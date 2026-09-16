@@ -312,6 +312,9 @@ fn run_eval(a: EvalArgs) -> i32 {
             ietsp::print::print_ambiguous(&mut ev, v, 1, &mut out, &mut seen, 0)
         })()
     };
+    if std::env::var_os("IETSP_STATS").is_some() {
+        ev.print_stats();
+    }
     match r {
         Ok(()) => {
             out.push(b'\n');

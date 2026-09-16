@@ -5,11 +5,19 @@
 use std::ptr;
 
 const CHUNK: usize = 32 << 20;
+/// A 32 MiB chunk populates in ~1 ms with huge pages and ~16 ms with 4 KiB
+/// pages; anything slower than this is a compaction stall.
+const THP_STALL: std::time::Duration = std::time::Duration::from_millis(6);
 
 pub struct Arena {
     ptr: *mut u8,
     end: *mut u8,
     pub bytes_allocated: usize,
+    /// Total chunk bytes mapped (and populated) so far.
+    pub mapped: usize,
+    pub stats: Stats,
+    /// Advise huge pages until a chunk populate stalls in compaction.
+    thp: bool,
 }
 
 impl Default for Arena {
@@ -24,6 +32,9 @@ impl Arena {
             ptr: ptr::null_mut(),
             end: ptr::null_mut(),
             bytes_allocated: 0,
+            mapped: 0,
+            stats: Stats::default(),
+            thp: true,
         }
     }
 
@@ -43,10 +54,12 @@ impl Arena {
     #[cold]
     fn alloc_slow(&mut self, size: usize, align: usize) -> *mut u8 {
         let chunk = CHUNK.max((size + align + CHUNK - 1) & !(CHUNK - 1));
-        // Anonymous mmap so the chunk is 2 MiB aligned and eligible for
-        // transparent huge pages: the evaluator allocates hundreds of MiB in
-        // small objects and page faults were a measurable share of runtime.
-        // The chunk is intentionally leaked.
+        // Anonymous mmap, prefaulted in one syscall. Transparent huge pages
+        // were tried first: on a fragmented box every huge fault that misses
+        // a free 2 MiB block stalls in direct compaction and then falls back
+        // to 4 KiB pages anyway, which cost ~1 s of system time per GiB.
+        // MADV_POPULATE_WRITE zeroes the chunk inside the kernel without one
+        // trap per page. The chunk is intentionally leaked.
         let base = unsafe {
             let p = libc::mmap(
                 std::ptr::null_mut(),
@@ -57,9 +70,17 @@ impl Arena {
                 0,
             );
             assert!(p != libc::MAP_FAILED, "arena: mmap failed");
-            libc::madvise(p, chunk, libc::MADV_HUGEPAGE);
+            let t0 = std::time::Instant::now();
+            if self.thp {
+                libc::madvise(p, chunk, libc::MADV_HUGEPAGE);
+            }
+            libc::madvise(p, chunk, libc::MADV_POPULATE_WRITE);
+            if self.thp && t0.elapsed() > THP_STALL {
+                self.thp = false;
+            }
             p as *mut u8
         };
+        self.mapped += chunk;
         self.ptr = base;
         self.end = unsafe { base.add(chunk) };
         let start = (self.ptr as usize + align - 1) & !(align - 1);
@@ -116,5 +137,54 @@ impl Arena {
         }
         // SAFETY: fully initialised above.
         unsafe { std::slice::from_raw_parts(p, len) }
+    }
+}
+
+/// Allocation kind for `IETSP_STATS`.
+#[derive(Clone, Copy)]
+#[repr(usize)]
+pub enum Stat {
+    Thunk,
+    ThunkApp,
+    Env,
+    List,
+    Attrs,
+    StrObj,
+    Bytes,
+    Ctx,
+    Lambda,
+    PrimOpApp,
+    Ir,
+    AttrsLit,
+    AttrsUpd,
+}
+
+pub const STAT_NAMES: [&str; 13] = [
+    "thunk",
+    "thunk_app",
+    "env",
+    "list",
+    "attrs",
+    "str_obj",
+    "bytes",
+    "ctx",
+    "lambda",
+    "primop_app",
+    "ir",
+    "attrs_lit",
+    "attrs_upd",
+];
+
+#[derive(Default)]
+pub struct Stats {
+    pub counts: [u64; 13],
+    pub bytes: [u64; 13],
+}
+
+impl Stats {
+    #[inline]
+    pub fn note(&mut self, s: Stat, bytes: usize) {
+        self.counts[s as usize] += 1;
+        self.bytes[s as usize] += bytes as u64;
     }
 }

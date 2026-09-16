@@ -30,8 +30,7 @@ fn attr_names(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let sorted = crate::print::lexicographic_order(ev, a);
     let mut items = Vec::with_capacity(sorted.len());
     for attr in sorted {
-        let name = ev.interner.name(attr.sym);
-        items.push(ev.arena.mk_string(name));
+        items.push(ev.sym_string(attr.sym));
     }
     Ok(ev.mk_list(&items))
 }
@@ -154,10 +153,8 @@ fn map_attrs(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let f = args[0];
     let mut out: Vec<(Sym, Pos, Word)> = Vec::with_capacity(a.len());
     for attr in a.attrs() {
-        let name = ev.interner.name(attr.sym);
-        let name = ev.arena.mk_string(name);
-        let f1 = ev.arena.mk_thunk_app(f, name);
-        let v = ev.arena.mk_thunk_app(f1, attr.cell.get());
+        let name = ev.sym_string(attr.sym);
+        let v = ev.arena.mk_thunk_app2(f, name, attr.cell.get());
         out.push((attr.sym, attr.pos, v));
     }
     Ok(ev.arena.mk_attrs_sorted(&out))
@@ -239,11 +236,9 @@ fn zip_attrs_with(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
     let mut out: Vec<(Sym, Pos, Word)> = Vec::with_capacity(groups.len());
     for sym in order {
         let vals = &groups[&sym];
-        let name = ev.interner.name(sym);
-        let name = ev.arena.mk_string(name);
+        let name = ev.sym_string(sym);
         let list = ev.mk_list(vals);
-        let f1 = ev.arena.mk_thunk_app(f, name);
-        let v = ev.arena.mk_thunk_app(f1, list);
+        let v = ev.arena.mk_thunk_app2(f, name, list);
         out.push((sym, Pos::NONE, v));
     }
     out.sort_by_key(|e| e.0);

@@ -13,9 +13,10 @@ pub use error::{Error, ErrorKind, EvalResult, Pos};
 
 use crate::compile::ir::{AttrElemIr, AttrsIr, BindIr, BindScope, Ir, IrRef, LambdaIr, ParamIr};
 use crate::compile::{Compiler, Globals};
+use crate::runtime::arena::{STAT_NAMES, Stat};
 use crate::runtime::*;
 use crate::syntax::ast::FileId;
-use crate::syntax::symbol::{Interner, Sym};
+use crate::syntax::symbol::{FxHashMap, Interner, Sym};
 
 pub const MAX_CALL_DEPTH: u32 = 10000;
 
@@ -27,25 +28,34 @@ impl CorePkgs {
 
 pub struct FileInfo {
     pub path: Vec<u8>,
-    pub src: &'static [u8],
+    pub base: u32,
     line_starts: Vec<u32>,
 }
 
 impl FileInfo {
-    fn new(path: Vec<u8>, src: &'static [u8]) -> FileInfo {
+    fn new(path: Vec<u8>, src: &[u8], base: u32) -> FileInfo {
         let mut line_starts = vec![0u32];
-        for (i, &b) in src.iter().enumerate() {
-            if b == b'\n' {
-                line_starts.push(i as u32 + 1);
-            }
+        let mut rest = src;
+        let mut off = 0usize;
+        // SAFETY: memchr reads at most `rest.len()` bytes of `rest`.
+        while let Some(i) = unsafe {
+            let p = libc::memchr(
+                rest.as_ptr() as *const libc::c_void,
+                b'\n' as i32,
+                rest.len(),
+            );
+            (!p.is_null()).then(|| p as usize - rest.as_ptr() as usize)
+        } {
+            off += i + 1;
+            line_starts.push(off as u32);
+            rest = &rest[i + 1..];
         }
         FileInfo {
             path,
-            src,
+            base,
             line_starts,
         }
     }
-
     /// 1-based line and column of a byte offset.
     pub fn line_col(&self, offset: u32) -> (u32, u32) {
         let line = match self.line_starts.binary_search(&offset) {
@@ -81,6 +91,7 @@ pub struct Evaluator {
     pub arena: Arena,
     pub interner: Interner,
     pub files: Vec<FileInfo>,
+    next_base: u32,
     file_ids: HashMap<Vec<u8>, FileId>,
     pub globals: Globals,
     pub root_env: &'static EnvObj,
@@ -96,6 +107,9 @@ pub struct Evaluator {
     pub current_system: &'static str,
     pub nr_thunks: u64,
     pub nr_function_calls: u64,
+    pub t_compile: std::time::Duration,
+    /// One shared context-free string per symbol, made on first use.
+    sym_strings: Vec<Word>,
     /// Source path -> virtual store path, like Nix's `srcToStore`.
     pub src_to_store: HashMap<Vec<u8>, &'static [u8]>,
     /// Store path -> where its content lives, for every source this evaluation added.
@@ -139,9 +153,10 @@ impl Evaluator {
             arena,
             interner,
             files: Vec::new(),
+            next_base: 0,
             file_ids: HashMap::new(),
             globals: Globals {
-                table: HashMap::new(),
+                table: FxHashMap::default(),
                 builtins: None,
             },
             root_env,
@@ -155,6 +170,8 @@ impl Evaluator {
             current_system: "x86_64-linux",
             nr_thunks: 0,
             nr_function_calls: 0,
+            t_compile: std::time::Duration::ZERO,
+            sym_strings: Vec::new(),
             src_to_store: HashMap::new(),
             sources: HashMap::new(),
             compile_settings: Default::default(),
@@ -166,13 +183,18 @@ impl Evaluator {
 
     // ---- files ------------------------------------------------------------
 
-    pub fn add_file(&mut self, path: &[u8], src: Vec<u8>) -> FileId {
+    /// Register a source file: only its path and line table are kept, so
+    /// 40 MB of nixpkgs text does not stay resident.
+    pub fn add_file(&mut self, path: &[u8], src: &[u8]) -> FileId {
         if let Some(id) = self.file_ids.get(path) {
             return *id;
         }
         let id = FileId(self.files.len() as u32);
-        let src: &'static [u8] = Box::leak(src.into_boxed_slice());
-        self.files.push(FileInfo::new(path.to_vec(), src));
+        let base = self.next_base;
+        self.next_base = base
+            .checked_add(src.len() as u32 + 1)
+            .expect("sources exceed 4 GiB");
+        self.files.push(FileInfo::new(path.to_vec(), src, base));
         self.file_ids.insert(path.to_vec(), id);
         id
     }
@@ -188,10 +210,20 @@ impl Evaluator {
         &self.sources
     }
 
+    /// The file holding `pos` and the offset inside it.
+    pub fn file_of(&self, pos: Pos) -> Option<(&FileInfo, u32)> {
+        if pos.is_none() {
+            return None;
+        }
+        let i = self.files.partition_point(|f| f.base <= pos.0);
+        let f = self.files.get(i.checked_sub(1)?)?;
+        Some((f, pos.0 - f.base))
+    }
+
     pub fn describe_pos(&self, pos: Pos) -> String {
-        match self.file(pos.file) {
-            Some(f) if !pos.is_none() => {
-                let (l, c) = f.line_col(pos.offset);
+        match self.file_of(pos) {
+            Some((f, off)) => {
+                let (l, c) = f.line_col(off);
                 format!("{}:{}:{}", String::from_utf8_lossy(&f.path), l, c)
             }
             _ => "«none»".to_string(),
@@ -207,27 +239,27 @@ impl Evaluator {
         base_dir: &[u8],
         extra_scope: Option<&[Sym]>,
     ) -> EvalResult<IrRef> {
-        let file = self.add_file(path, src);
-        let text = self.files[file.0 as usize].src;
-        let ast = crate::syntax::parse(text, file, &mut self.interner).map_err(|e| {
-            Error::boxed(
-                ErrorKind::Parse,
-                e.msg,
-                Pos {
-                    file,
-                    offset: e.span.start,
-                },
-            )
-        })?;
+        let file = self.add_file(path, &src);
+        let base = self.files[file.0 as usize].base;
+        let ast = crate::syntax::parse(&src, file, &mut self.interner)
+            .map_err(|e| Error::boxed(ErrorKind::Parse, e.msg, Pos(base + e.span.start)))?;
+        let t0 = std::time::Instant::now();
+        let before = self.arena.bytes_allocated;
         let mut c = Compiler::new(
             &ast,
             &mut self.arena,
             &mut self.interner,
             &self.globals,
+            base,
             base_dir,
             self.compile_settings,
         );
-        c.compile_root(extra_scope)
+        let r = c.compile_root(extra_scope);
+        self.arena
+            .stats
+            .note(Stat::Ir, self.arena.bytes_allocated - before);
+        self.t_compile += t0.elapsed();
+        r
     }
 
     /// Evaluate a string expression (`-E`).
@@ -271,7 +303,7 @@ impl Evaluator {
         let dir = dir_of(&resolved).to_vec();
         let ir = self.compile_source(&resolved, src, &dir, Some(&names))?;
         let env = self.arena.alloc_env(Some(self.root_env), names.len());
-        for (slot, a) in env.slots().iter().zip(scope.attrs()) {
+        for (slot, a) in env.slots_n(names.len()).iter().zip(scope.attrs()) {
             slot.set(a.cell.get());
         }
         self.eval(env, ir)
@@ -404,9 +436,13 @@ impl Evaluator {
                 let t = w.as_thunk();
                 self.eval(t.env, t.ir)
             }
-            _ => {
+            Kind::ThunkApp => {
                 let t = w.as_thunk_app();
                 self.apply(t.func, &[t.arg], Pos::NONE)
+            }
+            _ => {
+                let t = w.as_thunk_app2();
+                self.apply(t.func, &[t.arg1, t.arg2], Pos::NONE)
             }
         };
         match v {
@@ -440,7 +476,7 @@ impl Evaluator {
                 for _ in 0..*depth {
                     e = e.up().expect("compile-time depth is valid");
                 }
-                let w = e.slots()[*idx as usize].get();
+                let w = e.slot(*idx as usize).get();
                 // a slot of the env under construction (`let x = x;`): thunk it
                 // so forcing reports infinite recursion instead of reading EMPTY
                 if w == Word::EMPTY {
@@ -473,6 +509,23 @@ impl Evaluator {
                 },
                 _ => self.mk_thunk_counted(env, ir),
             },
+            // `x.y` on an attrset that is already forced: the attr's cell
+            // holds the value or the thunk that a fresh thunk would only
+            // look up, so share it. Missing attrs and unforced subjects
+            // keep the lazy path and its error position.
+            Ir::Select(s) => match self.shared_select(env, s.subject, s.path, s.default) {
+                Some(w) => w,
+                None => self.mk_thunk_counted(env, ir),
+            },
+            Ir::Select1 {
+                subject,
+                sym,
+                default,
+                ..
+            } => match self.shared_select(env, subject, &[AttrElemIr::Static(*sym)], *default) {
+                Some(w) => w,
+                None => self.mk_thunk_counted(env, ir),
+            },
             _ => self.mk_thunk_counted(env, ir),
         }
     }
@@ -481,6 +534,44 @@ impl Evaluator {
     fn mk_thunk_counted(&mut self, env: &'static EnvObj, ir: IrRef) -> Word {
         self.nr_thunks += 1;
         self.arena.mk_thunk(env, ir)
+    }
+
+    fn shared_select(
+        &mut self,
+        env: &'static EnvObj,
+        subject: IrRef,
+        path: &[AttrElemIr],
+        default: Option<IrRef>,
+    ) -> Option<Word> {
+        let mut w = match subject {
+            Ir::Const(w) => *w,
+            Ir::Local { depth, idx } => {
+                let mut e = env;
+                for _ in 0..*depth {
+                    e = e.up()?;
+                }
+                e.slot(*idx as usize).get()
+            }
+            _ => return None,
+        };
+        for elem in path {
+            let AttrElemIr::Static(sym) = elem else {
+                return None;
+            };
+            if w.heap_kind() != Some(Kind::Attrs) {
+                return None;
+            }
+            match w.as_attrs()?.get(*sym) {
+                Some(a) => {
+                    w = a.cell.get();
+                    if w == Word::EMPTY {
+                        return None;
+                    }
+                }
+                None => return default.map(|d| self.maybe_thunk(env, d)),
+            }
+        }
+        Some(w)
     }
 
     /// The value of a cheap operand if it is already a forced integer.
@@ -493,7 +584,7 @@ impl Evaluator {
                 for _ in 0..*depth {
                     e = e.up()?;
                 }
-                e.slots()[*idx as usize].get()
+                e.slot(*idx as usize).get()
             }
             _ => return None,
         };
@@ -717,15 +808,31 @@ impl Evaluator {
         self.interner.intern(name)
     }
 
+    /// The string value of a symbol's name. attrNames and mapAttrs hand
+    /// out the same object for the same name instead of copying it.
+    pub fn sym_string(&mut self, sym: Sym) -> Word {
+        let i = sym.0 as usize;
+        if i >= self.sym_strings.len() {
+            self.sym_strings.resize(self.interner.len(), Word::EMPTY);
+        }
+        let w = self.sym_strings[i];
+        if w != Word::EMPTY {
+            return w;
+        }
+        let w = self.arena.mk_string(self.interner.name(sym));
+        self.sym_strings[i] = w;
+        w
+    }
+
     /// `{ file, line, column }` for `__curPos` and `unsafeGetAttrPos`.
     pub fn mk_pos_attrs(&mut self, pos: Pos) -> Word {
-        let Some(f) = self.file(pos.file) else {
+        let Some((f, off)) = self.file_of(pos) else {
             return Word::NULL;
         };
-        if pos.is_none() || f.path.starts_with(b"\xc2\xab") {
+        if f.path.starts_with(b"\xc2\xab") {
             return Word::NULL;
         }
-        let (line, col) = f.line_col(pos.offset);
+        let (line, col) = f.line_col(off);
         let path = f.path.clone();
         let file = self.mk_string(&path);
         let line = self.mk_int(line as i64);
@@ -828,7 +935,7 @@ impl Evaluator {
     fn call_lambda(&mut self, l: &'static LambdaObj, arg: Word, pos: Pos) -> EvalResult<Word> {
         let lam: &'static LambdaIr = l.lam;
         let env2 = self.arena.alloc_env(Some(l.env), lam.nslots());
-        let slots = env2.slots();
+        let slots = env2.slots_n(lam.nslots());
         match &lam.param {
             ParamIr::Ident => slots[0].set(arg),
             ParamIr::Formals {
@@ -946,7 +1053,7 @@ impl Evaluator {
                 for _ in 0..*depth {
                     e = e.up().expect("compile-time depth is valid");
                 }
-                self.force_cell(&e.slots()[*idx as usize])
+                self.force_cell(e.slot(*idx as usize))
             }
             Ir::WithVar { sym, withs, pos } => self.eval_with_var(env, *sym, withs, *pos),
             Ir::CurPos(pos) => Ok(self.mk_pos_attrs(*pos)),
@@ -962,12 +1069,13 @@ impl Evaluator {
                 let p = self.find_file(&entries, n, *pos)?;
                 Ok(self.arena.mk_path(&p))
             }
-            Ir::Select {
+            Ir::Select(s) => self.eval_select(env, s.subject, s.path, s.default, s.pos),
+            Ir::Select1 {
                 subject,
-                path,
+                sym,
                 default,
                 pos,
-            } => self.eval_select(env, subject, path, *default, *pos),
+            } => self.eval_select1(env, subject, *sym, *default, *pos),
             Ir::HasAttr { subject, path } => {
                 let mut v = self.eval(env, subject)?;
                 for elem in path.iter() {
@@ -1003,14 +1111,14 @@ impl Evaluator {
                     self.apply(f, &v, *pos)
                 }
             }
-            Ir::Let { binds, from, body } => {
-                let env2 = self.alloc_rec_env(env, binds, from);
-                self.eval(env2, body)
+            Ir::Let(l) => {
+                let env2 = self.alloc_rec_env(env, l.binds, l.from);
+                self.eval(env2, l.body)
             }
             Ir::With { scope, body, .. } => {
                 let env2 = self.arena.alloc_env(Some(env), 1);
                 let w = self.maybe_thunk(env, scope);
-                env2.slots()[0].set(w);
+                env2.slot(0).set(w);
                 self.eval(env2, body)
             }
             Ir::If {
@@ -1177,11 +1285,11 @@ impl Evaluator {
             }
             walked = d;
             let attrs = self.force_attrs(
-                e.slots()[0].get(),
+                e.slot(0).get(),
                 pos,
                 "while evaluating the first subexpression of a with expression",
             )?;
-            e.slots()[0].set(Word::from_ptr(attrs));
+            e.slot(0).set(Word::from_ptr(attrs));
             if let Some(a) = attrs.get(sym) {
                 return self.force_cell(&a.cell);
             }
@@ -1269,6 +1377,46 @@ impl Evaluator {
         Ok(v)
     }
 
+    /// `eval_select` for the one-static-element case, without the path loop.
+    fn eval_select1(
+        &mut self,
+        env: &'static EnvObj,
+        subject: IrRef,
+        sym: Sym,
+        default: Option<IrRef>,
+        pos: Pos,
+    ) -> EvalResult<Word> {
+        let v = self.eval(env, subject)?;
+        let attr = match default {
+            Some(d) => match v.as_attrs().and_then(|a| a.get(sym)) {
+                Some(a) => a,
+                None => return self.eval(env, d),
+            },
+            None => {
+                let attrs = self.force_attrs(v, pos, "while selecting an attribute")?;
+                match attrs.get(sym) {
+                    Some(a) => a,
+                    None => bail!(
+                        ErrorKind::MissingAttr,
+                        pos,
+                        "attribute '{}' missing",
+                        self.interner.name_str(sym)
+                    ),
+                }
+            }
+        };
+        self.force_cell(&attr.cell).map_err(|mut e| {
+            e.add_trace(
+                attr.pos,
+                format!(
+                    "while evaluating the attribute '{}'",
+                    self.interner.name_str(sym)
+                ),
+            );
+            e
+        })
+    }
+
     fn show_attr_path(&mut self, env: &'static EnvObj, path: &[AttrElemIr]) -> String {
         let mut out = String::new();
         for (i, e) in path.iter().enumerate() {
@@ -1296,7 +1444,7 @@ impl Evaluator {
         from: &'static [IrRef],
     ) -> &'static EnvObj {
         let env2 = self.arena.alloc_env(Some(env), binds.len() + from.len());
-        let slots = env2.slots();
+        let slots = env2.slots_n(binds.len() + from.len());
         for (i, b) in binds.iter().enumerate() {
             let w = match b.scope {
                 BindScope::Outer => self.maybe_thunk(env, b.value),
@@ -1312,6 +1460,9 @@ impl Evaluator {
     }
 
     fn eval_attrs(&mut self, env: &'static EnvObj, a: &'static AttrsIr) -> EvalResult<Word> {
+        if a.dynamic.is_empty() && a.overrides.is_none() {
+            return Ok(self.eval_static_attrs(env, a));
+        }
         let mut entries: Vec<(Sym, Pos, Word)> =
             Vec::with_capacity(a.binds.len() + a.dynamic.len());
         let dyn_env: &'static EnvObj;
@@ -1320,17 +1471,17 @@ impl Evaluator {
             let env2 = self.alloc_rec_env(env, a.binds, a.from);
             dyn_env = env2;
             for (i, b) in a.binds.iter().enumerate() {
-                entries.push((b.sym, b.pos, env2.slots()[i].get()));
+                entries.push((b.sym, b.pos, env2.slot(i).get()));
             }
             if let Some(oi) = a.overrides {
-                let ow = env2.slots()[oi as usize].get();
+                let ow = env2.slot(oi as usize).get();
                 let overrides =
                     self.force_attrs(ow, a.pos, "while evaluating the `__overrides` attribute")?;
                 for o in overrides.attrs() {
                     match a.binds.binary_search_by(|b| b.sym.cmp(&o.sym)) {
                         Ok(j) => {
                             entries[j].2 = o.cell.get();
-                            env2.slots()[j].set(o.cell.get());
+                            env2.slot(j).set(o.cell.get());
                         }
                         Err(_) => entries.push((o.sym, o.pos, o.cell.get())),
                     }
@@ -1339,16 +1490,7 @@ impl Evaluator {
             }
         } else {
             dyn_env = env;
-            let inherit_env = if a.from.is_empty() {
-                None
-            } else {
-                let ie = self.arena.alloc_env(Some(env), a.from.len());
-                for (j, f) in a.from.iter().enumerate() {
-                    let w = self.maybe_thunk(env, f);
-                    ie.slots()[j].set(w);
-                }
-                Some(ie)
-            };
+            let inherit_env = self.inherit_env(env, a.from);
             for b in a.binds.iter() {
                 let w = match b.scope {
                     BindScope::From => self.maybe_thunk(inherit_env.unwrap(), b.value),
@@ -1387,6 +1529,47 @@ impl Evaluator {
         }
     }
 
+    /// The common case: static names only, so the binds are already sorted
+    /// and the set is filled in place without a temporary vector.
+    fn eval_static_attrs(&mut self, env: &'static EnvObj, a: &'static AttrsIr) -> Word {
+        let out = self.arena.alloc_attrs_as(a.binds.len(), Stat::AttrsLit);
+        if a.rec {
+            let env2 = self.alloc_rec_env(env, a.binds, a.from);
+            for (i, b) in a.binds.iter().enumerate() {
+                out.init(i, b.sym, b.pos, env2.slot(i).get());
+            }
+        } else {
+            let inherit_env = self.inherit_env(env, a.from);
+            for (i, b) in a.binds.iter().enumerate() {
+                let w = match b.scope {
+                    BindScope::From => self.maybe_thunk(inherit_env.unwrap(), b.value),
+                    _ => self.maybe_thunk(env, b.value),
+                };
+                out.init(i, b.sym, b.pos, w);
+            }
+        }
+        Word::from_ptr(out as *const AttrsObj)
+    }
+
+    /// Env holding the `inherit (e)` source thunks of a non-rec set.
+    fn inherit_env(
+        &mut self,
+        env: &'static EnvObj,
+        from: &'static [IrRef],
+    ) -> Option<&'static EnvObj> {
+        if from.is_empty() {
+            return None;
+        }
+        let ie = self.arena.alloc_env(Some(env), from.len());
+        for (j, f) in from.iter().enumerate() {
+            let w = self.maybe_thunk(env, f);
+            ie.slot(j).set(w);
+        }
+        Some(ie)
+    }
+
+    /// Kept out of `eval` so its buffers do not widen every eval frame.
+    #[inline(never)]
     fn eval_concat(
         &mut self,
         env: &'static EnvObj,
@@ -1398,7 +1581,11 @@ impl Evaluator {
         let mut first_type = ValueType::String;
         let mut n: i64 = 0;
         let mut nf: f64 = 0.0;
-        let mut strings: Vec<Cow<'static, [u8]>> = Vec::new();
+        // Interpolations have few parts and coerce to borrowed slices: keep
+        // them on the stack and spill to a Vec only past the buffer.
+        let mut buf: [&'static [u8]; 16] = [&[]; 16];
+        let mut nbuf = 0usize;
+        let mut spill: Vec<Cow<'static, [u8]>> = Vec::new();
         let mut ctx: Vec<Ctx> = Vec::new();
         for part in parts {
             let v = self.eval(env, part)?;
@@ -1449,11 +1636,29 @@ impl Evaluator {
                         first_type == ValueType::String,
                         !first,
                     )?;
-                    strings.push(s);
+                    match s {
+                        Cow::Borrowed(b) if spill.is_empty() && nbuf < buf.len() => {
+                            buf[nbuf] = b;
+                            nbuf += 1;
+                        }
+                        s => {
+                            if spill.is_empty() {
+                                spill.extend(buf[..nbuf].iter().map(|b| Cow::Borrowed(*b)));
+                                nbuf = 0;
+                            }
+                            spill.push(s);
+                        }
+                    }
                 }
             }
             first = false;
         }
+        let spilled: Vec<&[u8]> = spill.iter().map(|s| s.as_ref()).collect();
+        let pieces: &[&[u8]] = if spill.is_empty() {
+            &buf[..nbuf]
+        } else {
+            &spilled
+        };
         match first_type {
             ValueType::Int => Ok(self.mk_int(n)),
             ValueType::Float => Ok(self.mk_float(nf)),
@@ -1465,13 +1670,17 @@ impl Evaluator {
                         "a string that refers to a store path cannot be appended to a path"
                     );
                 }
-                let parts: Vec<&[u8]> = strings.iter().map(|s| s.as_ref()).collect();
-                let joined = parts.concat();
+                let joined = pieces.concat();
                 Ok(self.arena.mk_path(&crate::compile::canon_path(&joined)))
             }
             _ => {
-                let parts: Vec<&[u8]> = strings.iter().map(|s| s.as_ref()).collect();
-                let bytes = self.arena.alloc_concat(&parts);
+                self.arena
+                    .stats
+                    .note(Stat::Bytes, pieces.iter().map(|p| p.len()).sum());
+                self.arena
+                    .stats
+                    .note(Stat::Ctx, ctx.len() * size_of::<Ctx>());
+                let bytes = self.arena.alloc_concat(pieces);
                 let ctx = ctx_to_arena(&mut self.arena, ctx);
                 Ok(self.arena.mk_string_static(bytes, ctx))
             }
@@ -1480,7 +1689,7 @@ impl Evaluator {
 
     // ---- attrs and lists ---------------------------------------------------
 
-    /// `a // b`.
+    /// `a // b`. Two linear merges: one to size the result, one to fill it.
     pub fn update_attrs(&mut self, a: &'static AttrsObj, b: &'static AttrsObj) -> Word {
         if a.is_empty() {
             return Word::from_ptr(b);
@@ -1489,32 +1698,49 @@ impl Evaluator {
             return Word::from_ptr(a);
         }
         let (aa, bb) = (a.attrs(), b.attrs());
-        let mut out: Vec<(Sym, Pos, Word)> = Vec::with_capacity(aa.len() + bb.len());
-        let (mut i, mut j) = (0, 0);
+        let (mut i, mut j, mut common) = (0, 0, 0);
         while i < aa.len() && j < bb.len() {
             match aa[i].sym.cmp(&bb[j].sym) {
-                std::cmp::Ordering::Less => {
-                    out.push((aa[i].sym, aa[i].pos, aa[i].cell.get()));
-                    i += 1;
-                }
-                std::cmp::Ordering::Greater => {
-                    out.push((bb[j].sym, bb[j].pos, bb[j].cell.get()));
-                    j += 1;
-                }
+                std::cmp::Ordering::Less => i += 1,
+                std::cmp::Ordering::Greater => j += 1,
                 std::cmp::Ordering::Equal => {
-                    out.push((bb[j].sym, bb[j].pos, bb[j].cell.get()));
+                    common += 1;
                     i += 1;
                     j += 1;
                 }
             }
         }
-        for a in &aa[i..] {
-            out.push((a.sym, a.pos, a.cell.get()));
+        let out = self
+            .arena
+            .alloc_attrs_as(aa.len() + bb.len() - common, Stat::AttrsUpd);
+        let (mut i, mut j, mut k) = (0, 0, 0);
+        while i < aa.len() && j < bb.len() {
+            match aa[i].sym.cmp(&bb[j].sym) {
+                std::cmp::Ordering::Less => {
+                    out.init_from(k, &aa[i]);
+                    i += 1;
+                }
+                std::cmp::Ordering::Greater => {
+                    out.init_from(k, &bb[j]);
+                    j += 1;
+                }
+                std::cmp::Ordering::Equal => {
+                    out.init_from(k, &bb[j]);
+                    i += 1;
+                    j += 1;
+                }
+            }
+            k += 1;
         }
-        for b in &bb[j..] {
-            out.push((b.sym, b.pos, b.cell.get()));
+        for x in &aa[i..] {
+            out.init_from(k, x);
+            k += 1;
         }
-        self.arena.mk_attrs_sorted(&out)
+        for x in &bb[j..] {
+            out.init_from(k, x);
+            k += 1;
+        }
+        Word::from_ptr(out as *const AttrsObj)
     }
 
     pub fn concat_lists(&mut self, lists: &[&'static ListObj]) -> Word {
@@ -1633,7 +1859,7 @@ pub fn ir_pos(ir: &Ir) -> Pos {
         | Ir::CurPos(pos)
         | Ir::Concat { pos, .. }
         | Ir::SearchPath { pos, .. }
-        | Ir::Select { pos, .. }
+        | Ir::Select1 { pos, .. }
         | Ir::Apply { pos, .. }
         | Ir::With { pos, .. }
         | Ir::If { pos, .. }
@@ -1656,7 +1882,8 @@ pub fn ir_pos(ir: &Ir) -> Pos {
         | Ir::Div(_, _, pos) => *pos,
         Ir::Attrs(a) => a.pos,
         Ir::Lambda(l) => l.pos,
-        Ir::Let { body, .. } => ir_pos(body),
+        Ir::Select(s) => s.pos,
+        Ir::Let(l) => ir_pos(l.body),
         Ir::Const(_) | Ir::Local { .. } | Ir::HasAttr { .. } | Ir::List(_) => Pos::NONE,
     }
 }
@@ -1696,5 +1923,37 @@ impl Evaluator {
         }
         let a = self.arena.mk_attrs_sorted(&entries);
         self.apply(fun, &[a], Pos::NONE)
+    }
+}
+
+impl Evaluator {
+    /// `IETSP_STATS=1`: allocation and phase counters on stderr.
+    pub fn print_stats(&self) {
+        let st = &self.arena.stats;
+        eprintln!(
+            "files={} thunks={} calls={} drvs={} arena_bytes={} arena_mapped={} rss_kb={} compile={:?} ir_size={}",
+            self.files.len(),
+            self.nr_thunks,
+            self.nr_function_calls,
+            self.drv.nr_derivations,
+            self.arena.bytes_allocated,
+            self.arena.mapped,
+            std::fs::read_to_string("/proc/self/statm")
+                .ok()
+                .and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok())
+                .map_or(0, |pages| pages * 4),
+            self.t_compile,
+            size_of::<Ir>()
+        );
+        for (i, name) in STAT_NAMES.iter().enumerate() {
+            eprintln!(
+                "{name:>10} count={:>9} bytes={:>11} ({:.1} MiB)",
+                st.counts[i],
+                st.bytes[i],
+                st.bytes[i] as f64 / (1 << 20) as f64
+            );
+        }
+        // SAFETY: prints glibc heap statistics to stderr; no arguments.
+        unsafe { libc::malloc_stats() };
     }
 }

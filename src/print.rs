@@ -284,24 +284,26 @@ pub fn json_escape(out: &mut Vec<u8>, s: &[u8]) -> EvalResult<()> {
         )
     })?;
     out.push(b'"');
-    for ch in st.chars() {
-        match ch {
-            '"' => out.extend_from_slice(b"\\\""),
-            '\\' => out.extend_from_slice(b"\\\\"),
-            '\u{8}' => out.extend_from_slice(b"\\b"),
-            '\u{c}' => out.extend_from_slice(b"\\f"),
-            '\n' => out.extend_from_slice(b"\\n"),
-            '\r' => out.extend_from_slice(b"\\r"),
-            '\t' => out.extend_from_slice(b"\\t"),
-            c if (c as u32) < 0x20 => {
-                out.extend_from_slice(format!("\\u{:04x}", c as u32).as_bytes());
-            }
-            c => {
-                let mut buf = [0u8; 4];
-                out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
-            }
+    // Every byte that needs escaping is ASCII, so copy runs between them.
+    let mut rest = st.as_bytes();
+    while let Some(i) = rest
+        .iter()
+        .position(|&b| b < 0x20 || b == b'"' || b == b'\\')
+    {
+        out.extend_from_slice(&rest[..i]);
+        match rest[i] {
+            b'"' => out.extend_from_slice(b"\\\""),
+            b'\\' => out.extend_from_slice(b"\\\\"),
+            0x08 => out.extend_from_slice(b"\\b"),
+            0x0c => out.extend_from_slice(b"\\f"),
+            b'\n' => out.extend_from_slice(b"\\n"),
+            b'\r' => out.extend_from_slice(b"\\r"),
+            b'\t' => out.extend_from_slice(b"\\t"),
+            c => out.extend_from_slice(format!("\\u{c:04x}").as_bytes()),
         }
+        rest = &rest[i + 1..];
     }
+    out.extend_from_slice(rest);
     out.push(b'"');
     Ok(())
 }

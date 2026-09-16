@@ -1,22 +1,15 @@
-use crate::syntax::ast::FileId;
-
-/// A source position: file plus byte offset. Line and column are derived on
-/// demand from the file's line table.
+/// Byte offset into the concatenation of all loaded sources; the evaluator
+/// maps it back to a file and a local offset. 4 bytes so `Attr` and every IR
+/// node stay small.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Pos {
-    pub file: FileId,
-    pub offset: u32,
-}
+pub struct Pos(pub u32);
 
 impl Pos {
-    pub const NONE: Pos = Pos {
-        file: FileId(u32::MAX),
-        offset: 0,
-    };
+    pub const NONE: Pos = Pos(u32::MAX);
 
     #[inline]
     pub fn is_none(self) -> bool {
-        self.file.0 == u32::MAX
+        self.0 == u32::MAX
     }
 }
 

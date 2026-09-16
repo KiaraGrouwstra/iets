@@ -3,25 +3,23 @@
 
 pub mod ir;
 
-use std::collections::HashMap;
-
 use crate::eval::{Error, ErrorKind, Pos};
 use crate::runtime::{Arena, AttrsObj, Word};
 use crate::syntax::ast::{
     Ast, AttrElem, BinOp, Bind, BindKind, Expr, ExprId, Param, PathKind, StrPart, UnOp,
 };
-use crate::syntax::symbol::{Interner, Sym};
+use crate::syntax::symbol::{FxHashMap, Interner, Sym};
 use ir::*;
 
 /// Names visible at the root of every file.
 pub struct Globals {
-    pub table: HashMap<Sym, Word>,
+    pub table: FxHashMap<Sym, Word>,
     /// The `builtins` attrset, for `builtins.x` folding.
     pub builtins: Option<&'static AttrsObj>,
 }
 
 enum Scope {
-    Lexical(HashMap<Sym, u32>),
+    Lexical(FxHashMap<Sym, u32>),
     With,
 }
 
@@ -33,6 +31,8 @@ pub struct Compiler<'a> {
     scopes: Vec<Scope>,
     /// Directory of the file being compiled, for relative paths.
     base_dir: Vec<u8>,
+    /// Global offset of this file's first byte.
+    base: u32,
     home: Option<Vec<u8>>,
     settings: CompileSettings,
     sym_builtins: Sym,
@@ -78,7 +78,7 @@ fn err<T>(kind: ErrorKind, msg: String, pos: Pos) -> CResult<T> {
 struct Merged {
     rec: bool,
     statics: Vec<(Sym, Def, Pos)>,
-    index: HashMap<Sym, usize>,
+    index: FxHashMap<Sym, usize>,
     dynamics: Vec<(ExprId, Def, Pos)>,
     from_exprs: Vec<ExprId>,
     pos: Pos,
@@ -96,7 +96,7 @@ impl Merged {
         Merged {
             rec,
             statics: Vec::new(),
-            index: HashMap::new(),
+            index: FxHashMap::default(),
             dynamics: Vec::new(),
             from_exprs: Vec::new(),
             pos,
@@ -110,6 +110,7 @@ impl<'a> Compiler<'a> {
         arena: &'a mut Arena,
         interner: &'a mut Interner,
         globals: &'a Globals,
+        base: u32,
         base_dir: &[u8],
         settings: CompileSettings,
     ) -> Self {
@@ -124,6 +125,7 @@ impl<'a> Compiler<'a> {
             globals,
             scopes: Vec::new(),
             base_dir: base_dir.to_vec(),
+            base,
             home: std::env::var_os("HOME").map(|h| h.into_encoded_bytes()),
             settings,
             sym_builtins,
@@ -137,7 +139,7 @@ impl<'a> Compiler<'a> {
     /// (for `scopedImport`) that the runtime supplies as the env above root.
     pub fn compile_root(&mut self, extra_scope: Option<&[Sym]>) -> CResult<IrRef> {
         if let Some(names) = extra_scope {
-            let mut m = HashMap::new();
+            let mut m = FxHashMap::default();
             for (i, s) in names.iter().enumerate() {
                 m.insert(*s, i as u32);
             }
@@ -150,10 +152,7 @@ impl<'a> Compiler<'a> {
     }
 
     fn pos(&self, id: ExprId) -> Pos {
-        Pos {
-            file: self.ast.file,
-            offset: self.ast.span(id).start,
-        }
+        Pos(self.base + self.ast.span(id).start)
     }
 
     fn alloc<T>(&mut self, v: T) -> &'static T {
@@ -204,14 +203,14 @@ impl<'a> Compiler<'a> {
 
     fn expr_inner(&mut self, id: ExprId) -> CResult<Ir> {
         let pos = self.pos(id);
-        // Clone the node so `self` stays borrowable; nodes are small.
-        let node = self.ast.expr(id).clone();
-        Ok(match node {
-            Expr::Int(i) => Ir::Const(self.arena.mk_int(i)),
-            Expr::Float(f) => Ir::Const(self.arena.mk_float(f)),
-            Expr::Str(parts) => self.string(&parts, pos)?,
+        let ast: &'a Ast = self.ast;
+        Ok(match ast.expr(id) {
+            Expr::Int(i) => Ir::Const(self.arena.mk_int(*i)),
+            Expr::Float(f) => Ir::Const(self.arena.mk_float(*f)),
+            Expr::Str(parts) => self.string(parts, pos)?,
             Expr::Path(p) => self.path(&p.kind, &p.parts, pos)?,
             Expr::Var(sym) => {
+                let sym = *sym;
                 if sym == self.sym_cur_pos && self.lexical_lookup(sym).is_none() {
                     return Ok(Ir::CurPos(pos));
                 }
@@ -232,45 +231,40 @@ impl<'a> Compiler<'a> {
                 path,
                 default,
             } => {
-                if let Some(folded) = self.fold_builtins_select(subject, &path, default.is_none()) {
+                if let Some(folded) = self.fold_builtins_select(*subject, path, default.is_none()) {
                     return Ok(folded);
                 }
-                let subject = self.expr(subject)?;
-                let path = self.attr_path(&path)?;
+                let subject = self.expr(*subject)?;
+                let path = self.attr_path(path)?;
                 let default = match default {
-                    Some(d) => Some(self.expr(d)?),
+                    Some(d) => Some(self.expr(*d)?),
                     None => None,
                 };
-                Ir::Select {
-                    subject,
-                    path,
-                    default,
-                    pos,
-                }
+                self.mk_select(subject, path, default, pos)
             }
             Expr::HasAttr { subject, path } => {
-                let subject = self.expr(subject)?;
-                let path = self.attr_path(&path)?;
+                let subject = self.expr(*subject)?;
+                let path = self.attr_path(path)?;
                 Ir::HasAttr { subject, path }
             }
             Expr::Attrs { rec, binds } => {
-                let merged = self.merge_binds(rec, &binds, pos)?;
+                let merged = self.merge_binds(*rec, binds, pos)?;
                 let a = self.lower_attrs(merged)?;
                 Ir::Attrs(a)
             }
             Expr::List(items) => {
                 let mut v = Vec::with_capacity(items.len());
                 for i in items {
-                    v.push(self.expr(i)?);
+                    v.push(self.expr(*i)?);
                 }
                 Ir::List(self.alloc_refs(v))
             }
-            Expr::Lambda { param, body } => Ir::Lambda(self.lambda(&param, body, pos, None)?),
+            Expr::Lambda { param, body } => Ir::Lambda(self.lambda(param, *body, pos, None)?),
             Expr::Apply { func, args } => {
-                let func = self.expr(func)?;
+                let func = self.expr(*func)?;
                 let mut v = Vec::with_capacity(args.len());
                 for a in args {
-                    v.push(self.expr(a)?);
+                    v.push(self.expr(*a)?);
                 }
                 Ir::Apply {
                     func,
@@ -279,7 +273,7 @@ impl<'a> Compiler<'a> {
                 }
             }
             Expr::Let { binds, body } => {
-                let merged = self.merge_binds(true, &binds, pos)?;
+                let merged = self.merge_binds(true, binds, pos)?;
                 if !merged.dynamics.is_empty() {
                     return err(
                         ErrorKind::Eval,
@@ -288,38 +282,38 @@ impl<'a> Compiler<'a> {
                     );
                 }
                 let (binds, from) = self.lower_rec_binds(merged)?;
-                let body = self.expr(body)?;
+                let body = self.expr(*body)?;
                 self.scopes.pop();
-                Ir::Let { binds, from, body }
+                Ir::Let(self.alloc(LetIr { binds, from, body }))
             }
             Expr::With { scope, body } => {
-                let scope = self.expr(scope)?;
+                let scope = self.expr(*scope)?;
                 self.scopes.push(Scope::With);
-                let body = self.expr(body)?;
+                let body = self.expr(*body)?;
                 self.scopes.pop();
                 Ir::With { scope, body, pos }
             }
             Expr::If { cond, then, else_ } => Ir::If {
-                cond: self.expr(cond)?,
-                then: self.expr(then)?,
-                else_: self.expr(else_)?,
-                pos: self.pos(cond),
+                cond: self.expr(*cond)?,
+                then: self.expr(*then)?,
+                else_: self.expr(*else_)?,
+                pos: self.pos(*cond),
             },
             Expr::Assert { cond, body } => Ir::Assert {
-                cond: self.expr(cond)?,
-                body: self.expr(body)?,
+                cond: self.expr(*cond)?,
+                body: self.expr(*body)?,
                 pos,
             },
             Expr::Unary { op, expr } => {
-                let e = self.expr(expr)?;
+                let e = self.expr(*expr)?;
                 match op {
                     UnOp::Not => Ir::Not(e, pos),
                     UnOp::Neg => Ir::Neg(e, pos),
                 }
             }
             Expr::Binary { op, lhs, rhs } => {
-                let l = self.expr(lhs)?;
-                let r = self.expr(rhs)?;
+                let l = self.expr(*lhs)?;
+                let r = self.expr(*rhs)?;
                 match op {
                     BinOp::Eq => Ir::Eq(l, r, pos),
                     BinOp::Ne => Ir::Ne(l, r, pos),
@@ -389,12 +383,32 @@ impl<'a> Compiler<'a> {
         }
         let rest = self.attr_path(&path[1..]).ok()?;
         let subject = self.alloc(Ir::Const(w));
-        Some(Ir::Select {
+        let pos = self.pos(subject_pos_hack(path));
+        Some(self.mk_select(subject, rest, None, pos))
+    }
+
+    /// One static element stays inline as `Select1`; anything else is boxed.
+    fn mk_select(
+        &mut self,
+        subject: IrRef,
+        path: &'static [AttrElemIr],
+        default: Option<IrRef>,
+        pos: Pos,
+    ) -> Ir {
+        if let [AttrElemIr::Static(sym)] = path {
+            return Ir::Select1 {
+                subject,
+                sym: *sym,
+                default,
+                pos,
+            };
+        }
+        Ir::Select(self.alloc(SelectIr {
             subject,
-            path: rest,
-            default: None,
-            pos: self.pos(subject_pos_hack(path)),
-        })
+            path,
+            default,
+            pos,
+        }))
     }
 
     fn attr_path(&mut self, path: &[AttrElem]) -> CResult<&'static [AttrElemIr]> {
@@ -647,10 +661,7 @@ impl<'a> Compiler<'a> {
     }
 
     fn bind_pos(&self, b: &Bind) -> Pos {
-        Pos {
-            file: self.ast.file,
-            offset: b.span.start,
-        }
+        Pos(self.base + b.span.start)
     }
 
     fn add_bind(&mut self, m: &mut Merged, b: &Bind) -> CResult<()> {
@@ -659,10 +670,7 @@ impl<'a> Compiler<'a> {
             BindKind::Value { path, value } => self.add_path(m, path, Def::Expr(*value), pos),
             BindKind::Inherit { from: None, names } => {
                 for (name, span) in names {
-                    let p = Pos {
-                        file: self.ast.file,
-                        offset: span.start,
-                    };
+                    let p = Pos(self.base + span.start);
                     self.add_static(m, *name, Def::Inherit(*name), p)?;
                 }
                 Ok(())
@@ -674,10 +682,7 @@ impl<'a> Compiler<'a> {
                 let idx = m.from_exprs.len();
                 m.from_exprs.push(*e);
                 for (name, span) in names {
-                    let p = Pos {
-                        file: self.ast.file,
-                        offset: span.start,
-                    };
+                    let p = Pos(self.base + span.start);
                     self.add_static(m, *name, Def::InheritFrom(idx, *name), p)?;
                 }
                 Ok(())
@@ -738,14 +743,14 @@ impl<'a> Compiler<'a> {
     }
 
     fn static_name(&mut self, e: &AttrElem) -> Option<Sym> {
+        let ast: &'a Ast = self.ast;
         match e {
             AttrElem::Static(s) => Some(*s),
             AttrElem::Dynamic(id) => {
-                if let Expr::Str(parts) = self.ast.expr(*id)
+                if let Expr::Str(parts) = ast.expr(*id)
                     && let [StrPart::Lit(lit)] = parts.as_slice()
                 {
-                    let lit = lit.clone();
-                    Some(self.interner.intern(&lit))
+                    Some(self.interner.intern(lit))
                 } else {
                     None
                 }
@@ -759,8 +764,9 @@ impl<'a> Compiler<'a> {
         match &m.statics[idx].1 {
             Def::Nested(_) => Ok(()),
             Def::Expr(e) => {
-                if let Expr::Attrs { rec, binds } = self.ast.expr(*e).clone() {
-                    let nested = self.merge_binds(rec, &binds, self.pos(*e))?;
+                let ast: &'a Ast = self.ast;
+                if let Expr::Attrs { rec, binds } = ast.expr(*e) {
+                    let nested = self.merge_binds(*rec, binds, self.pos(*e))?;
                     m.statics[idx].1 = Def::Nested(Box::new(nested));
                     Ok(())
                 } else {
@@ -785,12 +791,13 @@ impl<'a> Compiler<'a> {
     fn add_static(&mut self, m: &mut Merged, sym: Sym, def: Def, pos: Pos) -> CResult<()> {
         if let Some(&i) = m.index.get(&sym) {
             // Both sides attrs literals: merge (Nix discards the inner `rec`).
-            let new_binds = match &def {
-                Def::Expr(e) => match self.ast.expr(*e) {
-                    Expr::Attrs { binds, .. } => Some(binds.clone()),
+            let ast: &'a Ast = self.ast;
+            let new_binds: Option<&'a [Bind]> = match &def {
+                Def::Expr(e) => match ast.expr(*e) {
+                    Expr::Attrs { binds, .. } => Some(binds),
                     _ => None,
                 },
-                Def::Nested(_) => Some(Vec::new()),
+                Def::Nested(_) => Some(&[]),
                 _ => None,
             };
             let Some(new_binds) = new_binds else {
@@ -807,7 +814,7 @@ impl<'a> Compiler<'a> {
                 }
                 target.dynamics.extend(src.dynamics);
             } else {
-                for b in &new_binds {
+                for b in new_binds {
                     self.add_bind(target, b)?;
                 }
             }
@@ -909,17 +916,16 @@ impl<'a> Compiler<'a> {
             from.push(self.expr(*e)?);
         }
         if !deferred_from.is_empty() {
-            self.scopes.push(Scope::Lexical(HashMap::new()));
+            self.scopes.push(Scope::Lexical(FxHashMap::default()));
             // the from-env has `from.len()` anonymous slots at depth 0
             for (fi, name, bpos, bi) in deferred_from {
                 let subject = self.alloc(Ir::Local {
                     depth: 0,
                     idx: fi as u32,
                 });
-                let path = self.alloc_elems(vec![AttrElemIr::Static(name)]);
-                binds[bi].value = self.alloc(Ir::Select {
+                binds[bi].value = self.alloc(Ir::Select1 {
                     subject,
-                    path,
+                    sym: name,
                     default: None,
                     pos: bpos,
                 });
@@ -983,7 +989,7 @@ impl<'a> Compiler<'a> {
                 _ => None,
             });
         }
-        let mut names = HashMap::with_capacity(statics.len());
+        let mut names = FxHashMap::with_capacity_and_hasher(statics.len(), Default::default());
         for (i, (sym, _, _)) in statics.iter().enumerate() {
             names.insert(*sym, i as u32);
         }
@@ -1003,11 +1009,10 @@ impl<'a> Compiler<'a> {
                         depth: 0,
                         idx: (nbinds + fi) as u32,
                     });
-                    let path = self.alloc_elems(vec![AttrElemIr::Static(name)]);
                     (
-                        self.alloc(Ir::Select {
+                        self.alloc(Ir::Select1 {
                             subject,
-                            path,
+                            sym: name,
                             default: None,
                             pos: bpos,
                         }),
@@ -1046,9 +1051,10 @@ impl<'a> Compiler<'a> {
 
     /// A binding's value; names lambdas after their binding.
     fn value_expr(&mut self, e: ExprId, name: Option<Sym>) -> CResult<IrRef> {
-        if let Expr::Lambda { param, body } = self.ast.expr(e).clone() {
+        let ast: &'a Ast = self.ast;
+        if let Expr::Lambda { param, body } = ast.expr(e) {
             let pos = self.pos(e);
-            let l = self.lambda(&param, body, pos, name)?;
+            let l = self.lambda(param, *body, pos, name)?;
             return Ok(self.alloc(Ir::Lambda(l)));
         }
         self.expr(e)
@@ -1064,7 +1070,7 @@ impl<'a> Compiler<'a> {
         let _ = self.sym_body;
         match param {
             Param::Ident(sym) => {
-                let mut m = HashMap::new();
+                let mut m = FxHashMap::default();
                 m.insert(*sym, 0);
                 self.scopes.push(Scope::Lexical(m));
                 let body = self.expr(body)?;
@@ -1096,7 +1102,7 @@ impl<'a> Compiler<'a> {
                         );
                     }
                 }
-                let mut m = HashMap::new();
+                let mut m = FxHashMap::default();
                 let mut idx = 0u32;
                 if let Some(b) = bind {
                     m.insert(*b, idx);
@@ -1125,10 +1131,7 @@ impl<'a> Compiler<'a> {
                     firs.push(FormalIr {
                         sym: f.name,
                         default,
-                        pos: Pos {
-                            file: self.ast.file,
-                            offset: f.span.start,
-                        },
+                        pos: Pos(self.base + f.span.start),
                     });
                 }
                 let body = self.expr(body)?;

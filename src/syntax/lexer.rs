@@ -289,14 +289,17 @@ impl<'a> Lexer<'a> {
 
     /// Longest of PATH or `PATH_SEG` followed by `${`; returns the token end.
     fn scan_path_token(&self, p: usize) -> Option<usize> {
-        if let Some(e) = self.scan_path(p) {
-            return Some(e);
-        }
         let mut i = p;
         while is_path_char(self.at(i)) {
             i += 1;
         }
-        if self.at(i) == b'/' && self.at(i + 1) == b'$' && self.at(i + 2) == b'{' {
+        if self.at(i) != b'/' {
+            return None;
+        }
+        if let Some(e) = self.scan_path(p) {
+            return Some(e);
+        }
+        if self.at(i + 1) == b'$' && self.at(i + 2) == b'{' {
             return Some(i + 1);
         }
         None
@@ -448,13 +451,23 @@ impl<'a> Lexer<'a> {
                 let mut end = i;
                 let next = self.at(i);
                 if matches!(next, b':' | b'.' | b'+' | b'/') {
-                    if let Some(e) = self.scan_path_token(start)
+                    // A path needs a `/` and a URI a `:` right after the run
+                    // of path chars from `start`; `a.b.c` chains have neither
+                    // and skip both scans.
+                    let mut k = start;
+                    while is_path_char(self.at(k)) {
+                        k += 1;
+                    }
+                    let after = self.at(k);
+                    if after == b'/'
+                        && let Some(e) = self.scan_path_token(start)
                         && e > end
                     {
                         kind = Tok::Path;
                         end = e;
                     }
-                    if let Some(e) = self.scan_uri(start)
+                    if after == b':'
+                        && let Some(e) = self.scan_uri(start)
                         && e > end
                     {
                         kind = Tok::Uri;

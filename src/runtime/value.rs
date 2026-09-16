@@ -2,8 +2,10 @@
 //! the pointer tag can be classified with one load. Variable-length objects
 //! (lists, attrs, envs) keep their elements inline after a fixed header.
 
-use super::arena::Arena;
-use super::word::{Cell, TAG_IMM, TAG_INT, TAG_PTR, TAG_THUNK, Word};
+use super::arena::{Arena, Stat};
+use super::word::{
+    Cell, TAG_IMM, TAG_INT, TAG_LAMBDA, TAG_PTR, TAG_THUNK, TAG_THUNK_APP, TAG_THUNK_APP2, Word,
+};
 use crate::compile::ir::{Ir, LambdaIr};
 use crate::eval::Pos;
 use crate::syntax::symbol::Sym;
@@ -23,6 +25,7 @@ pub enum Kind {
     Env,
     Thunk,
     ThunkApp,
+    ThunkApp2,
 }
 
 /// Type of a forced value, as Nix sees it.
@@ -130,17 +133,19 @@ pub struct AttrsObj {
     // followed by `len` Attrs sorted by sym
 }
 
+/// Envs are reached only through `up`, lambdas and thunks, never through a
+/// `Word`, so they carry no `Kind`; slot indices come from the compiler, so
+/// they carry no length either. Header is one word.
 #[repr(C)]
 pub struct EnvObj {
-    pub kind: Kind,
-    pub len: u32,
     pub up: *const EnvObj,
-    // followed by `len` Cells
+    // followed by the slots
 }
 
+/// Closures are the third most common object; `TAG_LAMBDA` on the word
+/// replaces the Kind byte so the object is two words.
 #[repr(C)]
 pub struct LambdaObj {
-    pub kind: Kind,
     pub env: &'static EnvObj,
     pub lam: &'static LambdaIr,
 }
@@ -164,10 +169,10 @@ pub struct PrimOpAppObj {
 }
 
 /// A suspended `ir` in `env`. `result` is EMPTY until forced, BLACKHOLE while
-/// being forced, then the forced value.
+/// being forced, then the forced value. Thunk objects carry no `Kind` byte:
+/// the word tag (`TAG_THUNK` vs `TAG_THUNK_APP`) tells the two layouts apart.
 #[repr(C)]
 pub struct ThunkObj {
-    pub kind: Kind,
     pub result: Cell,
     pub env: &'static EnvObj,
     pub ir: &'static Ir,
@@ -176,16 +181,28 @@ pub struct ThunkObj {
 /// A suspended application `func arg`, as created by `map`, `genList`, etc.
 #[repr(C)]
 pub struct ThunkAppObj {
-    pub kind: Kind,
     pub result: Cell,
     pub func: Word,
     pub arg: Word,
 }
 
+/// A suspended two-argument application `func a b`, as created by `mapAttrs`.
+#[repr(C)]
+pub struct ThunkApp2Obj {
+    pub result: Cell,
+    pub func: Word,
+    pub arg1: Word,
+    pub arg2: Word,
+}
+
 const _: () = assert!(size_of::<ListObj>() == 8);
 const _: () = assert!(size_of::<AttrsObj>() == 8);
-const _: () = assert!(size_of::<EnvObj>() == 16);
-const _: () = assert!(size_of::<Attr>() == 24);
+const _: () = assert!(size_of::<EnvObj>() == 8);
+const _: () = assert!(size_of::<Attr>() == 16);
+const _: () = assert!(size_of::<ThunkObj>() == 24);
+const _: () = assert!(size_of::<ThunkAppObj>() == 24);
+const _: () = assert!(size_of::<ThunkApp2Obj>() == 32);
+const _: () = assert!(size_of::<LambdaObj>() == 16);
 
 impl ListObj {
     #[inline]
@@ -234,12 +251,22 @@ impl AttrsObj {
 }
 
 impl EnvObj {
+    /// Slot `i`. The compiler resolved `i` against this env's binder, so it
+    /// is in range by construction.
     #[inline]
-    pub fn slots(&self) -> &'static [Cell] {
-        // SAFETY: the allocator placed `len` cells directly after the header.
+    pub fn slot(&self, i: usize) -> &'static Cell {
+        // SAFETY: `alloc_env` placed the slots directly after the header and
+        // every index the evaluator uses was resolved at compile time.
+        unsafe { &*((self as *const EnvObj).add(1) as *const Cell).add(i) }
+    }
+
+    /// The first `n` slots, for filling a fresh env of `n` slots.
+    #[inline]
+    pub fn slots_n(&self, n: usize) -> &'static [Cell] {
+        // SAFETY: as for `slot`; the caller passes the `n` it allocated.
         unsafe {
             let p = (self as *const EnvObj).add(1) as *const Cell;
-            std::slice::from_raw_parts(p, self.len as usize)
+            std::slice::from_raw_parts(p, n)
         }
     }
 
@@ -277,7 +304,9 @@ impl Word {
                 Word::FALSE => Value::Bool(false),
                 _ => panic!("view: blackhole"),
             },
-            TAG_THUNK => panic!("view: unforced thunk"),
+            TAG_THUNK | TAG_THUNK_APP | TAG_THUNK_APP2 => panic!("view: unforced thunk"),
+            // SAFETY: lambda-tagged words point at an arena LambdaObj.
+            TAG_LAMBDA => Value::Lambda(unsafe { &*self.ptr::<LambdaObj>() }),
             _ => {
                 debug_assert!(self.0 != 0, "view: empty word");
                 // SAFETY: pointer-tagged words always point at an arena
@@ -291,7 +320,6 @@ impl Word {
                         Kind::Path => Value::Path(&*(p as *const PathObj)),
                         Kind::List => Value::List(&*(p as *const ListObj)),
                         Kind::Attrs => Value::Attrs(&*(p as *const AttrsObj)),
-                        Kind::Lambda => Value::Lambda(&*(p as *const LambdaObj)),
                         Kind::PrimOp => Value::PrimOp(&*(p as *const PrimOpObj)),
                         Kind::PrimOpApp => Value::PrimOpApp(&*(p as *const PrimOpAppObj)),
                         k => panic!("view: not a value object: {k:?}"),
@@ -318,6 +346,9 @@ impl Word {
 
     #[inline]
     pub fn heap_kind(self) -> Option<Kind> {
+        if self.tag() == TAG_LAMBDA {
+            return Some(Kind::Lambda);
+        }
         if self.tag() == TAG_PTR && self.0 != 0 {
             // SAFETY: see `view`.
             Some(unsafe { *(self.ptr::<u8>() as *const Kind) })
@@ -358,12 +389,15 @@ impl Word {
         }
     }
 
-    /// The thunk object behind a THUNK-tagged word.
+    /// Which thunk layout a THUNK-tagged word points at.
     #[inline]
     pub fn thunk_kind(self) -> Kind {
         debug_assert!(self.is_thunk());
-        // SAFETY: thunk words point at a ThunkObj or ThunkAppObj.
-        unsafe { *(self.ptr::<u8>() as *const Kind) }
+        match self.tag() {
+            TAG_THUNK_APP => Kind::ThunkApp,
+            TAG_THUNK_APP2 => Kind::ThunkApp2,
+            _ => Kind::Thunk,
+        }
     }
 
     #[inline]
@@ -382,6 +416,12 @@ impl Word {
     pub fn as_thunk_app(self) -> &'static ThunkAppObj {
         // SAFETY: caller checked `thunk_kind() == Kind::ThunkApp`.
         unsafe { &*self.ptr::<ThunkAppObj>() }
+    }
+
+    #[inline]
+    pub fn as_thunk_app2(self) -> &'static ThunkApp2Obj {
+        // SAFETY: caller checked `thunk_kind() == Kind::ThunkApp2`.
+        unsafe { &*self.ptr::<ThunkApp2Obj>() }
     }
 }
 
@@ -409,6 +449,7 @@ impl Arena {
     }
 
     pub fn mk_string_static(&mut self, bytes: &'static [u8], ctx: &'static [Ctx]) -> Word {
+        self.stats.note(Stat::StrObj, size_of::<StringObj>());
         Word::from_ptr(self.alloc(StringObj {
             kind: Kind::String,
             bytes,
@@ -417,11 +458,14 @@ impl Arena {
     }
 
     pub fn mk_string(&mut self, bytes: &[u8]) -> Word {
+        self.stats.note(Stat::Bytes, bytes.len());
         let b = self.alloc_bytes(bytes);
         self.mk_string_static(b, &[])
     }
 
     pub fn mk_string_ctx(&mut self, bytes: &[u8], ctx: &[Ctx]) -> Word {
+        self.stats.note(Stat::Bytes, bytes.len());
+        self.stats.note(Stat::Ctx, size_of_val(ctx));
         let b = self.alloc_bytes(bytes);
         let c = self.alloc_slice(ctx);
         self.mk_string_static(b, c)
@@ -437,6 +481,8 @@ impl Arena {
 
     /// Allocate a list of `n` cells, all EMPTY. Fill through `cells()`.
     pub fn alloc_list(&mut self, n: usize) -> &'static ListObj {
+        self.stats
+            .note(Stat::List, size_of::<ListObj>() + n * size_of::<Cell>());
         let p = self.alloc_raw(size_of::<ListObj>() + n * size_of::<Cell>(), 8) as *mut ListObj;
         // SAFETY: fresh allocation sized for header plus n cells.
         unsafe {
@@ -461,6 +507,13 @@ impl Arena {
     /// Allocate attrs with `n` uninitialised entries. Caller fills them in
     /// sorted order through `attrs_mut`.
     pub fn alloc_attrs(&mut self, n: usize) -> &'static mut AttrsObj {
+        self.alloc_attrs_as(n, Stat::Attrs)
+    }
+
+    /// `alloc_attrs` with a stats bucket naming the producer.
+    pub fn alloc_attrs_as(&mut self, n: usize, bucket: Stat) -> &'static mut AttrsObj {
+        self.stats
+            .note(bucket, size_of::<AttrsObj>() + n * size_of::<Attr>());
         let p = self.alloc_raw(size_of::<AttrsObj>() + n * size_of::<Attr>(), 8) as *mut AttrsObj;
         // SAFETY: fresh allocation sized for header plus n attrs.
         unsafe {
@@ -505,12 +558,12 @@ impl Arena {
     }
 
     pub fn alloc_env(&mut self, up: Option<&'static EnvObj>, n: usize) -> &'static EnvObj {
+        self.stats
+            .note(Stat::Env, size_of::<EnvObj>() + n * size_of::<Cell>());
         let p = self.alloc_raw(size_of::<EnvObj>() + n * size_of::<Cell>(), 8) as *mut EnvObj;
         // SAFETY: fresh allocation sized for header plus n cells.
         unsafe {
             p.write(EnvObj {
-                kind: Kind::Env,
-                len: n as u32,
                 up: up.map_or(std::ptr::null(), |e| e as *const EnvObj),
             });
             let cells = p.add(1) as *mut u64;
@@ -521,8 +574,8 @@ impl Arena {
 
     #[inline]
     pub fn mk_thunk(&mut self, env: &'static EnvObj, ir: &'static Ir) -> Word {
+        self.stats.note(Stat::Thunk, size_of::<ThunkObj>());
         let t = self.alloc(ThunkObj {
-            kind: Kind::Thunk,
             result: Cell::new(Word::EMPTY),
             env,
             ir,
@@ -532,21 +585,30 @@ impl Arena {
 
     #[inline]
     pub fn mk_thunk_app(&mut self, func: Word, arg: Word) -> Word {
+        self.stats.note(Stat::ThunkApp, size_of::<ThunkAppObj>());
         let t = self.alloc(ThunkAppObj {
-            kind: Kind::ThunkApp,
             result: Cell::new(Word::EMPTY),
             func,
             arg,
         });
-        Word::thunk_from_ptr(t as *const ThunkAppObj)
+        Word::thunk_app_from_ptr(t as *const ThunkAppObj)
+    }
+
+    #[inline]
+    pub fn mk_thunk_app2(&mut self, func: Word, arg1: Word, arg2: Word) -> Word {
+        self.stats.note(Stat::ThunkApp, size_of::<ThunkApp2Obj>());
+        let t = self.alloc(ThunkApp2Obj {
+            result: Cell::new(Word::EMPTY),
+            func,
+            arg1,
+            arg2,
+        });
+        Word::thunk_app2_from_ptr(t as *const ThunkApp2Obj)
     }
 
     pub fn mk_lambda(&mut self, env: &'static EnvObj, lam: &'static LambdaIr) -> Word {
-        Word::from_ptr(self.alloc(LambdaObj {
-            kind: Kind::Lambda,
-            env,
-            lam,
-        }))
+        self.stats.note(Stat::Lambda, size_of::<LambdaObj>());
+        Word::lambda_from_ptr(self.alloc(LambdaObj { env, lam }) as *const LambdaObj)
     }
 
     pub fn mk_primop(&mut self, name: &'static str, arity: u8, f: PrimFn) -> Word {
@@ -559,6 +621,10 @@ impl Arena {
     }
 
     pub fn mk_primop_app(&mut self, op: &'static PrimOpObj, args: &[Word]) -> Word {
+        self.stats.note(
+            Stat::PrimOpApp,
+            size_of::<PrimOpAppObj>() + size_of_val(args),
+        );
         let args = self.alloc_slice(args);
         Word::from_ptr(self.alloc(PrimOpAppObj {
             kind: Kind::PrimOpApp,
@@ -619,4 +685,31 @@ pub fn ctx_to_arena(arena: &mut Arena, mut v: Vec<Ctx>) -> &'static [Ctx] {
     v.sort();
     v.dedup();
     arena.alloc_slice(&v)
+}
+
+impl AttrsObj {
+    /// Write entry `i` of a set from `alloc_attrs`. Callers fill every entry
+    /// in sorted order before handing the set out.
+    #[inline]
+    pub fn init(&mut self, i: usize, sym: Sym, pos: Pos, w: Word) {
+        debug_assert!(i < self.len as usize);
+        // SAFETY: `alloc_attrs` reserved `len` entries after the header;
+        // `write` does not read the uninitialised slot.
+        unsafe {
+            let p = (self as *mut AttrsObj).add(1) as *mut Attr;
+            std::ptr::write(
+                p.add(i),
+                Attr {
+                    sym,
+                    pos,
+                    cell: Cell::new(w),
+                },
+            )
+        }
+    }
+
+    #[inline]
+    pub fn init_from(&mut self, i: usize, a: &Attr) {
+        self.init(i, a.sym, a.pos, a.cell.get())
+    }
 }
