@@ -3,5 +3,108 @@
 
 pub mod deque;
 pub mod fiber;
+pub mod force;
+pub mod interner;
 pub mod sched;
+pub mod shared;
 pub mod thunk;
+
+use std::sync::Mutex;
+
+use crate::eval::Evaluator;
+use crate::runtime::Arena;
+
+pub use force::{fanout_attrs, fanout_list, force_deep, force_thunk, import_thunk, journal};
+
+/// Per-fiber evaluator state. `on` is false on the sequential path.
+#[derive(Clone)]
+pub struct Ctx {
+    pub on: bool,
+    /// Claimer id of the fiber running this evaluator.
+    pub id: u32,
+    pub is_main: bool,
+    pub cancelled: bool,
+    pub speculating: bool,
+    /// Effects recorded by a helper fiber; see docs/parallel.md.
+    pub journal: Vec<String>,
+    pub slot: *mut sched::Slot,
+}
+
+impl Default for Ctx {
+    fn default() -> Ctx {
+        Ctx {
+            on: false,
+            id: 0,
+            is_main: true,
+            cancelled: false,
+            speculating: false,
+            journal: Vec::new(),
+            slot: std::ptr::null_mut(),
+        }
+    }
+}
+
+/// A cloned evaluator starts with an empty arena; the worker swaps its
+/// own in on every resume.
+impl Clone for Arena {
+    fn clone(&self) -> Arena {
+        Arena::new()
+    }
+}
+
+/// Number of workers from `--workers`, `IETSP_WORKERS`, or the machine.
+pub fn default_workers() -> usize {
+    if let Ok(v) = std::env::var("IETSP_WORKERS")
+        && let Ok(n) = v.parse::<usize>()
+        && n >= 1
+    {
+        return n;
+    }
+    std::thread::available_parallelism().map_or(1, |n| n.get())
+}
+
+fn stack_size() -> usize {
+    std::env::var("IETSP_FIBER_STACK_MB")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map_or(fiber::DEFAULT_STACK, |mb| mb << 20)
+}
+
+/// Run `f` with `ev` as the main fiber on `workers` threads. With one
+/// worker this is a plain call.
+pub fn run<R: Send + 'static>(
+    workers: usize,
+    mut ev: Evaluator,
+    f: impl FnOnce(&mut Evaluator) -> R + Send + 'static,
+) -> R {
+    if workers <= 1 {
+        return f(&mut ev);
+    }
+    let template = force::SyncEv(ev.clone());
+    let rt = sched::Runtime::start(workers, Box::new(force::EvalDriver(template)), stack_size());
+    let user = Box::into_raw(Box::new(ev)) as *mut ();
+    let out: &'static Mutex<Option<R>> = Box::leak(Box::new(Mutex::new(None)));
+    rt.run_main(
+        user,
+        Box::new(move |slot: &mut sched::Slot| {
+            let ev = force::ev_of(slot);
+            force::init_ctx(ev, slot);
+            let r = f(ev);
+            if std::env::var_os("IETSP_PAR_STATS").is_some() {
+                eprintln!(
+                    "parallel: fibers={} deadlocks={} main-stack-resident={}K",
+                    slot.runtime().stats_fibers(),
+                    slot.runtime()
+                        .deadlocks
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                    slot.fiber.stack.resident() >> 10
+                );
+            }
+            *out.lock().unwrap() = Some(r);
+        }),
+    );
+    out.lock()
+        .unwrap()
+        .take()
+        .expect("main fiber returned a result")
+}

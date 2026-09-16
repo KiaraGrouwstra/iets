@@ -80,10 +80,11 @@ impl Word {
         self.tag() == TAG_PTR && self.0 != 0
     }
 
-    /// Any BLACKHOLE, including the claimer-tagged parallel forms.
+    /// Any BLACKHOLE, including the claimer-tagged parallel forms (bit 7
+    /// is the has-waiters flag, bits 8.. the claimer id).
     #[inline]
     pub fn is_blackhole(self) -> bool {
-        self.0 & 0xFF == IMM_BLACKHOLE
+        self.0 & 0x7F == IMM_BLACKHOLE
     }
 
     #[inline]

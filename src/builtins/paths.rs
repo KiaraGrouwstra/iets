@@ -195,7 +195,7 @@ fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>> {
                 if os_path(sp).exists() {
                     continue;
                 }
-                let src = ev.src_to_store.iter().find(|(_, v)| *v == sp);
+                let src = ev.src_to_store.iter().find(|(_, v)| v == sp);
                 if let Some((src, _)) = src
                     && p.starts_with(sp)
                 {

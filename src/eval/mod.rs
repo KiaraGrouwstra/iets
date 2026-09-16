@@ -32,7 +32,7 @@ pub struct FileInfo {
 }
 
 impl FileInfo {
-    fn new(path: Vec<u8>, src: &'static [u8]) -> FileInfo {
+    pub(crate) fn new(path: Vec<u8>, src: &'static [u8]) -> FileInfo {
         let mut line_starts = vec![0u32];
         for (i, &b) in src.iter().enumerate() {
             if b == b'\n' {
@@ -57,6 +57,7 @@ impl FileInfo {
 }
 
 /// Interned symbols the evaluator needs by name.
+#[derive(Clone)]
 pub struct WellKnown {
     pub out_path: Sym,
     pub drv_path: Sym,
@@ -77,14 +78,17 @@ pub struct WellKnown {
     pub prefix: Sym,
 }
 
+/// Clone gives a fiber its own evaluator: shared tables by handle, a
+/// fresh arena, private counters (see docs/parallel.md).
+#[derive(Clone)]
 pub struct Evaluator {
     pub arena: Arena,
     pub interner: Interner,
-    pub files: Vec<FileInfo>,
-    file_ids: HashMap<Vec<u8>, FileId>,
+    pub files: crate::parallel::shared::Files,
     pub globals: Globals,
     pub root_env: &'static EnvObj,
-    import_cache: HashMap<Vec<u8>, Word>,
+    /// Resolved path -> lazy import thunk (`parallel::import_thunk`).
+    import_cache: crate::parallel::shared::SharedMap<Vec<u8>, Word>,
     /// `(prefix, path)` entries, `-I` first then `NIX_PATH`.
     pub search_path: Vec<(Vec<u8>, Vec<u8>)>,
     pub call_depth: u32,
@@ -97,9 +101,10 @@ pub struct Evaluator {
     pub nr_thunks: u64,
     pub nr_function_calls: u64,
     /// Source path -> virtual store path, like Nix's `srcToStore`.
-    pub src_to_store: HashMap<Vec<u8>, &'static [u8]>,
+    pub src_to_store: crate::parallel::shared::SharedMap<Vec<u8>, &'static [u8]>,
     pub compile_settings: crate::compile::CompileSettings,
     pub drv: crate::builtins::derivation::DrvState,
+    pub par: crate::parallel::Ctx,
 }
 
 macro_rules! bail {
@@ -112,7 +117,7 @@ pub(crate) use bail;
 impl Evaluator {
     pub fn new() -> Evaluator {
         let mut arena = Arena::new();
-        let mut interner = Interner::new();
+        let interner = Interner::new();
         let root_env = arena.alloc_env(None, 0);
         let s = WellKnown {
             out_path: interner.intern(b"outPath"),
@@ -136,14 +141,13 @@ impl Evaluator {
         let mut ev = Evaluator {
             arena,
             interner,
-            files: Vec::new(),
-            file_ids: HashMap::new(),
+            files: Default::default(),
             globals: Globals {
                 table: HashMap::new(),
                 builtins: None,
             },
             root_env,
-            import_cache: HashMap::new(),
+            import_cache: Default::default(),
             search_path: Vec::new(),
             call_depth: 0,
             try_level: 0,
@@ -153,9 +157,10 @@ impl Evaluator {
             current_system: "x86_64-linux",
             nr_thunks: 0,
             nr_function_calls: 0,
-            src_to_store: HashMap::new(),
+            src_to_store: Default::default(),
             compile_settings: Default::default(),
             drv: Default::default(),
+            par: Default::default(),
         };
         crate::builtins::install(&mut ev);
         ev
@@ -164,14 +169,7 @@ impl Evaluator {
     // ---- files ------------------------------------------------------------
 
     pub fn add_file(&mut self, path: &[u8], src: Vec<u8>) -> FileId {
-        if let Some(id) = self.file_ids.get(path) {
-            return *id;
-        }
-        let id = FileId(self.files.len() as u32);
-        let src: &'static [u8] = Box::leak(src.into_boxed_slice());
-        self.files.push(FileInfo::new(path.to_vec(), src));
-        self.file_ids.insert(path.to_vec(), id);
-        id
+        self.files.add(path, src)
     }
 
     pub fn file(&self, id: FileId) -> Option<&FileInfo> {
@@ -235,16 +233,15 @@ impl Evaluator {
     /// `import`: parse, compile, evaluate and cache a file.
     pub fn eval_file(&mut self, path: &[u8], pos: Pos) -> EvalResult<Word> {
         let resolved = self.resolve_import_path(path, pos)?;
-        if let Some(w) = self.import_cache.get(&resolved) {
-            return Ok(*w);
-        }
-        let src = self.read_source(&resolved, pos)?;
-        let dir = dir_of(&resolved).to_vec();
-        let ir = self.compile_source(&resolved, src, &dir, None)?;
-        let root = self.root_env;
-        let w = self.eval(root, ir)?;
-        self.import_cache.insert(resolved, w);
-        Ok(w)
+        // parallel: one lazy thunk per file; forcing it does the work once
+        let w = match self.import_cache.get(&resolved) {
+            Some(w) => w,
+            None => {
+                let t = crate::parallel::import_thunk(self, &resolved, pos);
+                self.import_cache.get_or_insert(resolved, t)
+            }
+        };
+        self.force(w)
     }
 
     /// Like `eval_file` but with `scope` attrs bound above the globals; not
@@ -331,7 +328,7 @@ impl Evaluator {
         )
     }
 
-    fn read_source(&self, resolved: &[u8], pos: Pos) -> EvalResult<Vec<u8>> {
+    pub(crate) fn read_source(&self, resolved: &[u8], pos: Pos) -> EvalResult<Vec<u8>> {
         if let Some(rest) = resolved.strip_prefix(CorePkgs::PREFIX)
             && let Some(src) = crate::builtins::corepkgs(rest)
         {
@@ -376,6 +373,9 @@ impl Evaluator {
     }
 
     fn force_thunk(&mut self, w: Word) -> EvalResult<Word> {
+        if self.par.on {
+            return crate::parallel::force_thunk(self, w); // parallel: claim protocol
+        }
         let result = w.thunk_result_cell();
         let r = result.get();
         if r != Word::EMPTY {
@@ -496,6 +496,9 @@ impl Evaluator {
 
     /// Recursively force lists and attrs (`--strict`).
     pub fn force_deep(&mut self, w: Word) -> EvalResult<Word> {
+        if self.par.on {
+            return crate::parallel::force_deep(self, w); // parallel: fan-out walk
+        }
         let mut seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
         let w = self.force(w)?;
         self.force_deep_inner(w, &mut seen)?;

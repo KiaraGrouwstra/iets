@@ -194,7 +194,11 @@ fn trace(ev: &mut Evaluator, args: &[Word], _pos: Pos) -> EvalResult<Word> {
         Value::String(s) => String::from_utf8_lossy(s.bytes).into_owned(),
         _ => crate::print::show_value_short(ev, w),
     };
-    eprintln!("trace: {msg}");
+    let line = format!("trace: {msg}");
+    if !crate::parallel::journal(ev, line.clone()) {
+        // parallel: helpers journal, the demand path prints
+        eprintln!("{line}");
+    }
     ev.force(args[1])
 }
 
@@ -204,7 +208,11 @@ fn warn(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the first argument; the message passed to builtins.warn",
     )?;
-    eprintln!("evaluation warning: {}", String::from_utf8_lossy(s.bytes));
+    let line = format!("evaluation warning: {}", String::from_utf8_lossy(s.bytes));
+    if !crate::parallel::journal(ev, line.clone()) {
+        // parallel: helpers journal, the demand path prints
+        eprintln!("{line}");
+    }
     ev.force(args[1])
 }
 

@@ -67,6 +67,9 @@ fn invalid_regex(re: &[u8], pos: Pos) -> Box<Error> {
     )
 }
 
+// parallel: never inlined so the thread-local is resolved on the current
+// thread; callers hold the Rc across no force.
+#[inline(never)]
 fn get_regex(re: &[u8]) -> Rc<CompiledRegex> {
     REGEX_CACHE.with(|c| {
         let mut c = c.borrow_mut();
@@ -124,12 +127,12 @@ fn match_(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the first argument passed to builtins.match",
     )?;
-    let cre = get_regex(re);
     let s = ev.force_string(
         args[1],
         pos,
         "while evaluating the second argument passed to builtins.match",
     )?;
+    let cre = get_regex(re);
     let r = cre.get(true, re, pos)?;
     let mut locs = r.capture_locations();
     if r.captures_read(&mut locs, s.bytes).is_none() {
@@ -147,12 +150,12 @@ fn split(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the first argument passed to builtins.split",
     )?;
-    let cre = get_regex(re);
     let s = ev.force_string(
         args[1],
         pos,
         "while evaluating the second argument passed to builtins.split",
     )?;
+    let cre = get_regex(re);
     let r = cre.get(false, re, pos)?;
     let hay = s.bytes;
     let mut locs = r.capture_locations();

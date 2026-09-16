@@ -11,7 +11,7 @@ const STACK_SIZE: usize = 4 << 30;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: ietsp eval [--strict] [--json] [-I prefix=path]... [--arg name expr] [--argstr name str] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp build [--builder URL] [--timings] [--out NAME]... [--source STOREPATH=LOCAL]... DRV"
+        "usage: ietsp eval [--strict] [--json] [--workers N] [-I prefix=path]... [--arg name expr] [--argstr name str] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp build [--builder URL] [--timings] [--out NAME]... [--source STOREPATH=LOCAL]... DRV"
     );
     exit(2)
 }
@@ -69,6 +69,7 @@ struct EvalArgs {
     lint_absolute: ietsp::compile::Lint,
     lint_short: ietsp::compile::Lint,
     xp_features: Vec<String>,
+    workers: usize,
 }
 
 enum ArgKind {
@@ -110,6 +111,7 @@ fn parse_eval_args(argv: &[String]) -> EvalArgs {
         lint_absolute: ietsp::compile::Lint::Ignore,
         lint_short: ietsp::compile::Lint::Ignore,
         xp_features: Vec::new(),
+        workers: ietsp::parallel::default_workers(),
     };
     let mut i = 0;
     while i < argv.len() {
@@ -142,6 +144,14 @@ fn parse_eval_args(argv: &[String]) -> EvalArgs {
             "--dump-drvs" => {
                 i += 1;
                 a.dump_drvs = Some(argv.get(i).unwrap_or_else(|| usage()).clone());
+            }
+            "--workers" => {
+                i += 1;
+                a.workers = argv
+                    .get(i)
+                    .and_then(|v| v.parse().ok())
+                    .filter(|n| *n >= 1)
+                    .unwrap_or_else(|| usage());
             }
             "--option" => {
                 // accepted for nix-instantiate compatibility; ignored
@@ -195,14 +205,14 @@ fn report(ev: &Evaluator, e: &Error) {
     }
 }
 
-fn run_eval(a: EvalArgs) -> i32 {
+fn run_eval(mut a: EvalArgs) -> i32 {
     let mut ev = Evaluator::new();
     ev.compile_settings.lint_absolute_path_literals = a.lint_absolute;
     ev.compile_settings.lint_short_path_literals = a.lint_short;
     if a.xp_features.iter().any(|f| f == "parse-toml-timestamps") {
         ietsp::builtins::text::set_parse_toml_timestamps(true);
     }
-    let mut includes = a.includes;
+    let mut includes = std::mem::take(&mut a.includes);
     if let Ok(np) = std::env::var("NIX_PATH") {
         for entry in np.split(':').filter(|s| !s.is_empty()) {
             includes.push(parse_include(entry));
@@ -221,6 +231,12 @@ fn run_eval(a: EvalArgs) -> i32 {
         .map(|p| p.into_os_string().into_encoded_bytes())
         .unwrap_or_else(|_| b"/".to_vec());
 
+    // parallel: the rest runs as the main fiber
+    let workers = a.workers;
+    ietsp::parallel::run(workers, ev, move |ev| eval_and_print(ev, a, cwd))
+}
+
+fn eval_and_print(ev: &mut Evaluator, a: EvalArgs, cwd: Vec<u8>) -> i32 {
     let result = (|| -> Result<Word, Box<Error>> {
         let mut v = match a.input {
             Some(Input::Expr(e)) => ev.eval_string(&e, &cwd)?,
@@ -264,7 +280,7 @@ fn run_eval(a: EvalArgs) -> i32 {
     let v = match result {
         Ok(v) => v,
         Err(e) => {
-            report(&ev, &e);
+            report(ev, &e);
             return 1;
         }
     };
@@ -272,7 +288,7 @@ fn run_eval(a: EvalArgs) -> i32 {
     let mut out: Vec<u8> = Vec::new();
     let r = if a.json {
         let mut ctx = Vec::new();
-        ietsp::print::print_json(&mut ev, v, &mut out, &mut ctx, a.strict, Pos::NONE)
+        ietsp::print::print_json(ev, v, &mut out, &mut ctx, a.strict, Pos::NONE)
     } else {
         (|| {
             let v = if a.strict {
@@ -281,7 +297,7 @@ fn run_eval(a: EvalArgs) -> i32 {
                 ev.force(v)?
             };
             let mut seen = HashSet::new();
-            ietsp::print::print_ambiguous(&mut ev, v, 1, &mut out, &mut seen, 0)
+            ietsp::print::print_ambiguous(ev, v, 1, &mut out, &mut seen, 0)
         })()
     };
     match r {
@@ -293,7 +309,7 @@ fn run_eval(a: EvalArgs) -> i32 {
             0
         }
         Err(e) => {
-            report(&ev, &e);
+            report(ev, &e);
             1
         }
     }

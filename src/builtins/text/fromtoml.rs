@@ -1,19 +1,17 @@
 //! `builtins.fromTOML` on top of the `toml` crate, with Nix's datetime
 //! rendering (`primops/fromTOML.cc: normalizeDatetimeFormat`).
 
-use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::eval::{ErrorKind, EvalResult, Evaluator, Pos, bail};
 use crate::runtime::*;
 use crate::syntax::symbol::Sym;
 
-thread_local! {
-    static PARSE_TOML_TIMESTAMPS: Cell<bool> = const { Cell::new(false) };
-}
+static PARSE_TOML_TIMESTAMPS: AtomicBool = AtomicBool::new(false);
 
 /// The `parse-toml-timestamps` experimental feature.
 pub fn set_parse_toml_timestamps(on: bool) {
-    PARSE_TOML_TIMESTAMPS.with(|c| c.set(on));
+    PARSE_TOML_TIMESTAMPS.store(on, Ordering::Relaxed);
 }
 
 pub fn from_toml(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
@@ -44,7 +42,7 @@ fn convert(ev: &mut Evaluator, v: ::toml::Value, pos: Pos) -> EvalResult<Word> {
         T::Float(f) => ev.mk_float(f),
         T::Boolean(b) => Word::from_bool(b),
         T::Datetime(d) => {
-            if !PARSE_TOML_TIMESTAMPS.with(|c| c.get()) {
+            if !PARSE_TOML_TIMESTAMPS.load(Ordering::Relaxed) {
                 bail!(
                     ErrorKind::Eval,
                     pos,
