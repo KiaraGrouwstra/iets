@@ -14,6 +14,7 @@ pub use error::{Error, ErrorKind, EvalResult, Pos};
 use crate::compile::ir::{AttrElemIr, AttrsIr, BindIr, BindScope, Ir, IrRef, LambdaIr, ParamIr};
 use crate::compile::{Compiler, Globals};
 use crate::runtime::*;
+use crate::runtime::arena::{STAT_NAMES, Stat};
 use crate::syntax::ast::FileId;
 use crate::syntax::symbol::{Interner, Sym};
 
@@ -96,6 +97,7 @@ pub struct Evaluator {
     pub current_system: &'static str,
     pub nr_thunks: u64,
     pub nr_function_calls: u64,
+    pub t_compile: std::time::Duration,
     /// Source path -> virtual store path, like Nix's `srcToStore`.
     pub src_to_store: HashMap<Vec<u8>, &'static [u8]>,
     pub compile_settings: crate::compile::CompileSettings,
@@ -153,6 +155,7 @@ impl Evaluator {
             current_system: "x86_64-linux",
             nr_thunks: 0,
             nr_function_calls: 0,
+            t_compile: std::time::Duration::ZERO,
             src_to_store: HashMap::new(),
             compile_settings: Default::default(),
             drv: Default::default(),
@@ -209,6 +212,8 @@ impl Evaluator {
                 },
             )
         })?;
+        let t0 = std::time::Instant::now();
+        let before = self.arena.bytes_allocated;
         let mut c = Compiler::new(
             &ast,
             &mut self.arena,
@@ -217,7 +222,10 @@ impl Evaluator {
             base_dir,
             self.compile_settings,
         );
-        c.compile_root(extra_scope)
+        let r = c.compile_root(extra_scope);
+        self.arena.stats.note(Stat::Ir, self.arena.bytes_allocated - before);
+        self.t_compile += t0.elapsed();
+        r
     }
 
     /// Evaluate a string expression (`-E`).
@@ -1461,6 +1469,8 @@ impl Evaluator {
             }
             _ => {
                 let parts: Vec<&[u8]> = strings.iter().map(|s| s.as_ref()).collect();
+                self.arena.stats.note(Stat::Bytes, parts.iter().map(|p| p.len()).sum());
+                self.arena.stats.note(Stat::Ctx, ctx.len() * size_of::<Ctx>());
                 let bytes = self.arena.alloc_concat(&parts);
                 let ctx = ctx_to_arena(&mut self.arena, ctx);
                 Ok(self.arena.mk_string_static(bytes, ctx))
@@ -1686,5 +1696,29 @@ impl Evaluator {
         }
         let a = self.arena.mk_attrs_sorted(&entries);
         self.apply(fun, &[a], Pos::NONE)
+    }
+}
+
+impl Evaluator {
+    /// `IETSP_STATS=1`: allocation and phase counters on stderr.
+    pub fn print_stats(&self) {
+        let st = &self.arena.stats;
+        eprintln!(
+            "files={} src_bytes={} thunks={} calls={} arena_bytes={} compile={:?}",
+            self.files.len(),
+            self.files.iter().map(|f| f.src.len()).sum::<usize>(),
+            self.nr_thunks,
+            self.nr_function_calls,
+            self.arena.bytes_allocated,
+            self.t_compile
+        );
+        for (i, name) in STAT_NAMES.iter().enumerate() {
+            eprintln!(
+                "{name:>10} count={:>9} bytes={:>11} ({:.1} MiB)",
+                st.counts[i],
+                st.bytes[i],
+                st.bytes[i] as f64 / (1 << 20) as f64
+            );
+        }
     }
 }

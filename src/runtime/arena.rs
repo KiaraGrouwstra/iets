@@ -12,6 +12,7 @@ pub struct Arena {
     ptr: *mut u8,
     end: *mut u8,
     pub bytes_allocated: usize,
+    pub stats: Stats,
 }
 
 impl Default for Arena {
@@ -26,6 +27,7 @@ impl Arena {
             ptr: ptr::null_mut(),
             end: ptr::null_mut(),
             bytes_allocated: 0,
+            stats: Stats::default(),
         }
     }
 
@@ -120,5 +122,50 @@ impl Arena {
         }
         // SAFETY: fully initialised above.
         unsafe { std::slice::from_raw_parts(p, len) }
+    }
+}
+
+/// Allocation kind for `IETSP_STATS`.
+#[derive(Clone, Copy)]
+#[repr(usize)]
+pub enum Stat {
+    Thunk,
+    ThunkApp,
+    Env,
+    List,
+    Attrs,
+    StrObj,
+    Bytes,
+    Ctx,
+    Lambda,
+    PrimOpApp,
+    Ir,
+}
+
+pub const STAT_NAMES: [&str; 11] = [
+    "thunk",
+    "thunk_app",
+    "env",
+    "list",
+    "attrs",
+    "str_obj",
+    "bytes",
+    "ctx",
+    "lambda",
+    "primop_app",
+    "ir",
+];
+
+#[derive(Default)]
+pub struct Stats {
+    pub counts: [u64; 11],
+    pub bytes: [u64; 11],
+}
+
+impl Stats {
+    #[inline]
+    pub fn note(&mut self, s: Stat, bytes: usize) {
+        self.counts[s as usize] += 1;
+        self.bytes[s as usize] += bytes as u64;
     }
 }

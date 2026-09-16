@@ -2,7 +2,7 @@
 //! the pointer tag can be classified with one load. Variable-length objects
 //! (lists, attrs, envs) keep their elements inline after a fixed header.
 
-use super::arena::Arena;
+use super::arena::{Arena, Stat};
 use super::word::{Cell, TAG_IMM, TAG_INT, TAG_PTR, TAG_THUNK, Word};
 use crate::compile::ir::{Ir, LambdaIr};
 use crate::eval::Pos;
@@ -409,6 +409,7 @@ impl Arena {
     }
 
     pub fn mk_string_static(&mut self, bytes: &'static [u8], ctx: &'static [Ctx]) -> Word {
+        self.stats.note(Stat::StrObj, size_of::<StringObj>());
         Word::from_ptr(self.alloc(StringObj {
             kind: Kind::String,
             bytes,
@@ -417,11 +418,14 @@ impl Arena {
     }
 
     pub fn mk_string(&mut self, bytes: &[u8]) -> Word {
+        self.stats.note(Stat::Bytes, bytes.len());
         let b = self.alloc_bytes(bytes);
         self.mk_string_static(b, &[])
     }
 
     pub fn mk_string_ctx(&mut self, bytes: &[u8], ctx: &[Ctx]) -> Word {
+        self.stats.note(Stat::Bytes, bytes.len());
+        self.stats.note(Stat::Ctx, size_of_val(ctx));
         let b = self.alloc_bytes(bytes);
         let c = self.alloc_slice(ctx);
         self.mk_string_static(b, c)
@@ -437,6 +441,7 @@ impl Arena {
 
     /// Allocate a list of `n` cells, all EMPTY. Fill through `cells()`.
     pub fn alloc_list(&mut self, n: usize) -> &'static ListObj {
+        self.stats.note(Stat::List, size_of::<ListObj>() + n * size_of::<Cell>());
         let p = self.alloc_raw(size_of::<ListObj>() + n * size_of::<Cell>(), 8) as *mut ListObj;
         // SAFETY: fresh allocation sized for header plus n cells.
         unsafe {
@@ -461,6 +466,7 @@ impl Arena {
     /// Allocate attrs with `n` uninitialised entries. Caller fills them in
     /// sorted order through `attrs_mut`.
     pub fn alloc_attrs(&mut self, n: usize) -> &'static mut AttrsObj {
+        self.stats.note(Stat::Attrs, size_of::<AttrsObj>() + n * size_of::<Attr>());
         let p = self.alloc_raw(size_of::<AttrsObj>() + n * size_of::<Attr>(), 8) as *mut AttrsObj;
         // SAFETY: fresh allocation sized for header plus n attrs.
         unsafe {
@@ -505,6 +511,7 @@ impl Arena {
     }
 
     pub fn alloc_env(&mut self, up: Option<&'static EnvObj>, n: usize) -> &'static EnvObj {
+        self.stats.note(Stat::Env, size_of::<EnvObj>() + n * size_of::<Cell>());
         let p = self.alloc_raw(size_of::<EnvObj>() + n * size_of::<Cell>(), 8) as *mut EnvObj;
         // SAFETY: fresh allocation sized for header plus n cells.
         unsafe {
@@ -521,6 +528,7 @@ impl Arena {
 
     #[inline]
     pub fn mk_thunk(&mut self, env: &'static EnvObj, ir: &'static Ir) -> Word {
+        self.stats.note(Stat::Thunk, size_of::<ThunkObj>());
         let t = self.alloc(ThunkObj {
             kind: Kind::Thunk,
             result: Cell::new(Word::EMPTY),
@@ -532,6 +540,7 @@ impl Arena {
 
     #[inline]
     pub fn mk_thunk_app(&mut self, func: Word, arg: Word) -> Word {
+        self.stats.note(Stat::ThunkApp, size_of::<ThunkAppObj>());
         let t = self.alloc(ThunkAppObj {
             kind: Kind::ThunkApp,
             result: Cell::new(Word::EMPTY),
@@ -542,6 +551,7 @@ impl Arena {
     }
 
     pub fn mk_lambda(&mut self, env: &'static EnvObj, lam: &'static LambdaIr) -> Word {
+        self.stats.note(Stat::Lambda, size_of::<LambdaObj>());
         Word::from_ptr(self.alloc(LambdaObj {
             kind: Kind::Lambda,
             env,
@@ -559,6 +569,7 @@ impl Arena {
     }
 
     pub fn mk_primop_app(&mut self, op: &'static PrimOpObj, args: &[Word]) -> Word {
+        self.stats.note(Stat::PrimOpApp, size_of::<PrimOpAppObj>() + size_of_val(args));
         let args = self.alloc_slice(args);
         Word::from_ptr(self.alloc(PrimOpAppObj {
             kind: Kind::PrimOpApp,
