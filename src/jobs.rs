@@ -4,9 +4,9 @@
 //! force what a job needs (`type`, `name`, `drvPath`, output paths, `meta`)
 //! ahead of the walk. See docs/eval-jobs.md.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::parallel::force::{CellState, T_JOB, bail_requested, cell_state, fanout_range};
@@ -21,9 +21,12 @@ pub struct Opts {
     pub force_recurse: bool,
     pub meta: bool,
     pub show_input_drvs: bool,
-    /// `--chunks M --chunk N`: only leaves whose path hash is N mod M.
+    /// `--chunks M --chunk N`: only the units whose path hash is N mod M.
     pub chunks: u32,
     pub chunk: u32,
+    /// `--chunk-depth D`: a path of length D is a unit, whatever it holds;
+    /// a derivation above that depth is a unit of its own.
+    pub chunk_depth: u32,
 }
 
 struct Syms {
@@ -42,6 +45,24 @@ struct Config {
 }
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
+
+/// Path hash and depth of every set the walk fanned out, by address, so
+/// a helper handed a range of its cells can apply the chunk rule.
+static SETS: Mutex<Option<HashMap<u64, (u64, u32)>>> = Mutex::new(None);
+
+fn remember_set(a: &'static AttrsObj, hash: u64, depth: u32) {
+    SETS.lock()
+        .unwrap()
+        .get_or_insert_with(HashMap::new)
+        .insert(a as *const AttrsObj as u64, (hash, depth));
+}
+
+fn recall_set(a: &'static AttrsObj) -> Option<(u64, u32)> {
+    SETS.lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(&(a as *const AttrsObj as u64)).copied())
+}
 
 fn config() -> &'static Config {
     CONFIG.get().expect("eval-jobs config")
@@ -81,7 +102,7 @@ pub fn configure(ev: &mut Evaluator, opts: Opts, auto_args: Word) {
 pub fn run(ev: &mut Evaluator, root: Word, out: &mut dyn Write) -> Stats {
     let mut stats = Stats::default();
     let mut path = Vec::new();
-    walk(ev, root, &mut path, out, &mut stats);
+    walk(ev, root, &mut path, FNV_BASIS, out, &mut stats);
     stats
 }
 
@@ -95,15 +116,21 @@ fn walk(
     ev: &mut Evaluator,
     w: Word,
     path: &mut Vec<String>,
+    hash: u64,
     out: &mut dyn Write,
     stats: &mut Stats,
 ) {
-    match node(ev, w, path) {
+    let depth = path.len() as u32;
+    if depth == config().opts.chunk_depth && !admit(hash, depth, false) {
+        return;
+    }
+    match node(ev, w, path, hash) {
         Ok(Node::Job(line)) => {
             stats.jobs += 1;
             emit(out, &line);
         }
         Ok(Node::Recurse(attrs)) => {
+            remember_set(attrs, hash, depth);
             let ordered = lexicographic_order(ev, attrs);
             let cells = attrs.attrs();
             let index: Vec<usize> = ordered
@@ -128,12 +155,16 @@ fn walk(
                     fanout_range(ev, T_JOB, Word::from_ptr(attrs), lo, hi, JOB_BATCH);
                 }
                 let name = ev.interner.name_str(attr.sym).to_string();
+                let h = fnv_step(hash, name.as_bytes());
                 path.push(name);
-                walk(ev, attr.cell.get(), path, out, stats);
+                walk(ev, attr.cell.get(), path, h, out, stats);
                 path.pop();
             }
         }
         Ok(Node::Skip) => {}
+        // An attr that fails above the chunk depth is a unit of its own,
+        // like a derivation there, so one chunk reports it.
+        Err(_) if !admit(hash, depth, true) => {}
         Err(e) => {
             stats.errors += 1;
             let text = error_text(ev, &e);
@@ -202,21 +233,27 @@ pub fn error_text(ev: &Evaluator, e: &Error) -> String {
     s
 }
 
-/// FNV-1a over the path, for `--chunks`.
-fn path_hash(path: &[String]) -> u64 {
-    let mut h: u64 = 0xcbf29ce484222325;
-    for p in path {
-        for b in p.bytes().chain(std::iter::once(0)) {
-            h ^= b as u64;
-            h = h.wrapping_mul(0x100000001b3);
-        }
+const FNV_BASIS: u64 = 0xcbf29ce484222325;
+
+/// FNV-1a of one more path element (NUL-terminated) after `h`.
+fn fnv_step(h: u64, name: &[u8]) -> u64 {
+    let mut h = h;
+    for b in name.iter().copied().chain(std::iter::once(0)) {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
     }
     h
 }
 
-fn in_chunk(path: &[String]) -> bool {
+/// The chunk rule for a node at `depth` with path hash `hash`. Units are
+/// the paths of length `chunk_depth` and the derivations above it; every
+/// deeper node belongs to its unit.
+fn admit(hash: u64, depth: u32, leaf: bool) -> bool {
     let o = config().opts;
-    o.chunks <= 1 || path_hash(path) % o.chunks as u64 == o.chunk as u64
+    if o.chunks <= 1 || depth > o.chunk_depth || (depth < o.chunk_depth && !leaf) {
+        return true;
+    }
+    hash % o.chunks as u64 == o.chunk as u64
 }
 
 /// attr-path.cc: an all-digit component is a list index.
@@ -235,7 +272,7 @@ fn is_derivation(ev: &mut Evaluator, a: &'static AttrsObj) -> EvalResult<bool> {
 
 /// worker.cc:processJobRequest for one attribute path: what to print or
 /// where to recurse.
-fn node(ev: &mut Evaluator, w: Word, path: &[String]) -> EvalResult<Node> {
+fn node(ev: &mut Evaluator, w: Word, path: &[String], hash: u64) -> EvalResult<Node> {
     let cfg = config();
     if let Some(last) = path.last()
         && is_index(last)
@@ -256,7 +293,7 @@ fn node(ev: &mut Evaluator, w: Word, path: &[String]) -> EvalResult<Node> {
         return Ok(Node::Skip);
     };
     if is_derivation(ev, attrs)? {
-        if !in_chunk(path) {
+        if !admit(hash, path.len() as u32, true) {
             return Ok(Node::Skip);
         }
         return job(ev, attrs, path).map(Node::Job);
@@ -573,26 +610,51 @@ fn job(ev: &mut Evaluator, a: &'static AttrsObj, path: &[String]) -> EvalResult<
 /// in `start..end` of `attrs`. Never parks on a cell another fiber holds;
 /// an evaluation error in one child does not stop the others.
 pub fn prefetch_range(ev: &mut Evaluator, attrs: &'static AttrsObj, start: usize, end: usize) {
+    // A set the walk never registered is treated as below the chunk depth.
+    let (hash, depth) = recall_set(attrs).unwrap_or((FNV_BASIS, u32::MAX - 1));
     for attr in &attrs.attrs()[start..end] {
-        if bail_requested(ev) || ev.par.cancelled {
+        if prefetch_child(ev, attr, hash, depth).is_err() {
             return;
         }
-        let v = match cell_state(&attr.cell) {
-            CellState::Busy => continue,
-            CellState::Ready(v) => {
-                attr.cell.set(v);
-                v
-            }
-            CellState::Unclaimed => match ev.force_cell(&attr.cell) {
-                Ok(v) => v,
-                Err(_) => continue,
-            },
-        };
-        let _ = prefetch_value(ev, v, 0);
     }
 }
 
-fn prefetch_value(ev: &mut Evaluator, v: Word, depth: u32) -> EvalResult<()> {
+/// Force one child of a registered set and what a job needs of it. `Err`
+/// only when the fiber must stop.
+fn prefetch_child(
+    ev: &mut Evaluator,
+    attr: &'static Attr,
+    hash: u64,
+    depth: u32,
+) -> Result<(), ()> {
+    if bail_requested(ev) || ev.par.cancelled {
+        return Err(());
+    }
+    let cfg = config();
+    let h = fnv_step(hash, ev.interner.name(attr.sym));
+    let d = depth + 1;
+    if d == cfg.opts.chunk_depth && !admit(h, d, false) {
+        return Ok(());
+    }
+    let v = match cell_state(&attr.cell) {
+        CellState::Busy => return Ok(()),
+        CellState::Ready(v) => {
+            attr.cell.set(v);
+            v
+        }
+        CellState::Unclaimed => match ev.force_cell(&attr.cell) {
+            Ok(v) => v,
+            Err(e) if e.kind == ErrorKind::Cancelled => return Err(()),
+            Err(_) => return Ok(()),
+        },
+    };
+    match prefetch_value(ev, v, h, d) {
+        Err(e) if e.kind == ErrorKind::Cancelled => Err(()),
+        _ => Ok(()),
+    }
+}
+
+fn prefetch_value(ev: &mut Evaluator, v: Word, hash: u64, depth: u32) -> EvalResult<()> {
     if depth > 64 {
         return Ok(());
     }
@@ -602,7 +664,9 @@ fn prefetch_value(ev: &mut Evaluator, v: Word, depth: u32) -> EvalResult<()> {
         return Ok(());
     };
     if is_derivation(ev, a)? {
-        let _ = prefetch_job(ev, a);
+        if admit(hash, depth, true) {
+            prefetch_job(ev, a)?;
+        }
         return Ok(());
     }
     let mut recurse = cfg.opts.force_recurse;
@@ -612,30 +676,16 @@ fn prefetch_value(ev: &mut Evaluator, v: Word, depth: u32) -> EvalResult<()> {
     if !recurse {
         return Ok(());
     }
+    remember_set(a, hash, depth);
     fanout_range(ev, T_JOB, v, 0, a.len(), JOB_BATCH);
     for attr in a.attrs() {
-        if bail_requested(ev) || ev.par.cancelled {
-            return Ok(());
+        if prefetch_child(ev, attr, hash, depth).is_err() {
+            return Err(Error::boxed(ErrorKind::Cancelled, "cancelled", Pos::NONE));
         }
-        let c = match cell_state(&attr.cell) {
-            CellState::Busy => continue,
-            CellState::Ready(w) => {
-                attr.cell.set(w);
-                w
-            }
-            CellState::Unclaimed => match ev.force_cell(&attr.cell) {
-                Ok(w) => w,
-                Err(e) if e.kind == ErrorKind::Cancelled => return Err(e),
-                Err(_) => continue,
-            },
-        };
-        let _ = prefetch_value(ev, c, depth + 1);
     }
     Ok(())
 }
 
-/// Helpers cannot know the chunk of a leaf without its path, and the
-/// main walk skips the leaf anyway, so the chunk filter is main-only.
 fn prefetch_job(ev: &mut Evaluator, a: &'static AttrsObj) -> EvalResult<()> {
     let cfg = config();
     if let Some(n) = a.get(ev.s.name) {
