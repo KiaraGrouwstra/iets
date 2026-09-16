@@ -15,6 +15,8 @@ pub struct Arena {
     ptr: *mut u8,
     end: *mut u8,
     pub bytes_allocated: usize,
+    /// Total chunk bytes mapped (and populated) so far.
+    pub mapped: usize,
     pub stats: Stats,
     /// Advise huge pages until a chunk populate stalls in compaction.
     thp: bool,
@@ -32,6 +34,7 @@ impl Arena {
             ptr: ptr::null_mut(),
             end: ptr::null_mut(),
             bytes_allocated: 0,
+            mapped: 0,
             stats: Stats::default(),
             thp: true,
         }
@@ -79,6 +82,7 @@ impl Arena {
             }
             p as *mut u8
         };
+        self.mapped += chunk;
         self.ptr = base;
         self.end = unsafe { base.add(chunk) };
         let start = (self.ptr as usize + align - 1) & !(align - 1);

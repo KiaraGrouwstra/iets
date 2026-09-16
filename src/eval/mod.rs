@@ -1916,12 +1916,17 @@ impl Evaluator {
     pub fn print_stats(&self) {
         let st = &self.arena.stats;
         eprintln!(
-            "files={} thunks={} calls={} drvs={} arena_bytes={} compile={:?} ir_size={}",
+            "files={} thunks={} calls={} drvs={} arena_bytes={} arena_mapped={} rss_kb={} compile={:?} ir_size={}",
             self.files.len(),
             self.nr_thunks,
             self.nr_function_calls,
             self.drv.nr_derivations,
             self.arena.bytes_allocated,
+            self.arena.mapped,
+            std::fs::read_to_string("/proc/self/statm")
+                .ok()
+                .and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok())
+                .map_or(0, |pages| pages * 4),
             self.t_compile,
             size_of::<Ir>()
         );
@@ -1933,5 +1938,7 @@ impl Evaluator {
                 st.bytes[i] as f64 / (1 << 20) as f64
             );
         }
+        // SAFETY: prints glibc heap statistics to stderr; no arguments.
+        unsafe { libc::malloc_stats() };
     }
 }
