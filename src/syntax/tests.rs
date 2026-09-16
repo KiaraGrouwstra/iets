@@ -322,3 +322,138 @@ fn spans_cover_tokens() {
     let root = ast.span(ast.root);
     assert_eq!((root.start, root.end), (2, 7));
 }
+
+/// Value of a parsed string whose interpolations are all literal strings.
+fn literal_value(ast: &super::ast::Ast, id: super::ast::ExprId) -> Option<Vec<u8>> {
+    use super::ast::{Expr, StrPart};
+    let Expr::Str(parts) = ast.expr(id) else {
+        return None;
+    };
+    let mut out = Vec::new();
+    for p in parts {
+        match p {
+            StrPart::Lit(l) => out.extend_from_slice(l),
+            StrPart::Interp(e) => out.extend_from_slice(&literal_value(ast, *e)?),
+        }
+    }
+    Some(out)
+}
+
+fn nix_eval_raw(expr: &str) -> Option<Vec<u8>> {
+    let out = std::process::Command::new("nix")
+        .args([
+            "eval",
+            "--extra-experimental-features",
+            "nix-command",
+            "--raw",
+            "--expr",
+            expr,
+        ])
+        .output()
+        .expect("nix on PATH");
+    if out.status.success() {
+        Some(out.stdout)
+    } else {
+        None
+    }
+}
+
+/// Random string literals, compared byte for byte with the reference Nix.
+/// Run with `cargo test -- --ignored`.
+#[test]
+#[ignore = "needs nix on PATH and takes a few seconds"]
+fn differential_strings_against_nix() {
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    let mut rng = move |n: usize| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed % n as u64) as usize
+    };
+    let ind_alpha = [
+        " ", "\n", "a", "$", "'", "\\", "{", "}", "n", "\r", "${\"X\"}", "  ", "''$", "'''",
+        "''\\n", "\n  ", "\n ",
+    ];
+    let dq_alpha = [
+        " ", "\n", "a", "$", "\\", "\"", "{", "}", "n", "\r", "${\"X\"}", "\\$", "\\n", "$$",
+        "\\\\", "\r\n",
+    ];
+    let mut samples = Vec::new();
+    for _ in 0..3000 {
+        let len = 1 + rng(10);
+        let mut s = String::from("''");
+        for _ in 0..len {
+            s.push_str(ind_alpha[rng(ind_alpha.len())]);
+        }
+        s.push_str("''");
+        samples.push(s);
+    }
+    for _ in 0..3000 {
+        let len = 1 + rng(10);
+        let mut s = String::from("\"");
+        for _ in 0..len {
+            s.push_str(dq_alpha[rng(dq_alpha.len())]);
+        }
+        s.push('"');
+        samples.push(s);
+    }
+
+    let mut accepted: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut rejected: Vec<String> = Vec::new();
+    for s in samples {
+        let mut interner = Interner::new();
+        match parse(s.as_bytes(), FileId(0), &mut interner) {
+            Ok(ast) => {
+                let Some(v) = literal_value(&ast, ast.root) else {
+                    continue;
+                };
+                accepted.push((s, v));
+            }
+            Err(_) => rejected.push(s),
+        }
+    }
+
+    let expr = format!(
+        "builtins.concatStringsSep \"\\t\" [ {} ]",
+        accepted
+            .iter()
+            .map(|(s, _)| format!("({s})"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    let mut mismatches = Vec::new();
+    match nix_eval_raw(&expr) {
+        Some(out) => {
+            let got: Vec<&[u8]> = out.split(|&b| b == b'\t').collect();
+            assert_eq!(got.len(), accepted.len(), "separator count differs");
+            for ((s, mine), theirs) in accepted.iter().zip(got) {
+                if mine.as_slice() != theirs {
+                    mismatches.push(format!(
+                        "{s:?}: ietsp {:?} nix {:?}",
+                        String::from_utf8_lossy(mine),
+                        String::from_utf8_lossy(theirs)
+                    ));
+                }
+            }
+        }
+        None => {
+            for (s, _) in &accepted {
+                if nix_eval_raw(s).is_none() {
+                    mismatches.push(format!("{s:?}: ietsp accepts, nix rejects"));
+                }
+            }
+        }
+    }
+    for s in rejected.iter().take(150) {
+        if nix_eval_raw(s).is_some() {
+            mismatches.push(format!("{s:?}: ietsp rejects, nix accepts"));
+        }
+    }
+    assert!(
+        mismatches.is_empty(),
+        "{} accepted, {} rejected, mismatches:\n{}",
+        accepted.len(),
+        rejected.len(),
+        mismatches.join("\n")
+    );
+}
