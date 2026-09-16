@@ -11,7 +11,7 @@ const STACK_SIZE: usize = 4 << 30;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: ietsp eval [--strict] [--json] [-I prefix=path]... [--arg name expr] [--argstr name str] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp build [--builder URL] [--timings] [--out NAME]... [--source STOREPATH=LOCAL]... DRV"
+        "usage: ietsp eval [--strict] [--json] [-I prefix=path]... [--arg name expr] [--argstr name str] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp build [--builder URL] [--timings] [--out NAME]... [--source STOREPATH=LOCAL]... DRV"
     );
     exit(2)
 }
@@ -65,6 +65,7 @@ struct EvalArgs {
     includes: Vec<(Vec<u8>, Vec<u8>)>,
     args: Vec<(String, ArgKind)>,
     input: Option<Input>,
+    dump_drvs: Option<String>,
     lint_absolute: ietsp::compile::Lint,
     lint_short: ietsp::compile::Lint,
     xp_features: Vec<String>,
@@ -105,6 +106,7 @@ fn parse_eval_args(argv: &[String]) -> EvalArgs {
         includes: Vec::new(),
         args: Vec::new(),
         input: None,
+        dump_drvs: None,
         lint_absolute: ietsp::compile::Lint::Ignore,
         lint_short: ietsp::compile::Lint::Ignore,
         xp_features: Vec::new(),
@@ -136,6 +138,10 @@ fn parse_eval_args(argv: &[String]) -> EvalArgs {
                     },
                 ));
                 i += 2;
+            }
+            "--dump-drvs" => {
+                i += 1;
+                a.dump_drvs = Some(argv.get(i).unwrap_or_else(|| usage()).clone());
             }
             "--option" => {
                 // accepted for nix-instantiate compatibility; ignored
@@ -203,6 +209,13 @@ fn run_eval(a: EvalArgs) -> i32 {
         }
     }
     ietsp::builtins::set_search_path(&mut ev, includes);
+    if let Some(dir) = &a.dump_drvs {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            eprintln!("error: cannot create '{dir}': {e}");
+            return 1;
+        }
+        ev.drv.dump_dir = Some(std::path::PathBuf::from(dir));
+    }
 
     let cwd = std::env::current_dir()
         .map(|p| p.into_os_string().into_encoded_bytes())

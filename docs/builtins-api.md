@@ -132,6 +132,14 @@ parse-toml-timestamps` for datetimes), currentTime. Divergences:
 `docs/divergences.md`.
 constants: true, false, null, builtins, currentSystem, nixVersion,
 langVersion, storeDir, nixPath, derivation (from corepkgs/derivation.nix).
+derivation: derivationStrict, placeholder, `import` of a `.drv` store path.
+State lives in `ev.drv` (`DrvState`: hash cache, created-drv table,
+`--dump-drvs` dir). `scripts/drvdiff.sh` finds the first derivation that
+differs from nix-instantiate.
+interim (src/builtins/interim.rs, delete after the strings family merges):
+match, split, replaceStrings, fromJSON, toJSON, fromTOML, hashString,
+hashFile, convertHash, genericClosure, getEnv, currentTime, floor, ceil,
+break; toXML errors.
 
 ## TODO (next wave)
 

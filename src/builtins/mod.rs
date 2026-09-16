@@ -4,6 +4,7 @@
 pub mod attrs;
 pub mod context;
 pub mod core;
+pub mod derivation;
 pub mod lists;
 pub mod math;
 pub mod paths;
@@ -64,6 +65,7 @@ pub fn install(ev: &mut Evaluator) {
     paths::register(&mut r);
     context::register(&mut r);
     text::register(&mut r);
+    derivation::register(&mut r);
 
     r.constant("true", Word::TRUE);
     r.constant("false", Word::FALSE);
