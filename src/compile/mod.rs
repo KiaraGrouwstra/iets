@@ -205,14 +205,14 @@ impl<'a> Compiler<'a> {
 
     fn expr_inner(&mut self, id: ExprId) -> CResult<Ir> {
         let pos = self.pos(id);
-        // Clone the node so `self` stays borrowable; nodes are small.
-        let node = self.ast.expr(id).clone();
-        Ok(match node {
-            Expr::Int(i) => Ir::Const(self.arena.mk_int(i)),
-            Expr::Float(f) => Ir::Const(self.arena.mk_float(f)),
-            Expr::Str(parts) => self.string(&parts, pos)?,
+        let ast: &'a Ast = self.ast;
+        Ok(match ast.expr(id) {
+            Expr::Int(i) => Ir::Const(self.arena.mk_int(*i)),
+            Expr::Float(f) => Ir::Const(self.arena.mk_float(*f)),
+            Expr::Str(parts) => self.string(parts, pos)?,
             Expr::Path(p) => self.path(&p.kind, &p.parts, pos)?,
             Expr::Var(sym) => {
+                let sym = *sym;
                 if sym == self.sym_cur_pos && self.lexical_lookup(sym).is_none() {
                     return Ok(Ir::CurPos(pos));
                 }
@@ -233,13 +233,13 @@ impl<'a> Compiler<'a> {
                 path,
                 default,
             } => {
-                if let Some(folded) = self.fold_builtins_select(subject, &path, default.is_none()) {
+                if let Some(folded) = self.fold_builtins_select(*subject, path, default.is_none()) {
                     return Ok(folded);
                 }
-                let subject = self.expr(subject)?;
-                let path = self.attr_path(&path)?;
+                let subject = self.expr(*subject)?;
+                let path = self.attr_path(path)?;
                 let default = match default {
-                    Some(d) => Some(self.expr(d)?),
+                    Some(d) => Some(self.expr(*d)?),
                     None => None,
                 };
                 Ir::Select {
@@ -250,28 +250,28 @@ impl<'a> Compiler<'a> {
                 }
             }
             Expr::HasAttr { subject, path } => {
-                let subject = self.expr(subject)?;
-                let path = self.attr_path(&path)?;
+                let subject = self.expr(*subject)?;
+                let path = self.attr_path(path)?;
                 Ir::HasAttr { subject, path }
             }
             Expr::Attrs { rec, binds } => {
-                let merged = self.merge_binds(rec, &binds, pos)?;
+                let merged = self.merge_binds(*rec, binds, pos)?;
                 let a = self.lower_attrs(merged)?;
                 Ir::Attrs(a)
             }
             Expr::List(items) => {
                 let mut v = Vec::with_capacity(items.len());
                 for i in items {
-                    v.push(self.expr(i)?);
+                    v.push(self.expr(*i)?);
                 }
                 Ir::List(self.alloc_refs(v))
             }
-            Expr::Lambda { param, body } => Ir::Lambda(self.lambda(&param, body, pos, None)?),
+            Expr::Lambda { param, body } => Ir::Lambda(self.lambda(param, *body, pos, None)?),
             Expr::Apply { func, args } => {
-                let func = self.expr(func)?;
+                let func = self.expr(*func)?;
                 let mut v = Vec::with_capacity(args.len());
                 for a in args {
-                    v.push(self.expr(a)?);
+                    v.push(self.expr(*a)?);
                 }
                 Ir::Apply {
                     func,
@@ -280,7 +280,7 @@ impl<'a> Compiler<'a> {
                 }
             }
             Expr::Let { binds, body } => {
-                let merged = self.merge_binds(true, &binds, pos)?;
+                let merged = self.merge_binds(true, binds, pos)?;
                 if !merged.dynamics.is_empty() {
                     return err(
                         ErrorKind::Eval,
@@ -289,38 +289,38 @@ impl<'a> Compiler<'a> {
                     );
                 }
                 let (binds, from) = self.lower_rec_binds(merged)?;
-                let body = self.expr(body)?;
+                let body = self.expr(*body)?;
                 self.scopes.pop();
                 Ir::Let { binds, from, body }
             }
             Expr::With { scope, body } => {
-                let scope = self.expr(scope)?;
+                let scope = self.expr(*scope)?;
                 self.scopes.push(Scope::With);
-                let body = self.expr(body)?;
+                let body = self.expr(*body)?;
                 self.scopes.pop();
                 Ir::With { scope, body, pos }
             }
             Expr::If { cond, then, else_ } => Ir::If {
-                cond: self.expr(cond)?,
-                then: self.expr(then)?,
-                else_: self.expr(else_)?,
-                pos: self.pos(cond),
+                cond: self.expr(*cond)?,
+                then: self.expr(*then)?,
+                else_: self.expr(*else_)?,
+                pos: self.pos(*cond),
             },
             Expr::Assert { cond, body } => Ir::Assert {
-                cond: self.expr(cond)?,
-                body: self.expr(body)?,
+                cond: self.expr(*cond)?,
+                body: self.expr(*body)?,
                 pos,
             },
             Expr::Unary { op, expr } => {
-                let e = self.expr(expr)?;
+                let e = self.expr(*expr)?;
                 match op {
                     UnOp::Not => Ir::Not(e, pos),
                     UnOp::Neg => Ir::Neg(e, pos),
                 }
             }
             Expr::Binary { op, lhs, rhs } => {
-                let l = self.expr(lhs)?;
-                let r = self.expr(rhs)?;
+                let l = self.expr(*lhs)?;
+                let r = self.expr(*rhs)?;
                 match op {
                     BinOp::Eq => Ir::Eq(l, r, pos),
                     BinOp::Ne => Ir::Ne(l, r, pos),
@@ -730,14 +730,14 @@ impl<'a> Compiler<'a> {
     }
 
     fn static_name(&mut self, e: &AttrElem) -> Option<Sym> {
+        let ast: &'a Ast = self.ast;
         match e {
             AttrElem::Static(s) => Some(*s),
             AttrElem::Dynamic(id) => {
-                if let Expr::Str(parts) = self.ast.expr(*id)
+                if let Expr::Str(parts) = ast.expr(*id)
                     && let [StrPart::Lit(lit)] = parts.as_slice()
                 {
-                    let lit = lit.clone();
-                    Some(self.interner.intern(&lit))
+                    Some(self.interner.intern(lit))
                 } else {
                     None
                 }
@@ -751,8 +751,9 @@ impl<'a> Compiler<'a> {
         match &m.statics[idx].1 {
             Def::Nested(_) => Ok(()),
             Def::Expr(e) => {
-                if let Expr::Attrs { rec, binds } = self.ast.expr(*e).clone() {
-                    let nested = self.merge_binds(rec, &binds, self.pos(*e))?;
+                let ast: &'a Ast = self.ast;
+                if let Expr::Attrs { rec, binds } = ast.expr(*e) {
+                    let nested = self.merge_binds(*rec, binds, self.pos(*e))?;
                     m.statics[idx].1 = Def::Nested(Box::new(nested));
                     Ok(())
                 } else {
@@ -777,12 +778,13 @@ impl<'a> Compiler<'a> {
     fn add_static(&mut self, m: &mut Merged, sym: Sym, def: Def, pos: Pos) -> CResult<()> {
         if let Some(&i) = m.index.get(&sym) {
             // Both sides attrs literals: merge (Nix discards the inner `rec`).
-            let new_binds = match &def {
-                Def::Expr(e) => match self.ast.expr(*e) {
-                    Expr::Attrs { binds, .. } => Some(binds.clone()),
+            let ast: &'a Ast = self.ast;
+            let new_binds: Option<&'a [Bind]> = match &def {
+                Def::Expr(e) => match ast.expr(*e) {
+                    Expr::Attrs { binds, .. } => Some(binds),
                     _ => None,
                 },
-                Def::Nested(_) => Some(Vec::new()),
+                Def::Nested(_) => Some(&[]),
                 _ => None,
             };
             let Some(new_binds) = new_binds else {
@@ -799,7 +801,7 @@ impl<'a> Compiler<'a> {
                 }
                 target.dynamics.extend(src.dynamics);
             } else {
-                for b in &new_binds {
+                for b in new_binds {
                     self.add_bind(target, b)?;
                 }
             }
@@ -1038,9 +1040,10 @@ impl<'a> Compiler<'a> {
 
     /// A binding's value; names lambdas after their binding.
     fn value_expr(&mut self, e: ExprId, name: Option<Sym>) -> CResult<IrRef> {
-        if let Expr::Lambda { param, body } = self.ast.expr(e).clone() {
+        let ast: &'a Ast = self.ast;
+        if let Expr::Lambda { param, body } = ast.expr(e) {
             let pos = self.pos(e);
-            let l = self.lambda(&param, body, pos, name)?;
+            let l = self.lambda(param, *body, pos, name)?;
             return Ok(self.alloc(Ir::Lambda(l)));
         }
         self.expr(e)
