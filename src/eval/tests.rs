@@ -46,7 +46,8 @@ fn laziness_and_recursion() {
 fn scoping() {
     assert_eq!(eval_str("let x = 1; in with { x = 2; }; x"), "1");
     assert_eq!(eval_str("with { x = 2; }; with { x = 3; }; x"), "3");
-    assert_eq!(eval_str("with { map = 1; }; map"), "1");
+    assert_eq!(eval_str("with { map = 1; }; map"), "<PRIMOP>");
+    assert_eq!(eval_str("with { true = 1; }; true"), "true");
     assert_eq!(
         eval_str("let f = { a, b ? a + 1, ... } @ args: a + b + args.c; in f { a = 1; c = 10; }"),
         "13"
@@ -124,7 +125,10 @@ fn printing() {
         eval_str("\"a\\n\\\"b\\\" \\${x}\""),
         "\"a\\n\\\"b\\\" \\${x}\""
     );
-    assert_eq!(eval_str("{ \"a b\" = 1; }"), "{ a b = 1; }");
+    assert_eq!(
+        eval_str("{ \"a b\" = 1; \"1x\" = 2; \"if\" = 3; x-y = 4; }"),
+        "{ \"1x\" = 2; \"a b\" = 1; \"if\" = 3; x-y = 4; }"
+    );
 }
 
 #[test]
