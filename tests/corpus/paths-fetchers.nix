@@ -1,0 +1,2 @@
+map (n: builtins ? ${n}) [ "fetchurl" "fetchTarball" "fetchGit" "fetchTree" "fetchMercurial" "fetchClosure" "storePath" "path" "filterSource" "toFile" "readFile" "readDir" "readFileType" "pathExists" "toPath" "findFile" "getContext" "appendContext" "addDrvOutputDependencies" ]
+++ map (n: builtins.isFunction builtins.${n}) [ "fetchurl" "fetchTarball" "fetchGit" "fetchTree" "fetchMercurial" "fetchClosure" ]

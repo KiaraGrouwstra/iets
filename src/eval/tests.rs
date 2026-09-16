@@ -124,7 +124,7 @@ fn printing() {
         eval_str("\"a\\n\\\"b\\\" \\${x}\""),
         "\"a\\n\\\"b\\\" \\${x}\""
     );
-    assert_eq!(eval_str("{ \"a b\" = 1; }"), "{ a b = 1; }");
+    assert_eq!(eval_str("{ \"a b\" = 1; }"), "{ \"a b\" = 1; }");
 }
 
 #[test]

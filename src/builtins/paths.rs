@@ -117,7 +117,7 @@ fn io_error(e: io::Error, verb: &str, p: &[u8], pos: Pos) -> Box<Error> {
     Error::boxed(ErrorKind::Io, msg, pos)
 }
 
-fn utf8<'a>(b: &'a [u8], pos: Pos) -> EvalResult<&'a str> {
+fn utf8(b: &[u8], pos: Pos) -> EvalResult<&str> {
     std::str::from_utf8(b).map_err(|_| {
         Error::boxed(
             ErrorKind::Eval,
