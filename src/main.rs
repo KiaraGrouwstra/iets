@@ -11,7 +11,7 @@ const STACK_SIZE: usize = 4 << 30;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: ietsp eval [--strict] [--json] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp build [--builder URL] [--timings] [--out NAME]... [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--out NAME]... [--source STOREPATH=LOCAL]... DRV"
+        "usage: ietsp eval [--strict] [--json] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp build [--builder URL] [--timings] [--no-build] [--out NAME]... [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--out NAME]... [--source STOREPATH=LOCAL]... DRV"
     );
     exit(2)
 }
@@ -465,6 +465,7 @@ fn drv_roots(
 struct BuildArgs {
     url: String,
     timings: bool,
+    no_build: bool,
     outputs: Vec<String>,
     sources: HashMap<String, std::path::PathBuf>,
 }
@@ -477,6 +478,7 @@ fn cmd_build(argv: &[String]) -> i32 {
     let mut b = BuildArgs {
         url: "http://127.0.0.1:9455".to_string(),
         timings: false,
+        no_build: false,
         outputs: Vec::new(),
         sources: HashMap::new(),
     };
@@ -489,6 +491,7 @@ fn cmd_build(argv: &[String]) -> i32 {
                 b.url = argv.get(i).cloned().unwrap_or_else(|| usage());
             }
             "--timings" => b.timings = true,
+            "--no-build" => b.no_build = true,
             "--out" => {
                 i += 1;
                 b.outputs
@@ -628,6 +631,7 @@ fn build_roots(
 
     let mut built = Vec::new();
     let mut failed = false;
+    let roots = if b.no_build { &roots[..1] } else { roots };
     for root in roots {
         let mut on_event = |ev: Event| match ev {
             Event::Scheduled(s) => eprintln!("scheduled: {}", s.drv_paths.join(" ")),
@@ -646,8 +650,14 @@ fn build_roots(
             }
             Event::Done(d) => failed |= !d.success,
         };
-        let result =
-            ietsp::remote::client::build_blocking(&b.url, &plan, root, outputs, &mut on_event);
+        let result = ietsp::remote::client::build_blocking(
+            &b.url,
+            &plan,
+            root,
+            outputs,
+            b.no_build,
+            &mut on_event,
+        );
         match result {
             Ok(t) => {
                 if b.timings {

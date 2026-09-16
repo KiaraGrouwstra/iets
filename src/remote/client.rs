@@ -91,12 +91,14 @@ impl From<io::Error> for ClientError {
 }
 
 /// Uploads what the builder lacks and builds `root`. Events reach `on_event` as they arrive.
-/// Returns once the builder sends Done or closes the stream.
+/// Returns once the builder sends Done or closes the stream. With `upload_only` the call
+/// stops after `Put`.
 pub async fn build(
     url: &str,
     plan: &Plan,
     root: &StorePath,
     outputs: &[String],
+    upload_only: bool,
     on_event: &mut dyn FnMut(build_event::Event),
 ) -> Result<Timings, ClientError> {
     let mut t = Timings::default();
@@ -155,6 +157,9 @@ pub async fn build(
         }
     }
     t.put = t2.elapsed();
+    if upload_only {
+        return Ok(t);
+    }
 
     let t3 = Instant::now();
     let mut events = client
@@ -287,11 +292,12 @@ pub fn build_blocking(
     plan: &Plan,
     root: &StorePath,
     outputs: &[String],
+    upload_only: bool,
     on_event: &mut dyn FnMut(build_event::Event),
 ) -> Result<Timings, ClientError> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|e| ClientError(format!("tokio: {e}")))?;
-    rt.block_on(build(url, plan, root, outputs, on_event))
+    rt.block_on(build(url, plan, root, outputs, upload_only, on_event))
 }
