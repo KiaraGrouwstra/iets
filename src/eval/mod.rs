@@ -961,8 +961,9 @@ impl Evaluator {
                 let mut v = self.eval(env, subject)?;
                 for elem in path.iter() {
                     let name = self.attr_name(env, elem)?;
-                    match v.as_attrs().and_then(|a| a.get(name)) {
-                        Some(a) => v = self.force_cell(&a.cell)?,
+                    let attrs = self.force(v)?;
+                    match attrs.as_attrs().and_then(|a| a.get(name)) {
+                        Some(a) => v = a.cell.get(),
                         None => return Ok(Word::FALSE),
                     }
                 }
