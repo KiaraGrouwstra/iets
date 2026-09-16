@@ -3,14 +3,60 @@ use std::process::exit;
 
 use ietsp::eval::{Error, Evaluator, Pos};
 use ietsp::runtime::Word;
+use ietsp::syntax::ast::FileId;
+use ietsp::syntax::symbol::Interner;
+use ietsp::syntax::{dump, line_col, parse};
 
 const STACK_SIZE: usize = 4 << 30;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: ietsp eval [--strict] [--json] [-I prefix=path]... [--arg name expr] [--argstr name str] (-E EXPR | FILE)"
+        "usage: ietsp eval [--strict] [--json] [-I prefix=path]... [--arg name expr] [--argstr name str] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)"
     );
     exit(2)
+}
+
+/// With `-q`, parse every file, report errors, and print totals. Used to
+/// check and time the parser on whole trees such as nixpkgs.
+fn cmd_parse(files: &[String], quiet: bool) -> i32 {
+    let mut interner = Interner::new();
+    let mut errors = 0usize;
+    let mut bytes = 0usize;
+    let start = std::time::Instant::now();
+    for (i, file) in files.iter().enumerate() {
+        let src = match std::fs::read(file) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("error: cannot read {file}: {e}");
+                errors += 1;
+                continue;
+            }
+        };
+        bytes += src.len();
+        match parse(&src, FileId(i as u32), &mut interner) {
+            Ok(ast) => {
+                if !quiet {
+                    println!("{}", dump::dump(&ast, &interner));
+                }
+            }
+            Err(e) => {
+                let (line, col) = line_col(&src, e.span.start);
+                eprintln!("error: {}\n       at {file}:{line}:{col}", e.msg);
+                errors += 1;
+            }
+        }
+    }
+    if quiet {
+        let dt = start.elapsed();
+        eprintln!(
+            "{} files, {} bytes, {} errors, {:.3}s",
+            files.len(),
+            bytes,
+            errors,
+            dt.as_secs_f64()
+        );
+    }
+    if errors == 0 { 0 } else { 1 }
 }
 
 struct EvalArgs {
@@ -209,6 +255,21 @@ fn main() {
                 .join()
                 .unwrap_or(1);
             exit(code)
+        }
+        "parse" if argv.len() > 1 => {
+            let rest = &argv[1..];
+            let quiet = rest[0] == "-q";
+            let files = if quiet { &rest[1..] } else { rest };
+            let files: Vec<String> = if files == ["-"] {
+                std::io::read_to_string(std::io::stdin())
+                    .unwrap_or_default()
+                    .lines()
+                    .map(str::to_owned)
+                    .collect()
+            } else {
+                files.to_vec()
+            };
+            exit(cmd_parse(&files, quiet))
         }
         _ => usage(),
     }
