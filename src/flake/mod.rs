@@ -248,6 +248,23 @@ pub fn eval_flake(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
     ev.force(v)
 }
 
+/// eval-cache.cc:AttrCursor::findAlongAttrPath: walks `path` from `v`, forcing each
+/// step; `None` when a step is missing or the value at a step is not an attrset.
+pub fn select(ev: &mut Evaluator, mut v: Word, path: &[String]) -> EvalResult<Option<Word>> {
+    for name in path {
+        let forced = ev.force(v)?;
+        let Some(attrs) = forced.as_attrs() else {
+            return Ok(None);
+        };
+        let sym = ev.sym(name.as_bytes());
+        let Some(a) = attrs.get(sym) else {
+            return Ok(None);
+        };
+        v = a.cell.get();
+    }
+    Ok(Some(v))
+}
+
 /// Every input `flake.nix` declares must have a lock entry; Nix would
 /// otherwise fetch and lock it.
 fn check_declared_inputs(

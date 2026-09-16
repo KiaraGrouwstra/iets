@@ -424,6 +424,13 @@ impl Derivation {
             Err(i) => self.env.insert(i, (key.to_string(), value)),
         }
     }
+
+    /// Removes `key` from the sorted env, if present.
+    pub fn env_remove(&mut self, key: &str) {
+        if let Ok(i) = self.env.binary_search_by(|(k, _)| k.as_str().cmp(key)) {
+            self.env.remove(i);
+        }
+    }
 }
 
 /// Mirrors derivations.cc:parseDerivationOutput(store, pathS, hashAlgoStr, hashS).

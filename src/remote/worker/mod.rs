@@ -41,6 +41,7 @@ pub const MIN_MINOR: u64 = 35;
 enum Op {
     SetOptions = 19,
     QueryValidPaths = 31,
+    AddIndirectRoot = 12,
     NarFromPath = 38,
     QueryDerivationOutputMap = 41,
     AddMultipleToStore = 44,
@@ -509,6 +510,17 @@ impl Connection {
             map.insert(name, if path.is_empty() { None } else { Some(path) });
         }
         Ok(map)
+    }
+
+    /// `AddIndirectRoot` (uds-remote-store.cc:addIndirectRoot): registers `path`, an
+    /// existing symlink into the store that the caller created, as a GC root. The daemon
+    /// links `/nix/var/nix/gcroots/auto/<hash>` to it.
+    pub fn add_indirect_root(&mut self, path: &str, on_event: &mut dyn FnMut(Event)) -> Result<()> {
+        self.op(Op::AddIndirectRoot)?;
+        write_str(self.w(), path.as_bytes())?;
+        self.process_stderr(on_event)?;
+        read_u64(self.r())?;
+        Ok(())
     }
 
     /// `NarFromPath`: `sink` reads exactly the NAR from the connection.

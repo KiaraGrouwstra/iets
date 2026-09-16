@@ -591,7 +591,7 @@ fn downstream_placeholder(drv_path: &StorePath, drv_name: &str, output: &str) ->
 }
 
 /// `load_derivation_from_store` plus a `File` observation of the `.drv`.
-fn load_drv_traced(trace: &crate::trace::Trace, p: &StorePath) -> Result<Derivation, DrvError> {
+pub fn load_drv_traced(trace: &crate::trace::Trace, p: &StorePath) -> Result<Derivation, DrvError> {
     if !trace.is_on() {
         return load_derivation_from_store(p);
     }

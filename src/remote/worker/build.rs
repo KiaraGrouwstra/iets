@@ -84,12 +84,37 @@ pub fn build(
     fetch_to: Option<&Path>,
     on_event: &mut dyn FnMut(Event),
 ) -> Result<Timings, WorkerError> {
-    let mut t = Timings::default();
     let t0 = Instant::now();
     let mut conn = Connection::open(transport, on_event)?;
-    t.connect = t0.elapsed();
-    t.minor = conn.minor;
-    t.trusted = conn.trusted;
+    let connect = t0.elapsed();
+    let mut t = build_on(
+        &mut conn,
+        plan,
+        root,
+        outputs,
+        upload_only,
+        fetch_to,
+        on_event,
+    )?;
+    t.connect = connect;
+    Ok(t)
+}
+
+/// `build` on an open connection; `Timings::connect` stays zero.
+pub fn build_on(
+    conn: &mut Connection,
+    plan: &Plan,
+    root: &StorePath,
+    outputs: &[String],
+    upload_only: bool,
+    fetch_to: Option<&Path>,
+    on_event: &mut dyn FnMut(Event),
+) -> Result<Timings, WorkerError> {
+    let mut t = Timings {
+        minor: conn.minor,
+        trusted: conn.trusted,
+        ..Timings::default()
+    };
 
     let t1 = Instant::now();
     let paths: Vec<String> = plan

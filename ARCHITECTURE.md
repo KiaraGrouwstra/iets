@@ -68,8 +68,11 @@ source bytes
 - `flake/`: locked flakes. `PATH#attr` on the command line, Nix's
   `call-flake.nix` embedded verbatim, `fetchTree` for locked inputs, the
   root tree copied like `git+file://` or `path:`. See `docs/flakes.md`.
+- `devenv/`: `ietsp print-dev-env`, the `nix print-dev-env` replacement for
+  `.envrc`: the `-env` derivation, the environment JSON, the printed bash.
+  See `docs/direnv.md`.
 - `main.rs`: CLI. `ietsp eval [--strict] [--json] [--raw] [--no-cache] [-I prefix=path] [-E expr | file | dir#attr]`,
-  `ietsp build`, `ietsp parse`, `ietsp cache-dump`.
+  `ietsp build`, `ietsp print-dev-env`, `ietsp parse`, `ietsp cache-dump`.
 
 ## Value model
 
