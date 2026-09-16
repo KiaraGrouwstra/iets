@@ -12,7 +12,9 @@ use crate::runtime::Arena;
 pub const READY_CAP: usize = 4096;
 pub const TASK_CAP: usize = 4096;
 const PREWARM: usize = 4;
-const SPIN_SCANS: u32 = 200;
+/// Pool fibers beyond this many are trimmed when the worker parks.
+const TRIM_ABOVE: usize = 16;
+const SPIN_SCANS: u32 = 2000;
 const WARM_STACK: usize = 64 << 10;
 
 /// A unit of not-yet-started work. `obj` is a `Word` or anything else the
@@ -75,6 +77,7 @@ pub struct Worker {
     pub idx: usize,
     pub arena: Arena,
     pool: Vec<*mut Slot>,
+    spinning: bool,
     rng: u64,
     pub tasks_run: u64,
     pub steals: u64,
@@ -96,6 +99,13 @@ pub struct Runtime {
     lanes: Vec<Lanes>,
     overflow: Mutex<Vec<*mut Slot>>,
     overflow_len: Padded<AtomicUsize>,
+    /// Summaries of queued work so idle workers poll two words instead of
+    /// touching every lane's deque lines.
+    pending_tasks: Padded<AtomicUsize>,
+    pending_ready: Padded<AtomicUsize>,
+    /// Workers in the pre-park spin; capped so a wide pool does not keep
+    /// every idle core hammering the summary lines.
+    spinners: Padded<AtomicUsize>,
     sleepers: Padded<AtomicUsize>,
     epoch: Padded<AtomicU32>,
     pub shutdown: AtomicBool,
@@ -108,6 +118,15 @@ pub struct Runtime {
     stack_size: usize,
     pub waiters: super::thunk::WaiterTable,
     pub deadlocks: AtomicUsize,
+    pub stat_tasks: AtomicUsize,
+    pub stat_steals: AtomicUsize,
+    pub stat_parks: AtomicUsize,
+    pub stat_main_parks: AtomicUsize,
+    /// Nanoseconds the main fiber spent parked.
+    pub stat_main_wait_ns: AtomicUsize,
+    /// Nanoseconds all workers spent inside fibers.
+    pub stat_busy_ns: AtomicUsize,
+    pub stat_fiber_parks: AtomicUsize,
 }
 
 // SAFETY: raw slot pointers are only dereferenced under the ownership
@@ -133,6 +152,9 @@ impl Runtime {
                 .collect(),
             overflow: Mutex::new(Vec::new()),
             overflow_len: Padded(AtomicUsize::new(0)),
+            pending_tasks: Padded(AtomicUsize::new(0)),
+            pending_ready: Padded(AtomicUsize::new(0)),
+            spinners: Padded(AtomicUsize::new(0)),
             sleepers: Padded(AtomicUsize::new(0)),
             epoch: Padded(AtomicU32::new(0)),
             shutdown: AtomicBool::new(false),
@@ -144,6 +166,13 @@ impl Runtime {
             stack_size,
             waiters: super::thunk::WaiterTable::new(),
             deadlocks: AtomicUsize::new(0),
+            stat_tasks: AtomicUsize::new(0),
+            stat_steals: AtomicUsize::new(0),
+            stat_parks: AtomicUsize::new(0),
+            stat_main_parks: AtomicUsize::new(0),
+            stat_main_wait_ns: AtomicUsize::new(0),
+            stat_busy_ns: AtomicUsize::new(0),
+            stat_fiber_parks: AtomicUsize::new(0),
         }));
         for i in 1..n {
             std::thread::Builder::new()
@@ -186,25 +215,63 @@ impl Runtime {
             }
             if let Some(s) = self.take_ready(w) {
                 idle = 0;
+                self.stop_spinning(w);
                 self.run_slot(w, s);
                 continue;
             }
             if let Some(t) = self.take_task(w) {
                 idle = 0;
+                self.stop_spinning(w);
                 self.run_task(w, t);
                 continue;
             }
             idle += 1;
-            if idle < SPIN_SCANS {
-                if idle % 16 == 0 {
-                    std::thread::yield_now();
-                } else {
+            if idle < SPIN_SCANS && self.may_spin(w) {
+                // Poll the two summary words until something appears.
+                for _ in 0..64 {
+                    if self.has_work() {
+                        break;
+                    }
                     std::hint::spin_loop();
                 }
                 continue;
             }
+            if w.spinning {
+                w.spinning = false;
+                self.spinners.0.fetch_sub(1, Ordering::Relaxed);
+            }
             idle = 0;
             self.park(w, &done);
+        }
+    }
+
+    /// Worker 0 always spins (it carries the demand fiber); helpers only
+    /// while fewer than max(3, n/4) are spinning.
+    #[inline]
+    fn may_spin(&self, w: &mut Worker) -> bool {
+        if w.spinning || w.idx == 0 {
+            return true;
+        }
+        let cap = (self.n / 4).max(3);
+        let cur = self.spinners.0.load(Ordering::Relaxed);
+        if cur < cap
+            && self
+                .spinners
+                .0
+                .compare_exchange(cur, cur + 1, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
+            w.spinning = true;
+            return true;
+        }
+        false
+    }
+
+    #[inline]
+    fn stop_spinning(&self, w: &mut Worker) {
+        if w.spinning {
+            w.spinning = false;
+            self.spinners.0.fetch_sub(1, Ordering::Relaxed);
         }
     }
 
@@ -251,6 +318,7 @@ impl Runtime {
             }
         };
         w.tasks_run += 1;
+        self.stat_tasks.fetch_add(1, Ordering::Relaxed);
         // SAFETY: the slot is idle (in the pool) and owned by this thread.
         unsafe {
             (*slot).task = t;
@@ -269,14 +337,18 @@ impl Runtime {
             s.fiber.state.store(fiber::RUNNING, Ordering::Relaxed);
             s.worker = w;
             self.driver.on_switch(s, w);
+            let t0 = std::time::Instant::now();
             s.fiber.resume();
+            self.stat_busy_ns
+                .fetch_add(t0.elapsed().as_nanos() as usize, Ordering::Relaxed);
             self.driver.on_switch(s, w);
             match s.fiber.state.load(Ordering::Acquire) {
                 fiber::FINISHED => {
                     s.worker = std::ptr::null_mut();
                     w.pool.push(slot);
                 }
-                fiber::PARKING => {
+                // A waker may already have moved PARKING to WOKEN.
+                fiber::PARKING | fiber::WOKEN => {
                     if s.fiber.state.swap(fiber::SUSPENDED, Ordering::AcqRel) == fiber::WOKEN {
                         self.push_ready(w, slot);
                     }
@@ -326,6 +398,7 @@ impl Runtime {
     }
 
     fn push_ready(&self, w: &mut Worker, slot: *mut Slot) {
+        self.pending_ready.0.fetch_add(1, Ordering::SeqCst);
         if !self.lanes[w.idx].ready.push(slot as u64, 0) {
             self.overflow.lock().unwrap().push(slot);
             self.overflow_len.0.fetch_add(1, Ordering::Release);
@@ -334,6 +407,17 @@ impl Runtime {
     }
 
     fn take_ready(&self, w: &mut Worker) -> Option<*mut Slot> {
+        if self.pending_ready.0.load(Ordering::Acquire) == 0 {
+            return None;
+        }
+        let got = self.take_ready_scan(w);
+        if got.is_some() {
+            self.pending_ready.0.fetch_sub(1, Ordering::SeqCst);
+        }
+        got
+    }
+
+    fn take_ready_scan(&self, w: &mut Worker) -> Option<*mut Slot> {
         if let Some((a, _)) = self.lanes[w.idx].ready.pop() {
             return Some(a as *mut Slot);
         }
@@ -352,6 +436,7 @@ impl Runtime {
             }
             if let Some((a, _)) = self.lanes[v].ready.steal() {
                 w.steals += 1;
+                self.stat_steals.fetch_add(1, Ordering::Relaxed);
                 return Some(a as *mut Slot);
             }
         }
@@ -364,6 +449,7 @@ impl Runtime {
     pub fn submit_urgent(&self, w: &Worker, t: Task) -> bool {
         let (a, b) = t.pack();
         if self.lanes[w.idx].urgent.push(a, b) {
+            self.pending_tasks.0.fetch_add(1, Ordering::SeqCst);
             self.notify();
             true
         } else {
@@ -374,6 +460,7 @@ impl Runtime {
     pub fn submit_spec(&self, w: &Worker, t: Task) -> bool {
         let (a, b) = t.pack();
         if self.lanes[w.idx].spec.push(a, b) {
+            self.pending_tasks.0.fetch_add(1, Ordering::SeqCst);
             self.notify();
             true
         } else {
@@ -382,9 +469,19 @@ impl Runtime {
     }
 
     fn take_task(&self, w: &mut Worker) -> Option<Task> {
-        if self.suppress.load(Ordering::Relaxed) {
+        if self.suppress.load(Ordering::Relaxed)
+            || self.pending_tasks.0.load(Ordering::Acquire) == 0
+        {
             return None;
         }
+        let got = self.take_task_scan(w);
+        if got.is_some() {
+            self.pending_tasks.0.fetch_sub(1, Ordering::SeqCst);
+        }
+        got
+    }
+
+    fn take_task_scan(&self, w: &mut Worker) -> Option<Task> {
         if let Some((a, b)) = self.lanes[w.idx].urgent.pop() {
             return Some(Task::unpack(a, b));
         }
@@ -415,14 +512,11 @@ impl Runtime {
         None
     }
 
+    #[inline]
     fn has_work(&self) -> bool {
-        if self.overflow_len.0.load(Ordering::Acquire) > 0 {
-            return true;
-        }
-        let tasks = !self.suppress.load(Ordering::Relaxed);
-        self.lanes
-            .iter()
-            .any(|l| !l.ready.is_empty() || (tasks && (!l.urgent.is_empty() || !l.spec.is_empty())))
+        self.pending_ready.0.load(Ordering::Acquire) > 0
+            || (!self.suppress.load(Ordering::Relaxed)
+                && self.pending_tasks.0.load(Ordering::Acquire) > 0)
     }
 
     // ---- parking ----------------------------------------------------------
@@ -442,6 +536,7 @@ impl Runtime {
 
     fn park(&self, w: &mut Worker, done: &impl Fn() -> bool) {
         w.parks += 1;
+        self.stat_parks.fetch_add(1, Ordering::Relaxed);
         self.trim_pool(w);
         let s = self.sleepers.0.fetch_add(1, Ordering::SeqCst) + 1;
         let e = self.epoch.0.load(Ordering::Acquire);
@@ -487,7 +582,10 @@ impl Runtime {
     /// Give the stack pages of idle pool fibers beyond the prewarm count
     /// back to the OS. Runs only when the worker is about to park.
     fn trim_pool(&self, w: &mut Worker) {
-        for &s in w.pool.iter().skip(PREWARM) {
+        if w.parks % 64 != 0 {
+            return;
+        }
+        for &s in w.pool.iter().skip(TRIM_ABOVE) {
             // SAFETY: pool fibers are idle and owned by this worker.
             let slot = unsafe { &mut *s };
             if !slot.trimmed {
@@ -553,6 +651,7 @@ impl Worker {
             idx,
             arena: Arena::new(),
             pool: Vec::new(),
+            spinning: false,
             rng: 0x9E37_79B9_7F4A_7C15 ^ (idx as u64 + 1),
             tasks_run: 0,
             steals: 0,

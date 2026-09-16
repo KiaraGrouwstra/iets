@@ -108,6 +108,7 @@ fn derivation_strict(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<
         pos,
         "while evaluating the argument passed to builtins.derivationStrict",
     )?;
+    crate::parallel::fanout_attrs_coerce(ev, attrs); // parallel
     let Some(name_attr) = attrs.get(ev.s.name) else {
         let mut e = Error::new(
             ErrorKind::MissingAttr,

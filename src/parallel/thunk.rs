@@ -114,8 +114,15 @@ pub fn wait(slot: &mut Slot, cell: &Cell, cur: Word) -> Result<(), ()> {
         }
         g.entry(cell as *const Cell as usize).or_default().push(me);
     }
+    rt.stat_fiber_parks.fetch_add(1, Ordering::Relaxed);
+    let t0 = slot.is_main.then(std::time::Instant::now);
     // SAFETY: we are on this slot's fiber stack.
     unsafe { slot.park() };
+    if let Some(t0) = t0 {
+        rt.stat_main_parks.fetch_add(1, Ordering::Relaxed);
+        rt.stat_main_wait_ns
+            .fetch_add(t0.elapsed().as_nanos() as usize, Ordering::Relaxed);
+    }
     if slot.cancel.load(Ordering::Acquire) {
         return Err(());
     }

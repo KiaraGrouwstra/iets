@@ -14,11 +14,28 @@ use crate::runtime::*;
 pub const MIN_FANOUT: usize = 4;
 pub const BATCH: u32 = 16;
 
+/// `IETSP_FANOUT` bitmask for experiments: 1 deep, 2 coerce, 4 list builtins.
+fn fanout_mask() -> u32 {
+    static MASK: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *MASK.get_or_init(|| {
+        std::env::var("IETSP_FANOUT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(7)
+    })
+}
+
 pub const T_LIST_WHNF: u8 = 1;
 pub const T_ATTRS_WHNF: u8 = 2;
 pub const T_LIST_DEEP: u8 = 3;
 pub const T_ATTRS_DEEP: u8 = 4;
 pub const T_THUNK: u8 = 5;
+/// Coercion-shaped walk: lists element-wise, derivations to `outPath`,
+/// other attrsets attribute-wise. What `derivationStrict`, `toJSON` and
+/// `concatStringsSep` demand.
+pub const T_LIST_COERCE: u8 = 6;
+pub const T_ATTRS_COERCE: u8 = 7;
+const COERCE_BATCH: u32 = 4;
 
 /// The root evaluator, cloned for every fiber.
 pub struct EvalDriver(pub SyncEv);
@@ -196,23 +213,38 @@ fn cell_state(cell: &Cell) -> CellState {
 
 /// Submit `n` cells of `obj` as range tasks on the urgent lane.
 pub fn fanout(ev: &Evaluator, kind: u8, obj: Word, n: usize) {
+    fanout_batched(ev, kind, obj, n, BATCH)
+}
+
+fn fanout_batched(ev: &Evaluator, kind: u8, obj: Word, n: usize, batch: u32) {
     if n < MIN_FANOUT {
         return;
     }
     let slot = slot_of(ev);
     let rt = slot.runtime();
     let w = slot.worker();
+    let cell = |i: usize| -> &'static Cell {
+        match kind {
+            T_LIST_WHNF | T_LIST_DEEP | T_LIST_COERCE => &obj.as_list().unwrap().cells()[i],
+            _ => &obj.as_attrs().unwrap().attrs()[i].cell,
+        }
+    };
     let mut start = 0u32;
     while (start as usize) < n {
-        let len = BATCH.min(n as u32 - start);
-        let t = Task {
-            kind,
-            obj: obj.0,
-            start,
-            len,
-        };
-        if !rt.submit_urgent(w, t) {
-            return;
+        let len = batch.min(n as u32 - start);
+        // Only ranges with an unclaimed thunk are worth a task.
+        let worth = (start..start + len)
+            .any(|i| matches!(cell_state(cell(i as usize)), CellState::Unclaimed));
+        if worth {
+            let t = Task {
+                kind,
+                obj: obj.0,
+                start,
+                len,
+            };
+            if !rt.submit_urgent(w, t) {
+                return;
+            }
         }
         start += len;
     }
@@ -221,16 +253,88 @@ pub fn fanout(ev: &Evaluator, kind: u8, obj: Word, n: usize) {
 /// Fan out a list a strict builtin is about to walk (elements to WHNF).
 #[inline]
 pub fn fanout_list(ev: &Evaluator, l: &'static ListObj) {
-    if ev.par.on {
+    if ev.par.on && fanout_mask() & 4 != 0 {
         fanout(ev, T_LIST_WHNF, Word::from_ptr(l), l.len as usize);
     }
 }
 
 #[inline]
 pub fn fanout_attrs(ev: &Evaluator, a: &'static AttrsObj) {
-    if ev.par.on {
+    if ev.par.on && fanout_mask() & 4 != 0 {
         fanout(ev, T_ATTRS_WHNF, Word::from_ptr(a), a.len());
     }
+}
+
+/// A list whose elements are about to be coerced to strings.
+#[inline]
+pub fn fanout_list_coerce(ev: &Evaluator, l: &'static ListObj) {
+    if ev.par.on && fanout_mask() & 2 != 0 {
+        fanout_batched(
+            ev,
+            T_LIST_COERCE,
+            Word::from_ptr(l),
+            l.len as usize,
+            COERCE_BATCH,
+        );
+    }
+}
+
+/// Attrs whose values are about to be coerced (`derivationStrict`, JSON).
+#[inline]
+pub fn fanout_attrs_coerce(ev: &Evaluator, a: &'static AttrsObj) {
+    if ev.par.on && fanout_mask() & 2 != 0 {
+        fanout_batched(ev, T_ATTRS_COERCE, Word::from_ptr(a), a.len(), COERCE_BATCH);
+    }
+}
+
+/// Helper-side coercion walk of a forced value. Never parks on busy
+/// cells; returns false when the task should stop.
+fn coerce_walk(ev: &mut Evaluator, v: Word, depth: u32) -> bool {
+    if depth > 64 || bail_requested(ev) {
+        return depth <= 64;
+    }
+    match v.view() {
+        Value::List(l) => {
+            fanout_batched(ev, T_LIST_COERCE, v, l.len as usize, COERCE_BATCH);
+            for c in l.cells() {
+                if !coerce_step(ev, c, depth) {
+                    return false;
+                }
+            }
+            true
+        }
+        Value::Attrs(a) => {
+            if a.get(ev.s.to_string).is_some() {
+                return true;
+            }
+            if let Some(o) = a.get(ev.s.out_path) {
+                return coerce_step(ev, &o.cell, depth);
+            }
+            fanout_batched(ev, T_ATTRS_COERCE, v, a.len(), COERCE_BATCH);
+            for attr in a.attrs() {
+                if !coerce_step(ev, &attr.cell, depth) {
+                    return false;
+                }
+            }
+            true
+        }
+        _ => true,
+    }
+}
+
+fn coerce_step(ev: &mut Evaluator, c: &Cell, depth: u32) -> bool {
+    let v = match cell_state(c) {
+        CellState::Busy => return true,
+        CellState::Ready(v) => {
+            c.set(v);
+            v
+        }
+        CellState::Unclaimed => match ev.force_cell(c) {
+            Ok(v) => v,
+            Err(_) => return false,
+        },
+    };
+    coerce_walk(ev, v, depth + 1)
 }
 
 /// Parallel `Evaluator::force_deep`.
@@ -254,7 +358,9 @@ fn deep_inner(
             if !seen.insert(w.0) {
                 return Ok(());
             }
-            fanout(ev, T_ATTRS_DEEP, w, a.len());
+            if fanout_mask() & 1 != 0 {
+                fanout(ev, T_ATTRS_DEEP, w, a.len());
+            }
             let attrs = a.attrs();
             walk(
                 ev,
@@ -279,7 +385,9 @@ fn deep_inner(
             if !seen.insert(w.0) {
                 return Ok(());
             }
-            fanout(ev, T_LIST_DEEP, w, l.len as usize);
+            if fanout_mask() & 1 != 0 {
+                fanout(ev, T_LIST_DEEP, w, l.len as usize);
+            }
             let cells = l.cells();
             walk(ev, cells.len(), seen, demand, |i| &cells[i], |_, _, e| e)
         }
@@ -367,6 +475,22 @@ fn run_task(ev: &mut Evaluator, t: Task) {
             let mut seen = HashSet::new();
             for attr in &a.attrs()[start..end] {
                 if !range_step(ev, &attr.cell, deep, &mut seen) {
+                    return;
+                }
+            }
+        }
+        T_LIST_COERCE => {
+            let l = obj.as_list().expect("list task");
+            for c in &l.cells()[start..end] {
+                if !coerce_step(ev, c, 0) {
+                    return;
+                }
+            }
+        }
+        T_ATTRS_COERCE => {
+            let a = obj.as_attrs().expect("attrs task");
+            for attr in &a.attrs()[start..end] {
+                if !coerce_step(ev, &attr.cell, 0) {
                     return;
                 }
             }

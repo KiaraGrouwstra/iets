@@ -14,7 +14,10 @@ use std::sync::Mutex;
 use crate::eval::Evaluator;
 use crate::runtime::Arena;
 
-pub use force::{fanout_attrs, fanout_list, force_deep, force_thunk, import_thunk, journal};
+pub use force::{
+    fanout_attrs, fanout_attrs_coerce, fanout_list, fanout_list_coerce, force_deep, force_thunk,
+    import_thunk, journal,
+};
 
 /// Per-fiber evaluator state. `on` is false on the sequential path.
 #[derive(Clone)]
@@ -91,12 +94,19 @@ pub fn run<R: Send + 'static>(
             force::init_ctx(ev, slot);
             let r = f(ev);
             if std::env::var_os("IETSP_PAR_STATS").is_some() {
+                use std::sync::atomic::Ordering::Relaxed;
+                let rt = slot.runtime();
                 eprintln!(
-                    "parallel: fibers={} deadlocks={} main-stack-resident={}K",
-                    slot.runtime().stats_fibers(),
-                    slot.runtime()
-                        .deadlocks
-                        .load(std::sync::atomic::Ordering::Relaxed),
+                    "parallel: fibers={} tasks={} steals={} parks={} fiber-parks={} main-parks={} main-wait={}ms busy={}ms deadlocks={} main-stack-resident={}K",
+                    rt.stats_fibers(),
+                    rt.stat_tasks.load(Relaxed),
+                    rt.stat_steals.load(Relaxed),
+                    rt.stat_parks.load(Relaxed),
+                    rt.stat_fiber_parks.load(Relaxed),
+                    rt.stat_main_parks.load(Relaxed),
+                    rt.stat_main_wait_ns.load(Relaxed) / 1_000_000,
+                    rt.stat_busy_ns.load(Relaxed) / 1_000_000,
+                    rt.deadlocks.load(Relaxed),
                     slot.fiber.stack.resident() >> 10
                 );
             }
