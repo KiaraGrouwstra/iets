@@ -3,6 +3,7 @@ pub mod compile;
 pub mod devenv;
 pub mod eval;
 pub mod flake;
+pub mod jobs;
 pub mod parallel;
 pub mod print;
 pub mod remote;

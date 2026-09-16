@@ -35,6 +35,8 @@ pub const T_THUNK: u8 = 5;
 /// `concatStringsSep` demand.
 pub const T_LIST_COERCE: u8 = 6;
 pub const T_ATTRS_COERCE: u8 = 7;
+/// `ietsp eval-jobs` prefetch of a range of attrs (`crate::jobs`).
+pub const T_JOB: u8 = 8;
 const COERCE_BATCH: u32 = 4;
 
 /// The root evaluator, cloned for every fiber.
@@ -105,7 +107,7 @@ fn cancelled() -> Box<Error> {
 /// True once this helper fiber must stop: cancelled by deadlock
 /// resolution, or speculative after the main result exists.
 #[inline]
-fn bail_requested(ev: &Evaluator) -> bool {
+pub fn bail_requested(ev: &Evaluator) -> bool {
     if ev.par.is_main {
         return false;
     }
@@ -218,14 +220,14 @@ pub static EFFECT_BAILS: std::sync::atomic::AtomicUsize = std::sync::atomic::Ato
 
 // ---- fan-out --------------------------------------------------------------
 
-enum CellState {
+pub enum CellState {
     Ready(Word),
     Unclaimed,
     Busy,
 }
 
 #[inline]
-fn cell_state(cell: &Cell) -> CellState {
+pub fn cell_state(cell: &Cell) -> CellState {
     let w = cell.get();
     if !w.is_thunk() {
         return CellState::Ready(w);
@@ -246,7 +248,12 @@ pub fn fanout(ev: &Evaluator, kind: u8, obj: Word, n: usize) {
 }
 
 fn fanout_batched(ev: &Evaluator, kind: u8, obj: Word, n: usize, batch: u32) {
-    if n < MIN_FANOUT {
+    fanout_range(ev, kind, obj, 0, n, batch)
+}
+
+/// Submit cells `lo..hi` of `obj` as range tasks of `batch` cells.
+pub fn fanout_range(ev: &Evaluator, kind: u8, obj: Word, lo: usize, hi: usize, batch: u32) {
+    if !ev.par.on || hi - lo < MIN_FANOUT {
         return;
     }
     let slot = slot_of(ev);
@@ -258,7 +265,8 @@ fn fanout_batched(ev: &Evaluator, kind: u8, obj: Word, n: usize, batch: u32) {
             _ => &obj.as_attrs().unwrap().attrs()[i].cell,
         }
     };
-    let mut start = 0u32;
+    let n = hi;
+    let mut start = lo as u32;
     while (start as usize) < n {
         let len = batch.min(n as u32 - start);
         // Only ranges with an unclaimed thunk are worth a task.
@@ -523,6 +531,10 @@ fn run_task(ev: &mut Evaluator, t: Task) {
                     return;
                 }
             }
+        }
+        T_JOB => {
+            let a = obj.as_attrs().expect("attrs task");
+            crate::jobs::prefetch_range(ev, a, start, end);
         }
         T_THUNK => {
             ev.par.speculating = true;

@@ -11,7 +11,7 @@ const STACK_SIZE: usize = 4 << 30;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: ietsp eval [--strict] [--json] [--raw] [--workers N] [--timings] [--no-cache] [--cache-dir DIR] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp cache-dump READSET   (print a cache entry's read set)\n       ietsp build [--builder URL] [--timings] [--no-build] [--fetch-to DIR] [--no-cache] [--cache-dir DIR] [--out NAME]... [--workers N] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--fetch-to DIR] [--out NAME]... [--source STOREPATH=LOCAL]... DRV\n       ietsp print-dev-env [--builder URL] [--gc-root PATH] [--json] [--workers N] [--no-cache] [--cache-dir DIR] [--timings] [FLAKEREF[#attr]]   (default: ., a daemon URL)\n       URL: http://host:port (gRPC), daemon, unix:///path, ssh-ng://[user@]host (Nix worker protocol)"
+        "usage: ietsp eval [--strict] [--json] [--raw] [--workers N] [--timings] [--no-cache] [--cache-dir DIR] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp cache-dump READSET   (print a cache entry's read set)\n       ietsp build [--builder URL] [--timings] [--no-build] [--fetch-to DIR] [--no-cache] [--cache-dir DIR] [--out NAME]... [--workers N] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--fetch-to DIR] [--out NAME]... [--source STOREPATH=LOCAL]... DRV\n       ietsp eval-jobs [--workers N] [--force-recurse] [--meta] [--show-input-drvs] [--chunks M --chunk N] [--max-memory-size MB] [-I prefix=path]... [--arg name expr] [--argstr name str] (-E EXPR | FILE | FLAKEREF#attr)\n       ietsp print-dev-env [--builder URL] [--gc-root PATH] [--json] [--workers N] [--no-cache] [--cache-dir DIR] [--timings] [FLAKEREF[#attr]]   (default: ., a daemon URL)\n       URL: http://host:port (gRPC), daemon, unix:///path, ssh-ng://[user@]host (Nix worker protocol)"
     );
     exit(2)
 }
@@ -269,25 +269,7 @@ fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
         None => usage(),
     };
     if !a.args.is_empty() {
-        let mut entries = Vec::new();
-        for (name, kind) in &a.args {
-            let w = match kind {
-                ArgKind::Expr(e) => {
-                    let ir = ev.compile_source(
-                        b"\xc2\xabarg\xc2\xbb",
-                        e.as_bytes().to_vec(),
-                        &cwd,
-                        None,
-                    )?;
-                    let root = ev.root_env;
-                    ev.arena.mk_thunk(root, ir)
-                }
-                ArgKind::Str(s) => ev.mk_string(s.as_bytes()),
-            };
-            let sym = ev.sym(name.as_bytes());
-            entries.push((sym, Pos::NONE, w));
-        }
-        let args = ev.mk_attrs(&mut entries, Pos::NONE)?;
+        let args = auto_args(ev, &a.args, &cwd)?;
         v = ev.auto_call(v, args)?;
     }
     if let Some(attr) = &a.attr {
@@ -305,6 +287,123 @@ fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
         }
     }
     Ok(v)
+}
+
+/// The `--arg`/`--argstr` attrset (`nix-instantiate`'s autoArgs).
+fn auto_args(
+    ev: &mut Evaluator,
+    args: &[(String, ArgKind)],
+    cwd: &[u8],
+) -> Result<Word, Box<Error>> {
+    let mut entries = Vec::new();
+    for (name, kind) in args {
+        let w = match kind {
+            ArgKind::Expr(e) => {
+                let ir =
+                    ev.compile_source(b"\xc2\xabarg\xc2\xbb", e.as_bytes().to_vec(), cwd, None)?;
+                let root = ev.root_env;
+                ev.arena.mk_thunk(root, ir)
+            }
+            ArgKind::Str(s) => ev.mk_string(s.as_bytes()),
+        };
+        let sym = ev.sym(name.as_bytes());
+        entries.push((sym, Pos::NONE, w));
+    }
+    ev.mk_attrs(&mut entries, Pos::NONE)
+}
+
+/// `ietsp eval-jobs`: nix-eval-jobs's JSON lines from one process. See
+/// docs/eval-jobs.md.
+fn cmd_eval_jobs(argv: &[String]) -> i32 {
+    let mut opts = ietsp::jobs::Opts {
+        force_recurse: false,
+        meta: false,
+        show_input_drvs: false,
+        chunks: 1,
+        chunk: 0,
+    };
+    let mut rest: Vec<String> = Vec::new();
+    let mut i = 0;
+    let num = |i: &mut usize| -> u32 {
+        *i += 1;
+        argv.get(*i)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| usage())
+    };
+    while i < argv.len() {
+        match argv[i].as_str() {
+            "--force-recurse" => opts.force_recurse = true,
+            "--meta" => opts.meta = true,
+            "--show-input-drvs" => opts.show_input_drvs = true,
+            "--chunks" => opts.chunks = num(&mut i).max(1),
+            "--chunk" => opts.chunk = num(&mut i),
+            "--max-memory-size" => {
+                // nix-eval-jobs restarts a worker above this RSS; one arena
+                // has no such ceiling. Split the run with --chunks instead.
+                let _ = num(&mut i);
+            }
+            "--check-cache-status" | "--constituents" | "--apply" | "--select" => {
+                eprintln!("error: {} is not supported (docs/eval-jobs.md)", argv[i]);
+                return 1;
+            }
+            "--gc-roots-dir" | "--max-jobs" | "--log-format" => i += 1,
+            "--flake" | "--show-trace" | "--no-instantiate" | "--quiet" | "--verbose"
+            | "--debug" => {}
+            s => rest.push(s.to_string()),
+        }
+        i += 1;
+    }
+    if opts.chunk >= opts.chunks {
+        eprintln!("error: --chunk must be below --chunks");
+        return 1;
+    }
+    let mut a = parse_eval_args(&rest);
+    a.no_cache = true;
+    let workers = a.workers;
+    let t0 = std::time::Instant::now();
+    let ev = Evaluator::new();
+    ietsp::parallel::run(workers, ev, move |ev| {
+        let cwd = cwd();
+        let args = match auto_args(ev, &a.args, &cwd) {
+            Ok(w) => w,
+            Err(e) => {
+                report(ev, &e);
+                return 1;
+            }
+        };
+        ietsp::jobs::configure(ev, opts, args);
+        let root = match evaluate(ev, a) {
+            Ok(v) => v,
+            Err(e) => {
+                report(ev, &e);
+                return 1;
+            }
+        };
+        let stdout = std::io::stdout();
+        let mut out = std::io::BufWriter::new(stdout.lock());
+        let st = ietsp::jobs::run(ev, root, &mut out);
+        eprintln!(
+            "eval-jobs: {} jobs, {} errors, {:.3}s, peak RSS {} MB",
+            st.jobs,
+            st.errors,
+            t0.elapsed().as_secs_f64(),
+            peak_rss_mb()
+        );
+        0
+    })
+}
+
+/// `VmHWM` of this process, in MB (Linux only; 0 elsewhere).
+fn peak_rss_mb() -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("VmHWM:"))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|kb| kb.parse::<u64>().ok())
+        })
+        .map_or(0, |kb| kb / 1024)
 }
 
 fn run_eval(a: EvalArgs) -> i32 {
@@ -1610,13 +1709,14 @@ fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let Some(cmd) = argv.first() else { usage() };
     match cmd.as_str() {
-        "build" | "eval" | "print-dev-env" => {
+        "build" | "eval" | "eval-jobs" | "print-dev-env" => {
             let rest: Vec<String> = argv[1..].to_vec();
             let cmd = cmd.clone();
             let code = std::thread::Builder::new()
                 .stack_size(STACK_SIZE)
                 .spawn(move || match cmd.as_str() {
                     "build" => cmd_build(&rest),
+                    "eval-jobs" => cmd_eval_jobs(&rest),
                     "print-dev-env" => cmd_print_dev_env(&rest),
                     _ => run_eval(parse_eval_args(&rest)),
                 })
