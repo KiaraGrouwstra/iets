@@ -80,6 +80,12 @@ impl Word {
         self.tag() == TAG_PTR && self.0 != 0
     }
 
+    /// Any BLACKHOLE, including the claimer-tagged parallel forms.
+    #[inline]
+    pub fn is_blackhole(self) -> bool {
+        self.0 & 0xFF == IMM_BLACKHOLE
+    }
+
     #[inline]
     pub fn is_bool(self) -> bool {
         self == Word::TRUE || self == Word::FALSE
@@ -106,11 +112,10 @@ impl Word {
 /// A mutable slot holding a `Word`. Env slots, list elements, attr values and
 /// thunk results are cells.
 ///
-/// Single-threaded today, so every access is `Relaxed`: it compiles to a
-/// plain load or store on x86-64 and AArch64. The parallel phase changes
-/// `set` on thunk results to a compare-exchange claim protocol and readers to
-/// `Acquire`; the layout stays the same, which is the point of using an atomic
-/// from day one.
+/// Loads are `Acquire` and stores `Release` so that an object built on one
+/// thread is fully visible to another thread that reads the word pointing
+/// at it. Both are plain moves on x86-64. The parallel claim protocol on
+/// thunk results lives in `parallel::thunk`.
 #[repr(transparent)]
 pub struct Cell(AtomicU64);
 
@@ -122,12 +127,12 @@ impl Cell {
 
     #[inline]
     pub fn get(&self) -> Word {
-        Word(self.0.load(Ordering::Relaxed))
+        Word(self.0.load(Ordering::Acquire))
     }
 
     #[inline]
     pub fn set(&self, w: Word) {
-        self.0.store(w.0, Ordering::Relaxed)
+        self.0.store(w.0, Ordering::Release)
     }
 }
 
@@ -140,7 +145,7 @@ impl std::fmt::Debug for Word {
                 Word::NULL => write!(f, "null"),
                 Word::TRUE => write!(f, "true"),
                 Word::FALSE => write!(f, "false"),
-                Word::BLACKHOLE => write!(f, "blackhole"),
+                w if w.is_blackhole() => write!(f, "blackhole({})", self.0 >> 8),
                 _ => write!(f, "Imm({:#x})", self.0),
             },
             _ => {

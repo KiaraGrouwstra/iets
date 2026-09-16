@@ -122,7 +122,7 @@ pub fn print_ambiguous(
     }
     if w.is_thunk() {
         let r = w.thunk_result_cell().get();
-        if r == Word::BLACKHOLE {
+        if r.is_blackhole() {
             out.extend_from_slice("«potential infinite recursion»".as_bytes());
         } else if r == Word::EMPTY {
             out.extend_from_slice(b"<CODE>");

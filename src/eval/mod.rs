@@ -379,7 +379,7 @@ impl Evaluator {
         let result = w.thunk_result_cell();
         let r = result.get();
         if r != Word::EMPTY {
-            if r == Word::BLACKHOLE {
+            if r.is_blackhole() {
                 bail!(
                     ErrorKind::InfiniteRecursion,
                     self.thunk_pos(w),
