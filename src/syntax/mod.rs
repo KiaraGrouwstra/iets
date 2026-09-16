@@ -1,8 +1,6 @@
 pub mod ast;
 pub mod symbol;
 
-#[cfg(test)]
-pub mod test_builder;
 
 use ast::{Ast, FileId, Span};
 use symbol::Interner;
