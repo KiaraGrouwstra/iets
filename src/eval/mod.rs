@@ -16,7 +16,7 @@ use crate::compile::{Compiler, Globals};
 use crate::runtime::*;
 use crate::runtime::arena::{STAT_NAMES, Stat};
 use crate::syntax::ast::FileId;
-use crate::syntax::symbol::{Interner, Sym};
+use crate::syntax::symbol::{FxHashMap, Interner, Sym};
 
 pub const MAX_CALL_DEPTH: u32 = 10000;
 
@@ -145,7 +145,7 @@ impl Evaluator {
             next_base: 0,
             file_ids: HashMap::new(),
             globals: Globals {
-                table: HashMap::new(),
+                table: FxHashMap::default(),
                 builtins: None,
             },
             root_env,

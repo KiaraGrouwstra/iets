@@ -4,11 +4,10 @@
 //! duplicate-attribute detection at parse time, and nonassociative
 //! comparison operators.
 
-use std::collections::HashMap;
 
 use super::ast::*;
 use super::lexer::{IndPart, Lexer, PathPart, StrEnd, Tok, Token};
-use super::symbol::{Interner, Sym};
+use super::symbol::{FxHashMap, Interner, Sym};
 use super::{ParseError, line_col};
 
 type R<T> = Result<T, ParseError>;
@@ -1096,7 +1095,7 @@ struct Node {
 #[derive(Default)]
 struct SymMap {
     nodes: Vec<Node>,
-    index: Option<HashMap<Sym, u32>>,
+    index: Option<FxHashMap<Sym, u32>>,
 }
 
 const INDEX_THRESHOLD: usize = 16;
@@ -1114,7 +1113,7 @@ impl SymMap {
         if let Some(ix) = &mut self.index {
             ix.insert(node.sym, i as u32);
         } else if i >= INDEX_THRESHOLD {
-            let mut ix = HashMap::with_capacity(i * 2);
+            let mut ix = FxHashMap::with_capacity_and_hasher(i * 2, Default::default());
             for (j, n) in self.nodes.iter().enumerate() {
                 ix.insert(n.sym, j as u32);
             }

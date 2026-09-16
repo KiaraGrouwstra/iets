@@ -3,25 +3,24 @@
 
 pub mod ir;
 
-use std::collections::HashMap;
 
 use crate::eval::{Error, ErrorKind, Pos};
 use crate::runtime::{Arena, AttrsObj, Word};
 use crate::syntax::ast::{
     Ast, AttrElem, BinOp, Bind, BindKind, Expr, ExprId, Param, PathKind, StrPart, UnOp,
 };
-use crate::syntax::symbol::{Interner, Sym};
+use crate::syntax::symbol::{FxHashMap, Interner, Sym};
 use ir::*;
 
 /// Names visible at the root of every file.
 pub struct Globals {
-    pub table: HashMap<Sym, Word>,
+    pub table: FxHashMap<Sym, Word>,
     /// The `builtins` attrset, for `builtins.x` folding.
     pub builtins: Option<&'static AttrsObj>,
 }
 
 enum Scope {
-    Lexical(HashMap<Sym, u32>),
+    Lexical(FxHashMap<Sym, u32>),
     With,
 }
 
@@ -80,7 +79,7 @@ fn err<T>(kind: ErrorKind, msg: String, pos: Pos) -> CResult<T> {
 struct Merged {
     rec: bool,
     statics: Vec<(Sym, Def, Pos)>,
-    index: HashMap<Sym, usize>,
+    index: FxHashMap<Sym, usize>,
     dynamics: Vec<(ExprId, Def, Pos)>,
     from_exprs: Vec<ExprId>,
     pos: Pos,
@@ -98,7 +97,7 @@ impl Merged {
         Merged {
             rec,
             statics: Vec::new(),
-            index: HashMap::new(),
+            index: FxHashMap::default(),
             dynamics: Vec::new(),
             from_exprs: Vec::new(),
             pos,
@@ -141,7 +140,7 @@ impl<'a> Compiler<'a> {
     /// (for `scopedImport`) that the runtime supplies as the env above root.
     pub fn compile_root(&mut self, extra_scope: Option<&[Sym]>) -> CResult<IrRef> {
         if let Some(names) = extra_scope {
-            let mut m = HashMap::new();
+            let mut m = FxHashMap::default();
             for (i, s) in names.iter().enumerate() {
                 m.insert(*s, i as u32);
             }
@@ -903,7 +902,7 @@ impl<'a> Compiler<'a> {
             from.push(self.expr(*e)?);
         }
         if !deferred_from.is_empty() {
-            self.scopes.push(Scope::Lexical(HashMap::new()));
+            self.scopes.push(Scope::Lexical(FxHashMap::default()));
             // the from-env has `from.len()` anonymous slots at depth 0
             for (fi, name, bpos, bi) in deferred_from {
                 let subject = self.alloc(Ir::Local {
@@ -977,7 +976,7 @@ impl<'a> Compiler<'a> {
                 _ => None,
             });
         }
-        let mut names = HashMap::with_capacity(statics.len());
+        let mut names = FxHashMap::with_capacity_and_hasher(statics.len(), Default::default());
         for (i, (sym, _, _)) in statics.iter().enumerate() {
             names.insert(*sym, i as u32);
         }
@@ -1059,7 +1058,7 @@ impl<'a> Compiler<'a> {
         let _ = self.sym_body;
         match param {
             Param::Ident(sym) => {
-                let mut m = HashMap::new();
+                let mut m = FxHashMap::default();
                 m.insert(*sym, 0);
                 self.scopes.push(Scope::Lexical(m));
                 let body = self.expr(body)?;
@@ -1091,7 +1090,7 @@ impl<'a> Compiler<'a> {
                         );
                     }
                 }
-                let mut m = HashMap::new();
+                let mut m = FxHashMap::default();
                 let mut idx = 0u32;
                 if let Some(b) = bind {
                     m.insert(*b, idx);
