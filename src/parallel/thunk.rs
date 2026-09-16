@@ -43,25 +43,32 @@ pub enum Claim {
 
 #[inline]
 pub fn try_claim(cell: &Cell, me: u32) -> Claim {
-    match atomic(cell).compare_exchange(
-        Word::EMPTY.0,
-        blackhole(me).0,
-        Ordering::Acquire,
-        Ordering::Acquire,
-    ) {
-        Ok(_) => Claim::Won,
-        Err(cur) => {
-            let cur = Word(cur);
-            if cur.is_blackhole() {
-                if claimer(cur) == me {
-                    Claim::Mine
-                } else {
-                    Claim::Busy(cur)
-                }
-            } else {
-                Claim::Value(cur)
-            }
+    // Most forces hit a thunk another fiber already evaluated. A plain
+    // load answers those without the CAS, which would pull the line into
+    // exclusive state on every reader of a hot shared value.
+    let cur = atomic(cell).load(Ordering::Acquire);
+    let cur = if cur == Word::EMPTY.0 {
+        match atomic(cell).compare_exchange(
+            Word::EMPTY.0,
+            blackhole(me).0,
+            Ordering::Acquire,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return Claim::Won,
+            Err(cur) => cur,
         }
+    } else {
+        cur
+    };
+    let cur = Word(cur);
+    if cur.is_blackhole() {
+        if claimer(cur) == me {
+            Claim::Mine
+        } else {
+            Claim::Busy(cur)
+        }
+    } else {
+        Claim::Value(cur)
     }
 }
 
