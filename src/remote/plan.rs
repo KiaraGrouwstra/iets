@@ -88,11 +88,13 @@ pub enum Object {
         nar_size: u64,
         chunks: Vec<Hash>,
     },
-    /// A derivation, sent as its ATerm bytes.
+    /// A derivation, sent as its ATerm bytes. `references` is inputSrcs plus inputDrvs, what the
+    /// worker protocol needs to register the `.drv` as a text path.
     Drv {
         path: StorePath,
         aterm: Arc<Vec<u8>>,
         digest: Hash,
+        references: BTreeSet<StorePath>,
     },
 }
 
@@ -254,17 +256,18 @@ pub fn plan(
     locate: &Locator<'_>,
 ) -> Result<Plan, PlanError> {
     let mut sources: Vec<StorePath> = Vec::new();
-    let mut drvs: Vec<(StorePath, Arc<Vec<u8>>)> = Vec::new();
+    let mut drvs: Vec<(StorePath, Arc<Vec<u8>>, BTreeSet<StorePath>)> = Vec::new();
     let mut seen_src: HashSet<StorePath> = HashSet::new();
     let mut seen_drv: HashSet<StorePath> = HashSet::new();
     let mut store_drvs = 0;
 
     // Iterative post-order: a drv is emitted after every drv it references.
-    let mut stack: Vec<(StorePath, Option<Arc<Vec<u8>>>)> =
+    type Pending = Option<(Arc<Vec<u8>>, BTreeSet<StorePath>)>;
+    let mut stack: Vec<(StorePath, Pending)> =
         roots.iter().rev().map(|r| (r.clone(), None)).collect();
     while let Some((path, done)) = stack.pop() {
-        if let Some(aterm) = done {
-            drvs.push((path, aterm));
+        if let Some((aterm, references)) = done {
+            drvs.push((path, aterm, references));
             continue;
         }
         if !seen_drv.insert(path.clone()) {
@@ -272,7 +275,7 @@ pub fn plan(
         }
         let node = load_drv(&path, &inputs)?;
         store_drvs += usize::from(node.from_store);
-        stack.push((path, Some(node.aterm)));
+        stack.push((path, Some((node.aterm, node.references.clone()))));
         for r in node.references {
             if r.is_derivation() {
                 if !seen_drv.contains(&r) {
@@ -288,12 +291,13 @@ pub fn plan(
     let hashed = hash_sources(&sources, &infos)?;
     let mut objects = Vec::with_capacity(hashed.len() + drvs.len());
     objects.extend(hashed);
-    objects.extend(drvs.into_iter().map(|(path, aterm)| {
+    objects.extend(drvs.into_iter().map(|(path, aterm, references)| {
         let digest = sha256(&aterm);
         Object::Drv {
             path,
             aterm,
             digest,
+            references,
         }
     }));
     Ok(Plan {

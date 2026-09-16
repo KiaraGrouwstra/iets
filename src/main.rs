@@ -11,7 +11,7 @@ const STACK_SIZE: usize = 4 << 30;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: ietsp eval [--strict] [--json] [--workers N] [--timings] [--no-cache] [--cache-dir DIR] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp cache-dump READSET   (print a cache entry's read set)\n       ietsp build [--builder URL] [--timings] [--no-build] [--no-cache] [--cache-dir DIR] [--out NAME]... [--workers N] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--out NAME]... [--source STOREPATH=LOCAL]... DRV"
+        "usage: ietsp eval [--strict] [--json] [--workers N] [--timings] [--no-cache] [--cache-dir DIR] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp cache-dump READSET   (print a cache entry's read set)\n       ietsp build [--builder URL] [--timings] [--no-build] [--fetch-to DIR] [--no-cache] [--cache-dir DIR] [--out NAME]... [--workers N] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--fetch-to DIR] [--out NAME]... [--source STOREPATH=LOCAL]... DRV\n       URL: http://host:port (gRPC), daemon, unix:///path, ssh-ng://[user@]host (Nix worker protocol)"
     );
     exit(2)
 }
@@ -498,6 +498,7 @@ struct BuildArgs {
     url: String,
     timings: bool,
     no_build: bool,
+    fetch_to: Option<std::path::PathBuf>,
     outputs: Vec<String>,
     sources: HashMap<String, std::path::PathBuf>,
 }
@@ -509,6 +510,7 @@ fn cmd_build(argv: &[String]) -> i32 {
         url: "http://127.0.0.1:9455".to_string(),
         timings: false,
         no_build: false,
+        fetch_to: None,
         outputs: Vec::new(),
         sources: HashMap::new(),
     };
@@ -522,6 +524,12 @@ fn cmd_build(argv: &[String]) -> i32 {
             }
             "--timings" => b.timings = true,
             "--no-build" => b.no_build = true,
+            "--fetch-to" => {
+                i += 1;
+                b.fetch_to = Some(std::path::PathBuf::from(
+                    argv.get(i).cloned().unwrap_or_else(|| usage()),
+                ));
+            }
             "--out" => {
                 i += 1;
                 b.outputs
@@ -711,6 +719,7 @@ fn build_roots(
         );
     }
 
+    let transport = ietsp::remote::worker::Transport::parse(&b.url);
     let mut built = Vec::new();
     let mut failed = false;
     let roots = if b.no_build { &roots[..1] } else { roots };
@@ -732,18 +741,34 @@ fn build_roots(
             }
             Event::Done(d) => failed |= !d.success,
         };
-        let result = ietsp::remote::client::build_blocking(
-            &b.url,
-            &plan,
-            root,
-            outputs,
-            b.no_build,
-            &mut on_event,
-        );
-        match result {
-            Ok(t) => {
+        let report = if let Some(transport) = &transport {
+            ietsp::remote::worker::build::build(
+                transport,
+                &plan,
+                root,
+                outputs,
+                b.no_build,
+                b.fetch_to.as_deref(),
+                &mut on_event,
+            )
+            .map(|t| t.report(&plan, plan_time))
+            .map_err(|e| e.to_string())
+        } else {
+            ietsp::remote::client::build_blocking(
+                &b.url,
+                &plan,
+                root,
+                outputs,
+                b.no_build,
+                &mut on_event,
+            )
+            .map(|t| t.report(&plan, plan_time))
+            .map_err(|e| e.to_string())
+        };
+        match report {
+            Ok(r) => {
                 if b.timings {
-                    eprintln!("{}", t.report(&plan, plan_time));
+                    eprintln!("{r}");
                 }
             }
             Err(e) => {
@@ -752,10 +777,42 @@ fn build_roots(
             }
         }
     }
-    for (name, path) in &built {
-        if outputs.is_empty() || outputs.contains(name) {
-            println!("{path}");
+    let wanted: Vec<&(String, String)> = built
+        .iter()
+        .filter(|(name, _)| outputs.is_empty() || outputs.contains(name))
+        .collect();
+    if let Some(dir) = &b.fetch_to
+        && transport.is_none()
+        && !failed
+    {
+        let t0 = std::time::Instant::now();
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            eprintln!("error: cannot create '{}': {e}", dir.display());
+            return 1;
         }
+        for (_, path) in &wanted {
+            let dest = match StorePath::parse(path) {
+                Ok(p) => dir.join(p.base_name()),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return 1;
+                }
+            };
+            if let Err(e) = ietsp::remote::client::fetch_blocking(&b.url, path, &dest) {
+                eprintln!("error: fetch {path}: {e}");
+                return 1;
+            }
+        }
+        if b.timings {
+            eprintln!(
+                "fetch: {} outputs, {:.3}s",
+                wanted.len(),
+                t0.elapsed().as_secs_f64()
+            );
+        }
+    }
+    for (_, path) in &wanted {
+        println!("{path}");
     }
     if failed { 1 } else { 0 }
 }

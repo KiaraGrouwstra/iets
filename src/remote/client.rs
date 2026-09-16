@@ -15,8 +15,8 @@ use super::chunk::{Chunker, from_digest, sha256, to_digest};
 use super::plan::{Object, Plan, SourceKind};
 use super::proto::builder_client::BuilderClient;
 use super::proto::{
-    BuildRequest, Chunk, ContentAddress, Digest, DrvBlob, HaveRequest, Manifest, PutRequest,
-    build_event, put_request,
+    BuildRequest, Chunk, ContentAddress, Digest, DrvBlob, FetchRequest, HaveRequest, Manifest,
+    PutRequest, build_event, put_request,
 };
 
 pub const MAX_MESSAGE: usize = 16 << 20;
@@ -268,6 +268,7 @@ fn produce(
                 path,
                 aterm,
                 digest,
+                ..
             } => {
                 if missing.objects.contains(digest) {
                     n_objects += 1;
@@ -300,4 +301,43 @@ pub fn build_blocking(
         .build()
         .map_err(|e| ClientError(format!("tokio: {e}")))?;
     rt.block_on(build(url, plan, root, outputs, upload_only, on_event))
+}
+
+/// `Fetch`: restores the NAR of `store_path` from the builder into `dest`, which must not
+/// exist. The chunks are collected in memory first; outputs are small next to the closure.
+pub async fn fetch(
+    url: &str,
+    store_path: &str,
+    dest: &std::path::Path,
+) -> Result<u64, ClientError> {
+    let channel = Channel::from_shared(url.to_string())
+        .map_err(|e| ClientError(format!("bad url '{url}': {e}")))?
+        .connect()
+        .await?;
+    let mut client = BuilderClient::new(channel).max_decoding_message_size(MAX_MESSAGE);
+    let mut chunks = client
+        .fetch(FetchRequest {
+            store_path: store_path.to_string(),
+        })
+        .await?
+        .into_inner();
+    let mut nar = Vec::new();
+    while let Some(c) = chunks.next().await {
+        nar.extend_from_slice(&c?.data);
+    }
+    let size = nar.len() as u64;
+    crate::store::nar::restore_path(&mut nar.as_slice(), dest)?;
+    Ok(size)
+}
+
+pub fn fetch_blocking(
+    url: &str,
+    store_path: &str,
+    dest: &std::path::Path,
+) -> Result<u64, ClientError> {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| ClientError(format!("tokio: {e}")))?;
+    rt.block_on(fetch(url, store_path, dest))
 }

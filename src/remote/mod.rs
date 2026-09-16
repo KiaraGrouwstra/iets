@@ -4,6 +4,7 @@ pub mod chunk;
 pub mod client;
 pub mod plan;
 pub mod server;
+pub mod worker;
 
 #[allow(clippy::all, clippy::pedantic)]
 pub mod proto {
