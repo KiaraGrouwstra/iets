@@ -26,7 +26,7 @@ pub fn format_g(f: f64) -> String {
     let sci = format!("{:.*e}", (P - 1) as usize, f);
     let (mant, exp) = sci.split_once('e').unwrap();
     let exp: i32 = exp.parse().unwrap();
-    if exp < -4 || exp >= P {
+    if !(-4..P).contains(&exp) {
         let mant = strip_zeros(mant);
         let sign = if exp < 0 { '-' } else { '+' };
         format!("{mant}e{sign}{:02}", exp.abs())
@@ -122,7 +122,14 @@ pub fn print_ambiguous(
             for attr in lexicographic_order(ev, a) {
                 out.extend_from_slice(ev.interner.name(attr.sym));
                 out.extend_from_slice(b" = ");
-                print_ambiguous(ev, attr.cell.get(), &attr.cell as *const _ as u64, out, seen, depth + 1)?;
+                print_ambiguous(
+                    ev,
+                    attr.cell.get(),
+                    &attr.cell as *const _ as u64,
+                    out,
+                    seen,
+                    depth + 1,
+                )?;
                 out.extend_from_slice(b"; ");
             }
             out.push(b'}');
@@ -378,6 +385,6 @@ pub fn print_json(
     Ok(())
 }
 
-pub fn sym_name<'a>(ev: &'a Evaluator, s: Sym) -> &'a str {
+pub fn sym_name(ev: &Evaluator, s: Sym) -> &str {
     ev.interner.name_str(s)
 }

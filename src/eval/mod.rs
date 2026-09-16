@@ -3,6 +3,9 @@
 pub mod coerce;
 pub mod error;
 
+#[cfg(test)]
+mod tests;
+
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -93,6 +96,8 @@ pub struct Evaluator {
     pub current_system: &'static str,
     pub nr_thunks: u64,
     pub nr_function_calls: u64,
+    /// Source path -> virtual store path, like Nix's `srcToStore`.
+    pub src_to_store: HashMap<Vec<u8>, &'static [u8]>,
 }
 
 macro_rules! bail {
@@ -146,6 +151,7 @@ impl Evaluator {
             current_system: "x86_64-linux",
             nr_thunks: 0,
             nr_function_calls: 0,
+            src_to_store: HashMap::new(),
         };
         crate::builtins::install(&mut ev);
         ev
@@ -279,12 +285,17 @@ impl Evaluator {
     }
 
     /// `<name>` lookup.
-    pub fn find_file(&mut self, name: &[u8], pos: Pos) -> EvalResult<Vec<u8>> {
+    pub fn find_file(
+        &mut self,
+        entries: &[(Vec<u8>, Vec<u8>)],
+        name: &[u8],
+        pos: Pos,
+    ) -> EvalResult<Vec<u8>> {
         let (head, rest) = match name.iter().position(|&b| b == b'/') {
             Some(i) => (&name[..i], &name[i..]),
             None => (name, &b""[..]),
         };
-        for (prefix, path) in &self.search_path {
+        for (prefix, path) in entries {
             let candidate = if prefix.is_empty() {
                 let mut c = path.clone();
                 c.push(b'/');
@@ -424,10 +435,57 @@ impl Evaluator {
                 w
             }
             Ir::Lambda(l) => self.arena.mk_lambda(env, l),
-            _ => {
-                self.nr_thunks += 1;
-                self.arena.mk_thunk(env, ir)
+            // `n - 1` on an already-forced int cannot fail except on
+            // overflow, so compute it now instead of allocating a thunk
+            Ir::Sub(l, r, _) => match (self.forced_int(env, l), self.forced_int(env, r)) {
+                (Some(a), Some(b)) => match a.checked_sub(b) {
+                    Some(v) if Word::fits_imm(v) => Word::imm_int(v),
+                    _ => self.mk_thunk_counted(env, ir),
+                },
+                _ => self.mk_thunk_counted(env, ir),
+            },
+            Ir::Concat {
+                force_string: false,
+                parts,
+                ..
+            } if parts.len() == 2 => match (
+                self.forced_int(env, parts[0]),
+                self.forced_int(env, parts[1]),
+            ) {
+                (Some(a), Some(b)) => match a.checked_add(b) {
+                    Some(v) if Word::fits_imm(v) => Word::imm_int(v),
+                    _ => self.mk_thunk_counted(env, ir),
+                },
+                _ => self.mk_thunk_counted(env, ir),
+            },
+            _ => self.mk_thunk_counted(env, ir),
+        }
+    }
+
+    #[inline]
+    fn mk_thunk_counted(&mut self, env: &'static EnvObj, ir: IrRef) -> Word {
+        self.nr_thunks += 1;
+        self.arena.mk_thunk(env, ir)
+    }
+
+    /// The value of a cheap operand if it is already a forced integer.
+    #[inline]
+    fn forced_int(&self, env: &'static EnvObj, ir: IrRef) -> Option<i64> {
+        let w = match ir {
+            Ir::Const(w) => *w,
+            Ir::Local { depth, idx } => {
+                let mut e = env;
+                for _ in 0..*depth {
+                    e = e.up()?;
+                }
+                e.slots()[*idx as usize].get()
             }
+            _ => return None,
+        };
+        if w.is_imm_int() {
+            Some(w.imm_int_value())
+        } else {
+            None
         }
     }
 
@@ -624,7 +682,7 @@ impl Evaluator {
         self.arena.mk_list(items)
     }
 
-    pub fn mk_attrs(&mut self, entries: &mut Vec<(Sym, Pos, Word)>, pos: Pos) -> EvalResult<Word> {
+    pub fn mk_attrs(&mut self, entries: &mut [(Sym, Pos, Word)], pos: Pos) -> EvalResult<Word> {
         match self.arena.mk_attrs(entries) {
             Ok(w) => Ok(w),
             Err(dup) => bail!(
@@ -885,7 +943,8 @@ impl Evaluator {
             Ir::SearchPath { name, pos } => {
                 let n = self.eval(env, name)?;
                 let n = self.force_string_no_ctx(n, *pos, "while evaluating a path segment")?;
-                let p = self.find_file(n, *pos)?;
+                let entries = self.search_path.clone();
+                let p = self.find_file(&entries, n, *pos)?;
                 Ok(self.arena.mk_path(&p))
             }
             Ir::Select {

@@ -474,7 +474,7 @@ impl Arena {
 
     /// Build attrs from `(sym, pos, word)` triples; sorts and rejects duplicates
     /// (returns the duplicate sym).
-    pub fn mk_attrs(&mut self, entries: &mut Vec<(Sym, Pos, Word)>) -> Result<Word, Sym> {
+    pub fn mk_attrs(&mut self, entries: &mut [(Sym, Pos, Word)]) -> Result<Word, Sym> {
         entries.sort_by_key(|e| e.0);
         for w in entries.windows(2) {
             if w[0].0 == w[1].0 {

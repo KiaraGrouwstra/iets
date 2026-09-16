@@ -13,6 +13,7 @@ impl Evaluator {
     /// `toString` does). `copy_to_store` turns paths into store paths.
     /// `canonicalize` is false only for the first segment of an
     /// interpolated path, preserving a trailing slash.
+    #[allow(clippy::too_many_arguments)]
     pub fn coerce_to_string(
         &mut self,
         w: Word,
@@ -45,6 +46,7 @@ impl Evaluator {
         r
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn coerce_inner(
         &mut self,
         w: Word,
@@ -186,6 +188,7 @@ impl Evaluator {
     }
 
     /// Nix `eqValues`: identical words are equal (pointer shortcut).
+    #[allow(clippy::only_used_in_recursion)]
     pub fn eq_values(&mut self, a: Word, b: Word, pos: Pos) -> EvalResult<bool> {
         let a = self.force(a)?;
         let b = self.force(b)?;

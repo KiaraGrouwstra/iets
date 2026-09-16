@@ -149,12 +149,12 @@ impl<'a> Compiler<'a> {
                 Scope::With => withs.push(d as u32),
             }
         }
-        if let Some(w) = self.globals.table.get(&sym) {
-            if withs.is_empty() {
-                return Some(Ir::Const(*w));
-            }
-            // A `with` may shadow a global at runtime; fall through to the
-            // with lookup, whose miss path consults globals.
+        // A `with` may shadow a global at runtime; with any `with` in scope
+        // fall through to the with lookup, whose miss path consults globals.
+        if let Some(w) = self.globals.table.get(&sym)
+            && withs.is_empty()
+        {
+            return Some(Ir::Const(*w));
         }
         if withs.is_empty() {
             return None;
@@ -512,6 +512,22 @@ impl<'a> Compiler<'a> {
         if *kind == PathKind::Search {
             let name = self.string(parts, pos)?;
             let name = self.alloc(name);
+            // `<x>` is `__findFile __nixPath "x"`, so a local `__nixPath`
+            // or `__findFile` takes part like in Nix
+            let ff = self.interner.intern(b"__findFile");
+            let np = self.interner.intern(b"__nixPath");
+            if self.lexical_lookup(ff).is_some()
+                || self.lexical_lookup(np).is_some()
+                || self.scopes.iter().any(|s| matches!(s, Scope::With))
+            {
+                let func = self.var_ir(ff, pos)?;
+                let path = self.var_ir(np, pos)?;
+                return Ok(Ir::Apply {
+                    func,
+                    args: self.alloc_refs(vec![path, name]),
+                    pos,
+                });
+            }
             return Ok(Ir::SearchPath { name, pos });
         }
         let all_lit = parts.iter().all(|p| matches!(p, StrPart::Lit(_)));
@@ -855,7 +871,10 @@ impl<'a> Compiler<'a> {
         }))
     }
 
-    fn lower_dynamics(&mut self, dynamics: Vec<(ExprId, Def, Pos)>) -> CResult<&'static [DynBindIr]> {
+    fn lower_dynamics(
+        &mut self,
+        dynamics: Vec<(ExprId, Def, Pos)>,
+    ) -> CResult<&'static [DynBindIr]> {
         let mut dyns = Vec::with_capacity(dynamics.len());
         for (name_e, def, dpos) in dynamics {
             let name = self.expr(name_e)?;

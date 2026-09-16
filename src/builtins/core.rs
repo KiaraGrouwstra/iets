@@ -41,6 +41,7 @@ pub fn register(r: &mut Registry) {
         1,
         unsafe_discard_output_dependency,
     );
+    r.op("__findFile", 2, find_file);
     r.op("derivationStrict", 1, derivation_strict_stub);
     r.op("placeholder", 1, placeholder_stub);
 }
@@ -342,4 +343,57 @@ fn placeholder_stub(_ev: &mut Evaluator, _args: &[Word], pos: Pos) -> EvalResult
         "placeholder is not implemented yet (store wave)",
         pos,
     ))
+}
+
+fn find_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
+    let l = ev.force_list(
+        args[0],
+        pos,
+        "while evaluating the first argument passed to builtins.findFile",
+    )?;
+    let mut entries: Vec<(Vec<u8>, Vec<u8>)> = Vec::with_capacity(l.len as usize);
+    let prefix_sym = ev.s.prefix;
+    let path_sym = ev.s.path;
+    for c in l.cells() {
+        let w = c.get();
+        let a = ev.force_attrs(
+            w,
+            pos,
+            "while evaluating an element of the list passed to builtins.findFile",
+        )?;
+        let prefix = match a.get(prefix_sym) {
+            Some(p) => {
+                let pv = p.cell.get();
+                ev.force_string_no_ctx(pv, pos, "while evaluating the `prefix` attribute of an element of the list passed to builtins.findFile")?
+                    .to_vec()
+            }
+            None => Vec::new(),
+        };
+        let Some(pa) = a.get(path_sym) else {
+            bail!(
+                ErrorKind::Type,
+                pos,
+                "attribute 'path' missing in an element of the list passed to builtins.findFile"
+            );
+        };
+        let pv = pa.cell.get();
+        let mut ctx = Vec::new();
+        let path = ev.coerce_to_string(
+            pv,
+            &mut ctx,
+            pos,
+            "while evaluating the `path` attribute of an element of the list passed to builtins.findFile",
+            false,
+            false,
+            true,
+        )?;
+        entries.push((prefix, path.into_owned()));
+    }
+    let name = ev.force_string_no_ctx(
+        args[1],
+        pos,
+        "while evaluating the second argument passed to builtins.findFile",
+    )?;
+    let p = ev.find_file(&entries, name, pos)?;
+    Ok(ev.arena.mk_path(&p))
 }

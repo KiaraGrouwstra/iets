@@ -2,10 +2,9 @@
 //! until process exit, so every allocation hands out a `'static` reference.
 //! That is what makes graph sharing between cells trivially sound.
 
-use std::alloc::{Layout, alloc};
 use std::ptr;
 
-const CHUNK: usize = 8 << 20;
+const CHUNK: usize = 32 << 20;
 
 pub struct Arena {
     ptr: *mut u8,
@@ -43,11 +42,24 @@ impl Arena {
 
     #[cold]
     fn alloc_slow(&mut self, size: usize, align: usize) -> *mut u8 {
-        let chunk = CHUNK.max(size + align);
-        // SAFETY: layout is non-zero sized and 16-aligned; the chunk is
-        // intentionally leaked.
-        let base = unsafe { alloc(Layout::from_size_align(chunk, 16).unwrap()) };
-        assert!(!base.is_null(), "arena: out of memory");
+        let chunk = CHUNK.max((size + align + CHUNK - 1) & !(CHUNK - 1));
+        // Anonymous mmap so the chunk is 2 MiB aligned and eligible for
+        // transparent huge pages: the evaluator allocates hundreds of MiB in
+        // small objects and page faults were a measurable share of runtime.
+        // The chunk is intentionally leaked.
+        let base = unsafe {
+            let p = libc::mmap(
+                std::ptr::null_mut(),
+                chunk,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            );
+            assert!(p != libc::MAP_FAILED, "arena: mmap failed");
+            libc::madvise(p, chunk, libc::MADV_HUGEPAGE);
+            p as *mut u8
+        };
         self.ptr = base;
         self.end = unsafe { base.add(chunk) };
         let start = (self.ptr as usize + align - 1) & !(align - 1);
