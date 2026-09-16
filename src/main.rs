@@ -66,6 +66,8 @@ struct EvalArgs {
     args: Vec<(String, ArgKind)>,
     input: Option<Input>,
     dump_drvs: Option<String>,
+    lint_absolute: ietsp::compile::Lint,
+    lint_short: ietsp::compile::Lint,
 }
 
 enum ArgKind {
@@ -79,10 +81,21 @@ enum Input {
 }
 
 fn parse_include(s: &str) -> (Vec<u8>, Vec<u8>) {
-    match s.split_once('=') {
-        Some((p, v)) => (p.as_bytes().to_vec(), v.as_bytes().to_vec()),
-        None => (Vec::new(), s.as_bytes().to_vec()),
-    }
+    let (prefix, path) = match s.split_once('=') {
+        Some((p, v)) => (p.as_bytes().to_vec(), v),
+        None => (Vec::new(), s),
+    };
+    let abs = if path.starts_with('/') {
+        path.as_bytes().to_vec()
+    } else {
+        let mut cwd = std::env::current_dir()
+            .map(|p| p.into_os_string().into_encoded_bytes())
+            .unwrap_or_else(|_| b"/".to_vec());
+        cwd.push(b'/');
+        cwd.extend_from_slice(path.as_bytes());
+        ietsp::compile::canon_path(&cwd)
+    };
+    (prefix, abs)
 }
 
 fn parse_eval_args(argv: &[String]) -> EvalArgs {
@@ -93,6 +106,8 @@ fn parse_eval_args(argv: &[String]) -> EvalArgs {
         args: Vec::new(),
         input: None,
         dump_drvs: None,
+        lint_absolute: ietsp::compile::Lint::Ignore,
+        lint_short: ietsp::compile::Lint::Ignore,
     };
     let mut i = 0;
     while i < argv.len() {
@@ -130,6 +145,22 @@ fn parse_eval_args(argv: &[String]) -> EvalArgs {
                 // accepted for nix-instantiate compatibility; ignored
                 i += 2;
             }
+            "--lint-absolute-path-literals"
+            | "--lint-short-path-literals"
+            | "--lint-url-literals" => {
+                i += 1;
+                let v = argv.get(i).unwrap_or_else(|| usage());
+                let Some(mode) = ietsp::compile::Lint::parse(v) else {
+                    eprintln!("error: invalid lint mode '{v}'");
+                    usage()
+                };
+                match s {
+                    "--lint-absolute-path-literals" => a.lint_absolute = mode,
+                    "--lint-short-path-literals" => a.lint_short = mode,
+                    _ => {}
+                }
+            }
+            "--impure" | "--pure-eval" | "--readonly-mode" => {}
             _ if s.starts_with("-I") && s.len() > 2 => a.includes.push(parse_include(&s[2..])),
             _ if s.starts_with('-') && s != "-" => {
                 eprintln!("error: unknown flag '{s}'");
@@ -158,6 +189,8 @@ fn report(ev: &Evaluator, e: &Error) {
 
 fn run_eval(a: EvalArgs) -> i32 {
     let mut ev = Evaluator::new();
+    ev.compile_settings.lint_absolute_path_literals = a.lint_absolute;
+    ev.compile_settings.lint_short_path_literals = a.lint_short;
     let mut includes = a.includes;
     if let Ok(np) = std::env::var("NIX_PATH") {
         for entry in np.split(':').filter(|s| !s.is_empty()) {

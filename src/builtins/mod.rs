@@ -2,11 +2,13 @@
 //! `pub fn register(r: &mut Registry)`. See `docs/builtins-api.md`.
 
 pub mod attrs;
+pub mod context;
 pub mod core;
 pub mod derivation;
 pub mod interim;
 pub mod lists;
 pub mod math;
+pub mod paths;
 pub mod store_hooks;
 pub mod strings;
 
@@ -60,6 +62,8 @@ pub fn install(ev: &mut Evaluator) {
     lists::register(&mut r);
     strings::register(&mut r);
     math::register(&mut r);
+    paths::register(&mut r);
+    context::register(&mut r);
     derivation::register(&mut r);
     interim::register(&mut r);
 

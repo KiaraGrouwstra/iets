@@ -1,0 +1,1 @@
+[ { "a.txt" = "regular"; broken = "symlink"; dirlink = "symlink"; "exe.sh" = "regular"; link = "symlink"; sub = "directory"; } { "deep.txt" = "regular"; } { "deep.txt" = "regular"; } { "a.txt" = "regular"; broken = "symlink"; dirlink = "symlink"; "exe.sh" = "regular"; link = "symlink"; sub = "directory"; } ]

@@ -1,7 +1,6 @@
 //! `derivationStrict` and the derivation path pipeline (primops.cc:
 //! derivationStrictInternal): attrs -> `Derivation` -> output paths ->
-//! drvPath. Also `placeholder`, `outputOf`, `addDrvOutputDependencies`, and
-//! `import` of a `.drv` store path.
+//! drvPath. Also `placeholder` and `import` of a `.drv` store path.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
@@ -23,8 +22,6 @@ use crate::syntax::symbol::Sym;
 pub fn register(r: &mut Registry) {
     r.op("derivationStrict", 1, derivation_strict);
     r.op("placeholder", 1, placeholder);
-    r.op("__addDrvOutputDependencies", 1, add_drv_output_dependencies);
-    r.op("__outputOf", 2, output_of);
 }
 
 /// What later derivations need about one we created: its output names and
@@ -640,62 +637,6 @@ fn placeholder(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> 
     )?;
     let s = utf8(s, pos)?;
     Ok(ev.mk_string(hash_placeholder(&s).as_bytes()))
-}
-
-/// Mirrors primops/context.cc:prim_addDrvOutputDependencies.
-fn add_drv_output_dependencies(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
-    let mut ctx = Vec::new();
-    let s = ev.coerce_to_string(
-        args[0],
-        &mut ctx,
-        pos,
-        "while evaluating the argument passed to builtins.addDrvOutputDependencies",
-        false,
-        false,
-        true,
-    )?;
-    ctx.sort();
-    ctx.dedup();
-    if ctx.len() != 1 {
-        bail!(
-            ErrorKind::Eval,
-            pos,
-            "context of string '{}' must have exactly one element, but has {}",
-            String::from_utf8_lossy(&s),
-            ctx.len()
-        );
-    }
-    let c = match ctx[0] {
-        Ctx::Opaque(p) => {
-            if !p.ends_with(DRV_EXTENSION.as_bytes()) {
-                bail!(
-                    ErrorKind::Eval,
-                    pos,
-                    "path '{}' is not a derivation",
-                    String::from_utf8_lossy(p)
-                );
-            }
-            Ctx::DrvDeep(p)
-        }
-        Ctx::Built { output, .. } => bail!(
-            ErrorKind::Eval,
-            pos,
-            "`addDrvOutputDependencies` can only act on derivations, not on a derivation output such as '{}'",
-            String::from_utf8_lossy(output)
-        ),
-        c @ Ctx::DrvDeep(_) => c,
-    };
-    let bytes = ev.arena.alloc_bytes(&s);
-    Ok(ev.arena.mk_string_ctx(bytes, &[c]))
-}
-
-/// `builtins.outputOf` needs dynamic derivations, which are not supported.
-fn output_of(_ev: &mut Evaluator, _args: &[Word], pos: Pos) -> EvalResult<Word> {
-    bail!(
-        ErrorKind::Eval,
-        pos,
-        "builtins.outputOf: dynamic derivations are not supported"
-    )
 }
 
 /// Mirrors primops.cc:derivationToValue for `import /nix/store/...drv`:

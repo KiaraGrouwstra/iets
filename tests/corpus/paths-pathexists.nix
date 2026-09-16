@@ -1,0 +1,21 @@
+let d = ../fixtures/paths/dir; s = toString d; in
+[
+  (builtins.pathExists d)
+  (builtins.pathExists (d + "/a.txt"))
+  (builtins.pathExists (d + "/missing"))
+  (builtins.pathExists (d + "/broken"))
+  (builtins.pathExists (d + "/link"))
+  (builtins.pathExists (s + "/a.txt/"))
+  (builtins.pathExists (s + "/a.txt/."))
+  (builtins.pathExists (s + "/sub/"))
+  (builtins.pathExists (s + "/dirlink/"))
+  (builtins.pathExists (s + "/broken/"))
+  (builtins.pathExists (s + "/sub/../a.txt"))
+  (builtins.pathExists (s + "//sub/./"))
+  (builtins.pathExists (builtins.toPath (s + "/a.txt")))
+  (builtins.pathExists { __toString = _: s; })
+  (builtins.pathExists { outPath = s + "/nope"; })
+  (builtins.pathExists "/")
+  (builtins.pathExists "/definitely/not/here")
+  (builtins.pathExists (d + "/a.txt/x"))
+]

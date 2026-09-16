@@ -98,6 +98,7 @@ pub struct Evaluator {
     pub nr_function_calls: u64,
     /// Source path -> virtual store path, like Nix's `srcToStore`.
     pub src_to_store: HashMap<Vec<u8>, &'static [u8]>,
+    pub compile_settings: crate::compile::CompileSettings,
     pub drv: crate::builtins::derivation::DrvState,
     pub regex_cache: HashMap<String, regex::bytes::Regex>,
 }
@@ -154,6 +155,7 @@ impl Evaluator {
             nr_thunks: 0,
             nr_function_calls: 0,
             src_to_store: HashMap::new(),
+            compile_settings: Default::default(),
             drv: Default::default(),
             regex_cache: HashMap::new(),
         };
@@ -215,6 +217,7 @@ impl Evaluator {
             &mut self.interner,
             &self.globals,
             base_dir,
+            self.compile_settings,
         );
         c.compile_root(extra_scope)
     }
