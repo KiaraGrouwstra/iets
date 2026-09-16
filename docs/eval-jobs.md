@@ -368,3 +368,63 @@ aggregate; `constituents` are not resolved by either side without
 `--constituents`), `stdenvBootstrapTools.*`, `tests.*`, `lib-tests`,
 `pkgsLLVM/pkgsArocc/pkgsZig/pkgsMusl/pkgsStatic.stdenv`, `pkgsRocm`,
 `haskell.packages.ghc*.haskell-language-server`.
+
+## What is missing for Hydra or nixpkgs CI
+
+- **Memory ceiling.** nix-eval-jobs bounds RSS per worker by restarting
+  it above `--max-memory-size`; ietsp has one arena and no GC, so a
+  process grows with everything it has ever evaluated: 11-14 GB for an
+  eighth of x86_64-linux nixpkgs, about 1 GB per NixOS test, more than
+  23 GB for `nixos.tests.switchTest` alone. `--chunks` is the only
+  control: a driver has to pick a chunk count from the memory it has,
+  pay the shared base (~5 s of `lib`, stdenv and the package sets) once
+  per chunk, and re-split a chunk that does not fit. A worker-restart or
+  chunk-retry loop like nix-eval-jobs's collector, driven by RSS, is the
+  missing piece; a GC (or a per-unit arena that is dropped after the
+  unit is printed, which the shared thunk graph does not allow) is the
+  real fix. Note that nix-eval-jobs sets `GC_DONT_GC=1` too: a single
+  job that needs more than the box has kills it as well
+  (`switchTest`, below).
+- **Chunk depth.** A chunk decides by the hash of the path prefix of
+  length `--chunk-depth`; a derivation above that depth has to be forced
+  (`hydraJob` deep-forces it) before it can be skipped, so the depth
+  must be at or below the shallowest leaf: 2 for `release.nix` and
+  `outpaths.nix` (`pkg.system`, `pkgset.pkg`), 3 for
+  `release-combined.nix` (`nixpkgs.pkg.system`, `nixos.tests.name`)
+  where the `nixos.tests.networking.scripted` group is one unit. The
+  `tested` subset below was flattened to one test per depth-2 unit for
+  that reason. nixpkgs CI's pre-evaluated path list plus `chunk.nix`
+  pruning is the general answer; ietsp could take such a list
+  (`--attr-paths FILE`) and skip everything else without forcing.
+- **`--check-cache-status`** (`isCached`, `cacheStatus`,
+  `neededBuilds`, `neededSubstitutes`): needs `queryMissing` against
+  the local store and the substituters for every job's outputs. ietsp
+  has the daemon protocol (`docs/remote-builder-protocol.md`) and
+  `query_valid_paths`; the resolver thread nix-eval-jobs runs beside the
+  collector is the shape to copy. Not implemented; the flag errors.
+- **`--constituents`** (Hydra's aggregates, `nixos.tested`,
+  `nixpkgs.unstable`): needs the rewritten aggregate `.drv` written to
+  the store, which ietsp never does. The plain job line is printed
+  (`constituents: []`), which is what nix-eval-jobs prints without the
+  flag.
+- **`--gc-roots-dir`**: nothing to root; the `.drv`s live in memory.
+  Hydra then needs the `.drv`s instantiated by someone: `ietsp build`'s
+  remote path or a daemon `addToStore` of the in-memory ATerms is the
+  route, not done here.
+- **Meta correctness**: byte-identical to nix-eval-jobs on every job of
+  the three workloads after `jq -S` (`checkMeta` filtering, strict JSON,
+  key order, float rendering). Not checked: `meta` values that are
+  paths inside lists (dropped by `checkMeta` on both sides) and the
+  `extraValue` of `--apply`.
+- **Error text** differs; the set of failing attrs does not. Hydra
+  shows the text in its UI, so Nix's rendering (source excerpts, the
+  `… while` chain) would have to be copied for parity.
+- **Output order** is deterministic in ietsp (lexicographic DFS) and not
+  in nix-eval-jobs; consumers that key on `attr` (Hydra, nixpkgs CI's
+  `jq -s add`) do not care.
+- **Eval store / flakes**: `--flake` is accepted only for a locked
+  `DIR#attr` (`docs/flakes.md`); `--override-input`,
+  `--reference-lock-file`, registries are not there. `--option
+  restrict-eval true` (Hydra) is ignored: ietsp reads any path.
+- **`--show-input-drvs`** is implemented from the in-memory `.drv`;
+  `--apply`, `--select` are not.
