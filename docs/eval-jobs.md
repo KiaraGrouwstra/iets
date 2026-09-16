@@ -239,3 +239,83 @@ Same walk, same lines. Differences and gaps:
 
 The per-line stderr summary at the end reports jobs, errors, wall time
 and `VmHWM`.
+
+## Measurements
+
+Box: 16 vCPU, 30 GB RAM, `/nix/store` behind a local daemon
+(`NIX_REMOTE=daemon`). nix-eval-jobs 2.35.2 from the flake registry
+nixpkgs (`nix build nixpkgs#nix-eval-jobs -o ~/tmp/nej`); ietsp at
+commit `dd45092`. `NP=/nix/store/ah3pxz4xa52hd6vhbx17vcsci0b8bmbr-source`.
+
+How measured: every run went through a small wrapper
+(`scratchpad/memrun.sh`) that runs the command under `/usr/bin/env time
+-f "wall=%e user=%U sys=%S maxrss_largest=%MKB"` and, in parallel,
+sums the RSS of the whole process group from `ps -eo pgid=,rss=` once a
+second, keeping the maximum (and killing the group above 23 GB). For
+nix-eval-jobs, `time`'s user, sys and `%M` cover the waited-for worker
+processes: `%M` is the largest single process, the sampled sum is the
+memory the run needed. For ietsp the two agree. Runs are single-shot,
+sequential, on an otherwise idle box.
+
+### (a) `ci/eval/outpaths.nix`, x86_64-linux, full set
+
+```
+# outpaths-x86.nix
+import $NP/ci/eval/outpaths.nix { path = $NP; systems = [ "x86_64-linux" ]; includeBroken = false; }
+
+nix-eval-jobs --meta --workers 4 --max-memory-size 4096 \
+  --option allow-import-from-derivation false -I nixpkgs=$NP outpaths-x86.nix > nej.jsonl
+for c in 0 1 2 3 4 5 6 7; do
+  ietsp eval-jobs --meta --workers 4 --chunks 8 --chunk $c -I nixpkgs=$NP outpaths-x86.nix
+done > ietsp.jsonl
+scripts/evaljobs-cmp.sh nej.jsonl ietsp.jsonl [--meta]
+```
+
+No `--force-recurse`: `outpaths.nix` sets `recurseForDerivations` on
+every inner set (the `nix-env` walk needs it), so the walks agree. The
+full set does not fit one ietsp process (one eighth needs 11-14 GB, see
+below), so ietsp ran eight chunks in sequence and the table sums their
+times; peak RSS is the largest chunk.
+
+| run | wall | user | sys | peak RSS | jobs | errors | drvPath diffs |
+|---|---|---|---|---|---|---|---|
+| nix-eval-jobs `--workers 4 --max-memory-size 4096` | 789.8 s | 751.0 s | 192.6 s | 16.8 GB (sum of 4 workers; largest 4.8 GB) | 80245 | 1851 | – |
+| ietsp `--workers 4`, 8 chunks, summed | 110.6 s (12.4-16.0 s per chunk) | 254.2 s | 55.9 s | 14.3 GB (chunk 2; 11.3-14.3) | 80245 | 1851 | 0 |
+| ietsp `--workers 8`, 8 chunks, summed | 139.6 s (15.4-19.2 s per chunk) | 411.2 s | 79.0 s | 14.5 GB | 80245 | 1851 | 0 |
+| ietsp `--workers 1`, chunk 0 only | 33.1 s | 26.7 s | 6.0 s | 13.8 GB | 9244 | 167 | 0 |
+
+Comparison (`scripts/evaljobs-cmp.sh`, keyed on `attrPath`): the same
+82096 attrs on both sides, the same 80245 jobs and 1851 errors, no attr
+that is a job on one side and an error on the other, zero `drvPath`
+differences, and with `--meta` zero differences in the whole job line
+(`jq -S`), so `outputs`, `system`, `requiredSystemFeatures` and `meta`
+match byte for byte after key sorting. The one list-index quirk in the
+set, `gnomeExtensions.1440`, is an error on both sides. The 1851 errors
+are nixpkgs's own: 1346 `broken`, 45 `unsupported`, `tensorflow-bin:
+unsupported configuration: x86_64-linux_314`, `... not supported for
+interpreter python3.14`, NVIDIA and other licence throws. Error texts
+differ (Nix's rendering with source excerpts versus ietsp's `error:` +
+`at` + `…` lines) and are not compared.
+
+Notes on the numbers:
+
+- nix-eval-jobs instantiates: every `.drv` is written through the daemon
+  and read back. Its workers ran at ~30 % CPU each for most of the run
+  (`ps`), so a good part of its 790 s is store I/O, not evaluation.
+  ietsp never writes a store. A `--no-instantiate` row is below when
+  measured.
+- nix-eval-jobs restarted workers throughout (each lived about a
+  minute at the 4 GB threshold), which is what keeps its sum at 16.8 GB
+  while it re-evaluates the shared base (stdenv, `lib`, the package
+  sets) after every restart. ietsp has no ceiling inside a process: one
+  chunk of one eighth of the leaves already sits at 11-14 GB because
+  reaching the `hydraJob`-wrapped leaves forces their build graphs and
+  nothing is ever freed. Chunking is the only memory control, and every
+  chunk re-evaluates the shared base too; eight chunks cost roughly
+  8 x 5 s of that.
+- 8 workers are slower than 4 on this workload, as on nixos-desktop
+  (`docs/parallel.md`): the extra workers spin and steal without a
+  longer critical chain to shorten, and system time grows with them.
+- Memory is the same at 1 and 4 workers (13.8 GB vs 13.7 GB for chunk
+  0): it is the arena, not fiber stacks (300 fibers, 1.09 M tasks in the
+  4-worker run per `IETSP_PAR_STATS=1`).
