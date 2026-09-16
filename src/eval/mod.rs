@@ -491,6 +491,19 @@ impl Evaluator {
                 },
                 _ => self.mk_thunk_counted(env, ir),
             },
+            // `x.y` on an attrset that is already forced: the attr's cell
+            // holds the value or the thunk that a fresh thunk would only
+            // look up, so share it. Missing attrs and unforced subjects
+            // keep the lazy path and its error position.
+            Ir::Select {
+                subject,
+                path,
+                default,
+                ..
+            } => match self.shared_select(env, subject, path, *default) {
+                Some(w) => w,
+                None => self.mk_thunk_counted(env, ir),
+            },
             _ => self.mk_thunk_counted(env, ir),
         }
     }
@@ -499,6 +512,44 @@ impl Evaluator {
     fn mk_thunk_counted(&mut self, env: &'static EnvObj, ir: IrRef) -> Word {
         self.nr_thunks += 1;
         self.arena.mk_thunk(env, ir)
+    }
+
+    fn shared_select(
+        &mut self,
+        env: &'static EnvObj,
+        subject: IrRef,
+        path: &[AttrElemIr],
+        default: Option<IrRef>,
+    ) -> Option<Word> {
+        let mut w = match subject {
+            Ir::Const(w) => *w,
+            Ir::Local { depth, idx } => {
+                let mut e = env;
+                for _ in 0..*depth {
+                    e = e.up()?;
+                }
+                e.slots()[*idx as usize].get()
+            }
+            _ => return None,
+        };
+        for elem in path {
+            let AttrElemIr::Static(sym) = elem else {
+                return None;
+            };
+            if w.heap_kind() != Some(Kind::Attrs) {
+                return None;
+            }
+            match w.as_attrs()?.get(*sym) {
+                Some(a) => {
+                    w = a.cell.get();
+                    if w == Word::EMPTY {
+                        return None;
+                    }
+                }
+                None => return default.map(|d| self.maybe_thunk(env, d)),
+            }
+        }
+        Some(w)
     }
 
     /// The value of a cheap operand if it is already a forced integer.
