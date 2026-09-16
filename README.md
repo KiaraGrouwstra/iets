@@ -20,6 +20,12 @@ scripts/remote-e2e.sh
 
 See `docs/remote-builder-protocol.md`.
 
+Runs are cached: a second `ietsp eval` or `ietsp build` of the same
+command validates the files, directories and environment variables the
+first run read and replays the result (nixos-desktop: 40 ms instead of
+1 s). `--no-cache` or `IETSP_CACHE=0` turns it off, `--timings` reports
+hit or miss. Design and limits: `docs/tracing-cache.md`.
+
 ## Results (2026-09-16)
 
 `bench/run.sh nixos-desktop nixos-minimal`, 16 vCPU EPYC Genoa, nixpkgs

@@ -5,6 +5,8 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 IETSP=${IETSP:-./target/release/ietsp}
+# the second run of each case must evaluate again to print its traces
+export IETSP_CACHE=0
 N=${1:-8}
 fail=0
 run() { # name expr

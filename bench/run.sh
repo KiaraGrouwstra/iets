@@ -14,5 +14,5 @@ for w in "${@:-nixos-desktop}"; do
     -n nix "nix-instantiate --eval --strict --option pure-eval false -I nixpkgs=$NP $f" \
     -n fix "$FIX eval --strict --no-progress --option pure-eval false -I nixpkgs=$NP --compile-cache-dir $PWD/bench/fix-cache $f" \
     -n iets "env IETS_RESERVE=cage=64G IETS_NO_CACHE=attr $IETS eval --store null:// --impure -I nixpkgs=$NP --allowed-path $NP --allowed-path $PWD/bench/workloads $f" \
-    -n ietsp "$IETSP eval --strict -I nixpkgs=$NP $f"
+    -n ietsp "$IETSP eval --strict --no-cache -I nixpkgs=$NP $f"
 done

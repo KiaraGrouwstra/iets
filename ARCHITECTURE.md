@@ -59,7 +59,12 @@ source bytes
   derivation serialization, `hashDerivationModulo`, text and fixed-output
   paths. No dependency on `runtime`.
 - `corepkgs/`: `derivation.nix`, `fetchurl.nix` embedded from Nix 2.34.8.
-- `main.rs`: CLI. `ietsp eval [--strict] [--json] [-I prefix=path] [-E expr | file]`.
+- `trace/`: the tracing evaluation cache. Records every observation of
+  the outside world during evaluation (files, directories, stats, copied
+  trees, environment), keys the run on the command, and replays the
+  result when the read set still validates. See `docs/tracing-cache.md`.
+- `main.rs`: CLI. `ietsp eval [--strict] [--json] [--no-cache] [-I prefix=path] [-E expr | file]`,
+  `ietsp build`, `ietsp parse`, `ietsp cache-dump`.
 
 ## Value model
 
