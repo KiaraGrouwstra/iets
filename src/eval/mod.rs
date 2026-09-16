@@ -99,6 +99,7 @@ pub struct Evaluator {
     /// Source path -> virtual store path, like Nix's `srcToStore`.
     pub src_to_store: HashMap<Vec<u8>, &'static [u8]>,
     pub drv: crate::builtins::derivation::DrvState,
+    pub regex_cache: HashMap<String, regex::bytes::Regex>,
 }
 
 macro_rules! bail {
@@ -154,6 +155,7 @@ impl Evaluator {
             nr_function_calls: 0,
             src_to_store: HashMap::new(),
             drv: Default::default(),
+            regex_cache: HashMap::new(),
         };
         crate::builtins::install(&mut ev);
         ev
