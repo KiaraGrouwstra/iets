@@ -185,7 +185,7 @@ pub struct ThunkAppObj {
 const _: () = assert!(size_of::<ListObj>() == 8);
 const _: () = assert!(size_of::<AttrsObj>() == 8);
 const _: () = assert!(size_of::<EnvObj>() == 16);
-const _: () = assert!(size_of::<Attr>() == 24);
+const _: () = assert!(size_of::<Attr>() == 16);
 
 impl ListObj {
     #[inline]

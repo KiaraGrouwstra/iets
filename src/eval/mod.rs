@@ -29,11 +29,12 @@ impl CorePkgs {
 pub struct FileInfo {
     pub path: Vec<u8>,
     pub src: &'static [u8],
+    pub base: u32,
     line_starts: Vec<u32>,
 }
 
 impl FileInfo {
-    fn new(path: Vec<u8>, src: &'static [u8]) -> FileInfo {
+    fn new(path: Vec<u8>, src: &'static [u8], base: u32) -> FileInfo {
         let mut line_starts = vec![0u32];
         for (i, &b) in src.iter().enumerate() {
             if b == b'\n' {
@@ -43,6 +44,7 @@ impl FileInfo {
         FileInfo {
             path,
             src,
+            base,
             line_starts,
         }
     }
@@ -82,6 +84,7 @@ pub struct Evaluator {
     pub arena: Arena,
     pub interner: Interner,
     pub files: Vec<FileInfo>,
+    next_base: u32,
     file_ids: HashMap<Vec<u8>, FileId>,
     pub globals: Globals,
     pub root_env: &'static EnvObj,
@@ -139,6 +142,7 @@ impl Evaluator {
             arena,
             interner,
             files: Vec::new(),
+            next_base: 0,
             file_ids: HashMap::new(),
             globals: Globals {
                 table: HashMap::new(),
@@ -172,7 +176,11 @@ impl Evaluator {
         }
         let id = FileId(self.files.len() as u32);
         let src: &'static [u8] = Box::leak(src.into_boxed_slice());
-        self.files.push(FileInfo::new(path.to_vec(), src));
+        let base = self.next_base;
+        self.next_base = base
+            .checked_add(src.len() as u32 + 1)
+            .expect("sources exceed 4 GiB");
+        self.files.push(FileInfo::new(path.to_vec(), src, base));
         self.file_ids.insert(path.to_vec(), id);
         id
     }
@@ -181,10 +189,20 @@ impl Evaluator {
         self.files.get(id.0 as usize)
     }
 
+    /// The file holding `pos` and the offset inside it.
+    pub fn file_of(&self, pos: Pos) -> Option<(&FileInfo, u32)> {
+        if pos.is_none() {
+            return None;
+        }
+        let i = self.files.partition_point(|f| f.base <= pos.0);
+        let f = self.files.get(i.checked_sub(1)?)?;
+        Some((f, pos.0 - f.base))
+    }
+
     pub fn describe_pos(&self, pos: Pos) -> String {
-        match self.file(pos.file) {
-            Some(f) if !pos.is_none() => {
-                let (l, c) = f.line_col(pos.offset);
+        match self.file_of(pos) {
+            Some((f, off)) => {
+                let (l, c) = f.line_col(off);
                 format!("{}:{}:{}", String::from_utf8_lossy(&f.path), l, c)
             }
             _ => "«none»".to_string(),
@@ -202,14 +220,12 @@ impl Evaluator {
     ) -> EvalResult<IrRef> {
         let file = self.add_file(path, src);
         let text = self.files[file.0 as usize].src;
+        let base = self.files[file.0 as usize].base;
         let ast = crate::syntax::parse(text, file, &mut self.interner).map_err(|e| {
             Error::boxed(
                 ErrorKind::Parse,
                 e.msg,
-                Pos {
-                    file,
-                    offset: e.span.start,
-                },
+                Pos(base + e.span.start),
             )
         })?;
         let t0 = std::time::Instant::now();
@@ -219,6 +235,7 @@ impl Evaluator {
             &mut self.arena,
             &mut self.interner,
             &self.globals,
+            base,
             base_dir,
             self.compile_settings,
         );
@@ -717,13 +734,13 @@ impl Evaluator {
 
     /// `{ file, line, column }` for `__curPos` and `unsafeGetAttrPos`.
     pub fn mk_pos_attrs(&mut self, pos: Pos) -> Word {
-        let Some(f) = self.file(pos.file) else {
+        let Some((f, off)) = self.file_of(pos) else {
             return Word::NULL;
         };
-        if pos.is_none() || f.path.starts_with(b"\xc2\xab") {
+        if f.path.starts_with(b"\xc2\xab") {
             return Word::NULL;
         }
-        let (line, col) = f.line_col(pos.offset);
+        let (line, col) = f.line_col(off);
         let path = f.path.clone();
         let file = self.mk_string(&path);
         let line = self.mk_int(line as i64);

@@ -33,6 +33,8 @@ pub struct Compiler<'a> {
     scopes: Vec<Scope>,
     /// Directory of the file being compiled, for relative paths.
     base_dir: Vec<u8>,
+    /// Global offset of this file's first byte.
+    base: u32,
     home: Option<Vec<u8>>,
     settings: CompileSettings,
     sym_builtins: Sym,
@@ -110,6 +112,7 @@ impl<'a> Compiler<'a> {
         arena: &'a mut Arena,
         interner: &'a mut Interner,
         globals: &'a Globals,
+        base: u32,
         base_dir: &[u8],
         settings: CompileSettings,
     ) -> Self {
@@ -124,6 +127,7 @@ impl<'a> Compiler<'a> {
             globals,
             scopes: Vec::new(),
             base_dir: base_dir.to_vec(),
+            base,
             home: std::env::var_os("HOME").map(|h| h.into_encoded_bytes()),
             settings,
             sym_builtins,
@@ -150,10 +154,7 @@ impl<'a> Compiler<'a> {
     }
 
     fn pos(&self, id: ExprId) -> Pos {
-        Pos {
-            file: self.ast.file,
-            offset: self.ast.span(id).start,
-        }
+        Pos(self.base + self.ast.span(id).start)
     }
 
     fn alloc<T>(&mut self, v: T) -> &'static T {
@@ -647,10 +648,7 @@ impl<'a> Compiler<'a> {
     }
 
     fn bind_pos(&self, b: &Bind) -> Pos {
-        Pos {
-            file: self.ast.file,
-            offset: b.span.start,
-        }
+        Pos(self.base + b.span.start)
     }
 
     fn add_bind(&mut self, m: &mut Merged, b: &Bind) -> CResult<()> {
@@ -659,10 +657,7 @@ impl<'a> Compiler<'a> {
             BindKind::Value { path, value } => self.add_path(m, path, Def::Expr(*value), pos),
             BindKind::Inherit { from: None, names } => {
                 for (name, span) in names {
-                    let p = Pos {
-                        file: self.ast.file,
-                        offset: span.start,
-                    };
+                    let p = Pos(self.base + span.start);
                     self.add_static(m, *name, Def::Inherit(*name), p)?;
                 }
                 Ok(())
@@ -674,10 +669,7 @@ impl<'a> Compiler<'a> {
                 let idx = m.from_exprs.len();
                 m.from_exprs.push(*e);
                 for (name, span) in names {
-                    let p = Pos {
-                        file: self.ast.file,
-                        offset: span.start,
-                    };
+                    let p = Pos(self.base + span.start);
                     self.add_static(m, *name, Def::InheritFrom(idx, *name), p)?;
                 }
                 Ok(())
@@ -1125,10 +1117,7 @@ impl<'a> Compiler<'a> {
                     firs.push(FormalIr {
                         sym: f.name,
                         default,
-                        pos: Pos {
-                            file: self.ast.file,
-                            offset: f.span.start,
-                        },
+                        pos: Pos(self.base + f.span.start),
                     });
                 }
                 let body = self.expr(body)?;
