@@ -23,6 +23,7 @@ pub const TAG_INT: u64 = 0b001;
 pub const TAG_THUNK: u64 = 0b010;
 pub const TAG_THUNK_APP: u64 = 0b110;
 pub const TAG_THUNK_APP2: u64 = 0b100;
+pub const TAG_LAMBDA: u64 = 0b101;
 pub const TAG_IMM: u64 = 0b011;
 
 const IMM_NULL: u64 = TAG_IMM;
@@ -116,6 +117,12 @@ impl Word {
         debug_assert!(p as u64 & TAG_MASK == 0);
         Word(p as u64 | TAG_THUNK_APP2)
     }
+
+    #[inline]
+    pub fn lambda_from_ptr<T>(p: *const T) -> Word {
+        debug_assert!(p as u64 & TAG_MASK == 0);
+        Word(p as u64 | TAG_LAMBDA)
+    }
 }
 
 /// A mutable slot holding a `Word`. Env slots, list elements, attr values and
@@ -153,6 +160,7 @@ impl std::fmt::Debug for Word {
             TAG_THUNK => write!(f, "Thunk({:#x})", self.0),
             TAG_THUNK_APP => write!(f, "ThunkApp({:#x})", self.0),
             TAG_THUNK_APP2 => write!(f, "ThunkApp2({:#x})", self.0),
+            TAG_LAMBDA => write!(f, "Lambda({:#x})", self.0),
             TAG_IMM => match *self {
                 Word::NULL => write!(f, "null"),
                 Word::TRUE => write!(f, "true"),

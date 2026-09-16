@@ -3,7 +3,9 @@
 //! (lists, attrs, envs) keep their elements inline after a fixed header.
 
 use super::arena::{Arena, Stat};
-use super::word::{Cell, TAG_IMM, TAG_INT, TAG_PTR, TAG_THUNK, TAG_THUNK_APP, TAG_THUNK_APP2, Word};
+use super::word::{
+    Cell, TAG_IMM, TAG_INT, TAG_LAMBDA, TAG_PTR, TAG_THUNK, TAG_THUNK_APP, TAG_THUNK_APP2, Word,
+};
 use crate::compile::ir::{Ir, LambdaIr};
 use crate::eval::Pos;
 use crate::syntax::symbol::Sym;
@@ -140,9 +142,10 @@ pub struct EnvObj {
     // followed by the slots
 }
 
+/// Closures are the third most common object; `TAG_LAMBDA` on the word
+/// replaces the Kind byte so the object is two words.
 #[repr(C)]
 pub struct LambdaObj {
-    pub kind: Kind,
     pub env: &'static EnvObj,
     pub lam: &'static LambdaIr,
 }
@@ -199,6 +202,7 @@ const _: () = assert!(size_of::<Attr>() == 16);
 const _: () = assert!(size_of::<ThunkObj>() == 24);
 const _: () = assert!(size_of::<ThunkAppObj>() == 24);
 const _: () = assert!(size_of::<ThunkApp2Obj>() == 32);
+const _: () = assert!(size_of::<LambdaObj>() == 16);
 
 impl ListObj {
     #[inline]
@@ -301,6 +305,8 @@ impl Word {
                 _ => panic!("view: blackhole"),
             },
             TAG_THUNK | TAG_THUNK_APP | TAG_THUNK_APP2 => panic!("view: unforced thunk"),
+            // SAFETY: lambda-tagged words point at an arena LambdaObj.
+            TAG_LAMBDA => Value::Lambda(unsafe { &*self.ptr::<LambdaObj>() }),
             _ => {
                 debug_assert!(self.0 != 0, "view: empty word");
                 // SAFETY: pointer-tagged words always point at an arena
@@ -314,7 +320,6 @@ impl Word {
                         Kind::Path => Value::Path(&*(p as *const PathObj)),
                         Kind::List => Value::List(&*(p as *const ListObj)),
                         Kind::Attrs => Value::Attrs(&*(p as *const AttrsObj)),
-                        Kind::Lambda => Value::Lambda(&*(p as *const LambdaObj)),
                         Kind::PrimOp => Value::PrimOp(&*(p as *const PrimOpObj)),
                         Kind::PrimOpApp => Value::PrimOpApp(&*(p as *const PrimOpAppObj)),
                         k => panic!("view: not a value object: {k:?}"),
@@ -341,6 +346,9 @@ impl Word {
 
     #[inline]
     pub fn heap_kind(self) -> Option<Kind> {
+        if self.tag() == TAG_LAMBDA {
+            return Some(Kind::Lambda);
+        }
         if self.tag() == TAG_PTR && self.0 != 0 {
             // SAFETY: see `view`.
             Some(unsafe { *(self.ptr::<u8>() as *const Kind) })
@@ -597,11 +605,7 @@ impl Arena {
 
     pub fn mk_lambda(&mut self, env: &'static EnvObj, lam: &'static LambdaIr) -> Word {
         self.stats.note(Stat::Lambda, size_of::<LambdaObj>());
-        Word::from_ptr(self.alloc(LambdaObj {
-            kind: Kind::Lambda,
-            env,
-            lam,
-        }))
+        Word::lambda_from_ptr(self.alloc(LambdaObj { env, lam }) as *const LambdaObj)
     }
 
     pub fn mk_primop(&mut self, name: &'static str, arity: u8, f: PrimFn) -> Word {
