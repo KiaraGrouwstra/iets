@@ -69,6 +69,30 @@ pub fn print_literal_string(out: &mut Vec<u8>, s: &[u8]) {
     out.push(b'"');
 }
 
+/// Mirrors print.cc:isVarName plus the reserved keywords.
+fn is_var_name(s: &[u8]) -> bool {
+    const KEYWORDS: [&[u8]; 10] = [
+        b"if", b"then", b"else", b"assert", b"with", b"let", b"in", b"rec", b"inherit", b"or",
+    ];
+    if s.is_empty() || KEYWORDS.contains(&s) {
+        return false;
+    }
+    if s[0].is_ascii_digit() || s[0] == b'-' || s[0] == b'\'' {
+        return false;
+    }
+    s.iter()
+        .all(|&c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'\'' | b'-'))
+}
+
+/// Mirrors print.cc:printAttributeName: bare identifiers, quoted otherwise.
+pub fn print_attr_name(out: &mut Vec<u8>, name: &[u8]) {
+    if is_var_name(name) {
+        out.extend_from_slice(name);
+    } else {
+        print_literal_string(out, name);
+    }
+}
+
 /// Attr names in the order Nix prints them: by name bytes.
 pub fn lexicographic_order(ev: &Evaluator, a: &'static AttrsObj) -> Vec<&'static Attr> {
     let mut v: Vec<&'static Attr> = a.attrs().iter().collect();
@@ -120,7 +144,7 @@ pub fn print_ambiguous(
             }
             out.extend_from_slice(b"{ ");
             for attr in lexicographic_order(ev, a) {
-                out.extend_from_slice(ev.interner.name(attr.sym));
+                print_attr_name(out, ev.interner.name(attr.sym));
                 out.extend_from_slice(b" = ");
                 print_ambiguous(
                     ev,
