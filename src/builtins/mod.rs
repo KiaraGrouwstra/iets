@@ -35,6 +35,15 @@ impl Registry {
     }
 }
 
+/// Embedded corepkgs, addressed as `<nix/NAME>`.
+pub fn corepkgs(name: &[u8]) -> Option<&'static [u8]> {
+    match name {
+        b"fetchurl.nix" => Some(include_bytes!("../corepkgs/fetchurl.nix")),
+        b"derivation.nix" => Some(include_bytes!("../corepkgs/derivation.nix")),
+        _ => None,
+    }
+}
+
 fn builtins_name(name: &'static str) -> &'static str {
     name.strip_prefix("__").unwrap_or(name)
 }

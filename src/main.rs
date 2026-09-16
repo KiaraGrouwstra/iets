@@ -224,7 +224,7 @@ fn run_eval(a: EvalArgs) -> i32 {
                 ev.force(v)?
             };
             let mut seen = HashSet::new();
-            ietsp::print::print_ambiguous(&mut ev, v, &mut out, &mut seen, 0)
+            ietsp::print::print_ambiguous(&mut ev, v, 1, &mut out, &mut seen, 0)
         })()
     };
     match r {

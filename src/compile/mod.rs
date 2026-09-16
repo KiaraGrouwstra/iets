@@ -748,22 +748,25 @@ impl<'a> Compiler<'a> {
     fn lower_attrs(&mut self, m: Merged) -> CResult<&'static AttrsIr> {
         if m.rec {
             let pos = m.pos;
+            let mut m = m;
+            let dynamics = std::mem::take(&mut m.dynamics);
             let (binds, from) = self.lower_rec_binds(m)?;
-            // dynamics of rec sets are evaluated in the rec env
-            let a = AttrsIr {
-                rec: true,
-                binds,
-                from,
-                dynamic: &[],
-                pos,
-                overrides: None,
-            };
+            // dynamics of rec sets are evaluated in the rec env: compile them
+            // while its scope is still pushed
+            let dynamic = self.lower_dynamics(dynamics)?;
             let overrides = binds
                 .iter()
                 .position(|b| b.sym == self.sym_overrides)
                 .map(|i| i as u32);
             self.scopes.pop();
-            return Ok(self.alloc(AttrsIr { overrides, ..a }));
+            return Ok(self.alloc(AttrsIr {
+                rec: true,
+                binds,
+                from,
+                dynamic,
+                pos,
+                overrides,
+            }));
         }
         let Merged {
             statics,
@@ -838,6 +841,21 @@ impl<'a> Compiler<'a> {
             }
             self.scopes.pop();
         }
+        let dynamic = self.lower_dynamics(dynamics)?;
+        binds.sort_by_key(|b| b.sym);
+        let binds = self.alloc_binds(binds);
+        let from = self.alloc_refs(from);
+        Ok(self.alloc(AttrsIr {
+            rec: false,
+            binds,
+            from,
+            dynamic,
+            pos,
+            overrides: None,
+        }))
+    }
+
+    fn lower_dynamics(&mut self, dynamics: Vec<(ExprId, Def, Pos)>) -> CResult<&'static [DynBindIr]> {
         let mut dyns = Vec::with_capacity(dynamics.len());
         for (name_e, def, dpos) in dynamics {
             let name = self.expr(name_e)?;
@@ -855,18 +873,7 @@ impl<'a> Compiler<'a> {
                 pos: dpos,
             });
         }
-        binds.sort_by_key(|b| b.sym);
-        let binds = self.alloc_binds(binds);
-        let from = self.alloc_refs(from);
-        let dynamic = self.alloc_dyn(dyns);
-        Ok(self.alloc(AttrsIr {
-            rec: false,
-            binds,
-            from,
-            dynamic,
-            pos,
-            overrides: None,
-        }))
+        Ok(self.alloc_dyn(dyns))
     }
 
     /// Recursive bindings (`rec { }` and `let`). Pushes the new scope and

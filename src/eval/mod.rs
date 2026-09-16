@@ -16,6 +16,12 @@ use crate::syntax::symbol::{Interner, Sym};
 
 pub const MAX_CALL_DEPTH: u32 = 10000;
 
+/// Virtual path prefix for the embedded corepkgs (`<nix/fetchurl.nix>`).
+pub struct CorePkgs;
+impl CorePkgs {
+    pub const PREFIX: &[u8] = b"/__corepkgs__/";
+}
+
 pub struct FileInfo {
     pub path: Vec<u8>,
     pub src: &'static [u8],
@@ -221,18 +227,7 @@ impl Evaluator {
         if let Some(w) = self.import_cache.get(&resolved) {
             return Ok(*w);
         }
-        let src = match std::fs::read(std::path::Path::new(
-            std::str::from_utf8(&resolved).unwrap_or(""),
-        )) {
-            Ok(s) => s,
-            Err(e) => bail!(
-                ErrorKind::Io,
-                pos,
-                "opening file '{}': {}",
-                String::from_utf8_lossy(&resolved),
-                e
-            ),
-        };
+        let src = self.read_source(&resolved, pos)?;
         let dir = dir_of(&resolved).to_vec();
         let ir = self.compile_source(&resolved, src, &dir, None)?;
         let root = self.root_env;
@@ -250,18 +245,7 @@ impl Evaluator {
         pos: Pos,
     ) -> EvalResult<Word> {
         let resolved = self.resolve_import_path(path, pos)?;
-        let src = match std::fs::read(std::path::Path::new(
-            std::str::from_utf8(&resolved).unwrap_or(""),
-        )) {
-            Ok(s) => s,
-            Err(e) => bail!(
-                ErrorKind::Io,
-                pos,
-                "opening file '{}': {}",
-                String::from_utf8_lossy(&resolved),
-                e
-            ),
-        };
+        let src = self.read_source(&resolved, pos)?;
         let names: Vec<Sym> = scope.attrs().iter().map(|a| a.sym).collect();
         let dir = dir_of(&resolved).to_vec();
         let ir = self.compile_source(&resolved, src, &dir, Some(&names))?;
@@ -274,6 +258,9 @@ impl Evaluator {
 
     fn resolve_import_path(&mut self, path: &[u8], pos: Pos) -> EvalResult<Vec<u8>> {
         let mut p = path.to_vec();
+        if p.starts_with(CorePkgs::PREFIX) {
+            return Ok(p);
+        }
         let meta = std::fs::metadata(std::path::Path::new(std::str::from_utf8(&p).unwrap_or("")));
         match meta {
             Ok(m) if m.is_dir() => {
@@ -315,12 +302,37 @@ impl Evaluator {
                 return Ok(cp);
             }
         }
+        if head == b"nix" && crate::builtins::corepkgs(&rest[1..]).is_some() {
+            let mut p = CorePkgs::PREFIX.to_vec();
+            p.extend_from_slice(&rest[1..]);
+            return Ok(p);
+        }
         bail!(
-            ErrorKind::Eval,
+            ErrorKind::Throw,
             pos,
             "file '{}' was not found in the Nix search path (add it using $NIX_PATH or -I)",
             String::from_utf8_lossy(name)
         )
+    }
+
+    fn read_source(&self, resolved: &[u8], pos: Pos) -> EvalResult<Vec<u8>> {
+        if let Some(rest) = resolved.strip_prefix(CorePkgs::PREFIX)
+            && let Some(src) = crate::builtins::corepkgs(rest)
+        {
+            return Ok(src.to_vec());
+        }
+        match std::fs::read(std::path::Path::new(
+            std::str::from_utf8(resolved).unwrap_or(""),
+        )) {
+            Ok(s) => Ok(s),
+            Err(e) => bail!(
+                ErrorKind::Io,
+                pos,
+                "opening file '{}': {}",
+                String::from_utf8_lossy(resolved),
+                e
+            ),
+        }
     }
 
     // ---- forcing ----------------------------------------------------------
@@ -402,7 +414,14 @@ impl Evaluator {
                 for _ in 0..*depth {
                     e = e.up().expect("compile-time depth is valid");
                 }
-                e.slots()[*idx as usize].get()
+                let w = e.slots()[*idx as usize].get();
+                // a slot of the env under construction (`let x = x;`): thunk it
+                // so forcing reports infinite recursion instead of reading EMPTY
+                if w == Word::EMPTY {
+                    self.nr_thunks += 1;
+                    return self.arena.mk_thunk(env, ir);
+                }
+                w
             }
             Ir::Lambda(l) => self.arena.mk_lambda(env, l),
             _ => {
@@ -946,12 +965,12 @@ impl Evaluator {
             Ir::Eq(l, r, pos) => {
                 let a = self.eval(env, l)?;
                 let b = self.eval(env, r)?;
-                Ok(Word::from_bool(self.eq_values(a, b, *pos)?))
+                Ok(Word::from_bool(self.eq_values_top(a, b, *pos)?))
             }
             Ir::Ne(l, r, pos) => {
                 let a = self.eval(env, l)?;
                 let b = self.eval(env, r)?;
-                Ok(Word::from_bool(!self.eq_values(a, b, *pos)?))
+                Ok(Word::from_bool(!self.eq_values_top(a, b, *pos)?))
             }
             Ir::Lt(l, r, pos) => {
                 let a = self.eval(env, l)?;

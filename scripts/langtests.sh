@@ -1,23 +1,28 @@
 #!/usr/bin/env bash
-# Runs tests/lang/eval-okay-*.nix and eval-fail-*.nix against ietsp.
-# Prints pass/fail counts and the names of failures.
+# Runs tests/lang/eval-okay-*.nix and eval-fail-*.nix against ietsp, from
+# the tests/ directory like Nix's own harness (paths print as /pwd/lang/...).
 set -uo pipefail
 cd "$(dirname "$0")/.."
-IETSP=${IETSP:-./target/release/ietsp}
+IETSP=${IETSP:-$PWD/target/release/ietsp}
+cd tests
 pass=0; fail=0; failed=()
-for f in tests/lang/eval-okay-*.nix; do
+for f in lang/eval-okay-*.nix; do
   n=${f%.nix}
   flags=()
   [ -f "$n.flags" ] && read -r -a flags < "$n.flags"
   if [ -f "$n.exp" ]; then
-    out=$(cd tests/lang && ../../$IETSP eval --strict "${flags[@]}" "$(basename "$f")" 2>/dev/null)
+    out=$("$IETSP" eval --strict "${flags[@]}" "$f" 2>/dev/null | sed "s|$PWD|/pwd|g")
     if [ "$out" == "$(cat "$n.exp")" ]; then pass=$((pass+1)); else fail=$((fail+1)); failed+=("$(basename "$n")"); fi
   fi
 done
-for f in tests/lang/eval-fail-*.nix; do
+for f in lang/eval-fail-*.nix; do
   n=${f%.nix}
-  if (cd tests/lang && ../../$IETSP eval --strict "$(basename "$f")" >/dev/null 2>&1); then
-    fail=$((fail+1)); failed+=("$(basename "$n") (should fail)")
+  flags=()
+  [ -f "$n.flags" ] && read -r -a flags < "$n.flags"
+  "$IETSP" eval --strict "${flags[@]}" "$f" >/dev/null 2>&1
+  rc=$?
+  if [ $rc -eq 0 ]; then fail=$((fail+1)); failed+=("$(basename "$n") (should fail)")
+  elif [ $rc -ge 128 ]; then fail=$((fail+1)); failed+=("$(basename "$n") (crashed rc=$rc)")
   else pass=$((pass+1)); fi
 done
 echo "pass=$pass fail=$fail"

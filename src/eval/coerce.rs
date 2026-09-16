@@ -173,7 +173,19 @@ impl Evaluator {
         crate::builtins::store_hooks::copy_path_to_store(self, path, pos)
     }
 
-    /// Nix `==`.
+    /// The `==` operator. Nix compares the two operand temporaries, so two
+    /// references to one function are unequal here but equal when reached
+    /// through a shared cell (see `eq_values`).
+    pub fn eq_values_top(&mut self, a: Word, b: Word, pos: Pos) -> EvalResult<bool> {
+        let a = self.force(a)?;
+        let b = self.force(b)?;
+        if a == b && a.value_type() == ValueType::Function {
+            return Ok(false);
+        }
+        self.eq_values(a, b, pos)
+    }
+
+    /// Nix `eqValues`: identical words are equal (pointer shortcut).
     pub fn eq_values(&mut self, a: Word, b: Word, pos: Pos) -> EvalResult<bool> {
         let a = self.force(a)?;
         let b = self.force(b)?;

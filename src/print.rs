@@ -77,9 +77,13 @@ pub fn lexicographic_order(ev: &Evaluator, a: &'static AttrsObj) -> Vec<&'static
 }
 
 /// `nix-instantiate --eval` output. Does not force; `--strict` forces first.
+/// `cell` identifies the slot the value was read from; Nix keys repeated
+/// lists on the `Value` address, which is the cell in our model. The top
+/// level passes any unique number.
 pub fn print_ambiguous(
     ev: &mut Evaluator,
     w: Word,
+    cell: u64,
     out: &mut Vec<u8>,
     seen: &mut HashSet<u64>,
     depth: usize,
@@ -98,7 +102,7 @@ pub fn print_ambiguous(
         } else if r == Word::EMPTY {
             out.extend_from_slice(b"<CODE>");
         } else {
-            return print_ambiguous(ev, r, out, seen, depth);
+            return print_ambiguous(ev, r, cell, out, seen, depth);
         }
         return Ok(());
     }
@@ -118,19 +122,19 @@ pub fn print_ambiguous(
             for attr in lexicographic_order(ev, a) {
                 out.extend_from_slice(ev.interner.name(attr.sym));
                 out.extend_from_slice(b" = ");
-                print_ambiguous(ev, attr.cell.get(), out, seen, depth + 1)?;
+                print_ambiguous(ev, attr.cell.get(), &attr.cell as *const _ as u64, out, seen, depth + 1)?;
                 out.extend_from_slice(b"; ");
             }
             out.push(b'}');
         }
         Value::List(l) => {
-            if l.len > 0 && !seen.insert(w.0) {
+            if l.len > 0 && !seen.insert(cell) {
                 out.extend_from_slice("«repeated»".as_bytes());
                 return Ok(());
             }
             out.extend_from_slice(b"[ ");
             for c in l.cells() {
-                print_ambiguous(ev, c.get(), out, seen, depth + 1)?;
+                print_ambiguous(ev, c.get(), c as *const _ as u64, out, seen, depth + 1)?;
                 out.push(b' ');
             }
             out.push(b']');
