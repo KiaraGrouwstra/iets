@@ -197,55 +197,196 @@ calling the 'throw' builtin\n ...","fatal":false}`. The error text is
 
 ```
 ietsp eval-jobs [--workers N] [--force-recurse] [--meta] [--show-input-drvs]
-                [--chunks M --chunk N] [--max-memory-size MB] [-I prefix=path]...
-                [--arg name expr] [--argstr name str] [--option k v]
-                (-E EXPR | FILE | FLAKEREF#attr)
+                [--no-instantiate] [--eval-store URL] [--gc-roots-dir DIR]
+                [--check-cache-status] [--constituents] [--apply EXPR]
+                [--select EXPR] [--max-memory-size MB]
+                [--chunks M --chunk N [--chunk-depth D]]
+                [-I prefix=path]... [--arg name expr] [--argstr name str]
+                [--arg-from-file name path] [--arg-from-stdin name]
+                [--option k v]... (-E EXPR | FILE | --flake FLAKEREF[#attr])
 ```
 
-Same walk, same lines. Differences and gaps:
+Same walk, same lines. `scripts/evaljobs-flags.sh` runs nix-eval-jobs
+2.35.2 and ietsp with every flag combination below on the jobsets in
+`tests/evaljobs/` and diffs the sorted output (`jq -S` per line, error
+text replaced by `true`, GC root directories listed): 40 cases, all
+identical, exit codes included.
 
-- **Order** is deterministic: lexicographic depth-first by attribute
-  name (every child of a set before the next sibling). nix-eval-jobs's
-  is not; sort both by `attrPath` to compare.
+### Flags
+
+| flag | status | notes |
+|---|---|---|
+| `FILE`, `-E`/`--expr EXPR` | identical | The argument is a file unless `--flake`; the top level is auto-called with the `--arg`s like `releaseExprTopLevelValue`. |
+| `--arg`, `--argstr`, `--arg-from-file`, `--arg-from-stdin` | identical | |
+| `-I`, `--include` | identical | |
+| `--flake REF[#attr]` | identical for locked local flakes | `REF` is a directory (`.`, `./x`, `path:/x`); the fragment is looked up in `outputs` verbatim. Without a fragment the root is the `callFlake` result (`_type`, `inputs`, `outputs`, `sourceInfo`), to be `--select`ed like nix-eval-jobs. Registries, unlocked inputs and pure evaluation are out of scope (`docs/flakes.md`). |
+| `--force-recurse`, `--meta`, `--show-input-drvs` | identical | |
+| instantiation (the default) | identical result | nix-eval-jobs writes every `.drv` inside `derivationStrict`; ietsp registers the job drvs and their closures in batches on a thread beside the walk (below). |
+| `--no-instantiate` | identical | `system` from the `system` attribute (`unknown` without one), no `requiredSystemFeatures`, no `inputDrvs`, no roots; refused together with `--show-input-drvs`, `--check-cache-status` or `--constituents`, same message. |
+| `--eval-store URL` | supported | `daemon`, `unix:///path`, `ssh-ng://host`. Cache status and constituents read the `.drv`s back from `/nix/store`, so they need the local daemon, as nix-eval-jobs needs a `LocalFSStore`. |
+| `--gc-roots-dir DIR` | identical | `DIR/<drv basename>` symlink plus `AddIndirectRoot` for every job (and every rewritten aggregate), skipped when the link exists; nothing with `--no-instantiate`. ietsp creates `DIR`; nix-eval-jobs errors per job when it is missing. |
+| `--check-cache-status` | identical | `isCached`, `cacheStatus`, `neededBuilds`, `neededSubstitutes` from the cache-status-resolver.cc algorithm (below). |
+| `--constituents` | identical | Named, derivation, glob (`_hydraGlobConstituents`) constituents, dependency cycles, missing and failed constituents, rewritten `drvPath`/`outputs`, `namedConstituents` erased, roots. Not across `--chunks`: a name in another chunk is "does not exist". |
+| `--apply EXPR` | identical | `extraValue`; a non-attrset result is the job's error. |
+| `--select EXPR` | identical | Applied to the auto-called root; a non-attrset result is fatal. |
+| `--workers N` | different meaning | Fibers of one process (default 4); worker processes with `--max-memory-size` (nix-eval-jobs: processes, default 1). |
+| `--max-memory-size MB` | supported, different default | Only when given: worker processes restarted above `MB` (below). Without it one process with no ceiling; nix-eval-jobs always restarts at 4096. |
+| `--chunks M --chunk N`, `--chunk-depth D` | ietsp only | See above. |
+| `--impure` | accepted | ietsp never enforces pure evaluation. |
+| `--show-trace` | accepted | The trace is always in the error text. |
+| `--option k v` | accepted, ignored | `restrict-eval`, `allow-import-from-derivation` (IFD is unsupported anyway), `eval-cache`, substituters: none takes effect. |
+| `--quiet`, `--verbose`, `--debug` | accepted | `--quiet` drops the stderr summary. |
+| `--log-format raw` | accepted | `internal-json`, `bar`, `bar-with-logs`: error; ietsp logs plain lines. |
+| `--max-jobs N` | accepted, ignored | |
+| `--override-input`, `--override-flake`, `--reference-lock-file` | error | ietsp evaluates a flake from its own complete `flake.lock` only. |
+| `--repair` | error | ietsp never repairs store paths. |
+
+Differences that stay:
+
+- **Order** is lexicographic depth-first in one process, and completion
+  order (like nix-eval-jobs) with `--max-memory-size`. Sort by
+  `attrPath` to compare.
 - **Error text** is ietsp's (`error: msg`, `at file:line:col`, `… trace`
   lines), not Nix's rendering. The set of attrs that error is the same
-  in the measurements below; the text is not compared.
-- **`--max-memory-size`** is accepted and ignored: one arena, no GC, no
-  worker restart. Use `--chunks M --chunk N` to split a run across
-  processes: a leaf (derivation) is printed only when the FNV-1a hash of
-  its attribute path is `N mod M`; inner sets are still walked and every
-  leaf's `type` is still forced, so a chunk pays the whole "reach every
-  package" cost and one M-th of the `drvPath` cost. nixpkgs CI chunks
-  contiguous slices of a pre-evaluated path list instead; the hash keeps
-  chunking deterministic without a pre-evaluation.
-- **`--check-cache-status`**, `--constituents`, `--apply`, `--select`
-  exit with an error. `--gc-roots-dir`, `--max-jobs`, `--flake`,
-  `--show-trace`, `--no-instantiate`, `--option` are accepted and ignored
-  (ietsp never writes to a store, so nothing is instantiated and no root
-  is needed; `--option allow-import-from-derivation false` is the only
-  behaviour: IFD is unsupported anyway).
+  in every measurement; the text is not compared. A fatal line
+  (`StackOverflow`) ends the run with exit 1 on both sides.
 - **`system`** comes from the in-memory `.drv` (the derivation table
   filled by `derivationStrict`), or from `/nix/store` for an imported
-  `.drv`.
-- **Parallelism**: the main fiber walks and prints; before walking a set
-  it submits its children (in windows of 1024, 4 cells per task) as
-  `T_JOB` tasks. A helper forces the child, and if it is a derivation
-  forces `name`, `drvPath` (the build graph), each output's `outPath`
-  and, with `--meta`, `meta` deeply; if it is a set to recurse into it
-  fans out its children and walks them the same way. Helpers skip cells
-  another fiber holds and continue past errors; errors are never cached,
-  so the main walk re-evaluates a failing attr and reports it under its
-  own boundary.
+  `.drv`; nix-eval-jobs reads it back from the store after writing.
 
-The per-line stderr summary at the end reports jobs, errors, wall time
-and `VmHWM`.
+### Instantiation
+
+`src/jobs/instantiate.rs`. The walk hands every job or error line to a
+thread that holds one daemon connection. Every 256 jobs (or at the end)
+it computes the closure of the batch's `drvPath`s from the evaluator's
+derivation table (ATerm and references; an imported `.drv` is read from
+`/nix/store`) and the sources they reference (`ev.sources`: local trees
+and `toFile` texts, hashed on the way), stops at paths already known
+valid, asks `QueryValidPaths` once, sends what is missing in one
+`AddMultipleToStore` (sources first, drvs in post-order, the same
+`ValidPathInfo` + NAR framing as `ietsp build`), registers the GC roots,
+and only then passes the batch's lines on. So a printed `drvPath` is
+always valid in the store, as after nix-eval-jobs, and the daemon round
+trips overlap the evaluation. The stderr summary gets an `instantiate:`
+line with batches, paths queried and added, bytes, roots and thread
+time.
+
+Cost, same box and method as the measurements below (`--workers 4`):
+
+| workload | `--no-instantiate` | instantiate, warm store | instantiate, cold store (scratch `nix-daemon --store local?root=DIR`) |
+|---|---|---|---|
+| nixos-desktop toplevel (1 job, 4184-path closure, 3533 drvs) | 1.04 s | 1.17 s (1 batch, 4184 queried, 0.13 s on the thread) | 3.09 s (4184 added, 38 MB, 2.09 s on the thread) |
+| outpaths x86_64-linux chunk 0 of 8 (9244 jobs, 167 errors) | 13.3 s | 13.6 s (37 batches, 81721 queried, 2.7 s on the thread) | 54.7 s (81721 added, 632 MB, 51.0 s on the thread; 79074 drvs in the scratch store) |
+
+A warm store costs 0.3 s of wall on a 13 s chunk: the queries overlap
+the walk. A cold store costs 0.6 ms per path in the daemon
+(`AddMultipleToStore` registers one path per SQLite transaction) and
+the walk finishes long before the thread does, so the run is bound by
+the daemon's write rate: 41 s for 82k paths, against nix-eval-jobs's
+~540 s of first-time writes for the whole set (790 s cold vs 248 s
+warm, one `writeDerivation` round trip per drv from four workers). The
+same nixos-desktop job takes nix-eval-jobs 5.3 s warm (one worker).
+
+### Cache status
+
+`src/jobs/cache.rs` mirrors cache-status-resolver.cc (2.35 no longer
+calls `queryMissing`; it probes with `queryValidPaths` and
+`querySubstitutablePathInfos` and walks the input drvs itself): every
+output of the job is probed for validity; all valid is `local`; the
+missing ones all substitutable is `cached` with them as
+`neededSubstitutes`; otherwise the input graph is walked from the job's
+`.drv` (read back from `/nix/store`, cached), a drv whose wanted outputs
+are missing and not all substitutable is a needed build (post-order,
+`inputDrvs` in store-path order) and its inputs are visited, one whose
+missing outputs are substitutable contributes them to
+`neededSubstitutes` and is not descended. Probes are batched: one
+`QueryValidPaths` and one `QuerySubstitutablePathInfos` (worker op 30,
+added to `src/remote/worker/mod.rs`) per pass over the batch of jobs
+that is still unresolved; a failing substituter query counts as a miss.
+`neededSubstitutes` is sorted by name then path, like the C++. In one
+process the resolver runs on the instantiation thread after each batch;
+with `--max-memory-size` on its own thread fed by the collectors.
+
+### Constituents
+
+`src/jobs/constituents.rs` mirrors constituents.cc. At job time (with
+the flag) `_hydraAggregate = true` jobs yield `constituents` (the
+`.drv`s in the string context of `constituents`, sorted) and
+`namedConstituents` (its strings); an aggregate with names is withheld
+by the emitter. After the walk every withheld aggregate is resolved
+against the job table: a missing name is `does not exist` (or, with
+`_hydraGlobConstituents`, an fnmatch pattern over every other job,
+`constituent glob pattern had no matches` when nothing matches), an
+error line is `<its error text>`; aggregates are topologically sorted
+on the names that are aggregates themselves, and a cycle prints the two
+jobs with `Dependency cycle: a <-> b` and the rest with `Skipping
+aggregate because of a dependency cycle`. An aggregate with no broken
+constituent gets each constituent's `.drv` as an `inputDrvs` entry with
+the child's first output, its input-addressed outputs reset to
+deferred and recomputed (`finalize_input_addressed_outputs`, hashes
+read from `/nix/store`), the new `.drv` written through the daemon and
+rooted, `drvPath` and `outputs` replaced; `namedConstituents` is erased
+and a broken one becomes `error: "name: why\n..."` on the job line.
+`tests/evaljobs/aggregates.nix` has all of nix-eval-jobs's cases
+(direct, indirect, mixed, nested, missing, failed, two glob shapes, a
+cycle with a bystander, `_hydraAggregate` without constituents,
+`_hydraAggregate = false`): 23 lines, identical to nix-eval-jobs in
+one process, with `--max-memory-size` and with `--check-cache-status`.
+
+### Memory limit
+
+`src/jobs/collector.rs`. ietsp has one arena and no GC, so a process
+cannot shed what it has evaluated; the only ceiling is a process
+boundary. With `--max-memory-size MB` ietsp does what nix-eval-jobs
+does: the main process runs `--workers` collector threads, each with a
+worker process (`ietsp eval-jobs --worker` and the same arguments, one
+fiber thread, its own instantiation thread) and the shared `todo` set
+of attribute paths starting at `[]`; a worker gets `do ["a","b"]`,
+finds the value along the path (auto-calling at every step), and
+answers `{"attrs":[...]}` for a set to recurse into, `ok` for a skipped
+node or a job (the job line follows once its instantiation batch is
+registered, so lines arrive at any time), or an error line; after every
+answer it compares `VmHWM` with the limit and, above it, flushes its
+batch, says `restart` and exits, and the collector spawns a new one. A
+worker that dies is reported like nix-eval-jobs's
+`handleBrokenWorkerPipe`. Cache status and constituents run in the main
+process from the lines (the `.drv`s are in the store by then). Output
+order is completion order. The chunk rule still applies inside a
+worker, so `--chunks` and `--max-memory-size` combine.
+
+Full outpaths x86_64-linux set, `--workers 4 --max-memory-size 4096`,
+against the nix-eval-jobs rows of section (a), same box and method
+(`--meta`, `-I nixpkgs=$NP`, one run each unless noted):
+
+| run | wall | user | sys | peak RSS (group; largest process) | worker processes | jobs | errors | diffs |
+|---|---|---|---|---|---|---|---|---|
+| ietsp `--max-memory-size 4096`, warm store (two runs) | 72.4 s, 83.1 s | 243 s, 251 s | 53 s, 81 s | 16.1 GB; 4.9 GB | 28 (4 + 24 restarts) | 80245 | 1851 | 0 |
+| ietsp `--max-memory-size 4096 --no-instantiate` | 70.3 s | 229 s | 49 s | 15.9 GB; 4.7 GB | – | 80245 | 1851 | 0 |
+| ietsp `--max-memory-size 4096`, cold scratch store | 206.5 s | 228 s | 76 s | 17.0 GB; 4.7 GB | 27 | 80245 | 1851 | 0 (243545 drvs written, 2.0 GB) |
+| nix-eval-jobs `--workers 4 --max-memory-size 4096`, warm store, same day | 245.1 s | 564 s | 152 s | 17.1 GB; 4.6 GB | – | 80245 | 1851 | – |
+| nix-eval-jobs, section (a): cold, warm, `--no-instantiate` | 789.8 s, 247.7 s, 126.4 s | | | | | 80245 | 1851 | – |
+
+Diffs are `scripts/evaljobs-cmp.sh --meta` against the same-day
+nix-eval-jobs run: the same 82096 attrs, the same jobs and errors, zero
+whole-line differences after key sorting, for all three ietsp runs.
+Restart mode is 3.4x faster than nix-eval-jobs on a warm store and 3.8x
+on a cold one, with the same memory envelope (four workers under 4 GB
+each plus the collector), and the same fixed cost per restart: every
+new worker re-evaluates the shared base before its first job, which is
+what the 28 processes buy. The cold run is bound by the daemon's write
+rate (one path per SQLite transaction on each worker's connection):
++134 s over warm, against nix-eval-jobs's +542 s. The single-process
+mode of section (a) (eight `--chunks` in sequence, 110.6 s summed, 14 GB)
+remains the option without a memory ceiling.
 
 ## Measurements
 
 Box: 16 vCPU, 30 GB RAM, `/nix/store` behind a local daemon
 (`NIX_REMOTE=daemon`). nix-eval-jobs 2.35.2 from the flake registry
 nixpkgs (`nix build nixpkgs#nix-eval-jobs -o ~/tmp/nej`); ietsp at
-commit `dd45092`. `NP=/nix/store/ah3pxz4xa52hd6vhbx17vcsci0b8bmbr-source`.
+commit `dd45092`. `NP=/nix/store/ah3pxz4xa52hd6vhbx17vcsci0b8bmbr-source`. The ietsp
+rows of (a)-(c) predate instantiation: they are `--no-instantiate` runs
+in one process.
 
 How measured: every run went through a small wrapper
 (`scratchpad/memrun.sh`) that runs the command under `/usr/bin/env time
@@ -418,71 +559,50 @@ is a plain job on both sides (`namedConstituents: []` without
 
 | workload | nix-eval-jobs wall | ietsp wall (4 workers, chunks summed) | ietsp peak RSS | jobs | errors | diffs |
 |---|---|---|---|---|---|---|
-| (a) outpaths x86_64-linux | 789.8 s cold store, 247.7 s warm, 126.4 s `--no-instantiate` | 110.6 s | 14.3 GB | 80245 | 1851 | 0 |
+| (a) outpaths x86_64-linux | 789.8 s cold store, 247.7 s warm, 126.4 s `--no-instantiate` | 110.6 s (`--no-instantiate`, 8 chunks) | 14.3 GB | 80245 | 1851 | 0 |
+| (a) with `--max-memory-size 4096`, 4 worker processes | same | 72.4 s warm, 206.5 s cold, 70.3 s `--no-instantiate` | 16-17 GB group, 4.9 GB largest | 80245 | 1851 | 0 |
 | (b) release.nix x86_64-linux | 234.0 s (warm) | 93.7 s | 13.9 GB | 77708 | 4402 | 0 |
 | (c) nixos `tested` subset | killed (switchTest) | 79.4 s + switchTest killed | 14.1 GB | 116 | 0 | 0 |
 
-Gates at the end: `cargo test --release` 109 passed, clippy clean,
+Gates at the end: `cargo test --release` 113 passed, clippy clean,
+`scripts/evaljobs-flags.sh` 40/40,
 `scripts/langtests.sh` 245/5, `scripts/flaketest.sh` 19/19,
 `scripts/cachetest.sh` 18/18, `scripts/difftest.sh -I nixpkgs=$NP
 bench/workloads/nixos-desktop.nix` ok.
 
 ## What is missing for Hydra or nixpkgs CI
 
-- **Memory ceiling.** nix-eval-jobs bounds RSS per worker by restarting
-  it above `--max-memory-size`; ietsp has one arena and no GC, so a
-  process grows with everything it has ever evaluated: 11-14 GB for an
-  eighth of x86_64-linux nixpkgs, about 1 GB per NixOS test, more than
-  23 GB for `nixos.tests.switchTest` alone. `--chunks` is the only
-  control: a driver has to pick a chunk count from the memory it has,
-  pay the shared base (~5 s of `lib`, stdenv and the package sets) once
-  per chunk, and re-split a chunk that does not fit. A worker-restart or
-  chunk-retry loop like nix-eval-jobs's collector, driven by RSS, is the
-  missing piece; a GC (or a per-unit arena that is dropped after the
-  unit is printed, which the shared thunk graph does not allow) is the
-  real fix. Note that nix-eval-jobs sets `GC_DONT_GC=1` too: a single
-  job that needs more than the box has kills it as well
-  (`switchTest`, below).
+- **Memory ceiling** (`--max-memory-size`) costs a re-evaluation of the
+  shared base per restart, as in nix-eval-jobs, and has no in-process
+  form: a single job that needs more than the box (`nixos.tests.switchTest`)
+  kills both. A GC, or a per-unit arena the shared thunk graph does not
+  allow, is the real fix.
 - **Chunk depth.** A chunk decides by the hash of the path prefix of
   length `--chunk-depth`; a derivation above that depth has to be forced
   (`hydraJob` deep-forces it) before it can be skipped, so the depth
   must be at or below the shallowest leaf: 2 for `release.nix` and
-  `outpaths.nix` (`pkg.system`, `pkgset.pkg`), 3 for
-  `release-combined.nix` (`nixpkgs.pkg.system`, `nixos.tests.name`)
-  where the `nixos.tests.networking.scripted` group is one unit. The
-  `tested` subset below was flattened to one test per depth-2 unit for
-  that reason. nixpkgs CI's pre-evaluated path list plus `chunk.nix`
-  pruning is the general answer; ietsp could take such a list
-  (`--attr-paths FILE`) and skip everything else without forcing.
-- **`--check-cache-status`** (`isCached`, `cacheStatus`,
-  `neededBuilds`, `neededSubstitutes`): needs `queryMissing` against
-  the local store and the substituters for every job's outputs. ietsp
-  has the daemon protocol (`docs/remote-builder-protocol.md`) and
-  `query_valid_paths`; the resolver thread nix-eval-jobs runs beside the
-  collector is the shape to copy. Not implemented; the flag errors.
-- **`--constituents`** (Hydra's aggregates, `nixos.tested`,
-  `nixpkgs.unstable`): needs the rewritten aggregate `.drv` written to
-  the store, which ietsp never does. The plain job line is printed
-  (`constituents: []`), which is what nix-eval-jobs prints without the
-  flag.
-- **`--gc-roots-dir`**: nothing to root; the `.drv`s live in memory.
-  Hydra then needs the `.drv`s instantiated by someone: `ietsp build`'s
-  remote path or a daemon `addToStore` of the in-memory ATerms is the
-  route, not done here.
-- **Meta correctness**: byte-identical to nix-eval-jobs on every job of
-  the three workloads after `jq -S` (`checkMeta` filtering, strict JSON,
-  key order, float rendering). Not checked: `meta` values that are
-  paths inside lists (dropped by `checkMeta` on both sides) and the
-  `extraValue` of `--apply`.
+  `outpaths.nix`, 3 for `release-combined.nix`. nixpkgs CI's
+  pre-evaluated path list plus `chunk.nix` pruning is the general
+  answer; ietsp could take such a list (`--attr-paths FILE`) and skip
+  everything else without forcing. `--constituents` cannot resolve a
+  name in another chunk.
 - **Error text** differs; the set of failing attrs does not. Hydra
   shows the text in its UI, so Nix's rendering (source excerpts, the
   `… while` chain) would have to be copied for parity.
-- **Output order** is deterministic in ietsp (lexicographic DFS) and not
-  in nix-eval-jobs; consumers that key on `attr` (Hydra, nixpkgs CI's
-  `jq -s add`) do not care.
-- **Eval store / flakes**: `--flake` is accepted only for a locked
-  `DIR#attr` (`docs/flakes.md`); `--override-input`,
-  `--reference-lock-file`, registries are not there. `--option
-  restrict-eval true` (Hydra) is ignored: ietsp reads any path.
-- **`--show-input-drvs`** is implemented from the in-memory `.drv`;
-  `--apply`, `--select` are not.
+- **Flakes**: locked local flakes only. `--override-input`,
+  `--override-flake`, `--reference-lock-file` error; registries and
+  `github:` references are not fetched; `--flake` does not switch to
+  pure evaluation. `--option restrict-eval true` (Hydra) is ignored:
+  ietsp reads any path.
+- **`--eval-store`** other than the local daemon: instantiation works
+  over `ssh-ng://`, but `--check-cache-status` and `--constituents` read
+  `.drv`s from `/nix/store` and need the local one, like nix-eval-jobs's
+  `LocalFSStore` requirement.
+- **`--log-format internal-json`** is not produced; a driver that parses
+  nix-eval-jobs's stderr (Hydra reads only stdout and the exit code)
+  would see plain lines.
+- **`remote::plan`** (`ietsp build`) lists the sources of a closure in
+  discovery order and does not walk a `toFile` text's references, so a
+  text that references another copied source can reach the daemon before
+  it ("path ... is not valid"); `jobs::instantiate` orders them, `plan`
+  does not yet.
