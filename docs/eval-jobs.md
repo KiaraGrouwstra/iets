@@ -369,6 +369,64 @@ aggregate; `constituents` are not resolved by either side without
 `pkgsLLVM/pkgsArocc/pkgsZig/pkgsMusl/pkgsStatic.stdenv`, `pkgsRocm`,
 `haskell.packages.ghc*.haskell-language-server`.
 
+### (c) `nixos/release-combined.nix`: the `tested` subset
+
+The whole `nixos.tests` set (1376 names, more with nested groups) does
+not fit: one NixOS test costs ietsp about 1 GB (`tests.login`: 0.9 s,
+967 MB at 4 workers) and a chunk cannot skip a test above its chunk
+depth without forcing it, so a probe with `--chunks 32 --chunk-depth 4`
+evaluated every depth-3 test in every chunk and was killed at 23 GB
+after 9 lines. What was run instead is the set of tests the `tested`
+aggregate names on x86_64-linux (116 tests) plus `tested` itself,
+flattened to one depth-2 unit per test:
+
+```
+# nixos-tested-flat-x86.nix
+let np = $NP; lib = import (np + "/lib");
+    rc = import (np + "/nixos/release-combined.nix") { supportedSystems = [ "x86_64-linux" ]; limitedSupportedSystems = [ ]; };
+    names = lib.filter (lib.hasPrefix "nixos.tests.") rc.tested.constituents;
+    paths = map (n: lib.drop 2 (lib.splitString "." n)) names;
+    flat = lib.listToAttrs (map (p: lib.nameValuePair (lib.concatStringsSep "-" (lib.init p))
+             { ${lib.last p} = lib.getAttrFromPath p rc.nixos.tests; }) paths);
+in { inherit (rc) tested; tests = flat; }
+
+nix-eval-jobs --meta --force-recurse --workers 2 --max-memory-size 4096 \
+  --option allow-import-from-derivation false -I nixpkgs=$NP nixos-tested-flat-x86.nix
+for c in 0..15: ietsp eval-jobs --meta --force-recurse --workers 4 --chunks 16 --chunk $c -I nixpkgs=$NP nixos-tested-flat-x86.nix
+```
+
+| run | wall | user | sys | peak RSS | jobs | errors | diffs |
+|---|---|---|---|---|---|---|---|
+| nix-eval-jobs `--workers 4 --max-memory-size 4096 --force-recurse` | killed at 23 GB after 270 s | – | – | > 23 GB | 116 of 117 | 0 | – |
+| nix-eval-jobs `--workers 2`, same | killed at 23 GB after 474 s | – | – | > 23 GB | 116 of 117 | 0 | – |
+| ietsp `--workers 4`, 16 chunks | 15 chunks: 79.4 s (3.2-10.1 s each); chunk 2 killed at 24 GB after 13 s | 230 s | 43 s | 14.1 GB | 116 of 117 | 0 | 0 |
+| ietsp, chunk 2 re-split into 4 of 64 | 3 finish in 0.9-2.0 s; the one holding `switchTest` killed at 23 GB after 12 s | | | > 23 GB | | | |
+
+The 116 jobs both sides finished are the same attrs with zero
+`drvPath` and zero whole-line differences. The 117th,
+`tests.switchTest.x86_64-linux`, is the missing one on both sides: it
+alone needs more than 23 GB in ietsp (its chunk held nothing else once
+re-split) and pushed nix-eval-jobs's process group over 23 GB with
+either worker count, since its workers run with `GC_DONT_GC=1` and a
+single job is not bounded by `--max-memory-size`. It is the NixOS
+`switch-to-configuration` test with many system generations; a box
+with more memory would finish it on both. The `tested` aggregate itself
+is a plain job on both sides (`namedConstituents: []` without
+`--constituents`).
+
+## Summary
+
+| workload | nix-eval-jobs wall | ietsp wall (4 workers, chunks summed) | ietsp peak RSS | jobs | errors | diffs |
+|---|---|---|---|---|---|---|
+| (a) outpaths x86_64-linux | 789.8 s cold store, 247.7 s warm, 126.4 s `--no-instantiate` | 110.6 s | 14.3 GB | 80245 | 1851 | 0 |
+| (b) release.nix x86_64-linux | 234.0 s (warm) | 93.7 s | 13.9 GB | 77708 | 4402 | 0 |
+| (c) nixos `tested` subset | killed (switchTest) | 79.4 s + switchTest killed | 14.1 GB | 116 | 0 | 0 |
+
+Gates at the end: `cargo test --release` 109 passed, clippy clean,
+`scripts/langtests.sh` 245/5, `scripts/flaketest.sh` 19/19,
+`scripts/cachetest.sh` 18/18, `scripts/difftest.sh -I nixpkgs=$NP
+bench/workloads/nixos-desktop.nix` ok.
+
 ## What is missing for Hydra or nixpkgs CI
 
 - **Memory ceiling.** nix-eval-jobs bounds RSS per worker by restarting
