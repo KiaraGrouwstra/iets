@@ -26,5 +26,10 @@ for f in lang/eval-fail-*.nix; do
   elif [ $rc -ge 128 ]; then fail=$((fail+1)); failed+=("$(basename "$n") (crashed rc=$rc)")
   else pass=$((pass+1)); fi
 done
+for f in ../tests/corpus/*.nix; do
+  n=${f%.nix}
+  out=$("$IETSP" eval --strict "$f" 2>/dev/null)
+  if [ "$out" == "$(cat "$n.exp")" ]; then pass=$((pass+1)); else fail=$((fail+1)); failed+=("corpus/$(basename "$n")"); fi
+done
 echo "pass=$pass fail=$fail"
 printf '%s\n' "${failed[@]}" | head -${SHOW:-40}
