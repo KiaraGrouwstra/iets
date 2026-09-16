@@ -14,8 +14,54 @@ pub const TASK_CAP: usize = 4096;
 const PREWARM: usize = 4;
 /// Pool fibers beyond this many are trimmed when the worker parks.
 const TRIM_ABOVE: usize = 16;
-const SPIN_SCANS: u32 = 2000;
 const WARM_STACK: usize = 64 << 10;
+
+/// Scans of 64 polls an idle searcher makes before it parks (~2 ms). A
+/// shorter spin (64 scans) saved no user time once searchers were capped,
+/// and cost 3-5 % wall in futex round trips. `IETSP_SPIN` overrides.
+fn spin_scans() -> u32 {
+    static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("IETSP_SPIN")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(2000)
+    })
+}
+
+/// Queued tasks that justify waking one more sleeper. A fan-out burst of
+/// a few tiny tasks is cleared faster by the workers already awake than by
+/// a futex round trip (`IETSP_HANDOFF` overrides).
+fn handoff_depth() -> usize {
+    static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("IETSP_HANDOFF")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(64)
+    })
+}
+
+/// Idle workers allowed to search at once (`IETSP_SPINNERS` overrides).
+fn spinner_cap(n: usize) -> usize {
+    static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("IETSP_SPINNERS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or((n / 4).max(1))
+    })
+}
+
+/// Per-worker counters on their own cache line; summed for the stats.
+#[repr(align(128))]
+#[derive(Default)]
+pub struct WorkerStat {
+    /// 1 while the worker is inside a fiber.
+    pub running: AtomicUsize,
+    pub busy_ns: AtomicUsize,
+    pub tasks: AtomicUsize,
+}
 
 /// A unit of not-yet-started work. `obj` is a `Word` or anything else the
 /// driver packs; `start`/`len` address a range inside it.
@@ -107,10 +153,12 @@ pub struct Runtime {
     pending_ready: Padded<AtomicUsize>,
     /// Queued speculative tasks (subset of `pending_tasks`), for the cap.
     pending_spec: Padded<AtomicUsize>,
-    /// Workers currently inside a fiber.
-    running: Padded<AtomicUsize>,
-    /// Workers in the pre-park spin; capped so a wide pool does not keep
-    /// every idle core hammering the summary lines.
+    /// Per-worker running flag, busy time and task count.
+    wstat: Vec<WorkerStat>,
+    /// Idle workers searching for work. A push wakes a sleeper only when
+    /// this is zero: a searcher will find the work, and when it takes it,
+    /// it wakes one more sleeper if work remains (one wake per handoff,
+    /// never one per push).
     spinners: Padded<AtomicUsize>,
     sleepers: Padded<AtomicUsize>,
     epoch: Padded<AtomicU32>,
@@ -124,14 +172,11 @@ pub struct Runtime {
     stack_size: usize,
     pub waiters: super::thunk::WaiterTable,
     pub deadlocks: AtomicUsize,
-    pub stat_tasks: AtomicUsize,
     pub stat_steals: AtomicUsize,
     pub stat_parks: AtomicUsize,
     pub stat_main_parks: AtomicUsize,
     /// Nanoseconds the main fiber spent parked.
     pub stat_main_wait_ns: AtomicUsize,
-    /// Nanoseconds all workers spent inside fibers.
-    pub stat_busy_ns: AtomicUsize,
     pub stat_fiber_parks: AtomicUsize,
 }
 
@@ -161,7 +206,7 @@ impl Runtime {
             pending_tasks: Padded(AtomicUsize::new(0)),
             pending_ready: Padded(AtomicUsize::new(0)),
             pending_spec: Padded(AtomicUsize::new(0)),
-            running: Padded(AtomicUsize::new(0)),
+            wstat: (0..n).map(|_| WorkerStat::default()).collect(),
             spinners: Padded(AtomicUsize::new(0)),
             sleepers: Padded(AtomicUsize::new(0)),
             epoch: Padded(AtomicU32::new(0)),
@@ -174,12 +219,10 @@ impl Runtime {
             stack_size,
             waiters: super::thunk::WaiterTable::new(),
             deadlocks: AtomicUsize::new(0),
-            stat_tasks: AtomicUsize::new(0),
             stat_steals: AtomicUsize::new(0),
             stat_parks: AtomicUsize::new(0),
             stat_main_parks: AtomicUsize::new(0),
             stat_main_wait_ns: AtomicUsize::new(0),
-            stat_busy_ns: AtomicUsize::new(0),
             stat_fiber_parks: AtomicUsize::new(0),
         }));
         for i in 1..n {
@@ -201,6 +244,7 @@ impl Runtime {
     pub fn run_main(&'static self, user: *mut (), entry: MainEntry) {
         if std::env::var("IETSP_PAR_STATS").is_ok_and(|v| v == "2") {
             super::force::SAMPLE_POS.store(true, Ordering::Relaxed);
+            let _ = super::force::START.set(std::time::Instant::now());
             self.spawn_timeline();
         }
         let mut w = Worker::new(0);
@@ -221,24 +265,25 @@ impl Runtime {
 
     fn drain_loop(&self, w: &mut Worker, done: impl Fn() -> bool) {
         let mut idle: u32 = 0;
+        let scans = spin_scans();
         loop {
             if done() {
                 return;
             }
             if let Some(s) = self.take_ready(w) {
                 idle = 0;
-                self.stop_spinning(w);
+                self.found_work(w);
                 self.run_slot(w, s);
                 continue;
             }
             if let Some(t) = self.take_task(w) {
                 idle = 0;
-                self.stop_spinning(w);
+                self.found_work(w);
                 self.run_task(w, t);
                 continue;
             }
             idle += 1;
-            if idle < SPIN_SCANS && self.may_spin(w) {
+            if idle < scans && self.may_spin(w) {
                 // Poll the two summary words until something appears.
                 for _ in 0..64 {
                     if self.has_work() {
@@ -248,29 +293,31 @@ impl Runtime {
                 }
                 continue;
             }
-            if w.spinning {
-                w.spinning = false;
-                self.spinners.0.fetch_sub(1, Ordering::Relaxed);
-            }
+            self.stop_spinning(w);
             idle = 0;
             self.park(w, &done);
         }
     }
 
-    /// Worker 0 always spins (it carries the demand fiber); helpers only
-    /// while fewer than max(3, n/4) are spinning.
+    /// Register as a searcher. Worker 0 (it carries the demand fiber) is
+    /// never refused; helpers only while fewer than the cap are searching.
     #[inline]
     fn may_spin(&self, w: &mut Worker) -> bool {
-        if w.spinning || w.idx == 0 {
+        if w.spinning {
             return true;
         }
-        let cap = (self.n / 4).max(3);
+        if w.idx == 0 {
+            self.spinners.0.fetch_add(1, Ordering::SeqCst);
+            w.spinning = true;
+            return true;
+        }
+        let cap = spinner_cap(self.n);
         let cur = self.spinners.0.load(Ordering::Relaxed);
         if cur < cap
             && self
                 .spinners
                 .0
-                .compare_exchange(cur, cur + 1, Ordering::Relaxed, Ordering::Relaxed)
+                .compare_exchange(cur, cur + 1, Ordering::SeqCst, Ordering::Relaxed)
                 .is_ok()
         {
             w.spinning = true;
@@ -279,11 +326,27 @@ impl Runtime {
         false
     }
 
+    /// Leave the searcher set without a handoff (nothing was found).
     #[inline]
     fn stop_spinning(&self, w: &mut Worker) {
         if w.spinning {
             w.spinning = false;
-            self.spinners.0.fetch_sub(1, Ordering::Relaxed);
+            self.spinners.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    /// A searcher took work. If it was the last searcher and work remains,
+    /// wake one sleeper to keep exactly one searcher alive.
+    #[inline]
+    fn found_work(&self, w: &mut Worker) {
+        if w.spinning {
+            w.spinning = false;
+            if self.spinners.0.fetch_sub(1, Ordering::SeqCst) == 1
+                && self.worth_a_wake()
+                && self.sleepers.0.load(Ordering::SeqCst) > 0
+            {
+                self.wake_one();
+            }
         }
     }
 
@@ -330,7 +393,7 @@ impl Runtime {
             }
         };
         w.tasks_run += 1;
-        self.stat_tasks.fetch_add(1, Ordering::Relaxed);
+        self.wstat[w.idx].tasks.fetch_add(1, Ordering::Relaxed);
         // SAFETY: the slot is idle (in the pool) and owned by this thread.
         unsafe {
             (*slot).task = t;
@@ -350,10 +413,11 @@ impl Runtime {
             s.worker = w;
             self.driver.on_switch(s, w);
             let t0 = std::time::Instant::now();
-            self.running.0.fetch_add(1, Ordering::Relaxed);
+            let st = &self.wstat[w.idx];
+            st.running.store(1, Ordering::Relaxed);
             s.fiber.resume();
-            self.running.0.fetch_sub(1, Ordering::Relaxed);
-            self.stat_busy_ns
+            st.running.store(0, Ordering::Relaxed);
+            st.busy_ns
                 .fetch_add(t0.elapsed().as_nanos() as usize, Ordering::Relaxed);
             self.driver.on_switch(s, w);
             match s.fiber.state.load(Ordering::Acquire) {
@@ -546,12 +610,36 @@ impl Runtime {
 
     // ---- parking ----------------------------------------------------------
 
+    /// Called after work was published. Wakes one sleeper only when no
+    /// searcher is awake to find it; the searcher hands off (`found_work`).
     fn notify(&self) {
         fence(Ordering::SeqCst);
-        if self.sleepers.0.load(Ordering::Relaxed) > 0 {
-            self.epoch.0.fetch_add(1, Ordering::Release);
-            futex_wake(&self.epoch.0, 1);
+        if self.sleepers.0.load(Ordering::Relaxed) > 0
+            && self.spinners.0.load(Ordering::Relaxed) == 0
+            && self.worth_a_wake()
+        {
+            self.wake_one();
         }
+    }
+
+    /// A runnable fiber always is; queued tasks only past `handoff_depth`
+    /// unless nobody at all is awake to take them.
+    #[inline]
+    fn worth_a_wake(&self) -> bool {
+        if self.pending_ready.0.load(Ordering::Acquire) > 0 {
+            return true;
+        }
+        if self.suppress.load(Ordering::Relaxed) {
+            return false;
+        }
+        let tasks = self.pending_tasks.0.load(Ordering::Acquire);
+        tasks > 0
+            && (tasks >= handoff_depth() || self.sleepers.0.load(Ordering::Relaxed) + 1 >= self.n)
+    }
+
+    fn wake_one(&self) {
+        self.epoch.0.fetch_add(1, Ordering::Release);
+        futex_wake(&self.epoch.0, 1);
     }
 
     pub fn wake_all(&self) {
@@ -625,6 +713,27 @@ impl Runtime {
         self.all.lock().unwrap().len()
     }
 
+    pub fn stat_tasks(&self) -> usize {
+        self.wstat
+            .iter()
+            .map(|s| s.tasks.load(Ordering::Relaxed))
+            .sum()
+    }
+
+    pub fn stat_busy_ns(&self) -> usize {
+        self.wstat
+            .iter()
+            .map(|s| s.busy_ns.load(Ordering::Relaxed))
+            .sum()
+    }
+
+    fn stat_running(&self) -> usize {
+        self.wstat
+            .iter()
+            .map(|s| s.running.load(Ordering::Relaxed))
+            .sum()
+    }
+
     /// Print, every 20 ms, how many workers are inside fibers, how much
     /// work is queued and whether main is parked.
     fn spawn_timeline(&'static self) {
@@ -637,13 +746,13 @@ impl Runtime {
                 if self.shutdown.load(Ordering::Relaxed) {
                     return;
                 }
-                let busy = self.stat_busy_ns.load(Ordering::Relaxed);
-                let tasks = self.stat_tasks.load(Ordering::Relaxed);
+                let busy = self.stat_busy_ns();
+                let tasks = self.stat_tasks();
                 let pos = super::force::MAIN_POS.load(Ordering::Relaxed);
                 eprintln!(
                     "t={:4}ms running={:2} busy-workers={:.1} tasks/20ms={:5} queued={:5} spec={:5} sleepers={:2} main-at=pos{}",
                     t0.elapsed().as_millis(),
-                    self.running.0.load(Ordering::Relaxed),
+                    self.stat_running(),
                     (busy - last_busy) as f64 / 20e6,
                     tasks - last_tasks,
                     self.pending_tasks.0.load(Ordering::Relaxed),

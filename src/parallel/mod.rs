@@ -103,7 +103,11 @@ pub fn run<R: Send + 'static>(
             let r = f(ev);
             if std::env::var("IETSP_PAR_STATS").is_ok_and(|v| v == "2") {
                 for i in 0..ev.files.len() {
-                    eprintln!("file{i} = {}", String::from_utf8_lossy(&ev.files[i].path));
+                    eprintln!(
+                        "file{i} base={} = {}",
+                        ev.files[i].base,
+                        String::from_utf8_lossy(&ev.files[i].path)
+                    );
                 }
             }
             if std::env::var_os("IETSP_PAR_STATS").is_some() {
@@ -112,7 +116,7 @@ pub fn run<R: Send + 'static>(
                 eprintln!(
                     "parallel: fibers={} tasks={} spec-submitted={} effect-bails={} steals={} parks={} fiber-parks={} main-parks={} main-wait={}ms busy={}ms deadlocks={} main-stack-resident={}K",
                     rt.stats_fibers(),
-                    rt.stat_tasks.load(Relaxed),
+                    rt.stat_tasks(),
                     spec::SUBMITTED.load(Relaxed),
                     force::EFFECT_BAILS.load(Relaxed),
                     rt.stat_steals.load(Relaxed),
@@ -120,7 +124,7 @@ pub fn run<R: Send + 'static>(
                     rt.stat_fiber_parks.load(Relaxed),
                     rt.stat_main_parks.load(Relaxed),
                     rt.stat_main_wait_ns.load(Relaxed) / 1_000_000,
-                    rt.stat_busy_ns.load(Relaxed) / 1_000_000,
+                    rt.stat_busy_ns() / 1_000_000,
                     rt.deadlocks.load(Relaxed),
                     slot.fiber.stack.resident() >> 10
                 );

@@ -123,6 +123,7 @@ fn bail_requested(ev: &Evaluator) -> bool {
 /// `IETSP_PAR_STATS=2` timeline samples it).
 pub static MAIN_POS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static SAMPLE_POS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 
 /// Parallel `Evaluator::force_thunk`: claim, evaluate, publish.
 #[inline(never)]
@@ -574,9 +575,22 @@ pub fn import_thunk(ev: &mut Evaluator, resolved: &[u8], pos: Pos) -> Word {
 fn import_raw(ev: &mut Evaluator, args: &[Word], _pos: Pos) -> EvalResult<Word> {
     let resolved = args[0].as_string().expect("path string").bytes;
     let pos = Pos(args[1].imm_int_value() as u32);
+    let t0 = SAMPLE_POS
+        .load(Ordering::Relaxed)
+        .then(std::time::Instant::now);
     let src = ev.read_source(resolved, pos)?;
     let dir = crate::eval::dir_of(resolved).to_vec();
     let ir = ev.compile_source(resolved, src, &dir, None)?;
+    if let Some(t0) = t0 {
+        eprintln!(
+            "import t={}ms {}us main={} w{} {}",
+            START.get().map_or(0, |s| s.elapsed().as_millis()),
+            t0.elapsed().as_micros(),
+            ev.par.is_main,
+            slot_of(ev).worker().idx,
+            String::from_utf8_lossy(resolved)
+        );
+    }
     let root = ev.root_env;
     ev.eval(root, ir)
 }
