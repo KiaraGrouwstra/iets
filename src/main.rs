@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::process::exit;
 
 use ietsp::eval::{Error, Evaluator, Pos};
@@ -11,7 +11,7 @@ const STACK_SIZE: usize = 4 << 30;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: ietsp eval [--strict] [--json] [-I prefix=path]... [--arg name expr] [--argstr name str] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)"
+        "usage: ietsp eval [--strict] [--json] [-I prefix=path]... [--arg name expr] [--argstr name str] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp build [--builder URL] [--timings] [--out NAME]... [--source STOREPATH=LOCAL]... DRV"
     );
     exit(2)
 }
@@ -286,10 +286,204 @@ fn run_eval(a: EvalArgs) -> i32 {
     }
 }
 
+/// Answers the plan's locator from the local Nix store: one `nix path-info --json` call
+/// tells how each input source was content-addressed and what it references. Paths named
+/// by `--source` are read from the given local tree instead and are plain sources.
+fn locate_in_store(
+    paths: &[ietsp::store::path::StorePath],
+    overrides: &HashMap<String, std::path::PathBuf>,
+) -> Result<Vec<ietsp::remote::plan::SourceInfo>, String> {
+    use ietsp::remote::plan::{SourceInfo, SourceKind};
+    use ietsp::store::path::{STORE_DIR, StorePath};
+
+    let ask: Vec<String> = paths
+        .iter()
+        .map(|p| p.to_string())
+        .filter(|p| !overrides.contains_key(p))
+        .collect();
+    let mut info: HashMap<String, serde_json::Value> = HashMap::new();
+    if !ask.is_empty() {
+        let out = std::process::Command::new("nix")
+            .args([
+                "--extra-experimental-features",
+                "nix-command",
+                "path-info",
+                "--json",
+            ])
+            .args(&ask)
+            .stderr(std::process::Stdio::inherit())
+            .output()
+            .map_err(|e| format!("nix path-info: {e}"))?;
+        if !out.status.success() {
+            return Err("nix path-info failed".into());
+        }
+        info = serde_json::from_slice(&out.stdout).map_err(|e| format!("nix path-info: {e}"))?;
+    }
+    paths
+        .iter()
+        .map(|p| {
+            let full = p.to_string();
+            if let Some(local) = overrides.get(&full) {
+                return Ok(SourceInfo {
+                    local: local.clone(),
+                    kind: SourceKind::Source,
+                });
+            }
+            let v = info
+                .get(&full)
+                .ok_or_else(|| format!("'{full}' is not in the local store"))?;
+            let ca = v["ca"].as_str().unwrap_or("");
+            let kind = if ca.starts_with("fixed:r:sha256:") {
+                SourceKind::Source
+            } else if ca.starts_with("text:sha256:") {
+                let references = v["references"]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(|r| r.as_str()).collect::<Vec<_>>())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|r| StorePath::parse(r).map_err(|e| e.0))
+                    .collect::<Result<_, _>>()?;
+                SourceKind::Text { references }
+            } else {
+                return Err(format!(
+                    "'{full}': unsupported input source (ca = '{ca}'); v1 sends only recursive sha256 sources and text files"
+                ));
+            };
+            Ok(SourceInfo {
+                local: std::path::PathBuf::from(format!("{STORE_DIR}/{}", p.base_name())),
+                kind,
+            })
+        })
+        .collect()
+}
+
+/// `ietsp build [--builder URL] [--timings] [--out NAME]... DRV`: the root is a `.drv` store
+/// path on disk until eval hands over in-memory derivations.
+fn cmd_build(argv: &[String]) -> i32 {
+    use ietsp::remote::proto::build_event::Event;
+    use ietsp::store::drv::{Derivation, load_derivation_from_store};
+    use ietsp::store::path::StorePath;
+
+    let mut url = "http://127.0.0.1:9455".to_string();
+    let mut timings = false;
+    let mut outputs = Vec::new();
+    let mut sources: HashMap<String, std::path::PathBuf> = HashMap::new();
+    let mut root = None;
+    let mut i = 0;
+    while i < argv.len() {
+        match argv[i].as_str() {
+            "--builder" => {
+                i += 1;
+                url = argv.get(i).cloned().unwrap_or_else(|| usage());
+            }
+            "--timings" => timings = true,
+            "--out" => {
+                i += 1;
+                outputs.push(argv.get(i).cloned().unwrap_or_else(|| usage()));
+            }
+            "--source" => {
+                i += 1;
+                let spec = argv.get(i).unwrap_or_else(|| usage());
+                let (store, local) = spec.split_once('=').unwrap_or_else(|| usage());
+                sources.insert(store.to_string(), std::path::PathBuf::from(local));
+            }
+            s if s.starts_with('-') => {
+                eprintln!("error: unknown flag '{s}'");
+                usage()
+            }
+            s => root = Some(s.to_string()),
+        }
+        i += 1;
+    }
+    let Some(root_arg) = root else { usage() };
+    // A store path, or a file named `<hash>-<name>.drv` copied out of the store.
+    let base = std::path::Path::new(&root_arg)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let root = match StorePath::from_base_name(&base) {
+        Ok(p) if p.is_derivation() => p,
+        Ok(p) => {
+            eprintln!("error: '{p}' is not a derivation");
+            return 1;
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+
+    let t0 = std::time::Instant::now();
+    let drv = std::fs::read_to_string(&root_arg)
+        .map_err(|e| e.to_string())
+        .and_then(|text| {
+            Derivation::parse(&text, Derivation::name_from_path(&root).map_err(|e| e.0)?)
+                .map_err(|e| e.0)
+        });
+    let drv = match drv {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("error: cannot read derivation '{root_arg}': {e}");
+            return 1;
+        }
+    };
+    // Input sources come from the local store unless `--source` names the original tree,
+    // which is what eval will pass once it hands over in-memory derivations.
+    let locate = |paths: &[StorePath]| locate_in_store(paths, &sources);
+    let plan =
+        match ietsp::remote::plan::plan(&root, &drv, &mut load_derivation_from_store, &locate) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return 1;
+            }
+        };
+    let plan_time = t0.elapsed();
+
+    let mut built = Vec::new();
+    let mut failed = false;
+    let mut on_event = |ev: Event| match ev {
+        Event::Scheduled(s) => eprintln!("scheduled: {}", s.drv_paths.join(" ")),
+        Event::Started(s) => eprintln!("building {}", s.drv_path),
+        Event::Log(l) => {
+            let line = String::from_utf8_lossy(&l.line);
+            match StorePath::parse(&l.drv_path) {
+                Ok(p) => eprintln!("{}> {line}", p.name()),
+                Err(_) => eprintln!("{line}"),
+            }
+        }
+        Event::Built(b) => built.push((b.output, b.store_path)),
+        Event::Failed(f) => {
+            failed = true;
+            eprintln!("error: build of {} failed: {}", f.drv_path, f.reason);
+        }
+        Event::Done(d) => failed |= !d.success,
+    };
+    let result = ietsp::remote::client::build_blocking(&url, &plan, &root, &outputs, &mut on_event);
+    match result {
+        Ok(t) => {
+            if timings {
+                eprintln!("{}", t.report(&plan, plan_time));
+            }
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    }
+    for (name, path) in &built {
+        if outputs.is_empty() || outputs.contains(name) {
+            println!("{path}");
+        }
+    }
+    if failed { 1 } else { 0 }
+}
+
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let Some(cmd) = argv.first() else { usage() };
     match cmd.as_str() {
+        "build" => exit(cmd_build(&argv[1..])),
         "eval" => {
             let a = parse_eval_args(&argv[1..]);
             let code = std::thread::Builder::new()

@@ -7,6 +7,10 @@ edition = "2024"
 name = "ietsp"
 path = "src/main.rs"
 
+[[bin]]
+name = "ietsp-builderd"
+path = "src/bin/ietsp-builderd.rs"
+
 [dependencies]
 sha2 = "0.10"
 sha1 = "0.10"
@@ -14,6 +18,16 @@ md-5 = "0.10"
 libc = "0.2"
 regex = "1"
 toml = "1"
+tonic = "0.14"
+tonic-prost = "0.14"
+prost = "0.14"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "process", "io-util", "fs"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+serde_json = "1"
+
+[build-dependencies]
+tonic-prost-build = "0.14"
+protox = "0.9"
 
 [profile.release]
 opt-level = 3

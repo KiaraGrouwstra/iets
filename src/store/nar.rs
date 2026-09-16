@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -179,6 +179,134 @@ pub fn flat_hash(path: &Path, algo: HashAlgo) -> io::Result<Hash> {
     Ok(h.finish())
 }
 
+fn read_u64(source: &mut dyn Read) -> io::Result<u64> {
+    let mut b = [0u8; 8];
+    source.read_exact(&mut b)?;
+    Ok(u64::from_le_bytes(b))
+}
+
+fn read_padding(source: &mut dyn Read, len: u64) -> io::Result<()> {
+    let rem = (len % 8) as usize;
+    if rem != 0 {
+        let mut pad = [0u8; 8];
+        source.read_exact(&mut pad[..8 - rem])?;
+        if pad.iter().any(|&b| b != 0) {
+            return Err(bad_nar("non-zero padding"));
+        }
+    }
+    Ok(())
+}
+
+fn bad_nar(why: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, format!("bad NAR: {why}"))
+}
+
+/// Mirrors serialise.hh:readString with a size cap: length-prefixed, zero-padded to 8.
+fn read_str(source: &mut dyn Read, max: u64) -> io::Result<Vec<u8>> {
+    let len = read_u64(source)?;
+    if len > max {
+        return Err(bad_nar("string too long"));
+    }
+    let mut buf = vec![0u8; len as usize];
+    source.read_exact(&mut buf)?;
+    read_padding(source, len)?;
+    Ok(buf)
+}
+
+fn expect_str(source: &mut dyn Read, want: &[u8]) -> io::Result<()> {
+    let got = read_str(source, 64)?;
+    if got != want {
+        return Err(bad_nar(&format!(
+            "expected '{}', got '{}'",
+            String::from_utf8_lossy(want),
+            String::from_utf8_lossy(&got)
+        )));
+    }
+    Ok(())
+}
+
+/// Mirrors archive.cc:parseDump with RestoreSink: restores the NAR read from `source` at
+/// `dest`, which must not exist. Byte-exact inverse of `dump_path`.
+pub fn restore_path(source: &mut dyn Read, dest: &Path) -> io::Result<()> {
+    expect_str(source, b"nix-archive-1")?;
+    restore(source, dest, 0)
+}
+
+fn restore(source: &mut dyn Read, dest: &Path, depth: usize) -> io::Result<()> {
+    if depth >= NAR_MAX_DEPTH {
+        return Err(bad_nar("directory nesting too deep"));
+    }
+    expect_str(source, b"(")?;
+    expect_str(source, b"type")?;
+    let ty = read_str(source, 64)?;
+    match ty.as_slice() {
+        b"regular" => {
+            let mut tag = read_str(source, 64)?;
+            let mut executable = false;
+            if tag == b"executable" {
+                expect_str(source, b"")?;
+                executable = true;
+                tag = read_str(source, 64)?;
+            }
+            if tag != b"contents" {
+                return Err(bad_nar("expected 'contents'"));
+            }
+            let len = read_u64(source)?;
+            let mut f = fs::File::create(dest)?;
+            let copied = io::copy(&mut source.take(len), &mut f)?;
+            if copied != len {
+                return Err(bad_nar("truncated file contents"));
+            }
+            read_padding(source, len)?;
+            if executable {
+                f.set_permissions(fs::Permissions::from_mode(0o755))?;
+            }
+        }
+        b"directory" => {
+            fs::create_dir(dest)?;
+            let mut prev: Vec<u8> = Vec::new();
+            loop {
+                let tag = read_str(source, 64)?;
+                if tag == b")" {
+                    return Ok(());
+                }
+                if tag != b"entry" {
+                    return Err(bad_nar("expected 'entry' or ')'"));
+                }
+                expect_str(source, b"(")?;
+                expect_str(source, b"name")?;
+                let name = read_str(source, 4096)?;
+                if name.is_empty()
+                    || name == b"."
+                    || name == b".."
+                    || name.contains(&b'/')
+                    || name.contains(&0)
+                {
+                    return Err(bad_nar("bad entry name"));
+                }
+                if name <= prev {
+                    return Err(bad_nar("directory entries out of order"));
+                }
+                prev = name.clone();
+                expect_str(source, b"node")?;
+                restore(
+                    source,
+                    &dest.join(std::ffi::OsStr::from_bytes(&name)),
+                    depth + 1,
+                )?;
+                expect_str(source, b")")?;
+            }
+        }
+        b"symlink" => {
+            expect_str(source, b"target")?;
+            let target = read_str(source, 4096)?;
+            std::os::unix::fs::symlink(std::ffi::OsStr::from_bytes(&target), dest)?;
+        }
+        _ => return Err(bad_nar("unknown node type")),
+    }
+    expect_str(source, b")")
+}
+
 /// Hashes `contents` as a NAR regular file (what `nix hash path` gives for that file).
 pub fn nar_hash_of_string(contents: &[u8]) -> Hash {
     let mut h = Hasher::new(HashAlgo::Sha256);
@@ -263,6 +391,43 @@ pub(crate) mod tests {
             nar_hash(&tree.join("link")).unwrap().to_base16(),
             "8d3c00cfa866e4d1b809772afeac240786246221eb2c574d69c4bba168834e81"
         );
+    }
+
+    // nix-store --dump tree | nix-store --restore out ; nix-store --dump out | sha256sum
+    #[test]
+    fn restore_roundtrip() {
+        let tree = fixture_tree("restore");
+        let mut nar = Vec::new();
+        dump_path(&tree, &mut nar, &mut |_, _| true).unwrap();
+        let out = tree.with_file_name("restored");
+        restore_path(&mut nar.as_slice(), &out).unwrap();
+        assert_eq!(nar_hash(&out).unwrap(), nar_hash(&tree).unwrap());
+        assert_eq!(
+            fs::read_link(out.join("link")).unwrap().as_os_str(),
+            "a.txt"
+        );
+        assert_ne!(
+            fs::metadata(out.join("run.sh"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o100,
+            0
+        );
+        assert_eq!(
+            fs::metadata(out.join("a.txt"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o100,
+            0
+        );
+    }
+
+    #[test]
+    fn restore_rejects_garbage() {
+        let out = std::env::temp_dir().join(format!("ietsp-nar-garbage-{}", std::process::id()));
+        assert!(restore_path(&mut &b"nix-archive-2"[..], &out).is_err());
     }
 
     #[test]
