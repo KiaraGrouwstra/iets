@@ -6,6 +6,8 @@ use std::ptr;
 
 const CHUNK: usize = 32 << 20;
 
+
+
 pub struct Arena {
     ptr: *mut u8,
     end: *mut u8,
@@ -43,10 +45,12 @@ impl Arena {
     #[cold]
     fn alloc_slow(&mut self, size: usize, align: usize) -> *mut u8 {
         let chunk = CHUNK.max((size + align + CHUNK - 1) & !(CHUNK - 1));
-        // Anonymous mmap so the chunk is 2 MiB aligned and eligible for
-        // transparent huge pages: the evaluator allocates hundreds of MiB in
-        // small objects and page faults were a measurable share of runtime.
-        // The chunk is intentionally leaked.
+        // Anonymous mmap, prefaulted in one syscall. Transparent huge pages
+        // were tried first: on a fragmented box every huge fault that misses
+        // a free 2 MiB block stalls in direct compaction and then falls back
+        // to 4 KiB pages anyway, which cost ~1 s of system time per GiB.
+        // MADV_POPULATE_WRITE zeroes the chunk inside the kernel without one
+        // trap per page. The chunk is intentionally leaked.
         let base = unsafe {
             let p = libc::mmap(
                 std::ptr::null_mut(),
@@ -57,7 +61,7 @@ impl Arena {
                 0,
             );
             assert!(p != libc::MAP_FAILED, "arena: mmap failed");
-            libc::madvise(p, chunk, libc::MADV_HUGEPAGE);
+            libc::madvise(p, chunk, libc::MADV_POPULATE_WRITE);
             p as *mut u8
         };
         self.ptr = base;
