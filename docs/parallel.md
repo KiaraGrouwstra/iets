@@ -44,7 +44,7 @@ EMPTY ──CAS──> BLACKHOLE(claimer, waiters bit) ──store──> value
 
 - `BLACKHOLE(id)` is `Word::BLACKHOLE | id << 8`. Bit 7 is the
   *has-waiters* flag. The sequential path stores plain `Word::BLACKHOLE`
-  (id 0); `Word::is_blackhole` matches every variant.
+  (id 0); `Word::is_blackhole` masks bit 7 and matches every variant.
 - **Claim**: `compare_exchange(EMPTY, BLACKHOLE(me), Acquire, Acquire)`.
   Winner evaluates. Loser reads the current word:
   - value: return it (Acquire load pairs with the Release publish).
@@ -55,8 +55,7 @@ EMPTY ──CAS──> BLACKHOLE(claimer, waiters bit) ──store──> value
   bit, drain the waiter list for this thunk and wake each fiber.
 - **Reset**: same as publish with `EMPTY`; waiters wake and retry the
   claim. Used for errors (errors are never cached, as in the sequential
-  path), for cancelled fibers, and for helper results that carried a
-  `trace`/`warn` (see Effects).
+  path) and for cancelled fibers (see Effects).
 
 Waiter list: a side table sharded by thunk address (64 shards, each a
 `Mutex<HashMap<thunk addr, Vec<*mut Fiber>>>`). Thunk objects do not grow.
@@ -80,7 +79,8 @@ switched out. One atomic `state` word on the fiber does it, no lock:
 
 ```
 fiber before yield:        state = PARKING
-worker after switch-out:   prev = state.swap(SUSPENDED)
+worker after switch-out:   (state is PARKING or already WOKEN)
+                           prev = state.swap(SUSPENDED)
                            if prev == WOKEN: push fiber on own ready deque
 waker:                     loop on state:
                              SUSPENDED -> CAS to RUNNABLE -> push on own ready deque
@@ -123,12 +123,22 @@ urgent, own spec, steal spec. Ready fibers first because a woken fiber
 is usually on the critical path. A task runs by taking a pooled fiber,
 installing the task, and resuming it.
 
-Park: a worker with nothing to do spins for a bounded number of scans
-(`spin_loop` hints, then `yield_now`), then increments `sleepers`, reads
-the wake `epoch`, re-scans once, and `futex_wait(epoch)`. A push that
-observes `sleepers > 0` bumps `epoch` and does `futex_wake(1)`. Lost
-wake-ups are impossible: the epoch is read before the final scan and
-compared by the futex.
+Two global summary words, `pending_ready` and `pending_tasks`, say
+whether any lane holds work. Idle workers poll only those; scanning the
+lanes' `top`/`bottom` lines directly made every busy owner's push and
+pop pay a coherence miss per idle thief (8 workers ran slower than 4).
+The pre-park spin is capped to `max(3, n/4)` helpers at a time; worker 0
+always spins.
+
+Park: a worker with nothing to do spins for a bounded number of scans,
+then increments `sleepers`, reads the wake `epoch`, re-checks the
+summaries, and `futex_wait(epoch)`. A push that observes `sleepers > 0`
+bumps `epoch` and does `futex_wake(1)`. Lost wake-ups are impossible:
+the epoch is read before the final check and compared by the futex.
+
+Stack pages of idle pool fibers beyond 16 are returned with
+`MADV_DONTNEED` on every 64th park only; trimming on every park cost
+more in page faults than it saved.
 
 Shutdown: when the main fiber returns, `run` stores the result, sets
 `shutdown`, wakes everyone and returns. Helpers stop at their next loop
@@ -145,42 +155,65 @@ and main re-evaluates the cycle sequentially and reports the error.
 
 ## Work sources
 
-1. **Strict-demand fan-out** (`parallel::force_deep`, `deepSeq`,
-   `--strict`, `toJSON`): when a list or attrset with >= 4 elements is
-   forced deeply, the elements are submitted as range tasks of 16 cells
-   on the urgent deque before the demand loop walks them. A range task
-   forces each cell to WHNF and then recurses with `force_deep`, which
-   fans out again. Cells already forced are skipped. The demand walk then
-   finds most cells forced or claimed (park).
-2. **Speculation at thunk creation** (`maybe_thunk` hook): a thunk whose
-   IR body is substantial is also submitted as a spec task. Gated by
-   `par.speculating` (a speculative fiber does not spawn more speculation)
-   and by a per-worker backlog cap. Second phase.
-3. **Sibling prefetch** on attr lookup miss in attrsets with 16..64
-   entries. Third phase.
+1. **Strict-demand fan-out.** Three task shapes, all on the urgent lane,
+   batched, submitted only for ranges that still hold an unclaimed thunk:
+   - *deep* (`force_deep`, `deepSeq`, `--strict`): 16 cells per task,
+     each forced then walked deeply, fanning out again;
+   - *coerce* (`derivationStrict` attrs, strict `toJSON`,
+     `concatStringsSep`): 4 cells per task; lists element-wise,
+     derivations to `outPath` only, other attrsets attribute-wise. This
+     is the shape of the demand that follows, so helpers resolve the
+     derivation DAG ahead of the coercion loop;
+   - *WHNF* (`filter`, `foldl'`, `concatLists`, `concatMap`, `any`,
+     `all`, `sort`, `partition`, `elem`, `listToAttrs`, `zipAttrsWith`,
+     `catAttrs`, `groupBy`): 16 cells per task, elements to WHNF.
+   Helpers never park inside a range walk: a busy cell is skipped, its
+   claimer walks below it. The demand walk (`walk`) does every unclaimed
+   cell first and parks on the busy ones afterwards, in index order, so
+   the first error in sequential order is still the one reported.
+   Measured on nixos-desktop: the WHNF hooks alone are a net loss (main
+   parks on cheap elements), coerce alone is a small win, all three
+   together give the numbers below. `IETSP_FANOUT` bitmask (1 deep, 2
+   coerce, 4 WHNF) toggles them for experiments.
+2. **Creation-time speculation** (`mk_thunk_counted` and `map`/
+   `mapAttrs` thunk applications): a thunk whose body has at least
+   `IETSP_SPEC_MIN` (48) IR nodes is a candidate. Candidates are *not*
+   submitted where they are created: the `let`/`rec`/formals env may
+   still be under construction and a helper reading an EMPTY slot
+   dereferences null. They are buffered per fiber and submitted at the
+   next `force_thunk`, after the claim, once the last 64 slots of their
+   env are all filled. A speculative task bails (transient reset) after
+   `IETSP_SPEC_BUDGET` (4000) thunk creations or once main has finished.
+   **Off by default** (`IETSP_SPEC=1` thunks, `2` applications): the
+   mean gain was inside the noise (1.22 ± 0.14 s vs 1.29 ± 0.04 s at 8
+   workers) while peak RSS went from 1.6 GB to 2.5–6 GB, because nothing
+   frees the undemanded work. Parity holds with it on.
+3. **Sibling prefetch**: not implemented.
 
 ## Cancellation and bail
 
-Every helper fiber (any fiber except main) checks `par.cancel` at each
-`force_thunk` entry. Cancel is set by shutdown suppression, by deadlock
-resolution, and by the speculation brake. A cancelled fiber gets
-`Err(ErrorKind::Cancelled)` from every force and unwinds. **Cancel is
-sticky**: once set, every publish this fiber would do becomes a reset,
-so a swallowed error (`Err(_) => false` sites) cannot leak a value built
-from a bailed sub-computation into a shared thunk. `Cancelled` is not
-catchable by `tryEval`.
+Every helper fiber (any fiber except main) checks for a bail at each
+`force_thunk` entry: the slot's `cancel` flag (deadlock resolution), the
+global `suppress` flag and the creation budget (speculative fibers), or
+an effect (below). A cancelled fiber gets `Err(ErrorKind::Cancelled)`
+from every force and unwinds. **Cancel is sticky**: once set, every
+publish this fiber would still do becomes a reset, so a swallowed error
+(`Err(_) => false` sites) cannot leak a value built from a bailed
+sub-computation into a shared thunk. `Cancelled` is not catchable by
+`tryEval`. Thunks the fiber completed before the bail stay published.
 
 ## Effects
 
-`builtins.trace` and `builtins.warn` in a helper fiber append to the
-fiber journal instead of writing to stderr. At publish, a thunk whose
-evaluation grew the journal is reset instead of published, and so is
-every enclosing thunk of that fiber (the journal length is snapshotted at
-each `force_thunk` entry). The demand path re-evaluates those thunks and
-emits the messages itself, in sequential order, exactly once. Values
-computed by the helper below the traced thunk stay memoised. Errors are
-never cached in either mode, so error values from helpers are transient
-by construction.
+`builtins.trace` and `builtins.warn` in a helper fiber print nothing:
+the helper sets its sticky cancel and abandons the task. Every thunk
+still open in that fiber is reset, and because a cancelled force returns
+`Err`, no write-back into a list, attr or env cell happens (the first
+design, "journal and reset the thunk but keep computing", lost warnings:
+`force_cell` wrote the value into the container cell and demand never
+re-evaluated). The demand path evaluates the thunk itself and prints,
+exactly once. Errors are never cached in either mode, so error values
+from helpers are transient by construction. `scripts/partest.sh` checks
+trace and warn counts at 1 versus N workers.
 
 ## Memory model
 
@@ -215,10 +248,64 @@ The value graph is the same whichever fiber forces a thunk: forcing is
 pure except for the effects above, and each thunk is published at most
 once per successful evaluation (a reset followed by a re-evaluation
 yields the same value). Attr order, list order, and derivation hashing are
-unchanged. Differential tests: `--workers 8` versus `--workers 1` on
-`scripts/langtests.sh` and on `bench/workloads` (`drvPath` identical).
+unchanged. Known divergences: the order of trace lines on stderr can
+differ (main walks unclaimed cells first), and a helper starts at call
+depth 0, so a program that only fails by `max-call-depth` sequentially
+may succeed.
+
+Tests: `cargo test --lib parallel` (fiber, deque, scheduler handshake,
+claim/park stress on a shared DAG from 8 workers, deadlock resolution,
+interner); `scripts/partest.sh N` (twelve expressions at 1 versus N
+workers: shared graph, deep fan-out, cycles in one and two ranges,
+errors, `tryEval`, trace/warn exactly once, concurrent import,
+derivations, JSON); `IETSP_WORKERS=8 scripts/langtests.sh` (same 244/6
+as sequential); `IETSP_WORKERS=8 scripts/difftest.sh` on nixos-desktop
+and nixos-minimal (`ok`).
+
+## Measurements
+
+`bench/workloads/nixos-desktop.nix`, 16-core EPYC, hyperfine, 5 runs,
+load average ~2.4 from another agent's builds:
+
+| workers | wall | user | sys | max RSS |
+|---|---|---|---|---|
+| pristine main, sequential | 2.118 ± 0.045 s | 1.84 s | 0.26 s | 1.53 GB |
+| 1 | 2.194 ± 0.128 s | 1.91 s | 0.26 s | 1.53 GB |
+| 2 | 1.465 ± 0.032 s | 2.39 s | 0.30 s | 1.55 GB |
+| 4 | 1.232 ± 0.019 s | 3.38 s | 0.36 s | 1.58 GB |
+| 8 | 1.257 ± 0.055 s | 4.98 s | 0.56 s | 1.61 GB |
+| 16 | 1.366 ± 0.049 s | 7.32 s | 0.83 s | 1.63 GB |
+
+fix on the same machine: 1.63 s. Sequential overhead of the shared
+tables is at most 4 % and inside the run-to-run noise; the interner is
+the only measurable item (a lock per intern; a 1024-entry per-handle
+cache in front of it recovers most of it).
+
+Where the time goes at 8 workers (`IETSP_PAR_STATS=1|2`): main spends
+~1.1 s of the 1.26 s parked, so helpers walk the critical chain. The
+timeline shows ~0.4 s where one fiber runs alone with nothing queued:
+`lib/modules.nix` `mergeDefinitions`, the module fixpoint, which has no
+strict consumer to fan out from. That is the phase speculation targets
+and where the remaining headroom is. User time above the sequential
+1.9 s is mostly the capped idle spin.
+
+## Merge notes for the sequential work
+
+- `Evaluator` derives `Clone`; a new field must be `Clone`, and per-fiber
+  state must be cheap to clone (shared tables go behind a handle in
+  `parallel::shared`).
+- An inline cache on an IR node or a heap object is read and written by
+  several threads: use atomics, and expect stale misses.
+- A new `thread_local!` must be read through an `#[inline(never)]`
+  function that does not force anything.
+- A new strict list or attrset consumer can call
+  `parallel::fanout_list` / `fanout_attrs_coerce` after forcing the
+  container (one line; a no-op with one worker).
+- A new place that writes a forced value into a cell must do so only on
+  `Ok` (all current sites do), or a cancelled helper could leak a value.
 
 ## Not done
 
 ThreadSanitizer needs nightly; not run. Invariants above are the
-argument. No loom model.
+argument. No loom model. Sibling prefetch not implemented. The aarch64
+context switch is written but untested.
