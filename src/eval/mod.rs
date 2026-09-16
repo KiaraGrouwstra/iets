@@ -1327,6 +1327,9 @@ impl Evaluator {
     }
 
     fn eval_attrs(&mut self, env: &'static EnvObj, a: &'static AttrsIr) -> EvalResult<Word> {
+        if a.dynamic.is_empty() && a.overrides.is_none() {
+            return Ok(self.eval_static_attrs(env, a));
+        }
         let mut entries: Vec<(Sym, Pos, Word)> =
             Vec::with_capacity(a.binds.len() + a.dynamic.len());
         let dyn_env: &'static EnvObj;
@@ -1354,16 +1357,7 @@ impl Evaluator {
             }
         } else {
             dyn_env = env;
-            let inherit_env = if a.from.is_empty() {
-                None
-            } else {
-                let ie = self.arena.alloc_env(Some(env), a.from.len());
-                for (j, f) in a.from.iter().enumerate() {
-                    let w = self.maybe_thunk(env, f);
-                    ie.slots()[j].set(w);
-                }
-                Some(ie)
-            };
+            let inherit_env = self.inherit_env(env, a.from);
             for b in a.binds.iter() {
                 let w = match b.scope {
                     BindScope::From => self.maybe_thunk(inherit_env.unwrap(), b.value),
@@ -1400,6 +1394,45 @@ impl Evaluator {
         } else {
             Ok(self.arena.mk_attrs_sorted(&entries))
         }
+    }
+
+    /// The common case: static names only, so the binds are already sorted
+    /// and the set is filled in place without a temporary vector.
+    fn eval_static_attrs(&mut self, env: &'static EnvObj, a: &'static AttrsIr) -> Word {
+        let out = self.arena.alloc_attrs(a.binds.len());
+        if a.rec {
+            let env2 = self.alloc_rec_env(env, a.binds, a.from);
+            for (i, b) in a.binds.iter().enumerate() {
+                out.init(i, b.sym, b.pos, env2.slots()[i].get());
+            }
+        } else {
+            let inherit_env = self.inherit_env(env, a.from);
+            for (i, b) in a.binds.iter().enumerate() {
+                let w = match b.scope {
+                    BindScope::From => self.maybe_thunk(inherit_env.unwrap(), b.value),
+                    _ => self.maybe_thunk(env, b.value),
+                };
+                out.init(i, b.sym, b.pos, w);
+            }
+        }
+        Word::from_ptr(out as *const AttrsObj)
+    }
+
+    /// Env holding the `inherit (e)` source thunks of a non-rec set.
+    fn inherit_env(
+        &mut self,
+        env: &'static EnvObj,
+        from: &'static [IrRef],
+    ) -> Option<&'static EnvObj> {
+        if from.is_empty() {
+            return None;
+        }
+        let ie = self.arena.alloc_env(Some(env), from.len());
+        for (j, f) in from.iter().enumerate() {
+            let w = self.maybe_thunk(env, f);
+            ie.slots()[j].set(w);
+        }
+        Some(ie)
     }
 
     fn eval_concat(
@@ -1497,7 +1530,7 @@ impl Evaluator {
 
     // ---- attrs and lists ---------------------------------------------------
 
-    /// `a // b`.
+    /// `a // b`. Two linear merges: one to size the result, one to fill it.
     pub fn update_attrs(&mut self, a: &'static AttrsObj, b: &'static AttrsObj) -> Word {
         if a.is_empty() {
             return Word::from_ptr(b);
@@ -1506,32 +1539,47 @@ impl Evaluator {
             return Word::from_ptr(a);
         }
         let (aa, bb) = (a.attrs(), b.attrs());
-        let mut out: Vec<(Sym, Pos, Word)> = Vec::with_capacity(aa.len() + bb.len());
-        let (mut i, mut j) = (0, 0);
+        let (mut i, mut j, mut common) = (0, 0, 0);
         while i < aa.len() && j < bb.len() {
             match aa[i].sym.cmp(&bb[j].sym) {
-                std::cmp::Ordering::Less => {
-                    out.push((aa[i].sym, aa[i].pos, aa[i].cell.get()));
-                    i += 1;
-                }
-                std::cmp::Ordering::Greater => {
-                    out.push((bb[j].sym, bb[j].pos, bb[j].cell.get()));
-                    j += 1;
-                }
+                std::cmp::Ordering::Less => i += 1,
+                std::cmp::Ordering::Greater => j += 1,
                 std::cmp::Ordering::Equal => {
-                    out.push((bb[j].sym, bb[j].pos, bb[j].cell.get()));
+                    common += 1;
                     i += 1;
                     j += 1;
                 }
             }
         }
-        for a in &aa[i..] {
-            out.push((a.sym, a.pos, a.cell.get()));
+        let out = self.arena.alloc_attrs(aa.len() + bb.len() - common);
+        let (mut i, mut j, mut k) = (0, 0, 0);
+        while i < aa.len() && j < bb.len() {
+            match aa[i].sym.cmp(&bb[j].sym) {
+                std::cmp::Ordering::Less => {
+                    out.init_from(k, &aa[i]);
+                    i += 1;
+                }
+                std::cmp::Ordering::Greater => {
+                    out.init_from(k, &bb[j]);
+                    j += 1;
+                }
+                std::cmp::Ordering::Equal => {
+                    out.init_from(k, &bb[j]);
+                    i += 1;
+                    j += 1;
+                }
+            }
+            k += 1;
         }
-        for b in &bb[j..] {
-            out.push((b.sym, b.pos, b.cell.get()));
+        for x in &aa[i..] {
+            out.init_from(k, x);
+            k += 1;
         }
-        self.arena.mk_attrs_sorted(&out)
+        for x in &bb[j..] {
+            out.init_from(k, x);
+            k += 1;
+        }
+        Word::from_ptr(out as *const AttrsObj)
     }
 
     pub fn concat_lists(&mut self, lists: &[&'static ListObj]) -> Word {

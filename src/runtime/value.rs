@@ -633,3 +633,30 @@ pub fn ctx_to_arena(arena: &mut Arena, mut v: Vec<Ctx>) -> &'static [Ctx] {
     v.dedup();
     arena.alloc_slice(&v)
 }
+
+impl AttrsObj {
+    /// Write entry `i` of a set from `alloc_attrs`. Callers fill every entry
+    /// in sorted order before handing the set out.
+    #[inline]
+    pub fn init(&mut self, i: usize, sym: Sym, pos: Pos, w: Word) {
+        debug_assert!(i < self.len as usize);
+        // SAFETY: `alloc_attrs` reserved `len` entries after the header;
+        // `write` does not read the uninitialised slot.
+        unsafe {
+            let p = (self as *mut AttrsObj).add(1) as *mut Attr;
+            std::ptr::write(
+                p.add(i),
+                Attr {
+                    sym,
+                    pos,
+                    cell: Cell::new(w),
+                },
+            )
+        }
+    }
+
+    #[inline]
+    pub fn init_from(&mut self, i: usize, a: &Attr) {
+        self.init(i, a.sym, a.pos, a.cell.get())
+    }
+}
