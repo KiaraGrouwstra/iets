@@ -60,6 +60,7 @@ dependencies = [
 name = "ietsp"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "md-5",
  "sha1",
  "sha2",
