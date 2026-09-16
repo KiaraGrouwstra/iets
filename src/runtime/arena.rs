@@ -5,6 +5,9 @@
 use std::ptr;
 
 const CHUNK: usize = 32 << 20;
+/// A 32 MiB chunk populates in ~1 ms with huge pages and ~16 ms with 4 KiB
+/// pages; anything slower than this is a compaction stall.
+const THP_STALL: std::time::Duration = std::time::Duration::from_millis(6);
 
 
 
@@ -13,6 +16,8 @@ pub struct Arena {
     end: *mut u8,
     pub bytes_allocated: usize,
     pub stats: Stats,
+    /// Advise huge pages until a chunk populate stalls in compaction.
+    thp: bool,
 }
 
 impl Default for Arena {
@@ -28,6 +33,7 @@ impl Arena {
             end: ptr::null_mut(),
             bytes_allocated: 0,
             stats: Stats::default(),
+            thp: true,
         }
     }
 
@@ -63,7 +69,14 @@ impl Arena {
                 0,
             );
             assert!(p != libc::MAP_FAILED, "arena: mmap failed");
+            let t0 = std::time::Instant::now();
+            if self.thp {
+                libc::madvise(p, chunk, libc::MADV_HUGEPAGE);
+            }
             libc::madvise(p, chunk, libc::MADV_POPULATE_WRITE);
+            if self.thp && t0.elapsed() > THP_STALL {
+                self.thp = false;
+            }
             p as *mut u8
         };
         self.ptr = base;
