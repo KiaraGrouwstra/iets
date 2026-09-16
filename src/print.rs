@@ -325,6 +325,7 @@ pub fn print_json(
         }
         Value::Path(p) => {
             let sp = ev.copy_path_to_store(p.path, pos)?;
+            ctx.push(Ctx::Opaque(sp));
             json_escape(out, sp)?;
         }
         Value::Attrs(a) => {
