@@ -241,12 +241,7 @@ impl<'a> Compiler<'a> {
                     Some(d) => Some(self.expr(*d)?),
                     None => None,
                 };
-                Ir::Select {
-                    subject,
-                    path,
-                    default,
-                    pos,
-                }
+                self.mk_select(subject, path, default, pos)
             }
             Expr::HasAttr { subject, path } => {
                 let subject = self.expr(*subject)?;
@@ -290,7 +285,7 @@ impl<'a> Compiler<'a> {
                 let (binds, from) = self.lower_rec_binds(merged)?;
                 let body = self.expr(*body)?;
                 self.scopes.pop();
-                Ir::Let { binds, from, body }
+                Ir::Let(self.alloc(LetIr { binds, from, body }))
             }
             Expr::With { scope, body } => {
                 let scope = self.expr(*scope)?;
@@ -389,12 +384,32 @@ impl<'a> Compiler<'a> {
         }
         let rest = self.attr_path(&path[1..]).ok()?;
         let subject = self.alloc(Ir::Const(w));
-        Some(Ir::Select {
+        let pos = self.pos(subject_pos_hack(path));
+        Some(self.mk_select(subject, rest, None, pos))
+    }
+
+    /// One static element stays inline as `Select1`; anything else is boxed.
+    fn mk_select(
+        &mut self,
+        subject: IrRef,
+        path: &'static [AttrElemIr],
+        default: Option<IrRef>,
+        pos: Pos,
+    ) -> Ir {
+        if let [AttrElemIr::Static(sym)] = path {
+            return Ir::Select1 {
+                subject,
+                sym: *sym,
+                default,
+                pos,
+            };
+        }
+        Ir::Select(self.alloc(SelectIr {
             subject,
-            path: rest,
-            default: None,
-            pos: self.pos(subject_pos_hack(path)),
-        })
+            path,
+            default,
+            pos,
+        }))
     }
 
     fn attr_path(&mut self, path: &[AttrElem]) -> CResult<&'static [AttrElemIr]> {
@@ -909,10 +924,9 @@ impl<'a> Compiler<'a> {
                     depth: 0,
                     idx: fi as u32,
                 });
-                let path = self.alloc_elems(vec![AttrElemIr::Static(name)]);
-                binds[bi].value = self.alloc(Ir::Select {
+                binds[bi].value = self.alloc(Ir::Select1 {
                     subject,
-                    path,
+                    sym: name,
                     default: None,
                     pos: bpos,
                 });
@@ -996,11 +1010,10 @@ impl<'a> Compiler<'a> {
                         depth: 0,
                         idx: (nbinds + fi) as u32,
                     });
-                    let path = self.alloc_elems(vec![AttrElemIr::Static(name)]);
                     (
-                        self.alloc(Ir::Select {
+                        self.alloc(Ir::Select1 {
                             subject,
-                            path,
+                            sym: name,
                             default: None,
                             pos: bpos,
                         }),

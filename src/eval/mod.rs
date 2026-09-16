@@ -499,12 +499,16 @@ impl Evaluator {
             // holds the value or the thunk that a fresh thunk would only
             // look up, so share it. Missing attrs and unforced subjects
             // keep the lazy path and its error position.
-            Ir::Select {
+            Ir::Select(s) => match self.shared_select(env, s.subject, s.path, s.default) {
+                Some(w) => w,
+                None => self.mk_thunk_counted(env, ir),
+            },
+            Ir::Select1 {
                 subject,
-                path,
+                sym,
                 default,
                 ..
-            } => match self.shared_select(env, subject, path, *default) {
+            } => match self.shared_select(env, subject, &[AttrElemIr::Static(*sym)], *default) {
                 Some(w) => w,
                 None => self.mk_thunk_counted(env, ir),
             },
@@ -1051,12 +1055,13 @@ impl Evaluator {
                 let p = self.find_file(&entries, n, *pos)?;
                 Ok(self.arena.mk_path(&p))
             }
-            Ir::Select {
+            Ir::Select(s) => self.eval_select(env, s.subject, s.path, s.default, s.pos),
+            Ir::Select1 {
                 subject,
-                path,
+                sym,
                 default,
                 pos,
-            } => self.eval_select(env, subject, path, *default, *pos),
+            } => self.eval_select1(env, subject, *sym, *default, *pos),
             Ir::HasAttr { subject, path } => {
                 let mut v = self.eval(env, subject)?;
                 for elem in path.iter() {
@@ -1092,9 +1097,9 @@ impl Evaluator {
                     self.apply(f, &v, *pos)
                 }
             }
-            Ir::Let { binds, from, body } => {
-                let env2 = self.alloc_rec_env(env, binds, from);
-                self.eval(env2, body)
+            Ir::Let(l) => {
+                let env2 = self.alloc_rec_env(env, l.binds, l.from);
+                self.eval(env2, l.body)
             }
             Ir::With { scope, body, .. } => {
                 let env2 = self.arena.alloc_env(Some(env), 1);
@@ -1356,6 +1361,46 @@ impl Evaluator {
         }
         let _ = pos2;
         Ok(v)
+    }
+
+    /// `eval_select` for the one-static-element case, without the path loop.
+    fn eval_select1(
+        &mut self,
+        env: &'static EnvObj,
+        subject: IrRef,
+        sym: Sym,
+        default: Option<IrRef>,
+        pos: Pos,
+    ) -> EvalResult<Word> {
+        let v = self.eval(env, subject)?;
+        let attr = match default {
+            Some(d) => match v.as_attrs().and_then(|a| a.get(sym)) {
+                Some(a) => a,
+                None => return self.eval(env, d),
+            },
+            None => {
+                let attrs = self.force_attrs(v, pos, "while selecting an attribute")?;
+                match attrs.get(sym) {
+                    Some(a) => a,
+                    None => bail!(
+                        ErrorKind::MissingAttr,
+                        pos,
+                        "attribute '{}' missing",
+                        self.interner.name_str(sym)
+                    ),
+                }
+            }
+        };
+        self.force_cell(&attr.cell).map_err(|mut e| {
+            e.add_trace(
+                attr.pos,
+                format!(
+                    "while evaluating the attribute '{}'",
+                    self.interner.name_str(sym)
+                ),
+            );
+            e
+        })
     }
 
     fn show_attr_path(&mut self, env: &'static EnvObj, path: &[AttrElemIr]) -> String {
@@ -1796,7 +1841,7 @@ pub fn ir_pos(ir: &Ir) -> Pos {
         | Ir::CurPos(pos)
         | Ir::Concat { pos, .. }
         | Ir::SearchPath { pos, .. }
-        | Ir::Select { pos, .. }
+        | Ir::Select1 { pos, .. }
         | Ir::Apply { pos, .. }
         | Ir::With { pos, .. }
         | Ir::If { pos, .. }
@@ -1819,7 +1864,8 @@ pub fn ir_pos(ir: &Ir) -> Pos {
         | Ir::Div(_, _, pos) => *pos,
         Ir::Attrs(a) => a.pos,
         Ir::Lambda(l) => l.pos,
-        Ir::Let { body, .. } => ir_pos(body),
+        Ir::Select(s) => s.pos,
+        Ir::Let(l) => ir_pos(l.body),
         Ir::Const(_) | Ir::Local { .. } | Ir::HasAttr { .. } | Ir::List(_) => Pos::NONE,
     }
 }

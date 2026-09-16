@@ -39,9 +39,13 @@ pub enum Ir {
         name: IrRef,
         pos: Pos,
     },
-    Select {
+    /// `e.a.b or d` with a dynamic or multi-element path; boxed so the
+    /// node stays 32 bytes.
+    Select(&'static SelectIr),
+    /// `e.name`, the common case, inline.
+    Select1 {
         subject: IrRef,
-        path: &'static [AttrElemIr],
+        sym: Sym,
         default: Option<IrRef>,
         pos: Pos,
     },
@@ -58,11 +62,7 @@ pub enum Ir {
         pos: Pos,
     },
     /// `let`: new env with `binds.len() + from.len()` slots.
-    Let {
-        binds: &'static [BindIr],
-        from: &'static [IrRef],
-        body: IrRef,
-    },
+    Let(&'static LetIr),
     /// New env with one slot holding the (thunked) scope attrs.
     With {
         scope: IrRef,
@@ -185,3 +185,20 @@ impl Ir {
         matches!(self, Ir::Const(_) | Ir::Local { .. } | Ir::Lambda(_))
     }
 }
+
+pub struct SelectIr {
+    pub subject: IrRef,
+    pub path: &'static [AttrElemIr],
+    pub default: Option<IrRef>,
+    pub pos: Pos,
+}
+
+pub struct LetIr {
+    pub binds: &'static [BindIr],
+    pub from: &'static [IrRef],
+    pub body: IrRef,
+}
+
+// Every evaluated file keeps its IR for the whole run: ~120 MB for a NixOS
+// system at 48 bytes per node, so the node size is load-bearing.
+const _: () = assert!(size_of::<Ir>() == 32);
