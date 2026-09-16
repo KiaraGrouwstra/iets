@@ -3,6 +3,7 @@
 
 pub mod attrs;
 pub mod core;
+pub mod derivation;
 pub mod lists;
 pub mod math;
 pub mod store_hooks;
@@ -58,6 +59,7 @@ pub fn install(ev: &mut Evaluator) {
     lists::register(&mut r);
     strings::register(&mut r);
     math::register(&mut r);
+    derivation::register(&mut r);
 
     r.constant("true", Word::TRUE);
     r.constant("false", Word::FALSE);

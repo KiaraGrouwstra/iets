@@ -2,7 +2,7 @@
 
 use super::Registry;
 use crate::compile::ir::ParamIr;
-use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
+use crate::eval::{ErrorKind, EvalResult, Evaluator, Pos, bail};
 use crate::runtime::*;
 
 pub fn register(r: &mut Registry) {
@@ -42,8 +42,6 @@ pub fn register(r: &mut Registry) {
         unsafe_discard_output_dependency,
     );
     r.op("__findFile", 2, find_file);
-    r.op("derivationStrict", 1, derivation_strict_stub);
-    r.op("placeholder", 1, placeholder_stub);
 }
 
 fn import_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>> {
@@ -84,6 +82,9 @@ fn import_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>> {
 
 fn import(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let p = import_path(ev, args[0], pos)?;
+    if let Some(w) = super::derivation::import_derivation(ev, &p, pos)? {
+        return Ok(w);
+    }
     ev.eval_file(&p, pos)
 }
 
@@ -327,22 +328,6 @@ fn unsafe_discard_output_dependency(
         .collect();
     let ctx = ctx_to_arena(&mut ev.arena, ctx);
     Ok(ev.arena.mk_string_static(s.bytes, ctx))
-}
-
-fn derivation_strict_stub(_ev: &mut Evaluator, _args: &[Word], pos: Pos) -> EvalResult<Word> {
-    Err(Error::boxed(
-        ErrorKind::Eval,
-        "derivationStrict is not implemented yet (store wave)",
-        pos,
-    ))
-}
-
-fn placeholder_stub(_ev: &mut Evaluator, _args: &[Word], pos: Pos) -> EvalResult<Word> {
-    Err(Error::boxed(
-        ErrorKind::Eval,
-        "placeholder is not implemented yet (store wave)",
-        pos,
-    ))
 }
 
 fn find_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
