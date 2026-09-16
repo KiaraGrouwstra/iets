@@ -485,7 +485,7 @@ fn split(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         last = m.end();
     }
     if items.is_empty() {
-        return Ok(Word::from_ptr(s));
+        return Ok(ev.mk_list(&[Word::from_ptr(s)]));
     }
     items.push(ev.mk_string(&s.bytes[last..]));
     Ok(ev.mk_list(&items))
