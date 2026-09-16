@@ -85,5 +85,15 @@ collected, the run falls back to the full path and rebuilds it.
 
 ## Measurements
 
-See the numbers in the report of the commit that added this file, or run
-`scripts/devenv-test.sh` (case c prints the warm-run time).
+Same machine as `docs/flakes.md`, 2026-09-16, local daemon, run from the
+flake directory:
+
+| run | wall |
+|---|---|
+| `nix print-dev-env --option eval-cache false ~/home` | 3.48 s |
+| `ietsp print-dev-env ~/home`, cache miss, env output valid on the daemon | 0.67-0.83 s (eval 0.61-0.77 s, daemon 0.05 s) |
+| `ietsp print-dev-env ~/home`, cache hit | 21-35 ms (2,535 observations validated in 18 ms) |
+| `ietsp print-dev-env ~/iets-prime`, cache hit | 57-60 ms |
+| scratch mkShell flake, env output deleted, cache hit: fallback, plan, build | 0.65 s |
+
+`scripts/devenv-test.sh` prints the warm time (case c) on every run.
