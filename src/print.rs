@@ -122,7 +122,7 @@ pub fn print_ambiguous(
     }
     if w.is_thunk() {
         let r = w.thunk_result_cell().get();
-        if r == Word::BLACKHOLE {
+        if r.is_blackhole() {
             out.extend_from_slice("«potential infinite recursion»".as_bytes());
         } else if r == Word::EMPTY {
             out.extend_from_slice(b"<CODE>");
@@ -391,6 +391,9 @@ fn print_json_inner(
             if let Some(o) = a.get(ev.s.out_path) {
                 return print_json(ev, o.cell.get(), out, ctx, strict, o.pos);
             }
+            if strict {
+                crate::parallel::fanout_attrs_coerce(ev, a); // parallel
+            }
             out.push(b'{');
             let mut first = true;
             for attr in lexicographic_order(ev, a) {
@@ -414,6 +417,9 @@ fn print_json_inner(
             out.push(b'}');
         }
         Value::List(l) => {
+            if strict {
+                crate::parallel::fanout_list_coerce(ev, l); // parallel
+            }
             out.push(b'[');
             for (i, c) in l.cells().iter().enumerate() {
                 if i > 0 {

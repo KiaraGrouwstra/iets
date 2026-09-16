@@ -29,6 +29,8 @@ pub enum ErrorKind {
     Parse,
     MissingAttr,
     Io,
+    /// A parallel helper fiber was told to stop. Never caught.
+    Cancelled,
 }
 
 #[derive(Debug)]

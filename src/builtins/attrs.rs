@@ -155,6 +155,7 @@ fn map_attrs(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     for attr in a.attrs() {
         let name = ev.sym_string(attr.sym);
         let v = ev.arena.mk_thunk_app2(f, name, attr.cell.get());
+        crate::parallel::speculate_app(ev, v, f); // parallel
         out.push((attr.sym, attr.pos, v));
     }
     Ok(ev.arena.mk_attrs_sorted(&out))
@@ -166,6 +167,7 @@ fn list_to_attrs(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word
         pos,
         "while evaluating the argument passed to builtins.listToAttrs",
     )?;
+    crate::parallel::fanout_list(ev, l); // parallel
     let mut entries: Vec<(Sym, Pos, Word)> = Vec::with_capacity(l.len as usize);
     let mut seen: HashMap<Sym, ()> = HashMap::new();
     for c in l.cells() {
@@ -216,6 +218,7 @@ fn zip_attrs_with(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
         pos,
         "while evaluating the second argument passed to builtins.zipAttrsWith",
     )?;
+    crate::parallel::fanout_list(ev, l); // parallel
     let mut groups: HashMap<Sym, Vec<Word>> = HashMap::new();
     let mut order: Vec<Sym> = Vec::new();
     for c in l.cells() {
@@ -257,6 +260,7 @@ fn cat_attrs(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the second argument passed to builtins.catAttrs",
     )?;
+    crate::parallel::fanout_list(ev, l); // parallel
     let mut out = Vec::new();
     for c in l.cells() {
         let w = c.get();
@@ -283,6 +287,7 @@ fn group_by(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the second argument passed to builtins.groupBy",
     )?;
+    crate::parallel::fanout_list(ev, l); // parallel
     let mut groups: HashMap<Sym, Vec<Word>> = HashMap::new();
     for c in l.cells() {
         let elem = c.get();

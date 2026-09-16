@@ -88,6 +88,7 @@ fn concat_strings_sep(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult
         pos,
         "while evaluating the second argument (the list of strings to concat) passed to builtins.concatStringsSep",
     )?;
+    crate::parallel::fanout_list_coerce(ev, l); // parallel
     let mut ctx: Vec<Ctx> = sep.ctx.to_vec();
     let mut out: Vec<u8> = Vec::new();
     for (i, c) in l.cells().iter().enumerate() {

@@ -70,6 +70,7 @@ fn elem(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the second argument passed to builtins.elem",
     )?;
+    crate::parallel::fanout_list(ev, l); // parallel
     for c in l.cells() {
         let v = c.get();
         if ev.eq_values(args[0], v, pos)? {
@@ -119,6 +120,7 @@ fn map(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let out = ev.arena.alloc_list(l.len as usize);
     for (o, c) in out.cells().iter().zip(l.cells()) {
         let t = ev.arena.mk_thunk_app(f, c.get());
+        crate::parallel::speculate_app(ev, t, f); // parallel
         o.set(t);
     }
     Ok(Word::from_ptr(out))
@@ -130,6 +132,7 @@ fn filter(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the second argument passed to builtins.filter",
     )?;
+    crate::parallel::fanout_list(ev, l); // parallel
     if l.len == 0 {
         return Ok(Word::from_ptr(l));
     }
@@ -170,6 +173,7 @@ fn foldl_strict(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word>
         pos,
         "while evaluating the third argument passed to builtins.foldlStrict",
     )?;
+    crate::parallel::fanout_list(ev, l); // parallel
     let mut acc = args[1];
     for c in l.cells() {
         acc = ev.call2(f, acc, c.get(), pos)?;
@@ -183,6 +187,7 @@ fn concat_lists(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word>
         pos,
         "while evaluating the first argument passed to builtins.concatLists",
     )?;
+    crate::parallel::fanout_list(ev, l); // parallel
     let mut lists = Vec::with_capacity(l.len as usize);
     for c in l.cells() {
         let v = c.get();
@@ -206,6 +211,7 @@ fn concat_map(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the second argument passed to builtins.concatMap",
     )?;
+    crate::parallel::fanout_list(ev, l); // parallel
     let mut lists = Vec::with_capacity(l.len as usize);
     for c in l.cells() {
         let r = ev.call1(f, c.get(), pos)?;
@@ -251,6 +257,7 @@ fn any(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the second argument passed to builtins.any",
     )?;
+    crate::parallel::fanout_list(ev, l); // parallel
     for c in l.cells() {
         let r = ev.call1(f, c.get(), pos)?;
         if ev.force_bool(
@@ -275,6 +282,7 @@ fn all(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the second argument passed to builtins.all",
     )?;
+    crate::parallel::fanout_list(ev, l); // parallel
     for c in l.cells() {
         let r = ev.call1(f, c.get(), pos)?;
         if !ev.force_bool(
@@ -295,6 +303,7 @@ fn sort(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the second argument passed to builtins.sort",
     )?;
+    crate::parallel::fanout_list(ev, l); // parallel
     if l.len == 0 {
         return Ok(Word::from_ptr(l));
     }
@@ -378,6 +387,7 @@ fn partition(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the second argument passed to builtins.partition",
     )?;
+    crate::parallel::fanout_list(ev, l); // parallel
     let mut right = Vec::new();
     let mut wrong = Vec::new();
     for c in l.cells() {

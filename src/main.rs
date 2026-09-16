@@ -11,7 +11,7 @@ const STACK_SIZE: usize = 4 << 30;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: ietsp eval [--strict] [--json] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp build [--builder URL] [--timings] [--no-build] [--out NAME]... [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--out NAME]... [--source STOREPATH=LOCAL]... DRV"
+        "usage: ietsp eval [--strict] [--json] [--workers N] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp build [--builder URL] [--timings] [--no-build] [--out NAME]... [--workers N] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--out NAME]... [--source STOREPATH=LOCAL]... DRV"
     );
     exit(2)
 }
@@ -70,6 +70,7 @@ struct EvalArgs {
     lint_absolute: ietsp::compile::Lint,
     lint_short: ietsp::compile::Lint,
     xp_features: Vec<String>,
+    workers: usize,
 }
 
 enum ArgKind {
@@ -112,6 +113,7 @@ fn parse_eval_args(argv: &[String]) -> EvalArgs {
         lint_absolute: ietsp::compile::Lint::Ignore,
         lint_short: ietsp::compile::Lint::Ignore,
         xp_features: Vec::new(),
+        workers: ietsp::parallel::default_workers(),
     };
     let mut i = 0;
     while i < argv.len() {
@@ -148,6 +150,14 @@ fn parse_eval_args(argv: &[String]) -> EvalArgs {
             "--dump-drvs" => {
                 i += 1;
                 a.dump_drvs = Some(argv.get(i).unwrap_or_else(|| usage()).clone());
+            }
+            "--workers" => {
+                i += 1;
+                a.workers = argv
+                    .get(i)
+                    .and_then(|v| v.parse().ok())
+                    .filter(|n| *n >= 1)
+                    .unwrap_or_else(|| usage());
             }
             "--option" => {
                 // accepted for nix-instantiate compatibility; ignored
@@ -284,15 +294,18 @@ fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
 }
 
 fn run_eval(a: EvalArgs) -> i32 {
+    let ev = Evaluator::new();
+    // parallel: the rest runs as the main fiber
+    ietsp::parallel::run(a.workers, ev, move |ev| eval_and_print(ev, a))
+}
+
+fn eval_and_print(ev: &mut Evaluator, a: EvalArgs) -> i32 {
     let strict = a.strict;
     let json = a.json;
-    let mut ev = Evaluator::new();
-    let result = evaluate(&mut ev, a);
-
-    let v = match result {
+    let v = match evaluate(ev, a) {
         Ok(v) => v,
         Err(e) => {
-            report(&ev, &e);
+            report(ev, &e);
             return 1;
         }
     };
@@ -300,7 +313,7 @@ fn run_eval(a: EvalArgs) -> i32 {
     let mut out: Vec<u8> = Vec::new();
     let r = if json {
         let mut ctx = Vec::new();
-        ietsp::print::print_json(&mut ev, v, &mut out, &mut ctx, strict, Pos::NONE)
+        ietsp::print::print_json(ev, v, &mut out, &mut ctx, strict, Pos::NONE)
     } else {
         (|| {
             let v = if strict {
@@ -309,7 +322,7 @@ fn run_eval(a: EvalArgs) -> i32 {
                 ev.force(v)?
             };
             let mut seen = HashSet::new();
-            ietsp::print::print_ambiguous(&mut ev, v, 1, &mut out, &mut seen, 0)
+            ietsp::print::print_ambiguous(ev, v, 1, &mut out, &mut seen, 0)
         })()
     };
     if std::env::var_os("IETSP_STATS").is_some() {
@@ -324,7 +337,7 @@ fn run_eval(a: EvalArgs) -> i32 {
             0
         }
         Err(e) => {
-            report(&ev, &e);
+            report(ev, &e);
             1
         }
     }
@@ -476,8 +489,6 @@ struct BuildArgs {
 /// `ietsp build`: evaluate to derivations and ship their closure from memory, or (legacy)
 /// take a `.drv` path and read its closure from `/nix/store`.
 fn cmd_build(argv: &[String]) -> i32 {
-    use ietsp::store::path::StorePath;
-
     let mut b = BuildArgs {
         url: "http://127.0.0.1:9455".to_string(),
         timings: false,
@@ -519,11 +530,18 @@ fn cmd_build(argv: &[String]) -> i32 {
     }
 
     let t0 = std::time::Instant::now();
-    let mut ev = Evaluator::new();
+    let ev = Evaluator::new();
+    // parallel: eval and build run as the main fiber
+    ietsp::parallel::run(a.workers, ev, move |ev| build_eval(ev, &b, a, t0))
+}
+
+fn build_eval(ev: &mut Evaluator, b: &BuildArgs, a: EvalArgs, t0: std::time::Instant) -> i32 {
+    use ietsp::store::path::StorePath;
+
     let mut roots = Vec::new();
-    let r = evaluate(&mut ev, a).and_then(|v| drv_roots(&mut ev, v, &mut roots));
+    let r = evaluate(ev, a).and_then(|v| drv_roots(ev, v, &mut roots));
     if let Err(e) = r {
-        report(&ev, &e);
+        report(ev, &e);
         return 1;
     }
     let eval_time = t0.elapsed();
@@ -544,11 +562,13 @@ fn cmd_build(argv: &[String]) -> i32 {
         }
     }
     let root_paths: Vec<StorePath> = roots.iter().map(|(p, _)| p.clone()).collect();
+    let drvs = ev.drv.drvs.lock();
+    let sources = ev.source_origins();
     let inputs = ietsp::remote::plan::Inputs {
-        drvs: &ev.drv.drvs,
-        sources: ev.source_origins(),
+        drvs: &drvs,
+        sources: &sources,
     };
-    build_roots(&b, &root_paths, &outputs, inputs)
+    build_roots(b, &root_paths, &outputs, inputs)
 }
 
 /// Legacy mode: `DRV` is a `.drv` store path, or a copy of the file named

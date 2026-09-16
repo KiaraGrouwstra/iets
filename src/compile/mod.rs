@@ -12,6 +12,7 @@ use crate::syntax::symbol::{FxHashMap, Interner, Sym};
 use ir::*;
 
 /// Names visible at the root of every file.
+#[derive(Clone)]
 pub struct Globals {
     pub table: FxHashMap<Sym, Word>,
     /// The `builtins` attrset, for `builtins.x` folding.

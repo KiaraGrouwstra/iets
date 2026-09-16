@@ -2,7 +2,7 @@
 //! derivationStrictInternal): attrs -> `Derivation` -> output paths ->
 //! drvPath. Also `placeholder` and `import` of a `.drv` store path.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use super::Registry;
@@ -38,10 +38,10 @@ pub struct DrvInfo {
 
 /// Per-evaluator derivation state (derivations.cc:drvHashes plus the
 /// derivations this evaluation created).
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DrvState {
-    pub hash_cache: DrvHashCache,
-    pub drvs: HashMap<StorePath, DrvInfo>,
+    pub hash_cache: crate::parallel::shared::Shared<DrvHashCache>,
+    pub drvs: crate::parallel::shared::SharedMap<StorePath, DrvInfo>,
     /// `ietsp eval --dump-drvs DIR`: every created derivation is written as
     /// `DIR/<drv basename>` in ATerm form.
     pub dump_dir: Option<PathBuf>,
@@ -110,6 +110,7 @@ fn derivation_strict(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<
         pos,
         "while evaluating the argument passed to builtins.derivationStrict",
     )?;
+    crate::parallel::fanout_attrs_coerce(ev, attrs); // parallel
     let Some(name_attr) = attrs.get(ev.s.name) else {
         let mut e = Error::new(
             ErrorKind::MissingAttr,
@@ -498,15 +499,15 @@ fn derivation_strict_internal(
             drv.env_set(o, String::new());
             drv.outputs.insert(o.clone(), DerivationOutput::Deferred);
         }
-        finalize_input_addressed_outputs(&mut drv, &mut ev.drv.hash_cache, &mut loader)
+        finalize_input_addressed_outputs(&mut drv, &mut ev.drv.hash_cache.lock(), &mut loader)
             .map_err(|e| drv_err(e, pos))?;
     }
 
     let text = drv.unparse().map_err(|e| drv_err(e, pos))?;
     let drv_path = drv.drv_path_for(&text).map_err(|e| drv_err(e, pos))?;
-    let h = hash_derivation_modulo(&drv, false, &mut ev.drv.hash_cache, &mut loader)
+    let h = hash_derivation_modulo(&drv, false, &mut ev.drv.hash_cache.lock(), &mut loader)
         .map_err(|e| drv_err(e, pos))?;
-    ev.drv.hash_cache.insert(drv_path.clone(), h);
+    ev.drv.hash_cache.lock().insert(drv_path.clone(), h);
     ev.drv.nr_derivations += 1;
 
     if let Some(dir) = &ev.drv.dump_dir {
@@ -592,7 +593,7 @@ fn downstream_placeholder(drv_path: &StorePath, drv_name: &str, output: &str) ->
 /// else parsed from `/nix/store`.
 fn drv_info(ev: &mut Evaluator, p: &StorePath, pos: Pos) -> EvalResult<DrvInfo> {
     if let Some(i) = ev.drv.drvs.get(p) {
-        return Ok(i.clone());
+        return Ok(i);
     }
     let drv = load_derivation_from_store(p).map_err(|e| drv_err(e, pos))?;
     let mut references: BTreeSet<StorePath> = drv.input_srcs.clone();

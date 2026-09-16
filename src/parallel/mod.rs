@@ -1,0 +1,133 @@
+//! Parallel evaluation: fibers, work-stealing scheduler, thunk claim
+//! protocol. Design: docs/parallel.md.
+
+pub mod deque;
+pub mod fiber;
+pub mod force;
+pub mod interner;
+pub mod sched;
+pub mod shared;
+pub mod spec;
+pub mod thunk;
+
+use std::sync::Mutex;
+
+use crate::eval::Evaluator;
+use crate::runtime;
+use crate::runtime::Arena;
+
+pub use force::{
+    fanout_attrs, fanout_attrs_coerce, fanout_list, fanout_list_coerce, force_deep, force_thunk,
+    import_thunk, journal,
+};
+pub use spec::{speculate, speculate_app};
+
+/// Per-fiber evaluator state. `on` is false on the sequential path.
+#[derive(Clone)]
+pub struct Ctx {
+    pub on: bool,
+    /// Claimer id of the fiber running this evaluator.
+    pub id: u32,
+    pub is_main: bool,
+    pub cancelled: bool,
+    pub speculating: bool,
+    /// Thunks to speculate once their env is complete (`spec::flush`).
+    pub spec_buf: Vec<runtime::Word>,
+    /// `nr_thunks` when this speculative task started (budget base).
+    pub task_thunks: u64,
+    pub slot: *mut sched::Slot,
+}
+
+impl Default for Ctx {
+    fn default() -> Ctx {
+        Ctx {
+            on: false,
+            id: 0,
+            is_main: true,
+            cancelled: false,
+            speculating: false,
+            spec_buf: Vec::new(),
+            task_thunks: 0,
+            slot: std::ptr::null_mut(),
+        }
+    }
+}
+
+/// A cloned evaluator starts with an empty arena; the worker swaps its
+/// own in on every resume.
+impl Clone for Arena {
+    fn clone(&self) -> Arena {
+        Arena::new()
+    }
+}
+
+/// Number of workers from `--workers`, `IETSP_WORKERS`, or the machine.
+pub fn default_workers() -> usize {
+    if let Ok(v) = std::env::var("IETSP_WORKERS")
+        && let Ok(n) = v.parse::<usize>()
+        && n >= 1
+    {
+        return n;
+    }
+    std::thread::available_parallelism().map_or(1, |n| n.get())
+}
+
+fn stack_size() -> usize {
+    std::env::var("IETSP_FIBER_STACK_MB")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map_or(fiber::DEFAULT_STACK, |mb| mb << 20)
+}
+
+/// Run `f` with `ev` as the main fiber on `workers` threads. With one
+/// worker this is a plain call.
+pub fn run<R: Send + 'static>(
+    workers: usize,
+    mut ev: Evaluator,
+    f: impl FnOnce(&mut Evaluator) -> R + Send + 'static,
+) -> R {
+    if workers <= 1 {
+        return f(&mut ev);
+    }
+    let template = force::SyncEv(ev.clone());
+    let rt = sched::Runtime::start(workers, Box::new(force::EvalDriver(template)), stack_size());
+    let user = Box::into_raw(Box::new(ev)) as *mut ();
+    let out: &'static Mutex<Option<R>> = Box::leak(Box::new(Mutex::new(None)));
+    rt.run_main(
+        user,
+        Box::new(move |slot: &mut sched::Slot| {
+            let ev = force::ev_of(slot);
+            force::init_ctx(ev, slot);
+            let r = f(ev);
+            if std::env::var("IETSP_PAR_STATS").is_ok_and(|v| v == "2") {
+                for i in 0..ev.files.len() {
+                    eprintln!("file{i} = {}", String::from_utf8_lossy(&ev.files[i].path));
+                }
+            }
+            if std::env::var_os("IETSP_PAR_STATS").is_some() {
+                use std::sync::atomic::Ordering::Relaxed;
+                let rt = slot.runtime();
+                eprintln!(
+                    "parallel: fibers={} tasks={} spec-submitted={} effect-bails={} steals={} parks={} fiber-parks={} main-parks={} main-wait={}ms busy={}ms deadlocks={} main-stack-resident={}K",
+                    rt.stats_fibers(),
+                    rt.stat_tasks.load(Relaxed),
+                    spec::SUBMITTED.load(Relaxed),
+                    force::EFFECT_BAILS.load(Relaxed),
+                    rt.stat_steals.load(Relaxed),
+                    rt.stat_parks.load(Relaxed),
+                    rt.stat_fiber_parks.load(Relaxed),
+                    rt.stat_main_parks.load(Relaxed),
+                    rt.stat_main_wait_ns.load(Relaxed) / 1_000_000,
+                    rt.stat_busy_ns.load(Relaxed) / 1_000_000,
+                    rt.deadlocks.load(Relaxed),
+                    slot.fiber.stack.resident() >> 10
+                );
+            }
+            *out.lock().unwrap() = Some(r);
+        }),
+    );
+    out.lock()
+        .unwrap()
+        .take()
+        .expect("main fiber returned a result")
+}
