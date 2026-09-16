@@ -1435,6 +1435,8 @@ impl Evaluator {
         Some(ie)
     }
 
+    /// Kept out of `eval` so its buffers do not widen every eval frame.
+    #[inline(never)]
     fn eval_concat(
         &mut self,
         env: &'static EnvObj,
@@ -1446,7 +1448,11 @@ impl Evaluator {
         let mut first_type = ValueType::String;
         let mut n: i64 = 0;
         let mut nf: f64 = 0.0;
-        let mut strings: Vec<Cow<'static, [u8]>> = Vec::new();
+        // Interpolations have few parts and coerce to borrowed slices: keep
+        // them on the stack and spill to a Vec only past the buffer.
+        let mut buf: [&'static [u8]; 16] = [&[]; 16];
+        let mut nbuf = 0usize;
+        let mut spill: Vec<Cow<'static, [u8]>> = Vec::new();
         let mut ctx: Vec<Ctx> = Vec::new();
         for part in parts {
             let v = self.eval(env, part)?;
@@ -1497,11 +1503,29 @@ impl Evaluator {
                         first_type == ValueType::String,
                         !first,
                     )?;
-                    strings.push(s);
+                    match s {
+                        Cow::Borrowed(b) if spill.is_empty() && nbuf < buf.len() => {
+                            buf[nbuf] = b;
+                            nbuf += 1;
+                        }
+                        s => {
+                            if spill.is_empty() {
+                                spill.extend(buf[..nbuf].iter().map(|b| Cow::Borrowed(*b)));
+                                nbuf = 0;
+                            }
+                            spill.push(s);
+                        }
+                    }
                 }
             }
             first = false;
         }
+        let spilled: Vec<&[u8]> = spill.iter().map(|s| s.as_ref()).collect();
+        let pieces: &[&[u8]] = if spill.is_empty() {
+            &buf[..nbuf]
+        } else {
+            &spilled
+        };
         match first_type {
             ValueType::Int => Ok(self.mk_int(n)),
             ValueType::Float => Ok(self.mk_float(nf)),
@@ -1513,15 +1537,15 @@ impl Evaluator {
                         "a string that refers to a store path cannot be appended to a path"
                     );
                 }
-                let parts: Vec<&[u8]> = strings.iter().map(|s| s.as_ref()).collect();
-                let joined = parts.concat();
+                let joined = pieces.concat();
                 Ok(self.arena.mk_path(&crate::compile::canon_path(&joined)))
             }
             _ => {
-                let parts: Vec<&[u8]> = strings.iter().map(|s| s.as_ref()).collect();
-                self.arena.stats.note(Stat::Bytes, parts.iter().map(|p| p.len()).sum());
+                self.arena
+                    .stats
+                    .note(Stat::Bytes, pieces.iter().map(|p| p.len()).sum());
                 self.arena.stats.note(Stat::Ctx, ctx.len() * size_of::<Ctx>());
-                let bytes = self.arena.alloc_concat(&parts);
+                let bytes = self.arena.alloc_concat(pieces);
                 let ctx = ctx_to_arena(&mut self.arena, ctx);
                 Ok(self.arena.mk_string_static(bytes, ctx))
             }
@@ -1769,11 +1793,12 @@ impl Evaluator {
     pub fn print_stats(&self) {
         let st = &self.arena.stats;
         eprintln!(
-            "files={} src_bytes={} thunks={} calls={} arena_bytes={} compile={:?}",
+            "files={} src_bytes={} thunks={} calls={} drvs={} arena_bytes={} compile={:?}",
             self.files.len(),
             self.files.iter().map(|f| f.src.len()).sum::<usize>(),
             self.nr_thunks,
             self.nr_function_calls,
+            self.drv.nr_derivations,
             self.arena.bytes_allocated,
             self.t_compile
         );
