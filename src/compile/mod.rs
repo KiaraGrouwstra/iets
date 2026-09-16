@@ -149,11 +149,9 @@ impl<'a> Compiler<'a> {
                 Scope::With => withs.push(d as u32),
             }
         }
-        // A `with` may shadow a global at runtime; with any `with` in scope
-        // fall through to the with lookup, whose miss path consults globals.
-        if let Some(w) = self.globals.table.get(&sym)
-            && withs.is_empty()
-        {
+        // Globals live in Nix's static base env, a lexical scope, so they
+        // beat any enclosing `with` (`with { true = 1; }; true` is `true`).
+        if let Some(w) = self.globals.table.get(&sym) {
             return Some(Ir::Const(*w));
         }
         if withs.is_empty() {
