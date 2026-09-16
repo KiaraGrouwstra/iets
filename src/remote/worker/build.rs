@@ -224,7 +224,7 @@ pub fn build_on(
 /// One `ValidPathInfo` (worker-protocol.cc, the 1.16 layout `addMultipleToStore` fixes) and
 /// the NAR after it. Registration time 0 and no signatures: the daemon recomputes the content
 /// address and accepts the path on that alone.
-fn write_object(w: &mut dyn Write, o: &Object) -> io::Result<()> {
+pub fn write_object(w: &mut dyn Write, o: &Object) -> io::Result<()> {
     match o {
         Object::Source {
             path,

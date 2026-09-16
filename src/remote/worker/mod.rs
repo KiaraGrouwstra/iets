@@ -8,7 +8,7 @@ pub mod wire;
 use std::collections::{BTreeMap, HashMap};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 use super::proto::build_event::Event;
@@ -42,6 +42,7 @@ enum Op {
     SetOptions = 19,
     QueryValidPaths = 31,
     AddIndirectRoot = 12,
+    QuerySubstitutablePathInfos = 30,
     NarFromPath = 38,
     QueryDerivationOutputMap = 41,
     AddMultipleToStore = 44,
@@ -523,6 +524,50 @@ impl Connection {
         Ok(())
     }
 
+    /// `QuerySubstitutablePathInfos` (the protocol >= 1.22 shape, no content
+    /// addresses): the subset of `paths` some substituter has.
+    pub fn query_substitutable_path_infos(
+        &mut self,
+        paths: &[String],
+        on_event: &mut dyn FnMut(Event),
+    ) -> Result<Vec<String>> {
+        self.op(Op::QuerySubstitutablePathInfos)?;
+        write_u64(self.w(), paths.len() as u64)?;
+        for p in paths {
+            write_str(self.w(), p.as_bytes())?;
+            write_str(self.w(), b"")?;
+        }
+        self.process_stderr(on_event)?;
+        let n = read_u64(self.r())?;
+        let mut out = Vec::with_capacity(n.min(1 << 16) as usize);
+        for _ in 0..n {
+            let path = read_str(self.r())?;
+            read_str(self.r())?; // deriver
+            read_strs(self.r())?; // references
+            read_u64(self.r())?; // download size
+            read_u64(self.r())?; // NAR size
+            out.push(path);
+        }
+        Ok(out)
+    }
+
+    /// indirect-root-store.cc:addPermRoot: a symlink at `root` to
+    /// `store_path`, then `AddIndirectRoot`.
+    pub fn add_perm_root(&mut self, store_path: &str, root: &Path) -> Result<()> {
+        if root.starts_with(super::super::store::path::STORE_DIR) {
+            return Err(WorkerError(format!(
+                "creating a garbage collector root ({}) in the Nix store is forbidden",
+                root.display()
+            )));
+        }
+        replace_symlink(store_path, root)
+            .map_err(|e| WorkerError(format!("cannot create {}: {e}", root.display())))?;
+        let root_s = root
+            .to_str()
+            .ok_or_else(|| WorkerError("gc root path is not UTF-8".into()))?;
+        self.add_indirect_root(root_s, &mut |_| {})
+    }
+
     /// `NarFromPath`: `sink` reads exactly the NAR from the connection.
     pub fn nar_from_path(
         &mut self,
@@ -541,6 +586,25 @@ impl Connection {
     pub fn has_pending(&mut self) -> bool {
         !self.from.buffer().is_empty()
     }
+}
+
+/// file-system.cc:replaceSymlink: a temporary link renamed over `link`.
+pub fn replace_symlink(target: &str, link: &Path) -> io::Result<()> {
+    let parent = link.parent().unwrap_or(Path::new("/"));
+    std::fs::create_dir_all(parent)?;
+    let name = link.file_name().unwrap_or_default().to_string_lossy();
+    for n in 0.. {
+        let tmp = parent.join(format!(".{n}_{name}"));
+        match std::os::unix::fs::symlink(target, &tmp) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+        return std::fs::rename(&tmp, link).inspect_err(|_| {
+            let _ = std::fs::remove_file(&tmp);
+        });
+    }
+    unreachable!()
 }
 
 enum Field {
