@@ -163,7 +163,7 @@ fn abort(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the error message passed to builtins.abort",
         false,
-        false,
+        true,
         true,
     )?;
     bail!(
@@ -182,7 +182,7 @@ fn throw(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the error message passed to builtin.throw",
         false,
-        false,
+        true,
         true,
     )?;
     bail!(ErrorKind::Throw, pos, "{}", String::from_utf8_lossy(&s))
@@ -305,7 +305,7 @@ fn unsafe_discard_string_context(ev: &mut Evaluator, args: &[Word], pos: Pos) ->
         pos,
         "while evaluating the argument passed to builtins.unsafeDiscardStringContext",
         false,
-        false,
+        true,
         true,
     )?;
     if ctx.is_empty()
@@ -321,13 +321,17 @@ fn unsafe_discard_output_dependency(
     args: &[Word],
     pos: Pos,
 ) -> EvalResult<Word> {
-    let s = ev.force_string(
+    let mut ctx0 = Vec::new();
+    let bytes = ev.coerce_to_string(
         args[0],
+        &mut ctx0,
         pos,
         "while evaluating the argument passed to builtins.unsafeDiscardOutputDependency",
+        false,
+        true,
+        true,
     )?;
-    let ctx: Vec<Ctx> = s
-        .ctx
+    let ctx: Vec<Ctx> = ctx0
         .iter()
         .map(|c| match c {
             Ctx::DrvDeep(d) => Ctx::Opaque(d),
@@ -335,7 +339,8 @@ fn unsafe_discard_output_dependency(
         })
         .collect();
     let ctx = ctx_to_arena(&mut ev.arena, ctx);
-    Ok(ev.arena.mk_string_static(s.bytes, ctx))
+    let bytes = ev.arena.alloc_bytes(&bytes);
+    Ok(ev.arena.mk_string_static(bytes, ctx))
 }
 
 fn find_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {

@@ -23,7 +23,7 @@ fn string_length(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word
         pos,
         "while evaluating the argument passed to builtins.stringLength",
         false,
-        false,
+        true,
         true,
     )?;
     Ok(Word::imm_int(s.len() as i64))
@@ -60,7 +60,7 @@ fn substring(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the third argument (the string) passed to builtins.substring",
         false,
-        false,
+        true,
         true,
     )?;
     let start = start as usize;
@@ -101,7 +101,7 @@ fn concat_strings_sep(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult
             pos,
             "while evaluating one element of the list of strings to concat passed to builtins.concatStringsSep",
             false,
-            false,
+            true,
             true,
         )?;
         out.extend_from_slice(&s);
