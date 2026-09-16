@@ -57,25 +57,43 @@ connect). Everything the builder can look up by hash it looks up by hash.
 - `FetchRequest { store_path }` -> stream of `Chunk` (the NAR). Implemented
   on the server; the client does not call it yet.
 
-## Client (`src/remote/`)
+## Client (`src/remote/`, `ietsp build`)
 
-- `plan.rs`: from the root `Derivation` and a loader closure (drv path ->
-  `Derivation`), walks `inputDrvs` recursively and collects `inputSrcs`.
-  Sources are NAR-dumped and hashed (NAR hash plus per-chunk sha256) on a
-  thread pool. Output: `Plan { objects }` in topological order, sources
-  first, each drv after its inputs. A batch locator closure maps source
-  store paths to (local path, addressing kind); `ietsp build` answers it
-  with one `nix path-info --json` call, eval will answer from memory.
-- `client.rs`: `build(url, plan, root, outputs, on_event)`. One `Have` with
-  every digest. One `Put` stream: a blocking thread re-dumps each source
-  whose chunks are missing and pushes chunks into a bounded channel while
-  tonic sends them over HTTP/2 (dump and upload overlap). Then `Build`,
-  forwarding events as they arrive. `--timings` prints each phase.
-- `ietsp build [--builder URL] [--timings] [--out NAME]...
-  [--source STOREPATH=LOCAL]... DRV`. `DRV` is a `.drv` store path, or a copy
-  of the file named `<hash>-<name>.drv`; input drvs are read from
-  `/nix/store`. `--source` names the original local tree of an input
-  source, which is what eval will pass after the merge.
+`ietsp build [--builder URL] [--timings] [--no-build] [--out NAME]...
+[-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr]
+(-E EXPR | FILE)` evaluates like `ietsp eval`, forces the result to
+derivations (an attrset with `drvPath`, a string with derivation context,
+or a list of those; `!out!drv` context also names the wanted output), and
+builds each root. Nothing is read from the local store on this path:
+
+- Every derivation the evaluation created is in `Evaluator::drv.drvs`
+  (`DrvInfo { outputs, references, aterm }`); `derivationStrict` keeps the
+  ATerm it hashed, so the plan never re-serializes a drv. An input drv that
+  is not in the table came from a pre-existing `/nix/store/*.drv` reached
+  through string context or `import`; the plan reads that file and
+  `--timings` reports the count as `read from /nix/store`.
+- Every source the evaluation added is in `Evaluator::sources`
+  (`store::source::SourceOrigin`, accessor `source_origins()`): `./path`
+  and `builtins.path` record the original local tree plus the set of
+  entries a `filterSource` filter accepted, so the plan re-dumps the same
+  NAR; `builtins.toFile` records the contents and references in memory.
+  After hashing, the plan checks that the NAR still yields the planned
+  store path and fails if the tree changed since evaluation.
+- Sources with no recorded origin (only possible under a drv read from the
+  store) go to a batch locator: one `nix path-info --json` call.
+
+`plan.rs`: `plan(roots, Inputs { drvs, sources }, locate)` walks the drv
+closure once, iteratively, with a visited set (O(n)), emits drvs in
+post-order, and hashes the sources (NAR hash plus per-chunk sha256) on a
+thread pool. `client.rs`: `build(url, plan, root, outputs, upload_only,
+on_event)`: one `Have`, one `Put` stream (a blocking thread re-dumps each
+source with missing chunks while tonic sends), then `Build` with events
+forwarded; `--no-build` stops after `Put`.
+
+Legacy mode: `ietsp build [--source STOREPATH=LOCAL]... DRV` where `DRV` is
+a `.drv` store path or a copy named `<hash>-<name>.drv`. The root comes from
+that file, its closure from `/nix/store`, and `--source` names the original
+local tree of an input source. Same planner, empty eval tables.
 
 ## Reference server (`ietsp-builderd --listen ADDR --store-dir DIR`)
 
@@ -113,6 +131,8 @@ and produced the exact path in every test.
 
 ## Measured (`scripts/remote-e2e.sh`, release build, localhost)
 
+Legacy `.drv` path (closure read from `/nix/store`):
+
 | case | plan | have | put | build (realise) |
 |---|---|---|---|---|
 | 1 file tree + 1 drv, both absent on the builder and deleted from the store | 0.001 s | 3 digests, 3 missing, 0.001 s | 2 objects, 1 chunk, 1.6 KB, 0.002 s | 1.45 s |
@@ -125,10 +145,24 @@ The plan phase is dominated by `nix path-info --json` on 160 paths
 measures the Nix side: validity check, registration (a no-op here), and
 the realise itself. Case 1 includes the actual sandbox build.
 
-Round trips per build: 1 connect + `Have` + `Put` + `Build` = 4, and `Put`
-is skipped on a warm builder. Messages for the cold hello build: 1 `Have`
-request with 936 digests, 936 `Put` messages in one stream (160 chunks, 160
-manifests, 616 drvs), 1 `Build` request, and a handful of events back.
+Eval path (no local store reads; `strace -e openat` shows only the dynamic
+loader opening glibc for the `ietsp` binary itself):
+
+| case | eval | plan | have | put | build (realise) | total |
+|---|---|---|---|---|---|---|
+| `-E 'derivation { ... "${./somefile}" ... }'`, absent on the builder | 0.000 s | 0.000 s | 3 digests, 3 missing | 2 objects, 575 B, 0.001 s | 1.30 s | 1.3 s |
+| hello via `-E '(import <nixpkgs> {}).hello'`, cold builder | 0.143 s | 0.007 s | 936 digests, 936 missing, 0.011 s | 776 objects, 2.0 MB, 0.097 s | 0.47 s | 0.73 s |
+| hello, warm builder | 0.132 s | 0.006 s | 936 digests, 0 missing, 0.007 s | skipped | 0.42 s | 0.57 s |
+| `bench/workloads/nixos-desktop.nix` (6,660 drvs evaluated; closure 3,533 drvs, 651 sources), cold builder, `--no-build` | 3.76 s | 0.101 s | 4,839 digests, all missing, 0.049 s | 4,184 objects, 655 chunks, 36.5 MB, 0.52 s | skipped | 4.56 s |
+| nixos-desktop, warm builder, `--no-build` | 2.65 s | 0.101 s | 4,839 digests, 0 missing, 0.028 s | skipped | skipped | 2.88 s |
+
+The plan for hello drops from 0.15 s to 0.006 s without `nix path-info`.
+For nixos-desktop the whole client path before the build is eval plus
+0.13 s. Keeping every ATerm in memory costs +15 MB RSS (1.55 GB total) and
+no measurable eval time. A `nix build` equivalent on the same machine has no
+remote-only path to compare against: `nix-instantiate` writes 6.6k drvs and
+650 sources into the local store first, then `nix copy --to` and a remote
+realise; see the estimate below.
 
 ## Compared with the Nix worker protocol (estimate)
 
@@ -172,5 +206,8 @@ builder has.
   reference server builds every output of the root.
 - Signatures on `Built` events, blob garbage collection, concurrent-build
   locking on the server (the daemon serializes conflicting registrations).
-- The benchmark from the draft (nixos-desktop cold and warm against
-  `nix build --builders ssh-ng://`) waits for the eval wiring.
+- The nixos-desktop comparison against `nix build --builders ssh-ng://`
+  (needs an ssh loopback builder on this machine).
+- Flat fixed-output sources (`builtins.path { recursive = false; }`) have
+  no recorded origin; they fall back to the store locator, which rejects
+  them.
