@@ -29,16 +29,17 @@ fn spin_scans() -> u32 {
     })
 }
 
-/// Queued tasks that justify waking one more sleeper. A fan-out burst of
-/// a few tiny tasks is cleared faster by the workers already awake than by
-/// a futex round trip (`IETSP_HANDOFF` overrides).
-fn handoff_depth() -> usize {
+/// Queued tasks per awake worker that justify waking one more sleeper.
+/// A fan-out burst of a few tiny tasks is cleared faster by the workers
+/// already awake than by a futex round trip; a deep queue recruits
+/// sleepers one handoff at a time (`IETSP_HANDOFF` overrides).
+fn handoff_factor() -> usize {
     static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
         std::env::var("IETSP_HANDOFF")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(64)
+            .unwrap_or(8)
     })
 }
 
@@ -161,6 +162,9 @@ pub struct Runtime {
     /// never one per push).
     spinners: Padded<AtomicUsize>,
     sleepers: Padded<AtomicUsize>,
+    /// Wake a sleeper for every queued task. For drivers whose fibers
+    /// busy-wait on a queued peer instead of parking (tests).
+    eager_wakes: AtomicBool,
     epoch: Padded<AtomicU32>,
     pub shutdown: AtomicBool,
     pub main_done: AtomicBool,
@@ -209,6 +213,7 @@ impl Runtime {
             wstat: (0..n).map(|_| WorkerStat::default()).collect(),
             spinners: Padded(AtomicUsize::new(0)),
             sleepers: Padded(AtomicUsize::new(0)),
+            eager_wakes: AtomicBool::new(false),
             epoch: Padded(AtomicU32::new(0)),
             shutdown: AtomicBool::new(false),
             main_done: AtomicBool::new(false),
@@ -622,8 +627,9 @@ impl Runtime {
         }
     }
 
-    /// A runnable fiber always is; queued tasks only past `handoff_depth`
-    /// unless nobody at all is awake to take them.
+    /// A runnable fiber always is. Queued tasks are when the queue is
+    /// deeper than `handoff_factor` per awake worker, or when the caller
+    /// is the only worker awake (its own fiber may run for a long time).
     #[inline]
     fn worth_a_wake(&self) -> bool {
         if self.pending_ready.0.load(Ordering::Acquire) > 0 {
@@ -633,8 +639,18 @@ impl Runtime {
             return false;
         }
         let tasks = self.pending_tasks.0.load(Ordering::Acquire);
-        tasks > 0
-            && (tasks >= handoff_depth() || self.sleepers.0.load(Ordering::Relaxed) + 1 >= self.n)
+        if tasks == 0 {
+            return false;
+        }
+        if self.eager_wakes.load(Ordering::Relaxed) {
+            return true;
+        }
+        let awake = self.n - self.sleepers.0.load(Ordering::Relaxed);
+        awake <= 1 || tasks > handoff_factor() * awake
+    }
+
+    pub fn set_eager_wakes(&self) {
+        self.eager_wakes.store(true, Ordering::Relaxed);
     }
 
     fn wake_one(&self) {
@@ -963,6 +979,7 @@ mod tests {
     fn fan_out_from_main() {
         let c = counter();
         let rt = Runtime::start(4, Box::new(TestDriver(c)), 1 << 20);
+        rt.set_eager_wakes();
         rt.run_main(
             std::ptr::null_mut(),
             Box::new(move |slot: &mut Slot| {
@@ -990,6 +1007,7 @@ mod tests {
     fn park_and_wake_across_workers() {
         let c = counter();
         let rt = Runtime::start(3, Box::new(TestDriver(c)), 1 << 20);
+        rt.set_eager_wakes();
         rt.run_main(
             std::ptr::null_mut(),
             Box::new(move |slot: &mut Slot| {
@@ -1018,6 +1036,7 @@ mod tests {
     fn main_parks_and_is_woken_by_helper() {
         let c = counter();
         let rt = Runtime::start(2, Box::new(TestDriver(c)), 1 << 20);
+        rt.set_eager_wakes();
         rt.run_main(
             std::ptr::null_mut(),
             Box::new(move |slot: &mut Slot| {

@@ -300,6 +300,7 @@ mod tests {
             done: AtomicUsize::new(0),
         }));
         let rt = Runtime::start(3, Box::new(PairDriver(p)), 1 << 20);
+        rt.set_eager_wakes();
         rt.run_main(
             std::ptr::null_mut(),
             Box::new(move |slot: &mut Slot| {
@@ -403,6 +404,7 @@ mod tests {
             parks: AtomicUsize::new(0),
         }));
         let rt = Runtime::start(8, Box::new(GraphDriver(g)), 1 << 20);
+        rt.set_eager_wakes();
         rt.run_main(
             std::ptr::null_mut(),
             Box::new(move |slot: &mut Slot| {
