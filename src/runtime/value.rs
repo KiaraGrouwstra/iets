@@ -3,7 +3,7 @@
 //! (lists, attrs, envs) keep their elements inline after a fixed header.
 
 use super::arena::{Arena, Stat};
-use super::word::{Cell, TAG_IMM, TAG_INT, TAG_PTR, TAG_THUNK, TAG_THUNK_APP, Word};
+use super::word::{Cell, TAG_IMM, TAG_INT, TAG_PTR, TAG_THUNK, TAG_THUNK_APP, TAG_THUNK_APP2, Word};
 use crate::compile::ir::{Ir, LambdaIr};
 use crate::eval::Pos;
 use crate::syntax::symbol::Sym;
@@ -23,6 +23,7 @@ pub enum Kind {
     Env,
     Thunk,
     ThunkApp,
+    ThunkApp2,
 }
 
 /// Type of a forced value, as Nix sees it.
@@ -181,12 +182,22 @@ pub struct ThunkAppObj {
     pub arg: Word,
 }
 
+/// A suspended two-argument application `func a b`, as created by `mapAttrs`.
+#[repr(C)]
+pub struct ThunkApp2Obj {
+    pub result: Cell,
+    pub func: Word,
+    pub arg1: Word,
+    pub arg2: Word,
+}
+
 const _: () = assert!(size_of::<ListObj>() == 8);
 const _: () = assert!(size_of::<AttrsObj>() == 8);
 const _: () = assert!(size_of::<EnvObj>() == 16);
 const _: () = assert!(size_of::<Attr>() == 16);
 const _: () = assert!(size_of::<ThunkObj>() == 24);
 const _: () = assert!(size_of::<ThunkAppObj>() == 24);
+const _: () = assert!(size_of::<ThunkApp2Obj>() == 32);
 
 impl ListObj {
     #[inline]
@@ -278,7 +289,7 @@ impl Word {
                 Word::FALSE => Value::Bool(false),
                 _ => panic!("view: blackhole"),
             },
-            TAG_THUNK | TAG_THUNK_APP => panic!("view: unforced thunk"),
+            TAG_THUNK | TAG_THUNK_APP | TAG_THUNK_APP2 => panic!("view: unforced thunk"),
             _ => {
                 debug_assert!(self.0 != 0, "view: empty word");
                 // SAFETY: pointer-tagged words always point at an arena
@@ -363,10 +374,10 @@ impl Word {
     #[inline]
     pub fn thunk_kind(self) -> Kind {
         debug_assert!(self.is_thunk());
-        if self.tag() == TAG_THUNK_APP {
-            Kind::ThunkApp
-        } else {
-            Kind::Thunk
+        match self.tag() {
+            TAG_THUNK_APP => Kind::ThunkApp,
+            TAG_THUNK_APP2 => Kind::ThunkApp2,
+            _ => Kind::Thunk,
         }
     }
 
@@ -386,6 +397,12 @@ impl Word {
     pub fn as_thunk_app(self) -> &'static ThunkAppObj {
         // SAFETY: caller checked `thunk_kind() == Kind::ThunkApp`.
         unsafe { &*self.ptr::<ThunkAppObj>() }
+    }
+
+    #[inline]
+    pub fn as_thunk_app2(self) -> &'static ThunkApp2Obj {
+        // SAFETY: caller checked `thunk_kind() == Kind::ThunkApp2`.
+        unsafe { &*self.ptr::<ThunkApp2Obj>() }
     }
 }
 
@@ -550,6 +567,18 @@ impl Arena {
             arg,
         });
         Word::thunk_app_from_ptr(t as *const ThunkAppObj)
+    }
+
+    #[inline]
+    pub fn mk_thunk_app2(&mut self, func: Word, arg1: Word, arg2: Word) -> Word {
+        self.stats.note(Stat::ThunkApp, size_of::<ThunkApp2Obj>());
+        let t = self.alloc(ThunkApp2Obj {
+            result: Cell::new(Word::EMPTY),
+            func,
+            arg1,
+            arg2,
+        });
+        Word::thunk_app2_from_ptr(t as *const ThunkApp2Obj)
     }
 
     pub fn mk_lambda(&mut self, env: &'static EnvObj, lam: &'static LambdaIr) -> Word {

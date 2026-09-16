@@ -22,6 +22,7 @@ pub const TAG_PTR: u64 = 0b000;
 pub const TAG_INT: u64 = 0b001;
 pub const TAG_THUNK: u64 = 0b010;
 pub const TAG_THUNK_APP: u64 = 0b110;
+pub const TAG_THUNK_APP2: u64 = 0b100;
 pub const TAG_IMM: u64 = 0b011;
 
 const IMM_NULL: u64 = TAG_IMM;
@@ -73,7 +74,8 @@ impl Word {
 
     #[inline]
     pub fn is_thunk(self) -> bool {
-        self.0 & 0b011 == TAG_THUNK
+        // tags 010, 100, 110: even, and not the pointer tag 000
+        self.0 & 0b001 == 0 && self.0 & 0b110 != 0
     }
 
     #[inline]
@@ -107,6 +109,12 @@ impl Word {
     pub fn thunk_app_from_ptr<T>(p: *const T) -> Word {
         debug_assert!(p as u64 & TAG_MASK == 0);
         Word(p as u64 | TAG_THUNK_APP)
+    }
+
+    #[inline]
+    pub fn thunk_app2_from_ptr<T>(p: *const T) -> Word {
+        debug_assert!(p as u64 & TAG_MASK == 0);
+        Word(p as u64 | TAG_THUNK_APP2)
     }
 }
 
@@ -144,6 +152,7 @@ impl std::fmt::Debug for Word {
             TAG_INT => write!(f, "Int({})", self.imm_int_value()),
             TAG_THUNK => write!(f, "Thunk({:#x})", self.0),
             TAG_THUNK_APP => write!(f, "ThunkApp({:#x})", self.0),
+            TAG_THUNK_APP2 => write!(f, "ThunkApp2({:#x})", self.0),
             TAG_IMM => match *self {
                 Word::NULL => write!(f, "null"),
                 Word::TRUE => write!(f, "true"),

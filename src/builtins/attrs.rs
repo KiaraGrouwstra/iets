@@ -154,8 +154,7 @@ fn map_attrs(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let mut out: Vec<(Sym, Pos, Word)> = Vec::with_capacity(a.len());
     for attr in a.attrs() {
         let name = ev.sym_string(attr.sym);
-        let f1 = ev.arena.mk_thunk_app(f, name);
-        let v = ev.arena.mk_thunk_app(f1, attr.cell.get());
+        let v = ev.arena.mk_thunk_app2(f, name, attr.cell.get());
         out.push((attr.sym, attr.pos, v));
     }
     Ok(ev.arena.mk_attrs_sorted(&out))
@@ -239,8 +238,7 @@ fn zip_attrs_with(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
         let vals = &groups[&sym];
         let name = ev.sym_string(sym);
         let list = ev.mk_list(vals);
-        let f1 = ev.arena.mk_thunk_app(f, name);
-        let v = ev.arena.mk_thunk_app(f1, list);
+        let v = ev.arena.mk_thunk_app2(f, name, list);
         out.push((sym, Pos::NONE, v));
     }
     out.sort_by_key(|e| e.0);

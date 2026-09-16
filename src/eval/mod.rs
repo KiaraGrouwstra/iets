@@ -422,9 +422,13 @@ impl Evaluator {
                 let t = w.as_thunk();
                 self.eval(t.env, t.ir)
             }
-            _ => {
+            Kind::ThunkApp => {
                 let t = w.as_thunk_app();
                 self.apply(t.func, &[t.arg], Pos::NONE)
+            }
+            _ => {
+                let t = w.as_thunk_app2();
+                self.apply(t.func, &[t.arg1, t.arg2], Pos::NONE)
             }
         };
         match v {
