@@ -16,6 +16,9 @@
           version = "0.1.0";
           src = self;
           cargoLock.lockFile = ./Cargo.lock;
+          # the store tests read real .drv files from /nix/store; the
+          # sandbox hides them. `cargo test` runs in the dev shell and CI.
+          doCheck = false;
         };
       });
     };
