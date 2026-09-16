@@ -1,0 +1,459 @@
+use super::ast::FileId;
+use super::dump::dump;
+use super::symbol::Interner;
+use super::{line_col, parse};
+
+fn dump_src(src: &str) -> String {
+    let mut interner = Interner::new();
+    let ast = parse(src.as_bytes(), FileId(0), &mut interner)
+        .unwrap_or_else(|e| panic!("parse of {src:?} failed: {}", e.msg));
+    dump(&ast, &interner)
+}
+
+fn parse_err(src: &str) -> String {
+    let mut interner = Interner::new();
+    match parse(src.as_bytes(), FileId(0), &mut interner) {
+        Ok(ast) => panic!(
+            "expected parse error for {src:?}, got {}",
+            dump(&ast, &interner)
+        ),
+        Err(e) => e.msg,
+    }
+}
+
+fn str_value(src: &str) -> String {
+    let d = dump_src(src);
+    let inner = d
+        .strip_prefix("(str ")
+        .and_then(|s| s.strip_suffix(')'))
+        .unwrap_or_else(|| panic!("not a plain string dump: {d}"));
+    inner.to_string()
+}
+
+#[test]
+fn lang_corpus() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/lang");
+    // These two are scope errors that Nix reports from its resolver, not
+    // from the parser; ietsp reports them in `compile`.
+    let not_parser_errors = [
+        "parse-fail-undef-var.nix",
+        "parse-fail-regression-20060610.nix",
+    ];
+    // Nix rejects these in its parser; the corpus files them under eval-fail
+    // because `nix-instantiate --eval` is what fails.
+    let parser_errors = [
+        "eval-fail-dynamic-attrs-inherit.nix",
+        "eval-fail-dynamic-attrs-inherit-2.nix",
+        "eval-fail-dynamic-attrs-let.nix",
+        "eval-fail-dynamic-attrs-let-2.nix",
+        "eval-fail-dynamic-attrs-let-3.nix",
+        "eval-fail-path-slash.nix",
+    ];
+    let mut okay = 0;
+    let mut failed = 0;
+    let mut problems = Vec::new();
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_str().unwrap().to_string();
+        if !name.ends_with(".nix") {
+            continue;
+        }
+        let src = std::fs::read(&path).unwrap();
+        let mut interner = Interner::new();
+        let result = parse(&src, FileId(0), &mut interner);
+        let must_fail = (name.starts_with("parse-fail-")
+            && !not_parser_errors.contains(&name.as_str()))
+            || parser_errors.contains(&name.as_str());
+        match (result, must_fail) {
+            (Ok(_), false) => okay += 1,
+            (Err(_), true) => failed += 1,
+            (Ok(_), true) => problems.push(format!("{name}: parsed but should fail")),
+            (Err(e), false) => {
+                let (l, c) = line_col(&src, e.span.start);
+                problems.push(format!("{name}:{l}:{c}: {}", e.msg));
+            }
+        }
+    }
+    assert!(problems.is_empty(), "problems:\n{}", problems.join("\n"));
+    assert!(okay > 250, "only {okay} files parsed");
+    assert!(failed > 35, "only {failed} parse-fail files failed");
+}
+
+#[test]
+fn indented_string_stripping() {
+    assert_eq!(str_value("''\n  foo\n   bar\n  ''"), r#""foo\n bar\n""#);
+    assert_eq!(str_value("''\n    a\n  $\n  b''"), r#""  a\n$\nb""#);
+    assert_eq!(str_value("''\n  a'$''"), r#""a'$""#);
+    assert_eq!(str_value("''   \n  x''"), r#""x""#);
+    assert_eq!(str_value("''  a\n  '''\n  ''"), r#""a\n''\n""#);
+    assert_eq!(str_value("''\n  foo''\\\n  bar''"), r#""foo\nbar""#);
+    assert_eq!(str_value("''\n  a\n\n  b\n''"), r#""a\n\nb\n""#);
+    assert_eq!(str_value("''''"), r#""""#);
+    assert_eq!(str_value("''\n  ''"), r#""""#);
+    assert_eq!(str_value("'' a$ ''"), r#""a$ ""#);
+    assert_eq!(str_value("''$${x}''"), r#""$${x}""#);
+    assert_eq!(str_value("''''\\n''"), r#""\n""#);
+    assert_eq!(str_value("''  a\r\n  b''"), r#""a\r\nb""#);
+    assert_eq!(
+        dump_src("''  ${\"a\"}\n  x''"),
+        r#"(str (interp (str "a")) "\nx")"#
+    );
+    assert_eq!(
+        dump_src("''\n  x = ${x};\n    y\n''"),
+        r#"(str "x = " (interp x) ";\n  y\n")"#
+    );
+}
+
+#[test]
+fn string_escapes_and_interpolation() {
+    assert_eq!(
+        str_value(r#""a\nb\tc\\d\$e\"f\qg""#),
+        r#""a\nb\tc\\d$e\"fqg""#
+    );
+    assert_eq!(str_value("\"a\r\nb\rc\""), r#""a\nb\nc""#);
+    assert_eq!(str_value(r#""$${x}""#), r#""$${x}""#);
+    assert_eq!(str_value(r#""$$""#), r#""$$""#);
+    assert_eq!(str_value(r#""$""#), r#""$""#);
+    assert_eq!(str_value(r#""""#), r#""""#);
+    assert_eq!(str_value(r#""$\n""#), "\"$\\n\"");
+    assert_eq!(dump_src(r#""a${b}c""#), r#"(str "a" (interp b) "c")"#);
+    assert_eq!(dump_src(r#""${b}""#), r#"(str (interp b))"#);
+    assert_eq!(dump_src(r#""${"x"}""#), r#"(str (interp (str "x")))"#);
+    assert_eq!(
+        dump_src(r#""a${ "b${c}" }""#),
+        r#"(str "a" (interp (str "b" (interp c))))"#
+    );
+    assert_eq!(dump_src("x:y"), r#"(str "x:y")"#);
+    assert_eq!(
+        dump_src("https://a.b/c?d=e"),
+        r#"(str "https://a.b/c?d=e")"#
+    );
+    assert!(parse_err("\"abc").contains("end of file"));
+    assert!(parse_err("a 1\"$").contains("end of file"));
+}
+
+#[test]
+fn paths() {
+    assert_eq!(dump_src("./foo"), r#"(path rel "./foo")"#);
+    assert_eq!(dump_src("../foo/bar.nix"), r#"(path rel "../foo/bar.nix")"#);
+    assert_eq!(dump_src("/foo"), r#"(path abs "/foo")"#);
+    assert_eq!(dump_src("~/foo"), r#"(path home "/foo")"#);
+    assert_eq!(dump_src("<nixpkgs/lib>"), r#"(path search "nixpkgs/lib")"#);
+    assert_eq!(dump_src("./foo/${x}"), r#"(path rel "./foo/" (interp x))"#);
+    assert_eq!(
+        dump_src("./${x}/y${z}.nix"),
+        r#"(path rel "./" (interp x) "/y" (interp z) ".nix")"#
+    );
+    assert_eq!(dump_src("~/${x}"), r#"(path home "/" (interp x))"#);
+    assert_eq!(dump_src("/${x}"), r#"(path abs "/" (interp x))"#);
+    assert_eq!(dump_src("x/${a}b"), r#"(path rel "x/" (interp a) "b")"#);
+    assert_eq!(dump_src("2/3"), r#"(path rel "2/3")"#);
+    assert_eq!(dump_src("a / b"), "(/ a b)");
+    assert_eq!(dump_src("a // b"), "(// a b)");
+    assert!(parse_err("a < b > c").contains("unexpected '>'"));
+    assert_eq!(dump_src("a <b> c"), r#"(apply a (path search "b") c)"#);
+    assert!(parse_err("./foo/").contains("trailing slash"));
+    assert!(parse_err("/foo/${x}/").contains("trailing slash"));
+}
+
+#[test]
+fn numbers() {
+    assert_eq!(dump_src("007"), "7");
+    assert_eq!(dump_src("1."), "1.0");
+    assert_eq!(dump_src(".5"), "0.5");
+    assert_eq!(dump_src("1.5e3"), "1500.0");
+    assert_eq!(dump_src("0.5e-1"), "0.05");
+    assert_eq!(dump_src("-1"), "-1");
+    assert_eq!(dump_src("- 1"), "-1");
+    assert_eq!(dump_src("- - 1"), "1");
+    assert_eq!(dump_src("-1.5"), "-1.5");
+    assert_eq!(dump_src("-0.0"), "0.0");
+    assert_eq!(dump_src("-x"), "(neg x)");
+    assert_eq!(dump_src("x.5"), "(apply x 0.5)");
+    assert_eq!(dump_src("1e3"), "(apply 1 e3)");
+    assert_eq!(dump_src("9223372036854775807"), "9223372036854775807");
+    assert!(parse_err("9223372036854775808").contains("invalid integer"));
+    assert!(parse_err("-9223372036854775808").contains("invalid integer"));
+}
+
+#[test]
+fn operator_precedence() {
+    assert_eq!(dump_src("a -> b -> c"), "(-> a (-> b c))");
+    assert_eq!(dump_src("a || b && c"), "(|| a (&& b c))");
+    assert_eq!(dump_src("a && b || c"), "(|| (&& a b) c)");
+    assert_eq!(dump_src("a == b && c"), "(&& (== a b) c)");
+    assert_eq!(dump_src("a < b == c"), "(== (< a b) c)");
+    assert_eq!(dump_src("a // b // c"), "(// a (// b c))");
+    assert_eq!(dump_src("a // b + c"), "(// a (+ b c))");
+    assert_eq!(dump_src("!a + b"), "(! (+ a b))");
+    assert_eq!(dump_src("!a // b"), "(// (! a) b)");
+    assert_eq!(dump_src("!a == b"), "(== (! a) b)");
+    assert_eq!(dump_src("-a + b"), "(+ (neg a) b)");
+    assert_eq!(dump_src("-a * b"), "(* (neg a) b)");
+    assert_eq!(dump_src("a - b - c"), "(- (- a b) c)");
+    assert_eq!(dump_src("a + b * c"), "(+ a (* b c))");
+    assert_eq!(dump_src("a * b ++ c"), "(* a (++ b c))");
+    assert_eq!(dump_src("a ++ b ++ c"), "(++ a (++ b c))");
+    assert_eq!(dump_src("a ++ b ? c"), "(++ a (? b (c)))");
+    assert_eq!(dump_src("!a ? b"), "(! (? a (b)))");
+    assert_eq!(dump_src("-a ? b"), "(? (neg a) (b))");
+    assert_eq!(dump_src("a ? b.c"), "(? a (b c))");
+    assert_eq!(dump_src("a ? b == c"), "(== (? a (b)) c)");
+    assert_eq!(dump_src("f a b"), "(apply f a b)");
+    assert_eq!(dump_src("(f a) b"), "(apply f a b)");
+    assert_eq!(dump_src("f a.b c"), "(apply f (select a (b)) c)");
+    assert_eq!(dump_src("-f a"), "(neg (apply f a))");
+    assert_eq!(dump_src("f -a"), "(- f a)");
+    assert_eq!(dump_src("a.b or c d"), "(apply (select a (b) (or c)) d)");
+    assert_eq!(dump_src("f or x"), "(apply f or x)");
+    assert_eq!(dump_src("a |> f |> g"), "(apply g (apply f a))");
+    assert_eq!(dump_src("g <| f <| a"), "(apply g (apply f a))");
+    assert_eq!(dump_src("a |> f x"), "(apply f x a)");
+    assert_eq!(dump_src("if a then b else c: d"), "(if a b (lambda c d))");
+    assert_eq!(dump_src("with a; b: c"), "(with a (lambda b c))");
+    assert_eq!(dump_src("assert a; b"), "(assert a b)");
+    assert!(parse_err("a == b == c").contains("unexpected '=='"));
+    assert!(parse_err("a < b < c").contains("unexpected '<'"));
+    assert!(parse_err("a ? b ? c").contains("unexpected '?'"));
+    assert!(parse_err("a |> f <| b").contains("unexpected"));
+    assert!(parse_err("[ -1 ]").contains("unexpected '-'"));
+    assert!(parse_err("1 != != 2").contains("unexpected '!='"));
+}
+
+#[test]
+fn attrs_and_bindings() {
+    assert_eq!(dump_src("{ }"), "(attrs)");
+    assert_eq!(dump_src("rec { a = 1; }"), "(rec-attrs (= (a) 1))");
+    assert_eq!(
+        dump_src("{ a.b.\"c\".${d} = 1; }"),
+        "(attrs (= (a b c (dyn d)) 1))"
+    );
+    assert_eq!(dump_src("{ ${\"x\"} = 1; }"), "(attrs (= (x) 1))");
+    assert_eq!(
+        dump_src("{ \"a${b}\" = 1; }"),
+        r#"(attrs (= ((dyn (str "a" (interp b)))) 1))"#
+    );
+    assert_eq!(
+        dump_src("{ or = 1; }.or"),
+        "(select (attrs (= (or) 1)) (or))"
+    );
+    assert_eq!(
+        dump_src("{ inherit a b; inherit (c) d \"e\"; }"),
+        "(attrs (inherit a b) (inherit (from c) d e))"
+    );
+    assert_eq!(dump_src("let a = 1; in a"), "(let ( (= (a) 1)) a)");
+    assert_eq!(
+        dump_src("let { body = 1; }"),
+        "(select (rec-attrs (= (body) 1)) (body))"
+    );
+    assert_eq!(
+        dump_src("let a.${b} = 1; in a"),
+        "(let ( (= (a (dyn b)) 1)) a)"
+    );
+    assert_eq!(
+        dump_src("{ a = 1; b = { c = 2; }; b.d = 3; }"),
+        "(attrs (= (a) 1) (= (b) (attrs (= (c) 2))) (= (b d) 3))"
+    );
+    assert!(parse_err("let ${b} = 1; in a").contains("dynamic attributes not allowed in let"));
+    assert!(parse_err("{ inherit ${b}; }").contains("dynamic attributes not allowed in inherit"));
+    assert!(parse_err("{ a = 1; a = 2; }").contains("attribute 'a' already defined"));
+    assert!(parse_err("{ a.b = 1; a.b = 2; }").contains("attribute 'a.b' already defined"));
+    assert!(parse_err("{ a.b = 1; a = { b = 2; }; }").contains("attribute 'a.b' already defined"));
+    assert!(parse_err("{ a = { b = 2; }; a.b = 1; }").contains("attribute 'a.b' already defined"));
+    assert!(parse_err("{ inherit a; a = 1; }").contains("already defined"));
+    assert!(parse_err("{ inherit a a; }").contains("already defined"));
+    assert!(parse_err("{ a = 1; inherit (x) a; }").contains("already defined"));
+    assert!(parse_err("{ a.b = 1; inherit a; }").contains("already defined"));
+    assert!(parse_err("{ a = 1; }; }").contains("expecting end of file"));
+    assert!(parse_err("{ a ... }").contains("expecting '.' or '='"));
+    assert!(parse_err("{ 1 = x; }").contains("unexpected integer"));
+}
+
+#[test]
+fn lambdas() {
+    assert_eq!(dump_src("x: x"), "(lambda x x)");
+    assert_eq!(dump_src("{ }: x"), "(lambda {} x)");
+    assert_eq!(dump_src("{ ... }: x"), "(lambda {...} x)");
+    assert_eq!(
+        dump_src("{ a, b ? 1, ... }: a"),
+        "(lambda {a, b ? 1, ...} a)"
+    );
+    assert_eq!(dump_src("{ a, }: a"), "(lambda {a} a)");
+    assert_eq!(dump_src("x@{ a }: a"), "(lambda {a} @ x a)");
+    assert_eq!(dump_src("{ a }@x: a"), "(lambda {a} @ x a)");
+    assert_eq!(dump_src("x: y: z"), "(lambda x (lambda y z))");
+    assert!(parse_err("{ ..., a }: a").contains("expecting '}'"));
+    assert!(parse_err("{ a, a }: a").contains("duplicate formal function argument 'a'"));
+    assert!(parse_err("a@{ a }: a").contains("duplicate formal function argument 'a'"));
+    assert!(parse_err("{ a b }: a").contains("expecting '.' or '='"));
+}
+
+#[test]
+fn comments_and_misc() {
+    assert_eq!(dump_src("# c\n1 /* x */ # y\n"), "1");
+    assert_eq!(dump_src("/** doc */ x: x"), "(lambda x x)");
+    assert_eq!(dump_src("{ x = # c\ry; }"), "(attrs (= (x) y))");
+    assert_eq!(
+        dump_src("[ a b.c (d e) ]"),
+        "(list a (select b (c)) (apply d e))"
+    );
+    assert_eq!(dump_src("__curPos"), "__curPos");
+    assert!(parse_err("é").contains("invalid token"));
+    assert!(parse_err("(").contains("end of file"));
+    assert!(parse_err("a.'b").contains("invalid token"));
+    assert!(parse_err("").contains("end of file"));
+}
+
+#[test]
+fn line_col_counts_bytes() {
+    let src = b"ab\ncd\xc3\xa9f\n";
+    assert_eq!(line_col(src, 0), (1, 1));
+    assert_eq!(line_col(src, 2), (1, 3));
+    assert_eq!(line_col(src, 3), (2, 1));
+    assert_eq!(line_col(src, 7), (2, 5));
+    assert_eq!(line_col(src, 9), (3, 1));
+}
+
+#[test]
+fn spans_cover_tokens() {
+    let src = "  f a.b  ";
+    let mut interner = Interner::new();
+    let ast = parse(src.as_bytes(), FileId(0), &mut interner).unwrap();
+    let root = ast.span(ast.root);
+    assert_eq!((root.start, root.end), (2, 7));
+}
+
+/// Value of a parsed string whose interpolations are all literal strings.
+fn literal_value(ast: &super::ast::Ast, id: super::ast::ExprId) -> Option<Vec<u8>> {
+    use super::ast::{Expr, StrPart};
+    let Expr::Str(parts) = ast.expr(id) else {
+        return None;
+    };
+    let mut out = Vec::new();
+    for p in parts {
+        match p {
+            StrPart::Lit(l) => out.extend_from_slice(l),
+            StrPart::Interp(e) => out.extend_from_slice(&literal_value(ast, *e)?),
+        }
+    }
+    Some(out)
+}
+
+fn nix_eval_raw(expr: &str) -> Option<Vec<u8>> {
+    let out = std::process::Command::new("nix")
+        .args([
+            "eval",
+            "--extra-experimental-features",
+            "nix-command",
+            "--raw",
+            "--expr",
+            expr,
+        ])
+        .output()
+        .expect("nix on PATH");
+    if out.status.success() {
+        Some(out.stdout)
+    } else {
+        None
+    }
+}
+
+/// Random string literals, compared byte for byte with the reference Nix.
+/// Run with `cargo test -- --ignored`.
+#[test]
+#[ignore = "needs nix on PATH and takes a few seconds"]
+fn differential_strings_against_nix() {
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    let mut rng = move |n: usize| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed % n as u64) as usize
+    };
+    let ind_alpha = [
+        " ", "\n", "a", "$", "'", "\\", "{", "}", "n", "\r", "${\"X\"}", "  ", "''$", "'''",
+        "''\\n", "\n  ", "\n ",
+    ];
+    let dq_alpha = [
+        " ", "\n", "a", "$", "\\", "\"", "{", "}", "n", "\r", "${\"X\"}", "\\$", "\\n", "$$",
+        "\\\\", "\r\n",
+    ];
+    let mut samples = Vec::new();
+    for _ in 0..3000 {
+        let len = 1 + rng(10);
+        let mut s = String::from("''");
+        for _ in 0..len {
+            s.push_str(ind_alpha[rng(ind_alpha.len())]);
+        }
+        s.push_str("''");
+        samples.push(s);
+    }
+    for _ in 0..3000 {
+        let len = 1 + rng(10);
+        let mut s = String::from("\"");
+        for _ in 0..len {
+            s.push_str(dq_alpha[rng(dq_alpha.len())]);
+        }
+        s.push('"');
+        samples.push(s);
+    }
+
+    let mut accepted: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut rejected: Vec<String> = Vec::new();
+    for s in samples {
+        let mut interner = Interner::new();
+        match parse(s.as_bytes(), FileId(0), &mut interner) {
+            Ok(ast) => {
+                let Some(v) = literal_value(&ast, ast.root) else {
+                    continue;
+                };
+                accepted.push((s, v));
+            }
+            Err(_) => rejected.push(s),
+        }
+    }
+
+    let expr = format!(
+        "builtins.concatStringsSep \"\\t\" [ {} ]",
+        accepted
+            .iter()
+            .map(|(s, _)| format!("({s})"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    let mut mismatches = Vec::new();
+    match nix_eval_raw(&expr) {
+        Some(out) => {
+            let got: Vec<&[u8]> = out.split(|&b| b == b'\t').collect();
+            assert_eq!(got.len(), accepted.len(), "separator count differs");
+            for ((s, mine), theirs) in accepted.iter().zip(got) {
+                if mine.as_slice() != theirs {
+                    mismatches.push(format!(
+                        "{s:?}: ietsp {:?} nix {:?}",
+                        String::from_utf8_lossy(mine),
+                        String::from_utf8_lossy(theirs)
+                    ));
+                }
+            }
+        }
+        None => {
+            for (s, _) in &accepted {
+                if nix_eval_raw(s).is_none() {
+                    mismatches.push(format!("{s:?}: ietsp accepts, nix rejects"));
+                }
+            }
+        }
+    }
+    for s in rejected.iter().take(150) {
+        if nix_eval_raw(s).is_some() {
+            mismatches.push(format!("{s:?}: ietsp rejects, nix accepts"));
+        }
+    }
+    assert!(
+        mismatches.is_empty(),
+        "{} accepted, {} rejected, mismatches:\n{}",
+        accepted.len(),
+        rejected.len(),
+        mismatches.join("\n")
+    );
+}
