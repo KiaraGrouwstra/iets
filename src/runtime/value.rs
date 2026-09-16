@@ -3,7 +3,7 @@
 //! (lists, attrs, envs) keep their elements inline after a fixed header.
 
 use super::arena::{Arena, Stat};
-use super::word::{Cell, TAG_IMM, TAG_INT, TAG_PTR, TAG_THUNK, Word};
+use super::word::{Cell, TAG_IMM, TAG_INT, TAG_PTR, TAG_THUNK, TAG_THUNK_APP, Word};
 use crate::compile::ir::{Ir, LambdaIr};
 use crate::eval::Pos;
 use crate::syntax::symbol::Sym;
@@ -164,10 +164,10 @@ pub struct PrimOpAppObj {
 }
 
 /// A suspended `ir` in `env`. `result` is EMPTY until forced, BLACKHOLE while
-/// being forced, then the forced value.
+/// being forced, then the forced value. Thunk objects carry no `Kind` byte:
+/// the word tag (`TAG_THUNK` vs `TAG_THUNK_APP`) tells the two layouts apart.
 #[repr(C)]
 pub struct ThunkObj {
-    pub kind: Kind,
     pub result: Cell,
     pub env: &'static EnvObj,
     pub ir: &'static Ir,
@@ -176,7 +176,6 @@ pub struct ThunkObj {
 /// A suspended application `func arg`, as created by `map`, `genList`, etc.
 #[repr(C)]
 pub struct ThunkAppObj {
-    pub kind: Kind,
     pub result: Cell,
     pub func: Word,
     pub arg: Word,
@@ -186,6 +185,8 @@ const _: () = assert!(size_of::<ListObj>() == 8);
 const _: () = assert!(size_of::<AttrsObj>() == 8);
 const _: () = assert!(size_of::<EnvObj>() == 16);
 const _: () = assert!(size_of::<Attr>() == 16);
+const _: () = assert!(size_of::<ThunkObj>() == 24);
+const _: () = assert!(size_of::<ThunkAppObj>() == 24);
 
 impl ListObj {
     #[inline]
@@ -277,7 +278,7 @@ impl Word {
                 Word::FALSE => Value::Bool(false),
                 _ => panic!("view: blackhole"),
             },
-            TAG_THUNK => panic!("view: unforced thunk"),
+            TAG_THUNK | TAG_THUNK_APP => panic!("view: unforced thunk"),
             _ => {
                 debug_assert!(self.0 != 0, "view: empty word");
                 // SAFETY: pointer-tagged words always point at an arena
@@ -358,12 +359,15 @@ impl Word {
         }
     }
 
-    /// The thunk object behind a THUNK-tagged word.
+    /// Which thunk layout a THUNK-tagged word points at.
     #[inline]
     pub fn thunk_kind(self) -> Kind {
         debug_assert!(self.is_thunk());
-        // SAFETY: thunk words point at a ThunkObj or ThunkAppObj.
-        unsafe { *(self.ptr::<u8>() as *const Kind) }
+        if self.tag() == TAG_THUNK_APP {
+            Kind::ThunkApp
+        } else {
+            Kind::Thunk
+        }
     }
 
     #[inline]
@@ -530,7 +534,6 @@ impl Arena {
     pub fn mk_thunk(&mut self, env: &'static EnvObj, ir: &'static Ir) -> Word {
         self.stats.note(Stat::Thunk, size_of::<ThunkObj>());
         let t = self.alloc(ThunkObj {
-            kind: Kind::Thunk,
             result: Cell::new(Word::EMPTY),
             env,
             ir,
@@ -542,12 +545,11 @@ impl Arena {
     pub fn mk_thunk_app(&mut self, func: Word, arg: Word) -> Word {
         self.stats.note(Stat::ThunkApp, size_of::<ThunkAppObj>());
         let t = self.alloc(ThunkAppObj {
-            kind: Kind::ThunkApp,
             result: Cell::new(Word::EMPTY),
             func,
             arg,
         });
-        Word::thunk_from_ptr(t as *const ThunkAppObj)
+        Word::thunk_app_from_ptr(t as *const ThunkAppObj)
     }
 
     pub fn mk_lambda(&mut self, env: &'static EnvObj, lam: &'static LambdaIr) -> Word {
