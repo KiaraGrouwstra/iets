@@ -6,6 +6,7 @@ cd "$(dirname "$0")/.."
 IETSP=${IETSP:-$PWD/target/release/ietsp}
 export HOME=/fake-home
 cd tests
+export NIX_PATH=lang/dir3:lang/dir4
 pass=0; fail=0; failed=()
 for f in lang/eval-okay-*.nix; do
   n=${f%.nix}

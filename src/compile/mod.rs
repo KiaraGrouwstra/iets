@@ -34,6 +34,7 @@ pub struct Compiler<'a> {
     /// Directory of the file being compiled, for relative paths.
     base_dir: Vec<u8>,
     home: Option<Vec<u8>>,
+    settings: CompileSettings,
     sym_builtins: Sym,
     sym_cur_pos: Sym,
     sym_overrides: Sym,
@@ -41,6 +42,33 @@ pub struct Compiler<'a> {
 }
 
 type CResult<T> = Result<T, Box<Error>>;
+
+/// Nix's `Diagnose` setting for the `lint-*` options.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Lint {
+    #[default]
+    Ignore,
+    Warn,
+    Fatal,
+}
+
+impl Lint {
+    pub fn parse(s: &str) -> Option<Lint> {
+        match s {
+            "ignore" => Some(Lint::Ignore),
+            "warn" => Some(Lint::Warn),
+            "fatal" => Some(Lint::Fatal),
+            _ => None,
+        }
+    }
+}
+
+/// Settings the compiler needs from the evaluator.
+#[derive(Clone, Copy, Default)]
+pub struct CompileSettings {
+    pub lint_absolute_path_literals: Lint,
+    pub lint_short_path_literals: Lint,
+}
 
 fn err<T>(kind: ErrorKind, msg: String, pos: Pos) -> CResult<T> {
     Err(Box::new(Error::new(kind, msg, pos)))
@@ -83,6 +111,7 @@ impl<'a> Compiler<'a> {
         interner: &'a mut Interner,
         globals: &'a Globals,
         base_dir: &[u8],
+        settings: CompileSettings,
     ) -> Self {
         let sym_builtins = interner.intern(b"builtins");
         let sym_cur_pos = interner.intern(b"__curPos");
@@ -96,6 +125,7 @@ impl<'a> Compiler<'a> {
             scopes: Vec::new(),
             base_dir: base_dir.to_vec(),
             home: std::env::var_os("HOME").map(|h| h.into_encoded_bytes()),
+            settings,
             sym_builtins,
             sym_cur_pos,
             sym_overrides,
@@ -508,6 +538,46 @@ impl<'a> Compiler<'a> {
         }
     }
 
+    /// parser.y `path_start`: the `lint-absolute-path-literals` and
+    /// `lint-short-path-literals` diagnostics.
+    fn lint_path_literal(&self, kind: &PathKind, lit: &[u8], pos: Pos) -> CResult<()> {
+        let (mode, msg, name) = match kind {
+            PathKind::Absolute => (
+                self.settings.lint_absolute_path_literals,
+                format!(
+                    "absolute path literals are not portable. Consider replacing path literal '{}' by a string, relative path, or parameter",
+                    String::from_utf8_lossy(lit)
+                ),
+                "lint-absolute-path-literals",
+            ),
+            PathKind::Home => (
+                self.settings.lint_absolute_path_literals,
+                format!(
+                    "home path literals are not portable. Consider replacing path literal '~{}' by a string, relative path, or parameter",
+                    String::from_utf8_lossy(lit)
+                ),
+                "lint-absolute-path-literals",
+            ),
+            PathKind::Relative if lit.first() != Some(&b'.') => (
+                self.settings.lint_short_path_literals,
+                format!(
+                    "relative path literal '{0}' should be prefixed with '.' for clarity: './{0}'",
+                    String::from_utf8_lossy(lit)
+                ),
+                "lint-short-path-literals",
+            ),
+            _ => return Ok(()),
+        };
+        match mode {
+            Lint::Ignore => Ok(()),
+            Lint::Warn => {
+                eprintln!("warning: {msg} ({name})");
+                Ok(())
+            }
+            Lint::Fatal => err(ErrorKind::Parse, format!("{msg} ({name})"), pos),
+        }
+    }
+
     fn path(&mut self, kind: &PathKind, parts: &[StrPart], pos: Pos) -> CResult<Ir> {
         if *kind == PathKind::Search {
             let name = self.string(parts, pos)?;
@@ -535,6 +605,7 @@ impl<'a> Compiler<'a> {
             Some(StrPart::Lit(l)) => l.clone(),
             _ => Vec::new(),
         };
+        self.lint_path_literal(kind, &first_lit, pos)?;
         let trailing_slash = first_lit.ends_with(b"/") && !all_lit;
         let mut resolved = self.resolve_path_literal(kind, &first_lit);
         if trailing_slash && !resolved.ends_with(b"/") {

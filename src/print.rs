@@ -120,7 +120,7 @@ pub fn print_ambiguous(
             }
             out.extend_from_slice(b"{ ");
             for attr in lexicographic_order(ev, a) {
-                out.extend_from_slice(ev.interner.name(attr.sym));
+                print_attr_name(out, ev.interner.name(attr.sym));
                 out.extend_from_slice(b" = ");
                 print_ambiguous(
                     ev,
@@ -383,6 +383,29 @@ pub fn print_json(
         }
     }
     Ok(())
+}
+
+/// print.cc:isVarName: bare identifiers print as-is, anything else quoted.
+fn is_var_name(s: &[u8]) -> bool {
+    const KEYWORDS: [&[u8]; 10] = [
+        b"if", b"then", b"else", b"assert", b"with", b"let", b"in", b"rec", b"inherit", b"or",
+    ];
+    let Some(&c) = s.first() else {
+        return false;
+    };
+    if KEYWORDS.contains(&s) || c.is_ascii_digit() || c == b'-' || c == b'\'' {
+        return false;
+    }
+    s.iter()
+        .all(|&b| b.is_ascii_alphanumeric() || b == b'_' || b == b'\'' || b == b'-')
+}
+
+pub fn print_attr_name(out: &mut Vec<u8>, name: &[u8]) {
+    if is_var_name(name) {
+        out.extend_from_slice(name);
+    } else {
+        print_literal_string(out, name);
+    }
 }
 
 pub fn sym_name(ev: &Evaluator, s: Sym) -> &str {
