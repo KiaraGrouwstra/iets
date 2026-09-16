@@ -43,7 +43,7 @@ pub fn register(r: &mut Registry) {
     r.op("__toFile", 2, to_file);
     r.op("__toPath", 1, to_path);
     r.op("__toXML", 1, unsupported);
-    r.op("fromTOML", 1, unsupported);
+    r.op("fromTOML", 1, from_toml);
     r.op("__fetchClosure", 1, unsupported);
     r.op("fetchGit", 1, unsupported);
     r.op("fetchMercurial", 1, unsupported);
@@ -788,6 +788,49 @@ fn from_json(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         return p.err("trailing characters");
     }
     Ok(v)
+}
+
+// ---- TOML --------------------------------------------------------------------
+
+fn toml_to_value(ev: &mut Evaluator, v: &toml::Value, pos: Pos) -> EvalResult<Word> {
+    Ok(match v {
+        toml::Value::String(s) => ev.mk_string(s.as_bytes()),
+        toml::Value::Integer(i) => ev.mk_int(*i),
+        toml::Value::Float(f) => ev.mk_float(*f),
+        toml::Value::Boolean(b) => Word::from_bool(*b),
+        toml::Value::Datetime(_) => bail!(
+            ErrorKind::Eval,
+            pos,
+            "while parsing TOML: Dates and times are not supported"
+        ),
+        toml::Value::Array(items) => {
+            let mut ws = Vec::with_capacity(items.len());
+            for i in items {
+                ws.push(toml_to_value(ev, i, pos)?);
+            }
+            ev.mk_list(&ws)
+        }
+        toml::Value::Table(t) => {
+            let mut entries: Vec<(Sym, Pos, Word)> = Vec::with_capacity(t.len());
+            for (k, v) in t {
+                let w = toml_to_value(ev, v, pos)?;
+                entries.push((ev.sym(k.as_bytes()), Pos::NONE, w));
+            }
+            ev.mk_attrs(&mut entries, pos)?
+        }
+    })
+}
+
+fn from_toml(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
+    let s = ev.force_string_no_ctx(
+        args[0],
+        pos,
+        "while evaluating the argument passed to builtins.fromTOML",
+    )?;
+    let s = utf8(s, pos)?;
+    let v: toml::Value = toml::from_str(s)
+        .map_err(|e| Error::boxed(ErrorKind::Eval, format!("while parsing TOML: {e}"), pos))?;
+    toml_to_value(ev, &v, pos)
 }
 
 // ---- genericClosure ----------------------------------------------------------
