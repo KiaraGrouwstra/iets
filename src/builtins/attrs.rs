@@ -158,6 +158,7 @@ fn map_attrs(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         let name = ev.arena.mk_string(name);
         let f1 = ev.arena.mk_thunk_app(f, name);
         let v = ev.arena.mk_thunk_app(f1, attr.cell.get());
+        crate::parallel::speculate_app(ev, v, f); // parallel
         out.push((attr.sym, attr.pos, v));
     }
     Ok(ev.arena.mk_attrs_sorted(&out))

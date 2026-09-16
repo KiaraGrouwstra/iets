@@ -120,6 +120,7 @@ fn map(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let out = ev.arena.alloc_list(l.len as usize);
     for (o, c) in out.cells().iter().zip(l.cells()) {
         let t = ev.arena.mk_thunk_app(f, c.get());
+        crate::parallel::speculate_app(ev, t, f); // parallel
         o.set(t);
     }
     Ok(Word::from_ptr(out))

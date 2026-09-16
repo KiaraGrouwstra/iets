@@ -66,21 +66,25 @@ pub fn try_claim(cell: &Cell, me: u32) -> Claim {
 }
 
 /// Store `v` (a value, or EMPTY to reset) and wake every parked waiter.
-pub fn publish(slot: &Slot, cell: &Cell, v: Word) {
+pub fn publish(slot: &mut Slot, cell: &Cell, v: Word) {
     let old = atomic(cell).swap(v.0, Ordering::AcqRel);
     if old & WAITERS_BIT != 0 {
         let rt = slot.runtime();
         let list = rt.waiters.take(cell);
         let w = slot.worker();
         for f in list {
-            rt.wake(w, f);
+            // SAFETY: entries come from `wait`, whose slots live forever.
+            unsafe { rt.wake(w, f) };
         }
     }
 }
 
-/// Park until the cell leaves the claimed state `cur`. `Err` means the
-/// fiber was cancelled while parked.
-pub fn wait(slot: &mut Slot, cell: &Cell, cur: Word) -> Result<(), ()> {
+/// The fiber was cancelled while parked (deadlock resolution).
+#[derive(Debug)]
+pub struct Cancelled;
+
+/// Park until the cell leaves the claimed state `cur`.
+pub fn wait(slot: &mut Slot, cell: &Cell, cur: Word) -> Result<(), Cancelled> {
     let base = cur.0 & !WAITERS_BIT;
     for _ in 0..SPIN {
         if cell.get().0 & !WAITERS_BIT != base {
@@ -124,13 +128,19 @@ pub fn wait(slot: &mut Slot, cell: &Cell, cur: Word) -> Result<(), ()> {
             .fetch_add(t0.elapsed().as_nanos() as usize, Ordering::Relaxed);
     }
     if slot.cancel.load(Ordering::Acquire) {
-        return Err(());
+        return Err(Cancelled);
     }
     Ok(())
 }
 
 pub struct WaiterTable {
     shards: Vec<Mutex<HashMap<usize, Vec<*mut Slot>>>>,
+}
+
+impl Default for WaiterTable {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // SAFETY: slot pointers are opaque handles here; see `Runtime`.
@@ -226,6 +236,120 @@ mod tests {
         fn on_switch(&self, _slot: &mut Slot, _w: &mut Worker) {}
     }
 
+    /// Two cells; task A claims cell 0 then waits on cell 1, task B the
+    /// other way round. Both park; deadlock resolution cancels them.
+    struct Pair {
+        cells: [Cell; 2],
+        cancelled: AtomicUsize,
+        done: AtomicUsize,
+    }
+
+    // SAFETY: cells are atomic.
+    unsafe impl Sync for Pair {}
+
+    struct PairDriver(&'static Pair);
+
+    impl Driver for PairDriver {
+        fn new_user(&self, _rt: &Runtime) -> *mut () {
+            std::ptr::null_mut()
+        }
+        fn run_task(&self, _rt: &Runtime, slot: &mut Slot) {
+            let p = self.0;
+            let mine = slot.task.start as usize;
+            let other = 1 - mine;
+            let Claim::Won = try_claim(&p.cells[mine], slot.id) else {
+                panic!("cell already claimed")
+            };
+            // Let the other task claim its cell before we look at it.
+            let t0 = std::time::Instant::now();
+            while p.cells[other].get() == Word::EMPTY {
+                assert!(t0.elapsed().as_secs() < 10, "peer never claimed");
+                std::thread::yield_now();
+            }
+            loop {
+                match try_claim(&p.cells[other], slot.id) {
+                    Claim::Busy(cur) => {
+                        if wait(slot, &p.cells[other], cur).is_err() {
+                            p.cancelled.fetch_add(1, Ordering::Relaxed);
+                            publish(slot, &p.cells[mine], Word::EMPTY);
+                            break;
+                        }
+                    }
+                    Claim::Won => {
+                        publish(slot, &p.cells[other], Word::imm_int(1));
+                        publish(slot, &p.cells[mine], Word::imm_int(1));
+                        break;
+                    }
+                    Claim::Value(_) => {
+                        publish(slot, &p.cells[mine], Word::imm_int(1));
+                        break;
+                    }
+                    Claim::Mine => unreachable!(),
+                }
+            }
+            p.done.fetch_add(1, Ordering::Release);
+        }
+        fn on_switch(&self, _slot: &mut Slot, _w: &mut Worker) {}
+    }
+
+    #[test]
+    fn deadlocked_fibers_are_cancelled() {
+        let p: &'static Pair = Box::leak(Box::new(Pair {
+            cells: [Cell::new(Word::EMPTY), Cell::new(Word::EMPTY)],
+            cancelled: AtomicUsize::new(0),
+            done: AtomicUsize::new(0),
+        }));
+        let rt = Runtime::start(3, Box::new(PairDriver(p)), 1 << 20);
+        rt.run_main(
+            std::ptr::null_mut(),
+            Box::new(move |slot: &mut Slot| {
+                let rt = slot.runtime();
+                for i in 0..2 {
+                    let t = Task {
+                        kind: 1,
+                        obj: 0,
+                        start: i,
+                        len: 0,
+                    };
+                    assert!(rt.submit_urgent(slot.worker(), t));
+                }
+                // Once both helpers hold their claims, main parks on cell 0
+                // like a demand fiber would; the cancelled helper resets it
+                // and main re-claims.
+                let t0 = std::time::Instant::now();
+                while p.cells.iter().any(|c| c.get() == Word::EMPTY) {
+                    assert!(t0.elapsed().as_secs() < 20, "timeout");
+                    std::thread::yield_now();
+                }
+                loop {
+                    assert!(t0.elapsed().as_secs() < 20, "timeout");
+                    match try_claim(&p.cells[0], slot.id) {
+                        Claim::Won => {
+                            publish(slot, &p.cells[0], Word::imm_int(7));
+                            break;
+                        }
+                        Claim::Value(_) => break,
+                        Claim::Busy(cur) => {
+                            wait(slot, &p.cells[0], cur).unwrap();
+                        }
+                        Claim::Mine => unreachable!(),
+                    }
+                }
+                while p.done.load(Ordering::Acquire) < 2 {
+                    assert!(t0.elapsed().as_secs() < 20, "timeout");
+                    std::thread::yield_now();
+                }
+            }),
+        );
+        assert!(
+            rt.deadlocks.load(Ordering::Relaxed) >= 1,
+            "resolver did not run"
+        );
+        assert!(p.cancelled.load(Ordering::Relaxed) >= 1);
+        assert!(!p.cells[0].get().is_blackhole());
+        assert!(!p.cells[1].get().is_blackhole());
+    }
+
     fn expected(g: &Graph, i: usize, memo: &mut Vec<Option<i64>>) -> i64 {
         if let Some(v) = memo[i] {
             return v;
@@ -260,7 +384,7 @@ mod tests {
                 seed ^= seed >> 7;
                 seed ^= seed << 17;
                 if i > 0 {
-                    let d = if seed % 4 == 0 {
+                    let d = if seed.is_multiple_of(4) {
                         (seed % 8) as usize % i
                     } else {
                         (seed as usize) % i

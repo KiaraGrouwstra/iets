@@ -57,6 +57,8 @@ pub trait Driver: Sync {
     fn on_switch(&self, slot: &mut Slot, worker: &mut Worker);
 }
 
+pub type MainEntry = Box<dyn FnOnce(&mut Slot)>;
+
 pub struct Slot {
     pub fiber: Fiber,
     /// Claimer id: nonzero, unique per slot, stable across migration.
@@ -65,7 +67,7 @@ pub struct Slot {
     pub is_main: bool,
     pub user: *mut (),
     pub task: Task,
-    main_entry: Option<Box<dyn FnOnce(&mut Slot)>>,
+    main_entry: Option<MainEntry>,
     /// Worker currently running this fiber. Valid while RUNNING.
     pub worker: *mut Worker,
     pub rt: *const Runtime,
@@ -103,6 +105,10 @@ pub struct Runtime {
     /// touching every lane's deque lines.
     pending_tasks: Padded<AtomicUsize>,
     pending_ready: Padded<AtomicUsize>,
+    /// Queued speculative tasks (subset of `pending_tasks`), for the cap.
+    pending_spec: Padded<AtomicUsize>,
+    /// Workers currently inside a fiber.
+    running: Padded<AtomicUsize>,
     /// Workers in the pre-park spin; capped so a wide pool does not keep
     /// every idle core hammering the summary lines.
     spinners: Padded<AtomicUsize>,
@@ -154,6 +160,8 @@ impl Runtime {
             overflow_len: Padded(AtomicUsize::new(0)),
             pending_tasks: Padded(AtomicUsize::new(0)),
             pending_ready: Padded(AtomicUsize::new(0)),
+            pending_spec: Padded(AtomicUsize::new(0)),
+            running: Padded(AtomicUsize::new(0)),
             spinners: Padded(AtomicUsize::new(0)),
             sleepers: Padded(AtomicUsize::new(0)),
             epoch: Padded(AtomicU32::new(0)),
@@ -190,7 +198,11 @@ impl Runtime {
 
     /// Run `entry` in the main fiber on this thread (worker 0), draining
     /// other work while it is parked. Returns when `entry` has returned.
-    pub fn run_main(&'static self, user: *mut (), entry: Box<dyn FnOnce(&mut Slot)>) {
+    pub fn run_main(&'static self, user: *mut (), entry: MainEntry) {
+        if std::env::var("IETSP_PAR_STATS").is_ok_and(|v| v == "2") {
+            super::force::SAMPLE_POS.store(true, Ordering::Relaxed);
+            self.spawn_timeline();
+        }
         let mut w = Worker::new(0);
         let slot = self.new_slot(&mut w, user);
         // SAFETY: fresh slot, owned by this thread.
@@ -338,7 +350,9 @@ impl Runtime {
             s.worker = w;
             self.driver.on_switch(s, w);
             let t0 = std::time::Instant::now();
+            self.running.0.fetch_add(1, Ordering::Relaxed);
             s.fiber.resume();
+            self.running.0.fetch_sub(1, Ordering::Relaxed);
             self.stat_busy_ns
                 .fetch_add(t0.elapsed().as_nanos() as usize, Ordering::Relaxed);
             self.driver.on_switch(s, w);
@@ -358,10 +372,13 @@ impl Runtime {
         }
     }
 
-    /// Make a parked fiber runnable. Safe to call from any thread and at
-    /// any time; a spurious wake just makes the fiber re-check its wait.
-    pub fn wake(&self, w: &mut Worker, slot: *mut Slot) {
-        // SAFETY: only the atomic state is touched.
+    /// Make a parked fiber runnable. Callable from any thread at any time;
+    /// a spurious wake just makes the fiber re-check its wait.
+    ///
+    /// # Safety
+    /// `slot` must point at a live slot (slots are never freed).
+    pub unsafe fn wake(&self, w: &mut Worker, slot: *mut Slot) {
+        // SAFETY: per the contract; only the atomic state is touched.
         let st = unsafe { &(*slot).fiber.state };
         loop {
             match st.load(Ordering::Acquire) {
@@ -457,9 +474,15 @@ impl Runtime {
         }
     }
 
+    #[inline]
+    pub fn pending_spec(&self) -> usize {
+        self.pending_spec.0.load(Ordering::Relaxed)
+    }
+
     pub fn submit_spec(&self, w: &Worker, t: Task) -> bool {
         let (a, b) = t.pack();
         if self.lanes[w.idx].spec.push(a, b) {
+            self.pending_spec.0.fetch_add(1, Ordering::Relaxed);
             self.pending_tasks.0.fetch_add(1, Ordering::SeqCst);
             self.notify();
             true
@@ -497,6 +520,7 @@ impl Runtime {
             }
         }
         if let Some((a, b)) = self.lanes[w.idx].spec.pop() {
+            self.pending_spec.0.fetch_sub(1, Ordering::Relaxed);
             return Some(Task::unpack(a, b));
         }
         for k in 0..self.n {
@@ -506,6 +530,7 @@ impl Runtime {
             }
             if let Some((a, b)) = self.lanes[v].spec.steal() {
                 w.steals += 1;
+                self.pending_spec.0.fetch_sub(1, Ordering::Relaxed);
                 return Some(Task::unpack(a, b));
             }
         }
@@ -565,7 +590,8 @@ impl Runtime {
                 continue;
             }
             slot.cancel.store(true, Ordering::Release);
-            self.wake(w, s);
+            // SAFETY: `s` comes from `all`.
+            unsafe { self.wake(w, s) };
             woken += 1;
         }
         drop(all);
@@ -582,7 +608,7 @@ impl Runtime {
     /// Give the stack pages of idle pool fibers beyond the prewarm count
     /// back to the OS. Runs only when the worker is about to park.
     fn trim_pool(&self, w: &mut Worker) {
-        if w.parks % 64 != 0 {
+        if !w.parks.is_multiple_of(64) {
             return;
         }
         for &s in w.pool.iter().skip(TRIM_ABOVE) {
@@ -597,6 +623,39 @@ impl Runtime {
 
     pub fn stats_fibers(&self) -> usize {
         self.all.lock().unwrap().len()
+    }
+
+    /// Print, every 20 ms, how many workers are inside fibers, how much
+    /// work is queued and whether main is parked.
+    fn spawn_timeline(&'static self) {
+        std::thread::spawn(move || {
+            let t0 = std::time::Instant::now();
+            let mut last_busy = 0;
+            let mut last_tasks = 0;
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                if self.shutdown.load(Ordering::Relaxed) {
+                    return;
+                }
+                let busy = self.stat_busy_ns.load(Ordering::Relaxed);
+                let tasks = self.stat_tasks.load(Ordering::Relaxed);
+                let pos = super::force::MAIN_POS.load(Ordering::Relaxed);
+                eprintln!(
+                    "t={:4}ms running={:2} busy-workers={:.1} tasks/20ms={:5} queued={:5} spec={:5} sleepers={:2} main-at=file{}:{}",
+                    t0.elapsed().as_millis(),
+                    self.running.0.load(Ordering::Relaxed),
+                    (busy - last_busy) as f64 / 20e6,
+                    tasks - last_tasks,
+                    self.pending_tasks.0.load(Ordering::Relaxed),
+                    self.pending_spec.0.load(Ordering::Relaxed),
+                    self.sleepers.0.load(Ordering::Relaxed),
+                    pos >> 32,
+                    pos & 0xFFFF_FFFF,
+                );
+                last_busy = busy;
+                last_tasks = tasks;
+            }
+        });
     }
 }
 
@@ -632,9 +691,11 @@ impl Slot {
         unsafe { self.fiber.yield_() };
     }
 
+    /// The worker currently running this fiber.
     #[inline]
-    pub fn worker(&self) -> &mut Worker {
-        // SAFETY: valid while the fiber runs; set by `run_slot`.
+    pub fn worker(&mut self) -> &mut Worker {
+        // SAFETY: valid while the fiber runs; set by `run_slot`. Exclusive
+        // through `&mut self`: the fiber is the worker's only running code.
         unsafe { &mut *self.worker }
     }
 
@@ -734,7 +795,8 @@ mod tests {
                             start: i * 16,
                             len: 16,
                         };
-                        if !rt.submit_urgent(slot.worker(), sub) {
+                        let w = slot.worker();
+                        if !rt.submit_urgent(w, sub) {
                             self.run_task_inline(c, sub);
                         }
                     }
@@ -751,7 +813,8 @@ mod tests {
                 WAKE => loop {
                     let p = c.parked.load(Ordering::Acquire);
                     if !p.is_null() {
-                        rt.wake(slot.worker(), p);
+                        // SAFETY: `p` is a leaked slot.
+                        unsafe { rt.wake(slot.worker(), p) };
                         c.done.fetch_add(1, Ordering::Release);
                         return;
                     }

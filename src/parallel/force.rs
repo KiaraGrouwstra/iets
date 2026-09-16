@@ -78,12 +78,18 @@ pub fn init_ctx(ev: &mut Evaluator, slot: &mut Slot) {
         is_main: slot.is_main,
         cancelled: false,
         speculating: false,
-        journal: std::mem::take(&mut ev.par.journal),
+        spec_buf: std::mem::take(&mut ev.par.spec_buf),
+        task_thunks: ev.nr_thunks,
         slot,
     };
-    ev.par.journal.clear();
+    ev.par.spec_buf.clear();
     ev.call_depth = 0;
     ev.try_level = 0;
+}
+
+#[inline]
+pub fn ev_slot(ev: &Evaluator) -> &'static mut Slot {
+    slot_of(ev)
 }
 
 #[inline]
@@ -108,14 +114,28 @@ fn bail_requested(ev: &Evaluator) -> bool {
     }
     let slot = slot_of(ev);
     slot.cancel.load(Ordering::Relaxed)
-        || (ev.par.speculating && slot.runtime().suppress.load(Ordering::Relaxed))
+        || (ev.par.speculating
+            && (slot.runtime().suppress.load(Ordering::Relaxed)
+                || ev.nr_thunks - ev.par.task_thunks > super::spec::budget()))
 }
+
+/// Position of the thunk the main fiber forced last (diagnostics: the
+/// `IETSP_PAR_STATS=2` timeline samples it).
+pub static MAIN_POS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static SAMPLE_POS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Parallel `Evaluator::force_thunk`: claim, evaluate, publish.
 #[inline(never)]
 pub fn force_thunk(ev: &mut Evaluator, w: Word) -> EvalResult<Word> {
     let cell = w.thunk_result_cell();
     let me = ev.par.id;
+    if SAMPLE_POS.load(Ordering::Relaxed) && ev.par.is_main && w.thunk_kind() == Kind::Thunk {
+        let p = crate::eval::ir_pos(w.as_thunk().ir);
+        MAIN_POS.store(
+            ((p.file.0 as u64) << 32) | p.offset as u64,
+            Ordering::Relaxed,
+        );
+    }
     loop {
         match thunk::try_claim(cell, me) {
             Claim::Won => break,
@@ -144,7 +164,9 @@ pub fn force_thunk(ev: &mut Evaluator, w: Word) -> EvalResult<Word> {
         thunk::publish(slot_of(ev), cell, Word::EMPTY);
         return Err(cancelled());
     }
-    let journal_len = ev.par.journal.len();
+    if !ev.par.spec_buf.is_empty() {
+        super::spec::flush(ev);
+    }
     let r = match w.thunk_kind() {
         Kind::Thunk => {
             let t = w.as_thunk();
@@ -158,13 +180,12 @@ pub fn force_thunk(ev: &mut Evaluator, w: Word) -> EvalResult<Word> {
     match r {
         Ok(v) => {
             debug_assert!(!v.is_thunk());
-            // A helper result that carried an effect is not memoised: the
-            // demand path recomputes it and emits the effect itself.
-            let memo = !ev.par.cancelled && (ev.par.is_main || ev.par.journal.len() == journal_len);
-            thunk::publish(slot_of(ev), cell, if memo { v } else { Word::EMPTY });
             if ev.par.cancelled {
+                // Bailed (or hit an effect) somewhere below: transient.
+                thunk::publish(slot_of(ev), cell, Word::EMPTY);
                 Err(cancelled())
             } else {
+                thunk::publish(slot_of(ev), cell, v);
                 Ok(v)
             }
         }
@@ -175,17 +196,23 @@ pub fn force_thunk(ev: &mut Evaluator, w: Word) -> EvalResult<Word> {
     }
 }
 
-/// `trace`/`warn` in a helper fiber: record instead of print. Returns
-/// false when the caller should print.
+/// `trace`/`warn` in a helper fiber: the helper abandons its task instead
+/// of printing. Cancel is sticky, so every thunk still open in this fiber
+/// is reset and no value built after the effect escapes into a cell; the
+/// demand path re-evaluates and prints. Returns false when the caller
+/// should print.
 #[inline]
-pub fn journal(ev: &mut Evaluator, msg: String) -> bool {
+pub fn journal(ev: &mut Evaluator, _msg: String) -> bool {
     if ev.par.on && !ev.par.is_main {
-        ev.par.journal.push(msg);
+        ev.par.cancelled = true;
+        EFFECT_BAILS.fetch_add(1, Ordering::Relaxed);
         true
     } else {
         false
     }
 }
+
+pub static EFFECT_BAILS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 // ---- fan-out --------------------------------------------------------------
 
@@ -497,7 +524,9 @@ fn run_task(ev: &mut Evaluator, t: Task) {
         }
         T_THUNK => {
             ev.par.speculating = true;
-            let _ = ev.force(obj);
+            if obj.thunk_result_cell().get() == Word::EMPTY {
+                let _ = ev.force(obj);
+            }
         }
         k => panic!("unknown task kind {k}"),
     }

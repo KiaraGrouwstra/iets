@@ -117,7 +117,7 @@ pub(crate) use bail;
 impl Evaluator {
     pub fn new() -> Evaluator {
         let mut arena = Arena::new();
-        let interner = Interner::new();
+        let mut interner = Interner::new();
         let root_env = arena.alloc_env(None, 0);
         let s = WellKnown {
             out_path: interner.intern(b"outPath"),
@@ -470,7 +470,11 @@ impl Evaluator {
     #[inline]
     fn mk_thunk_counted(&mut self, env: &'static EnvObj, ir: IrRef) -> Word {
         self.nr_thunks += 1;
-        self.arena.mk_thunk(env, ir)
+        let w = self.arena.mk_thunk(env, ir);
+        if self.par.on {
+            crate::parallel::speculate(self, w, ir); // parallel: candidate
+        }
+        w
     }
 
     /// The value of a cheap operand if it is already a forced integer.
