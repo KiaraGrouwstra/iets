@@ -3,6 +3,10 @@
 //! oddities: `or` as an application argument, `let { body = ...; }`,
 //! duplicate-attribute detection at parse time, and nonassociative
 //! comparison operators.
+//!
+//! Variable-length children are built on per-table scratch stacks and
+//! moved into the `Ast` side tables in one block when their parent node
+//! is complete, so a nested construct never splits its parent's run.
 
 use super::ast::*;
 use super::lexer::{IndPart, Lexer, PathPart, StrEnd, Tok, Token};
@@ -63,6 +67,17 @@ fn starts_simple(kind: Tok) -> bool {
     )
 }
 
+/// Move `stack[mark..]` to the end of `table` and describe where it went.
+fn commit<T: Copy>(table: &mut Vec<T>, stack: &mut Vec<T>, mark: usize) -> Range {
+    let start = table.len() as u32;
+    table.extend_from_slice(&stack[mark..]);
+    stack.truncate(mark);
+    Range {
+        start,
+        len: table.len() as u32 - start,
+    }
+}
+
 pub struct Parser<'a> {
     src: &'a [u8],
     lx: Lexer<'a>,
@@ -70,17 +85,32 @@ pub struct Parser<'a> {
     next: Option<Token>,
     last_end: u32,
     interner: &'a mut Interner,
-    exprs: Vec<Expr>,
-    spans: Vec<Span>,
+    ast: Ast,
+    sc_ids: Vec<ExprId>,
+    sc_elems: Vec<AttrElem>,
+    sc_parts: Vec<StrPart>,
+    sc_binds: Vec<Bind>,
+    sc_names: Vec<(Sym, Span)>,
+    sc_formals: Vec<Formal>,
     sym_or: Sym,
     sym_body: Sym,
 }
 
 impl<'a> Parser<'a> {
     pub fn new(src: &'a [u8], interner: &'a mut Interner) -> Self {
+        Self::with_ast(src, interner, Ast::default())
+    }
+
+    /// Reuse the buffers of a previous file's `Ast` (contents discarded).
+    pub fn with_ast(src: &'a [u8], interner: &'a mut Interner, mut ast: Ast) -> Self {
         let sym_or = interner.intern(b"or");
         let sym_body = interner.intern(b"body");
+        ast.clear();
         let cap = src.len() / 12 + 8;
+        if ast.exprs.capacity() < cap {
+            ast.exprs.reserve(cap);
+            ast.spans.reserve(cap);
+        }
         Parser {
             src,
             lx: Lexer::new(src),
@@ -88,8 +118,13 @@ impl<'a> Parser<'a> {
             next: None,
             last_end: 0,
             interner,
-            exprs: Vec::with_capacity(cap),
-            spans: Vec::with_capacity(cap),
+            ast,
+            sc_ids: Vec::new(),
+            sc_elems: Vec::new(),
+            sc_parts: Vec::new(),
+            sc_binds: Vec::new(),
+            sc_names: Vec::new(),
+            sc_formals: Vec::new(),
             sym_or,
             sym_body,
         }
@@ -101,12 +136,9 @@ impl<'a> Parser<'a> {
         if t.kind != Tok::Eof {
             return Err(self.unexpected(t, Some("expecting end of file")));
         }
-        Ok(Ast {
-            file,
-            exprs: self.exprs,
-            spans: self.spans,
-            root,
-        })
+        self.ast.file = file;
+        self.ast.root = root;
+        Ok(self.ast)
     }
 
     // ---- token plumbing ----
@@ -184,14 +216,32 @@ impl<'a> Parser<'a> {
 
     #[inline]
     fn add(&mut self, e: Expr, start: u32, end: u32) -> ExprId {
-        let id = ExprId(self.exprs.len() as u32);
-        self.exprs.push(e);
-        self.spans.push(Span { start, end });
+        let id = ExprId(self.ast.exprs.len() as u32);
+        self.ast.exprs.push(e);
+        self.ast.spans.push(Span { start, end });
         id
     }
 
     fn text(&self, t: Token) -> &'a [u8] {
         &self.src[t.start as usize..t.end as usize]
+    }
+
+    /// Store `b` in the bytes table.
+    fn lit(&mut self, b: &[u8]) -> StrPart {
+        let start = self.ast.bytes.len() as u32;
+        self.ast.bytes.extend_from_slice(b);
+        StrPart::Lit(Range {
+            start,
+            len: b.len() as u32,
+        })
+    }
+
+    /// One-part string over `b`.
+    fn single_str(&mut self, b: &[u8]) -> Range {
+        let mark = self.sc_parts.len();
+        let p = self.lit(b);
+        self.sc_parts.push(p);
+        commit(&mut self.ast.parts, &mut self.sc_parts, mark)
     }
 
     // ---- grammar ----
@@ -225,7 +275,7 @@ impl<'a> Parser<'a> {
                         self.bump();
                         let name = self.interner.intern(self.text(t));
                         let (formals, ellipsis) = self.parse_formals()?;
-                        self.validate_formals(&formals, Some((name, t.span())))?;
+                        self.validate_formals(formals, Some((name, t.span())))?;
                         self.expect(Tok::Colon, "expecting ':'")?;
                         let body = self.parse_function()?;
                         Ok(self.add(
@@ -252,7 +302,7 @@ impl<'a> Parser<'a> {
                     let n = self.expect(Tok::Id, "expecting identifier")?;
                     bind = Some((self.interner.intern(self.text(n)), n.span()));
                 }
-                self.validate_formals(&formals, bind)?;
+                self.validate_formals(formals, bind)?;
                 self.expect(Tok::Colon, "expecting ':'")?;
                 let body = self.parse_function()?;
                 Ok(self.add(
@@ -286,9 +336,9 @@ impl<'a> Parser<'a> {
                 self.bump();
                 let binds = self.parse_binds(Tok::In)?;
                 self.expect(Tok::In, "expecting 'in'")?;
-                for b in &binds {
-                    if let BindKind::Value { path, .. } = &b.kind
-                        && let Some(AttrElem::Dynamic(_)) = path.first()
+                for b in self.ast.binds(binds) {
+                    if let BindKind::Value { path, .. } = b.kind
+                        && let Some(AttrElem::Dynamic(_)) = self.ast.elems(path).first()
                     {
                         return Err(self.error_at(
                             b.span.start,
@@ -315,9 +365,9 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_formals(&mut self) -> R<(Vec<Formal>, bool)> {
+    fn parse_formals(&mut self) -> R<(Range, bool)> {
         self.expect(Tok::LBrace, "expecting '{'")?;
-        let mut formals = Vec::new();
+        let mark = self.sc_formals.len();
         let mut ellipsis = false;
         loop {
             let t = self.peek();
@@ -340,7 +390,7 @@ impl<'a> Parser<'a> {
                         self.bump();
                         default = Some(self.parse_expr()?);
                     }
-                    formals.push(Formal {
+                    self.sc_formals.push(Formal {
                         name,
                         default,
                         span: Span {
@@ -363,10 +413,12 @@ impl<'a> Parser<'a> {
                 _ => return Err(self.unexpected(t, Some("expecting identifier or '...' or '}'"))),
             }
         }
-        Ok((formals, ellipsis))
+        let r = commit(&mut self.ast.formals, &mut self.sc_formals, mark);
+        Ok((r, ellipsis))
     }
 
-    fn validate_formals(&self, formals: &[Formal], bind: Option<(Sym, Span)>) -> R<()> {
+    fn validate_formals(&self, formals: Range, bind: Option<(Sym, Span)>) -> R<()> {
+        let formals = self.ast.formals(formals);
         if formals.len() > 1 {
             let mut seen: Vec<(Sym, u32)> =
                 formals.iter().map(|f| (f.name, f.span.start)).collect();
@@ -451,22 +503,30 @@ impl<'a> Parser<'a> {
     }
 
     /// `f a` becomes one `Apply`; applying an `Apply` again extends it,
-    /// exactly like Nix's `makeCall`.
+    /// exactly like Nix's `makeCall`. The extended argument run is copied
+    /// to the end of the table; the old run is left behind.
     fn make_call(&mut self, func: ExprId, arg: ExprId) -> ExprId {
-        let arg_span = self.spans[arg.0 as usize];
-        if let Expr::Apply { args, .. } = &mut self.exprs[func.0 as usize] {
-            args.push(arg);
-            let s = &mut self.spans[func.0 as usize];
+        let arg_span = self.ast.spans[arg.0 as usize];
+        if let Expr::Apply { args, .. } = self.ast.exprs[func.0 as usize] {
+            let mark = self.sc_ids.len();
+            self.sc_ids.extend_from_slice(self.ast.ids(args));
+            self.sc_ids.push(arg);
+            let args = commit(&mut self.ast.ids, &mut self.sc_ids, mark);
+            let Expr::Apply { args: a, .. } = &mut self.ast.exprs[func.0 as usize] else {
+                unreachable!()
+            };
+            *a = args;
+            let s = &mut self.ast.spans[func.0 as usize];
             s.start = s.start.min(arg_span.start);
             s.end = s.end.max(arg_span.end);
             return func;
         }
-        let fs = self.spans[func.0 as usize];
+        let fs = self.ast.spans[func.0 as usize];
+        let mark = self.sc_ids.len();
+        self.sc_ids.push(arg);
+        let args = commit(&mut self.ast.ids, &mut self.sc_ids, mark);
         self.add(
-            Expr::Apply {
-                func,
-                args: vec![arg],
-            },
+            Expr::Apply { func, args },
             fs.start.min(arg_span.start),
             fs.end.max(arg_span.end),
         )
@@ -490,15 +550,15 @@ impl<'a> Parser<'a> {
             Tok::Minus => {
                 self.bump();
                 let e = self.parse_op(BP_NEG + 1)?;
-                match self.exprs[e.0 as usize] {
+                match self.ast.exprs[e.0 as usize] {
                     Expr::Int(i) => {
-                        self.exprs[e.0 as usize] = Expr::Int(0i64.wrapping_sub(i));
-                        self.spans[e.0 as usize].start = t.start;
+                        self.ast.exprs[e.0 as usize] = Expr::Int(0i64.wrapping_sub(i));
+                        self.ast.spans[e.0 as usize].start = t.start;
                         e
                     }
                     Expr::Float(f) => {
-                        self.exprs[e.0 as usize] = Expr::Float(0.0 - f);
-                        self.spans[e.0 as usize].start = t.start;
+                        self.ast.exprs[e.0 as usize] = Expr::Float(0.0 - f);
+                        self.ast.spans[e.0 as usize].start = t.start;
                         e
                     }
                     _ => self.add(
@@ -522,7 +582,7 @@ impl<'a> Parser<'a> {
                 break;
             }
             self.bump();
-            let start = self.spans[lhs.0 as usize].start;
+            let start = self.ast.spans[lhs.0 as usize].start;
             lhs = match bin {
                 None => {
                     let path = self.parse_attrpath()?;
@@ -545,13 +605,40 @@ impl<'a> Parser<'a> {
         Ok(lhs)
     }
 
+    /// `f a b c`: the arguments are collected first so they land in one
+    /// run; a `func` that already is an `Apply` (the `or` argument hack)
+    /// is extended like `make_call` does.
     fn parse_app(&mut self) -> R<ExprId> {
-        let mut f = self.parse_select()?;
+        let f = self.parse_select()?;
+        if !starts_simple(self.peek().kind) {
+            return Ok(f);
+        }
+        let mark = self.sc_ids.len();
+        let existing = match self.ast.exprs[f.0 as usize] {
+            Expr::Apply { args, .. } => {
+                self.sc_ids.extend_from_slice(self.ast.ids(args));
+                true
+            }
+            _ => false,
+        };
         while starts_simple(self.peek().kind) {
             let a = self.parse_select()?;
-            f = self.make_call(f, a);
+            self.sc_ids.push(a);
         }
-        Ok(f)
+        let args = commit(&mut self.ast.ids, &mut self.sc_ids, mark);
+        let last = self.ast.ids(args).last().copied().unwrap();
+        let end = self.ast.spans[last.0 as usize].end;
+        if existing {
+            let Expr::Apply { args: a, .. } = &mut self.ast.exprs[f.0 as usize] else {
+                unreachable!()
+            };
+            *a = args;
+            let s = &mut self.ast.spans[f.0 as usize];
+            s.end = s.end.max(end);
+            return Ok(f);
+        }
+        let fs = self.ast.spans[f.0 as usize];
+        Ok(self.add(Expr::Apply { func: f, args }, fs.start, fs.end.max(end)))
     }
 
     fn parse_select(&mut self) -> R<ExprId> {
@@ -579,10 +666,13 @@ impl<'a> Parser<'a> {
             Tok::Or => {
                 let t = self.bump();
                 let or = self.add(Expr::Var(self.sym_or), t.start, t.end);
+                let mark = self.sc_ids.len();
+                self.sc_ids.push(or);
+                let args = commit(&mut self.ast.ids, &mut self.sc_ids, mark);
                 Ok(self.add(
                     Expr::Apply {
                         func: subject,
-                        args: vec![or],
+                        args,
                     },
                     start,
                     t.end,
@@ -637,11 +727,11 @@ impl<'a> Parser<'a> {
             Tok::SPath => {
                 self.bump();
                 let text = self.text(t);
-                let inner = text[1..text.len() - 1].to_vec();
+                let parts = self.single_str(&text[1..text.len() - 1]);
                 Ok(self.add(
                     Expr::Path(PathExpr {
                         kind: PathKind::Search,
-                        parts: vec![StrPart::Lit(inner)],
+                        parts,
                     }),
                     t.start,
                     t.end,
@@ -649,8 +739,9 @@ impl<'a> Parser<'a> {
             }
             Tok::Uri => {
                 self.bump();
-                let text = self.text(t).to_vec();
-                Ok(self.add(Expr::Str(vec![StrPart::Lit(text)]), t.start, t.end))
+                let text = self.text(t);
+                let parts = self.single_str(text);
+                Ok(self.add(Expr::Str(parts), t.start, t.end))
             }
             Tok::LParen => {
                 self.bump();
@@ -664,10 +755,13 @@ impl<'a> Parser<'a> {
                 let binds = self.parse_binds(Tok::RBrace)?;
                 self.expect(Tok::RBrace, "expecting '}'")?;
                 let attrs = self.add(Expr::Attrs { rec: true, binds }, t.start, self.last_end);
+                let mark = self.sc_elems.len();
+                self.sc_elems.push(AttrElem::Static(self.sym_body));
+                let path = commit(&mut self.ast.elems, &mut self.sc_elems, mark);
                 Ok(self.add(
                     Expr::Select {
                         subject: attrs,
-                        path: vec![AttrElem::Static(self.sym_body)],
+                        path,
                         default: None,
                     },
                     t.start,
@@ -689,7 +783,7 @@ impl<'a> Parser<'a> {
             }
             Tok::LBracket => {
                 self.bump();
-                let mut items = Vec::new();
+                let mark = self.sc_ids.len();
                 loop {
                     let n = self.peek();
                     if n.kind == Tok::RBracket {
@@ -699,8 +793,10 @@ impl<'a> Parser<'a> {
                     if !starts_simple(n.kind) {
                         return Err(self.unexpected(n, None));
                     }
-                    items.push(self.parse_select()?);
+                    let e = self.parse_select()?;
+                    self.sc_ids.push(e);
                 }
+                let items = commit(&mut self.ast.ids, &mut self.sc_ids, mark);
                 Ok(self.add(Expr::List(items), t.start, self.last_end))
             }
             _ => Err(self.unexpected(t, None)),
@@ -708,32 +804,39 @@ impl<'a> Parser<'a> {
     }
 
     /// Body of a `"..."` string; the opening quote is already consumed.
-    fn parse_string_parts(&mut self) -> R<Vec<StrPart>> {
+    /// Literal chunks are decoded straight into the bytes table.
+    fn parse_string_parts(&mut self) -> R<Range> {
         debug_assert!(self.tok.is_none() && self.next.is_none());
-        let mut parts = Vec::new();
+        let mark = self.sc_parts.len();
         loop {
-            let mut buf = Vec::new();
-            match self.lx.lex_str_chunk(&mut buf)? {
+            let start = self.ast.bytes.len();
+            let end = self.lx.lex_str_chunk(&mut self.ast.bytes)?;
+            let lit = StrPart::Lit(Range {
+                start: start as u32,
+                len: (self.ast.bytes.len() - start) as u32,
+            });
+            let empty = self.ast.bytes.len() == start;
+            match end {
                 StrEnd::Close => {
-                    if !buf.is_empty() || parts.is_empty() {
-                        parts.push(StrPart::Lit(buf));
+                    if !empty || self.sc_parts.len() == mark {
+                        self.sc_parts.push(lit);
                     }
                     self.last_end = self.lx.pos() as u32;
-                    return Ok(parts);
+                    return Ok(commit(&mut self.ast.parts, &mut self.sc_parts, mark));
                 }
                 StrEnd::Interp => {
-                    if !buf.is_empty() {
-                        parts.push(StrPart::Lit(buf));
+                    if !empty {
+                        self.sc_parts.push(lit);
                     }
                     let e = self.parse_expr()?;
                     self.expect(Tok::RBrace, "expecting '}'")?;
-                    parts.push(StrPart::Interp(e));
+                    self.sc_parts.push(StrPart::Interp(e));
                 }
             }
         }
     }
 
-    fn parse_ind_string(&mut self) -> R<Vec<StrPart>> {
+    fn parse_ind_string(&mut self) -> R<Range> {
         debug_assert!(self.tok.is_none() && self.next.is_none());
         let mut parts = Vec::new();
         let mut interps = Vec::new();
@@ -749,7 +852,15 @@ impl<'a> Parser<'a> {
             }
         }
         self.last_end = self.lx.pos() as u32;
-        Ok(strip_indentation(self.src, &parts, &interps))
+        let mark = self.sc_parts.len();
+        strip_indentation(
+            self.src,
+            &parts,
+            &interps,
+            &mut self.ast.bytes,
+            &mut self.sc_parts,
+        );
+        Ok(commit(&mut self.ast.parts, &mut self.sc_parts, mark))
     }
 
     fn parse_path(&mut self, t: Token) -> R<ExprId> {
@@ -759,7 +870,9 @@ impl<'a> Parser<'a> {
             _ if text[0] == b'/' => (PathKind::Absolute, text),
             _ => (PathKind::Relative, text),
         };
-        let mut parts = vec![StrPart::Lit(first.to_vec())];
+        let mark = self.sc_parts.len();
+        let p = self.lit(first);
+        self.sc_parts.push(p);
         let mut after_slash = *text.last().unwrap() == b'/';
         loop {
             match self.lx.lex_path_part(after_slash)? {
@@ -767,31 +880,44 @@ impl<'a> Parser<'a> {
                 PathPart::Str(s, e) => {
                     let bytes = &self.src[s as usize..e as usize];
                     after_slash = bytes[bytes.len() - 1] == b'/';
-                    match parts.last_mut() {
-                        Some(StrPart::Lit(l)) => l.extend_from_slice(bytes),
-                        _ => parts.push(StrPart::Lit(bytes.to_vec())),
+                    // Consecutive literal pieces sit at the end of the
+                    // bytes table (no interpolation was parsed between
+                    // them), so the last part just grows.
+                    match self.sc_parts.last_mut() {
+                        Some(StrPart::Lit(l))
+                            if (l.start + l.len) as usize == self.ast.bytes.len() =>
+                        {
+                            self.ast.bytes.extend_from_slice(bytes);
+                            l.len += bytes.len() as u32;
+                        }
+                        _ => {
+                            let p = self.lit(bytes);
+                            self.sc_parts.push(p);
+                        }
                     }
                     self.last_end = e;
                 }
                 PathPart::Interp => {
                     let e = self.parse_expr()?;
                     self.expect(Tok::RBrace, "expecting '}'")?;
-                    parts.push(StrPart::Interp(e));
+                    self.sc_parts.push(StrPart::Interp(e));
                     after_slash = false;
                 }
             }
         }
+        let parts = commit(&mut self.ast.parts, &mut self.sc_parts, mark);
         Ok(self.add(Expr::Path(PathExpr { kind, parts }), t.start, self.last_end))
     }
 
-    fn parse_attrpath(&mut self) -> R<Vec<AttrElem>> {
-        let mut path = Vec::with_capacity(1);
+    fn parse_attrpath(&mut self) -> R<Range> {
+        let mark = self.sc_elems.len();
         loop {
-            path.push(self.parse_attr_elem()?);
+            let e = self.parse_attr_elem()?;
+            self.sc_elems.push(e);
             if self.peek().kind == Tok::Dot {
                 self.bump();
             } else {
-                return Ok(path);
+                return Ok(commit(&mut self.ast.elems, &mut self.sc_elems, mark));
             }
         }
     }
@@ -822,10 +948,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn str_to_attr_elem(&mut self, parts: Vec<StrPart>, start: u32) -> AttrElem {
-        match parts.as_slice() {
+    fn str_to_attr_elem(&mut self, parts: Range, start: u32) -> AttrElem {
+        match self.ast.parts(parts) {
             [] => AttrElem::Static(self.interner.intern(b"")),
-            [StrPart::Lit(l)] => AttrElem::Static(self.interner.intern(l)),
+            [StrPart::Lit(l)] => AttrElem::Static(self.interner.intern(self.ast.bytes(*l))),
             _ => {
                 let e = self.add(Expr::Str(parts), start, self.last_end);
                 AttrElem::Dynamic(e)
@@ -835,12 +961,11 @@ impl<'a> Parser<'a> {
 
     /// `${"literal"}` counts as a static attribute, like in Nix.
     fn expr_to_attr_elem(&mut self, e: ExprId) -> AttrElem {
-        if let Expr::Str(parts) = &self.exprs[e.0 as usize] {
-            match parts.as_slice() {
+        if let Expr::Str(parts) = self.ast.exprs[e.0 as usize] {
+            match self.ast.parts(parts) {
                 [] => return AttrElem::Static(self.interner.intern(b"")),
                 [StrPart::Lit(l)] => {
-                    let l = l.clone();
-                    return AttrElem::Static(self.interner.intern(&l));
+                    return AttrElem::Static(self.interner.intern(self.ast.bytes(*l)));
                 }
                 _ => {}
             }
@@ -848,8 +973,8 @@ impl<'a> Parser<'a> {
         AttrElem::Dynamic(e)
     }
 
-    fn parse_binds(&mut self, closer: Tok) -> R<Vec<Bind>> {
-        let mut binds = Vec::new();
+    fn parse_binds(&mut self, closer: Tok) -> R<Range> {
+        let mark = self.sc_binds.len();
         loop {
             let t = self.peek();
             if t.kind == closer {
@@ -863,30 +988,33 @@ impl<'a> Parser<'a> {
                     from = Some(self.parse_expr()?);
                     self.expect(Tok::RParen, "expecting ')'")?;
                 }
-                let mut names = Vec::new();
+                let nmark = self.sc_names.len();
                 loop {
                     let n = self.peek();
                     match n.kind {
                         Tok::Id => {
                             self.bump();
-                            names.push((self.interner.intern(self.text(n)), n.span()));
+                            let s = self.interner.intern(self.text(n));
+                            self.sc_names.push((s, n.span()));
                         }
                         Tok::Or => {
                             self.bump();
-                            names.push((self.sym_or, n.span()));
+                            self.sc_names.push((self.sym_or, n.span()));
                         }
                         Tok::DQuote => {
                             self.bump();
                             let parts = self.parse_string_parts()?;
                             let elem = self.str_to_attr_elem(parts, n.start);
-                            names.push((self.static_inherit_name(elem, n)?, n.span()));
+                            let s = self.static_inherit_name(elem, n)?;
+                            self.sc_names.push((s, n.span()));
                         }
                         Tok::DollarCurly => {
                             self.bump();
                             let e = self.parse_expr()?;
                             self.expect(Tok::RBrace, "expecting '}'")?;
                             let elem = self.expr_to_attr_elem(e);
-                            names.push((self.static_inherit_name(elem, n)?, n.span()));
+                            let s = self.static_inherit_name(elem, n)?;
+                            self.sc_names.push((s, n.span()));
                         }
                         Tok::Semi => {
                             self.bump();
@@ -895,7 +1023,8 @@ impl<'a> Parser<'a> {
                         _ => return Err(self.unexpected(n, None)),
                     }
                 }
-                binds.push(Bind {
+                let names = commit(&mut self.ast.names, &mut self.sc_names, nmark);
+                self.sc_binds.push(Bind {
                     span: Span {
                         start: t.start,
                         end: self.last_end,
@@ -908,7 +1037,7 @@ impl<'a> Parser<'a> {
             self.expect(Tok::Assign, "expecting '.' or '='")?;
             let value = self.parse_expr()?;
             self.expect(Tok::Semi, "expecting ';'")?;
-            binds.push(Bind {
+            self.sc_binds.push(Bind {
                 span: Span {
                     start: t.start,
                     end: self.last_end,
@@ -916,7 +1045,8 @@ impl<'a> Parser<'a> {
                 kind: BindKind::Value { path, value },
             });
         }
-        check_dup_attrs(self.src, &self.exprs, self.interner, &binds)?;
+        let binds = commit(&mut self.ast.binds, &mut self.sc_binds, mark);
+        check_dup_attrs(self.src, &self.ast, self.interner, binds)?;
         Ok(binds)
     }
 
@@ -942,9 +1072,21 @@ fn parse_int(text: &[u8]) -> Option<i64> {
 
 /// Port of `ParserState::stripIndentation` from Nix. Token boundaries
 /// matter: only the last token loses a trailing whitespace-only line.
-fn strip_indentation(src: &[u8], parts: &[IndPart], interps: &[ExprId]) -> Vec<StrPart> {
+/// Output text goes to `bytes`, the parts to `out`.
+fn strip_indentation(
+    src: &[u8],
+    parts: &[IndPart],
+    interps: &[ExprId],
+    bytes: &mut Vec<u8>,
+    out: &mut Vec<StrPart>,
+) {
+    let out_mark = out.len();
     if parts.is_empty() {
-        return vec![StrPart::Lit(Vec::new())];
+        out.push(StrPart::Lit(Range {
+            start: bytes.len() as u32,
+            len: 0,
+        }));
+        return;
     }
     let mut at_start = true;
     let mut min_indent = usize::MAX;
@@ -977,19 +1119,23 @@ fn strip_indentation(src: &[u8], parts: &[IndPart], interps: &[ExprId]) -> Vec<S
         }
     }
 
-    let mut out: Vec<StrPart> = Vec::new();
-    let mut pending: Vec<u8> = Vec::new();
+    // `pending` is bytes[pending_start..]: the literal run being built.
+    let mut pending_start = bytes.len();
     let mut interp_i = 0;
     at_start = true;
     let mut cur_dropped = 0usize;
     for (idx, p) in parts.iter().enumerate() {
         let last = idx + 1 == parts.len();
-        let bytes: &[u8] = match p {
+        let text: &[u8] = match p {
             IndPart::Interp => {
                 at_start = false;
                 cur_dropped = 0;
-                if !pending.is_empty() {
-                    out.push(StrPart::Lit(std::mem::take(&mut pending)));
+                if bytes.len() > pending_start {
+                    out.push(StrPart::Lit(Range {
+                        start: pending_start as u32,
+                        len: (bytes.len() - pending_start) as u32,
+                    }));
+                    pending_start = bytes.len();
                 }
                 out.push(StrPart::Interp(interps[interp_i]));
                 interp_i += 1;
@@ -999,39 +1145,38 @@ fn strip_indentation(src: &[u8], parts: &[IndPart], interps: &[ExprId]) -> Vec<S
             IndPart::Lit(a, b, n) => {
                 let tmp: [u8; 2] = [*a, *b];
                 let n = *n as usize;
-                let before = pending.len();
+                let before = bytes.len();
                 trim_into(
-                    &mut pending,
+                    bytes,
                     &tmp[..n],
                     min_indent,
                     &mut at_start,
                     &mut cur_dropped,
                 );
                 if last {
-                    drop_trailing_blank_line(&mut pending, before);
+                    drop_trailing_blank_line(bytes, before);
                 }
                 continue;
             }
         };
-        let before = pending.len();
-        trim_into(
-            &mut pending,
-            bytes,
-            min_indent,
-            &mut at_start,
-            &mut cur_dropped,
-        );
+        let before = bytes.len();
+        trim_into(bytes, text, min_indent, &mut at_start, &mut cur_dropped);
         if last {
-            drop_trailing_blank_line(&mut pending, before);
+            drop_trailing_blank_line(bytes, before);
         }
     }
-    if !pending.is_empty() {
-        out.push(StrPart::Lit(pending));
+    if bytes.len() > pending_start {
+        out.push(StrPart::Lit(Range {
+            start: pending_start as u32,
+            len: (bytes.len() - pending_start) as u32,
+        }));
     }
-    if out.is_empty() {
-        out.push(StrPart::Lit(Vec::new()));
+    if out.len() == out_mark {
+        out.push(StrPart::Lit(Range {
+            start: bytes.len() as u32,
+            len: 0,
+        }));
     }
-    out
 }
 
 fn trim_into(
@@ -1126,20 +1271,20 @@ impl SymMap {
 
 struct DupCx<'a> {
     src: &'a [u8],
-    exprs: &'a [Expr],
+    ast: &'a Ast,
     interner: &'a Interner,
 }
 
-impl DupCx<'_> {
-    fn binds_of(&self, e: ExprId) -> &[Bind] {
-        match &self.exprs[e.0 as usize] {
-            Expr::Attrs { binds, .. } => binds,
+impl<'a> DupCx<'a> {
+    fn binds_of(&self, e: ExprId) -> &'a [Bind] {
+        match self.ast.expr(e) {
+            Expr::Attrs { binds, .. } => self.ast.binds(*binds),
             _ => unreachable!("Lazy node always holds an Attrs expr"),
         }
     }
 
     fn is_attrs(&self, e: ExprId) -> bool {
-        matches!(self.exprs[e.0 as usize], Expr::Attrs { .. })
+        matches!(self.ast.expr(e), Expr::Attrs { .. })
     }
 
     fn dup(&self, prefix: &[Sym], pos: u32, prev: u32) -> ParseError {
@@ -1170,12 +1315,12 @@ impl DupCx<'_> {
     fn add_binds(&self, map: &mut SymMap, binds: &[Bind], prefix: &mut Vec<Sym>) -> R<()> {
         let depth = prefix.len();
         for b in binds {
-            match &b.kind {
+            match b.kind {
                 BindKind::Value { path, value } => {
-                    self.add_path(map, path, *value, b.span.start, prefix)?;
+                    self.add_path(map, self.ast.elems(path), value, b.span.start, prefix)?;
                 }
                 BindKind::Inherit { names, .. } => {
-                    for (s, sp) in names {
+                    for (s, sp) in self.ast.names(names) {
                         self.add_leaf(map, *s, None, sp.start, prefix)?;
                         prefix.truncate(depth);
                     }
@@ -1265,20 +1410,17 @@ impl DupCx<'_> {
     }
 }
 
-fn check_dup_attrs(src: &[u8], exprs: &[Expr], interner: &Interner, binds: &[Bind]) -> R<()> {
+fn check_dup_attrs(src: &[u8], ast: &Ast, interner: &Interner, binds: Range) -> R<()> {
+    let binds = ast.binds(binds);
     let needs_check = match binds {
         [] => false,
-        [b] => matches!(&b.kind, BindKind::Inherit { names, .. } if names.len() > 1),
+        [b] => matches!(b.kind, BindKind::Inherit { names, .. } if names.len() > 1),
         _ => true,
     };
     if !needs_check {
         return Ok(());
     }
-    let cx = DupCx {
-        src,
-        exprs,
-        interner,
-    };
+    let cx = DupCx { src, ast, interner };
     let mut map = SymMap::default();
     let mut prefix = Vec::new();
     cx.add_binds(&mut map, binds, &mut prefix)

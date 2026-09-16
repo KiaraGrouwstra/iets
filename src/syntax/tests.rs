@@ -330,9 +330,9 @@ fn literal_value(ast: &super::ast::Ast, id: super::ast::ExprId) -> Option<Vec<u8
         return None;
     };
     let mut out = Vec::new();
-    for p in parts {
+    for p in ast.parts(*parts) {
         match p {
-            StrPart::Lit(l) => out.extend_from_slice(l),
+            StrPart::Lit(l) => out.extend_from_slice(ast.bytes(*l)),
             StrPart::Interp(e) => out.extend_from_slice(&literal_value(ast, *e)?),
         }
     }

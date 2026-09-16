@@ -39,7 +39,7 @@ impl Dumper<'_> {
         for p in parts {
             out.push(' ');
             match p {
-                StrPart::Lit(l) => quote(l, out),
+                StrPart::Lit(l) => quote(self.ast.bytes(*l), out),
                 StrPart::Interp(e) => {
                     out.push_str("(interp ");
                     self.expr(*e, out);
@@ -73,7 +73,7 @@ impl Dumper<'_> {
             match &b.kind {
                 BindKind::Value { path, value } => {
                     out.push_str("(= ");
-                    self.attrpath(path, out);
+                    self.attrpath(self.ast.elems(*path), out);
                     out.push(' ');
                     self.expr(*value, out);
                     out.push(')');
@@ -85,7 +85,7 @@ impl Dumper<'_> {
                         self.expr(*f, out);
                         out.push(')');
                     }
-                    for (s, _) in names {
+                    for (s, _) in self.ast.names(*names) {
                         out.push(' ');
                         self.sym(*s, out);
                     }
@@ -101,7 +101,7 @@ impl Dumper<'_> {
             Expr::Float(f) => out.push_str(&format!("{f:?}")),
             Expr::Str(parts) => {
                 out.push_str("(str");
-                self.parts(parts, out);
+                self.parts(self.ast.parts(*parts), out);
                 out.push(')');
             }
             Expr::Path(p) => {
@@ -111,7 +111,7 @@ impl Dumper<'_> {
                     PathKind::Home => "(path home",
                     PathKind::Search => "(path search",
                 });
-                self.parts(&p.parts, out);
+                self.parts(self.ast.parts(p.parts), out);
                 out.push(')');
             }
             Expr::Var(s) => self.sym(*s, out),
@@ -123,7 +123,7 @@ impl Dumper<'_> {
                 out.push_str("(select ");
                 self.expr(*subject, out);
                 out.push(' ');
-                self.attrpath(path, out);
+                self.attrpath(self.ast.elems(*path), out);
                 if let Some(d) = default {
                     out.push_str(" (or ");
                     self.expr(*d, out);
@@ -135,17 +135,17 @@ impl Dumper<'_> {
                 out.push_str("(? ");
                 self.expr(*subject, out);
                 out.push(' ');
-                self.attrpath(path, out);
+                self.attrpath(self.ast.elems(*path), out);
                 out.push(')');
             }
             Expr::Attrs { rec, binds } => {
                 out.push_str(if *rec { "(rec-attrs" } else { "(attrs" });
-                self.binds(binds, out);
+                self.binds(self.ast.binds(*binds), out);
                 out.push(')');
             }
             Expr::List(items) => {
                 out.push_str("(list");
-                for i in items {
+                for i in self.ast.ids(*items) {
                     out.push(' ');
                     self.expr(*i, out);
                 }
@@ -160,6 +160,7 @@ impl Dumper<'_> {
                         formals,
                         ellipsis,
                     } => {
+                        let formals = self.ast.formals(*formals);
                         out.push('{');
                         for (i, f) in formals.iter().enumerate() {
                             if i > 0 {
@@ -191,7 +192,7 @@ impl Dumper<'_> {
             Expr::Apply { func, args } => {
                 out.push_str("(apply ");
                 self.expr(*func, out);
-                for a in args {
+                for a in self.ast.ids(*args) {
                     out.push(' ');
                     self.expr(*a, out);
                 }
@@ -199,7 +200,7 @@ impl Dumper<'_> {
             }
             Expr::Let { binds, body } => {
                 out.push_str("(let (");
-                self.binds(binds, out);
+                self.binds(self.ast.binds(*binds), out);
                 out.push_str(") ");
                 self.expr(*body, out);
                 out.push(')');

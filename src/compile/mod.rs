@@ -208,8 +208,8 @@ impl<'a> Compiler<'a> {
         Ok(match ast.expr(id) {
             Expr::Int(i) => Ir::Const(self.arena.mk_int(*i)),
             Expr::Float(f) => Ir::Const(self.arena.mk_float(*f)),
-            Expr::Str(parts) => self.string(parts, pos)?,
-            Expr::Path(p) => self.path(&p.kind, &p.parts, pos)?,
+            Expr::Str(parts) => self.string(ast.parts(*parts), pos)?,
+            Expr::Path(p) => self.path(p.kind, ast.parts(p.parts), pos)?,
             Expr::Var(sym) => {
                 let sym = *sym;
                 if sym == self.sym_cur_pos && self.lexical_lookup(sym).is_none() {
@@ -232,6 +232,7 @@ impl<'a> Compiler<'a> {
                 path,
                 default,
             } => {
+                let path = ast.elems(*path);
                 if let Some(folded) = self.fold_builtins_select(*subject, path, default.is_none()) {
                     return Ok(folded);
                 }
@@ -245,24 +246,26 @@ impl<'a> Compiler<'a> {
             }
             Expr::HasAttr { subject, path } => {
                 let subject = self.expr(*subject)?;
-                let path = self.attr_path(path)?;
+                let path = self.attr_path(ast.elems(*path))?;
                 Ir::HasAttr { subject, path }
             }
             Expr::Attrs { rec, binds } => {
-                let merged = self.merge_binds(*rec, binds, pos)?;
+                let merged = self.merge_binds(*rec, ast.binds(*binds), pos)?;
                 let a = self.lower_attrs(merged)?;
                 Ir::Attrs(a)
             }
             Expr::List(items) => {
+                let items = ast.ids(*items);
                 let mut v = Vec::with_capacity(items.len());
                 for i in items {
                     v.push(self.expr(*i)?);
                 }
                 Ir::List(self.alloc_refs(v))
             }
-            Expr::Lambda { param, body } => Ir::Lambda(self.lambda(param, *body, pos, None)?),
+            Expr::Lambda { param, body } => Ir::Lambda(self.lambda(*param, *body, pos, None)?),
             Expr::Apply { func, args } => {
                 let func = self.expr(*func)?;
+                let args = ast.ids(*args);
                 let mut v = Vec::with_capacity(args.len());
                 for a in args {
                     v.push(self.expr(*a)?);
@@ -274,7 +277,7 @@ impl<'a> Compiler<'a> {
                 }
             }
             Expr::Let { binds, body } => {
-                let merged = self.merge_binds(true, binds, pos)?;
+                let merged = self.merge_binds(true, ast.binds(*binds), pos)?;
                 if !merged.dynamics.is_empty() {
                     return err(
                         ErrorKind::Eval,
@@ -419,8 +422,9 @@ impl<'a> Compiler<'a> {
                 AttrElem::Static(s) => AttrElemIr::Static(*s),
                 AttrElem::Dynamic(id) => {
                     // A dynamic element that is a constant string is static.
-                    if let Expr::Str(parts) = self.ast.expr(*id)
-                        && let [StrPart::Lit(lit)] = parts.as_slice()
+                    let ast: &'a Ast = self.ast;
+                    if let Expr::Str(parts) = ast.expr(*id)
+                        && let Some(lit) = ast.single_lit(*parts)
                     {
                         AttrElemIr::Static(self.interner.intern(lit))
                     } else {
@@ -507,11 +511,15 @@ impl<'a> Compiler<'a> {
     }
 
     fn string(&mut self, parts: &[StrPart], pos: Pos) -> CResult<Ir> {
+        let ast: &'a Ast = self.ast;
+        if let [StrPart::Lit(l)] = parts {
+            return Ok(Ir::Const(self.arena.mk_string(ast.bytes(*l))));
+        }
         if parts.iter().all(|p| matches!(p, StrPart::Lit(_))) {
             let mut bytes = Vec::new();
             for p in parts {
                 if let StrPart::Lit(l) = p {
-                    bytes.extend_from_slice(l);
+                    bytes.extend_from_slice(ast.bytes(*l));
                 }
             }
             return Ok(Ir::Const(self.arena.mk_string(&bytes)));
@@ -520,7 +528,7 @@ impl<'a> Compiler<'a> {
         for p in parts {
             v.push(match p {
                 StrPart::Lit(l) => {
-                    let w = self.arena.mk_string(l);
+                    let w = self.arena.mk_string(ast.bytes(*l));
                     self.alloc(Ir::Const(w))
                 }
                 StrPart::Interp(e) => self.expr(*e)?,
@@ -591,7 +599,9 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn path(&mut self, kind: &PathKind, parts: &[StrPart], pos: Pos) -> CResult<Ir> {
+    fn path(&mut self, kind: PathKind, parts: &[StrPart], pos: Pos) -> CResult<Ir> {
+        let ast: &'a Ast = self.ast;
+        let kind = &kind;
         if *kind == PathKind::Search {
             let name = self.string(parts, pos)?;
             let name = self.alloc(name);
@@ -615,7 +625,7 @@ impl<'a> Compiler<'a> {
         }
         let all_lit = parts.iter().all(|p| matches!(p, StrPart::Lit(_)));
         let first_lit: Vec<u8> = match parts.first() {
-            Some(StrPart::Lit(l)) => l.clone(),
+            Some(StrPart::Lit(l)) => ast.bytes(*l).to_vec(),
             _ => Vec::new(),
         };
         self.lint_path_literal(kind, &first_lit, pos)?;
@@ -638,7 +648,7 @@ impl<'a> Compiler<'a> {
         for p in rest {
             v.push(match p {
                 StrPart::Lit(l) => {
-                    let w = self.arena.mk_string(l);
+                    let w = self.arena.mk_string(ast.bytes(*l));
                     self.alloc(Ir::Const(w))
                 }
                 StrPart::Interp(e) => self.expr(*e)?,
@@ -666,11 +676,14 @@ impl<'a> Compiler<'a> {
     }
 
     fn add_bind(&mut self, m: &mut Merged, b: &Bind) -> CResult<()> {
+        let ast: &'a Ast = self.ast;
         let pos = self.bind_pos(b);
         match &b.kind {
-            BindKind::Value { path, value } => self.add_path(m, path, Def::Expr(*value), pos),
+            BindKind::Value { path, value } => {
+                self.add_path(m, ast.elems(*path), Def::Expr(*value), pos)
+            }
             BindKind::Inherit { from: None, names } => {
-                for (name, span) in names {
+                for (name, span) in ast.names(*names) {
                     let p = Pos(self.base + span.start);
                     self.add_static(m, *name, Def::Inherit(*name), p)?;
                 }
@@ -682,7 +695,7 @@ impl<'a> Compiler<'a> {
             } => {
                 let idx = m.from_exprs.len();
                 m.from_exprs.push(*e);
-                for (name, span) in names {
+                for (name, span) in ast.names(*names) {
                     let p = Pos(self.base + span.start);
                     self.add_static(m, *name, Def::InheritFrom(idx, *name), p)?;
                 }
@@ -749,7 +762,7 @@ impl<'a> Compiler<'a> {
             AttrElem::Static(s) => Some(*s),
             AttrElem::Dynamic(id) => {
                 if let Expr::Str(parts) = ast.expr(*id)
-                    && let [StrPart::Lit(lit)] = parts.as_slice()
+                    && let Some(lit) = ast.single_lit(*parts)
                 {
                     Some(self.interner.intern(lit))
                 } else {
@@ -767,7 +780,7 @@ impl<'a> Compiler<'a> {
             Def::Expr(e) => {
                 let ast: &'a Ast = self.ast;
                 if let Expr::Attrs { rec, binds } = ast.expr(*e) {
-                    let nested = self.merge_binds(*rec, binds, self.pos(*e))?;
+                    let nested = self.merge_binds(*rec, ast.binds(*binds), self.pos(*e))?;
                     m.statics[idx].1 = Def::Nested(Box::new(nested));
                     Ok(())
                 } else {
@@ -795,7 +808,7 @@ impl<'a> Compiler<'a> {
             let ast: &'a Ast = self.ast;
             let new_binds: Option<&'a [Bind]> = match &def {
                 Def::Expr(e) => match ast.expr(*e) {
-                    Expr::Attrs { binds, .. } => Some(binds),
+                    Expr::Attrs { binds, .. } => Some(ast.binds(*binds)),
                     _ => None,
                 },
                 Def::Nested(_) => Some(&[]),
@@ -1055,7 +1068,7 @@ impl<'a> Compiler<'a> {
         let ast: &'a Ast = self.ast;
         if let Expr::Lambda { param, body } = ast.expr(e) {
             let pos = self.pos(e);
-            let l = self.lambda(param, *body, pos, name)?;
+            let l = self.lambda(*param, *body, pos, name)?;
             return Ok(self.alloc(Ir::Lambda(l)));
         }
         self.expr(e)
@@ -1063,16 +1076,17 @@ impl<'a> Compiler<'a> {
 
     fn lambda(
         &mut self,
-        param: &Param,
+        param: Param,
         body: ExprId,
         pos: Pos,
         name: Option<Sym>,
     ) -> CResult<&'static LambdaIr> {
         let _ = self.sym_body;
+        let ast: &'a Ast = self.ast;
         match param {
             Param::Ident(sym) => {
                 let mut m = FxHashMap::default();
-                m.insert(*sym, 0);
+                m.insert(sym, 0);
                 self.scopes.push(Scope::Lexical(m));
                 let body = self.expr(body)?;
                 self.scopes.pop();
@@ -1081,7 +1095,7 @@ impl<'a> Compiler<'a> {
                     body,
                     pos,
                     name,
-                    arg: Some(*sym),
+                    arg: Some(sym),
                 }))
             }
             Param::Formals {
@@ -1089,6 +1103,7 @@ impl<'a> Compiler<'a> {
                 formals,
                 ellipsis,
             } => {
+                let formals = ast.formals(formals);
                 let mut sorted: Vec<_> = formals.iter().collect();
                 sorted.sort_by_key(|f| f.name);
                 for w in sorted.windows(2) {
@@ -1106,7 +1121,7 @@ impl<'a> Compiler<'a> {
                 let mut m = FxHashMap::default();
                 let mut idx = 0u32;
                 if let Some(b) = bind {
-                    m.insert(*b, idx);
+                    m.insert(b, idx);
                     idx += 1;
                 }
                 for f in &sorted {
@@ -1142,12 +1157,12 @@ impl<'a> Compiler<'a> {
                     param: ParamIr::Formals {
                         has_bind: bind.is_some(),
                         formals,
-                        ellipsis: *ellipsis,
+                        ellipsis,
                     },
                     body,
                     pos,
                     name,
-                    arg: *bind,
+                    arg: bind,
                 }))
             }
         }
