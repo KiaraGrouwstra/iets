@@ -12,10 +12,16 @@ in memory, and prints results. It never writes to a store.
    with the pinned nixpkgs. Sequential speed first, parallel forcing second.
 3. Small, readable code. One crate, modules by phase.
 
+4. Phase B: the fastest possible client to a remote builder. Evaluate in
+   memory, ask the builder what it lacks, stream only that, wait for the
+   root. This replaces the Nix worker protocol; see
+   `docs/remote-builder-protocol.md`.
+
 ## Non-goals
 
-Store writes, builds, daemon protocol, flakes, fetchers that hit the network
-(they error), a REPL, a debugger, a bytecode VM.
+Local store writes, local builds, the Nix worker protocol as our transport,
+flakes, fetchers that hit the network (they error), a REPL, a debugger, a
+bytecode VM.
 
 ## Pipeline
 
