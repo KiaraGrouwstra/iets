@@ -99,9 +99,12 @@ fn concat_map(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
 `src/builtins/store_hooks.rs` connects the evaluator to the pure `store`
 module: `copy_path_to_store(ev, path, pos)` returns the virtual store path of
 a source path (NAR hash, `make_fixed_output_path`), cached in
-`ev.src_to_store`. `derivationStrict`, `toFile`, `path`, `filterSource`,
-`placeholder`, `storePath`, `getContext`, `appendContext` belong to the
-next wave and should build on `crate::store::{drv, path, context, hash}`.
+`ev.src_to_store`. `paths.rs` builds `toFile`, `path`, `filterSource` and
+`storePath` on `crate::store::{nar, path, hash}`; `derivationStrict` and
+`placeholder` should build on `crate::store::drv`. Reading a path whose
+context is a virtual store path (`readFile "${./x}"`) maps back to the
+source through `src_to_store`; a derivation output in context is an error,
+since nothing is ever built.
 
 ## Implemented
 
@@ -117,15 +120,16 @@ concatMap, genList, any, all, sort, partition.
 strings: stringLength, substring, concatStringsSep, splitVersion,
 compareVersions, parseDrvName, baseNameOf, dirOf.
 math: add, sub, mul, div, bitAnd, bitOr, bitXor, lessThan.
+paths: readFile, readDir, readFileType, pathExists, toPath, storePath,
+filterSource, path, toFile; fetchurl, fetchTarball, fetchGit, fetchTree,
+fetchMercurial, fetchClosure, getFlake, parseFlakeRef, flakeRefToString,
+outputOf exist but fail when called.
+context: getContext, appendContext, addDrvOutputDependencies.
 constants: true, false, null, builtins, currentSystem, nixVersion,
 langVersion, storeDir, nixPath, derivation (from corepkgs/derivation.nix).
 
 ## TODO (next wave)
 
 match, split, replaceStrings, fromJSON, toJSON, toXML, fromTOML, hashString,
-hashFile, convertHash, readFile, readDir, readFileType, pathExists,
-filterSource, path, toFile, derivationStrict, placeholder, outputOf,
-getEnv, getContext, appendContext, storePath, fetchurl, fetchTarball,
-fetchGit, fetchTree, fetchClosure (all fetchers: error), currentTime, floor,
-ceil, toPath, genericClosure, break, flakeRefToString, parseFlakeRef,
-getFlake, ... anything else in primops.cc.
+hashFile, convertHash, derivationStrict, placeholder, getEnv, currentTime,
+floor, ceil, genericClosure, break, ... anything else in primops.cc.

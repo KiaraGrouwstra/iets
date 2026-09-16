@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 
@@ -221,6 +221,8 @@ fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>> {
     Ok(p)
 }
 
+/// Reads `st_size` bytes like `PosixSourceAccessor::readFile`, so a procfs
+/// file reads as empty.
 fn read_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let p = realise_path(ev, args[0], pos)?;
     let meta = fs::metadata(os_path(&p)).map_err(|e| io_error(e, "getting status of", &p, pos))?;
@@ -232,7 +234,10 @@ fn read_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
             lossy(&p)
         );
     }
-    let bytes = fs::read(os_path(&p)).map_err(|e| io_error(e, "reading file", &p, pos))?;
+    let mut bytes = Vec::with_capacity(meta.len() as usize);
+    fs::File::open(os_path(&p))
+        .and_then(|f| io::Read::take(f, meta.len()).read_to_end(&mut bytes))
+        .map_err(|e| io_error(e, "reading file", &p, pos))?;
     if bytes.contains(&0) {
         bail!(
             ErrorKind::Eval,
