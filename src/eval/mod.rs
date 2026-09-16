@@ -101,6 +101,8 @@ pub struct Evaluator {
     pub nr_thunks: u64,
     pub nr_function_calls: u64,
     pub t_compile: std::time::Duration,
+    /// One shared context-free string per symbol, made on first use.
+    sym_strings: Vec<Word>,
     /// Source path -> virtual store path, like Nix's `srcToStore`.
     pub src_to_store: HashMap<Vec<u8>, &'static [u8]>,
     pub compile_settings: crate::compile::CompileSettings,
@@ -160,6 +162,7 @@ impl Evaluator {
             nr_thunks: 0,
             nr_function_calls: 0,
             t_compile: std::time::Duration::ZERO,
+            sym_strings: Vec::new(),
             src_to_store: HashMap::new(),
             compile_settings: Default::default(),
             drv: Default::default(),
@@ -730,6 +733,22 @@ impl Evaluator {
 
     pub fn sym(&mut self, name: &[u8]) -> Sym {
         self.interner.intern(name)
+    }
+
+    /// The string value of a symbol's name. attrNames and mapAttrs hand
+    /// out the same object for the same name instead of copying it.
+    pub fn sym_string(&mut self, sym: Sym) -> Word {
+        let i = sym.0 as usize;
+        if i >= self.sym_strings.len() {
+            self.sym_strings.resize(self.interner.len(), Word::EMPTY);
+        }
+        let w = self.sym_strings[i];
+        if w != Word::EMPTY {
+            return w;
+        }
+        let w = self.arena.mk_string(self.interner.name(sym));
+        self.sym_strings[i] = w;
+        w
     }
 
     /// `{ file, line, column }` for `__curPos` and `unsafeGetAttrPos`.
