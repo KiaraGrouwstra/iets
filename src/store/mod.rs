@@ -6,3 +6,4 @@ pub mod drv;
 pub mod hash;
 pub mod nar;
 pub mod path;
+pub mod source;

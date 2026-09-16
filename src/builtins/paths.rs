@@ -3,7 +3,7 @@
 //! and flake primops are registered so `builtins ? fetchTree` holds, but
 //! they fail when called: ietsp never touches the network or the store.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Read};
@@ -19,6 +19,7 @@ use crate::store::nar::{self, FileType};
 use crate::store::path::{
     IngestionMethod, STORE_DIR, StorePath, make_fixed_output_path, make_text_path,
 };
+use crate::store::source::SourceOrigin;
 
 pub fn register(r: &mut Registry) {
     r.op("__readFile", 1, read_file);
@@ -456,6 +457,7 @@ fn add_path_inner(
     }
     let resolved: PathBuf =
         fs::canonicalize(os_path(path)).unwrap_or_else(|_| os_path(path).to_path_buf());
+    let mut accepted: Option<HashSet<PathBuf>> = filter.map(|_| HashSet::new());
     let hash = match method {
         IngestionMethod::Flat => {
             let meta =
@@ -481,7 +483,12 @@ fn add_path_inner(
                     return false;
                 }
                 match call_filter(ev, filter, p, t, pos) {
-                    Ok(b) => b,
+                    Ok(b) => {
+                        if b && let Some(a) = &mut accepted {
+                            a.insert(p.to_path_buf());
+                        }
+                        b
+                    }
                     Err(e) => {
                         err = Some(e);
                         false
@@ -496,6 +503,15 @@ fn add_path_inner(
         }
     };
     let sp = make_fixed_output_path(method, &hash, name, &refs).map_err(store_err)?;
+    if method == IngestionMethod::Recursive {
+        ev.sources.insert(
+            sp.clone(),
+            SourceOrigin::Tree {
+                local: resolved,
+                accepted,
+            },
+        );
+    }
     if let Some(exp) = expected_sp
         && exp != sp
     {
@@ -668,5 +684,12 @@ fn to_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let h = hash_bytes(HashAlgo::Sha256, contents.bytes);
     let sp = make_text_path(utf8(name, pos)?, &h, &refs)
         .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, pos))?;
+    ev.sources.insert(
+        sp.clone(),
+        SourceOrigin::Text {
+            contents: contents.bytes.to_vec(),
+            references: refs,
+        },
+    );
     Ok(store_path_string(ev, &sp))
 }

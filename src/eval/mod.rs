@@ -98,6 +98,8 @@ pub struct Evaluator {
     pub nr_function_calls: u64,
     /// Source path -> virtual store path, like Nix's `srcToStore`.
     pub src_to_store: HashMap<Vec<u8>, &'static [u8]>,
+    /// Store path -> where its content lives, for every source this evaluation added.
+    pub sources: HashMap<crate::store::path::StorePath, crate::store::source::SourceOrigin>,
     pub compile_settings: crate::compile::CompileSettings,
     pub drv: crate::builtins::derivation::DrvState,
 }
@@ -154,6 +156,7 @@ impl Evaluator {
             nr_thunks: 0,
             nr_function_calls: 0,
             src_to_store: HashMap::new(),
+            sources: HashMap::new(),
             compile_settings: Default::default(),
             drv: Default::default(),
         };
@@ -176,6 +179,13 @@ impl Evaluator {
 
     pub fn file(&self, id: FileId) -> Option<&FileInfo> {
         self.files.get(id.0 as usize)
+    }
+
+    /// Every source this evaluation added to the (virtual) store and where its content is.
+    pub fn source_origins(
+        &self,
+    ) -> &HashMap<crate::store::path::StorePath, crate::store::source::SourceOrigin> {
+        &self.sources
     }
 
     pub fn describe_pos(&self, pos: Pos) -> String {

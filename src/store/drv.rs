@@ -388,10 +388,14 @@ impl Derivation {
     /// Mirrors derivations.cc:computeStorePath: the text path of the unparsed ATerm with
     /// references = inputSrcs + inputDrvs.
     pub fn drv_path(&self) -> Result<StorePath, DrvError> {
+        self.drv_path_for(&self.unparse()?)
+    }
+
+    /// `drv_path` for a caller that already holds `self.unparse()`, so the ATerm is built once.
+    pub fn drv_path_for(&self, aterm: &str) -> Result<StorePath, DrvError> {
         let mut references = self.input_srcs.clone();
         references.extend(self.input_drvs.keys().cloned());
-        let contents = self.unparse()?;
-        let hash = hash_bytes(HashAlgo::Sha256, contents.as_bytes());
+        let hash = hash_bytes(HashAlgo::Sha256, aterm.as_bytes());
         Ok(make_text_path(
             &format!("{}{DRV_EXTENSION}", self.name),
             &hash,

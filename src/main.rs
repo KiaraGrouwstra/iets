@@ -11,7 +11,7 @@ const STACK_SIZE: usize = 4 << 30;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: ietsp eval [--strict] [--json] [-I prefix=path]... [--arg name expr] [--argstr name str] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp build [--builder URL] [--timings] [--out NAME]... [--source STOREPATH=LOCAL]... DRV"
+        "usage: ietsp eval [--strict] [--json] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp build [--builder URL] [--timings] [--out NAME]... [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--out NAME]... [--source STOREPATH=LOCAL]... DRV"
     );
     exit(2)
 }
@@ -66,6 +66,7 @@ struct EvalArgs {
     args: Vec<(String, ArgKind)>,
     input: Option<Input>,
     dump_drvs: Option<String>,
+    attr: Option<String>,
     lint_absolute: ietsp::compile::Lint,
     lint_short: ietsp::compile::Lint,
     xp_features: Vec<String>,
@@ -107,6 +108,7 @@ fn parse_eval_args(argv: &[String]) -> EvalArgs {
         args: Vec::new(),
         input: None,
         dump_drvs: None,
+        attr: None,
         lint_absolute: ietsp::compile::Lint::Ignore,
         lint_short: ietsp::compile::Lint::Ignore,
         xp_features: Vec::new(),
@@ -138,6 +140,10 @@ fn parse_eval_args(argv: &[String]) -> EvalArgs {
                     },
                 ));
                 i += 2;
+            }
+            "-A" | "--attr" => {
+                i += 1;
+                a.attr = Some(argv.get(i).unwrap_or_else(|| usage()).clone());
             }
             "--dump-drvs" => {
                 i += 1;
@@ -195,8 +201,8 @@ fn report(ev: &Evaluator, e: &Error) {
     }
 }
 
-fn run_eval(a: EvalArgs) -> i32 {
-    let mut ev = Evaluator::new();
+/// Applies the shared `eval` settings and evaluates the input, `--arg`s and `-A` included.
+fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
     ev.compile_settings.lint_absolute_path_literals = a.lint_absolute;
     ev.compile_settings.lint_short_path_literals = a.lint_short;
     if a.xp_features.iter().any(|f| f == "parse-toml-timestamps") {
@@ -208,12 +214,15 @@ fn run_eval(a: EvalArgs) -> i32 {
             includes.push(parse_include(entry));
         }
     }
-    ietsp::builtins::set_search_path(&mut ev, includes);
+    ietsp::builtins::set_search_path(ev, includes);
     if let Some(dir) = &a.dump_drvs {
-        if let Err(e) = std::fs::create_dir_all(dir) {
-            eprintln!("error: cannot create '{dir}': {e}");
-            return 1;
-        }
+        std::fs::create_dir_all(dir).map_err(|e| {
+            Error::boxed(
+                ietsp::eval::ErrorKind::Io,
+                format!("cannot create '{dir}': {e}"),
+                Pos::NONE,
+            )
+        })?;
         ev.drv.dump_dir = Some(std::path::PathBuf::from(dir));
     }
 
@@ -221,45 +230,64 @@ fn run_eval(a: EvalArgs) -> i32 {
         .map(|p| p.into_os_string().into_encoded_bytes())
         .unwrap_or_else(|_| b"/".to_vec());
 
-    let result = (|| -> Result<Word, Box<Error>> {
-        let mut v = match a.input {
-            Some(Input::Expr(e)) => ev.eval_string(&e, &cwd)?,
-            Some(Input::File(f)) => {
-                let mut p = f.as_bytes().to_vec();
-                if !p.starts_with(b"/") {
-                    let mut full = cwd.clone();
-                    full.push(b'/');
-                    full.extend_from_slice(&p);
-                    p = ietsp::compile::canon_path(&full);
-                }
-                ev.eval_file(&p, Pos::NONE)?
+    let mut v = match a.input {
+        Some(Input::Expr(e)) => ev.eval_string(&e, &cwd)?,
+        Some(Input::File(f)) => {
+            let mut p = f.as_bytes().to_vec();
+            if !p.starts_with(b"/") {
+                let mut full = cwd.clone();
+                full.push(b'/');
+                full.extend_from_slice(&p);
+                p = ietsp::compile::canon_path(&full);
             }
-            None => usage(),
-        };
-        if !a.args.is_empty() {
-            let mut entries = Vec::new();
-            for (name, kind) in &a.args {
-                let w = match kind {
-                    ArgKind::Expr(e) => {
-                        let ir = ev.compile_source(
-                            b"\xc2\xabarg\xc2\xbb",
-                            e.as_bytes().to_vec(),
-                            &cwd,
-                            None,
-                        )?;
-                        let root = ev.root_env;
-                        ev.arena.mk_thunk(root, ir)
-                    }
-                    ArgKind::Str(s) => ev.mk_string(s.as_bytes()),
-                };
-                let sym = ev.sym(name.as_bytes());
-                entries.push((sym, Pos::NONE, w));
-            }
-            let args = ev.mk_attrs(&mut entries, Pos::NONE)?;
-            v = ev.auto_call(v, args)?;
+            ev.eval_file(&p, Pos::NONE)?
         }
-        Ok(v)
-    })();
+        None => usage(),
+    };
+    if !a.args.is_empty() {
+        let mut entries = Vec::new();
+        for (name, kind) in &a.args {
+            let w = match kind {
+                ArgKind::Expr(e) => {
+                    let ir = ev.compile_source(
+                        b"\xc2\xabarg\xc2\xbb",
+                        e.as_bytes().to_vec(),
+                        &cwd,
+                        None,
+                    )?;
+                    let root = ev.root_env;
+                    ev.arena.mk_thunk(root, ir)
+                }
+                ArgKind::Str(s) => ev.mk_string(s.as_bytes()),
+            };
+            let sym = ev.sym(name.as_bytes());
+            entries.push((sym, Pos::NONE, w));
+        }
+        let args = ev.mk_attrs(&mut entries, Pos::NONE)?;
+        v = ev.auto_call(v, args)?;
+    }
+    if let Some(attr) = &a.attr {
+        for name in attr.split('.').filter(|n| !n.is_empty()) {
+            let attrs = ev.force_attrs(v, Pos::NONE, "while selecting an attribute")?;
+            let sym = ev.sym(name.as_bytes());
+            let Some(a) = attrs.get(sym) else {
+                return Err(Error::boxed(
+                    ietsp::eval::ErrorKind::MissingAttr,
+                    format!("attribute '{name}' in selection path '{attr}' not found"),
+                    Pos::NONE,
+                ));
+            };
+            v = a.cell.get();
+        }
+    }
+    Ok(v)
+}
+
+fn run_eval(a: EvalArgs) -> i32 {
+    let strict = a.strict;
+    let json = a.json;
+    let mut ev = Evaluator::new();
+    let result = evaluate(&mut ev, a);
 
     let v = match result {
         Ok(v) => v,
@@ -270,12 +298,12 @@ fn run_eval(a: EvalArgs) -> i32 {
     };
 
     let mut out: Vec<u8> = Vec::new();
-    let r = if a.json {
+    let r = if json {
         let mut ctx = Vec::new();
-        ietsp::print::print_json(&mut ev, v, &mut out, &mut ctx, a.strict, Pos::NONE)
+        ietsp::print::print_json(&mut ev, v, &mut out, &mut ctx, strict, Pos::NONE)
     } else {
         (|| {
-            let v = if a.strict {
+            let v = if strict {
                 ev.force_deep(v)?
             } else {
                 ev.force(v)?
@@ -306,7 +334,7 @@ fn locate_in_store(
     paths: &[ietsp::store::path::StorePath],
     overrides: &HashMap<String, std::path::PathBuf>,
 ) -> Result<Vec<ietsp::remote::plan::SourceInfo>, String> {
-    use ietsp::remote::plan::{SourceInfo, SourceKind};
+    use ietsp::remote::plan::{SourceData, SourceInfo, SourceKind};
     use ietsp::store::path::{STORE_DIR, StorePath};
 
     let ask: Vec<String> = paths
@@ -337,10 +365,7 @@ fn locate_in_store(
         .map(|p| {
             let full = p.to_string();
             if let Some(local) = overrides.get(&full) {
-                return Ok(SourceInfo {
-                    local: local.clone(),
-                    kind: SourceKind::Source,
-                });
+                return Ok(SourceInfo::tree(local.clone()));
             }
             let v = info
                 .get(&full)
@@ -363,54 +388,170 @@ fn locate_in_store(
                 ));
             };
             Ok(SourceInfo {
-                local: std::path::PathBuf::from(format!("{STORE_DIR}/{}", p.base_name())),
+                data: SourceData::Local {
+                    path: std::path::PathBuf::from(format!("{STORE_DIR}/{}", p.base_name())),
+                    accepted: None,
+                },
                 kind,
             })
         })
         .collect()
 }
 
-/// `ietsp build [--builder URL] [--timings] [--out NAME]... DRV`: the root is a `.drv` store
-/// path on disk until eval hands over in-memory derivations.
+/// The derivations a build result names: an attrset with `drvPath`, a string with derivation
+/// context, or a list of those. `!out!drv` context also names the wanted output.
+fn drv_roots(
+    ev: &mut Evaluator,
+    v: Word,
+    roots: &mut Vec<(ietsp::store::path::StorePath, Option<String>)>,
+) -> Result<(), Box<Error>> {
+    use ietsp::runtime::Ctx;
+    use ietsp::store::path::StorePath;
+    let bad = |msg: String| Error::boxed(ietsp::eval::ErrorKind::Eval, msg, Pos::NONE);
+    let parse = |p: &[u8]| {
+        StorePath::parse(&String::from_utf8_lossy(p))
+            .map_err(|e| Error::boxed(ietsp::eval::ErrorKind::Eval, e.0, Pos::NONE))
+    };
+    let v = ev.force(v)?;
+    if let Some(attrs) = v.as_attrs() {
+        let Some(a) = attrs.get(ev.s.drv_path) else {
+            return Err(bad(
+                "expression evaluated to an attrset without 'drvPath'".into()
+            ));
+        };
+        let s = ev.force_string(a.cell.get(), Pos::NONE, "while evaluating 'drvPath'")?;
+        let p = parse(s.bytes)?;
+        if !p.is_derivation() {
+            return Err(bad(format!("'{p}' is not a derivation path")));
+        }
+        roots.push((p, None));
+        return Ok(());
+    }
+    if let Some(s) = v.as_string() {
+        let mut found = false;
+        for c in s.ctx {
+            match c {
+                Ctx::Built { drv, output } => {
+                    let out = String::from_utf8_lossy(output).into_owned();
+                    roots.push((parse(drv)?, Some(out)));
+                    found = true;
+                }
+                Ctx::DrvDeep(drv) => {
+                    roots.push((parse(drv)?, None));
+                    found = true;
+                }
+                Ctx::Opaque(_) => {}
+            }
+        }
+        if !found {
+            return Err(bad(format!(
+                "string '{}' has no derivation in its context",
+                String::from_utf8_lossy(s.bytes)
+            )));
+        }
+        return Ok(());
+    }
+    if let Some(l) = v.as_list() {
+        for c in l.cells() {
+            drv_roots(ev, c.get(), roots)?;
+        }
+        return Ok(());
+    }
+    Err(bad(
+        "expression must evaluate to a derivation, a string with derivation context, or a list of those".into(),
+    ))
+}
+
+struct BuildArgs {
+    url: String,
+    timings: bool,
+    outputs: Vec<String>,
+    sources: HashMap<String, std::path::PathBuf>,
+}
+
+/// `ietsp build`: evaluate to derivations and ship their closure from memory, or (legacy)
+/// take a `.drv` path and read its closure from `/nix/store`.
 fn cmd_build(argv: &[String]) -> i32 {
-    use ietsp::remote::proto::build_event::Event;
-    use ietsp::store::drv::{Derivation, load_derivation_from_store};
     use ietsp::store::path::StorePath;
 
-    let mut url = "http://127.0.0.1:9455".to_string();
-    let mut timings = false;
-    let mut outputs = Vec::new();
-    let mut sources: HashMap<String, std::path::PathBuf> = HashMap::new();
-    let mut root = None;
+    let mut b = BuildArgs {
+        url: "http://127.0.0.1:9455".to_string(),
+        timings: false,
+        outputs: Vec::new(),
+        sources: HashMap::new(),
+    };
+    let mut rest: Vec<String> = Vec::new();
     let mut i = 0;
     while i < argv.len() {
         match argv[i].as_str() {
             "--builder" => {
                 i += 1;
-                url = argv.get(i).cloned().unwrap_or_else(|| usage());
+                b.url = argv.get(i).cloned().unwrap_or_else(|| usage());
             }
-            "--timings" => timings = true,
+            "--timings" => b.timings = true,
             "--out" => {
                 i += 1;
-                outputs.push(argv.get(i).cloned().unwrap_or_else(|| usage()));
+                b.outputs
+                    .push(argv.get(i).cloned().unwrap_or_else(|| usage()));
             }
             "--source" => {
                 i += 1;
                 let spec = argv.get(i).unwrap_or_else(|| usage());
                 let (store, local) = spec.split_once('=').unwrap_or_else(|| usage());
-                sources.insert(store.to_string(), std::path::PathBuf::from(local));
+                b.sources
+                    .insert(store.to_string(), std::path::PathBuf::from(local));
             }
-            s if s.starts_with('-') => {
-                eprintln!("error: unknown flag '{s}'");
-                usage()
-            }
-            s => root = Some(s.to_string()),
+            s => rest.push(s.to_string()),
         }
         i += 1;
     }
-    let Some(root_arg) = root else { usage() };
-    // A store path, or a file named `<hash>-<name>.drv` copied out of the store.
-    let base = std::path::Path::new(&root_arg)
+    let a = parse_eval_args(&rest);
+    if let Some(Input::File(f)) = &a.input
+        && f.ends_with(".drv")
+    {
+        return build_drv_file(&b, f);
+    }
+
+    let t0 = std::time::Instant::now();
+    let mut ev = Evaluator::new();
+    let mut roots = Vec::new();
+    let r = evaluate(&mut ev, a).and_then(|v| drv_roots(&mut ev, v, &mut roots));
+    if let Err(e) = r {
+        report(&ev, &e);
+        return 1;
+    }
+    let eval_time = t0.elapsed();
+    if b.timings {
+        eprintln!(
+            "eval: {} derivations, {} sources, {:.3}s",
+            ev.drv.nr_derivations,
+            ev.source_origins().len(),
+            eval_time.as_secs_f64()
+        );
+    }
+    let mut outputs = b.outputs.clone();
+    for (_, out) in &roots {
+        if let Some(o) = out
+            && !outputs.contains(o)
+        {
+            outputs.push(o.clone());
+        }
+    }
+    let root_paths: Vec<StorePath> = roots.iter().map(|(p, _)| p.clone()).collect();
+    let inputs = ietsp::remote::plan::Inputs {
+        drvs: &ev.drv.drvs,
+        sources: ev.source_origins(),
+    };
+    build_roots(&b, &root_paths, &outputs, inputs)
+}
+
+/// Legacy mode: `DRV` is a `.drv` store path, or a copy of the file named
+/// `<hash>-<name>.drv`; its closure is read from `/nix/store`.
+fn build_drv_file(b: &BuildArgs, root_arg: &str) -> i32 {
+    use ietsp::builtins::derivation::DrvInfo;
+    use ietsp::store::drv::Derivation;
+    use ietsp::store::path::StorePath;
+    let base = std::path::Path::new(root_arg)
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
@@ -425,63 +566,98 @@ fn cmd_build(argv: &[String]) -> i32 {
             return 1;
         }
     };
-
-    let t0 = std::time::Instant::now();
-    let drv = std::fs::read_to_string(&root_arg)
+    // The root may be a copy outside the store; its inputs are read from `/nix/store`.
+    let info = std::fs::read_to_string(root_arg)
         .map_err(|e| e.to_string())
         .and_then(|text| {
-            Derivation::parse(&text, Derivation::name_from_path(&root).map_err(|e| e.0)?)
-                .map_err(|e| e.0)
+            let name = Derivation::name_from_path(&root).map_err(|e| e.0)?;
+            let drv = Derivation::parse(&text, name).map_err(|e| e.0)?;
+            let mut references = drv.input_srcs;
+            references.extend(drv.input_drvs.into_keys());
+            Ok(DrvInfo {
+                outputs: drv.outputs.into_keys().collect(),
+                references,
+                aterm: Some(text.into_bytes()),
+            })
         });
-    let drv = match drv {
-        Ok(d) => d,
+    let info = match info {
+        Ok(i) => i,
         Err(e) => {
             eprintln!("error: cannot read derivation '{root_arg}': {e}");
             return 1;
         }
     };
-    // Input sources come from the local store unless `--source` names the original tree,
-    // which is what eval will pass once it hands over in-memory derivations.
-    let locate = |paths: &[StorePath]| locate_in_store(paths, &sources);
-    let plan =
-        match ietsp::remote::plan::plan(&root, &drv, &mut load_derivation_from_store, &locate) {
-            Ok(p) => p,
+    let drvs = HashMap::from([(root.clone(), info)]);
+    let sources = HashMap::new();
+    build_roots(
+        b,
+        &[root],
+        &b.outputs,
+        ietsp::remote::plan::Inputs {
+            drvs: &drvs,
+            sources: &sources,
+        },
+    )
+}
+
+fn build_roots(
+    b: &BuildArgs,
+    roots: &[ietsp::store::path::StorePath],
+    outputs: &[String],
+    inputs: ietsp::remote::plan::Inputs<'_>,
+) -> i32 {
+    use ietsp::remote::proto::build_event::Event;
+    use ietsp::store::path::StorePath;
+
+    let t0 = std::time::Instant::now();
+    let locate = |paths: &[StorePath]| locate_in_store(paths, &b.sources);
+    let plan = match ietsp::remote::plan::plan(roots, inputs, &locate) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+    let plan_time = t0.elapsed();
+    if b.timings && (plan.store_drvs > 0 || plan.store_sources > 0) {
+        eprintln!(
+            "plan: {} drvs and {} sources not from this eval, read from /nix/store",
+            plan.store_drvs, plan.store_sources
+        );
+    }
+
+    let mut built = Vec::new();
+    let mut failed = false;
+    for root in roots {
+        let mut on_event = |ev: Event| match ev {
+            Event::Scheduled(s) => eprintln!("scheduled: {}", s.drv_paths.join(" ")),
+            Event::Started(s) => eprintln!("building {}", s.drv_path),
+            Event::Log(l) => {
+                let line = String::from_utf8_lossy(&l.line);
+                match StorePath::parse(&l.drv_path) {
+                    Ok(p) => eprintln!("{}> {line}", p.name()),
+                    Err(_) => eprintln!("{line}"),
+                }
+            }
+            Event::Built(b) => built.push((b.output, b.store_path)),
+            Event::Failed(f) => {
+                failed = true;
+                eprintln!("error: build of {} failed: {}", f.drv_path, f.reason);
+            }
+            Event::Done(d) => failed |= !d.success,
+        };
+        let result =
+            ietsp::remote::client::build_blocking(&b.url, &plan, root, outputs, &mut on_event);
+        match result {
+            Ok(t) => {
+                if b.timings {
+                    eprintln!("{}", t.report(&plan, plan_time));
+                }
+            }
             Err(e) => {
                 eprintln!("error: {e}");
                 return 1;
             }
-        };
-    let plan_time = t0.elapsed();
-
-    let mut built = Vec::new();
-    let mut failed = false;
-    let mut on_event = |ev: Event| match ev {
-        Event::Scheduled(s) => eprintln!("scheduled: {}", s.drv_paths.join(" ")),
-        Event::Started(s) => eprintln!("building {}", s.drv_path),
-        Event::Log(l) => {
-            let line = String::from_utf8_lossy(&l.line);
-            match StorePath::parse(&l.drv_path) {
-                Ok(p) => eprintln!("{}> {line}", p.name()),
-                Err(_) => eprintln!("{line}"),
-            }
-        }
-        Event::Built(b) => built.push((b.output, b.store_path)),
-        Event::Failed(f) => {
-            failed = true;
-            eprintln!("error: build of {} failed: {}", f.drv_path, f.reason);
-        }
-        Event::Done(d) => failed |= !d.success,
-    };
-    let result = ietsp::remote::client::build_blocking(&url, &plan, &root, &outputs, &mut on_event);
-    match result {
-        Ok(t) => {
-            if timings {
-                eprintln!("{}", t.report(&plan, plan_time));
-            }
-        }
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
         }
     }
     for (name, path) in &built {
@@ -496,12 +672,18 @@ fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let Some(cmd) = argv.first() else { usage() };
     match cmd.as_str() {
-        "build" => exit(cmd_build(&argv[1..])),
-        "eval" => {
-            let a = parse_eval_args(&argv[1..]);
+        "build" | "eval" => {
+            let rest: Vec<String> = argv[1..].to_vec();
+            let is_build = cmd == "build";
             let code = std::thread::Builder::new()
                 .stack_size(STACK_SIZE)
-                .spawn(move || run_eval(a))
+                .spawn(move || {
+                    if is_build {
+                        cmd_build(&rest)
+                    } else {
+                        run_eval(parse_eval_args(&rest))
+                    }
+                })
                 .expect("spawn evaluator thread")
                 .join()
                 .unwrap_or(1);

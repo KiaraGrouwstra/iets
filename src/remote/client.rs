@@ -9,7 +9,6 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Channel;
 
 use crate::store::hash::Hash;
-use crate::store::nar::dump_path;
 use crate::store::path::StorePath;
 
 use super::chunk::{Chunker, from_digest, sha256, to_digest};
@@ -195,7 +194,7 @@ fn produce(
         match o {
             Object::Source {
                 path,
-                local,
+                data,
                 kind,
                 nar_hash,
                 nar_size,
@@ -206,23 +205,23 @@ fn produce(
                 if need_chunks.iter().any(|&b| b) {
                     let mut i = 0;
                     let mut err = None;
-                    let mut chunker = Chunker::new(|data: Vec<u8>| {
+                    let mut chunker = Chunker::new(|chunk: Vec<u8>| {
                         let need = need_chunks.get(i).copied().unwrap_or(true);
                         i += 1;
                         if need {
-                            let digest = sha256(&data);
+                            let digest = sha256(&chunk);
                             if chunks.get(i - 1) != Some(&digest) {
                                 return Err(io::Error::other(format!(
                                     "source '{}' changed while uploading",
-                                    local.display()
+                                    data.describe()
                                 )));
                             }
                             n_chunks += 1;
-                            bytes += data.len() as u64;
+                            bytes += chunk.len() as u64;
                             let req = PutRequest {
                                 body: Some(put_request::Body::Chunk(Chunk {
                                     digest: Some(to_digest(&digest)),
-                                    data,
+                                    data: chunk,
                                 })),
                             };
                             if tx.blocking_send(req).is_err() {
@@ -232,8 +231,7 @@ fn produce(
                         }
                         Ok(())
                     });
-                    let r = dump_path(local, &mut chunker, &mut |_, _| true)
-                        .and_then(|()| chunker.finish());
+                    let r = data.dump(&mut chunker).and_then(|()| chunker.finish());
                     if let Some(e) = err {
                         return Err(e);
                     }
@@ -272,7 +270,7 @@ fn produce(
                     let req = PutRequest {
                         body: Some(put_request::Body::Drv(DrvBlob {
                             drv_path: path.to_string(),
-                            aterm: aterm.clone(),
+                            aterm: aterm.as_ref().clone(),
                         })),
                     };
                     tx.blocking_send(req).map_err(|_| closed())?;

@@ -32,6 +32,8 @@ pub fn register(r: &mut Registry) {
 pub struct DrvInfo {
     pub outputs: BTreeSet<String>,
     pub references: BTreeSet<StorePath>,
+    /// The ATerm this evaluation produced; `None` when the drv was read from `/nix/store`.
+    pub aterm: Option<Vec<u8>>,
 }
 
 /// Per-evaluator derivation state (derivations.cc:drvHashes plus the
@@ -500,16 +502,16 @@ fn derivation_strict_internal(
             .map_err(|e| drv_err(e, pos))?;
     }
 
-    let drv_path = drv.drv_path().map_err(|e| drv_err(e, pos))?;
+    let text = drv.unparse().map_err(|e| drv_err(e, pos))?;
+    let drv_path = drv.drv_path_for(&text).map_err(|e| drv_err(e, pos))?;
     let h = hash_derivation_modulo(&drv, false, &mut ev.drv.hash_cache, &mut loader)
         .map_err(|e| drv_err(e, pos))?;
     ev.drv.hash_cache.insert(drv_path.clone(), h);
     ev.drv.nr_derivations += 1;
 
     if let Some(dir) = &ev.drv.dump_dir {
-        let text = drv.unparse().map_err(|e| drv_err(e, pos))?;
         let file = dir.join(drv_path.base_name());
-        std::fs::write(&file, text).map_err(|e| {
+        std::fs::write(&file, &text).map_err(|e| {
             Error::boxed(
                 ErrorKind::Io,
                 format!("writing '{}': {e}", file.display()),
@@ -525,6 +527,7 @@ fn derivation_strict_internal(
         DrvInfo {
             outputs: drv.outputs.keys().cloned().collect(),
             references,
+            aterm: Some(text.into_bytes()),
         },
     );
 
@@ -597,6 +600,7 @@ fn drv_info(ev: &mut Evaluator, p: &StorePath, pos: Pos) -> EvalResult<DrvInfo> 
     let info = DrvInfo {
         outputs: drv.outputs.keys().cloned().collect(),
         references,
+        aterm: None,
     };
     ev.drv.drvs.insert(p.clone(), info.clone());
     Ok(info)

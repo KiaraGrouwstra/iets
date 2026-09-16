@@ -44,5 +44,12 @@ pub fn copy_path_to_store(
         .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, pos))?;
     let full = ev.arena.alloc_bytes(sp.to_full_string().as_bytes());
     ev.src_to_store.insert(path.to_vec(), full);
+    ev.sources.insert(
+        sp,
+        crate::store::source::SourceOrigin::Tree {
+            local: p.to_path_buf(),
+            accepted: None,
+        },
+    );
     Ok(full)
 }
