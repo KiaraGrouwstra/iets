@@ -14,13 +14,13 @@ in memory, and prints results. It never writes to a store.
 
 4. Phase B: the fastest possible client to a remote builder. Evaluate in
    memory, ask the builder what it lacks, stream only that, wait for the
-   root. This replaces the Nix worker protocol; see
-   `docs/remote-builder-protocol.md`.
+   root. This replaces the Nix worker protocol, which stays as a fallback
+   transport to any `nix-daemon`; see `docs/remote-builder-protocol.md`.
 
 ## Non-goals
 
-Local store writes, local builds, the Nix worker protocol as our transport,
-flakes, fetchers that hit the network (they error), a REPL, a debugger, a
+Local store writes, local builds, the Nix worker protocol as the primary
+transport (it is the fallback: `docs/remote-builder-protocol.md`), flakes, fetchers that hit the network (they error), a REPL, a debugger, a
 bytecode VM.
 
 ## Pipeline

@@ -13,6 +13,8 @@
 #    AddMultipleToStore; hashes and ca checked in that store.
 # 4. hello warm against the scratch daemon: 0 missing.
 # 5. custom derivation through unix:///nix/var/nix/daemon-socket/socket.
+# 6. custom derivation through ssh-ng://, with an `ssh` shim in PATH that runs
+#    `nix-daemon --stdio` locally: the stdio transport without a remote host.
 #
 # usage: scripts/daemon-e2e.sh            # uses target/release
 #        BIN=target/debug scripts/daemon-e2e.sh
@@ -28,6 +30,8 @@ work=$(mktemp -d "$TMPDIR/ietsp-daemon-e2e.XXXXXX")
 scratch_pid=
 cleanup() {
     [ -n "$scratch_pid" ] && kill "$scratch_pid" 2>/dev/null || true
+    # the scratch store's paths are read-only, as in a real store
+    chmod -R u+w "$work/store" 2>/dev/null || true
     rm -rf "$work"
 }
 trap cleanup EXIT
@@ -129,4 +133,11 @@ echo "ok"
 echo "== 5. custom derivation, --builder unix:///nix/var/nix/daemon-socket/socket"
 make_case "$work/c5" ietsp-daemon-e2e-unix
 run_custom "$work/c5" unix:///nix/var/nix/daemon-socket/socket
+
+echo "== 6. custom derivation, --builder ssh-ng://shim (ssh shim runs nix-daemon --stdio)"
+mkdir -p "$work/bin"
+printf '#!/bin/sh\n# ignore the host and the remote command: run the daemon on stdio here\nexec nix-daemon --stdio\n' > "$work/bin/ssh"
+chmod +x "$work/bin/ssh"
+make_case "$work/c6" ietsp-daemon-e2e-ssh
+PATH="$work/bin:$PATH" run_custom "$work/c6" ssh-ng://shim
 echo "PASS"

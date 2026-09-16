@@ -6,6 +6,10 @@ and matches nix-grpc-store and tribuchet. The protocol lives in
 `proto/builder.proto` and is transport-agnostic; QUIC (iroh, weft) can carry
 the same messages later.
 
+Fallback: the same `ietsp build` speaks the Nix worker protocol to any
+`nix-daemon` (`--builder daemon`, `unix://`, `ssh-ng://`); see the section at
+the end.
+
 ## Problem
 
 The Nix worker protocol is a serial RPC stream designed for a local daemon.
@@ -166,7 +170,9 @@ realise; see the estimate below.
 
 ## Compared with the Nix worker protocol (estimate)
 
-No ssh loopback is configured on this machine, so this is read from
+For measurements of the worker protocol driven by this client, see
+"Fallback: worker protocol" below. This section estimates what `nix-build`
+itself does. No ssh loopback is configured on this machine, so this is read from
 `src/libstore/worker-protocol.hh`, `remote-store.cc`, `store-api.cc`
 (`copyPaths`), `derivations.cc` (`writeDerivation`), `libfetchers/
 fetch-to-store.cc`, and `src/nix/build-remote/build-remote.cc` in Nix
@@ -198,7 +204,8 @@ builder has.
 - Auth. Next step is mTLS on the tonic channel; the reference server binds
   to localhost cleartext.
 - Retries, resume, and backpressure beyond HTTP/2 flow control.
-- `Fetch` on the client: outputs stay on the builder.
+- `Fetch` on the client is only `--fetch-to DIR` on the root outputs, whole
+  NARs collected in memory; no chunk reuse against what the client has.
 - Input sources other than `SOURCE` and `TEXT`: flat fixed-output paths
   (`nix-store --add-fixed`) and output paths used as `inputSrcs`
   (`builtins.storePath`) are rejected at plan time.
@@ -211,3 +218,134 @@ builder has.
 - Flat fixed-output sources (`builtins.path { recursive = false; }`) have
   no recorded origin; they fall back to the store locator, which rejects
   them.
+
+## Fallback: worker protocol
+
+`ietsp build --builder daemon | unix:///path | ssh-ng://[user@]host` speaks
+the Nix worker protocol (`src/libstore/worker-protocol.hh`, Nix 2.34.8) to a
+`nix-daemon`, from the same in-memory plan. `daemon` is
+`/nix/var/nix/daemon-socket/socket`; `ssh-ng://` runs `ssh host nix-daemon
+--stdio` and uses its stdio, as `ssh-store.cc` does. `http://` and `https://`
+stay on gRPC. Code: `src/remote/worker/` (`wire.rs` framing and the
+`FramedSink`; `mod.rs` transport, handshake, the `STDERR_*` loop, the ops;
+`build.rs` the client flow). No Nix library, no store; the protocol is
+written from the C++ source.
+
+Handshake as `initConnection`: `WORKER_MAGIC_1`, our version 1.38, the
+daemon's version, a feature-set exchange at >= 1.38 (we offer none), the
+obsolete CPU-affinity and reserve-space words, then the daemon's `nix_version`
+and its trust flag, then one `STDERR_LAST`. Daemons below 1.35 are refused.
+`SetOptions` sends what `RemoteStore::setOptions` sends: keep-failed 0,
+keep-going 0, try-fallback 0, verbosity `lvlInfo`, max-jobs = the CPU count
+(`max-jobs = auto`; 0 would forbid local builds), max-silent-time 0,
+build verbosity `lvlVomit` (so builder output arrives as
+`resBuildLogLine` results attributed to their build activity, not as plain
+log lines), cores 0, substitutes on, and an empty override map.
+
+The client flow mirrors the gRPC one, one op per phase:
+
+1. `QueryValidPaths` on every planned path (sources, text paths, drvs) in one
+   call, substitute flag off.
+2. `AddMultipleToStore` of the missing ones in one framed stream, in plan
+   order (sources and text paths first, then each drv after its inputs). Each
+   entry is a `ValidPathInfo` in the 1.16 layout the daemon fixes for this op
+   followed by the NAR: no deriver, NAR hash and size from our own dump,
+   registration time 0, `ultimate = false`, no signatures, and the content
+   address the daemon recomputes and checks: `fixed:r:sha256:<nar hash>` for
+   a source tree, `text:sha256:<flat hash>` plus references for a
+   `builtins.toFile` path, and `text:sha256:<sha256(aterm)>` with
+   references = inputSrcs + inputDrvs for a `.drv` (a drv is a text path;
+   `writeDerivation` registers it the same way). A CA path is accepted from
+   an untrusted client because it needs no signature.
+3. `BuildPathsWithResults` in normal mode on `<root drv>!<out1,out2>` (`!*`
+   without `--out`), the legacy `DerivedPath` string that protocol >= 1.30
+   reads. A failure status becomes a `Failed` event.
+4. `QueryDerivationOutputMap` on the root: `Built` events per output.
+5. `NarFromPath` per wanted output with `--fetch-to DIR`, restored with
+   `store::nar::restore_path` (the gRPC path uses `Fetch` for the same flag).
+
+`STDERR_NEXT` lines are unattributed `Log` events; `STDERR_START_ACTIVITY` of
+type `actBuild` (105) is `Started` and maps the activity id to its drv;
+`STDERR_RESULT` of type `resBuildLogLine` (101) or `resPostBuildLogLine`
+(107) is a `Log` attributed through that map; `STDERR_ERROR` is decoded as
+`readError` (message plus traces). `--timings` counts worker ops and round
+trips (ops plus the three handshake exchanges) and bytes written to the
+socket.
+
+### Measured (`scripts/daemon-e2e.sh`, release build)
+
+"Local daemon" is this machine's `nix-daemon` on its socket; the hello
+closure is GC-rooted there, so every path is valid and a cold run is
+impossible. "Scratch daemon" is `nix-daemon --store local?root=DIR` on its own
+socket: an empty chroot store, so the cold numbers are real uploads and a
+build is not attempted (`--no-build`). `unix://` and `daemon` are the same
+code; `ssh-ng://` is the same code over a child's stdio, tested with an `ssh`
+shim in `PATH` that runs `nix-daemon --stdio` locally (case 6), not against
+a real host (no host with a reachable `nix-daemon` accepted the key).
+
+| case | eval | plan | connect | QueryValidPaths | AddMultipleToStore | build (realise) | ops / round trips | bytes sent |
+|---|---|---|---|---|---|---|---|---|
+| custom drv + 1 source tree, deleted from the store, local daemon, `--fetch-to` | 0.005 s | 0.001 s | 0.077 s | 2 paths, 2 missing, 0.000 s | 2 paths, 2.4 KB, 0.001 s | 0.87 s | 6 / 9 | 2.9 KB |
+| hello, local daemon (all valid) | 0.138 s | 0.006 s | 0.074 s | 776 paths, 0 missing, 0.008 s | skipped | 0.001 s | 4 / 7 | 62 KB |
+| hello, scratch daemon, cold, `--no-build` | 0.159 s | 0.008 s | 0.020 s | 776 paths, 776 missing, 0.008 s | 776 paths, 2.6 MB, 0.247 s | skipped | 3 / 6 | 2.66 MB |
+| hello, scratch daemon, warm, `--no-build` | 0.146 s | 0.007 s | 0.008 s | 776 paths, 0 missing, 0.011 s | skipped | skipped | 2 / 5 | 62 KB |
+| nixos-desktop, scratch daemon, cold, `--no-build` | 1.48 s | 0.094 s | 0.015 s | 4,184 paths, all missing, 0.022 s | 4,184 paths, 40.4 MB, 1.89 s | skipped | 3 / 6 | 40.8 MB |
+| nixos-desktop, scratch daemon, warm, `--no-build` | 1.65 s | 0.112 s | 0.055 s | 4,184 paths, 0 missing, 0.034 s | skipped | skipped | 2 / 5 | 333 KB |
+| nixos-desktop, local daemon, `--no-build` | 1.21 s | 0.121 s | 0.081 s | 4,184 paths, 413 missing, 0.201 s | 413 paths, 23.2 MB, 1.67 s | skipped | 3 / 6 | 23.5 MB |
+
+The 62 KB of a warm hello run is the `QueryValidPaths` request: 776 full
+store paths as padded strings, and the 776 answers back. The custom drv's
+0.87 s "build" is the sandbox build itself; the 0.87-1.1 s spread across
+runs is the daemon, not the client. The 413 paths the local daemon lacked
+for nixos-desktop are large nixpkgs subtrees that no local evaluation had
+copied yet (the NixOS manual sources, python packages); the run registered
+them, exactly as `nix-instantiate` would have.
+
+Byte identity, checked by the script: after the upload, the `.drv` file in
+the store is `cmp`-identical to the one `nix-instantiate` wrote before it
+was deleted; `nix-store -q --hash`, `nix derivation show`, and `nix path-info
+--json` (`ca`, `narHash`, `narSize`, `references`) match for the drv and the
+source; in the scratch store the hello drv has the same hash as in the local
+store and every input source has the same `ca`.
+
+### Against gRPC (same client, same plan, same machine)
+
+| case | gRPC (Have / Put / Build) | worker protocol |
+|---|---|---|
+| custom drv, absent everywhere | 3 RPCs, 575 B, build 1.30 s | 6 ops / 9 round trips, 2.9 KB, build 0.87 s |
+| hello cold upload | Have 0.011 s, Put 776 objects 2.0 MB 0.097 s | QueryValidPaths 0.008 s, AddMultipleToStore 776 paths 2.6 MB 0.247 s |
+| hello warm | Have 0.007 s, 936 digests | QueryValidPaths 0.011 s, 776 paths, 62 KB |
+| nixos-desktop cold upload | Have 0.051 s, Put 4,184 objects, 36.5 MB, 0.557 s | QueryValidPaths 0.022 s, AddMultipleToStore 4,184 paths, 40.4 MB, 1.89 s |
+| nixos-desktop warm | Have 0.028 s | QueryValidPaths 0.034 s, 333 KB |
+
+Same shape on both: one query, one stream, one build. The worker protocol
+costs three more round trips (handshake, features, `SetOptions`) plus one for
+the output map, and sends 10% more bytes (a `ValidPathInfo` with the
+reference list per drv, and NAR framing around each ATerm, against one
+`DrvBlob` per drv). The upload is 3x slower on the daemon side: the
+reference server writes blobs to disk and validates later, the daemon hashes
+each NAR, parses each drv, and inserts 4,184 rows in its SQLite database
+inside the op. The gRPC path skips chunks the builder has; the worker
+protocol sends whole NARs, which matters for a source that changed by a few
+bytes. What the worker protocol buys: any Nix >= 2.4 daemon is a builder
+without deploying `ietsp-builderd`, and the paths land in a real store
+that other Nix tools can read.
+
+### Gaps
+
+- `ssh-ng://` is tested only through a local `ssh` shim: `ssh bld1
+  nix-daemon --version` was refused (publickey). The shim path found one
+  bug already (the child's stdin must close before waiting for it), so a
+  real host is worth one run. No `--ssh-option` passthrough.
+- The client does not poll stderr while streaming `AddMultipleToStore`, so an
+  error in the middle of a large upload surfaces after the whole stream is
+  sent; the daemon's `FramedSource` drains the rest, so nothing deadlocks.
+- `max-jobs` is the CPU count; there is no flag for it, `keep-going`, or
+  substituters.
+- Protocol < 1.35 is refused, and no features are negotiated.
+- `QueryDerivationOutputMap` only on the root; no `Built` events for
+  dependencies.
+- Connecting to the system daemon costs about 75 ms here against 10-20 ms
+  on the scratch daemon; the system daemon forks a child per connection and
+  loads two plugins (`plugin-files` in `nix.conf`), which is the likely
+  cause but was not profiled.

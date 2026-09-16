@@ -146,10 +146,19 @@ pub struct Connection {
 }
 
 impl Drop for Connection {
+    /// The ssh child exits on EOF of its stdin, which lives inside `to`; swap it out before
+    /// waiting, or the wait never returns.
     fn drop(&mut self) {
         let _ = self.to.flush();
         if let Some(mut c) = self.child.take() {
-            drop(c.stdin.take());
+            let sink: Box<dyn Write + Send> = Box::new(io::sink());
+            drop(std::mem::replace(
+                &mut self.to,
+                BufWriter::new(Counting {
+                    inner: sink,
+                    bytes: 0,
+                }),
+            ));
             let _ = c.wait();
         }
     }
