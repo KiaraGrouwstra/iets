@@ -1,11 +1,17 @@
 //! `ietsp eval-jobs`: the nix-eval-jobs 2.35 walk over an attribute tree
 //! and its JSON lines. The main fiber walks the tree in lexicographic
-//! depth-first order and prints; helpers run `T_JOB` range tasks that
-//! force what a job needs (`type`, `name`, `drvPath`, output paths, `meta`)
-//! ahead of the walk. See docs/eval-jobs.md.
+//! depth-first order and hands every job or error to a sink; helpers run
+//! `T_JOB` range tasks that force what a job needs (`type`, `name`,
+//! `drvPath`, output paths, `meta`) ahead of the walk. See docs/eval-jobs.md.
+
+pub mod cache;
+pub mod collector;
+pub mod constituents;
+pub mod emit;
+pub mod instantiate;
+pub mod line;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::io::Write;
 use std::sync::{Mutex, OnceLock};
 
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
@@ -16,11 +22,19 @@ use crate::store::drv::{Derivation, DerivationOutput, load_derivation_from_store
 use crate::store::path::{STORE_DIR, StorePath};
 use crate::syntax::symbol::Sym;
 
+pub use line::{ErrorLine, Job, Line};
+
 #[derive(Clone, Copy)]
 pub struct Opts {
     pub force_recurse: bool,
     pub meta: bool,
     pub show_input_drvs: bool,
+    /// `--no-instantiate`: nix-eval-jobs cannot read the `.drv` back, so
+    /// `system` comes from the attribute and `requiredSystemFeatures` and
+    /// `inputDrvs` are absent.
+    pub no_instantiate: bool,
+    /// `--constituents`: read `_hydraAggregate` jobs' `constituents`.
+    pub constituents: bool,
     /// `--chunks M --chunk N`: only the units whose path hash is N mod M.
     pub chunks: u32,
     pub chunk: u32,
@@ -34,6 +48,10 @@ struct Syms {
     meta: Sym,
     outputs: Sym,
     recurse: Sym,
+    system: Sym,
+    hydra_aggregate: Sym,
+    constituents: Sym,
+    glob_constituents: Sym,
 }
 
 struct Config {
@@ -42,6 +60,8 @@ struct Config {
     /// The `--arg`/`--argstr` attrset, auto-called on every function met.
     /// A `Word` into the arena, which is never freed.
     auto_args: u64,
+    /// The `--apply` function, evaluated once.
+    apply: Option<u64>,
 }
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
@@ -75,7 +95,7 @@ const JOB_BATCH: u32 = 4;
 /// deque is bounded, so a huge set is fed in windows.
 const WINDOW: usize = 1024;
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone, Copy)]
 pub struct Stats {
     pub jobs: u64,
     pub errors: u64,
@@ -83,31 +103,35 @@ pub struct Stats {
 
 /// Install the options for every fiber. Call before `parallel::run`.
 /// `auto_args` is the `--arg`/`--argstr` set applied to every function
-/// met on the way.
-pub fn configure(ev: &mut Evaluator, opts: Opts, auto_args: Word) {
+/// met on the way; `apply` the `--apply` function.
+pub fn configure(ev: &mut Evaluator, opts: Opts, auto_args: Word, apply: Option<Word>) {
     let syms = Syms {
         type_: ev.sym(b"type"),
         meta: ev.sym(b"meta"),
         outputs: ev.sym(b"outputs"),
         recurse: ev.sym(b"recurseForDerivations"),
+        system: ev.sym(b"system"),
+        hydra_aggregate: ev.sym(b"_hydraAggregate"),
+        constituents: ev.sym(b"constituents"),
+        glob_constituents: ev.sym(b"_hydraGlobConstituents"),
     };
     let _ = CONFIG.set(Config {
         opts,
         syms,
         auto_args: auto_args.0,
+        apply: apply.map(|w| w.0),
     });
 }
 
-/// Walk `root` and print one JSON line per job or error.
-pub fn run(ev: &mut Evaluator, root: Word, out: &mut dyn Write) -> Stats {
-    let mut stats = Stats::default();
+/// Walk `root` and hand every job or error line to `sink`, in
+/// lexicographic depth-first order.
+pub fn run(ev: &mut Evaluator, root: Word, sink: &mut dyn FnMut(Line)) {
     let mut path = Vec::new();
-    walk(ev, root, &mut path, FNV_BASIS, out, &mut stats);
-    stats
+    walk(ev, root, &mut path, FNV_BASIS, sink);
 }
 
-enum Node {
-    Job(Vec<u8>),
+pub enum Node {
+    Job(Job),
     Recurse(&'static AttrsObj),
     Skip,
 }
@@ -117,18 +141,14 @@ fn walk(
     w: Word,
     path: &mut Vec<String>,
     hash: u64,
-    out: &mut dyn Write,
-    stats: &mut Stats,
+    sink: &mut dyn FnMut(Line),
 ) {
     let depth = path.len() as u32;
     if depth == config().opts.chunk_depth && !admit(hash, depth, false) {
         return;
     }
     match node(ev, w, path, hash) {
-        Ok(Node::Job(line)) => {
-            stats.jobs += 1;
-            emit(out, &line);
-        }
+        Ok(Node::Job(job)) => sink(Line::Job(job)),
         Ok(Node::Recurse(attrs)) => {
             remember_set(attrs, hash, depth);
             let ordered = lexicographic_order(ev, attrs);
@@ -157,7 +177,7 @@ fn walk(
                 let name = ev.interner.name_str(attr.sym).to_string();
                 let h = fnv_step(hash, name.as_bytes());
                 path.push(name);
-                walk(ev, attr.cell.get(), path, h, out, stats);
+                walk(ev, attr.cell.get(), path, h, sink);
                 path.pop();
             }
         }
@@ -165,31 +185,24 @@ fn walk(
         // An attr that fails above the chunk depth is a unit of its own,
         // like a derivation there, so one chunk reports it.
         Err(_) if !admit(hash, depth, true) => {}
-        Err(e) => {
-            stats.errors += 1;
-            let text = error_text(ev, &e);
-            eprintln!("{text}");
-            let mut line = Vec::new();
-            line.extend_from_slice(b"{\"attr\":");
-            let _ = json_escape(&mut line, attr_join(path).as_bytes());
-            line.extend_from_slice(b",\"attrPath\":");
-            attr_path_json(&mut line, path);
-            line.extend_from_slice(b",\"error\":");
-            let _ = json_escape(&mut line, text.as_bytes());
-            line.extend_from_slice(b",\"fatal\":false}");
-            emit(out, &line);
-        }
+        Err(e) => sink(Line::Error(error_line(ev, path, &e))),
     }
 }
 
-fn emit(out: &mut dyn Write, line: &[u8]) {
-    let _ = out.write_all(line);
-    let _ = out.write_all(b"\n");
-    let _ = out.flush();
+/// The error line for `path`, also printed to stderr as nix-eval-jobs does.
+pub fn error_line(ev: &Evaluator, path: &[String], e: &Error) -> ErrorLine {
+    let text = error_text(ev, e);
+    eprintln!("{text}");
+    ErrorLine {
+        attr: attr_join(path),
+        attr_path: path.to_vec(),
+        error: text,
+        fatal: e.kind == ErrorKind::StackOverflow,
+    }
 }
 
 /// worker.cc:attrPathJoin: elements containing a dot are quoted.
-fn attr_join(path: &[String]) -> String {
+pub fn attr_join(path: &[String]) -> String {
     let mut s = String::new();
     for (i, p) in path.iter().enumerate() {
         if i > 0 {
@@ -204,17 +217,6 @@ fn attr_join(path: &[String]) -> String {
         }
     }
     s
-}
-
-fn attr_path_json(out: &mut Vec<u8>, path: &[String]) {
-    out.push(b'[');
-    for (i, p) in path.iter().enumerate() {
-        if i > 0 {
-            out.push(b',');
-        }
-        let _ = json_escape(out, p.as_bytes());
-    }
-    out.push(b']');
 }
 
 /// `error: msg` plus the trace, one line each, like `main::report`.
@@ -233,10 +235,10 @@ pub fn error_text(ev: &Evaluator, e: &Error) -> String {
     s
 }
 
-const FNV_BASIS: u64 = 0xcbf29ce484222325;
+pub const FNV_BASIS: u64 = 0xcbf29ce484222325;
 
 /// FNV-1a of one more path element (NUL-terminated) after `h`.
-fn fnv_step(h: u64, name: &[u8]) -> u64 {
+pub fn fnv_step(h: u64, name: &[u8]) -> u64 {
     let mut h = h;
     for b in name.iter().copied().chain(std::iter::once(0)) {
         h ^= b as u64;
@@ -248,7 +250,7 @@ fn fnv_step(h: u64, name: &[u8]) -> u64 {
 /// The chunk rule for a node at `depth` with path hash `hash`. Units are
 /// the paths of length `chunk_depth` and the derivations above it; every
 /// deeper node belongs to its unit.
-fn admit(hash: u64, depth: u32, leaf: bool) -> bool {
+pub fn admit(hash: u64, depth: u32, leaf: bool) -> bool {
     let o = config().opts;
     if o.chunks <= 1 || depth > o.chunk_depth || (depth < o.chunk_depth && !leaf) {
         return true;
@@ -272,7 +274,7 @@ fn is_derivation(ev: &mut Evaluator, a: &'static AttrsObj) -> EvalResult<bool> {
 
 /// worker.cc:processJobRequest for one attribute path: what to print or
 /// where to recurse.
-fn node(ev: &mut Evaluator, w: Word, path: &[String], hash: u64) -> EvalResult<Node> {
+pub fn node(ev: &mut Evaluator, w: Word, path: &[String], hash: u64) -> EvalResult<Node> {
     let cfg = config();
     if let Some(last) = path.last()
         && is_index(last)
@@ -313,6 +315,60 @@ fn node(ev: &mut Evaluator, w: Word, path: &[String], hash: u64) -> EvalResult<N
     } else {
         Node::Skip
     })
+}
+
+/// attr-path.cc:findAlongAttrPath with nix-eval-jobs's auto-call at every
+/// step: the value at `path` under `root`.
+pub fn find_along_attr_path(ev: &mut Evaluator, root: Word, path: &[String]) -> EvalResult<Word> {
+    let cfg = config();
+    let mut v = root;
+    for (i, name) in path.iter().enumerate() {
+        v = ev.auto_call(v, Word(cfg.auto_args))?;
+        v = ev.force(v)?;
+        let selection = attr_join(&path[..=i]);
+        if is_index(name) {
+            let Some(l) = v.as_list() else {
+                return Err(Error::boxed(
+                    ErrorKind::Type,
+                    format!(
+                        "the expression selected by the selection path '{selection}' should be a list but is {}",
+                        v.value_type().type_of()
+                    ),
+                    Pos::NONE,
+                ));
+            };
+            let n: usize = name.parse().unwrap_or(usize::MAX);
+            let Some(c) = l.cells().get(n) else {
+                return Err(Error::boxed(
+                    ErrorKind::Eval,
+                    format!("list index {n} in selection path '{selection}' is out of range"),
+                    Pos::NONE,
+                ));
+            };
+            v = c.get();
+            continue;
+        }
+        let Some(attrs) = v.as_attrs() else {
+            return Err(Error::boxed(
+                ErrorKind::Type,
+                format!(
+                    "the expression selected by the selection path '{selection}' should be a set but is {}",
+                    v.value_type().type_of()
+                ),
+                Pos::NONE,
+            ));
+        };
+        let sym = ev.sym(name.as_bytes());
+        let Some(a) = attrs.get(sym) else {
+            return Err(Error::boxed(
+                ErrorKind::MissingAttr,
+                format!("attribute '{name}' in selection path '{selection}' not found"),
+                Pos::NONE,
+            ));
+        };
+        v = a.cell.get();
+    }
+    Ok(v)
 }
 
 fn coerce_store_path(ev: &mut Evaluator, w: Word, pos: Pos, what: &str) -> EvalResult<StorePath> {
@@ -494,10 +550,98 @@ fn required_system_features(drv: &Derivation) -> BTreeSet<String> {
     set
 }
 
-/// drv.cc:Drv::fromPackageInfo and its JSON: one line, keys in the
-/// order nlohmann's std::map gives them.
-fn job(ev: &mut Evaluator, a: &'static AttrsObj, path: &[String]) -> EvalResult<Vec<u8>> {
+/// worker.cc:extractConstituents: the `.drv`s in the string context of
+/// `constituents`, the job names in it, and `_hydraGlobConstituents`.
+fn extract_constituents(
+    ev: &mut Evaluator,
+    a: &'static AttrsObj,
+) -> EvalResult<(Vec<StorePath>, Vec<String>, bool)> {
+    let syms = &config().syms;
+    let Some(agg) = a.get(syms.hydra_aggregate) else {
+        return Ok((Vec::new(), Vec::new(), false));
+    };
+    if !ev.force_bool(
+        agg.cell.get(),
+        agg.pos,
+        "while evaluating the `_hydraAggregate` attribute",
+    )? {
+        return Ok((Vec::new(), Vec::new(), false));
+    }
+    let Some(c) = a.get(syms.constituents) else {
+        return Err(Error::boxed(
+            ErrorKind::Eval,
+            "derivation must have a 'constituents' attribute",
+            Pos::NONE,
+        ));
+    };
+    let mut ctx = Vec::new();
+    ev.coerce_to_string(
+        c.cell.get(),
+        &mut ctx,
+        c.pos,
+        "while evaluating the `constituents` attribute",
+        true,
+        false,
+        true,
+    )?;
+    ctx.sort();
+    ctx.dedup();
+    let mut drvs = Vec::new();
+    for e in ctx {
+        if let Ctx::Built { drv, .. } = e {
+            let p = StorePath::parse(&String::from_utf8_lossy(drv))
+                .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, c.pos))?;
+            if drvs.last() != Some(&p) {
+                drvs.push(p);
+            }
+        }
+    }
+    let l = ev.force_list(
+        c.cell.get(),
+        c.pos,
+        "while evaluating the `constituents` attribute",
+    )?;
+    let mut named = Vec::new();
+    for cell in l.cells() {
+        let v = ev.force(cell.get())?;
+        if let Some(s) = v.as_string() {
+            named.push(String::from_utf8_lossy(s.bytes).into_owned());
+        }
+    }
+    let glob = match a.get(syms.glob_constituents) {
+        Some(g) => ev.force_bool(
+            g.cell.get(),
+            g.pos,
+            "while evaluating the `_hydraGlobConstituents` attribute",
+        )?,
+        None => false,
+    };
+    Ok((drvs, named, glob))
+}
+
+/// worker.cc:applyExprToValue: `--apply` on the job, printed as strict JSON.
+fn apply_json(ev: &mut Evaluator, f: Word, a: &'static AttrsObj) -> EvalResult<Vec<u8>> {
+    let res = ev.apply(f, &[Word::from_ptr(a)], Pos::NONE)?;
+    ev.force_attrs(res, Pos::NONE, "apply needs to evaluate to an attrset")?;
+    let mut out = Vec::new();
+    let mut ctx = Vec::new();
+    print_json(ev, res, &mut out, &mut ctx, true, Pos::NONE)?;
+    Ok(out)
+}
+
+/// drv.cc:Drv::fromPackageInfo, in the order nix-eval-jobs forces things:
+/// constituents, `--apply`, name, drvPath, outputs, the `.drv`, meta.
+fn job(ev: &mut Evaluator, a: &'static AttrsObj, path: &[String]) -> EvalResult<Job> {
     let cfg = config();
+    let (constituents, named, glob) = if cfg.opts.constituents {
+        extract_constituents(ev, a)?
+    } else {
+        (Vec::new(), Vec::new(), false)
+    };
+    let mut extra: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    if let Some(f) = cfg.apply {
+        extra.insert("extraValue".into(), apply_json(ev, Word(f), a)?);
+    }
     let name = match a.get(ev.s.name) {
         Some(n) => ev
             .force_string_no_ctx(
@@ -547,61 +691,61 @@ fn job(ev: &mut Evaluator, a: &'static AttrsObj, path: &[String]) -> EvalResult<
         );
         e
     })?;
-    let drv = read_drv(ev, &drv_path)?;
-    let features = required_system_features(&drv);
-
-    let mut line = Vec::new();
-    line.extend_from_slice(b"{\"attr\":");
-    json_escape(&mut line, attr_join(path).as_bytes())?;
-    line.extend_from_slice(b",\"attrPath\":");
-    attr_path_json(&mut line, path);
-    line.extend_from_slice(b",\"constituents\":[],\"drvPath\":");
-    json_escape(&mut line, drv_path.to_string().as_bytes())?;
-    line.extend_from_slice(b",\"globConstituents\":false");
-    if cfg.opts.show_input_drvs {
-        line.extend_from_slice(b",\"inputDrvs\":{");
-        for (i, (p, names)) in drv.input_drvs.iter().enumerate() {
-            if i > 0 {
-                line.push(b',');
-            }
-            json_escape(&mut line, p.to_string().as_bytes())?;
-            line.extend_from_slice(b":[");
-            for (j, n) in names.iter().enumerate() {
-                if j > 0 {
-                    line.push(b',');
+    let system = if cfg.opts.no_instantiate {
+        // get-drvs.cc:PackageInfo::querySystem.
+        match a.get(cfg.syms.system) {
+            Some(s) => ev
+                .force_string_no_ctx(
+                    s.cell.get(),
+                    s.pos,
+                    "while evaluating the 'system' attribute of a derivation",
+                )?
+                .to_vec(),
+            None => b"unknown".to_vec(),
+        }
+    } else {
+        let drv = read_drv(ev, &drv_path)?;
+        if cfg.opts.show_input_drvs {
+            let mut v = vec![b'{'];
+            for (i, (p, names)) in drv.input_drvs.iter().enumerate() {
+                if i > 0 {
+                    v.push(b',');
                 }
-                json_escape(&mut line, n.as_bytes())?;
+                v.extend(line::json_str(&p.to_string()));
+                v.push(b':');
+                v.extend(line::json_str_list(names.iter()));
             }
-            line.push(b']');
+            v.push(b'}');
+            extra.insert("inputDrvs".into(), v);
         }
-        line.push(b'}');
-    }
+        extra.insert(
+            "requiredSystemFeatures".into(),
+            line::json_str_list(required_system_features(&drv).iter()),
+        );
+        drv.platform.into_bytes()
+    };
     if cfg.opts.meta {
-        line.extend_from_slice(b",\"meta\":");
-        meta_json(ev, a, &mut line)?;
+        let mut m = Vec::new();
+        meta_json(ev, a, &mut m)?;
+        extra.insert("meta".into(), m);
     }
-    line.extend_from_slice(b",\"name\":");
-    json_escape(&mut line, &name)?;
-    line.extend_from_slice(b",\"namedConstituents\":[],\"outputs\":{");
-    for (i, (n, p)) in outs.iter().enumerate() {
-        if i > 0 {
-            line.push(b',');
-        }
-        json_escape(&mut line, n.as_bytes())?;
-        line.push(b':');
-        json_escape(&mut line, p.to_string().as_bytes())?;
-    }
-    line.extend_from_slice(b"},\"requiredSystemFeatures\":[");
-    for (i, f) in features.iter().enumerate() {
-        if i > 0 {
-            line.push(b',');
-        }
-        json_escape(&mut line, f.as_bytes())?;
-    }
-    line.extend_from_slice(b"],\"storeDir\":\"/nix/store\",\"system\":");
-    json_escape(&mut line, drv.platform.as_bytes())?;
-    line.push(b'}');
-    Ok(line)
+    let mut js = Vec::new();
+    json_escape(&mut js, &name)?;
+    extra.insert("name".into(), js);
+    extra.insert("storeDir".into(), b"\"/nix/store\"".to_vec());
+    let mut js = Vec::new();
+    json_escape(&mut js, &system)?;
+    extra.insert("system".into(), js);
+    Ok(Job {
+        attr: attr_join(path),
+        attr_path: path.to_vec(),
+        drv_path,
+        outputs: outs.into_iter().map(|(k, v)| (k, Some(v))).collect(),
+        constituents,
+        named_constituents: Some(named),
+        glob_constituents: glob,
+        extra,
+    })
 }
 
 // ---- helper side ------------------------------------------------------------
