@@ -289,7 +289,7 @@ impl Evaluator {
         let dir = dir_of(&resolved).to_vec();
         let ir = self.compile_source(&resolved, src, &dir, Some(&names))?;
         let env = self.arena.alloc_env(Some(self.root_env), names.len());
-        for (slot, a) in env.slots().iter().zip(scope.attrs()) {
+        for (slot, a) in env.slots_n(names.len()).iter().zip(scope.attrs()) {
             slot.set(a.cell.get());
         }
         self.eval(env, ir)
@@ -462,7 +462,7 @@ impl Evaluator {
                 for _ in 0..*depth {
                     e = e.up().expect("compile-time depth is valid");
                 }
-                let w = e.slots()[*idx as usize].get();
+                let w = e.slot(*idx as usize).get();
                 // a slot of the env under construction (`let x = x;`): thunk it
                 // so forcing reports infinite recursion instead of reading EMPTY
                 if w == Word::EMPTY {
@@ -536,7 +536,7 @@ impl Evaluator {
                 for _ in 0..*depth {
                     e = e.up()?;
                 }
-                e.slots()[*idx as usize].get()
+                e.slot(*idx as usize).get()
             }
             _ => return None,
         };
@@ -570,7 +570,7 @@ impl Evaluator {
                 for _ in 0..*depth {
                     e = e.up()?;
                 }
-                e.slots()[*idx as usize].get()
+                e.slot(*idx as usize).get()
             }
             _ => return None,
         };
@@ -921,7 +921,7 @@ impl Evaluator {
     fn call_lambda(&mut self, l: &'static LambdaObj, arg: Word, pos: Pos) -> EvalResult<Word> {
         let lam: &'static LambdaIr = l.lam;
         let env2 = self.arena.alloc_env(Some(l.env), lam.nslots());
-        let slots = env2.slots();
+        let slots = env2.slots_n(lam.nslots());
         match &lam.param {
             ParamIr::Ident => slots[0].set(arg),
             ParamIr::Formals {
@@ -1039,7 +1039,7 @@ impl Evaluator {
                 for _ in 0..*depth {
                     e = e.up().expect("compile-time depth is valid");
                 }
-                self.force_cell(&e.slots()[*idx as usize])
+                self.force_cell(e.slot(*idx as usize))
             }
             Ir::WithVar { sym, withs, pos } => self.eval_with_var(env, *sym, withs, *pos),
             Ir::CurPos(pos) => Ok(self.mk_pos_attrs(*pos)),
@@ -1104,7 +1104,7 @@ impl Evaluator {
             Ir::With { scope, body, .. } => {
                 let env2 = self.arena.alloc_env(Some(env), 1);
                 let w = self.maybe_thunk(env, scope);
-                env2.slots()[0].set(w);
+                env2.slot(0).set(w);
                 self.eval(env2, body)
             }
             Ir::If {
@@ -1271,11 +1271,11 @@ impl Evaluator {
             }
             walked = d;
             let attrs = self.force_attrs(
-                e.slots()[0].get(),
+                e.slot(0).get(),
                 pos,
                 "while evaluating the first subexpression of a with expression",
             )?;
-            e.slots()[0].set(Word::from_ptr(attrs));
+            e.slot(0).set(Word::from_ptr(attrs));
             if let Some(a) = attrs.get(sym) {
                 return self.force_cell(&a.cell);
             }
@@ -1430,7 +1430,7 @@ impl Evaluator {
         from: &'static [IrRef],
     ) -> &'static EnvObj {
         let env2 = self.arena.alloc_env(Some(env), binds.len() + from.len());
-        let slots = env2.slots();
+        let slots = env2.slots_n(binds.len() + from.len());
         for (i, b) in binds.iter().enumerate() {
             let w = match b.scope {
                 BindScope::Outer => self.maybe_thunk(env, b.value),
@@ -1457,17 +1457,17 @@ impl Evaluator {
             let env2 = self.alloc_rec_env(env, a.binds, a.from);
             dyn_env = env2;
             for (i, b) in a.binds.iter().enumerate() {
-                entries.push((b.sym, b.pos, env2.slots()[i].get()));
+                entries.push((b.sym, b.pos, env2.slot(i).get()));
             }
             if let Some(oi) = a.overrides {
-                let ow = env2.slots()[oi as usize].get();
+                let ow = env2.slot(oi as usize).get();
                 let overrides =
                     self.force_attrs(ow, a.pos, "while evaluating the `__overrides` attribute")?;
                 for o in overrides.attrs() {
                     match a.binds.binary_search_by(|b| b.sym.cmp(&o.sym)) {
                         Ok(j) => {
                             entries[j].2 = o.cell.get();
-                            env2.slots()[j].set(o.cell.get());
+                            env2.slot(j).set(o.cell.get());
                         }
                         Err(_) => entries.push((o.sym, o.pos, o.cell.get())),
                     }
@@ -1522,7 +1522,7 @@ impl Evaluator {
         if a.rec {
             let env2 = self.alloc_rec_env(env, a.binds, a.from);
             for (i, b) in a.binds.iter().enumerate() {
-                out.init(i, b.sym, b.pos, env2.slots()[i].get());
+                out.init(i, b.sym, b.pos, env2.slot(i).get());
             }
         } else {
             let inherit_env = self.inherit_env(env, a.from);
@@ -1549,7 +1549,7 @@ impl Evaluator {
         let ie = self.arena.alloc_env(Some(env), from.len());
         for (j, f) in from.iter().enumerate() {
             let w = self.maybe_thunk(env, f);
-            ie.slots()[j].set(w);
+            ie.slot(j).set(w);
         }
         Some(ie)
     }

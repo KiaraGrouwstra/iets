@@ -131,12 +131,13 @@ pub struct AttrsObj {
     // followed by `len` Attrs sorted by sym
 }
 
+/// Envs are reached only through `up`, lambdas and thunks, never through a
+/// `Word`, so they carry no `Kind`; slot indices come from the compiler, so
+/// they carry no length either. Header is one word.
 #[repr(C)]
 pub struct EnvObj {
-    pub kind: Kind,
-    pub len: u32,
     pub up: *const EnvObj,
-    // followed by `len` Cells
+    // followed by the slots
 }
 
 #[repr(C)]
@@ -193,7 +194,7 @@ pub struct ThunkApp2Obj {
 
 const _: () = assert!(size_of::<ListObj>() == 8);
 const _: () = assert!(size_of::<AttrsObj>() == 8);
-const _: () = assert!(size_of::<EnvObj>() == 16);
+const _: () = assert!(size_of::<EnvObj>() == 8);
 const _: () = assert!(size_of::<Attr>() == 16);
 const _: () = assert!(size_of::<ThunkObj>() == 24);
 const _: () = assert!(size_of::<ThunkAppObj>() == 24);
@@ -246,12 +247,22 @@ impl AttrsObj {
 }
 
 impl EnvObj {
+    /// Slot `i`. The compiler resolved `i` against this env's binder, so it
+    /// is in range by construction.
     #[inline]
-    pub fn slots(&self) -> &'static [Cell] {
-        // SAFETY: the allocator placed `len` cells directly after the header.
+    pub fn slot(&self, i: usize) -> &'static Cell {
+        // SAFETY: `alloc_env` placed the slots directly after the header and
+        // every index the evaluator uses was resolved at compile time.
+        unsafe { &*((self as *const EnvObj).add(1) as *const Cell).add(i) }
+    }
+
+    /// The first `n` slots, for filling a fresh env of `n` slots.
+    #[inline]
+    pub fn slots_n(&self, n: usize) -> &'static [Cell] {
+        // SAFETY: as for `slot`; the caller passes the `n` it allocated.
         unsafe {
             let p = (self as *const EnvObj).add(1) as *const Cell;
-            std::slice::from_raw_parts(p, self.len as usize)
+            std::slice::from_raw_parts(p, n)
         }
     }
 
@@ -542,8 +553,6 @@ impl Arena {
         // SAFETY: fresh allocation sized for header plus n cells.
         unsafe {
             p.write(EnvObj {
-                kind: Kind::Env,
-                len: n as u32,
                 up: up.map_or(std::ptr::null(), |e| e as *const EnvObj),
             });
             let cells = p.add(1) as *mut u64;
