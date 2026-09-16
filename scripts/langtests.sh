@@ -5,6 +5,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 IETSP=${IETSP:-$PWD/target/release/ietsp}
 export HOME=/fake-home
+export TEST_VAR=foo # for eval-okay-getenv.nix
 cd tests
 export NIX_PATH=lang/dir3:lang/dir4
 pass=0; fail=0; failed=()

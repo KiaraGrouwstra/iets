@@ -5,6 +5,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 NIX=${NIX:-nix-instantiate}
 export HOME=/fake-home
+export TEST_VAR=foo
 cd tests
 if [ $# -gt 0 ]; then files=(); for t in "$@"; do files+=("corpus/${t%.nix}.nix"); done
 else files=(corpus/*.nix); fi

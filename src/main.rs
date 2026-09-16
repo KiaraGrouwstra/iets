@@ -67,6 +67,7 @@ struct EvalArgs {
     input: Option<Input>,
     lint_absolute: ietsp::compile::Lint,
     lint_short: ietsp::compile::Lint,
+    xp_features: Vec<String>,
 }
 
 enum ArgKind {
@@ -106,6 +107,7 @@ fn parse_eval_args(argv: &[String]) -> EvalArgs {
         input: None,
         lint_absolute: ietsp::compile::Lint::Ignore,
         lint_short: ietsp::compile::Lint::Ignore,
+        xp_features: Vec::new(),
     };
     let mut i = 0;
     while i < argv.len() {
@@ -155,6 +157,12 @@ fn parse_eval_args(argv: &[String]) -> EvalArgs {
                 }
             }
             "--impure" | "--pure-eval" | "--readonly-mode" => {}
+            "--extra-experimental-features" | "--experimental-features" => {
+                i += 1;
+                let v = argv.get(i).unwrap_or_else(|| usage());
+                a.xp_features
+                    .extend(v.split_whitespace().map(str::to_owned));
+            }
             _ if s.starts_with("-I") && s.len() > 2 => a.includes.push(parse_include(&s[2..])),
             _ if s.starts_with('-') && s != "-" => {
                 eprintln!("error: unknown flag '{s}'");
@@ -185,6 +193,9 @@ fn run_eval(a: EvalArgs) -> i32 {
     let mut ev = Evaluator::new();
     ev.compile_settings.lint_absolute_path_literals = a.lint_absolute;
     ev.compile_settings.lint_short_path_literals = a.lint_short;
+    if a.xp_features.iter().any(|f| f == "parse-toml-timestamps") {
+        ietsp::builtins::text::set_parse_toml_timestamps(true);
+    }
     let mut includes = a.includes;
     if let Ok(np) = std::env::var("NIX_PATH") {
         for entry in np.split(':').filter(|s| !s.is_empty()) {

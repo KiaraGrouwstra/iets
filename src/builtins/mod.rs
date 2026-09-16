@@ -9,6 +9,7 @@ pub mod math;
 pub mod paths;
 pub mod store_hooks;
 pub mod strings;
+pub mod text;
 
 use crate::eval::{Evaluator, Pos};
 use crate::runtime::*;
@@ -62,6 +63,7 @@ pub fn install(ev: &mut Evaluator) {
     math::register(&mut r);
     paths::register(&mut r);
     context::register(&mut r);
+    text::register(&mut r);
 
     r.constant("true", Word::TRUE);
     r.constant("false", Word::FALSE);

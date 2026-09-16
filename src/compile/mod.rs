@@ -1076,6 +1076,7 @@ impl<'a> Compiler<'a> {
                     body,
                     pos,
                     name,
+                    arg: Some(*sym),
                 }))
             }
             Param::Formals {
@@ -1144,6 +1145,7 @@ impl<'a> Compiler<'a> {
                     body,
                     pos,
                     name,
+                    arg: *bind,
                 }))
             }
         }

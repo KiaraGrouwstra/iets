@@ -125,6 +125,11 @@ filterSource, path, toFile; fetchurl, fetchTarball, fetchGit, fetchTree,
 fetchMercurial, fetchClosure, getFlake, parseFlakeRef, flakeRefToString,
 outputOf exist but fail when called.
 context: getContext, appendContext, addDrvOutputDependencies.
+text: match, split (ERE via `text/ere.rs`, per-thread regex cache), replaceStrings,
+hashString, hashFile, convertHash, floor, ceil, genericClosure, getEnv, break,
+toJSON, fromJSON, toXML, fromTOML (`--extra-experimental-features
+parse-toml-timestamps` for datetimes), currentTime. Divergences:
+`docs/divergences.md`.
 constants: true, false, null, builtins, currentSystem, nixVersion,
 langVersion, storeDir, nixPath, derivation (from corepkgs/derivation.nix).
 
@@ -133,3 +138,16 @@ langVersion, storeDir, nixPath, derivation (from corepkgs/derivation.nix).
 match, split, replaceStrings, fromJSON, toJSON, toXML, fromTOML, hashString,
 hashFile, convertHash, derivationStrict, placeholder, getEnv, currentTime,
 floor, ceil, genericClosure, break, ... anything else in primops.cc.
+readFile, readDir, readFileType, pathExists,
+filterSource, path, toFile, derivationStrict, placeholder, outputOf,
+getContext, appendContext, storePath, fetchurl, fetchTarball,
+fetchGit, fetchTree, fetchClosure (all fetchers: error),
+toPath, flakeRefToString, parseFlakeRef,
+getFlake, ... anything else in primops.cc.
+
+## Corpus tests
+
+`tests/corpus/<name>.nix` holds one case per builtin family member, with
+`.exp` captured from `nix-instantiate --eval --strict` and an optional
+`.flags` file. `scripts/corpus-update.sh` regenerates the `.exp` files;
+`scripts/corpus.sh` checks them against `target/release/ietsp`.

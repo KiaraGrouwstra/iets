@@ -145,6 +145,8 @@ pub struct LambdaIr {
     pub body: IrRef,
     pub pos: Pos,
     pub name: Option<Sym>,
+    /// The `x` in `x: ...` or the `args` in `{ ... }@args: ...`; `toXML` prints it.
+    pub arg: Option<Sym>,
 }
 
 pub enum ParamIr {
