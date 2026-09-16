@@ -119,6 +119,17 @@ compareVersions, parseDrvName, baseNameOf, dirOf.
 math: add, sub, mul, div, bitAnd, bitOr, bitXor, lessThan.
 constants: true, false, null, builtins, currentSystem, nixVersion,
 langVersion, storeDir, nixPath, derivation (from corepkgs/derivation.nix).
+derivation: derivationStrict, placeholder, addDrvOutputDependencies,
+outputOf (error: dynamic derivations), `import` of a `.drv` store path.
+State lives in `ev.drv` (`DrvState`: hash cache, created-drv table,
+`--dump-drvs` dir). `scripts/drvdiff.sh` finds the first derivation that
+differs from nix-instantiate.
+interim (src/builtins/interim.rs, delete after the strings and paths
+families merge): getContext, appendContext, match, split, replaceStrings,
+fromJSON, toJSON, fromTOML, hashString, hashFile, convertHash, readFile,
+readDir, pathExists, readFileType, filterSource, path, storePath, toFile,
+toPath, genericClosure, getEnv, currentTime, floor, ceil, break; fetchers,
+toXML and flake builtins error.
 
 ## TODO (next wave)
 
