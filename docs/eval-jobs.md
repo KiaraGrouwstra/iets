@@ -319,3 +319,52 @@ Notes on the numbers:
 - Memory is the same at 1 and 4 workers (13.8 GB vs 13.7 GB for chunk
   0): it is the arena, not fiber stacks (300 fibers, 1.09 M tasks in the
   4-worker run per `IETSP_PAR_STATS=1`).
+
+Two more nix-eval-jobs rows for the same set, same flags:
+
+| run | wall | user | sys | peak RSS | jobs | errors |
+|---|---|---|---|---|---|---|
+| nix-eval-jobs, second run (every `.drv` already in the store) | 247.7 s | 571.2 s | 152.2 s | 17.2 GB | 80245 | 1851 |
+| nix-eval-jobs `--no-instantiate` | 126.4 s | 421.4 s | 69.1 s | 17.1 GB | 80245 | 1851 |
+
+So of the 790 s, ~540 s were first-time `.drv` writes through the
+daemon, ~120 s are the store round trips that remain when the paths
+are valid, and ~126 s is evaluation. Against the evaluation-only row,
+ietsp's eight sequential 4-worker chunks (110.6 s wall, 254 s user) do
+the same work in 0.9x the wall and 0.6x the CPU, while re-evaluating
+the shared base eight times; a single process would need more than the
+30 GB of this box.
+
+### (b) `pkgs/top-level/release.nix`, x86_64-linux
+
+```
+# release-x86.nix
+import $NP/pkgs/top-level/release.nix { supportedSystems = [ "x86_64-linux" ]; }
+
+nix-eval-jobs --meta --force-recurse --workers 4 --max-memory-size 4096 \
+  --option allow-import-from-derivation false -I nixpkgs=$NP release-x86.nix
+for c in 0..7: ietsp eval-jobs --meta --force-recurse --workers 4 --chunks 8 --chunk $c -I nixpkgs=$NP release-x86.nix
+```
+
+`--force-recurse` as Hydra passes it: `release.nix` leaves are
+`<pkg>.<system>` sets without `recurseForDerivations`, so without it
+both tools print only the handful of top-level derivations (`tarball`,
+`manual`, `metrics`, `release-checks`, `unstable`) and the sets that
+carry the flag: 586 lines from ietsp in 1-3 s per chunk, 23 s for
+nix-eval-jobs. `release-lib.nix` has no `limitedSupportedSystems`
+argument (that is `release-combined.nix`); `supportedSystems` alone
+restricts the jobs. `nixpkgs` is the default `cleanSource ../..`.
+
+| run | wall | user | sys | peak RSS | jobs | errors | diffs |
+|---|---|---|---|---|---|---|---|
+| nix-eval-jobs `--workers 4 --max-memory-size 4096 --force-recurse` (`.drv`s mostly in the store from (a)) | 234.0 s | 531.4 s | 144.7 s | 17.0 GB (largest 4.7 GB) | 77708 | 4402 | – |
+| ietsp `--workers 4`, 8 chunks, summed | 93.7 s (10.2-14.1 s per chunk) | 237.4 s | 41.4 s | 13.9 GB (10.7-13.9) | 77708 | 4402 | 0 |
+
+Same 82110 attrs, same 77708 jobs and 4402 errors (`allowUnfree =
+false` here, so every unfree package is an error), zero `drvPath` and
+zero whole-line (`--meta`) differences. The full set includes
+`tarball`, `manual`, `metrics`, `release-checks`, `unstable` (the
+aggregate; `constituents` are not resolved by either side without
+`--constituents`), `stdenvBootstrapTools.*`, `tests.*`, `lib-tests`,
+`pkgsLLVM/pkgsArocc/pkgsZig/pkgsMusl/pkgsStatic.stdenv`, `pkgsRocm`,
+`haskell.packages.ghc*.haskell-language-server`.
