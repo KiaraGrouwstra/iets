@@ -38,7 +38,11 @@ source bytes
 - `syntax/`: `symbol.rs` (interner, `Sym` = u32), `ast.rs` (shared AST,
   written first, do not change shape without updating compile), `lexer.rs`,
   `parser.rs`. Parser output keeps raw bindings; attrpath merging and
-  scope resolution happen in `compile`.
+  scope resolution happen in `compile`. Variable-length node payloads
+  (attrpaths, string parts, bindings, arguments, formals, literal bytes)
+  live in side tables of the `Ast` addressed by `Range`; the parser
+  builds them on scratch stacks and commits each run when its parent
+  completes, so a file costs nine allocations instead of one per node.
 - `compile/`: AST -> IR. Every variable becomes `Local { depth, index }`
   or `WithVar(sym)` (only when no lexical binder exists). Attrset bindings
   are sorted by `Sym` id at compile time when static. Literal folding.

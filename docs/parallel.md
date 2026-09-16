@@ -45,8 +45,12 @@ EMPTY ──CAS──> BLACKHOLE(claimer, waiters bit) ──store──> value
 - `BLACKHOLE(id)` is `Word::BLACKHOLE | id << 8`. Bit 7 is the
   *has-waiters* flag. The sequential path stores plain `Word::BLACKHOLE`
   (id 0); `Word::is_blackhole` masks bit 7 and matches every variant.
-- **Claim**: `compare_exchange(EMPTY, BLACKHOLE(me), Acquire, Acquire)`.
-  Winner evaluates. Loser reads the current word:
+- **Claim**: load the word first (Acquire); only an EMPTY word gets the
+  `compare_exchange(EMPTY, BLACKHOLE(me), Acquire, Acquire)`. A failed
+  CAS still takes the cache line exclusive, and most forces hit a thunk
+  another fiber already evaluated (`lib` functions, `pkgs`), so the
+  plain load keeps hot shared lines shared. Winner evaluates. Loser
+  reads the current word:
   - value: return it (Acquire load pairs with the Release publish).
   - `BLACKHOLE(me)`: infinite recursion. The claimer id is per fiber, not
     per thread, so it follows a migrated computation.
@@ -127,14 +131,31 @@ Two global summary words, `pending_ready` and `pending_tasks`, say
 whether any lane holds work. Idle workers poll only those; scanning the
 lanes' `top`/`bottom` lines directly made every busy owner's push and
 pop pay a coherence miss per idle thief (8 workers ran slower than 4).
-The pre-park spin is capped to `max(3, n/4)` helpers at a time; worker 0
-always spins.
+Idle workers register as *searchers*; at most `max(1, n/4)` helpers
+search at a time (worker 0 is never refused) and a searcher spins
+~2 ms (2000 scans of 64 polls, `IETSP_SPIN`) before it parks.
 
-Park: a worker with nothing to do spins for a bounded number of scans,
-then increments `sleepers`, reads the wake `epoch`, re-checks the
-summaries, and `futex_wait(epoch)`. A push that observes `sleepers > 0`
-bumps `epoch` and does `futex_wake(1)`. Lost wake-ups are impossible:
-the epoch is read before the final check and compared by the futex.
+Park: a searcher that finds nothing increments `sleepers`, reads the
+wake `epoch`, re-checks the summaries, and `futex_wait(epoch)`. Lost
+wake-ups are impossible: the epoch is read before the final check and
+compared by the futex.
+
+Wake policy (one wake per handoff, never one per push): a push wakes
+one sleeper only when no searcher is awake *and* the work is worth a
+wake; a searcher that takes work and was the last searcher wakes one
+more sleeper under the same test. Worth a wake: a ready fiber always
+(it is usually the critical path); queued tasks only when the queue
+holds more than 8 tasks per awake worker (`IETSP_HANDOFF`), or when
+the caller is the only worker awake. Waking on every push cost the
+critical path a futex syscall per fan-out task and handed cache-warm
+work to cold cores: at 16 workers 26k parks per run and 0.9 s of
+system time; the handoff policy brought that to ~2k parks. Drivers
+whose fibers busy-wait on a queued peer instead of parking (the tests)
+call `set_eager_wakes` to get one wake per task back.
+
+`running`, busy time and task counts are per-worker padded counters
+(`WorkerStat`), summed for the stats; the shared counters they replace
+were written from every core on every fiber resume.
 
 Stack pages of idle pool fibers beyond 16 are returned with
 `MADV_DONTNEED` on every 64th park only; trimming on every park cost
@@ -304,6 +325,46 @@ Same workload, hyperfine `--warmup 1 --runs 5`, 16-core box:
 Main still parks ~0.95 s of the 1.22 s at 8 workers (`main-wait`), so
 the critical chain, not the sequential base, sets the floor.
 
+### Second pass (wake policy, shared tables, flat AST)
+
+Same box, load average 3-4 from other agents, hyperfine 8 runs, A/B
+against the merge above run back to back:
+
+| workload | workers | before | after |
+|---|---|---|---|
+| nixos-desktop | 1 | 1.87 s (user 1.61, sys 0.24) | 1.67 s (user 1.44, sys 0.21) |
+| nixos-desktop | 4 | 1.15 s (user 3.08, sys 0.39) | 1.01 s (user 2.37, sys 0.31) |
+| nixos-desktop | 16 | 1.42 s (user 7.36, sys 1.13) | 1.27 s (user 5.88, sys 0.74) |
+| nixos-minimal | 1 | 1.54 s (user 1.34, sys 0.19) | 1.32 s (user 1.16, sys 0.15) |
+| nixos-minimal | 4 | 1.01 s (user 2.41, sys 0.34) | 0.89 s (user 1.95, sys 0.27) |
+| nixos-minimal | 16 | 1.26 s (user 5.85, sys 0.91) | 1.18 s (user 4.86, sys 0.59) |
+
+Where the wall goes at 4 workers on nixos-minimal (`IETSP_PAR_STATS=2`
+timeline and per-import log): ~0.6 s with all four workers busy, then
+~0.17 s where one helper alone reads, parses and compiles
+`pkgs/development/haskell-modules/hackage-packages.nix` (16.6 MB,
+pulled in by `shellcheck` through `writeShellApplication`) while main
+and the other helpers wait on it, plus a few 40 ms stretches with one
+runner. Nothing can be prefetched there: the file is imported the
+instant its importer is compiled. Parse and compile speed is the only
+lever on that phase; the flat AST took the import from 0.27 s to
+0.18 s. At w1, `compile_source` is still 28 % of the run (parse 19 %,
+compile 8 %).
+
+Tried and dropped in this pass, each measured A/B and inside noise or
+worse: a chunk prefault thread for the arena (a 17th busy thread on 16
+vCPUs; w16 +20 %); no stack trimming plus prefaulting the warm 64 KiB
+of new stacks (madvise count went up, not down); a shared lock-free
+interner cache in front of the shards (two dependent cold-line loads
+per probe, `intern` self time doubled; the 1024-entry per-handle cache
+stays); reusing AST buffers across parses; coerce batches of 8 cells;
+glibc malloc tunables (`top_pad`, `trim_threshold`: -0.05 s sys at
+w16, noise at w1; `arena_max=2` is a disaster). The `MADV_POPULATE_WRITE`
+of the arena chunks costs 27 ms total at w1 when huge pages are
+available; the rest of the sequential system time is ~20k page faults
+(glibc heap growth and parser buffers), ~25k file syscalls for ~4.5k
+opens, ~13k `mprotect` calls from glibc heap grow/shrink, and exit.
+
 ## Merge notes for the sequential work
 
 - `Evaluator` derives `Clone`; a new field must be `Clone`, and per-fiber
@@ -331,4 +392,5 @@ the critical chain, not the sequential base, sets the floor.
 
 ThreadSanitizer needs nightly; not run. Invariants above are the
 argument. No loom model. Sibling prefetch not implemented. The aarch64
-context switch is written but untested.
+context switch is written but untested. Speculation is still off by
+default and was not re-tuned in the second pass.
