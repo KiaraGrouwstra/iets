@@ -11,7 +11,7 @@ const STACK_SIZE: usize = 4 << 30;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: ietsp eval [--strict] [--json] [--workers N] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp build [--builder URL] [--timings] [--no-build] [--out NAME]... [--workers N] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--out NAME]... [--source STOREPATH=LOCAL]... DRV"
+        "usage: ietsp eval [--strict] [--json] [--workers N] [--timings] [--no-cache] [--cache-dir DIR] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp cache-dump READSET   (print a cache entry's read set)\n       ietsp build [--builder URL] [--timings] [--no-build] [--no-cache] [--cache-dir DIR] [--out NAME]... [--workers N] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--out NAME]... [--source STOREPATH=LOCAL]... DRV"
     );
     exit(2)
 }
@@ -71,6 +71,9 @@ struct EvalArgs {
     lint_short: ietsp::compile::Lint,
     xp_features: Vec<String>,
     workers: usize,
+    timings: bool,
+    no_cache: bool,
+    cache_dir: Option<String>,
 }
 
 enum ArgKind {
@@ -114,6 +117,9 @@ fn parse_eval_args(argv: &[String]) -> EvalArgs {
         lint_short: ietsp::compile::Lint::Ignore,
         xp_features: Vec::new(),
         workers: ietsp::parallel::default_workers(),
+        timings: false,
+        no_cache: std::env::var_os("IETSP_CACHE").is_some_and(|v| v == "0"),
+        cache_dir: None,
     };
     let mut i = 0;
     while i < argv.len() {
@@ -121,6 +127,12 @@ fn parse_eval_args(argv: &[String]) -> EvalArgs {
         match s {
             "--strict" => a.strict = true,
             "--json" => a.json = true,
+            "--timings" => a.timings = true,
+            "--no-cache" => a.no_cache = true,
+            "--cache-dir" => {
+                i += 1;
+                a.cache_dir = Some(argv.get(i).unwrap_or_else(|| usage()).clone());
+            }
             "-I" | "--include" => {
                 i += 1;
                 a.includes
@@ -218,13 +230,7 @@ fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
     if a.xp_features.iter().any(|f| f == "parse-toml-timestamps") {
         ietsp::builtins::text::set_parse_toml_timestamps(true);
     }
-    let mut includes = a.includes;
-    if let Ok(np) = std::env::var("NIX_PATH") {
-        for entry in np.split(':').filter(|s| !s.is_empty()) {
-            includes.push(parse_include(entry));
-        }
-    }
-    ietsp::builtins::set_search_path(ev, includes);
+    ietsp::builtins::set_search_path(ev, full_includes(&a.includes));
     if let Some(dir) = &a.dump_drvs {
         std::fs::create_dir_all(dir).map_err(|e| {
             Error::boxed(
@@ -236,22 +242,11 @@ fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
         ev.drv.dump_dir = Some(std::path::PathBuf::from(dir));
     }
 
-    let cwd = std::env::current_dir()
-        .map(|p| p.into_os_string().into_encoded_bytes())
-        .unwrap_or_else(|_| b"/".to_vec());
+    let cwd = cwd();
 
     let mut v = match a.input {
         Some(Input::Expr(e)) => ev.eval_string(&e, &cwd)?,
-        Some(Input::File(f)) => {
-            let mut p = f.as_bytes().to_vec();
-            if !p.starts_with(b"/") {
-                let mut full = cwd.clone();
-                full.push(b'/');
-                full.extend_from_slice(&p);
-                p = ietsp::compile::canon_path(&full);
-            }
-            ev.eval_file(&p, Pos::NONE)?
-        }
+        Some(Input::File(f)) => ev.eval_file(&abs_path(&f, &cwd), Pos::NONE)?,
         None => usage(),
     };
     if !a.args.is_empty() {
@@ -294,14 +289,29 @@ fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
 }
 
 fn run_eval(a: EvalArgs) -> i32 {
-    let ev = Evaluator::new();
+    let mut ev = Evaluator::new();
+    let cache = Cache::setup(&a, "eval", &ev);
+    if let Some(c) = &cache
+        && c.lookup()
+        && let Some(out) = c.store.read(&c.key, ietsp::trace::store::RESULT)
+    {
+        use std::io::Write;
+        let _ = std::io::stdout().write_all(&out);
+        let _ = std::io::stdout().flush();
+        return 0;
+    }
+    if cache.is_some() {
+        ev.trace = ietsp::trace::Trace::enabled();
+    }
     // parallel: the rest runs as the main fiber
-    ietsp::parallel::run(a.workers, ev, move |ev| eval_and_print(ev, a))
+    ietsp::parallel::run(a.workers, ev, move |ev| eval_and_print(ev, a, cache))
 }
 
-fn eval_and_print(ev: &mut Evaluator, a: EvalArgs) -> i32 {
+fn eval_and_print(ev: &mut Evaluator, a: EvalArgs, cache: Option<Cache>) -> i32 {
     let strict = a.strict;
     let json = a.json;
+    let t0 = std::time::Instant::now();
+    let timings = a.timings;
     let v = match evaluate(ev, a) {
         Ok(v) => v,
         Err(e) => {
@@ -334,6 +344,12 @@ fn eval_and_print(ev: &mut Evaluator, a: EvalArgs) -> i32 {
             use std::io::Write;
             let _ = std::io::stdout().write_all(&out);
             let _ = std::io::stdout().flush();
+            if timings {
+                eprintln!("eval: {:.3}s", t0.elapsed().as_secs_f64());
+            }
+            if let Some(c) = &cache {
+                c.write(ev, &out, false);
+            }
             0
         }
         Err(e) => {
@@ -530,14 +546,62 @@ fn cmd_build(argv: &[String]) -> i32 {
     }
 
     let t0 = std::time::Instant::now();
-    let ev = Evaluator::new();
+    let mut ev = Evaluator::new();
+    let a = EvalArgs {
+        timings: a.timings || b.timings,
+        ..a
+    };
+    let cache = Cache::setup(&a, "build", &ev);
+    if let Some(c) = &cache
+        && c.lookup()
+        && let Some(hit) = c.read_build()
+    {
+        let (roots, drvs, sources) = hit;
+        if b.timings {
+            eprintln!(
+                "eval: skipped, {} derivations and {} sources from the cache, {:.3}s",
+                drvs.len(),
+                sources.len(),
+                t0.elapsed().as_secs_f64()
+            );
+        }
+        let (root_paths, outputs) = build_targets(&b, &roots);
+        let inputs = ietsp::remote::plan::Inputs {
+            drvs: &drvs,
+            sources: &sources,
+        };
+        return build_roots(&b, &root_paths, &outputs, inputs);
+    }
+    if cache.is_some() {
+        ev.trace = ietsp::trace::Trace::enabled();
+    }
     // parallel: eval and build run as the main fiber
-    ietsp::parallel::run(a.workers, ev, move |ev| build_eval(ev, &b, a, t0))
+    ietsp::parallel::run(a.workers, ev, move |ev| build_eval(ev, &b, a, t0, cache))
 }
 
-fn build_eval(ev: &mut Evaluator, b: &BuildArgs, a: EvalArgs, t0: std::time::Instant) -> i32 {
-    use ietsp::store::path::StorePath;
+/// The drv paths to build and the outputs to print: `--out` plus the outputs the roots' context named.
+fn build_targets(
+    b: &BuildArgs,
+    roots: &[(ietsp::store::path::StorePath, Option<String>)],
+) -> (Vec<ietsp::store::path::StorePath>, Vec<String>) {
+    let mut outputs = b.outputs.clone();
+    for (_, out) in roots {
+        if let Some(o) = out
+            && !outputs.contains(o)
+        {
+            outputs.push(o.clone());
+        }
+    }
+    (roots.iter().map(|(p, _)| p.clone()).collect(), outputs)
+}
 
+fn build_eval(
+    ev: &mut Evaluator,
+    b: &BuildArgs,
+    a: EvalArgs,
+    t0: std::time::Instant,
+    cache: Option<Cache>,
+) -> i32 {
     let mut roots = Vec::new();
     let r = evaluate(ev, a).and_then(|v| drv_roots(ev, v, &mut roots));
     if let Err(e) = r {
@@ -553,15 +617,10 @@ fn build_eval(ev: &mut Evaluator, b: &BuildArgs, a: EvalArgs, t0: std::time::Ins
             eval_time.as_secs_f64()
         );
     }
-    let mut outputs = b.outputs.clone();
-    for (_, out) in &roots {
-        if let Some(o) = out
-            && !outputs.contains(o)
-        {
-            outputs.push(o.clone());
-        }
+    if let Some(c) = &cache {
+        c.write(ev, &ietsp::trace::wire::encode_roots(&roots), true);
     }
-    let root_paths: Vec<StorePath> = roots.iter().map(|(p, _)| p.clone()).collect();
+    let (root_paths, outputs) = build_targets(b, &roots);
     let drvs = ev.drv.drvs.lock();
     let sources = ev.source_origins();
     let inputs = ietsp::remote::plan::Inputs {
@@ -701,6 +760,268 @@ fn build_roots(
     if failed { 1 } else { 0 }
 }
 
+/// One line per observation of a `readset` file, for debugging misses.
+fn cmd_cache_dump(file: &str) -> i32 {
+    use ietsp::trace::Obs;
+    let Ok(bytes) = std::fs::read(file) else {
+        eprintln!("error: cannot read {file}");
+        return 1;
+    };
+    let Some(obs) = ietsp::trace::wire::decode_readset(&bytes) else {
+        eprintln!("error: {file} is not a readset");
+        return 1;
+    };
+    let hex = |d: &[u8]| d.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let s = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
+    for o in &obs {
+        match o {
+            Obs::File {
+                path, size, hash, ..
+            } => println!("file {} {size} {}", s(path), &hex(hash)[..16]),
+            Obs::Dir { path, hash } => println!("dir {} {}", s(path), &hex(hash)[..16]),
+            Obs::Stat { path, follow, kind } => {
+                println!("stat {} follow={follow} {kind:?}", s(path))
+            }
+            Obs::Tree { root, filtered, .. } => println!(
+                "tree {} accepted={}",
+                s(root),
+                filtered
+                    .as_ref()
+                    .map_or("all".to_string(), |f| f.accepted.len().to_string())
+            ),
+            Obs::Canon { path, target } => println!(
+                "canon {} -> {}",
+                s(path),
+                target.as_deref().map_or("(none)".to_string(), s)
+            ),
+            Obs::Env { name, value } => println!(
+                "env {}={}",
+                s(name),
+                value.as_deref().map_or("(unset)".to_string(), s)
+            ),
+        }
+    }
+    0
+}
+
+fn cwd() -> Vec<u8> {
+    std::env::current_dir()
+        .map(|p| p.into_os_string().into_encoded_bytes())
+        .unwrap_or_else(|_| b"/".to_vec())
+}
+
+fn abs_path(f: &str, cwd: &[u8]) -> Vec<u8> {
+    let p = f.as_bytes();
+    if p.starts_with(b"/") {
+        return p.to_vec();
+    }
+    let mut full = cwd.to_vec();
+    full.push(b'/');
+    full.extend_from_slice(p);
+    ietsp::compile::canon_path(&full)
+}
+
+/// `-I` entries first, then `NIX_PATH`, as absolute `(prefix, path)` pairs.
+fn full_includes(includes: &[(Vec<u8>, Vec<u8>)]) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let mut all = includes.to_vec();
+    if let Ok(np) = std::env::var("NIX_PATH") {
+        for entry in np.split(':').filter(|s| !s.is_empty()) {
+            all.push(parse_include(entry));
+        }
+    }
+    all
+}
+
+/// The tracing cache for one run: where the entry lives and its key. See docs/tracing-cache.md.
+struct Cache {
+    store: ietsp::trace::store::Store,
+    key: String,
+    timings: bool,
+}
+
+impl Cache {
+    /// `None` when the cache is off or the command cannot be keyed.
+    fn setup(a: &EvalArgs, subcommand: &str, ev: &Evaluator) -> Option<Cache> {
+        use ietsp::trace::key::{Key, has_relative_path};
+        if a.no_cache || a.dump_drvs.is_some() {
+            return None;
+        }
+        let store = ietsp::trace::store::Store::locate(a.cache_dir.as_deref())?;
+        let cwd = cwd();
+        let mut k = Key::new(subcommand);
+        let mut needs_cwd = false;
+        match a.input.as_ref()? {
+            Input::Expr(e) => {
+                k.field("expr", e.as_bytes());
+                needs_cwd |= has_relative_path(e);
+            }
+            Input::File(f) => {
+                let p = abs_path(f, &cwd);
+                let bytes = std::fs::read(std::path::Path::new(
+                    <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&p),
+                ))
+                .ok()?;
+                k.field("file", &p);
+                k.field("file-hash", &ietsp::trace::sha256(&bytes));
+            }
+        }
+        for (name, kind) in &a.args {
+            match kind {
+                ArgKind::Expr(e) => {
+                    k.field("arg", name.as_bytes());
+                    k.field("val", e.as_bytes());
+                    needs_cwd |= has_relative_path(e);
+                }
+                ArgKind::Str(s) => {
+                    k.field("argstr", name.as_bytes());
+                    k.field("val", s.as_bytes());
+                }
+            }
+        }
+        for (prefix, path) in full_includes(&a.includes) {
+            k.field("include-prefix", &prefix);
+            k.field("include-path", &path);
+        }
+        k.field("attr", a.attr.as_deref().unwrap_or("").as_bytes());
+        k.flag("strict", a.strict);
+        k.flag("json", a.json);
+        k.field("lint-absolute", format!("{:?}", a.lint_absolute).as_bytes());
+        k.field("lint-short", format!("{:?}", a.lint_short).as_bytes());
+        for f in &a.xp_features {
+            k.field("xp", f.as_bytes());
+        }
+        k.field("system", ev.current_system.as_bytes());
+        if needs_cwd {
+            k.field("cwd", &cwd);
+        }
+        Some(Cache {
+            store,
+            key: k.finish(),
+            timings: a.timings,
+        })
+    }
+
+    /// Validates the stored read set; true on a hit. A hit that refreshed
+    /// stat fields rewrites `readset`.
+    fn lookup(&self) -> bool {
+        use ietsp::trace::store::READSET;
+        let t0 = std::time::Instant::now();
+        let Some(bytes) = self.store.read(&self.key, READSET) else {
+            if self.timings {
+                eprintln!("cache: miss (no entry)");
+            }
+            return false;
+        };
+        let Some(mut obs) = ietsp::trace::wire::decode_readset(&bytes) else {
+            if self.timings {
+                eprintln!("cache: miss (unreadable entry)");
+            }
+            return false;
+        };
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(4));
+        let t_load = t0.elapsed();
+        match ietsp::trace::validate::validate(&mut obs, threads) {
+            Ok(r) => {
+                if r.refreshed > 0 {
+                    let _ = self.store.write(
+                        &self.key,
+                        READSET,
+                        &ietsp::trace::wire::encode_readset(&obs),
+                    );
+                }
+                if self.timings {
+                    eprintln!(
+                        "cache: hit, {} entries validated, {} rehashed, load {:.3}s, validate {:.3}s",
+                        r.entries,
+                        r.rehashed,
+                        t_load.as_secs_f64(),
+                        (t0.elapsed() - t_load).as_secs_f64()
+                    );
+                }
+                true
+            }
+            Err(m) => {
+                if self.timings {
+                    eprintln!(
+                        "cache: miss ({}), {} entries, {:.3}s",
+                        m.0,
+                        obs.len(),
+                        t0.elapsed().as_secs_f64()
+                    );
+                }
+                false
+            }
+        }
+    }
+
+    /// Writes the entry after a successful run; a run that observed
+    /// `currentTime` or called a fetcher writes nothing. `tables` adds the
+    /// drv and source tables, which only a `build` hit reads back.
+    fn write(&self, ev: &Evaluator, result: &[u8], tables: bool) {
+        use ietsp::trace::store::{DRVS, READSET, RESULT, SOURCES};
+        use ietsp::trace::wire;
+        if !ev.trace.is_cacheable() {
+            if self.timings {
+                eprintln!("cache: not written (uncacheable run)");
+            }
+            return;
+        }
+        let t0 = std::time::Instant::now();
+        let obs = ev.trace.take();
+        let r = if tables {
+            self.store
+                .write(&self.key, DRVS, &wire::encode_drvs(&ev.drv.drvs.lock()))
+                .and_then(|_| {
+                    self.store.write(
+                        &self.key,
+                        SOURCES,
+                        &wire::encode_sources(&ev.source_origins()),
+                    )
+                })
+        } else {
+            Ok(())
+        };
+        let r = r
+            .and_then(|_| self.store.write(&self.key, RESULT, result))
+            .and_then(|_| {
+                self.store
+                    .write(&self.key, READSET, &wire::encode_readset(&obs))
+            });
+        match r {
+            Ok(()) => {
+                if self.timings {
+                    eprintln!(
+                        "cache: wrote {} entries, {:.3}s",
+                        obs.len(),
+                        t0.elapsed().as_secs_f64()
+                    );
+                }
+            }
+            Err(e) => eprintln!(
+                "warning: cannot write cache entry {}: {e}",
+                self.store.entry_dir(&self.key).display()
+            ),
+        }
+    }
+
+    /// The roots, drv table and source table of a `build` entry.
+    #[allow(clippy::type_complexity)]
+    fn read_build(
+        &self,
+    ) -> Option<(
+        Vec<(ietsp::store::path::StorePath, Option<String>)>,
+        HashMap<ietsp::store::path::StorePath, ietsp::builtins::derivation::DrvInfo>,
+        HashMap<ietsp::store::path::StorePath, ietsp::store::source::SourceOrigin>,
+    )> {
+        use ietsp::trace::store::{DRVS, RESULT, SOURCES};
+        use ietsp::trace::wire;
+        let roots = wire::decode_roots(&self.store.read(&self.key, RESULT)?)?;
+        let drvs = wire::decode_drvs(&self.store.read(&self.key, DRVS)?)?;
+        let sources = wire::decode_sources(&self.store.read(&self.key, SOURCES)?)?;
+        Some((roots, drvs, sources))
+    }
+}
+
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let Some(cmd) = argv.first() else { usage() };
@@ -722,6 +1043,7 @@ fn main() {
                 .unwrap_or(1);
             exit(code)
         }
+        "cache-dump" if argv.len() == 2 => exit(cmd_cache_dump(&argv[1])),
         "parse" if argv.len() > 1 => {
             let rest = &argv[1..];
             let quiet = rest[0] == "-q";

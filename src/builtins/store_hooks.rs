@@ -31,6 +31,7 @@ pub fn copy_path_to_store(
             pos,
         )
     })?;
+    ev.trace.tree(p, crate::trace::hash_to_digest(&hash), None);
     let name = p
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())

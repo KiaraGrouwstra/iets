@@ -7,3 +7,4 @@ pub mod remote;
 pub mod runtime;
 pub mod store;
 pub mod syntax;
+pub mod trace;

@@ -451,7 +451,8 @@ fn derivation_strict_internal(
         );
     }
 
-    let mut loader = load_derivation_from_store;
+    let trace = ev.trace.clone();
+    let mut loader = move |p: &StorePath| load_drv_traced(&trace, p);
     if let Some(h) = output_hash {
         if outputs.len() != 1 || !outputs.contains("out") {
             bail!(
@@ -589,13 +590,34 @@ fn downstream_placeholder(drv_path: &StorePath, drv_name: &str, output: &str) ->
     )
 }
 
+/// `load_derivation_from_store` plus a `File` observation of the `.drv`.
+fn load_drv_traced(trace: &crate::trace::Trace, p: &StorePath) -> Result<Derivation, DrvError> {
+    if !trace.is_on() {
+        return load_derivation_from_store(p);
+    }
+    let full = p.to_string();
+    let read = || -> std::io::Result<(std::fs::Metadata, Vec<u8>)> {
+        let mut f = std::fs::File::open(&full)?;
+        let meta = f.metadata()?;
+        let mut d = Vec::with_capacity(meta.len() as usize);
+        std::io::Read::read_to_end(&mut f, &mut d)?;
+        Ok((meta, d))
+    };
+    let (meta, bytes) =
+        read().map_err(|e| DrvError(format!("cannot read derivation '{full}': {e}")))?;
+    trace.file(full.as_bytes(), &meta, &bytes);
+    let text = String::from_utf8(bytes)
+        .map_err(|_| DrvError(format!("derivation '{full}' is not valid UTF-8")))?;
+    Derivation::parse(&text, Derivation::name_from_path(p)?)
+}
+
 /// Output names and `.drv` references of `p`: from this evaluation's table,
 /// else parsed from `/nix/store`.
 fn drv_info(ev: &mut Evaluator, p: &StorePath, pos: Pos) -> EvalResult<DrvInfo> {
     if let Some(i) = ev.drv.drvs.get(p) {
         return Ok(i);
     }
-    let drv = load_derivation_from_store(p).map_err(|e| drv_err(e, pos))?;
+    let drv = load_drv_traced(&ev.trace, p).map_err(|e| drv_err(e, pos))?;
     let mut references: BTreeSet<StorePath> = drv.input_srcs.clone();
     references.extend(drv.input_drvs.keys().cloned());
     let info = DrvInfo {
@@ -656,10 +678,10 @@ pub fn import_derivation(ev: &mut Evaluator, path: &[u8], pos: Pos) -> EvalResul
     let Ok(sp) = sp else {
         return Ok(None);
     };
-    if !std::path::Path::new(&sp.to_string()).is_file() {
+    if ev.trace.stat_now(sp.to_string().as_bytes(), true) != crate::trace::Kind::Regular {
         return Ok(None);
     }
-    let drv = load_derivation_from_store(&sp).map_err(|e| drv_err(e, pos))?;
+    let drv = load_drv_traced(&ev.trace, &sp).map_err(|e| drv_err(e, pos))?;
     let drv_name = Derivation::name_from_path(&sp)
         .map_err(|e| drv_err(e, pos))?
         .to_string();

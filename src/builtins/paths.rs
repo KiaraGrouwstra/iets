@@ -45,7 +45,8 @@ pub fn register(r: &mut Registry) {
 
 macro_rules! unsupported {
     ($fn:ident, $msg:expr) => {
-        fn $fn(_ev: &mut Evaluator, _args: &[Word], pos: Pos) -> EvalResult<Word> {
+        fn $fn(ev: &mut Evaluator, _args: &[Word], pos: Pos) -> EvalResult<Word> {
+            ev.trace.mark_uncacheable();
             bail!(ErrorKind::Eval, pos, "{}", $msg)
         }
     };
@@ -193,7 +194,7 @@ fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>> {
     for c in &ctx {
         let msg = match c {
             Ctx::Opaque(sp) => {
-                if os_path(sp).exists() {
+                if ev.trace.stat_now(sp, true) != crate::trace::Kind::Missing {
                     continue;
                 }
                 let src = ev.src_to_store.iter().find(|(_, v)| v == sp);
@@ -239,6 +240,7 @@ fn read_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     fs::File::open(os_path(&p))
         .and_then(|f| io::Read::take(f, meta.len()).read_to_end(&mut bytes))
         .map_err(|e| io_error(e, "reading file", &p, pos))?;
+    ev.trace.file(&p, &meta, &bytes);
     if bytes.contains(&0) {
         bail!(
             ErrorKind::Eval,
@@ -270,22 +272,32 @@ fn read_dir(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         ev.mk_string(FileType::Unknown.nix_name().as_bytes()),
     ];
     let mut entries = Vec::new();
+    let mut listing = Vec::new();
     for e in rd {
         let e = e.map_err(|e| io_error(e, "reading directory", &p, pos))?;
         let ft = e
             .file_type()
             .map_err(|e| io_error(e, "getting status of", &p, pos))?;
-        let idx = if ft.is_symlink() {
-            2
+        let (idx, kind) = if ft.is_symlink() {
+            (2, crate::trace::Kind::Symlink)
         } else if ft.is_dir() {
-            1
+            (1, crate::trace::Kind::Directory)
         } else if ft.is_file() {
-            0
+            (0, crate::trace::Kind::Regular)
         } else {
-            3
+            (3, crate::trace::Kind::Other)
         };
         let sym = ev.sym(e.file_name().as_bytes());
         entries.push((sym, Pos::NONE, names[idx]));
+        if ev.trace.is_on() {
+            listing.push((e.file_name().as_bytes().to_vec(), kind));
+        }
+    }
+    if ev.trace.is_on() {
+        ev.trace.record(crate::trace::Obs::Dir {
+            path: p.clone(),
+            hash: crate::trace::dir_listing_hash(&mut listing),
+        });
     }
     ev.mk_attrs(&mut entries, pos)
 }
@@ -296,8 +308,9 @@ fn libc_enotdir() -> i32 {
 
 fn read_file_type(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let p = realise_path(ev, args[0], pos)?;
-    let meta =
-        fs::symlink_metadata(os_path(&p)).map_err(|e| io_error(e, "getting status of", &p, pos))?;
+    let meta = fs::symlink_metadata(os_path(&p));
+    ev.trace.stat(&p, false, crate::trace::Kind::of(&meta));
+    let meta = meta.map_err(|e| io_error(e, "getting status of", &p, pos))?;
     Ok(ev.mk_string(file_type_name(meta.file_type()).as_bytes()))
 }
 
@@ -309,9 +322,13 @@ fn path_exists(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> 
     );
     let p = realise_path(ev, w, pos)?;
     let r = if must_be_dir {
-        fs::metadata(os_path(&p)).map(|m| m.is_dir())
+        let m = fs::metadata(os_path(&p));
+        ev.trace.stat(&p, true, crate::trace::Kind::of(&m));
+        m.map(|m| m.is_dir())
     } else {
-        fs::symlink_metadata(os_path(&p)).map(|_| true)
+        let m = fs::symlink_metadata(os_path(&p));
+        ev.trace.stat(&p, false, crate::trace::Kind::of(&m));
+        m.map(|_| true)
     };
     match r {
         Ok(b) => Ok(Word::from_bool(b)),
@@ -364,8 +381,9 @@ fn store_path(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         "while evaluating the first argument passed to 'builtins.storePath'",
     )?;
     if !is_store_path(&p) {
-        let resolved =
-            fs::canonicalize(os_path(&p)).map_err(|e| io_error(e, "getting status of", &p, pos))?;
+        let resolved = fs::canonicalize(os_path(&p));
+        ev.trace.canon(&p, resolved.as_deref().ok());
+        let resolved = resolved.map_err(|e| io_error(e, "getting status of", &p, pos))?;
         p = resolved.into_os_string().into_vec();
     }
     let sp = match to_store_path(&p) {
@@ -451,12 +469,15 @@ fn add_path_inner(
         .transpose()
         .map_err(store_err)?;
     if let Some(sp) = &expected_sp
-        && Path::new(&sp.to_full_string()).exists()
+        && ev.trace.stat_now(sp.to_full_string().as_bytes(), true) != crate::trace::Kind::Missing
     {
         return Ok(store_path_string(ev, sp));
     }
     let resolved: PathBuf =
         fs::canonicalize(os_path(path)).unwrap_or_else(|_| os_path(path).to_path_buf());
+    if resolved.as_os_str().as_bytes() != path {
+        ev.trace.canon(path, Some(&resolved));
+    }
     let mut accepted: Option<HashSet<PathBuf>> = filter.map(|_| HashSet::new());
     let hash = match method {
         IngestionMethod::Flat => {
@@ -470,8 +491,16 @@ fn add_path_inner(
                     lossy(path)
                 );
             }
-            nar::flat_hash(&resolved, HashAlgo::Sha256)
-                .map_err(|e| io_error(e, "reading file", path, pos))?
+            let h = nar::flat_hash(&resolved, HashAlgo::Sha256)
+                .map_err(|e| io_error(e, "reading file", path, pos))?;
+            if ev.trace.is_on() {
+                ev.trace.record(crate::trace::file_obs(
+                    resolved.as_os_str().as_bytes(),
+                    &meta,
+                    crate::trace::hash_to_digest(&h),
+                ));
+            }
+            h
         }
         IngestionMethod::Recursive => {
             let mut err: Option<Box<Error>> = None;
@@ -499,7 +528,13 @@ fn add_path_inner(
             if let Some(e) = err {
                 return Err(e);
             }
-            r.map_err(|e| io_error(e, "copying", path, pos))?.0
+            let h = r.map_err(|e| io_error(e, "copying", path, pos))?.0;
+            ev.trace.tree(
+                &resolved,
+                crate::trace::hash_to_digest(&h),
+                accepted.as_ref(),
+            );
+            h
         }
     };
     let sp = make_fixed_output_path(method, &hash, name, &refs).map_err(store_err)?;

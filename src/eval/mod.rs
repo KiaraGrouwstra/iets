@@ -123,6 +123,8 @@ pub struct Evaluator {
     pub compile_settings: crate::compile::CompileSettings,
     pub drv: crate::builtins::derivation::DrvState,
     pub par: crate::parallel::Ctx,
+    /// Read-set recorder for the tracing cache; off unless `main` enables it.
+    pub trace: crate::trace::Trace,
 }
 
 macro_rules! bail {
@@ -182,6 +184,7 @@ impl Evaluator {
             compile_settings: Default::default(),
             drv: Default::default(),
             par: Default::default(),
+            trace: Default::default(),
         };
         crate::builtins::install(&mut ev);
         ev
@@ -249,10 +252,14 @@ impl Evaluator {
             self.compile_settings,
         );
         let r = c.compile_root(extra_scope);
+        let used_home = c.used_home.get();
         self.arena
             .stats
             .note(Stat::Ir, self.arena.bytes_allocated - before);
         self.t_compile += t0.elapsed();
+        if used_home {
+            self.trace.env(b"HOME");
+        }
         r
     }
 
@@ -310,6 +317,8 @@ impl Evaluator {
         let meta = std::fs::metadata(std::path::Path::new(std::str::from_utf8(&p).unwrap_or("")));
         match meta {
             Ok(m) if m.is_dir() => {
+                // a regular file needs no Stat: its File observation checks the type
+                self.trace.stat(&p, true, crate::trace::Kind::Directory);
                 p.extend_from_slice(b"/default.nix");
             }
             Ok(_) => {}
@@ -349,7 +358,8 @@ impl Evaluator {
                 continue;
             };
             let cp = crate::compile::canon_path(&candidate);
-            if std::path::Path::new(std::str::from_utf8(&cp).unwrap_or("")).exists() {
+            let kind = self.trace.stat_now(&cp, true);
+            if kind != crate::trace::Kind::Missing {
                 return Ok(cp);
             }
         }
@@ -372,9 +382,17 @@ impl Evaluator {
         {
             return Ok(src.to_vec());
         }
-        match std::fs::read(std::path::Path::new(
-            std::str::from_utf8(resolved).unwrap_or(""),
-        )) {
+        let read = || -> std::io::Result<Vec<u8>> {
+            let mut f = std::fs::File::open(std::path::Path::new(
+                std::str::from_utf8(resolved).unwrap_or(""),
+            ))?;
+            let meta = f.metadata()?;
+            let mut s = Vec::with_capacity(meta.len() as usize);
+            std::io::Read::read_to_end(&mut f, &mut s)?;
+            self.trace.file(resolved, &meta, &s);
+            Ok(s)
+        };
+        match read() {
             Ok(s) => Ok(s),
             Err(e) => bail!(
                 ErrorKind::Io,

@@ -35,6 +35,8 @@ pub struct Compiler<'a> {
     /// Global offset of this file's first byte.
     base: u32,
     home: Option<Vec<u8>>,
+    /// Set when a `~/` path literal was compiled; the evaluator then records `$HOME`.
+    pub used_home: std::cell::Cell<bool>,
     settings: CompileSettings,
     sym_builtins: Sym,
     sym_cur_pos: Sym,
@@ -128,6 +130,7 @@ impl<'a> Compiler<'a> {
             base_dir: base_dir.to_vec(),
             base,
             home: std::env::var_os("HOME").map(|h| h.into_encoded_bytes()),
+            used_home: std::cell::Cell::new(false),
             settings,
             sym_builtins,
             sym_cur_pos,
@@ -551,6 +554,7 @@ impl<'a> Compiler<'a> {
                 canon_path(&p)
             }
             PathKind::Home => {
+                self.used_home.set(true);
                 let mut p = self.home.clone().unwrap_or_else(|| b"/".to_vec());
                 p.extend_from_slice(text);
                 canon_path(&p)

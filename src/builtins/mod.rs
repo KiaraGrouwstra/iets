@@ -80,6 +80,14 @@ pub fn install(ev: &mut Evaluator) {
     r.constant("__storeDir", sd);
     let np = ev.mk_list(&[]);
     r.constant("__nixPath", np);
+    let ct_op = r
+        .ops
+        .iter()
+        .find(|(n, ..)| *n == "currentTimeRaw")
+        .map(|(n, a, f, _)| ev.arena.mk_primop(n, *a, *f))
+        .expect("currentTimeRaw registered");
+    let ct = ev.arena.mk_thunk_app(ct_op, Word::NULL);
+    r.constant("__currentTime", ct);
 
     let mut entries: Vec<(Sym, Pos, Word)> = Vec::new();
     for (name, arity, f, global) in &r.ops {

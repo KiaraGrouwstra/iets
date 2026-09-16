@@ -35,11 +35,18 @@ pub fn register(r: &mut Registry) {
     r.op("__fromJSON", 1, json::from_json);
     r.op("__toXML", 1, xml::to_xml);
     r.op("fromTOML", 1, fromtoml::from_toml);
+    r.op_hidden("currentTimeRaw", 1, current_time);
+}
+
+/// `builtins.currentTime` is a thunk over this, so the run is marked
+/// uncacheable only when a program forces it.
+fn current_time(ev: &mut Evaluator, _args: &[Word], _pos: Pos) -> EvalResult<Word> {
+    ev.trace.mark_uncacheable();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    r.constant("__currentTime", Word::imm_int(now));
+    Ok(Word::imm_int(now))
 }
 
 // ---- regular expressions ------------------------------------------------------
@@ -331,8 +338,18 @@ fn hash_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         }
     };
     let os = <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&path);
-    let data = match std::fs::read(os) {
-        Ok(d) => d,
+    let read = || -> std::io::Result<(std::fs::Metadata, Vec<u8>)> {
+        let mut f = std::fs::File::open(os)?;
+        let meta = f.metadata()?;
+        let mut d = Vec::with_capacity(meta.len() as usize);
+        std::io::Read::read_to_end(&mut f, &mut d)?;
+        Ok((meta, d))
+    };
+    let data = match read() {
+        Ok((meta, d)) => {
+            ev.trace.file(&path, &meta, &d);
+            d
+        }
         Err(e) => bail!(
             ErrorKind::Io,
             pos,
@@ -569,6 +586,7 @@ fn get_env(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         "while evaluating the first argument passed to builtins.getEnv",
     )?;
     let os = <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(name);
+    ev.trace.env(name);
     let v = std::env::var_os(os).unwrap_or_default();
     let bytes = <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::as_bytes(&v);
     Ok(ev.mk_string(bytes))
