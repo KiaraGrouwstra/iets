@@ -1,0 +1,134 @@
+// ietsp remote builder protocol, v1. Transport-agnostic: this file defines
+// messages and one service; v1 carries it over gRPC/HTTP2 cleartext.
+syntax = "proto3";
+
+package ietsp.builder.v1;
+
+service Builder {
+  // One batch: which of these digests does the builder lack?
+  rpc Have(HaveRequest) returns (HaveResponse);
+  // One stream: every missing chunk, manifest, and drv, pipelined.
+  rpc Put(stream PutRequest) returns (PutResponse);
+  // One request; the builder streams events until Done.
+  rpc Build(BuildRequest) returns (stream BuildEvent);
+  // Optional: pull a store path back as a chunked NAR.
+  rpc Fetch(FetchRequest) returns (stream Chunk);
+}
+
+enum HashAlgo {
+  SHA256 = 0; // Nix compatible; the only algo v1 accepts
+  BLAKE3 = 1; // reserved for a later version
+}
+
+message Digest {
+  HashAlgo algo = 1;
+  bytes bytes = 2; // raw digest, 32 bytes for sha256
+}
+
+// A slice of a NAR. Data is at most CHUNK_MAX = 4 MiB. Addressed by the
+// sha256 of `data`.
+message Chunk {
+  Digest digest = 1;
+  bytes data = 2;
+}
+
+// How a store path was content-addressed; decides how the builder derives
+// and checks `store_path`.
+enum ContentAddress {
+  SOURCE = 0; // recursive sha256 of the NAR, no references (`./path`, fetchTarball)
+  TEXT = 1;   // flat sha256 of one regular file, with references (builtins.toFile)
+}
+
+// A source tree: the NAR of a store path, split into chunks. Addressed by
+// its NAR hash. The builder recomputes `store_path` from the content under
+// the Nix rules for `ca` and rejects a manifest that does not match.
+message Manifest {
+  string store_path = 1; // /nix/store/<hash>-<name>
+  Digest nar_hash = 2;
+  uint64 nar_size = 3;
+  repeated Digest chunks = 4; // in NAR order
+  ContentAddress ca = 5;
+  repeated string references = 6; // TEXT only: store paths the file refers to
+}
+
+// A derivation: its ATerm bytes and the drv path the client computed.
+// Addressed by sha256(aterm).
+message DrvBlob {
+  string drv_path = 1; // /nix/store/<hash>-<name>.drv
+  bytes aterm = 2;
+}
+
+message HaveRequest {
+  // Chunks and objects live in separate namespaces: a one-chunk NAR has
+  // chunk digest == NAR hash, so one list would conflate them.
+  repeated Digest chunks = 1;
+  repeated Digest objects = 2; // manifests (by NAR hash) and drvs (by sha256 of the ATerm)
+}
+
+message HaveResponse {
+  repeated Digest missing_chunks = 1;
+  repeated Digest missing_objects = 2;
+}
+
+message PutRequest {
+  oneof body {
+    Chunk chunk = 1;
+    Manifest manifest = 2;
+    DrvBlob drv = 3;
+  }
+}
+
+message PutResponse {
+  repeated Digest stored = 1;
+}
+
+message BuildRequest {
+  string root_drv_path = 1;
+  repeated string outputs = 2; // empty means all
+  bool keep_going = 3;
+  int32 priority = 4;
+}
+
+message BuildEvent {
+  oneof event {
+    Scheduled scheduled = 1;
+    Started started = 2;
+    Log log = 3;
+    Built built = 4;
+    Failed failed = 5;
+    Done done = 6;
+  }
+}
+
+message Scheduled {
+  repeated string drv_paths = 1; // what the builder will build
+}
+
+message Started {
+  string drv_path = 1;
+}
+
+message Log {
+  string drv_path = 1; // empty when not attributed to one build
+  bytes line = 2;
+}
+
+message Built {
+  string drv_path = 1;
+  string output = 2;
+  string store_path = 3;
+  string signature = 4; // empty in v1
+}
+
+message Failed {
+  string drv_path = 1;
+  string reason = 2;
+}
+
+message Done {
+  bool success = 1;
+}
+
+message FetchRequest {
+  string store_path = 1;
+}
