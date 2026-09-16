@@ -69,7 +69,9 @@ pub fn default_workers() -> usize {
     {
         return n;
     }
-    std::thread::available_parallelism().map_or(1, |n| n.get())
+    // the critical chain, not core count, sets the floor; past 4 workers the
+    // idle spin costs more wall time than the extra stealing gains
+    std::thread::available_parallelism().map_or(1, |n| n.get().min(4))
 }
 
 fn stack_size() -> usize {
