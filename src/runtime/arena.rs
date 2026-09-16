@@ -153,9 +153,11 @@ pub enum Stat {
     Lambda,
     PrimOpApp,
     Ir,
+    AttrsLit,
+    AttrsUpd,
 }
 
-pub const STAT_NAMES: [&str; 11] = [
+pub const STAT_NAMES: [&str; 13] = [
     "thunk",
     "thunk_app",
     "env",
@@ -167,12 +169,14 @@ pub const STAT_NAMES: [&str; 11] = [
     "lambda",
     "primop_app",
     "ir",
+    "attrs_lit",
+    "attrs_upd",
 ];
 
 #[derive(Default)]
 pub struct Stats {
-    pub counts: [u64; 11],
-    pub bytes: [u64; 11],
+    pub counts: [u64; 13],
+    pub bytes: [u64; 13],
 }
 
 impl Stats {

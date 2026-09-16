@@ -1473,7 +1473,7 @@ impl Evaluator {
     /// The common case: static names only, so the binds are already sorted
     /// and the set is filled in place without a temporary vector.
     fn eval_static_attrs(&mut self, env: &'static EnvObj, a: &'static AttrsIr) -> Word {
-        let out = self.arena.alloc_attrs(a.binds.len());
+        let out = self.arena.alloc_attrs_as(a.binds.len(), Stat::AttrsLit);
         if a.rec {
             let env2 = self.alloc_rec_env(env, a.binds, a.from);
             for (i, b) in a.binds.iter().enumerate() {
@@ -1649,7 +1649,7 @@ impl Evaluator {
                 }
             }
         }
-        let out = self.arena.alloc_attrs(aa.len() + bb.len() - common);
+        let out = self.arena.alloc_attrs_as(aa.len() + bb.len() - common, Stat::AttrsUpd);
         let (mut i, mut j, mut k) = (0, 0, 0);
         while i < aa.len() && j < bb.len() {
             match aa[i].sym.cmp(&bb[j].sym) {
@@ -1867,14 +1867,15 @@ impl Evaluator {
     pub fn print_stats(&self) {
         let st = &self.arena.stats;
         eprintln!(
-            "files={} src_bytes={} thunks={} calls={} drvs={} arena_bytes={} compile={:?}",
+            "files={} src_bytes={} thunks={} calls={} drvs={} arena_bytes={} compile={:?} ir_size={}",
             self.files.len(),
             self.files.iter().map(|f| f.src.len()).sum::<usize>(),
             self.nr_thunks,
             self.nr_function_calls,
             self.drv.nr_derivations,
             self.arena.bytes_allocated,
-            self.t_compile
+            self.t_compile,
+            size_of::<Ir>()
         );
         for (i, name) in STAT_NAMES.iter().enumerate() {
             eprintln!(

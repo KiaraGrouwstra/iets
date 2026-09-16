@@ -487,7 +487,12 @@ impl Arena {
     /// Allocate attrs with `n` uninitialised entries. Caller fills them in
     /// sorted order through `attrs_mut`.
     pub fn alloc_attrs(&mut self, n: usize) -> &'static mut AttrsObj {
-        self.stats.note(Stat::Attrs, size_of::<AttrsObj>() + n * size_of::<Attr>());
+        self.alloc_attrs_as(n, Stat::Attrs)
+    }
+
+    /// `alloc_attrs` with a stats bucket naming the producer.
+    pub fn alloc_attrs_as(&mut self, n: usize, bucket: Stat) -> &'static mut AttrsObj {
+        self.stats.note(bucket, size_of::<AttrsObj>() + n * size_of::<Attr>());
         let p = self.alloc_raw(size_of::<AttrsObj>() + n * size_of::<Attr>(), 8) as *mut AttrsObj;
         // SAFETY: fresh allocation sized for header plus n attrs.
         unsafe {
