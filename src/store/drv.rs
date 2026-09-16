@@ -84,16 +84,22 @@ pub type DrvLoader<'a> = dyn FnMut(&StorePath) -> Result<Derivation, DrvError> +
 /// Mirrors derivations.cc:printString: ATerm string with `\"`, `\\`, `\n`, `\r`, `\t` escapes.
 fn print_string(out: &mut String, s: &str) {
     out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c => out.push(c),
-        }
+    let mut rest = s;
+    while let Some(i) = rest
+        .bytes()
+        .position(|b| matches!(b, b'"' | b'\\' | b'\n' | b'\r' | b'\t'))
+    {
+        out.push_str(&rest[..i]);
+        out.push_str(match rest.as_bytes()[i] {
+            b'"' => "\\\"",
+            b'\\' => "\\\\",
+            b'\n' => "\\n",
+            b'\r' => "\\r",
+            _ => "\\t",
+        });
+        rest = &rest[i + 1..];
     }
+    out.push_str(rest);
     out.push('"');
 }
 
