@@ -63,7 +63,7 @@ fn unsupported(_ev: &mut Evaluator, _args: &[Word], pos: Pos) -> EvalResult<Word
     )
 }
 
-fn utf8<'a>(b: &'a [u8], pos: Pos) -> EvalResult<&'a str> {
+fn utf8(b: &[u8], pos: Pos) -> EvalResult<&str> {
     std::str::from_utf8(b)
         .map_err(|_| Error::boxed(ErrorKind::Eval, "string is not valid UTF-8", pos))
 }
@@ -811,7 +811,7 @@ fn generic_closure(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wo
         "while evaluating the 'startSet' attribute passed as argument to builtins.genericClosure",
     )?;
     if start_l.len == 0 {
-        return Ok(ev.force(start_w)?);
+        return ev.force(start_w);
     }
     let Some(op) = attrs.get(s_op) else {
         bail!(ErrorKind::MissingAttr, pos, "attribute 'operator' missing");
