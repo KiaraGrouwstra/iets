@@ -9,7 +9,7 @@ use crate::builtins::derivation::DrvInfo;
 use crate::store::path::StorePath;
 use crate::store::source::SourceOrigin;
 
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
 
 struct Enc(Vec<u8>);
 
@@ -196,7 +196,13 @@ fn put_obs(e: &mut Enc, o: &Obs) {
                 None => e.u8(0),
                 Some(f) => {
                     e.u8(1);
-                    e.digest(&f.seen_hash);
+                    match f.seen_hash {
+                        Some(h) => {
+                            e.u8(1);
+                            e.digest(&h);
+                        }
+                        None => e.u8(0),
+                    }
                     e.list(&f.accepted);
                 }
             }
@@ -210,6 +216,12 @@ fn put_obs(e: &mut Enc, o: &Obs) {
             e.u8(5);
             e.bytes(name);
             e.opt_bytes(value.as_deref());
+        }
+        Obs::Cmd { dir, argv, hash } => {
+            e.u8(6);
+            e.bytes(dir);
+            e.list(argv);
+            e.digest(hash);
         }
     }
 }
@@ -239,7 +251,11 @@ fn get_obs(d: &mut Dec<'_>) -> R<Obs> {
             let filtered = match d.u8()? {
                 0 => None,
                 1 => Some(Filtered {
-                    seen_hash: d.digest()?,
+                    seen_hash: match d.u8()? {
+                        0 => None,
+                        1 => Some(d.digest()?),
+                        _ => return Err(()),
+                    },
                     accepted: d.list()?,
                 }),
                 _ => return Err(()),
@@ -258,6 +274,11 @@ fn get_obs(d: &mut Dec<'_>) -> R<Obs> {
         5 => Obs::Env {
             name: d.vec()?,
             value: d.opt_vec()?,
+        },
+        6 => Obs::Cmd {
+            dir: d.vec()?,
+            argv: d.list()?,
+            hash: d.digest()?,
         },
         _ => return Err(()),
     })
@@ -494,7 +515,7 @@ mod tests {
                 nar_hash: [2; 32],
                 stat_hash: [3; 32],
                 filtered: Some(Filtered {
-                    seen_hash: [4; 32],
+                    seen_hash: Some([4; 32]),
                     accepted: vec![b"/t/x".to_vec()],
                 }),
             },

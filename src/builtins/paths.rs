@@ -1,7 +1,8 @@
 //! File system primops (primops.cc): readFile, readDir, readFileType,
-//! pathExists, toPath, storePath, filterSource, path, toFile. The fetchers
-//! and flake primops are registered so `builtins ? fetchTree` holds, but
-//! they fail when called: ietsp never touches the network or the store.
+//! pathExists, toPath, storePath, filterSource, path, toFile. The network
+//! fetchers and flake primops are registered so `builtins ? fetchGit`
+//! holds, but they fail when called; only `fetchTree` on a locked input
+//! works (`flake::fetch`).
 
 use std::collections::{BTreeSet, HashSet};
 use std::ffi::OsStr;
@@ -35,7 +36,7 @@ pub fn register(r: &mut Registry) {
     r.op("__fetchurl", 1, fetchurl);
     r.op("fetchTarball", 1, fetch_tarball);
     r.op("fetchGit", 1, fetch_git);
-    r.op("fetchTree", 1, fetch_tree);
+    r.op("fetchTree", 1, crate::flake::fetch::fetch_tree);
     r.op("fetchMercurial", 1, fetch_mercurial);
     r.op("__fetchClosure", 1, fetch_closure);
     r.op("__getFlake", 1, get_flake);
@@ -63,10 +64,6 @@ unsupported!(
 unsupported!(
     fetch_git,
     "ietsp: network fetchers are not supported (builtins.fetchGit)"
-);
-unsupported!(
-    fetch_tree,
-    "ietsp: network fetchers are not supported (builtins.fetchTree)"
 );
 unsupported!(
     fetch_mercurial,

@@ -1,6 +1,7 @@
 pub mod builtins;
 pub mod compile;
 pub mod eval;
+pub mod flake;
 pub mod parallel;
 pub mod print;
 pub mod remote;

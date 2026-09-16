@@ -20,9 +20,10 @@ measurable next to the sha256 of the file bytes.
 | `File { path, size, mtime_ns, ino, sha256 }` | `import`, `scopedImport`, `readFile`, `hashFile`, `import` of a `/nix/store/*.drv`, every `.drv` read for `hashDerivationModulo` | `lstat`; on a stat mismatch the file is rehashed and accepted if the hash matches (stat fields refreshed in the entry) |
 | `Dir { path, sha256 of the sorted (name, type) listing }` | `readDir` | re-list and rehash |
 | `Stat { path, follow, kind }` where kind is missing, regular, directory, symlink, other | `pathExists`, `readFileType`, the `default.nix` probe of `import`, every candidate of a `<name>` search-path lookup, store paths checked for existence | re-stat |
-| `Tree { root, nar_hash, stat_hash, filtered: Option<{ seen_hash, accepted }> }` | `./path` coerced to a string, `builtins.path`, `filterSource` | recompute `stat_hash` (a walk with `lstat` only, no contents); on a mismatch re-dump the NAR with the recorded `accepted` set as filter and accept if `nar_hash` (and `seen_hash`) match |
+| `Tree { root, nar_hash, stat_hash, filtered: Option<{ seen_hash: Option, accepted }> }` | `./path` coerced to a string, `builtins.path`, `filterSource`, a flake's git working tree (`seen_hash` is `None` there: git names the file set, so unlisted entries cannot matter), a `path:` flake or input (unfiltered) | recompute `stat_hash` (a walk with `lstat` only, no contents); on a mismatch re-dump the NAR with the recorded `accepted` set as filter and accept if `nar_hash` (and `seen_hash`, when kept) match |
 | `Canon { path, target }` | `storePath`, `builtins.path` and `filterSource` when `canonicalize(path) != path` | `canonicalize` again |
 | `Env { name, value: Option<bytes> }` | `getEnv`; `HOME` when a `~/` path literal is compiled | `var_os` again |
+| `Cmd { dir, argv, sha256 of exit status and stdout }` | the `git` queries of a flake's working tree (`flake::root`) | run again, rehash |
 
 `stat_hash` covers, for every entry the walk saw: relative path, type,
 size, mtime_ns, inode, and symlink target. `seen_hash` covers the (relative
@@ -30,9 +31,11 @@ path, type) pairs the filter was asked about, so a new entry the filter
 would have accepted or rejected is a miss. For an unfiltered tree the
 `stat_hash` already covers that.
 
-`builtins.currentTime` and every fetcher (`fetchurl`, `fetchTarball`,
-`fetchGit`, `fetchTree`, `fetchMercurial`, `fetchClosure`, `getFlake`)
-mark the run uncacheable. `currentTime` is a lazy thunk over an internal
+`builtins.currentTime` and every network fetcher (`fetchurl`,
+`fetchTarball`, `fetchGit`, `fetchMercurial`, `fetchClosure`, `getFlake`)
+mark the run uncacheable. `fetchTree` on a locked input is cacheable: its
+result follows from the attrs and a `Stat` of the store path (see
+`docs/flakes.md`). `currentTime` is a lazy thunk over an internal
 primop so the mark happens only when a program forces it. `--dump-drvs`
 also disables the cache (it has a side effect on every miss).
 
@@ -45,10 +48,12 @@ The key is computed before evaluation from the command alone:
   (`cargo:rerun-if-changed` on those paths keeps it current; the nix build
   stays reproducible);
 - subcommand (`eval` or `build`);
-- the expression text, or the absolute file path plus the sha256 of its
-  contents;
+- the expression text; the absolute file path plus the sha256 of its
+  contents; or, for a flake reference, its text, the resolved flake
+  directory and the sha256 of `flake.nix` and `flake.lock` (cwd is then
+  always in the key);
 - `--arg`/`--argstr` name and value pairs in order; `-A`; `--strict`;
-  `--json`; the lint flags; experimental features;
+  `--json`; `--raw`; the lint flags; experimental features;
 - `-I` entries and `NIX_PATH` entries as absolute `(prefix, path)` pairs
   in resolution order;
 - `builtins.currentSystem`;
