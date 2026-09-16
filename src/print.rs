@@ -69,6 +69,31 @@ pub fn print_literal_string(out: &mut Vec<u8>, s: &[u8]) {
     out.push(b'"');
 }
 
+/// `print.cc: isVarName`.
+fn is_var_name(s: &[u8]) -> bool {
+    const KEYWORDS: [&[u8]; 9] = [
+        b"if", b"then", b"else", b"assert", b"with", b"let", b"in", b"rec", b"inherit",
+    ];
+    if s.is_empty() || KEYWORDS.contains(&s) {
+        return false;
+    }
+    if matches!(s[0], b'0'..=b'9' | b'-' | b'\'') {
+        return false;
+    }
+    s.iter()
+        .all(|&c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-' | b'\''))
+}
+
+/// `print.cc: printAttributeName`: bare when it is a valid identifier,
+/// a string literal otherwise.
+pub fn print_attr_name(out: &mut Vec<u8>, name: &[u8]) {
+    if is_var_name(name) {
+        out.extend_from_slice(name);
+    } else {
+        print_literal_string(out, name);
+    }
+}
+
 /// Attr names in the order Nix prints them: by name bytes.
 pub fn lexicographic_order(ev: &Evaluator, a: &'static AttrsObj) -> Vec<&'static Attr> {
     let mut v: Vec<&'static Attr> = a.attrs().iter().collect();
@@ -120,7 +145,7 @@ pub fn print_ambiguous(
             }
             out.extend_from_slice(b"{ ");
             for attr in lexicographic_order(ev, a) {
-                out.extend_from_slice(ev.interner.name(attr.sym));
+                print_attr_name(out, ev.interner.name(attr.sym));
                 out.extend_from_slice(b" = ");
                 print_ambiguous(
                     ev,
@@ -289,7 +314,7 @@ pub fn json_float(f: f64) -> String {
     let sci = format!("{f:e}");
     let (mant, exp) = sci.split_once('e').unwrap();
     let exp: i32 = exp.parse().unwrap();
-    if (-5..17).contains(&exp) {
+    if (-4..15).contains(&exp) {
         let s = format!("{f}");
         if s.contains('.') { s } else { format!("{s}.0") }
     } else {
@@ -298,7 +323,31 @@ pub fn json_float(f: f64) -> String {
     }
 }
 
+/// `printValueAsJSON`. Counts against the call depth like Nix's
+/// `addCallDepth`, so deep structures fail with a stack overflow error.
 pub fn print_json(
+    ev: &mut Evaluator,
+    w: Word,
+    out: &mut Vec<u8>,
+    ctx: &mut Vec<Ctx>,
+    strict: bool,
+    pos: Pos,
+) -> EvalResult<()> {
+    ev.call_depth += 1;
+    if ev.call_depth > crate::eval::MAX_CALL_DEPTH {
+        ev.call_depth -= 1;
+        return Err(Error::boxed(
+            ErrorKind::StackOverflow,
+            "stack overflow; max-call-depth exceeded",
+            pos,
+        ));
+    }
+    let r = print_json_inner(ev, w, out, ctx, strict, pos);
+    ev.call_depth -= 1;
+    r
+}
+
+fn print_json_inner(
     ev: &mut Evaluator,
     w: Word,
     out: &mut Vec<u8>,

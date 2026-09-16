@@ -7,6 +7,7 @@ pub mod lists;
 pub mod math;
 pub mod store_hooks;
 pub mod strings;
+pub mod text;
 
 use crate::eval::{Evaluator, Pos};
 use crate::runtime::*;
@@ -58,6 +59,7 @@ pub fn install(ev: &mut Evaluator) {
     lists::register(&mut r);
     strings::register(&mut r);
     math::register(&mut r);
+    text::register(&mut r);
 
     r.constant("true", Word::TRUE);
     r.constant("false", Word::FALSE);

@@ -117,15 +117,26 @@ concatMap, genList, any, all, sort, partition.
 strings: stringLength, substring, concatStringsSep, splitVersion,
 compareVersions, parseDrvName, baseNameOf, dirOf.
 math: add, sub, mul, div, bitAnd, bitOr, bitXor, lessThan.
+text: match, split (ERE via `text/ere.rs`, per-thread regex cache), replaceStrings,
+hashString, hashFile, convertHash, floor, ceil, genericClosure, getEnv, break,
+toJSON, fromJSON, toXML, fromTOML (`--extra-experimental-features
+parse-toml-timestamps` for datetimes), currentTime. Divergences:
+`docs/divergences.md`.
 constants: true, false, null, builtins, currentSystem, nixVersion,
 langVersion, storeDir, nixPath, derivation (from corepkgs/derivation.nix).
 
 ## TODO (next wave)
 
-match, split, replaceStrings, fromJSON, toJSON, toXML, fromTOML, hashString,
-hashFile, convertHash, readFile, readDir, readFileType, pathExists,
+readFile, readDir, readFileType, pathExists,
 filterSource, path, toFile, derivationStrict, placeholder, outputOf,
-getEnv, getContext, appendContext, storePath, fetchurl, fetchTarball,
-fetchGit, fetchTree, fetchClosure (all fetchers: error), currentTime, floor,
-ceil, toPath, genericClosure, break, flakeRefToString, parseFlakeRef,
+getContext, appendContext, storePath, fetchurl, fetchTarball,
+fetchGit, fetchTree, fetchClosure (all fetchers: error),
+toPath, flakeRefToString, parseFlakeRef,
 getFlake, ... anything else in primops.cc.
+
+## Corpus tests
+
+`tests/corpus/<name>.nix` holds one case per builtin family member, with
+`.exp` captured from `nix-instantiate --eval --strict` and an optional
+`.flags` file. `scripts/corpus-update.sh` regenerates the `.exp` files;
+`scripts/corpus.sh` checks them against `target/release/ietsp`.
