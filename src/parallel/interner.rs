@@ -10,7 +10,7 @@ use std::sync::{Arc, RwLock};
 use crate::syntax::symbol::{FxBuild, FxHasher, Sym};
 
 const SHARDS: usize = 64;
-const MAX_SYMS: usize = 1 << 24;
+pub const MAX_SYMS: usize = 1 << 24;
 
 #[inline]
 fn hash_bytes(b: &[u8]) -> u64 {

@@ -5,10 +5,13 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::ops::Index;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::eval::{FileInfo, Pos};
+use crate::runtime::Word;
 use crate::syntax::ast::FileId;
+use crate::syntax::symbol::Sym;
 
 pub struct SharedMap<K, V>(Arc<Mutex<HashMap<K, V>>>);
 
@@ -167,5 +170,65 @@ impl Index<usize> for Files {
     type Output = FileInfo;
     fn index(&self, i: usize) -> &FileInfo {
         self.get(i).expect("file id out of range")
+    }
+}
+
+/// Lock-free `Sym -> Word` table for the string object of a symbol's name
+/// (`Evaluator::sym_string`), shared by every fiber. A per-evaluator
+/// `Vec` cost each new fiber a copy or a re-zeroing of one word per
+/// symbol (~1 MB with nixpkgs loaded). Entries are written at most a few
+/// times: two fibers racing on one symbol both store a valid string, and
+/// either one serves.
+#[derive(Clone)]
+pub struct SymWords(Arc<SymWordsInner>);
+
+struct SymWordsInner(*mut AtomicU64);
+
+// SAFETY: the table holds atomics only; the mapping lives for the process.
+unsafe impl Sync for SymWordsInner {}
+unsafe impl Send for SymWordsInner {}
+
+impl Default for SymWords {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SymWords {
+    pub fn new() -> SymWords {
+        let bytes = super::interner::MAX_SYMS * size_of::<AtomicU64>();
+        // SAFETY: anonymous zero-filled mapping (zero is `Word::EMPTY`),
+        // paged in on demand.
+        let p = unsafe {
+            let p = libc::mmap(
+                std::ptr::null_mut(),
+                bytes,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
+                -1,
+                0,
+            );
+            assert!(p != libc::MAP_FAILED, "sym words: mmap failed");
+            p as *mut AtomicU64
+        };
+        SymWords(Arc::new(SymWordsInner(p)))
+    }
+
+    #[inline]
+    fn slot(&self, s: Sym) -> &AtomicU64 {
+        assert!((s.0 as usize) < super::interner::MAX_SYMS);
+        // SAFETY: in bounds of the mapping.
+        unsafe { &*self.0.0.add(s.0 as usize) }
+    }
+
+    /// `Word::EMPTY` when no string was stored yet.
+    #[inline]
+    pub fn get(&self, s: Sym) -> Word {
+        Word(self.slot(s).load(Ordering::Acquire))
+    }
+
+    #[inline]
+    pub fn set(&self, s: Sym, w: Word) {
+        self.slot(s).store(w.0, Ordering::Release);
     }
 }

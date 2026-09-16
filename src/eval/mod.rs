@@ -112,7 +112,7 @@ pub struct Evaluator {
     pub nr_function_calls: u64,
     pub t_compile: std::time::Duration,
     /// One shared context-free string per symbol, made on first use.
-    sym_strings: Vec<Word>,
+    sym_strings: crate::parallel::shared::SymWords,
     /// Source path -> virtual store path, like Nix's `srcToStore`.
     pub src_to_store: crate::parallel::shared::SharedMap<Vec<u8>, &'static [u8]>,
     /// Store path -> where its content lives, for every source this evaluation added.
@@ -176,7 +176,7 @@ impl Evaluator {
             nr_thunks: 0,
             nr_function_calls: 0,
             t_compile: std::time::Duration::ZERO,
-            sym_strings: Vec::new(),
+            sym_strings: crate::parallel::shared::SymWords::new(),
             src_to_store: Default::default(),
             sources: Default::default(),
             compile_settings: Default::default(),
@@ -814,16 +814,12 @@ impl Evaluator {
     /// The string value of a symbol's name. attrNames and mapAttrs hand
     /// out the same object for the same name instead of copying it.
     pub fn sym_string(&mut self, sym: Sym) -> Word {
-        let i = sym.0 as usize;
-        if i >= self.sym_strings.len() {
-            self.sym_strings.resize(self.interner.len(), Word::EMPTY);
-        }
-        let w = self.sym_strings[i];
+        let w = self.sym_strings.get(sym);
         if w != Word::EMPTY {
             return w;
         }
         let w = self.arena.mk_string(self.interner.name(sym));
-        self.sym_strings[i] = w;
+        self.sym_strings.set(sym, w);
         w
     }
 
