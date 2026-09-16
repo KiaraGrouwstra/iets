@@ -20,8 +20,9 @@ in memory, and prints results. It never writes to a store.
 ## Non-goals
 
 Local store writes, local builds, the Nix worker protocol as our transport,
-flakes, fetchers that hit the network (they error), a REPL, a debugger, a
-bytecode VM.
+unlocked flakes (registries, `nix flake lock`), fetchers that hit the
+network (they error; a locked flake input missing from `/nix/store` is the
+one exception, see `docs/flakes.md`), a REPL, a debugger, a bytecode VM.
 
 ## Pipeline
 
@@ -63,7 +64,10 @@ source bytes
   the outside world during evaluation (files, directories, stats, copied
   trees, environment), keys the run on the command, and replays the
   result when the read set still validates. See `docs/tracing-cache.md`.
-- `main.rs`: CLI. `ietsp eval [--strict] [--json] [--no-cache] [-I prefix=path] [-E expr | file]`,
+- `flake/`: locked flakes. `PATH#attr` on the command line, Nix's
+  `call-flake.nix` embedded verbatim, `fetchTree` for locked inputs, the
+  root tree copied like `git+file://` or `path:`. See `docs/flakes.md`.
+- `main.rs`: CLI. `ietsp eval [--strict] [--json] [--raw] [--no-cache] [-I prefix=path] [-E expr | file | dir#attr]`,
   `ietsp build`, `ietsp parse`, `ietsp cache-dump`.
 
 ## Value model

@@ -107,7 +107,11 @@ fn check(o: &Obs, rehashed: &AtomicUsize) -> Outcome {
             let Ok((nar, seen)) = super::tree_rehash(root_p, accepted.as_ref()) else {
                 return Outcome::Changed(format!("tree {} is unreadable", lossy(root)));
             };
-            if nar != *nar_hash || filtered.as_ref().is_some_and(|f| f.seen_hash != seen) {
+            if nar != *nar_hash
+                || filtered
+                    .as_ref()
+                    .is_some_and(|f| f.seen_hash.is_some_and(|s| s != seen))
+            {
                 return Outcome::Changed(format!("tree {} changed", lossy(root)));
             }
             let Ok((sh, _)) = super::tree_fingerprint(root_p, accepted.as_ref()) else {
@@ -138,6 +142,14 @@ fn check(o: &Obs, rehashed: &AtomicUsize) -> Outcome {
                 Outcome::Changed(format!("${} changed", lossy(name)))
             }
         }
+        Obs::Cmd { dir, argv, hash } => match super::run_cmd(os(dir), argv) {
+            Ok((status, out)) if super::cmd_hash(status, &out) == *hash => Outcome::Same,
+            _ => Outcome::Changed(format!(
+                "output of `{}` in {} changed",
+                argv.iter().map(|a| lossy(a)).collect::<Vec<_>>().join(" "),
+                lossy(dir)
+            )),
+        },
     }
 }
 

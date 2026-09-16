@@ -11,7 +11,7 @@ const STACK_SIZE: usize = 4 << 30;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: ietsp eval [--strict] [--json] [--workers N] [--timings] [--no-cache] [--cache-dir DIR] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp cache-dump READSET   (print a cache entry's read set)\n       ietsp build [--builder URL] [--timings] [--no-build] [--no-cache] [--cache-dir DIR] [--out NAME]... [--workers N] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--out NAME]... [--source STOREPATH=LOCAL]... DRV"
+        "usage: ietsp eval [--strict] [--json] [--raw] [--workers N] [--timings] [--no-cache] [--cache-dir DIR] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] (-E EXPR | FILE | FLAKEDIR#attr.path)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp cache-dump READSET   (print a cache entry's read set)\n       ietsp build [--builder URL] [--timings] [--no-build] [--no-cache] [--cache-dir DIR] [--out NAME]... [--workers N] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--out NAME]... [--source STOREPATH=LOCAL]... DRV"
     );
     exit(2)
 }
@@ -62,6 +62,7 @@ fn cmd_parse(files: &[String], quiet: bool) -> i32 {
 struct EvalArgs {
     strict: bool,
     json: bool,
+    raw: bool,
     includes: Vec<(Vec<u8>, Vec<u8>)>,
     args: Vec<(String, ArgKind)>,
     input: Option<Input>,
@@ -84,6 +85,8 @@ enum ArgKind {
 enum Input {
     Expr(String),
     File(String),
+    /// `DIR#attr.path`, see `ietsp::flake`.
+    Flake(String),
 }
 
 fn parse_include(s: &str) -> (Vec<u8>, Vec<u8>) {
@@ -108,6 +111,7 @@ fn parse_eval_args(argv: &[String]) -> EvalArgs {
     let mut a = EvalArgs {
         strict: false,
         json: false,
+        raw: false,
         includes: Vec::new(),
         args: Vec::new(),
         input: None,
@@ -127,6 +131,7 @@ fn parse_eval_args(argv: &[String]) -> EvalArgs {
         match s {
             "--strict" => a.strict = true,
             "--json" => a.json = true,
+            "--raw" => a.raw = true,
             "--timings" => a.timings = true,
             "--no-cache" => a.no_cache = true,
             "--cache-dir" => {
@@ -202,11 +207,20 @@ fn parse_eval_args(argv: &[String]) -> EvalArgs {
                 eprintln!("error: unknown flag '{s}'");
                 usage()
             }
+            _ if ietsp::flake::is_flake_ref(s) => a.input = Some(Input::Flake(s.to_string())),
             _ => a.input = Some(Input::File(s.to_string())),
         }
         i += 1;
     }
     a
+}
+
+fn home() -> Option<Vec<u8>> {
+    std::env::var_os("HOME").map(|h| h.into_encoded_bytes())
+}
+
+fn flake_ref(f: &str, cwd: &[u8]) -> Result<ietsp::flake::FlakeRef, String> {
+    ietsp::flake::parse_flake_ref(f, cwd, home().as_deref())
 }
 
 fn report(ev: &Evaluator, e: &Error) {
@@ -247,6 +261,11 @@ fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
     let mut v = match a.input {
         Some(Input::Expr(e)) => ev.eval_string(&e, &cwd)?,
         Some(Input::File(f)) => ev.eval_file(&abs_path(&f, &cwd), Pos::NONE)?,
+        Some(Input::Flake(f)) => {
+            let fr = flake_ref(&f, &cwd)
+                .map_err(|m| Error::boxed(ietsp::eval::ErrorKind::Eval, m, Pos::NONE))?;
+            ietsp::flake::eval_flake(ev, &fr)?
+        }
         None => usage(),
     };
     if !a.args.is_empty() {
@@ -310,6 +329,7 @@ fn run_eval(a: EvalArgs) -> i32 {
 fn eval_and_print(ev: &mut Evaluator, a: EvalArgs, cache: Option<Cache>) -> i32 {
     let strict = a.strict;
     let json = a.json;
+    let raw = a.raw;
     let t0 = std::time::Instant::now();
     let timings = a.timings;
     let v = match evaluate(ev, a) {
@@ -321,7 +341,20 @@ fn eval_and_print(ev: &mut Evaluator, a: EvalArgs, cache: Option<Cache>) -> i32 
     };
 
     let mut out: Vec<u8> = Vec::new();
-    let r = if json {
+    let r = if raw {
+        // nix eval --raw: coerce without copying to the store, no newline
+        let mut ctx = Vec::new();
+        ev.coerce_to_string(
+            v,
+            &mut ctx,
+            Pos::NONE,
+            "while generating the eval command output",
+            false,
+            false,
+            true,
+        )
+        .map(|s| out.extend_from_slice(&s))
+    } else if json {
         let mut ctx = Vec::new();
         ietsp::print::print_json(ev, v, &mut out, &mut ctx, strict, Pos::NONE)
     } else {
@@ -340,7 +373,9 @@ fn eval_and_print(ev: &mut Evaluator, a: EvalArgs, cache: Option<Cache>) -> i32 
     }
     match r {
         Ok(()) => {
-            out.push(b'\n');
+            if !raw {
+                out.push(b'\n');
+            }
             use std::io::Write;
             let _ = std::io::stdout().write_all(&out);
             let _ = std::io::stdout().flush();
@@ -799,6 +834,12 @@ fn cmd_cache_dump(file: &str) -> i32 {
                 s(name),
                 value.as_deref().map_or("(unset)".to_string(), s)
             ),
+            Obs::Cmd { dir, argv, hash } => println!(
+                "cmd {} `{}` {}",
+                s(dir),
+                argv.iter().map(|a| s(a)).collect::<Vec<_>>().join(" "),
+                &hex(hash)[..16]
+            ),
         }
     }
     0
@@ -864,6 +905,16 @@ impl Cache {
                 k.field("file", &p);
                 k.field("file-hash", &ietsp::trace::sha256(&bytes));
             }
+            Input::Flake(f) => {
+                let fr = flake_ref(f, &cwd).ok()?;
+                k.field("flake", f.as_bytes());
+                k.field("flake-dir", fr.dir.as_os_str().as_encoded_bytes());
+                for name in ["flake.nix", "flake.lock"] {
+                    let bytes = std::fs::read(fr.dir.join(name)).ok()?;
+                    k.field(name, &ietsp::trace::sha256(&bytes));
+                }
+                needs_cwd = true;
+            }
         }
         for (name, kind) in &a.args {
             match kind {
@@ -885,6 +936,7 @@ impl Cache {
         k.field("attr", a.attr.as_deref().unwrap_or("").as_bytes());
         k.flag("strict", a.strict);
         k.flag("json", a.json);
+        k.flag("raw", a.raw);
         k.field("lint-absolute", format!("{:?}", a.lint_absolute).as_bytes());
         k.field("lint-short", format!("{:?}", a.lint_short).as_bytes());
         for f in &a.xp_features {

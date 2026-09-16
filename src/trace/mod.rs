@@ -7,6 +7,7 @@ pub mod store;
 pub mod validate;
 pub mod wire;
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fs;
 use std::io;
@@ -70,7 +71,9 @@ impl Kind {
 /// the filter was asked about (hashed) and the ones it accepted.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Filtered {
-    pub seen_hash: Digest32,
+    /// `None` when the accepted set came from outside the tree (a git
+    /// index), so entries the set does not name cannot change the result.
+    pub seen_hash: Option<Digest32>,
     /// Absolute paths, sorted.
     pub accepted: Vec<Vec<u8>>,
 }
@@ -108,20 +111,57 @@ pub enum Obs {
         name: Vec<u8>,
         value: Option<Vec<u8>>,
     },
+    /// A command run in `dir`; `hash` covers its exit status and stdout.
+    Cmd {
+        dir: Vec<u8>,
+        argv: Vec<Vec<u8>>,
+        hash: Digest32,
+    },
 }
 
 impl Obs {
     /// Identity for deduplication: kind and subject, not the observed value.
-    fn dedupe_key(&self) -> (u8, &[u8], u8) {
+    fn dedupe_key(&self) -> (u8, Cow<'_, [u8]>, u8) {
         match self {
-            Obs::File { path, .. } => (0, path, 0),
-            Obs::Dir { path, .. } => (1, path, 0),
-            Obs::Stat { path, follow, .. } => (2, path, u8::from(*follow)),
-            Obs::Tree { root, filtered, .. } => (3, root, u8::from(filtered.is_some())),
-            Obs::Canon { path, .. } => (4, path, 0),
-            Obs::Env { name, .. } => (5, name, 0),
+            Obs::File { path, .. } => (0, Cow::Borrowed(path), 0),
+            Obs::Dir { path, .. } => (1, Cow::Borrowed(path), 0),
+            Obs::Stat { path, follow, .. } => (2, Cow::Borrowed(path), u8::from(*follow)),
+            Obs::Tree { root, filtered, .. } => {
+                (3, Cow::Borrowed(root), u8::from(filtered.is_some()))
+            }
+            Obs::Canon { path, .. } => (4, Cow::Borrowed(path), 0),
+            Obs::Env { name, .. } => (5, Cow::Borrowed(name), 0),
+            Obs::Cmd { dir, argv, .. } => (6, Cow::Owned(cmd_subject(dir, argv)), 0),
         }
     }
+}
+
+fn cmd_subject(dir: &[u8], argv: &[Vec<u8>]) -> Vec<u8> {
+    let mut v = dir.to_vec();
+    for a in argv {
+        v.push(0);
+        v.extend_from_slice(a);
+    }
+    v
+}
+
+/// Runs `argv` in `dir` and returns its exit status and stdout; stderr is
+/// inherited. `hash` is what a `Cmd` observation records.
+pub fn run_cmd(dir: &Path, argv: &[Vec<u8>]) -> io::Result<(i32, Vec<u8>)> {
+    let out = std::process::Command::new(std::ffi::OsStr::from_bytes(&argv[0]))
+        .args(argv[1..].iter().map(|a| std::ffi::OsStr::from_bytes(a)))
+        .current_dir(dir)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::inherit())
+        .output()?;
+    Ok((out.status.code().unwrap_or(-1), out.stdout))
+}
+
+pub fn cmd_hash(status: i32, stdout: &[u8]) -> Digest32 {
+    let mut h = Sha256::new();
+    h.update(status.to_le_bytes());
+    h.update(stdout);
+    h.finalize().into()
 }
 
 struct Inner {
@@ -171,7 +211,7 @@ impl Trace {
             return Vec::new();
         };
         let all = std::mem::take(&mut *i.obs.lock().unwrap());
-        let mut seen: HashSet<(u8, &[u8], u8)> = HashSet::with_capacity(all.len());
+        let mut seen: HashSet<(u8, Cow<'_, [u8]>, u8)> = HashSet::with_capacity(all.len());
         let mut exact: HashSet<Vec<u8>> = HashSet::new();
         let mut keep = vec![false; all.len()];
         for (idx, o) in all.iter().enumerate() {
@@ -220,6 +260,19 @@ impl Trace {
         }
     }
 
+    /// Runs `argv` in `dir`, records what it printed, returns (status, stdout).
+    pub fn cmd(&self, dir: &Path, argv: &[Vec<u8>]) -> io::Result<(i32, Vec<u8>)> {
+        let (status, stdout) = run_cmd(dir, argv)?;
+        if self.is_on() {
+            self.record(Obs::Cmd {
+                dir: dir.as_os_str().as_bytes().to_vec(),
+                argv: argv.to_vec(),
+                hash: cmd_hash(status, &stdout),
+            });
+        }
+        Ok((status, stdout))
+    }
+
     pub fn canon(&self, path: &[u8], target: Option<&Path>) {
         if self.is_on() {
             self.record(Obs::Canon {
@@ -232,6 +285,22 @@ impl Trace {
     /// A tree copied to the store. `accepted` is the filter result, `None`
     /// for an unfiltered copy. Walks the tree once more with `lstat` only.
     pub fn tree(&self, root: &Path, nar_hash: Digest32, accepted: Option<&HashSet<PathBuf>>) {
+        self.tree_with(root, nar_hash, accepted, true);
+    }
+
+    /// A tree whose accepted set comes from outside (a git index): only the
+    /// accepted entries matter, so no `seen_hash` is kept.
+    pub fn tree_external(&self, root: &Path, nar_hash: Digest32, accepted: &HashSet<PathBuf>) {
+        self.tree_with(root, nar_hash, Some(accepted), false);
+    }
+
+    fn tree_with(
+        &self,
+        root: &Path,
+        nar_hash: Digest32,
+        accepted: Option<&HashSet<PathBuf>>,
+        keep_seen: bool,
+    ) {
         if !self.is_on() {
             return;
         }
@@ -246,7 +315,7 @@ impl Trace {
                 .collect();
             accepted.sort();
             Filtered {
-                seen_hash,
+                seen_hash: keep_seen.then_some(seen_hash),
                 accepted,
             }
         });
