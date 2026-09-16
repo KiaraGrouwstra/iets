@@ -168,9 +168,9 @@ fn read_traced(ev: &Evaluator, p: &Path) -> std::io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Evaluates the flake and selects `attr` from its outputs (or returns the
-/// outputs attrset for an empty path).
-pub fn eval_flake(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
+/// Evaluates the flake: the `callFlake` result (`_type`, `inputs`, `outputs`,
+/// `sourceInfo` and its fields), as `nix-eval-jobs --flake DIR` walks it.
+pub fn eval_flake_value(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
     let pos = Pos::NONE;
     let lock_bytes = read_traced(ev, &fr.dir.join("flake.lock"))
         .map_err(|_| Error::boxed(ErrorKind::Io, LOCK_ERROR, pos))?;
@@ -220,7 +220,14 @@ pub fn eval_flake(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
         .and_then(|b| b.get(fetch_sym))
         .map(|a| a.cell.get())
         .expect("builtins.fetchTree is registered");
-    let result = ev.apply(call_flake, &[lock_str, overrides, fetch_tree], pos)?;
+    ev.apply(call_flake, &[lock_str, overrides, fetch_tree], pos)
+}
+
+/// Evaluates the flake and selects `attr` from its outputs (or returns the
+/// outputs attrset for an empty path).
+pub fn eval_flake(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
+    let pos = Pos::NONE;
+    let result = eval_flake_value(ev, fr)?;
 
     let attrs = ev.force_attrs(result, pos, "while evaluating the flake")?;
     let outputs_sym = ev.sym(b"outputs");
