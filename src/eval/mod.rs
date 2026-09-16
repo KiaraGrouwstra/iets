@@ -28,27 +28,30 @@ impl CorePkgs {
 
 pub struct FileInfo {
     pub path: Vec<u8>,
-    pub src: &'static [u8],
     pub base: u32,
     line_starts: Vec<u32>,
 }
 
 impl FileInfo {
-    fn new(path: Vec<u8>, src: &'static [u8], base: u32) -> FileInfo {
+    fn new(path: Vec<u8>, src: &[u8], base: u32) -> FileInfo {
         let mut line_starts = vec![0u32];
-        for (i, &b) in src.iter().enumerate() {
-            if b == b'\n' {
-                line_starts.push(i as u32 + 1);
-            }
+        let mut rest = src;
+        let mut off = 0usize;
+        // SAFETY: memchr reads at most `rest.len()` bytes of `rest`.
+        while let Some(i) = unsafe {
+            let p = libc::memchr(rest.as_ptr() as *const libc::c_void, b'\n' as i32, rest.len());
+            (!p.is_null()).then(|| p as usize - rest.as_ptr() as usize)
+        } {
+            off += i + 1;
+            line_starts.push(off as u32);
+            rest = &rest[i + 1..];
         }
         FileInfo {
             path,
-            src,
             base,
             line_starts,
         }
     }
-
     /// 1-based line and column of a byte offset.
     pub fn line_col(&self, offset: u32) -> (u32, u32) {
         let line = match self.line_starts.binary_search(&offset) {
@@ -173,12 +176,13 @@ impl Evaluator {
 
     // ---- files ------------------------------------------------------------
 
-    pub fn add_file(&mut self, path: &[u8], src: Vec<u8>) -> FileId {
+    /// Register a source file: only its path and line table are kept, so
+    /// 40 MB of nixpkgs text does not stay resident.
+    pub fn add_file(&mut self, path: &[u8], src: &[u8]) -> FileId {
         if let Some(id) = self.file_ids.get(path) {
             return *id;
         }
         let id = FileId(self.files.len() as u32);
-        let src: &'static [u8] = Box::leak(src.into_boxed_slice());
         let base = self.next_base;
         self.next_base = base
             .checked_add(src.len() as u32 + 1)
@@ -221,10 +225,9 @@ impl Evaluator {
         base_dir: &[u8],
         extra_scope: Option<&[Sym]>,
     ) -> EvalResult<IrRef> {
-        let file = self.add_file(path, src);
-        let text = self.files[file.0 as usize].src;
+        let file = self.add_file(path, &src);
         let base = self.files[file.0 as usize].base;
-        let ast = crate::syntax::parse(text, file, &mut self.interner).map_err(|e| {
+        let ast = crate::syntax::parse(&src, file, &mut self.interner).map_err(|e| {
             Error::boxed(
                 ErrorKind::Parse,
                 e.msg,
@@ -1913,9 +1916,8 @@ impl Evaluator {
     pub fn print_stats(&self) {
         let st = &self.arena.stats;
         eprintln!(
-            "files={} src_bytes={} thunks={} calls={} drvs={} arena_bytes={} compile={:?} ir_size={}",
+            "files={} thunks={} calls={} drvs={} arena_bytes={} compile={:?} ir_size={}",
             self.files.len(),
-            self.files.iter().map(|f| f.src.len()).sum::<usize>(),
             self.nr_thunks,
             self.nr_function_calls,
             self.drv.nr_derivations,
