@@ -36,60 +36,107 @@ these inputs, so the key is sound without a read set. Impure inputs
 (`currentTime`, `getEnv`, fetchers, `--impure`) are simply never
 published.
 
-## Objects
+## Measured (2026-09-17)
 
-Stored beside `<hash>.narinfo` in the same bucket or served by the same
-daemon, under one prefix:
+Data: `ci/eval/outpaths.nix` for x86_64-linux at two nixos-unstable
+commits three weeks apart (2026-08-23 `56c02bc`, 2026-09 `a831408e`),
+80,245 and 80,314 jobs. Cache timings from this datacenter box; a laptop
+on wifi sees a tenth of the bandwidth and two to four times the latency.
+
+| artifact | raw | zstd -19 |
+|---|---|---|
+| nix-eval-jobs lines with `meta` | 237 MB | 12.1 MB |
+| attr, drvPath, outputs, system as JSON | 23.9 MB | 5.5 MB |
+| attr, drv hash, output names and hashes | 11.8 MB | 4.5 MB |
+| same in CBOR with 20-byte binary hashes (computed) | 8.5 MB | about 4.3 MB |
+| delta between the two commits: 4,316 changed, 72 added, 3 removed | 0.9 MB | 0.27 MB |
+
+The floor is entropy: 80k drv hashes plus 126k output hashes are 4.1 MB
+of incompressible bytes. Encoding choice moves the full index by 5 %.
+Only the delta and the shard shape move it by an order of magnitude.
+
+| transfer | cache.nixos.org | bld1 over the mesh |
+|---|---|---|
+| time to first byte | 55 to 150 ms | 3 ms |
+| bandwidth | 133 MB/s here; 5 to 20 MB/s on a laptop | 2.5 MB/s (tunnel) |
+
+What a lookup competes against (this box):
+
+| consumer | ietsp eval | nix eval | ietsp tracing-cache hit |
+|---|---|---|---|
+| `nixpkgs#hello` at a channel | 0.10 s | 0.4 s | 0.03 s |
+| a NixOS system from ~/home | 1.0 s | 4 to 19 s | 0.03 s |
+| whole nixpkgs, one system | 70 s | 250 s | none |
+
+## Trade-off
+
+Three object shapes, each right for one consumer:
+
+1. **Shard.** Attrs bucketed by the first 10 bits of sha256(attrpath):
+   1,024 shards of about 4.5 KB compressed, one COSE_Sign1 CBOR map
+   `attr -> [drvhash, [[output, hash]...]]` each. One lookup is one GET
+   of a few KB: 60 to 150 ms on a public cache, 3 ms on the mesh. That
+   beats evaluation for everything except a warm local tracing-cache hit,
+   which nobody publishes anyway. Publishing a commit re-PUTs only the
+   shards that changed: a 100-attr commit touches under 100 shards; the
+   three-week delta above touched most of them once. A per-attr object
+   (about 120 bytes) is not better than this: it saves nothing on the
+   wire and costs 80k PUTs per commit.
+2. **Delta.** For bulk consumers (CI compare, search, a channel mirror):
+   a full index once per source line, then one delta per commit,
+   `[attr, drvhash, outputs]` for changed and added attrs and `[attr]`
+   for removed. 270 KB for three weeks of nixos-unstable; a single
+   commit is usually under 10 KB, a mass rebuild is a new full index.
+   The consumer folds deltas locally into its copy of the index. This
+   is a mirror of published, signed, content-keyed data, not an
+   evaluation cache: nothing local is derived.
+3. **Full index.** 4.3 MB, published so a delta chain has a base. Never
+   fetched for a single attr; on a laptop it costs as much as
+   evaluating.
+
+Dropped from the first draft: the standalone per-attr `evalinfo`
+object. The shard replaces it.
+
+## Encoding
+
+CBOR, deterministic encoding (RFC 8949 4.2), hashes as 20-byte strings,
+one COSE_Sign1 envelope (RFC 9052, ed25519) per shard, per delta, and
+per full index, signed with the cache key. Shards are maps keyed by the
+attrpath string. Deltas and the full index are CBOR sequences so a
+consumer can stream them. `ietsp eval-cache show URL` prints any of
+them as JSON for humans. The compressed size is within 5 % of JSON; the
+reasons are canonical signing without a canonicalization spec, and one
+decoder shared with amber, whose directory objects are already CBOR.
+
+## Layout
 
 ```
-eval/<evalkey>.evalinfo
-  Key: <evalkey>
-  Source: <source narHash>
-  Attr: nixosConfigurations.nv1.config.system.build.toplevel
-  System: x86_64-linux
-  DrvPath: /nix/store/...-nixos-system-nv1.drv
-  Outputs: out=/nix/store/...-nixos-system-nv1
-  Sig: hairesis-cache-1:...
+eval/v1/<source narHash>/<system>/shard/<10-bit prefix as 3 hex>   COSE(CBOR map)
+eval/v1/<source narHash>/<system>/index                            COSE(CBOR seq)
+eval/v1/<source narHash>/<system>/delta/<previous source narHash>  COSE(CBOR seq)
 ```
 
-Plus, optionally, an index per source for whole jobsets:
-
-```
-eval/index/<source narHash>/<system>.jsonl.zst
-  one nix-eval-jobs line per attr, exactly what `ietsp eval-jobs` prints
-```
-
-The `.drv` files themselves are ordinary store paths: publish their NARs
-like any other path when a consumer may need to build. A consumer that
-only substitutes never touches them.
+The source narHash is the locked flake source or the nixpkgs tarball;
+the lock's narHash is folded into it for flakes (hash of both). Args
+other than the system are not part of v1: jobsets are published as the
+producer evaluated them.
 
 ## Producer
 
-`ietsp eval-jobs --publish s3://... --sign KEY` (or `ietsp build
---publish`): for every job line, write the evalinfo, sign it, and push
-the `.drv` closure through the normal `nix copy` path. Hydra, nixpkgs
-CI, and a flake's own CI already run the evaluation; this adds one
-object per job to what they upload. For the nixpkgs channels the index
-is the interesting artifact: 80k lines, about 10 MB compressed, one
-file per commit and system.
+`ietsp eval-jobs --publish DIR` writes the shards, the full index, and,
+given `--delta-from DIR`, the delta; the directory is shipped with the
+same `nix copy` or rsync the NARs use. Cost on top of the evaluation:
+under a second of CPU, 1,024 small PUTs for a full publish.
 
 ## Consumer
 
-```
-ietsp build .#nixosConfigurations.nv1...   (or nix build via a wrapper)
-  1. key from the checkout                   ~1 ms, no evaluation
-  2. GET eval/<key>.evalinfo                 one round trip
-  3. hit: outputs known
-       substitutable? -> realise by substitution, done
-       else           -> fetch the .drv closure, build as usual
-  4. miss: evaluate locally (ietsp: ~1 s), optionally publish
-```
-
-On a hit the machine never parses nixpkgs. `hai apply` on nv1 becomes:
-key, one GET, `nix-store --realise` of a path that bld1 already holds.
-`nix run nixpkgs#hello` at a channel commit becomes one GET plus the
-existing narinfo lookups.
-
+`ietsp build`, `print-dev-env`, and `eval` take `--eval-cache URL`:
+compute the source narHash and the attrpath, GET the shard, verify the
+signature, use the drv and output hashes. Substitutable outputs are
+realised; otherwise the `.drv` closure is fetched from the same cache
+and built. A miss, a bad signature, or a dirty checkout falls through to
+evaluation. Bulk tools (`ietsp eval-jobs --compare`, a search index)
+take `--eval-cache URL` too and use index plus deltas.
 ## Trust
 
 The same key that signs "P has these bytes" signs "A of S is P". A
@@ -105,7 +152,6 @@ gains nothing new.
   objects. nix-grpc-store: same.
 - amber-nix-daemon: an evalinfo maps naturally to a realisation-like
   record keyed by evalkey; the index is a blob.
-- Nix itself: nothing changes. Consumers that want it use ietsp or a
   small wrapper. If it proves out, the format is simple enough to
   propose upstream as a `nix build --eval-cache-url` feature.
 
