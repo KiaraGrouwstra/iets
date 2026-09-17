@@ -38,7 +38,7 @@ pub struct DrvInfo {
 
 /// Per-evaluator derivation state (derivations.cc:drvHashes plus the
 /// derivations this evaluation created).
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct DrvState {
     pub hash_cache: crate::parallel::shared::Shared<DrvHashCache>,
     pub drvs: crate::parallel::shared::SharedMap<StorePath, DrvInfo>,
@@ -46,8 +46,26 @@ pub struct DrvState {
     /// `DIR/<drv basename>` in ATerm form.
     pub dump_dir: Option<PathBuf>,
     pub nr_derivations: u64,
+    /// Keep the ATerm text of every derivation for instantiation, the
+    /// cache, `--dump-drvs` and `build`. Off for runs that only print
+    /// paths: 331 MB on the outpaths chunk (docs/memory.md).
+    pub keep_aterm: bool,
     syms: Option<DrvSyms>,
     imported_drv_fn: Option<Word>,
+}
+
+impl Default for DrvState {
+    fn default() -> Self {
+        DrvState {
+            hash_cache: Default::default(),
+            drvs: Default::default(),
+            dump_dir: None,
+            nr_derivations: 0,
+            keep_aterm: true,
+            syms: None,
+            imported_drv_fn: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -529,7 +547,7 @@ fn derivation_strict_internal(
         DrvInfo {
             outputs: drv.outputs.keys().cloned().collect(),
             references,
-            aterm: Some(text.into_bytes()),
+            aterm: ev.drv.keep_aterm.then(|| text.into_bytes()),
         },
     );
 

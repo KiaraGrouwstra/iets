@@ -184,6 +184,24 @@ outpaths 32.10 → 33.13 s at 1 worker (+3.2 %; user +6 %, sys −10 %) and
 within the ±5 % run-to-run noise of this box. Kept: 9 % of RSS for 3 %
 of wall at one worker, and a gain at four.
 
+### 4. ATerm text kept only when something reads it
+
+`derivationStrict` stored the ATerm of every derivation in the derivation
+table (79812 entries, 331 MB of heap on outpaths) although only
+instantiation, the tracing cache, `--dump-drvs`, `build` and
+`print-dev-env` read it. `DrvState::keep_aterm` (default on) is switched
+off for `eval-jobs --no-instantiate` and for `eval` runs with neither a
+cache nor `--dump-drvs`. `DrvInfo.aterm = None` was already the state of
+a derivation read back from `/nix/store`, so every reader handles it.
+
+Result: outpaths peak RSS 7680 → 7219 MB (glibc heap in use 825 → 401
+MB); the arena is unchanged. Time within noise: outpaths 33.13 → 32.47 s
+at 1 worker, 13.46 → 13.47 at 4. The desktop rows of this commit were
+taken while the box had turned slower (the commit-2 binary re-measured
+in the same session gave 1.88 / 1.37 s against its 1.71 / 1.00 earlier);
+side by side the two binaries are within 4 %, and the desktop path keeps
+no ATerm under `--no-cache`, RSS 676 → 659 MB.
+
 ## Running perf table
 
 `bench/perf.nu` rows: nixos-desktop is the median-wall run of 5; outpaths
@@ -207,6 +225,16 @@ chunk 0/8 is one run. Same 16-core box, idle.
 | 3 strings by content | nixos-desktop | 4 | 1.05 | 2.49 | 0.34 | 833 |
 | 3 strings by content | outpaths chunk 0/8 | 1 | 33.13 | 28.58 | 4.21 | 7680 |
 | 3 strings by content | outpaths chunk 0/8 | 4 | 13.46 | 34.75 | 6.16 | 8138 |
+| 4 no ATerm text | nixos-desktop | 1 | 2.08 | 1.60 | 0.44 | 659 |
+| 4 no ATerm text | nixos-desktop | 4 | 1.42 | 2.63 | 0.70 | 808 |
+| 4 no ATerm text | outpaths chunk 0/8 | 1 | 32.47 | 27.90 | 4.21 | 7219 |
+| 4 no ATerm text | outpaths chunk 0/8 | 4 | 13.47 | 35.70 | 6.13 | 7620 |
+| 2 re-measured with 4 | nixos-desktop | 1 | 1.88 | 1.48 | 0.38 | 700 |
+| 2 re-measured with 4 | nixos-desktop | 4 | 1.37 | 2.66 | 0.63 | 825 |
+
+The desktop rows of change 4 and the re-measured change-2 rows come from
+a later session in which every binary ran about 10 % slower (sys time
+doubled); compare rows within a session.
 
 ## Assessed and not done
 

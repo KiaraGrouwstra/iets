@@ -506,14 +506,16 @@ fn cmd_eval_jobs(argv: &[String]) -> i32 {
     };
     let t0 = std::time::Instant::now();
     if j.worker {
-        let ev = Evaluator::new();
+        let mut ev = Evaluator::new();
+        ev.drv.keep_aterm = !j.opts.no_instantiate;
         return ietsp::parallel::run(1, ev, move |ev| jobs_worker(ev, a, &j, &transport));
     }
     if j.max_memory.is_some() {
         return jobs_collector(argv, a.workers, &j, &transport, t0);
     }
     let workers = a.workers;
-    let ev = Evaluator::new();
+    let mut ev = Evaluator::new();
+    ev.drv.keep_aterm = !j.opts.no_instantiate;
     ietsp::parallel::run(workers, ev, move |ev| {
         jobs_single(ev, a, &j, &transport, t0)
     })
@@ -845,6 +847,8 @@ fn run_eval(a: EvalArgs) -> i32 {
     if cache.is_some() {
         ev.trace = ietsp::trace::Trace::enabled();
     }
+    // only the cache and --dump-drvs read the ATerm text after evaluation
+    ev.drv.keep_aterm = cache.is_some() || a.dump_drvs.is_some();
     // parallel: the rest runs as the main fiber
     ietsp::parallel::run(a.workers, ev, move |ev| eval_and_print(ev, a, cache))
 }
