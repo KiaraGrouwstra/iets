@@ -1,13 +1,13 @@
 #!/usr/bin/env nu
 # `ietsp print-dev-env` against `nix print-dev-env --option eval-cache false`:
-#  a. byte-identical bash for /home/zimbatm/home and /home/zimbatm/iets-prime;
+#  a. byte-identical bash for /home/zimbatm/home and /home/zimbatm/ietsp;
 #  b. --json identical modulo key order (jq -S);
 #  c. warm run (cache hit) time, printed;
 #  d. --gc-root creates the symlink and nix-store --gc --print-roots lists it;
 #  e. a garbage-collected env output is rebuilt on the next (cached) run;
 #  f. a shell whose package is absent from /nix/store gets it substituted;
 #  g. `#attr` selects a shell.
-# e-g use a scratch flake on the nixpkgs iets-prime pins (lock written by hand,
+# e-g use a scratch flake on the nixpkgs ietsp pins (lock written by hand,
 # so nothing is fetched: both evaluators find the tree in the store by narHash).
 #
 # usage: scripts/devenv-test.nu            # uses target/release
@@ -49,7 +49,7 @@ def run-tests [ctx: record]: nothing -> int {
   $env.IETSP_CACHE_DIR = $"($work)/cache"
   mut res = []
 
-  for flake in ["/home/zimbatm/home" "/home/zimbatm/iets-prime"] {
+  for flake in ["/home/zimbatm/home" "/home/zimbatm/ietsp"] {
     let name = ($flake | path basename)
     if (nix-env $work $flake $"($work)/nix.sh") != 0 { $res ++= [(bad $"nix print-dev-env ($name)" (tail-of $"($work)/nix.err" 3))] }
     if (ietsp-env $ctx $flake $"($work)/ietsp.sh" --no-cache) != 0 { $res ++= [(bad $"ietsp print-dev-env ($name)" (tail-of $"($work)/ietsp.err" 3))] }
@@ -81,12 +81,12 @@ def run-tests [ctx: record]: nothing -> int {
   }
 
   # ---- scratch flake -----------------------------------------------------------
-  let locked = (open --raw /home/zimbatm/iets-prime/flake.lock | from json | get nodes.nixpkgs.locked)
+  let locked = (open --raw /home/zimbatm/ietsp/flake.lock | from json | get nodes.nixpkgs.locked)
   let rev = $locked.rev
   mut absent = ""
   mut absent_out = ""
   for p in [cowsay hello sl figlet lolcat] {
-    let r = (nixf eval --raw --impure --expr $"\(builtins.getFlake \"/home/zimbatm/iets-prime\"\).inputs.nixpkgs.legacyPackages.x86_64-linux.($p).outPath" | complete)
+    let r = (nixf eval --raw --impure --expr $"\(builtins.getFlake \"/home/zimbatm/ietsp\"\).inputs.nixpkgs.legacyPackages.x86_64-linux.($p).outPath" | complete)
     if $r.exit_code != 0 { continue }
     let out = ($r.stdout | chomp)
     if not ($out | path exists) { $absent = $p; $absent_out = $out; break }

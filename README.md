@@ -34,13 +34,13 @@ hit or miss. Design and limits: `docs/tracing-cache.md`.
 ## Results (2026-09-16)
 
 `bench/run.nu nixos-desktop nixos-minimal`, 16 vCPU EPYC Genoa, nixpkgs
-26.11pre1059574.a831408e6378, hyperfine 5 runs, all four evaluators produce
+26.11pre1059574.a831408e6378, hyperfine 5 runs, all three evaluators produce
 the same drvPath. ietsp runs with its default of 4 workers.
 
-| workload | nix 2.35 | fix 0.3 (16 threads) | iets | ietsp |
-|---|---|---|---|---|
-| nixos-desktop | 3.58 s | 2.13 s (1.55 s best) | 2.65 s | 1.04 s |
-| nixos-minimal | 2.86 s | 1.01 s | 2.09 s | 0.85 s |
+| workload | nix 2.35 | fix 0.3 (16 threads) | ietsp |
+|---|---|---|---|
+| nixos-desktop | 3.58 s | 2.13 s (1.55 s best) | 1.04 s |
+| nixos-minimal | 2.86 s | 1.01 s | 0.85 s |
 
 Single-threaded ietsp: 1.67 s desktop, 1.32 s minimal. Details in
 `docs/parallel.md` and `bench/results/`.
