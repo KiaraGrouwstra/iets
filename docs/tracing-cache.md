@@ -123,7 +123,7 @@ rehashed, T s` on stderr.
 ## Measurements
 
 `bench/workloads/nixos-desktop.nix` with the pinned nixpkgs, 16-core EPYC
-with other agents' builds running (load average 2-4), release build,
+with other builds running (load average 2-4), release build,
 2026-09-16. The read set holds 5,340 observations: 3,513 files (37.7 MB
 hashed), 781 `readDir` listings, 643 copied trees (625 single files, 18
 directories, 10 of them filtered), 399 stats, 4 environment variables.

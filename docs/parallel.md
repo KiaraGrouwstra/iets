@@ -327,7 +327,7 @@ the critical chain, not the sequential base, sets the floor.
 
 ### Second pass (wake policy, shared tables, flat AST)
 
-Same box, load average 3-4 from other agents, hyperfine 8 runs, A/B
+Same box, load average 3-4 from other work, hyperfine 8 runs, A/B
 against the merge above run back to back:
 
 | workload | workers | before | after |
