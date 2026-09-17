@@ -290,3 +290,67 @@ the arena after change 3 (7.1 GB).
   helper work. Not a lever.
 - **Derivation table.** 79812 entries, ATerm text 331 MB plus the output
   and reference sets. Change 4 drops the text when nothing reads it.
+
+## Freeing memory without a collector
+
+Two scoped-release candidates were assessed with the `stats2` escape
+census: a scope records the thunks created inside it, and every force of
+a thunk created before the scope counts as an escape, because the forced
+value (built inside the scope) is written into that older thunk, and
+through it into older cells.
+
+- **`tryEval` that failed.** outpaths: 2900 outermost `tryEval` calls,
+  1781 failed, 1.28 MB allocated inside all failed scopes together, and
+  not one failed scope without an escape (desktop: 25 calls, none
+  failed). `check-meta` forces the package's `meta` and `name` thunks
+  from inside the scope, so the values live on in the package set. Both
+  the payoff (0.02 % of the arena) and the safety condition rule it out.
+- **Per-unit scopes in eval-jobs.** 9244 units on the chunk; the walk's
+  own allocation inside `job()` (coercing `drvPath`, the output paths,
+  the JSON line) is 65 MB in total, 0.9 % of the arena. The other 99 %
+  is the build graph forced through the package set's thunks, which the
+  set keeps: every unit escapes by construction. Freeing it means
+  un-memoizing the package set, which is what nix-eval-jobs's worker
+  restarts do at 4 GB (docs/eval-jobs.md); ietsp keeps `--max-memory-size`
+  for that.
+
+What a real collector would reclaim, from the census after the changes:
+the 35 M thunks that are never forced but stay reachable from cells (560
+MB), the 8 M frames whose slot nothing read (126 MB) and the 25 M frames
+nothing captured (415 MB), the flat copies unions make for one iteration,
+the source-file IR after its last thunk is forced, and above all the
+forced build graphs of finished eval-jobs units (the 7 GB that grows with
+the number of jobs per process). Only the last item changes the picture:
+a collector or a restart strategy is what bounds a long eval-jobs run;
+everything else in this document is packing.
+
+## Where it stands
+
+After the four changes (commit 155cbdf), same measurement as the first
+table:
+
+| | before | after | Nix for scale |
+|---|---|---|---|
+| desktop arena | 937 MB | 629 MB | |
+| desktop peak RSS, 1 worker | 988 MB | 659 MB | 690 MB (`nix-instantiate`) |
+| outpaths arena | 13253 MB | 7106 MB | |
+| outpaths peak RSS, 1 worker | 13495 MB | 7219 MB | 4.8 GB per nix-eval-jobs worker, restarted at that size |
+| outpaths peak RSS, 4 workers | 13733 MB | 7620 MB | |
+| outpaths wall, 1 / 4 workers | 32.7 / 15.2 s | 32.5 / 13.5 s | |
+
+outpaths arena by kind after the changes (MiB): env 1263, thunk 1221
+(80 M at 16 B), `//` 1175 (5.8 M unions plus the flat copies consumers
+asked for: `mapAttrs` flattens its source, 170 MiB of those), attrs
+literal 646, lambda 317, attrs from `mapAttrs` 296, attrs other builtins
+277, IR 249, attrs `removeAttrs` 229, string bytes 169, `mapAttrs` state
+cells 169, list literal 165, string objects 108, list other 101,
+`ThunkApp2` 81, list `++` 68, `map` thunks 64, `zipAttrsWith` 54, list
+`map` 41, `listToAttrs` 33, `intersectAttrs` 18, primop_app 17, path 11,
+contexts 8. glibc heap in use 401 MB (derivation table without ATerms,
+hash caches, string tables, line tables).
+
+The next packing item by size is the frame stack for the 25 M frames
+nothing captures (415 MB, 5.8 %), then the 8 M frames nothing reads (126
+MB), then the string header (43 MB). Beyond that the arena is thunks,
+frames and attrsets that the program reaches, and only a collector or a
+restart strategy shrinks it.
