@@ -398,6 +398,31 @@ fn register_expr(path: &StorePath, file: &Path, ca: ContentAddress, refs: &[Stri
     }
 }
 
+/// Loads `s` after the sources its manifest references: a `toFile` text
+/// may point at a tree no derivation lists, and registration needs the
+/// references valid first.
+fn collect_source(
+    d: &Builderd,
+    s: &StorePath,
+    seen: &mut HashSet<StorePath>,
+    sources: &mut Vec<(StorePath, Manifest)>,
+) -> Result<(), String> {
+    if !seen.insert(s.clone()) {
+        return Ok(());
+    }
+    let put_request::Body::Manifest(m) = d.load_object(s)? else {
+        return Err(format!("'{s}' is not a source tree"));
+    };
+    for r in &m.references {
+        let r = StorePath::parse(r).map_err(|e| e.0)?;
+        if !r.is_derivation() {
+            collect_source(d, &r, seen, sources)?;
+        }
+    }
+    sources.push((s.clone(), m));
+    Ok(())
+}
+
 async fn run_build(
     d: &Builderd,
     id: u64,
@@ -432,12 +457,7 @@ async fn run_build(
         let text = std::str::from_utf8(&blob.aterm).map_err(|e| e.to_string())?;
         let drv = Derivation::parse(text, name).map_err(|e| e.0)?;
         for s in &drv.input_srcs {
-            if seen.insert(s.clone()) {
-                let put_request::Body::Manifest(m) = d.load_object(s)? else {
-                    return Err(format!("'{s}' is not a source tree"));
-                };
-                sources.push((s.clone(), m));
-            }
+            collect_source(d, s, &mut seen, &mut sources)?;
         }
         stack.push((p.clone(), true));
         for i in drv.input_drvs.keys() {

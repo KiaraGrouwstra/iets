@@ -601,7 +601,7 @@ bench/workloads/nixos-desktop.nix` ok.
 - **`--log-format internal-json`** is not produced; a driver that parses
   nix-eval-jobs's stderr (Hydra reads only stdout and the exit code)
   would see plain lines.
-- **`remote::plan`** (`ietsp build`) lists the sources of a closure in
+- **`remote::plan`** (`ietsp build`) used to list the sources of a closure in
   discovery order and does not walk a `toFile` text's references, so a
   text that references another copied source can reach the daemon before
   it ("path ... is not valid"); `jobs::instantiate` orders them, `plan`

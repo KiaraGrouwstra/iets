@@ -281,8 +281,8 @@ pub fn plan(
                 if !seen_drv.contains(&r) {
                     stack.push((r, None));
                 }
-            } else if seen_src.insert(r.clone()) {
-                sources.push(r);
+            } else {
+                collect_source(r, inputs.sources, &mut seen_src, &mut sources);
             }
         }
     }
@@ -305,6 +305,28 @@ pub fn plan(
         store_drvs,
         store_sources,
     })
+}
+
+/// Adds `p` to `sources` after the sources it references: a `toFile`
+/// text can point at a copied path that no derivation lists directly,
+/// and the daemon registers a path only once its references are valid.
+fn collect_source(
+    p: StorePath,
+    origins: &HashMap<StorePath, SourceOrigin>,
+    seen: &mut HashSet<StorePath>,
+    sources: &mut Vec<StorePath>,
+) {
+    if !seen.insert(p.clone()) {
+        return;
+    }
+    if let Some(SourceOrigin::Text { references, .. }) = origins.get(&p) {
+        for r in references {
+            if !r.is_derivation() {
+                collect_source(r.clone(), origins, seen, sources);
+            }
+        }
+    }
+    sources.push(p);
 }
 
 /// Resolves each source from its eval-time origin; the rest go to `locate` in one batch.

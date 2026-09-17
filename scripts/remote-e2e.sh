@@ -112,6 +112,29 @@ grep -q 'read from /nix/store' "$work/client4.log" && fail "eval path fell back 
 cmp "$work/src2/somefile" "$out" || fail "output content differs"
 echo "ok: $out"
 
+
+echo "== 4b. eval path: toFile text that references a copied source no drv lists"
+mkdir -p "$work/src3"
+echo "text $RANDOM $$ $(date +%s%N)" > "$work/src3/inner"
+cat > "$work/e2e-text.nix" <<NIX
+derivation {
+  name = "ietsp-e2e-text";
+  system = "$system";
+  builder = "/bin/sh";
+  args = [ "-c" "read -r p < \${builtins.toFile "pointer" "\${$work/src3/inner}\\n"}; while read -r l; do echo \"\$l\"; done < \"\$p\" > \$out" ];
+}
+NIX
+drv=$(nix-instantiate "$work/e2e-text.nix")
+expected=$(nix-store -q --outputs "$drv")
+refs=$(nix-store -q --references "$drv")
+inner=$(nix-store -q --references $refs | grep -- '-inner$' || true)
+nix-store --delete "$drv" $refs $inner >/dev/null 2>&1 || echo "note: could not delete $drv and its sources from the store"
+out=$("$BIN/ietsp" build --builder "$url" --timings "$work/e2e-text.nix" 2>"$work/client4b.log") || { cat "$work/client4b.log"; fail "client exited non-zero"; }
+grep -E '^(eval|plan|connect|have|put|build):' "$work/client4b.log"
+[ "$out" = "$expected" ] || fail "output '$out' != expected '$expected'"
+cmp "$work/src3/inner" "$out" || fail "output content differs"
+echo "ok: $out"
+
 echo "== 5. eval path: hello (cold builder)"
 rm -rf "$work/builder"
 kill "$srv"; wait "$srv" 2>/dev/null || true
