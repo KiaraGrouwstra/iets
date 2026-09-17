@@ -130,25 +130,19 @@ pub static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock:
 /// Parallel `Evaluator::force_thunk`: claim, evaluate, publish.
 #[inline(never)]
 pub fn force_thunk(ev: &mut Evaluator, w: Word) -> EvalResult<Word> {
-    let cell = w.thunk_result_cell();
+    let cell = w.thunk_state_cell();
     let me = ev.par.id;
-    if SAMPLE_POS.load(Ordering::Relaxed) && ev.par.is_main && w.thunk_kind() == Kind::Thunk {
-        let p = crate::eval::ir_pos(w.as_thunk().ir);
-        MAIN_POS.store(p.0 as u64, Ordering::Relaxed);
-    }
-    loop {
-        match thunk::try_claim(cell, me) {
-            Claim::Won => break,
-            Claim::Value(v) => return Ok(v),
+    // `payload` is the state word the cell held (env, arg, or the map
+    // word); a reset stores it back.
+    let payload = loop {
+        match thunk::try_claim(cell, me, |st| w.thunk_unforced(st)) {
+            Claim::Won(p) => break p,
+            Claim::Value(st) => return Ok(w.thunk_value(st)),
             Claim::Mine => {
-                let pos = match w.thunk_kind() {
-                    Kind::Thunk => crate::eval::ir_pos(w.as_thunk().ir),
-                    _ => Pos::NONE,
-                };
                 return Err(Error::boxed(
                     ErrorKind::InfiniteRecursion,
                     "infinite recursion encountered",
-                    pos,
+                    ev.thunk_pos(w),
                 ));
             }
             Claim::Busy(cur) => {
@@ -158,43 +152,34 @@ pub fn force_thunk(ev: &mut Evaluator, w: Word) -> EvalResult<Word> {
                 }
             }
         }
+    };
+    if SAMPLE_POS.load(Ordering::Relaxed) && ev.par.is_main && w.thunk_kind() == Kind::Thunk {
+        let p = crate::eval::ir_pos(w.as_thunk().ir());
+        MAIN_POS.store(p.0 as u64, Ordering::Relaxed);
     }
     if bail_requested(ev) {
         ev.par.cancelled = true;
-        thunk::publish(slot_of(ev), cell, Word::EMPTY);
+        thunk::publish(slot_of(ev), cell, payload);
         return Err(cancelled());
     }
     if !ev.par.spec_buf.is_empty() {
         super::spec::flush(ev);
     }
-    let r = match w.thunk_kind() {
-        Kind::Thunk => {
-            let t = w.as_thunk();
-            ev.eval(t.env, t.ir)
-        }
-        Kind::ThunkApp => {
-            let t = w.as_thunk_app();
-            ev.apply(t.func, &[t.arg], Pos::NONE)
-        }
-        _ => {
-            let t = w.as_thunk_app2();
-            ev.apply(t.func, &[t.arg1, t.arg2], Pos::NONE)
-        }
-    };
-    match r {
+    match ev.run_thunk(w, payload) {
         Ok(v) => {
             debug_assert!(!v.is_thunk());
             if ev.par.cancelled {
                 // Bailed (or hit an effect) somewhere below: transient.
-                thunk::publish(slot_of(ev), cell, Word::EMPTY);
+                thunk::publish(slot_of(ev), cell, payload);
                 Err(cancelled())
             } else {
-                thunk::publish(slot_of(ev), cell, v);
+                let done = w.thunk_finish(v);
+                thunk::publish(slot_of(ev), cell, done);
                 Ok(v)
             }
         }
         Err(e) => {
-            thunk::publish(slot_of(ev), cell, Word::EMPTY);
+            thunk::publish(slot_of(ev), cell, payload);
             Err(e)
         }
     }
@@ -232,13 +217,13 @@ pub fn cell_state(cell: &Cell) -> CellState {
     if !w.is_thunk() {
         return CellState::Ready(w);
     }
-    let r = w.thunk_result_cell().get();
-    if r == Word::EMPTY {
-        CellState::Unclaimed
-    } else if r.is_blackhole() {
+    let st = w.thunk_state_cell().get();
+    if st.is_blackhole() {
         CellState::Busy
+    } else if w.thunk_unforced(st) {
+        CellState::Unclaimed
     } else {
-        CellState::Ready(r)
+        CellState::Ready(w.thunk_value(st))
     }
 }
 
@@ -542,7 +527,7 @@ fn run_task(ev: &mut Evaluator, t: Task) {
         }
         T_THUNK => {
             ev.par.speculating = true;
-            if obj.thunk_result_cell().get() == Word::EMPTY {
+            if obj.thunk_unforced(obj.thunk_state_cell().get()) {
                 let _ = ev.force(obj);
             }
         }

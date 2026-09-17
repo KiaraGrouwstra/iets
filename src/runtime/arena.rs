@@ -169,10 +169,11 @@ pub enum Stat {
     BigInt,
     Lambda,
     PrimOpApp,
+    ThunkMap,
     Ir,
 }
 
-pub const NSTATS: usize = 26;
+pub const NSTATS: usize = 27;
 
 pub const STAT_NAMES: [&str; NSTATS] = [
     "thunk",
@@ -200,6 +201,7 @@ pub const STAT_NAMES: [&str; NSTATS] = [
     "bigint",
     "lambda",
     "primop_app",
+    "thunk_map",
     "ir",
 ];
 

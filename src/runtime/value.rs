@@ -4,7 +4,8 @@
 
 use super::arena::{Arena, Stat};
 use super::word::{
-    Cell, TAG_IMM, TAG_INT, TAG_LAMBDA, TAG_PTR, TAG_THUNK, TAG_THUNK_APP, TAG_THUNK_APP2, Word,
+    Cell, TAG_IMM, TAG_INT, TAG_LAMBDA, TAG_PTR, TAG_THUNK, TAG_THUNK_APP, TAG_THUNK_APP2,
+    TAG_THUNK_MAP, Word,
 };
 use crate::compile::ir::{Ir, LambdaIr};
 use crate::eval::Pos;
@@ -27,6 +28,7 @@ pub enum Kind {
     Thunk,
     ThunkApp,
     ThunkApp2,
+    ThunkMap,
 }
 
 /// Type of a forced value, as Nix sees it.
@@ -224,41 +226,90 @@ pub struct PrimOpAppObj {
     pub args: &'static [Word],
 }
 
-/// A suspended `ir` in `env`. `result` is EMPTY until forced, BLACKHOLE while
-/// being forced, then the forced value. Thunk objects carry no `Kind` byte:
-/// the word tag (`TAG_THUNK` vs `TAG_THUNK_APP`) tells the two layouts apart.
+/// A suspended `ir` in `env`, overwritten in place when forced. Thunk
+/// objects carry no `Kind` byte: the word tag tells the layouts apart.
+/// Every layout has one `state` cell that goes from the payload it holds
+/// while unforced (never EMPTY, never a BLACKHOLE) to BLACKHOLE while being
+/// forced to EMPTY once forced, and one `code` word that holds the IR or
+/// function until then and the forced value after (docs/parallel.md).
 #[repr(C)]
 pub struct ThunkObj {
-    pub result: Cell,
-    pub env: &'static EnvObj,
-    pub ir: &'static Ir,
+    /// `&Ir`, then the value.
+    pub code: Cell,
+    /// `&EnvObj`, BLACKHOLE, EMPTY.
+    pub state: Cell,
 }
 
 /// A suspended application `func arg`, as created by `map`, `genList`, etc.
 #[repr(C)]
 pub struct ThunkAppObj {
-    pub result: Cell,
-    pub func: Word,
-    pub arg: Word,
+    /// `func`, then the value.
+    pub code: Cell,
+    /// `arg`, BLACKHOLE, EMPTY.
+    pub state: Cell,
 }
 
-/// A suspended two-argument application `func a b`, as created by `mapAttrs`.
+/// A suspended two-argument application `func a b`, as created by
+/// `zipAttrsWith` and by `mapAttrs` on sets too large for a map word.
 #[repr(C)]
 pub struct ThunkApp2Obj {
-    pub result: Cell,
-    pub func: Word,
+    /// `func`, then the value.
+    pub code: Cell,
     pub arg1: Word,
-    pub arg2: Word,
+    /// `arg2`, BLACKHOLE, EMPTY.
+    pub state: Cell,
+}
+
+/// One per `mapAttrs` call; entry `i` of `out` starts as the map word
+/// `(desc, i)`, which is a thunk with no object of its own: its `code`
+/// word is that entry's cell (the map word, then the value) and its
+/// state is `states[i]` (NULL, BLACKHOLE, EMPTY). Forcing applies `f` to
+/// the name and `src`'s entry `i`. Attr cells never hold a BLACKHOLE, so
+/// readers of `attr.cell` need no special case.
+#[repr(C)]
+pub struct MapDesc {
+    pub f: Word,
+    /// Flat, same syms as `out`.
+    pub src: &'static AttrsObj,
+    pub out: &'static AttrsObj,
+    // followed by `out.len()` state cells
+}
+
+impl MapDesc {
+    #[inline]
+    pub fn state(&self, i: usize) -> &'static Cell {
+        debug_assert!(i < self.out.len());
+        // SAFETY: `mk_map_attrs` placed one cell per entry after the header.
+        unsafe { &*((self as *const MapDesc).add(1) as *const Cell).add(i) }
+    }
 }
 
 const _: () = assert!(size_of::<ListObj>() == 8);
 const _: () = assert!(size_of::<AttrsObj>() == 8);
 const _: () = assert!(size_of::<EnvObj>() == 8);
 const _: () = assert!(size_of::<Attr>() == 16);
-const _: () = assert!(size_of::<ThunkObj>() == 24);
-const _: () = assert!(size_of::<ThunkAppObj>() == 24);
-const _: () = assert!(size_of::<ThunkApp2Obj>() == 32);
+const _: () = assert!(size_of::<ThunkObj>() == 16);
+const _: () = assert!(size_of::<ThunkAppObj>() == 16);
+const _: () = assert!(size_of::<ThunkApp2Obj>() == 24);
+const _: () = assert!(size_of::<MapDesc>() == 24);
 const _: () = assert!(size_of::<LambdaObj>() == 16);
+
+impl ThunkObj {
+    /// The IR, valid while `state` is not EMPTY.
+    #[inline]
+    pub fn ir(&self) -> &'static Ir {
+        // SAFETY: `mk_thunk` stored an arena IR pointer in `code`; it is
+        // overwritten only when `state` becomes EMPTY.
+        unsafe { &*self.code.get().ptr::<Ir>() }
+    }
+
+    /// The env a state word holds while unforced.
+    #[inline]
+    pub fn env_of(state: Word) -> &'static EnvObj {
+        // SAFETY: `mk_thunk` stored an arena env pointer as the state.
+        unsafe { &*state.ptr::<EnvObj>() }
+    }
+}
 
 /// Census marks (`stats2`): a byte in header padding is written through a
 /// raw pointer. Single-worker measurement runs only.
@@ -546,7 +597,9 @@ impl Word {
                 Word::FALSE => Value::Bool(false),
                 _ => panic!("view: blackhole"),
             },
-            TAG_THUNK | TAG_THUNK_APP | TAG_THUNK_APP2 => panic!("view: unforced thunk"),
+            TAG_THUNK | TAG_THUNK_APP | TAG_THUNK_APP2 | TAG_THUNK_MAP => {
+                panic!("view: unforced thunk")
+            }
             // SAFETY: lambda-tagged words point at an arena LambdaObj.
             TAG_LAMBDA => Value::Lambda(unsafe { &*self.ptr::<LambdaObj>() }),
             _ => {
@@ -642,14 +695,80 @@ impl Word {
         match self.tag() {
             TAG_THUNK_APP => Kind::ThunkApp,
             TAG_THUNK_APP2 => Kind::ThunkApp2,
+            TAG_THUNK_MAP => Kind::ThunkMap,
             _ => Kind::Thunk,
         }
     }
 
+    /// The cell whose word is this thunk's state: the payload while
+    /// unforced, a BLACKHOLE while claimed, then EMPTY (value in `code`).
     #[inline]
-    pub fn thunk_result_cell(self) -> &'static Cell {
-        // SAFETY: both thunk layouts place `result` right after `kind`.
-        unsafe { &(*self.ptr::<ThunkObj>()).result }
+    pub fn thunk_state_cell(self) -> &'static Cell {
+        // SAFETY: the tag names the layout; every layout keeps its state
+        // cell where the match says, and a map word's cell is entry `i`
+        // of the result set it names.
+        unsafe {
+            match self.tag() {
+                TAG_THUNK_APP2 => &(*self.ptr::<ThunkApp2Obj>()).state,
+                TAG_THUNK_MAP => {
+                    let (d, i) = self.map_desc();
+                    d.state(i)
+                }
+                _ => &(*self.ptr::<ThunkObj>()).state,
+            }
+        }
+    }
+
+    /// The cell that holds the IR or function until forced and the value
+    /// after: the object's first word, or the map entry's own cell.
+    #[inline]
+    fn thunk_code_cell(self) -> &'static Cell {
+        if self.tag() == TAG_THUNK_MAP {
+            let (d, i) = self.map_desc();
+            &d.out.attrs_raw()[i].cell
+        } else {
+            // SAFETY: every object layout starts with `code`.
+            unsafe { &(*self.ptr::<ThunkObj>()).code }
+        }
+    }
+
+    /// True when `state` (read from `thunk_state_cell`) still holds the
+    /// payload: the thunk was not forced and is not being forced.
+    #[inline]
+    pub fn thunk_unforced(self, state: Word) -> bool {
+        state != Word::EMPTY && !state.is_blackhole()
+    }
+
+    /// The forced value once the state is EMPTY.
+    #[inline]
+    pub fn thunk_value(self, _state: Word) -> Word {
+        self.thunk_code_cell().get()
+    }
+
+    /// Store the forced value; returns the state word to publish.
+    #[inline]
+    pub fn thunk_finish(self, v: Word) -> Word {
+        self.thunk_code_cell().set(v);
+        Word::EMPTY
+    }
+
+    /// The value of a forced thunk, `None` while unforced or claimed.
+    #[inline]
+    pub fn thunk_forced(self) -> Option<Word> {
+        let st = self.thunk_state_cell().get();
+        if st.is_blackhole() || self.thunk_unforced(st) {
+            None
+        } else {
+            Some(self.thunk_value(st))
+        }
+    }
+
+    /// Descriptor and entry index of a map word.
+    #[inline]
+    pub fn map_desc(self) -> (&'static MapDesc, usize) {
+        let (p, i) = self.map_parts::<MapDesc>();
+        // SAFETY: map words are built by `mapAttrs` over an arena `MapDesc`.
+        (unsafe { &*p }, i)
     }
 
     #[inline]
@@ -924,34 +1043,64 @@ impl Arena {
         self.stats.note(Stat::Thunk, size_of::<ThunkObj>());
         env.mark_captured();
         let t = self.alloc(ThunkObj {
-            result: Cell::new(Word::EMPTY),
-            env,
-            ir,
+            code: Cell::new(Word::from_ptr(ir as *const Ir)),
+            state: Cell::new(Word::from_ptr(env as *const EnvObj)),
         });
         Word::thunk_from_ptr(t as *const ThunkObj)
     }
 
     #[inline]
     pub fn mk_thunk_app(&mut self, func: Word, arg: Word) -> Word {
+        debug_assert!(arg != Word::EMPTY && !arg.is_blackhole());
         self.stats.note(Stat::ThunkApp, size_of::<ThunkAppObj>());
         let t = self.alloc(ThunkAppObj {
-            result: Cell::new(Word::EMPTY),
-            func,
-            arg,
+            code: Cell::new(func),
+            state: Cell::new(arg),
         });
         Word::thunk_app_from_ptr(t as *const ThunkAppObj)
     }
 
     #[inline]
     pub fn mk_thunk_app2(&mut self, func: Word, arg1: Word, arg2: Word) -> Word {
+        debug_assert!(arg2 != Word::EMPTY && !arg2.is_blackhole());
         self.stats.note(Stat::ThunkApp2, size_of::<ThunkApp2Obj>());
         let t = self.alloc(ThunkApp2Obj {
-            result: Cell::new(Word::EMPTY),
-            func,
+            code: Cell::new(func),
             arg1,
-            arg2,
+            state: Cell::new(arg2),
         });
         Word::thunk_app2_from_ptr(t as *const ThunkApp2Obj)
+    }
+
+    /// `mapAttrs f src` for a flat `src` of at most `MAP_MAX_IDX + 1`
+    /// entries: the result's cells are the thunks, no object per entry.
+    pub fn mk_map_attrs(&mut self, f: Word, src: &'static AttrsObj) -> Word {
+        debug_assert!(!src.is_union() && src.len() <= Word::MAP_MAX_IDX + 1);
+        let n = src.len();
+        let out: *mut AttrsObj = self.alloc_attrs_as(n, Stat::AttrsMap);
+        let size = size_of::<MapDesc>() + n * size_of::<Cell>();
+        self.stats.note(Stat::ThunkMap, size);
+        // SAFETY: `out` is a fresh arena set that lives forever; the
+        // descriptor only reads it after the fill below.
+        let out_ref: &'static AttrsObj = unsafe { &*out };
+        let desc = self.alloc_raw(size, 8) as *mut MapDesc;
+        // SAFETY: fresh allocation sized for the header plus n state cells.
+        unsafe {
+            desc.write(MapDesc {
+                f,
+                src,
+                out: out_ref,
+            });
+            let states = desc.add(1) as *mut Cell;
+            for i in 0..n {
+                states.add(i).write(Cell::new(Word::NULL));
+            }
+        }
+        for (i, a) in src.attrs_raw().iter().enumerate() {
+            // SAFETY: exclusive access to the fresh set during the fill.
+            unsafe { (*out).init(i, a.sym, a.pos, Word::thunk_map_from_ptr(desc, i)) };
+        }
+        Word::from_ptr(out_ref as *const AttrsObj)
     }
 
     pub fn mk_lambda(&mut self, env: &'static EnvObj, lam: &'static LambdaIr) -> Word {

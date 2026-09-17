@@ -32,8 +32,10 @@ fn atomic(cell: &Cell) -> &AtomicU64 {
 }
 
 pub enum Claim {
-    /// We own the thunk and must publish or reset it.
-    Won,
+    /// We own the thunk and must publish or reset it; carries the payload
+    /// word the state cell held.
+    Won(Word),
+    /// The state word of a forced thunk.
     Value(Word),
     /// Claimed by this fiber already: infinite recursion.
     Mine,
@@ -41,38 +43,40 @@ pub enum Claim {
     Busy(Word),
 }
 
+/// `unforced` says whether a state word is still the payload (thunk not
+/// forced), as opposed to the forced state; see `Word::thunk_unforced`.
 #[inline]
-pub fn try_claim(cell: &Cell, me: u32) -> Claim {
+pub fn try_claim(cell: &Cell, me: u32, unforced: impl Fn(Word) -> bool) -> Claim {
     // Most forces hit a thunk another fiber already evaluated. A plain
     // load answers those without the CAS, which would pull the line into
     // exclusive state on every reader of a hot shared value.
-    let cur = atomic(cell).load(Ordering::Acquire);
-    let cur = if cur == Word::EMPTY.0 {
+    let mut cur = atomic(cell).load(Ordering::Acquire);
+    loop {
+        let w = Word(cur);
+        if w.is_blackhole() {
+            return if claimer(w) == me {
+                Claim::Mine
+            } else {
+                Claim::Busy(w)
+            };
+        }
+        if !unforced(w) {
+            return Claim::Value(w);
+        }
         match atomic(cell).compare_exchange(
-            Word::EMPTY.0,
+            cur,
             blackhole(me).0,
             Ordering::Acquire,
             Ordering::Acquire,
         ) {
-            Ok(_) => return Claim::Won,
-            Err(cur) => cur,
+            Ok(_) => return Claim::Won(w),
+            Err(now) => cur = now,
         }
-    } else {
-        cur
-    };
-    let cur = Word(cur);
-    if cur.is_blackhole() {
-        if claimer(cur) == me {
-            Claim::Mine
-        } else {
-            Claim::Busy(cur)
-        }
-    } else {
-        Claim::Value(cur)
     }
 }
 
-/// Store `v` (a value, or EMPTY to reset) and wake every parked waiter.
+/// Store the new state word (the forced state, or the payload again to
+/// reset) and wake every parked waiter.
 pub fn publish(slot: &mut Slot, cell: &Cell, v: Word) {
     let old = atomic(cell).swap(v.0, Ordering::AcqRel);
     if old & WAITERS_BIT != 0 {
@@ -202,8 +206,8 @@ mod tests {
     fn force(g: &Graph, slot: &mut Slot, i: usize) -> i64 {
         let cell = &g.nodes[i].cell;
         loop {
-            match try_claim(cell, slot.id) {
-                Claim::Won => {
+            match try_claim(cell, slot.id, |w| w == Word::EMPTY) {
+                Claim::Won(_) => {
                     // Some work per node so claims overlap and fibers park.
                     let mut x = i as u64;
                     for _ in 0..3000 {
@@ -264,7 +268,7 @@ mod tests {
             let p = self.0;
             let mine = slot.task.start as usize;
             let other = 1 - mine;
-            let Claim::Won = try_claim(&p.cells[mine], slot.id) else {
+            let Claim::Won(_) = try_claim(&p.cells[mine], slot.id, |w| w == Word::EMPTY) else {
                 panic!("cell already claimed")
             };
             // Let the other task claim its cell before we look at it.
@@ -274,7 +278,7 @@ mod tests {
                 std::thread::yield_now();
             }
             loop {
-                match try_claim(&p.cells[other], slot.id) {
+                match try_claim(&p.cells[other], slot.id, |w| w == Word::EMPTY) {
                     Claim::Busy(cur) => {
                         if wait(slot, &p.cells[other], cur).is_err() {
                             p.cancelled.fetch_add(1, Ordering::Relaxed);
@@ -282,7 +286,7 @@ mod tests {
                             break;
                         }
                     }
-                    Claim::Won => {
+                    Claim::Won(_) => {
                         publish(slot, &p.cells[other], Word::imm_int(1));
                         publish(slot, &p.cells[mine], Word::imm_int(1));
                         break;
@@ -331,8 +335,8 @@ mod tests {
                 }
                 loop {
                     assert!(t0.elapsed().as_secs() < 20, "timeout");
-                    match try_claim(&p.cells[0], slot.id) {
-                        Claim::Won => {
+                    match try_claim(&p.cells[0], slot.id, |w| w == Word::EMPTY) {
+                        Claim::Won(_) => {
                             publish(slot, &p.cells[0], Word::imm_int(7));
                             break;
                         }

@@ -25,6 +25,12 @@ pub const TAG_THUNK_APP: u64 = 0b110;
 pub const TAG_THUNK_APP2: u64 = 0b100;
 pub const TAG_LAMBDA: u64 = 0b101;
 pub const TAG_IMM: u64 = 0b011;
+/// `mapAttrs` entry: bits 3..48 point at a `MapDesc`, bits 48.. hold the
+/// entry index; the entry's own cell in the result set is the thunk.
+pub const TAG_THUNK_MAP: u64 = 0b111;
+/// One bit per tag value: 010, 100, 110, 111 are thunks.
+const THUNK_TAGS: u64 =
+    (1 << TAG_THUNK) | (1 << TAG_THUNK_APP2) | (1 << TAG_THUNK_APP) | (1 << TAG_THUNK_MAP);
 
 const IMM_NULL: u64 = TAG_IMM;
 const IMM_TRUE: u64 = TAG_IMM | (1 << 3);
@@ -75,8 +81,7 @@ impl Word {
 
     #[inline]
     pub fn is_thunk(self) -> bool {
-        // tags 010, 100, 110: even, and not the pointer tag 000
-        self.0 & 0b001 == 0 && self.0 & 0b110 != 0
+        (THUNK_TAGS >> self.tag()) & 1 != 0
     }
 
     #[inline]
@@ -130,6 +135,26 @@ impl Word {
         debug_assert!(p as u64 & TAG_MASK == 0);
         Word(p as u64 | TAG_LAMBDA)
     }
+
+    /// Largest entry index a map thunk word can carry.
+    pub const MAP_MAX_IDX: usize = 0xFFFF;
+
+    #[inline]
+    pub fn thunk_map_from_ptr<T>(p: *const T, idx: usize) -> Word {
+        debug_assert!(p as u64 & TAG_MASK == 0 && (p as u64) >> 48 == 0);
+        debug_assert!(idx <= Self::MAP_MAX_IDX);
+        Word(p as u64 | ((idx as u64) << 48) | TAG_THUNK_MAP)
+    }
+
+    /// The descriptor pointer and entry index of a map thunk word.
+    #[inline]
+    pub fn map_parts<T>(self) -> (*const T, usize) {
+        debug_assert!(self.tag() == TAG_THUNK_MAP);
+        (
+            (self.0 & 0x0000_FFFF_FFFF_FFF8) as *const T,
+            (self.0 >> 48) as usize,
+        )
+    }
 }
 
 /// A mutable slot holding a `Word`. Env slots, list elements, attr values and
@@ -166,6 +191,7 @@ impl std::fmt::Debug for Word {
             TAG_THUNK => write!(f, "Thunk({:#x})", self.0),
             TAG_THUNK_APP => write!(f, "ThunkApp({:#x})", self.0),
             TAG_THUNK_APP2 => write!(f, "ThunkApp2({:#x})", self.0),
+            TAG_THUNK_MAP => write!(f, "ThunkMap({:#x})", self.0),
             TAG_LAMBDA => write!(f, "Lambda({:#x})", self.0),
             TAG_IMM => match *self {
                 Word::NULL => write!(f, "null"),

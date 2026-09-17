@@ -125,6 +125,38 @@ version kept `(a, b)` pointers and probed recursively; it cost +3.8 %
 wall on outpaths at 1 worker, so the leaves are stored inline and probed
 in a loop.
 
+### 2. Thunks overwritten in place; `mapAttrs` entries without a thunk object
+
+A thunk was `{ result, env, ir }` (24 B), a `map` thunk `{ result, func,
+arg }` (24 B), a `mapAttrs` thunk `{ result, func, name, value }` (32 B):
+80 M, 4 M and 22 M of them on outpaths, 2.6 GB, and 35 M of the plain
+thunks plus 93 % of the `mapAttrs` thunks are never forced. Now a thunk
+is two words: `code` (the IR or function, overwritten with the value) and
+`state` (the env or argument, then BLACKHOLE, then EMPTY); `ThunkApp2`
+keeps its first argument as a third word. The env and IR pointers do not
+fit one word together (48 + 48 bits; IR ids would need a dedicated
+contiguous IR arena), so the in-place overwrite is what makes 16 bytes
+possible. The claim protocol moved from "EMPTY → BLACKHOLE → value" to
+"payload → BLACKHOLE → EMPTY" on the state cell (docs/parallel.md);
+payloads are never EMPTY or a BLACKHOLE, so the states stay disjoint.
+
+`mapAttrs` gets no thunk object at all: a `THUNK_MAP` word (tag 111,
+descriptor pointer in bits 3..48, entry index in bits 48..64) sits in the
+result's own attr cell, and one `MapDesc { f, src, out }` per call holds
+one 8-byte state cell per entry. Forcing reads the name from the result's
+sym and the value from the source's cell at the same index. A first cut
+kept the state in the attr cell itself; it crashed at 4 workers because
+readers of `attr.cell` saw a BLACKHOLE as a value, hence the state array
+(8 B per entry instead of 0, still 24 B less than the object). Sets over
+65536 entries fall back to `ThunkApp2`.
+
+Result: outpaths arena 8936 → 7981 MB (−955 MB, −10.7 %), peak RSS 9398
+→ 8437 MB: thunks 1832 → 1221 MiB, `map` thunks 96 → 64 MiB, `mapAttrs`
+thunks 683 → 169 MiB of state cells plus 81 MiB of `ThunkApp2` for
+`zipAttrsWith`. desktop arena 741 → 657 MB, RSS 796 → 700 MB. Time within
+noise: outpaths 31.92 → 32.10 s at 1 worker, 14.61 → 14.45 at 4; desktop
+1.72 → 1.71 and 1.15 → 1.00. Output byte-identical.
+
 ## Running perf table
 
 `bench/perf.nu` rows: nixos-desktop is the median-wall run of 5; outpaths
@@ -140,3 +172,7 @@ chunk 0/8 is one run. Same 16-core box, idle.
 | 1 union `//` | nixos-desktop | 4 | 1.15 | 2.54 | 0.44 | 885 |
 | 1 union `//` | outpaths chunk 0/8 | 1 | 31.92 | 26.74 | 4.85 | 9398 |
 | 1 union `//` | outpaths chunk 0/8 | 4 | 14.61 | 34.90 | 7.44 | 9801 |
+| 2 thunks in place | nixos-desktop | 1 | 1.71 | 1.49 | 0.20 | 700 |
+| 2 thunks in place | nixos-desktop | 4 | 1.00 | 2.37 | 0.32 | 793 |
+| 2 thunks in place | outpaths chunk 0/8 | 1 | 32.10 | 27.01 | 4.67 | 8437 |
+| 2 thunks in place | outpaths chunk 0/8 | 4 | 14.45 | 36.37 | 6.86 | 8811 |

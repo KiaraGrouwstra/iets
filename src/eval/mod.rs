@@ -438,57 +438,72 @@ impl Evaluator {
         if self.par.on {
             return crate::parallel::force_thunk(self, w); // parallel: claim protocol
         }
-        let result = w.thunk_result_cell();
-        let r = result.get();
-        if r != Word::EMPTY {
-            if r.is_blackhole() {
-                bail!(
-                    ErrorKind::InfiniteRecursion,
-                    self.thunk_pos(w),
-                    "infinite recursion encountered"
-                );
-            }
-            return Ok(r);
+        let state = w.thunk_state_cell();
+        let st = state.get();
+        if st.is_blackhole() {
+            bail!(
+                ErrorKind::InfiniteRecursion,
+                self.thunk_pos(w),
+                "infinite recursion encountered"
+            );
         }
-        result.set(Word::BLACKHOLE);
+        if !w.thunk_unforced(st) {
+            return Ok(w.thunk_value(st));
+        }
+        state.set(Word::BLACKHOLE);
         #[cfg(feature = "stats2")]
         {
             self.arena.stats.census.forced[match w.thunk_kind() {
                 Kind::Thunk => 0,
                 Kind::ThunkApp => 1,
-                _ => 2,
+                Kind::ThunkApp2 => 2,
+                _ => 3,
             }] += 1;
         }
-        let v = match w.thunk_kind() {
-            Kind::Thunk => {
-                let t = w.as_thunk();
-                self.eval(t.env, t.ir)
-            }
-            Kind::ThunkApp => {
-                let t = w.as_thunk_app();
-                self.apply(t.func, &[t.arg], Pos::NONE)
-            }
-            _ => {
-                let t = w.as_thunk_app2();
-                self.apply(t.func, &[t.arg1, t.arg2], Pos::NONE)
-            }
-        };
+        let v = self.run_thunk(w, st);
         match v {
             Ok(v) => {
                 debug_assert!(!v.is_thunk());
-                result.set(v);
+                let done = w.thunk_finish(v);
+                state.set(done);
                 Ok(v)
             }
             Err(e) => {
-                result.set(Word::EMPTY);
+                state.set(st);
                 Err(e)
             }
         }
     }
 
-    fn thunk_pos(&self, w: Word) -> Pos {
+    /// Evaluate a claimed thunk from its payload word `st`.
+    #[inline]
+    pub fn run_thunk(&mut self, w: Word, st: Word) -> EvalResult<Word> {
         match w.thunk_kind() {
-            Kind::Thunk => ir_pos(w.as_thunk().ir),
+            Kind::Thunk => {
+                let t = w.as_thunk();
+                self.eval(ThunkObj::env_of(st), t.ir())
+            }
+            Kind::ThunkApp => {
+                let f = w.as_thunk_app().code.get();
+                self.apply(f, &[st], Pos::NONE)
+            }
+            Kind::ThunkApp2 => {
+                let t = w.as_thunk_app2();
+                self.apply(t.code.get(), &[t.arg1, st], Pos::NONE)
+            }
+            _ => {
+                let (d, i) = w.map_desc();
+                let name = self.sym_string(d.out.attrs_raw()[i].sym);
+                let v = d.src.attrs_raw()[i].cell.get();
+                self.apply(d.f, &[name, v], Pos::NONE)
+            }
+        }
+    }
+
+    /// Position of a claimed or unforced thunk, for the recursion error.
+    pub fn thunk_pos(&self, w: Word) -> Pos {
+        match w.thunk_kind() {
+            Kind::Thunk => ir_pos(w.as_thunk().ir()),
             _ => Pos::NONE,
         }
     }

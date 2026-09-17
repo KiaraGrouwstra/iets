@@ -121,13 +121,13 @@ pub fn print_ambiguous(
         ));
     }
     if w.is_thunk() {
-        let r = w.thunk_result_cell().get();
-        if r.is_blackhole() {
+        let st = w.thunk_state_cell().get();
+        if st.is_blackhole() {
             out.extend_from_slice("«potential infinite recursion»".as_bytes());
-        } else if r == Word::EMPTY {
+        } else if w.thunk_unforced(st) {
             out.extend_from_slice(b"<CODE>");
         } else {
-            return print_ambiguous(ev, r, cell, out, seen, depth);
+            return print_ambiguous(ev, w.thunk_value(st), cell, out, seen, depth);
         }
         return Ok(());
     }

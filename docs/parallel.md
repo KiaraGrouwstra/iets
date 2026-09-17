@@ -34,32 +34,49 @@ global; cross-arena references are fine because arenas are never freed.
 
 ## Thunk claim protocol
 
-The thunk result `Cell` is the synchronisation word. States:
+The thunk's *state* `Cell` is the synchronisation word
+(`Word::thunk_state_cell`). A thunk is overwritten in place, so the state
+cell doubles as payload storage (docs/memory.md): for a `Thunk` it holds
+the env pointer, for a `ThunkApp` the argument, for a `ThunkApp2` the
+second argument, and for a `mapAttrs` map word it is a cell in the
+`MapDesc` (payload NULL) while the entry's own cell in the result set is
+the `code` word. States:
 
 ```
-EMPTY ──CAS──> BLACKHOLE(claimer, waiters bit) ──store──> value
-  ^                          │
-  └────────── reset ─────────┘   (error, cancel, or traced-in-helper)
+payload ──CAS──> BLACKHOLE(claimer, waiters bit) ──store──> EMPTY
+   ^                          │
+   └────────── reset ─────────┘   (error, cancel, or traced-in-helper)
 ```
+
+The value sits in the `code` word, written before the state with
+Release. `Word::thunk_unforced(state)` tells payload from done;
+`thunk_value` and `thunk_finish` read and write the value. Cells that
+values are read from (env slots, list and attr cells) never hold a
+BLACKHOLE.
 
 - `BLACKHOLE(id)` is `Word::BLACKHOLE | id << 8`. Bit 7 is the
   *has-waiters* flag. The sequential path stores plain `Word::BLACKHOLE`
   (id 0); `Word::is_blackhole` masks bit 7 and matches every variant.
-- **Claim**: load the word first (Acquire); only an EMPTY word gets the
-  `compare_exchange(EMPTY, BLACKHOLE(me), Acquire, Acquire)`. A failed
-  CAS still takes the cache line exclusive, and most forces hit a thunk
-  another fiber already evaluated (`lib` functions, `pkgs`), so the
-  plain load keeps hot shared lines shared. Winner evaluates. Loser
-  reads the current word:
-  - value: return it (Acquire load pairs with the Release publish).
+  Payloads are never EMPTY and never a BLACKHOLE (`mk_thunk_app` asserts
+  it), so the three states are disjoint.
+- **Claim**: load the word first (Acquire); only a payload word gets the
+  `compare_exchange(payload, BLACKHOLE(me), Acquire, Acquire)`, retried
+  on the new word when it fails. A failed CAS still takes the cache line
+  exclusive, and most forces hit a thunk another fiber already evaluated
+  (`lib` functions, `pkgs`), so the plain load keeps hot shared lines
+  shared. Winner gets the payload back (`Claim::Won(payload)`) and
+  evaluates; the `code` word still holds the IR or function, which only
+  the winner may read. Loser reads the current word:
+  - done: return the value (Acquire load pairs with the Release publish).
   - `BLACKHOLE(me)`: infinite recursion. The claimer id is per fiber, not
     per thread, so it follows a migrated computation.
   - `BLACKHOLE(other)`: park (below).
-- **Publish**: `swap(value, Release)`. If the old word had the has-waiters
-  bit, drain the waiter list for this thunk and wake each fiber.
-- **Reset**: same as publish with `EMPTY`; waiters wake and retry the
-  claim. Used for errors (errors are never cached, as in the sequential
-  path) and for cancelled fibers (see Effects).
+- **Publish**: store the value in `code`, then `swap(done, Release)` on
+  the state. If the old word had the has-waiters bit, drain the waiter
+  list for this thunk and wake each fiber.
+- **Reset**: same as publish with the payload; waiters wake and retry
+  the claim. Used for errors (errors are never cached, as in the
+  sequential path) and for cancelled fibers (see Effects).
 
 Waiter list: a side table sharded by thunk address (64 shards, each a
 `Mutex<HashMap<thunk addr, Vec<*mut Fiber>>>`). Thunk objects do not grow.

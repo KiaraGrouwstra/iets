@@ -151,6 +151,11 @@ fn map_attrs(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         "while evaluating the second argument passed to builtins.mapAttrs",
     )?;
     let f = args[0];
+    let a = ev.arena.flat(a);
+    if a.len() <= Word::MAP_MAX_IDX + 1 {
+        // one map word per entry, no thunk object (docs/memory.md)
+        return Ok(ev.arena.mk_map_attrs(f, a));
+    }
     let mut out: Vec<(Sym, Pos, Word)> = Vec::with_capacity(a.len());
     for attr in a.iter() {
         let name = ev.sym_string(attr.sym);

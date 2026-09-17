@@ -82,17 +82,23 @@ source bytes
 |---|---|
 | INT | 61-bit immediate integer; out-of-range ints box to a heap object |
 | PTR | pointer to a heap object with a one-byte kind header |
-| THUNK | pointer to a `Thunk { env, ir }` object, not yet evaluated |
-| BLACKHOLE | thunk under evaluation (recursion detection, later: parallel claim) |
+| THUNK, THUNK_APP, THUNK_APP2 | pointer to a 16- or 24-byte thunk object, not yet evaluated |
+| THUNK_MAP | a `mapAttrs` entry: descriptor pointer plus entry index, no object |
+| LAMBDA | pointer to a two-word closure |
+| BLACKHOLE | thunk under evaluation (recursion detection, parallel claim) |
 | NULL, TRUE, FALSE | immediates |
 
 Heap kinds: `Float`, `BigInt`, `String { bytes, context }`, `Path`, `List
-{ [Cell] }`, `Attrs { [(Sym, Cell)] sorted by Sym id }`, `Lambda { env,
-ir }`, `PrimOp`, `PrimOpApp`, `Env { up, [Cell] }`, `Thunk`.
+{ [Cell] }`, `Attrs { [(Sym, Pos, Cell)] sorted by Sym id }`, `AttrsUnion`
+(the result of `//`: flat leaves, no copy), `Lambda { env, ir }`,
+`PrimOp`, `PrimOpApp`, `Env { up, [Cell] }`, `Thunk { code, state }`.
 
 A `Cell` is an `AtomicU64` holding a `Word`. Env slots, list elements, and
-attr values are cells. Forcing a thunk overwrites its cell in place with
-the result (graph reduction). Values are immutable after forcing.
+attr values are cells. Forcing a thunk overwrites the thunk object in
+place: its `code` word (IR or function) becomes the value and its `state`
+word (env or argument) becomes EMPTY; cells that held the thunk pointer
+are rewritten with the value as they are read (graph reduction). Values
+are immutable after forcing. See docs/memory.md for the layouts.
 
 Attrs are sorted by `Sym` id, like C++ Nix. Name order (for `attrNames`,
 printing, JSON, derivation env) is computed on demand.

@@ -227,11 +227,10 @@ pub fn speculate_app(ev: &Evaluator, w: Word, f: Word) {
     // `f` is usually still a thunk here; only an already forced lambda
     // tells us anything.
     let f = if f.is_thunk() {
-        let r = f.thunk_result_cell().get();
-        if r == Word::EMPTY || r.is_blackhole() {
-            return;
+        match f.thunk_forced() {
+            Some(r) => r,
+            None => return,
         }
-        r
     } else {
         f
     };
