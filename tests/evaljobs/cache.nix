@@ -33,6 +33,6 @@ rec {
     outputHash = "98ea6e4f216f2fb4b69fff9b3a44842c38686ca685f3f55dc48c5d3fb1107be4";
   };
   # A nixpkgs package whose output is in the store on the box that runs
-  # the tests (hello is built by scripts/daemon-e2e.sh).
+  # the tests (hello is built by scripts/daemon-e2e.nu).
   hello = (import <nixpkgs> { inherit system; }).hello;
 }

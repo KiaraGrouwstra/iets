@@ -17,7 +17,7 @@ bench/run.nu nixos-desktop
 ./target/release/ietsp build --builder daemon -A hello /path/to/nixpkgs/default.nix
 ./target/release/ietsp build --no-build FILE.nix     # upload only, no realise
 ./target/release/ietsp build /nix/store/<hash>-<name>.drv   # legacy: closure from the local store
-scripts/remote-e2e.sh
+scripts/remote-e2e.nu
 
 # .envrc: what `nix print-dev-env` prints, byte-exact, from the in-memory shell drv
 ./target/release/ietsp print-dev-env --gc-root .direnv/ietsp-env .   # see docs/direnv.md

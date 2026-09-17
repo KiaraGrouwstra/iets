@@ -133,7 +133,7 @@ serializer. `nix-store --import` needs a trusted user or `require-sigs =
 false`. `builtins.toFile` with appended opaque context is the smallest route
 and produced the exact path in every test.
 
-## Measured (`scripts/remote-e2e.sh`, release build, localhost)
+## Measured (`scripts/remote-e2e.nu`, release build, localhost)
 
 Legacy `.drv` path (closure read from `/nix/store`):
 
@@ -272,7 +272,7 @@ type `actBuild` (105) is `Started` and maps the activity id to its drv;
 trips (ops plus the three handshake exchanges) and bytes written to the
 socket.
 
-### Measured (`scripts/daemon-e2e.sh`, release build)
+### Measured (`scripts/daemon-e2e.nu`, release build)
 
 "Local daemon" is this machine's `nix-daemon` on its socket; the hello
 closure is GC-rooted there, so every path is valid and a cold run is
