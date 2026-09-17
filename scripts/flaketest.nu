@@ -4,8 +4,8 @@
 # repo's flake, on a scratch flake with locked inputs of every offline type
 # (`path:`, `git+file://`, a `file://` tarball), a `follows`, a devShell and a
 # NixOS system, and on a scratch git flake with a `path:` input, a `follows`,
-# a clean tree and a dirty tree. No network: nixpkgs is the store tree this
-# repo's lock names.
+# a clean tree and a dirty tree. The only fetch is this repo's own nixpkgs
+# input; the scratch flakes reuse that store tree through a `path:` input.
 use lib.nu [chomp show verdict]
 
 def --wrapped nixf [...args: string] { ^nix --extra-experimental-features "nix-command flakes" ...$args }
