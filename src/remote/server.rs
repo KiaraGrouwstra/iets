@@ -234,10 +234,7 @@ impl Builder for Builderd {
             let Some(body) = msg.body else {
                 return Err(Status::invalid_argument("empty PutRequest"));
             };
-            let this = self.clone();
-            let (objects, paths) = tokio::task::spawn_blocking(move || this.put_one(body))
-                .await
-                .map_err(|e| Status::internal(e.to_string()))??;
+            let (objects, paths) = self.put_one(body)?;
             resp.objects += objects;
             resp.paths += paths;
         }
