@@ -3,7 +3,7 @@
 `ietsp print-dev-env [FLAKEREF[#attr]]` prints the bash that
 `nix print-dev-env --option eval-cache false FLAKEREF` prints, byte for byte,
 and replaces nix-direnv's `use flake` in `.envrc`. Code: `src/devenv/`,
-`cmd_print_dev_env` in `src/main.rs`. Judge: `scripts/devenv-test.sh`.
+`cmd_print_dev_env` in `src/main.rs`. Judge: `scripts/devenv-test.nu`.
 
 ```
 ietsp print-dev-env [--builder URL] [--gc-root PATH] [--json] [--workers N]
@@ -96,4 +96,4 @@ flake directory:
 | `ietsp print-dev-env ~/iets-prime`, cache hit | 57-60 ms |
 | scratch mkShell flake, env output deleted, cache hit: fallback, plan, build | 0.65 s |
 
-`scripts/devenv-test.sh` prints the warm time (case c) on every run.
+`scripts/devenv-test.nu` prints the warm time (case c) on every run.

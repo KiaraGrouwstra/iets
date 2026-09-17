@@ -206,7 +206,7 @@ ietsp eval-jobs [--workers N] [--force-recurse] [--meta] [--show-input-drvs]
                 [--option k v]... (-E EXPR | FILE | --flake FLAKEREF[#attr])
 ```
 
-Same walk, same lines. `scripts/evaljobs-flags.sh` runs nix-eval-jobs
+Same walk, same lines. `scripts/evaljobs-flags.nu` runs nix-eval-jobs
 2.35.2 and ietsp with every flag combination below on the jobsets in
 `tests/evaljobs/` and diffs the sorted output (`jq -S` per line, error
 text replaced by `true`, GC root directories listed): 40 cases, all
@@ -366,7 +366,7 @@ against the nix-eval-jobs rows of section (a), same box and method
 | nix-eval-jobs `--workers 4 --max-memory-size 4096`, warm store, same day | 245.1 s | 564 s | 152 s | 17.1 GB; 4.6 GB | – | 80245 | 1851 | – |
 | nix-eval-jobs, section (a): cold, warm, `--no-instantiate` | 789.8 s, 247.7 s, 126.4 s | | | | | 80245 | 1851 | – |
 
-Diffs are `scripts/evaljobs-cmp.sh --meta` against the same-day
+Diffs are `scripts/evaljobs-cmp.nu --meta` against the same-day
 nix-eval-jobs run: the same 82096 attrs, the same jobs and errors, zero
 whole-line differences after key sorting, for all three ietsp runs.
 Restart mode is 3.4x faster than nix-eval-jobs on a warm store and 3.8x
@@ -409,7 +409,7 @@ nix-eval-jobs --meta --workers 4 --max-memory-size 4096 \
 for c in 0 1 2 3 4 5 6 7; do
   ietsp eval-jobs --meta --workers 4 --chunks 8 --chunk $c -I nixpkgs=$NP outpaths-x86.nix
 done > ietsp.jsonl
-scripts/evaljobs-cmp.sh nej.jsonl ietsp.jsonl [--meta]
+scripts/evaljobs-cmp.nu nej.jsonl ietsp.jsonl [--meta]
 ```
 
 No `--force-recurse`: `outpaths.nix` sets `recurseForDerivations` on
@@ -425,7 +425,7 @@ times; peak RSS is the largest chunk.
 | ietsp `--workers 8`, 8 chunks, summed | 139.6 s (15.4-19.2 s per chunk) | 411.2 s | 79.0 s | 14.5 GB | 80245 | 1851 | 0 |
 | ietsp `--workers 1`, chunk 0 only | 33.1 s | 26.7 s | 6.0 s | 13.8 GB | 9244 | 167 | 0 |
 
-Comparison (`scripts/evaljobs-cmp.sh`, keyed on `attrPath`): the same
+Comparison (`scripts/evaljobs-cmp.nu`, keyed on `attrPath`): the same
 82096 attrs on both sides, the same 80245 jobs and 1851 errors, no attr
 that is a job on one side and an error on the other, zero `drvPath`
 differences, and with `--meta` zero differences in the whole job line
@@ -565,9 +565,9 @@ is a plain job on both sides (`namedConstituents: []` without
 | (c) nixos `tested` subset | killed (switchTest) | 79.4 s + switchTest killed | 14.1 GB | 116 | 0 | 0 |
 
 Gates at the end: `cargo test --release` 113 passed, clippy clean,
-`scripts/evaljobs-flags.sh` 40/40,
-`scripts/langtests.nu` 245/5, `scripts/flaketest.sh` 19/19,
-`scripts/cachetest.sh` 18/18, `scripts/difftest.nu -I nixpkgs=$NP
+`scripts/evaljobs-flags.nu` 40/40,
+`scripts/langtests.nu` 245/5, `scripts/flaketest.nu` 19/19,
+`scripts/cachetest.nu` 18/18, `scripts/difftest.nu -I nixpkgs=$NP
 bench/workloads/nixos-desktop.nix` ok.
 
 ## What is missing for Hydra or nixpkgs CI

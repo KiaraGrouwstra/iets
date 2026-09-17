@@ -35,3 +35,9 @@ export def glob-sorted [pat: string]: nothing -> list<string> {
   let names = (ls ($pat | into glob) | get name | str join "\n" | ^sort | lines)
   $names
 }
+
+# Print "ok   NAME" or "FAIL DETAIL"; returns OK.
+export def verdict [ok: bool, name: string, detail: string]: nothing -> bool {
+  if $ok { print $"ok   ($name)" } else { print $"FAIL ($detail)" }
+  $ok
+}

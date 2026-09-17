@@ -2,7 +2,7 @@
 
 `ietsp eval --raw DIR#attr.path` evaluates a locked flake and prints what
 `nix eval --raw --option eval-cache false DIR#attr.path` prints. Code:
-`src/flake/`. Judge: `scripts/flaketest.sh`.
+`src/flake/`. Judge: `scripts/flaketest.nu`.
 
 ## Scope
 

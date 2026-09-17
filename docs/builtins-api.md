@@ -134,7 +134,7 @@ constants: true, false, null, builtins, currentSystem, nixVersion,
 langVersion, storeDir, nixPath, derivation (from corepkgs/derivation.nix).
 derivation: derivationStrict, placeholder, `import` of a `.drv` store path.
 State lives in `ev.drv` (`DrvState`: hash cache, created-drv table,
-`--dump-drvs` dir). `scripts/drvdiff.sh` finds the first derivation that
+`--dump-drvs` dir). `scripts/drvdiff.nu` finds the first derivation that
 differs from nix-instantiate.
 interim (src/builtins/interim.rs, delete after the strings family merges):
 match, split, replaceStrings, fromJSON, toJSON, fromTOML, hashString,

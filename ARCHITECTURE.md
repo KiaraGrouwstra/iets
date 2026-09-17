@@ -133,7 +133,7 @@ lists and attrsets, and a speculation gate. Designed after fix; see
   with `.exp`, `eval-fail-*.nix`). `scripts/langtests.nu` runs them.
 - `tests/corpus/`: our own cases; `.exp` captured from `nix-instantiate`.
 - `scripts/difftest.nu <expr-or-file>`: runs both evaluators and diffs.
-- `bench/`: the fix workloads and `bench/run.sh` (hyperfine).
+- `bench/`: the fix workloads and `bench/run.nu` (hyperfine).
 
 ## Conventions
 

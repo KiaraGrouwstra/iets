@@ -7,7 +7,7 @@ nix develop -c cargo build --release
 ./target/release/ietsp eval --strict -E '1 + 1'
 scripts/langtests.nu
 scripts/difftest.nu -I nixpkgs=/path -E '(import <nixpkgs> {}).hello.drvPath'
-bench/run.sh nixos-desktop
+bench/run.nu nixos-desktop
 
 # remote builds: evaluate in memory, ship only what the builder lacks
 ./target/release/ietsp-builderd --listen 127.0.0.1:9455 --store-dir /var/tmp/builder &
@@ -33,7 +33,7 @@ hit or miss. Design and limits: `docs/tracing-cache.md`.
 
 ## Results (2026-09-16)
 
-`bench/run.sh nixos-desktop nixos-minimal`, 16 vCPU EPYC Genoa, nixpkgs
+`bench/run.nu nixos-desktop nixos-minimal`, 16 vCPU EPYC Genoa, nixpkgs
 26.11pre1059574.a831408e6378, hyperfine 5 runs, all four evaluators produce
 the same drvPath. ietsp runs with its default of 4 workers.
 

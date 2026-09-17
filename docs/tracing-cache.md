@@ -160,4 +160,4 @@ process start. Deduplicating the read set by cloning every path cost
 | cold builder, miss | 1.32 s (+30 ms cache write) | 0.11 s | 0.03 s | 4,184 objects, 36.5 MB, 0.62 s | 2.20 s |
 | warm builder, hit | skipped: 0.11 s to validate and load 3,616 drvs and 657 sources | 0.09-0.11 s | 0.02-0.03 s | nothing | 0.25 s |
 
-`scripts/cachetest.sh` covers the semantics (18 cases).
+`scripts/cachetest.nu` covers the semantics (18 cases).
