@@ -157,6 +157,33 @@ thunks 683 → 169 MiB of state cells plus 81 MiB of `ThunkApp2` for
 noise: outpaths 31.92 → 32.10 s at 1 worker, 14.61 → 14.45 at 4; desktop
 1.72 → 1.71 and 1.15 → 1.00. Output byte-identical.
 
+### 3. Strings and contexts shared by content
+
+5.93 M of the 7.31 M strings on outpaths repeat the bytes of an earlier
+one (662 MB of 745 MB), and 0.91 M of 1.09 M context slices repeat too.
+The arena now keeps `strings: FxHashMap<&[u8], Word>` (bytes by content,
+plus the context-free string object over them once one exists) and
+`ctxs: FxHashSet<&[Ctx]>`. `mk_string`, `mk_string_ctx`, interpolation
+(`eval_concat`) and the builtins that build a `Vec<u8>` (`substring`,
+`replaceStrings`, `concatStringsSep`, `toJSON`, `toXML`, `readFile`,
+`baseNameOf`, ...) look the content up first; a string with an empty
+context shares the object, a string with context shares the bytes.
+Interpolation joins its pieces in the arena and gives the bytes back
+(`Arena::mark`/`release`) when the content already exists, so no scratch
+buffer is needed. The tables are per arena (per fiber in parallel runs);
+sharing across fibers is not required for correctness. The table is
+keyed by the 64-bit content hash (probes compare integers, the bytes are
+read only on a hit, a new string is hashed once); a first version keyed
+by `&[u8]` cost 6 % wall on outpaths at 1 worker and 12 % at 4.
+
+Result: outpaths arena 7981 → 7106 MB (−875 MB, −11 %), peak RSS 8437 →
+7680 MB: string objects 279 → 108 MiB, bytes 745 → 169 MiB, contexts 51
+→ 8 MiB; the tables cost ~60 MB of heap. desktop RSS 700 → 676 MB. Time:
+outpaths 32.10 → 33.13 s at 1 worker (+3.2 %; user +6 %, sys −10 %) and
+14.45 → 13.46 s at 4 (−7 %); desktop 1.71 → 1.80 s and 1.00 → 1.05 s,
+within the ±5 % run-to-run noise of this box. Kept: 9 % of RSS for 3 %
+of wall at one worker, and a gain at four.
+
 ## Running perf table
 
 `bench/perf.nu` rows: nixos-desktop is the median-wall run of 5; outpaths
@@ -176,3 +203,62 @@ chunk 0/8 is one run. Same 16-core box, idle.
 | 2 thunks in place | nixos-desktop | 4 | 1.00 | 2.37 | 0.32 | 793 |
 | 2 thunks in place | outpaths chunk 0/8 | 1 | 32.10 | 27.01 | 4.67 | 8437 |
 | 2 thunks in place | outpaths chunk 0/8 | 4 | 14.45 | 36.37 | 6.86 | 8811 |
+| 3 strings by content | nixos-desktop | 1 | 1.80 | 1.59 | 0.19 | 676 |
+| 3 strings by content | nixos-desktop | 4 | 1.05 | 2.49 | 0.34 | 833 |
+| 3 strings by content | outpaths chunk 0/8 | 1 | 33.13 | 28.58 | 4.21 | 7680 |
+| 3 strings by content | outpaths chunk 0/8 | 4 | 13.46 | 34.75 | 6.16 | 8138 |
+
+## Assessed and not done
+
+Numbers are from the outpaths census unless stated; percentages are of
+the arena after change 3 (7.1 GB).
+
+- **Attr positions in a side table.** An `Attr` is `{ sym: u32, pos: u32,
+  cell: AtomicU64 }`, 16 bytes; dropping `pos` gives a 12-byte struct
+  that alignment pads back to 16. Saving the 4 bytes needs a
+  struct-of-arrays set (`syms[]`, `cells[]`, and `pos[]` only when
+  known) and touches every `Attr` consumer. Literal sets could take their
+  positions from `BindIr` for free (646 MB → −160 MB, 2.3 %); `//`
+  results hold no entries any more; builtin results would still need an
+  array. `unsafeGetAttrPos` runs 192181 times on the chunk
+  (`mkDerivation`'s `meta.position`), so positions cannot be dropped.
+  Not worth the churn.
+- **IR.** 266 MB (3.7 %), 32 bytes per node, slices exact, AST dropped
+  after each file, line tables 21 MB, interner ~10 MB. One file
+  (`hackage-packages.nix`, 16.6 MB of source) is 41 MB of IR and is
+  almost all unused; compiling its bindings on first force would keep
+  the AST (24 bytes per node plus side tables, ~60 % of the IR) for the
+  whole run, so the gain is ~15 MB per such file. Not done.
+- **Env frames.** 1.26 GB (18 %): 52 M one-slot frames. Flattening `let`
+  frames into the enclosing frame saves only the 8-byte header per
+  `let` (all multi-slot frames together are 430 MB, so under 56 MB).
+  Small envs inside the closure object does not apply: frames are
+  per call, closures per creation. 7.9 M one-slot frames are never
+  read (126 MB) and 25.5 M (415 MB, 5.8 %) are read but never captured
+  by a thunk, closure or child frame: those could live on a per-fiber
+  frame stack and be popped on return if the compiler proves the body
+  creates nothing that holds the frame. That is the largest remaining
+  packing item and is a compiler analysis plus a second allocator; not
+  done here.
+- **Lists.** `map` allocates a result list plus a 16-byte `ThunkApp` per
+  element; 98 % of those thunks are forced, so a lazier form saves
+  nothing. Lists never read: 3.6 M of 24 M (63 MB, 0.9 %).
+- **Dead thunks.** 35 M of 80 M thunks are never forced (560 MB at 16
+  bytes). They are laziness itself; only a smaller thunk helps, done.
+- **String header.** `StringObj` is 40 bytes (kind, fat pointer to bytes,
+  fat pointer to context); thin pointers with `u32` lengths in the header
+  would make it 24 bytes: 2.7 M objects after dedup, 43 MB (0.6 %). Not
+  done. Sharing bytes on `+` with a prefix already in the arena (rope or
+  slice) is superseded by content sharing.
+- **Closed lambdas.** 1.05 M of 20.8 M closures capture nothing (16 MB,
+  0.2 %) and could be allocated once per `LambdaIr`. Not worth a cell in
+  the IR.
+- **Empty attrsets.** 2.7 M empty literal sets, 22 MB (0.3 %), could be
+  one shared object. Not done.
+- **Arena chunks.** 32 MiB chunks populated with `MADV_POPULATE_WRITE`;
+  mapped minus used is one chunk (32-46 MB) at one worker. At four
+  workers RSS is 370 MB above one worker: four per-worker arenas with
+  their tails, pooled fiber stacks (64 KB resident each) and duplicated
+  helper work. Not a lever.
+- **Derivation table.** 79812 entries, ATerm text 331 MB plus the output
+  and reference sets. Change 4 drops the text when nothing reads it.

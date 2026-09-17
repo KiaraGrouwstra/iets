@@ -10,8 +10,7 @@ pub fn to_json(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> 
     let mut ctx: Vec<Ctx> = Vec::new();
     crate::print::print_json(ev, args[0], &mut out, &mut ctx, true, pos)?;
     let ctx = ctx_to_arena(&mut ev.arena, ctx);
-    let bytes = ev.arena.alloc_bytes(&out);
-    Ok(ev.arena.mk_string_static(bytes, ctx))
+    Ok(ev.arena.mk_string_shared(&out, ctx))
 }
 
 pub fn from_json(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {

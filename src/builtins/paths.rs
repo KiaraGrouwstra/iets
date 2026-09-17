@@ -348,8 +348,7 @@ fn to_path(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         "while evaluating the first argument passed to builtins.toPath",
     )?;
     let ctx = ctx_to_arena(&mut ev.arena, ctx);
-    let bytes = ev.arena.alloc_bytes(&p);
-    Ok(ev.arena.mk_string_static(bytes, ctx))
+    Ok(ev.arena.mk_string_shared(&p, ctx))
 }
 
 /// `/nix/store/<hash>-<name>` with nothing after it.
@@ -395,8 +394,7 @@ fn store_path(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let full = ev.arena.alloc_bytes(sp.to_full_string().as_bytes());
     ctx.push(Ctx::Opaque(full));
     let ctx = ctx_to_arena(&mut ev.arena, ctx);
-    let bytes = ev.arena.alloc_bytes(&p);
-    Ok(ev.arena.mk_string_static(bytes, ctx))
+    Ok(ev.arena.mk_string_shared(&p, ctx))
 }
 
 /// The base name of a canonical path; `source` for the root, like

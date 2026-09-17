@@ -78,6 +78,18 @@ pub struct Census {
     pub lambda_closed: u64,
     pub get_attr_pos_calls: u64,
     pub ir_by_file: Vec<(u32, u64)>,
+    /// Scoped-release assessment: thunks created inside the open scope,
+    /// and forces of older thunks inside it (each one writes a value
+    /// built inside the scope into memory that outlives it).
+    pub scope_open: bool,
+    pub scope_thunks: HashSet<u64>,
+    pub scope_escapes: u64,
+    pub scope_start: usize,
+    /// `tryEval` scopes: calls, failed, bytes inside failed, failed with
+    /// no escape and their bytes.
+    pub try_scopes: [u64; 5],
+    /// eval-jobs job units: units, bytes, units with no escape, their bytes.
+    pub job_scopes: [u64; 4],
 }
 
 fn fx(bytes: &[u8]) -> u64 {
@@ -89,6 +101,39 @@ fn fx(bytes: &[u8]) -> u64 {
 }
 
 impl Census {
+    /// Open an escape-tracking scope at `bytes` allocated; false when one
+    /// is already open (nested scopes are not tracked).
+    pub fn scope_enter(&mut self, bytes: usize) -> bool {
+        if self.scope_open {
+            return false;
+        }
+        self.scope_open = true;
+        self.scope_thunks.clear();
+        self.scope_escapes = 0;
+        self.scope_start = bytes;
+        true
+    }
+
+    /// Close the scope: (bytes allocated inside, escapes).
+    pub fn scope_leave(&mut self, bytes: usize) -> (u64, u64) {
+        self.scope_open = false;
+        ((bytes - self.scope_start) as u64, self.scope_escapes)
+    }
+
+    #[inline]
+    pub fn note_thunk_created(&mut self, w: u64) {
+        if self.scope_open {
+            self.scope_thunks.insert(w);
+        }
+    }
+
+    #[inline]
+    pub fn note_thunk_forced(&mut self, w: u64) {
+        if self.scope_open && !self.scope_thunks.contains(&w) {
+            self.scope_escapes += 1;
+        }
+    }
+
     pub fn note_env(&mut self, e: *const EnvObj, n: usize) {
         let b = size_bucket(n);
         self.env_hist[b].0 += 1;
@@ -364,6 +409,18 @@ impl Census {
             self.lambda_closed
         );
         let _ = writeln!(out, "unsafeGetAttrPos calls: {}", self.get_attr_pos_calls);
+        let t = &self.try_scopes;
+        let _ = writeln!(
+            out,
+            "tryEval scopes (outermost): calls={} failed={} bytes inside failed={} failed without escape={} ({} bytes)",
+            t[0], t[1], t[2], t[3], t[4]
+        );
+        let j = &self.job_scopes;
+        let _ = writeln!(
+            out,
+            "eval-jobs units: {} ({} bytes inside); without escape: {} ({} bytes)",
+            j[0], j[1], j[2], j[3]
+        );
         let mut files: Vec<(u32, u64)> = self.ir_by_file.clone();
         files.sort_by_key(|f| std::cmp::Reverse(f.1));
         let total: u64 = files.iter().map(|f| f.1).sum();

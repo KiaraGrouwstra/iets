@@ -2,7 +2,7 @@
 //! the pointer tag can be classified with one load. Variable-length objects
 //! (lists, attrs, envs) keep their elements inline after a fixed header.
 
-use super::arena::{Arena, Stat};
+use super::arena::{Arena, Interned, Stat, StrEntry};
 use super::word::{
     Cell, TAG_IMM, TAG_INT, TAG_LAMBDA, TAG_PTR, TAG_THUNK, TAG_THUNK_APP, TAG_THUNK_APP2,
     TAG_THUNK_MAP, Word,
@@ -833,18 +833,127 @@ impl Arena {
         Word::from_ptr(s)
     }
 
+    /// A context-free string, shared by content with every earlier one.
     pub fn mk_string(&mut self, bytes: &[u8]) -> Word {
-        self.stats.note(Stat::Bytes, bytes.len());
-        let b = self.alloc_bytes(bytes);
-        self.mk_string_static(b, &[])
+        let i = self.intern_bytes(bytes);
+        self.mk_string_over(i, &[])
     }
 
     pub fn mk_string_ctx(&mut self, bytes: &[u8], ctx: &[Ctx]) -> Word {
-        self.stats.note(Stat::Bytes, bytes.len());
-        self.stats.note(Stat::Ctx, size_of_val(ctx));
+        let i = self.intern_bytes(bytes);
+        let c = self.intern_ctx(ctx);
+        self.mk_string_over(i, c)
+    }
+
+    /// Content hash of string bytes for the `strings` table. The table is
+    /// keyed by this 64-bit value so a probe compares integers and the
+    /// bytes are read only on a hit; a full collision of distinct contents
+    /// (about 1 in 2^64 per pair) just skips the sharing.
+    #[inline]
+    fn str_hash(bytes: &[u8]) -> u64 {
+        use std::hash::Hasher;
+        let mut h = crate::syntax::symbol::FxHasher::default();
+        h.write(bytes);
+        h.write_usize(bytes.len());
+        h.finish()
+    }
+
+    /// Record freshly copied `b` under `hash`; the entry it collides with,
+    /// if any, keeps its own content.
+    #[inline]
+    fn str_record(&mut self, hash: u64, b: &'static [u8]) -> Interned {
+        self.stats.note(Stat::Bytes, b.len());
+        let e = self.strings.entry(hash).or_insert(StrEntry {
+            bytes: b,
+            word: Word::EMPTY,
+        });
+        Interned {
+            bytes: b,
+            word: Word::EMPTY,
+            hash: if e.bytes.as_ptr() == b.as_ptr() {
+                hash
+            } else {
+                0
+            },
+        }
+    }
+
+    /// The arena copy of `bytes`, made once per distinct content, and the
+    /// context-free string object over it if one exists.
+    #[inline]
+    pub fn intern_bytes(&mut self, bytes: &[u8]) -> Interned {
+        let hash = Self::str_hash(bytes);
+        if let Some(e) = self.strings.get(&hash)
+            && e.bytes == bytes
+        {
+            return Interned {
+                bytes: e.bytes,
+                word: e.word,
+                hash,
+            };
+        }
         let b = self.alloc_bytes(bytes);
-        let c = self.alloc_slice(ctx);
-        self.mk_string_static(b, c)
+        self.str_record(hash, b)
+    }
+
+    /// Like `intern_bytes` for the concatenation of `parts`: the pieces are
+    /// joined in the arena and given back when the content is known.
+    pub fn intern_concat(&mut self, parts: &[&[u8]]) -> Interned {
+        let m = self.mark();
+        let b = self.alloc_concat(parts);
+        let hash = Self::str_hash(b);
+        if let Some(e) = self.strings.get(&hash).copied()
+            && e.bytes == b
+        {
+            self.release(m);
+            return Interned {
+                bytes: e.bytes,
+                word: e.word,
+                hash,
+            };
+        }
+        self.str_record(hash, b)
+    }
+
+    /// The string object over interned bytes: for an empty context the
+    /// shared object (made and recorded on first use), else a fresh object
+    /// sharing the bytes.
+    #[inline]
+    pub fn mk_string_over(&mut self, i: Interned, ctx: &'static [Ctx]) -> Word {
+        if !ctx.is_empty() {
+            return self.mk_string_static(i.bytes, ctx);
+        }
+        if i.word != Word::EMPTY {
+            return i.word;
+        }
+        let w = self.mk_string_static(i.bytes, &[]);
+        if i.hash != 0
+            && let Some(e) = self.strings.get_mut(&i.hash)
+        {
+            e.word = w;
+        }
+        w
+    }
+
+    /// Bytes for a string object whose bytes were already copied (from
+    /// a `Vec` built by a builtin): interned by content.
+    pub fn mk_string_shared(&mut self, bytes: &[u8], ctx: &'static [Ctx]) -> Word {
+        let i = self.intern_bytes(bytes);
+        self.mk_string_over(i, ctx)
+    }
+
+    /// A sorted, deduplicated context slice, shared by content.
+    pub fn intern_ctx(&mut self, ctx: &[Ctx]) -> &'static [Ctx] {
+        if ctx.is_empty() {
+            return &[];
+        }
+        if let Some(&c) = self.ctxs.get(ctx) {
+            return c;
+        }
+        self.stats.note(Stat::Ctx, size_of_val(ctx));
+        let c: &'static [Ctx] = self.alloc_slice(ctx);
+        self.ctxs.insert(c);
+        c
     }
 
     pub fn mk_path(&mut self, path: &[u8]) -> Word {
@@ -1046,7 +1155,10 @@ impl Arena {
             code: Cell::new(Word::from_ptr(ir as *const Ir)),
             state: Cell::new(Word::from_ptr(env as *const EnvObj)),
         });
-        Word::thunk_from_ptr(t as *const ThunkObj)
+        let w = Word::thunk_from_ptr(t as *const ThunkObj);
+        #[cfg(feature = "stats2")]
+        self.stats.census.note_thunk_created(w.0);
+        w
     }
 
     #[inline]
@@ -1057,7 +1169,10 @@ impl Arena {
             code: Cell::new(func),
             state: Cell::new(arg),
         });
-        Word::thunk_app_from_ptr(t as *const ThunkAppObj)
+        let w = Word::thunk_app_from_ptr(t as *const ThunkAppObj);
+        #[cfg(feature = "stats2")]
+        self.stats.census.note_thunk_created(w.0);
+        w
     }
 
     #[inline]
@@ -1069,7 +1184,10 @@ impl Arena {
             arg1,
             state: Cell::new(arg2),
         });
-        Word::thunk_app2_from_ptr(t as *const ThunkApp2Obj)
+        let w = Word::thunk_app2_from_ptr(t as *const ThunkApp2Obj);
+        #[cfg(feature = "stats2")]
+        self.stats.census.note_thunk_created(w.0);
+        w
     }
 
     /// `mapAttrs f src` for a flat `src` of at most `MAP_MAX_IDX + 1`
@@ -1176,7 +1294,7 @@ pub fn merge_ctx(arena: &mut Arena, a: &'static [Ctx], b: &'static [Ctx]) -> &'s
     }
     out.extend_from_slice(&a[i..]);
     out.extend_from_slice(&b[j..]);
-    arena.alloc_slice(&out)
+    arena.intern_ctx(&out)
 }
 
 /// Sort and dedup a context vector, then move it to the arena.
@@ -1186,7 +1304,7 @@ pub fn ctx_to_arena(arena: &mut Arena, mut v: Vec<Ctx>) -> &'static [Ctx] {
     }
     v.sort();
     v.dedup();
-    arena.alloc_slice(&v)
+    arena.intern_ctx(&v)
 }
 
 impl AttrsObj {

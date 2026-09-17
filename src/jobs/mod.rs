@@ -633,6 +633,24 @@ fn apply_json(ev: &mut Evaluator, f: Word, a: &'static AttrsObj) -> EvalResult<V
 /// drv.cc:Drv::fromPackageInfo, in the order nix-eval-jobs forces things:
 /// constituents, `--apply`, name, drvPath, outputs, the `.drv`, meta.
 fn job(ev: &mut Evaluator, a: &'static AttrsObj, path: &[String]) -> EvalResult<Job> {
+    #[cfg(feature = "stats2")]
+    let scope = ev.arena.stats.census.scope_enter(ev.arena.bytes_allocated);
+    let r = job_inner(ev, a, path);
+    #[cfg(feature = "stats2")]
+    if scope {
+        let (bytes, escapes) = ev.arena.stats.census.scope_leave(ev.arena.bytes_allocated);
+        let j = &mut ev.arena.stats.census.job_scopes;
+        j[0] += 1;
+        j[1] += bytes;
+        if escapes == 0 {
+            j[2] += 1;
+            j[3] += bytes;
+        }
+    }
+    r
+}
+
+fn job_inner(ev: &mut Evaluator, a: &'static AttrsObj, path: &[String]) -> EvalResult<Job> {
     let cfg = config();
     let (constituents, named, glob) = if cfg.opts.constituents {
         extract_constituents(ev, a)?

@@ -4,6 +4,9 @@
 
 use std::ptr;
 
+use super::word::Word;
+use crate::syntax::symbol::{FxHashMap, FxHashSet};
+
 const CHUNK: usize = 32 << 20;
 /// A 32 MiB chunk populates in ~1 ms with huge pages and ~16 ms with 4 KiB
 /// pages; anything slower than this is a compaction stall.
@@ -18,6 +21,20 @@ pub struct Arena {
     pub stats: Stats,
     /// Advise huge pages until a chunk populate stalls in compaction.
     thp: bool,
+    /// String bytes by content, and the context-free string object over
+    /// them once one was made (EMPTY until then). nixpkgs builds the same
+    /// text millions of times (docs/memory.md).
+    pub strings: FxHashMap<u64, StrEntry>,
+    /// Context slices by content.
+    pub ctxs: FxHashSet<&'static [super::value::Ctx]>,
+}
+
+/// Position of the bump pointer, to give back the last allocation.
+#[derive(Clone, Copy)]
+pub struct Mark {
+    ptr: *mut u8,
+    end: *mut u8,
+    bytes: usize,
 }
 
 impl Default for Arena {
@@ -35,6 +52,27 @@ impl Arena {
             mapped: 0,
             stats: Stats::default(),
             thp: true,
+            strings: FxHashMap::with_capacity_and_hasher(1 << 16, Default::default()),
+            ctxs: FxHashSet::default(),
+        }
+    }
+
+    #[inline]
+    pub fn mark(&self) -> Mark {
+        Mark {
+            ptr: self.ptr,
+            end: self.end,
+            bytes: self.bytes_allocated,
+        }
+    }
+
+    /// Give back everything allocated since `m`, when it is still the
+    /// tail of the current chunk. The caller holds no reference to it.
+    #[inline]
+    pub fn release(&mut self, m: Mark) {
+        if self.end == m.end {
+            self.ptr = m.ptr;
+            self.bytes_allocated = m.bytes;
         }
     }
 
@@ -235,4 +273,22 @@ impl Stats {
         self.counts[s as usize] += 1;
         self.bytes[s as usize] += bytes as u64;
     }
+}
+
+/// One distinct string content: its arena bytes and the context-free
+/// string object over them once one was made (EMPTY until then).
+#[derive(Clone, Copy)]
+pub struct StrEntry {
+    pub bytes: &'static [u8],
+    pub word: Word,
+}
+
+/// What `Arena::intern_bytes` hands back: the shared bytes, the shared
+/// context-free object if any, and the table key (0 when the content is
+/// not in the table because of a hash collision).
+#[derive(Clone, Copy)]
+pub struct Interned {
+    pub bytes: &'static [u8],
+    pub word: Word,
+    pub hash: u64,
 }

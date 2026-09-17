@@ -459,6 +459,7 @@ impl Evaluator {
                 Kind::ThunkApp2 => 2,
                 _ => 3,
             }] += 1;
+            self.arena.stats.census.note_thunk_forced(w.0);
         }
         let v = self.run_thunk(w, st);
         match v {
@@ -1725,15 +1726,9 @@ impl Evaluator {
                 Ok(self.arena.mk_path(&crate::compile::canon_path(&joined)))
             }
             _ => {
-                self.arena
-                    .stats
-                    .note(Stat::Bytes, pieces.iter().map(|p| p.len()).sum());
-                self.arena
-                    .stats
-                    .note(Stat::Ctx, ctx.len() * size_of::<Ctx>());
-                let bytes = self.arena.alloc_concat(pieces);
+                let i = self.arena.intern_concat(pieces);
                 let ctx = ctx_to_arena(&mut self.arena, ctx);
-                Ok(self.arena.mk_string_static(bytes, ctx))
+                Ok(self.arena.mk_string_over(i, ctx))
             }
         }
     }

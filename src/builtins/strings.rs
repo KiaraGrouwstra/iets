@@ -73,8 +73,7 @@ fn substring(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         &s[start..end]
     };
     let ctx = ctx_to_arena(&mut ev.arena, ctx);
-    let bytes = ev.arena.alloc_bytes(out);
-    Ok(ev.arena.mk_string_static(bytes, ctx))
+    Ok(ev.arena.mk_string_shared(out, ctx))
 }
 
 fn concat_strings_sep(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
@@ -107,8 +106,7 @@ fn concat_strings_sep(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult
         out.extend_from_slice(&s);
     }
     let ctx = ctx_to_arena(&mut ev.arena, ctx);
-    let bytes = ev.arena.alloc_bytes(&out);
-    Ok(ev.arena.mk_string_static(bytes, ctx))
+    Ok(ev.arena.mk_string_shared(&out, ctx))
 }
 
 /// Nix version component splitting (`names.cc: nextComponent`).
@@ -267,8 +265,7 @@ fn base_name_of(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word>
         .map_or(0, |i| i + 1);
     let out = &s[start..end];
     let ctx = ctx_to_arena(&mut ev.arena, ctx);
-    let bytes = ev.arena.alloc_bytes(out);
-    Ok(ev.arena.mk_string_static(bytes, ctx))
+    Ok(ev.arena.mk_string_shared(out, ctx))
 }
 
 fn dir_of(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
@@ -293,6 +290,5 @@ fn dir_of(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         Some(i) => &s[..i],
     };
     let ctx = ctx_to_arena(&mut ev.arena, ctx);
-    let bytes = ev.arena.alloc_bytes(out);
-    Ok(ev.arena.mk_string_static(bytes, ctx))
+    Ok(ev.arena.mk_string_shared(out, ctx))
 }

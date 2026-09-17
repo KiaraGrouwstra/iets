@@ -14,8 +14,7 @@ pub fn to_xml(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     print_xml(ev, args[0], &mut out, 1, &mut ctx, &mut drvs_seen, pos)?;
     out.extend_from_slice(b"</expr>\n");
     let ctx = ctx_to_arena(&mut ev.arena, ctx);
-    let bytes = ev.arena.alloc_bytes(&out);
-    Ok(ev.arena.mk_string_static(bytes, ctx))
+    Ok(ev.arena.mk_string_shared(&out, ctx))
 }
 
 fn indent(out: &mut Vec<u8>, depth: usize) {

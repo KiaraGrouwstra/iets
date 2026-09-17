@@ -110,8 +110,7 @@ fn to_string(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         true,
     )?;
     let ctx = ctx_to_arena(&mut ev.arena, ctx);
-    let bytes = ev.arena.alloc_bytes(&s);
-    Ok(ev.arena.mk_string_static(bytes, ctx))
+    Ok(ev.arena.mk_string_shared(&s, ctx))
 }
 
 fn type_of(ev: &mut Evaluator, args: &[Word], _pos: Pos) -> EvalResult<Word> {
@@ -238,8 +237,24 @@ fn add_error_context(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<
 
 fn try_eval(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     ev.try_level += 1;
+    #[cfg(feature = "stats2")]
+    let scope = ev.arena.stats.census.scope_enter(ev.arena.bytes_allocated);
     let r = ev.force(args[0]);
     ev.try_level -= 1;
+    #[cfg(feature = "stats2")]
+    if scope {
+        let (bytes, escapes) = ev.arena.stats.census.scope_leave(ev.arena.bytes_allocated);
+        let t = &mut ev.arena.stats.census.try_scopes;
+        t[0] += 1;
+        if matches!(&r, Err(e) if e.is_catchable()) {
+            t[1] += 1;
+            t[2] += bytes;
+            if escapes == 0 {
+                t[3] += 1;
+                t[4] += bytes;
+            }
+        }
+    }
     let (success, value) = match r {
         Ok(v) => (Word::TRUE, v),
         Err(e) if e.is_catchable() => (Word::FALSE, Word::FALSE),
@@ -343,8 +358,7 @@ fn unsafe_discard_output_dependency(
         })
         .collect();
     let ctx = ctx_to_arena(&mut ev.arena, ctx);
-    let bytes = ev.arena.alloc_bytes(&bytes);
-    Ok(ev.arena.mk_string_static(bytes, ctx))
+    Ok(ev.arena.mk_string_shared(&bytes, ctx))
 }
 
 fn find_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
