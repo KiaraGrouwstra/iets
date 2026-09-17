@@ -233,7 +233,7 @@ design, "journal and reset the thunk but keep computing", lost warnings:
 `force_cell` wrote the value into the container cell and demand never
 re-evaluated). The demand path evaluates the thunk itself and prints,
 exactly once. Errors are never cached in either mode, so error values
-from helpers are transient by construction. `scripts/partest.sh` checks
+from helpers are transient by construction. `scripts/partest.nu` checks
 trace and warn counts at 1 versus N workers.
 
 ## Memory model
@@ -276,11 +276,11 @@ may succeed.
 
 Tests: `cargo test --lib parallel` (fiber, deque, scheduler handshake,
 claim/park stress on a shared DAG from 8 workers, deadlock resolution,
-interner); `scripts/partest.sh N` (twelve expressions at 1 versus N
+interner); `scripts/partest.nu N` (twelve expressions at 1 versus N
 workers: shared graph, deep fan-out, cycles in one and two ranges,
 errors, `tryEval`, trace/warn exactly once, concurrent import,
-derivations, JSON); `IETSP_WORKERS=8 scripts/langtests.sh` (same 244/6
-as sequential); `IETSP_WORKERS=8 scripts/difftest.sh` on nixos-desktop
+derivations, JSON); `IETSP_WORKERS=8 scripts/langtests.nu` (same 244/6
+as sequential); `IETSP_WORKERS=8 scripts/difftest.nu` on nixos-desktop
 and nixos-minimal (`ok`).
 
 ## Measurements

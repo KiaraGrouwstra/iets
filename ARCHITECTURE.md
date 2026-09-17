@@ -7,7 +7,7 @@ in memory, and prints results. It never writes to a store.
 ## Goals, in order
 
 1. Byte-exact parity with `nix-instantiate --eval --strict` on `.drvPath`
-   of NixOS systems from nixpkgs. The judge is `scripts/difftest.sh`.
+   of NixOS systems from nixpkgs. The judge is `scripts/difftest.nu`.
 2. Faster than iets (2.58 s) and fix (1.46 s) on `bench/workloads/nixos-desktop.nix`
    with the pinned nixpkgs. Sequential speed first, parallel forcing second.
 3. Small, readable code. One crate, modules by phase.
@@ -130,9 +130,9 @@ lists and attrsets, and a speculation gate. Designed after fix; see
 ## Testing
 
 - `tests/lang/`: Nix 2.34.8 functional language tests (`eval-okay-*.nix`
-  with `.exp`, `eval-fail-*.nix`). `scripts/langtests.sh` runs them.
+  with `.exp`, `eval-fail-*.nix`). `scripts/langtests.nu` runs them.
 - `tests/corpus/`: our own cases; `.exp` captured from `nix-instantiate`.
-- `scripts/difftest.sh <expr-or-file>`: runs both evaluators and diffs.
+- `scripts/difftest.nu <expr-or-file>`: runs both evaluators and diffs.
 - `bench/`: the fix workloads and `bench/run.sh` (hyperfine).
 
 ## Conventions

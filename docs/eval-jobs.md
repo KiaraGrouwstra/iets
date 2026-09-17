@@ -566,8 +566,8 @@ is a plain job on both sides (`namedConstituents: []` without
 
 Gates at the end: `cargo test --release` 113 passed, clippy clean,
 `scripts/evaljobs-flags.sh` 40/40,
-`scripts/langtests.sh` 245/5, `scripts/flaketest.sh` 19/19,
-`scripts/cachetest.sh` 18/18, `scripts/difftest.sh -I nixpkgs=$NP
+`scripts/langtests.nu` 245/5, `scripts/flaketest.sh` 19/19,
+`scripts/cachetest.sh` 18/18, `scripts/difftest.nu -I nixpkgs=$NP
 bench/workloads/nixos-desktop.nix` ok.
 
 ## What is missing for Hydra or nixpkgs CI

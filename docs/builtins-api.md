@@ -157,5 +157,5 @@ getFlake, ... anything else in primops.cc.
 
 `tests/corpus/<name>.nix` holds one case per builtin family member, with
 `.exp` captured from `nix-instantiate --eval --strict` and an optional
-`.flags` file. `scripts/corpus-update.sh` regenerates the `.exp` files;
-`scripts/corpus.sh` checks them against `target/release/ietsp`.
+`.flags` file. `scripts/corpus-update.nu` regenerates the `.exp` files;
+`scripts/corpus.nu` checks them against `target/release/ietsp`.
