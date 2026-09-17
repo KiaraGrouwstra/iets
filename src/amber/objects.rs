@@ -343,6 +343,22 @@ pub fn decode_dir_node(bytes: &[u8]) -> Result<Vec<(Vec<u8>, Key)>, String> {
     Ok(pairs)
 }
 
+/// Checks that `bytes` is the object `key` names: the key is recomputed from the bytes,
+/// including the logical length, which needs the children for the structured types.
+pub fn verify(key: &Key, bytes: &[u8]) -> Result<(), String> {
+    let computed = match key.type_() {
+        Type::Blob => Key::new(Type::Blob, bytes.len() as u64, bytes),
+        Type::FileNode => encode_file_node(&decode_file_node(bytes)?).key,
+        Type::DirLeaf => encode_dir_leaf(&decode_dir_leaf(bytes)?).key,
+        Type::DirNode => encode_dir_node(&decode_dir_node(bytes)?).key,
+        Type::XattrSet => return Err("xattr objects are not accepted".into()),
+    };
+    if &computed != key {
+        return Err(format!("object bytes hash to {computed}, not {key}"));
+    }
+    Ok(())
+}
+
 // ---- builders (core-rs `fstree/builder.rs`) ----
 
 pub type Emit<'a> = dyn FnMut(Object) + 'a;

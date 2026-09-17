@@ -5,14 +5,14 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use crate::amber::Key;
+use crate::amber::tree::{KeySink, Meta, Root, Sink, ingest_bytes, ingest_path, no_filter};
 use crate::builtins::derivation::DrvInfo;
 use crate::store::drv::{Derivation, DrvError};
 use crate::store::hash::{Hash, HashAlgo, Hasher};
 use crate::store::nar::{dump_path, dump_string};
 use crate::store::path::{STORE_DIR, StorePath};
 use crate::store::source::SourceOrigin;
-
-use super::chunk::{Chunker, Tee, sha256};
 
 /// How an input source was content-addressed (store-api.hh:ContentAddress, the two kinds
 /// eval produces).
@@ -48,6 +48,21 @@ impl SourceData {
         }
     }
 
+    /// Builds the amber objects of this source, emitting each into `sink`, and returns the
+    /// top-level node. The same walk as `dump`, so both describe the same tree.
+    pub fn ingest(&self, sink: &dyn Sink) -> io::Result<Root> {
+        match self {
+            SourceData::Local { path, accepted } => match accepted {
+                Some(a) => ingest_path(path, &|p, _| a.contains(p), Meta::Canonical, sink),
+                None => ingest_path(path, &no_filter, Meta::Canonical, sink),
+            },
+            SourceData::Memory(contents) => Ok(Root::File {
+                key: ingest_bytes(contents, sink),
+                executable: false,
+            }),
+        }
+    }
+
     pub fn describe(&self) -> String {
         match self {
             SourceData::Local { path, .. } => path.display().to_string(),
@@ -76,40 +91,77 @@ impl SourceInfo {
     }
 }
 
+/// The amber object graph of one store path: its top-level node and every object key it
+/// needs, children before parents, root last.
+#[derive(Clone, Debug)]
+pub struct Tree {
+    pub root: Root,
+    pub keys: Vec<Key>,
+}
+
 /// One object the builder must hold before it can build the root.
 #[derive(Clone, Debug)]
 pub enum Object {
-    /// A source tree, sent as chunks plus a manifest.
+    /// A source tree: its amber object graph plus the NAR hash Nix addresses it by.
     Source {
         path: StorePath,
         data: SourceData,
         kind: SourceKind,
         nar_hash: Hash,
         nar_size: u64,
-        chunks: Vec<Hash>,
+        tree: Tree,
     },
-    /// A derivation, sent as its ATerm bytes. `references` is inputSrcs plus inputDrvs, what the
-    /// worker protocol needs to register the `.drv` as a text path.
+    /// A derivation: its ATerm as one file object. `references` is inputSrcs plus inputDrvs,
+    /// what the worker protocol needs to register the `.drv` as a text path.
     Drv {
         path: StorePath,
         aterm: Arc<Vec<u8>>,
-        digest: Hash,
         references: BTreeSet<StorePath>,
+        tree: Tree,
     },
 }
 
 impl Object {
-    /// The digest the builder indexes this object by.
-    pub fn digest(&self) -> &Hash {
-        match self {
-            Object::Source { nar_hash, .. } => nar_hash,
-            Object::Drv { digest, .. } => digest,
+    /// Hashes and chunks a source.
+    pub fn source(path: StorePath, info: SourceInfo) -> io::Result<Object> {
+        let (nar_hash, nar_size, tree) = hash_source(&info.data)?;
+        Ok(Object::Source {
+            path,
+            data: info.data,
+            kind: info.kind,
+            nar_hash,
+            nar_size,
+            tree,
+        })
+    }
+
+    /// Chunks a derivation's ATerm.
+    pub fn drv(path: StorePath, aterm: Arc<Vec<u8>>, references: BTreeSet<StorePath>) -> Object {
+        let sink = KeySink::default();
+        let key = ingest_bytes(&aterm, &sink);
+        Object::Drv {
+            path,
+            aterm,
+            references,
+            tree: Tree {
+                root: Root::File {
+                    key,
+                    executable: false,
+                },
+                keys: sink.0.into_inner().unwrap(),
+            },
         }
     }
 
     pub fn store_path(&self) -> &StorePath {
         match self {
             Object::Source { path, .. } | Object::Drv { path, .. } => path,
+        }
+    }
+
+    pub fn tree(&self) -> &Tree {
+        match self {
+            Object::Source { tree, .. } | Object::Drv { tree, .. } => tree,
         }
     }
 }
@@ -124,6 +176,16 @@ pub struct Plan {
     pub store_sources: usize,
 }
 
+/// How many object keys the plan carries and how many are the same object.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct KeyStats {
+    /// Keys over every tree, one per emitted object.
+    pub emitted: usize,
+    pub unique: usize,
+    /// Unique keys that at least two trees need.
+    pub shared: usize,
+}
+
 impl Plan {
     pub fn sources(&self) -> usize {
         self.objects
@@ -134,6 +196,26 @@ impl Plan {
 
     pub fn drvs(&self) -> usize {
         self.objects.len() - self.sources()
+    }
+
+    pub fn key_stats(&self) -> KeyStats {
+        let mut trees_per_key: HashMap<Key, u32> = HashMap::new();
+        let mut emitted = 0;
+        for o in &self.objects {
+            let keys = &o.tree().keys;
+            emitted += keys.len();
+            let mut seen_here: HashSet<Key> = HashSet::with_capacity(keys.len());
+            for k in keys {
+                if seen_here.insert(*k) {
+                    *trees_per_key.entry(*k).or_insert(0) += 1;
+                }
+            }
+        }
+        KeyStats {
+            emitted,
+            unique: trees_per_key.len(),
+            shared: trees_per_key.values().filter(|&&n| n > 1).count(),
+        }
     }
 }
 
@@ -202,18 +284,22 @@ pub struct Inputs<'a> {
     pub sources: &'a HashMap<StorePath, SourceOrigin>,
 }
 
-/// Hashes a source: NAR hash and size, and the sha256 of each chunk.
-pub fn hash_source(data: &SourceData) -> io::Result<(Hash, u64, Vec<Hash>)> {
-    let mut chunks = Vec::new();
-    let mut chunker = Chunker::new(|c: Vec<u8>| {
-        chunks.push(sha256(&c));
-        Ok(())
-    });
+/// Hashes a source: the NAR hash and size for Nix, and the amber object graph for the
+/// transfer. Two passes over the bytes; the second walks subtrees in parallel.
+pub fn hash_source(data: &SourceData) -> io::Result<(Hash, u64, Tree)> {
     let mut nar = Hasher::new(HashAlgo::Sha256);
-    data.dump(&mut Tee(&mut nar, &mut chunker))?;
-    chunker.finish()?;
+    data.dump(&mut nar)?;
     let size = nar.bytes_written();
-    Ok((nar.finish(), size, chunks))
+    let sink = KeySink::default();
+    let root = data.ingest(&sink)?;
+    Ok((
+        nar.finish(),
+        size,
+        Tree {
+            root,
+            keys: sink.0.into_inner().unwrap(),
+        },
+    ))
 }
 
 /// A drv's ATerm and references, from the eval table or from `/nix/store`.
@@ -291,15 +377,10 @@ pub fn plan(
     let hashed = hash_sources(&sources, &infos)?;
     let mut objects = Vec::with_capacity(hashed.len() + drvs.len());
     objects.extend(hashed);
-    objects.extend(drvs.into_iter().map(|(path, aterm, references)| {
-        let digest = sha256(&aterm);
-        Object::Drv {
-            path,
-            aterm,
-            digest,
-            references,
-        }
-    }));
+    objects.extend(
+        drvs.into_iter()
+            .map(|(path, aterm, references)| Object::drv(path, aterm, references)),
+    );
     Ok(Plan {
         objects,
         store_drvs,
@@ -401,18 +482,13 @@ fn hash_sources(sources: &[StorePath], infos: &[SourceInfo]) -> Result<Vec<Objec
                     }
                     let path = &sources[i];
                     let info = &infos[i];
-                    let r = hash_source(&info.data)
+                    let r = Object::source(path.clone(), info.clone())
                         .map_err(|e| PlanError(format!("cannot dump '{path}': {e}")))
-                        .and_then(|(nar_hash, nar_size, chunks)| {
-                            check_source_path(path, &info.kind, &nar_hash)?;
-                            Ok(Object::Source {
-                                path: path.clone(),
-                                data: info.data.clone(),
-                                kind: info.kind.clone(),
-                                nar_hash,
-                                nar_size,
-                                chunks,
-                            })
+                        .and_then(|o| {
+                            if let Object::Source { nar_hash, kind, .. } = &o {
+                                check_source_path(path, kind, nar_hash)?;
+                            }
+                            Ok(o)
                         });
                     *results[i].lock().unwrap() = Some(r);
                 }
@@ -428,6 +504,7 @@ fn hash_sources(sources: &[StorePath], infos: &[SourceInfo]) -> Result<Vec<Objec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::amber::Type;
     use crate::store::nar::{nar_hash, nar_size};
 
     #[test]
@@ -437,17 +514,43 @@ mod tests {
             path: tree.clone(),
             accepted: None,
         };
-        let (h, size, chunks) = hash_source(&data).unwrap();
+        let (h, size, t) = hash_source(&data).unwrap();
         assert_eq!(h, nar_hash(&tree).unwrap());
         assert_eq!(size, nar_size(&tree).unwrap());
-        assert_eq!(chunks.len(), 1);
+        assert!(matches!(t.root, Root::Dir(_)));
+        // a.txt, run.sh, empty, z, the sub leaf, the root leaf
+        assert_eq!(t.keys.len(), 6);
+        assert_eq!(t.keys.last(), t.root.key());
     }
 
     #[test]
     fn memory_source_matches_dump_string() {
         let data = SourceData::Memory(Arc::new(b"hello\n".to_vec()));
-        let (h, size, _) = hash_source(&data).unwrap();
+        let (h, size, t) = hash_source(&data).unwrap();
         assert_eq!(h, crate::store::nar::nar_hash_of_string(b"hello\n"));
         assert!(size > 0);
+        assert_eq!(t.keys.len(), 1);
+        assert_eq!(t.keys[0].type_(), Type::Blob);
+        assert_eq!(t.keys[0].length(), 6);
+    }
+
+    #[test]
+    fn key_stats_count_sharing() {
+        let a = Object::drv(
+            StorePath::parse("/nix/store/00000000000000000000000000000000-a.drv").unwrap(),
+            Arc::new(b"same".to_vec()),
+            BTreeSet::new(),
+        );
+        let b = Object::drv(
+            StorePath::parse("/nix/store/00000000000000000000000000000000-b.drv").unwrap(),
+            Arc::new(b"same".to_vec()),
+            BTreeSet::new(),
+        );
+        let plan = Plan {
+            objects: vec![a, b],
+            ..Default::default()
+        };
+        let s = plan.key_stats();
+        assert_eq!((s.emitted, s.unique, s.shared), (2, 1, 1));
     }
 }

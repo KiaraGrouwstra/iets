@@ -1,9 +1,9 @@
-//! The reference builder: blobs in a directory, a local Nix store behind it, `nix-store
-//! --realise` for the build. For tests and benchmarks, not a product.
+//! The reference builder: amber objects in a directory, a local Nix store behind it,
+//! `nix-store --realise` for the build. For tests and benchmarks, not a product.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -16,20 +16,25 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 
+use crate::amber::objects::verify;
+use crate::amber::tree::{Root, read_file, restore};
+use crate::amber::{Key, Type};
 use crate::store::drv::Derivation;
-use crate::store::hash::{Hash, HashAlgo, Hasher};
-use crate::store::nar::{flat_hash, restore_path};
+use crate::store::hash::{Hash, HashAlgo};
+use crate::store::nar::{flat_hash, nar_hash_filtered};
 use crate::store::path::{IngestionMethod, StorePath, make_fixed_output_path, make_text_path};
 
-use super::chunk::{CHUNK_MAX, Chunker, from_digest, sha256, to_digest};
 use super::proto::builder_server::{Builder, BuilderServer};
 use super::proto::{
-    BuildEvent, BuildRequest, Built, Chunk, ContentAddress, Done, DrvBlob, Failed, FetchRequest,
-    HaveRequest, HaveResponse, Log, Manifest, PutRequest, PutResponse, Scheduled, Started,
+    BuildEvent, BuildRequest, Built, ContentAddress, Done, Failed, FetchRequest, HaveRequest,
+    HaveResponse, Log, Manifest, NarChunk, PutRequest, PutResponse, Scheduled, Started,
     build_event, put_request,
 };
 
-const MAX_MESSAGE: usize = 16 << 20;
+const MAX_MESSAGE: usize = 64 << 20;
+
+/// `Fetch` sends the NAR in pieces of this size.
+const NAR_CHUNK: usize = 4 << 20;
 
 #[derive(Clone)]
 pub struct Builderd {
@@ -39,7 +44,7 @@ pub struct Builderd {
 
 impl Builderd {
     pub fn new(dir: PathBuf) -> io::Result<Builderd> {
-        for sub in ["blobs", "objects", "paths", "tmp"] {
+        for sub in ["objects", "paths", "tmp"] {
             fs::create_dir_all(dir.join(sub))?;
         }
         Ok(Builderd {
@@ -48,27 +53,26 @@ impl Builderd {
         })
     }
 
-    fn blob(&self, h: &Hash) -> PathBuf {
-        self.dir.join("blobs").join(h.to_base16())
-    }
-
-    fn object(&self, h: &Hash) -> PathBuf {
-        self.dir.join("objects").join(h.to_base16())
+    fn object(&self, k: &Key) -> PathBuf {
+        self.dir.join("objects").join(k.to_string())
     }
 
     fn by_path(&self, p: &StorePath) -> PathBuf {
         self.dir.join("paths").join(p.base_name())
     }
 
-    fn load_object(&self, p: &StorePath) -> Result<put_request::Body, String> {
-        let hex = fs::read_to_string(self.by_path(p))
-            .map_err(|_| format!("builder does not have '{p}'"))?;
-        let h = Hash::from_base16(HashAlgo::Sha256, hex.trim()).map_err(|e| e.0)?;
-        let bytes = fs::read(self.object(&h)).map_err(|e| format!("object {hex}: {e}"))?;
+    /// Reads an object by key; the getter `amber::tree` restores from.
+    fn get(&self, k: &Key) -> io::Result<Vec<u8>> {
+        fs::read(self.object(k)).map_err(|e| io::Error::other(format!("object {k}: {e}")))
+    }
+
+    fn load_path(&self, p: &StorePath) -> Result<put_request::Body, String> {
+        let bytes =
+            fs::read(self.by_path(p)).map_err(|_| format!("builder does not have '{p}'"))?;
         PutRequest::decode(bytes.as_slice())
-            .map_err(|e| format!("object {hex}: {e}"))?
+            .map_err(|e| format!("path record '{p}': {e}"))?
             .body
-            .ok_or_else(|| "empty object".into())
+            .ok_or_else(|| "empty path record".into())
     }
 
     /// Writes `data` under `path` atomically.
@@ -85,37 +89,29 @@ impl Builderd {
         fs::rename(&tmp, path)
     }
 
-    fn store_object(&self, h: &Hash, path: &StorePath, body: put_request::Body) -> io::Result<()> {
+    fn store_path_record(&self, path: &StorePath, body: put_request::Body) -> io::Result<()> {
         let bytes = PutRequest { body: Some(body) }.encode_to_vec();
-        self.store(&self.object(h), &bytes)?;
-        self.store(&self.by_path(path), h.to_base16().as_bytes())
+        self.store(&self.by_path(path), &bytes)
     }
 
-    fn put_one(&self, body: put_request::Body) -> Result<Hash, Status> {
+    /// Stores one message of the `Put` stream; returns (objects, paths) stored.
+    fn put_one(&self, body: put_request::Body) -> Result<(u64, u64), Status> {
         let bad = |m: String| Status::invalid_argument(m);
         let io = |e: io::Error| Status::internal(e.to_string());
         match body {
-            put_request::Body::Chunk(c) => {
-                if c.data.len() > CHUNK_MAX {
-                    return Err(bad("chunk larger than 4 MiB".into()));
+            put_request::Body::Objects(batch) => {
+                let n = batch.objects.len() as u64;
+                for o in batch.objects {
+                    let k = Key::parse(&o.key).map_err(bad)?;
+                    verify(&k, &o.data).map_err(bad)?;
+                    self.store(&self.object(&k), &o.data).map_err(io)?;
                 }
-                let h = sha256(&c.data);
-                if let Some(d) = &c.digest
-                    && from_digest(d).map_err(bad)? != h
-                {
-                    return Err(bad("chunk digest does not match its data".into()));
-                }
-                self.store(&self.blob(&h), &c.data).map_err(io)?;
-                Ok(h)
+                Ok((n, 0))
             }
             put_request::Body::Manifest(m) => {
                 let path = StorePath::parse(&m.store_path).map_err(|e| bad(e.0))?;
-                let nar_hash = from_digest(
-                    m.nar_hash
-                        .as_ref()
-                        .ok_or_else(|| bad("no nar_hash".into()))?,
-                )
-                .map_err(bad)?;
+                let nar_hash =
+                    Hash::from_bytes(HashAlgo::Sha256, &m.nar_hash).map_err(|e| bad(e.0))?;
                 match ContentAddress::try_from(m.ca) {
                     Ok(ContentAddress::Source) => {
                         // Cheap consistency check now; the NAR itself is verified at build time.
@@ -139,23 +135,27 @@ impl Builderd {
                     }
                     Err(_) => return Err(bad(format!("unknown content address kind {}", m.ca))),
                 }
-                for c in &m.chunks {
-                    let h = from_digest(c).map_err(bad)?;
-                    if !self.blob(&h).exists() {
+                manifest_root(&m).map_err(bad)?;
+                for k in &m.keys {
+                    let k = Key::parse(k).map_err(bad)?;
+                    if !self.object(&k).exists() {
                         return Err(Status::failed_precondition(format!(
-                            "manifest '{path}' references missing chunk {}",
-                            h.to_base16()
+                            "manifest '{path}' needs missing object {k}"
                         )));
                     }
                 }
-                self.store_object(&nar_hash, &path, put_request::Body::Manifest(m))
+                self.store_path_record(&path, put_request::Body::Manifest(m))
                     .map_err(io)?;
-                Ok(nar_hash)
+                Ok((0, 1))
             }
             put_request::Body::Drv(d) => {
                 let path = StorePath::parse(&d.drv_path).map_err(|e| bad(e.0))?;
                 let name = Derivation::name_from_path(&path).map_err(|e| bad(e.0))?;
-                let text = std::str::from_utf8(&d.aterm).map_err(|e| bad(e.to_string()))?;
+                let content = Key::parse(&d.content).map_err(bad)?;
+                let get = |k: &Key| self.get(k);
+                let aterm = read_file(&get, &content)
+                    .map_err(|e| Status::failed_precondition(format!("drv '{path}': {e}")))?;
+                let text = std::str::from_utf8(&aterm).map_err(|e| bad(e.to_string()))?;
                 let drv = Derivation::parse(text, name).map_err(|e| bad(e.0))?;
                 let expect = drv.drv_path().map_err(|e| bad(e.0))?;
                 if expect != path {
@@ -163,12 +163,44 @@ impl Builderd {
                         "drv path '{path}' does not match its ATerm (expected '{expect}')"
                     )));
                 }
-                let h = sha256(&d.aterm);
-                self.store_object(&h, &path, put_request::Body::Drv(d))
+                self.store_path_record(&path, put_request::Body::Drv(d))
                     .map_err(io)?;
-                Ok(h)
+                Ok((0, 1))
             }
         }
+    }
+
+    /// The ATerm of a stored drv, parsed.
+    fn load_drv(&self, p: &StorePath) -> Result<(Derivation, Vec<u8>), String> {
+        let put_request::Body::Drv(blob) = self.load_path(p)? else {
+            return Err(format!("'{p}' is not a derivation"));
+        };
+        let content = Key::parse(&blob.content)?;
+        let get = |k: &Key| self.get(k);
+        let aterm = read_file(&get, &content).map_err(|e| e.to_string())?;
+        let name = Derivation::name_from_path(p).map_err(|e| e.0)?;
+        let text = std::str::from_utf8(&aterm).map_err(|e| e.to_string())?;
+        let drv = Derivation::parse(text, name).map_err(|e| e.0)?;
+        Ok((drv, aterm))
+    }
+}
+
+/// The top-level node a manifest describes, checked against its key type.
+fn manifest_root(m: &Manifest) -> Result<Root, String> {
+    if !m.symlink_target.is_empty() {
+        if !m.root.is_empty() {
+            return Err("a symlink manifest carries no root key".into());
+        }
+        return Ok(Root::Symlink(m.symlink_target.as_bytes().to_vec()));
+    }
+    let key = Key::parse(&m.root)?;
+    match key.type_() {
+        Type::DirLeaf | Type::DirNode => Ok(Root::Dir(key)),
+        Type::Blob | Type::FileNode => Ok(Root::File {
+            key,
+            executable: m.executable,
+        }),
+        t => Err(format!("root key type {t} cannot be a store path")),
     }
 }
 
@@ -177,16 +209,16 @@ impl Builder for Builderd {
     async fn have(&self, req: Request<HaveRequest>) -> Result<Response<HaveResponse>, Status> {
         let req = req.into_inner();
         let mut resp = HaveResponse::default();
-        for d in &req.chunks {
-            let h = from_digest(d).map_err(Status::invalid_argument)?;
-            if !self.blob(&h).exists() {
-                resp.missing_chunks.push(to_digest(&h));
+        for k in req.keys {
+            let key = Key::parse(&k).map_err(Status::invalid_argument)?;
+            if !self.object(&key).exists() {
+                resp.missing_keys.push(k);
             }
         }
-        for d in &req.objects {
-            let h = from_digest(d).map_err(Status::invalid_argument)?;
-            if !self.object(&h).exists() {
-                resp.missing_objects.push(to_digest(&h));
+        for p in req.paths {
+            let path = StorePath::parse(&p).map_err(|e| Status::invalid_argument(e.0))?;
+            if !self.by_path(&path).exists() {
+                resp.missing_paths.push(p);
             }
         }
         Ok(Response::new(resp))
@@ -197,14 +229,19 @@ impl Builder for Builderd {
         req: Request<Streaming<PutRequest>>,
     ) -> Result<Response<PutResponse>, Status> {
         let mut stream = req.into_inner();
-        let mut stored = Vec::new();
+        let mut resp = PutResponse::default();
         while let Some(msg) = stream.message().await? {
             let Some(body) = msg.body else {
                 return Err(Status::invalid_argument("empty PutRequest"));
             };
-            stored.push(to_digest(&self.put_one(body)?));
+            let this = self.clone();
+            let (objects, paths) = tokio::task::spawn_blocking(move || this.put_one(body))
+                .await
+                .map_err(|e| Status::internal(e.to_string()))??;
+            resp.objects += objects;
+            resp.paths += paths;
         }
-        Ok(Response::new(PutResponse { stored }))
+        Ok(Response::new(resp))
     }
 
     type BuildStream = ReceiverStream<Result<BuildEvent, Status>>;
@@ -240,7 +277,7 @@ impl Builder for Builderd {
         Ok(Response::new(ReceiverStream::new(rx)))
     }
 
-    type FetchStream = ReceiverStream<Result<Chunk, Status>>;
+    type FetchStream = ReceiverStream<Result<NarChunk, Status>>;
 
     async fn fetch(
         &self,
@@ -250,25 +287,58 @@ impl Builder for Builderd {
             .map_err(|e| Status::invalid_argument(e.0))?;
         let (tx, rx) = mpsc::channel(4);
         tokio::task::spawn_blocking(move || {
-            let mut chunker = Chunker::new(|data: Vec<u8>| {
-                let c = Chunk {
-                    digest: Some(to_digest(&sha256(&data))),
-                    data,
-                };
-                tx.blocking_send(Ok(c))
-                    .map_err(|_| io::Error::other("client went away"))
-            });
+            let mut splitter = NarSplitter {
+                buf: Vec::with_capacity(NAR_CHUNK),
+                tx: &tx,
+            };
             let r = crate::store::nar::dump_path(
                 Path::new(&path.to_string()),
-                &mut chunker,
+                &mut splitter,
                 &mut |_, _| true,
             )
-            .and_then(|()| chunker.finish());
+            .and_then(|()| splitter.finish());
             if let Err(e) = r {
                 let _ = tx.blocking_send(Err(Status::not_found(e.to_string())));
             }
         });
         Ok(Response::new(ReceiverStream::new(rx)))
+    }
+}
+
+/// Cuts the NAR stream into `NAR_CHUNK` pieces for `Fetch`.
+struct NarSplitter<'a> {
+    buf: Vec<u8>,
+    tx: &'a mpsc::Sender<Result<NarChunk, Status>>,
+}
+
+impl NarSplitter<'_> {
+    fn send(&mut self) -> io::Result<()> {
+        let data = std::mem::replace(&mut self.buf, Vec::with_capacity(NAR_CHUNK));
+        self.tx
+            .blocking_send(Ok(NarChunk { data }))
+            .map_err(|_| io::Error::other("client went away"))
+    }
+
+    fn finish(mut self) -> io::Result<()> {
+        if self.buf.is_empty() {
+            return Ok(());
+        }
+        self.send()
+    }
+}
+
+impl Write for NarSplitter<'_> {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        let n = (NAR_CHUNK - self.buf.len()).min(data.len());
+        self.buf.extend_from_slice(&data[..n]);
+        if self.buf.len() == NAR_CHUNK {
+            self.send()?;
+        }
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }
 
@@ -285,55 +355,16 @@ impl Events {
     }
 }
 
-/// Reads the chunks of a manifest as one NAR stream while hashing it.
-struct ChunkReader {
-    files: std::vec::IntoIter<PathBuf>,
-    cur: Option<fs::File>,
-    hasher: Hasher,
-}
-
-impl Read for ChunkReader {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        loop {
-            if let Some(f) = &mut self.cur {
-                let n = f.read(buf)?;
-                if n > 0 {
-                    self.hasher.update(&buf[..n]);
-                    return Ok(n);
-                }
-                self.cur = None;
-            }
-            match self.files.next() {
-                Some(p) => self.cur = Some(fs::File::open(p)?),
-                None => return Ok(0),
-            }
-        }
-    }
-}
-
-/// Restores a source tree from its chunks at `dest`, checks the NAR hash and size, and
+/// Restores a source tree from its objects at `dest`, checks the NAR hash and size, and
 /// checks that the content yields `store_path` under the manifest's addressing.
 fn materialize_source(d: &Builderd, m: &Manifest, dest: &Path) -> Result<(), String> {
     let path = StorePath::parse(&m.store_path).map_err(|e| e.0)?;
-    let nar_hash = from_digest(m.nar_hash.as_ref().ok_or("no nar_hash")?)?;
-    let files: Vec<PathBuf> = m
-        .chunks
-        .iter()
-        .map(|c| from_digest(c).map(|h| d.blob(&h)))
-        .collect::<Result<_, _>>()?;
-    let mut r = ChunkReader {
-        files: files.into_iter(),
-        cur: None,
-        hasher: Hasher::new(HashAlgo::Sha256),
-    };
-    restore_path(&mut r, dest).map_err(|e| format!("restoring '{}': {e}", m.store_path))?;
-    let mut rest = Vec::new();
-    r.read_to_end(&mut rest).map_err(|e| e.to_string())?;
-    if !rest.is_empty() {
-        return Err(format!("'{}': trailing bytes after NAR", m.store_path));
-    }
-    let size = r.hasher.bytes_written();
-    let got = r.hasher.finish();
+    let nar_hash = Hash::from_bytes(HashAlgo::Sha256, &m.nar_hash).map_err(|e| e.0)?;
+    let root = manifest_root(m)?;
+    let get = |k: &Key| d.get(k);
+    restore(&get, &root, dest).map_err(|e| format!("restoring '{}': {e}", m.store_path))?;
+    let (got, size) =
+        nar_hash_filtered(dest, HashAlgo::Sha256, &mut |_, _| true).map_err(|e| e.to_string())?;
     if got != nar_hash || size != m.nar_size {
         return Err(format!(
             "'{}': NAR hash mismatch (got {}, {size} bytes)",
@@ -410,7 +441,7 @@ fn collect_source(
     if !seen.insert(s.clone()) {
         return Ok(());
     }
-    let put_request::Body::Manifest(m) = d.load_object(s)? else {
+    let put_request::Body::Manifest(m) = d.load_path(s)? else {
         return Err(format!("'{s}' is not a source tree"));
     };
     for r in &m.references {
@@ -433,29 +464,19 @@ async fn run_build(
     // 1. Closure of the root from the object store: sources first, then drvs in
     //    dependency order.
     let mut sources: Vec<(StorePath, Manifest)> = Vec::new();
-    let mut drvs: Vec<(StorePath, Derivation, DrvBlob)> = Vec::new();
+    let mut drvs: Vec<(StorePath, Derivation, Vec<u8>)> = Vec::new();
     let mut seen: HashSet<StorePath> = HashSet::new();
     let mut stack: Vec<(StorePath, bool)> = vec![(root.clone(), false)];
     while let Some((p, expanded)) = stack.pop() {
         if expanded {
-            let put_request::Body::Drv(blob) = d.load_object(&p)? else {
-                return Err(format!("'{p}' is not a derivation"));
-            };
-            let name = Derivation::name_from_path(&p).map_err(|e| e.0)?;
-            let text = std::str::from_utf8(&blob.aterm).map_err(|e| e.to_string())?;
-            let drv = Derivation::parse(text, name).map_err(|e| e.0)?;
-            drvs.push((p, drv, blob));
+            let (drv, aterm) = d.load_drv(&p)?;
+            drvs.push((p, drv, aterm));
             continue;
         }
         if !seen.insert(p.clone()) {
             continue;
         }
-        let put_request::Body::Drv(blob) = d.load_object(&p)? else {
-            return Err(format!("'{p}' is not a derivation"));
-        };
-        let name = Derivation::name_from_path(&p).map_err(|e| e.0)?;
-        let text = std::str::from_utf8(&blob.aterm).map_err(|e| e.to_string())?;
-        let drv = Derivation::parse(text, name).map_err(|e| e.0)?;
+        let (drv, _) = d.load_drv(&p)?;
         for s in &drv.input_srcs {
             collect_source(d, s, &mut seen, &mut sources)?;
         }
@@ -508,12 +529,12 @@ async fn run_build(
             expr.push_str(&register_expr(p, &dest, ca, &m.references));
             expected.push(p.to_string());
         }
-        for (p, drv, blob) in &drvs {
+        for (p, drv, aterm) in &drvs {
             if !invalid.contains(&p.to_string()) {
                 continue;
             }
             let dest = tmp.join(p.base_name());
-            fs::write(&dest, &blob.aterm).map_err(|e| e.to_string())?;
+            fs::write(&dest, aterm).map_err(|e| e.to_string())?;
             let refs: Vec<String> = drv
                 .input_srcs
                 .iter()

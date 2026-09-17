@@ -2,29 +2,33 @@
 
 use std::collections::HashSet;
 use std::io;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Channel;
 
-use crate::store::hash::Hash;
+use crate::amber::tree::{Root, Sink, ingest_bytes};
+use crate::amber::{Key, Object as AmberObject};
 use crate::store::path::StorePath;
 
-use super::chunk::{Chunker, from_digest, sha256, to_digest};
 use super::plan::{Object, Plan, SourceKind};
 use super::proto::builder_client::BuilderClient;
 use super::proto::{
-    BuildRequest, Chunk, ContentAddress, Digest, DrvBlob, FetchRequest, HaveRequest, Manifest,
+    BuildRequest, ContentAddress, DrvBlob, FetchRequest, HaveRequest, Manifest, ObjectBatch,
     PutRequest, build_event, put_request,
 };
 
-pub const MAX_MESSAGE: usize = 16 << 20;
+pub const MAX_MESSAGE: usize = 64 << 20;
 
-/// What the builder reported it lacks, in the two digest namespaces of `Have`.
+/// Objects are sent in batches of about this many bytes.
+const BATCH_BYTES: usize = 1 << 20;
+
+/// What the builder reported it lacks.
 struct Missing {
-    chunks: HashSet<Hash>,
-    objects: HashSet<Hash>,
+    keys: HashSet<Key>,
+    paths: HashSet<String>,
 }
 
 /// Wall-clock and volume figures for one `build` call.
@@ -34,26 +38,32 @@ pub struct Timings {
     pub have: Duration,
     pub put: Duration,
     pub build: Duration,
-    pub have_digests: usize,
+    pub have_keys: usize,
+    pub have_paths: usize,
     pub missing: usize,
     pub put_objects: usize,
-    pub put_chunks: usize,
+    pub put_paths: usize,
     pub put_bytes: u64,
 }
 
 impl Timings {
     pub fn report(&self, plan: &Plan, plan_time: Duration) -> String {
+        let stats = plan.key_stats();
         format!(
-            "plan: {} sources, {} drvs, {:.3}s\nconnect: {:.3}s\nhave: {} digests, {} missing, {:.3}s\nput: {} objects, {} chunks, {} bytes, {:.3}s\nbuild: {:.3}s",
+            "plan: {} sources, {} drvs, {:.3}s\nobjects: {} keys, {} unique, {} shared by two or more trees\nconnect: {:.3}s\nhave: {} keys, {} paths, {} missing, {:.3}s\nput: {} objects, {} paths, {} bytes, {:.3}s\nbuild: {:.3}s",
             plan.sources(),
             plan.drvs(),
             plan_time.as_secs_f64(),
+            stats.emitted,
+            stats.unique,
+            stats.shared,
             self.connect.as_secs_f64(),
-            self.have_digests,
+            self.have_keys,
+            self.have_paths,
             self.missing,
             self.have.as_secs_f64(),
             self.put_objects,
-            self.put_chunks,
+            self.put_paths,
             self.put_bytes,
             self.put.as_secs_f64(),
             self.build.as_secs_f64(),
@@ -116,43 +126,45 @@ pub async fn build(
 
     let t1 = Instant::now();
     let mut req = HaveRequest::default();
+    let mut seen: HashSet<Key> = HashSet::new();
     for o in &plan.objects {
-        if let Object::Source { chunks, .. } = o {
-            req.chunks.extend(chunks.iter().map(to_digest));
+        for k in &o.tree().keys {
+            if seen.insert(*k) {
+                req.keys.push(k.as_bytes().to_vec());
+            }
         }
-        req.objects.push(to_digest(o.digest()));
+        req.paths.push(o.store_path().to_string());
     }
-    t.have_digests = req.chunks.len() + req.objects.len();
+    t.have_keys = req.keys.len();
+    t.have_paths = req.paths.len();
     let resp = client.have(req).await?.into_inner();
-    let to_set = |v: &[Digest]| -> Result<HashSet<Hash>, ClientError> {
-        v.iter()
-            .map(|d| from_digest(d).map_err(ClientError))
-            .collect()
-    };
     let missing = Missing {
-        chunks: to_set(&resp.missing_chunks)?,
-        objects: to_set(&resp.missing_objects)?,
+        keys: resp
+            .missing_keys
+            .iter()
+            .map(|k| Key::parse(k).map_err(ClientError))
+            .collect::<Result<_, _>>()?,
+        paths: resp.missing_paths.into_iter().collect(),
     };
-    t.missing = missing.chunks.len() + missing.objects.len();
+    t.missing = missing.keys.len() + missing.paths.len();
     t.have = t1.elapsed();
 
     let t2 = Instant::now();
     if t.missing > 0 {
         let (tx, rx) = tokio::sync::mpsc::channel::<PutRequest>(16);
         let objects: Vec<Object> = plan.objects.clone();
-        let producer = tokio::task::spawn_blocking(move || produce(&objects, &missing, tx));
+        let producer = tokio::task::spawn_blocking(move || produce(&objects, missing, tx));
         let ack = client.put(ReceiverStream::new(rx)).await?.into_inner();
         let stats = producer
             .await
             .map_err(|e| ClientError(format!("upload thread: {e}")))??;
-        t.put_objects = stats.0;
-        t.put_chunks = stats.1;
-        t.put_bytes = stats.2;
-        if ack.stored.len() != t.missing {
+        t.put_objects = stats.objects;
+        t.put_paths = stats.paths;
+        t.put_bytes = stats.bytes;
+        if ack.objects as usize + ack.paths as usize != t.missing {
             return Err(ClientError(format!(
-                "builder stored {} of {} missing objects",
-                ack.stored.len(),
-                t.missing
+                "builder stored {} objects and {} paths of {} missing",
+                ack.objects, ack.paths, t.missing
             )));
         }
     }
@@ -184,107 +196,183 @@ pub async fn build(
     Ok(t)
 }
 
-/// Runs on a blocking thread: re-dumps each source that needs uploading, sends its missing
-/// chunks, then its manifest; sends missing drvs. Returns (objects, chunks, bytes).
+#[derive(Default)]
+struct PutStats {
+    objects: usize,
+    paths: usize,
+    bytes: u64,
+}
+
+/// Sends the objects a tree walk emits, those still missing on the builder, in batches. A
+/// key is sent once: the first tree that emits it removes it from `pending`.
+struct Uploader<'a> {
+    tx: &'a tokio::sync::mpsc::Sender<PutRequest>,
+    state: Mutex<UploadState>,
+}
+
+struct UploadState {
+    pending: HashSet<Key>,
+    batch: Vec<super::proto::Object>,
+    batch_bytes: usize,
+    stats: PutStats,
+    closed: bool,
+}
+
+impl Uploader<'_> {
+    fn flush_locked(st: &mut UploadState, tx: &tokio::sync::mpsc::Sender<PutRequest>) {
+        if st.batch.is_empty() || st.closed {
+            return;
+        }
+        let req = PutRequest {
+            body: Some(put_request::Body::Objects(ObjectBatch {
+                objects: std::mem::take(&mut st.batch),
+            })),
+        };
+        st.batch_bytes = 0;
+        if tx.blocking_send(req).is_err() {
+            st.closed = true;
+        }
+    }
+
+    fn flush(&self) {
+        let mut st = self.state.lock().unwrap();
+        Self::flush_locked(&mut st, self.tx);
+    }
+
+    fn send(&self, req: PutRequest) -> Result<(), ClientError> {
+        let mut st = self.state.lock().unwrap();
+        Self::flush_locked(&mut st, self.tx);
+        if st.closed || self.tx.blocking_send(req).is_err() {
+            st.closed = true;
+            return Err(closed());
+        }
+        Ok(())
+    }
+}
+
+impl Sink for Uploader<'_> {
+    fn emit(&self, o: AmberObject) {
+        let mut st = self.state.lock().unwrap();
+        if !st.pending.remove(&o.key) {
+            return;
+        }
+        st.stats.objects += 1;
+        st.stats.bytes += o.bytes.len() as u64;
+        st.batch_bytes += o.bytes.len();
+        st.batch.push(super::proto::Object {
+            key: o.key.as_bytes().to_vec(),
+            data: o.bytes,
+        });
+        if st.batch_bytes >= BATCH_BYTES {
+            Self::flush_locked(&mut st, self.tx);
+        }
+    }
+}
+
+fn closed() -> ClientError {
+    ClientError("builder closed the upload stream".into())
+}
+
+/// Runs on a blocking thread: re-walks each tree with missing objects and sends them, then
+/// the tree's manifest or drv when the builder lacks the path.
 fn produce(
     objects: &[Object],
-    missing: &Missing,
+    missing: Missing,
     tx: tokio::sync::mpsc::Sender<PutRequest>,
-) -> Result<(usize, usize, u64), ClientError> {
-    let closed = || ClientError("builder closed the upload stream".into());
-    let mut n_objects = 0;
-    let mut n_chunks = 0;
-    let mut bytes = 0u64;
+) -> Result<PutStats, ClientError> {
+    let up = Uploader {
+        tx: &tx,
+        state: Mutex::new(UploadState {
+            pending: missing.keys,
+            batch: Vec::new(),
+            batch_bytes: 0,
+            stats: PutStats::default(),
+            closed: false,
+        }),
+    };
     for o in objects {
-        match o {
+        let tree = o.tree();
+        let needs_objects = {
+            let st = up.state.lock().unwrap();
+            tree.keys.iter().any(|k| st.pending.contains(k))
+        };
+        if needs_objects {
+            let root = match o {
+                Object::Source { data, .. } => data.ingest(&up)?,
+                Object::Drv { aterm, .. } => Root::File {
+                    key: ingest_bytes(aterm, &up),
+                    executable: false,
+                },
+            };
+            if root != tree.root {
+                return Err(ClientError(format!(
+                    "'{}' changed while uploading",
+                    o.store_path()
+                )));
+            }
+            if up.state.lock().unwrap().closed {
+                return Err(closed());
+            }
+        }
+        if !missing.paths.contains(&o.store_path().to_string()) {
+            continue;
+        }
+        let body = match o {
             Object::Source {
                 path,
-                data,
                 kind,
                 nar_hash,
                 nar_size,
-                chunks,
-            } => {
-                let need_chunks: Vec<bool> =
-                    chunks.iter().map(|c| missing.chunks.contains(c)).collect();
-                if need_chunks.iter().any(|&b| b) {
-                    let mut i = 0;
-                    let mut err = None;
-                    let mut chunker = Chunker::new(|chunk: Vec<u8>| {
-                        let need = need_chunks.get(i).copied().unwrap_or(true);
-                        i += 1;
-                        if need {
-                            let digest = sha256(&chunk);
-                            if chunks.get(i - 1) != Some(&digest) {
-                                return Err(io::Error::other(format!(
-                                    "source '{}' changed while uploading",
-                                    data.describe()
-                                )));
-                            }
-                            n_chunks += 1;
-                            bytes += chunk.len() as u64;
-                            let req = PutRequest {
-                                body: Some(put_request::Body::Chunk(Chunk {
-                                    digest: Some(to_digest(&digest)),
-                                    data: chunk,
-                                })),
-                            };
-                            if tx.blocking_send(req).is_err() {
-                                err = Some(closed());
-                                return Err(io::Error::other("closed"));
-                            }
-                        }
-                        Ok(())
-                    });
-                    let r = data.dump(&mut chunker).and_then(|()| chunker.finish());
-                    if let Some(e) = err {
-                        return Err(e);
-                    }
-                    r?;
-                }
-                if missing.objects.contains(nar_hash) {
-                    n_objects += 1;
-                    let (ca, references) = match kind {
-                        SourceKind::Source => (ContentAddress::Source, Vec::new()),
-                        SourceKind::Text { references } => (
-                            ContentAddress::Text,
-                            references.iter().map(|r| r.to_string()).collect(),
-                        ),
-                    };
-                    let req = PutRequest {
-                        body: Some(put_request::Body::Manifest(Manifest {
-                            store_path: path.to_string(),
-                            nar_hash: Some(to_digest(nar_hash)),
-                            nar_size: *nar_size,
-                            chunks: chunks.iter().map(to_digest).collect(),
-                            ca: ca as i32,
-                            references,
-                        })),
-                    };
-                    tx.blocking_send(req).map_err(|_| closed())?;
-                }
-            }
-            Object::Drv {
-                path,
-                aterm,
-                digest,
+                tree,
                 ..
             } => {
-                if missing.objects.contains(digest) {
-                    n_objects += 1;
-                    bytes += aterm.len() as u64;
-                    let req = PutRequest {
-                        body: Some(put_request::Body::Drv(DrvBlob {
-                            drv_path: path.to_string(),
-                            aterm: aterm.as_ref().clone(),
-                        })),
-                    };
-                    tx.blocking_send(req).map_err(|_| closed())?;
-                }
+                let (ca, references) = match kind {
+                    SourceKind::Source => (ContentAddress::Source, Vec::new()),
+                    SourceKind::Text { references } => (
+                        ContentAddress::Text,
+                        references.iter().map(|r| r.to_string()).collect(),
+                    ),
+                };
+                let (root, executable, symlink_target) = match &tree.root {
+                    Root::Dir(k) => (k.as_bytes().to_vec(), false, String::new()),
+                    Root::File { key, executable } => {
+                        (key.as_bytes().to_vec(), *executable, String::new())
+                    }
+                    Root::Symlink(t) => {
+                        (Vec::new(), false, String::from_utf8_lossy(t).into_owned())
+                    }
+                };
+                put_request::Body::Manifest(Manifest {
+                    store_path: path.to_string(),
+                    nar_hash: nar_hash.bytes().to_vec(),
+                    nar_size: *nar_size,
+                    ca: ca as i32,
+                    references,
+                    root,
+                    executable,
+                    symlink_target,
+                    keys: tree.keys.iter().map(|k| k.as_bytes().to_vec()).collect(),
+                })
             }
-        }
+            Object::Drv { path, tree, .. } => put_request::Body::Drv(DrvBlob {
+                drv_path: path.to_string(),
+                content: tree
+                    .root
+                    .key()
+                    .expect("a drv is a file")
+                    .as_bytes()
+                    .to_vec(),
+            }),
+        };
+        up.send(PutRequest { body: Some(body) })?;
+        up.state.lock().unwrap().stats.paths += 1;
     }
-    Ok((n_objects, n_chunks, bytes))
+    up.flush();
+    let st = up.state.into_inner().unwrap();
+    if st.closed {
+        return Err(closed());
+    }
+    Ok(st.stats)
 }
 
 /// `build` on a fresh multi-thread runtime, for callers without one.
@@ -304,7 +392,7 @@ pub fn build_blocking(
 }
 
 /// `Fetch`: restores the NAR of `store_path` from the builder into `dest`, which must not
-/// exist. The chunks are collected in memory first; outputs are small next to the closure.
+/// exist. The pieces are collected in memory first; outputs are small next to the closure.
 pub async fn fetch(
     url: &str,
     store_path: &str,

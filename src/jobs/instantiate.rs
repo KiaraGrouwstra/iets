@@ -15,11 +15,10 @@ use std::time::{Duration, Instant};
 use super::line::{Job, Line};
 use crate::builtins::derivation::DrvInfo;
 use crate::parallel::shared::SharedMap;
-use crate::remote::plan::{Object, SourceData, SourceInfo, SourceKind, hash_source};
+use crate::remote::plan::{Object, SourceData, SourceInfo, SourceKind};
 use crate::remote::worker::build::write_object;
 use crate::remote::worker::{Connection, Transport};
 use crate::store::drv::Derivation;
-use crate::store::hash::{HashAlgo, hash_bytes};
 use crate::store::path::{STORE_DIR, StorePath};
 use crate::store::source::SourceOrigin;
 
@@ -185,27 +184,15 @@ impl Store {
                     kind: SourceKind::Text { references },
                 },
             };
-            let (nar_hash, nar_size, chunks) =
-                hash_source(&info.data).map_err(|e| format!("cannot dump '{p}': {e}"))?;
-            objects.push(Object::Source {
-                path: p.clone(),
-                data: info.data,
-                kind: info.kind,
-                nar_hash,
-                nar_size,
-                chunks,
-            });
+            objects.push(
+                Object::source(p.clone(), info).map_err(|e| format!("cannot dump '{p}': {e}"))?,
+            );
         }
         for (path, aterm, references) in drvs.iter() {
             if valid.contains(&path.to_string()) {
                 continue;
             }
-            objects.push(Object::Drv {
-                path: path.clone(),
-                digest: hash_bytes(HashAlgo::Sha256, aterm),
-                aterm: aterm.clone(),
-                references: references.clone(),
-            });
+            objects.push(Object::drv(path.clone(), aterm.clone(), references.clone()));
         }
         if !objects.is_empty() {
             let before = self.conn.bytes_sent();

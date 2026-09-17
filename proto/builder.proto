@@ -1,35 +1,34 @@
-// ietsp remote builder protocol, v1. Transport-agnostic: this file defines
-// messages and one service; v1 carries it over gRPC/HTTP2 cleartext.
+// ietsp remote builder protocol, v2. Transport-agnostic: this file defines
+// messages and one service; the reference carries it over gRPC/HTTP2
+// cleartext. Content is addressed by amber-store keys (src/amber/), so an
+// amber-hostd holding the same objects could serve Put and Have directly.
 syntax = "proto3";
 
-package ietsp.builder.v1;
+package ietsp.builder.v2;
 
 service Builder {
-  // One batch: which of these digests does the builder lack?
+  // One batch: which of these object keys and store paths does the builder lack?
   rpc Have(HaveRequest) returns (HaveResponse);
-  // One stream: every missing chunk, manifest, and drv, pipelined.
+  // One stream: every missing object, then the manifests and drvs that need them.
   rpc Put(stream PutRequest) returns (PutResponse);
   // One request; the builder streams events until Done.
   rpc Build(BuildRequest) returns (stream BuildEvent);
-  // Optional: pull a store path back as a chunked NAR.
-  rpc Fetch(FetchRequest) returns (stream Chunk);
+  // Optional: pull a store path back as a NAR in pieces.
+  rpc Fetch(FetchRequest) returns (stream NarChunk);
 }
 
-enum HashAlgo {
-  SHA256 = 0; // Nix compatible; the only algo v1 accepts
-  BLAKE3 = 1; // reserved for a later version
-}
-
-message Digest {
-  HashAlgo algo = 1;
-  bytes bytes = 2; // raw digest, 32 bytes for sha256
-}
-
-// A slice of a NAR. Data is at most CHUNK_MAX = 4 MiB. Addressed by the
-// sha256 of `data`.
-message Chunk {
-  Digest digest = 1;
+// One amber object: `key` is the 32-byte amber key (type nibble, logical
+// length, truncated BLAKE3 of `data`). A Blob is raw file bytes (at most 64
+// KiB, the chunker's ceiling); a FileNode, DirLeaf or DirNode is
+// deterministic CBOR. The builder recomputes the key and rejects a mismatch.
+message Object {
+  bytes key = 1;
   bytes data = 2;
+}
+
+// Several objects in one message; the client fills a batch to about 1 MiB.
+message ObjectBatch {
+  repeated Object objects = 1;
 }
 
 // How a store path was content-addressed; decides how the builder derives
@@ -39,47 +38,56 @@ enum ContentAddress {
   TEXT = 1;   // flat sha256 of one regular file, with references (builtins.toFile)
 }
 
-// A source tree: the NAR of a store path, split into chunks. Addressed by
-// its NAR hash. The builder recomputes `store_path` from the content under
-// the Nix rules for `ca` and rejects a manifest that does not match.
+// A source tree as an amber object graph. Addressed by its store path. The
+// builder restores the tree from `root`, hashes the NAR, and recomputes
+// `store_path` under the Nix rules for `ca`; a mismatch is rejected.
 message Manifest {
   string store_path = 1; // /nix/store/<hash>-<name>
-  Digest nar_hash = 2;
+  bytes nar_hash = 2;    // sha256 of the NAR, 32 bytes, for the Nix side
   uint64 nar_size = 3;
-  repeated Digest chunks = 4; // in NAR order
-  ContentAddress ca = 5;
-  repeated string references = 6; // TEXT only: store paths the file refers to
+  ContentAddress ca = 4;
+  repeated string references = 5; // TEXT only: store paths the file refers to
+  // The top-level node. A directory: `root` is a DirLeaf or DirNode key. A
+  // regular file: a Blob or FileNode key plus `executable`. A symlink:
+  // `root` is empty and `symlink_target` is set.
+  bytes root = 6;
+  bool executable = 7;
+  string symlink_target = 8;
+  // Every object key the tree needs, root included, children before
+  // parents; the builder checks it holds each one before it accepts the
+  // manifest.
+  repeated bytes keys = 9;
 }
 
-// A derivation: its ATerm bytes and the drv path the client computed.
-// Addressed by sha256(aterm).
+// A derivation. Its identity is its store path; its ATerm bytes are a file
+// object (Blob or FileNode) under `content`. The builder reads the ATerm,
+// parses it, and checks that it hashes to `drv_path`.
 message DrvBlob {
   string drv_path = 1; // /nix/store/<hash>-<name>.drv
-  bytes aterm = 2;
+  bytes content = 2;   // amber key of the ATerm file object
 }
 
 message HaveRequest {
-  // Chunks and objects live in separate namespaces: a one-chunk NAR has
-  // chunk digest == NAR hash, so one list would conflate them.
-  repeated Digest chunks = 1;
-  repeated Digest objects = 2; // manifests (by NAR hash) and drvs (by sha256 of the ATerm)
+  repeated bytes keys = 1;   // amber object keys
+  repeated string paths = 2; // store paths of manifests and drvs
 }
 
 message HaveResponse {
-  repeated Digest missing_chunks = 1;
-  repeated Digest missing_objects = 2;
+  repeated bytes missing_keys = 1;
+  repeated string missing_paths = 2;
 }
 
 message PutRequest {
   oneof body {
-    Chunk chunk = 1;
+    ObjectBatch objects = 1;
     Manifest manifest = 2;
     DrvBlob drv = 3;
   }
 }
 
 message PutResponse {
-  repeated Digest stored = 1;
+  uint64 objects = 1; // objects stored
+  uint64 paths = 2;   // manifests and drvs stored
 }
 
 message BuildRequest {
@@ -117,7 +125,7 @@ message Built {
   string drv_path = 1;
   string output = 2;
   string store_path = 3;
-  string signature = 4; // empty in v1
+  string signature = 4; // empty in v2
 }
 
 message Failed {
@@ -131,4 +139,9 @@ message Done {
 
 message FetchRequest {
   string store_path = 1;
+}
+
+// A piece of a NAR, at most 4 MiB, in stream order.
+message NarChunk {
+  bytes data = 1;
 }

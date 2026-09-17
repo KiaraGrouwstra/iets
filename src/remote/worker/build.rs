@@ -260,9 +260,10 @@ pub fn write_object(w: &mut dyn Write, o: &Object) -> io::Result<()> {
         Object::Drv {
             path,
             aterm,
-            digest,
             references,
+            ..
         } => {
+            let digest = hash_bytes(HashAlgo::Sha256, aterm);
             let mut h = Hasher::new(HashAlgo::Sha256);
             dump_string(aterm, &mut h)?;
             let nar_size = h.bytes_written();

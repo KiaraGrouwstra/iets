@@ -16,7 +16,6 @@ use crate::remote::worker::build::write_object;
 use crate::store::drv::{
     DerivationOutput, DrvHashCache, finalize_input_addressed_outputs, load_derivation_from_store,
 };
-use crate::store::hash::{HashAlgo, hash_bytes};
 use crate::store::path::StorePath;
 
 /// What the collector keeps of every line: enough to resolve names.
@@ -334,12 +333,7 @@ pub fn rewrite(
                     let mut references = drv.input_srcs.clone();
                     references.extend(drv.input_drvs.keys().cloned());
                     let aterm = std::sync::Arc::new(text.into_bytes());
-                    let object = Object::Drv {
-                        path: new_path.clone(),
-                        digest: hash_bytes(HashAlgo::Sha256, &aterm),
-                        aterm,
-                        references,
-                    };
+                    let object = Object::drv(new_path.clone(), aterm, references);
                     let mut body = |w: &mut dyn Write| -> std::io::Result<()> {
                         crate::remote::worker::wire::write_u64(w, 1)?;
                         write_object(w, &object)
