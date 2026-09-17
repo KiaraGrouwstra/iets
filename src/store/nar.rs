@@ -25,7 +25,7 @@ impl FileType {
         }
     }
 
-    fn of(ft: fs::FileType) -> FileType {
+    pub(crate) fn of(ft: fs::FileType) -> FileType {
         if ft.is_symlink() {
             FileType::Symlink
         } else if ft.is_dir() {

@@ -11,7 +11,7 @@ const STACK_SIZE: usize = 4 << 30;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: ietsp eval [--strict] [--json] [--raw] [--workers N] [--timings] [--no-cache] [--cache-dir DIR] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp cache-dump READSET   (print a cache entry's read set)\n       ietsp build [--builder URL] [--timings] [--no-build] [--fetch-to DIR] [--no-cache] [--cache-dir DIR] [--out NAME]... [--workers N] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--fetch-to DIR] [--out NAME]... [--source STOREPATH=LOCAL]... DRV\n       ietsp eval-jobs [--workers N] [--force-recurse] [--meta] [--show-input-drvs] [--chunks M --chunk N [--chunk-depth D]] [--max-memory-size MB] [-I prefix=path]... [--arg name expr] [--argstr name str] (-E EXPR | FILE | FLAKEREF#attr)\n       ietsp print-dev-env [--builder URL] [--gc-root PATH] [--json] [--workers N] [--no-cache] [--cache-dir DIR] [--timings] [FLAKEREF[#attr]]   (default: ., a daemon URL)\n       URL: http://host:port (gRPC), daemon, unix:///path, ssh-ng://[user@]host (Nix worker protocol)"
+        "usage: ietsp eval [--strict] [--json] [--raw] [--workers N] [--timings] [--no-cache] [--cache-dir DIR] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp cache-dump READSET   (print a cache entry's read set)\n       ietsp amber-keys [--lstat] PATH   (every amber object key of a tree)\n       ietsp build [--builder URL] [--timings] [--no-build] [--fetch-to DIR] [--no-cache] [--cache-dir DIR] [--out NAME]... [--workers N] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--fetch-to DIR] [--out NAME]... [--source STOREPATH=LOCAL]... DRV\n       ietsp eval-jobs [--workers N] [--force-recurse] [--meta] [--show-input-drvs] [--chunks M --chunk N [--chunk-depth D]] [--max-memory-size MB] [-I prefix=path]... [--arg name expr] [--argstr name str] (-E EXPR | FILE | FLAKEREF#attr)\n       ietsp print-dev-env [--builder URL] [--gc-root PATH] [--json] [--workers N] [--no-cache] [--cache-dir DIR] [--timings] [FLAKEREF[#attr]]   (default: ., a daemon URL)\n       URL: http://host:port (gRPC), daemon, unix:///path, ssh-ng://[user@]host (Nix worker protocol)"
     );
     exit(2)
 }
@@ -2107,6 +2107,74 @@ impl Cache {
     }
 }
 
+/// `ietsp amber-keys [--lstat] PATH`: every amber object of the tree, sorted by key, in the
+/// format of `tools/amber-diff/amber-keys.rs` so the two can be compared.
+fn cmd_amber_keys(argv: &[String]) -> i32 {
+    use ietsp::amber::tree::{Meta, Sink, ingest_path, no_filter};
+    use ietsp::amber::{Key, Object, Type};
+    use std::collections::BTreeMap;
+    use std::io::Write;
+    use std::sync::Mutex;
+
+    let mut meta = Meta::Canonical;
+    let mut path = None;
+    for a in argv {
+        match a.as_str() {
+            "--lstat" => meta = Meta::Lstat,
+            p => path = Some(p.to_string()),
+        }
+    }
+    let Some(path) = path else {
+        eprintln!("usage: ietsp amber-keys [--lstat] PATH");
+        return 2;
+    };
+    struct Collect(Mutex<BTreeMap<Key, Option<Vec<u8>>>>);
+    impl Sink for Collect {
+        fn emit(&self, o: Object) {
+            let bytes = (o.key.type_() != Type::Blob).then_some(o.bytes);
+            self.0.lock().unwrap().insert(o.key, bytes);
+        }
+    }
+    let sink = Collect(Mutex::new(BTreeMap::new()));
+    let root = match ingest_path(std::path::Path::new(&path), &no_filter, meta, &sink) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+    let out = std::io::stdout();
+    let mut out = std::io::BufWriter::new(out.lock());
+    for (k, bytes) in sink.0.into_inner().unwrap() {
+        match bytes {
+            None => writeln!(out, "{k} Blob {}", k.length()),
+            Some(b) => writeln!(
+                out,
+                "{k} {} {} {}",
+                k.type_(),
+                k.length(),
+                ietsp::store::hash::base16_encode(&b)
+            ),
+        }
+        .unwrap();
+    }
+    match root {
+        ietsp::amber::tree::Root::Dir(k) => writeln!(out, "root {k}"),
+        ietsp::amber::tree::Root::File { key, executable } => {
+            writeln!(
+                out,
+                "root {key} {}",
+                if executable { "0555" } else { "0444" }
+            )
+        }
+        ietsp::amber::tree::Root::Symlink(t) => {
+            writeln!(out, "root link {}", String::from_utf8_lossy(&t))
+        }
+    }
+    .unwrap();
+    0
+}
+
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let Some(cmd) = argv.first() else { usage() };
@@ -2128,6 +2196,7 @@ fn main() {
             exit(code)
         }
         "cache-dump" if argv.len() == 2 => exit(cmd_cache_dump(&argv[1])),
+        "amber-keys" => exit(cmd_amber_keys(&argv[1..])),
         "parse" if argv.len() > 1 => {
             let rest = &argv[1..];
             let quiet = rest[0] == "-q";
