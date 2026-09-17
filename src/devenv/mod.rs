@@ -557,13 +557,14 @@ mod tests {
         );
     }
 
-    /// `nix print-dev-env /home/zimbatm/home` wrote both fixtures (2026-09-16); the
+    /// Both fixtures are this repo's devShell: `nix eval --raw .#devShells.x86_64-linux.default.drvPath`
+    /// names the shell drv and `nix print-dev-env .` writes the `-env.drv` (2026-09-17); the
     /// transformation must reproduce the `-env.drv` byte for byte. Needs the shell's input
     /// closure in /nix/store for the hash modulo.
     #[test]
     fn env_derivation_matches_nix() {
-        let shell_path = "sighxvw1hjhv3gi8kcphvflvlrqayysf-nix-shell.drv";
-        let env_path = "rbqqc8mrvg70ic7sqpz3rg4w544ipzc6-nix-shell-env.drv";
+        let shell_path = "1rpf3nddnjznxv3q2bf64vpn8zdz1ciw-nix-shell.drv";
+        let env_path = "vlcxckkq3qad5dp748a5xypnkwq76azw-nix-shell-env.drv";
         let shell = Derivation::parse(&fixture(shell_path), "nix-shell").unwrap();
         if !shell
             .input_drvs
