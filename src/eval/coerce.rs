@@ -227,10 +227,10 @@ impl Evaluator {
                         return self.eq_values(vi, vj, pos);
                     }
                 }
-                if x.len != y.len {
+                if x.len() != y.len() {
                     return Ok(false);
                 }
-                for (ax, ay) in x.attrs().iter().zip(y.attrs()) {
+                for (ax, ay) in x.iter().zip(y.iter()) {
                     if ax.sym != ay.sym {
                         return Ok(false);
                     }

@@ -296,8 +296,9 @@ pub fn fanout_list(ev: &Evaluator, l: &'static ListObj) {
 }
 
 #[inline]
-pub fn fanout_attrs(ev: &Evaluator, a: &'static AttrsObj) {
+pub fn fanout_attrs(ev: &mut Evaluator, a: &'static AttrsObj) {
     if ev.par.on && fanout_mask() & 4 != 0 {
+        let a = ev.arena.flat(a);
         fanout(ev, T_ATTRS_WHNF, Word::from_ptr(a), a.len());
     }
 }
@@ -318,8 +319,9 @@ pub fn fanout_list_coerce(ev: &Evaluator, l: &'static ListObj) {
 
 /// Attrs whose values are about to be coerced (`derivationStrict`, JSON).
 #[inline]
-pub fn fanout_attrs_coerce(ev: &Evaluator, a: &'static AttrsObj) {
+pub fn fanout_attrs_coerce(ev: &mut Evaluator, a: &'static AttrsObj) {
     if ev.par.on && fanout_mask() & 2 != 0 {
+        let a = ev.arena.flat(a);
         fanout_batched(ev, T_ATTRS_COERCE, Word::from_ptr(a), a.len(), COERCE_BATCH);
     }
 }
@@ -347,7 +349,8 @@ fn coerce_walk(ev: &mut Evaluator, v: Word, depth: u32) -> bool {
             if let Some(o) = a.get(ev.s.out_path) {
                 return coerce_step(ev, &o.cell, depth);
             }
-            fanout_batched(ev, T_ATTRS_COERCE, v, a.len(), COERCE_BATCH);
+            let a = ev.arena.flat(a);
+            fanout_batched(ev, T_ATTRS_COERCE, Word::from_ptr(a), a.len(), COERCE_BATCH);
             for attr in a.attrs() {
                 if !coerce_step(ev, &attr.cell, depth) {
                     return false;
@@ -395,8 +398,9 @@ fn deep_inner(
             if !seen.insert(w.0) {
                 return Ok(());
             }
+            let a = ev.arena.flat(a);
             if fanout_mask() & 1 != 0 {
-                fanout(ev, T_ATTRS_DEEP, w, a.len());
+                fanout(ev, T_ATTRS_DEEP, Word::from_ptr(a), a.len());
             }
             let attrs = a.attrs();
             walk(

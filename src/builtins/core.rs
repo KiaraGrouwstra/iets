@@ -282,6 +282,10 @@ fn unsafe_get_attr_pos(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResul
         "while evaluating the second argument passed to builtins.unsafeGetAttrPos",
     )?;
     let sym = ev.sym(name);
+    #[cfg(feature = "stats2")]
+    {
+        ev.arena.stats.census.get_attr_pos_calls += 1;
+    }
     match attrs.get(sym) {
         None => Ok(Word::NULL),
         Some(a) => Ok(ev.mk_pos_attrs(a.pos)),

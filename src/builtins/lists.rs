@@ -2,6 +2,7 @@
 
 use super::Registry;
 use crate::eval::{ErrorKind, EvalResult, Evaluator, Pos, bail};
+use crate::runtime::arena::Stat;
 use crate::runtime::*;
 
 pub fn register(r: &mut Registry) {
@@ -117,7 +118,7 @@ fn map(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the first argument passed to builtins.map",
     )?;
-    let out = ev.arena.alloc_list(l.len as usize);
+    let out = ev.arena.alloc_list_as(l.len as usize, Stat::ListMap);
     for (o, c) in out.cells().iter().zip(l.cells()) {
         let t = ev.arena.mk_thunk_app(f, c.get());
         crate::parallel::speculate_app(ev, t, f); // parallel
@@ -238,7 +239,7 @@ fn gen_list(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         Pos::NONE,
         "while evaluating the first argument passed to builtins.genList",
     )?;
-    let out = ev.arena.alloc_list(n as usize);
+    let out = ev.arena.alloc_list_as(n as usize, Stat::ListGen);
     for (i, c) in out.cells().iter().enumerate() {
         let t = ev.arena.mk_thunk_app(f, Word::imm_int(i as i64));
         c.set(t);

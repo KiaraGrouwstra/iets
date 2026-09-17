@@ -293,7 +293,7 @@ fn check_declared_inputs(
         pos,
         "while evaluating the 'inputs' attribute of flake.nix",
     )?;
-    for a in inputs.attrs() {
+    for a in inputs.iter() {
         let name = ev.interner.name(a.sym).to_vec();
         if !lock.root_inputs().any(|k| k.as_bytes() == name) {
             return Err(Error::boxed(

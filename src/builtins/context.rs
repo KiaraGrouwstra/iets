@@ -79,7 +79,7 @@ fn append_context(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
     let s_all = ev.sym(b"allOutputs");
     let s_outputs = ev.sym(b"outputs");
     let mut ctx: Vec<Ctx> = orig.ctx.to_vec();
-    for a in attrs.attrs() {
+    for a in attrs.iter() {
         let name: Vec<u8> = ev.interner.name(a.sym).to_vec();
         let sp = std::str::from_utf8(&name)
             .ok()

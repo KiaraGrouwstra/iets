@@ -96,7 +96,7 @@ pub fn print_attr_name(out: &mut Vec<u8>, name: &[u8]) {
 
 /// Attr names in the order Nix prints them: by name bytes.
 pub fn lexicographic_order(ev: &Evaluator, a: &'static AttrsObj) -> Vec<&'static Attr> {
-    let mut v: Vec<&'static Attr> = a.attrs().iter().collect();
+    let mut v: Vec<&'static Attr> = a.iter().collect();
     v.sort_by(|x, y| ev.interner.name(x.sym).cmp(ev.interner.name(y.sym)));
     v
 }

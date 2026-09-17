@@ -311,7 +311,8 @@ pub fn node(ev: &mut Evaluator, w: Word, path: &[String], hash: u64) -> EvalResu
         )?;
     }
     Ok(if recurse {
-        Node::Recurse(attrs)
+        // the walk and the prefetch address children by index
+        Node::Recurse(ev.arena.flat(attrs))
     } else {
         Node::Skip
     })
@@ -458,7 +459,7 @@ fn check_meta(ev: &mut Evaluator, w: Word) -> EvalResult<bool> {
             if a.get(ev.s.out_path).is_some() {
                 return Ok(false);
             }
-            for attr in a.attrs() {
+            for attr in a.iter() {
                 if !check_meta(ev, attr.cell.get())? {
                     return Ok(false);
                 }
@@ -820,8 +821,9 @@ fn prefetch_value(ev: &mut Evaluator, v: Word, hash: u64, depth: u32) -> EvalRes
     if !recurse {
         return Ok(());
     }
+    let a = ev.arena.flat(a);
     remember_set(a, hash, depth);
-    fanout_range(ev, T_JOB, v, 0, a.len(), JOB_BATCH);
+    fanout_range(ev, T_JOB, Word::from_ptr(a), 0, a.len(), JOB_BATCH);
     for attr in a.attrs() {
         if prefetch_child(ev, attr, hash, depth).is_err() {
             return Err(Error::boxed(ErrorKind::Cancelled, "cancelled", Pos::NONE));
@@ -844,7 +846,7 @@ fn prefetch_job(ev: &mut Evaluator, a: &'static AttrsObj) -> EvalResult<()> {
         && let Some(m) = a.get(cfg.syms.meta)
     {
         let meta = ev.force_attrs(m.cell.get(), m.pos, "")?;
-        for attr in meta.attrs() {
+        for attr in meta.iter() {
             if check_meta(ev, attr.cell.get())? {
                 ev.force_deep(attr.cell.get())?;
             }

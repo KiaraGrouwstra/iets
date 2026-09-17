@@ -141,44 +141,90 @@ impl Arena {
 }
 
 /// Allocation kind for `IETSP_STATS`.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(usize)]
 pub enum Stat {
     Thunk,
     ThunkApp,
+    ThunkApp2,
     Env,
+    ListLit,
+    ListMap,
+    ListGen,
+    ListConcat,
     List,
     Attrs,
+    AttrsLit,
+    AttrsUpd,
+    AttrsMap,
+    AttrsListTo,
+    AttrsRemove,
+    AttrsZip,
+    AttrsInter,
     StrObj,
     Bytes,
     Ctx,
+    Path,
+    Float,
+    BigInt,
     Lambda,
     PrimOpApp,
     Ir,
-    AttrsLit,
-    AttrsUpd,
 }
 
-pub const STAT_NAMES: [&str; 13] = [
+pub const NSTATS: usize = 26;
+
+pub const STAT_NAMES: [&str; NSTATS] = [
     "thunk",
     "thunk_app",
+    "thunk_app2",
     "env",
-    "list",
-    "attrs",
+    "list_lit",
+    "list_map",
+    "list_gen",
+    "list_concat",
+    "list_other",
+    "attrs_other",
+    "attrs_lit",
+    "attrs_upd",
+    "attrs_map",
+    "attrs_listto",
+    "attrs_remove",
+    "attrs_zip",
+    "attrs_inter",
     "str_obj",
-    "bytes",
+    "str_bytes",
     "ctx",
+    "path",
+    "float",
+    "bigint",
     "lambda",
     "primop_app",
     "ir",
-    "attrs_lit",
-    "attrs_upd",
 ];
+
+impl Stat {
+    /// The census origin byte of an attrset producer.
+    pub fn attrs_origin(self) -> u8 {
+        match self {
+            Stat::AttrsLit => 1,
+            Stat::AttrsUpd => 2,
+            Stat::AttrsMap => 3,
+            Stat::AttrsListTo => 4,
+            Stat::AttrsRemove => 5,
+            Stat::AttrsZip => 6,
+            Stat::AttrsInter => 7,
+            _ => 0,
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct Stats {
-    pub counts: [u64; 13],
-    pub bytes: [u64; 13],
+    pub counts: [u64; NSTATS],
+    pub bytes: [u64; NSTATS],
+    #[cfg(feature = "stats2")]
+    pub census: super::census::Census,
 }
 
 impl Stats {

@@ -614,6 +614,9 @@ fn jobs_single(
     if j.opts.no_instantiate {
         let em = emitter.clone();
         ietsp::jobs::run(ev, root, &mut |line| em.lock().unwrap().emit(line));
+        if std::env::var_os("IETSP_STATS").is_some() {
+            ev.print_stats();
+        }
     } else {
         let setup = Store::open(
             transport,

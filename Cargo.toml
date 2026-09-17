@@ -26,6 +26,10 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "proce
 tokio-stream = { version = "0.1", features = ["net"] }
 serde_json = "1"
 
+[features]
+# Memory census behind IETSP_STATS=2 (docs/memory.md); off the hot path when unset.
+stats2 = []
+
 [build-dependencies]
 sha2 = "0.10"
 tonic-prost-build = "0.14"

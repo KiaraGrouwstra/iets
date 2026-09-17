@@ -30,6 +30,9 @@ pub struct Compiler<'a> {
     interner: &'a mut Interner,
     globals: &'a Globals,
     scopes: Vec<Scope>,
+    /// Open lambdas, innermost last: the index in `scopes` of the param
+    /// frame and whether the body has read a variable from outside it.
+    lambdas: Vec<(usize, std::cell::Cell<bool>)>,
     /// Directory of the file being compiled, for relative paths.
     base_dir: Vec<u8>,
     /// Global offset of this file's first byte.
@@ -127,6 +130,7 @@ impl<'a> Compiler<'a> {
             interner,
             globals,
             scopes: Vec::new(),
+            lambdas: Vec::new(),
             base_dir: base_dir.to_vec(),
             base,
             home: std::env::var_os("HOME").map(|h| h.into_encoded_bytes()),
@@ -167,12 +171,26 @@ impl<'a> Compiler<'a> {
         self.arena.alloc_slice(&v)
     }
 
+    /// A variable read from scope index `s` captures every open lambda
+    /// whose frame sits above `s`.
+    fn note_capture(&self, s: usize) {
+        for (frame, captures) in self.lambdas.iter().rev() {
+            if *frame > s {
+                captures.set(true);
+            } else {
+                break;
+            }
+        }
+    }
+
     fn resolve(&self, sym: Sym) -> Option<Ir> {
         let mut withs: Vec<u32> = Vec::new();
+        let n = self.scopes.len();
         for (d, scope) in self.scopes.iter().rev().enumerate() {
             match scope {
                 Scope::Lexical(m) => {
                     if let Some(&idx) = m.get(&sym) {
+                        self.note_capture(n - 1 - d);
                         return Some(Ir::Local {
                             depth: d as u32,
                             idx,
@@ -181,6 +199,9 @@ impl<'a> Compiler<'a> {
                 }
                 Scope::With => withs.push(d as u32),
             }
+        }
+        if let Some(outermost) = withs.last() {
+            self.note_capture(n - 1 - *outermost as usize);
         }
         // Globals live in Nix's static base env, a lexical scope, so they
         // beat any enclosing `with` (`with { true = 1; }; true` is `true`).
@@ -1091,15 +1112,19 @@ impl<'a> Compiler<'a> {
             Param::Ident(sym) => {
                 let mut m = FxHashMap::default();
                 m.insert(sym, 0);
+                self.lambdas
+                    .push((self.scopes.len(), std::cell::Cell::new(false)));
                 self.scopes.push(Scope::Lexical(m));
                 let body = self.expr(body)?;
                 self.scopes.pop();
+                let closed = !self.lambdas.pop().unwrap().1.get();
                 Ok(self.alloc(LambdaIr {
                     param: ParamIr::Ident,
                     body,
                     pos,
                     name,
                     arg: Some(sym),
+                    closed,
                 }))
             }
             Param::Formals {
@@ -1141,6 +1166,8 @@ impl<'a> Compiler<'a> {
                     }
                     idx += 1;
                 }
+                self.lambdas
+                    .push((self.scopes.len(), std::cell::Cell::new(false)));
                 self.scopes.push(Scope::Lexical(m));
                 let mut firs = Vec::with_capacity(sorted.len());
                 for f in &sorted {
@@ -1156,6 +1183,7 @@ impl<'a> Compiler<'a> {
                 }
                 let body = self.expr(body)?;
                 self.scopes.pop();
+                let closed = !self.lambdas.pop().unwrap().1.get();
                 let formals = self.alloc_formals(firs);
                 Ok(self.alloc(LambdaIr {
                     param: ParamIr::Formals {
@@ -1167,6 +1195,7 @@ impl<'a> Compiler<'a> {
                     pos,
                     name,
                     arg: bind,
+                    closed,
                 }))
             }
         }

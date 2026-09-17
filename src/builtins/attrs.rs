@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use super::Registry;
 use crate::eval::{ErrorKind, EvalResult, Evaluator, Pos, bail};
+use crate::runtime::arena::Stat;
 use crate::runtime::*;
 use crate::syntax::symbol::Sym;
 
@@ -108,12 +109,11 @@ fn remove_attrs(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word>
     names.sort();
     names.dedup();
     let out: Vec<(Sym, Pos, Word)> = a
-        .attrs()
         .iter()
         .filter(|at| names.binary_search(&at.sym).is_err())
         .map(|at| (at.sym, at.pos, at.cell.get()))
         .collect();
-    Ok(ev.arena.mk_attrs_sorted(&out))
+    Ok(ev.arena.mk_attrs_sorted_as(&out, Stat::AttrsRemove))
 }
 
 fn intersect_attrs(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
@@ -129,19 +129,19 @@ fn intersect_attrs(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wo
     )?;
     let mut out: Vec<(Sym, Pos, Word)> = Vec::with_capacity(left.len().min(right.len()));
     if left.len() < right.len() {
-        for l in left.attrs() {
+        for l in left.iter() {
             if let Some(r) = right.get(l.sym) {
                 out.push((r.sym, r.pos, r.cell.get()));
             }
         }
     } else {
-        for r in right.attrs() {
+        for r in right.iter() {
             if left.get(r.sym).is_some() {
                 out.push((r.sym, r.pos, r.cell.get()));
             }
         }
     }
-    Ok(ev.arena.mk_attrs_sorted(&out))
+    Ok(ev.arena.mk_attrs_sorted_as(&out, Stat::AttrsInter))
 }
 
 fn map_attrs(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
@@ -152,13 +152,13 @@ fn map_attrs(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     )?;
     let f = args[0];
     let mut out: Vec<(Sym, Pos, Word)> = Vec::with_capacity(a.len());
-    for attr in a.attrs() {
+    for attr in a.iter() {
         let name = ev.sym_string(attr.sym);
         let v = ev.arena.mk_thunk_app2(f, name, attr.cell.get());
         crate::parallel::speculate_app(ev, v, f); // parallel
         out.push((attr.sym, attr.pos, v));
     }
-    Ok(ev.arena.mk_attrs_sorted(&out))
+    Ok(ev.arena.mk_attrs_sorted_as(&out, Stat::AttrsMap))
 }
 
 fn list_to_attrs(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
@@ -204,7 +204,7 @@ fn list_to_attrs(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word
         entries.push((sym, v.pos, v.cell.get()));
     }
     entries.sort_by_key(|e| e.0);
-    Ok(ev.arena.mk_attrs_sorted(&entries))
+    Ok(ev.arena.mk_attrs_sorted_as(&entries, Stat::AttrsListTo))
 }
 
 fn zip_attrs_with(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
@@ -228,7 +228,7 @@ fn zip_attrs_with(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
             Pos::NONE,
             "while evaluating a value of the list passed as second argument to builtins.zipAttrsWith",
         )?;
-        for attr in a.attrs() {
+        for attr in a.iter() {
             let e = groups.entry(attr.sym).or_insert_with(|| {
                 order.push(attr.sym);
                 Vec::new()
@@ -245,7 +245,7 @@ fn zip_attrs_with(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
         out.push((sym, Pos::NONE, v));
     }
     out.sort_by_key(|e| e.0);
-    Ok(ev.arena.mk_attrs_sorted(&out))
+    Ok(ev.arena.mk_attrs_sorted_as(&out, Stat::AttrsZip))
 }
 
 fn cat_attrs(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {

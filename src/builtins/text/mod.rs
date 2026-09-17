@@ -63,6 +63,12 @@ thread_local! {
     static REGEX_CACHE: RefCell<HashMap<Vec<u8>, Rc<CompiledRegex>>> = RefCell::new(HashMap::new());
 }
 
+/// Entries in this thread's regex cache (`IETSP_STATS`).
+#[inline(never)]
+pub fn regex_cache_len() -> usize {
+    REGEX_CACHE.with(|c| c.borrow().len())
+}
+
 fn invalid_regex(re: &[u8], pos: Pos) -> Box<Error> {
     Error::boxed(
         ErrorKind::Eval,

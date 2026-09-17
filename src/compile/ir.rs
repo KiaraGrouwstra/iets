@@ -147,6 +147,9 @@ pub struct LambdaIr {
     pub name: Option<Sym>,
     /// The `x` in `x: ...` or the `args` in `{ ... }@args: ...`; `toXML` prints it.
     pub arg: Option<Sym>,
+    /// The body reads no variable of an enclosing scope (no `Local` above
+    /// its own frame, no `with` variable), so every closure of it is alike.
+    pub closed: bool,
 }
 
 pub enum ParamIr {

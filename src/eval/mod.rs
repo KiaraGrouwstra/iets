@@ -29,7 +29,7 @@ impl CorePkgs {
 pub struct FileInfo {
     pub path: Vec<u8>,
     pub base: u32,
-    line_starts: Vec<u32>,
+    pub line_starts: Vec<u32>,
 }
 
 impl FileInfo {
@@ -256,6 +256,12 @@ impl Evaluator {
         self.arena
             .stats
             .note(Stat::Ir, self.arena.bytes_allocated - before);
+        #[cfg(feature = "stats2")]
+        self.arena
+            .stats
+            .census
+            .ir_by_file
+            .push((file.0, (self.arena.bytes_allocated - before) as u64));
         self.t_compile += t0.elapsed();
         if used_home {
             self.trace.env(b"HOME");
@@ -299,11 +305,11 @@ impl Evaluator {
     ) -> EvalResult<Word> {
         let resolved = self.resolve_import_path(path, pos)?;
         let src = self.read_source(&resolved, pos)?;
-        let names: Vec<Sym> = scope.attrs().iter().map(|a| a.sym).collect();
+        let names: Vec<Sym> = scope.iter().map(|a| a.sym).collect();
         let dir = dir_of(&resolved).to_vec();
         let ir = self.compile_source(&resolved, src, &dir, Some(&names))?;
         let env = self.arena.alloc_env(Some(self.root_env), names.len());
-        for (slot, a) in env.slots_n(names.len()).iter().zip(scope.attrs()) {
+        for (slot, a) in env.slots_n(names.len()).iter().zip(scope.iter()) {
             slot.set(a.cell.get());
         }
         self.eval(env, ir)
@@ -445,6 +451,14 @@ impl Evaluator {
             return Ok(r);
         }
         result.set(Word::BLACKHOLE);
+        #[cfg(feature = "stats2")]
+        {
+            self.arena.stats.census.forced[match w.thunk_kind() {
+                Kind::Thunk => 0,
+                Kind::ThunkApp => 1,
+                _ => 2,
+            }] += 1;
+        }
         let v = match w.thunk_kind() {
             Kind::Thunk => {
                 let t = w.as_thunk();
@@ -490,6 +504,7 @@ impl Evaluator {
                 for _ in 0..*depth {
                     e = e.up().expect("compile-time depth is valid");
                 }
+                e.mark_read();
                 let w = e.slot(*idx as usize).get();
                 // a slot of the env under construction (`let x = x;`): thunk it
                 // so forcing reports infinite recursion instead of reading EMPTY
@@ -568,6 +583,7 @@ impl Evaluator {
                 for _ in 0..*depth {
                     e = e.up()?;
                 }
+                e.mark_read();
                 e.slot(*idx as usize).get()
             }
             _ => return None,
@@ -576,7 +592,7 @@ impl Evaluator {
             let AttrElemIr::Static(sym) = elem else {
                 return None;
             };
-            if w.heap_kind() != Some(Kind::Attrs) {
+            if !matches!(w.heap_kind(), Some(Kind::Attrs | Kind::AttrsUnion)) {
                 return None;
             }
             match w.as_attrs()?.get(*sym) {
@@ -602,6 +618,7 @@ impl Evaluator {
                 for _ in 0..*depth {
                     e = e.up()?;
                 }
+                e.mark_read();
                 e.slot(*idx as usize).get()
             }
             _ => return None,
@@ -634,7 +651,7 @@ impl Evaluator {
                 if !seen.insert(w.0) {
                     return Ok(());
                 }
-                for attr in a.attrs() {
+                for attr in a.iter() {
                     let v = self.force_cell(&attr.cell).map_err(|mut e| {
                         e.add_trace(
                             attr.pos,
@@ -1007,7 +1024,7 @@ impl Evaluator {
                     i += 1;
                 }
                 if !*ellipsis && used != attrs.len() {
-                    for a in attrs.attrs() {
+                    for a in attrs.iter() {
                         if formals.binary_search_by(|f| f.sym.cmp(&a.sym)).is_err() {
                             let mut e = Error::new(
                                 ErrorKind::Type,
@@ -1070,6 +1087,7 @@ impl Evaluator {
                 for _ in 0..*depth {
                     e = e.up().expect("compile-time depth is valid");
                 }
+                e.mark_read();
                 self.force_cell(e.slot(*idx as usize))
             }
             Ir::WithVar { sym, withs, pos } => self.eval_with_var(env, *sym, withs, *pos),
@@ -1107,7 +1125,7 @@ impl Evaluator {
             }
             Ir::Attrs(a) => self.eval_attrs(env, a),
             Ir::List(items) => {
-                let l = self.arena.alloc_list(items.len());
+                let l = self.arena.alloc_list_as(items.len(), Stat::ListLit);
                 for (c, item) in l.cells().iter().zip(items.iter()) {
                     let w = self.maybe_thunk(env, item);
                     c.set(w);
@@ -1301,6 +1319,7 @@ impl Evaluator {
                 e = e.up().expect("compile-time depth is valid");
             }
             walked = d;
+            e.mark_read();
             let attrs = self.force_attrs(
                 e.slot(0).get(),
                 pos,
@@ -1494,7 +1513,7 @@ impl Evaluator {
                 let ow = env2.slot(oi as usize).get();
                 let overrides =
                     self.force_attrs(ow, a.pos, "while evaluating the `__overrides` attribute")?;
-                for o in overrides.attrs() {
+                for o in overrides.iter() {
                     match a.binds.binary_search_by(|b| b.sym.cmp(&o.sym)) {
                         Ok(j) => {
                             entries[j].2 = o.cell.get();
@@ -1706,7 +1725,10 @@ impl Evaluator {
 
     // ---- attrs and lists ---------------------------------------------------
 
-    /// `a // b`. Two linear merges: one to size the result, one to fill it.
+    /// `a // b`. A large left side is not copied: the result is a union
+    /// that probes `b` then `a` (docs/memory.md). Small left sides and
+    /// unions past the leaf budget are merged flat in two linear passes:
+    /// one to size the result, one to fill it.
     pub fn update_attrs(&mut self, a: &'static AttrsObj, b: &'static AttrsObj) -> Word {
         if a.is_empty() {
             return Word::from_ptr(b);
@@ -1714,7 +1736,23 @@ impl Evaluator {
         if b.is_empty() {
             return Word::from_ptr(a);
         }
-        let (aa, bb) = (a.attrs(), b.attrs());
+        #[cfg(feature = "stats2")]
+        self.arena.stats.census.note_upd(a, b);
+        let a_small = a.kind == Kind::Attrs && a.len() < UNION_MIN;
+        if !a_small {
+            let a = if leaf_count(a) + leaf_count(b) > MAX_LEAVES as usize {
+                self.arena.flat(a)
+            } else {
+                a
+            };
+            if leaf_count(a) + leaf_count(b) <= MAX_LEAVES as usize {
+                return self.arena.alloc_union(a, b);
+            }
+        }
+        let (aa, bb) = (
+            self.arena.flat(a).attrs_raw(),
+            self.arena.flat(b).attrs_raw(),
+        );
         let (mut i, mut j, mut common) = (0, 0, 0);
         while i < aa.len() && j < bb.len() {
             match aa[i].sym.cmp(&bb[j].sym) {
@@ -1765,7 +1803,7 @@ impl Evaluator {
         if let Some(l) = lists.iter().find(|l| l.len as usize == total) {
             return Word::from_ptr(*l);
         }
-        let out = self.arena.alloc_list(total);
+        let out = self.arena.alloc_list_as(total, Stat::ListConcat);
         let cells = out.cells();
         let mut k = 0;
         for l in lists {
@@ -1964,13 +2002,46 @@ impl Evaluator {
         );
         for (i, name) in STAT_NAMES.iter().enumerate() {
             eprintln!(
-                "{name:>10} count={:>9} bytes={:>11} ({:.1} MiB)",
+                "{name:>12} count={:>9} bytes={:>11} ({:.1} MiB)",
                 st.counts[i],
                 st.bytes[i],
                 st.bytes[i] as f64 / (1 << 20) as f64
             );
         }
+        let mut line_table = 0usize;
+        let mut file_paths = 0usize;
+        for i in 0..self.files.len() {
+            let f = &self.files[i];
+            line_table += f.line_starts.capacity() * 4;
+            file_paths += f.path.capacity();
+        }
+        let mut sym_bytes = 0usize;
+        for i in 0..self.interner.len() {
+            sym_bytes += self.interner.name(Sym(i as u32)).len();
+        }
+        let (mut drvs, mut aterm_bytes) = (0usize, 0usize);
+        for (_, d) in self.drv.drvs.iter() {
+            drvs += 1;
+            aterm_bytes += d.aterm.as_ref().map_or(0, |a| a.len());
+        }
+        eprintln!(
+            "non-arena: line_tables={line_table} file_paths={file_paths} symbols={} (name bytes {sym_bytes}, map entries ~{}) import_cache={} drvs={drvs} (aterm bytes {aterm_bytes}) regex_cache={}",
+            self.interner.len(),
+            self.interner.len() * 32,
+            self.import_cache.len(),
+            crate::builtins::text::regex_cache_len()
+        );
         // SAFETY: prints glibc heap statistics to stderr; no arguments.
         unsafe { libc::malloc_stats() };
+        if std::env::var("IETSP_STATS").is_ok_and(|v| v == "2") {
+            #[cfg(feature = "stats2")]
+            {
+                let mut out = String::new();
+                st.census.report(&mut out);
+                eprint!("{out}");
+            }
+            #[cfg(not(feature = "stats2"))]
+            eprintln!("census: build with --features stats2");
+        }
     }
 }

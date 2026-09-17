@@ -91,7 +91,7 @@ fn collect_attrs(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Attrs> {
         );
     };
     let mut out = Attrs::new();
-    for attr in a.attrs() {
+    for attr in a.iter() {
         let name = String::from_utf8_lossy(ev.interner.name(attr.sym)).into_owned();
         if name == "__final" {
             continue;

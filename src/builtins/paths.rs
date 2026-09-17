@@ -606,7 +606,7 @@ fn path(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let mut filter: Option<Word> = None;
     let mut method = IngestionMethod::Recursive;
     let mut expected: Option<Hash> = None;
-    for attr in a.attrs() {
+    for attr in a.iter() {
         let n: Vec<u8> = ev.interner.name(attr.sym).to_vec();
         let v = attr.cell.get();
         match n.as_slice() {
