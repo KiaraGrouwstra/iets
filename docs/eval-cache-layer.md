@@ -18,24 +18,20 @@ anyway, and keyed by the immutable identity of the source.
 
 ## Key
 
+Everything a consumer needs to find its shard is content it already has:
+
 ```
-evalkey = sha256(
-  "eval:1",
-  source narHash            # the locked flake source, or a nixpkgs tarball
-  lock narHash              # flake.lock contents; empty for a plain tree
-  system
-  attrpath                  # "nixosConfigurations.nv1.config.system.build.toplevel"
-  args                      # canonical JSON of --arg/--argstr, usually {}
-)
+source   = narHash of the locked flake source (lock folded in) or the nixpkgs tarball
+system   = x86_64-linux
+attrpath = nixosConfigurations.nv1.config.system.build.toplevel
+shard    = first 10 bits of sha256(attrpath)
 ```
 
-Everything in the key is content. Two machines with the same checkout
-compute the same key without talking to anyone; a git-clean checkout
-gets its narHash from the tree object. Pure evaluation is a function of
-these inputs, so the key is sound without a read set. Impure inputs
-(`currentTime`, `getEnv`, fetchers, `--impure`) are simply never
-published.
-
+Two machines with the same checkout compute the same location without
+talking to anyone; a git-clean checkout gets its narHash from the tree
+object. Pure evaluation is a function of source, system and attrpath,
+so the lookup is sound without a read set. Impure inputs (`currentTime`,
+`getEnv`, fetchers, `--impure`) are never published.
 ## Measured (2026-09-17)
 
 Data: `ci/eval/outpaths.nix` for x86_64-linux at two nixos-unstable
@@ -137,6 +133,7 @@ realised; otherwise the `.drv` closure is fetched from the same cache
 and built. A miss, a bad signature, or a dirty checkout falls through to
 evaluation. Bulk tools (`ietsp eval-jobs --compare`, a search index)
 take `--eval-cache URL` too and use index plus deltas.
+
 ## Trust
 
 The same key that signs "P has these bytes" signs "A of S is P". A
@@ -151,7 +148,8 @@ gains nothing new.
 - harmonia and niks3: one more route or S3 prefix; they never read the
   objects. nix-grpc-store: same.
 - amber-nix-daemon: an evalinfo maps naturally to a realisation-like
-  record keyed by evalkey; the index is a blob.
+  record keyed by source, system and attrpath; the index is a blob.
+- Nix itself: nothing changes. Consumers that want it use ietsp or a
   small wrapper. If it proves out, the format is simple enough to
   propose upstream as a `nix build --eval-cache-url` feature.
 
