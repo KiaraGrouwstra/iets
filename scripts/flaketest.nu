@@ -1,8 +1,11 @@
 #!/usr/bin/env nu
 # End-to-end flake evaluation: `ietsp eval --raw FLAKE#attr` must print what
-# `nix eval --raw --option eval-cache false FLAKE#attr` prints, on real
-# flakes and on a scratch git flake with a `path:` input, a `follows`, a
-# clean tree and a dirty tree.
+# `nix eval --raw --option eval-cache false FLAKE#attr` prints, on this
+# repo's flake, on a scratch flake with locked inputs of every offline type
+# (`path:`, `git+file://`, a `file://` tarball), a `follows`, a devShell and a
+# NixOS system, and on a scratch git flake with a `path:` input, a `follows`,
+# a clean tree and a dirty tree. No network: nixpkgs is the store tree this
+# repo's lock names.
 use lib.nu [chomp show verdict]
 
 def --wrapped nixf [...args: string] { ^nix --extra-experimental-features "nix-command flakes" ...$args }
@@ -38,13 +41,63 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   $env.IETSP_CACHE_DIR = $"($work)/cache"
   mut res = []
 
-  let home = "/home/zimbatm/home"
-  let host = (nixf eval --json $"($home)#nixosConfigurations" --apply builtins.attrNames err> /dev/null | from json | first)
-  $res ++= [(check $ietsp "home devShell" $"($home)#devShells.x86_64-linux.default.drvPath")]
-  $res ++= [(check $ietsp "home devShell, IETSP_WORKERS=8" $"($home)#devShells.x86_64-linux.default.drvPath" {IETSP_WORKERS: "8"})]
-  $res ++= [(check $ietsp $"home nixosConfigurations.($host) toplevel" $"($home)#nixosConfigurations.($host).config.system.build.toplevel.drvPath")]
-  $res ++= [(check $ietsp "hairesis muster" "/home/zimbatm/hairesis#packages.x86_64-linux.muster.drvPath")]
-  $res ++= [(check $ietsp "iets-prime default" "/home/zimbatm/iets-prime#packages.x86_64-linux.default.drvPath")]
+  # ---- this repo ---------------------------------------------------------------
+  $res ++= [(check $ietsp "repo packages.default" ".#packages.x86_64-linux.default.drvPath")]
+
+  # ---- a flake with locked inputs of every type, a devShell and a NixOS system --
+  # Offline: nixpkgs is the store tree this repo's lock names (`path:`), `lib`
+  # is a scratch git repo (`git+file://`), `util` a directory (`path:`) whose
+  # own `lib` input follows ours, `tb` a tarball behind a `file://` URL. `nix
+  # flake lock` then fetches nothing from the network.
+  let nixpkgs = (nixf eval --raw --impure --expr $"\(builtins.getFlake \"($env.PWD)\"\).inputs.nixpkgs.outPath" | complete | get stdout | chomp)
+  let big = $"($work)/big"
+  mkdir $"($work)/lib" $"($work)/util" $"($work)/tbsrc" $big
+  '{ outputs = { self }: { greeting = "hello-" + self.shortRev; }; }' + "\n" | save $"($work)/lib/flake.nix"
+  git-in $"($work)/lib" init -q
+  git-in $"($work)/lib" add -A
+  git-in $"($work)/lib" commit -q -m lib
+  r#'{
+  inputs.lib.url = "git+file://@WORK@/lib";
+  outputs = { self, lib }: { twice = lib.greeting + lib.greeting; inherit lib; };
+}
+'# | str replace -a "@WORK@" $work | save $"($work)/util/flake.nix"
+  '{ outputs = { self }: { value = "tarball-" + self.narHash; }; }' + "\n" | save $"($work)/tbsrc/flake.nix"
+  ^tar -C $work -czf $"($work)/tb.tar.gz" tbsrc
+  r#'{
+  inputs.nixpkgs.url = "path:@NIXPKGS@";
+  inputs.lib.url = "git+file://@WORK@/lib";
+  inputs.util.url = "path:@WORK@/util";
+  inputs.util.inputs.lib.follows = "lib";
+  inputs.tb.url = "file://@WORK@/tb.tar.gz";
+  outputs = { self, nixpkgs, lib, util, tb }:
+    let
+      system = "x86_64-linux";
+      pkgs = nixpkgs.legacyPackages.${system};
+    in {
+      devShells.${system}.default = pkgs.mkShell {
+        packages = [ pkgs.hello pkgs.jq ];
+        GREETING = util.twice + " " + tb.value + " " + lib.greeting;
+      };
+      nixosConfigurations.scratch = nixpkgs.lib.nixosSystem {
+        inherit system;
+        modules = [ ./configuration.nix ];
+      };
+    };
+}
+'# | str replace -a "@WORK@" $work | str replace -a "@NIXPKGS@" $nixpkgs | save $"($big)/flake.nix"
+  r#'{ modulesPath, ... }: {
+  imports = [ (modulesPath + "/profiles/minimal.nix") ];
+  boot.loader.grub.enable = false;
+  fileSystems."/" = { device = "none"; fsType = "tmpfs"; };
+  networking.hostName = "scratch";
+  system.stateVersion = "25.11";
+}
+'# | save $"($big)/configuration.nix"
+  let lock = (do { cd $big; nixf flake lock } | complete)
+  if $lock.exit_code != 0 { print $"FAIL nix flake lock: ($lock.stderr)"; $res ++= [false] }
+  $res ++= [(check $ietsp "big: devShell" $"($big)#devShells.x86_64-linux.default.drvPath")]
+  $res ++= [(check $ietsp "big: devShell, IETSP_WORKERS=8" $"($big)#devShells.x86_64-linux.default.drvPath" {IETSP_WORKERS: "8"})]
+  $res ++= [(check $ietsp "big: nixosConfigurations.scratch toplevel" $"($big)#nixosConfigurations.scratch.config.system.build.toplevel.drvPath")]
 
   # ---- scratch flake ---------------------------------------------------------
   let repo = $"($work)/repo"
