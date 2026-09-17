@@ -11,7 +11,7 @@ const STACK_SIZE: usize = 4 << 30;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: ietsp eval [--strict] [--json] [--raw] [--workers N] [--timings] [--no-cache] [--cache-dir DIR] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp cache-dump READSET   (print a cache entry's read set)\n       ietsp amber-keys [--lstat] PATH   (every amber object key of a tree)\n       ietsp build [--builder URL] [--timings] [--no-build] [--fetch-to DIR] [--no-cache] [--cache-dir DIR] [--out NAME]... [--workers N] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--fetch-to DIR] [--out NAME]... [--source STOREPATH=LOCAL]... DRV\n       ietsp eval-jobs [--workers N] [--force-recurse] [--meta] [--show-input-drvs] [--chunks M --chunk N [--chunk-depth D]] [--max-memory-size MB] [-I prefix=path]... [--arg name expr] [--argstr name str] (-E EXPR | FILE | FLAKEREF#attr)\n       ietsp print-dev-env [--builder URL] [--gc-root PATH] [--json] [--workers N] [--no-cache] [--cache-dir DIR] [--timings] [FLAKEREF[#attr]]   (default: ., a daemon URL)\n       URL: http://host:port (gRPC), daemon, unix:///path, ssh-ng://[user@]host (Nix worker protocol)"
+        "usage: ietsp eval [--strict] [--json] [--raw] [--workers N] [--timings] [--no-cache] [--cache-dir DIR] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp cache-dump READSET   (print a cache entry's read set)\n       ietsp amber-keys [--lstat] PATH   (every amber object key of a tree)\n       ietsp build [--builder URL] [--timings] [--no-build] [--fetch-to DIR] [--no-cache] [--cache-dir DIR] [--out NAME]... [--workers N] [SCHED]... [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--fetch-to DIR] [--out NAME]... [--source STOREPATH=LOCAL]... [SCHED]... DRV\n       SCHED (worker protocol only, docs/scheduling.md): --connections N, --upload-connections N, --upload-batch N, --overlap, --critical-path, --per-drv, --build-batch K, --skip-substitutable\n       ietsp eval-jobs [--workers N] [--force-recurse] [--meta] [--show-input-drvs] [--chunks M --chunk N [--chunk-depth D]] [--max-memory-size MB] [-I prefix=path]... [--arg name expr] [--argstr name str] (-E EXPR | FILE | FLAKEREF#attr)\n       ietsp print-dev-env [--builder URL] [--gc-root PATH] [--json] [--workers N] [--no-cache] [--cache-dir DIR] [--timings] [FLAKEREF[#attr]]   (default: ., a daemon URL)\n       URL: http://host:port (gRPC), daemon, unix:///path, ssh-ng://[user@]host (Nix worker protocol)"
     );
     exit(2)
 }
@@ -1059,10 +1059,15 @@ fn drv_roots(
 struct BuildArgs {
     url: String,
     timings: bool,
+    sched: ietsp::remote::worker::sched::Opts,
     no_build: bool,
     fetch_to: Option<std::path::PathBuf>,
     outputs: Vec<String>,
     sources: HashMap<String, std::path::PathBuf>,
+}
+
+fn parse_count(s: Option<&String>) -> usize {
+    s.and_then(|v| v.parse().ok()).unwrap_or_else(|| usage())
 }
 
 /// `ietsp build`: evaluate to derivations and ship their closure from memory, or (legacy)
@@ -1071,6 +1076,7 @@ fn cmd_build(argv: &[String]) -> i32 {
     let mut b = BuildArgs {
         url: "http://127.0.0.1:9455".to_string(),
         timings: false,
+        sched: Default::default(),
         no_build: false,
         fetch_to: None,
         outputs: Vec::new(),
@@ -1086,6 +1092,26 @@ fn cmd_build(argv: &[String]) -> i32 {
             }
             "--timings" => b.timings = true,
             "--no-build" => b.no_build = true,
+            "--connections" => {
+                i += 1;
+                b.sched.connections = parse_count(argv.get(i));
+            }
+            "--upload-connections" => {
+                i += 1;
+                b.sched.upload_connections = parse_count(argv.get(i));
+            }
+            "--upload-batch" => {
+                i += 1;
+                b.sched.upload_batch = parse_count(argv.get(i));
+            }
+            "--overlap" => b.sched.overlap = true,
+            "--critical-path" => b.sched.critical_path = true,
+            "--per-drv" => b.sched.per_drv = Some(1),
+            "--build-batch" => {
+                i += 1;
+                b.sched.per_drv = Some(parse_count(argv.get(i)));
+            }
+            "--skip-substitutable" => b.sched.skip_substitutable = true,
             "--fetch-to" => {
                 i += 1;
                 b.fetch_to = Some(std::path::PathBuf::from(
@@ -1311,6 +1337,7 @@ fn build_roots(
                 outputs,
                 b.no_build,
                 b.fetch_to.as_deref(),
+                b.sched.clone(),
                 &mut on_event,
             )
             .map(|t| t.report(&plan, plan_time))

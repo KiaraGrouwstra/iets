@@ -3,6 +3,7 @@
 //! op is one request and one `STDERR_*` reply loop.
 
 pub mod build;
+pub mod sched;
 pub mod wire;
 
 use std::collections::{BTreeMap, HashMap};
@@ -41,6 +42,7 @@ pub const MIN_MINOR: u64 = 35;
 enum Op {
     SetOptions = 19,
     QueryValidPaths = 31,
+    QueryMissing = 40,
     AddIndirectRoot = 12,
     QuerySubstitutablePathInfos = 30,
     NarFromPath = 38,
@@ -134,6 +136,16 @@ impl BuildResult {
     }
 }
 
+/// misc.cc:MissingPaths, the reply to `QueryMissing`.
+#[derive(Debug, Clone, Default)]
+pub struct Missing {
+    pub will_build: Vec<String>,
+    pub will_substitute: Vec<String>,
+    pub unknown: Vec<String>,
+    pub download_size: u64,
+    pub nar_size: u64,
+}
+
 pub struct Connection {
     to: BufWriter<Counting<Box<dyn Write + Send>>>,
     from: BufReader<Box<dyn Read + Send>>,
@@ -183,6 +195,11 @@ impl Connection {
                     let mut cmd = Command::new("ssh");
                     if let Some(u) = user {
                         cmd.arg("-l").arg(u);
+                    }
+                    // the same knob Nix's ssh.cc reads, so ControlMaster and friends can
+                    // be set per run
+                    if let Ok(opts) = std::env::var("NIX_SSHOPTS") {
+                        cmd.args(opts.split_whitespace());
                     }
                     cmd.arg("-x")
                         .arg(host)
@@ -549,6 +566,31 @@ impl Connection {
             out.push(path);
         }
         Ok(out)
+    }
+
+    /// `QueryMissing` (daemon.cc, op 40; misc.cc:Store::queryMissing): for legacy derived
+    /// paths, which drvs the daemon would build, which output paths it would substitute, and
+    /// which drvs it cannot read because they are absent.
+    pub fn query_missing(
+        &mut self,
+        targets: &[String],
+        on_event: &mut dyn FnMut(Event),
+    ) -> Result<Missing> {
+        self.op(Op::QueryMissing)?;
+        write_strs(self.w(), targets)?;
+        self.process_stderr(on_event)?;
+        let will_build = read_strs(self.r())?;
+        let will_substitute = read_strs(self.r())?;
+        let unknown = read_strs(self.r())?;
+        let download_size = read_u64(self.r())?;
+        let nar_size = read_u64(self.r())?;
+        Ok(Missing {
+            will_build,
+            will_substitute,
+            unknown,
+            download_size,
+            nar_size,
+        })
     }
 
     /// indirect-root-store.cc:addPermRoot: a symlink at `root` to
