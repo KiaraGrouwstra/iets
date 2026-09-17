@@ -66,12 +66,18 @@ pub const DEFAULT_SOCKET: &str = "/nix/var/nix/daemon-socket/socket";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Transport {
     Unix(PathBuf),
-    Ssh { user: Option<String>, host: String },
+    Ssh {
+        user: Option<String>,
+        host: String,
+        /// The command run on the host, `nix-daemon --stdio` unless the URL's
+        /// `remote-program` query parameter says otherwise (as for Nix's ssh-ng store).
+        remote_program: Vec<String>,
+    },
 }
 
 impl Transport {
-    /// `daemon`, `unix://[/path]`, `ssh-ng://[user@]host`. `None` for every other scheme,
-    /// which stays on gRPC.
+    /// `daemon`, `unix://[/path]`, `ssh-ng://[user@]host[?remote-program=CMD]`. `None`
+    /// for every other scheme, which stays on gRPC.
     pub fn parse(url: &str) -> Option<Transport> {
         if url == "daemon" || url == "unix://" {
             return Some(Transport::Unix(PathBuf::from(DEFAULT_SOCKET)));
@@ -80,15 +86,56 @@ impl Transport {
             return Some(Transport::Unix(PathBuf::from(path)));
         }
         if let Some(rest) = url.strip_prefix("ssh-ng://") {
+            let (rest, query) = rest.split_once('?').unwrap_or((rest, ""));
             let rest = rest.trim_end_matches('/');
             let (user, host) = match rest.split_once('@') {
                 Some((u, h)) => (Some(u.to_string()), h.to_string()),
                 None => (None, rest.to_string()),
             };
-            return Some(Transport::Ssh { user, host });
+            let mut remote_program = vec!["nix-daemon".to_string(), "--stdio".to_string()];
+            for kv in query.split('&') {
+                if let Some(v) = kv.strip_prefix("remote-program=") {
+                    remote_program = percent_decode(v)
+                        .split_whitespace()
+                        .map(str::to_string)
+                        .collect();
+                }
+            }
+            return Some(Transport::Ssh {
+                user,
+                host,
+                remote_program,
+            });
         }
         None
     }
+}
+
+/// `%XX` and `+` in a URL query value.
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = if b[i] == b'%' && i + 2 < b.len() {
+            std::str::from_utf8(&b[i + 1..i + 3])
+                .ok()
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+        } else {
+            None
+        };
+        match hex {
+            Some(c) => {
+                out.push(c);
+                i += 3;
+            }
+            None => {
+                out.push(if b[i] == b'+' { b' ' } else { b[i] });
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[derive(Debug)]
@@ -191,7 +238,11 @@ impl Connection {
                     let r = s.try_clone()?;
                     (Box::new(s), Box::new(r), None)
                 }
-                Transport::Ssh { user, host } => {
+                Transport::Ssh {
+                    user,
+                    host,
+                    remote_program,
+                } => {
                     let mut cmd = Command::new("ssh");
                     if let Some(u) = user {
                         cmd.arg("-l").arg(u);
@@ -203,7 +254,7 @@ impl Connection {
                     }
                     cmd.arg("-x")
                         .arg(host)
-                        .args(["nix-daemon", "--stdio"])
+                        .args(remote_program)
                         .stdin(Stdio::piped())
                         .stdout(Stdio::piped())
                         .stderr(Stdio::inherit());
@@ -688,14 +739,31 @@ mod tests {
             Transport::parse("ssh-ng://bob@builder.example"),
             Some(Transport::Ssh {
                 user: Some("bob".into()),
-                host: "builder.example".into()
+                host: "builder.example".into(),
+                remote_program: vec!["nix-daemon".into(), "--stdio".into()],
             })
         );
         assert_eq!(
             Transport::parse("ssh-ng://builder.example/"),
             Some(Transport::Ssh {
                 user: None,
-                host: "builder.example".into()
+                host: "builder.example".into(),
+                remote_program: vec!["nix-daemon".into(), "--stdio".into()],
+            })
+        );
+        assert_eq!(
+            Transport::parse(
+                "ssh-ng://builder.example?remote-program=nix-daemon%20--store%20local%3Froot%3D/tmp/s+--stdio"
+            ),
+            Some(Transport::Ssh {
+                user: None,
+                host: "builder.example".into(),
+                remote_program: vec![
+                    "nix-daemon".into(),
+                    "--store".into(),
+                    "local?root=/tmp/s".into(),
+                    "--stdio".into()
+                ],
             })
         );
         assert_eq!(Transport::parse("http://127.0.0.1:9455"), None);
