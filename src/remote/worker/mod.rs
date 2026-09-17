@@ -643,17 +643,17 @@ mod tests {
             Some(Transport::Unix(PathBuf::from("/tmp/s")))
         );
         assert_eq!(
-            Transport::parse("ssh-ng://bob@bld1"),
+            Transport::parse("ssh-ng://bob@builder.example"),
             Some(Transport::Ssh {
                 user: Some("bob".into()),
-                host: "bld1".into()
+                host: "builder.example".into()
             })
         );
         assert_eq!(
-            Transport::parse("ssh-ng://bld1/"),
+            Transport::parse("ssh-ng://builder.example/"),
             Some(Transport::Ssh {
                 user: None,
-                host: "bld1".into()
+                host: "builder.example".into()
             })
         );
         assert_eq!(Transport::parse("http://127.0.0.1:9455"), None);

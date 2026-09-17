@@ -4,7 +4,7 @@ Status: v2, 2026-09-17: content is addressed by amber-store keys (v1 of
 2026-09-16 used sha256 of 4 MiB NAR slices). Wire: gRPC over HTTP/2
 cleartext (tonic + prost), chosen because it is boring, tooled, and matches
 nix-grpc-store and tribuchet. The protocol lives in `proto/builder.proto`
-and is transport-agnostic; QUIC (iroh, weft) can carry the same messages
+and is transport-agnostic; QUIC (iroh) can carry the same messages
 later.
 
 Fallback: the same `ietsp build` speaks the Nix worker protocol to any
@@ -38,10 +38,10 @@ connect). Everything the builder can look up by hash it looks up by hash.
 ## Object model (`src/amber/`)
 
 A store path is not shipped as a NAR but as amber-store's object graph:
-the model of `amber-store-core` (core-rs at rev `72f38e9e`, the one
-amberfs pins) with the parameters amberfs uses for every Nix store path
-(hairesis decision 0028). The keys are amber's, byte for byte: an object
-ietsp uploads is the object `amberfs publish` would store for the same
+the model of `amber-store-core` (core-rs, github.com/amber-store/core-rs
+at rev `72f38e9e`) with the parameters our amber deployment uses for every
+Nix store path. The keys are amber's, byte for byte: an object ietsp
+uploads is the object an amber store ingest would store for the same
 tree, so an `amber-hostd` holding a closure could answer `Have` and take
 `Put` directly, and two clients uploading the same file pay for it once.
 
@@ -67,7 +67,7 @@ target (symlinks). ietsp writes what Nix leaves on a registered store path
 (`amber::tree::Meta::Canonical`): uid 0, gid 0, mtime 1 s, mode 0444 or
 0555 for files, 0555 for directories, 0777 for symlinks. That is the
 metadata `lstat` reports inside `/nix/store`, so the keys of an uploaded
-source equal those of the same path ingested by amberfs, and they depend
+source equal those of the same path ingested by an amber store deployment, and they depend
 on the content alone.
 
 Chunking (`amber::cdc`): UltraCDC over file bytes with min 8 KiB, normal
@@ -82,7 +82,7 @@ Blob (`0000af13...`); an empty directory is the empty DirLeaf (`0x80`).
 
 Equality with core-rs is proven, not assumed: `tools/amber-diff/` builds
 an `examples/` program inside a scratch copy of the core-rs crate that runs
-the real `ingest::objects` with amberfs's parameters, and `ietsp amber-keys
+the real `ingest::objects` with our deployment's parameters, and `ietsp amber-keys
 PATH` prints the same list from `src/amber/`. Run 2026-09-17: a synthetic
 tree (empty, 1-byte, exactly 8 KiB / 32 KiB / 64 KiB, 200 KiB, 5 MiB and 40
 MiB random, 300 KB of zeros, executable, symlinks, nested dirs, an empty
@@ -91,8 +91,9 @@ source tree (93,904 objects), a hello output (155) and firefox-unwrapped
 (10,146): 213,106 keys and every non-Blob object's bytes compared, 0
 differences. The core-rs golden vectors (`keys.json`, `ultracdc.json`,
 `item_chunker.json`) and the Go oracle digests of the builders run as unit
-tests. ietsp cannot depend on the crate itself: it is a private git
-dependency and the nix package build has no network.
+tests. ietsp does not depend on the crate itself: it is a git dependency,
+not a crates.io release, and it would pull its whole dependency tree into
+the nix package build.
 
 ## Messages (`proto/builder.proto`)
 
@@ -304,12 +305,15 @@ ones the builder has.
 - `Fetch` on the client is only `--fetch-to DIR` on the root outputs, whole
   NARs collected in memory; no object reuse against what the client has.
   Outputs could travel as the same object graph (the builder would ingest
-  them as amberfs does), which is the natural next step.
+  them as amber-store does), which is the natural next step.
 - The object model carries what a NAR carries. Extended attributes,
   devices, fifos and sockets are refused at ingest, and the builder's
   `DirLeaf` decoder rejects entries with those payloads (map keys 7-9);
-  amberfs's `dir-cbor` refuses them the same way. Hard links are ingested
+  amber's `dir-cbor` refuses them the same way. Hard links are ingested
   as separate files (they dedup by content, as in a NAR).
+- Directory entry mtime: amber's `dir-cbor` path uses mtime 0; we use the
+  canonical store-path metadata (mtime 1 s), which is what `lstat` reports
+  on a registered store path.
 - A tree that has a missing key is re-walked whole on `Put`, and the plan
   reads every source twice (NAR hash, then chunks). Both are cheap next to
   eval today; a fused walk that hashes the NAR while chunking would remove
@@ -447,10 +451,10 @@ that other Nix tools can read.
 
 ### Gaps
 
-- `ssh-ng://` is tested only through a local `ssh` shim: `ssh bld1
-  nix-daemon --version` was refused (publickey). The shim path found one
-  bug already (the child's stdin must close before waiting for it), so a
-  real host is worth one run. No `--ssh-option` passthrough.
+- `ssh-ng://` is tested only through a local `ssh` shim; no real host has
+  been tried. The shim path found one bug already (the child's stdin must
+  close before waiting for it), so a real host is worth one run. No
+  `--ssh-option` passthrough.
 - The client does not poll stderr while streaming `AddMultipleToStore`, so an
   error in the middle of a large upload surfaces after the whole stream is
   sent; the daemon's `FramedSource` drains the rest, so nothing deadlocks.

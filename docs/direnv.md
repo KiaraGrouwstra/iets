@@ -90,10 +90,10 @@ flake directory:
 
 | run | wall |
 |---|---|
-| `nix print-dev-env --option eval-cache false ~/home` | 3.48 s |
-| `ietsp print-dev-env ~/home`, cache miss, env output valid on the daemon | 0.67-0.83 s (eval 0.61-0.77 s, daemon 0.05 s) |
-| `ietsp print-dev-env ~/home`, cache hit | 21-35 ms (2,535 observations validated in 18 ms) |
-| `ietsp print-dev-env ~/iets-prime`, cache hit | 57-60 ms |
+| `nix print-dev-env --option eval-cache false` on a NixOS flake with 31 locked inputs and a devShell | 3.48 s |
+| `ietsp print-dev-env` on that flake, cache miss, env output valid on the daemon | 0.67-0.83 s (eval 0.61-0.77 s, daemon 0.05 s) |
+| `ietsp print-dev-env` on that flake, cache hit | 21-35 ms (2,535 observations validated in 18 ms) |
+| `ietsp print-dev-env` on a one-input Rust flake, cache hit | 57-60 ms |
 | scratch mkShell flake, env output deleted, cache hit: fallback, plan, build | 0.65 s |
 
 `scripts/devenv-test.nu` prints the warm time (case c) on every run.

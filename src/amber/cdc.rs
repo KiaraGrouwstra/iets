@@ -1,5 +1,5 @@
 //! Content-defined chunking as core-rs `src/chunkers.rs`: the UltraCDC byte chunker (a port
-//! of PlakarKorp/go-cdc-chunkers, ISC) at the amberfs parameters, and the item chunker that
+//! of PlakarKorp/go-cdc-chunkers, ISC) at our amber deployment's parameters, and the item chunker that
 //! cuts index and entry streams between whole items.
 //!
 //! Copyright (c) 2023 Gilles Chehade <gilles@poolp.org>. Permission to use, copy, modify, and
@@ -10,8 +10,8 @@
 
 use std::io::{self, Read};
 
-/// UltraCDC sizes. amberfs (hairesis decision 0028) chunks every Nix store path at
-/// 8 KiB / 32 KiB / 64 KiB; every key depends on these, so they never change.
+/// UltraCDC sizes: 8 KiB / 32 KiB / 64 KiB, the parameters our amber deployment uses for
+/// every Nix store path; every key depends on these, so they never change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ByteOpts {
     pub min_size: usize,
@@ -272,7 +272,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn amberfs_sizes_reassemble() {
+    fn deployment_sizes_reassemble() {
         let data = splitmix(9, 3 * 1024 * 1024);
         let mut got = Vec::new();
         let mut lens = Vec::new();

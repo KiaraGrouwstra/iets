@@ -1,34 +1,47 @@
 #!/usr/bin/env nu
 # Differential test: every amber object key ietsp computes for a tree must
-# equal what amber-store-core (core-rs) computes with amberfs's parameters.
+# equal what amber-store-core (core-rs) computes with our deployment's
+# parameters.
 #
 # usage: nu tools/amber-diff/run.nu [PATH ...]
-#   CORE_RS  a checkout of core-rs (default: the rev amberfs pins under
-#            ~/forge-dev/forge-core). It is copied to ~/tmp/core-rs-scratch,
-#            `amber-keys.rs` goes into its examples/, and the example is built
-#            offline in its nix dev shell.
+#   CORE_RS  a checkout of core-rs. Default: the script clones
+#            github.com/amber-store/core-rs at CORE_RS_REV into a temp dir
+#            (network needed). The checkout is copied to a scratch dir,
+#            `amber-keys.rs` goes into its examples/, and the example is
+#            built offline in its nix dev shell.
 #   BIN      ietsp binary directory (default: target/release)
 #
 # Without PATH arguments the script compares a synthetic tree (built under
-# ~/tmp/amber-diff/synth) with `--lstat` metadata, then the nixpkgs source
-# tree and one hello and one firefox-unwrapped output with canonical metadata; store
-# paths carry Nix's canonical metadata, so both sides must agree there
-# without the flag.
+# the scratch dir) with `--lstat` metadata, then the locked nixpkgs source
+# tree and one hello and one firefox-unwrapped output with canonical
+# metadata; store paths carry Nix's canonical metadata, so both sides must
+# agree there without the flag.
 use ../../scripts/lib.nu [chomp]
 
-def build-reference [core_rs: string]: nothing -> string {
-  let scratch = ($env.HOME | path join "tmp" "core-rs-scratch")
-  if not ($scratch | path join "Cargo.toml" | path exists) {
-    mkdir $scratch
-    ^cp -r $"($core_rs)/." $scratch
-    rm -rf ($scratch | path join ".git")
-  }
-  cp ($env.FILE_PWD | path join "amber-keys.rs") ($scratch | path join "examples" "amber-keys.rs")
-  cd $scratch
-  ^nix develop --extra-experimental-features "nix-command flakes" -c cargo build --release --offline --example amber-keys
-  $scratch | path join "target" "release" "examples" "amber-keys"
+const CORE_RS_URL = "https://github.com/amber-store/core-rs"
+const CORE_RS_REV = "72f38e9e49847704e65c808e16258a9bad27a54f"
+
+def --wrapped nixf [...args: string] { ^nix --extra-experimental-features "nix-command flakes" ...$args }
+
+# The core-rs source: $CORE_RS, else a fresh clone at the pinned rev under WORK.
+def core-rs-checkout [work: string]: nothing -> string {
+  if ($env.CORE_RS? | default "") != "" { return $env.CORE_RS }
+  let dir = ($work | path join "core-rs")
+  ^git clone -q $CORE_RS_URL $dir
+  ^git -C $dir checkout -q $CORE_RS_REV
+  $dir
 }
 
+def build-reference [work: string, core_rs: string]: nothing -> string {
+  let scratch = ($work | path join "core-rs-scratch")
+  mkdir $scratch
+  ^cp -r $"($core_rs)/." $scratch
+  rm -rf ($scratch | path join ".git")
+  cp ($env.FILE_PWD | path join "amber-keys.rs") ($scratch | path join "examples" "amber-keys.rs")
+  cd $scratch
+  nixf develop -c cargo build --release --offline --example amber-keys
+  $scratch | path join "target" "release" "examples" "amber-keys"
+}
 # Random bytes from /dev/urandom, N of them, into FILE.
 def random-file [file: string, n: int] {
   ^head -c $n /dev/urandom | save -f $file
@@ -67,9 +80,7 @@ def make-synthetic [dir: string] {
 }
 
 # Compare one tree; prints a summary line and fails on any difference.
-def compare [reference: string, bin: string, path: string, lstat: bool]: nothing -> record {
-  let work = ($env.HOME | path join "tmp" "amber-diff")
-  mkdir $work
+def compare [work: string, reference: string, bin: string, path: string, lstat: bool]: nothing -> record {
   let ref_out = $"($work)/ref.txt"
   let our_out = $"($work)/ours.txt"
   ^$reference $path | save -f $ref_out
@@ -88,33 +99,38 @@ def compare [reference: string, bin: string, path: string, lstat: bool]: nothing
   {path: $path, keys: $n, root: $root, same: $same}
 }
 
+# The locked nixpkgs source tree of this repo's flake, fetched into the store.
+def nixpkgs-source []: nothing -> string {
+  nixf eval --raw --impure --expr $"\(builtins.getFlake \"($env.PWD)\"\).inputs.nixpkgs.outPath" | chomp
+}
+
 def main [...paths: string] {
   cd ($env.FILE_PWD | path join ".." "..")
-  $env.TMPDIR = ($env.TMPDIR? | default ($env.HOME | path join "tmp" "nixtmp"))
   $env.NIX_REMOTE = ($env.NIX_REMOTE? | default "daemon")
-  let core_rs = ($env.CORE_RS? | default ($env.HOME | path join "forge-dev" "forge-core" "core-rs-72f38e9e49847704e65c808e16258a9bad27a54f"))
+  let work = (mktemp -d --tmpdir ietsp-amber-diff.XXXXXX)
   let bin = ($env.BIN? | default "target/release")
-  let reference = (build-reference $core_rs)
+  let reference = (build-reference $work (core-rs-checkout $work))
   mut results = []
   if ($paths | is-empty) {
-    let synth = ($env.HOME | path join "tmp" "amber-diff" "synth")
+    let synth = ($work | path join "synth")
     make-synthetic $synth
-    $results = ($results | append (compare $reference $bin $synth true))
+    $results = ($results | append (compare $work $reference $bin $synth true))
     let store = [
-      "/nix/store/ah3pxz4xa52hd6vhbx17vcsci0b8bmbr-source"
+      (nixpkgs-source)
       (ls -d /nix/store/*-hello-2.12* | get name | where {|p| not ($p | str ends-with ".drv") and not ($p | str contains "tar.gz") } | first)
       (ls -d /nix/store/*-firefox-unwrapped-1* | get name | where {|p| not ($p | str ends-with ".drv") and not ($p | str contains "symbols") } | first)
     ]
     for p in $store {
-      $results = ($results | append (compare $reference $bin $p false))
+      $results = ($results | append (compare $work $reference $bin $p false))
       # canonical and lstat must agree on a store path: Nix left mtime 1, uid 0, 0444/0555
-      $results = ($results | append (compare $reference $bin $p true))
+      $results = ($results | append (compare $work $reference $bin $p true))
     }
   } else {
     for p in $paths {
-      $results = ($results | append (compare $reference $bin $p false))
+      $results = ($results | append (compare $work $reference $bin $p false))
     }
   }
+  rm -rf $work
   print ($results | select path keys same | table --width 120)
   let total = ($results | get keys | math sum)
   let bad = ($results | where same == false | length)

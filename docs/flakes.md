@@ -74,7 +74,7 @@ garbage-collected input all miss; an untracked file does not.
 
 ## Measurements
 
-`~/home#devShells.x86_64-linux.default.drvPath`, 31 locked inputs,
+A NixOS flake with 31 locked inputs and a devShell, `devShells.x86_64-linux.default.drvPath`,
 2026-09-16, same machine as `docs/tracing-cache.md`:
 
 | run | wall |
@@ -85,5 +85,5 @@ garbage-collected input all miss; an untracked file does not.
 | `ietsp eval --raw`, cache hit | 0.02 s |
 | `IETSP_WORKERS=8 ietsp eval --raw --no-cache` | 0.62 s |
 
-`~/home#nixosConfigurations.agents.config.system.build.toplevel.drvPath`:
+The same flake, a NixOS system configuration (`nixosConfigurations.<host>.config.system.build.toplevel.drvPath`):
 nix 7.21 s, ietsp 1.27 s uncached.

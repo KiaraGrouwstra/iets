@@ -23,7 +23,7 @@ Everything a consumer needs to find its shard is content it already has:
 ```
 source   = narHash of the locked flake source (lock folded in) or the nixpkgs tarball
 system   = x86_64-linux
-attrpath = nixosConfigurations.nv1.config.system.build.toplevel
+attrpath = nixosConfigurations.host.config.system.build.toplevel
 shard    = first 10 bits of sha256(attrpath)
 ```
 
@@ -52,7 +52,7 @@ The floor is entropy: 80k drv hashes plus 126k output hashes are 4.1 MB
 of incompressible bytes. Encoding choice moves the full index by 5 %.
 Only the delta and the shard shape move it by an order of magnitude.
 
-| transfer | cache.nixos.org | bld1 over the mesh |
+| transfer | cache.nixos.org | a builder on the local network |
 |---|---|---|
 | time to first byte | 55 to 150 ms | 3 ms |
 | bandwidth | 133 MB/s here; 5 to 20 MB/s on a laptop | 2.5 MB/s (tunnel) |
@@ -62,7 +62,7 @@ What a lookup competes against (this box):
 | consumer | ietsp eval | nix eval | ietsp tracing-cache hit |
 |---|---|---|---|
 | `nixpkgs#hello` at a channel | 0.10 s | 0.4 s | 0.03 s |
-| a NixOS system from ~/home | 1.0 s | 4 to 19 s | 0.03 s |
+| a NixOS system configuration | 1.0 s | 4 to 19 s | 0.03 s |
 | whole nixpkgs, one system | 70 s | 250 s | none |
 
 ## Trade-off
@@ -72,7 +72,7 @@ Three object shapes, each right for one consumer:
 1. **Shard.** Attrs bucketed by the first 10 bits of sha256(attrpath):
    1,024 shards of about 4.5 KB compressed, one COSE_Sign1 CBOR map
    `attr -> [drvhash, [[output, hash]...]]` each. One lookup is one GET
-   of a few KB: 60 to 150 ms on a public cache, 3 ms on the mesh. That
+   of a few KB: 60 to 150 ms on a public cache, 3 ms on the local network. That
    beats evaluation for everything except a warm local tracing-cache hit,
    which nobody publishes anyway. Publishing a commit re-PUTs only the
    shards that changed: a 100-attr commit touches under 100 shards; the
@@ -148,7 +148,7 @@ gains nothing new.
 
 - harmonia and niks3: one more route or S3 prefix; they never read the
   objects. nix-grpc-store: same.
-- amber-nix-daemon: an evalinfo maps naturally to a realisation-like
+- an amber-backed Nix daemon: an evalinfo maps naturally to a realisation-like
   record keyed by source, system and attrpath; the index is a blob.
 - Nix itself: nothing changes. Consumers that want it use ietsp or a
   small wrapper. If it proves out, the format is simple enough to
@@ -171,7 +171,7 @@ gains nothing new.
    the index to a directory that `nix copy`/rsync ships to the cache.
 2. Consumer in `ietsp build` and `print-dev-env`: `--eval-cache URL`,
    hit path only, falling back to evaluation.
-3. Measure on ~/home: `hai apply` on nv1 with a hit versus today.
+3. Measure a NixOS system switch with a hit versus today.
 4. Then the nixpkgs index for one channel commit, and `ietsp build
    nixpkgs#hello` against it.
 

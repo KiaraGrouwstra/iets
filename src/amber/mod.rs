@@ -1,7 +1,8 @@
 //! amber-store's object model, reimplemented so that a tree ietsp uploads yields exactly the
-//! keys amber-store (core-rs, the rev amberfs pins) produces for the same tree. ietsp cannot
-//! depend on the core-rs crate (a private git dependency the nix build cannot fetch), so
-//! `tools/amber-diff/` proves the equality differentially against that crate.
+//! keys amber-store (core-rs, github.com/amber-store/core-rs at rev 72f38e9e) produces for the
+//! same tree with our deployment's parameters. ietsp does not depend on the core-rs crate (a git
+//! dependency with a large dependency tree), so `tools/amber-diff/` proves the equality
+//! differentially against that crate.
 
 pub mod cdc;
 pub mod key;

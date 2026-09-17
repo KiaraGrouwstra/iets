@@ -23,9 +23,9 @@ const MAX_DEPTH: usize = 64;
 /// Which POSIX fields go into a directory entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Meta {
-    /// What Nix leaves on a registered store path, so the keys equal those of an
-    /// `amberfs publish` of the same path: uid 0, gid 0, mtime 1 s, mode 0444/0555, dirs
-    /// 0555, symlinks 0777. The keys then depend on the content alone.
+    /// What Nix leaves on a registered store path: uid 0, gid 0, mtime 1 s, mode 0444/0555,
+    /// dirs 0555, symlinks 0777. `lstat` inside /nix/store reports the same fields, so the keys
+    /// equal those of an amber store ingest of the same path and depend on the content alone.
     Canonical,
     /// The fields `lstat` reports; the differential test uses it on trees outside the store.
     Lstat,

@@ -1,5 +1,5 @@
 //! Reference side of the ietsp differential test: ingest PATH with the
-//! amberfs chunking parameters (decision 0028) and print every object.
+//! chunking parameters our amber deployment uses and print every object.
 //!
 //! Output, sorted by key hex, one object per line:
 //!   <key hex> <type> <key length> [<object bytes hex>]
