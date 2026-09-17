@@ -32,6 +32,7 @@ talking to anyone; a git-clean checkout gets its narHash from the tree
 object. Pure evaluation is a function of source, system and attrpath,
 so the lookup is sound without a read set. Impure inputs (`currentTime`,
 `getEnv`, fetchers, `--impure`) are never published.
+
 ## Measured (2026-09-17)
 
 Data: `ci/eval/outpaths.nix` for x86_64-linux at two nixos-unstable
