@@ -10,6 +10,7 @@ pub mod constituents;
 pub mod emit;
 pub mod instantiate;
 pub mod line;
+pub mod stream;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Mutex, OnceLock};

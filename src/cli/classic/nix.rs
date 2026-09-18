@@ -6,11 +6,13 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use super::{Argv, Common, Root, fallback, is_unsupported};
+use crate::build::render::Style;
+use crate::build::upload::PlanUpload;
+use crate::build::{Dispatcher, Target as BuildTarget};
 use crate::cli::{ArgKind, abs_path, auto_args, cwd, parse_include, report};
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
-use crate::remote::event::Event;
 use crate::remote::plan::Plan;
-use crate::remote::worker::{Connection, Options, Transport};
+use crate::remote::worker::{Options, Transport};
 use crate::runtime::{Value, Word};
 use crate::store::path::StorePath;
 
@@ -569,20 +571,27 @@ fn realise(
     plan: &Plan,
 ) -> i32 {
     let roots = flat_roots(targets);
-    let logs = n.print_build_logs;
-    let failed = std::cell::Cell::new(false);
-    let mut on_event = |e: Event| match e {
-        Event::Log(l) if logs => eprintln!("{}", String::from_utf8_lossy(&l.line)),
-        Event::Failed(f) => {
-            failed.set(true);
-            eprintln!("error: build of '{}' failed: {}", f.drv_path, f.reason);
-        }
-        _ => {}
+    let style = Style {
+        quiet: !n.print_build_logs,
+        ..Style::detect()
     };
     if let Transport::Grpc(cfg) = transport {
         // The farm builds per derivation and publishes to the cache, so the
-        // whole flow differs; see `crate::remote::grpc::classic`.
+        // whole flow differs; see `crate::remote::grpc::classic`. It blocks
+        // per derivation and tags no event with one, so it does not go
+        // through the dispatcher yet (docs/fast-build.md).
+        use crate::remote::event::Event;
         use crate::remote::grpc::classic;
+        let logs = n.print_build_logs;
+        let failed = std::cell::Cell::new(false);
+        let mut on_event = |e: Event| match e {
+            Event::Log(l) if logs => eprintln!("{}", String::from_utf8_lossy(&l.line)),
+            Event::Failed(f) => {
+                failed.set(true);
+                eprintln!("error: build of '{}' failed: {}", f.drv_path, f.reason);
+            }
+            _ => {}
+        };
         let gt: Vec<classic::Target> = targets
             .iter()
             .map(|t| classic::Target {
@@ -603,64 +612,56 @@ fn realise(
             }
         };
     }
-    let mut conn = match Connection::open_with(transport, options, &mut on_event) {
-        Ok(c) => c,
+    let mut d = match Dispatcher::open(
+        transport,
+        options,
+        crate::provenance::Provenance::off(),
+        style,
+    ) {
+        Ok(d) => d,
         Err(e) => {
             eprintln!("error: {e}");
             return 1;
         }
     };
-    let upload = crate::remote::worker::build::build_on(
-        &mut conn,
-        plan,
-        &super::locate_store,
-        &roots[0].drv,
-        &[],
-        true,
-        None,
-        &mut on_event,
-    );
-    if let Err(e) = upload {
-        eprintln!("error: {e}");
-        return 1;
-    }
-    let wanted: Vec<String> = roots
-        .iter()
-        .map(|r| format!("{}!{}", r.drv, r.output))
-        .collect();
-    let results = match conn.build_paths_with_results(&wanted, &mut on_event) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
-    };
-    for r in &results {
-        if !r.success() {
-            failed.set(true);
-            eprintln!("error: build failed: status {}: {}", r.status, r.msg);
-        }
-    }
-    if failed.get() {
-        return 1;
-    }
-
-    let mut maps: HashMap<String, BTreeMap<String, Option<String>>> = HashMap::new();
+    let mut batch: Vec<BuildTarget> = Vec::new();
     for r in &roots {
-        let drv = r.drv.to_string();
-        if maps.contains_key(&drv) {
-            continue;
-        }
-        match conn.query_derivation_output_map(&drv, &mut on_event) {
-            Ok(m) => {
-                maps.insert(drv, m);
+        match batch.iter_mut().find(|t| t.drv == r.drv) {
+            Some(t) => {
+                if !t.outputs.contains(&r.output) {
+                    t.outputs.push(r.output.clone());
+                }
             }
-            Err(e) => {
-                eprintln!("error: {e}");
-                return 1;
-            }
+            None => batch.push(BuildTarget::new(
+                r.drv.name(),
+                r.drv.clone(),
+                vec![r.output.clone()],
+            )),
         }
     }
+    let mut up = PlanUpload::new(plan, &super::locate_store);
+    let outcomes = match d.submit(&mut up, batch) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+    if d.failed {
+        return 1;
+    }
+    let maps: HashMap<String, BTreeMap<String, Option<String>>> = outcomes
+        .iter()
+        .map(|o| {
+            (
+                o.drv.to_string(),
+                o.outputs
+                    .iter()
+                    .map(|(k, v)| (k.clone(), Some(v.clone())))
+                    .collect(),
+            )
+        })
+        .collect();
 
     let cwd = cwd();
     let mut out = String::new();
@@ -687,7 +688,7 @@ fn realise(
                     link.push_str(output);
                 }
                 let link = String::from_utf8_lossy(&abs_path(&link, &cwd)).into_owned();
-                if let Err(e) = conn.add_perm_root(&path, std::path::Path::new(&link)) {
+                if let Err(e) = d.out_link(&path, std::path::Path::new(&link)) {
                     eprintln!("error: {e}");
                     return 1;
                 }

@@ -7,6 +7,8 @@ pub enum Event {
     Built(Built),
     Failed(Failed),
     Done(Done),
+    Phase(Phase),
+    Stopped(Stopped),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,4 +39,18 @@ pub struct Failed {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Done {
     pub success: bool,
+}
+
+/// A build's `setPhase` result (logging.hh:resSetPhase).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Phase {
+    pub drv_path: String,
+    pub phase: String,
+}
+
+/// The build activity ended. Says nothing about success: the op's
+/// `BuildResult` and the daemon's error messages do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stopped {
+    pub drv_path: String,
 }

@@ -11,7 +11,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
-use super::event::{Built, Event, Failed, Log, Started};
+use super::event::{Built, Event, Failed, Log, Phase, Started, Stopped};
 use crate::config::Config;
 use crate::error::{Error, Result};
 use wire::{Counting, FramedSink};
@@ -92,6 +92,7 @@ enum Op {
 const ACT_BUILD: u64 = 105;
 const RES_BUILD_LOG_LINE: u64 = 101;
 const RES_POST_BUILD_LOG_LINE: u64 = 107;
+const RES_SET_PHASE: u64 = 104;
 
 /// error.hh:Verbosity.
 const LVL_INFO: u64 = 3;
@@ -490,7 +491,9 @@ impl Connection {
                 }
                 STDERR_STOP_ACTIVITY => {
                     let act = read_u64(self.r())?;
-                    self.activities.remove(&act);
+                    if let Some(drv) = self.activities.remove(&act) {
+                        on_event(Event::Stopped(Stopped { drv_path: drv }));
+                    }
                 }
                 STDERR_RESULT => {
                     let act = read_u64(self.r())?;
@@ -502,6 +505,15 @@ impl Connection {
                         on_event(Event::Log(Log {
                             drv_path: self.activities.get(&act).cloned().unwrap_or_default(),
                             line: line.clone().into_bytes(),
+                        }));
+                    }
+                    if ty == RES_SET_PHASE
+                        && let Some(Field::Str(phase)) = fields.first()
+                        && let Some(drv) = self.activities.get(&act)
+                    {
+                        on_event(Event::Phase(Phase {
+                            drv_path: drv.clone(),
+                            phase: phase.clone(),
                         }));
                     }
                 }

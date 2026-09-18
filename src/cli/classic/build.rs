@@ -6,12 +6,14 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use super::{Argv, Common, Root, common_flag, fallback, is_unsupported};
+use crate::build::render::Style;
+use crate::build::upload::PlanUpload;
+use crate::build::{Dispatcher, Target};
 use crate::cli::{abs_path, auto_args, cwd, report};
 use crate::eval::{Error, Evaluator};
 use crate::provenance::Provenance;
-use crate::remote::event::Event;
 use crate::remote::plan::Plan;
-use crate::remote::worker::{Connection, Options, Transport};
+use crate::remote::worker::{Options, Transport};
 
 const NAME: &str = "nix-build";
 
@@ -134,99 +136,58 @@ fn realise(
     plan: &Plan,
     prov: &Provenance,
 ) -> i32 {
-    let quiet = b.c.quiet;
-    let failed = std::cell::Cell::new(false);
-    let mut on_event = |e: Event| match e {
-        Event::Started(s) => match prov.started(&s.drv_path) {
-            Some(l) => eprintln!("{l}..."),
-            None => eprintln!("building '{}'...", s.drv_path),
-        },
-        Event::Log(l) if !quiet => {
-            eprintln!("{}", String::from_utf8_lossy(&prov.rewrite(&l.line)))
-        }
-        Event::Failed(f) => {
-            failed.set(true);
-            match prov.failed(&f.drv_path, &f.reason) {
-                Some(l) => eprintln!("{l}"),
-                None => eprintln!(
-                    "error: build of '{}' failed: {}",
-                    f.drv_path,
-                    prov.rewrite_str(&f.reason)
-                ),
-            }
-        }
-        _ => {}
+    let style = Style {
+        quiet: b.c.quiet,
+        ..Style::detect()
     };
-    let mut conn = match Connection::open_with(transport, options, &mut on_event) {
-        Ok(c) => c,
+    let mut d = match Dispatcher::open(transport, options, prov.clone(), style) {
+        Ok(d) => d,
         Err(e) => {
             eprintln!("error: {e}");
             return 1;
         }
     };
-    let upload = crate::remote::worker::build::build_on(
-        &mut conn,
-        plan,
-        &super::locate_store,
-        &roots[0].drv,
-        &[],
-        true,
-        None,
-        &mut on_event,
-    );
-    if let Err(e) = upload {
-        eprintln!("error: {e}");
-        return 1;
-    }
-
-    // nix-build asks for every root in one buildPaths, one output per root.
-    let targets: Vec<String> = roots
-        .iter()
-        .map(|r| format!("{}!{}", r.drv, r.output))
-        .collect();
-    let results = match conn.build_paths_with_results(&targets, &mut on_event) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
-    };
-    for r in &results {
-        if !r.success() {
-            failed.set(true);
-            // A derived path: `<drv>!<outputs>`.
-            let drv = r.path.split('!').next().unwrap_or(&r.path);
-            match prov.failed(drv, &format!("status {}: {}", r.status, r.msg)) {
-                Some(l) => eprintln!("{l}"),
-                None => eprintln!(
-                    "error: build failed: status {}: {}",
-                    r.status,
-                    prov.rewrite_str(&r.msg)
-                ),
-            }
-        }
-    }
-    if failed.get() {
-        return 1;
-    }
-
-    let mut maps: HashMap<String, std::collections::BTreeMap<String, Option<String>>> =
-        HashMap::new();
+    // nix-build asks for every root in one op, one output per root; roots
+    // that share a derivation become one target with both outputs.
+    let mut targets: Vec<Target> = Vec::new();
     for r in roots {
-        let drv = r.drv.to_string();
-        if maps.contains_key(&drv) {
-            continue;
-        }
-        match conn.query_derivation_output_map(&drv, &mut on_event) {
-            Ok(m) => {
-                maps.insert(drv, m);
+        match targets.iter_mut().find(|t| t.drv == r.drv) {
+            Some(t) => {
+                if !t.outputs.contains(&r.output) {
+                    t.outputs.push(r.output.clone());
+                }
             }
-            Err(e) => {
-                eprintln!("error: {e}");
-                return 1;
+            None => {
+                let name = prov
+                    .name_of(&r.drv.to_string())
+                    .unwrap_or_else(|| r.drv.name().to_string());
+                targets.push(Target::new(&name, r.drv.clone(), vec![r.output.clone()]));
             }
         }
     }
+    let mut up = PlanUpload::new(plan, &super::locate_store);
+    let outcomes = match d.submit(&mut up, targets) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+    if d.failed {
+        return 1;
+    }
+    let maps: HashMap<String, std::collections::BTreeMap<String, Option<String>>> = outcomes
+        .iter()
+        .map(|o| {
+            (
+                o.drv.to_string(),
+                o.outputs
+                    .iter()
+                    .map(|(n, p)| (n.clone(), Some(p.clone())))
+                    .collect(),
+            )
+        })
+        .collect();
 
     // nix-build.cc: the n-th distinct drv gets the suffix `-n` from 2 on; an
     // output other than `out` adds `-<output>`.
@@ -258,7 +219,7 @@ fn realise(
                 link.push_str(&r.output);
             }
             let link = String::from_utf8_lossy(&abs_path(&link, &cwd)).into_owned();
-            if let Err(e) = conn.add_perm_root(&path, std::path::Path::new(&link)) {
+            if let Err(e) = d.out_link(&path, std::path::Path::new(&link)) {
                 eprintln!("error: {e}");
                 return 1;
             }
