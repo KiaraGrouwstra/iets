@@ -47,7 +47,7 @@ fn main() {
         exit(on_big_stack(move || cli::classic::dispatch(&name, &rest)))
     }
     match cmd.as_str() {
-        "build" | "eval" | "eval-jobs" | "print-dev-env" => {
+        "build" | "eval" | "eval-jobs" | "print-dev-env" | "fast-build" => {
             let rest: Vec<String> = argv[1..].to_vec();
             let cmd = cmd.clone();
             let code = std::thread::Builder::new()
@@ -55,6 +55,7 @@ fn main() {
                 .spawn(move || match cmd.as_str() {
                     "build" => cli::build::cmd_build(&rest),
                     "eval-jobs" => cli::jobs::cmd_eval_jobs(&rest),
+                    "fast-build" => cli::fastbuild::cmd_fast_build(&rest),
                     "print-dev-env" => cli::devenv::cmd_print_dev_env(&rest),
                     _ => cli::eval::run_eval(cli::parse_eval_args(&rest)),
                 })

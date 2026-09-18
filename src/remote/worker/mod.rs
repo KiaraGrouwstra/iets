@@ -265,7 +265,9 @@ pub struct Connection {
     pub trusted: Option<bool>,
     pub stats: Stats,
     /// Running builds by activity id, to attribute log lines.
+    /// `parents` follows a nested activity back to the build it belongs to.
     activities: HashMap<u64, String>,
+    parents: HashMap<u64, u64>,
 }
 
 impl Drop for Connection {
@@ -356,6 +358,7 @@ impl Connection {
             trusted: None,
             stats: Stats::default(),
             activities: HashMap::new(),
+            parents: HashMap::new(),
         };
         conn.handshake()?;
         conn.process_stderr(on_event)?;
@@ -479,7 +482,7 @@ impl Connection {
                     let ty = read_u64(self.r())?;
                     let _s = read_str(self.r())?;
                     let fields = self.read_fields()?;
-                    let _parent = read_u64(self.r())?;
+                    let parent = read_u64(self.r())?;
                     if ty == ACT_BUILD
                         && let Some(Field::Str(drv)) = fields.first()
                     {
@@ -487,10 +490,16 @@ impl Connection {
                         on_event(Event::Started(Started {
                             drv_path: drv.clone(),
                         }));
+                    } else if parent != 0 {
+                        // A build's log can arrive under a nested activity
+                        // (a remote builder, a substitution): remember the
+                        // chain so the line still names its derivation.
+                        self.parents.insert(act, parent);
                     }
                 }
                 STDERR_STOP_ACTIVITY => {
                     let act = read_u64(self.r())?;
+                    self.parents.remove(&act);
                     if let Some(drv) = self.activities.remove(&act) {
                         on_event(Event::Stopped(Stopped { drv_path: drv }));
                     }
@@ -503,16 +512,16 @@ impl Connection {
                         && let Some(Field::Str(line)) = fields.first()
                     {
                         on_event(Event::Log(Log {
-                            drv_path: self.activities.get(&act).cloned().unwrap_or_default(),
+                            drv_path: self.build_of(act).unwrap_or_default(),
                             line: line.clone().into_bytes(),
                         }));
                     }
                     if ty == RES_SET_PHASE
                         && let Some(Field::Str(phase)) = fields.first()
-                        && let Some(drv) = self.activities.get(&act)
+                        && let Some(drv) = self.build_of(act)
                     {
                         on_event(Event::Phase(Phase {
-                            drv_path: drv.clone(),
+                            drv_path: drv,
                             phase: phase.clone(),
                         }));
                     }
@@ -534,6 +543,19 @@ impl Connection {
                 }
             }
         }
+    }
+
+    /// The derivation whose build `act` belongs to, following the activity's
+    /// parents: a remote builder's log arrives under a child activity.
+    fn build_of(&self, act: u64) -> Option<String> {
+        let mut id = act;
+        for _ in 0..16 {
+            if let Some(drv) = self.activities.get(&id) {
+                return Some(drv.clone());
+            }
+            id = *self.parents.get(&id)?;
+        }
+        None
     }
 
     /// worker-protocol-connection.cc:readFields.

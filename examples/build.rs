@@ -100,6 +100,7 @@ fn eval_and_build(ev: &mut Evaluator, a: EvalArgs, url: String) -> u8 {
                 eprintln!("error: build of {} failed: {}", f.drv_path, f.reason);
             }
             Event::Done(d) => failed |= !d.success,
+            Event::Phase(_) | Event::Stopped(_) => {}
         };
         let r = worker::build::build(
             &transport,

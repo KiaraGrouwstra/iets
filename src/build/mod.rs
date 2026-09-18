@@ -44,6 +44,9 @@ pub struct Target {
     pub outputs: Vec<String>,
     /// From `--check-cache-status`, for the result records.
     pub cache_status: Option<String>,
+    /// What the renderer shows, when it differs from `attr`: the attribute
+    /// plus the source position, which the records must not carry.
+    pub label: Option<String>,
 }
 
 impl Target {
@@ -53,6 +56,7 @@ impl Target {
             drv,
             outputs,
             cache_status: None,
+            label: None,
         }
     }
 
@@ -318,9 +322,16 @@ impl Dispatcher {
     }
 
     fn submit_once(&mut self, up: &mut dyn Uploader, batch: &[Target]) -> Result<Vec<Outcome>> {
+        // The renderer's name for each target, and from it the label the
+        // event sink hands every build in this batch.
         let by_drv: HashMap<String, String> = batch
             .iter()
-            .map(|t| (t.drv.to_string(), t.attr.clone()))
+            .map(|t| {
+                (
+                    t.drv.to_string(),
+                    t.label.clone().unwrap_or_else(|| t.attr.clone()),
+                )
+            })
             .collect();
         let labels: HashMap<String, String> = by_drv
             .keys()
@@ -395,7 +406,10 @@ impl Dispatcher {
                 }
                 Some((false, reason)) => {
                     let tail = self.reporter.tail(&drv);
-                    let reason = self.prov.rewrite_str(reason);
+                    // The daemon's message is several coloured lines; the
+                    // records want one plain one, the log tail has the rest.
+                    let reason = results::strip_ansi(&self.prov.rewrite_str(reason));
+                    let reason = reason.lines().next().unwrap_or_default().to_string();
                     self.reporter.emit(&FastBuildEvent::new(
                         &attr,
                         &drv,
@@ -560,9 +574,11 @@ fn event_sink<'a>(
     }
 }
 
-/// `<hash>-<name>` without the hash, the way a build log names a derivation.
+/// `<hash>-<name>.drv` as just `<name>`, the way a build log names a
+/// derivation that no attribute points at.
 fn strip_hash(drv_path: &str) -> &str {
     let base = drv_path.rsplit('/').next().unwrap_or(drv_path);
+    let base = base.strip_suffix(".drv").unwrap_or(base);
     match base.split_once('-') {
         Some((hash, rest)) if hash.len() == 32 => rest,
         _ => base,
@@ -598,7 +614,7 @@ mod tests {
 
     #[test]
     fn hash_stripping() {
-        assert_eq!(strip_hash(&drv("hello").to_string()), "hello.drv");
+        assert_eq!(strip_hash(&drv("hello").to_string()), "hello");
         assert_eq!(strip_hash("plain"), "plain");
     }
 

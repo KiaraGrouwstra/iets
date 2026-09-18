@@ -8,7 +8,7 @@
 //! the running builds every `HEARTBEAT`, and a build silent for `STALL`
 //! switches to live streaming.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::time::{Duration, Instant};
 
@@ -73,7 +73,10 @@ pub fn actions_ci() -> bool {
 
 /// One build's buffered output.
 struct Build {
+    /// The attribute plus its source position, for the state-change lines.
     label: String,
+    /// The attribute alone, for the per-line log prefix.
+    short: String,
     started: Instant,
     last_output: Instant,
     lines: VecDeque<String>,
@@ -98,6 +101,13 @@ pub struct Renderer {
     /// Buffers of builds that already stopped, for a failure reported after
     /// the activity ended. Bounded: only the most recent are kept.
     finished: VecDeque<(String, Vec<String>)>,
+    /// Derivations the daemon named in a failure message. The stop of a
+    /// build activity says nothing about success, so this is where a
+    /// dependency's verdict comes from.
+    failed: HashSet<String>,
+    /// Derivations that already got a full verdict block, so the op's own
+    /// result does not print the log a second time.
+    verdicted: HashSet<String>,
 }
 
 impl Renderer {
@@ -107,7 +117,14 @@ impl Renderer {
             out,
             running: HashMap::new(),
             finished: VecDeque::new(),
+            failed: HashSet::new(),
+            verdicted: HashSet::new(),
         }
+    }
+
+    /// True once the daemon has named `drv` in a failure message.
+    pub fn is_failed(&self, drv: &str) -> bool {
+        self.failed.contains(drv)
     }
 
     fn sgr(&self, code: &str, s: &str) -> String {
@@ -162,6 +179,7 @@ impl Renderer {
             e.drv.clone(),
             Build {
                 label: e.attr.clone(),
+                short: short_label(&e.attr),
                 started: now,
                 last_output: now,
                 lines: VecDeque::new(),
@@ -197,11 +215,25 @@ impl Renderer {
 
     fn log(&mut self, e: &FastBuildEvent, bytes: &[u8]) {
         let text = String::from_utf8_lossy(bytes).into_owned();
-        let Some(b) = self.running.get_mut(&e.drv) else {
-            // Not attributed to a build: the daemon's own message.
-            if !self.style.quiet {
-                self.line(text);
+        // A failure message names the derivation that failed, which is the
+        // only per-derivation verdict the protocol carries.
+        self.note_failures(&text);
+        // A line the daemon did not attribute belongs to the running build
+        // when there is exactly one: that is what a remote builder's own
+        // stderr looks like coming back through the daemon.
+        let key = match self.running.contains_key(&e.drv) {
+            true => e.drv.clone(),
+            false if self.running.len() == 1 => {
+                self.running.keys().next().expect("one running").clone()
             }
+            false => {
+                if !self.style.quiet {
+                    self.line(text);
+                }
+                return;
+            }
+        };
+        let Some(b) = self.running.get_mut(&key) else {
             return;
         };
         b.last_output = Instant::now();
@@ -211,21 +243,33 @@ impl Renderer {
         }
         b.lines.push_back(text.clone());
         if b.streaming {
-            let prefix = b.label.clone();
+            let prefix = b.short.clone();
             let l = self.sgr(DIM, &format!("{prefix}>"));
             self.line(format!("{l} {text}"));
         }
     }
 
-    /// A build stopped without a verdict yet: flush its block and keep the
-    /// tail in case a failure names it later.
+    /// Every `<hash>-<name>.drv` a failure message names.
+    fn note_failures(&mut self, text: &str) {
+        if !text.contains("failed") && !text.contains("error") {
+            return;
+        }
+        for drv in drv_paths(&super::results::strip_ansi(text)) {
+            self.failed.insert(drv);
+        }
+    }
+
+    /// A build's activity ended: flush its block, with the verdict the
+    /// daemon's messages imply, and keep the tail for the op's own result.
     pub fn stopped(&mut self, drv: &str) {
         let Some(b) = self.running.remove(drv) else {
             return;
         };
         let tail = b.tail(FAILURE_TAIL);
         self.retain(drv, tail);
-        self.verdict_block(&b, true, None);
+        let ok = !self.failed.contains(drv);
+        self.verdicted.insert(drv.to_string());
+        self.verdict_block(&b, ok, None);
     }
 
     fn retain(&mut self, drv: &str, tail: Vec<String>) {
@@ -261,6 +305,22 @@ impl Renderer {
     fn failure(&mut self, e: &FastBuildEvent, reason: &str, tail: &[String]) {
         if self.running.contains_key(&e.drv) {
             self.verdict(e, false, Some(reason));
+            return;
+        }
+        if self.verdicted.contains(&e.drv) {
+            // The block went out when the activity stopped. Say something
+            // only when that block claimed a success the op now contradicts.
+            if !self.failed.contains(&e.drv) {
+                let l = self.sgr(
+                    RED,
+                    &format!(
+                        "✘  {} failed after {} ({reason})",
+                        e.attr,
+                        fmt_duration(e.elapsed)
+                    ),
+                );
+                self.line(l);
+            }
             return;
         }
         let head = self.sgr(
@@ -307,7 +367,7 @@ impl Renderer {
             self.line(verdict);
             return;
         }
-        let prefix = self.sgr(DIM, &format!("{}>", b.label));
+        let prefix = self.sgr(DIM, &format!("{}>", b.short));
         let body: Vec<String> = if ok {
             b.lines.iter().map(|l| format!("{prefix} {l}")).collect()
         } else {
@@ -404,7 +464,7 @@ impl Renderer {
         for drv in stalled {
             let (label, silent, tail) = {
                 let b = &self.running[&drv];
-                (b.label.clone(), b.last_output.elapsed(), b.tail(STALL_TAIL))
+                (b.short.clone(), b.last_output.elapsed(), b.tail(STALL_TAIL))
             };
             let prefix = self.sgr(DIM, &format!("{label}>"));
             let mut out = vec![self.sgr(
@@ -422,6 +482,38 @@ impl Renderer {
             }
         }
     }
+}
+
+/// The label without the source position: `checks.x.foo (f.nix:1:2)` as
+/// `checks.x.foo`, so a log prefix stays short.
+fn short_label(label: &str) -> String {
+    match label.split_once(" (") {
+        Some((attr, _)) => attr.to_string(),
+        None => label.to_string(),
+    }
+}
+
+/// Every `/nix/store/<name>.drv` in `text`, in order, without duplicates.
+fn drv_paths(text: &str) -> Vec<String> {
+    const PREFIX: &str = "/nix/store/";
+    let mut out: Vec<String> = Vec::new();
+    let b = text.as_bytes();
+    let mut i = 0;
+    while let Some(rel) = text[i..].find(PREFIX) {
+        let start = i + rel;
+        let mut end = start + PREFIX.len();
+        while end < b.len()
+            && (b[end].is_ascii_alphanumeric() || matches!(b[end], b'+' | b'-' | b'.' | b'_'))
+        {
+            end += 1;
+        }
+        let path = &text[start..end];
+        if path.ends_with(".drv") && !out.iter().any(|p| p == path) {
+            out.push(path.to_string());
+        }
+        i = end.max(start + PREFIX.len());
+    }
+    out
 }
 
 #[cfg(test)]
@@ -538,6 +630,42 @@ mod tests {
         assert!(t.contains("checks.x.a: build (0s)"));
         assert!(t.contains("✔  checks.x.a (0s)"));
         assert!(!t.contains("noise"), "{t}");
+    }
+
+    #[test]
+    fn a_daemon_failure_message_decides_the_verdict() {
+        let (mut r, s) = ci(false);
+        r.event(&ev(Kind::Started));
+        r.event(&ev(Kind::Log(b"about to fail".to_vec())));
+        // Unattributed, as the daemon sends it, with nix's colours.
+        r.event(&FastBuildEvent::new(
+            "",
+            "",
+            Kind::Log(
+                b"\x1b[31;1merror:\x1b[0m build of '\x1b[35;1m/nix/store/a.drv\x1b[0m' failed"
+                    .to_vec(),
+            ),
+            Duration::ZERO,
+        ));
+        r.stopped("/nix/store/a.drv");
+        let t = text(&s);
+        assert!(t.contains("✘  checks.x.a failed after 0s"), "{t}");
+        assert!(!t.contains("✔"), "{t}");
+        // The op's own result must not repeat the whole log.
+        r.event(&ev(Kind::Failed {
+            reason: "status 9".into(),
+            log_tail: vec![],
+        }));
+        let t = text(&s);
+        assert_eq!(t.matches("about to fail").count(), 1, "{t}");
+    }
+
+    #[test]
+    fn drv_paths_of_a_failure_message() {
+        let msg =
+            "error: builder for '/nix/store/2ijv-x.drv' failed; nix log /nix/store/2ijv-x.drv";
+        assert_eq!(drv_paths(msg), ["/nix/store/2ijv-x.drv"]);
+        assert!(drv_paths("/nix/store/2ijv-x is an output").is_empty());
     }
 
     #[test]

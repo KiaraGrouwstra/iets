@@ -7,6 +7,7 @@ pub mod cache_dump;
 pub mod classic;
 pub mod devenv;
 pub mod eval;
+pub mod fastbuild;
 pub mod jobs;
 pub mod parse;
 
