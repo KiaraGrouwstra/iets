@@ -5,7 +5,7 @@ handles the subset ietsp implements and execs the real binary for the rest,
 so it is a drop-in only where the real nix is also on `PATH`.
 
 ```
-nix build .#classic     # bin/{nix-instantiate,nix-build,nix-eval-jobs,nix}
+nix build .#classic     # bin/{nix-instantiate,nix-build,nix-eval-jobs,nix-shell,nix}
 ```
 
 Every symlink points at `bin/ietsp`; the basename of `argv[0]` picks the
@@ -92,6 +92,47 @@ Falls back on: `--dry-run`, `--drv-link`, `--run-env`, `--command`,
 `--run`, `--repair`, `--check`, `--pure`, `--exclude`, `--keep`,
 `-p`/`--packages`, `-`, any other flag.
 
+### `nix-shell`
+
+`[FILE]` (a directory, or nothing, resolves to `shell.nix` and then
+`default.nix`; `<name>` goes through the search path), `-E`/`--expr`, `-A`,
+`--arg`/`--argstr`, `-I`, `--run CMD`, `--command CMD`, `--pure`, `--impure`,
+`--keep NAME`, `--option`, `--store`, `-j`/`--max-jobs`, `--cores`, `-k`, `-K`,
+`-Q`/`--no-build-output`, `--quiet`, `-v`, `--show-trace`, `--add-drv-link`,
+`--indirect`, `--no-gc-warning` (the last three obsolete, ignored).
+
+This is `nix-build.cc`'s `runEnv` path, not `print-dev-env`: nothing builds the
+`-env` derivation. It
+
+1. evaluates to exactly one derivation (`nix-shell requires a single
+   derivation`), with `inNixShell = true` passed to a function that has that
+   formal;
+2. realises the derivation's **inputs** — every `inputDrvs` output and every
+   `inputSrcs` path — through the daemon, never the derivation itself;
+3. builds the environment: the current environment (filtered to nix's
+   `keepVars` with `--pure`), then `NIX_BUILD_TOP` and the `TMP*` family, the
+   per-run temporary directory, `NIX_STORE`, `NIX_BUILD_CORES`, then every
+   `drv.env` pair, with `passAsFile` names written to `.attr-<n>` files and
+   exposed as `<name>Path`;
+4. writes the rc file `nix-build.cc` writes — the tmpdir cleanup trap,
+   `~/.bashrc` when impure, `unset PATH`, the structured attributes as
+   `declare` lines, `source $stdenv/setup`, `PATH`/`SHELL`/`BASH`, `PS1`,
+   `runHook shellHook`, `shopt -s execfail`, then the `--run`/`--command`
+   command with `exit` appended;
+5. execs `bash --rcfile <rc>` when the shell will be interactive (stdin and
+   stderr are both a tty, and `--run` was not used), else `bash <rc>`.
+
+bash is `$NIX_BUILD_SHELL`, else `(import <nixpkgs> {}).bashInteractive` built
+through the daemon, else — when that expression does not evaluate — `bash` from
+the environment, with nix's `uses bash from your environment` notice.
+
+Falls back on: `-p`/`--packages`, a `#!` script (the first argument is a file
+starting with `#!`, which is `-i INTERPRETER` mode), `--exclude`, `--dry-run`,
+`--check`, `--repair`, `-o`/`--out-link`, `--no-out-link`/`--no-link`, `-`
+(stdin), a derivation that nix would have to resolve first (any output that is
+not input-addressed), `exportReferencesGraph` in a structured-attributes
+derivation, any other flag.
+
 ### `nix-eval-jobs`
 
 The existing `ietsp eval-jobs`, which already matches nix-eval-jobs 2.35
@@ -99,7 +140,7 @@ flag for flag. See `docs/eval-jobs.md`.
 
 ### `nix`
 
-Three subcommands; every other one execs the real `nix`.
+Four subcommands; every other one execs the real `nix`.
 
 `nix eval [INSTALLABLE]`: `--json`, `--raw`, `--expr E`, `-f`/`--file FILE`,
 `--impure` (accepted; ietsp is impure already), `-I`, `--arg`/`--argstr`,
@@ -145,12 +186,37 @@ error.
 `nix print-dev-env [FLAKEREF[#attr]] [--json]` is `ietsp print-dev-env`
 (`docs/direnv.md`).
 
+`nix develop [INSTALLABLE]`: `-c`/`--command CMD ARGS...` (like nix, it takes
+every remaining argument), `-i`/`--ignore-env`/`--ignore-environment`,
+`-k`/`--keep`/`--keep-env-var NAME`, `-u`/`--unset`/`--unset-env-var NAME`, plus
+the same global flags. The environment is the one `nix print-dev-env` prints,
+computed by the same code (`docs/direnv.md`), so the shell derivation's `-env`
+derivation is built through the daemon. On top of `makeRcScript` it appends what
+`CmdDevelop::run` appends: the rc file deletes itself, `--command` becomes
+`exec`, an interactive shell is wrapped in the `~/.bashrc` and
+`shopt -u expand_aliases` pair, the `bash-prompt`, `bash-prompt-prefix` and
+`bash-prompt-suffix` settings become `PS1` lines, and `SHELL` plus the `PATH`
+prefix of the bash directory close the script. `NIX_GCROOT` holds the `-env`
+output so the shell keeps it alive. `--ignore-env` clears the environment except
+the `--keep` names; `--unset` removes names; both are
+`command.cc:MixEnvironment::setEnviron`, so `NIX_GCROOT` and `SHELL` are set
+afterwards and always survive.
+
+The attribute paths are `develop.cc`'s: `devShells.<system>.default`,
+`devShell.<system>`, `packages.<system>.default`, `defaultPackage.<system>` with
+no fragment; `devShells.<system>.<f>`, `packages.<system>.<f>`,
+`legacyPackages.<system>.<f>`, `<f>` for a fragment.
+
+Falls back on: `--phase`, `--unpack`, `--configure`, `--build`, `--check`,
+`--install`, `--installcheck`, `--profile`, `--redirect`, more than one
+installable, any other flag.
+
 Falls back on: `nix eval --apply`, `--write-to` or more than one
 installable, `nix build --rebuild`, `--dry-run` or `--json`, an installable
 that is a store path (`/nix/store/…`, or an `^outputs` suffix), a
 non-local flake reference such as `nixpkgs#hello`, an installable that is
 not a derivation under `nix build`, `--arg`/`--argstr` with a flake (nix
-refuses that), `nix develop`, `nix flake …`, `nix run`, `nix shell`,
+refuses that), `nix flake …`, `nix run`, `nix shell`,
 `nix profile`, `nix store`, `nix copy`, `nix repl`, `nix log`,
 `nix why-depends`, `nix fmt`, every other subcommand, and any flag not
 listed above.
@@ -233,13 +299,46 @@ What is used:
 - An evaluation error inside a value `nix eval` prints becomes
   `«error: …»`, except `ErrorKind::Unsupported`, which must escape so the
   run can fall back to the real nix.
+- **`nix develop` takes bash from the shell derivation's own builder.**
+  `develop.cc` builds `nixpkgs#bashInteractive` from the flake's `nixpkgs`
+  input (or the registry), which needs a fetcher ietsp does not have. The
+  builder of a derivation `nix develop` accepts is a `bin/bash` in the store
+  by definition, and in a nixpkgs dev shell it is the same store path nix
+  picks, so `SHELL` and the `PATH` prefix come out the same. With no such
+  file, `bash` from `PATH`, and then the `PATH` prefix line is omitted, as in
+  nix when `bashInteractive` fails.
+- `nix develop` does not use the `print-dev-env` tracing cache, so it always
+  evaluates. It sets no profile: `--profile` falls back.
+- `nix-shell --pure` keeps the lower-case proxy variables (`http_proxy` …)
+  and not the upper-case ones. `network-proxy.cc:getAllVariables` means to add
+  the upper-case names but writes into an empty `std::string`, so nix inserts
+  an empty name instead; ietsp keeps the set nix keeps, not the set nix means
+  to keep.
+- `nix-shell` computes `NIX_BUILD_CORES` from the `cores` setting, else the
+  cgroup CPU quota, else the CPU count — `globals.cc:getDefaultCores`, with
+  the cgroup2 `cpu.max` of the process's own cgroup and no `/proc/mounts`
+  check.
+- `nix-shell` leaves the derivation's `.drv` in the store. Nix registers it
+  too (`evalStore` is the store here), so this is only visible with a
+  separate eval store.
 
 ## Tests
 
-`scripts/classic-e2e.nu` runs the real `nix-instantiate`/`nix-build`/`nix`
-and ours for every case and compares stdout byte for byte, the exit code and
-the `result*` symlink targets. The `nix` cases use
-`tests/fixtures/flake`, a flake with no inputs and a complete `flake.lock`,
-copied out of the repository so both sides see a `path:` flake. It writes to the store and needs a live
-`nix-daemon`, so it is not part of `nix flake check`; run it from the dev
-shell after `cargo build --release`.
+`scripts/classic-e2e.nu` runs the real
+`nix-instantiate`/`nix-build`/`nix-shell`/`nix` and ours for every case and
+compares stdout byte for byte, the exit code and the `result*` symlink targets.
+The `nix` cases use `tests/fixtures/flake`, a flake with no inputs and a
+complete `flake.lock`, copied out of the repository so both sides see a `path:`
+flake. It writes to the store and needs a live `nix-daemon`, so it is not part
+of `nix flake check`; run it from the dev shell after `cargo build --release`.
+
+The shell cases compare an `env` dump, which is only comparable without the
+variables that legitimately differ: `NIX_BUILD_TOP`, the `TMP*` family,
+`NIX_ATTRS_*_FILE`, `__*`, `SHLVL`, `_`, `PWD`, `OLDPWD` and `PS1`. The rest is
+compared line by line after `sort`. `nix-shell` runs on
+`<nixpkgs>/default.nix -A hello`, a structured-attributes derivation, not on
+`'<nixpkgs>' -A hello`: that resolves to `nixpkgs/shell.nix`, which fetches a
+pinned tree and therefore falls back. `nix develop` runs on this repository's
+own flake, the only `mkShell`-shaped shell around — the flake fixture has no
+nixpkgs. The fallback cases use `IETSP_NO_FALLBACK=1`, so no real `nix-shell -p`
+or `nix develop --phase build` build ever runs.

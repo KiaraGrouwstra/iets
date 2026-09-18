@@ -17,7 +17,7 @@ def real-bin-dir []: nothing -> string {
 # The symlink farm: our binary under the classic names.
 def make-farm [bin: string, dir: string]: nothing -> string {
   mkdir $"($dir)/bin"
-  for n in [nix-instantiate nix-build nix-eval-jobs nix] {
+  for n in [nix-instantiate nix-build nix-eval-jobs nix-shell nix] {
     ^ln -sf ($bin | path expand) $"($dir)/bin/($n)"
   }
   $"($dir)/bin"
@@ -43,6 +43,37 @@ def cmp-case [label: string, r: record]: nothing -> bool {
     print $"  ours stderr: ($r.ours.stderr | str substring 0..400)"
     false
   }
+}
+
+# `env` output is only comparable without the variables that legitimately
+# differ: the per-run temporary directory, bash's own bookkeeping, the prompt.
+const ENV_SKIP = '^(NIX_BUILD_TOP|TMPDIR|TMP|TEMP|TEMPDIR|NIX_ATTRS_SH_FILE|NIX_ATTRS_JSON_FILE|__[A-Za-z_]*|SHLVL|_|PWD|OLDPWD|PS1)='
+
+def env-filter [text: string]: nothing -> string {
+  $text | lines | where not ($it =~ $ENV_SKIP) | sort | str join "\n"
+}
+
+# Compares a filtered `env` dump and the exit code.
+def cmp-env [label: string, r: record]: nothing -> bool {
+  let a = (env-filter $r.real.stdout)
+  let b = (env-filter $r.ours.stdout)
+  if $a == $b and $r.ours.exit_code == $r.real.exit_code {
+    verdict true $"($label) \(($a | lines | length) variables\)" ""
+  } else {
+    print $"FAIL ($label): exit ours=($r.ours.exit_code) real=($r.real.exit_code)"
+    print $"  only real: ($a | lines | where $it not-in ($b | lines) | first 4 | str join ' | ')"
+    print $"  only ours: ($b | lines | where $it not-in ($a | lines) | first 4 | str join ' | ')"
+    print $"  ours stderr: ($r.ours.stderr | str substring 0..300)"
+    false
+  }
+}
+
+# The reason a case falls back, without paying for the real run. `cmd` is the
+# classic name and its arguments.
+def fallback-reason [farm: string, cmd: list<string>]: nothing -> string {
+  let name = ($cmd | first)
+  let args = ($cmd | skip 1)
+  (with-env {IETSP_NO_FALLBACK: "1"} { ^$"($farm)/($name)" ...$args | complete }).stderr
 }
 
 def main [] {
@@ -234,6 +265,80 @@ def main [] {
   let pde_own = (^(^readlink -f $"($farm)/nix" | chomp) print-dev-env $"($fref)#pkg" | complete)
   $ok = ($ok | append (verdict (($pde_nix.stdout == $pde_own.stdout) and ($pde_nix.exit_code == $pde_own.exit_code))
     "nix print-dev-env is ietsp print-dev-env" $"exit ($pde_nix.exit_code) vs ($pde_own.exit_code)"))
+
+  # --- nix-shell: the derivation's inputs, then bash on nix-build.cc's rc file.
+  # `<nixpkgs>` resolves to nixpkgs/shell.nix, which fetches a pinned tree, so
+  # the real code path needs default.nix by name.
+  cd $tmp
+  let pkgs_nix = $"($NIXPKGS)/default.nix"
+  $ok = ($ok | append (cmp-case "nix-shell nixpkgs -A hello --run 'echo $name'"
+    (run-both $farm nix-shell -I $"nixpkgs=($NIXPKGS)" $pkgs_nix -A hello --run 'echo $name')))
+  $ok = ($ok | append (cmp-env "nix-shell nixpkgs -A hello --run env"
+    (run-both $farm nix-shell -I $"nixpkgs=($NIXPKGS)" $pkgs_nix -A hello --run env)))
+  $ok = ($ok | append (cmp-env "nix-shell --pure --run env"
+    (run-both $farm nix-shell -I $"nixpkgs=($NIXPKGS)" $pkgs_nix -A hello --pure --run env)))
+  $ok = ($ok | append (cmp-case "nix-shell --pure --keep FOO"
+    (with-env {FOO: "bar"} { run-both $farm nix-shell -I $"nixpkgs=($NIXPKGS)" $pkgs_nix -A hello --pure --keep FOO --run 'echo "[$FOO]"' })))
+  # --command is interactive unless stdin is not a tty: an empty pipe settles it.
+  let cmd_ours = ("" | ^$"($farm)/nix-shell" -I $"nixpkgs=($NIXPKGS)" $pkgs_nix -A hello --command 'echo $name' | complete)
+  let cmd_real = ("" | ^nix-shell -I $"nixpkgs=($NIXPKGS)" $pkgs_nix -A hello --command 'echo $name' | complete)
+  $ok = ($ok | append (cmp-case "nix-shell --command, stdin not a tty" {ours: $cmd_ours, real: $cmd_real}))
+
+  # a plain derivation: shell.nix wins over default.nix, and passAsFile
+  let sh = $"($tmp)/shellnix"
+  mkdir $sh
+  r#'derivation {
+  name = "classic-e2e-shell";
+  system = "x86_64-linux";
+  builder = "/bin/sh";
+  args = [ "-c" "echo hi > $out" ];
+  MARK = "from-@WHICH@";
+  passAsFile = "BIG";
+  BIG = "big-value";
+}
+'# | str replace -a "@WHICH@" "shell-nix" | save $"($sh)/shell.nix"
+  open --raw $"($sh)/shell.nix" | str replace -a "shell-nix" "default-nix" | save $"($sh)/default.nix"
+  cd $sh
+  $ok = ($ok | append (cmp-case "nix-shell with no argument prefers shell.nix"
+    (run-both $farm nix-shell --run 'echo $MARK; cat $BIGPath')))
+  $ok = ($ok | append (cmp-case "nix-shell --run 'exit 3' keeps the exit code"
+    (run-both $farm nix-shell --run "exit 3")))
+  cd $tmp
+  $ok = ($ok | append (cmp-case "nix-shell with no shell.nix or default.nix"
+    (run-both $farm nix-shell --run "true")))
+
+  # --- nix develop: the print-dev-env environment, then bash. This repository's
+  # own flake is the only mkShell-shaped shell around (the fixture has no nixpkgs).
+  let repo = ($env.FILE_PWD | path join ".." | path expand)
+  $ok = ($ok | append (cmp-env "nix develop -c env"
+    (run-both $farm nix develop $repo -c env)))
+  $ok = ($ok | append (cmp-case "nix develop -c sh -c 'echo $name'"
+    (run-both $farm nix develop $repo -c sh -c 'echo $name')))
+  $ok = ($ok | append (cmp-env "nix develop --ignore-environment --keep HOME"
+    (run-both $farm nix develop $repo -i -k HOME -c env)))
+  $ok = ($ok | append (cmp-case "nix develop -u HOME"
+    (run-both $farm nix develop $repo -u HOME -c sh -c 'echo "[$HOME]"')))
+
+  # --- fallbacks, priced with IETSP_NO_FALLBACK so the real run never happens
+  for case in [
+    {label: "nix-shell -p falls back", want: "'-p' is not implemented"
+     args: [nix-shell -p hello --run "true"]}
+    {label: "nix-shell <nixpkgs> falls back on the fetch in nixpkgs/shell.nix", want: "builtins.fetchTarball"
+     args: [nix-shell -I $"nixpkgs=($NIXPKGS)" "<nixpkgs>" -A hello --run "true"]}
+    {label: "nix develop --phase falls back", want: "'--phase' is not implemented"
+     args: [nix develop --phase build]}
+    {label: "nix develop --profile falls back", want: "'--profile' is not implemented"
+     args: [nix develop --profile p]}
+    {label: "nix develop --redirect falls back", want: "'--redirect' is not implemented"
+     args: [nix develop --redirect a b]}
+  ] {
+    let err = (fallback-reason $farm $case.args)
+    $ok = ($ok | append (verdict ($err | str contains $case.want) $case.label $"stderr was '($err)'"))
+  }
+  let shebang = $"($tmp)/script.sh"
+  "#! /usr/bin/env nix-shell\n#! nix-shell -p hello -i bash\necho hi\n" | save -f $shebang
+  let err = (fallback-reason $farm [nix-shell $shebang])
+  $ok = ($ok | append (verdict ($err | str contains "a '#!' script") "nix-shell falls back on a #! script" $"stderr was '($err)'"))
 
   let meta = (^$"($farm)/nix" flake metadata $fref | complete)
   $ok = ($ok | append (verdict ($meta.stderr | str contains "falling back to nix: subcommand 'flake'")
