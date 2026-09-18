@@ -9,7 +9,7 @@ use crate::error::Result;
 use crate::store::path::StorePath;
 
 use super::super::event::Event;
-use super::super::plan::Plan;
+use super::super::plan::{Locator, Plan};
 use super::super::worker::{Connection, DEFAULT_SOCKET, Transport};
 use super::{Client, GrpcConfig};
 
@@ -31,6 +31,7 @@ pub struct Links {
 pub fn realise(
     cfg: &GrpcConfig,
     plan: &Plan,
+    locate: &Locator<'_>,
     targets: &[Target],
     links: &Links,
     on_event: &mut dyn FnMut(Event),
@@ -47,6 +48,7 @@ pub fn realise(
         let built = super::build::build_on(
             &mut c,
             plan,
+            locate,
             &t.drv,
             &t.outputs,
             false,

@@ -296,6 +296,7 @@ fn build_roots(
             crate::remote::worker::Transport::Grpc(cfg) => crate::remote::grpc::build::build(
                 cfg,
                 &plan,
+                &locate,
                 root,
                 outputs,
                 b.no_build,

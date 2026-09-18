@@ -594,7 +594,7 @@ fn realise(
             out_link: (!n.no_link).then(|| n.out_link.clone()),
             print_out_paths: n.print_out_paths,
         };
-        return match classic::realise(cfg, plan, &gt, &links, &mut on_event) {
+        return match classic::realise(cfg, plan, &super::locate_store, &gt, &links, &mut on_event) {
             Ok(code) if failed.get() => code.max(1),
             Ok(code) => code,
             Err(e) => {

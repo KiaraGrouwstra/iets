@@ -1,5 +1,6 @@
 //! The `grpc://` client flow, mirroring `worker/build.rs`:
-//! `StoreInfo` once, one `QueryValidPaths` over the plan, one
+//! `StoreInfo` once, one `QueryValidPaths` over the plan, the missing sources
+//! located and hashed, the ones only the store can produce left to it, one
 //! `AddMultipleToStore`, then builds — `BuildDerivation` per derivation in
 //! farm mode, `BuildPaths` otherwise — and `FetchNars` for the outputs.
 
@@ -19,7 +20,7 @@ use crate::store::nar::restore_path;
 use crate::store::path::StorePath;
 
 use super::super::event::{Done, Event, Log, Started};
-use super::super::plan::{Object, Plan};
+use super::super::plan::{Locator, Object, Plan};
 use super::super::worker::build::write_object;
 use super::super::worker::wire::write_u64;
 use super::super::worker::{built_event, failed_event};
@@ -34,6 +35,8 @@ use super::{Client, GrpcConfig, Headers, c_request, first_line, gone_away, proto
 pub struct Timings {
     pub connect: Duration,
     pub query: Duration,
+    pub resolve: Duration,
+    pub substitute: Duration,
     pub add: Duration,
     pub build: Duration,
     pub outputs: Duration,
@@ -42,6 +45,12 @@ pub struct Timings {
     pub trusted: Option<bool>,
     pub query_paths: usize,
     pub missing: usize,
+    /// Missing sources the client located and hashed.
+    pub resolve_paths: usize,
+    /// Of those, the ones with no eval-time origin, found through the local store.
+    pub store_sources: usize,
+    /// Missing sources left to the store's substituters.
+    pub substitute_paths: usize,
     pub add_paths: usize,
     pub add_bytes: u64,
     pub drvs: usize,
@@ -59,14 +68,32 @@ impl Timings {
         };
         let mode = if self.farm { "farm" } else { "store" };
         let mut s = format!(
-            "plan: {} sources, {} drvs, {:.3}s\nconnect: gRPC {mode}, {trusted}, {:.3}s\nquery: {} paths, {} missing, {:.3}s\nadd: {} paths, {} bytes, {:.3}s\nbuild: {} drvs, {} already valid, {:.3}s\noutputs: {:.3}s",
-            plan.sources(),
-            plan.drvs(),
+            "plan: {} sources, {} drvs, {:.3}s\nconnect: gRPC {mode}, {trusted}, {:.3}s\nquery: {} paths, {} missing, {:.3}s\nresolve: {} sources",
+            plan.sources.len(),
+            plan.drvs.len(),
             plan_time.as_secs_f64(),
             self.connect.as_secs_f64(),
             self.query_paths,
             self.missing,
             self.query.as_secs_f64(),
+            self.resolve_paths,
+        );
+        if self.store_sources > 0 {
+            s.push_str(&format!(
+                ", {} not from this eval, read from /nix/store",
+                self.store_sources
+            ));
+        }
+        s.push_str(&format!(", {:.3}s", self.resolve.as_secs_f64()));
+        if self.substitute_paths > 0 {
+            s.push_str(&format!(
+                "\nsubstitute: {} paths left to the store, {:.3}s",
+                self.substitute_paths,
+                self.substitute.as_secs_f64()
+            ));
+        }
+        s.push_str(&format!(
+            "\nadd: {} paths, {} bytes, {:.3}s\nbuild: {} drvs, {} already valid, {:.3}s\noutputs: {:.3}s",
             self.add_paths,
             self.add_bytes,
             self.add.as_secs_f64(),
@@ -74,7 +101,7 @@ impl Timings {
             self.drvs_cached,
             self.build.as_secs_f64(),
             self.outputs.as_secs_f64(),
-        );
+        ));
         if self.fetched > 0 {
             s.push_str(&format!(
                 "\nfetch: {} outputs, {:.3}s",
@@ -89,10 +116,13 @@ impl Timings {
 
 /// Uploads what the store lacks, builds `root`, reports its outputs and
 /// restores the wanted ones into `fetch_to`. With `upload_only` the call stops
-/// after the upload.
+/// after the upload. `locate` answers for the missing sources that have no
+/// eval-time origin.
+#[allow(clippy::too_many_arguments)]
 pub fn build(
     cfg: &GrpcConfig,
     plan: &Plan,
+    locate: &Locator<'_>,
     root: &StorePath,
     outputs: &[String],
     upload_only: bool,
@@ -101,7 +131,16 @@ pub fn build(
 ) -> Result<Timings> {
     let mut c = Client::open(cfg)?;
     let mut t = Timings::default();
-    let built = build_on(&mut c, plan, root, outputs, upload_only, &mut t, on_event)?;
+    let built = build_on(
+        &mut c,
+        plan,
+        locate,
+        root,
+        outputs,
+        upload_only,
+        &mut t,
+        on_event,
+    )?;
 
     if let (Some(dir), Some(built)) = (fetch_to, &built) {
         let t5 = Instant::now();
@@ -129,9 +168,11 @@ pub fn build(
 
 /// `build` without the fetch step. `None` means a build failed; otherwise the
 /// root's wanted outputs and their store paths.
+#[allow(clippy::too_many_arguments)]
 pub fn build_on(
     c: &mut Client,
     plan: &Plan,
+    locate: &Locator<'_>,
     root: &StorePath,
     outputs: &[String],
     upload_only: bool,
@@ -145,42 +186,67 @@ pub fn build_on(
 
     let t1 = Instant::now();
     let names: Vec<String> = plan
-        .objects
+        .sources
         .iter()
-        .map(|o| o.store_path().base_name().to_string())
+        .map(|p| p.base_name().to_string())
+        .chain(
+            plan.drvs
+                .iter()
+                .map(|d| d.store_path().base_name().to_string()),
+        )
         .collect();
     t.query_paths = names.len();
     let valid = query_valid_paths(c, &names, t)?;
-    let missing: Vec<&Object> = plan
-        .objects
+    let missing_sources: Vec<StorePath> = plan
+        .sources
+        .iter()
+        .filter(|p| !valid.contains(p.base_name()))
+        .cloned()
+        .collect();
+    let missing_drvs: Vec<&Object> = plan
+        .drvs
         .iter()
         .filter(|o| !valid.contains(o.store_path().base_name()))
         .collect();
-    t.missing = missing.len();
+    t.missing = missing_sources.len() + missing_drvs.len();
     t.query = t1.elapsed();
 
     let t2 = Instant::now();
+    let resolved = plan.resolve(&missing_sources, locate)?;
+    t.resolve_paths = resolved.objects.len();
+    t.store_sources = resolved.store_sources;
+    t.substitute_paths = resolved.substitute.len();
+    t.resolve = t2.elapsed();
+
+    // A path registers only once its references are valid, so the store must
+    // have these before the drvs that name them.
+    let t3 = Instant::now();
+    substitute(c, &resolved.substitute, t, on_event)?;
+    t.substitute = t3.elapsed();
+
+    let t4 = Instant::now();
+    let missing: Vec<&Object> = resolved.objects.iter().chain(missing_drvs).collect();
     if !missing.is_empty() {
         t.add_bytes = add_multiple(c, &missing, t)?;
         t.add_paths = missing.len();
     }
-    t.add = t2.elapsed();
+    t.add = t4.elapsed();
     if upload_only {
         return Ok(Some(Vec::new()));
     }
 
-    let t3 = Instant::now();
+    let t5 = Instant::now();
     let ok = if c.info.farm {
-        farm_build(c, plan, &drvs, t, on_event)?
+        farm_build(c, plan, &resolved.objects, &drvs, t, on_event)?
     } else {
         store_build(c, root, outputs, t, on_event)?
     };
-    t.build = t3.elapsed();
+    t.build = t5.elapsed();
     if !ok {
         return Ok(None);
     }
 
-    let t4 = Instant::now();
+    let t6 = Instant::now();
     let root_drv = drvs
         .get(root)
         .ok_or_else(|| Error::Plan(format!("'{root}' is not in the plan")))?;
@@ -197,8 +263,57 @@ pub fn build_on(
         on_event(built_event(&root.to_string(), name, &path.to_string()));
         built.push((name.clone(), path));
     }
-    t.outputs = t4.elapsed();
+    t.outputs = t6.elapsed();
     Ok(Some(built))
+}
+
+/// The sources the client cannot produce (an input-addressed build output
+/// pinned with `builtins.storePath`): the store fetches them instead. Non-farm
+/// realises them now, as `worker/build.rs` does with
+/// `BuildPathsWithResults`; a farm substitutes an input when the build asks
+/// for it (daemon/main.cc:`gatherInputs`), so there we only check that some
+/// substituter has them, which is what `QueryValidPaths` with `substitute`
+/// answers in farm mode.
+fn substitute(
+    c: &mut Client,
+    paths: &[StorePath],
+    t: &mut Timings,
+    on_event: &mut dyn FnMut(Event),
+) -> Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    if c.info.farm {
+        t.calls += 1;
+        let req = proto::QueryValidPathsRequest {
+            paths: paths.iter().map(|p| p.base_name().to_string()).collect(),
+            substitute: true,
+        };
+        let reply = c.call("QueryValidPaths", |mut stub, h| {
+            let req = req.clone();
+            async move { stub.query_valid_paths(c_request(req, &h)).await }
+        })?;
+        let known: HashSet<String> = reply.paths.into_iter().collect();
+        for p in paths {
+            if !known.contains(p.base_name()) {
+                return Err(Error::Store(format!(
+                    "'{p}' is not in the local store and no substituter of '{}' has it",
+                    c.cfg.authority
+                )));
+            }
+        }
+        return Ok(());
+    }
+    let targets: Vec<String> = paths.iter().map(ToString::to_string).collect();
+    for (path, res) in build_paths(c, targets, t, on_event)? {
+        if !res.success() {
+            return Err(Error::Store(format!(
+                "cannot substitute '{path}' on the builder: status {}: {}",
+                res.status, res.error_msg
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Every derivation of the plan, parsed from its ATerm. The plan holds the
@@ -206,7 +321,7 @@ pub fn build_on(
 /// derivation.
 pub fn drv_table(plan: &Plan) -> Result<BTreeMap<StorePath, Derivation>> {
     let mut out = BTreeMap::new();
-    for o in &plan.objects {
+    for o in &plan.drvs {
         if let Object::Drv { path, aterm, .. } = o {
             let text = std::str::from_utf8(aterm)
                 .map_err(|_| Error::Plan(format!("derivation '{path}' is not UTF-8")))?;
@@ -408,8 +523,57 @@ fn upload(
 
 // ---- builds -----------------------------------------------------------------
 
-/// Non-farm: one `BuildPaths` on `<root>^<outputs>`, whose reply carries the
-/// `vector<KeyedBuildResult>` bytes.
+/// One `BuildPaths` call: the targets are `DerivedPath`s in nix's own string
+/// notation, and the reply carries the `vector<KeyedBuildResult>` bytes.
+/// `log_line` and `phase` become `Log` events while it runs.
+fn build_paths(
+    c: &mut Client,
+    targets: Vec<String>,
+    t: &mut Timings,
+    on_event: &mut dyn FnMut(Event),
+) -> Result<Vec<(String, BuildResult)>> {
+    let req = proto::BuildPathsRequest {
+        targets,
+        build_mode: 0,
+        protocol: BUILD_PROTOCOL,
+    };
+    t.calls += 1;
+    let headers = c.headers()?;
+    let mut stub = c.stub.clone();
+    let mut stream =
+        c.rt.block_on(async { stub.build_paths(c_request(req, &headers)).await })
+            .map_err(|s| c.status_error(&s, "BuildPaths"))?
+            .into_inner();
+
+    let mut results: Option<Vec<(String, BuildResult)>> = None;
+    while let Some(msg) =
+        c.rt.block_on(stream.next())
+            .transpose()
+            .map_err(|s| c.status_error(&s, "BuildPaths"))?
+    {
+        match msg.event {
+            Some(proto::build_paths_chunk::Event::LogLine(line)) => {
+                on_event(Event::Log(Log {
+                    drv_path: String::new(),
+                    line,
+                }));
+            }
+            Some(proto::build_paths_chunk::Event::Phase(phase)) => {
+                on_event(Event::Log(Log {
+                    drv_path: String::new(),
+                    line: format!("phase: {phase}").into_bytes(),
+                }));
+            }
+            Some(proto::build_paths_chunk::Event::Done(done)) => {
+                results = Some(read_keyed_build_results(&mut done.results.as_slice())?);
+            }
+            None => {}
+        }
+    }
+    results.ok_or_else(|| Error::Protocol("gRPC BuildPaths stream ended without a result".into()))
+}
+
+/// Non-farm: one `BuildPaths` on `<root>^<outputs>`.
 fn store_build(
     c: &mut Client,
     root: &StorePath,
@@ -423,52 +587,12 @@ fn store_build(
         let names: BTreeSet<&str> = outputs.iter().map(String::as_str).collect();
         names.into_iter().collect::<Vec<_>>().join(",")
     };
-    let req = proto::BuildPathsRequest {
-        // The daemon parses these with `DerivedPath::parse`, whose separator is
-        // `^`, not the worker protocol's legacy `!` (derived-path.cc).
-        targets: vec![format!("{root}^{spec}")],
-        build_mode: 0,
-        protocol: BUILD_PROTOCOL,
-    };
-    t.calls += 1;
-    let headers = c.headers()?;
-    let mut stub = c.stub.clone();
-    let mut stream =
-        c.rt.block_on(async { stub.build_paths(c_request(req, &headers)).await })
-            .map_err(|s| c.status_error(&s, "BuildPaths"))?
-            .into_inner();
-
-    let drv = root.to_string();
     on_event(Event::Started(Started {
-        drv_path: drv.clone(),
+        drv_path: root.to_string(),
     }));
-    let mut results: Option<Vec<(String, BuildResult)>> = None;
-    while let Some(msg) =
-        c.rt.block_on(stream.next())
-            .transpose()
-            .map_err(|s| c.status_error(&s, "BuildPaths"))?
-    {
-        match msg.event {
-            Some(proto::build_paths_chunk::Event::LogLine(line)) => {
-                on_event(Event::Log(Log {
-                    drv_path: drv.clone(),
-                    line,
-                }));
-            }
-            Some(proto::build_paths_chunk::Event::Phase(phase)) => {
-                on_event(Event::Log(Log {
-                    drv_path: drv.clone(),
-                    line: format!("phase: {phase}").into_bytes(),
-                }));
-            }
-            Some(proto::build_paths_chunk::Event::Done(done)) => {
-                results = Some(read_keyed_build_results(&mut done.results.as_slice())?);
-            }
-            None => {}
-        }
-    }
-    let results = results
-        .ok_or_else(|| Error::Protocol("gRPC BuildPaths stream ended without a result".into()))?;
+    // The daemon parses these with `DerivedPath::parse`, whose separator is
+    // `^`, not the worker protocol's legacy `!` (derived-path.cc).
+    let results = build_paths(c, vec![format!("{root}^{spec}")], t, on_event)?;
     t.drvs = 1;
     let mut ok = true;
     for (path, res) in &results {
@@ -515,6 +639,7 @@ struct Run {
 fn farm_build(
     c: &mut Client,
     plan: &Plan,
+    uploaded: &[Object],
     drvs: &BTreeMap<StorePath, Derivation>,
     t: &mut Timings,
     on_event: &mut dyn FnMut(Event),
@@ -586,7 +711,7 @@ fn farm_build(
     });
     let wake = Condvar::new();
     let threads = c.cfg.max_builds.min(jobs.len());
-    let plan_index = PlanIndex::new(plan);
+    let plan_index = PlanIndex::new(plan, uploaded);
     let client: &Client = c;
 
     std::thread::scope(|s| {
@@ -816,18 +941,21 @@ fn try_build_derivation(
     res.ok_or_else(|| tonic::Status::internal("gRPC BuildDerivation stream ended without a result"))
 }
 
-/// The plan by store path base name, so a `NOT_FOUND` retry can re-send just
-/// the closure of one derivation (store.cc:`uploadDrvClosure`).
+/// What this run can re-send, by store path base name, so a `NOT_FOUND` retry
+/// re-sends just the closure of one derivation (store.cc:`uploadDrvClosure`).
+/// The plan names every source but hashes only the missing ones, so only those
+/// (`uploaded`) are here; a source the store already had is skipped, and a
+/// substituted one is not ours to send.
 struct PlanIndex<'a> {
     by_name: HashMap<&'a str, &'a Object>,
 }
 
 impl<'a> PlanIndex<'a> {
-    fn new(plan: &'a Plan) -> PlanIndex<'a> {
+    fn new(plan: &'a Plan, uploaded: &'a [Object]) -> PlanIndex<'a> {
         PlanIndex {
-            by_name: plan
-                .objects
+            by_name: uploaded
                 .iter()
+                .chain(&plan.drvs)
                 .map(|o| (o.store_path().base_name(), o))
                 .collect(),
         }

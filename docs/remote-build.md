@@ -175,14 +175,22 @@ hash part, which the balancer hashes to pick a worker) and `x-nix-features`
 
 `StoreInfo` once, for the trust flag and the `farm` flag. Then:
 
-1. `QueryValidPaths` with every planned path's base name, in one call.
-2. `AddMultipleToStore`: one client-streamed zstd stream whose decompressed
+1. `QueryValidPaths` with every planned path's base name, in one call, then
+   `Plan::resolve` on the missing sources — the same split the worker path
+   makes.
+2. The sources the client cannot produce go to the store: non-farm realises
+   them with one `BuildPaths` over their plain store paths, as the worker path
+   does with `BuildPathsWithResults`; a farm substitutes an input when the
+   build asks for it (daemon/main.cc:`gatherInputs`), so there ietsp only
+   checks that some substituter has them, which is what `QueryValidPaths` with
+   `substitute` answers in farm mode.
+3. `AddMultipleToStore`: one client-streamed zstd stream whose decompressed
    bytes are exactly the worker-protocol `AddMultipleToStore` framing the
    `unix://` path already writes — the same `write_object`, count first, then
    each `ValidPathInfo` at 1.16 followed by its NAR. The flags travel alone in
    the first message; the data follows in 256 KiB chunks, as the C++ sink does,
    and the stream is ended (not flushed) once at the end.
-3. Farm mode (`StoreInfoReply.farm`): `BuildDerivation` per derivation, at
+4. Farm mode (`StoreInfoReply.farm`): `BuildDerivation` per derivation, at
    most `max-builds` in flight, a derivation only once every input derivation
    of it is done. The request carries the `BasicDerivation` wire form
    (`derivation/aterm.cc:write`) at `protocol = 1 << 8 | 37` and
@@ -191,10 +199,10 @@ hash part, which the balancer hashes to pick a worker) and `x-nix-features`
    or `Failed`. Derivations whose outputs `QueryValidPaths` already reports
    valid are skipped — the C++ plugin sends them and lets the niks3 claim
    answer `AlreadyValid`, one RPC each.
-4. Non-farm: one `BuildPaths` on `<drv>^<outputs>` (note `^`: the daemon parses
+5. Non-farm: one `BuildPaths` on `<drv>^<outputs>` (note `^`: the daemon parses
    with `DerivedPath::parse`, not the worker protocol's legacy `!`), whose
    reply is a `vector<KeyedBuildResult>` at 1.37.
-5. `--fetch-to DIR`: the farm never copies an output into a local store, so
+6. `--fetch-to DIR`: the farm never copies an output into a local store, so
    `FetchNars` streams the NARs back — one zstd stream across all paths,
    flushed per frame, each frame tagged with its `path_index` and the last one
    of a path marked `eof`. Each NAR is spooled beside its destination and
