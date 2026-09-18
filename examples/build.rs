@@ -70,7 +70,7 @@ fn eval_and_build(ev: &mut Evaluator, a: EvalArgs, url: String) -> u8 {
     };
     let no_overrides = HashMap::new();
     let locate = |paths: &[StorePath]| locate_in_store(paths, &no_overrides);
-    let plan = match plan::plan(&root_paths, inputs, &locate) {
+    let plan = match plan::plan(&root_paths, inputs) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("error: {e}");
@@ -104,6 +104,7 @@ fn eval_and_build(ev: &mut Evaluator, a: EvalArgs, url: String) -> u8 {
         let r = worker::build::build(
             &transport,
             &plan,
+            &locate,
             root,
             &outputs,
             false,
