@@ -19,6 +19,10 @@ bench/run.nu nixos-desktop
 ./target/release/ietsp build --builder 'grpc://farm.numtide.com:50051?token-file=./jwt' --fetch-to out FILE.nix   # nix-grpc-store, natively
 scripts/daemon-e2e.nu; scripts/grpc-e2e.nu
 
+# nix-fast-build's flags, one process: eval and build overlap, results as json or junit
+./target/release/ietsp fast-build --flake .#checks --skip-cached --result-file r.json
+scripts/fastbuild-e2e.nu
+
 # .envrc: what `nix print-dev-env` prints, byte-exact, from the in-memory shell drv
 ./target/release/ietsp print-dev-env --gc-root .direnv/ietsp-env .   # see docs/direnv.md
 
@@ -29,7 +33,8 @@ nix build .#classic && ./result/bin/nix-instantiate -A hello /path/to/nixpkgs
 scripts/classic-e2e.nu
 ```
 
-See `docs/remote-build.md`. NixOS hosts: import
+See `docs/remote-build.md` and `docs/fast-build.md` (every build path shares
+one dispatcher). NixOS hosts: import
 `nixosModules.default` and keep `use flake` in `.envrc` (`docs/direnv.md`).
 
 Runs are cached: a second `ietsp eval` or `ietsp build` of the same
