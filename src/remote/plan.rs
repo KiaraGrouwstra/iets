@@ -1,4 +1,5 @@
-//! The upload plan: the closure of the root derivations, hashed the way Nix addresses them.
+//! The upload plan: the closure of the root derivations, and the sources the daemon lacks
+//! hashed the way Nix addresses them.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io;
@@ -123,26 +124,103 @@ impl Object {
     }
 }
 
-/// Objects in topological order: every source first, then each drv after its input drvs.
+/// The closure of the roots: what the daemon must hold before it can build them. Sources are
+/// only named here; `resolve` locates and hashes the ones the daemon lacks.
 #[derive(Debug, Default)]
 pub struct Plan {
-    pub objects: Vec<Object>,
+    /// Input sources in registration order: a `toFile` text after the sources it references.
+    pub sources: Vec<StorePath>,
+    /// The eval-time origin of every source in `sources` that this evaluation added.
+    pub origins: HashMap<StorePath, SourceOrigin>,
+    /// Derivations in post-order: each after its input drvs.
+    pub drvs: Vec<Object>,
     /// Input drvs that were not created by this evaluation and were read from `/nix/store`.
     pub store_drvs: usize,
-    /// Input sources with no eval-time origin, located through the local store.
+}
+
+/// The missing sources after `Plan::resolve`: what the client uploads and what it leaves to
+/// the daemon.
+#[derive(Debug, Default)]
+pub struct Resolved {
+    /// Hashed sources, in the order they were asked for.
+    pub objects: Vec<Object>,
+    /// Sources the client cannot produce: not in the local store, or not content-addressed
+    /// the way v1 sends (an input-addressed build output pinned with `builtins.storePath`).
+    /// The daemon substitutes them.
+    pub substitute: Vec<StorePath>,
+    /// Sources with no eval-time origin, read from the local store and hashed.
     pub store_sources: usize,
 }
 
 impl Plan {
-    pub fn sources(&self) -> usize {
-        self.objects
+    /// Every path in the closure, sources then drvs, for `QueryValidPaths`.
+    pub fn paths(&self) -> Vec<String> {
+        self.sources
             .iter()
-            .filter(|o| matches!(o, Object::Source { .. }))
-            .count()
+            .map(ToString::to_string)
+            .chain(self.drvs.iter().map(|d| d.store_path().to_string()))
+            .collect()
     }
 
-    pub fn drvs(&self) -> usize {
-        self.objects.len() - self.sources()
+    /// Locates and hashes `missing`, a subset of `sources` in plan order: eval-time origins
+    /// first, the rest through `locate` in one batch, hashed on a thread pool.
+    pub fn resolve(&self, missing: &[StorePath], locate: &Locator<'_>) -> Result<Resolved> {
+        let mut infos: Vec<Option<SourceInfo>> = Vec::with_capacity(missing.len());
+        let mut unknown: Vec<StorePath> = Vec::new();
+        for p in missing {
+            let info = self.origins.get(p).map(|o| match o {
+                SourceOrigin::Tree { local, accepted } => SourceInfo {
+                    data: SourceData::Local {
+                        path: local.clone(),
+                        accepted: accepted.as_ref().map(|a| Arc::new(a.clone())),
+                    },
+                    kind: SourceKind::Source,
+                },
+                SourceOrigin::Text {
+                    contents,
+                    references,
+                } => SourceInfo {
+                    data: SourceData::Memory(Arc::new(contents.clone())),
+                    kind: SourceKind::Text {
+                        references: references.clone(),
+                    },
+                },
+            });
+            if info.is_none() {
+                unknown.push(p.clone());
+            }
+            infos.push(info);
+        }
+        let mut substitute = Vec::new();
+        if !unknown.is_empty() {
+            let found = locate(&unknown)?;
+            if found.len() != unknown.len() {
+                return Err(Error::Plan(
+                    "locator returned the wrong number of sources".into(),
+                ));
+            }
+            let mut found = found.into_iter();
+            for (p, slot) in missing.iter().zip(infos.iter_mut()) {
+                if slot.is_some() {
+                    continue;
+                }
+                match found.next().expect("one answer per unknown source") {
+                    Some(info) => *slot = Some(info),
+                    None => substitute.push(p.clone()),
+                }
+            }
+        }
+        let (paths, infos): (Vec<&StorePath>, Vec<SourceInfo>) = missing
+            .iter()
+            .zip(infos)
+            .filter_map(|(p, i)| i.map(|i| (p, i)))
+            .unzip();
+        let store_sources = unknown.len() - substitute.len();
+        Ok(Resolved {
+            objects: hash_sources(&paths, &infos)?,
+            substitute,
+            store_sources,
+        })
     }
 }
 
@@ -167,8 +245,9 @@ fn check_source_path(path: &StorePath, kind: &SourceKind, nar_hash: &Hash) -> Re
 }
 
 /// Maps input source store paths that eval did not record, in one batch, to where to read
-/// them and how they were addressed. `ietsp build` asks the local store.
-pub type Locator<'a> = dyn Fn(&[StorePath]) -> Result<Vec<SourceInfo>> + 'a;
+/// them and how they were addressed; `None` when the local side cannot produce the path and
+/// the daemon must substitute it. `ietsp build` asks the local store.
+pub type Locator<'a> = dyn Fn(&[StorePath]) -> Result<Vec<Option<SourceInfo>>> + 'a;
 
 /// What the evaluation knows: the drv table and the origin of every added source. Both may
 /// be empty, in which case everything is read from `/nix/store`.
@@ -216,13 +295,13 @@ fn load_drv(path: &StorePath, inputs: &Inputs<'_>) -> Result<DrvNode> {
     })
 }
 
-/// Computes the closure of `roots`: input drvs recursively and every input source, hashed in
-/// parallel. Every drv and source comes from `inputs`; what is not there is read from
-/// `/nix/store` (drvs) or asked from `locate` (sources) and counted in the plan. Fixed-output
-/// drvs are ordinary drvs here; the builder fetches them.
-pub fn plan(roots: &[StorePath], inputs: Inputs<'_>, locate: &Locator<'_>) -> Result<Plan> {
+/// Computes the closure of `roots`: input drvs recursively and every input source, without
+/// reading or hashing a source. Every drv comes from `inputs`; what is not there is read from
+/// `/nix/store` and counted in the plan. Fixed-output drvs are ordinary drvs here; the builder
+/// fetches them.
+pub fn plan(roots: &[StorePath], inputs: Inputs<'_>) -> Result<Plan> {
     let mut sources: Vec<StorePath> = Vec::new();
-    let mut drvs: Vec<(StorePath, Arc<Vec<u8>>, BTreeSet<StorePath>)> = Vec::new();
+    let mut drvs: Vec<Object> = Vec::new();
     let mut seen_src: HashSet<StorePath> = HashSet::new();
     let mut seen_drv: HashSet<StorePath> = HashSet::new();
     let mut store_drvs = 0;
@@ -233,7 +312,7 @@ pub fn plan(roots: &[StorePath], inputs: Inputs<'_>, locate: &Locator<'_>) -> Re
         roots.iter().rev().map(|r| (r.clone(), None)).collect();
     while let Some((path, done)) = stack.pop() {
         if let Some((aterm, references)) = done {
-            drvs.push((path, aterm, references));
+            drvs.push(Object::drv(path, aterm, references));
             continue;
         }
         if !seen_drv.insert(path.clone()) {
@@ -253,18 +332,15 @@ pub fn plan(roots: &[StorePath], inputs: Inputs<'_>, locate: &Locator<'_>) -> Re
         }
     }
 
-    let (infos, store_sources) = locate_sources(&sources, inputs.sources, locate)?;
-    let hashed = hash_sources(&sources, &infos)?;
-    let mut objects = Vec::with_capacity(hashed.len() + drvs.len());
-    objects.extend(hashed);
-    objects.extend(
-        drvs.into_iter()
-            .map(|(path, aterm, references)| Object::drv(path, aterm, references)),
-    );
+    let origins = sources
+        .iter()
+        .filter_map(|p| inputs.sources.get(p).map(|o| (p.clone(), o.clone())))
+        .collect();
     Ok(Plan {
-        objects,
+        sources,
+        origins,
+        drvs,
         store_drvs,
-        store_sources,
     })
 }
 
@@ -290,56 +366,8 @@ fn collect_source(
     sources.push(p);
 }
 
-/// Resolves each source from its eval-time origin; the rest go to `locate` in one batch.
-fn locate_sources(
-    sources: &[StorePath],
-    origins: &HashMap<StorePath, SourceOrigin>,
-    locate: &Locator<'_>,
-) -> Result<(Vec<SourceInfo>, usize)> {
-    let mut infos: Vec<Option<SourceInfo>> = Vec::with_capacity(sources.len());
-    let mut unknown: Vec<StorePath> = Vec::new();
-    for p in sources {
-        let info = origins.get(p).map(|o| match o {
-            SourceOrigin::Tree { local, accepted } => SourceInfo {
-                data: SourceData::Local {
-                    path: local.clone(),
-                    accepted: accepted.as_ref().map(|a| Arc::new(a.clone())),
-                },
-                kind: SourceKind::Source,
-            },
-            SourceOrigin::Text {
-                contents,
-                references,
-            } => SourceInfo {
-                data: SourceData::Memory(Arc::new(contents.clone())),
-                kind: SourceKind::Text {
-                    references: references.clone(),
-                },
-            },
-        });
-        if info.is_none() {
-            unknown.push(p.clone());
-        }
-        infos.push(info);
-    }
-    if !unknown.is_empty() {
-        let found = locate(&unknown)?;
-        if found.len() != unknown.len() {
-            return Err(Error::Plan(
-                "locator returned the wrong number of sources".into(),
-            ));
-        }
-        let mut found = found.into_iter();
-        for slot in infos.iter_mut().filter(|s| s.is_none()) {
-            *slot = found.next();
-        }
-    }
-    let n = unknown.len();
-    Ok((infos.into_iter().map(|i| i.expect("resolved")).collect(), n))
-}
-
 /// Dumps and hashes every source on a thread pool; results keep the input order.
-fn hash_sources(sources: &[StorePath], infos: &[SourceInfo]) -> Result<Vec<Object>> {
+fn hash_sources(sources: &[&StorePath], infos: &[SourceInfo]) -> Result<Vec<Object>> {
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4)
@@ -360,7 +388,7 @@ fn hash_sources(sources: &[StorePath], infos: &[SourceInfo]) -> Result<Vec<Objec
                     if i >= sources.len() {
                         break;
                     }
-                    let path = &sources[i];
+                    let path = sources[i];
                     let info = &infos[i];
                     let r = Object::source(path.clone(), info.clone())
                         .map_err(|e| Error::io(format!("cannot dump '{path}'"), e))

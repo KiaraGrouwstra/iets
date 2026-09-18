@@ -9,11 +9,13 @@ use crate::runtime::Word;
 
 /// Answers the plan's locator from the local Nix store: one `nix path-info --json` call
 /// tells how each input source was content-addressed and what it references. Paths named
-/// by `--source` are read from the given local tree instead and are plain sources.
+/// by `--source` are read from the given local tree instead and are plain sources. A path
+/// that is not valid locally, or whose content address v1 cannot send (an input-addressed
+/// output pinned with `builtins.storePath`), is `None`: the daemon substitutes it.
 pub fn locate_in_store(
     paths: &[crate::store::path::StorePath],
     overrides: &HashMap<String, std::path::PathBuf>,
-) -> crate::error::Result<Vec<crate::remote::plan::SourceInfo>> {
+) -> crate::error::Result<Vec<Option<crate::remote::plan::SourceInfo>>> {
     use crate::remote::plan::{SourceData, SourceInfo, SourceKind};
     use crate::store::path::{STORE_DIR, StorePath};
 
@@ -46,11 +48,13 @@ pub fn locate_in_store(
         .map(|p| {
             let full = p.to_string();
             if let Some(local) = overrides.get(&full) {
-                return Ok(SourceInfo::tree(local.clone()));
+                return Ok(Some(SourceInfo::tree(local.clone())));
             }
-            let v = info
-                .get(&full)
-                .ok_or_else(|| CrateError::Store(format!("'{full}' is not in the local store")))?;
+            // `null` is what `nix path-info` prints for a path that is not valid.
+            let v = match info.get(&full) {
+                Some(v) if !v.is_null() => v,
+                _ => return Ok(None),
+            };
             let ca = v["ca"].as_str().unwrap_or("");
             let kind = if ca.starts_with("fixed:r:sha256:") {
                 SourceKind::Source
@@ -64,17 +68,15 @@ pub fn locate_in_store(
                     .collect::<crate::error::Result<_>>()?;
                 SourceKind::Text { references }
             } else {
-                return Err(CrateError::Store(format!(
-                    "'{full}': unsupported input source (ca = '{ca}'); v1 sends only recursive sha256 sources and text files"
-                )));
+                return Ok(None);
             };
-            Ok(SourceInfo {
+            Ok(Some(SourceInfo {
                 data: SourceData::Local {
                     path: std::path::PathBuf::from(format!("{STORE_DIR}/{}", p.base_name())),
                     accepted: None,
                 },
                 kind,
-            })
+            }))
         })
         .collect()
 }

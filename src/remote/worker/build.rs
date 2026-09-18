@@ -1,6 +1,8 @@
 //! The client flow over the worker protocol:
-//! `QueryValidPaths` once, `AddMultipleToStore` once, `BuildPathsWithResults` on the root,
-//! `QueryDerivationOutputMap`, then `NarFromPath` per fetched output.
+//! `QueryValidPaths` once, the missing sources located and hashed, `BuildPathsWithResults`
+//! on the sources only the daemon can substitute, `AddMultipleToStore` once,
+//! `BuildPathsWithResults` on the root, `QueryDerivationOutputMap`, then `NarFromPath` per
+//! fetched output.
 
 use std::collections::{BTreeSet, HashSet};
 use std::io::{self, Write};
@@ -12,7 +14,7 @@ use crate::store::nar::{dump_string, flat_hash, restore_path};
 use crate::store::path::StorePath;
 
 use super::super::event::{Done, Event};
-use super::super::plan::{Object, Plan, SourceData, SourceKind};
+use super::super::plan::{Locator, Object, Plan, SourceData, SourceKind};
 use super::wire::{write_str, write_strs, write_u64};
 use crate::error::{Error, Result};
 
@@ -22,6 +24,8 @@ use super::{Connection, Stats, Transport, built_event, failed_event};
 pub struct Timings {
     pub connect: Duration,
     pub query: Duration,
+    pub resolve: Duration,
+    pub substitute: Duration,
     pub add: Duration,
     pub build: Duration,
     pub outputs: Duration,
@@ -30,6 +34,12 @@ pub struct Timings {
     pub trusted: Option<bool>,
     pub query_paths: usize,
     pub missing: usize,
+    /// Missing sources the client located and hashed.
+    pub resolve_paths: usize,
+    /// Of those, the ones with no eval-time origin, found through the local store.
+    pub store_sources: usize,
+    /// Missing sources left to the daemon's substituters.
+    pub substitute_paths: usize,
     pub add_paths: usize,
     pub add_bytes: u64,
     pub fetched: usize,
@@ -44,21 +54,39 @@ impl Timings {
             None => "trust unknown",
         };
         let mut s = format!(
-            "plan: {} sources, {} drvs, {:.3}s\nconnect: protocol 1.{}, {trusted}, {:.3}s\nquery: {} paths, {} missing, {:.3}s\nadd: {} paths, {} bytes, {:.3}s\nbuild: {:.3}s\noutputs: {:.3}s",
-            plan.sources(),
-            plan.drvs(),
+            "plan: {} sources, {} drvs, {:.3}s\nconnect: protocol 1.{}, {trusted}, {:.3}s\nquery: {} paths, {} missing, {:.3}s\nresolve: {} sources",
+            plan.sources.len(),
+            plan.drvs.len(),
             plan_time.as_secs_f64(),
             self.minor,
             self.connect.as_secs_f64(),
             self.query_paths,
             self.missing,
             self.query.as_secs_f64(),
+            self.resolve_paths,
+        );
+        if self.store_sources > 0 {
+            s.push_str(&format!(
+                ", {} not from this eval, read from /nix/store",
+                self.store_sources
+            ));
+        }
+        s.push_str(&format!(", {:.3}s", self.resolve.as_secs_f64()));
+        if self.substitute_paths > 0 {
+            s.push_str(&format!(
+                "\nsubstitute: {} paths left to the daemon, {:.3}s",
+                self.substitute_paths,
+                self.substitute.as_secs_f64()
+            ));
+        }
+        s.push_str(&format!(
+            "\nadd: {} paths, {} bytes, {:.3}s\nbuild: {:.3}s\noutputs: {:.3}s",
             self.add_paths,
             self.add_bytes,
             self.add.as_secs_f64(),
             self.build.as_secs_f64(),
             self.outputs.as_secs_f64(),
-        );
+        ));
         if self.fetched > 0 {
             s.push_str(&format!(
                 "\nfetch: {} outputs, {:.3}s",
@@ -76,9 +104,12 @@ impl Timings {
 
 /// Uploads what the daemon lacks, builds `root`, reports its outputs, and restores the wanted
 /// outputs into `fetch_to` when given. With `upload_only` the call stops after the upload.
+/// `locate` answers for the missing sources that have no eval-time origin.
+#[allow(clippy::too_many_arguments)]
 pub fn build(
     transport: &Transport,
     plan: &Plan,
+    locate: &Locator<'_>,
     root: &StorePath,
     outputs: &[String],
     upload_only: bool,
@@ -91,6 +122,7 @@ pub fn build(
     let mut t = build_on(
         &mut conn,
         plan,
+        locate,
         root,
         outputs,
         upload_only,
@@ -102,9 +134,11 @@ pub fn build(
 }
 
 /// `build` on an open connection; `Timings::connect` stays zero.
+#[allow(clippy::too_many_arguments)]
 pub fn build_on(
     conn: &mut Connection,
     plan: &Plan,
+    locate: &Locator<'_>,
     root: &StorePath,
     outputs: &[String],
     upload_only: bool,
@@ -118,25 +152,51 @@ pub fn build_on(
     };
 
     let t1 = Instant::now();
-    let paths: Vec<String> = plan
-        .objects
-        .iter()
-        .map(|o| o.store_path().to_string())
-        .collect();
+    let paths = plan.paths();
     t.query_paths = paths.len();
     let valid: HashSet<String> = conn
         .query_valid_paths(&paths, on_event)?
         .into_iter()
         .collect();
-    let missing: Vec<&Object> = plan
-        .objects
+    let missing_sources: Vec<StorePath> = plan
+        .sources
+        .iter()
+        .filter(|p| !valid.contains(&p.to_string()))
+        .cloned()
+        .collect();
+    let missing_drvs: Vec<&Object> = plan
+        .drvs
         .iter()
         .filter(|o| !valid.contains(&o.store_path().to_string()))
         .collect();
-    t.missing = missing.len();
+    t.missing = missing_sources.len() + missing_drvs.len();
     t.query = t1.elapsed();
 
     let t2 = Instant::now();
+    let resolved = plan.resolve(&missing_sources, locate)?;
+    t.resolve_paths = resolved.objects.len();
+    t.store_sources = resolved.store_sources;
+    t.substitute_paths = resolved.substitute.len();
+    t.resolve = t2.elapsed();
+
+    // A path registers only once its references are valid (local-store.cc,
+    // registerValidPaths), so the daemon must have these before the drvs that name them.
+    let t3 = Instant::now();
+    if !resolved.substitute.is_empty() {
+        let targets: Vec<String> = resolved.substitute.iter().map(|p| p.to_string()).collect();
+        for r in conn.build_paths_with_results(&targets, on_event)? {
+            if !r.success() {
+                return Err(Error::Store(format!(
+                    "cannot substitute '{}' on the builder: status {}: {}",
+                    r.path, r.status, r.msg
+                )));
+            }
+        }
+    }
+    t.substitute = t3.elapsed();
+
+    let t4 = Instant::now();
+    let missing: Vec<&Object> = resolved.objects.iter().chain(missing_drvs).collect();
     if !missing.is_empty() {
         let before = conn.bytes_sent();
         let mut body = |w: &mut dyn Write| -> io::Result<()> {
@@ -150,13 +210,13 @@ pub fn build_on(
         t.add_paths = missing.len();
         t.add_bytes = conn.bytes_sent() - before;
     }
-    t.add = t2.elapsed();
+    t.add = t4.elapsed();
     if upload_only {
         t.stats = conn.stats;
         return Ok(t);
     }
 
-    let t3 = Instant::now();
+    let t5 = Instant::now();
     let spec = if outputs.is_empty() {
         "*".to_string()
     } else {
@@ -164,7 +224,7 @@ pub fn build_on(
         names.into_iter().collect::<Vec<_>>().join(",")
     };
     let results = conn.build_paths_with_results(&[format!("{root}!{spec}")], on_event)?;
-    t.build = t3.elapsed();
+    t.build = t5.elapsed();
     let mut success = true;
     for r in &results {
         if !r.success() {
@@ -181,7 +241,7 @@ pub fn build_on(
         return Ok(t);
     }
 
-    let t4 = Instant::now();
+    let t6 = Instant::now();
     let map = conn.query_derivation_output_map(&root.to_string(), on_event)?;
     let mut built = Vec::new();
     for (name, path) in &map {
@@ -190,10 +250,10 @@ pub fn build_on(
             built.push((name.clone(), p.clone()));
         }
     }
-    t.outputs = t4.elapsed();
+    t.outputs = t6.elapsed();
 
     if let Some(dir) = fetch_to {
-        let t5 = Instant::now();
+        let t7 = Instant::now();
         std::fs::create_dir_all(dir)
             .map_err(|e| Error::io(format!("cannot create {}", dir.display()), e))?;
         for (name, p) in &built {
@@ -211,7 +271,7 @@ pub fn build_on(
             conn.nar_from_path(p, on_event, &mut |r| restore_path(r, &dest))?;
             t.fetched += 1;
         }
-        t.fetch = t5.elapsed();
+        t.fetch = t7.elapsed();
     }
     on_event(Event::Done(Done { success: true }));
     if conn.has_pending() {

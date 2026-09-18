@@ -354,12 +354,13 @@ fn dev_env_full(
                     drvs: &drvs,
                     sources: &sources,
                 };
-                crate::remote::plan::plan(std::slice::from_ref(&env_path), inputs, &locate)?
+                crate::remote::plan::plan(std::slice::from_ref(&env_path), inputs)?
             };
             let plan_time = t2.elapsed();
             let t = crate::remote::worker::build::build_on(
                 &mut conn,
                 &plan,
+                &locate,
                 &env_path,
                 &[],
                 false,

@@ -15,6 +15,13 @@
 # 5. custom derivation through unix:///nix/var/nix/daemon-socket/socket.
 # 6. custom derivation through ssh-ng://, with an `ssh` shim in PATH that runs
 #    `nix-daemon --stdio` locally: the stdio transport without a remote host.
+# 7. an input-addressed build output (`builtins.storePath` of the hello
+#    output) as an input source, through the local daemon that has it: no
+#    upload of the source, no `substitute:` line.
+# 8. the same drv through a second scratch daemon that lacks the output and
+#    substitutes it from a file:// binary cache made with `nix copy`: first
+#    --no-build (the daemon substitutes, then the drv registers), then the
+#    build itself.
 #
 # usage: scripts/daemon-e2e.nu            # uses target/release
 #        BIN=target/debug scripts/daemon-e2e.nu
@@ -66,6 +73,38 @@ def make-case [dir: string, name: string, system: string] {
 '# | str replace -a "@NAME@" $name | str replace -a "@SYSTEM@" $system | str replace -a "@DIR@" $dir | save $"($dir)/case.nix"
 }
 
+# The lines `--timings` prints, in the client flow's order.
+const timing_lines = '^(eval|plan|connect|query|resolve|substitute|add|build|outputs|fetch|worker):'
+
+# make-storepath-case DIR NAME SYSTEM OUT: writes DIR/case.nix, a derivation that runs the
+# hello output OUT, pinned with builtins.storePath, into $out.
+def make-storepath-case [dir: string, name: string, system: string, out: string] {
+  mkdir $dir
+  r#'derivation {
+  name = "@NAME@";
+  system = "@SYSTEM@";
+  builder = "/bin/sh";
+  args = [ "-c" "${builtins.storePath "@OUT@"}/bin/hello > $out" ];
+}
+'# | str replace -a "@NAME@" $name | str replace -a "@SYSTEM@" $system | str replace -a "@OUT@" $out | save $"($dir)/case.nix"
+}
+
+# scratch-daemon ROOT [OPTIONS]: starts `nix-daemon --store local?root=ROOT` as a job and
+# returns its socket path once it listens. `NIX_DAEMON_SOCKET_PATH` pins the socket under
+# ROOT; Nix 2.34's daemon binds the system socket otherwise.
+def --wrapped scratch-daemon [root: string, ...options: string]: nothing -> string {
+  let sock = $"($root)/nix/var/nix/daemon-socket/socket"
+  let log = $"($root).log"
+  let store = $"local?root=($root)"
+  job spawn { with-env {NIX_DAEMON_SOCKET_PATH: $sock} { ^nix-daemon --store $store ...$options o+e> $log } } | ignore
+  for _ in 1..200 {
+    if ($sock | path exists) { break }
+    sleep 50ms
+  }
+  if not ($sock | path exists) { print (open --raw $log | chomp); fail "scratch daemon did not start" }
+  $sock
+}
+
 # run-custom DIR URL: instantiate, record what Nix created, delete, build via URL, compare.
 def run-custom [bin: string, dir: string, url: string] {
   let drv = (^nix-instantiate $"($dir)/case.nix" err> /dev/null | chomp)
@@ -84,7 +123,7 @@ def run-custom [bin: string, dir: string, url: string] {
   $r.stderr | save -f $"($dir)/client.log"
   if $r.exit_code != 0 { print ($r.stderr | chomp); fail "client exited non-zero" }
   let out = ($r.stdout | chomp)
-  show-matching '^(eval|plan|connect|query|add|build|outputs|fetch|worker):' $"($dir)/client.log"
+  show-matching $timing_lines $"($dir)/client.log"
   if ($r.stderr | str contains "read from /nix/store") { fail "eval path fell back to the local store" }
   if $out != $expected { fail $"output '($out)' != expected '($expected)'" }
   if ((bytes-of $"($dir)/src/a") ++ (bytes-of $"($dir)/src/sub/b")) != (bytes-of $out) { fail "output content differs" }
@@ -114,25 +153,18 @@ def run-tests [bin: string, nixpkgs: string, work: string] {
   $r.stderr | save -f $"($work)/client2.log"
   if $r.exit_code != 0 { print ($r.stderr | chomp); fail "client exited non-zero" }
   let out = ($r.stdout | chomp)
-  show-matching '^(eval|plan|connect|query|add|build|outputs|worker):' $"($work)/client2.log"
+  show-matching $timing_lines $"($work)/client2.log"
   if ($r.stderr | str contains "read from /nix/store") { fail "eval path fell back to the local store" }
   if $out != $expected { fail $"hello output '($out)' != expected '($expected)'" }
   print $"ok: ($out)"
 
   print "== 3. hello cold against a scratch chroot daemon, --no-build"
   let scratch = $"local?root=($work)/store"
-  let log = $"($work)/scratch.log"
-  job spawn { ^nix-daemon --store $scratch o+e> $log } | ignore
-  let sock = $"($work)/store/nix/var/nix/daemon-socket/socket"
-  for _ in 1..200 {
-    if ($sock | path exists) { break }
-    sleep 50ms
-  }
-  if not ($sock | path exists) { print (open --raw $log | chomp); fail "scratch daemon did not start" }
+  let sock = (scratch-daemon $"($work)/store")
   let r = (^$"($bin)/ietsp" build --builder $"unix://($sock)" --timings --no-cache --no-build -I $"nixpkgs=($nixpkgs)" -E '(import <nixpkgs> {}).hello' | complete)
   $r.stderr | save -f $"($work)/client3.log"
   if $r.exit_code != 0 { print ($r.stderr | chomp); fail "client exited non-zero" }
-  show-matching '^(eval|plan|connect|query|add|build|outputs|worker):' $"($work)/client3.log"
+  show-matching $timing_lines $"($work)/client3.log"
   if not ($r.stderr | str contains "query: 776 paths, 776 missing") { fail "cold scratch store should miss every path" }
   if not ($r.stderr | str contains "worker: 3 ops") { fail "expected SetOptions + QueryValidPaths + AddMultipleToStore" }
   if (out-of nix-store --store $scratch -q --hash $hello) != (out-of nix-store -q --hash $hello) { fail "hello drv hash differs in the scratch store" }
@@ -151,7 +183,7 @@ def run-tests [bin: string, nixpkgs: string, work: string] {
   let r = (^$"($bin)/ietsp" build --builder $"unix://($sock)" --timings --no-cache --no-build -I $"nixpkgs=($nixpkgs)" -E '(import <nixpkgs> {}).hello' | complete)
   $r.stderr | save -f $"($work)/client4.log"
   if $r.exit_code != 0 { print ($r.stderr | chomp); fail "client exited non-zero" }
-  show-matching '^(eval|plan|connect|query|add|build|outputs|worker):' $"($work)/client4.log"
+  show-matching $timing_lines $"($work)/client4.log"
   if not ($r.stderr | str contains "query: 776 paths, 0 missing") { fail "warm run still had missing paths" }
   print "ok"
 
@@ -165,6 +197,52 @@ def run-tests [bin: string, nixpkgs: string, work: string] {
   ^chmod +x $"($work)/bin/ssh"
   make-case $"($work)/c6" ietsp-daemon-e2e-ssh $system
   with-env {PATH: ($env.PATH | prepend $"($work)/bin")} { run-custom $bin $"($work)/c6" ssh-ng://shim }
+
+  print "== 7. builtins.storePath of the hello output as an input source, local daemon has it"
+  let hello_out = $expected
+  make-storepath-case $"($work)/c7" ietsp-daemon-e2e-storepath $system $hello_out
+  let drv7 = (^nix-instantiate $"($work)/c7/case.nix" err> /dev/null | chomp)
+  if not (out-of nix-store -q --references $drv7 | lines | any {|l| $l == $hello_out }) { fail $"nix-instantiate did not list ($hello_out) as an input source" }
+  let expected7 = (out-of nix-store -q --outputs $drv7 | chomp)
+  cp $drv7 $"($work)/c7/nix.drv"
+  if not (quiet-ok nix-store --delete $drv7) { fail $"cannot delete ($drv7) from the store" }
+  let r = (^$"($bin)/ietsp" build --builder daemon --timings --no-cache --option pure-eval false $"($work)/c7/case.nix" | complete)
+  $r.stderr | save -f $"($work)/client7.log"
+  if $r.exit_code != 0 { print ($r.stderr | chomp); fail "client exited non-zero" }
+  show-matching $timing_lines $"($work)/client7.log"
+  if not ($r.stderr | str contains "query: 2 paths, 1 missing") { fail "the local daemon should have the hello output and lack the drv" }
+  if ($r.stderr | str contains "substitute:") { fail "nothing should be left to the daemon when it has the path" }
+  let out7 = ($r.stdout | chomp)
+  if $out7 != $expected7 { fail $"output '($out7)' != expected '($expected7)'" }
+  if (open --raw $out7 | chomp) != "Hello, world!" { fail "output content differs" }
+  if not (same-file $drv7 $"($work)/c7/nix.drv") { fail "registered drv differs from nix-instantiate's" }
+  print $"ok: ($out7)"
+
+  print "== 8. the same through a scratch daemon that lacks the output and substitutes it from file://"
+  let cache = $"file://($work)/cache"
+  if not (quiet-ok nix copy --to $"($cache)?compression=none" $hello_out) { fail $"cannot copy ($hello_out) to ($cache)" }
+  let scratch2 = $"local?root=($work)/store2"
+  let sock2 = (scratch-daemon $"($work)/store2" --option substituters $cache --option require-sigs "false")
+  if (quiet-ok nix-store --store $scratch2 --check-validity $hello_out) { fail "the second scratch store should start without the hello output" }
+  let r = (^$"($bin)/ietsp" build --builder $"unix://($sock2)" --timings --no-cache --no-build --option pure-eval false $"($work)/c7/case.nix" | complete)
+  $r.stderr | save -f $"($work)/client8a.log"
+  if $r.exit_code != 0 { print ($r.stderr | chomp); fail "client exited non-zero" }
+  show-matching $timing_lines $"($work)/client8a.log"
+  if not ($r.stderr | str contains "query: 2 paths, 2 missing") { fail "the scratch daemon should lack both paths" }
+  if not ($r.stderr | str contains "substitute: 1 paths left to the daemon") { fail "the hello output should be left to the daemon" }
+  if not ($r.stderr | str contains "add: 1 paths") { fail "only the drv should be uploaded" }
+  if not (quiet-ok nix-store --store $scratch2 --check-validity $hello_out $drv7) { fail "hello output or drv not valid in the scratch store after --no-build" }
+  if not (same-file $"($work)/store2($drv7)" $drv7) { fail "drv bytes differ in the scratch store" }
+  print "ok: substituted, drv registered"
+  let r = (^$"($bin)/ietsp" build --builder $"unix://($sock2)" --timings --no-cache --option pure-eval false $"($work)/c7/case.nix" | complete)
+  $r.stderr | save -f $"($work)/client8b.log"
+  if $r.exit_code != 0 { print ($r.stderr | chomp); fail "client exited non-zero" }
+  show-matching $timing_lines $"($work)/client8b.log"
+  if not ($r.stderr | str contains "query: 2 paths, 0 missing") { fail "the second run should find both paths" }
+  let out8 = ($r.stdout | chomp)
+  if $out8 != $expected7 { fail $"output '($out8)' != expected '($expected7)'" }
+  if (open --raw $"($work)/store2($out8)" | chomp) != "Hello, world!" { fail "output content differs in the scratch store" }
+  print $"ok: ($out8)"
   print "PASS"
 }
 
@@ -179,7 +257,7 @@ def main [] {
   # cleanup, as the bash EXIT trap: the scratch daemon is the only job
   for j in (job list | get id) { job kill $j }
   # the scratch store's paths are read-only, as in a real store
-  ^chmod -R u+w $"($work)/store" err> /dev/null | complete | ignore
+  ^chmod -R u+w $"($work)/store" $"($work)/store2" err> /dev/null | complete | ignore
   rm -rf $work
   exit $code
 }

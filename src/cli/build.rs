@@ -251,8 +251,7 @@ fn build_roots(
         return 2;
     };
     let t0 = std::time::Instant::now();
-    let locate = |paths: &[StorePath]| locate_in_store(paths, &b.sources);
-    let plan = match crate::remote::plan::plan(roots, inputs, &locate) {
+    let plan = match crate::remote::plan::plan(roots, inputs) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("error: {e}");
@@ -260,12 +259,13 @@ fn build_roots(
         }
     };
     let plan_time = t0.elapsed();
-    if b.timings && (plan.store_drvs > 0 || plan.store_sources > 0) {
+    if b.timings && plan.store_drvs > 0 {
         eprintln!(
-            "plan: {} drvs and {} sources not from this eval, read from /nix/store",
-            plan.store_drvs, plan.store_sources
+            "plan: {} drvs not from this eval, read from /nix/store",
+            plan.store_drvs
         );
     }
+    let locate = |paths: &[StorePath]| locate_in_store(paths, &b.sources);
 
     let mut built = Vec::new();
     let mut failed = false;
@@ -301,6 +301,7 @@ fn build_roots(
         let report = crate::remote::worker::build::build(
             &transport,
             &plan,
+            &locate,
             root,
             outputs,
             b.no_build,

@@ -229,6 +229,7 @@ fn finish(
         let r = crate::remote::worker::build::build_on(
             conn,
             plan,
+            &super::locate_store,
             &roots[0].drv,
             &[],
             true,

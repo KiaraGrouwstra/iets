@@ -34,18 +34,26 @@ builds each root.
 - Every source the evaluation added is in `Evaluator::sources`
   (`store::source::SourceOrigin`, accessor `source_origins()`): `./path`
   and `builtins.path` record the original local tree plus the set of
-  entries a `filterSource` filter accepted, so the plan re-dumps the same
+  entries a `filterSource` filter accepted, so the client re-dumps the same
   NAR; `builtins.toFile` records the contents and references in memory.
-  After hashing, the plan checks that the NAR still yields the planned
+  After hashing, the client checks that the NAR still yields the planned
   store path and fails if the tree changed since evaluation.
-- Sources with no recorded origin (only possible under a drv read from the
-  store) go to a batch locator: one `nix path-info --json` call.
+- Sources with no recorded origin (under a drv read from the store, or a
+  path pinned with `builtins.storePath`) go to a batch locator: one `nix
+  path-info --json` call. A path the local store has as a recursive sha256
+  source or a text file is read from `/nix/store`. Anything else, an
+  input-addressed build output or a path that is not valid locally, is left
+  to the daemon: Nix treats such an `inputSrcs` entry the same way, valid or
+  substitutable on the builder.
 
-`plan.rs`: `plan(roots, Inputs { drvs, sources }, locate)` walks the drv
-closure once, iteratively, with a visited set (O(n)), emits drvs in
-post-order, and hashes the sources on a thread pool. A `toFile` text is
-emitted after the sources it references, so the daemon sees every
-reference before the path that needs it.
+`plan.rs`: `plan(roots, Inputs { drvs, sources })` walks the drv closure
+once, iteratively, with a visited set (O(n)), emits drvs in post-order and
+the source paths in registration order, and keeps the eval-time origin of
+each source. It reads and hashes nothing: the daemon is asked first, and
+`Plan::resolve(missing, locate)` then locates and hashes only the sources
+the daemon lacks, on a thread pool. A `toFile` text is listed after the
+sources it references, so the daemon sees every reference before the path
+that needs it.
 
 Legacy mode: `ietsp build [--source STOREPATH=LOCAL]... DRV` where `DRV` is
 a `.drv` store path or a copy named `<hash>-<name>.drv`. The root comes from
@@ -76,8 +84,18 @@ log lines), cores 0, substitutes on, and an empty override map.
 One op per phase:
 
 1. `QueryValidPaths` on every planned path (sources, text paths, drvs) in one
-   call, substitute flag off.
-2. `AddMultipleToStore` of the missing ones in one framed stream, in plan
+   call, substitute flag off. Then, off the wire, `Plan::resolve` on the
+   missing sources: eval-time origins and `--source` overrides first, one
+   `nix path-info --json` batch for the rest.
+2. `BuildPathsWithResults` on the missing sources the client cannot produce
+   (plain store paths, the `DerivedPath::Opaque` case that the daemon turns
+   into a substitution goal), before any upload: `registerValidPaths`
+   (local-store.cc) rejects a path whose reference is not valid, so the
+   daemon must hold these before the drvs that name them. Skipped when there
+   are none. A failed substitution ends the run with the daemon's message.
+   This is what `nix build` does through `copyPaths` plus `buildPaths` for an
+   `inputSrcs` entry it does not own.
+3. `AddMultipleToStore` of the missing ones in one framed stream, in plan
    order (sources and text paths first, then each drv after its inputs). Each
    entry is a `ValidPathInfo` in the 1.16 layout the daemon fixes for this op
    followed by the NAR: no deriver, NAR hash and size from our own dump,
@@ -88,12 +106,19 @@ One op per phase:
    references = inputSrcs + inputDrvs for a `.drv` (a drv is a text path;
    `writeDerivation` registers it the same way). A CA path is accepted from
    an untrusted client because it needs no signature.
-3. `BuildPathsWithResults` in normal mode on `<root drv>!<out1,out2>` (`!*`
+4. `BuildPathsWithResults` in normal mode on `<root drv>!<out1,out2>` (`!*`
    without `--out`), the legacy `DerivedPath` string that protocol >= 1.30
-   reads. A failure status becomes a `Failed` event.
-4. `QueryDerivationOutputMap` on the root: `Built` events per output.
-5. `NarFromPath` per wanted output with `--fetch-to DIR`, restored with
+   reads. A failure status becomes a `Failed` event. `--no-build` stops
+   before this step; the substitution in step 2 still runs, or the drvs
+   could not register.
+5. `QueryDerivationOutputMap` on the root: `Built` events per output.
+6. `NarFromPath` per wanted output with `--fetch-to DIR`, restored with
    `store::nar::restore_path`.
+
+`--timings` prints one line per phase: `plan` (the closure walk), `connect`,
+`query`, `resolve` (locate plus hash of the missing sources, with the count
+read from `/nix/store` when there are any), `substitute` (only when paths
+were left to the daemon), `add`, `build`, `outputs`, `fetch`, `worker`.
 
 `STDERR_NEXT` lines are unattributed `Log` events; `STDERR_START_ACTIVITY` of
 type `actBuild` (105) is `Started` and maps the activity id to its drv;
@@ -162,6 +187,8 @@ The upload is daemon-bound: about 0.5 ms per path for the sequential
   loads two plugins (`plugin-files` in `nix.conf`), which is the likely
   cause but was not profiled.
 - Flat fixed-output sources (`builtins.path { recursive = false; }`) have
-  no recorded origin; they fall back to the store locator, which rejects
-  them. Output paths used as `inputSrcs` (`builtins.storePath`) are
-  rejected at plan time too.
+  no recorded origin; the store locator does not send them, so the daemon
+  must substitute them like an input-addressed output.
+- `nix path-info --json` on this Nix prints a deprecation warning for the
+  missing `--json-format`; it reaches stderr on every run that locates a
+  source through the store.

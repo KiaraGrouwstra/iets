@@ -581,6 +581,7 @@ fn realise(
     let upload = crate::remote::worker::build::build_on(
         &mut conn,
         plan,
+        &super::locate_store,
         &roots[0].drv,
         &[],
         true,

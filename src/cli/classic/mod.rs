@@ -466,14 +466,18 @@ pub fn plan_roots(
     let drvs = ev.drv.drvs.lock();
     let sources = ev.source_origins();
     let paths: Vec<StorePath> = roots.iter().map(|r| r.drv.clone()).collect();
-    let empty = std::collections::HashMap::new();
-    let locate = |p: &[StorePath]| crate::store::locate::locate_in_store(p, &empty);
     crate::remote::plan::plan(
         &paths,
         crate::remote::plan::Inputs {
             drvs: &drvs,
             sources: &sources,
         },
-        &locate,
     )
+}
+
+/// The plan's locator: the local store, no `--source` overrides.
+pub fn locate_store(
+    paths: &[StorePath],
+) -> crate::error::Result<Vec<Option<crate::remote::plan::SourceInfo>>> {
+    crate::store::locate::locate_in_store(paths, &std::collections::HashMap::new())
 }
