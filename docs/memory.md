@@ -308,6 +308,31 @@ nixos-desktop w4 is inside this box's noise: three interleaved measurements gave
 -6.8 % (7 runs, before = 217e383), +4.3 % (7 runs) and, at 11 runs, median
 +1.2 % with mean -1.2 % (1232-1493 ms against 1220-1543 ms, user 2.62 -> 2.55 s).
 
+
+Idea 2, transient frames on a fiber-local stack (tried, rejected;
+before = 02d7621). The census counted 25.5 M one-slot frames on outpaths
+that nothing captured. A compile-time analysis (`Compiler::marks`: a
+`let` or lambda is transient when its body compiles no lazy position
+that thunks, no lambda, no `with`, no `rec` and no `inherit (e)` env)
+proved 20.3 M of the 59.0 M frames on the chunk (desktop 1.06 M of
+6.1 M), and those frames were pushed on a per-fiber chunked stack and
+popped on return: envs in the arena 1262 → 947 MiB, outpaths peak RSS
+7215 → 6895 MB, output byte-identical at 1 and 4 workers. The wall did
+not follow. Env allocation is an inlined bump and the kernel is 1.1 % of
+the one-worker profile, so the only win was locality:
+
+| workload | wall before | wall after | change | user before | user after | sys before | sys after | RSS before | RSS after |
+|---|---|---|---|---|---|---|---|---|---|
+| nixos-desktop w1 | 1.523 | 1.561 | 2.5% | 1.28 | 1.3 | 0.22 | 0.26 | 654 | 654 |
+| nixos-desktop w4 | 1.322 | 1.319 | -0.2% | 2.54 | 2.53 | 0.58 | 0.62 | 829 | 793 |
+| nixos-minimal w1 | 1.148 | 1.146 | -0.1% | 0.99 | 0.99 | 0.15 | 0.15 | 522 | 521 |
+| outpaths 0/8 w1 | 33.049 | 32.479 | -1.7% | 28.6 | 28.18 | 4.27 | 4.19 | 7215 | 6895 |
+
+Reverted: −1.7 % on outpaths is under the 2 % bar and desktop w1 lost
+2.5 %. The 320 MB of RSS would be the reason to bring it back as a
+memory change; the diff is small (a `marks` counter in the compiler, a
+`transient` flag on `LambdaIr` and `LetIr`, `eval::frames::FrameStack`).
+
 ## Assessed and not done
 
 Numbers are from the outpaths census unless stated; percentages are of
@@ -339,7 +364,7 @@ the arena after change 3 (7.1 GB).
   frame stack and be popped on return if the compiler proves the body
   creates nothing that holds the frame. That is the largest remaining
   packing item and is a compiler analysis plus a second allocator; not
-  done here.
+  done here; tried as idea 2 (2026-09-18): 320 MB of RSS, no wall gain.
 - **Lists.** `map` allocates a result list plus a 16-byte `ThunkApp` per
   element; 98 % of those thunks are forced, so a lazier form saves
   nothing. Lists never read: 3.6 M of 24 M (63 MB, 0.9 %).
