@@ -8,6 +8,7 @@ nix develop -c cargo build --release
 nix flake check   # test, clippy, fmt, langtests, partest
 scripts/langtests.nu
 scripts/difftest.nu -I nixpkgs=/path -E '(import <nixpkgs> {}).hello.drvPath'
+scripts/parity.nu   # match/split/fromTOML against the real nix-instantiate
 bench/run.nu nixos-desktop
 
 # remote builds: evaluate in memory, ship only what the daemon lacks, over the Nix worker protocol

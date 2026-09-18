@@ -23,15 +23,10 @@ pub const INVALID: Id = u32::MAX;
 
 /// `_GLIBCXX_REGEX_STATE_LIMIT`: libstdc++ throws `error_space` once the NFA
 /// holds more states than this, which Nix reports as a memory limit.
-const STATE_LIMIT: usize = 100_000;
-
-/// The state budget, for the compiler's repetition loops.
-pub fn state_limit() -> u64 {
-    STATE_LIMIT as u64
-}
+pub const STATE_LIMIT: usize = 100_000;
 
 /// A byte set: a bracket expression, already collapsed to bytes.
-#[derive(Clone, Default, PartialEq, Eq, Debug)]
+#[derive(Clone, Default)]
 pub struct Bits([u64; 4]);
 
 impl Bits {
@@ -480,9 +475,10 @@ pub struct Found {
 }
 
 /// `std::cregex_iterator` over `hay`, which is what `builtins.split` walks.
+/// One executor is reused for every step; C++ builds a fresh one per
+/// `regex_search`, which only means the match spans start unset again.
 pub struct Matches<'a> {
-    prog: &'a Prog,
-    hay: &'a [u8],
+    ex: Exec<'a>,
     /// Span of the match just returned; `None` before the first one.
     last: Option<(usize, usize)>,
     prev_avail: bool,
@@ -491,8 +487,7 @@ pub struct Matches<'a> {
 
 pub fn matches<'a>(prog: &'a Prog, hay: &'a [u8]) -> Matches<'a> {
     Matches {
-        prog,
-        hay,
+        ex: Exec::new(prog, hay, 0),
         last: None,
         prev_avail: false,
         done: false,
@@ -501,7 +496,9 @@ pub fn matches<'a>(prog: &'a Prog, hay: &'a [u8]) -> Matches<'a> {
 
 impl Matches<'_> {
     fn search(&mut self, begin: usize, anchored_non_empty: bool) -> Option<Found> {
-        let mut ex = Exec::new(self.prog, self.hay, begin);
+        let ex = &mut self.ex;
+        ex.begin = begin;
+        ex.results.fill(Span::default());
         ex.prev_avail = self.prev_avail;
         ex.not_null = anchored_non_empty;
         ex.continuous = anchored_non_empty;
@@ -511,7 +508,7 @@ impl Matches<'_> {
         Some(Found {
             start: ex.results[0].first,
             end: ex.results[0].second,
-            groups: groups(&ex),
+            groups: groups(ex),
         })
     }
 
@@ -544,7 +541,7 @@ impl Iterator for Matches<'_> {
         };
         let mut start = second;
         if first == second {
-            if start == self.hay.len() {
+            if start == self.ex.hay.len() {
                 self.done = true;
                 return None;
             }

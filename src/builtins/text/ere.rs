@@ -8,7 +8,7 @@
 //! no collation. Outside brackets only the ERE metacharacters may be
 //! escaped; anything else is an error, as in libstdc++.
 
-use super::posix::{Bits, INVALID, Prog, Seq};
+use super::posix::{self, Bits, INVALID, Prog, Seq};
 
 const CLASSES: [&str; 12] = [
     "alnum", "alpha", "blank", "cntrl", "digit", "graph", "lower", "print", "punct", "space",
@@ -226,7 +226,7 @@ impl Compiler<'_> {
         let mut e = one(d);
         // Each copy costs a state, so a silly count runs into the NFA's
         // state limit instead of looping.
-        for _ in 0..lo.min(super::posix::state_limit() + 1) {
+        for _ in 0..lo.min(posix::STATE_LIMIT as u64 + 1) {
             let c = self.prog.clone_seq(r)?;
             self.prog.append(&mut e, c);
         }
@@ -238,7 +238,7 @@ impl Compiler<'_> {
         } else {
             let end = self.prog.dummy()?;
             let mut alts = Vec::new();
-            for _ in 0..extra.min(super::posix::state_limit() + 1) {
+            for _ in 0..extra.min(posix::STATE_LIMIT as u64 + 1) {
                 let tmp = self.prog.clone_seq(r)?;
                 let alt = self.prog.repeat(tmp.start, end)?;
                 alts.push(alt);
