@@ -231,9 +231,9 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
     root: "root"
     version: 7
   } | to json | save $"($ghost)/flake.lock"
-  let g = (with-env {IETSP_NIX_BIN_DIR: $"($work)/nobin"} { ^$ietsp eval --raw --no-cache $"($ghost)#v" | complete })
+  let g = (with-env {IETSP_NIX_BIN_DIR: $"($work)/nobin", PATH: $"($work)/nobin"} { ^$ietsp eval --raw --no-cache $"($ghost)#v" | complete })
   let named = ($g.stderr | lines | where ($it | str contains "input 'ghost'") | length)
-  $res ++= [(verdict ($g.exit_code != 0 and $g.stdout == "" and $named == 2 and ($g.stderr | str contains "nix is not on PATH")) "unfetchable input: both messages name it, no nix on PATH is plain" $"unfetchable input \(exit ($g.exit_code)\): ($g.stderr | lines | first 2 | str join ' | ')")]
+  $res ++= [(verdict ($g.exit_code != 0 and $g.stdout == "" and $named == 2 and ($g.stderr | str contains "nix is not on PATH")) "unfetchable input: both messages name it, no nix anywhere is plain" $"unfetchable input \(exit ($g.exit_code)\): ($g.stderr | lines | first 2 | str join ' | ')")]
 
   let fail = ($res | where not $it | length)
   print $"pass=($res | where $it | length) fail=($fail)"
