@@ -346,9 +346,22 @@ pub fn derivations(
     out: &mut Vec<Root>,
     seen: &mut HashSet<(String, String)>,
 ) -> EvalResult<()> {
+    derivations_at(ev, v, args, out, seen, "")
+}
+
+/// `derivations`, telling every derivation it finds which attribute path it
+/// was reached by (`attr` is the path already walked, from `-A`).
+pub fn derivations_at(
+    ev: &mut Evaluator,
+    v: Word,
+    args: Word,
+    out: &mut Vec<Root>,
+    seen: &mut HashSet<(String, String)>,
+    attr: &str,
+) -> EvalResult<()> {
     let v = ev.auto_call(v, args)?;
     let v = ev.force(v)?;
-    if one_derivation(ev, v, out, seen)? {
+    if one_derivation(ev, v, out, seen, attr)? {
         return Ok(());
     }
     if let Some(attrs) = v.as_attrs() {
@@ -362,8 +375,9 @@ pub fn derivations(
             if !is_attr_path_component(&name) {
                 continue;
             }
+            let sub = join_attr(attr, &name);
             let child = ev.force(child)?;
-            if one_derivation(ev, child, out, seen)? {
+            if one_derivation(ev, child, out, seen, &sub)? {
                 continue;
             }
             let Some(ca) = child.as_attrs() else { continue };
@@ -375,14 +389,14 @@ pub fn derivations(
                 r.pos,
                 "while evaluating the attribute `recurseForDerivations`",
             )? {
-                derivations(ev, child, args, out, seen)?;
+                derivations_at(ev, child, args, out, seen, &sub)?;
             }
         }
         return Ok(());
     }
     if let Some(l) = v.as_list() {
         for c in l.cells() {
-            derivations(ev, c.get(), args, out, seen)?;
+            derivations_at(ev, c.get(), args, out, seen, attr)?;
         }
         return Ok(());
     }
@@ -393,12 +407,23 @@ pub fn derivations(
     ))
 }
 
+/// `a.b` from `a` and `b`; `b` alone when the prefix is empty.
+fn join_attr(prefix: &str, name: &[u8]) -> String {
+    let name = String::from_utf8_lossy(name);
+    if prefix.is_empty() {
+        name.into_owned()
+    } else {
+        format!("{prefix}.{name}")
+    }
+}
+
 /// True when `v` was a derivation and is now in `out`, or was a duplicate.
 fn one_derivation(
     ev: &mut Evaluator,
     v: Word,
     out: &mut Vec<Root>,
     seen: &mut HashSet<(String, String)>,
+    attr: &str,
 ) -> EvalResult<bool> {
     let Some(attrs) = v.as_attrs() else {
         return Ok(false);
@@ -441,6 +466,7 @@ fn one_derivation(
             Pos::NONE,
         ));
     }
+    ev.drv.set_attr(&drv, attr);
     if seen.insert((drv.to_string(), output.clone())) {
         out.push(Root { drv, output });
     }

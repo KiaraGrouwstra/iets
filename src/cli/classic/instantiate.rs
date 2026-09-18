@@ -140,7 +140,7 @@ fn run(ev: &mut Evaluator, i: &Inst) -> Run {
                     let v = if has_args { ev.auto_call(v, args)? } else { v };
                     print_value(ev, v, i, &mut text)?;
                 } else {
-                    super::derivations(ev, v, args, &mut roots, &mut seen)?;
+                    super::derivations_at(ev, v, args, &mut roots, &mut seen, attr)?;
                 }
             }
         }

@@ -17,7 +17,7 @@ use crate::trace::run::Cache;
 
 pub fn usage() -> ! {
     eprintln!(
-        "usage: ietsp eval [--strict] [--json] [--raw] [--workers N] [--timings] [--no-cache] [--no-ir-cache] [--cache-dir DIR] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp cache-dump READSET   (print a cache entry's read set)\n       ietsp build [--builder URL] [--timings] [--no-build] [--fetch-to DIR] [--no-cache] [--cache-dir DIR] [--out NAME]... [--workers N] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--fetch-to DIR] [--out NAME]... [--source STOREPATH=LOCAL]... DRV\n       ietsp eval-jobs [--workers N] [--force-recurse] [--meta] [--show-input-drvs] [--chunks M --chunk N [--chunk-depth D]] [--max-memory-size MB] [-I prefix=path]... [--arg name expr] [--argstr name str] (-E EXPR | FILE | FLAKEREF#attr)\n       ietsp print-dev-env [--builder URL] [--gc-root PATH] [--json] [--workers N] [--no-cache] [--cache-dir DIR] [--timings] [FLAKEREF[#attr]]   (default: ., a daemon URL)\n       URL: daemon, unix:///path, ssh-ng://[user@]host (Nix worker protocol)"
+        "usage: ietsp eval [--strict] [--json] [--raw] [--workers N] [--timings] [--no-cache] [--no-ir-cache] [--cache-dir DIR] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp cache-dump READSET   (print a cache entry's read set)\n       ietsp build [--builder URL] [--timings] [--no-build] [--fetch-to DIR] [--no-cache] [--cache-dir DIR] [--out NAME]... [--workers N] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--fetch-to DIR] [--out NAME]... [--source STOREPATH=LOCAL]... DRV\n       ietsp eval-jobs [--workers N] [--force-recurse] [--meta] [--provenance] [--show-input-drvs] [--chunks M --chunk N [--chunk-depth D]] [--max-memory-size MB] [-I prefix=path]... [--arg name expr] [--argstr name str] (-E EXPR | FILE | FLAKEREF#attr)\n       ietsp print-dev-env [--builder URL] [--gc-root PATH] [--json] [--workers N] [--no-cache] [--cache-dir DIR] [--timings] [FLAKEREF[#attr]]   (default: ., a daemon URL)\n       URL: daemon, unix:///path, ssh-ng://[user@]host (Nix worker protocol)"
     );
     exit(2)
 }
@@ -194,16 +194,22 @@ pub fn flake_ref(f: &str, cwd: &[u8]) -> crate::error::Result<crate::flake::Flak
     crate::flake::parse_flake_ref(f, cwd, home().as_deref())
 }
 
+/// Prints an evaluation error. Positions and the store paths inside the
+/// messages name the local file the source was copied from, when one is
+/// known (docs/provenance.md).
 pub fn report(ev: &Evaluator, e: &Error) {
-    eprintln!("error: {}", e.msg);
+    use crate::provenance::{describe_pos, rewrite_msg};
+    let at = |pos: Pos| describe_pos(ev, pos).unwrap_or_else(|| ev.describe_pos(pos));
+    eprintln!("error: {}", rewrite_msg(ev, &e.msg));
     if !e.pos.is_none() {
-        eprintln!("       at {}", ev.describe_pos(e.pos));
+        eprintln!("       at {}", at(e.pos));
     }
     for (pos, msg) in e.trace.iter() {
+        let msg = rewrite_msg(ev, msg);
         if pos.is_none() {
             eprintln!("       … {msg}");
         } else {
-            eprintln!("       … {msg} at {}", ev.describe_pos(*pos));
+            eprintln!("       … {msg} at {}", at(*pos));
         }
     }
 }

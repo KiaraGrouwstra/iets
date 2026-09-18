@@ -21,6 +21,14 @@ pub fn enabled() -> bool {
     !std::env::var_os("IETSP_PROVENANCE").is_some_and(|v| v == "0")
 }
 
+/// How many times a mapping may point at another mapped tree.
+const MAX_HOPS: usize = 8;
+
+/// A byte a store path's base name may hold (path.cc:checkName).
+fn is_name_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.' | b'_' | b'?' | b'=')
+}
+
 /// A pseudo-file (`«derivation-internal»`, `«arg»`) rather than a real path.
 fn is_pseudo(path: &[u8]) -> bool {
     path.starts_with("\u{ab}".as_bytes())
@@ -59,9 +67,29 @@ impl SourceMap {
         });
     }
 
+    /// Orders the entries for matching and resolves the chains: a tree
+    /// copied from a tree that is itself in the store (`./.` inside a flake
+    /// already in the store) must land on the local directory, not on the
+    /// store path in between.
     pub fn sort(&mut self) {
         self.entries.sort_by(|a, b| b.prefix.cmp(&a.prefix));
         self.entries.dedup_by(|a, b| a.prefix == b.prefix);
+        for _ in 0..MAX_HOPS {
+            let mut changed = false;
+            let resolved: Vec<Option<Vec<u8>>> =
+                self.entries.iter().map(|e| self.locate(&e.local)).collect();
+            for (e, r) in self.entries.iter_mut().zip(resolved) {
+                if let Some(r) = r
+                    && r != e.local
+                {
+                    e.local = r;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
     }
 
     fn find(&self, path: &[u8]) -> Option<&Entry> {
@@ -102,9 +130,7 @@ impl SourceMap {
                 let end = start
                     + text[start..]
                         .iter()
-                        .position(|&b| {
-                            b == b'/' || b == b'\'' || b == b'"' || b.is_ascii_whitespace()
-                        })
+                        .position(|&b| !is_name_byte(b))
                         .unwrap_or(text.len() - start);
                 if let Some(local) = self.locate(&text[i..end]) {
                     out.extend_from_slice(&local);
@@ -120,9 +146,18 @@ impl SourceMap {
 
     /// The trees this evaluation copied, plus the `source-map` setting.
     pub fn from_eval(ev: &Evaluator, cfg: Option<&Config>) -> SourceMap {
+        SourceMap::from_sources(&ev.source_origins(), cfg)
+    }
+
+    /// The same map from a set of source records, for a run that replayed
+    /// them from the cache instead of evaluating.
+    pub fn from_sources(
+        sources: &HashMap<crate::store::path::StorePath, SourceOrigin>,
+        cfg: Option<&Config>,
+    ) -> SourceMap {
         let mut m = SourceMap::default();
         let revs = revs().lock().unwrap();
-        for (p, o) in ev.source_origins().iter() {
+        for (p, o) in sources.iter() {
             if let SourceOrigin::Tree { local, .. } = o {
                 let full = p.to_string();
                 let rev = revs.get(&full).cloned();
@@ -197,6 +232,16 @@ pub fn real_pos(ev: &Evaluator, pos: Pos) -> Option<Pos> {
     (!is_pseudo(&f.path)).then_some(pos)
 }
 
+/// The derivation name inside a `.drv` store path: no hash, no extension.
+fn drv_name(drv_path: &str) -> String {
+    let base = drv_path.rsplit('/').next().unwrap_or(drv_path);
+    let name = base.strip_suffix(".drv").unwrap_or(base);
+    match name.split_once('-') {
+        Some((hash, rest)) if hash.len() == 32 => rest.to_string(),
+        _ => name.to_string(),
+    }
+}
+
 /// Where one derivation was defined.
 #[derive(Clone, Debug, Default)]
 pub struct Site {
@@ -219,6 +264,16 @@ impl Provenance {
     /// Provenance that maps and names nothing.
     pub fn off() -> Provenance {
         Provenance::default()
+    }
+
+    /// Rewriting only: no derivation is named. This is what a run that hit
+    /// the evaluation cache can offer, because the cache keeps no positions.
+    pub fn from_map(map: SourceMap) -> Provenance {
+        Provenance {
+            map,
+            sites: HashMap::new(),
+            on: enabled(),
+        }
     }
 
     pub fn snapshot(ev: &Evaluator, cfg: Option<&Config>) -> Provenance {
@@ -275,11 +330,10 @@ impl Provenance {
     /// known. `None` when nothing is.
     pub fn name_of(&self, drv_path: &str) -> Option<String> {
         let s = self.site(drv_path)?;
-        match (&s.attr, &s.pos) {
-            (Some(a), Some(p)) => Some(format!("{a} ({p})")),
-            (Some(a), None) => Some(a.clone()),
-            (None, Some(p)) => Some(p.clone()),
-            (None, None) => None,
+        let what = s.attr.clone().unwrap_or_else(|| drv_name(drv_path));
+        match &s.pos {
+            Some(p) => Some(format!("{what} ({p})")),
+            None => Some(what),
         }
     }
 
@@ -292,7 +346,7 @@ impl Provenance {
     pub fn failed(&self, drv_path: &str, reason: &str) -> Option<String> {
         let s = self.site(drv_path)?;
         let base = drv_path.rsplit('/').next().unwrap_or(drv_path);
-        let what = s.attr.clone().unwrap_or_else(|| base.to_string());
+        let what = s.attr.clone().unwrap_or_else(|| drv_name(drv_path));
         let mut line = format!("error: build of {what} failed ({base})");
         if let Some(p) = &s.pos {
             line.push_str(&format!(", defined at {p}"));
@@ -347,6 +401,38 @@ mod tests {
             SourceMap::default()
                 .locate(b"/nix/store/aaaa-source")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn a_tree_copied_from_a_store_tree_resolves_to_the_local_one() {
+        // `./.` inside a flake that is already in the store copies the store
+        // tree again; the log line names the second copy.
+        let mut m = SourceMap::default();
+        m.insert(b"/nix/store/aaaa-source", b"/home/u/repo", None);
+        m.insert(
+            b"/nix/store/bbbb-aaaa-source",
+            b"/nix/store/aaaa-source",
+            None,
+        );
+        m.sort();
+        assert_eq!(
+            m.locate(b"/nix/store/bbbb-aaaa-source/flake.nix").unwrap(),
+            b"/home/u/repo/flake.nix".to_vec()
+        );
+        assert_eq!(
+            String::from_utf8(m.rewrite(b"tree is /nix/store/bbbb-aaaa-source")).unwrap(),
+            "tree is /home/u/repo"
+        );
+    }
+
+    #[test]
+    fn a_path_followed_by_a_colour_escape_still_matches() {
+        let m = map();
+        let line = b"at \x1b[35;1m/nix/store/aaaa-source/x.nix\x1b[0m!";
+        assert_eq!(
+            m.rewrite(line),
+            b"at \x1b[35;1m/home/u/repo/x.nix\x1b[0m!".to_vec()
         );
     }
 

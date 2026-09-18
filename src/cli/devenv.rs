@@ -20,6 +20,7 @@ struct EventSink {
     live: bool,
     log: Vec<String>,
     failed: Option<String>,
+    prov: crate::provenance::Provenance,
 }
 
 impl EventSink {
@@ -27,16 +28,26 @@ impl EventSink {
         use crate::remote::event::Event;
         match e {
             Event::Log(l) => {
-                let line = String::from_utf8_lossy(&l.line).into_owned();
+                let line = self.prov.rewrite_str(&String::from_utf8_lossy(&l.line));
                 if self.live {
                     eprintln!("ietsp: {line}");
                 } else {
                     self.log.push(line);
                 }
             }
-            Event::Started(s) if self.live => eprintln!("ietsp: building {}", s.drv_path),
+            Event::Started(s) if self.live => match self.prov.started(&s.drv_path) {
+                Some(l) => eprintln!("ietsp: {l}"),
+                None => eprintln!("ietsp: building {}", s.drv_path),
+            },
             Event::Failed(f) => {
-                self.failed = Some(format!("build of {} failed: {}", f.drv_path, f.reason));
+                self.failed = Some(match self.prov.failed(&f.drv_path, &f.reason) {
+                    Some(l) => l.trim_start_matches("error: ").to_string(),
+                    None => format!(
+                        "build of {} failed: {}",
+                        f.drv_path,
+                        self.prov.rewrite_str(&f.reason)
+                    ),
+                });
             }
             Event::Done(d) if !d.success && self.failed.is_none() => {
                 self.failed = Some("build failed".into());
@@ -325,6 +336,10 @@ fn dev_env_full(
             live: timings,
             log: Vec::new(),
             failed: None,
+            prov: crate::provenance::Provenance::snapshot(
+                ev,
+                crate::config::Config::load(&[]).ok().as_ref(),
+            ),
         };
         let mut conn = Connection::open(&d.transport, &mut |e| sink.event(e))?;
         let valid = conn.query_valid_paths(&out_paths, &mut |e| sink.event(e))?;

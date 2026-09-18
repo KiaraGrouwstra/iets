@@ -41,6 +41,10 @@ pub struct Opts {
     /// `--chunk-depth D`: a path of length D is a unit, whatever it holds;
     /// a derivation above that depth is a unit of its own.
     pub chunk_depth: u32,
+    /// `--provenance`: add a `pos` key, the source position of each job's
+    /// derivation. nix-eval-jobs 2.35 has no such key, so this is off by
+    /// default and the output stays flag-identical (docs/provenance.md).
+    pub provenance: bool,
 }
 
 struct Syms {
@@ -747,6 +751,12 @@ fn job_inner(ev: &mut Evaluator, a: &'static AttrsObj, path: &[String]) -> EvalR
         let mut m = Vec::new();
         meta_json(ev, a, &mut m)?;
         extra.insert("meta".into(), m);
+    }
+    if cfg.opts.provenance
+        && let Some(pos) = ev.drv.drvs.get(&drv_path).and_then(|i| i.pos)
+        && let Some(s) = crate::provenance::describe_pos(ev, pos)
+    {
+        extra.insert("pos".into(), line::json_str(&s));
     }
     let mut js = Vec::new();
     json_escape(&mut js, &name)?;

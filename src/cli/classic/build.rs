@@ -8,6 +8,7 @@ use std::sync::Arc;
 use super::{Argv, Common, Root, common_flag, fallback, is_unsupported};
 use crate::cli::{abs_path, auto_args, cwd, report};
 use crate::eval::{Error, Evaluator};
+use crate::provenance::Provenance;
 use crate::remote::event::Event;
 use crate::remote::plan::Plan;
 use crate::remote::worker::{Connection, Options, Transport};
@@ -62,7 +63,7 @@ fn parse(argv: &[String]) -> Result<Build, String> {
 enum Run {
     Failed(i32),
     Unsupported(String),
-    Ready(Vec<Root>, Box<Plan>),
+    Ready(Vec<Root>, Box<Plan>, Box<Provenance>),
     Empty,
 }
 
@@ -78,17 +79,18 @@ pub fn main(argv: &[String]) -> i32 {
     let ev = super::evaluator(&b.c, &cfg);
     let b = Arc::new(b);
     let build = Arc::clone(&b);
+    let cfg2 = cfg.clone();
     match crate::parallel::run(crate::parallel::default_workers(), ev, move |ev| {
-        run(ev, &build)
+        run(ev, &build, &cfg2)
     }) {
         Run::Failed(code) => code,
         Run::Unsupported(reason) => fallback(NAME, argv, &reason),
         Run::Empty => 0,
-        Run::Ready(roots, plan) => realise(&b, &transport, &options, &roots, &plan),
+        Run::Ready(roots, plan, prov) => realise(&b, &transport, &options, &roots, &plan, &prov),
     }
 }
 
-fn run(ev: &mut Evaluator, b: &Build) -> Run {
+fn run(ev: &mut Evaluator, b: &Build, cfg: &crate::config::Config) -> Run {
     let cwd = cwd();
     let mut roots: Vec<Root> = Vec::new();
     let mut seen = HashSet::new();
@@ -98,7 +100,7 @@ fn run(ev: &mut Evaluator, b: &Build) -> Run {
             let root = super::eval_input(ev, &b.c, file, &cwd)?;
             for attr in &b.c.attr_paths {
                 let v = super::select(ev, root, attr, args)?;
-                super::derivations(ev, v, args, &mut roots, &mut seen)?;
+                super::derivations_at(ev, v, args, &mut roots, &mut seen, attr)?;
             }
         }
         Ok(())
@@ -113,8 +115,9 @@ fn run(ev: &mut Evaluator, b: &Build) -> Run {
     if roots.is_empty() {
         return Run::Empty;
     }
+    let prov = Provenance::snapshot(ev, Some(cfg));
     match super::plan_roots(ev, &roots) {
-        Ok(p) => Run::Ready(roots, Box::new(p)),
+        Ok(p) => Run::Ready(roots, Box::new(p), Box::new(prov)),
         Err(e) => {
             eprintln!("error: {e}");
             Run::Failed(1)
@@ -129,15 +132,28 @@ fn realise(
     options: &Options,
     roots: &[Root],
     plan: &Plan,
+    prov: &Provenance,
 ) -> i32 {
     let quiet = b.c.quiet;
     let failed = std::cell::Cell::new(false);
     let mut on_event = |e: Event| match e {
-        Event::Started(s) => eprintln!("building '{}'...", s.drv_path),
-        Event::Log(l) if !quiet => eprintln!("{}", String::from_utf8_lossy(&l.line)),
+        Event::Started(s) => match prov.started(&s.drv_path) {
+            Some(l) => eprintln!("{l}..."),
+            None => eprintln!("building '{}'...", s.drv_path),
+        },
+        Event::Log(l) if !quiet => {
+            eprintln!("{}", String::from_utf8_lossy(&prov.rewrite(&l.line)))
+        }
         Event::Failed(f) => {
             failed.set(true);
-            eprintln!("error: build of '{}' failed: {}", f.drv_path, f.reason);
+            match prov.failed(&f.drv_path, &f.reason) {
+                Some(l) => eprintln!("{l}"),
+                None => eprintln!(
+                    "error: build of '{}' failed: {}",
+                    f.drv_path,
+                    prov.rewrite_str(&f.reason)
+                ),
+            }
         }
         _ => {}
     };
@@ -177,7 +193,16 @@ fn realise(
     for r in &results {
         if !r.success() {
             failed.set(true);
-            eprintln!("error: build failed: status {}: {}", r.status, r.msg);
+            // A derived path: `<drv>!<outputs>`.
+            let drv = r.path.split('!').next().unwrap_or(&r.path);
+            match prov.failed(drv, &format!("status {}: {}", r.status, r.msg)) {
+                Some(l) => eprintln!("{l}"),
+                None => eprintln!(
+                    "error: build failed: status {}: {}",
+                    r.status,
+                    prov.rewrite_str(&r.msg)
+                ),
+            }
         }
     }
     if failed.get() {

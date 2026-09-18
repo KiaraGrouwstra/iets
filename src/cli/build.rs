@@ -88,17 +88,26 @@ pub fn cmd_build(argv: &[String]) -> i32 {
             );
         }
         let (root_paths, outputs) = build_targets(&b, &roots);
+        let prov = crate::provenance::Provenance::from_map(
+            crate::provenance::SourceMap::from_sources(&sources, config().as_ref()),
+        );
         let inputs = crate::remote::plan::Inputs {
             drvs: &drvs,
             sources: &sources,
         };
-        return build_roots(&b, &root_paths, &outputs, inputs);
+        return build_roots(&b, &root_paths, &outputs, inputs, &prov);
     }
     if cache.is_some() {
         ev.trace = crate::trace::Trace::enabled();
     }
     // parallel: eval and build run as the main fiber
     crate::parallel::run(a.workers, ev, move |ev| build_eval(ev, &b, a, t0, cache))
+}
+
+/// The Nix settings, for the `source-map` setting only; `ietsp build` takes
+/// no `--option`.
+fn config() -> Option<crate::config::Config> {
+    crate::config::Config::load(&[]).ok()
 }
 
 /// The drv paths to build and the outputs to print: `--out` plus the outputs the roots' context named.
@@ -125,10 +134,19 @@ fn build_eval(
     cache: Option<Cache>,
 ) -> i32 {
     let mut roots = Vec::new();
+    let target = a.attr.clone().or_else(|| match &a.input {
+        Some(Input::Flake(f)) => f.split_once('#').map(|(_, frag)| frag.to_string()),
+        _ => None,
+    });
     let r = evaluate(ev, a).and_then(|v| drv_roots(ev, v, &mut roots));
     if let Err(e) = r {
         report(ev, &e);
         return 1;
+    }
+    if let Some(t) = &target {
+        for (p, _) in &roots {
+            ev.drv.set_attr(p, t);
+        }
     }
     let eval_time = t0.elapsed();
     if b.timings {
@@ -143,13 +161,14 @@ fn build_eval(
         c.write(ev, &crate::trace::wire::encode_roots(&roots), true);
     }
     let (root_paths, outputs) = build_targets(b, &roots);
+    let prov = crate::provenance::Provenance::snapshot(ev, config().as_ref());
     let drvs = ev.drv.drvs.lock();
     let sources = ev.source_origins();
     let inputs = crate::remote::plan::Inputs {
         drvs: &drvs,
         sources: &sources,
     };
-    build_roots(b, &root_paths, &outputs, inputs)
+    build_roots(b, &root_paths, &outputs, inputs, &prov)
 }
 
 /// Legacy mode: `DRV` is a `.drv` store path, or a copy of the file named
@@ -198,6 +217,10 @@ fn build_drv_file(b: &BuildArgs, root_arg: &str) -> i32 {
     };
     let drvs = HashMap::from([(root.clone(), info)]);
     let sources = HashMap::new();
+    let prov = crate::provenance::Provenance::from_map(crate::provenance::SourceMap::from_sources(
+        &sources,
+        config().as_ref(),
+    ));
     build_roots(
         b,
         &[root],
@@ -206,6 +229,7 @@ fn build_drv_file(b: &BuildArgs, root_arg: &str) -> i32 {
             drvs: &drvs,
             sources: &sources,
         },
+        &prov,
     )
 }
 
@@ -214,6 +238,7 @@ fn build_roots(
     roots: &[crate::store::path::StorePath],
     outputs: &[String],
     inputs: crate::remote::plan::Inputs<'_>,
+    prov: &crate::provenance::Provenance,
 ) -> i32 {
     use crate::remote::event::Event;
     use crate::store::path::StorePath;
@@ -247,9 +272,13 @@ fn build_roots(
     let roots = if b.no_build { &roots[..1] } else { roots };
     for root in roots {
         let mut on_event = |ev: Event| match ev {
-            Event::Started(s) => eprintln!("building {}", s.drv_path),
+            Event::Started(s) => match prov.started(&s.drv_path) {
+                Some(l) => eprintln!("{l}"),
+                None => eprintln!("building {}", s.drv_path),
+            },
             Event::Log(l) => {
-                let line = String::from_utf8_lossy(&l.line);
+                let line = prov.rewrite(&l.line);
+                let line = String::from_utf8_lossy(&line);
                 match StorePath::parse(&l.drv_path) {
                     Ok(p) => eprintln!("{}> {line}", p.name()),
                     Err(_) => eprintln!("{line}"),
@@ -258,7 +287,14 @@ fn build_roots(
             Event::Built(b) => built.push((b.output, b.store_path)),
             Event::Failed(f) => {
                 failed = true;
-                eprintln!("error: build of {} failed: {}", f.drv_path, f.reason);
+                match prov.failed(&f.drv_path, &f.reason) {
+                    Some(l) => eprintln!("{l}"),
+                    None => eprintln!(
+                        "error: build of {} failed: {}",
+                        f.drv_path,
+                        prov.rewrite_str(&f.reason)
+                    ),
+                }
             }
             Event::Done(d) => failed |= !d.success,
         };
