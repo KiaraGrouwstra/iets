@@ -1,5 +1,7 @@
-//! Remote builds: the upload plan and the Nix worker-protocol client.
+//! Remote builds: the upload plan, the Nix worker-protocol client and the
+//! `grpc://` client for nix-grpc-store.
 
 pub mod event;
+pub mod grpc;
 pub mod plan;
 pub mod worker;

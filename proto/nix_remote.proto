@@ -1,0 +1,157 @@
+// Vendored verbatim from github.com/Mic92/nix-grpc-store proto/nix_remote.proto at rev 8f3a2ecb58117448f28bae90304c3e24e8e42b79.
+syntax = "proto3";
+
+package nix.remote;
+
+// A zstd-compressed chunk of the Nix worker protocol byte stream. The
+// concatenation of all chunks in one direction is a single zstd stream; each
+// chunk ends on a ZSTD_e_flush boundary so it can be decoded in isolation.
+message Chunk {
+  bytes data = 1;
+}
+
+// Batched validity query. Paths are store path base names ("<hash>-<name>").
+message QueryValidPathsRequest {
+  repeated string paths = 1;
+  // If true, the server may try to substitute missing paths.
+  bool substitute = 2;
+}
+
+message QueryValidPathsReply {
+  repeated string paths = 1;
+}
+
+// One message of a client-streamed bulk import. The concatenation of all
+// `data` fields is a single zstd stream; its decompressed content uses the
+// worker-protocol AddMultipleToStore framing: a count, then for each path a
+// ValidPathInfo (protocol 1.16 serialisation) followed by its NAR.
+message AddMultipleChunk {
+  // Only meaningful on the first message of the stream.
+  bool repair = 1;
+  bool check_sigs = 2;
+  bytes data = 3;
+}
+
+message AddMultipleReply {}
+
+message QueryPathInfosRequest {
+  repeated string paths = 1;
+}
+
+// `info` is the worker-protocol UnkeyedValidPathInfo (protocol 1.16)
+// serialisation. Paths unknown to the store are omitted from the reply.
+message PathInfo {
+  string path = 1;
+  bytes info = 2;
+}
+
+message QueryPathInfosReply {
+  repeated PathInfo infos = 1;
+}
+
+// `drv` is the worker-protocol BasicDerivation serialisation. `protocol`
+// (major << 8 | minor) pins the BuildResult serialisation in the reply.
+message BuildDerivationRequest {
+  string drv_path = 1;
+  bytes drv = 2;
+  uint32 build_mode = 3;
+  uint32 protocol = 4;
+}
+
+// `result` is the worker-protocol BuildResult serialisation at the request's
+// `protocol`. Output path infos ride along so the client needs no follow-up
+// queries.
+message BuildDerivationDone {
+  bytes result = 1;
+  repeated PathInfo outputs = 2;
+}
+
+message BuildDerivationChunk {
+  oneof event {
+    // Raw builder stderr, which need not be valid UTF-8.
+    bytes log_line = 1;
+    BuildDerivationDone done = 2;
+    // stdenv phase name (resSetPhase), for progress displays.
+    string phase = 3;
+  }
+}
+
+message BuildPathsRequest {
+  // DerivedPaths in nix's string notation.
+  repeated string targets = 1;
+  uint32 build_mode = 2;
+  uint32 protocol = 3;
+}
+
+// `results` is the worker-protocol vector<KeyedBuildResult> serialisation at
+// the request's `protocol`. Output path infos ride along so the client needs
+// no follow-up queries.
+message BuildPathsDone {
+  bytes results = 1;
+  repeated PathInfo outputs = 2;
+}
+
+message BuildPathsChunk {
+  oneof event {
+    // Raw builder stderr, which need not be valid UTF-8.
+    bytes log_line = 1;
+    BuildPathsDone done = 2;
+    string phase = 3;
+  }
+}
+
+message QueryMissingRequest {
+  // DerivedPaths in nix's string notation.
+  repeated string targets = 1;
+}
+
+message QueryMissingReply {
+  repeated string will_build = 1;
+  repeated string will_substitute = 2;
+  repeated string unknown = 3;
+  uint64 download_size = 4;
+  uint64 nar_size = 5;
+}
+
+message StoreInfoRequest {}
+
+message StoreInfoReply {
+  optional bool trusted = 1;
+  // Builds go through BuildDerivation only, see docs/farm.md.
+  bool farm = 2;
+}
+
+message FetchNarsRequest {
+  // Store paths to send, streamed back in this order.
+  repeated string paths = 1;
+}
+
+// One frame of a NAR download. The concatenation of all `data` fields in one
+// FetchNars call is a single zstd stream, so the compression window is
+// shared across paths. The stream is flushed at every frame boundary, so
+// each frame decodes in isolation and its decompressed bytes belong to
+// `paths[path_index]`. `eof` marks the last frame of that path's NAR; the
+// client can restore the path as soon as its frames arrive, while later
+// paths are still in flight.
+message NarFrame {
+  uint32 path_index = 1;
+  bytes data = 2;
+  bool eof = 3;
+}
+
+// Bidirectional tunnel that carries the same byte stream `nix-daemon --stdio`
+// would exchange over stdin/stdout. The server side hands the stream to
+// `nix::daemon::processConnection`, the client side to `nix::RemoteStore`.
+// QueryValidPaths / AddMultipleToStore bypass the tunnel for the `nix copy`
+// hot path so many small paths share one zstd stream and one round trip.
+service NixRemote {
+  rpc Connect(stream Chunk) returns (stream Chunk);
+  rpc QueryValidPaths(QueryValidPathsRequest) returns (QueryValidPathsReply);
+  rpc AddMultipleToStore(stream AddMultipleChunk) returns (AddMultipleReply);
+  rpc QueryPathInfos(QueryPathInfosRequest) returns (QueryPathInfosReply);
+  rpc FetchNars(FetchNarsRequest) returns (stream NarFrame);
+  rpc BuildDerivation(BuildDerivationRequest) returns (stream BuildDerivationChunk);
+  rpc BuildPaths(BuildPathsRequest) returns (stream BuildPathsChunk);
+  rpc QueryMissing(QueryMissingRequest) returns (QueryMissingReply);
+  rpc StoreInfo(StoreInfoRequest) returns (StoreInfoReply);
+}

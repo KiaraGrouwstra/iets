@@ -16,6 +16,12 @@ md-5 = "0.10"
 libc = "0.2"
 toml = "1"
 serde_json = "1"
+tonic = { version = "0.14", default-features = false, features = ["codegen", "channel", "transport", "tls-ring", "tls-native-roots"] }
+tonic-prost = "0.14"
+prost = "0.14"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+tokio-stream = "0.1"
+zstd = "0.13"
 
 [features]
 # Memory census behind IETSP_STATS=2 (docs/memory.md); off the hot path when unset.
@@ -23,6 +29,8 @@ stats2 = []
 
 [build-dependencies]
 sha2 = "0.10"
+tonic-prost-build = "0.14"
+protox = "0.9"
 
 [profile.release]
 opt-level = 3

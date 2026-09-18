@@ -288,13 +288,13 @@ impl Config {
 const CACHE_NIXOS_ORG_KEY: &str = "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=";
 
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
-const DEFAULT_SYSTEM: &str = "x86_64-linux";
+pub const DEFAULT_SYSTEM: &str = "x86_64-linux";
 #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
-const DEFAULT_SYSTEM: &str = "aarch64-linux";
+pub const DEFAULT_SYSTEM: &str = "aarch64-linux";
 #[cfg(all(target_arch = "x86_64", target_os = "macos"))]
-const DEFAULT_SYSTEM: &str = "x86_64-darwin";
+pub const DEFAULT_SYSTEM: &str = "x86_64-darwin";
 #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
-const DEFAULT_SYSTEM: &str = "aarch64-darwin";
+pub const DEFAULT_SYSTEM: &str = "aarch64-darwin";
 
 fn cpus() -> u64 {
     std::thread::available_parallelism().map_or(1, |n| n.get() as u64)

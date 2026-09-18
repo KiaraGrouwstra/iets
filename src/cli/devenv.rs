@@ -104,6 +104,10 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
             <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&abs_path(&r, &cwd)),
         )
     });
+    if matches!(transport, crate::remote::worker::Transport::Grpc(_)) {
+        eprintln!("error: print-dev-env needs a Nix daemon; grpc:// only builds");
+        return 1;
+    }
     if gc_root.is_some() && !matches!(transport, crate::remote::worker::Transport::Unix(_)) {
         eprintln!("error: --gc-root needs a local daemon (daemon or unix://)");
         return 1;
@@ -152,7 +156,7 @@ fn dev_env_hit(d: &DevEnvArgs, hit: &crate::devenv::CachedResult) -> crate::erro
     use crate::remote::worker::{Connection, Transport};
     let present = match &d.transport {
         Transport::Unix(_) => std::path::Path::new(&hit.out_path).exists(),
-        Transport::Ssh { .. } => {
+        Transport::Ssh { .. } | Transport::Grpc(_) => {
             let mut conn = Connection::open(&d.transport, &mut |_| {})?;
             !conn
                 .query_valid_paths(std::slice::from_ref(&hit.out_path), &mut |_| {})?
@@ -503,7 +507,7 @@ fn read_env_output(
             Transport::Unix(_) => {
                 std::fs::read(p).map_err(|e| CrateError::io(format!("cannot read '{p}'"), e))?
             }
-            Transport::Ssh { .. } => {
+            Transport::Ssh { .. } | Transport::Grpc(_) => {
                 let dir =
                     std::env::temp_dir().join(format!("ietsp-dev-env-{}", std::process::id()));
                 std::fs::create_dir_all(&dir)?;

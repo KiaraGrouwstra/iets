@@ -99,10 +99,13 @@ const LVL_VOMIT: u64 = 7;
 
 pub const DEFAULT_SOCKET: &str = "/nix/var/nix/daemon-socket/socket";
 
-/// Where the `--builder` URL points when it names a worker-protocol endpoint.
+/// Where the `--builder` or `--store` URL points.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Transport {
     Unix(PathBuf),
+    /// nix-grpc-store, which does not speak the worker protocol; see
+    /// `crate::remote::grpc`.
+    Grpc(Box<super::grpc::GrpcConfig>),
     Ssh {
         user: Option<String>,
         host: String,
@@ -113,9 +116,26 @@ pub enum Transport {
 }
 
 impl Transport {
-    /// `daemon`, `unix://[/path]`, `ssh-ng://[user@]host[?remote-program=CMD]`. `None`
-    /// for every other scheme.
+    /// `daemon`, `unix://[/path]`, `ssh-ng://[user@]host[?remote-program=CMD]`,
+    /// `grpc://host:port[?…]`. `None` for every other scheme. A malformed
+    /// `grpc://` URL is `None` too; `parse_checked` reports why.
     pub fn parse(url: &str) -> Option<Transport> {
+        Transport::parse_checked(url, crate::config::DEFAULT_SYSTEM).ok()?
+    }
+
+    /// `parse` with the `grpc://` parameter errors kept, and the `system=`
+    /// default the caller's `system` setting implies.
+    pub fn parse_checked(
+        url: &str,
+        default_system: &str,
+    ) -> crate::error::Result<Option<Transport>> {
+        if let Some(cfg) = super::grpc::GrpcConfig::parse(url, default_system) {
+            return Ok(Some(Transport::Grpc(Box::new(cfg?))));
+        }
+        Ok(Transport::parse_worker(url))
+    }
+
+    fn parse_worker(url: &str) -> Option<Transport> {
         if url == "daemon" || url == "unix://" {
             return Some(Transport::Unix(PathBuf::from(DEFAULT_SOCKET)));
         }
@@ -149,7 +169,7 @@ impl Transport {
 }
 
 /// `%XX` and `+` in a URL query value.
-fn percent_decode(s: &str) -> String {
+pub fn percent_decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
@@ -281,6 +301,12 @@ impl Connection {
     ) -> Result<Connection> {
         let (to, from, child): (Box<dyn Write + Send>, Box<dyn Read + Send>, Option<Child>) =
             match transport {
+                Transport::Grpc(cfg) => {
+                    return Err(Error::Usage(format!(
+                        "'{}' is a gRPC store, not a worker-protocol daemon",
+                        cfg.url()
+                    )));
+                }
                 Transport::Unix(path) => {
                     let s = UnixStream::connect(path).map_err(|e| {
                         Error::io(format!("cannot connect to '{}'", path.display()), e)

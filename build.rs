@@ -20,15 +20,26 @@ fn hash_tree(h: &mut Sha256, dir: &Path) {
     }
 }
 
-fn main() {
-    for p in ["src", "Cargo.lock", "build.rs"] {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let fds = protox::compile(["nix_remote.proto"], ["proto"])?;
+    tonic_prost_build::configure()
+        .build_server(false)
+        .build_client(true)
+        // The service has its own `Connect` RPC (the worker-protocol tunnel),
+        // whose generated method would clash with the transport constructor.
+        .build_transport(false)
+        .compile_fds(fds)?;
+
+    for p in ["src", "proto", "Cargo.lock", "build.rs"] {
         println!("cargo:rerun-if-changed={p}");
     }
     let mut h = Sha256::new();
     hash_tree(&mut h, Path::new("src"));
+    hash_tree(&mut h, Path::new("proto"));
     for f in ["Cargo.lock", "build.rs"] {
         h.update(std::fs::read(f).unwrap_or_default());
     }
     let id: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
     println!("cargo:rustc-env=IETSP_BUILD_ID={id}");
+    Ok(())
 }
