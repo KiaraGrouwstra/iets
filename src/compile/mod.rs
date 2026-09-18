@@ -109,6 +109,23 @@ impl Merged {
             pos,
         }
     }
+
+    /// The nested node at `statics[idx]`, which the caller has just made a
+    /// `Def::Nested` (a fresh push, or `open_nested`).
+    fn nested_at(&mut self, idx: usize) -> &mut Merged {
+        match &mut self.statics[idx].1 {
+            Def::Nested(n) => n,
+            _ => unreachable!("statics[{idx}] was just set to Def::Nested"),
+        }
+    }
+}
+
+/// The name of an attrpath element: a symbol when it is known at compile
+/// time (a literal, or a string with no interpolation), otherwise the
+/// expression that computes it.
+enum Name {
+    Static(Sym),
+    Dynamic(ExprId),
 }
 
 impl<'a> Compiler<'a> {
@@ -525,7 +542,8 @@ impl<'a> Compiler<'a> {
                 p.extend_from_slice(text);
                 canon_path(&p)
             }
-            PathKind::Search => unreachable!(),
+            // `<x>` is a lookup, not a literal: `path` returns before this.
+            PathKind::Search => unreachable!("a search path has no literal to resolve"),
         }
     }
 
@@ -678,8 +696,8 @@ impl<'a> Compiler<'a> {
         let (last, prefix) = path.split_last().expect("attrpath has an element");
         let mut cur = m;
         for elem in prefix {
-            match self.static_name(elem) {
-                Some(sym) => {
+            match self.attr_name(elem) {
+                Name::Static(sym) => {
                     let idx = match cur.index.get(&sym) {
                         Some(&i) => {
                             self.open_nested(cur, i, pos)?;
@@ -696,47 +714,39 @@ impl<'a> Compiler<'a> {
                             i
                         }
                     };
-                    let Def::Nested(n) = &mut cur.statics[idx].1 else {
-                        unreachable!()
-                    };
-                    cur = n;
+                    cur = cur.nested_at(idx);
                 }
-                None => {
-                    let AttrElem::Dynamic(e) = elem else {
-                        unreachable!()
-                    };
+                Name::Dynamic(e) => {
                     cur.dynamics
-                        .push((*e, Def::Nested(Box::new(Merged::new(false, pos))), pos));
-                    let Def::Nested(n) = &mut cur.dynamics.last_mut().unwrap().1 else {
-                        unreachable!()
+                        .push((e, Def::Nested(Box::new(Merged::new(false, pos))), pos));
+                    let last = cur.dynamics.last_mut().expect("just pushed");
+                    let Def::Nested(n) = &mut last.1 else {
+                        unreachable!("the dynamic node just pushed is a Def::Nested")
                     };
                     cur = n;
                 }
             }
         }
-        match self.static_name(last) {
-            Some(sym) => self.add_static(cur, sym, def, pos),
-            None => {
-                let AttrElem::Dynamic(e) = last else {
-                    unreachable!()
-                };
-                cur.dynamics.push((*e, def, pos));
+        match self.attr_name(last) {
+            Name::Static(sym) => self.add_static(cur, sym, def, pos),
+            Name::Dynamic(e) => {
+                cur.dynamics.push((e, def, pos));
                 Ok(())
             }
         }
     }
 
-    fn static_name(&mut self, e: &AttrElem) -> Option<Sym> {
+    fn attr_name(&mut self, e: &AttrElem) -> Name {
         let ast: &'a Ast = self.ast;
         match e {
-            AttrElem::Static(s) => Some(*s),
+            AttrElem::Static(s) => Name::Static(*s),
             AttrElem::Dynamic(id) => {
                 if let Expr::Str(parts) = ast.expr(*id)
                     && let Some(lit) = ast.single_lit(*parts)
                 {
-                    Some(self.interner.intern(lit))
+                    Name::Static(self.interner.intern(lit))
                 } else {
-                    None
+                    Name::Dynamic(*id)
                 }
             }
         }
@@ -788,9 +798,7 @@ impl<'a> Compiler<'a> {
                 return self.dup_attr(sym, pos, m.statics[i].2);
             };
             self.open_nested(m, i, pos)?;
-            let Def::Nested(target) = &mut m.statics[i].1 else {
-                unreachable!()
-            };
+            let target = m.nested_at(i);
             if let Def::Nested(src) = def {
                 let src = *src;
                 for (s, d, p) in src.statics {
