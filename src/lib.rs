@@ -9,6 +9,7 @@ pub mod flake;
 pub mod jobs;
 pub mod parallel;
 pub mod print;
+pub mod provenance;
 pub mod remote;
 pub mod runtime;
 pub mod store;

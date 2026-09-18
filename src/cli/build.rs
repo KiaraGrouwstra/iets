@@ -185,6 +185,8 @@ fn build_drv_file(b: &BuildArgs, root_arg: &str) -> i32 {
                 outputs: drv.outputs.into_keys().collect(),
                 references,
                 aterm: Some(text.into_bytes()),
+                pos: None,
+                attr: None,
             })
         });
     let info = match info {

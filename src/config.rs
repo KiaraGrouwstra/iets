@@ -23,6 +23,7 @@ const APPENDABLE: &[&str] = &[
     "plugin-files",
     "sandbox-paths",
     "secret-key-files",
+    "source-map",
     "substituters",
     "system-features",
     "trusted-public-keys",
@@ -260,6 +261,16 @@ impl Config {
             Some(s) => parse_nix_path(&s),
             None => self.list("nix-path"),
         }
+    }
+
+    /// `source-map`: ietsp's own setting, `STOREPATH=LOCALDIR` entries
+    /// separated by whitespace. See docs/provenance.md.
+    pub fn source_map(&self) -> Vec<(String, String)> {
+        self.list(crate::provenance::SETTING)
+            .iter()
+            .filter_map(|e| e.split_once('='))
+            .map(|(s, l)| (s.to_string(), l.to_string()))
+            .collect()
     }
 
     /// `sandbox`: `true`, `false` or `relaxed`. Default `true` on Linux only.

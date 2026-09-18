@@ -34,6 +34,15 @@ pub struct DrvInfo {
     pub references: BTreeSet<StorePath>,
     /// The ATerm this evaluation produced; `None` when the drv was read from `/nix/store`.
     pub aterm: Option<Vec<u8>>,
+    /// Where the derivation was defined. `derivation` is a wrapper around
+    /// `derivationStrict`, so the primop's call position is inside
+    /// `«derivation-internal»` for every normal call; the position of the
+    /// `name` attribute's value stands in, which is the same position Nix
+    /// names in "whose name attribute is located at". A direct
+    /// `builtins.derivationStrict` call keeps its own call position.
+    pub pos: Option<Pos>,
+    /// The attribute path a cli walk reached this derivation by.
+    pub attr: Option<String>,
 }
 
 /// Per-evaluator derivation state (derivations.cc:drvHashes plus the
@@ -52,6 +61,22 @@ pub struct DrvState {
     pub keep_aterm: bool,
     syms: Option<DrvSyms>,
     imported_drv_fn: Option<Word>,
+}
+
+impl DrvState {
+    /// Records the attribute path a cli walk reached `p` by. The first walk
+    /// to name a drv wins, as `getDerivations` reports the first path.
+    pub fn set_attr(&self, p: &StorePath, attr: &str) {
+        if attr.is_empty() {
+            return;
+        }
+        let mut g = self.drvs.lock();
+        if let Some(i) = g.get_mut(p)
+            && i.attr.is_none()
+        {
+            i.attr = Some(attr.to_string());
+        }
+    }
 }
 
 impl Default for DrvState {
@@ -157,7 +182,7 @@ fn derivation_strict(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<
         })?;
     let drv_name = utf8(drv_name, pos)?;
     let s = syms(ev);
-    derivation_strict_internal(ev, &drv_name, attrs, pos, &s).map_err(|mut e| {
+    derivation_strict_internal(ev, &drv_name, attrs, pos, name_attr.pos, &s).map_err(|mut e| {
         e.add_trace(
             Pos::NONE,
             format!(
@@ -356,6 +381,7 @@ fn derivation_strict_internal(
     drv_name: &str,
     attrs: &'static AttrsObj,
     pos: Pos,
+    name_pos: Pos,
     s: &DrvSyms,
 ) -> EvalResult<Word> {
     if let Err(e) = check_name(drv_name) {
@@ -542,12 +568,16 @@ fn derivation_strict_internal(
 
     let mut references: BTreeSet<StorePath> = drv.input_srcs.clone();
     references.extend(drv.input_drvs.keys().cloned());
+    let site =
+        crate::provenance::real_pos(ev, pos).or_else(|| crate::provenance::real_pos(ev, name_pos));
     ev.drv.drvs.insert(
         drv_path.clone(),
         DrvInfo {
             outputs: drv.outputs.keys().cloned().collect(),
             references,
             aterm: ev.drv.keep_aterm.then(|| text.into_bytes()),
+            pos: site,
+            attr: None,
         },
     );
 
@@ -642,6 +672,8 @@ fn drv_info(ev: &mut Evaluator, p: &StorePath, pos: Pos) -> EvalResult<DrvInfo> 
         outputs: drv.outputs.keys().cloned().collect(),
         references,
         aterm: None,
+        pos: None,
+        attr: None,
     };
     ev.drv.drvs.insert(p.clone(), info.clone());
     Ok(info)

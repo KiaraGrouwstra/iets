@@ -364,6 +364,8 @@ pub fn decode_drvs(b: &[u8]) -> Option<HashMap<StorePath, DrvInfo>> {
                 outputs,
                 references,
                 aterm: Some(aterm),
+                pos: None,
+                attr: None,
             },
         );
     }
@@ -544,6 +546,8 @@ mod tests {
                 outputs: ["out".to_string()].into(),
                 references: [s.clone()].into(),
                 aterm: Some(b"Derive(...)".to_vec()),
+                pos: None,
+                attr: None,
             },
         );
         drvs.insert(
@@ -552,6 +556,8 @@ mod tests {
                 outputs: BTreeSet::new(),
                 references: BTreeSet::new(),
                 aterm: None,
+                pos: None,
+                attr: None,
             },
         );
         let back = decode_drvs(&encode_drvs(&drvs)).unwrap();

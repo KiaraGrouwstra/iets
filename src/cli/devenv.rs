@@ -290,6 +290,8 @@ fn dev_env_full(
                 outputs: env_drv.outputs.keys().cloned().collect(),
                 references,
                 aterm: Some(text.into_bytes()),
+                pos: None,
+                attr: None,
             },
         );
         ev.sources.insert(
