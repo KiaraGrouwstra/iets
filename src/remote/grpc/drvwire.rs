@@ -4,7 +4,7 @@
 //! protocol 1.16 in a `PathInfo`.
 
 use std::collections::BTreeMap;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 
 use crate::error::{Error, Result};
 use crate::store::drv::{Derivation, DerivationOutput, STRUCTURED_ATTRS_ENV};
@@ -182,16 +182,25 @@ pub struct PathInfo {
 impl PathInfo {
     /// `entry.path` is a store path base name; `entry.info` the 1.16 bytes.
     pub fn decode(path: &str, info: &[u8]) -> Result<PathInfo> {
-        let path = StorePath::from_base_name(path)?;
         let mut r = info;
-        let deriver = read_str(&mut r)?;
-        let nar_hash = read_str(&mut r)?;
-        let references = read_strs(&mut r)?;
-        let registration_time = read_u64(&mut r)?;
-        let nar_size = read_u64(&mut r)?;
-        let ultimate = read_u64(&mut r)? != 0;
-        let sigs = read_strs(&mut r)?;
-        let ca = read_str(&mut r)?;
+        PathInfo::fields(StorePath::from_base_name(path)?, &mut r)
+    }
+
+    /// The same fields straight off a worker-protocol connection, where `path`
+    /// is the full store path the caller asked `QueryPathInfo` about.
+    pub fn read(path: &str, r: &mut dyn Read) -> Result<PathInfo> {
+        PathInfo::fields(StorePath::parse(path)?, r)
+    }
+
+    fn fields(path: StorePath, r: &mut dyn Read) -> Result<PathInfo> {
+        let deriver = read_str(r)?;
+        let nar_hash = read_str(r)?;
+        let references = read_strs(r)?;
+        let registration_time = read_u64(r)?;
+        let nar_size = read_u64(r)?;
+        let ultimate = read_u64(r)? != 0;
+        let sigs = read_strs(r)?;
+        let ca = read_str(r)?;
         Ok(PathInfo {
             path,
             deriver,

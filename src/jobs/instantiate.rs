@@ -204,7 +204,8 @@ impl Store {
                 }
                 Ok(())
             };
-            self.conn.add_multiple_to_store(&mut body, &mut |_| {})?;
+            self.conn
+                .add_multiple_to_store(false, &mut body, &mut |_| {})?;
             self.stats.added += objects.len();
             self.stats.bytes += self.conn.bytes_sent() - before;
         }

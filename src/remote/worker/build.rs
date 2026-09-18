@@ -206,7 +206,7 @@ pub fn build_on(
             }
             Ok(())
         };
-        conn.add_multiple_to_store(&mut body, on_event)?;
+        conn.add_multiple_to_store(false, &mut body, on_event)?;
         t.add_paths = missing.len();
         t.add_bytes = conn.bytes_sent() - before;
     }

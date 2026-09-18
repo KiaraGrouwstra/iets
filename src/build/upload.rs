@@ -298,7 +298,7 @@ impl Uploader for StreamUpload {
                 }
                 Ok(())
             };
-            conn.add_multiple_to_store(&mut body, on_event)?;
+            conn.add_multiple_to_store(false, &mut body, on_event)?;
             st.added = objects.len();
             st.bytes = conn.bytes_sent() - before;
         }

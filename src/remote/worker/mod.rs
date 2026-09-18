@@ -79,6 +79,7 @@ pub const MIN_MINOR: u64 = 35;
 #[repr(u64)]
 enum Op {
     SetOptions = 19,
+    QueryPathInfo = 26,
     QueryValidPaths = 31,
     AddIndirectRoot = 12,
     QuerySubstitutablePathInfos = 30,
@@ -613,16 +614,35 @@ impl Connection {
         read_strs(self.r())
     }
 
+    /// `QueryPathInfo`: the path's `UnkeyedValidPathInfo`, `None` when the store
+    /// has not got it (remote-store.cc:queryPathInfoUncached).
+    pub fn query_path_info(
+        &mut self,
+        path: &str,
+        on_event: &mut dyn FnMut(Event),
+    ) -> Result<Option<super::grpc::drvwire::PathInfo>> {
+        self.op(Op::QueryPathInfo)?;
+        write_str(self.w(), path.as_bytes())?;
+        self.process_stderr(on_event)?;
+        if read_u64(self.r())? == 0 {
+            return Ok(None);
+        }
+        Ok(Some(super::grpc::drvwire::PathInfo::read(path, self.r())?))
+    }
+
     /// `AddMultipleToStore`: `body` writes the count, then each `ValidPathInfo` followed by its
     /// NAR (store-api.cc:Store::addMultipleToStore(Source &)), into one framed stream.
+    /// `dont_check_sigs` asks the daemon to skip the signature check, which it
+    /// grants a trusted client only (daemon.cc:performOp).
     pub fn add_multiple_to_store(
         &mut self,
+        dont_check_sigs: bool,
         body: &mut dyn FnMut(&mut dyn Write) -> io::Result<()>,
         on_event: &mut dyn FnMut(Event),
     ) -> Result<()> {
         self.op(Op::AddMultipleToStore)?;
         write_u64(self.w(), 0)?;
-        write_u64(self.w(), 0)?;
+        write_u64(self.w(), u64::from(dont_check_sigs))?;
         self.flush()?;
         let mut sink = FramedSink::new(&mut self.to);
         body(&mut sink).map_err(conn)?;

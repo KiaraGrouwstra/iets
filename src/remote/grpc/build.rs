@@ -19,6 +19,7 @@ use crate::store::drv::Derivation;
 use crate::store::nar::restore_path;
 use crate::store::path::StorePath;
 
+use super::super::copy::topo_sort;
 use super::super::event::{Done, Event, Log, Started};
 use super::super::plan::{Locator, Object, Plan};
 use super::super::worker::build::write_object;
@@ -1159,7 +1160,7 @@ pub fn register(
         })
         .map_err(io::Error::other)
     };
-    conn.add_multiple_to_store(&mut body, on_event)
+    conn.add_multiple_to_store(false, &mut body, on_event)
         .map_err(|e| {
             Error::Protocol(format!(
                 "{e}\nhint: '{}' publishes its outputs to a binary cache. The local daemon \
@@ -1207,39 +1208,6 @@ fn remote_closure(
         }
     }
     Ok(infos)
-}
-
-/// References before referrers, so `AddMultipleToStore` can register each path
-/// as it arrives.
-fn topo_sort(infos: &HashMap<StorePath, PathInfo>) -> Vec<StorePath> {
-    let mut out = Vec::with_capacity(infos.len());
-    let mut seen: HashSet<StorePath> = HashSet::new();
-    let mut order: Vec<&StorePath> = infos.keys().collect();
-    order.sort();
-    for root in order {
-        let mut stack = vec![(root.clone(), false)];
-        while let Some((p, expanded)) = stack.pop() {
-            if expanded {
-                out.push(p);
-                continue;
-            }
-            if !seen.insert(p.clone()) {
-                continue;
-            }
-            stack.push((p.clone(), true));
-            if let Some(info) = infos.get(&p) {
-                for r in &info.references {
-                    if let Ok(rp) = StorePath::parse(r)
-                        && rp != p
-                        && !seen.contains(&rp)
-                    {
-                        stack.push((rp, false));
-                    }
-                }
-            }
-        }
-    }
-    out
 }
 
 #[cfg(test)]

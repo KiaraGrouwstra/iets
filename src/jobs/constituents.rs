@@ -334,7 +334,7 @@ pub fn rewrite(
                         crate::remote::worker::wire::write_u64(w, 1)?;
                         write_object(w, &object)
                     };
-                    conn.add_multiple_to_store(&mut body, &mut |_| {})?;
+                    conn.add_multiple_to_store(false, &mut body, &mut |_| {})?;
                 }
                 if let Some(dir) = gc_roots_dir {
                     let root = dir.join(new_path.base_name());
