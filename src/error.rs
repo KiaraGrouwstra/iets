@@ -21,6 +21,8 @@ pub enum Error {
     Eval(Box<crate::eval::error::Error>),
     /// Bad command-line input.
     Usage(String),
+    /// nix.conf: a syntax error, a missing include, or a bad setting value.
+    Config(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -44,7 +46,8 @@ impl fmt::Display for Error {
             | Error::Store(m)
             | Error::Flake(m)
             | Error::Cache(m)
-            | Error::Usage(m) => f.write_str(m),
+            | Error::Usage(m)
+            | Error::Config(m) => f.write_str(m),
             Error::Eval(e) => f.write_str(&e.msg),
         }
     }

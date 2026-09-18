@@ -12,8 +12,50 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 use super::event::{Built, Event, Failed, Log, Started};
+use crate::config::Config;
 use crate::error::{Error, Result};
 use wire::{Counting, FramedSink};
+
+/// What `SetOptions` sends (remote-store.cc:setOptions). `Default` is what this
+/// client has always sent; `TryFrom<&Config>` takes the values from the user's
+/// nix.conf instead, and fails the way Nix does on a bad setting value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Options {
+    /// `0` would forbid local builds, so the default is the CPU count, what
+    /// `max-jobs = auto` gives.
+    pub max_jobs: u64,
+    /// `0` means all cores.
+    pub cores: u64,
+    pub keep_going: bool,
+    pub keep_failed: bool,
+    pub substitutes: bool,
+}
+
+impl Default for Options {
+    fn default() -> Options {
+        Options {
+            max_jobs: std::thread::available_parallelism().map_or(1, |n| n.get() as u64),
+            cores: 0,
+            keep_going: false,
+            keep_failed: false,
+            substitutes: true,
+        }
+    }
+}
+
+impl TryFrom<&Config> for Options {
+    type Error = Error;
+
+    fn try_from(c: &Config) -> Result<Options> {
+        Ok(Options {
+            max_jobs: c.max_jobs()?,
+            cores: c.cores()?,
+            keep_going: c.keep_going()?,
+            keep_failed: c.keep_failed()?,
+            substitutes: c.bool("substitute")?.unwrap_or(true),
+        })
+    }
+}
 
 const WORKER_MAGIC_1: u64 = 0x6e69_7863;
 const WORKER_MAGIC_2: u64 = 0x6478_696f;
@@ -225,9 +267,18 @@ impl Drop for Connection {
 }
 
 impl Connection {
+    /// Opens the transport with the options this client has always sent.
+    pub fn open(transport: &Transport, on_event: &mut dyn FnMut(Event)) -> Result<Connection> {
+        Connection::open_with(transport, &Options::default(), on_event)
+    }
+
     /// Opens the transport and runs the handshake and `SetOptions`, as
     /// remote-store.cc:initConnection does.
-    pub fn open(transport: &Transport, on_event: &mut dyn FnMut(Event)) -> Result<Connection> {
+    pub fn open_with(
+        transport: &Transport,
+        options: &Options,
+        on_event: &mut dyn FnMut(Event),
+    ) -> Result<Connection> {
         let (to, from, child): (Box<dyn Write + Send>, Box<dyn Read + Send>, Option<Child>) =
             match transport {
                 Transport::Unix(path) => {
@@ -281,7 +332,7 @@ impl Connection {
         };
         conn.handshake()?;
         conn.process_stderr(on_event)?;
-        conn.set_options(on_event)?;
+        conn.set_options(options, on_event)?;
         Ok(conn)
     }
 
@@ -353,24 +404,21 @@ impl Connection {
     }
 
     /// remote-store.cc:setOptions. Sends the same twelve fields plus an empty override map.
-    /// `max-jobs` is the CPU count, what `max-jobs = auto` gives; `0` would forbid local
-    /// builds.
-    fn set_options(&mut self, on_event: &mut dyn FnMut(Event)) -> Result<()> {
-        let jobs = std::thread::available_parallelism().map_or(1, |n| n.get() as u64);
+    fn set_options(&mut self, o: &Options, on_event: &mut dyn FnMut(Event)) -> Result<()> {
         self.op(Op::SetOptions)?;
         for v in [
-            0,         // keep-failed
-            0,         // keep-going
-            0,         // try-fallback
-            LVL_INFO,  // verbosity
-            jobs,      // max-jobs
-            0,         // max-silent-time
-            1,         // obsolete use-build-hook
-            LVL_VOMIT, // build verbosity: lvlVomit means verboseBuild = false
-            0,         // obsolete log type
-            0,         // obsolete print build trace
-            0,         // cores
-            1,         // substitute
+            o.keep_failed.into(), // keep-failed
+            o.keep_going.into(),  // keep-going
+            0,                    // try-fallback
+            LVL_INFO,             // verbosity
+            o.max_jobs,           // max-jobs
+            0,                    // max-silent-time
+            1,                    // obsolete use-build-hook
+            LVL_VOMIT,            // build verbosity: lvlVomit means verboseBuild = false
+            0,                    // obsolete log type
+            0,                    // obsolete print build trace
+            o.cores,              // cores
+            o.substitutes.into(), // substitute
         ] {
             write_u64(self.w(), v)?;
         }
