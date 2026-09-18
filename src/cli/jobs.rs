@@ -278,6 +278,29 @@ fn jobs_summary(
     eprintln!("{s}");
 }
 
+/// The tail every role shares: the emitter's `finish` when a connection is
+/// there for it, the summary line, and the exit code.
+fn jobs_finish(
+    emitter: &std::sync::Mutex<crate::jobs::emit::Emitter>,
+    j: &JobsArgs,
+    conn: Option<&mut crate::remote::worker::Connection>,
+    inst: Option<crate::jobs::instantiate::Stats>,
+    t0: std::time::Instant,
+) -> i32 {
+    if let Some(conn) = conn
+        && let Err(e) = emitter
+            .lock()
+            .unwrap()
+            .finish(conn, j.gc_roots_dir.as_deref())
+    {
+        eprintln!("error: {e}");
+        return 1;
+    }
+    let em = emitter.lock().unwrap();
+    jobs_summary(j, em.stats, inst, t0);
+    if em.fatal { 1 } else { 0 }
+}
+
 /// One process: the walk on the main fiber, instantiation and cache
 /// status on a thread beside it, constituents at the end.
 fn jobs_single(
@@ -302,6 +325,7 @@ fn jobs_single(
     let stdout = Box::new(std::io::BufWriter::new(std::io::stdout()));
     let emitter = Arc::new(Mutex::new(Emitter::new(stdout, j.opts.constituents)));
     let mut inst_stats = None;
+    let mut conn = None;
     if j.opts.no_instantiate {
         let em = emitter.clone();
         crate::jobs::run(ev, root, &mut |line| em.lock().unwrap().emit(line));
@@ -353,19 +377,9 @@ fn jobs_single(
             }
         };
         inst_stats = Some(stats);
-        let mut conn = store.into_connection();
-        if let Err(e) = emitter
-            .lock()
-            .unwrap()
-            .finish(&mut conn, j.gc_roots_dir.as_deref())
-        {
-            eprintln!("error: {e}");
-            return 1;
-        }
+        conn = Some(store.into_connection());
     }
-    let em = emitter.lock().unwrap();
-    jobs_summary(j, em.stats, inst_stats, t0);
-    if em.fatal { 1 } else { 0 }
+    jobs_finish(&emitter, j, conn.as_mut(), inst_stats, t0)
 }
 
 /// A worker process under `--max-memory-size`: the root once, then
@@ -502,19 +516,15 @@ fn jobs_collector(
         eprintln!("error: {e}");
         return 1;
     }
+    let mut conn = None;
     if j.opts.constituents {
-        let done = Connection::open(transport, &mut |_| {}).and_then(|mut conn| {
-            emitter
-                .lock()
-                .unwrap()
-                .finish(&mut conn, j.gc_roots_dir.as_deref())
-        });
-        if let Err(e) = done {
-            eprintln!("error: {e}");
-            return 1;
+        match Connection::open(transport, &mut |_| {}) {
+            Ok(c) => conn = Some(c),
+            Err(e) => {
+                eprintln!("error: {e}");
+                return 1;
+            }
         }
     }
-    let em = emitter.lock().unwrap();
-    jobs_summary(j, em.stats, None, t0);
-    if em.fatal { 1 } else { 0 }
+    jobs_finish(&emitter, j, conn.as_mut(), None, t0)
 }
