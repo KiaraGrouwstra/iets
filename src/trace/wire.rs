@@ -430,13 +430,13 @@ pub fn decode_sources(b: &[u8]) -> Option<HashMap<StorePath, SourceOrigin>> {
                 let local = path_buf(d.bytes().ok()?);
                 let accepted = match d.u8().ok()? {
                     0 => None,
-                    1 => Some(
+                    1 => Some(std::sync::Arc::new(
                         d.list()
                             .ok()?
                             .iter()
                             .map(|p| path_buf(p))
                             .collect::<HashSet<PathBuf>>(),
-                    ),
+                    )),
                     _ => return None,
                 };
                 SourceOrigin::Tree { local, accepted }
@@ -570,7 +570,7 @@ mod tests {
             s.clone(),
             SourceOrigin::Tree {
                 local: PathBuf::from("/tmp/x"),
-                accepted: Some([PathBuf::from("/tmp/x/a")].into()),
+                accepted: Some(std::sync::Arc::new([PathBuf::from("/tmp/x/a")].into())),
             },
         );
         sources.insert(

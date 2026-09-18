@@ -38,6 +38,13 @@
    - path (path.cc): the whole directory; `lastModified` is the newest
      `lstat` mtime in it.
    The store path is `make_fixed_output_path(recursive, narHash, "source")`.
+   The copy is virtual: nothing is written or fetched. The store path is
+   registered as a `SourceOrigin::Tree` (local directory plus the
+   tracked-file set), and every read under it, `import`, `readFile`,
+   `readDir`, `pathExists`, `hashFile`, `"${./x}"`, `builtins.path`, goes
+   to the working tree through `builtins::store_hooks::locate`, with the
+   tracked-file set as filter (an untracked file does not exist, `readDir`
+   does not list it). The store is never consulted for the root tree.
 2. `call-flake.nix` from Nix 2.34.8 is embedded verbatim and called with
    the lock file text, `{ root = { sourceInfo; dir; }; }` and
    `builtins.fetchTree`.
@@ -45,29 +52,38 @@
    path from `narHash` and returns `emitTreeAttrs`: `outPath`, `narHash`,
    `rev`/`shortRev` when `rev` is present, `revCount`, `dirtyRev`/
    `dirtyShortRev`, `lastModified`/`lastModifiedDate` (`%Y%m%d%H%M%S`
-   UTC), `submodules` for `git`. A `path` input is NAR-hashed and checked
-   against `narHash`. Unlocked inputs (no `narHash`) and URL arguments are
-   errors.
+   UTC), `submodules` for `git`. A `path` input is NAR-hashed, checked
+   against `narHash` when the lock has one, and is a virtual copy like the
+   root. A relative `path:` input (`path:./sub`) never reaches `fetchTree`:
+   `nix flake lock` writes it as `{ path = "./sub"; type = "path"; }` with no
+   `narHash`, `lock::check` accepts that, and `call-flake.nix` resolves it
+   under the parent's `outPath`. Unlocked remote inputs (no `narHash`) and
+   URL arguments are errors.
 
-The flake's `flake.nix` is then imported from the real store path, so
-positions, `./x` path literals and `readDir` see exactly what Nix sees.
+The flake's `flake.nix` is imported under its store path, so positions,
+`./x` path literals and `readDir` see exactly what Nix sees; the bytes come
+from the store when the tree is there, else from the local tree.
 
 ## The one place ietsp runs nix
 
-A tree that is not in `/nix/store` must get there first:
-`flake::fetch::ensure_in_store` runs
-`nix eval --raw --impure --expr '(builtins.fetchTree <locked attrs>).outPath'`
-once, then checks that the path Nix reports is the one the lock (or the
-root tree hash) implies, so a difference in the file set is an error, not
-a silent divergence. This is also how a dirty working tree gets copied.
-Nothing else in ietsp runs nix; ietsp never writes to the store itself.
+A remote input (github, git, tarball, ...) whose locked tree is not in
+`/nix/store` must get there first: `flake::fetch::ensure_in_store` prints
+`ietsp: input '<name>' is not in the store (<path>), fetching it with nix`,
+runs `nix eval --raw --impure --expr '(builtins.fetchTree <locked attrs>).outPath'`
+once, then checks that the path Nix reports is the one the lock implies, so
+a difference in the file set is an error, not a silent divergence. When no
+nix other than ietsp itself is on `PATH`, the error is
+`ietsp: input '<name>' is not in the store and nix is not on PATH; fetch it with nix (...) first`.
+The root tree and `path:` inputs are never fetched. Nothing else in ietsp
+runs nix; ietsp never writes to the store itself.
 
 ## Tracing cache
 
 Everything above is recorded (`docs/tracing-cache.md`): the git queries as
 `Cmd` observations, the working-tree file set as a filtered `Tree` (no
-`seen_hash`: unlisted entries cannot change the result), the lock file as a
-`File`, each store tree's existence as a `Stat`. The key holds the
+`seen_hash`: unlisted entries cannot change the result), every file read
+under the root as a `File` on the local path, the lock file as a `File`,
+each remote input's store tree existence as a `Stat`. The key holds the
 reference text, the resolved directory, cwd, and the hashes of `flake.nix`
 and `flake.lock`. A commit, an edit of a tracked file, `git add`, or a
 garbage-collected input all miss; an untracked file does not.

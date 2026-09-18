@@ -1,8 +1,9 @@
 //! `builtins.fetchTree` for locked inputs (fetchTree.cc, fetchers.cc): the
-//! store path follows from the `narHash`, the tree must be in `/nix/store`,
-//! and the result attrset mirrors `emitTreeAttrs`. A tree that is not in
-//! the store is fetched by running `nix` once; this is the only place
-//! ietsp runs nix.
+//! store path follows from the `narHash` and the result attrset mirrors
+//! `emitTreeAttrs`. A `path` input is a virtual copy of the local
+//! directory, like the root tree. A remote input (github, git, tarball,
+//! ...) must be in `/nix/store`; one that is not is fetched by running
+//! `nix` once. This is the only place ietsp runs nix.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -180,8 +181,10 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
             let hash = parse_nar_hash(nar_hash)
                 .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
             attrs.insert("narHash".into(), AttrVal::Str(hash.to_sri()));
-            source_store_path(&hash)
-                .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?
+            let sp = source_store_path(&hash)
+                .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
+            ensure_in_store(ev, &sp, &attrs, pos)?;
+            sp
         }
         other => bail!(
             ErrorKind::Unsupported,
@@ -189,8 +192,14 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
             "ietsp: fetchTree input type '{other}' is not supported"
         ),
     };
-    ensure_in_store(ev, &sp, &attrs, pos)?;
     emit_tree_attrs(ev, &sp, &attrs, pos)
+}
+
+/// The lock file's name for a locked input, else its attrs as a URL.
+fn input_name(ev: &Evaluator, attrs: &Attrs) -> String {
+    str_attr(attrs, "narHash")
+        .and_then(|h| ev.input_names.get(h))
+        .unwrap_or_else(|| to_url(attrs))
 }
 
 /// `flake:...`-style display of an input for messages; not a parseable ref.
@@ -239,9 +248,10 @@ fn nix_string_literal(s: &str) -> String {
     out
 }
 
-/// The tree must exist at its store path so `import` reads exactly what Nix
-/// reads. A missing tree is fetched by handing the locked attrs to Nix's own
-/// `fetchTree`; the store path Nix reports must be the one the lock implies.
+/// A remote input's tree must exist at its store path so `import` reads
+/// exactly what Nix reads. A missing tree is fetched by handing the locked
+/// attrs to Nix's own `fetchTree`; the store path Nix reports must be the
+/// one the lock implies. Never called for the root tree or a `path` input.
 pub fn ensure_in_store(
     ev: &mut Evaluator,
     sp: &StorePath,
@@ -251,22 +261,29 @@ pub fn ensure_in_store(
     let full = sp.to_full_string();
     let p = Path::new(&full);
     if crate::trace::stat_kind(p, true) == crate::trace::Kind::Missing {
+        let name = input_name(ev, attrs);
         let expr = format!(
             "(builtins.fetchTree (builtins.fromJSON {})).outPath",
             nix_string_literal(&attrs_to_json(attrs))
         );
-        eprintln!(
-            "ietsp: '{full}' is not in the store, fetching {} input with nix",
-            str_attr(attrs, "type").unwrap_or("?")
-        );
+        eprintln!("ietsp: input '{name}' is not in the store ({full}), fetching it with nix");
         if crate::settings::get().fetching {
             bail!(
                 ErrorKind::Eval,
                 pos,
-                "ietsp: recursive fetch of {full}: the nix on PATH is ietsp itself"
+                "ietsp: recursive fetch of input '{name}': the nix on PATH is ietsp itself"
             );
         }
-        let out = std::process::Command::new(crate::nixbin::nix())
+        let Some(nix) = crate::nixbin::real("nix") else {
+            bail!(
+                ErrorKind::Eval,
+                pos,
+                "ietsp: input '{name}' is not in the store and nix is not on PATH; \
+                 fetch it with nix ({}) first",
+                to_url(attrs)
+            );
+        };
+        let out = std::process::Command::new(nix)
             .env("IETSP_FETCHING", "1")
             .args([
                 "--extra-experimental-features",
@@ -280,12 +297,18 @@ pub fn ensure_in_store(
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::inherit())
             .output()
-            .map_err(|e| Error::boxed(ErrorKind::Io, format!("ietsp: cannot run nix: {e}"), pos))?;
+            .map_err(|e| {
+                Error::boxed(
+                    ErrorKind::Io,
+                    format!("ietsp: cannot run nix to fetch input '{name}': {e}"),
+                    pos,
+                )
+            })?;
         if !out.status.success() {
             bail!(
                 ErrorKind::Eval,
                 pos,
-                "ietsp: nix could not fetch input {}",
+                "ietsp: nix could not fetch input '{name}' ({})",
                 to_url(attrs)
             );
         }
@@ -294,13 +317,17 @@ pub fn ensure_in_store(
             bail!(
                 ErrorKind::Eval,
                 pos,
-                "ietsp: nix fetched '{got}' but the lock implies '{full}' for input {}",
-                to_url(attrs)
+                "ietsp: nix fetched '{got}' for input '{name}' but the lock implies '{full}'"
             );
         }
     }
     if ev.trace.stat_now(full.as_bytes(), true) == crate::trace::Kind::Missing {
-        bail!(ErrorKind::Io, pos, "ietsp: '{full}' is not in the store");
+        bail!(
+            ErrorKind::Io,
+            pos,
+            "ietsp: input '{}' is not in the store ({full})",
+            input_name(ev, attrs)
+        );
     }
     Ok(())
 }

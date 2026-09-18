@@ -2,16 +2,21 @@
 //! git.cc:getAccessorFromWorkdir does it: the files git tracks (index
 //! entries that still exist), with the working tree contents and modes;
 //! nothing untracked, no `.git`, no submodules. A plain directory is copied
-//! whole (path.cc). Every git query is a `Cmd` observation and the copied
-//! file set a `Tree` observation, so the tracing cache follows the tree.
+//! whole (path.cc). The copy is virtual: the store path is computed from
+//! the NAR hash and registered as a `SourceOrigin::Tree`, so reads under it
+//! go to the working tree (`store_hooks::locate`); nothing is fetched and
+//! the store is never consulted. Every git query is a `Cmd` observation and
+//! the copied file set a `Tree` observation, so the tracing cache follows
+//! the tree.
 
 use std::collections::HashSet;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use super::Source;
-use super::fetch::{AttrVal, Attrs, emit_tree_attrs, ensure_in_store, source_store_path};
+use super::fetch::{AttrVal, Attrs, emit_tree_attrs, source_store_path};
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
 use crate::runtime::Word;
 use crate::store::hash::{Hash, HashAlgo};
@@ -35,7 +40,6 @@ pub fn source_info(ev: &mut Evaluator, source: &Source, pos: Pos) -> EvalResult<
             attrs.insert("lastModified".into(), AttrVal::Int(mtime.max(0) as u64));
             let sp = source_store_path(&hash)
                 .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
-            ensure_in_store(ev, &sp, &attrs, pos)?;
             Ok((emit_tree_attrs(ev, &sp, &attrs, pos)?, String::new()))
         }
         Source::Git { root, subdir } => Ok((git_tree(ev, root, pos)?, subdir.clone())),
@@ -185,7 +189,7 @@ fn git_tree(ev: &mut Evaluator, root: &Path, pos: Pos) -> EvalResult<Word> {
         sp.clone(),
         SourceOrigin::Tree {
             local: root.to_path_buf(),
-            accepted: Some(accepted),
+            accepted: Some(Arc::new(accepted)),
         },
     );
     if let Some(h) = &wd.head {
@@ -244,12 +248,6 @@ fn git_tree(ev: &mut Evaluator, root: &Path, pos: Pos) -> EvalResult<Word> {
             attrs.insert("revCount".into(), AttrVal::Int(n));
         }
     }
-    // Nix fetches `{ type = "git"; url = "file://..."; }` from the working tree too.
-    let mut for_nix = Attrs::new();
-    for k in ["type", "url"] {
-        for_nix.insert(k.into(), attrs[k].clone());
-    }
-    ensure_in_store(ev, &sp, &for_nix, pos)?;
     emit_tree_attrs(ev, &sp, &attrs, pos)
 }
 

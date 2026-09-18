@@ -20,6 +20,19 @@ impl Lock {
             .into_iter()
             .flat_map(|m| m.keys().map(String::as_str))
     }
+
+    /// `(narHash, node name)` of every locked node, for messages that name
+    /// an input by what `fetchTree` receives.
+    pub fn nar_hash_names(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.json["nodes"]
+            .as_object()
+            .into_iter()
+            .flat_map(|m| m.iter())
+            .filter_map(|(name, node)| {
+                let h = node["locked"]["narHash"].as_str()?;
+                Some((h, name.as_str()))
+            })
+    }
 }
 
 /// A node is locked when it has a `narHash` (fetchers.cc:isLocked) or is a

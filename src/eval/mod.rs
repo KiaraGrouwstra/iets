@@ -120,6 +120,9 @@ pub struct Evaluator {
         crate::store::path::StorePath,
         crate::store::source::SourceOrigin,
     >,
+    /// Locked `narHash` -> flake input name, from the lock file, for messages
+    /// about an input that must be fetched.
+    pub input_names: crate::parallel::shared::SharedMap<String, String>,
     pub compile_settings: crate::compile::CompileSettings,
     pub drv: crate::builtins::derivation::DrvState,
     pub par: crate::parallel::Ctx,
@@ -183,6 +186,7 @@ impl Evaluator {
             sym_strings: crate::parallel::shared::SymWords::new(),
             src_to_store: Default::default(),
             sources: Default::default(),
+            input_names: Default::default(),
             compile_settings: Default::default(),
             drv: Default::default(),
             par: Default::default(),
@@ -394,11 +398,21 @@ impl Evaluator {
         if p.starts_with(CorePkgs::PREFIX) {
             return Ok(p);
         }
-        let meta = std::fs::metadata(std::path::Path::new(std::str::from_utf8(&p).unwrap_or("")));
+        let Some(phys) = crate::builtins::store_hooks::physical(self, &p) else {
+            bail!(
+                ErrorKind::Io,
+                pos,
+                "getting status of '{}': No such file or directory",
+                String::from_utf8_lossy(&p)
+            );
+        };
+        let meta = std::fs::metadata(std::path::Path::new(
+            <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&phys),
+        ));
         match meta {
             Ok(m) if m.is_dir() => {
                 // a regular file needs no Stat: its File observation checks the type
-                self.trace.stat(&p, true, crate::trace::Kind::Directory);
+                self.trace.stat(&phys, true, crate::trace::Kind::Directory);
                 p.extend_from_slice(b"/default.nix");
             }
             Ok(_) => {}
@@ -463,13 +477,15 @@ impl Evaluator {
             return Ok(src.to_vec());
         }
         let read = || -> std::io::Result<Vec<u8>> {
+            let phys = crate::builtins::store_hooks::physical(self, resolved)
+                .ok_or_else(|| std::io::Error::from_raw_os_error(libc::ENOENT))?;
             let mut f = std::fs::File::open(std::path::Path::new(
-                std::str::from_utf8(resolved).unwrap_or(""),
+                <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&phys),
             ))?;
             let meta = f.metadata()?;
             let mut s = Vec::with_capacity(meta.len() as usize);
             std::io::Read::read_to_end(&mut f, &mut s)?;
-            self.trace.file(resolved, &meta, &s);
+            self.trace.file(&phys, &meta, &s);
             Ok(s)
         };
         match read() {

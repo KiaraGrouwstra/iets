@@ -172,7 +172,7 @@ impl Plan {
                 SourceOrigin::Tree { local, accepted } => SourceInfo {
                     data: SourceData::Local {
                         path: local.clone(),
-                        accepted: accepted.as_ref().map(|a| Arc::new(a.clone())),
+                        accepted: accepted.clone(),
                     },
                     kind: SourceKind::Source,
                 },

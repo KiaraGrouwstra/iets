@@ -180,6 +180,9 @@ pub fn eval_flake_value(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
     let lock = lock::check(&lock_bytes).map_err(|why| {
         EvalError::boxed(ErrorKind::Unsupported, format!("{LOCK_ERROR} ({why})"), pos)
     })?;
+    for (hash, name) in lock.nar_hash_names() {
+        ev.input_names.insert(hash.to_string(), name.to_string());
+    }
 
     let (source_info, subdir) = root::source_info(ev, &fr.source, pos)?;
     let out_path = {

@@ -172,7 +172,7 @@ impl Store {
                 SourceOrigin::Tree { local, accepted } => SourceInfo {
                     data: SourceData::Local {
                         path: local,
-                        accepted: accepted.map(Arc::new),
+                        accepted,
                     },
                     kind: SourceKind::Source,
                 },

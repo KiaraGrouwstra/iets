@@ -10,8 +10,10 @@ use std::fs;
 use std::io::{self, Read};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use super::Registry;
+use super::store_hooks;
 use crate::compile::canon_path;
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
 use crate::runtime::*;
@@ -176,8 +178,9 @@ pub fn coerce_to_path(
 }
 
 /// Nix's `realisePath` without building: a path with derivation context
-/// cannot be realised here, and an opaque store path must already exist.
-/// A virtual store path produced by `"${./x}"` maps back to its source.
+/// cannot be realised here, and an opaque store path must exist or be a
+/// tree this evaluation copied. The result is the path as Nix names it;
+/// `store_hooks::locate` gives the file to read.
 fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>> {
     let mut ctx = Vec::new();
     let p = coerce_to_path(
@@ -187,21 +190,13 @@ fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>> {
         Pos::NONE,
         "while realising the context of a path",
     )?;
-    let mut p = p;
     for c in &ctx {
         let mut kind = ErrorKind::Eval;
         let msg = match c {
             Ctx::Opaque(sp) => {
-                if ev.trace.stat_now(sp, true) != crate::trace::Kind::Missing {
-                    continue;
-                }
-                let src = ev.src_to_store.iter().find(|(_, v)| v == sp);
-                if let Some((src, _)) = src
-                    && p.starts_with(sp)
+                if !matches!(store_hooks::locate(ev, sp), store_hooks::Access::Store)
+                    || ev.trace.stat_now(sp, true) != crate::trace::Kind::Missing
                 {
-                    let mut q = src.clone();
-                    q.extend_from_slice(&p[sp.len()..]);
-                    p = q;
                     continue;
                 }
                 format!("path '{}' is not valid", lossy(sp))
@@ -224,10 +219,33 @@ fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>> {
     Ok(p)
 }
 
+/// The file to read for a realised path, with the filter of the copied
+/// tree it lies in; an entry that filter left out is
+/// `path '...' does not exist`.
+fn realise_existing(
+    ev: &mut Evaluator,
+    w: Word,
+    pos: Pos,
+) -> EvalResult<(Vec<u8>, crate::store::source::Accepted)> {
+    let p = realise_path(ev, w, pos)?;
+    match store_hooks::locate(ev, &p) {
+        store_hooks::Access::Store => Ok((p, None)),
+        store_hooks::Access::Local { path, accepted } => {
+            Ok((path.into_os_string().into_vec(), accepted))
+        }
+        store_hooks::Access::Missing => Err(io_error(
+            io::Error::from_raw_os_error(libc::ENOENT),
+            "getting status of",
+            &p,
+            pos,
+        )),
+    }
+}
+
 /// Reads `st_size` bytes like `PosixSourceAccessor::readFile`, so a procfs
 /// file reads as empty.
 fn read_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
-    let p = realise_path(ev, args[0], pos)?;
+    let (p, _) = realise_existing(ev, args[0], pos)?;
     let meta = fs::metadata(os_path(&p)).map_err(|e| io_error(e, "getting status of", &p, pos))?;
     if !meta.is_file() {
         bail!(
@@ -253,8 +271,11 @@ fn read_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     Ok(ev.mk_string(&bytes))
 }
 
+/// The listing hides entries a copied tree's filter left out (untracked
+/// files of a git tree); the `Dir` observation keeps the full listing, the
+/// one validation can re-read.
 fn read_dir(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
-    let p = realise_path(ev, args[0], pos)?;
+    let (p, accepted) = realise_existing(ev, args[0], pos)?;
     let rd = fs::read_dir(os_path(&p)).map_err(|e| {
         if e.raw_os_error() == Some(libc_enotdir()) {
             Error::boxed(
@@ -288,11 +309,14 @@ fn read_dir(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         } else {
             (3, crate::trace::Kind::Other)
         };
-        let sym = ev.sym(e.file_name().as_bytes());
-        entries.push((sym, Pos::NONE, names[idx]));
         if ev.trace.is_on() {
             listing.push((e.file_name().as_bytes().to_vec(), kind));
         }
+        if accepted.as_ref().is_some_and(|a| !a.contains(&e.path())) {
+            continue;
+        }
+        let sym = ev.sym(e.file_name().as_bytes());
+        entries.push((sym, Pos::NONE, names[idx]));
     }
     if ev.trace.is_on() {
         ev.trace.record(crate::trace::Obs::Dir {
@@ -308,7 +332,7 @@ fn libc_enotdir() -> i32 {
 }
 
 fn read_file_type(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
-    let p = realise_path(ev, args[0], pos)?;
+    let (p, _) = realise_existing(ev, args[0], pos)?;
     let meta = fs::symlink_metadata(os_path(&p));
     ev.trace.stat(&p, false, crate::trace::Kind::of(&meta));
     let meta = meta.map_err(|e| io_error(e, "getting status of", &p, pos))?;
@@ -322,6 +346,9 @@ fn path_exists(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> 
         Value::String(s) if s.bytes.ends_with(b"/") || s.bytes.ends_with(b"/.")
     );
     let p = realise_path(ev, w, pos)?;
+    let Some(p) = store_hooks::physical(ev, &p) else {
+        return Ok(Word::FALSE);
+    };
     let r = if must_be_dir {
         let m = fs::metadata(os_path(&p));
         ev.trace.stat(&p, true, crate::trace::Kind::of(&m));
@@ -472,11 +499,35 @@ fn add_path_inner(
     {
         return Ok(store_path_string(ev, sp));
     }
-    let resolved: PathBuf =
-        fs::canonicalize(os_path(path)).unwrap_or_else(|_| os_path(path).to_path_buf());
-    if resolved.as_os_str().as_bytes() != path {
-        ev.trace.canon(path, Some(&resolved));
-    }
+    // A path under a tree this evaluation copied reads the local tree, with
+    // that tree's filter applied before this call's `filter`; the filter
+    // function still sees the store path Nix would show it.
+    let (resolved, parent): (PathBuf, Option<Arc<HashSet<PathBuf>>>) =
+        match store_hooks::locate(ev, path) {
+            store_hooks::Access::Store => {
+                let resolved =
+                    fs::canonicalize(os_path(path)).unwrap_or_else(|_| os_path(path).to_path_buf());
+                if resolved.as_os_str().as_bytes() != path {
+                    ev.trace.canon(path, Some(&resolved));
+                }
+                (resolved, None)
+            }
+            store_hooks::Access::Local { path, accepted } => (path, accepted),
+            store_hooks::Access::Missing => {
+                return Err(io_error(
+                    io::Error::from_raw_os_error(libc::ENOENT),
+                    "getting status of",
+                    path,
+                    pos,
+                ));
+            }
+        };
+    let shown = |p: &Path| -> PathBuf {
+        match p.strip_prefix(&resolved) {
+            Ok(rest) if parent.is_some() => os_path(path).join(rest),
+            _ => p.to_path_buf(),
+        }
+    };
     let mut accepted: Option<HashSet<PathBuf>> = filter.map(|_| HashSet::new());
     let hash = match method {
         IngestionMethod::Flat => {
@@ -504,13 +555,16 @@ fn add_path_inner(
         IngestionMethod::Recursive => {
             let mut err: Option<Box<Error>> = None;
             let mut f = |p: &Path, t: FileType| -> bool {
+                if parent.as_ref().is_some_and(|a| !a.contains(p)) {
+                    return false;
+                }
                 let Some(filter) = filter else {
                     return true;
                 };
                 if err.is_some() {
                     return false;
                 }
-                match call_filter(ev, filter, p, t, pos) {
+                match call_filter(ev, filter, &shown(p), t, pos) {
                     Ok(b) => {
                         if b && let Some(a) = &mut accepted {
                             a.insert(p.to_path_buf());
@@ -542,7 +596,7 @@ fn add_path_inner(
             sp.clone(),
             SourceOrigin::Tree {
                 local: resolved,
-                accepted,
+                accepted: accepted.map(Arc::new).or(parent),
             },
         );
     }

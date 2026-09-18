@@ -6,7 +6,9 @@
 #  d. --gc-root creates the symlink and nix-store --gc --print-roots lists it;
 #  e. a garbage-collected env output is rebuilt on the next (cached) run;
 #  f. a shell whose package is absent from /nix/store gets it substituted;
-#  g. `#attr` selects a shell.
+#  g. `#attr` selects a shell;
+#  h. a `git worktree` of this repo at a path nix has never copied: ietsp
+#     prints the same bash without fetching the root tree.
 # The scratch flakes sit on the nixpkgs this repo pins (lock written by hand,
 # so nothing is fetched: both evaluators find the tree in the store by narHash).
 #
@@ -198,6 +200,20 @@ def run-tests [ctx: record]: nothing -> int {
     $res ++= [(ok "g. #missing reports the attribute paths tried")]
   } else {
     $res ++= [(bad "g. #missing error text" (tail-of $"($work)/ietsp.err" 2))]
+  }
+
+  # h. ietsp first (cache off) on a worktree nix has never copied; then nix for the reference
+  let fresh = $"($work)/fresh"
+  ^git -C $env.PWD worktree add -q $fresh HEAD
+  let r = (do { cd $fresh; with-env {IETSP_CACHE: "0"} { ^$ietsp print-dev-env --no-cache $fresh | complete } })
+  $r.stdout | save -f $"($work)/fresh.sh"
+  $r.stderr | save -f $"($work)/ietsp.err"
+  nix-env $work $fresh $"($work)/fresh-nix.sh"
+  ^git -C $env.PWD worktree remove --force $fresh
+  if $r.exit_code == 0 and not ($r.stderr | str contains "fetching") and (same $"($work)/fresh-nix.sh" $"($work)/fresh.sh") {
+    $res ++= [(ok "h. worktree nix never saw: bash identical, nothing fetched")]
+  } else {
+    $res ++= [(bad $"h. worktree \(exit ($r.exit_code)\)" (tail-of $"($work)/ietsp.err" 3) (diff-head $"($work)/fresh-nix.sh" $"($work)/fresh.sh" 5 | str join "\n"))]
   }
 
   let fail = ($res | where not $it | length)

@@ -311,17 +311,19 @@ fn hash_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
             crate::compile::canon_path(&s)
         }
     };
-    let os = <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&path);
-    let read = || -> std::io::Result<(std::fs::Metadata, Vec<u8>)> {
+    let read = || -> std::io::Result<(Vec<u8>, std::fs::Metadata, Vec<u8>)> {
+        let phys = crate::builtins::store_hooks::physical(ev, &path)
+            .ok_or_else(|| std::io::Error::from_raw_os_error(libc::ENOENT))?;
+        let os = <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&phys);
         let mut f = std::fs::File::open(os)?;
         let meta = f.metadata()?;
         let mut d = Vec::with_capacity(meta.len() as usize);
         std::io::Read::read_to_end(&mut f, &mut d)?;
-        Ok((meta, d))
+        Ok((phys, meta, d))
     };
     let data = match read() {
-        Ok((meta, d)) => {
-            ev.trace.file(&path, &meta, &d);
+        Ok((phys, meta, d)) => {
+            ev.trace.file(&phys, &meta, &d);
             d
         }
         Err(e) => bail!(
