@@ -581,7 +581,7 @@ fn import_raw(ev: &mut Evaluator, args: &[Word], _pos: Pos) -> EvalResult<Word> 
         .then(std::time::Instant::now);
     let src = ev.read_source(resolved, pos)?;
     let dir = crate::eval::dir_of(resolved).to_vec();
-    let ir = ev.compile_source(resolved, src, &dir, None)?;
+    let ir = ev.compile_file(resolved, src, &dir)?;
     if let Some(t0) = t0 {
         eprintln!(
             "import t={}ms {}us main={} w{} {}",

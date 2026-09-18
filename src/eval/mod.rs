@@ -125,6 +125,8 @@ pub struct Evaluator {
     pub par: crate::parallel::Ctx,
     /// Read-set recorder for the tracing cache; off unless `main` enables it.
     pub trace: crate::trace::Trace,
+    /// Compiled-IR cache for imported files; `None` when disabled.
+    pub ir_cache: Option<std::sync::Arc<crate::compile::cache::IrCache>>,
 }
 
 macro_rules! bail {
@@ -185,6 +187,7 @@ impl Evaluator {
             drv: Default::default(),
             par: Default::default(),
             trace: Default::default(),
+            ir_cache: None,
         };
         crate::builtins::install(&mut ev);
         ev
@@ -236,6 +239,18 @@ impl Evaluator {
         base_dir: &[u8],
         extra_scope: Option<&[Sym]>,
     ) -> EvalResult<IrRef> {
+        self.compile_source_inner(path, src, base_dir, extra_scope)
+            .map(|(ir, _)| ir)
+    }
+
+    /// `compile_source` plus whether a `~/` path literal was compiled.
+    fn compile_source_inner(
+        &mut self,
+        path: &[u8],
+        src: Vec<u8>,
+        base_dir: &[u8],
+        extra_scope: Option<&[Sym]>,
+    ) -> EvalResult<(IrRef, bool)> {
         let file = self.add_file(path, &src);
         let base = self.files[file.0 as usize].base;
         let ast = crate::syntax::parse(&src, file, &mut self.interner)
@@ -266,7 +281,66 @@ impl Evaluator {
         if used_home {
             self.trace.env(b"HOME");
         }
-        r
+        r.map(|ir| (ir, used_home))
+    }
+
+    /// `compile_source` for an imported file, through the IR cache when it
+    /// is on: an entry keyed on the source is loaded instead of parsing and
+    /// compiling, and a fresh compile writes one. Files with `~/` paths and
+    /// runs with lint diagnostics bypass it (the warnings live in the
+    /// compiler).
+    pub fn compile_file(
+        &mut self,
+        path: &[u8],
+        src: Vec<u8>,
+        base_dir: &[u8],
+    ) -> EvalResult<IrRef> {
+        let Some(cache) = self.ir_cache.clone() else {
+            return self.compile_source(path, src, base_dir, None);
+        };
+        let lint = self.compile_settings;
+        if src.len() < cache.min_size
+            || lint.lint_absolute_path_literals != crate::compile::Lint::Ignore
+            || lint.lint_short_path_literals != crate::compile::Lint::Ignore
+        {
+            return self.compile_source(path, src, base_dir, None);
+        }
+        let t0 = std::time::Instant::now();
+        let key = cache.key(path, &src, self.current_system, &self.store_dir);
+        let file = self.add_file(path, &src);
+        let base = self.files[file.0 as usize].base;
+        if let Some(bytes) = cache.read(&key) {
+            let before = self.arena.bytes_allocated;
+            let ir = crate::compile::cache::deserialize(self, &bytes, base, cache.stats);
+            self.arena
+                .stats
+                .note(Stat::Ir, self.arena.bytes_allocated - before);
+            if let Some(ir) = ir {
+                if cache.stats {
+                    eprintln!(
+                        "ir-cache load {} {} {}us",
+                        String::from_utf8_lossy(path),
+                        src.len(),
+                        t0.elapsed().as_micros()
+                    );
+                }
+                return Ok(ir);
+            }
+        }
+        let (ir, used_home) = self.compile_source_inner(path, src, base_dir, None)?;
+        let t1 = std::time::Instant::now();
+        if !used_home && let Some(bytes) = crate::compile::cache::serialize(self, ir, base) {
+            cache.write(&key, &bytes);
+        }
+        if cache.stats {
+            eprintln!(
+                "ir-cache store {} {}us (write {}us)",
+                String::from_utf8_lossy(path),
+                (t1 - t0).as_micros(),
+                t1.elapsed().as_micros()
+            );
+        }
+        Ok(ir)
     }
 
     /// Evaluate a string expression (`-E`).

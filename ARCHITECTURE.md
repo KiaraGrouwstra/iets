@@ -47,7 +47,9 @@ source bytes
   or `WithVar(sym)` (only when no lexical binder exists). Attrset bindings
   are sorted by `Sym` id at compile time when static. Literal folding.
   Records "cheap" expressions (literals, variables) so the evaluator can
-  skip thunk allocation.
+  skip thunk allocation. `cache.rs`: the compiled IR of every imported
+  file is written to `~/.cache/ietsp/ir/` and loaded instead of parsing
+  and compiling on the next run (docs/memory.md, change 5).
 - `runtime/`: `arena.rs` (bump allocator, no GC, per-thread later),
   `word.rs` (8-byte tagged `Word`), `value.rs` (heap objects: string with
   context, list, attrs, lambda, primop, thunk, env), `symbol` reuse.
@@ -69,7 +71,7 @@ source bytes
 - `devenv/`: `ietsp print-dev-env`, the `nix print-dev-env` replacement for
   `.envrc`: the `-env` derivation, the environment JSON, the printed bash.
   See `docs/direnv.md`.
-- `main.rs`: CLI. `ietsp eval [--strict] [--json] [--raw] [--no-cache] [-I prefix=path] [-E expr | file | dir#attr]`,
+- `main.rs`: CLI. `ietsp eval [--strict] [--json] [--raw] [--no-cache] [--no-ir-cache] [-I prefix=path] [-E expr | file | dir#attr]`,
   `ietsp build`, `ietsp print-dev-env`, `ietsp parse`, `ietsp cache-dump`.
 
 ## Value model

@@ -17,7 +17,7 @@ use crate::trace::run::Cache;
 
 pub fn usage() -> ! {
     eprintln!(
-        "usage: ietsp eval [--strict] [--json] [--raw] [--workers N] [--timings] [--no-cache] [--cache-dir DIR] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp cache-dump READSET   (print a cache entry's read set)\n       ietsp build [--builder URL] [--timings] [--no-build] [--fetch-to DIR] [--no-cache] [--cache-dir DIR] [--out NAME]... [--workers N] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--fetch-to DIR] [--out NAME]... [--source STOREPATH=LOCAL]... DRV\n       ietsp eval-jobs [--workers N] [--force-recurse] [--meta] [--show-input-drvs] [--chunks M --chunk N [--chunk-depth D]] [--max-memory-size MB] [-I prefix=path]... [--arg name expr] [--argstr name str] (-E EXPR | FILE | FLAKEREF#attr)\n       ietsp print-dev-env [--builder URL] [--gc-root PATH] [--json] [--workers N] [--no-cache] [--cache-dir DIR] [--timings] [FLAKEREF[#attr]]   (default: ., a daemon URL)\n       URL: daemon, unix:///path, ssh-ng://[user@]host (Nix worker protocol)"
+        "usage: ietsp eval [--strict] [--json] [--raw] [--workers N] [--timings] [--no-cache] [--no-ir-cache] [--cache-dir DIR] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp cache-dump READSET   (print a cache entry's read set)\n       ietsp build [--builder URL] [--timings] [--no-build] [--fetch-to DIR] [--no-cache] [--cache-dir DIR] [--out NAME]... [--workers N] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--fetch-to DIR] [--out NAME]... [--source STOREPATH=LOCAL]... DRV\n       ietsp eval-jobs [--workers N] [--force-recurse] [--meta] [--show-input-drvs] [--chunks M --chunk N [--chunk-depth D]] [--max-memory-size MB] [-I prefix=path]... [--arg name expr] [--argstr name str] (-E EXPR | FILE | FLAKEREF#attr)\n       ietsp print-dev-env [--builder URL] [--gc-root PATH] [--json] [--workers N] [--no-cache] [--cache-dir DIR] [--timings] [FLAKEREF[#attr]]   (default: ., a daemon URL)\n       URL: daemon, unix:///path, ssh-ng://[user@]host (Nix worker protocol)"
     );
     exit(2)
 }
@@ -37,6 +37,8 @@ pub struct EvalArgs {
     pub workers: usize,
     pub timings: bool,
     pub no_cache: bool,
+    /// `--no-ir-cache` or `IETSP_CACHE=0`: compile every import from source.
+    pub no_ir_cache: bool,
     pub cache_dir: Option<String>,
     /// `eval-jobs --flake DIR` with no fragment: the whole `callFlake` result,
     /// not its `outputs`.
@@ -89,6 +91,7 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
         workers: crate::parallel::default_workers(),
         timings: false,
         no_cache: std::env::var_os("IETSP_CACHE").is_some_and(|v| v == "0"),
+        no_ir_cache: std::env::var_os("IETSP_CACHE").is_some_and(|v| v == "0"),
         cache_dir: None,
         flake_whole: false,
     };
@@ -101,6 +104,7 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
             "--raw" => a.raw = true,
             "--timings" => a.timings = true,
             "--no-cache" => a.no_cache = true,
+            "--no-ir-cache" => a.no_ir_cache = true,
             "--cache-dir" => {
                 i += 1;
                 a.cache_dir = Some(argv.get(i).unwrap_or_else(|| usage()).clone());
@@ -208,6 +212,10 @@ pub fn report(ev: &Evaluator, e: &Error) {
 pub fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
     ev.compile_settings.lint_absolute_path_literals = a.lint_absolute;
     ev.compile_settings.lint_short_path_literals = a.lint_short;
+    if !a.no_ir_cache {
+        ev.ir_cache =
+            crate::compile::cache::IrCache::locate(a.cache_dir.as_deref()).map(std::sync::Arc::new);
+    }
     if a.xp_features.iter().any(|f| f == "parse-toml-timestamps") {
         crate::builtins::text::set_parse_toml_timestamps(true);
     }

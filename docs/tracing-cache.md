@@ -112,6 +112,10 @@ rehashed, T s` on stderr.
 - `--no-cache` and `IETSP_CACHE=0` disable lookup and write. `--cache-dir
   DIR` (or `IETSP_CACHE_DIR`) moves the store. Default: on for `eval` and
   `build`.
+- The compiled-IR cache (`src/compile/cache.rs`, docs/memory.md change 5)
+  is a separate store under `${IETSP_CACHE_DIR:-~/.cache/ietsp}/ir/`. It
+  is keyed on file contents, not on the run, so `--no-cache` leaves it on;
+  `--no-ir-cache` or `IETSP_CACHE=0` turns it off.
 - Recorded paths are absolute. A relative path in `-E` puts cwd in the key.
 - A file that changes while the evaluation runs may be recorded twice with
   two hashes; validation then fails on one of them, which is a miss, never

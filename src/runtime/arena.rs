@@ -150,6 +150,22 @@ impl Arena {
         }
     }
 
+    /// Move the elements of `v` into one arena slice.
+    pub fn alloc_vec<T>(&mut self, v: Vec<T>) -> &'static [T] {
+        let n = v.len();
+        if n == 0 {
+            return &[];
+        }
+        let p = self.alloc_raw(n * size_of::<T>(), align_of::<T>()) as *mut T;
+        // SAFETY: fresh allocation of n elements; values moved in.
+        unsafe {
+            for (i, e) in v.into_iter().enumerate() {
+                p.add(i).write(e);
+            }
+            std::slice::from_raw_parts(p, n)
+        }
+    }
+
     #[inline]
     pub fn alloc_bytes(&mut self, b: &[u8]) -> &'static [u8] {
         self.alloc_slice(b)

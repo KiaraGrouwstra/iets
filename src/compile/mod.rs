@@ -1,6 +1,7 @@
 //! AST -> IR: scope resolution, attrpath merging, inherit expansion,
 //! literal allocation, and folding of `builtins.x` to constants.
 
+pub mod cache;
 pub mod ir;
 
 use crate::eval::{Error, ErrorKind, Pos};
@@ -463,75 +464,19 @@ impl<'a> Compiler<'a> {
     }
 
     fn alloc_elems(&mut self, v: Vec<AttrElemIr>) -> &'static [AttrElemIr] {
-        let n = v.len();
-        if n == 0 {
-            return &[];
-        }
-        let p = self
-            .arena
-            .alloc_raw(n * size_of::<AttrElemIr>(), align_of::<AttrElemIr>())
-            as *mut AttrElemIr;
-        // SAFETY: fresh allocation of n elements; values moved in.
-        unsafe {
-            for (i, e) in v.into_iter().enumerate() {
-                p.add(i).write(e);
-            }
-            std::slice::from_raw_parts(p, n)
-        }
+        self.arena.alloc_vec(v)
     }
 
     fn alloc_binds(&mut self, v: Vec<BindIr>) -> &'static [BindIr] {
-        let n = v.len();
-        if n == 0 {
-            return &[];
-        }
-        let p = self
-            .arena
-            .alloc_raw(n * size_of::<BindIr>(), align_of::<BindIr>())
-            as *mut BindIr;
-        // SAFETY: as above.
-        unsafe {
-            for (i, e) in v.into_iter().enumerate() {
-                p.add(i).write(e);
-            }
-            std::slice::from_raw_parts(p, n)
-        }
+        self.arena.alloc_vec(v)
     }
 
     fn alloc_dyn(&mut self, v: Vec<DynBindIr>) -> &'static [DynBindIr] {
-        let n = v.len();
-        if n == 0 {
-            return &[];
-        }
-        let p = self
-            .arena
-            .alloc_raw(n * size_of::<DynBindIr>(), align_of::<DynBindIr>())
-            as *mut DynBindIr;
-        // SAFETY: as above.
-        unsafe {
-            for (i, e) in v.into_iter().enumerate() {
-                p.add(i).write(e);
-            }
-            std::slice::from_raw_parts(p, n)
-        }
+        self.arena.alloc_vec(v)
     }
 
     fn alloc_formals(&mut self, v: Vec<FormalIr>) -> &'static [FormalIr] {
-        let n = v.len();
-        if n == 0 {
-            return &[];
-        }
-        let p = self
-            .arena
-            .alloc_raw(n * size_of::<FormalIr>(), align_of::<FormalIr>())
-            as *mut FormalIr;
-        // SAFETY: as above.
-        unsafe {
-            for (i, e) in v.into_iter().enumerate() {
-                p.add(i).write(e);
-            }
-            std::slice::from_raw_parts(p, n)
-        }
+        self.arena.alloc_vec(v)
     }
 
     fn string(&mut self, parts: &[StrPart], pos: Pos) -> CResult<Ir> {

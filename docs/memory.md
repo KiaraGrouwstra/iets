@@ -202,6 +202,57 @@ in the same session gave 1.88 / 1.37 s against its 1.71 / 1.00 earlier);
 side by side the two binaries are within 4 %, and the desktop path keeps
 no ATerm under `--no-cache`, RSS 676 → 659 MB.
 
+### 5. Compiled-IR cache on disk
+
+At one worker, parsing and compiling the 3,500 files of nixos-desktop is
+~28 % of the run (docs/parallel.md; `hackage-packages.nix` alone is
+0.19 s). `src/compile/cache.rs` writes each imported file's IR after its
+first compile and loads it on later runs. Entry:
+`${IETSP_CACHE_DIR:-~/.cache/ietsp}/ir/<blake3 of build id, path,
+system, store dir, source>`; a varint pre-order stream with a per-entry
+symbol table. Three things make IR process-specific and the entry undoes
+each: `Sym` ids (names re-interned on load), `Pos` (stored relative to the
+file, rebased on the file's global base), and constant words (literals by
+content; globals and `builtins.x` by name, looked up in the live tables
+on load, so `__nixPath` follows the run). Binding frames (`let`, `rec`,
+formals) are slot-ordered by `Sym` id, which differs between processes:
+the loader re-sorts them by the new ids and rewrites every `Local` index
+through a permutation stack that mirrors the compiler's scope pushes
+(frames already in order, the common case, push no permutation).
+
+Only `import` uses the cache (`scopedImport`, `-E`, and files with a
+`~/` path literal or a lint diagnostic compile from source). Files under
+1 KiB are not cached: below that the load (open, read, decode) costs
+what the compile costs. `--no-ir-cache` or `IETSP_CACHE=0` disables it;
+`--no-cache` (the tracing cache) leaves it on. `IETSP_IR_STATS=1` prints
+a line per file, `IETSP_IR_MIN` overrides the size floor.
+
+Per file on desktop (one cold and one warm run, 3,501 files):
+`hackage-packages.nix` loads in 71-77 ms against 190-218 ms to parse and
+compile (symbol table 3.6 ms, nodes 57 ms, the rest is the key hash,
+the read and the line table); all files together load in 229 ms against
+696 ms. The loader's profile is the compiler's minus the parser: string
+interning, the line table's `memchr`, symbol interning, plus blake3 of
+the source (7 %). A cold run (every entry written, 23 MB) costs the
+compile plus 238 ms of serialize-and-write; that is the first run only.
+
+A/B (`bench/ab.nu`, hyperfine `--warmup 1 --runs 7`, interleaved, warm
+IR cache, 2026-09-18):
+
+| workload | wall before | wall after | change | user before | user after | sys before | sys after | RSS before | RSS after |
+|---|---|---|---|---|---|---|---|---|---|
+| nixos-desktop w1 | 2.011 | 1.693 | -15.8% | 1.6 | 1.3 | 0.39 | 0.39 | 658 | 654 |
+| nixos-desktop w4 | 1.556 | 1.623 | 4.3% | 2.74 | 2.67 | 0.86 | 0.85 | 799 | 812 |
+| nixos-minimal w1 | 1.549 | 1.252 | -19.2% | 1.26 | 1.0 | 0.28 | 0.24 | 529 | 522 |
+| outpaths 0/8 w1 | 33.469 | 32.729 | -2.2% | 28.98 | 28.0 | 4.48 | 4.45 | 7218 | 7215 |
+
+nixos-desktop w4 is inside this box's noise: three interleaved measurements gave
+-6.8 % (7 runs, before = 217e383), +4.3 % (7 runs) and, at 11 runs, median
++1.2 % with mean -1.2 % (1232-1493 ms against 1220-1543 ms, user 2.62 -> 2.55 s).
+
+Kept: -15.8 % wall on desktop at one worker, -19.2 % on minimal, -2.2 % on outpaths at one
+worker; RSS unchanged.
+
 ## Running perf table
 
 `bench/perf.nu` rows: nixos-desktop is the median-wall run of 5; outpaths
@@ -235,6 +286,27 @@ chunk 0/8 is one run. Same 16-core box, idle.
 The desktop rows of change 4 and the re-measured change-2 rows come from
 a later session in which every binary ran about 10 % slower (sys time
 doubled); compare rows within a session.
+
+### Single-thread ideas, 2026-09-18
+
+`bench/ab.nu BEFORE AFTER`: both binaries in one hyperfine invocation
+per workload (`--warmup 1 --runs 7`, runs interleaved), median wall,
+mean user and sys, peak RSS of one extra run. Keep rule: wall improves
+more than 2 % on desktop w1 or outpaths w1 with no regression above 1 %
+elsewhere. Same 16-core box, idle, warm IR cache.
+
+Idea 1, compiled-IR cache (kept; before = fb21901):
+
+| workload | wall before | wall after | change | user before | user after | sys before | sys after | RSS before | RSS after |
+|---|---|---|---|---|---|---|---|---|---|
+| nixos-desktop w1 | 2.011 | 1.693 | -15.8% | 1.6 | 1.3 | 0.39 | 0.39 | 658 | 654 |
+| nixos-desktop w4 | 1.556 | 1.623 | 4.3% | 2.74 | 2.67 | 0.86 | 0.85 | 799 | 812 |
+| nixos-minimal w1 | 1.549 | 1.252 | -19.2% | 1.26 | 1.0 | 0.28 | 0.24 | 529 | 522 |
+| outpaths 0/8 w1 | 33.469 | 32.729 | -2.2% | 28.98 | 28.0 | 4.48 | 4.45 | 7218 | 7215 |
+
+nixos-desktop w4 is inside this box's noise: three interleaved measurements gave
+-6.8 % (7 runs, before = 217e383), +4.3 % (7 runs) and, at 11 runs, median
++1.2 % with mean -1.2 % (1232-1493 ms against 1220-1543 ms, user 2.62 -> 2.55 s).
 
 ## Assessed and not done
 
