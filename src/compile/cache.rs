@@ -26,12 +26,14 @@ pub struct IrCache {
     pub min_size: usize,
     /// `IETSP_IR_STATS=1`: one line per file on stderr.
     pub stats: bool,
+    /// The store is swept at most once per process, on the first write.
+    swept: std::sync::atomic::AtomicBool,
 }
 
 impl IrCache {
     /// `--cache-dir DIR`, else `IETSP_CACHE_DIR`, else `$XDG_CACHE_HOME/ietsp`,
     /// else `~/.cache/ietsp`; the entries live in its `ir/` subdirectory.
-    pub fn locate(override_dir: Option<&str>) -> Option<IrCache> {
+    pub fn locate(override_dir: Option<&str>, timings: bool) -> Option<IrCache> {
         let set = crate::settings::get();
         let base = if let Some(d) = override_dir {
             PathBuf::from(d)
@@ -44,11 +46,18 @@ impl IrCache {
             };
             base.join("ietsp")
         };
+        let root = base.join("ir");
+        crate::cachefs::prepare(&root, timings);
         Some(IrCache {
-            root: base.join("ir"),
+            root,
             min_size: set.ir_min,
             stats: set.ir_stats,
+            swept: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+
+    pub fn root(&self) -> &std::path::Path {
+        &self.root
     }
 
     pub fn key(&self, path: &[u8], src: &[u8], system: &str, store_dir: &[u8]) -> String {
@@ -70,18 +79,44 @@ impl IrCache {
         self.root.join(&key[..2]).join(&key[2..])
     }
 
+    /// A hit marks the entry as used from the same `fstat` that sizes the
+    /// read, and only when the mark is due (`cachefs::touch_open`).
     pub fn read(&self, key: &str) -> Option<Vec<u8>> {
-        std::fs::read(self.entry(key)).ok()
+        use std::io::Read;
+        let f = std::fs::File::open(self.entry(key)).ok()?;
+        let md = f.metadata().ok()?;
+        let mut bytes = Vec::with_capacity(md.len() as usize + 1);
+        let mut r = &f;
+        r.read_to_end(&mut bytes).ok()?;
+        crate::cachefs::touch_open(&f, md.modified().ok());
+        Some(bytes)
     }
 
+    /// Skips the write when a sibling process holds the store lock: the file
+    /// is compiled again next run, which is cheaper than waiting here.
     pub fn write(&self, key: &str, bytes: &[u8]) {
+        use std::sync::atomic::Ordering;
         let path = self.entry(key);
         let dir = path.parent().expect("entry has a parent");
-        let tmp = dir.join(format!(".{}.{}.tmp", &key[2..], std::process::id()));
         let _ = std::fs::create_dir_all(dir);
-        if std::fs::write(&tmp, bytes).is_ok() && std::fs::rename(&tmp, &path).is_err() {
-            let _ = std::fs::remove_file(&tmp);
+        let name = &key[2..];
+        if let Some(_lock) = crate::cachefs::write_lock(&self.root) {
+            let _ = crate::cachefs::write_atomic(dir, name, crate::cachefs::tag(), bytes);
+        } else if self.stats {
+            eprintln!("ir-cache skip {name} (a sibling holds the store lock)");
         }
+        if !self.swept.swap(true, Ordering::Relaxed) {
+            crate::cachefs::maybe_sweep(
+                &self.root,
+                crate::cachefs::Shape::ShardedFiles,
+                self.stats,
+            );
+        }
+    }
+
+    /// Poison and wipe, never repair: an entry that does not decode goes.
+    pub fn discard(&self, key: &str) {
+        let _ = std::fs::remove_file(self.entry(key));
     }
 }
 

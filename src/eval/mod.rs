@@ -319,6 +319,9 @@ impl Evaluator {
             self.arena
                 .stats
                 .note(Stat::Ir, self.arena.bytes_allocated - before);
+            if ir.is_none() {
+                cache.discard(&key);
+            }
             if let Some(ir) = ir {
                 if cache.stats {
                     eprintln!(

@@ -1,6 +1,7 @@
 pub mod api;
 pub mod build;
 pub mod builtins;
+pub mod cachefs;
 pub mod cli;
 pub mod compile;
 pub mod config;

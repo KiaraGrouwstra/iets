@@ -1,9 +1,12 @@
 //! The on-disk cache: one directory per key, files written to a temporary
-//! name and renamed into place.
+//! name and renamed into place. `crate::cachefs` holds the store-level
+//! structure (version, writer lock, sweeps) this shares with the IR cache.
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+
+use crate::cachefs;
 
 pub const READSET: &str = "readset";
 pub const RESULT: &str = "result";
@@ -35,6 +38,10 @@ impl Store {
         })
     }
 
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub fn entry_dir(&self, key: &str) -> PathBuf {
         self.root.join(key)
     }
@@ -43,17 +50,25 @@ impl Store {
         fs::read(self.entry_dir(key).join(file)).ok()
     }
 
-    pub fn write(&self, key: &str, file: &str, bytes: &[u8]) -> io::Result<()> {
+    /// `false` when a sibling writer held the store lock: the entry stays as
+    /// it was and the next run misses.
+    pub fn write(&self, key: &str, file: &str, bytes: &[u8]) -> io::Result<bool> {
         let dir = self.entry_dir(key);
         fs::create_dir_all(&dir)?;
-        write_atomic(&dir, file, bytes)
+        let Some(_lock) = cachefs::write_lock(&self.root) else {
+            return Ok(false);
+        };
+        cachefs::write_atomic(&dir, file, cachefs::tag(), bytes).map(|()| true)
     }
-}
 
-fn write_atomic(dir: &Path, file: &str, bytes: &[u8]) -> io::Result<()> {
-    let tmp = dir.join(format!(".{file}.{}.tmp", std::process::id()));
-    fs::write(&tmp, bytes)?;
-    fs::rename(&tmp, dir.join(file)).inspect_err(|_| {
-        let _ = fs::remove_file(&tmp);
-    })
+    /// A hit marks the entry as used; renaming a file into the directory
+    /// already does that, so a refreshed `readset` needs no touch.
+    pub fn touch(&self, key: &str) {
+        cachefs::touch(&self.entry_dir(key));
+    }
+
+    /// Poison and wipe, never repair: an entry that does not decode goes.
+    pub fn discard(&self, key: &str) {
+        let _ = fs::remove_dir_all(self.entry_dir(key));
+    }
 }

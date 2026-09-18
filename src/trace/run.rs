@@ -17,6 +17,7 @@ impl Cache {
     /// `None` when no cache store can be located.
     pub fn open(cache_dir: Option<&str>, key: Key, timings: bool) -> Option<Cache> {
         let store = crate::trace::store::Store::locate(cache_dir)?;
+        crate::cachefs::prepare(store.root(), timings);
         Some(Cache {
             store,
             key: key.finish(),
@@ -36,8 +37,9 @@ impl Cache {
             return false;
         };
         let Some(mut obs) = crate::trace::wire::decode_readset(&bytes) else {
+            self.store.discard(&self.key);
             if self.timings {
-                eprintln!("cache: miss (unreadable entry)");
+                eprintln!("cache: miss (unreadable entry, discarded)");
             }
             return false;
         };
@@ -51,6 +53,8 @@ impl Cache {
                         READSET,
                         &crate::trace::wire::encode_readset(&obs),
                     );
+                } else {
+                    self.store.touch(&self.key);
                 }
                 if self.timings {
                     eprintln!(
@@ -91,33 +95,42 @@ impl Cache {
         }
         let t0 = std::time::Instant::now();
         let obs = ev.trace.take();
-        let r = if tables {
+        // `readset` goes last: a write the store lock cut short leaves no
+        // entry to hit rather than a half-written one.
+        let r = (|| -> std::io::Result<bool> {
+            if tables {
+                if !self
+                    .store
+                    .write(&self.key, DRVS, &wire::encode_drvs(&ev.drv.drvs.lock()))?
+                {
+                    return Ok(false);
+                }
+                if !self.store.write(
+                    &self.key,
+                    SOURCES,
+                    &wire::encode_sources(&ev.source_origins()),
+                )? {
+                    return Ok(false);
+                }
+            }
+            if !self.store.write(&self.key, RESULT, result)? {
+                return Ok(false);
+            }
             self.store
-                .write(&self.key, DRVS, &wire::encode_drvs(&ev.drv.drvs.lock()))
-                .and_then(|_| {
-                    self.store.write(
-                        &self.key,
-                        SOURCES,
-                        &wire::encode_sources(&ev.source_origins()),
-                    )
-                })
-        } else {
-            Ok(())
-        };
-        let r = r
-            .and_then(|_| self.store.write(&self.key, RESULT, result))
-            .and_then(|_| {
-                self.store
-                    .write(&self.key, READSET, &wire::encode_readset(&obs))
-            });
+                .write(&self.key, READSET, &wire::encode_readset(&obs))
+        })();
         match r {
-            Ok(()) => {
+            Ok(wrote) => {
                 if self.timings {
-                    eprintln!(
-                        "cache: wrote {} entries, {:.3}s",
-                        obs.len(),
-                        t0.elapsed().as_secs_f64()
-                    );
+                    if wrote {
+                        eprintln!(
+                            "cache: wrote {} entries, {:.3}s",
+                            obs.len(),
+                            t0.elapsed().as_secs_f64()
+                        );
+                    } else {
+                        eprintln!("cache: not written (a sibling holds the store lock)");
+                    }
                 }
             }
             Err(e) => eprintln!(
@@ -125,6 +138,7 @@ impl Cache {
                 self.store.entry_dir(&self.key).display()
             ),
         }
+        crate::cachefs::maybe_sweep(self.store.root(), crate::cachefs::Shape::Dirs, self.timings);
     }
 
     /// The roots, drv table and source table of a `build` entry.
@@ -138,9 +152,18 @@ impl Cache {
     )> {
         use crate::trace::store::{DRVS, RESULT, SOURCES};
         use crate::trace::wire;
-        let roots = wire::decode_roots(&self.store.read(&self.key, RESULT)?)?;
-        let drvs = wire::decode_drvs(&self.store.read(&self.key, DRVS)?)?;
-        let sources = wire::decode_sources(&self.store.read(&self.key, SOURCES)?)?;
-        Some((roots, drvs, sources))
+        let tables = (|| {
+            let roots = wire::decode_roots(&self.store.read(&self.key, RESULT)?)?;
+            let drvs = wire::decode_drvs(&self.store.read(&self.key, DRVS)?)?;
+            let sources = wire::decode_sources(&self.store.read(&self.key, SOURCES)?)?;
+            Some((roots, drvs, sources))
+        })();
+        if tables.is_none() {
+            self.store.discard(&self.key);
+            if self.timings {
+                eprintln!("cache: miss (unreadable tables, discarded)");
+            }
+        }
+        tables
     }
 }

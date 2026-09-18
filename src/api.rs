@@ -128,8 +128,8 @@ pub fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
     ev.compile_settings.lint_absolute_path_literals = a.lint_absolute;
     ev.compile_settings.lint_short_path_literals = a.lint_short;
     if !a.no_ir_cache {
-        ev.ir_cache =
-            crate::compile::cache::IrCache::locate(a.cache_dir.as_deref()).map(std::sync::Arc::new);
+        ev.ir_cache = crate::compile::cache::IrCache::locate(a.cache_dir.as_deref(), a.timings)
+            .map(std::sync::Arc::new);
     }
     if a.xp_features.iter().any(|f| f == "parse-toml-timestamps") {
         crate::builtins::text::set_parse_toml_timestamps(true);
