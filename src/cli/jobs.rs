@@ -9,6 +9,11 @@ use crate::error::Error as CrateError;
 use crate::eval::{Error, Evaluator, Pos};
 use crate::runtime::Word;
 
+/// nix-eval-jobs's `MyArgs::DEFAULT_MAX_MEMORY_SIZE` (eval-args.hh:18): an
+/// arena without a GC cannot shed a walked subtree, so the default needs
+/// the same process boundary nix-eval-jobs has.
+const DEFAULT_MAX_MEMORY_MB: u64 = 4096;
+
 /// `ietsp eval-jobs`'s own flags; everything else goes to `parse_eval_args`.
 struct JobsArgs {
     opts: crate::jobs::Opts,
@@ -17,8 +22,11 @@ struct JobsArgs {
     eval_store: String,
     apply: Option<String>,
     select: Option<String>,
-    /// `--max-memory-size MB`: worker processes restarted above it.
-    max_memory: Option<u64>,
+    /// `--max-memory-size MB`: worker processes restarted above it;
+    /// `0` is one process with no ceiling.
+    max_memory: u64,
+    /// `--arg-from-stdin NAME`: what was read, for the worker argv.
+    stdin_args: Vec<(String, String)>,
     worker: bool,
     flake: bool,
     quiet: bool,
@@ -42,7 +50,8 @@ fn parse_jobs_args(argv: &[String]) -> (JobsArgs, Vec<String>) {
         eval_store: "daemon".into(),
         apply: None,
         select: None,
-        max_memory: None,
+        max_memory: DEFAULT_MAX_MEMORY_MB,
+        stdin_args: Vec::new(),
         worker: false,
         flake: false,
         quiet: false,
@@ -71,7 +80,7 @@ fn parse_jobs_args(argv: &[String]) -> (JobsArgs, Vec<String>) {
             "--chunks" => j.opts.chunks = (num(&mut i) as u32).max(1),
             "--chunk" => j.opts.chunk = num(&mut i) as u32,
             "--chunk-depth" => j.opts.chunk_depth = num(&mut i) as u32,
-            "--max-memory-size" => j.max_memory = Some(num(&mut i)),
+            "--max-memory-size" => j.max_memory = num(&mut i),
             "--apply" => j.apply = Some(arg(&mut i)),
             "--select" => j.select = Some(arg(&mut i)),
             "--gc-roots-dir" => {
@@ -123,7 +132,8 @@ fn parse_jobs_args(argv: &[String]) -> (JobsArgs, Vec<String>) {
                     eprintln!("error: cannot read stdin: {e}");
                     exit(1)
                 });
-                rest.extend(["--argstr".to_string(), name, contents]);
+                rest.extend(["--argstr".to_string(), name.clone(), contents.clone()]);
+                j.stdin_args.push((name, contents));
             }
             "--include" => {
                 rest.push("-I".to_string());
@@ -134,6 +144,27 @@ fn parse_jobs_args(argv: &[String]) -> (JobsArgs, Vec<String>) {
         i += 1;
     }
     (j, rest)
+}
+
+/// A worker process's arguments: `argv` with every `--arg-from-stdin`
+/// replaced by the `--argstr` the main process read for it. A worker's
+/// stdin is the collector's pipe, so it cannot read the value itself.
+fn worker_argv(argv: &[String], j: &JobsArgs) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(argv.len());
+    let mut read = j.stdin_args.iter();
+    let mut i = 0;
+    while i < argv.len() {
+        if argv[i] == "--arg-from-stdin" {
+            if let Some((name, contents)) = read.next() {
+                out.extend(["--argstr".to_string(), name.clone(), contents.clone()]);
+            }
+            i += 2;
+            continue;
+        }
+        out.push(argv[i].clone());
+        i += 1;
+    }
+    out
 }
 
 /// nix-eval-jobs.cc:validateIncompatibleFlags.
@@ -167,8 +198,9 @@ fn check_jobs_args(j: &JobsArgs) -> crate::error::Result<crate::remote::worker::
     })
 }
 
-/// `ietsp eval-jobs`: nix-eval-jobs's JSON lines. One process by default;
-/// with `--max-memory-size`, worker processes restarted above the limit.
+/// `ietsp eval-jobs`: nix-eval-jobs's JSON lines. Worker processes
+/// restarted above `--max-memory-size` (4096 MB, like nix-eval-jobs);
+/// `--max-memory-size 0` is one process with no ceiling.
 /// See docs/eval-jobs.md.
 pub fn cmd_eval_jobs(argv: &[String]) -> i32 {
     let (j, rest) = parse_jobs_args(argv);
@@ -201,8 +233,8 @@ pub fn cmd_eval_jobs(argv: &[String]) -> i32 {
         ev.drv.keep_aterm = !j.opts.no_instantiate;
         return crate::parallel::run(1, ev, move |ev| jobs_worker(ev, a, &j, &transport));
     }
-    if j.max_memory.is_some() {
-        return jobs_collector(argv, a.workers, &j, &transport, t0);
+    if j.max_memory > 0 {
+        return jobs_collector(&worker_argv(argv, &j), a.workers, &j, &transport, t0);
     }
     let workers = a.workers;
     let mut ev = Evaluator::new();
@@ -257,7 +289,7 @@ fn jobs_summary(
         stats.jobs,
         stats.errors,
         t0.elapsed().as_secs_f64(),
-        if j.max_memory.is_some() {
+        if j.max_memory > 0 {
             format!(
                 "{} worker processes spawned",
                 crate::jobs::collector::SPAWNED.load(std::sync::atomic::Ordering::Relaxed)
@@ -437,7 +469,7 @@ fn jobs_worker(
             Err(e) => return fail(&out, &format!("error: {e}")),
         }
     };
-    match run_worker(ev, root, inst, j.max_memory.unwrap_or(4096), &out) {
+    match run_worker(ev, root, inst, j.max_memory, &out) {
         Ok(()) => 0,
         Err(e) => fail(&out, &format!("error: {e}")),
     }

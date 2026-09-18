@@ -1,7 +1,8 @@
 # eval-jobs: whole-nixpkgs evaluation
 
 `ietsp eval-jobs` prints the JSON lines `nix-eval-jobs` 2.35 prints, from
-one process, using the fiber runtime (`docs/parallel.md`). This document
+worker processes of fibers (`docs/parallel.md`), restarted at
+`--max-memory-size` as nix-eval-jobs restarts its own. This document
 records how Hydra and nixpkgs CI evaluate nixpkgs, the exact walk and
 schema of nix-eval-jobs, the measurements against it, and what is
 missing.
@@ -210,7 +211,7 @@ ietsp eval-jobs [--workers N] [--force-recurse] [--meta] [--provenance]
 Same walk, same lines. `scripts/evaljobs-flags.nu` runs nix-eval-jobs
 2.35.2 and ietsp with every flag combination below on the jobsets in
 `tests/evaljobs/` and diffs the sorted output (`jq -S` per line, error
-text replaced by `true`, GC root directories listed): 40 cases, all
+text replaced by `true`, GC root directories listed): 41 cases, all
 identical, exit codes included.
 
 ### Flags
@@ -230,8 +231,8 @@ identical, exit codes included.
 | `--constituents` | identical | Named, derivation, glob (`_hydraGlobConstituents`) constituents, dependency cycles, missing and failed constituents, rewritten `drvPath`/`outputs`, `namedConstituents` erased, roots. Not across `--chunks`: a name in another chunk is "does not exist". |
 | `--apply EXPR` | identical | `extraValue`; a non-attrset result is the job's error. |
 | `--select EXPR` | identical | Applied to the auto-called root; a non-attrset result is fatal. |
-| `--workers N` | different meaning | Fibers of one process (default 4); worker processes with `--max-memory-size` (nix-eval-jobs: processes, default 1). |
-| `--max-memory-size MB` | supported, different default | Only when given: worker processes restarted above `MB` (below). Without it one process with no ceiling; nix-eval-jobs always restarts at 4096. |
+| `--workers N` | different meaning | Worker processes (default 4; nix-eval-jobs: 1), or fibers of one process with `--max-memory-size 0`. |
+| `--max-memory-size MB` | identical default | Worker processes restarted above `MB`, 4096 like nix-eval-jobs (below). `0` is ietsp's own: one process with no ceiling, which no jobset larger than the box can finish. |
 | `--chunks M --chunk N`, `--chunk-depth D` | ietsp only | See above. |
 | `--impure` | accepted | ietsp never enforces pure evaluation. |
 | `--show-trace` | accepted | The trace is always in the error text. |
@@ -239,15 +240,14 @@ identical, exit codes included.
 | `--quiet`, `--verbose`, `--debug` | accepted | `--quiet` drops the stderr summary. |
 | `--log-format raw` | accepted | `internal-json`, `bar`, `bar-with-logs`: error; ietsp logs plain lines. |
 | `--max-jobs N` | accepted, ignored | |
-| `--provenance` | ietsp only | Adds a `pos` key per job: `file:line:col` of the derivation, mapped back to the local tree (`docs/provenance.md`). nix-eval-jobs 2.35 has no such key, so the flag is off by default and the 40 cases stay identical. |
+| `--provenance` | ietsp only | Adds a `pos` key per job: `file:line:col` of the derivation, mapped back to the local tree (`docs/provenance.md`). nix-eval-jobs 2.35 has no such key, so the flag is off by default and the 41 cases stay identical. |
 | `--override-input`, `--override-flake`, `--reference-lock-file` | error | ietsp evaluates a flake from its own complete `flake.lock` only. |
 | `--repair` | error | ietsp never repairs store paths. |
 
 Differences that stay:
 
-- **Order** is lexicographic depth-first in one process, and completion
-  order (like nix-eval-jobs) with `--max-memory-size`. Sort by
-  `attrPath` to compare.
+- **Order** is completion order, like nix-eval-jobs, and lexicographic
+  depth-first with `--max-memory-size 0`. Sort by `attrPath` to compare.
 - **Error text** is ietsp's (`error: msg`, `at file:line:col`, `… trace`
   lines), not Nix's rendering. The set of attrs that error is the same
   in every measurement; the text is not compared. A fatal line
@@ -332,14 +332,16 @@ and a broken one becomes `error: "name: why\n..."` on the job line.
 `tests/evaljobs/aggregates.nix` has all of nix-eval-jobs's cases
 (direct, indirect, mixed, nested, missing, failed, two glob shapes, a
 cycle with a bystander, `_hydraAggregate` without constituents,
-`_hydraAggregate = false`): 23 lines, identical to nix-eval-jobs in
-one process, with `--max-memory-size` and with `--check-cache-status`.
+`_hydraAggregate = false`): 23 lines, identical to nix-eval-jobs with
+worker restarts, with `--max-memory-size 0` and with
+`--check-cache-status`.
 
 ### Memory limit
 
 `src/jobs/collector.rs`. ietsp has one arena and no GC, so a process
 cannot shed what it has evaluated; the only ceiling is a process
-boundary. With `--max-memory-size MB` ietsp does what nix-eval-jobs
+boundary. `--max-memory-size MB` is therefore 4096 by default, like
+nix-eval-jobs (`eval-args.hh:18`), and ietsp does what nix-eval-jobs
 does: the main process runs `--workers` collector threads, each with a
 worker process (`ietsp eval-jobs --worker` and the same arguments, one
 fiber thread, its own instantiation thread) and the shared `todo` set
@@ -355,6 +357,14 @@ worker that dies is reported like nix-eval-jobs's
 process from the lines (the `.drv`s are in the store by then). Output
 order is completion order. The chunk rule still applies inside a
 worker, so `--chunks` and `--max-memory-size` combine.
+
+The default is what `nixos/release-small.nix --force-recurse --workers 4`
+needs: 60 NixOS VM tests in one arena pass 30 GB and the kernel kills
+the process, which is what ietsp did while `--max-memory-size` was off
+by default. With the restarts it prints the same 123 lines as
+nix-eval-jobs (120 jobs, 3 errors, same `drvPath`s and outputs) in
+47.9 s against 132.8 s, over 16 worker processes. `bench/eval-jobs.nu`
+compares that pair on every run.
 
 Full outpaths x86_64-linux set, `--workers 4 --max-memory-size 4096`,
 against the nix-eval-jobs rows of section (a), same box and method

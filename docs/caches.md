@@ -101,18 +101,21 @@ has no version file.
 `bench/eval-jobs.nu [rounds]` runs `ietsp eval-jobs` and `nix-eval-jobs`
 on `nixos/release-small.nix` with 4 workers and interleaves cold and warm
 cache runs. Without `--force-recurse` both tools agree that the jobset has
-one job, the `tested` aggregate, so the numbers are small; `ietsp
-eval-jobs --force-recurse` still fails on that file where nix-eval-jobs
-returns 123 jobs, which is an evaluator divergence, not a cache question.
+one job, the `tested` aggregate, so the numbers are small. The script then
+runs each tool once with `--force-recurse` and compares the job sets: 123
+lines on both sides (`--no-parity` skips that pair, which takes minutes).
 `eval-jobs` uses the IR cache only, so cold against warm is the IR cache.
 2026-09-18, 16-core EPYC, median of 2 rounds:
 
 | tool | run | wall | user | sys | max RSS |
 |---|---|---|---|---|---|
-| ietsp eval-jobs | cold | 0.27s | 0.29s | 0.15s | 242 MiB |
-| ietsp eval-jobs | warm | 0.21s | 0.26s | 0.13s | 227 MiB |
-| nix-eval-jobs | cold | 0.54s | 0.25s | 0.22s | 113 MiB |
-| nix-eval-jobs | warm | 0.60s | 0.27s | 0.23s | 113 MiB |
+| ietsp eval-jobs | cold | 0.29s | 0.12s | 0.08s | 85 MiB |
+| ietsp eval-jobs | warm | 0.26s | 0.09s | 0.08s | 85 MiB |
+| nix-eval-jobs | cold | 0.68s | 0.30s | 0.22s | 113 MiB |
+| nix-eval-jobs | warm | 0.66s | 0.31s | 0.21s | 113 MiB |
+
+`max RSS` is the main process; ietsp's evaluation now happens in a worker
+process (`--max-memory-size` defaults to 4096 MB, `docs/eval-jobs.md`).
 
 nix-eval-jobs keeps no on-disk evaluation cache for a file argument, so
 its two rows differ only in page cache.

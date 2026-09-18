@@ -123,6 +123,7 @@ def run-all [ctx: record, np: string]: nothing -> int {
     [check restart-constituents [--max-memory-size 1 --workers 2 --constituents --check-cache-status --gc-roots-dir GCROOTS aggregates.nix]]
     [check restart-flake [--max-memory-size 1 --workers 2 --flake ./flake#hydraJobs --apply 'd: { n = d.name; }']]
     [check restart-no-instantiate [--max-memory-size 1 --workers 2 --no-instantiate --meta ci.nix]]
+    [check one-process [--max-memory-size 0 --force-recurse --meta --gc-roots-dir GCROOTS ci.nix]]
     [chunks chunks [--meta ci.nix]]
     [expect-fail no-instantiate-constituents [--no-instantiate --constituents aggregates.nix]]
     [expect-fail no-instantiate-cache [--no-instantiate --check-cache-status ci.nix]]

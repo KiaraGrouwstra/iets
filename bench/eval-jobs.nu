@@ -1,8 +1,10 @@
 #!/usr/bin/env nu
-# Usage: bench/eval-jobs.nu [rounds]
+# Usage: bench/eval-jobs.nu [rounds] [--no-parity]
 # `ietsp eval-jobs` against `nix-eval-jobs` on nixos/release-small.nix with 4
 # workers, cold and warm runs interleaved. Reports the median of each cell.
 # GNU time comes from the system, not the dev shell: set TIME_BIN to move it.
+# Then one --force-recurse run of each tool, whose job sets must match
+# (--no-parity skips it; that pair takes a few minutes).
 
 def timed [cache: path, env_vars: record, cmd: list<string>] {
   let out = (mktemp -t ietsp-bench-XXXXXX)
@@ -24,7 +26,30 @@ def median [xs: list<float>] {
   $s | get (($s | length) // 2)
 }
 
-def main [rounds: int = 3] {
+def norm []: string -> list<string> {
+  let out = ($in | ^jq -S -c 'if .error then {attr, error: true} else {attr, drvPath, outputs, name, system, requiredSystemFeatures} end')
+  $out | lines | sort
+}
+
+# One run of each tool with --force-recurse: the job sets must be equal.
+# Error text is not compared (ietsp renders its own traces).
+def parity [ietsp: string, nej: string, args: list<string>]: nothing -> bool {
+  let i = (^$ietsp eval-jobs --force-recurse ...$args | complete)
+  let n = (^$nej --force-recurse ...$args | complete)
+  let ii = ($i.stdout | norm)
+  let nn = ($n.stdout | norm)
+  if $i.exit_code == $n.exit_code and $ii == $nn {
+    print $"parity ok: --force-recurse, ($ii | length) lines, exit ($i.exit_code)"
+    return true
+  }
+  print $"parity FAIL: --force-recurse, ietsp ($ii | length) lines exit ($i.exit_code), nix-eval-jobs ($nn | length) lines exit ($n.exit_code)"
+  $nn | where {|l| $l not-in $ii } | take 3 | each {|l| print $"  only nix-eval-jobs: ($l)" } | ignore
+  $ii | where {|l| $l not-in $nn } | take 3 | each {|l| print $"  only ietsp: ($l)" } | ignore
+  $i.stderr | lines | last 3 | each {|l| print $"  ietsp: ($l)" } | ignore
+  false
+}
+
+def main [rounds: int = 3, --no-parity] {
   cd ($env.FILE_PWD | path join "..")
   let np = ($env.NIXPKGS? | default "/nix/store/ah3pxz4xa52hd6vhbx17vcsci0b8bmbr-source")
   let ietsp = ($env.IETSP? | default $"($env.PWD)/target/release/ietsp")
@@ -63,5 +88,7 @@ def main [rounds: int = 3] {
     }
   }
   rm -rf $cache
-  $rows | to md --pretty
+  print ($rows | to md --pretty)
+  if $no_parity or not ($nej | path exists) { return }
+  if not (parity $ietsp $nej $args) { exit 1 }
 }
