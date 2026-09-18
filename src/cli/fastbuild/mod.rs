@@ -81,12 +81,19 @@ pub fn cmd_fast_build(argv: &[String]) -> i32 {
 
 fn run(a: Args) -> Result<i32> {
     let cfg = Config::load(&a.overrides)?;
-    let transport = Transport::parse(&a.store).ok_or_else(|| {
+    let transport = Transport::parse_checked(&a.store, &cfg.system())?.ok_or_else(|| {
         CrateError::Usage(format!(
             "--store '{}': ietsp fast-build speaks the Nix worker protocol: daemon, unix:///path or ssh-ng://[user@]host",
             a.store
         ))
     })?;
+    if matches!(transport, Transport::Grpc(_)) {
+        // The grpc client blocks per derivation and tags no event with one,
+        // so the dispatcher cannot drive it yet (docs/fast-build.md).
+        return Err(CrateError::Usage(
+            "--store grpc:// is not supported by ietsp fast-build yet: the grpc client needs a non-blocking submit and per-derivation events first (docs/fast-build.md). Use ssh-ng://".into(),
+        ));
+    }
     let mut options = Options::try_from(&cfg)?;
     if let Some(j) = a.max_jobs {
         // nix-fast-build's 0 means "unlimited"; the daemon wants a number.

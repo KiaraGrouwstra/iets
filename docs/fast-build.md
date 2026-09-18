@@ -153,24 +153,32 @@ parallelism.
 at the first failed batch; the attributes left are recorded skipped.
 `--retries N` re-submits the failed targets of a batch N more times.
 
-### When the grpc transport lands
+### grpc:// bypasses the dispatcher for now
 
-`Transport::Grpc` needs nothing from this side to work: `Dispatcher` and
-both uploaders speak to a `Transport` and a `Connection`, never to a
-socket. `--store grpc://…` starts working as soon as `Transport::parse`
-accepts the scheme.
+`Transport::Grpc` has its own client (`src/remote/grpc`), and
+`--builder grpc://…` on `ietsp build` and `--store grpc://…` on classic
+`nix build` take an early branch to it: `cli::build::build_roots_grpc` and
+`remote::grpc::classic::realise`. They keep the plain per-line printer and
+their own timing report; the dispatcher's batched op, per-build log
+blocks, heartbeat and structured events are not on that path.
 
-One thing changes then, and it changes inside `Dispatcher::submit_once`.
-The batched op exists because the worker protocol is serial per
-connection: a second request cannot be in flight, so a per-derivation op
-would idle the daemon between derivations. A transport that multiplexes
-lifts that, and then the right shape is one request per derivation with
-`-j` of them in flight, which drops the layer-synchronous barrier a
-batched op imposes (every derivation in a batch waits for the slowest).
-What the grpc transport must offer for that: a way to start a build
-without waiting for the previous one to finish, and events tagged with the
-derivation they belong to. The event mapping, the renderer, the records
-and every call site stay as they are.
+Two things are missing before the grpc flow can fold into the dispatcher.
+It submits one derivation at a time and blocks until that build finishes,
+so a batch would serialise; and its events are not tagged with the
+derivation they belong to, so per-build log buffers cannot be filled. Once
+the grpc client offers a non-blocking submit and drv-tagged events, the
+change is inside `Dispatcher::submit_once` alone: one request per
+derivation with `-j` of them in flight, which also drops the
+layer-synchronous barrier a batched op imposes (every derivation in a
+batch waits for the slowest). The batched op exists only because the
+worker protocol is serial per connection, where a per-derivation op would
+idle the daemon between derivations. The event mapping, the renderer, the
+records and every call site stay as they are.
+
+`ietsp fast-build --store grpc://…` is refused today with that reason: the
+dispatcher is the only path fast-build has. Use `--store ssh-ng://…` until
+the grpc client grows the two features above.
+
 
 ### Measured on the e2e flake
 
