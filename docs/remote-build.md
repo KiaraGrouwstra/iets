@@ -64,7 +64,9 @@ local tree of an input source. Same planner, empty eval tables.
 ## Transport
 
 `--builder daemon | unix:///path | ssh-ng://[user@]host[?remote-program=CMD] |
-grpc://host:port[?…]`. `grpc://` is its own protocol and has its own section
+grpc://host:port[?…]`. Without the flag the URL is the `builder` setting in
+`ietsp.conf`, and nix.conf's `store` when that is unset (`docs/config.md`).
+`grpc://` is its own protocol and has its own section
 below; the rest of this section is the worker protocol.
 `daemon` is `/nix/var/nix/daemon-socket/socket`; `ssh-ng://` runs `ssh host
 nix-daemon --stdio` and uses its stdio, as `ssh-store.cc` does, and reads

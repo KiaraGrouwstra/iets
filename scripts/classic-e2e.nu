@@ -6,7 +6,7 @@
 #
 # usage: nu scripts/classic-e2e.nu
 #        BIN=target/debug nu scripts/classic-e2e.nu
-use lib.nu [chomp show verdict]
+use lib.nu [chomp scratch-daemon show verdict]
 
 const NIXPKGS = "/nix/store/ah3pxz4xa52hd6vhbx17vcsci0b8bmbr-source"
 
@@ -180,9 +180,47 @@ def main [] {
     $ok = ($ok | append $same)
   }
 
+  # --- the `builder` setting: the build runs on a scratch chroot daemon, and
+  # the outputs come back so `result` names a path the local store has. The
+  # builder uses shell builtins only: a chroot store has no coreutils.
+  r#'derivation {
+  name = "classic-e2e-builder";
+  system = "x86_64-linux";
+  builder = "/bin/sh";
+  args = [ "-c" "while read -r l; do echo \"$l\"; done < ${@DIR@/src}/a > $out" ];
+}
+'# | str replace -a "@DIR@" $d | save $"($d)/builder.nix"
+  let sd = $"($tmp)/scratch"
+  mkdir $sd
+  let sock = (scratch-daemon $sd)
+  let wd = $"($tmp)/build-builder"
+  mkdir $wd
+  cd $wd
+  let r = (with-env {IETSP_CONFIG: $"builder = unix://($sock)"} {
+    ^$"($farm)/nix-build" $"($d)/builder.nix" | complete
+  })
+  let printed = ($r.stdout | chomp)
+  let link = (if ("result" | path exists) { ^readlink result | chomp } else { "MISSING" })
+  let built_there = ($"($sd)($printed)" | path exists)
+  let here = ((^nix-store --check-validity $printed | complete).exit_code == 0)
+  let rooted = ((^nix-store --query --roots $printed | complete).stdout | str contains $"($wd)/result")
+  let builder_ok = ($r.exit_code == 0) and ($link == $printed) and $built_there and $here and $rooted
+  if not $builder_ok {
+    print $"  exit=($r.exit_code) printed=($printed) link=($link)"
+    print $"  on the scratch daemon=($built_there) valid here=($here) gc root=($rooted)"
+    print $"  stderr: ($r.stderr | str substring 0..600)"
+  }
+  $ok = ($ok | append (verdict $builder_ok "builder = unix://SCRATCH builds there and registers here" "see above"))
+  cd $tmp
+
   # --- fallbacks
   $ok = ($ok | append (cmp-case "--parse execs the real nix-instantiate"
     (run-both $farm nix-instantiate --parse -E 1)))
+  # `--ietsp-option` is ours: the fallback must exec nix without it.
+  $ok = ($ok | append (cmp-case "--ietsp-option never reaches the fallback nix" {
+    ours: (^$"($farm)/nix-instantiate" --ietsp-option workers 2 --parse -E 1 | complete),
+    real: (^nix-instantiate --parse -E 1 | complete)
+  }))
   let fb = (^$"($farm)/nix-instantiate" --parse -E 1 | complete)
   $ok = ($ok | append (verdict ($fb.stderr | str contains "ietsp: falling back to nix-instantiate:")
     "the fallback prints one line on stderr" $"stderr was '($fb.stderr)'"))
@@ -359,6 +397,8 @@ def main [] {
     "nix eval --apply falls back" $"stderr was '($apply.stderr)'"))
 
   cd /
+  # The scratch store's directories are read-only, as every Nix store is.
+  ^chmod -R u+w $"($tmp)/scratch" err> /dev/null | complete | ignore
   rm -rf $tmp
   let failed = ($ok | where $it == false | length)
   print $"($ok | length) cases, ($failed) failed"

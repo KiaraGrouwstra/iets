@@ -12,15 +12,39 @@ Every symlink points at `bin/ietsp`; the basename of `argv[0]` picks the
 command. Without symlinks the same commands work as subcommands:
 `ietsp nix-instantiate ...`, `ietsp nix-build ...`.
 
+## Where the builds go
+
+None of the classic names has a `--builder` flag, so the build target is the
+`builder` setting in `ietsp.conf`, and nix.conf's `store` when that is unset.
+`--store URL` and `--option store URL` on the command line win over both.
+`--ietsp-option name value` sets any ietsp setting for one run, and is stripped
+from the argv before a fallback execs the real nix (`docs/config.md`).
+
+Registration stays local whatever `builder` says:
+
+- `nix-instantiate` registers the drvs and their sources on the local daemon,
+  and `--add-root` links them there. It builds nothing, so the builder is
+  irrelevant to it.
+- `nix-build` and `nix build` build on the builder. When that is not the local
+  daemon, the outputs' closure is copied back to the local store
+  (`QueryPathInfo` and `NarFromPath` there, one `AddMultipleToStore` here)
+  before `result` is linked and `AddIndirectRoot`ed, so the link names a path
+  this machine has. The same thing the `grpc://` path has always done.
+- `nix-shell` and `nix develop` build the shell's inputs on the builder and
+  then run a local shell, so a remote `builder` leaves them pointing at paths
+  the local store has not got. Use the local daemon for those.
+
 ## The NixOS module
 
 `nix/module.nix` installs `packages.default` and the direnv hook.
-`ietsp.classic.enable` (default `false`) adds the farm as well:
+`ietsp.classic.enable` (default `false`) adds the farm as well, and
+`ietsp.settings` writes `/etc/ietsp/ietsp.conf` (`docs/config.md`):
 
 ```nix
 {
   imports = [ ietsp.nixosModules.default ];
   ietsp.classic.enable = true;
+  ietsp.settings.builder = "ssh-ng://bld1";
 }
 ```
 

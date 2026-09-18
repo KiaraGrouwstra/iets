@@ -37,13 +37,17 @@ Three sources fill it:
    `builtins.path`, the root flake's tree (`src/flake/root.rs`) and every
    locked flake input of type `path`. This is the case that matters: the repo
    you are working on.
-2. **The `source-map` setting** in `nix.conf` or `--option`, for trees this
-   evaluation did not copy: whitespace-separated `STOREPATH=LOCALDIR` entries.
-   `extra-source-map` appends. This is how a nixpkgs checkout is mapped:
+2. **The `source-map` setting** in `ietsp.conf` or `--ietsp-option`
+   (`docs/config.md`), for trees this evaluation did not copy:
+   whitespace-separated `STOREPATH=LOCALDIR` entries. `extra-source-map`
+   appends. This is how a nixpkgs checkout is mapped:
 
    ```
    source-map = /nix/store/ah3pxz4…-source=/home/u/nixpkgs
    ```
+
+   It was a `nix.conf` setting before. Nix warns about a key it does not know,
+   so the setting moved to ietsp's own file.
 3. **A revision**, for display only, when the root flake is a git working
    tree: the `HEAD` commit, with `-dirty` when the tree is dirty.
 

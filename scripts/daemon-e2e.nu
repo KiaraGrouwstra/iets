@@ -25,7 +25,7 @@
 #
 # usage: scripts/daemon-e2e.nu            # uses target/release
 #        BIN=target/debug scripts/daemon-e2e.nu
-use lib.nu [chomp show]
+use lib.nu [chomp scratch-daemon show]
 
 # Like bash `set -e`: an error unwinds to main, which cleans up and exits 1.
 def fail [msg: string] {
@@ -87,22 +87,6 @@ def make-storepath-case [dir: string, name: string, system: string, out: string]
   args = [ "-c" "${builtins.storePath "@OUT@"}/bin/hello > $out" ];
 }
 '# | str replace -a "@NAME@" $name | str replace -a "@SYSTEM@" $system | str replace -a "@OUT@" $out | save $"($dir)/case.nix"
-}
-
-# scratch-daemon ROOT [OPTIONS]: starts `nix-daemon --store local?root=ROOT` as a job and
-# returns its socket path once it listens. `NIX_DAEMON_SOCKET_PATH` pins the socket under
-# ROOT; Nix 2.34's daemon binds the system socket otherwise.
-def --wrapped scratch-daemon [root: string, ...options: string]: nothing -> string {
-  let sock = $"($root)/nix/var/nix/daemon-socket/socket"
-  let log = $"($root).log"
-  let store = $"local?root=($root)"
-  job spawn { with-env {NIX_DAEMON_SOCKET_PATH: $sock} { ^nix-daemon --store $store ...$options o+e> $log } } | ignore
-  for _ in 1..200 {
-    if ($sock | path exists) { break }
-    sleep 50ms
-  }
-  if not ($sock | path exists) { print (open --raw $log | chomp); fail "scratch daemon did not start" }
-  $sock
 }
 
 # run-custom DIR URL: instantiate, record what Nix created, delete, build via URL, compare.

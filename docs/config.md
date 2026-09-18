@@ -1,3 +1,9 @@
+# Settings files
+
+ietsp reads two settings files. `nix.conf` is Nix's, shared with the real nix
+behind the classic fallback; `ietsp.conf` is ietsp's own, and no nix ever sees
+it. Both use the same line syntax.
+
 # nix.conf
 
 `src/config.rs` reads Nix's settings files. It copies Nix 2.34.8:
@@ -58,18 +64,78 @@ target), `max_jobs` (`auto` = CPU count), `cores` (`0` = all), `keep_going`,
 
 Library call sites still pass `Options::default()`, which sends the values this
 client has always sent. `crate::cli::classic` builds a `Config` and uses it:
-`store` picks the worker transport, `system` sets the evaluator's
+`store` is the last fallback for `builder` below, `system` sets the evaluator's
 `builtins.currentSystem`, and `Options::try_from` feeds `SetOptions`
-(`docs/classic.md`). The other subcommands still do not read `nix.conf`.
-
-## Settings of ietsp's own
-
-`source-map`: whitespace-separated `STOREPATH=LOCALDIR` entries that map a
-store path back to a local checkout for error messages and build logs.
-`extra-source-map` appends. See `docs/provenance.md`.
+(`docs/classic.md`). The other subcommands read `system` and `store` only.
 
 ## Parsed but not used yet
 
 `substituters`, `trusted-public-keys`, `builders`, `experimental-features`,
 `nix-path`, `sandbox` and every unknown setting are read and exposed, but
 nothing in ietsp consults them yet.
+
+# ietsp.conf
+
+`src/settings.rs` reads ietsp's own settings. The line syntax is nix.conf's,
+parsed by the same code: `name = value`, `include`/`!include`, `#` comments and
+`extra-<name>` appending to a list setting.
+
+Nothing but ietsp reads this file, so a host can send ietsp's builds somewhere
+without touching `nix.conf`, which the real nix behind the classic fallback
+also reads.
+
+## Files and order
+
+Later wins.
+
+1. `$IETSP_CONF_DIR/ietsp.conf`, default `/etc/ietsp/ietsp.conf`.
+2. `$XDG_CONFIG_HOME/ietsp/ietsp.conf`, default `~/.config/ietsp/ietsp.conf`.
+3. `$IETSP_CONFIG`, treated as one more file's text.
+4. The `--ietsp-option name value` pairs from the command line.
+
+A file that is missing or unreadable is skipped. An **unknown key is an
+error** naming the file and the line: this file is ietsp's, so a name it does
+not know is a mistake, not a setting for somebody else.
+
+## Keys
+
+| Key | Type | Default |
+|:---|:---|:---|
+| `builder` | URL: `daemon`, `unix://PATH`, `ssh-ng://[user@]host`, `grpc://host:port` | the nix.conf `store` setting (itself `auto`) |
+| `source-map` | list of `STOREPATH=LOCALDIR` | empty |
+| `workers` | int ≥ 1 | cores, capped at 4 |
+| `provenance` | bool | `true` |
+| `nix-bin-dir` | path | unset: search `PATH` |
+| `no-fallback` | bool | `false` |
+| `cache` | bool | `true` |
+| `cache-dir` | path | `$XDG_CACHE_HOME/ietsp` |
+| `fiber-stack-mb` | int (MiB) | 256 |
+
+`extra-source-map` appends; no other key is a list.
+
+`builder` is where derivations are realised. Every command takes it:
+`ietsp build --builder`, `ietsp print-dev-env --builder` and
+`ietsp fast-build --store` win over it, and so does a classic `--store` or
+`--option store`. `nix-build`, `nix build`, `nix-shell` and `nix develop` have
+no flag of their own and use it as it stands. Registration is not affected:
+drvs and sources for `nix-instantiate --add-root`, its GC roots and the
+`nix-build`/`nix build` out-links always go to the local daemon, and a remote
+`builder`'s outputs are copied back first (`docs/classic.md`).
+
+## Precedence
+
+For every key that also has an environment variable (`docs/settings.md`), the
+variable wins over the files: the environment stays the debugging override.
+`builder` and `source-map` have no variable.
+
+## The NixOS module
+
+`ietsp.settings` is an attribute set of key to string, bool, int or list of
+strings, rendered to `/etc/ietsp/ietsp.conf`:
+
+```nix
+{
+  imports = [ ietsp.nixosModules.default ];
+  ietsp.settings.builder = "ssh-ng://bld1";
+}
+```

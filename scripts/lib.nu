@@ -41,3 +41,22 @@ export def verdict [ok: bool, name: string, detail: string]: nothing -> bool {
   if $ok { print $"ok   ($name)" } else { print $"FAIL ($detail)" }
   $ok
 }
+
+# scratch-daemon ROOT [OPTIONS]: starts `nix-daemon --store local?root=ROOT` as a job and
+# returns its socket path once it listens. `NIX_DAEMON_SOCKET_PATH` pins the socket under
+# ROOT; Nix 2.34's daemon binds the system socket otherwise.
+export def --wrapped scratch-daemon [root: string, ...options: string]: nothing -> string {
+  let sock = $"($root)/nix/var/nix/daemon-socket/socket"
+  let log = $"($root).log"
+  let store = $"local?root=($root)"
+  job spawn { with-env {NIX_DAEMON_SOCKET_PATH: $sock} { ^nix-daemon --store $store ...$options o+e> $log } } | ignore
+  for _ in 1..200 {
+    if ($sock | path exists) { break }
+    sleep 50ms
+  }
+  if not ($sock | path exists) {
+    print -e (open --raw $log | chomp)
+    error make -u {msg: $"scratch daemon did not start in ($root)"}
+  }
+  $sock
+}

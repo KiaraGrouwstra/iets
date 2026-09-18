@@ -63,6 +63,38 @@
           fmt = lint "fmt" pkgs.rustfmt "fmt --check";
           langtests = nuScript "langtests";
           partest = nuScript "partest";
+          # `ietsp.settings` reaches /etc/ietsp/ietsp.conf in the shape the
+          # reader wants: one `name = value` line, lists joined by spaces.
+          module =
+            let
+              sys = nixpkgs.lib.nixosSystem {
+                system = pkgs.stdenv.hostPlatform.system;
+                modules = [
+                  self.nixosModules.default
+                  {
+                    boot.loader.grub.enable = false;
+                    fileSystems."/" = { device = "none"; fsType = "tmpfs"; };
+                    system.stateVersion = "25.11";
+                    ietsp.settings = {
+                      builder = "ssh-ng://bld1";
+                      workers = 8;
+                      provenance = false;
+                      source-map = [ "/nix/store/x=/a" "/nix/store/y=/b" ];
+                    };
+                  }
+                ];
+              };
+            in
+            pkgs.runCommand "ietsp-module"
+              { conf = sys.config.environment.etc."ietsp/ietsp.conf".text; }
+              ''
+                printf %s "$conf"
+                printf %s "$conf" | grep -qx 'builder = ssh-ng://bld1'
+                printf %s "$conf" | grep -qx 'workers = 8'
+                printf %s "$conf" | grep -qx 'provenance = false'
+                printf %s "$conf" | grep -qx 'source-map = /nix/store/x=/a /nix/store/y=/b'
+                touch $out
+              '';
         });
     };
 }
