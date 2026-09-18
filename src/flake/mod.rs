@@ -179,13 +179,22 @@ pub fn eval_flake_value(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
 
     let (source_info, subdir) = root::source_info(ev, &fr.source, pos)?;
     let out_path = {
-        let a = source_info.as_attrs().expect("sourceInfo is an attrset");
-        let w = a
-            .get(ev.s.out_path)
-            .expect("sourceInfo has outPath")
-            .cell
-            .get();
-        ev.force_string(w, pos, "while evaluating the flake's outPath")?
+        let ctx = format!(
+            "while evaluating the sourceInfo of flake '{}'",
+            fr.dir.display()
+        );
+        let a = ev.force_attrs(source_info, pos, &ctx)?;
+        let Some(attr) = a.get(ev.s.out_path) else {
+            return Err(Error::boxed(
+                ErrorKind::MissingAttr,
+                format!(
+                    "flake '{}': sourceInfo has no attribute 'outPath'",
+                    fr.dir.display()
+                ),
+                pos,
+            ));
+        };
+        ev.force_string(attr.cell.get(), pos, "while evaluating the flake's outPath")?
             .bytes
             .to_vec()
     };
@@ -231,11 +240,14 @@ pub fn eval_flake(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
 
     let attrs = ev.force_attrs(result, pos, "while evaluating the flake")?;
     let outputs_sym = ev.sym(b"outputs");
-    let mut v = attrs
-        .get(outputs_sym)
-        .expect("call-flake.nix result has outputs")
-        .cell
-        .get();
+    let Some(outputs) = attrs.get(outputs_sym) else {
+        return Err(Error::boxed(
+            ErrorKind::MissingAttr,
+            format!("flake '{}' has no attribute 'outputs'", fr.dir.display()),
+            pos,
+        ));
+    };
+    let mut v = outputs.cell.get();
     for (i, name) in fr.attr.iter().enumerate() {
         let a = ev.force_attrs(v, pos, "while selecting a flake output attribute")?;
         let sym = ev.sym(name.as_bytes());

@@ -19,9 +19,16 @@ pub struct Emitter {
 }
 
 fn write_line(out: &mut dyn Write, line: &Line) {
-    let _ = out.write_all(&line.render());
-    let _ = out.write_all(b"\n");
-    let _ = out.flush();
+    let r = out
+        .write_all(&line.render())
+        .and_then(|_| out.write_all(b"\n"))
+        .and_then(|_| out.flush());
+    // `ietsp eval-jobs | head`: a closed reader ends the run, it is not an error.
+    if let Err(e) = r
+        && e.kind() == std::io::ErrorKind::BrokenPipe
+    {
+        std::process::exit(0);
+    }
 }
 
 impl Emitter {

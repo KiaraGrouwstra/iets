@@ -24,8 +24,9 @@ pub fn format_g(f: f64) -> String {
     }
     const P: i32 = 6;
     let sci = format!("{:.*e}", (P - 1) as usize, f);
-    let (mant, exp) = sci.split_once('e').unwrap();
-    let exp: i32 = exp.parse().unwrap();
+    let Some((mant, exp)) = split_sci(&sci) else {
+        return format!("{f}");
+    };
     if !(-4..P).contains(&exp) {
         let mant = strip_zeros(mant);
         let sign = if exp < 0 { '-' } else { '+' };
@@ -35,6 +36,13 @@ pub fn format_g(f: f64) -> String {
         let s = format!("{:.*}", decimals, f);
         strip_zeros(&s).to_string()
     }
+}
+
+/// Mantissa and exponent of Rust's `{:e}` output. `None` only if the format
+/// ever stops emitting `<mant>e<exp>`, which callers answer with plain `{}`.
+fn split_sci(sci: &str) -> Option<(&str, i32)> {
+    let (mant, exp) = sci.split_once('e')?;
+    Some((mant, exp.parse().ok()?))
 }
 
 fn strip_zeros(s: &str) -> &str {
@@ -314,11 +322,15 @@ pub fn json_float(f: f64) -> String {
         return "null".into();
     }
     let sci = format!("{f:e}");
-    let (mant, exp) = sci.split_once('e').unwrap();
-    let exp: i32 = exp.parse().unwrap();
-    if (-4..15).contains(&exp) {
+    let plain = || {
         let s = format!("{f}");
         if s.contains('.') { s } else { format!("{s}.0") }
+    };
+    let Some((mant, exp)) = split_sci(&sci) else {
+        return plain();
+    };
+    if (-4..15).contains(&exp) {
+        plain()
     } else {
         let sign = if exp < 0 { '-' } else { '+' };
         format!("{mant}e{sign}{:02}", exp.abs())
@@ -445,4 +457,42 @@ fn print_json_inner(
 
 pub fn sym_name(ev: &Evaluator, s: Sym) -> &str {
     ev.interner.name_str(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{format_g, json_float};
+
+    #[test]
+    fn float_formatting_edge_cases() {
+        for f in [
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            -0.0,
+            0.0,
+            1e300,
+            -1e300,
+            5e-324,
+            f64::MIN_POSITIVE,
+            1.0,
+            0.1,
+        ] {
+            let g = format_g(f);
+            assert!(!g.is_empty(), "format_g({f}) is empty");
+            let j = json_float(f);
+            assert!(!j.is_empty(), "json_float({f}) is empty");
+        }
+        assert_eq!(format_g(f64::NAN), "nan");
+        assert_eq!(format_g(f64::INFINITY), "inf");
+        assert_eq!(format_g(f64::NEG_INFINITY), "-inf");
+        assert_eq!(format_g(-0.0), "-0");
+        assert_eq!(format_g(1e300), "1e+300");
+        assert_eq!(format_g(5e-324), "4.94066e-324");
+        assert_eq!(json_float(f64::NAN), "null");
+        assert_eq!(json_float(f64::INFINITY), "null");
+        assert_eq!(json_float(-0.0), "-0.0");
+        assert_eq!(json_float(1e300), "1e+300");
+        assert_eq!(json_float(5e-324), "5e-324");
+    }
 }

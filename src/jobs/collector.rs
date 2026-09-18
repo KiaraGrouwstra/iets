@@ -168,8 +168,15 @@ impl Proc {
             .stderr(Stdio::inherit())
             .spawn()
             .map_err(|e| format!("spawning worker process: {e}"))?;
-        let to = child.stdin.take().expect("piped");
-        let from = BufReader::with_capacity(1 << 20, child.stdout.take().expect("piped"));
+        let to = child
+            .stdin
+            .take()
+            .ok_or("worker process has no stdin pipe")?;
+        let out = child
+            .stdout
+            .take()
+            .ok_or("worker process has no stdout pipe")?;
+        let from = BufReader::with_capacity(1 << 20, out);
         Ok(Proc { child, to, from })
     }
 
@@ -315,17 +322,23 @@ fn collector(shared: &Shared, args: &[String], sink: &Sink) -> Result<(), String
             return Ok(());
         };
         loop {
-            if proc.is_none() {
-                proc = Some(Proc::spawn(args)?);
-            }
-            let p = proc.as_mut().expect("worker");
+            let p = match proc {
+                Some(ref mut p) => p,
+                None => proc.insert(Proc::spawn(args)?),
+            };
             match p.read_control(sink, "checking worker process")? {
                 Control::Next => break,
-                Control::Restart => proc.take().expect("worker").drain(sink)?,
+                Control::Restart => {
+                    if let Some(old) = proc.take() {
+                        old.drain(sink)?;
+                    }
+                }
                 _ => return Err("worker error: unexpected response while idle".into()),
             }
         }
-        let p = proc.as_mut().expect("worker");
+        let Some(p) = proc.as_mut() else {
+            return Err("worker error: no worker process".into());
+        };
         let joined = super::attr_join(&path);
         p.send(&format!(
             "{MSG_DO}{}",

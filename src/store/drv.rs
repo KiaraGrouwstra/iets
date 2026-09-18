@@ -262,24 +262,18 @@ impl Derivation {
             print_string(s, if masked { "" } else { v });
             s.push(')');
         };
-        let mut json_done = self.structured_attrs.is_none();
+        let mut pending_json = self.structured_attrs.as_deref();
         for (k, v) in &self.env {
-            if !json_done && k.as_str() > STRUCTURED_ATTRS_ENV {
-                emit(
-                    &mut s,
-                    STRUCTURED_ATTRS_ENV,
-                    self.structured_attrs.as_deref().unwrap(),
-                );
-                json_done = true;
+            if let Some(json) = pending_json
+                && k.as_str() > STRUCTURED_ATTRS_ENV
+            {
+                emit(&mut s, STRUCTURED_ATTRS_ENV, json);
+                pending_json = None;
             }
             emit(&mut s, k, v);
         }
-        if !json_done {
-            emit(
-                &mut s,
-                STRUCTURED_ATTRS_ENV,
-                self.structured_attrs.as_deref().unwrap(),
-            );
+        if let Some(json) = pending_json {
+            emit(&mut s, STRUCTURED_ATTRS_ENV, json);
         }
         s.push_str("])");
         Ok(s)
@@ -669,10 +663,10 @@ pub fn finalize_input_addressed_outputs(
         let actual = match out {
             DerivationOutput::Fixed { .. } => drv.fixed_output_path(&name)?,
             DerivationOutput::InputAddressed(_) | DerivationOutput::Deferred => {
-                if hashes_modulo.is_none() {
-                    hashes_modulo = Some(hash_derivation_modulo(drv, true, cache, loader)?);
-                }
-                let hm = hashes_modulo.as_ref().unwrap();
+                let hm = match hashes_modulo {
+                    Some(ref h) => h,
+                    None => hashes_modulo.insert(hash_derivation_modulo(drv, true, cache, loader)?),
+                };
                 match hm.kind {
                     DrvHashKind::Deferred => {
                         if let DerivationOutput::InputAddressed(p) = out {

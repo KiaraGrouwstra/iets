@@ -2075,7 +2075,16 @@ impl Cache {
     }
 }
 
+/// Rust masks SIGPIPE, so a closed stdout (`ietsp eval-jobs | head`) surfaces
+/// as an EPIPE panic. The default disposition makes the process die quietly.
+fn restore_sigpipe() {
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
 fn main() {
+    restore_sigpipe();
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let Some(cmd) = argv.first() else { usage() };
     match cmd.as_str() {
