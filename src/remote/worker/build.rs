@@ -33,19 +33,6 @@ pub struct Timings {
     pub add_bytes: u64,
     pub fetched: usize,
     pub stats: Stats,
-    pub connections: usize,
-    /// From the start of the connect to the first `Started` event.
-    pub first_build: Option<Duration>,
-    /// From the start of the connect to the root's outputs (and fetches).
-    pub total: Duration,
-    pub add_ops: usize,
-    pub build_ops: usize,
-    /// `--skip-substitutable`: paths some substituter has, and how many were not uploaded.
-    pub substitutable: usize,
-    pub skipped: usize,
-    /// `QueryMissing` after the upload, with `--skip-substitutable`.
-    pub will_build: usize,
-    pub will_substitute: usize,
 }
 
 impl Timings {
@@ -82,33 +69,12 @@ impl Timings {
             "\nworker: {} ops, {} round trips, {} bytes sent",
             self.stats.ops, self.stats.round_trips, self.stats.bytes_sent
         ));
-        if self.connections > 0 {
-            let first = match self.first_build {
-                Some(d) => format!("{:.3}s", d.as_secs_f64()),
-                None => "none".to_string(),
-            };
-            s.push_str(&format!(
-                "\nsched: {} connections, {} add ops, {} build ops, first build {first}, total {:.3}s",
-                self.connections,
-                self.add_ops,
-                self.build_ops,
-                self.total.as_secs_f64()
-            ));
-            if self.substitutable > 0 || self.skipped > 0 {
-                s.push_str(&format!(
-                    "\nskip: {} substitutable, {} skipped, daemon will build {} and substitute {}",
-                    self.substitutable, self.skipped, self.will_build, self.will_substitute
-                ));
-            }
-        }
         s
     }
 }
 
 /// Uploads what the daemon lacks, builds `root`, reports its outputs, and restores the wanted
 /// outputs into `fetch_to` when given. With `upload_only` the call stops after the upload.
-/// `opts` selects the scheduling levers; `Opts::default()` is the flow of `build_on`.
-#[allow(clippy::too_many_arguments)]
 pub fn build(
     transport: &Transport,
     plan: &Plan,
@@ -116,23 +82,25 @@ pub fn build(
     outputs: &[String],
     upload_only: bool,
     fetch_to: Option<&Path>,
-    opts: super::sched::Opts,
     on_event: &mut dyn FnMut(Event),
 ) -> Result<Timings, WorkerError> {
-    super::sched::run(
-        transport,
+    let t0 = Instant::now();
+    let mut conn = Connection::open(transport, on_event)?;
+    let connect = t0.elapsed();
+    let mut t = build_on(
+        &mut conn,
         plan,
         root,
         outputs,
         upload_only,
         fetch_to,
-        opts,
         on_event,
-    )
+    )?;
+    t.connect = connect;
+    Ok(t)
 }
 
-/// The single-connection flow on an open connection, for callers that reuse the connection
-/// (`print-dev-env`); `Timings::connect` stays zero.
+/// `build` on an open connection; `Timings::connect` stays zero.
 pub fn build_on(
     conn: &mut Connection,
     plan: &Plan,
