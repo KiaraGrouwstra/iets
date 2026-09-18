@@ -237,6 +237,9 @@ def main [] {
   $env.NIX_REMOTE = ($env.NIX_REMOTE? | default "daemon")
   $env.TMPDIR = ($env.TMPDIR? | default "/tmp")
   let work = (mktemp -d --tmpdir ietsp-daemon-e2e.XXXXXX)
+  $env.IETSP_CONF_DIR = $"($work)/no-conf"
+  $env.XDG_CONFIG_HOME = $"($work)/no-xdg"
+  hide-env -i IETSP_CONFIG
   let code = (try { run-tests $bin $nixpkgs $work; 0 } catch {|e| if $e.msg != "fail" { print -e $e.rendered }; 1 })
   # cleanup, as the bash EXIT trap: the scratch daemon is the only job
   for j in (job list | get id) { job kill $j }

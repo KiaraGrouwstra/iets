@@ -59,6 +59,10 @@ def main [] {
   if not ($ietsp | path exists) { print -e $"no ($ietsp); cargo build --release first"; exit 1 }
   let system = (^nix-instantiate --eval -E builtins.currentSystem | str replace -a '"' '' | chomp)
   let tmp = (mktemp -d -t provenance-e2e-XXXXXX)
+  # the host's ietsp.conf must not steer these builds (a remote `builder` changes cores and out-links)
+  $env.IETSP_CONF_DIR = $"($tmp)/no-conf"
+  $env.XDG_CONFIG_HOME = $"($tmp)/no-xdg"
+  hide-env -i IETSP_CONFIG
   let farm = (make-farm $ietsp $tmp)
   let d = $"($tmp)/case"
   make-case $d

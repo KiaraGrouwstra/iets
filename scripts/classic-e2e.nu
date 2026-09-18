@@ -86,6 +86,10 @@ def main [] {
   print $"real nix: ($real)"
   $env.IETSP_NIX_BIN_DIR = $real
   let tmp = (mktemp -d -t classic-e2e-XXXXXX)
+  # the host's ietsp.conf must not steer these builds (a remote `builder` changes cores and out-links)
+  $env.IETSP_CONF_DIR = $"($tmp)/no-conf"
+  $env.XDG_CONFIG_HOME = $"($tmp)/no-xdg"
+  hide-env -i IETSP_CONFIG
   let farm = (make-farm $ietsp $tmp)
   mut ok = []
 

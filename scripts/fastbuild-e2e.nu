@@ -39,6 +39,10 @@ def main [] {
   if not ($ietsp | path exists) { print -e $"no ($ietsp); cargo build --release first"; exit 1 }
   let system = (^nix --extra-experimental-features nix-command eval --impure --raw --expr builtins.currentSystem | chomp)
   let tmp = (mktemp -d -t fastbuild-e2e-XXXXXX)
+  # the host's ietsp.conf must not steer these builds (a remote `builder` changes cores and out-links)
+  $env.IETSP_CONF_DIR = $"($tmp)/no-conf"
+  $env.XDG_CONFIG_HOME = $"($tmp)/no-xdg"
+  hide-env -i IETSP_CONFIG
   let flake = $"($tmp)/flake"
   fastbuild-flake $flake
   let target = $"path:($flake)#checks"
