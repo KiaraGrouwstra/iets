@@ -11,7 +11,7 @@ selects level 2, and any other value selects level 1.
 | Variable | Type | Default | Effect |
 |:---|:---|:---|:---|
 | `IETSP_WORKERS` | usize ≥ 1 | cores, capped at 4 | Worker threads. `--workers N` overrides it. |
-| `IETSP_FIBER_STACK_MB` | usize (MiB) | 256 | Stack of every fiber. The reservation is `MAP_NORESERVE`. |
+| `IETSP_FIBER_STACK_MB` | usize (MiB) | 256 | Stack of every fiber. The reservation is `MAP_NORESERVE`, and workers × stack may not pass 64 GiB. |
 | `IETSP_SPIN` | u32 | 2000 | Scans an idle searcher makes before it parks (one scan is 64 polls). |
 | `IETSP_SPINNERS` | usize | workers / 4, at least 1 | Idle workers that may search for work at once. |
 | `IETSP_HANDOFF` | usize | 8 | Queued tasks per awake worker that justify waking a sleeper. |

@@ -77,18 +77,36 @@ fn stack_size() -> usize {
         .map_or(fiber::DEFAULT_STACK, |mb| mb << 20)
 }
 
-/// Run `f` with `ev` as the main fiber on `workers` threads. With one
-/// worker this is a plain call.
+/// `try_run` for a command line: the fiber stacks are a startup failure,
+/// so it reports them on stderr and exits 1. A library frontend calls
+/// `try_run` and handles the error itself.
 pub fn run<R: Send + 'static>(
+    workers: usize,
+    ev: Evaluator,
+    f: impl FnOnce(&mut Evaluator) -> R + Send + 'static,
+) -> R {
+    match try_run(workers, ev, f) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("ietsp: {e}");
+            std::process::exit(1)
+        }
+    }
+}
+
+/// Run `f` with `ev` as the main fiber on `workers` threads. With one
+/// worker this is a plain call. The error is the fiber stacks: the
+/// reservation is over the cap, or the kernel refused the mapping.
+pub fn try_run<R: Send + 'static>(
     workers: usize,
     mut ev: Evaluator,
     f: impl FnOnce(&mut Evaluator) -> R + Send + 'static,
-) -> R {
+) -> Result<R, fiber::StackError> {
     if workers <= 1 {
-        return f(&mut ev);
+        return Ok(f(&mut ev));
     }
     let template = force::SyncEv(ev.clone());
-    let rt = sched::Runtime::start(workers, Box::new(force::EvalDriver(template)), stack_size());
+    let rt = sched::Runtime::start(workers, Box::new(force::EvalDriver(template)), stack_size())?;
     let user = Box::into_raw(Box::new(ev)) as *mut ();
     let out: &'static Mutex<Option<R>> = Box::leak(Box::new(Mutex::new(None)));
     rt.run_main(
@@ -136,9 +154,10 @@ pub fn run<R: Send + 'static>(
             }
             *out.lock().unwrap() = Some(r);
         }),
-    );
-    out.lock()
+    )?;
+    Ok(out
+        .lock()
         .unwrap()
         .take()
-        .expect("main fiber returned a result")
+        .expect("main fiber returned a result"))
 }

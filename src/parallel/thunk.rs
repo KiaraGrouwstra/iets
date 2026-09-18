@@ -310,9 +310,9 @@ mod tests {
             cancelled: AtomicUsize::new(0),
             done: AtomicUsize::new(0),
         }));
-        let rt = Runtime::start(3, Box::new(PairDriver(p)), 1 << 20);
+        let rt = Runtime::start(3, Box::new(PairDriver(p)), 1 << 20).expect("runtime");
         rt.set_eager_wakes();
-        rt.run_main(
+        let r = rt.run_main(
             std::ptr::null_mut(),
             Box::new(move |slot: &mut Slot| {
                 let rt = slot.runtime();
@@ -353,6 +353,7 @@ mod tests {
                 }
             }),
         );
+        r.expect("main fiber");
         assert!(
             rt.deadlocks.load(Ordering::Relaxed) >= 1,
             "resolver did not run"
@@ -414,9 +415,9 @@ mod tests {
             done: AtomicUsize::new(0),
             parks: AtomicUsize::new(0),
         }));
-        let rt = Runtime::start(8, Box::new(GraphDriver(g)), 1 << 20);
+        let rt = Runtime::start(8, Box::new(GraphDriver(g)), 1 << 20).expect("runtime");
         rt.set_eager_wakes();
-        rt.run_main(
+        let r = rt.run_main(
             std::ptr::null_mut(),
             Box::new(move |slot: &mut Slot| {
                 let rt = slot.runtime();
@@ -442,6 +443,7 @@ mod tests {
                 }
             }),
         );
+        r.expect("main fiber");
         let mut memo = vec![None; N];
         for i in 0..N {
             let want = expected(g, i, &mut memo);

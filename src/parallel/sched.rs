@@ -149,6 +149,8 @@ pub struct Runtime {
     eager_wakes: AtomicBool,
     epoch: Padded<AtomicU32>,
     pub shutdown: AtomicBool,
+    /// Set once a fiber stack could not be reserved (reported once).
+    stack_failed: AtomicBool,
     pub main_done: AtomicBool,
     /// Set once the main result exists: helpers stop starting new work.
     pub suppress: AtomicBool,
@@ -175,9 +177,15 @@ unsafe impl Send for Worker {}
 
 impl Runtime {
     /// Create the runtime and spawn workers `1..n`. The caller's thread is
-    /// worker 0 and must call `run_main`.
-    pub fn start(n: usize, driver: Box<dyn Driver>, stack_size: usize) -> &'static Runtime {
+    /// worker 0 and must call `run_main`. Fails when the fiber stacks of
+    /// `n` workers would reserve more address space than the cap allows.
+    pub fn start(
+        n: usize,
+        driver: Box<dyn Driver>,
+        stack_size: usize,
+    ) -> Result<&'static Runtime, fiber::StackError> {
         assert!(n >= 1);
+        fiber::check_reservation(n, stack_size)?;
         let rt: &'static Runtime = Box::leak(Box::new(Runtime {
             n,
             lanes: (0..n)
@@ -198,6 +206,7 @@ impl Runtime {
             eager_wakes: AtomicBool::new(false),
             epoch: Padded(AtomicU32::new(0)),
             shutdown: AtomicBool::new(false),
+            stack_failed: AtomicBool::new(false),
             main_done: AtomicBool::new(false),
             suppress: AtomicBool::new(false),
             next_id: AtomicU32::new(1),
@@ -223,19 +232,24 @@ impl Runtime {
                 })
                 .expect("spawn worker");
         }
-        rt
+        Ok(rt)
     }
 
     /// Run `entry` in the main fiber on this thread (worker 0), draining
     /// other work while it is parked. Returns when `entry` has returned.
-    pub fn run_main(&'static self, user: *mut (), entry: MainEntry) {
+    /// Fails only when the main fiber's own stack cannot be reserved.
+    pub fn run_main(
+        &'static self,
+        user: *mut (),
+        entry: MainEntry,
+    ) -> Result<(), fiber::StackError> {
         if crate::settings::get().par_stats >= 2 {
             super::force::SAMPLE_POS.store(true, Ordering::Relaxed);
             let _ = super::force::START.set(std::time::Instant::now());
             self.spawn_timeline();
         }
         let mut w = Worker::new(0);
-        let slot = self.new_slot(&mut w, user);
+        let slot = self.new_slot(&mut w, user)?;
         // SAFETY: fresh slot, owned by this thread.
         unsafe {
             (*slot).is_main = true;
@@ -244,6 +258,7 @@ impl Runtime {
         }
         self.run_slot(&mut w, slot);
         self.drain_loop(&mut w, || self.main_done.load(Ordering::Acquire));
+        Ok(())
     }
 
     pub fn driver(&self) -> &dyn Driver {
@@ -339,11 +354,11 @@ impl Runtime {
 
     // ---- fibers -----------------------------------------------------------
 
-    fn new_slot(&self, w: &mut Worker, user: *mut ()) -> *mut Slot {
+    fn new_slot(&self, w: &mut Worker, user: *mut ()) -> Result<*mut Slot, fiber::StackError> {
         w.fibers_created += 1;
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let slot = Box::into_raw(Box::new(Slot {
-            fiber: Fiber::new(self.stack_size, slot_entry, std::ptr::null_mut()),
+            fiber: Fiber::new(self.stack_size, slot_entry, std::ptr::null_mut())?,
             id,
             cancel: AtomicBool::new(false),
             is_main: false,
@@ -360,14 +375,24 @@ impl Runtime {
             trimmed: false,
         }));
         self.all.lock().unwrap().push(slot);
-        slot
+        Ok(slot)
+    }
+
+    /// Report the first stack failure. Tasks are re-derivable work, so a
+    /// run that cannot grow its fiber pool finishes on the fibers it has.
+    fn report_no_stack(&self, e: &fiber::StackError) {
+        if !self.stack_failed.swap(true, Ordering::Relaxed) {
+            eprintln!("ietsp: {e}; continuing without new fibers");
+        }
     }
 
     fn prewarm(&self, w: &mut Worker) {
         for _ in 0..PREWARM {
             let user = self.driver.new_user(self);
-            let s = self.new_slot(w, user);
-            w.pool.push(s);
+            match self.new_slot(w, user) {
+                Ok(s) => w.pool.push(s),
+                Err(e) => return self.report_no_stack(&e),
+            }
         }
     }
 
@@ -375,8 +400,14 @@ impl Runtime {
         let slot = match w.pool.pop() {
             Some(s) => s,
             None => {
+                if self.stack_failed.load(Ordering::Relaxed) {
+                    return;
+                }
                 let user = self.driver.new_user(self);
-                self.new_slot(w, user)
+                match self.new_slot(w, user) {
+                    Ok(s) => s,
+                    Err(e) => return self.report_no_stack(&e),
+                }
             }
         };
         w.tasks_run += 1;
@@ -960,9 +991,9 @@ mod tests {
     #[test]
     fn fan_out_from_main() {
         let c = counter();
-        let rt = Runtime::start(4, Box::new(TestDriver(c)), 1 << 20);
+        let rt = Runtime::start(4, Box::new(TestDriver(c)), 1 << 20).expect("runtime");
         rt.set_eager_wakes();
-        rt.run_main(
+        let r = rt.run_main(
             std::ptr::null_mut(),
             Box::new(move |slot: &mut Slot| {
                 let rt = slot.runtime();
@@ -981,6 +1012,7 @@ mod tests {
                 wait_done(c, 64 * 9);
             }),
         );
+        r.expect("main fiber");
         let expect: u64 = 64 * (0..128u64).sum::<u64>();
         assert_eq!(c.sum.load(Ordering::Relaxed), expect);
     }
@@ -988,9 +1020,9 @@ mod tests {
     #[test]
     fn park_and_wake_across_workers() {
         let c = counter();
-        let rt = Runtime::start(3, Box::new(TestDriver(c)), 1 << 20);
+        let rt = Runtime::start(3, Box::new(TestDriver(c)), 1 << 20).expect("runtime");
         rt.set_eager_wakes();
-        rt.run_main(
+        let r = rt.run_main(
             std::ptr::null_mut(),
             Box::new(move |slot: &mut Slot| {
                 let rt = slot.runtime();
@@ -1011,15 +1043,16 @@ mod tests {
                 wait_done(c, 2);
             }),
         );
+        r.expect("main fiber");
         assert_eq!(c.sum.load(Ordering::Relaxed), 1000);
     }
 
     #[test]
     fn main_parks_and_is_woken_by_helper() {
         let c = counter();
-        let rt = Runtime::start(2, Box::new(TestDriver(c)), 1 << 20);
+        let rt = Runtime::start(2, Box::new(TestDriver(c)), 1 << 20).expect("runtime");
         rt.set_eager_wakes();
-        rt.run_main(
+        let r = rt.run_main(
             std::ptr::null_mut(),
             Box::new(move |slot: &mut Slot| {
                 let rt = slot.runtime();
@@ -1037,6 +1070,7 @@ mod tests {
                 wait_done(c, 1);
             }),
         );
+        r.expect("main fiber");
         assert_eq!(c.sum.load(Ordering::Relaxed), 7);
     }
 }

@@ -11,6 +11,59 @@ use std::sync::atomic::{AtomicU8, Ordering};
 pub const DEFAULT_STACK: usize = 256 << 20;
 const GUARD: usize = 4096;
 
+/// Address space the fiber stacks of one runtime may reserve. The mappings
+/// are `MAP_NORESERVE`, so they cost address space and page tables, not
+/// memory; the cap turns an absurd `--workers` or `IETSP_FIBER_STACK_MB`
+/// into an error at startup instead of a failed mmap in the middle of a run.
+pub const MAX_RESERVE: usize = 64 << 30;
+
+/// A fiber stack that could not be reserved.
+#[derive(Debug)]
+pub struct StackError {
+    /// Bytes the reservation asked for.
+    pub bytes: usize,
+    pub why: Why,
+}
+
+#[derive(Debug)]
+pub enum Why {
+    /// More than `MAX_RESERVE`, before anything was mapped.
+    OverLimit,
+    Mmap(std::io::Error),
+}
+
+impl std::fmt::Display for StackError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "cannot reserve {} MiB of fiber stacks: ",
+            self.bytes >> 20
+        )?;
+        match &self.why {
+            Why::OverLimit => write!(
+                f,
+                "over the {} MiB limit, lower --workers or IETSP_FIBER_STACK_MB",
+                MAX_RESERVE >> 20
+            ),
+            Why::Mmap(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for StackError {}
+
+/// Check the reservation `workers` fibers of `stack_size` bytes make.
+pub fn check_reservation(workers: usize, stack_size: usize) -> Result<(), StackError> {
+    let bytes = stack_size.saturating_mul(workers);
+    if bytes > MAX_RESERVE {
+        return Err(StackError {
+            bytes,
+            why: Why::OverLimit,
+        });
+    }
+    Ok(())
+}
+
 /// Fiber lifecycle. Transitions are documented in docs/parallel.md.
 pub const NEW: u8 = 0;
 pub const RUNNING: u8 = 1;
@@ -26,7 +79,7 @@ pub struct Stack {
 }
 
 impl Stack {
-    pub fn new(size: usize) -> Stack {
+    pub fn new(size: usize) -> Result<Stack, StackError> {
         // SAFETY: anonymous private mapping; the low page is made
         // inaccessible as a guard. NORESERVE keeps large reservations cheap.
         let base = unsafe {
@@ -38,11 +91,16 @@ impl Stack {
                 -1,
                 0,
             );
-            assert!(p != libc::MAP_FAILED, "fiber stack: mmap failed");
+            if p == libc::MAP_FAILED {
+                return Err(StackError {
+                    bytes: size,
+                    why: Why::Mmap(std::io::Error::last_os_error()),
+                });
+            }
             libc::mprotect(p, GUARD, libc::PROT_NONE);
             p as *mut u8
         };
-        Stack { base, size }
+        Ok(Stack { base, size })
     }
 
     #[inline]
@@ -87,15 +145,15 @@ pub struct Fiber {
 }
 
 impl Fiber {
-    pub fn new(stack_size: usize, entry: Entry, arg: *mut ()) -> Fiber {
-        Fiber {
+    pub fn new(stack_size: usize, entry: Entry, arg: *mut ()) -> Result<Fiber, StackError> {
+        Ok(Fiber {
             sp: std::ptr::null_mut(),
             caller_sp: std::ptr::null_mut(),
-            stack: Stack::new(stack_size),
+            stack: Stack::new(stack_size)?,
             state: AtomicU8::new(NEW),
             entry,
             arg,
-        }
+        })
     }
 
     /// Rewind a NEW or FINISHED fiber so the next resume starts `entry`.
@@ -300,11 +358,9 @@ mod tests {
             fiber: std::ptr::null_mut(),
             n: AtomicUsize::new(0),
         }));
-        let f = Box::leak(Box::new(Fiber::new(
-            1 << 20,
-            count_entry,
-            c as *mut Counter as *mut (),
-        )));
+        let f = Box::leak(Box::new(
+            Fiber::new(1 << 20, count_entry, c as *mut Counter as *mut ()).expect("fiber stack"),
+        ));
         c.fiber = f;
         for i in 1..=3 {
             f.state.store(RUNNING, Ordering::Relaxed);
@@ -326,11 +382,9 @@ mod tests {
             fiber: std::ptr::null_mut(),
             n: AtomicUsize::new(0),
         }));
-        let f = Box::leak(Box::new(Fiber::new(
-            1 << 20,
-            count_entry,
-            c as *mut Counter as *mut (),
-        )));
+        let f = Box::leak(Box::new(
+            Fiber::new(1 << 20, count_entry, c as *mut Counter as *mut ()).expect("fiber stack"),
+        ));
         c.fiber = f;
         let fp = f as *mut Fiber as usize;
         for i in 1..=3 {
@@ -343,6 +397,27 @@ mod tests {
             .unwrap();
             assert_eq!(c.n.load(Ordering::Relaxed), i);
         }
+    }
+
+    #[test]
+    fn reservation_is_capped_and_mmap_failure_is_an_error() {
+        check_reservation(4, DEFAULT_STACK).expect("the default fits");
+        let e = check_reservation(1024, DEFAULT_STACK).expect_err("over the cap");
+        assert_eq!(
+            e.to_string(),
+            format!(
+                "cannot reserve 262144 MiB of fiber stacks: over the {} MiB limit, \
+                 lower --workers or IETSP_FIBER_STACK_MB",
+                MAX_RESERVE >> 20
+            )
+        );
+        let Err(e) = Stack::new(usize::MAX - 4095) else {
+            panic!("the whole address space was mapped");
+        };
+        assert!(
+            matches!(e.why, Why::Mmap(_)) && e.to_string().starts_with("cannot reserve"),
+            "unexpected message: {e}"
+        );
     }
 
     #[inline(never)]
@@ -367,11 +442,9 @@ mod tests {
             fiber: std::ptr::null_mut(),
             n: AtomicUsize::new(0),
         }));
-        let f = Box::leak(Box::new(Fiber::new(
-            64 << 20,
-            deep_entry,
-            c as *mut Counter as *mut (),
-        )));
+        let f = Box::leak(Box::new(
+            Fiber::new(64 << 20, deep_entry, c as *mut Counter as *mut ()).expect("fiber stack"),
+        ));
         f.state.store(RUNNING, Ordering::Relaxed);
         unsafe { f.resume() };
         assert_eq!(f.state.load(Ordering::Relaxed), FINISHED);
