@@ -113,6 +113,9 @@ not know is a mistake, not a setting for somebody else.
 
 `extra-source-map` appends; no other key is a list.
 
+ietsp has no local store of its own, so `auto` and an empty value both mean the
+local daemon.
+
 `builder` is where derivations are realised. Every command takes it:
 `ietsp build --builder`, `ietsp print-dev-env --builder` and
 `ietsp fast-build --store` win over it, and so does a classic `--store` or

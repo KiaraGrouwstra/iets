@@ -138,7 +138,9 @@ impl Transport {
     }
 
     fn parse_worker(url: &str) -> Option<Transport> {
-        if url == "daemon" || url == "unix://" {
+        // `auto` is nix.conf's default `store`, which ietsp answers with the
+        // daemon: it has no local store of its own (docs/config.md).
+        if url == "daemon" || url == "unix://" || url == "auto" || url.is_empty() {
             return Some(Transport::Unix(PathBuf::from(DEFAULT_SOCKET)));
         }
         if let Some(path) = url.strip_prefix("unix://") {
@@ -838,6 +840,9 @@ mod tests {
             Transport::parse("unix:///tmp/s"),
             Some(Transport::Unix(PathBuf::from("/tmp/s")))
         );
+        // nix.conf's default `store`, which `builder` falls back to.
+        assert_eq!(Transport::parse("auto"), Transport::parse("daemon"));
+        assert_eq!(Transport::parse(""), Transport::parse("daemon"));
         assert_eq!(
             Transport::parse("ssh-ng://bob@builder.example"),
             Some(Transport::Ssh {
