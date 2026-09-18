@@ -225,7 +225,9 @@ Only `import` uses the cache (`scopedImport`, `-E`, and files with a
 1 KiB are not cached: below that the load (open, read, decode) costs
 what the compile costs. `--no-ir-cache` or `IETSP_CACHE=0` disables it;
 `--no-cache` (the tracing cache) leaves it on. `IETSP_IR_STATS=1` prints
-a line per file, `IETSP_IR_MIN` overrides the size floor.
+a line per file, `IETSP_IR_MIN` overrides the size floor. The store's
+locking, touching, garbage collection and version file are the ones both
+caches share: docs/caches.md.
 
 Per file on desktop (one cold and one warm run, 3,501 files):
 `hackage-packages.nix` loads in 71-77 ms against 190-218 ms to parse and

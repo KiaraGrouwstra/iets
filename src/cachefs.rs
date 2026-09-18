@@ -339,7 +339,7 @@ pub fn maybe_sweep(root: &Path, shape: Shape, timings: bool) {
         }
     }
     let s = sweep(root, shape, Duration::from_secs(TTL_DAYS * DAY), false);
-    if timings {
+    if timings && s.scanned > 0 {
         eprintln!(
             "cache: swept {} of {} entries ({} KiB) from {}",
             s.removed,

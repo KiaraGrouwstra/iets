@@ -124,6 +124,40 @@ rehashed, T s` on stderr.
   read set. That over-approximates the read set (more misses in rare
   cases) and never under-approximates it.
 
+## Lifecycle and concurrency
+
+Full rules and numbers: docs/caches.md. In short:
+
+- Many processes share the store. Readers never lock. A writer takes the
+  store's `flock` for exactly one file and gives up after 50 ms, which
+  costs a later miss and never a stall. `readset` is written last, so a
+  cut-short write leaves nothing to hit.
+- A hit that refreshed nothing writes nothing: it touches the entry's
+  mtime, and only when that mtime is over a day old.
+- Entries unread for 30 days are swept. The sweep runs on a write path,
+  at most once a day per store, never on the lookup path, and by hand
+  through `ietsp cache gc [--ttl DAYS] [--dry-run]`. A swept entry misses
+  next time. A cold sweep of 10,000 entries costs 0.03 s when nothing is
+  past the TTL and 0.57 s when everything is.
+- An entry that does not decode is deleted, never repaired. A store whose
+  `version` or `gc-stamp` file cannot be read is wiped whole; `--timings`
+  says so in one line.
+
+## Virtual paths
+
+Backlog, not built. nix-tarmac keeps an index over content-addressed
+blobs and serves an accessor from it, so `readFile` and `readDir` answer
+for a path that is not in `/nix/store` at all: the index names the store
+path's tree, the blobs hold the bytes, and evaluation never waits for a
+realisation. That is the design to reach for if ietsp ever has to read a
+substitutable-but-absent path. Today it does not: `builtins.storePath`
+hands the path to the daemon, which substitutes it before any read, and
+import-from-derivation and `builtins.outputOf` are unsupported, so the
+evaluator never needs bytes that the store does not have yet. The read
+set would need one more observation kind (the blob hash behind a virtual
+path) so a hit can tell that the bytes it replayed are still the bytes
+the index would serve.
+
 ## Measurements
 
 `bench/workloads/nixos-desktop.nix` with the pinned nixpkgs, 16-core EPYC
