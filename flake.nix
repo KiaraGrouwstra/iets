@@ -16,12 +16,12 @@
       # handles the subset ietsp implements and execs the real nix for the
       # rest; `share/ietsp/real-nix-bin` names that nix, so the fallback works
       # even when the farm shadows it out of PATH (docs/classic.md).
-      classic = pkgs: nix: pkgs.runCommand "ietsp-classic" { } ''
+      classic = pkgs: ietspPkg: nix: pkgs.runCommand "ietsp-classic" { } ''
         mkdir -p $out/bin
         mkdir -p $out/share/ietsp
         echo -n "${nix}/bin" > $out/share/ietsp/real-nix-bin
         for n in nix-instantiate nix-build nix-eval-jobs nix-shell nix-fast-build nix; do
-          ln -s ${ietsp pkgs}/bin/ietsp $out/bin/$n
+          ln -s ${ietspPkg}/bin/ietsp $out/bin/$n
         done
       '';
     in {
@@ -32,7 +32,7 @@
       });
       nixosModules.default = import ./nix/module.nix self;
       lib.mkClassic = classic;
-      packages = forAll (pkgs: { default = ietsp pkgs; classic = classic pkgs pkgs.nix; });
+      packages = forAll (pkgs: { default = ietsp pkgs; classic = classic pkgs (ietsp pkgs) pkgs.nix; });
       checks = forAll (pkgs:
         let
           pkg = ietsp pkgs;
