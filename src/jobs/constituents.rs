@@ -10,6 +10,7 @@ use std::io::Write;
 use std::path::Path;
 
 use super::line::{Job, Line, json_str};
+use crate::error::{Error, Result};
 use crate::remote::plan::Object;
 use crate::remote::worker::Connection;
 use crate::remote::worker::build::write_object;
@@ -211,7 +212,7 @@ fn resolve_named(jobs: &Jobs) -> BTreeMap<String, Aggregate> {
 
 /// constituents.cc:topoSort: dependencies first; a cycle names the two
 /// jobs and every aggregate not yet erased.
-fn topo_sort(mut dict: BTreeMap<String, Aggregate>) -> Result<Vec<Aggregate>, Cycle> {
+fn topo_sort(mut dict: BTreeMap<String, Aggregate>) -> std::result::Result<Vec<Aggregate>, Cycle> {
     fn visit(
         dict: &mut BTreeMap<String, Aggregate>,
         visited: &mut BTreeSet<String>,
@@ -219,7 +220,7 @@ fn topo_sort(mut dict: BTreeMap<String, Aggregate>) -> Result<Vec<Aggregate>, Cy
         sorted: &mut Vec<Aggregate>,
         path: &str,
         parent: Option<&str>,
-    ) -> Result<(), Cycle> {
+    ) -> std::result::Result<(), Cycle> {
         if parents.contains(path) {
             dict.remove(path);
             let parent = parent.unwrap_or_default();
@@ -264,7 +265,7 @@ pub fn rewrite(
     conn: &mut Connection,
     gc_roots_dir: Option<&Path>,
     out: &mut dyn FnMut(Line),
-) -> Result<(), String> {
+) -> Result<()> {
     let aggregates = resolve_named(jobs);
     let sorted = match topo_sort(aggregates) {
         Ok(s) => s,
@@ -295,19 +296,17 @@ pub fn rewrite(
             continue;
         };
         if agg.broken.is_empty() {
-            let mut drv = load_derivation_from_store(&job.drv_path).map_err(|e| e.0)?;
+            let mut drv = load_derivation_from_store(&job.drv_path)?;
             for dep in &agg.dependencies {
                 let child = jobs[dep]
                     .drv_path
                     .clone()
-                    .ok_or_else(|| format!("constituent '{dep}' has no drvPath"))?;
-                let child_drv = load_derivation_from_store(&child).map_err(|e| e.0)?;
-                let first = child_drv
-                    .outputs
-                    .keys()
-                    .next()
-                    .cloned()
-                    .ok_or_else(|| format!("derivation '{child}' has no outputs"))?;
+                    .ok_or_else(|| Error::Store(format!("constituent '{dep}' has no drvPath")))?;
+                let child_drv = load_derivation_from_store(&child)?;
+                let first =
+                    child_drv.outputs.keys().next().cloned().ok_or_else(|| {
+                        Error::Store(format!("derivation '{child}' has no outputs"))
+                    })?;
                 job.constituents.push(child.clone());
                 drv.input_drvs.insert(child, BTreeSet::from([first]));
             }
@@ -321,14 +320,11 @@ pub fn rewrite(
                 }
             }
             let mut loader = |p: &StorePath| load_derivation_from_store(p);
-            finalize_input_addressed_outputs(&mut drv, &mut hash_cache, &mut loader)
-                .map_err(|e| e.0)?;
-            let text = drv.unparse().map_err(|e| e.0)?;
-            let new_path = drv.drv_path_for(&text).map_err(|e| e.0)?;
+            finalize_input_addressed_outputs(&mut drv, &mut hash_cache, &mut loader)?;
+            let text = drv.unparse()?;
+            let new_path = drv.drv_path_for(&text)?;
             if new_path != job.drv_path {
-                let valid = conn
-                    .query_valid_paths(&[new_path.to_string()], &mut |_| {})
-                    .map_err(|e| e.to_string())?;
+                let valid = conn.query_valid_paths(&[new_path.to_string()], &mut |_| {})?;
                 if valid.is_empty() {
                     let mut references = drv.input_srcs.clone();
                     references.extend(drv.input_drvs.keys().cloned());
@@ -338,14 +334,12 @@ pub fn rewrite(
                         crate::remote::worker::wire::write_u64(w, 1)?;
                         write_object(w, &object)
                     };
-                    conn.add_multiple_to_store(&mut body, &mut |_| {})
-                        .map_err(|e| e.to_string())?;
+                    conn.add_multiple_to_store(&mut body, &mut |_| {})?;
                 }
                 if let Some(dir) = gc_roots_dir {
                     let root = dir.join(new_path.base_name());
                     if std::fs::symlink_metadata(&root).is_err() {
-                        conn.add_perm_root(&new_path.to_string(), &root)
-                            .map_err(|e| e.to_string())?;
+                        conn.add_perm_root(&new_path.to_string(), &root)?;
                     }
                 }
                 job.drv_path = new_path.clone();

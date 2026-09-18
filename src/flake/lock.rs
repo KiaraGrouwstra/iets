@@ -5,6 +5,8 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
+use crate::error::{Error, Result};
+
 #[derive(Debug)]
 pub struct Lock {
     pub root: String,
@@ -45,17 +47,19 @@ fn resolve<'a>(
     root: &'a str,
     path: &[Value],
     depth: usize,
-) -> Result<&'a str, String> {
+) -> Result<&'a str> {
     if depth > 64 {
-        return Err("follow cycle".into());
+        return Err(Error::Flake("follow cycle".into()));
     }
     let mut cur = root;
     for elem in path {
         let Some(name) = elem.as_str() else {
-            return Err("follows path element is not a string".into());
+            return Err(Error::Flake("follows path element is not a string".into()));
         };
         let Some(spec) = nodes.get(cur).and_then(|n| n["inputs"].get(name)) else {
-            return Err(format!("input '{name}' of node '{cur}' is missing"));
+            return Err(Error::Flake(format!(
+                "input '{name}' of node '{cur}' is missing"
+            )));
         };
         cur = resolve_spec(nodes, root, spec, depth + 1)?;
     }
@@ -67,25 +71,28 @@ fn resolve_spec<'a>(
     root: &'a str,
     spec: &'a Value,
     depth: usize,
-) -> Result<&'a str, String> {
+) -> Result<&'a str> {
     match spec {
         Value::String(s) => Ok(s.as_str()),
         Value::Array(p) => resolve(nodes, root, p, depth),
-        _ => Err("input spec is neither a node name nor a follows path".into()),
+        _ => Err(Error::Flake(
+            "input spec is neither a node name nor a follows path".into(),
+        )),
     }
 }
 
-pub fn check(bytes: &[u8]) -> Result<Lock, String> {
-    let json: Value = serde_json::from_slice(bytes).map_err(|e| format!("cannot parse: {e}"))?;
+pub fn check(bytes: &[u8]) -> Result<Lock> {
+    let json: Value =
+        serde_json::from_slice(bytes).map_err(|e| Error::Flake(format!("cannot parse: {e}")))?;
     let version = json["version"].as_u64().unwrap_or(0);
     if !(5..=7).contains(&version) {
-        return Err(format!("unsupported version {version}"));
+        return Err(Error::Flake(format!("unsupported version {version}")));
     }
     let Some(root) = json["root"].as_str().map(str::to_owned) else {
-        return Err("no root".into());
+        return Err(Error::Flake("no root".into()));
     };
     let Some(nodes) = json["nodes"].as_object() else {
-        return Err("no nodes".into());
+        return Err(Error::Flake("no nodes".into()));
     };
     let mut todo = vec![root.as_str()];
     let mut seen: HashSet<&str> = HashSet::new();
@@ -94,10 +101,10 @@ pub fn check(bytes: &[u8]) -> Result<Lock, String> {
             continue;
         }
         let Some(node) = nodes.get(key) else {
-            return Err(format!("node '{key}' is missing"));
+            return Err(Error::Flake(format!("node '{key}' is missing")));
         };
         if key != root && !is_locked(node) {
-            return Err(format!("node '{key}' is not locked"));
+            return Err(Error::Flake(format!("node '{key}' is not locked")));
         }
         if let Some(inputs) = node["inputs"].as_object() {
             for spec in inputs.values() {
@@ -137,15 +144,26 @@ mod tests {
     #[test]
     fn incomplete_locks_fail() {
         let missing_node = LOCK.replace(r#""a": "a", "#, r#""a": "b", "#);
-        assert!(check(missing_node.as_bytes()).unwrap_err().contains("'b'"));
+        assert!(
+            check(missing_node.as_bytes())
+                .unwrap_err()
+                .to_string()
+                .contains("'b'")
+        );
         let unlocked = LOCK.replace(r#", "narHash": "sha256-BBBB""#, "");
         assert!(
             check(unlocked.as_bytes())
                 .unwrap_err()
+                .to_string()
                 .contains("not locked")
         );
         let bad_follows = LOCK.replace(r#"["a", "nixpkgs"]"#, r#"["a", "nope"]"#);
-        assert!(check(bad_follows.as_bytes()).unwrap_err().contains("nope"));
+        assert!(
+            check(bad_follows.as_bytes())
+                .unwrap_err()
+                .to_string()
+                .contains("nope")
+        );
         let old = LOCK.replace(r#""version": 7"#, r#""version": 4"#);
         assert!(check(old.as_bytes()).is_err());
         assert!(check(b"{").is_err());

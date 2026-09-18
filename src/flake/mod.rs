@@ -10,7 +10,8 @@ pub mod root;
 
 use std::path::{Path, PathBuf};
 
-use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
+use crate::error::{Error, Result};
+use crate::eval::{Error as EvalError, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::runtime::Word;
 
 pub const CALL_FLAKE: &str = include_str!("call-flake.nix");
@@ -45,15 +46,15 @@ pub fn is_flake_ref(arg: &str) -> bool {
 }
 
 /// `PATH[#attr.path]` where PATH is `.`, `./x`, `/abs`, `~/x` or `path:/abs`.
-pub fn parse_flake_ref(arg: &str, cwd: &[u8], home: Option<&[u8]>) -> Result<FlakeRef, String> {
+pub fn parse_flake_ref(arg: &str, cwd: &[u8], home: Option<&[u8]>) -> Result<FlakeRef> {
     let (loc, frag) = match arg.split_once('#') {
         Some((l, f)) => (l, Some(f)),
         None => (arg, None),
     };
     if loc.contains('?') {
-        return Err(format!(
+        return Err(Error::Flake(format!(
             "ietsp: query parameters in flake reference '{arg}' are not supported"
-        ));
+        )));
     }
     let (explicit_path, loc) = match loc.strip_prefix("path:") {
         Some(rest) => (true, rest),
@@ -61,13 +62,13 @@ pub fn parse_flake_ref(arg: &str, cwd: &[u8], home: Option<&[u8]>) -> Result<Fla
     };
     if loc.contains(':') && !loc.starts_with('/') && !loc.starts_with('.') && !loc.starts_with('~')
     {
-        return Err(format!(
+        return Err(Error::Flake(format!(
             "ietsp: flake reference '{arg}' is not a path; only local paths are supported"
-        ));
+        )));
     }
     let mut full: Vec<u8> = if loc == "~" || loc.starts_with("~/") {
         let Some(h) = home else {
-            return Err("ietsp: $HOME is not set".to_string());
+            return Err(Error::Flake("ietsp: $HOME is not set".to_string()));
         };
         let mut v = h.to_vec();
         v.extend_from_slice(&loc.as_bytes()[1..]);
@@ -86,16 +87,16 @@ pub fn parse_flake_ref(arg: &str, cwd: &[u8], home: Option<&[u8]>) -> Result<Fla
     let full = crate::compile::canon_path(&full);
     let dir = PathBuf::from(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&full));
     if !dir.is_dir() {
-        return Err(format!(
+        return Err(Error::Flake(format!(
             "path '{}' is not a flake (because it's not a directory)",
             dir.display()
-        ));
+        )));
     }
     if !dir.join("flake.nix").is_file() {
-        return Err(format!(
+        return Err(Error::Flake(format!(
             "path '{}' is not a flake (because it doesn't contain a 'flake.nix' file)",
             dir.display()
-        ));
+        )));
     }
     let source = if explicit_path {
         Source::Path(dir.clone())
@@ -132,7 +133,7 @@ fn git_root(dir: &Path) -> Option<PathBuf> {
 }
 
 /// attr-path.cc:parseAttrPath: `.` separates, `"..."` quotes.
-pub fn parse_attr_path(s: &str) -> Result<Vec<String>, String> {
+pub fn parse_attr_path(s: &str) -> Result<Vec<String>> {
     let mut res = Vec::new();
     let mut cur = String::new();
     let mut it = s.chars();
@@ -142,7 +143,9 @@ pub fn parse_attr_path(s: &str) -> Result<Vec<String>, String> {
             '"' => loop {
                 match it.next() {
                     None => {
-                        return Err(format!("missing closing quote in selection path '{s}'"));
+                        return Err(Error::Flake(format!(
+                            "missing closing quote in selection path '{s}'"
+                        )));
                     }
                     Some('"') => break,
                     Some(c) => cur.push(c),
@@ -173,9 +176,9 @@ fn read_traced(ev: &Evaluator, p: &Path) -> std::io::Result<Vec<u8>> {
 pub fn eval_flake_value(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
     let pos = Pos::NONE;
     let lock_bytes = read_traced(ev, &fr.dir.join("flake.lock"))
-        .map_err(|_| Error::boxed(ErrorKind::Io, LOCK_ERROR, pos))?;
+        .map_err(|_| EvalError::boxed(ErrorKind::Io, LOCK_ERROR, pos))?;
     let lock = lock::check(&lock_bytes)
-        .map_err(|why| Error::boxed(ErrorKind::Eval, format!("{LOCK_ERROR} ({why})"), pos))?;
+        .map_err(|why| EvalError::boxed(ErrorKind::Eval, format!("{LOCK_ERROR} ({why})"), pos))?;
 
     let (source_info, subdir) = root::source_info(ev, &fr.source, pos)?;
     let out_path = {
@@ -185,7 +188,7 @@ pub fn eval_flake_value(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
         );
         let a = ev.force_attrs(source_info, pos, &ctx)?;
         let Some(attr) = a.get(ev.s.out_path) else {
-            return Err(Error::boxed(
+            return Err(EvalError::boxed(
                 ErrorKind::MissingAttr,
                 format!(
                     "flake '{}': sourceInfo has no attribute 'outPath'",
@@ -241,7 +244,7 @@ pub fn eval_flake(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
     let attrs = ev.force_attrs(result, pos, "while evaluating the flake")?;
     let outputs_sym = ev.sym(b"outputs");
     let Some(outputs) = attrs.get(outputs_sym) else {
-        return Err(Error::boxed(
+        return Err(EvalError::boxed(
             ErrorKind::MissingAttr,
             format!("flake '{}' has no attribute 'outputs'", fr.dir.display()),
             pos,
@@ -252,7 +255,7 @@ pub fn eval_flake(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
         let a = ev.force_attrs(v, pos, "while selecting a flake output attribute")?;
         let sym = ev.sym(name.as_bytes());
         let Some(attr) = a.get(sym) else {
-            return Err(Error::boxed(
+            return Err(EvalError::boxed(
                 ErrorKind::MissingAttr,
                 format!(
                     "flake '{}' does not provide attribute '{}'",
@@ -308,7 +311,7 @@ fn check_declared_inputs(
     for a in inputs.iter() {
         let name = ev.interner.name(a.sym).to_vec();
         if !lock.root_inputs().any(|k| k.as_bytes() == name) {
-            return Err(Error::boxed(
+            return Err(EvalError::boxed(
                 ErrorKind::Eval,
                 format!(
                     "{LOCK_ERROR} (input '{}' has no lock entry)",

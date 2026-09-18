@@ -8,9 +8,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::error::{Error, Result};
 use crate::store::drv::{
-    Derivation, DerivationOutput, DrvError, DrvHashCache, DrvLoader,
-    finalize_input_addressed_outputs,
+    Derivation, DerivationOutput, DrvHashCache, DrvLoader, finalize_input_addressed_outputs,
 };
 use crate::store::hash::{HashAlgo, hash_bytes};
 use crate::store::path::{StorePath, make_text_path};
@@ -62,10 +62,10 @@ pub fn env_derivation(
     shell: &Derivation,
     cache: &mut DrvHashCache,
     loader: &mut DrvLoader<'_>,
-) -> Result<Derivation, DrvError> {
+) -> Result<Derivation> {
     let builder = shell.builder.rsplit('/').next().unwrap_or("");
     if builder != "bash" {
-        return Err(DrvError(
+        return Err(Error::Store(
             "'nix develop' only works on derivations that use 'bash' as their builder".into(),
         ));
     }
@@ -109,9 +109,9 @@ pub fn env_derivation(
 
 /// `structuredAttrs.erase("outputChecks")` followed by nlohmann's compact `dump()`;
 /// unchanged when the key is absent, so the eval-time encoding stays byte-exact.
-fn erase_output_checks(json: &str) -> Result<String, DrvError> {
+fn erase_output_checks(json: &str) -> Result<String> {
     let mut v: serde_json::Value = serde_json::from_str(json)
-        .map_err(|e| DrvError(format!("structured attrs are not valid JSON: {e}")))?;
+        .map_err(|e| Error::Store(format!("structured attrs are not valid JSON: {e}")))?;
     let removed = v
         .as_object_mut()
         .is_some_and(|o| o.remove("outputChecks").is_some());
@@ -139,19 +139,19 @@ pub struct BuildEnvironment {
     pub structured_attrs: Option<(String, String)>,
 }
 
-fn json_str(v: &serde_json::Value, what: &str) -> Result<String, String> {
+fn json_str(v: &serde_json::Value, what: &str) -> Result<String> {
     v.as_str()
         .map(str::to_owned)
-        .ok_or_else(|| format!("{what} is not a string"))
+        .ok_or_else(|| Error::Protocol(format!("{what} is not a string")))
 }
 
 impl BuildEnvironment {
     /// BuildEnvironment::fromJSON: variables of an unknown type are dropped.
-    pub fn from_json(json: &serde_json::Value) -> Result<BuildEnvironment, String> {
+    pub fn from_json(json: &serde_json::Value) -> Result<BuildEnvironment> {
         let mut res = BuildEnvironment::default();
         let vars = json["variables"]
             .as_object()
-            .ok_or("environment has no 'variables' object")?;
+            .ok_or_else(|| Error::Protocol("environment has no 'variables' object".into()))?;
         for (name, info) in vars {
             let ty = json_str(&info["type"], "variable type")?;
             let value = &info["value"];
@@ -163,18 +163,20 @@ impl BuildEnvironment {
                 "array" => Value::Array(
                     value
                         .as_array()
-                        .ok_or("array variable is not a list")?
+                        .ok_or_else(|| Error::Protocol("array variable is not a list".into()))?
                         .iter()
                         .map(|s| json_str(s, "array element"))
-                        .collect::<Result<_, _>>()?,
+                        .collect::<Result<_>>()?,
                 ),
                 "associative" => Value::Associative(
                     value
                         .as_object()
-                        .ok_or("associative variable is not an object")?
+                        .ok_or_else(|| {
+                            Error::Protocol("associative variable is not an object".into())
+                        })?
                         .iter()
                         .map(|(k, s)| Ok((k.clone(), json_str(s, "associative value")?)))
-                        .collect::<Result<_, String>>()?,
+                        .collect::<Result<_>>()?,
                 ),
                 _ => continue,
             };
@@ -182,7 +184,7 @@ impl BuildEnvironment {
         }
         let funs = json["bashFunctions"]
             .as_object()
-            .ok_or("environment has no 'bashFunctions' object")?;
+            .ok_or_else(|| Error::Protocol("environment has no 'bashFunctions' object".into()))?;
         for (name, def) in funs {
             res.bash_functions
                 .insert(name.clone(), json_str(def, "function body")?);
@@ -196,9 +198,9 @@ impl BuildEnvironment {
         Ok(res)
     }
 
-    pub fn parse(bytes: &[u8]) -> Result<BuildEnvironment, String> {
+    pub fn parse(bytes: &[u8]) -> Result<BuildEnvironment> {
         let json: serde_json::Value = serde_json::from_slice(bytes)
-            .map_err(|e| format!("environment file is not valid JSON: {e}"))?;
+            .map_err(|e| Error::Protocol(format!("environment file is not valid JSON: {e}")))?;
         BuildEnvironment::from_json(&json)
     }
 
@@ -308,11 +310,15 @@ impl BuildEnvironment {
         }
     }
 
-    fn get_string(&self, name: &str) -> Result<&str, String> {
+    fn get_string(&self, name: &str) -> Result<&str> {
         match self.vars.get(name) {
             Some(Value::String { value, .. }) => Ok(value),
-            Some(_) => Err(format!("bash variable '{name}' is not a string")),
-            None => Err(format!("environment has no variable '{name}'")),
+            Some(_) => Err(Error::Protocol(format!(
+                "bash variable '{name}' is not a string"
+            ))),
+            None => Err(Error::Protocol(format!(
+                "environment has no variable '{name}'"
+            ))),
         }
     }
 }
@@ -362,7 +368,7 @@ pub fn make_rc_script(
     env: &BuildEnvironment,
     attrs_dir: &Path,
     outputs_dir: &Path,
-) -> Result<RcScript, String> {
+) -> Result<RcScript> {
     let mut out = String::with_capacity(64 << 10);
     out.push_str("unset shellHook\n");
     for var in SAVED_VARS {
@@ -384,7 +390,7 @@ pub fn make_rc_script(
     let outputs = env
         .vars
         .get("outputs")
-        .ok_or("environment has no 'outputs' variable")?;
+        .ok_or_else(|| Error::Protocol("environment has no 'outputs' variable".into()))?;
     match outputs {
         Value::Associative(m) => {
             for (name, from) in m {
@@ -418,14 +424,14 @@ pub fn make_rc_script(
     let mut files = Vec::new();
     if let Some((json, sh)) = &env.structured_attrs {
         std::fs::create_dir_all(attrs_dir)
-            .map_err(|e| format!("cannot create '{}': {e}", attrs_dir.display()))?;
+            .map_err(|e| Error::io(format!("cannot create '{}'", attrs_dir.display()), e))?;
         for (ext, var, content) in [
             ("sh", "NIX_ATTRS_SH_FILE", sh),
             ("json", "NIX_ATTRS_JSON_FILE", json),
         ] {
             let target = attrs_dir.join(format!(".attrs.{ext}"));
             write_file(&target, content.as_bytes())
-                .map_err(|e| format!("cannot write '{}': {e}", target.display()))?;
+                .map_err(|e| Error::io(format!("cannot write '{}'", target.display()), e))?;
             rewrites.insert(
                 env.get_string(var)?.to_string(),
                 target.to_string_lossy().into_owned(),

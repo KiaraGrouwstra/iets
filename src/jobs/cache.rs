@@ -8,6 +8,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use super::line::{Job, Line, json_str, json_str_list};
+use crate::error::{Error, Result};
 use crate::remote::worker::{Connection, Transport};
 use crate::store::drv::{Derivation, DerivationOutput, load_derivation_from_store};
 use crate::store::path::StorePath;
@@ -46,8 +47,8 @@ fn sort_paths(paths: &mut [StorePath]) {
 }
 
 impl Resolver {
-    pub fn open(transport: &Transport) -> Result<Resolver, String> {
-        let conn = Connection::open(transport, &mut |_| {}).map_err(|e| e.to_string())?;
+    pub fn open(transport: &Transport) -> Result<Resolver> {
+        let conn = Connection::open(transport, &mut |_| {})?;
         Ok(Resolver::new(conn))
     }
 
@@ -69,7 +70,7 @@ impl Resolver {
     }
 
     /// Fills the cache-status fields of every job in `lines`.
-    pub fn resolve(&mut self, lines: &mut [Line]) -> Result<(), String> {
+    pub fn resolve(&mut self, lines: &mut [Line]) -> Result<()> {
         let mut left: Vec<usize> = lines
             .iter()
             .enumerate()
@@ -91,7 +92,9 @@ impl Resolver {
                 break;
             }
             if self.wanted_valid.is_empty() && self.wanted.is_empty() {
-                return Err("cache status resolver made no progress".into());
+                return Err(Error::Cache(
+                    "cache status resolver made no progress".into(),
+                ));
             }
             self.resolve_wanted()?;
         }
@@ -100,14 +103,13 @@ impl Resolver {
 
     /// One `QueryValidPaths` and one `QuerySubstitutablePathInfos` for
     /// everything the last pass asked for.
-    fn resolve_wanted(&mut self) -> Result<(), String> {
+    fn resolve_wanted(&mut self) -> Result<()> {
         if !self.wanted_valid.is_empty() {
             let batch = std::mem::take(&mut self.wanted_valid);
             let paths: Vec<String> = batch.iter().map(|p| p.to_string()).collect();
             let valid: BTreeSet<String> = self
                 .conn
-                .query_valid_paths(&paths, &mut |_| {})
-                .map_err(|e| e.to_string())?
+                .query_valid_paths(&paths, &mut |_| {})?
                 .into_iter()
                 .collect();
             self.round_trips += 1;
@@ -164,9 +166,9 @@ impl Resolver {
         None
     }
 
-    fn read_derivation(&mut self, p: &StorePath) -> Result<&Derivation, String> {
+    fn read_derivation(&mut self, p: &StorePath) -> Result<&Derivation> {
         if !self.drvs.contains_key(p) {
-            let drv = load_derivation_from_store(p).map_err(|e| e.0)?;
+            let drv = load_derivation_from_store(p)?;
             self.drvs.insert(p.clone(), drv);
         }
         Ok(&self.drvs[p])
@@ -177,7 +179,7 @@ impl Resolver {
         &mut self,
         drv: &Derivation,
         wanted: &BTreeSet<String>,
-    ) -> Result<MissingOutputs, String> {
+    ) -> Result<MissingOutputs> {
         let mut r = MissingOutputs {
             known: true,
             complete: true,
@@ -189,7 +191,7 @@ impl Resolver {
             }
             let path = match out {
                 DerivationOutput::InputAddressed(p) => p.clone(),
-                DerivationOutput::Fixed { .. } => drv.fixed_output_path(name).map_err(|e| e.0)?,
+                DerivationOutput::Fixed { .. } => drv.fixed_output_path(name)?,
                 _ => {
                     r.known = false;
                     return Ok(r);
@@ -209,7 +211,7 @@ impl Resolver {
         t: &mut Traversal,
         drv_path: &StorePath,
         wanted: &BTreeSet<String>,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         if !t.visited.insert(drv_path.clone()) {
             return Ok(());
         }
@@ -247,7 +249,7 @@ impl Resolver {
 
     /// One attempt with the probes cached so far; `false` when a probe is
     /// still pending (the job is retried after `resolve_wanted`).
-    fn try_resolve(&mut self, job: &mut Job) -> Result<bool, String> {
+    fn try_resolve(&mut self, job: &mut Job) -> Result<bool> {
         self.attempt_complete = true;
         let mut missing: Vec<StorePath> = Vec::new();
         let mut known = true;

@@ -33,7 +33,8 @@ pub fn source_info(ev: &mut Evaluator, source: &Source, pos: Pos) -> EvalResult<
             );
             attrs.insert("narHash".into(), AttrVal::Str(hash.to_sri()));
             attrs.insert("lastModified".into(), AttrVal::Int(mtime.max(0) as u64));
-            let sp = source_store_path(&hash).map_err(|e| Error::boxed(ErrorKind::Eval, e, pos))?;
+            let sp = source_store_path(&hash)
+                .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
             ensure_in_store(ev, &sp, &attrs, pos)?;
             Ok((emit_tree_attrs(ev, &sp, &attrs, pos)?, String::new()))
         }
@@ -55,7 +56,8 @@ pub fn path_tree(ev: &mut Evaluator, dir: &Path, pos: Pos) -> EvalResult<(Hash, 
     let mtime = max_mtime(dir).map_err(io)?;
     ev.trace
         .tree(dir, crate::trace::hash_to_digest(&hash), None);
-    let sp = source_store_path(&hash).map_err(|e| Error::boxed(ErrorKind::Eval, e, pos))?;
+    let sp =
+        source_store_path(&hash).map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
     ev.sources.insert(
         sp,
         SourceOrigin::Tree {
@@ -177,7 +179,8 @@ fn git_tree(ev: &mut Evaluator, root: &Path, pos: Pos) -> EvalResult<Word> {
     })?;
     ev.trace
         .tree_external(root, crate::trace::hash_to_digest(&hash), &accepted);
-    let sp = source_store_path(&hash).map_err(|e| Error::boxed(ErrorKind::Eval, e, pos))?;
+    let sp =
+        source_store_path(&hash).map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
     ev.sources.insert(
         sp.clone(),
         SourceOrigin::Tree {

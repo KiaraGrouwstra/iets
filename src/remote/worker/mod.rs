@@ -12,10 +12,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 use super::event::{Built, Event, Failed, Log, Started};
-use wire::{
-    Counting, FramedSink, read_bytes, read_str, read_strs, read_u64, write_str, write_strs,
-    write_u64,
-};
+use crate::error::{Error, Result};
+use wire::{Counting, FramedSink};
 
 const WORKER_MAGIC_1: u64 = 0x6e69_7863;
 const WORKER_MAGIC_2: u64 = 0x6478_696f;
@@ -135,24 +133,38 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-#[derive(Debug)]
-pub struct WorkerError(pub String);
-
-impl std::fmt::Display for WorkerError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
+/// Every failure of the connection's own reads and writes reports the same way.
+fn conn(e: io::Error) -> Error {
+    Error::io("daemon connection", e)
 }
 
-impl std::error::Error for WorkerError {}
-
-impl From<io::Error> for WorkerError {
-    fn from(e: io::Error) -> Self {
-        WorkerError(format!("daemon connection: {e}"))
-    }
+fn write_u64(w: &mut dyn Write, n: u64) -> Result<()> {
+    wire::write_u64(w, n).map_err(conn)
 }
 
-type Result<T> = std::result::Result<T, WorkerError>;
+fn write_str(w: &mut dyn Write, s: &[u8]) -> Result<()> {
+    wire::write_str(w, s).map_err(conn)
+}
+
+fn write_strs<S: AsRef<[u8]>>(w: &mut dyn Write, items: &[S]) -> Result<()> {
+    wire::write_strs(w, items).map_err(conn)
+}
+
+fn read_u64(r: &mut dyn Read) -> Result<u64> {
+    wire::read_u64(r).map_err(conn)
+}
+
+fn read_bytes(r: &mut dyn Read, max: u64) -> Result<Vec<u8>> {
+    wire::read_bytes(r, max).map_err(conn)
+}
+
+fn read_str(r: &mut dyn Read) -> Result<String> {
+    wire::read_str(r).map_err(conn)
+}
+
+fn read_strs(r: &mut dyn Read) -> Result<Vec<String>> {
+    wire::read_strs(r).map_err(conn)
+}
 
 /// Round trips and bytes on one connection, for `--timings`.
 #[derive(Debug, Default, Clone, Copy)]
@@ -220,9 +232,9 @@ impl Connection {
             match transport {
                 Transport::Unix(path) => {
                     let s = UnixStream::connect(path).map_err(|e| {
-                        WorkerError(format!("cannot connect to '{}': {e}", path.display()))
+                        Error::io(format!("cannot connect to '{}'", path.display()), e)
                     })?;
-                    let r = s.try_clone()?;
+                    let r = s.try_clone().map_err(conn)?;
                     (Box::new(s), Box::new(r), None)
                 }
                 Transport::Ssh {
@@ -245,9 +257,7 @@ impl Connection {
                         .stdin(Stdio::piped())
                         .stdout(Stdio::piped())
                         .stderr(Stdio::inherit());
-                    let mut c = cmd
-                        .spawn()
-                        .map_err(|e| WorkerError(format!("cannot run ssh: {e}")))?;
+                    let mut c = cmd.spawn().map_err(|e| Error::io("cannot run ssh", e))?;
                     let stdin = c.stdin.take().expect("piped");
                     let stdout = c.stdout.take().expect("piped");
                     (Box::new(stdin), Box::new(stdout), Some(c))
@@ -279,6 +289,10 @@ impl Connection {
         self.to.get_ref().bytes
     }
 
+    fn flush(&mut self) -> Result<()> {
+        self.to.flush().map_err(conn)
+    }
+
     fn sync_stats(&mut self) {
         self.stats.bytes_sent = self.bytes_sent();
     }
@@ -295,33 +309,33 @@ impl Connection {
     fn handshake(&mut self) -> Result<()> {
         write_u64(self.w(), WORKER_MAGIC_1)?;
         write_u64(self.w(), (1 << 8) | LATEST_MINOR)?;
-        self.to.flush()?;
+        self.flush()?;
         if read_u64(self.r())? != WORKER_MAGIC_2 {
-            return Err(WorkerError("nix-daemon protocol mismatch".into()));
+            return Err(Error::Protocol("nix-daemon protocol mismatch".into()));
         }
         let daemon = read_u64(self.r())?;
         if (daemon & 0xff00) >> 8 != 1 {
-            return Err(WorkerError(
+            return Err(Error::Protocol(
                 "Nix daemon protocol version not supported".into(),
             ));
         }
         self.minor = (daemon & 0xff).min(LATEST_MINOR);
         self.stats.round_trips += 1;
         if self.minor < MIN_MINOR {
-            return Err(WorkerError(format!(
+            return Err(Error::Protocol(format!(
                 "the Nix daemon speaks protocol 1.{}; this client needs 1.{MIN_MINOR} or newer",
                 self.minor
             )));
         }
         if self.minor >= 38 {
             write_strs::<&str>(self.w(), &[])?;
-            self.to.flush()?;
+            self.flush()?;
             read_strs(self.r())?;
             self.stats.round_trips += 1;
         }
         write_u64(self.w(), 0)?;
         write_u64(self.w(), 0)?;
-        self.to.flush()?;
+        self.flush()?;
         self.daemon_nix_version = read_str(self.r())?;
         self.trusted = match read_u64(self.r())? {
             1 => Some(true),
@@ -332,7 +346,7 @@ impl Connection {
         Ok(())
     }
 
-    fn op(&mut self, op: Op) -> io::Result<()> {
+    fn op(&mut self, op: Op) -> Result<()> {
         self.stats.ops += 1;
         self.stats.round_trips += 1;
         write_u64(self.w(), op as u64)
@@ -367,7 +381,7 @@ impl Connection {
     /// worker-protocol-connection.cc:processStderrReturn: drains the daemon's log stream until
     /// `STDERR_LAST` (the reply follows) or `STDERR_ERROR`.
     fn process_stderr(&mut self, on_event: &mut dyn FnMut(Event)) -> Result<()> {
-        self.to.flush()?;
+        self.flush()?;
         loop {
             match read_u64(self.r())? {
                 STDERR_LAST => {
@@ -423,12 +437,12 @@ impl Connection {
                     return Err(e);
                 }
                 STDERR_READ | STDERR_WRITE => {
-                    return Err(WorkerError(
+                    return Err(Error::Protocol(
                         "daemon asked for a data stream this client does not provide".into(),
                     ));
                 }
                 other => {
-                    return Err(WorkerError(format!(
+                    return Err(Error::Protocol(format!(
                         "got unknown message type {other:#x} from Nix daemon"
                     )));
                 }
@@ -448,7 +462,7 @@ impl Connection {
                 }
                 1 => Field::Str(read_str(self.r())?),
                 t => {
-                    return Err(WorkerError(format!(
+                    return Err(Error::Protocol(format!(
                         "got unsupported field type {t:#x} from Nix daemon"
                     )));
                 }
@@ -459,10 +473,10 @@ impl Connection {
     }
 
     /// serialise.cc:readError (protocol >= 1.26).
-    fn read_error(&mut self) -> Result<WorkerError> {
+    fn read_error(&mut self) -> Result<Error> {
         let ty = read_str(self.r())?;
         if ty != "Error" {
-            return Err(WorkerError(format!("unexpected error type '{ty}'")));
+            return Err(Error::Protocol(format!("unexpected error type '{ty}'")));
         }
         let _level = read_u64(self.r())?;
         let _name = read_str(self.r())?;
@@ -475,7 +489,7 @@ impl Connection {
             msg.push_str("\n       … ");
             msg.push_str(&hint);
         }
-        Ok(WorkerError(msg))
+        Ok(Error::Protocol(msg))
     }
 
     /// `QueryValidPaths` with substitution off; returns the valid subset.
@@ -488,7 +502,7 @@ impl Connection {
         write_strs(self.w(), paths)?;
         write_u64(self.w(), 0)?;
         self.process_stderr(on_event)?;
-        Ok(read_strs(self.r())?)
+        read_strs(self.r())
     }
 
     /// `AddMultipleToStore`: `body` writes the count, then each `ValidPathInfo` followed by its
@@ -501,10 +515,10 @@ impl Connection {
         self.op(Op::AddMultipleToStore)?;
         write_u64(self.w(), 0)?;
         write_u64(self.w(), 0)?;
-        self.to.flush()?;
+        self.flush()?;
         let mut sink = FramedSink::new(&mut self.to);
-        body(&mut sink)?;
-        sink.finish()?;
+        body(&mut sink).map_err(conn)?;
+        sink.finish().map_err(conn)?;
         self.process_stderr(on_event)
     }
 
@@ -610,16 +624,16 @@ impl Connection {
     /// `store_path`, then `AddIndirectRoot`.
     pub fn add_perm_root(&mut self, store_path: &str, root: &Path) -> Result<()> {
         if root.starts_with(super::super::store::path::STORE_DIR) {
-            return Err(WorkerError(format!(
+            return Err(Error::Protocol(format!(
                 "creating a garbage collector root ({}) in the Nix store is forbidden",
                 root.display()
             )));
         }
         replace_symlink(store_path, root)
-            .map_err(|e| WorkerError(format!("cannot create {}: {e}", root.display())))?;
+            .map_err(|e| Error::io(format!("cannot create {}", root.display()), e))?;
         let root_s = root
             .to_str()
-            .ok_or_else(|| WorkerError("gc root path is not UTF-8".into()))?;
+            .ok_or_else(|| Error::Usage("gc root path is not UTF-8".into()))?;
         self.add_indirect_root(root_s, &mut |_| {})
     }
 
@@ -633,7 +647,7 @@ impl Connection {
         self.op(Op::NarFromPath)?;
         write_str(self.w(), path.as_bytes())?;
         self.process_stderr(on_event)?;
-        sink(&mut self.from)?;
+        sink(&mut self.from).map_err(conn)?;
         Ok(())
     }
 

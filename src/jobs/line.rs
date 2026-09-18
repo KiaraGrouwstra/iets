@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::error::{Error, Result};
 use crate::store::path::StorePath;
 
 pub struct Job {
@@ -130,18 +131,23 @@ impl Line {
 
     /// Parses a line a worker printed. A line with `drvPath` is a job, one
     /// with `error` and no `drvPath` is an error.
-    pub fn parse(bytes: &[u8]) -> Result<Line, String> {
+    pub fn parse(bytes: &[u8]) -> Result<Line> {
         let fields = split_object(bytes)?;
         let mut map: BTreeMap<String, &[u8]> = fields.into_iter().collect();
-        let take_str = |map: &mut BTreeMap<String, &[u8]>, k: &str| -> Result<String, String> {
-            let raw = map.remove(k).ok_or_else(|| format!("line without '{k}'"))?;
-            serde_json::from_slice::<String>(raw).map_err(|e| format!("'{k}': {e}"))
+        let take_str = |map: &mut BTreeMap<String, &[u8]>, k: &str| -> Result<String> {
+            let raw = map
+                .remove(k)
+                .ok_or_else(|| Error::Protocol(format!("line without '{k}'")))?;
+            serde_json::from_slice::<String>(raw)
+                .map_err(|e| Error::Protocol(format!("'{k}': {e}")))
         };
-        let take_strs =
-            |map: &mut BTreeMap<String, &[u8]>, k: &str| -> Result<Vec<String>, String> {
-                let raw = map.remove(k).ok_or_else(|| format!("line without '{k}'"))?;
-                serde_json::from_slice::<Vec<String>>(raw).map_err(|e| format!("'{k}': {e}"))
-            };
+        let take_strs = |map: &mut BTreeMap<String, &[u8]>, k: &str| -> Result<Vec<String>> {
+            let raw = map
+                .remove(k)
+                .ok_or_else(|| Error::Protocol(format!("line without '{k}'")))?;
+            serde_json::from_slice::<Vec<String>>(raw)
+                .map_err(|e| Error::Protocol(format!("'{k}': {e}")))
+        };
         let attr = take_str(&mut map, "attr")?;
         let attr_path = take_strs(&mut map, "attrPath")?;
         if !map.contains_key("drvPath") {
@@ -154,23 +160,25 @@ impl Line {
                 fatal,
             }));
         }
-        let parse_path = |s: String| StorePath::parse(&s).map_err(|e| e.0);
+        let parse_path = |s: String| StorePath::parse(&s).map_err(Error::from);
         let drv_path = parse_path(take_str(&mut map, "drvPath")?)?;
-        let raw_outputs = map.remove("outputs").ok_or("job without 'outputs'")?;
-        let outputs: BTreeMap<String, Option<String>> =
-            serde_json::from_slice(raw_outputs).map_err(|e| format!("'outputs': {e}"))?;
+        let raw_outputs = map
+            .remove("outputs")
+            .ok_or_else(|| Error::Protocol("job without 'outputs'".into()))?;
+        let outputs: BTreeMap<String, Option<String>> = serde_json::from_slice(raw_outputs)
+            .map_err(|e| Error::Protocol(format!("'outputs': {e}")))?;
         let outputs = outputs
             .into_iter()
             .map(|(k, v)| Ok((k, v.map(&parse_path).transpose()?)))
-            .collect::<Result<_, String>>()?;
+            .collect::<Result<_>>()?;
         let constituents = take_strs(&mut map, "constituents")?
             .into_iter()
             .map(&parse_path)
-            .collect::<Result<_, String>>()?;
+            .collect::<Result<_>>()?;
         let named_constituents = match map.remove("namedConstituents") {
             Some(raw) => Some(
                 serde_json::from_slice::<Vec<String>>(raw)
-                    .map_err(|e| format!("'namedConstituents': {e}"))?,
+                    .map_err(|e| Error::Protocol(format!("'namedConstituents': {e}")))?,
             ),
             None => None,
         };
@@ -213,7 +221,7 @@ fn skip_ws(s: &[u8], mut i: usize) -> usize {
 }
 
 /// `i` is at the opening quote; returns the index after the closing one.
-fn scan_string(s: &[u8], i: usize) -> Result<usize, String> {
+fn scan_string(s: &[u8], i: usize) -> Result<usize> {
     let mut j = i + 1;
     while j < s.len() {
         match s[j] {
@@ -222,12 +230,12 @@ fn scan_string(s: &[u8], i: usize) -> Result<usize, String> {
             _ => j += 1,
         }
     }
-    Err("unterminated string".into())
+    Err(Error::Protocol("unterminated string".into()))
 }
 
-fn scan_value(s: &[u8], i: usize) -> Result<usize, String> {
+fn scan_value(s: &[u8], i: usize) -> Result<usize> {
     match s.get(i) {
-        None => Err("missing value".into()),
+        None => Err(Error::Protocol("missing value".into())),
         Some(b'"') => scan_string(s, i),
         Some(b'{') | Some(b'[') => {
             let mut depth = 0usize;
@@ -249,7 +257,7 @@ fn scan_value(s: &[u8], i: usize) -> Result<usize, String> {
                     _ => j += 1,
                 }
             }
-            Err("unterminated object".into())
+            Err(Error::Protocol("unterminated object".into()))
         }
         Some(_) => {
             let mut j = i;
@@ -263,10 +271,10 @@ fn scan_value(s: &[u8], i: usize) -> Result<usize, String> {
 }
 
 /// The top-level keys of a JSON object and the raw text of their values.
-pub fn split_object(s: &[u8]) -> Result<Vec<(String, &[u8])>, String> {
+pub fn split_object(s: &[u8]) -> Result<Vec<(String, &[u8])>> {
     let mut i = skip_ws(s, 0);
     if s.get(i) != Some(&b'{') {
-        return Err("expected '{'".into());
+        return Err(Error::Protocol("expected '{'".into()));
     }
     i = skip_ws(s, i + 1);
     let mut out = Vec::new();
@@ -275,13 +283,14 @@ pub fn split_object(s: &[u8]) -> Result<Vec<(String, &[u8])>, String> {
     }
     loop {
         if s.get(i) != Some(&b'"') {
-            return Err("expected a key".into());
+            return Err(Error::Protocol("expected a key".into()));
         }
         let end = scan_string(s, i)?;
-        let key: String = serde_json::from_slice(&s[i..end]).map_err(|e| e.to_string())?;
+        let key: String =
+            serde_json::from_slice(&s[i..end]).map_err(|e| Error::Protocol(e.to_string()))?;
         i = skip_ws(s, end);
         if s.get(i) != Some(&b':') {
-            return Err("expected ':'".into());
+            return Err(Error::Protocol("expected ':'".into()));
         }
         i = skip_ws(s, i + 1);
         let end = scan_value(s, i)?;
@@ -290,7 +299,7 @@ pub fn split_object(s: &[u8]) -> Result<Vec<(String, &[u8])>, String> {
         match s.get(i) {
             Some(b',') => i = skip_ws(s, i + 1),
             Some(b'}') => return Ok(out),
-            _ => return Err("expected ',' or '}'".into()),
+            _ => return Err(Error::Protocol("expected ',' or '}'".into())),
         }
     }
 }

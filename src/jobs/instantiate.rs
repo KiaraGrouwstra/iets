@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use super::line::{Job, Line};
 use crate::builtins::derivation::DrvInfo;
+use crate::error::{Error, Result};
 use crate::parallel::shared::SharedMap;
 use crate::remote::plan::{Object, SourceData, SourceInfo, SourceKind};
 use crate::remote::worker::build::write_object;
@@ -52,11 +53,11 @@ impl Store {
         gc_roots_dir: Option<PathBuf>,
         drvs: SharedMap<StorePath, DrvInfo>,
         sources: SharedMap<StorePath, SourceOrigin>,
-    ) -> Result<Store, String> {
-        let conn = Connection::open(transport, &mut |_| {}).map_err(|e| e.to_string())?;
+    ) -> Result<Store> {
+        let conn = Connection::open(transport, &mut |_| {})?;
         if let Some(dir) = &gc_roots_dir {
             std::fs::create_dir_all(dir)
-                .map_err(|e| format!("cannot create '{}': {e}", dir.display()))?;
+                .map_err(|e| Error::io(format!("cannot create '{}'", dir.display()), e))?;
         }
         Ok(Store {
             conn,
@@ -69,7 +70,7 @@ impl Store {
     }
 
     /// ATerm and references of `p`: this evaluation's, else `/nix/store`'s.
-    fn load_drv(&self, p: &StorePath) -> Result<(Arc<Vec<u8>>, BTreeSet<StorePath>), String> {
+    fn load_drv(&self, p: &StorePath) -> Result<(Arc<Vec<u8>>, BTreeSet<StorePath>)> {
         if let Some(info) = self.drvs.get(p)
             && let Some(aterm) = info.aterm
         {
@@ -77,9 +78,9 @@ impl Store {
         }
         let full = format!("{STORE_DIR}/{}", p.base_name());
         let text = std::fs::read_to_string(&full)
-            .map_err(|e| format!("cannot read derivation '{full}': {e}"))?;
-        let name = Derivation::name_from_path(p).map_err(|e| e.0)?;
-        let drv = Derivation::parse(&text, name).map_err(|e| e.0)?;
+            .map_err(|e| Error::io(format!("cannot read derivation '{full}'"), e))?;
+        let name = Derivation::name_from_path(p)?;
+        let drv = Derivation::parse(&text, name)?;
         let mut references = drv.input_srcs;
         references.extend(drv.input_drvs.into_keys());
         Ok((Arc::new(text.into_bytes()), references))
@@ -108,7 +109,7 @@ impl Store {
 
     /// Registers the closures of `jobs`' drvs that the daemon lacks, then
     /// roots each job's `.drv`.
-    pub fn instantiate(&mut self, jobs: &[&Job]) -> Result<(), String> {
+    pub fn instantiate(&mut self, jobs: &[&Job]) -> Result<()> {
         let t0 = Instant::now();
         let mut seen: HashSet<StorePath> = HashSet::new();
         let mut drvs: Vec<(StorePath, Arc<Vec<u8>>, BTreeSet<StorePath>)> = Vec::new();
@@ -153,8 +154,7 @@ impl Store {
             HashSet::new()
         } else {
             self.conn
-                .query_valid_paths(&paths, &mut |_| {})
-                .map_err(|e| e.to_string())?
+                .query_valid_paths(&paths, &mut |_| {})?
                 .into_iter()
                 .collect()
         };
@@ -164,9 +164,9 @@ impl Store {
                 continue;
             }
             let Some(origin) = self.sources.get(p) else {
-                return Err(format!(
+                return Err(Error::Store(format!(
                     "source '{p}' is not valid in the store and this evaluation did not create it"
-                ));
+                )));
             };
             let info = match origin {
                 SourceOrigin::Tree { local, accepted } => SourceInfo {
@@ -185,7 +185,8 @@ impl Store {
                 },
             };
             objects.push(
-                Object::source(p.clone(), info).map_err(|e| format!("cannot dump '{p}': {e}"))?,
+                Object::source(p.clone(), info)
+                    .map_err(|e| Error::io(format!("cannot dump '{p}'"), e))?,
             );
         }
         for (path, aterm, references) in drvs.iter() {
@@ -203,9 +204,7 @@ impl Store {
                 }
                 Ok(())
             };
-            self.conn
-                .add_multiple_to_store(&mut body, &mut |_| {})
-                .map_err(|e| e.to_string())?;
+            self.conn.add_multiple_to_store(&mut body, &mut |_| {})?;
             self.stats.added += objects.len();
             self.stats.bytes += self.conn.bytes_sent() - before;
         }
@@ -217,9 +216,8 @@ impl Store {
                 if std::fs::symlink_metadata(&root).is_ok() {
                     continue;
                 }
-                self.conn
-                    .add_perm_root(&j.drv_path.to_string(), &root)
-                    .map_err(|e| e.to_string())?;
+                self.conn.add_perm_root(&j.drv_path.to_string(), &root)?;
+
                 self.stats.roots += 1;
             }
         }
@@ -236,13 +234,13 @@ impl Store {
 /// The thread: lines in, instantiated batches out to `sink`, in order.
 pub struct Instantiator {
     tx: Option<Sender<Line>>,
-    thread: Option<JoinHandle<Result<(Store, Stats), String>>>,
+    thread: Option<JoinHandle<Result<(Store, Stats)>>>,
 }
 
 impl Instantiator {
     pub fn start(
         mut store: Store,
-        mut sink: Box<dyn FnMut(Vec<Line>) -> Result<(), String> + Send>,
+        mut sink: Box<dyn FnMut(Vec<Line>) -> Result<()> + Send>,
     ) -> Instantiator {
         let (tx, rx) = channel::<Line>();
         let thread = std::thread::Builder::new()
@@ -251,20 +249,19 @@ impl Instantiator {
             .spawn(move || {
                 let mut pending: Vec<Line> = Vec::new();
                 let mut njobs = 0usize;
-                let mut flush =
-                    |store: &mut Store, pending: &mut Vec<Line>| -> Result<(), String> {
-                        let jobs: Vec<&Job> = pending
-                            .iter()
-                            .filter_map(|l| match l {
-                                Line::Job(j) => Some(j),
-                                Line::Error(_) => None,
-                            })
-                            .collect();
-                        if !jobs.is_empty() {
-                            store.instantiate(&jobs)?;
-                        }
-                        sink(std::mem::take(pending))
-                    };
+                let mut flush = |store: &mut Store, pending: &mut Vec<Line>| -> Result<()> {
+                    let jobs: Vec<&Job> = pending
+                        .iter()
+                        .filter_map(|l| match l {
+                            Line::Job(j) => Some(j),
+                            Line::Error(_) => None,
+                        })
+                        .collect();
+                    if !jobs.is_empty() {
+                        store.instantiate(&jobs)?;
+                    }
+                    sink(std::mem::take(pending))
+                };
                 for line in rx {
                     if matches!(line, Line::Job(_)) {
                         njobs += 1;
@@ -293,12 +290,12 @@ impl Instantiator {
     }
 
     /// Flushes the last batch and returns the store for later use.
-    pub fn finish(mut self) -> Result<(Store, Stats), String> {
+    pub fn finish(mut self) -> Result<(Store, Stats)> {
         drop(self.tx.take());
         self.thread
             .take()
             .expect("instantiate thread")
             .join()
-            .map_err(|_| "instantiate thread panicked".to_string())?
+            .map_err(|_| Error::Protocol("instantiate thread panicked".into()))?
     }
 }

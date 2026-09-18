@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::process::exit;
 
+use ietsp::error::Error as CrateError;
 use ietsp::eval::{Error, Evaluator, Pos};
 use ietsp::runtime::Word;
 use ietsp::syntax::ast::FileId;
@@ -223,7 +224,7 @@ fn home() -> Option<Vec<u8>> {
     std::env::var_os("HOME").map(|h| h.into_encoded_bytes())
 }
 
-fn flake_ref(f: &str, cwd: &[u8]) -> Result<ietsp::flake::FlakeRef, String> {
+fn flake_ref(f: &str, cwd: &[u8]) -> ietsp::error::Result<ietsp::flake::FlakeRef> {
     ietsp::flake::parse_flake_ref(f, cwd, home().as_deref())
 }
 
@@ -266,8 +267,9 @@ fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
         Some(Input::Expr(e)) => ev.eval_string(&e, &cwd)?,
         Some(Input::File(f)) => ev.eval_file(&abs_path(&f, &cwd), Pos::NONE)?,
         Some(Input::Flake(f)) => {
-            let fr = flake_ref(&f, &cwd)
-                .map_err(|m| Error::boxed(ietsp::eval::ErrorKind::Eval, m, Pos::NONE))?;
+            let fr = flake_ref(&f, &cwd).map_err(|m| {
+                Error::boxed(ietsp::eval::ErrorKind::Eval, m.to_string(), Pos::NONE)
+            })?;
             if a.flake_whole && fr.attr.is_empty() {
                 ietsp::flake::eval_flake_value(ev, &fr)?
             } else {
@@ -446,9 +448,9 @@ fn parse_jobs_args(argv: &[String]) -> (JobsArgs, Vec<String>) {
 }
 
 /// nix-eval-jobs.cc:validateIncompatibleFlags.
-fn check_jobs_args(j: &JobsArgs) -> Result<ietsp::remote::worker::Transport, String> {
+fn check_jobs_args(j: &JobsArgs) -> ietsp::error::Result<ietsp::remote::worker::Transport> {
     if j.opts.chunk >= j.opts.chunks {
-        return Err("--chunk must be below --chunks".into());
+        return Err(CrateError::Usage("--chunk must be below --chunks".into()));
     }
     if j.opts.no_instantiate {
         let mut bad = Vec::new();
@@ -462,17 +464,17 @@ fn check_jobs_args(j: &JobsArgs) -> Result<ietsp::remote::worker::Transport, Str
             bad.push("--constituents");
         }
         if !bad.is_empty() {
-            return Err(format!(
+            return Err(CrateError::Usage(format!(
                 "--no-instantiate is incompatible with: {}. These features require instantiated derivations.",
                 bad.join(", ")
-            ));
+            )));
         }
     }
     ietsp::remote::worker::Transport::parse(&j.eval_store).ok_or_else(|| {
-        format!(
+        CrateError::Usage(format!(
             "--eval-store '{}': eval-jobs needs a Nix daemon: daemon, unix:///path or ssh-ng://host",
             j.eval_store
-        )
+        ))
     })
 }
 
@@ -771,7 +773,7 @@ fn jobs_collector(
             std::thread::Builder::new()
                 .name("cache-status".into())
                 .stack_size(64 << 20)
-                .spawn(move || -> Result<(), String> {
+                .spawn(move || -> ietsp::error::Result<()> {
                     while let Ok(first) = rx.recv() {
                         let mut batch = vec![first];
                         while let Ok(l) = rx.try_recv() {
@@ -806,7 +808,7 @@ fn jobs_collector(
     let r = r.and_then(|_| match resolver_thread {
         Some(t) => t
             .join()
-            .map_err(|_| "cache-status thread panicked".to_string())?,
+            .map_err(|_| CrateError::Protocol("cache-status thread panicked".into()))?,
         None => Ok(()),
     });
     if let Err(e) = r {
@@ -814,14 +816,12 @@ fn jobs_collector(
         return 1;
     }
     if j.opts.constituents {
-        let done = Connection::open(transport, &mut |_| {})
-            .map_err(|e| e.to_string())
-            .and_then(|mut conn| {
-                emitter
-                    .lock()
-                    .unwrap()
-                    .finish(&mut conn, j.gc_roots_dir.as_deref())
-            });
+        let done = Connection::open(transport, &mut |_| {}).and_then(|mut conn| {
+            emitter
+                .lock()
+                .unwrap()
+                .finish(&mut conn, j.gc_roots_dir.as_deref())
+        });
         if let Err(e) = done {
             eprintln!("error: {e}");
             return 1;
@@ -927,7 +927,7 @@ fn eval_and_print(ev: &mut Evaluator, a: EvalArgs, cache: Option<Cache>) -> i32 
 fn locate_in_store(
     paths: &[ietsp::store::path::StorePath],
     overrides: &HashMap<String, std::path::PathBuf>,
-) -> Result<Vec<ietsp::remote::plan::SourceInfo>, String> {
+) -> ietsp::error::Result<Vec<ietsp::remote::plan::SourceInfo>> {
     use ietsp::remote::plan::{SourceData, SourceInfo, SourceKind};
     use ietsp::store::path::{STORE_DIR, StorePath};
 
@@ -948,11 +948,12 @@ fn locate_in_store(
             .args(&ask)
             .stderr(std::process::Stdio::inherit())
             .output()
-            .map_err(|e| format!("nix path-info: {e}"))?;
+            .map_err(|e| CrateError::io("nix path-info", e))?;
         if !out.status.success() {
-            return Err("nix path-info failed".into());
+            return Err(CrateError::Protocol("nix path-info failed".into()));
         }
-        info = serde_json::from_slice(&out.stdout).map_err(|e| format!("nix path-info: {e}"))?;
+        info = serde_json::from_slice(&out.stdout)
+            .map_err(|e| CrateError::Protocol(format!("nix path-info: {e}")))?;
     }
     paths
         .iter()
@@ -963,7 +964,7 @@ fn locate_in_store(
             }
             let v = info
                 .get(&full)
-                .ok_or_else(|| format!("'{full}' is not in the local store"))?;
+                .ok_or_else(|| CrateError::Store(format!("'{full}' is not in the local store")))?;
             let ca = v["ca"].as_str().unwrap_or("");
             let kind = if ca.starts_with("fixed:r:sha256:") {
                 SourceKind::Source
@@ -973,13 +974,13 @@ fn locate_in_store(
                     .map(|a| a.iter().filter_map(|r| r.as_str()).collect::<Vec<_>>())
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|r| StorePath::parse(r).map_err(|e| e.0))
-                    .collect::<Result<_, _>>()?;
+                    .map(|r| StorePath::parse(r).map_err(CrateError::from))
+                    .collect::<ietsp::error::Result<_>>()?;
                 SourceKind::Text { references }
             } else {
-                return Err(format!(
+                return Err(CrateError::Store(format!(
                     "'{full}': unsupported input source (ca = '{ca}'); v1 sends only recursive sha256 sources and text files"
-                ));
+                )));
             };
             Ok(SourceInfo {
                 data: SourceData::Local {
@@ -1223,10 +1224,10 @@ fn build_drv_file(b: &BuildArgs, root_arg: &str) -> i32 {
     };
     // The root may be a copy outside the store; its inputs are read from `/nix/store`.
     let info = std::fs::read_to_string(root_arg)
-        .map_err(|e| e.to_string())
+        .map_err(CrateError::from)
         .and_then(|text| {
-            let name = Derivation::name_from_path(&root).map_err(|e| e.0)?;
-            let drv = Derivation::parse(&text, name).map_err(|e| e.0)?;
+            let name = Derivation::name_from_path(&root)?;
+            let drv = Derivation::parse(&text, name)?;
             let mut references = drv.input_srcs;
             references.extend(drv.input_drvs.into_keys());
             Ok(DrvInfo {
@@ -1469,16 +1470,14 @@ fn cmd_print_dev_env(argv: &[String]) -> i32 {
 
 /// A cache hit is usable when the env output (and the files the script names) still exist;
 /// the GC root is refreshed when it does not point at the output.
-fn dev_env_hit(d: &DevEnvArgs, hit: &ietsp::devenv::CachedResult) -> Result<bool, String> {
+fn dev_env_hit(d: &DevEnvArgs, hit: &ietsp::devenv::CachedResult) -> ietsp::error::Result<bool> {
     use ietsp::remote::worker::{Connection, Transport};
     let present = match &d.transport {
         Transport::Unix(_) => std::path::Path::new(&hit.out_path).exists(),
         Transport::Ssh { .. } => {
-            let mut conn =
-                Connection::open(&d.transport, &mut |_| {}).map_err(|e| e.to_string())?;
+            let mut conn = Connection::open(&d.transport, &mut |_| {})?;
             !conn
-                .query_valid_paths(std::slice::from_ref(&hit.out_path), &mut |_| {})
-                .map_err(|e| e.to_string())?
+                .query_valid_paths(std::slice::from_ref(&hit.out_path), &mut |_| {})?
                 .is_empty()
         }
     };
@@ -1498,17 +1497,17 @@ fn ensure_gc_root(
     root: &std::path::Path,
     out_path: &str,
     conn: Option<&mut ietsp::remote::worker::Connection>,
-) -> Result<(), String> {
+) -> ietsp::error::Result<()> {
     use ietsp::remote::worker::Connection;
     use ietsp::store::path::STORE_DIR;
     if std::fs::read_link(root).ok().as_deref() == Some(std::path::Path::new(out_path)) {
         return Ok(());
     }
     if root.starts_with(STORE_DIR) {
-        return Err(format!(
+        return Err(CrateError::Usage(format!(
             "creating a garbage collector root ({}) in the Nix store is forbidden",
             root.display()
-        ));
+        )));
     }
     if let Ok(m) = std::fs::symlink_metadata(root)
         && (!m.file_type().is_symlink()
@@ -1516,24 +1515,25 @@ fn ensure_gc_root(
                 .map(|t| t.starts_with(STORE_DIR))
                 .unwrap_or(false))
     {
-        return Err(format!(
+        return Err(CrateError::Usage(format!(
             "cannot create symlink {}; already exists",
             root.display()
-        ));
+        )));
     }
     ietsp::remote::worker::replace_symlink(out_path, root)
-        .map_err(|e| format!("cannot create {}: {e}", root.display()))?;
-    let root_s = root.to_str().ok_or("gc root path is not UTF-8")?;
+        .map_err(|e| CrateError::io(format!("cannot create {}", root.display()), e))?;
+    let root_s = root
+        .to_str()
+        .ok_or_else(|| CrateError::Usage("gc root path is not UTF-8".into()))?;
     let mut opened;
     let conn = match conn {
         Some(c) => c,
         None => {
-            opened = Connection::open(transport, &mut |_| {}).map_err(|e| e.to_string())?;
+            opened = Connection::open(transport, &mut |_| {})?;
             &mut opened
         }
     };
     conn.add_indirect_root(root_s, &mut |_| {})
-        .map_err(|e| e.to_string())
 }
 
 /// The cache-miss path: evaluate the shell, derive and build its `-env` derivation through
@@ -1574,7 +1574,7 @@ fn dev_env_full(
         )?;
         for c in &candidates {
             let path = ietsp::flake::parse_attr_path(c)
-                .map_err(|m| Error::boxed(ErrorKind::Eval, m, Pos::NONE))?;
+                .map_err(|m| Error::boxed(ErrorKind::Eval, m.to_string(), Pos::NONE))?;
             if let Some(v) = ietsp::flake::select(ev, outputs, &path)? {
                 return drv_roots(ev, v, &mut roots);
             }
@@ -1602,21 +1602,19 @@ fn dev_env_full(
     let shell_path = roots[0].0.clone();
     let eval_time = t0.elapsed();
 
-    let r = (|| -> Result<Vec<u8>, String> {
+    let r = (|| -> ietsp::error::Result<Vec<u8>> {
         let shell = match ev.drv.drvs.get(&shell_path).and_then(|i| i.aterm) {
             Some(aterm) => Derivation::parse(
-                std::str::from_utf8(&aterm).map_err(|e| e.to_string())?,
-                Derivation::name_from_path(&shell_path).map_err(|e| e.0)?,
+                std::str::from_utf8(&aterm).map_err(|e| CrateError::Store(e.to_string()))?,
+                Derivation::name_from_path(&shell_path)?,
             ),
             None => load_drv_traced(&ev.trace, &shell_path),
-        }
-        .map_err(|e| e.0)?;
+        }?;
         let trace = ev.trace.clone();
         let mut loader = move |p: &StorePath| load_drv_traced(&trace, p);
-        let env_drv = devenv::env_derivation(&shell, &mut ev.drv.hash_cache.lock(), &mut loader)
-            .map_err(|e| e.0)?;
-        let text = env_drv.unparse().map_err(|e| e.0)?;
-        let env_path = env_drv.drv_path_for(&text).map_err(|e| e.0)?;
+        let env_drv = devenv::env_derivation(&shell, &mut ev.drv.hash_cache.lock(), &mut loader)?;
+        let text = env_drv.unparse()?;
+        let env_path = env_drv.drv_path_for(&text)?;
         let mut references = env_drv.input_srcs.clone();
         references.extend(env_drv.input_drvs.keys().cloned());
         ev.drv.drvs.insert(
@@ -1636,9 +1634,13 @@ fn dev_env_full(
         );
         let mut out_paths = Vec::new();
         for (name, out) in &env_drv.outputs {
-            match out.path(&env_drv.name, name).map_err(|e| e.0)? {
+            match out.path(&env_drv.name, name)? {
                 Some(p) => out_paths.push(p.to_string()),
-                None => return Err("content-addressed shells are not supported".into()),
+                None => {
+                    return Err(CrateError::Store(
+                        "content-addressed shells are not supported".into(),
+                    ));
+                }
             }
         }
         if timings {
@@ -1655,11 +1657,8 @@ fn dev_env_full(
             log: Vec::new(),
             failed: None,
         };
-        let mut conn =
-            Connection::open(&d.transport, &mut |e| sink.event(e)).map_err(|e| e.to_string())?;
-        let valid = conn
-            .query_valid_paths(&out_paths, &mut |e| sink.event(e))
-            .map_err(|e| e.to_string())?;
+        let mut conn = Connection::open(&d.transport, &mut |e| sink.event(e))?;
+        let valid = conn.query_valid_paths(&out_paths, &mut |e| sink.event(e))?;
         if valid.len() != out_paths.len() {
             let t2 = std::time::Instant::now();
             let no_overrides = HashMap::new();
@@ -1671,8 +1670,7 @@ fn dev_env_full(
                     drvs: &drvs,
                     sources: &sources,
                 };
-                ietsp::remote::plan::plan(std::slice::from_ref(&env_path), inputs, &locate)
-                    .map_err(|e| e.to_string())?
+                ietsp::remote::plan::plan(std::slice::from_ref(&env_path), inputs, &locate)?
             };
             let plan_time = t2.elapsed();
             let t = ietsp::remote::worker::build::build_on(
@@ -1683,11 +1681,10 @@ fn dev_env_full(
                 false,
                 None,
                 &mut |e| sink.event(e),
-            )
-            .map_err(|e| e.to_string())?;
+            )?;
             if let Some(why) = &sink.failed {
                 sink.dump();
-                return Err(why.clone());
+                return Err(CrateError::Protocol(why.clone()));
             }
             if timings {
                 eprintln!("{}", t.report(&plan, plan_time));
@@ -1708,7 +1705,8 @@ fn dev_env_full(
 
         let (mut output, files) = if json {
             (
-                serde_json::to_vec(&env.to_json()).map_err(|e| e.to_string())?,
+                serde_json::to_vec(&env.to_json())
+                    .map_err(|e| CrateError::Protocol(e.to_string()))?,
                 Vec::new(),
             )
         } else {
@@ -1766,25 +1764,24 @@ fn read_env_output(
     conn: &mut ietsp::remote::worker::Connection,
     out_paths: &[String],
     sink: &mut EventSink,
-) -> Result<(String, Vec<u8>), String> {
+) -> ietsp::error::Result<(String, Vec<u8>)> {
     use ietsp::remote::worker::Transport;
     use ietsp::store::path::StorePath;
     for p in out_paths {
         let bytes = match transport {
             Transport::Unix(_) => {
-                std::fs::read(p).map_err(|e| format!("cannot read '{p}': {e}"))?
+                std::fs::read(p).map_err(|e| CrateError::io(format!("cannot read '{p}'"), e))?
             }
             Transport::Ssh { .. } => {
                 let dir =
                     std::env::temp_dir().join(format!("ietsp-dev-env-{}", std::process::id()));
-                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-                let dest = dir.join(StorePath::parse(p).map_err(|e| e.0)?.base_name());
+                std::fs::create_dir_all(&dir)?;
+                let dest = dir.join(StorePath::parse(p)?.base_name());
                 let _ = std::fs::remove_file(&dest);
                 conn.nar_from_path(p, &mut |e| sink.event(e), &mut |r| {
                     ietsp::store::nar::restore_path(r, &dest)
-                })
-                .map_err(|e| e.to_string())?;
-                let bytes = std::fs::read(&dest).map_err(|e| e.to_string())?;
+                })?;
+                let bytes = std::fs::read(&dest)?;
                 let _ = std::fs::remove_dir_all(&dir);
                 bytes
             }
@@ -1793,7 +1790,9 @@ fn read_env_output(
             return Ok((p.clone(), bytes));
         }
     }
-    Err("get-env.sh failed to produce an environment".into())
+    Err(CrateError::Protocol(
+        "get-env.sh failed to produce an environment".into(),
+    ))
 }
 
 /// One line per observation of a `readset` file, for debugging misses.

@@ -14,7 +14,9 @@ use crate::store::path::StorePath;
 use super::super::event::{Done, Event};
 use super::super::plan::{Object, Plan, SourceData, SourceKind};
 use super::wire::{write_str, write_strs, write_u64};
-use super::{Connection, Stats, Transport, WorkerError, built_event, failed_event};
+use crate::error::{Error, Result};
+
+use super::{Connection, Stats, Transport, built_event, failed_event};
 
 #[derive(Debug, Default, Clone)]
 pub struct Timings {
@@ -82,7 +84,7 @@ pub fn build(
     upload_only: bool,
     fetch_to: Option<&Path>,
     on_event: &mut dyn FnMut(Event),
-) -> Result<Timings, WorkerError> {
+) -> Result<Timings> {
     let t0 = Instant::now();
     let mut conn = Connection::open(transport, on_event)?;
     let connect = t0.elapsed();
@@ -108,7 +110,7 @@ pub fn build_on(
     upload_only: bool,
     fetch_to: Option<&Path>,
     on_event: &mut dyn FnMut(Event),
-) -> Result<Timings, WorkerError> {
+) -> Result<Timings> {
     let mut t = Timings {
         minor: conn.minor,
         trusted: conn.trusted,
@@ -192,15 +194,16 @@ pub fn build_on(
 
     if let Some(dir) = fetch_to {
         let t5 = Instant::now();
-        std::fs::create_dir_all(dir)?;
+        std::fs::create_dir_all(dir)
+            .map_err(|e| Error::io(format!("cannot create {}", dir.display()), e))?;
         for (name, p) in &built {
             if !outputs.is_empty() && !outputs.contains(name) {
                 continue;
             }
-            let sp = StorePath::parse(p).map_err(|e| WorkerError(e.0))?;
+            let sp = StorePath::parse(p)?;
             let dest = dir.join(sp.base_name());
             if dest.exists() {
-                return Err(WorkerError(format!(
+                return Err(Error::Usage(format!(
                     "fetch: '{}' already exists",
                     dest.display()
                 )));
@@ -212,7 +215,7 @@ pub fn build_on(
     }
     on_event(Event::Done(Done { success: true }));
     if conn.has_pending() {
-        return Err(WorkerError(
+        return Err(Error::Protocol(
             "daemon sent more data than the protocol expects".into(),
         ));
     }

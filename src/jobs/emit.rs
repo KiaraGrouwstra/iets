@@ -7,6 +7,7 @@ use std::path::Path;
 use super::Stats;
 use super::constituents::{self, Entry, Jobs};
 use super::line::Line;
+use crate::error::Result;
 use crate::remote::worker::Connection;
 
 pub struct Emitter {
@@ -85,11 +86,7 @@ impl Emitter {
     }
 
     /// `--constituents`: resolve and print the withheld aggregates.
-    pub fn finish(
-        &mut self,
-        conn: &mut Connection,
-        gc_roots_dir: Option<&Path>,
-    ) -> Result<(), String> {
+    pub fn finish(&mut self, conn: &mut Connection, gc_roots_dir: Option<&Path>) -> Result<()> {
         if !self.constituents {
             return Ok(());
         }

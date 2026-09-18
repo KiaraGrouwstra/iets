@@ -19,6 +19,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use super::instantiate::Instantiator;
 use super::line::{Line, json_str, json_str_list, split_object};
 use super::{FNV_BASIS, Node, admit, config, error_line, find_along_attr_path, fnv_step, node};
+use crate::error::{Error, Result};
 use crate::eval::Evaluator;
 use crate::print::lexicographic_order;
 use crate::runtime::Word;
@@ -62,11 +63,11 @@ pub fn run_worker(
     mut inst: Option<Instantiator>,
     max_memory_mb: u64,
     out: &Out,
-) -> Result<(), String> {
+) -> Result<()> {
     let stdin = std::io::stdin();
     let mut lines = stdin.lock().lines();
     let chunk_depth = config().opts.chunk_depth;
-    let flush = |inst: &mut Option<Instantiator>| -> Result<(), String> {
+    let flush = |inst: &mut Option<Instantiator>| -> Result<()> {
         if let Some(i) = inst.take() {
             i.finish()?;
         }
@@ -81,10 +82,12 @@ pub fn run_worker(
             break;
         }
         let Some(js) = cmd.strip_prefix(MSG_DO) else {
-            return Err(format!("worker error: received invalid command '{cmd}'"));
+            return Err(Error::Protocol(format!(
+                "worker error: received invalid command '{cmd}'"
+            )));
         };
-        let path: Vec<String> =
-            serde_json::from_str(js).map_err(|e| format!("worker error: bad path: {e}"))?;
+        let path: Vec<String> = serde_json::from_str(js)
+            .map_err(|e| Error::Protocol(format!("worker error: bad path: {e}")))?;
         let hash = path
             .iter()
             .fold(FNV_BASIS, |h, n| fnv_step(h, n.as_bytes()));
@@ -156,9 +159,9 @@ struct Proc {
 }
 
 impl Proc {
-    fn spawn(args: &[String]) -> Result<Proc, String> {
+    fn spawn(args: &[String]) -> Result<Proc> {
         SPAWNED.fetch_add(1, Ordering::Relaxed);
-        let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+        let exe = std::env::current_exe().map_err(|e| Error::io("current_exe", e))?;
         let mut child = Command::new(exe)
             .arg("eval-jobs")
             .arg("--worker")
@@ -167,25 +170,25 @@ impl Proc {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()
-            .map_err(|e| format!("spawning worker process: {e}"))?;
+            .map_err(|e| Error::io("spawning worker process", e))?;
         let to = child
             .stdin
             .take()
-            .ok_or("worker process has no stdin pipe")?;
+            .ok_or_else(|| Error::Protocol("worker process has no stdin pipe".into()))?;
         let out = child
             .stdout
             .take()
-            .ok_or("worker process has no stdout pipe")?;
+            .ok_or_else(|| Error::Protocol("worker process has no stdout pipe".into()))?;
         let from = BufReader::with_capacity(1 << 20, out);
         Ok(Proc { child, to, from })
     }
 
-    fn send(&mut self, line: &str) -> Result<(), String> {
+    fn send(&mut self, line: &str) -> Result<()> {
         self.to
             .write_all(line.as_bytes())
             .and_then(|_| self.to.write_all(b"\n"))
             .and_then(|_| self.to.flush())
-            .map_err(|e| format!("writing to worker: {e}"))
+            .map_err(|e| Error::io("writing to worker", e))
     }
 
     /// nix-eval-jobs.cc:handleBrokenWorkerPipe: what a dead worker means.
@@ -210,16 +213,16 @@ impl Proc {
     }
 
     /// The next control line; job lines on the way go to `sink`.
-    fn read_control(&mut self, sink: &Sink, what: &str) -> Result<Control, String> {
+    fn read_control(&mut self, sink: &Sink, what: &str) -> Result<Control> {
         let mut buf = Vec::new();
         loop {
             buf.clear();
             let n = self
                 .from
                 .read_until(b'\n', &mut buf)
-                .map_err(|e| format!("reading from worker: {e}"))?;
+                .map_err(|e| Error::io("reading from worker", e))?;
             if n == 0 {
-                return Err(self.broken(what));
+                return Err(Error::Protocol(self.broken(what)));
             }
             if buf.last() == Some(&b'\n') {
                 buf.pop();
@@ -230,14 +233,15 @@ impl Proc {
                 b"ok" => return Ok(Control::Ok),
                 s if s.first() == Some(&b'{') => {
                     let fields = split_object(s).map_err(|e| {
-                        format!(
+                        Error::Protocol(format!(
                             "Received invalid JSON from worker: {e}\n json: '{}'",
                             String::from_utf8_lossy(s)
-                        )
+                        ))
                     })?;
                     if let Some((_, raw)) = fields.iter().find(|(k, _)| k == "attrs") {
-                        let names: Vec<String> = serde_json::from_slice(raw)
-                            .map_err(|e| format!("Received invalid JSON from worker: {e}"))?;
+                        let names: Vec<String> = serde_json::from_slice(raw).map_err(|e| {
+                            Error::Protocol(format!("Received invalid JSON from worker: {e}"))
+                        })?;
                         return Ok(Control::Attrs(names));
                     }
                     if !fields.iter().any(|(k, _)| k == "attr") {
@@ -246,7 +250,7 @@ impl Proc {
                             .find(|(k, _)| k == "error")
                             .and_then(|(_, raw)| serde_json::from_slice::<String>(raw).ok())
                             .unwrap_or_default();
-                        return Err(format!("worker error: {msg}"));
+                        return Err(Error::Protocol(format!("worker error: {msg}")));
                     }
                     let line = Line::parse(s)?;
                     match line {
@@ -255,17 +259,17 @@ impl Proc {
                     }
                 }
                 other => {
-                    return Err(format!(
+                    return Err(Error::Protocol(format!(
                         "worker error: unexpected line '{}'",
                         String::from_utf8_lossy(other)
-                    ));
+                    )));
                 }
             }
         }
     }
 
     /// Reads the job lines a leaving worker still prints, then reaps it.
-    fn drain(mut self, sink: &Sink) -> Result<(), String> {
+    fn drain(mut self, sink: &Sink) -> Result<()> {
         drop(self.to);
         let mut buf = Vec::new();
         loop {
@@ -273,7 +277,7 @@ impl Proc {
             let n = self
                 .from
                 .read_until(b'\n', &mut buf)
-                .map_err(|e| format!("reading from worker: {e}"))?;
+                .map_err(|e| Error::io("reading from worker", e))?;
             if n == 0 {
                 break;
             }
@@ -305,7 +309,7 @@ fn next_job(shared: &Shared) -> Option<Vec<String>> {
     }
 }
 
-fn collector(shared: &Shared, args: &[String], sink: &Sink) -> Result<(), String> {
+fn collector(shared: &Shared, args: &[String], sink: &Sink) -> Result<()> {
     let mut proc: Option<Proc> = None;
     loop {
         let Some(path) = next_job(shared) else {
@@ -333,11 +337,15 @@ fn collector(shared: &Shared, args: &[String], sink: &Sink) -> Result<(), String
                         old.drain(sink)?;
                     }
                 }
-                _ => return Err("worker error: unexpected response while idle".into()),
+                _ => {
+                    return Err(Error::Protocol(
+                        "worker error: unexpected response while idle".into(),
+                    ));
+                }
             }
         }
         let Some(p) = proc.as_mut() else {
-            return Err("worker error: no worker process".into());
+            return Err(Error::Protocol("worker error: no worker process".into()));
         };
         let joined = super::attr_join(&path);
         p.send(&format!(
@@ -363,11 +371,15 @@ fn collector(shared: &Shared, args: &[String], sink: &Sink) -> Result<(), String
                 };
                 (sink.lock().unwrap())(line);
                 if fatal {
-                    return Err(text);
+                    return Err(Error::Protocol(text));
                 }
                 Vec::new()
             }
-            _ => return Err(format!("worker error: unexpected status for '{joined}'")),
+            _ => {
+                return Err(Error::Protocol(format!(
+                    "worker error: unexpected status for '{joined}'"
+                )));
+            }
         };
         let (lock, cv) = &**shared;
         let mut st = lock.lock().unwrap();
@@ -380,7 +392,7 @@ fn collector(shared: &Shared, args: &[String], sink: &Sink) -> Result<(), String
 /// nix-eval-jobs.cc:main's collector threads: `workers` of them, each with
 /// its own worker process, until the tree is walked. Every line reaches
 /// `sink` in completion order.
-pub fn run_collector(args: &[String], workers: usize, sink: Sink) -> Result<(), String> {
+pub fn run_collector(args: &[String], workers: usize, sink: Sink) -> Result<()> {
     let shared: Shared = Arc::new((
         Mutex::new(State {
             todo: BTreeSet::from([Vec::new()]),
@@ -397,7 +409,7 @@ pub fn run_collector(args: &[String], workers: usize, sink: Sink) -> Result<(), 
                 if let Err(e) = collector(&shared, args, &sink) {
                     let (lock, cv) = &*shared;
                     let mut st = lock.lock().unwrap();
-                    st.failed.get_or_insert(e);
+                    st.failed.get_or_insert(e.to_string());
                     cv.notify_all();
                 }
             });
@@ -405,7 +417,7 @@ pub fn run_collector(args: &[String], workers: usize, sink: Sink) -> Result<(), 
     });
     let st = shared.0.lock().unwrap();
     match &st.failed {
-        Some(e) => Err(e.clone()),
+        Some(e) => Err(Error::Protocol(e.clone())),
         None => Ok(()),
     }
 }

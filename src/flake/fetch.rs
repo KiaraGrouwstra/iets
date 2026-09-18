@@ -44,18 +44,18 @@ fn bool_attr(a: &Attrs, name: &str) -> Option<bool> {
     }
 }
 
-pub fn source_store_path(nar_hash: &Hash) -> Result<StorePath, String> {
+pub fn source_store_path(nar_hash: &Hash) -> crate::error::Result<StorePath> {
     make_fixed_output_path(
         IngestionMethod::Recursive,
         nar_hash,
         "source",
         &std::collections::BTreeSet::new(),
     )
-    .map_err(|e| e.0)
+    .map_err(Into::into)
 }
 
-pub fn parse_nar_hash(s: &str) -> Result<Hash, String> {
-    Hash::parse_any(s, Some(HashAlgo::Sha256)).map_err(|e| e.0)
+pub fn parse_nar_hash(s: &str) -> crate::error::Result<Hash> {
+    Hash::parse_any(s, Some(HashAlgo::Sha256)).map_err(Into::into)
 }
 
 /// `%Y%m%d%H%M%S` of a Unix time in UTC (Howard Hinnant's civil_from_days).
@@ -148,8 +148,8 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
             }
             let (hash, mtime) = super::root::path_tree(ev, Path::new(path), pos)?;
             if let Some(expected) = str_attr(&attrs, "narHash") {
-                let exp =
-                    parse_nar_hash(expected).map_err(|e| Error::boxed(ErrorKind::Eval, e, pos))?;
+                let exp = parse_nar_hash(expected)
+                    .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
                 if exp != hash {
                     bail!(
                         ErrorKind::Eval,
@@ -165,7 +165,8 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
             attrs
                 .entry("lastModified".into())
                 .or_insert(AttrVal::Int(mtime.max(0) as u64));
-            source_store_path(&hash).map_err(|e| Error::boxed(ErrorKind::Eval, e, pos))?
+            source_store_path(&hash)
+                .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?
         }
         "github" | "gitlab" | "sourcehut" | "git" | "tarball" | "hg" => {
             let Some(nar_hash) = str_attr(&attrs, "narHash") else {
@@ -176,10 +177,11 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
                     to_url(&attrs)
                 );
             };
-            let hash =
-                parse_nar_hash(nar_hash).map_err(|e| Error::boxed(ErrorKind::Eval, e, pos))?;
+            let hash = parse_nar_hash(nar_hash)
+                .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
             attrs.insert("narHash".into(), AttrVal::Str(hash.to_sri()));
-            source_store_path(&hash).map_err(|e| Error::boxed(ErrorKind::Eval, e, pos))?
+            source_store_path(&hash)
+                .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?
         }
         other => bail!(
             ErrorKind::Eval,
