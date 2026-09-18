@@ -3,6 +3,7 @@
 
 pub mod build;
 pub mod cache_dump;
+pub mod classic;
 pub mod devenv;
 pub mod eval;
 pub mod jobs;
@@ -54,7 +55,7 @@ pub enum Input {
     Flake(String),
 }
 
-fn parse_include(s: &str) -> (Vec<u8>, Vec<u8>) {
+pub fn parse_include(s: &str) -> (Vec<u8>, Vec<u8>) {
     let (prefix, path) = match s.split_once('=') {
         Some((p, v)) => (p.as_bytes().to_vec(), v),
         None => (Vec::new(), s),

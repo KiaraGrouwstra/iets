@@ -12,12 +12,40 @@ fn restore_sigpipe() {
     }
 }
 
+/// The classic Nix name this process was invoked under, if any.
+fn classic_name() -> Option<String> {
+    let argv0 = std::env::args_os().next()?;
+    let base = std::path::Path::new(&argv0)
+        .file_name()?
+        .to_str()?
+        .to_string();
+    cli::classic::NAMES.contains(&base.as_str()).then_some(base)
+}
+
+/// Classic commands need the evaluator's stack, like the subcommands below.
+fn on_big_stack(f: impl FnOnce() -> i32 + Send + 'static) -> i32 {
+    std::thread::Builder::new()
+        .stack_size(STACK_SIZE)
+        .spawn(f)
+        .expect("spawn evaluator thread")
+        .join()
+        .unwrap_or(1)
+}
+
 fn main() {
     restore_sigpipe();
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(name) = classic_name() {
+        exit(on_big_stack(move || cli::classic::dispatch(&name, &argv)))
+    }
     let Some(cmd) = argv.first() else {
         cli::usage()
     };
+    if cli::classic::NAMES.contains(&cmd.as_str()) {
+        let name = cmd.clone();
+        let rest: Vec<String> = argv[1..].to_vec();
+        exit(on_big_stack(move || cli::classic::dispatch(&name, &rest)))
+    }
     match cmd.as_str() {
         "build" | "eval" | "eval-jobs" | "print-dev-env" => {
             let rest: Vec<String> = argv[1..].to_vec();
