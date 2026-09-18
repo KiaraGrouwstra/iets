@@ -3,8 +3,8 @@
 
 use std::collections::HashMap;
 
-use crate::cli::{ArgKind, EvalArgs, Input, abs_path, cwd, flake_ref, full_includes};
 use crate::eval::Evaluator;
+use crate::trace::key::Key;
 
 /// The tracing cache for one run: where the entry lives and its key. See docs/tracing-cache.md.
 pub struct Cache {
@@ -14,75 +14,13 @@ pub struct Cache {
 }
 
 impl Cache {
-    /// `None` when the cache is off or the command cannot be keyed.
-    pub fn setup(a: &EvalArgs, subcommand: &str, ev: &Evaluator) -> Option<Cache> {
-        use crate::trace::key::{Key, has_relative_path};
-        if a.no_cache || a.dump_drvs.is_some() {
-            return None;
-        }
-        let store = crate::trace::store::Store::locate(a.cache_dir.as_deref())?;
-        let cwd = cwd();
-        let mut k = Key::new(subcommand);
-        let mut needs_cwd = false;
-        match a.input.as_ref()? {
-            Input::Expr(e) => {
-                k.field("expr", e.as_bytes());
-                needs_cwd |= has_relative_path(e);
-            }
-            Input::File(f) => {
-                let p = abs_path(f, &cwd);
-                let bytes = std::fs::read(std::path::Path::new(
-                    <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&p),
-                ))
-                .ok()?;
-                k.field("file", &p);
-                k.field("file-hash", &crate::trace::sha256(&bytes));
-            }
-            Input::Flake(f) => {
-                let fr = flake_ref(f, &cwd).ok()?;
-                k.field("flake", f.as_bytes());
-                k.field("flake-dir", fr.dir.as_os_str().as_encoded_bytes());
-                for name in ["flake.nix", "flake.lock"] {
-                    let bytes = std::fs::read(fr.dir.join(name)).ok()?;
-                    k.field(name, &crate::trace::sha256(&bytes));
-                }
-                needs_cwd = true;
-            }
-        }
-        for (name, kind) in &a.args {
-            match kind {
-                ArgKind::Expr(e) => {
-                    k.field("arg", name.as_bytes());
-                    k.field("val", e.as_bytes());
-                    needs_cwd |= has_relative_path(e);
-                }
-                ArgKind::Str(s) => {
-                    k.field("argstr", name.as_bytes());
-                    k.field("val", s.as_bytes());
-                }
-            }
-        }
-        for (prefix, path) in full_includes(&a.includes) {
-            k.field("include-prefix", &prefix);
-            k.field("include-path", &path);
-        }
-        k.field("attr", a.attr.as_deref().unwrap_or("").as_bytes());
-        k.flag("strict", a.strict);
-        k.flag("json", a.json);
-        k.flag("raw", a.raw);
-        k.field("lint-absolute", format!("{:?}", a.lint_absolute).as_bytes());
-        k.field("lint-short", format!("{:?}", a.lint_short).as_bytes());
-        for f in &a.xp_features {
-            k.field("xp", f.as_bytes());
-        }
-        k.field("system", ev.current_system.as_bytes());
-        if needs_cwd {
-            k.field("cwd", &cwd);
-        }
+    /// `None` when no cache store can be located.
+    pub fn open(cache_dir: Option<&str>, key: Key, timings: bool) -> Option<Cache> {
+        let store = crate::trace::store::Store::locate(cache_dir)?;
         Some(Cache {
             store,
-            key: k.finish(),
-            timings: a.timings,
+            key: key.finish(),
+            timings,
         })
     }
 

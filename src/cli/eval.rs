@@ -8,7 +8,7 @@ use crate::trace::run::Cache;
 
 pub fn run_eval(a: EvalArgs) -> i32 {
     let mut ev = Evaluator::new();
-    let cache = Cache::setup(&a, "eval", &ev);
+    let cache = super::setup_cache(&a, "eval", &ev);
     if let Some(c) = &cache
         && c.lookup()
         && let Some(out) = c.store.read(&c.key, crate::trace::store::RESULT)

@@ -101,7 +101,7 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
 
     let t0 = std::time::Instant::now();
     let mut ev = Evaluator::new();
-    let cache = Cache::setup(&a, "print-dev-env", &ev);
+    let cache = super::setup_cache(&a, "print-dev-env", &ev);
     if let Some(c) = &cache
         && c.lookup()
         && let Some(bytes) = c.store.read(&c.key, crate::trace::store::RESULT)

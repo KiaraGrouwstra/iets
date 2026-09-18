@@ -73,7 +73,7 @@ pub fn cmd_build(argv: &[String]) -> i32 {
         timings: a.timings || b.timings,
         ..a
     };
-    let cache = Cache::setup(&a, "build", &ev);
+    let cache = super::setup_cache(&a, "build", &ev);
     if let Some(c) = &cache
         && c.lookup()
         && let Some(hit) = c.read_build()
