@@ -1,0 +1,811 @@
+//! `nix` (src/nix): the subcommands ietsp implements — `eval`, `build` and
+//! `print-dev-env` — with the same exec fallback as the other classic names
+//! for everything else. See `docs/classic.md`.
+
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
+
+use super::{Argv, Common, Root, fallback, is_unsupported};
+use crate::cli::{ArgKind, abs_path, auto_args, cwd, parse_include, report};
+use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
+use crate::remote::event::Event;
+use crate::remote::plan::Plan;
+use crate::remote::worker::{Connection, Options, Transport};
+use crate::runtime::{Value, Word};
+use crate::store::path::StorePath;
+
+const NAME: &str = "nix";
+
+/// The flags accepted before the subcommand, and how many values each takes.
+/// `global_flag` applies them; `find_sub` only needs the arity.
+const GLOBALS: &[(&str, usize)] = &[
+    ("--impure", 0),
+    ("--accept-flake-config", 0),
+    ("--show-trace", 0),
+    ("--experimental-features", 1),
+    ("--extra-experimental-features", 1),
+    ("--option", 2),
+    ("-I", 1),
+    ("--include", 1),
+    ("--arg", 2),
+    ("--argstr", 2),
+    ("--store", 1),
+    ("-j", 1),
+    ("--max-jobs", 1),
+    ("--cores", 1),
+    ("-k", 0),
+    ("--keep-going", 0),
+];
+
+#[derive(Default)]
+struct Nix {
+    c: Common,
+    json: bool,
+    raw: bool,
+    expr: Option<String>,
+    file: Option<String>,
+    installables: Vec<String>,
+    /// The `-o`/`--out-link` prefix; `--no-link` clears it.
+    out_link: String,
+    no_link: bool,
+    print_out_paths: bool,
+    print_build_logs: bool,
+}
+
+/// Runs `nix <subcommand>`. `argv` is everything after `argv[0]`.
+pub fn main(argv: &[String]) -> i32 {
+    let k = match find_sub(argv) {
+        Ok(k) => k,
+        Err(reason) => fallback(NAME, argv, &reason),
+    };
+    let mut rest = argv.to_vec();
+    let sub = rest.remove(k);
+    match sub.as_str() {
+        "eval" => eval_main(argv, &rest),
+        "build" => build_main(argv, &rest),
+        "print-dev-env" => dev_env_main(argv, &rest),
+        s => fallback(NAME, argv, &format!("subcommand '{s}'")),
+    }
+}
+
+/// The index of the subcommand word: the first argument that is not one of
+/// the global flags ietsp accepts.
+fn find_sub(argv: &[String]) -> Result<usize, String> {
+    let mut i = 0;
+    while i < argv.len() {
+        let s = &argv[i];
+        if !s.starts_with('-') {
+            return Ok(i);
+        }
+        let Some((_, arity)) = GLOBALS.iter().find(|(f, _)| *f == s.as_str()) else {
+            return Err(format!("'{s}' is not implemented"));
+        };
+        i += 1 + arity;
+    }
+    Err("no subcommand".into())
+}
+
+fn number(flag: &str, v: &str) -> Result<String, String> {
+    v.parse::<u64>()
+        .map(|n| n.to_string())
+        .map_err(|_| format!("'{flag}' wants a number, got '{v}'"))
+}
+
+/// `Ok(true)`: consumed. `Ok(false)`: not one of ours. `Err`: fall back.
+fn global_flag(n: &mut Nix, a: &mut Argv, s: &str) -> Result<bool, String> {
+    let Some((_, arity)) = GLOBALS.iter().find(|(f, _)| *f == s) else {
+        return Ok(false);
+    };
+    let mut v = Vec::new();
+    for _ in 0..*arity {
+        v.push(a.value(s)?);
+    }
+    match s {
+        "--impure" | "--accept-flake-config" => {}
+        "--experimental-features" | "--extra-experimental-features" => {}
+        "--show-trace" => n.c.show_trace = true,
+        "--option" => n.c.overrides.push((v[0].clone(), v[1].clone())),
+        "-I" | "--include" => n.c.includes.push(parse_include(&v[0])),
+        "--arg" => n.c.args.push((v[0].clone(), ArgKind::Expr(v[1].clone()))),
+        "--argstr" => n.c.args.push((v[0].clone(), ArgKind::Str(v[1].clone()))),
+        "--store" => n.c.overrides.push(("store".into(), v[0].clone())),
+        "-j" | "--max-jobs" => n.c.overrides.push(("max-jobs".into(), number(s, &v[0])?)),
+        "--cores" => n.c.overrides.push(("cores".into(), number(s, &v[0])?)),
+        "-k" | "--keep-going" => n.c.overrides.push(("keep-going".into(), "true".into())),
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+fn parse_eval(argv: &[String]) -> Result<Nix, String> {
+    let mut n = Nix::default();
+    let mut a = Argv { all: argv, i: 0 };
+    while a.i < argv.len() {
+        let s = argv[a.i].clone();
+        match s.as_str() {
+            "--json" => n.json = true,
+            "--raw" => n.raw = true,
+            "--expr" => n.expr = Some(a.value(&s)?),
+            "-f" | "--file" => n.file = Some(a.value(&s)?),
+            _ => {
+                if !global_flag(&mut n, &mut a, &s)? {
+                    if s.starts_with('-') {
+                        return Err(format!("'{s}' is not implemented"));
+                    }
+                    n.installables.push(s);
+                }
+            }
+        }
+        a.i += 1;
+    }
+    if n.raw && n.json {
+        return Err("--raw and --json are mutually exclusive".into());
+    }
+    if n.expr.is_some() && n.file.is_some() {
+        return Err("'--file' and '--expr' are exclusive".into());
+    }
+    if n.installables.len() > 1 {
+        return Err("'nix eval' takes one installable".into());
+    }
+    check_args_with_flake(&n)?;
+    Ok(n)
+}
+
+fn parse_build(argv: &[String]) -> Result<Nix, String> {
+    let mut n = Nix {
+        out_link: "result".into(),
+        ..Nix::default()
+    };
+    let mut a = Argv { all: argv, i: 0 };
+    while a.i < argv.len() {
+        let s = argv[a.i].clone();
+        match s.as_str() {
+            "-o" | "--out-link" => n.out_link = a.value(&s)?,
+            "--no-link" => n.no_link = true,
+            "--print-out-paths" => n.print_out_paths = true,
+            "-L" | "--print-build-logs" => n.print_build_logs = true,
+            "--expr" => n.expr = Some(a.value(&s)?),
+            "-f" | "--file" => n.file = Some(a.value(&s)?),
+            _ => {
+                if !global_flag(&mut n, &mut a, &s)? {
+                    if s.starts_with('-') {
+                        return Err(format!("'{s}' is not implemented"));
+                    }
+                    n.installables.push(s);
+                }
+            }
+        }
+        a.i += 1;
+    }
+    if n.expr.is_some() && n.file.is_some() {
+        return Err("'--file' and '--expr' are exclusive".into());
+    }
+    if n.installables.is_empty() {
+        n.installables.push(".".into());
+    }
+    check_args_with_flake(&n)?;
+    Ok(n)
+}
+
+/// installable-flake.cc: a flake installable refuses `--arg`/`--argstr`, so
+/// the real nix reports that better than we would.
+fn check_args_with_flake(n: &Nix) -> Result<(), String> {
+    if !n.c.args.is_empty() && n.expr.is_none() && n.file.is_none() {
+        return Err("'--arg' and '--argstr' are incompatible with flakes".into());
+    }
+    Ok(())
+}
+
+enum Run {
+    Failed(i32),
+    Unsupported(String),
+    /// `nix eval`: the whole stdout, already formatted.
+    Out(Vec<u8>),
+    /// `nix build`: what to build, and the closure to upload.
+    Ready(Vec<Target>, Box<Plan>),
+}
+
+fn eval_main(argv: &[String], rest: &[String]) -> i32 {
+    let n = match parse_eval(rest) {
+        Ok(n) => n,
+        Err(reason) => fallback(NAME, argv, &reason),
+    };
+    let (cfg, _, _) = match super::settings(&n.c) {
+        Ok(t) => t,
+        Err(reason) => fallback(NAME, argv, &reason),
+    };
+    let ev = super::evaluator(&n.c, &cfg);
+    let n = Arc::new(n);
+    let run = Arc::clone(&n);
+    match crate::parallel::run(crate::parallel::default_workers(), ev, move |ev| {
+        eval_run(ev, &run)
+    }) {
+        Run::Failed(code) => code,
+        Run::Unsupported(reason) => fallback(NAME, argv, &reason),
+        Run::Out(text) => {
+            print_bytes(&text);
+            0
+        }
+        Run::Ready(..) => unreachable!("eval does not build"),
+    }
+}
+
+fn eval_run(ev: &mut Evaluator, n: &Nix) -> Run {
+    let cwd = cwd();
+    let mut out: Vec<u8> = Vec::new();
+    let r = (|| -> Result<(), Box<Error>> {
+        let what = n.installables.first().map_or(".", String::as_str);
+        let v = resolve(ev, n, what, &cwd)?;
+        // installables.cc: the installable's value is forced before printing,
+        // so an error at the top level is reported instead of printed.
+        let v = ev.force(v)?;
+        if n.raw {
+            let mut ctx = Vec::new();
+            let s = ev.coerce_to_string(
+                v,
+                &mut ctx,
+                Pos::NONE,
+                "while generating the eval command output",
+                false,
+                true,
+                true,
+            )?;
+            out.extend_from_slice(&s);
+        } else if n.json {
+            let mut ctx = Vec::new();
+            crate::print::print_json(ev, v, &mut out, &mut ctx, true, Pos::NONE)?;
+            out.push(b'\n');
+        } else {
+            let mut seen = HashSet::new();
+            print_eval(ev, v, &mut out, &mut seen, 0)?;
+            out.push(b'\n');
+        }
+        Ok(())
+    })();
+    match r {
+        Ok(()) => Run::Out(out),
+        Err(e) if is_unsupported(&e) => Run::Unsupported(e.msg.clone()),
+        Err(e) => {
+            report(ev, &e);
+            Run::Failed(1)
+        }
+    }
+}
+
+fn build_main(argv: &[String], rest: &[String]) -> i32 {
+    let n = match parse_build(rest) {
+        Ok(n) => n,
+        Err(reason) => fallback(NAME, argv, &reason),
+    };
+    let (cfg, transport, options) = match super::settings(&n.c) {
+        Ok(t) => t,
+        Err(reason) => fallback(NAME, argv, &reason),
+    };
+    let ev = super::evaluator(&n.c, &cfg);
+    let n = Arc::new(n);
+    let run = Arc::clone(&n);
+    match crate::parallel::run(crate::parallel::default_workers(), ev, move |ev| {
+        build_run(ev, &run)
+    }) {
+        Run::Failed(code) => code,
+        Run::Unsupported(reason) => fallback(NAME, argv, &reason),
+        Run::Out(_) => unreachable!("build prints its own output"),
+        Run::Ready(targets, plan) => realise(&n, &transport, &options, &targets, &plan),
+    }
+}
+
+fn build_run(ev: &mut Evaluator, n: &Nix) -> Run {
+    let cwd = cwd();
+    let mut targets: Vec<Target> = Vec::new();
+    let r = (|| -> Result<(), Box<Error>> {
+        for what in &n.installables {
+            let v = resolve(ev, n, what, &cwd)?;
+            targets.push(target(ev, v, what, n.expr.is_none() && n.file.is_none())?);
+        }
+        Ok(())
+    })();
+    if let Err(e) = r {
+        if is_unsupported(&e) {
+            return Run::Unsupported(e.msg.clone());
+        }
+        report(ev, &e);
+        return Run::Failed(1);
+    }
+    let roots = flat_roots(&targets);
+    match super::plan_roots(ev, &roots) {
+        Ok(p) => Run::Ready(targets, Box::new(p)),
+        Err(e) => {
+            eprintln!("error: {e}");
+            Run::Failed(1)
+        }
+    }
+}
+
+fn dev_env_main(argv: &[String], rest: &[String]) -> i32 {
+    let mut pass: Vec<String> = Vec::new();
+    let mut flakes = 0;
+    for s in rest {
+        if s.starts_with('-') && s != "--json" {
+            fallback(NAME, argv, &format!("'{s}' is not implemented"));
+        }
+        if !s.starts_with('-') {
+            flakes += 1;
+        }
+        pass.push(s.clone());
+    }
+    if flakes > 1 {
+        fallback(NAME, argv, "'nix print-dev-env' takes one installable");
+    }
+    crate::cli::devenv::cmd_print_dev_env(&pass)
+}
+
+// ---- installables ------------------------------------------------------------
+
+/// installable-flake.cc:getActualAttrPaths with installables.cc's defaults:
+/// the `packages.<system>.` and `legacyPackages.<system>.` prefixes on the
+/// fragment, then the fragment itself; no fragment means the default package.
+fn attr_paths(fragment: &str, system: &str) -> Vec<String> {
+    if fragment.is_empty() {
+        return vec![
+            format!("packages.{system}.default"),
+            format!("defaultPackage.{system}"),
+        ];
+    }
+    if let Some(rest) = fragment.strip_prefix('.') {
+        return vec![rest.to_string()];
+    }
+    vec![
+        format!("packages.{system}.{fragment}"),
+        format!("legacyPackages.{system}.{fragment}"),
+        fragment.to_string(),
+    ]
+}
+
+/// The value one installable names: an attribute of the `--expr`/`--file`
+/// value, or a flake output attribute.
+fn resolve(ev: &mut Evaluator, n: &Nix, what: &str, cwd: &[u8]) -> EvalResult<Word> {
+    let args = auto_args(ev, &n.c.args, cwd)?;
+    // installable-attr-path.cc:parse: `.` is the whole value.
+    let attr = if what == "." { "" } else { what };
+    if let Some(e) = &n.expr {
+        let root = ev.eval_string(e, cwd)?;
+        return super::select(ev, root, attr, args);
+    }
+    if let Some(f) = &n.file {
+        let p = super::lookup_file_arg(ev, f, cwd)?;
+        let root = ev.eval_file(&p, Pos::NONE)?;
+        return super::select(ev, root, attr, args);
+    }
+    if what.contains('^') || what.as_bytes().starts_with(&ev.store_dir) {
+        return Err(Error::boxed(
+            ErrorKind::Unsupported,
+            format!("the installable '{what}' is a store path"),
+            Pos::NONE,
+        ));
+    }
+    let (loc, fragment) = what.split_once('#').unwrap_or((what, ""));
+    let fr = crate::cli::flake_ref(loc, cwd)
+        .map_err(|e| Error::boxed(ErrorKind::Unsupported, e.to_string(), Pos::NONE))?;
+    let outputs = crate::flake::eval_flake(ev, &fr)?;
+    let candidates = attr_paths(fragment, ev.current_system);
+    for c in &candidates {
+        let path = crate::flake::parse_attr_path(c)
+            .map_err(|m| Error::boxed(ErrorKind::Eval, m.to_string(), Pos::NONE))?;
+        if let Some(v) = crate::flake::select(ev, outputs, &path)? {
+            return Ok(v);
+        }
+    }
+    Err(Error::boxed(
+        ErrorKind::MissingAttr,
+        format!(
+            "flake '{loc}' does not provide attribute {}",
+            crate::devenv::show_attr_paths(&candidates)
+        ),
+        Pos::NONE,
+    ))
+}
+
+/// One installable's derivation and the outputs `nix build` installs.
+pub struct Target {
+    drv: StorePath,
+    outputs: Vec<String>,
+}
+
+/// The `Root`s the plan and `BuildPathsWithResults` need, in target order.
+fn flat_roots(targets: &[Target]) -> Vec<Root> {
+    let mut roots = Vec::new();
+    let mut seen = HashSet::new();
+    for t in targets {
+        for o in &t.outputs {
+            if seen.insert((t.drv.to_string(), o.clone())) {
+                roots.push(Root {
+                    drv: t.drv.clone(),
+                    output: o.clone(),
+                });
+            }
+        }
+    }
+    roots
+}
+
+/// The derivation an installable names and its outputs to install
+/// (get-drvs.cc:queryOutputs, installable-flake.cc:toDerivedPaths):
+/// `outputSpecified` picks one, else `meta.outputsToInstall`, else every
+/// output for an attr-path installable and `out` for a flake one.
+fn target(ev: &mut Evaluator, v: Word, what: &str, flake: bool) -> EvalResult<Target> {
+    let v = ev.force(v)?;
+    let unsupported = |msg: String| Error::boxed(ErrorKind::Unsupported, msg, Pos::NONE);
+    let Some(attrs) = v.as_attrs() else {
+        return Err(unsupported(format!(
+            "the installable '{what}' is not a derivation"
+        )));
+    };
+    let is_drv = match attrs.get(ev.s.type_) {
+        Some(t) => {
+            ev.force_string(
+                t.cell.get(),
+                Pos::NONE,
+                "while evaluating the 'type' attribute",
+            )?
+            .bytes
+                == b"derivation"
+        }
+        None => false,
+    };
+    if !is_drv {
+        return Err(unsupported(format!(
+            "the installable '{what}' is not a derivation"
+        )));
+    }
+    let Some(dp) = attrs.get(ev.s.drv_path) else {
+        return Err(Error::boxed(
+            ErrorKind::MissingAttr,
+            "derivation without a 'drvPath' attribute",
+            Pos::NONE,
+        ));
+    };
+    let dp = ev.force_string(dp.cell.get(), Pos::NONE, "while evaluating 'drvPath'")?;
+    let drv = StorePath::parse(&String::from_utf8_lossy(dp.bytes))
+        .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, Pos::NONE))?;
+
+    let name_of = |ev: &mut Evaluator, w: Word, ctx: &str| -> EvalResult<String> {
+        Ok(String::from_utf8_lossy(ev.force_string(w, Pos::NONE, ctx)?.bytes).into_owned())
+    };
+    let specified = match attrs.get(ev.sym(b"outputSpecified")) {
+        Some(a) => ev.force_bool(
+            a.cell.get(),
+            a.pos,
+            "while evaluating the 'outputSpecified' attribute of a derivation",
+        )?,
+        None => false,
+    };
+    if specified {
+        let Some(on) = attrs.get(ev.sym(b"outputName")) else {
+            return Err(Error::boxed(
+                ErrorKind::MissingAttr,
+                format!("derivation '{drv}' lacks an 'outputName' attribute"),
+                Pos::NONE,
+            ));
+        };
+        let o = name_of(ev, on.cell.get(), "while evaluating 'outputName'")?;
+        return Ok(Target {
+            drv,
+            outputs: vec![o],
+        });
+    }
+    if let Some(m) = attrs.get(ev.sym(b"meta")) {
+        let meta = ev.force(m.cell.get())?;
+        if let Some(ma) = meta.as_attrs()
+            && let Some(oti) = ma.get(ev.sym(b"outputsToInstall"))
+        {
+            let l = ev.force(oti.cell.get())?;
+            let Some(l) = l.as_list() else {
+                return Err(Error::boxed(
+                    ErrorKind::Type,
+                    "this derivation has bad 'meta.outputsToInstall'",
+                    Pos::NONE,
+                ));
+            };
+            let mut outputs = Vec::new();
+            for c in l.cells() {
+                outputs.push(name_of(
+                    ev,
+                    c.get(),
+                    "while evaluating 'meta.outputsToInstall'",
+                )?);
+            }
+            outputs.sort();
+            return Ok(Target { drv, outputs });
+        }
+    }
+    if flake {
+        return Ok(Target {
+            drv,
+            outputs: vec!["out".into()],
+        });
+    }
+    let mut outputs = Vec::new();
+    if let Some(o) = attrs.get(ev.sym(b"outputs")) {
+        let l = ev.force(o.cell.get())?;
+        let Some(l) = l.as_list() else {
+            return Err(Error::boxed(
+                ErrorKind::Type,
+                "the 'outputs' attribute of a derivation is not a list",
+                Pos::NONE,
+            ));
+        };
+        for c in l.cells() {
+            outputs.push(name_of(
+                ev,
+                c.get(),
+                "while evaluating the name of an output of a derivation",
+            )?);
+        }
+    }
+    if outputs.is_empty() {
+        outputs.push("out".into());
+    }
+    outputs.sort();
+    Ok(Target { drv, outputs })
+}
+
+// ---- building ----------------------------------------------------------------
+
+/// Uploads the closure, builds every target in one call, makes the symlinks
+/// (command.cc:createOutLinks) and prints with `--print-out-paths`.
+fn realise(
+    n: &Nix,
+    transport: &Transport,
+    options: &Options,
+    targets: &[Target],
+    plan: &Plan,
+) -> i32 {
+    let roots = flat_roots(targets);
+    let logs = n.print_build_logs;
+    let failed = std::cell::Cell::new(false);
+    let mut on_event = |e: Event| match e {
+        Event::Log(l) if logs => eprintln!("{}", String::from_utf8_lossy(&l.line)),
+        Event::Failed(f) => {
+            failed.set(true);
+            eprintln!("error: build of '{}' failed: {}", f.drv_path, f.reason);
+        }
+        _ => {}
+    };
+    let mut conn = match Connection::open_with(transport, options, &mut on_event) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+    let upload = crate::remote::worker::build::build_on(
+        &mut conn,
+        plan,
+        &roots[0].drv,
+        &[],
+        true,
+        None,
+        &mut on_event,
+    );
+    if let Err(e) = upload {
+        eprintln!("error: {e}");
+        return 1;
+    }
+    let wanted: Vec<String> = roots
+        .iter()
+        .map(|r| format!("{}!{}", r.drv, r.output))
+        .collect();
+    let results = match conn.build_paths_with_results(&wanted, &mut on_event) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+    for r in &results {
+        if !r.success() {
+            failed.set(true);
+            eprintln!("error: build failed: status {}: {}", r.status, r.msg);
+        }
+    }
+    if failed.get() {
+        return 1;
+    }
+
+    let mut maps: HashMap<String, BTreeMap<String, Option<String>>> = HashMap::new();
+    for r in &roots {
+        let drv = r.drv.to_string();
+        if maps.contains_key(&drv) {
+            continue;
+        }
+        match conn.query_derivation_output_map(&drv, &mut on_event) {
+            Ok(m) => {
+                maps.insert(drv, m);
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                return 1;
+            }
+        }
+    }
+
+    let cwd = cwd();
+    let mut out = String::new();
+    for (i, t) in targets.iter().enumerate() {
+        let drv = t.drv.to_string();
+        for output in &t.outputs {
+            let path = maps
+                .get(&drv)
+                .and_then(|m| m.get(output).cloned())
+                .flatten();
+            let Some(path) = path else {
+                eprintln!("error: derivation '{drv}' has no output '{output}'");
+                return 1;
+            };
+            if !n.no_link {
+                // build.cc: the n-th installable adds `-n` from 1 on, an
+                // output other than `out` adds `-<output>`.
+                let mut link = n.out_link.clone();
+                if i > 0 {
+                    link.push_str(&format!("-{i}"));
+                }
+                if output != "out" {
+                    link.push('-');
+                    link.push_str(output);
+                }
+                let link = String::from_utf8_lossy(&abs_path(&link, &cwd)).into_owned();
+                if let Err(e) = conn.add_perm_root(&path, std::path::Path::new(&link)) {
+                    eprintln!("error: {e}");
+                    return 1;
+                }
+            }
+            if n.print_out_paths {
+                out.push_str(&path);
+                out.push('\n');
+            }
+        }
+    }
+    print_bytes(out.as_bytes());
+    0
+}
+
+// ---- printing ----------------------------------------------------------------
+
+fn print_bytes(b: &[u8]) {
+    use std::io::Write;
+    let mut out = std::io::stdout();
+    let _ = out.write_all(b);
+    let _ = out.flush();
+}
+
+/// An error the printer shows in place of the value. `Unsupported` must
+/// escape so the caller can fall back to the real nix instead.
+fn printable(e: &Error) -> bool {
+    !matches!(e.kind, ErrorKind::Unsupported | ErrorKind::StackOverflow)
+}
+
+/// `nix eval`'s printer (print.cc:Printer with `force`, `derivationPaths`
+/// and `trackRepeated`): forces as it goes, prints a derivation as its drv
+/// path and a failing value as `«error: …»`.
+fn print_eval(
+    ev: &mut Evaluator,
+    w: Word,
+    out: &mut Vec<u8>,
+    seen: &mut HashSet<u64>,
+    depth: usize,
+) -> EvalResult<()> {
+    if depth > crate::eval::MAX_CALL_DEPTH as usize {
+        return Err(Error::boxed(
+            ErrorKind::StackOverflow,
+            "stack overflow; max-call-depth exceeded",
+            Pos::NONE,
+        ));
+    }
+    let w = match ev.force(w) {
+        Ok(w) => w,
+        Err(e) if printable(&e) => {
+            out.extend_from_slice("«error: ".as_bytes());
+            out.extend_from_slice(e.msg.as_bytes());
+            out.extend_from_slice("»".as_bytes());
+            return Ok(());
+        }
+        Err(e) => return Err(e),
+    };
+    match w.view() {
+        Value::Attrs(a) => {
+            // Nix keys the seen set on the `Bindings` and shares one empty
+            // `Bindings`, so the second empty attrset is «repeated».
+            let key = if a.is_empty() { 0 } else { w.0 };
+            if !seen.insert(key) {
+                out.extend_from_slice("«repeated»".as_bytes());
+                return Ok(());
+            }
+            if let Some(drv) = derivation_path(ev, w)? {
+                out.extend_from_slice("«derivation".as_bytes());
+                if !drv.is_empty() {
+                    out.push(b' ');
+                    out.extend_from_slice(&drv);
+                }
+                out.extend_from_slice("»".as_bytes());
+                return Ok(());
+            }
+            out.extend_from_slice(b"{ ");
+            for attr in crate::print::lexicographic_order(ev, a) {
+                crate::print::print_attr_name(out, ev.interner.name(attr.sym));
+                out.extend_from_slice(b" = ");
+                print_eval(ev, attr.cell.get(), out, seen, depth + 1)?;
+                out.extend_from_slice(b"; ");
+            }
+            out.push(b'}');
+        }
+        Value::List(l) => {
+            if l.len > 0 && !seen.insert(w.0) {
+                out.extend_from_slice("«repeated»".as_bytes());
+                return Ok(());
+            }
+            out.extend_from_slice(b"[ ");
+            for c in l.cells() {
+                print_eval(ev, c.get(), out, seen, depth + 1)?;
+                out.push(b' ');
+            }
+            out.push(b']');
+        }
+        Value::PrimOp(p) => {
+            out.extend_from_slice("«primop ".as_bytes());
+            out.extend_from_slice(primop_name(p.name).as_bytes());
+            out.extend_from_slice("»".as_bytes());
+        }
+        Value::PrimOpApp(p) => {
+            out.extend_from_slice("«partially applied primop ".as_bytes());
+            out.extend_from_slice(primop_name(p.op.name).as_bytes());
+            out.extend_from_slice("»".as_bytes());
+        }
+        Value::Lambda(_) => {
+            out.extend_from_slice(crate::print::show_value_short(ev, w).as_bytes());
+        }
+        _ => {
+            let mut one = HashSet::new();
+            crate::print::print_ambiguous(ev, w, 1, out, &mut one, depth)?;
+        }
+    }
+    Ok(())
+}
+
+/// eval.cc:addPrimOp drops a leading `__` from a primop's name, so that is
+/// the name print.cc:printFunction shows.
+fn primop_name(name: &str) -> &str {
+    name.strip_prefix("__").unwrap_or(name)
+}
+
+/// print.cc:printDerivation: `Some(drvPath)` when the attrset is a
+/// derivation, which the printer shows instead of the attributes.
+fn derivation_path(ev: &mut Evaluator, w: Word) -> EvalResult<Option<Vec<u8>>> {
+    let Some(attrs) = w.as_attrs() else {
+        return Ok(None);
+    };
+    let Some(t) = attrs.get(ev.s.type_) else {
+        return Ok(None);
+    };
+    let t = ev.force_string(
+        t.cell.get(),
+        Pos::NONE,
+        "while evaluating the 'type' attribute",
+    )?;
+    if t.bytes != b"derivation" {
+        return Ok(None);
+    }
+    let Some(dp) = attrs.get(ev.s.drv_path) else {
+        return Ok(Some(Vec::new()));
+    };
+    let mut ctx = Vec::new();
+    let s = ev.coerce_to_string(
+        dp.cell.get(),
+        &mut ctx,
+        dp.pos,
+        "while evaluating the drvPath of a derivation",
+        false,
+        false,
+        true,
+    )?;
+    Ok(Some(s.to_vec()))
+}

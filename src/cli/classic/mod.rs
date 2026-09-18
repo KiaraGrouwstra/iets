@@ -4,6 +4,7 @@
 
 pub mod build;
 pub mod instantiate;
+pub mod nix;
 
 use std::collections::HashSet;
 use std::os::unix::process::CommandExt;
@@ -26,11 +27,7 @@ pub fn dispatch(name: &str, argv: &[String]) -> i32 {
         "nix-instantiate" => instantiate::main(argv),
         "nix-build" => build::main(argv),
         "nix-eval-jobs" => crate::cli::jobs::cmd_eval_jobs(argv),
-        _ => fallback(
-            "nix",
-            argv,
-            "ietsp implements no 'nix' subcommand (docs/classic.md)",
-        ),
+        _ => nix::main(argv),
     }
 }
 
