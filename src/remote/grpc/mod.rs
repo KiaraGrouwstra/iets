@@ -4,6 +4,7 @@
 //! and every call is a `block_on`. See `docs/remote-build.md`.
 
 pub mod build;
+pub mod classic;
 pub mod drvwire;
 
 #[allow(clippy::all, clippy::pedantic)]

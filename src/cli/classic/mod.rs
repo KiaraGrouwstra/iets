@@ -156,15 +156,18 @@ pub fn common_flag(c: &mut Common, a: &mut Argv, s: &str) -> Result<bool, String
     Ok(true)
 }
 
-/// Where the worker protocol goes, from the `store` setting.
-pub fn transport_of(store: &str) -> Result<Transport, String> {
+/// Where the builds go, from the `store` setting. `system` is the `system=`
+/// default a `grpc://` URL takes.
+pub fn transport_of(store: &str, system: &str) -> Result<Transport, String> {
     match store {
         "auto" | "" | "daemon" => Ok(Transport::Unix(PathBuf::from(DEFAULT_SOCKET))),
-        s if s.starts_with("unix://") || s.starts_with("ssh-ng://") => {
-            Transport::parse(s).ok_or_else(|| format!("cannot parse the store URL '{s}'"))
+        s if s.starts_with("unix://") || s.starts_with("ssh-ng://") || s.starts_with("grpc://") => {
+            Transport::parse_checked(s, system)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("cannot parse the store URL '{s}'"))
         }
         s => Err(format!(
-            "store '{s}' is not supported; ietsp speaks the worker protocol only"
+            "store '{s}' is not supported; ietsp speaks the worker protocol and grpc:// only"
         )),
     }
 }
@@ -172,7 +175,7 @@ pub fn transport_of(store: &str) -> Result<Transport, String> {
 /// `Config::load` plus the transport and `SetOptions` values it implies.
 pub fn settings(c: &Common) -> Result<(Config, Transport, Options), String> {
     let cfg = Config::load(&c.overrides).map_err(|e| e.to_string())?;
-    let transport = transport_of(&cfg.store())?;
+    let transport = transport_of(&cfg.store(), &cfg.system())?;
     let options = Options::try_from(&cfg).map_err(|e| e.to_string())?;
     Ok((cfg, transport, options))
 }

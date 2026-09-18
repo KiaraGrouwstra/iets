@@ -227,12 +227,22 @@ fn build_roots(
     use crate::remote::event::Event;
     use crate::store::path::StorePath;
 
-    let Some(transport) = crate::remote::worker::Transport::parse(&b.url) else {
-        eprintln!(
-            "error: unsupported builder '{}': expected daemon, unix:///path, or ssh-ng://[user@]host",
-            b.url
-        );
-        return 2;
+    let transport = match crate::remote::worker::Transport::parse_checked(
+        &b.url,
+        &config().map_or_else(|| crate::config::DEFAULT_SYSTEM.to_string(), |c| c.system()),
+    ) {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            eprintln!(
+                "error: unsupported builder '{}': expected daemon, unix:///path, ssh-ng://[user@]host or grpc://host:port",
+                b.url
+            );
+            return 2;
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 2;
+        }
     };
     let t0 = std::time::Instant::now();
     let plan = match crate::remote::plan::plan(roots, inputs) {
@@ -282,17 +292,29 @@ fn build_roots(
             }
             Event::Done(d) => failed |= !d.success,
         };
-        let report = crate::remote::worker::build::build(
-            &transport,
-            &plan,
-            &locate,
-            root,
-            outputs,
-            b.no_build,
-            b.fetch_to.as_deref(),
-            &mut on_event,
-        )
-        .map(|t| t.report(&plan, plan_time));
+        let report = match &transport {
+            crate::remote::worker::Transport::Grpc(cfg) => crate::remote::grpc::build::build(
+                cfg,
+                &plan,
+                root,
+                outputs,
+                b.no_build,
+                b.fetch_to.as_deref(),
+                &mut on_event,
+            )
+            .map(|t| t.report(&plan, plan_time)),
+            _ => crate::remote::worker::build::build(
+                &transport,
+                &plan,
+                &locate,
+                root,
+                outputs,
+                b.no_build,
+                b.fetch_to.as_deref(),
+                &mut on_event,
+            )
+            .map(|t| t.report(&plan, plan_time)),
+        };
         match report {
             Ok(r) => {
                 if b.timings {

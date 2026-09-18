@@ -183,6 +183,18 @@ and `out` of a flake one. The links are `build.cc:createOutLinks`:
 without `--print-out-paths`. Exit 1 on an evaluation, daemon or build
 error.
 
+`--store grpc://host:port[?…]` builds on a nix-grpc-store service instead,
+natively: no plugin, no `nix` on the other side. `--eval-store auto` (or
+`daemon`, or empty) is accepted and ignored, so the invocation the `nix-farm`
+wrapper makes — `nix build --store 'grpc://farm.numtide.com:50051?token-file=…'
+--eval-store auto .#pkg` — works as it stands; any other `--eval-store` value
+falls back, since ietsp always evaluates in its own process. A build farm
+publishes its outputs to a binary cache instead of a local store, so an
+out-link needs them copied in first: ietsp reads their closure back with
+`QueryPathInfos`, fetches what the local store lacks with `FetchNars`, and
+registers it with their signatures over the worker protocol before it makes
+the symlink. `--no-link` skips all of that. See `docs/remote-build.md`.
+
 `nix print-dev-env [FLAKEREF[#attr]] [--json]` is `ietsp print-dev-env`
 (`docs/direnv.md`).
 
@@ -264,7 +276,7 @@ What is used:
 
 | setting | effect |
 |---|---|
-| `store` | the worker transport: `auto`, empty and `daemon` are the daemon socket; `unix://PATH` and `ssh-ng://HOST` are honoured; anything else falls back |
+| `store` | where builds go: `auto`, empty and `daemon` are the daemon socket; `unix://PATH`, `ssh-ng://HOST` and `grpc://HOST:PORT[?…]` are honoured; anything else falls back |
 | `system` | the evaluator's `builtins.currentSystem` |
 | `max-jobs`, `cores`, `keep-going`, `keep-failed`, `substitute` | `SetOptions` on the connection |
 

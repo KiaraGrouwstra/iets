@@ -408,7 +408,7 @@ fn upload(
 
 // ---- builds -----------------------------------------------------------------
 
-/// Non-farm: one `BuildPaths` on `<root>!<outputs>`, whose reply carries the
+/// Non-farm: one `BuildPaths` on `<root>^<outputs>`, whose reply carries the
 /// `vector<KeyedBuildResult>` bytes.
 fn store_build(
     c: &mut Client,
@@ -424,7 +424,9 @@ fn store_build(
         names.into_iter().collect::<Vec<_>>().join(",")
     };
     let req = proto::BuildPathsRequest {
-        targets: vec![format!("{root}!{spec}")],
+        // The daemon parses these with `DerivedPath::parse`, whose separator is
+        // `^`, not the worker protocol's legacy `!` (derived-path.cc).
+        targets: vec![format!("{root}^{spec}")],
         build_mode: 0,
         protocol: BUILD_PROTOCOL,
     };
@@ -994,14 +996,13 @@ fn fetch_into_dir(c: &mut Client, paths: &[StorePath], dir: &Path, t: &mut Timin
 /// `ValidPathInfo` — signatures included, so the daemon accepts what the cache
 /// signed. This is what `nix-farm`'s `nix copy --from <cache>` does.
 pub fn register(
-    cfg: &GrpcConfig,
+    c: &mut Client,
     paths: &[StorePath],
     conn: &mut super::super::worker::Connection,
     on_event: &mut dyn FnMut(Event),
 ) -> Result<usize> {
-    let mut c = Client::open(cfg)?;
     let mut t = Timings::default();
-    let infos = remote_closure(&mut c, paths, &mut t)?;
+    let infos = remote_closure(c, paths, &mut t)?;
     let all: Vec<String> = infos.keys().map(StorePath::to_string).collect();
     let valid: HashSet<String> = conn
         .query_valid_paths(&all, on_event)?
@@ -1030,7 +1031,15 @@ pub fn register(
         })
         .map_err(io::Error::other)
     };
-    conn.add_multiple_to_store(&mut body, on_event)?;
+    conn.add_multiple_to_store(&mut body, on_event)
+        .map_err(|e| {
+            Error::Protocol(format!(
+                "{e}\nhint: '{}' publishes its outputs to a binary cache. The local daemon \
+             checks their signatures, as `nix copy --from` does, so add the cache's public \
+             key to `trusted-public-keys` in nix.conf, or use --no-link.",
+                c.cfg.url()
+            ))
+        })?;
     Ok(n)
 }
 

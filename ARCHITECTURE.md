@@ -23,6 +23,11 @@ flakes (registries, `nix flake lock`), fetchers that hit the network (they
 error; a locked flake input missing from `/nix/store` is the one exception,
 see `docs/flakes.md`), a REPL, a debugger, a bytecode VM.
 
+nix-grpc-store (github.com/Mic92/nix-grpc-store) is the supported gRPC
+transport, spoken natively from its vendored `proto/nix_remote.proto`. Its
+`nix-grpc-daemon` is somebody else's daemon, which is the point: we are a
+client of it, not a replacement for it.
+
 ## Pipeline
 
 ```

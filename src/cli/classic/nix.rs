@@ -30,6 +30,9 @@ const GLOBALS: &[(&str, usize)] = &[
     ("--arg", 2),
     ("--argstr", 2),
     ("--store", 1),
+    // The `nix-farm` wrapper passes `--eval-store auto` because the farm
+    // refuses the worker-protocol tunnel; ietsp always evaluates locally.
+    ("--eval-store", 1),
     ("-j", 1),
     ("--max-jobs", 1),
     ("--cores", 1),
@@ -110,6 +113,10 @@ pub(super) fn global_flag(c: &mut Common, a: &mut Argv, s: &str) -> Result<bool,
         "--arg" => c.args.push((v[0].clone(), ArgKind::Expr(v[1].clone()))),
         "--argstr" => c.args.push((v[0].clone(), ArgKind::Str(v[1].clone()))),
         "--store" => c.overrides.push(("store".into(), v[0].clone())),
+        "--eval-store" if v[0] == "auto" || v[0] == "daemon" || v[0].is_empty() => {}
+        "--eval-store" => {
+            return Err(format!("'--eval-store {}' is not implemented", v[0]));
+        }
         "-j" | "--max-jobs" => c.overrides.push(("max-jobs".into(), number(s, &v[0])?)),
         "--cores" => c.overrides.push(("cores".into(), number(s, &v[0])?)),
         "-k" | "--keep-going" => c.overrides.push(("keep-going".into(), "true".into())),
@@ -572,6 +579,30 @@ fn realise(
         }
         _ => {}
     };
+    if let Transport::Grpc(cfg) = transport {
+        // The farm builds per derivation and publishes to the cache, so the
+        // whole flow differs; see `crate::remote::grpc::classic`.
+        use crate::remote::grpc::classic;
+        let gt: Vec<classic::Target> = targets
+            .iter()
+            .map(|t| classic::Target {
+                drv: t.drv.clone(),
+                outputs: t.outputs.clone(),
+            })
+            .collect();
+        let links = classic::Links {
+            out_link: (!n.no_link).then(|| n.out_link.clone()),
+            print_out_paths: n.print_out_paths,
+        };
+        return match classic::realise(cfg, plan, &gt, &links, &mut on_event) {
+            Ok(code) if failed.get() => code.max(1),
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("error: {e}");
+                1
+            }
+        };
+    }
     let mut conn = match Connection::open_with(transport, options, &mut on_event) {
         Ok(c) => c,
         Err(e) => {

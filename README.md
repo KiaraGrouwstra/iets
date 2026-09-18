@@ -16,7 +16,8 @@ bench/run.nu nixos-desktop
 ./target/release/ietsp build --builder ssh-ng://host -A hello /path/to/nixpkgs/default.nix
 ./target/release/ietsp build --builder unix:///path/to/socket --no-build FILE.nix   # upload only, no realise
 ./target/release/ietsp build /nix/store/<hash>-<name>.drv   # legacy: closure from the local store
-scripts/daemon-e2e.nu
+./target/release/ietsp build --builder 'grpc://farm.numtide.com:50051?token-file=./jwt' --fetch-to out FILE.nix   # nix-grpc-store, natively
+scripts/daemon-e2e.nu; scripts/grpc-e2e.nu
 
 # .envrc: what `nix print-dev-env` prints, byte-exact, from the in-memory shell drv
 ./target/release/ietsp print-dev-env --gc-root .direnv/ietsp-env .   # see docs/direnv.md
