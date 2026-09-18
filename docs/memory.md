@@ -358,6 +358,42 @@ shared IR node on top of the search, and at 68 % hits on outpaths that
 store lands on lines other selects read. A two-entry cache would raise
 the hit rate but not remove the store. Not pursued.
 
+
+Idea 4, one escaped ATerm per derivation (tried, rejected; before =
+521ca66). `derivationStrict` serializes every derivation three times
+(masked hash-modulo input, text, unmasked hash-modulo) and walks the
+input hashes twice, cloning each cached `DrvHash`; the profile has
+`print_string` at 2.9 %, sha256 at 2.8 % and the allocator at ~5 %.
+`store::drv::instantiate` escaped the derivation once into segments
+(`Parts`), replayed the masked form straight into a sha256 hasher, built
+the text once, hashed the unmasked form from the same segments, returned
+cache borrows instead of clones, and `print_string` scanned with a
+256-byte table. Output byte-identical, 133 tests including the 30 `.drv`
+fixtures. User time fell 1-3 % on every workload; wall did not:
+
+| workload | wall before | wall after | change | user before | user after | sys before | sys after | RSS before | RSS after |
+|---|---|---|---|---|---|---|---|---|---|
+| nixos-desktop w1 | 1.524 | 1.529 | 0.3% | 1.33 | 1.31 | 0.21 | 0.21 | 654 | 654 |
+| nixos-desktop w4 | 1.055 | 1.021 | -3.3% | 2.47 | 2.4 | 0.33 | 0.33 | 822 | 817 |
+| nixos-minimal w1 | 1.106 | 1.114 | 0.7% | 0.98 | 0.96 | 0.14 | 0.15 | 522 | 522 |
+| outpaths 0/8 w1 | 31.887 | 31.517 | -1.2% | 27.58 | 27.23 | 4.08 | 5.11 | 7219 | 7219 |
+
+Reverted: −1.2 % on outpaths is under the 2 % bar. The whole derivation
+path is ~6 % of a one-worker run and the sha256 work (two hashes of the
+ATerm per derivation, both required) is half of that, so the 2 % bar
+was out of reach for any change to the serialization alone. The diff
+(`+345/−60` in `src/store/drv.rs`, one call site in
+`src/builtins/derivation.rs`) is a clean 1-3 % of user time if a later
+pass wants it.
+
+
+Where it stands after the four ideas: one kept (the IR cache), three
+rejected with their numbers above. Against the starting point 217e383
+on this box, desktop w1 1.92 → 1.70 s (−11.5 %, first session) and
+1.52 s in the later, quieter sessions; outpaths chunk 0/8 w1 34.0 →
+32.6 s (−4.3 %) and 31.9 s later; RSS unchanged. `bench/ab.nu` is the
+runner for the next round.
+
 ## Assessed and not done
 
 Numbers are from the outpaths census unless stated; percentages are of
