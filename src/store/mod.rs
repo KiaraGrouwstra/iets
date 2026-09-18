@@ -4,6 +4,7 @@
 pub mod context;
 pub mod drv;
 pub mod hash;
+pub mod locate;
 pub mod nar;
 pub mod path;
 pub mod source;

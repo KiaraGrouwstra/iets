@@ -3,6 +3,7 @@
 //! docs/tracing-cache.md.
 
 pub mod key;
+pub mod run;
 pub mod store;
 pub mod validate;
 pub mod wire;
