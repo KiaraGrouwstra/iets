@@ -4,13 +4,12 @@
 mod ere;
 mod fromtoml;
 mod json;
+mod posix;
 mod xml;
 
-use std::cell::{OnceCell, RefCell};
+use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
-
-use regex::bytes::{CaptureLocations, Regex};
 
 use super::Registry;
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
@@ -51,13 +50,9 @@ fn current_time(ev: &mut Evaluator, _args: &[Word], _pos: Pos) -> EvalResult<Wor
 
 // ---- regular expressions ------------------------------------------------------
 
-/// One ERE, compiled on demand for unanchored search (`split`) and for a
-/// whole-string match (`match`).
-struct CompiledRegex {
-    translated: Option<String>,
-    search: OnceCell<Regex>,
-    anchored: OnceCell<Regex>,
-}
+/// One ERE. `None` is a pattern libstdc++ would reject; the cache keeps the
+/// rejection so a repeated bad pattern is not re-parsed.
+type CompiledRegex = Option<posix::Prog>;
 
 thread_local! {
     static REGEX_CACHE: RefCell<HashMap<Vec<u8>, Rc<CompiledRegex>>> = RefCell::new(HashMap::new());
@@ -89,44 +84,20 @@ fn get_regex(re: &[u8]) -> Rc<CompiledRegex> {
         if let Some(r) = c.get(re) {
             return r.clone();
         }
-        let r = Rc::new(CompiledRegex {
-            translated: ere::translate(re),
-            search: OnceCell::new(),
-            anchored: OnceCell::new(),
-        });
+        let r = Rc::new(ere::compile(re));
         c.insert(re.to_vec(), r.clone());
         r
     })
 }
 
-impl CompiledRegex {
-    fn get(&self, anchored: bool, re: &[u8], pos: Pos) -> EvalResult<&Regex> {
-        let Some(t) = &self.translated else {
-            return Err(invalid_regex(re, pos));
-        };
-        let cell = if anchored {
-            &self.anchored
-        } else {
-            &self.search
-        };
-        if let Some(r) = cell.get() {
-            return Ok(r);
-        }
-        let pat = if anchored {
-            format!("(?s-u)\\A(?:{t})\\z")
-        } else {
-            format!("(?s-u){t}")
-        };
-        let r = Regex::new(&pat).map_err(|_| invalid_regex(re, pos))?;
-        Ok(cell.get_or_init(|| r))
-    }
-}
-
-fn group_list(ev: &mut Evaluator, locs: &CaptureLocations, hay: &'static [u8]) -> &'static ListObj {
-    let n = locs.len() - 1;
-    let out = ev.arena.alloc_list(n);
-    for (i, c) in out.cells().iter().enumerate() {
-        c.set(match locs.get(i + 1) {
+fn group_list(
+    ev: &mut Evaluator,
+    groups: &[Option<(usize, usize)>],
+    hay: &'static [u8],
+) -> &'static ListObj {
+    let out = ev.arena.alloc_list(groups.len());
+    for (c, g) in out.cells().iter().zip(groups) {
+        c.set(match *g {
             Some((a, b)) => ev.arena.mk_string_static(&hay[a..b], &[]),
             None => Word::NULL,
         });
@@ -146,12 +117,13 @@ fn match_(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         "while evaluating the second argument passed to builtins.match",
     )?;
     let cre = get_regex(re);
-    let r = cre.get(true, re, pos)?;
-    let mut locs = r.capture_locations();
-    if r.captures_read(&mut locs, s.bytes).is_none() {
+    let Some(prog) = cre.as_ref() else {
+        return Err(invalid_regex(re, pos));
+    };
+    let Some(groups) = posix::match_exact(prog, s.bytes) else {
         return Ok(Word::NULL);
-    }
-    Ok(Word::from_ptr(group_list(ev, &locs, s.bytes)))
+    };
+    Ok(Word::from_ptr(group_list(ev, &groups, s.bytes)))
 }
 
 /// `std::cregex_iterator` order: after an empty match the search resumes one
@@ -169,20 +141,16 @@ fn split(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         "while evaluating the second argument passed to builtins.split",
     )?;
     let cre = get_regex(re);
-    let r = cre.get(false, re, pos)?;
+    let Some(prog) = cre.as_ref() else {
+        return Err(invalid_regex(re, pos));
+    };
     let hay = s.bytes;
-    let mut locs = r.capture_locations();
     let mut items: Vec<Word> = Vec::new();
     let mut prev_end = 0;
-    let mut start = 0;
-    while start <= hay.len() {
-        let Some(m) = r.captures_read_at(&mut locs, hay, start) else {
-            break;
-        };
-        items.push(ev.arena.mk_string_static(&hay[prev_end..m.start()], &[]));
-        items.push(Word::from_ptr(group_list(ev, &locs, hay)));
-        prev_end = m.end();
-        start = if m.is_empty() { m.end() + 1 } else { m.end() };
+    for m in posix::matches(prog, hay) {
+        items.push(ev.arena.mk_string_static(&hay[prev_end..m.start], &[]));
+        items.push(Word::from_ptr(group_list(ev, &m.groups, hay)));
+        prev_end = m.end;
     }
     if items.is_empty() {
         return Ok(ev.mk_list(&[Word::from_ptr(s)]));
