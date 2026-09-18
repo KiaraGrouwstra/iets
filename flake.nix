@@ -7,7 +7,7 @@
     in {
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
-          packages = [ pkgs.cargo pkgs.rustc pkgs.clippy pkgs.rustfmt pkgs.hyperfine pkgs.nix pkgs.perf pkgs.jq pkgs.nushell pkgs.socat ];
+          packages = [ pkgs.cargo pkgs.rustc pkgs.clippy pkgs.rustfmt pkgs.hyperfine pkgs.nix pkgs.perf pkgs.jq pkgs.nushell ];
         };
       });
       nixosModules.default = import ./nix/module.nix self;
