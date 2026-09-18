@@ -1,11 +1,5 @@
-//! Phase B: the remote builder client and the reference server.
+//! Remote builds: the upload plan and the Nix worker-protocol client.
 
-pub mod client;
+pub mod event;
 pub mod plan;
-pub mod server;
 pub mod worker;
-
-#[allow(clippy::all, clippy::pedantic)]
-pub mod proto {
-    tonic::include_proto!("ietsp.builder.v2");
-}

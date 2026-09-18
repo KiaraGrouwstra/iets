@@ -20,24 +20,15 @@ fn hash_tree(h: &mut Sha256, dir: &Path) {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("cargo:rerun-if-changed=proto/builder.proto");
-    let fds = protox::compile(["proto/builder.proto"], ["proto"])?;
-    tonic_prost_build::configure()
-        .build_server(true)
-        .build_client(true)
-        .compile_fds(fds)?;
-
-    for p in ["src", "proto", "Cargo.lock", "build.rs"] {
+fn main() {
+    for p in ["src", "Cargo.lock", "build.rs"] {
         println!("cargo:rerun-if-changed={p}");
     }
     let mut h = Sha256::new();
     hash_tree(&mut h, Path::new("src"));
-    hash_tree(&mut h, Path::new("proto"));
     for f in ["Cargo.lock", "build.rs"] {
         h.update(std::fs::read(f).unwrap_or_default());
     }
     let id: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
     println!("cargo:rustc-env=IETSP_BUILD_ID={id}");
-    Ok(())
 }

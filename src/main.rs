@@ -11,7 +11,7 @@ const STACK_SIZE: usize = 4 << 30;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: ietsp eval [--strict] [--json] [--raw] [--workers N] [--timings] [--no-cache] [--cache-dir DIR] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp cache-dump READSET   (print a cache entry's read set)\n       ietsp amber-keys [--lstat] PATH   (every amber object key of a tree)\n       ietsp build [--builder URL] [--timings] [--no-build] [--fetch-to DIR] [--no-cache] [--cache-dir DIR] [--out NAME]... [--workers N] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--fetch-to DIR] [--out NAME]... [--source STOREPATH=LOCAL]... DRV\n       ietsp eval-jobs [--workers N] [--force-recurse] [--meta] [--show-input-drvs] [--chunks M --chunk N [--chunk-depth D]] [--max-memory-size MB] [-I prefix=path]... [--arg name expr] [--argstr name str] (-E EXPR | FILE | FLAKEREF#attr)\n       ietsp print-dev-env [--builder URL] [--gc-root PATH] [--json] [--workers N] [--no-cache] [--cache-dir DIR] [--timings] [FLAKEREF[#attr]]   (default: ., a daemon URL)\n       URL: http://host:port (gRPC), daemon, unix:///path, ssh-ng://[user@]host (Nix worker protocol)"
+        "usage: ietsp eval [--strict] [--json] [--raw] [--workers N] [--timings] [--no-cache] [--cache-dir DIR] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp cache-dump READSET   (print a cache entry's read set)\n       ietsp build [--builder URL] [--timings] [--no-build] [--fetch-to DIR] [--no-cache] [--cache-dir DIR] [--out NAME]... [--workers N] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--fetch-to DIR] [--out NAME]... [--source STOREPATH=LOCAL]... DRV\n       ietsp eval-jobs [--workers N] [--force-recurse] [--meta] [--show-input-drvs] [--chunks M --chunk N [--chunk-depth D]] [--max-memory-size MB] [-I prefix=path]... [--arg name expr] [--argstr name str] (-E EXPR | FILE | FLAKEREF#attr)\n       ietsp print-dev-env [--builder URL] [--gc-root PATH] [--json] [--workers N] [--no-cache] [--cache-dir DIR] [--timings] [FLAKEREF[#attr]]   (default: ., a daemon URL)\n       URL: daemon, unix:///path, ssh-ng://[user@]host (Nix worker protocol)"
     );
     exit(2)
 }
@@ -1069,7 +1069,7 @@ struct BuildArgs {
 /// take a `.drv` path and read its closure from `/nix/store`.
 fn cmd_build(argv: &[String]) -> i32 {
     let mut b = BuildArgs {
-        url: "http://127.0.0.1:9455".to_string(),
+        url: "daemon".to_string(),
         timings: false,
         no_build: false,
         fetch_to: None,
@@ -1261,9 +1261,16 @@ fn build_roots(
     outputs: &[String],
     inputs: ietsp::remote::plan::Inputs<'_>,
 ) -> i32 {
-    use ietsp::remote::proto::build_event::Event;
+    use ietsp::remote::event::Event;
     use ietsp::store::path::StorePath;
 
+    let Some(transport) = ietsp::remote::worker::Transport::parse(&b.url) else {
+        eprintln!(
+            "error: unsupported builder '{}': expected daemon, unix:///path, or ssh-ng://[user@]host",
+            b.url
+        );
+        return 2;
+    };
     let t0 = std::time::Instant::now();
     let locate = |paths: &[StorePath]| locate_in_store(paths, &b.sources);
     let plan = match ietsp::remote::plan::plan(roots, inputs, &locate) {
@@ -1281,13 +1288,11 @@ fn build_roots(
         );
     }
 
-    let transport = ietsp::remote::worker::Transport::parse(&b.url);
     let mut built = Vec::new();
     let mut failed = false;
     let roots = if b.no_build { &roots[..1] } else { roots };
     for root in roots {
         let mut on_event = |ev: Event| match ev {
-            Event::Scheduled(s) => eprintln!("scheduled: {}", s.drv_paths.join(" ")),
             Event::Started(s) => eprintln!("building {}", s.drv_path),
             Event::Log(l) => {
                 let line = String::from_utf8_lossy(&l.line);
@@ -1303,30 +1308,16 @@ fn build_roots(
             }
             Event::Done(d) => failed |= !d.success,
         };
-        let report = if let Some(transport) = &transport {
-            ietsp::remote::worker::build::build(
-                transport,
-                &plan,
-                root,
-                outputs,
-                b.no_build,
-                b.fetch_to.as_deref(),
-                &mut on_event,
-            )
-            .map(|t| t.report(&plan, plan_time))
-            .map_err(|e| e.to_string())
-        } else {
-            ietsp::remote::client::build_blocking(
-                &b.url,
-                &plan,
-                root,
-                outputs,
-                b.no_build,
-                &mut on_event,
-            )
-            .map(|t| t.report(&plan, plan_time))
-            .map_err(|e| e.to_string())
-        };
+        let report = ietsp::remote::worker::build::build(
+            &transport,
+            &plan,
+            root,
+            outputs,
+            b.no_build,
+            b.fetch_to.as_deref(),
+            &mut on_event,
+        )
+        .map(|t| t.report(&plan, plan_time));
         match report {
             Ok(r) => {
                 if b.timings {
@@ -1343,36 +1334,6 @@ fn build_roots(
         .iter()
         .filter(|(name, _)| outputs.is_empty() || outputs.contains(name))
         .collect();
-    if let Some(dir) = &b.fetch_to
-        && transport.is_none()
-        && !failed
-    {
-        let t0 = std::time::Instant::now();
-        if let Err(e) = std::fs::create_dir_all(dir) {
-            eprintln!("error: cannot create '{}': {e}", dir.display());
-            return 1;
-        }
-        for (_, path) in &wanted {
-            let dest = match StorePath::parse(path) {
-                Ok(p) => dir.join(p.base_name()),
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    return 1;
-                }
-            };
-            if let Err(e) = ietsp::remote::client::fetch_blocking(&b.url, path, &dest) {
-                eprintln!("error: fetch {path}: {e}");
-                return 1;
-            }
-        }
-        if b.timings {
-            eprintln!(
-                "fetch: {} outputs, {:.3}s",
-                wanted.len(),
-                t0.elapsed().as_secs_f64()
-            );
-        }
-    }
     for (_, path) in &wanted {
         println!("{path}");
     }
@@ -1394,8 +1355,8 @@ struct EventSink {
 }
 
 impl EventSink {
-    fn event(&mut self, e: ietsp::remote::proto::build_event::Event) {
-        use ietsp::remote::proto::build_event::Event;
+    fn event(&mut self, e: ietsp::remote::event::Event) {
+        use ietsp::remote::event::Event;
         match e {
             Event::Log(l) => {
                 let line = String::from_utf8_lossy(&l.line).into_owned();
@@ -2114,74 +2075,6 @@ impl Cache {
     }
 }
 
-/// `ietsp amber-keys [--lstat] PATH`: every amber object of the tree, sorted by key, in the
-/// format of `tools/amber-diff/amber-keys.rs` so the two can be compared.
-fn cmd_amber_keys(argv: &[String]) -> i32 {
-    use ietsp::amber::tree::{Meta, Sink, ingest_path, no_filter};
-    use ietsp::amber::{Key, Object, Type};
-    use std::collections::BTreeMap;
-    use std::io::Write;
-    use std::sync::Mutex;
-
-    let mut meta = Meta::Canonical;
-    let mut path = None;
-    for a in argv {
-        match a.as_str() {
-            "--lstat" => meta = Meta::Lstat,
-            p => path = Some(p.to_string()),
-        }
-    }
-    let Some(path) = path else {
-        eprintln!("usage: ietsp amber-keys [--lstat] PATH");
-        return 2;
-    };
-    struct Collect(Mutex<BTreeMap<Key, Option<Vec<u8>>>>);
-    impl Sink for Collect {
-        fn emit(&self, o: Object) {
-            let bytes = (o.key.type_() != Type::Blob).then_some(o.bytes);
-            self.0.lock().unwrap().insert(o.key, bytes);
-        }
-    }
-    let sink = Collect(Mutex::new(BTreeMap::new()));
-    let root = match ingest_path(std::path::Path::new(&path), &no_filter, meta, &sink) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
-    };
-    let out = std::io::stdout();
-    let mut out = std::io::BufWriter::new(out.lock());
-    for (k, bytes) in sink.0.into_inner().unwrap() {
-        match bytes {
-            None => writeln!(out, "{k} Blob {}", k.length()),
-            Some(b) => writeln!(
-                out,
-                "{k} {} {} {}",
-                k.type_(),
-                k.length(),
-                ietsp::store::hash::base16_encode(&b)
-            ),
-        }
-        .unwrap();
-    }
-    match root {
-        ietsp::amber::tree::Root::Dir(k) => writeln!(out, "root {k}"),
-        ietsp::amber::tree::Root::File { key, executable } => {
-            writeln!(
-                out,
-                "root {key} {}",
-                if executable { "0555" } else { "0444" }
-            )
-        }
-        ietsp::amber::tree::Root::Symlink(t) => {
-            writeln!(out, "root link {}", String::from_utf8_lossy(&t))
-        }
-    }
-    .unwrap();
-    0
-}
-
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let Some(cmd) = argv.first() else { usage() };
@@ -2203,7 +2096,6 @@ fn main() {
             exit(code)
         }
         "cache-dump" if argv.len() == 2 => exit(cmd_cache_dump(&argv[1])),
-        "amber-keys" => exit(cmd_amber_keys(&argv[1..])),
         "parse" if argv.len() > 1 => {
             let rest = &argv[1..];
             let quiet = rest[0] == "-q";

@@ -1,4 +1,4 @@
-//! Fallback transport: the Nix worker protocol (libstore/worker-protocol.hh), spoken to a
+//! The Nix worker protocol (libstore/worker-protocol.hh), spoken to a
 //! local `nix-daemon` socket or to `nix-daemon --stdio` over ssh. One serial connection; every
 //! op is one request and one `STDERR_*` reply loop.
 
@@ -11,8 +11,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
-use super::proto::build_event::Event;
-use super::proto::{Built, Failed, Log, Started};
+use super::event::{Built, Event, Failed, Log, Started};
 use wire::{
     Counting, FramedSink, read_bytes, read_str, read_strs, read_u64, write_str, write_strs,
     write_u64,
@@ -75,7 +74,7 @@ pub enum Transport {
 
 impl Transport {
     /// `daemon`, `unix://[/path]`, `ssh-ng://[user@]host[?remote-program=CMD]`. `None`
-    /// for every other scheme, which stays on gRPC.
+    /// for every other scheme.
     pub fn parse(url: &str) -> Option<Transport> {
         if url == "daemon" || url == "unix://" {
             return Some(Transport::Unix(PathBuf::from(DEFAULT_SOCKET)));
@@ -673,7 +672,6 @@ pub fn built_event(drv_path: &str, output: &str, store_path: &str) -> Event {
         drv_path: drv_path.to_string(),
         output: output.to_string(),
         store_path: store_path.to_string(),
-        signature: String::new(),
     })
 }
 

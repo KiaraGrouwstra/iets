@@ -31,7 +31,7 @@ Everything on one machine (16 cores) against Nix 2.34.8 (`nix develop`), the
 Nix whose source is cited below. The scratch daemon is
 `nix-daemon --store 'local?root=ROOT/store' --option builders '' --option
 substituters '' --stdio`, so it builds locally in its own sandbox and never
-forwards to the real daemon's gRPC builder. It runs under `ietsp-shim`
+forwards to the real daemon's remote builders. It ran under `ietsp-shim`
 (`src/bin/ietsp-shim.rs`), a relay that holds every chunk in each direction
 for `IETSP_SCHED_LATENCY_MS` (one round trip costs twice that; `pv -L` and
 `socat` rate limits change bandwidth, not latency) and, when the daemon exits,

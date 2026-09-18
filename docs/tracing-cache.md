@@ -43,7 +43,7 @@ also disables the cache (it has a side effect on every miss).
 
 The key is computed before evaluation from the command alone:
 
-- build id: sha256 of every file under `src/`, `proto/`, `Cargo.lock` and
+- build id: sha256 of every file under `src/`, `Cargo.lock` and
   `build.rs`, computed by `build.rs` and embedded as `IETSP_BUILD_ID`
   (`cargo:rerun-if-changed` on those paths keeps it current; the nix build
   stays reproducible);
@@ -153,11 +153,7 @@ dominate; plain file stats are a few microseconds each), the rest is
 process start. Deduplicating the read set by cloning every path cost
 15 ms per write; deduplicating by reference brought the write to 3-5 ms.
 
-`ietsp build --no-build` against a local `ietsp-builderd`:
-
-| run | eval | plan | have | put | total |
-|---|---|---|---|---|---|
-| cold builder, miss | 1.32 s (+30 ms cache write) | 0.11 s | 0.03 s | 4,184 objects, 36.5 MB, 0.62 s | 2.20 s |
-| warm builder, hit | skipped: 0.11 s to validate and load 3,616 drvs and 657 sources | 0.09-0.11 s | 0.02-0.03 s | nothing | 0.25 s |
+On a `build --no-build` hit of nixos-desktop, loading the 3,616 drvs and
+657 sources from the cache took 0.11 s against 1.32 s of evaluation.
 
 `scripts/cachetest.nu` covers the semantics (18 cases).

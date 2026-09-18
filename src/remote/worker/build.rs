@@ -1,4 +1,4 @@
-//! The client flow over the worker protocol, mirroring `remote::client::build`:
+//! The client flow over the worker protocol:
 //! `QueryValidPaths` once, `AddMultipleToStore` once, `BuildPathsWithResults` on the root,
 //! `QueryDerivationOutputMap`, then `NarFromPath` per fetched output.
 
@@ -11,9 +11,8 @@ use crate::store::hash::{HashAlgo, Hasher, hash_bytes};
 use crate::store::nar::{dump_string, flat_hash, restore_path};
 use crate::store::path::StorePath;
 
+use super::super::event::{Done, Event};
 use super::super::plan::{Object, Plan, SourceData, SourceKind};
-use super::super::proto::Done;
-use super::super::proto::build_event::Event;
 use super::wire::{write_str, write_strs, write_u64};
 use super::{Connection, Stats, Transport, WorkerError, built_event, failed_event};
 

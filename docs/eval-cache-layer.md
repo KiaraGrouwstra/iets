@@ -103,7 +103,7 @@ attrpath string. Deltas and the full index are CBOR sequences so a
 consumer can stream them. `ietsp eval-cache show URL` prints any of
 them as JSON for humans. The compressed size is within 5 % of JSON; the
 reasons are canonical signing without a canonicalization spec, and one
-decoder shared with amber, whose directory objects are already CBOR.
+decoder for every artifact.
 
 ## Layout
 
@@ -148,8 +148,6 @@ gains nothing new.
 
 - harmonia and niks3: one more route or S3 prefix; they never read the
   objects. nix-grpc-store: same.
-- an amber-backed Nix daemon: an evalinfo maps naturally to a realisation-like
-  record keyed by source, system and attrpath; the index is a blob.
 - Nix itself: nothing changes. Consumers that want it use ietsp or a
   small wrapper. If it proves out, the format is simple enough to
   propose upstream as a `nix build --eval-cache-url` feature.

@@ -1,4 +1,3 @@
-pub mod amber;
 pub mod builtins;
 pub mod compile;
 pub mod devenv;

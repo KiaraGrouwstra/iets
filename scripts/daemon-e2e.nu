@@ -1,6 +1,6 @@
 #!/usr/bin/env nu
-# End-to-end test of the worker-protocol fallback (`--builder daemon`,
-# `unix://`): the same cases as remote-e2e.nu against a Nix daemon.
+# End-to-end test of `ietsp build` against a Nix daemon (`--builder daemon`,
+# `unix://`).
 #
 # 1. custom derivation with a source tree through the local daemon, drv and
 #    source deleted first; checks that the registered paths are byte-identical

@@ -9,21 +9,18 @@ scripts/langtests.nu
 scripts/difftest.nu -I nixpkgs=/path -E '(import <nixpkgs> {}).hello.drvPath'
 bench/run.nu nixos-desktop
 
-# remote builds: evaluate in memory, ship only what the builder lacks
-./target/release/ietsp-builderd --listen 127.0.0.1:9455 --store-dir /var/tmp/builder &
+# remote builds: evaluate in memory, ship only what the daemon lacks, over the Nix worker protocol
 ./target/release/ietsp build --timings -I nixpkgs=/path -E '(import <nixpkgs> {}).hello'
-./target/release/ietsp build --builder http://host:9455 -A hello /path/to/nixpkgs/default.nix
-# fallback: any nix-daemon over the worker protocol (daemon, unix:///path, ssh-ng://host)
-./target/release/ietsp build --builder daemon -A hello /path/to/nixpkgs/default.nix
-./target/release/ietsp build --no-build FILE.nix     # upload only, no realise
+./target/release/ietsp build --builder ssh-ng://host -A hello /path/to/nixpkgs/default.nix
+./target/release/ietsp build --builder unix:///path/to/socket --no-build FILE.nix   # upload only, no realise
 ./target/release/ietsp build /nix/store/<hash>-<name>.drv   # legacy: closure from the local store
-scripts/remote-e2e.nu
+scripts/daemon-e2e.nu
 
 # .envrc: what `nix print-dev-env` prints, byte-exact, from the in-memory shell drv
 ./target/release/ietsp print-dev-env --gc-root .direnv/ietsp-env .   # see docs/direnv.md
 ```
 
-See `docs/remote-builder-protocol.md`. NixOS hosts: import
+See `docs/remote-build.md`. NixOS hosts: import
 `nixosModules.default` and keep `use flake` in `.envrc` (`docs/direnv.md`).
 
 Runs are cached: a second `ietsp eval` or `ietsp build` of the same
