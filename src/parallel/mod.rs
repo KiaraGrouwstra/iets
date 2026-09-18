@@ -98,8 +98,14 @@ pub fn run<R: Send + 'static>(
     rt.run_main(
         user,
         Box::new(move |slot: &mut sched::Slot| {
-            let ev = force::ev_of(slot);
-            force::init_ctx(ev, slot);
+            // The main fiber reaches its slot through this pointer only, so
+            // no reference to the slot is live while it evaluates.
+            let slot: *mut sched::Slot = slot;
+            // SAFETY: the main fiber owns this slot for the whole entry, and
+            // holds no other reference to it or to its evaluator.
+            let ev = unsafe { force::ev_of(slot) };
+            // SAFETY: as above.
+            unsafe { force::init_ctx(ev, slot) };
             let r = f(ev);
             if std::env::var("IETSP_PAR_STATS").is_ok_and(|v| v == "2") {
                 for i in 0..ev.files.len() {
@@ -112,6 +118,9 @@ pub fn run<R: Send + 'static>(
             }
             if std::env::var_os("IETSP_PAR_STATS").is_some() {
                 use std::sync::atomic::Ordering::Relaxed;
+                // SAFETY: the main fiber still owns the slot; evaluation is
+                // over, so nothing else reads it.
+                let slot = unsafe { &*slot };
                 let rt = slot.runtime();
                 eprintln!(
                     "parallel: fibers={} tasks={} spec-submitted={} effect-bails={} steals={} parks={} fiber-parks={} main-parks={} main-wait={}ms busy={}ms deadlocks={} main-stack-resident={}K",

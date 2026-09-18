@@ -244,7 +244,9 @@ pub fn speculate_app(ev: &Evaluator, w: Word, f: Word) {
 }
 
 fn submit(ev: &Evaluator, w: Word) {
-    let slot = ev_slot(ev);
+    // SAFETY: this fiber owns its slot, and the borrow only serves to reach
+    // the runtime and the worker it runs on; nothing else borrows it here.
+    let slot = unsafe { ev_slot(ev) };
     let rt = slot.runtime();
     if rt.n <= 1 || rt.pending_spec() >= BACKLOG_PER_HELPER * (rt.n - 1) {
         return;

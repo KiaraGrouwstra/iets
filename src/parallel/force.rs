@@ -54,30 +54,54 @@ impl Driver for EvalDriver {
     }
 
     fn run_task(&self, _rt: &Runtime, slot: &mut Slot) {
-        let ev = ev_of(slot);
-        init_ctx(ev, slot);
-        let t = slot.task;
-        run_task(ev, t);
+        // Everything below reaches the slot through this pointer, so no
+        // reference to it is live across the task (see `slot_mut`).
+        let slot: *mut Slot = slot;
+        // SAFETY: the fiber about to run owns the slot and its evaluator:
+        // the scheduler resumes a slot on one worker at a time, and no
+        // other reference to either is live here.
+        unsafe {
+            let ev = ev_of(slot);
+            init_ctx(ev, slot);
+            let t = (*slot).task;
+            run_task(ev, t);
+        }
     }
 
     fn on_switch(&self, slot: &mut Slot, w: &mut Worker) {
-        std::mem::swap(&mut ev_of(slot).arena, &mut w.arena);
+        // SAFETY: the fiber is switched out and this worker holds the slot,
+        // so nothing else references its evaluator.
+        let ev = unsafe { ev_of(slot) };
+        std::mem::swap(&mut ev.arena, &mut w.arena);
     }
 }
 
+/// The evaluator of `slot`, for the fiber that owns it.
+///
+/// # Safety
+/// The caller must own the slot — it runs on that fiber, or the fiber is
+/// switched out and this worker holds it — and must hold no other
+/// reference to that evaluator.
 #[inline]
-pub fn ev_of(slot: &Slot) -> &'static mut Evaluator {
-    // SAFETY: `user` was created by `new_user` (or is the root evaluator)
-    // and is only touched by the fiber that owns the slot.
-    unsafe { &mut *(slot.user as *mut Evaluator) }
+pub unsafe fn ev_of(slot: *mut Slot) -> &'static mut Evaluator {
+    // SAFETY: `new_user` leaked a `Box<Evaluator>` into `user`; the
+    // reference is derived from that raw pointer, and the caller
+    // guarantees it is the only live one.
+    unsafe { &mut *((*slot).user as *mut Evaluator) }
 }
 
 /// Bind a slot's evaluator to the fiber that is about to run.
-pub fn init_ctx(ev: &mut Evaluator, slot: &mut Slot) {
+///
+/// # Safety
+/// `slot` must be the live slot of the fiber that will run `ev`.
+pub unsafe fn init_ctx(ev: &mut Evaluator, slot: *mut Slot) {
+    // SAFETY: per the contract; only the slot's own fields are read, and
+    // the pointer is stored for `slot_mut` to derive borrows from.
+    let (id, is_main) = unsafe { ((*slot).id, (*slot).is_main) };
     ev.par = Ctx {
         on: true,
-        id: slot.id,
-        is_main: slot.is_main,
+        id,
+        is_main,
         cancelled: false,
         speculating: false,
         spec_buf: std::mem::take(&mut ev.par.spec_buf),
@@ -89,15 +113,34 @@ pub fn init_ctx(ev: &mut Evaluator, slot: &mut Slot) {
     ev.try_level = 0;
 }
 
+/// Exclusive borrow of the slot this evaluator's fiber runs on.
+///
+/// # Safety
+/// The borrow must not outlive the call it is passed to, and no other
+/// borrow of the slot may be live across it. One fiber owns a slot at a
+/// time, established by the scheduler: a slot is resumed by a single
+/// worker, and `init_ctx` binds it to the evaluator that fiber runs
+/// (docs/parallel.md).
 #[inline]
-pub fn ev_slot(ev: &Evaluator) -> &'static mut Slot {
-    slot_of(ev)
+pub unsafe fn ev_slot(ev: &Evaluator) -> &'static mut Slot {
+    // SAFETY: derived from the raw pointer `init_ctx` stored, never from a
+    // reference to the slot; exclusivity is the caller's contract.
+    unsafe { &mut *ev.par.slot }
 }
 
 #[inline]
-fn slot_of(ev: &Evaluator) -> &'static mut Slot {
-    // SAFETY: set by `init_ctx`; the slot outlives the process.
-    unsafe { &mut *ev.par.slot }
+unsafe fn slot_mut(ev: &Evaluator) -> &'static mut Slot {
+    // SAFETY: same contract as `ev_slot`, which the callers below keep by
+    // passing the borrow straight into one call.
+    unsafe { ev_slot(ev) }
+}
+
+/// Shared view of the slot: its atomics and its runtime handle.
+#[inline]
+fn slot_ref(ev: &Evaluator) -> &'static Slot {
+    // SAFETY: the pointer `init_ctx` stored; slots are never freed, and no
+    // exclusive borrow of the slot is live inside the callers below.
+    unsafe { &*ev.par.slot }
 }
 
 fn cancelled() -> Box<Error> {
@@ -114,7 +157,7 @@ pub fn bail_requested(ev: &Evaluator) -> bool {
     if ev.par.cancelled {
         return true;
     }
-    let slot = slot_of(ev);
+    let slot = slot_ref(ev);
     slot.cancel.load(Ordering::Relaxed)
         || (ev.par.speculating
             && (slot.runtime().suppress.load(Ordering::Relaxed)
@@ -132,6 +175,9 @@ pub static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock:
 pub fn force_thunk(ev: &mut Evaluator, w: Word) -> EvalResult<Word> {
     let cell = w.thunk_state_cell();
     let me = ev.par.id;
+    // SAFETY (every `slot_mut` below): this fiber owns its slot, and each
+    // borrow goes straight into one call, so no two are ever live at once.
+    //
     // `payload` is the state word the cell held (env, arg, or the map
     // word); a reset stores it back.
     let payload = loop {
@@ -146,7 +192,7 @@ pub fn force_thunk(ev: &mut Evaluator, w: Word) -> EvalResult<Word> {
                 ));
             }
             Claim::Busy(cur) => {
-                if thunk::wait(slot_of(ev), cell, cur).is_err() {
+                if thunk::wait(unsafe { slot_mut(ev) }, cell, cur).is_err() {
                     ev.par.cancelled = true;
                     return Err(cancelled());
                 }
@@ -159,7 +205,7 @@ pub fn force_thunk(ev: &mut Evaluator, w: Word) -> EvalResult<Word> {
     }
     if bail_requested(ev) {
         ev.par.cancelled = true;
-        thunk::publish(slot_of(ev), cell, payload);
+        thunk::publish(unsafe { slot_mut(ev) }, cell, payload);
         return Err(cancelled());
     }
     if !ev.par.spec_buf.is_empty() {
@@ -170,16 +216,16 @@ pub fn force_thunk(ev: &mut Evaluator, w: Word) -> EvalResult<Word> {
             debug_assert!(!v.is_thunk());
             if ev.par.cancelled {
                 // Bailed (or hit an effect) somewhere below: transient.
-                thunk::publish(slot_of(ev), cell, payload);
+                thunk::publish(unsafe { slot_mut(ev) }, cell, payload);
                 Err(cancelled())
             } else {
                 let done = w.thunk_finish(v);
-                thunk::publish(slot_of(ev), cell, done);
+                thunk::publish(unsafe { slot_mut(ev) }, cell, done);
                 Ok(v)
             }
         }
         Err(e) => {
-            thunk::publish(slot_of(ev), cell, payload);
+            thunk::publish(unsafe { slot_mut(ev) }, cell, payload);
             Err(e)
         }
     }
@@ -241,7 +287,9 @@ pub fn fanout_range(ev: &Evaluator, kind: u8, obj: Word, lo: usize, hi: usize, b
     if !ev.par.on || hi - lo < MIN_FANOUT {
         return;
     }
-    let slot = slot_of(ev);
+    // SAFETY: this fiber owns its slot, and the borrow only serves to reach
+    // the worker it runs on; nothing else borrows the slot below.
+    let slot = unsafe { slot_mut(ev) };
     let rt = slot.runtime();
     let w = slot.worker();
     let cell = |i: usize| -> &'static Cell {
@@ -583,12 +631,15 @@ fn import_raw(ev: &mut Evaluator, args: &[Word], _pos: Pos) -> EvalResult<Word> 
     let dir = crate::eval::dir_of(resolved).to_vec();
     let ir = ev.compile_file(resolved, src, &dir)?;
     if let Some(t0) = t0 {
+        // SAFETY: this fiber owns its slot; the borrow ends with the
+        // statement and nothing else borrows the slot here.
+        let w = unsafe { slot_mut(ev) }.worker().idx;
         eprintln!(
             "import t={}ms {}us main={} w{} {}",
             START.get().map_or(0, |s| s.elapsed().as_millis()),
             t0.elapsed().as_micros(),
             ev.par.is_main,
-            slot_of(ev).worker().idx,
+            w,
             String::from_utf8_lossy(resolved)
         );
     }
