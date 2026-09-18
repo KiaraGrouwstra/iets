@@ -357,3 +357,7 @@ The upload is daemon-bound: about 0.5 ms per path for the sequential
   a second `QueryValidPaths` over the output paths.
 - Floating content-addressed and dynamic derivations are rejected, as they
   are by the C++ farm path.
+- `x-nix-features` is the derivation's `requiredSystemFeatures` only.
+  `DerivationOptions::getRequiredSystemFeatures` also adds `ca-derivations`
+  for a content-addressed output and `recursive-nix` for `__recursive-nix`,
+  neither of which ietsp supports anyway.
