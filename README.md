@@ -19,6 +19,12 @@ scripts/daemon-e2e.nu
 
 # .envrc: what `nix print-dev-env` prints, byte-exact, from the in-memory shell drv
 ./target/release/ietsp print-dev-env --gc-root .direnv/ietsp-env .   # see docs/direnv.md
+
+# classic mode: the same binary as nix-instantiate, nix-build, nix-eval-jobs and nix,
+# exec'ing the real nix for anything it does not implement (docs/classic.md)
+nix build .#classic && ./result/bin/nix-instantiate -A hello /path/to/nixpkgs
+./target/release/ietsp nix-build -A hello /path/to/nixpkgs   # same, without symlinks
+scripts/classic-e2e.nu
 ```
 
 See `docs/remote-build.md`. NixOS hosts: import

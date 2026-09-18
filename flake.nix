@@ -12,6 +12,15 @@
         # checks.test runs the suite; the package build stays a build.
         doCheck = false;
       };
+      # `classic`: the same binary under Nix's own command names. Each one
+      # handles the subset ietsp implements and execs the real nix for the
+      # rest, so this only belongs on a PATH that also has nix (docs/classic.md).
+      classic = pkgs: pkgs.runCommand "ietsp-classic" { } ''
+        mkdir -p $out/bin
+        for n in nix-instantiate nix-build nix-eval-jobs nix; do
+          ln -s ${ietsp pkgs}/bin/ietsp $out/bin/$n
+        done
+      '';
     in {
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
@@ -19,7 +28,7 @@
         };
       });
       nixosModules.default = import ./nix/module.nix self;
-      packages = forAll (pkgs: { default = ietsp pkgs; });
+      packages = forAll (pkgs: { default = ietsp pkgs; classic = classic pkgs; });
       checks = forAll (pkgs:
         let
           pkg = ietsp pkgs;

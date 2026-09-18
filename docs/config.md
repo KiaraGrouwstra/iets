@@ -57,11 +57,13 @@ target), `max_jobs` (`auto` = CPU count), `cores` (`0` = all), `keep_going`,
 `Options::try_from(&config)`.
 
 Library call sites still pass `Options::default()`, which sends the values this
-client has always sent. The CLI does not build a `Config` yet: that wiring
-lands with classic mode.
+client has always sent. `crate::cli::classic` builds a `Config` and uses it:
+`store` picks the worker transport, `system` sets the evaluator's
+`builtins.currentSystem`, and `Options::try_from` feeds `SetOptions`
+(`docs/classic.md`). The other subcommands still do not read `nix.conf`.
 
 ## Parsed but not used yet
 
-`store`, `system`, `substituters`, `trusted-public-keys`, `builders`,
-`experimental-features`, `nix-path`, `sandbox` and every unknown setting are
-read and exposed, but nothing in ietsp consults them yet.
+`substituters`, `trusted-public-keys`, `builders`, `experimental-features`,
+`nix-path`, `sandbox` and every unknown setting are read and exposed, but
+nothing in ietsp consults them yet.

@@ -63,3 +63,10 @@ Nix returns a copy of the unforced argument thunk; inside a list,
 (`[ (builtins.break { a = 2; }) ]` gives `[ <CODE> ]`). ietsp forces the
 argument and prints the value. Selecting from the result behaves the same
 in both.
+
+## Classic mode
+
+`nix-instantiate`, `nix-build` and `nix-eval-jobs` under Nix's own names
+diverge in a few more places (store `auto`, `-Q`, `--show-trace`,
+`--no-out-link`, `getDerivations` recursion, `--add-root` clobbering).
+They are listed in `docs/classic.md`.
