@@ -176,9 +176,10 @@ fn read_traced(ev: &Evaluator, p: &Path) -> std::io::Result<Vec<u8>> {
 pub fn eval_flake_value(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
     let pos = Pos::NONE;
     let lock_bytes = read_traced(ev, &fr.dir.join("flake.lock"))
-        .map_err(|_| EvalError::boxed(ErrorKind::Io, LOCK_ERROR, pos))?;
-    let lock = lock::check(&lock_bytes)
-        .map_err(|why| EvalError::boxed(ErrorKind::Eval, format!("{LOCK_ERROR} ({why})"), pos))?;
+        .map_err(|_| EvalError::boxed(ErrorKind::Unsupported, LOCK_ERROR, pos))?;
+    let lock = lock::check(&lock_bytes).map_err(|why| {
+        EvalError::boxed(ErrorKind::Unsupported, format!("{LOCK_ERROR} ({why})"), pos)
+    })?;
 
     let (source_info, subdir) = root::source_info(ev, &fr.source, pos)?;
     let out_path = {
@@ -312,7 +313,7 @@ fn check_declared_inputs(
         let name = ev.interner.name(a.sym).to_vec();
         if !lock.root_inputs().any(|k| k.as_bytes() == name) {
             return Err(EvalError::boxed(
-                ErrorKind::Eval,
+                ErrorKind::Unsupported,
                 format!(
                     "{LOCK_ERROR} (input '{}' has no lock entry)",
                     String::from_utf8_lossy(&name)

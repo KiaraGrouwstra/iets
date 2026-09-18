@@ -48,7 +48,7 @@ macro_rules! unsupported {
     ($fn:ident, $msg:expr) => {
         fn $fn(ev: &mut Evaluator, _args: &[Word], pos: Pos) -> EvalResult<Word> {
             ev.trace.mark_uncacheable();
-            bail!(ErrorKind::Eval, pos, "{}", $msg)
+            bail!(ErrorKind::Unsupported, pos, "{}", $msg)
         }
     };
 }
@@ -189,6 +189,7 @@ fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>> {
     )?;
     let mut p = p;
     for c in &ctx {
+        let mut kind = ErrorKind::Eval;
         let msg = match c {
             Ctx::Opaque(sp) => {
                 if ev.trace.stat_now(sp, true) != crate::trace::Kind::Missing {
@@ -205,12 +206,15 @@ fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>> {
                 }
                 format!("path '{}' is not valid", lossy(sp))
             }
-            Ctx::DrvDeep(d) | Ctx::Built { drv: d, .. } => format!(
-                "ietsp: cannot build derivation '{}' (building is not supported)",
-                lossy(d)
-            ),
+            Ctx::DrvDeep(d) | Ctx::Built { drv: d, .. } => {
+                kind = ErrorKind::Unsupported;
+                format!(
+                    "ietsp: cannot build derivation '{}' (building is not supported)",
+                    lossy(d)
+                )
+            }
         };
-        let mut e = Error::new(ErrorKind::Eval, msg, pos);
+        let mut e = Error::new(kind, msg, pos);
         e.add_trace(
             pos,
             format!("while realising the context of path '{}'", lossy(&p)),

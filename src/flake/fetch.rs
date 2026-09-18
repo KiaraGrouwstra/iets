@@ -85,7 +85,7 @@ fn collect_attrs(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Attrs> {
     let w = ev.force(w)?;
     let Some(a) = w.as_attrs() else {
         bail!(
-            ErrorKind::Eval,
+            ErrorKind::Unsupported,
             pos,
             "ietsp: 'fetchTree' with a URL argument is not supported; pass the locked attribute set"
         );
@@ -171,7 +171,7 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
         "github" | "gitlab" | "sourcehut" | "git" | "tarball" | "hg" => {
             let Some(nar_hash) = str_attr(&attrs, "narHash") else {
                 bail!(
-                    ErrorKind::Eval,
+                    ErrorKind::Unsupported,
                     pos,
                     "ietsp: cannot fetch unlocked input '{}' (no narHash); run nix flake lock",
                     to_url(&attrs)
@@ -184,7 +184,7 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
                 .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?
         }
         other => bail!(
-            ErrorKind::Eval,
+            ErrorKind::Unsupported,
             pos,
             "ietsp: fetchTree input type '{other}' is not supported"
         ),
