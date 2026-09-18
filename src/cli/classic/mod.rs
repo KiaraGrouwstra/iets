@@ -6,6 +6,7 @@ pub mod build;
 pub mod develop;
 pub mod instantiate;
 pub mod nix;
+pub mod shell;
 
 use std::collections::HashSet;
 use std::os::unix::process::CommandExt;
@@ -20,13 +21,20 @@ use crate::runtime::Word;
 use crate::store::path::StorePath;
 
 /// The command names ietsp answers to when it is installed as classic Nix.
-pub const NAMES: &[&str] = &["nix-instantiate", "nix-build", "nix-eval-jobs", "nix"];
+pub const NAMES: &[&str] = &[
+    "nix-instantiate",
+    "nix-build",
+    "nix-eval-jobs",
+    "nix-shell",
+    "nix",
+];
 
 /// Runs the classic command `name`. `argv` is everything after argv[0].
 pub fn dispatch(name: &str, argv: &[String]) -> i32 {
     match name {
         "nix-instantiate" => instantiate::main(argv),
         "nix-build" => build::main(argv),
+        "nix-shell" => shell::main(argv),
         "nix-eval-jobs" => crate::cli::jobs::cmd_eval_jobs(argv),
         _ => nix::main(argv),
     }

@@ -17,7 +17,7 @@
       # rest, so this only belongs on a PATH that also has nix (docs/classic.md).
       classic = pkgs: pkgs.runCommand "ietsp-classic" { } ''
         mkdir -p $out/bin
-        for n in nix-instantiate nix-build nix-eval-jobs nix; do
+        for n in nix-instantiate nix-build nix-eval-jobs nix-shell nix; do
           ln -s ${ietsp pkgs}/bin/ietsp $out/bin/$n
         done
       '';
