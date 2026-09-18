@@ -199,13 +199,25 @@ fn walk(ev: &mut Evaluator, a: Args, stream: Stream) -> bool {
             ev,
             crate::cli::EvalArgs {
                 input: Some(input),
-                attr: a.attr.clone(),
                 no_cache: true,
                 flake_whole: true,
                 ..crate::cli::parse_eval_args(&[])
             },
         )?;
         let root = ev.auto_call(root, args)?;
+        // `-A attr` is the walk root, selected after the auto-call, the way
+        // nix-fast-build's `--select 'root: root.attr'` is (processes.py:128).
+        let root = match &a.attr {
+            Some(attr) => {
+                let path: Vec<String> = attr
+                    .split('.')
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                crate::jobs::find_along_attr_path(ev, root, &path)?
+            }
+            None => root,
+        };
         let Some(select) = &a.select else {
             return Ok(root);
         };

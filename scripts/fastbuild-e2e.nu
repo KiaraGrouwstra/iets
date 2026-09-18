@@ -181,8 +181,23 @@ def main [] {
   let ru = (with-env {IETSP_NO_FALLBACK: "1"} { go $ietsp fast-build --nonsense })
   $ok = ($ok | append (verdict ($ru.stderr =~ 'falling back to nix-fast-build') "an unknown flag falls back" $ru.stderr))
 
-  # --- 9. the same flake through the real nix-fast-build
-  print "== 9. against the real nix-fast-build"
+  # --- 9. the nixpkgs-free packages set, and --file mode with -A
+  print "== 9. --flake #packages and --file -A"
+  let r9a = (go $ietsp fast-build --flake $"path:($flake)#packages" --systems $system)
+  $ok = ($ok | append (verdict ($r9a.exit_code == 0) "#packages builds and exits 0" $"exit ($r9a.exit_code)"))
+  $ok = ($ok | append (verdict ($r9a.stderr =~ 'building fb-lone') "#packages.lone was built" $r9a.stderr))
+  # The same derivations through a plain Nix file, selected with -A.
+  let rel = $"($tmp)/release.nix"
+  $"{ system ? builtins.currentSystem }:
+let f = import ($flake)/flake.nix; o = f.outputs { self = null; };
+in { ci = o.checks.${system}; }
+" | save -f $rel
+  let r9b = (go $ietsp fast-build --file $rel -A ci --argstr system $system)
+  $ok = ($ok | append (verdict ($r9b.exit_code == 1) "--file -A ci reaches the failing check" $"exit ($r9b.exit_code)"))
+  $ok = ($ok | append (verdict ($r9b.stderr =~ 'bad') "--file -A ci names the failure" $r9b.stderr))
+
+  # --- 10. the same flake through the real nix-fast-build
+  print "== 10. against the real nix-fast-build"
   let nfb = (^bash -c "command -v nix-fast-build || true" | chomp)
   if ($nfb | is-empty) {
     print "     skipped: nix-fast-build is not on PATH. Run it with"

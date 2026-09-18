@@ -153,6 +153,25 @@ parallelism.
 at the first failed batch; the attributes left are recorded skipped.
 `--retries N` re-submits the failed targets of a batch N more times.
 
+### When the grpc transport lands
+
+`Transport::Grpc` needs nothing from this side to work: `Dispatcher` and
+both uploaders speak to a `Transport` and a `Connection`, never to a
+socket. `--store grpc://…` starts working as soon as `Transport::parse`
+accepts the scheme.
+
+One thing changes then, and it changes inside `Dispatcher::submit_once`.
+The batched op exists because the worker protocol is serial per
+connection: a second request cannot be in flight, so a per-derivation op
+would idle the daemon between derivations. A transport that multiplexes
+lifts that, and then the right shape is one request per derivation with
+`-j` of them in flight, which drops the layer-synchronous barrier a
+batched op imposes (every derivation in a batch waits for the slowest).
+What the grpc transport must offer for that: a way to start a build
+without waiting for the previous one to finish, and events tagged with the
+derivation they belong to. The event mapping, the renderer, the records
+and every call site stay as they are.
+
 ### Measured on the e2e flake
 
 `scripts/fastbuild-e2e.nu`'s flake: four `checks.<system>` derivations for
@@ -229,12 +248,13 @@ pipeline.
 
 ## Tests
 
-`scripts/fastbuild-e2e.nu` (32 cases). A flake with four `checks` per
+`scripts/fastbuild-e2e.nu` (36 cases). A flake with four `checks` per
 system and no nixpkgs, built against the local daemon: the exit code, the
 failing attribute named, the failure log tail, the dependent check built,
 the JSON and JUnit result files, `--out-link`, `--fail-fast`,
-`--stream-json-lines`, `--systems` with no match, every refused flag, and
-the fallback on an unknown flag. Case 9 runs the same flake through the
+`--stream-json-lines`, `--systems` with no match, every refused flag, the
+fallback on an unknown flag, the nixpkgs-free `packages` set, and `--file`
+mode with `-A`. Case 10 runs the same flake through the
 real `nix-fast-build` and compares the JSON result file's attributes and
 per-attribute outcomes, not timings; it is skipped with a note when
 `nix-fast-build` is not on `PATH` (the dev shell does not ship it, so
