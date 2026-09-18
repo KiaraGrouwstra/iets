@@ -23,7 +23,6 @@ const APPENDABLE: &[&str] = &[
     "plugin-files",
     "sandbox-paths",
     "secret-key-files",
-    "source-map",
     "substituters",
     "system-features",
     "trusted-public-keys",
@@ -40,7 +39,7 @@ fn home() -> PathBuf {
 }
 
 /// `$XDG_CONFIG_HOME` or `~/.config` (unix/xdg-dirs.cc:getConfigHome).
-fn config_home() -> PathBuf {
+pub fn config_home() -> PathBuf {
     env("XDG_CONFIG_HOME").map_or_else(|| home().join(".config"), PathBuf::from)
 }
 
@@ -125,12 +124,12 @@ impl Config {
     }
 
     pub fn apply(&mut self, text: &str, origin: &Path) -> Result<()> {
-        for (name, value) in parse(text, origin)? {
+        for e in parse(text, origin)? {
             // NIX_PATH must override the setting (configuration.cc:186).
-            if (name == "nix-path" || name == "extra-nix-path") && env("NIX_PATH").is_some() {
+            if (e.name == "nix-path" || e.name == "extra-nix-path") && env("NIX_PATH").is_some() {
                 continue;
             }
-            self.set(&name, &value);
+            self.set(&e.name, &e.value);
         }
         Ok(())
     }
@@ -263,16 +262,6 @@ impl Config {
         }
     }
 
-    /// `source-map`: ietsp's own setting, `STOREPATH=LOCALDIR` entries
-    /// separated by whitespace. See docs/provenance.md.
-    pub fn source_map(&self) -> Vec<(String, String)> {
-        self.list(crate::provenance::SETTING)
-            .iter()
-            .filter_map(|e| e.split_once('='))
-            .map(|(s, l)| (s.to_string(), l.to_string()))
-            .collect()
-    }
-
     /// `sandbox`: `true`, `false` or `relaxed`. Default `true` on Linux only.
     pub fn sandbox(&self) -> String {
         self.str("sandbox")
@@ -300,9 +289,26 @@ fn cpus() -> u64 {
     std::thread::available_parallelism().map_or(1, |n| n.get() as u64)
 }
 
-/// configuration.cc:parseConfigFiles. Returns the pairs in file order, includes
-/// expanded in place.
-fn parse(text: &str, origin: &Path) -> Result<Vec<(String, String)>> {
+/// One `name = value` line, with the file and line it came from so a reader
+/// that rejects unknown names can say where the name is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    pub name: String,
+    pub value: String,
+    pub file: PathBuf,
+    pub line: usize,
+}
+
+impl Entry {
+    /// `file:line`, what an error message shows.
+    pub fn at(&self) -> String {
+        format!("{}:{}", self.file.display(), self.line)
+    }
+}
+
+/// configuration.cc:parseConfigFiles. Returns the entries in file order,
+/// includes expanded in place.
+pub fn parse(text: &str, origin: &Path) -> Result<Vec<Entry>> {
     let mut out = Vec::new();
     parse_into(text, origin, &mut out, 0)?;
     Ok(out)
@@ -310,19 +316,14 @@ fn parse(text: &str, origin: &Path) -> Result<Vec<(String, String)>> {
 
 const MAX_INCLUDE_DEPTH: usize = 32;
 
-fn parse_into(
-    text: &str,
-    origin: &Path,
-    out: &mut Vec<(String, String)>,
-    depth: usize,
-) -> Result<()> {
+fn parse_into(text: &str, origin: &Path, out: &mut Vec<Entry>, depth: usize) -> Result<()> {
     if depth > MAX_INCLUDE_DEPTH {
         return Err(Error::Config(format!(
             "too many nested includes in {}",
             origin.display()
         )));
     }
-    for raw in text.split('\n') {
+    for (nr, raw) in text.split('\n').enumerate() {
         let line = match raw.find('#') {
             Some(i) => &raw[..i],
             None => raw,
@@ -371,7 +372,12 @@ fn parse_into(
                 origin.display()
             )));
         }
-        out.push((tokens[0].to_string(), tokens[2..].join(" ")));
+        out.push(Entry {
+            name: tokens[0].to_string(),
+            value: tokens[2..].join(" "),
+            file: origin.to_path_buf(),
+            line: nr + 1,
+        });
     }
     Ok(())
 }

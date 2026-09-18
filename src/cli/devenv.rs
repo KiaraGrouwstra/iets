@@ -66,7 +66,7 @@ impl EventSink {
 /// `ietsp print-dev-env`: the bash `nix print-dev-env` prints for a flake's shell, from the
 /// in-memory shell derivation through a Nix daemon. See docs/direnv.md.
 pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
-    let mut url = "daemon".to_string();
+    let mut url: Option<String> = None;
     let mut gc_root: Option<String> = None;
     let mut rest: Vec<String> = Vec::new();
     let mut flake: Option<String> = None;
@@ -75,7 +75,7 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
         match argv[i].as_str() {
             "--builder" => {
                 i += 1;
-                url = argv.get(i).cloned().unwrap_or_else(|| usage());
+                url = Some(argv.get(i).cloned().unwrap_or_else(|| usage()));
             }
             "--gc-root" => {
                 i += 1;
@@ -92,6 +92,8 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
     }
     let mut a = parse_eval_args(&rest);
     a.input = Some(Input::Flake(flake.unwrap_or_else(|| ".".into())));
+    let cfg = crate::config::Config::load(&[]).unwrap_or_else(|_| crate::config::Config::empty());
+    let url = crate::settings::builder(url.as_deref(), &cfg);
     let Some(transport) = crate::remote::worker::Transport::parse(&url) else {
         eprintln!(
             "error: print-dev-env needs a Nix daemon: --builder daemon, unix:///path or ssh-ng://host"
@@ -427,10 +429,7 @@ fn dev_env_build(ev: &mut Evaluator, a: EvalArgs, d: &DevEnvArgs) -> Result<DevE
             live: timings,
             log: Vec::new(),
             failed: None,
-            prov: crate::provenance::Provenance::snapshot(
-                ev,
-                crate::config::Config::load(&[]).ok().as_ref(),
-            ),
+            prov: crate::provenance::Provenance::snapshot(ev),
         };
         let mut conn = Connection::open(&d.transport, &mut |e| sink.event(e))?;
         let valid = conn.query_valid_paths(&out_paths, &mut |e| sink.event(e))?;

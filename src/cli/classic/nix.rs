@@ -665,6 +665,7 @@ fn realise(
 
     let cwd = cwd();
     let mut out = String::new();
+    let mut links: Vec<(String, String)> = Vec::new();
     for (i, t) in targets.iter().enumerate() {
         let drv = t.drv.to_string();
         for output in &t.outputs {
@@ -688,16 +689,17 @@ fn realise(
                     link.push_str(output);
                 }
                 let link = String::from_utf8_lossy(&abs_path(&link, &cwd)).into_owned();
-                if let Err(e) = d.out_link(&path, std::path::Path::new(&link)) {
-                    eprintln!("error: {e}");
-                    return 1;
-                }
+                links.push((path.clone(), link));
             }
             if n.print_out_paths {
                 out.push_str(&path);
                 out.push('\n');
             }
         }
+    }
+    if let Err(e) = super::out_links(&mut d, transport, &links) {
+        eprintln!("error: {e}");
+        return 1;
     }
     print_bytes(out.as_bytes());
     0

@@ -57,8 +57,7 @@ fn eval_and_build(ev: &mut Evaluator, a: EvalArgs, url: String) -> u8 {
     }
     // `--out` would add wanted outputs; the roots' string context is enough here.
     let (root_paths, outputs) = api::build_targets(&[], &roots);
-    let cfg = ietsp::config::Config::load(&[]).ok();
-    let prov = ietsp::provenance::Provenance::snapshot(ev, cfg.as_ref());
+    let prov = ietsp::provenance::Provenance::snapshot(ev);
 
     // Every derivation and source this evaluation created, straight from
     // memory: the plan reads `/nix/store` only for what it did not create.

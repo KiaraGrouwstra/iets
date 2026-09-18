@@ -8,13 +8,12 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use crate::config::Config;
 use crate::eval::{Evaluator, Pos};
 use crate::store::path::STORE_DIR;
 use crate::store::source::SourceOrigin;
 
-/// The setting that maps store paths to local checkouts, for trees this
-/// evaluation did not copy itself (a nixpkgs checkout, mainly).
+/// The `ietsp.conf` setting that maps store paths to local checkouts, for
+/// trees this evaluation did not copy itself (a nixpkgs checkout, mainly).
 pub const SETTING: &str = "source-map";
 
 pub fn enabled() -> bool {
@@ -145,15 +144,14 @@ impl SourceMap {
     }
 
     /// The trees this evaluation copied, plus the `source-map` setting.
-    pub fn from_eval(ev: &Evaluator, cfg: Option<&Config>) -> SourceMap {
-        SourceMap::from_sources(&ev.source_origins(), cfg)
+    pub fn from_eval(ev: &Evaluator) -> SourceMap {
+        SourceMap::from_sources(&ev.source_origins())
     }
 
     /// The same map from a set of source records, for a run that replayed
     /// them from the cache instead of evaluating.
     pub fn from_sources(
         sources: &HashMap<crate::store::path::StorePath, SourceOrigin>,
-        cfg: Option<&Config>,
     ) -> SourceMap {
         let mut m = SourceMap::default();
         let revs = revs().lock().unwrap();
@@ -165,10 +163,8 @@ impl SourceMap {
             }
         }
         drop(revs);
-        if let Some(cfg) = cfg {
-            for (store, local) in cfg.source_map() {
-                m.insert(store.as_bytes(), local.as_bytes(), None);
-            }
+        for (store, local) in &crate::settings::get().source_map {
+            m.insert(store.as_bytes(), local.as_bytes(), None);
         }
         m.sort();
         m
@@ -194,7 +190,7 @@ pub fn record_rev(store_path: &str, rev: &str) {
 /// Built on first use, so a tree copied later is not in it.
 fn lazy_map(ev: &Evaluator) -> &'static SourceMap {
     static MAP: OnceLock<SourceMap> = OnceLock::new();
-    MAP.get_or_init(|| SourceMap::from_eval(ev, Config::load(&[]).ok().as_ref()))
+    MAP.get_or_init(|| SourceMap::from_eval(ev))
 }
 
 /// `file:line:col` of `pos`, the local path when the file is a copy of one.
@@ -276,11 +272,11 @@ impl Provenance {
         }
     }
 
-    pub fn snapshot(ev: &Evaluator, cfg: Option<&Config>) -> Provenance {
+    pub fn snapshot(ev: &Evaluator) -> Provenance {
         if !enabled() {
             return Provenance::off();
         }
-        let map = SourceMap::from_eval(ev, cfg);
+        let map = SourceMap::from_eval(ev);
         let mut sites = HashMap::new();
         for (p, info) in ev.drv.drvs.iter() {
             if info.attr.is_none() && info.pos.is_none() {

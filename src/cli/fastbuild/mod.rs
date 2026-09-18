@@ -50,7 +50,6 @@ struct Dispatch {
     retries: usize,
     fail_fast: bool,
     stream_json_lines: bool,
-    cfg: Config,
     drvs: SharedMap<StorePath, DrvInfo>,
     sources: SharedMap<StorePath, SourceOrigin>,
 }
@@ -81,10 +80,10 @@ pub fn cmd_fast_build(argv: &[String]) -> i32 {
 
 fn run(a: Args) -> Result<i32> {
     let cfg = Config::load(&a.overrides)?;
-    let transport = Transport::parse_checked(&a.store, &cfg.system())?.ok_or_else(|| {
+    let store = crate::settings::builder(a.store.as_deref(), &cfg);
+    let transport = Transport::parse_checked(&store, &cfg.system())?.ok_or_else(|| {
         CrateError::Usage(format!(
-            "--store '{}': ietsp fast-build speaks the Nix worker protocol: daemon, unix:///path or ssh-ng://[user@]host",
-            a.store
+            "--store '{store}': ietsp fast-build speaks the Nix worker protocol: daemon, unix:///path or ssh-ng://[user@]host"
         ))
     })?;
     if matches!(transport, Transport::Grpc(_)) {
@@ -144,7 +143,6 @@ fn run(a: Args) -> Result<i32> {
         retries: a.retries,
         fail_fast: a.fail_fast,
         stream_json_lines: a.stream_json_lines,
-        cfg: cfg.clone(),
         drvs: ev.drv.drvs.clone(),
         sources: ev.sources.clone(),
     };
@@ -343,10 +341,7 @@ fn dispatch(d: Dispatch, rx: Receiver<Line>) -> Result<Report> {
                 // The first batch: the sources the flake copied are in the
                 // table now, so the log rewriter can be built.
                 let prov = crate::provenance::Provenance::from_map(
-                    crate::provenance::SourceMap::from_sources(
-                        &d.sources.lock().clone(),
-                        Some(&d.cfg),
-                    ),
+                    crate::provenance::SourceMap::from_sources(&d.sources.lock().clone()),
                 );
                 let mut fresh = Dispatcher::open(&d.transport, &d.options, prov, d.style)?;
                 fresh.retries = d.retries;

@@ -33,7 +33,8 @@ pub struct Args {
     pub overrides: Vec<(String, String)>,
     /// `-j`; `None` means "take `max-jobs` from the settings".
     pub max_jobs: Option<u64>,
-    pub store: String,
+    /// `--store`; `None` means "take `builder` from the ietsp settings".
+    pub store: Option<String>,
     pub eval_workers: Option<usize>,
     pub skip_cached: bool,
     pub skip_unsupported: bool,
@@ -63,7 +64,7 @@ impl Default for Args {
             impure: false,
             overrides: Vec::new(),
             max_jobs: None,
-            store: "daemon".into(),
+            store: None,
             eval_workers: None,
             skip_cached: false,
             skip_unsupported: false,
@@ -200,7 +201,7 @@ pub fn parse(argv: &[String]) -> Result<Args, Reject> {
                         Reject::Unknown(format!("'{s}' wants a number, got '{v}'"))
                     })?);
             }
-            "--store" => a.store = value(&mut i, &s)?,
+            "--store" => a.store = Some(value(&mut i, &s)?),
             "--eval-workers" => {
                 let v = value(&mut i, &s)?;
                 a.eval_workers =
@@ -302,7 +303,7 @@ mod tests {
         let a = args(&[]);
         assert_eq!(a.mode, EvalMode::Flake);
         assert_eq!(a.flake, ".#checks");
-        assert_eq!(a.store, "daemon");
+        assert_eq!(a.store, None);
         assert_eq!(a.result_format, Format::Json);
         assert!(!a.impure);
         assert_eq!(a.max_jobs, None);
@@ -344,7 +345,7 @@ mod tests {
             "--flake",
             ".#checks.x86_64-linux",
         ]);
-        assert_eq!(a.store, "ssh-ng://farm.example");
+        assert_eq!(a.store.as_deref(), Some("ssh-ng://farm.example"));
         assert_eq!(a.max_jobs, Some(8));
         assert_eq!(a.systems, ["x86_64-linux", "aarch64-linux"]);
         assert_eq!(a.result_format, Format::Junit);

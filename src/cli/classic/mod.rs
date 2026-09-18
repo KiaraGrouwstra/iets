@@ -174,12 +174,58 @@ pub fn transport_of(store: &str, system: &str) -> Result<Transport, String> {
     }
 }
 
-/// `Config::load` plus the transport and `SetOptions` values it implies.
+/// `Config::load` plus the transport and `SetOptions` values it implies. The
+/// build target is `--store` or `--option store` when the command line gave
+/// one, else the `builder` setting, else nix.conf's `store` (docs/config.md).
 pub fn settings(c: &Common) -> Result<(Config, Transport, Options), String> {
     let cfg = Config::load(&c.overrides).map_err(|e| e.to_string())?;
-    let transport = transport_of(&cfg.store(), &cfg.system())?;
+    let flag = c
+        .overrides
+        .iter()
+        .any(|(k, _)| k == "store")
+        .then(|| cfg.store());
+    let transport = transport_of(
+        &crate::settings::builder(flag.as_deref(), &cfg),
+        &cfg.system(),
+    )?;
     let options = Options::try_from(&cfg).map_err(|e| e.to_string())?;
     Ok((cfg, transport, options))
+}
+
+/// The local daemon, where GC roots, out-links and `--add-root` registrations
+/// go whatever `builder` says (docs/classic.md).
+pub fn local() -> Transport {
+    Transport::Unix(PathBuf::from(DEFAULT_SOCKET))
+}
+
+/// Makes the `(store path, link)` out-links on the local daemon. A `builder`
+/// that is not the local daemon leaves the outputs there, so their closure is
+/// copied back first: a symlink and its GC root are worth nothing without the
+/// path they name (docs/classic.md).
+pub fn out_links(
+    d: &mut crate::build::Dispatcher,
+    transport: &Transport,
+    links: &[(String, String)],
+) -> crate::error::Result<()> {
+    if links.is_empty() {
+        return Ok(());
+    }
+    if *transport == local() {
+        for (path, link) in links {
+            d.out_link(path, std::path::Path::new(link))?;
+        }
+        return Ok(());
+    }
+    let mut paths: Vec<StorePath> = Vec::with_capacity(links.len());
+    for (p, _) in links {
+        paths.push(StorePath::parse(p)?);
+    }
+    let mut conn = crate::remote::worker::Connection::open(&local(), &mut |_| {})?;
+    crate::remote::copy::closure(&mut d.conn, &mut conn, &paths, &mut |_| {})?;
+    for (path, link) in links {
+        conn.add_perm_root(path, std::path::Path::new(link))?;
+    }
+    Ok(())
 }
 
 /// An evaluator with the search path and the `system` setting applied.

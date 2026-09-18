@@ -81,9 +81,8 @@ pub fn main(argv: &[String]) -> i32 {
     let ev = super::evaluator(&b.c, &cfg);
     let b = Arc::new(b);
     let build = Arc::clone(&b);
-    let cfg2 = cfg.clone();
     match crate::parallel::run(crate::parallel::default_workers(), ev, move |ev| {
-        run(ev, &build, &cfg2)
+        run(ev, &build)
     }) {
         Run::Failed(code) => code,
         Run::Unsupported(reason) => fallback(NAME, argv, &reason),
@@ -92,7 +91,7 @@ pub fn main(argv: &[String]) -> i32 {
     }
 }
 
-fn run(ev: &mut Evaluator, b: &Build, cfg: &crate::config::Config) -> Run {
+fn run(ev: &mut Evaluator, b: &Build) -> Run {
     let cwd = cwd();
     let mut roots: Vec<Root> = Vec::new();
     let mut seen = HashSet::new();
@@ -117,7 +116,7 @@ fn run(ev: &mut Evaluator, b: &Build, cfg: &crate::config::Config) -> Run {
     if roots.is_empty() {
         return Run::Empty;
     }
-    let prov = Provenance::snapshot(ev, Some(cfg));
+    let prov = Provenance::snapshot(ev);
     match super::plan_roots(ev, &roots) {
         Ok(p) => Run::Ready(roots, Box::new(p), Box::new(prov)),
         Err(e) => {
@@ -198,6 +197,7 @@ fn realise(
     }
     let cwd = cwd();
     let mut out = String::new();
+    let mut links: Vec<(String, String)> = Vec::new();
     for r in roots {
         let drv = r.drv.to_string();
         let path = maps
@@ -219,13 +219,14 @@ fn realise(
                 link.push_str(&r.output);
             }
             let link = String::from_utf8_lossy(&abs_path(&link, &cwd)).into_owned();
-            if let Err(e) = d.out_link(&path, std::path::Path::new(&link)) {
-                eprintln!("error: {e}");
-                return 1;
-            }
+            links.push((path.clone(), link));
         }
         out.push_str(&path);
         out.push('\n');
+    }
+    if let Err(e) = super::out_links(&mut d, transport, &links) {
+        eprintln!("error: {e}");
+        return 1;
     }
     use std::io::Write;
     let mut stdout = std::io::stdout();

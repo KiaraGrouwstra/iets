@@ -35,6 +35,15 @@ fn on_big_stack(f: impl FnOnce() -> i32 + Send + 'static) -> i32 {
 fn main() {
     restore_sigpipe();
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    // `--ietsp-option` is ours, so it leaves the argv here: a classic fallback
+    // execs the real nix with what is left (docs/settings.md).
+    let argv = match ietsp::settings::take_options(&argv) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("error: {e}");
+            exit(2)
+        }
+    };
     if let Some(name) = classic_name() {
         exit(on_big_stack(move || cli::classic::dispatch(&name, &argv)))
     }

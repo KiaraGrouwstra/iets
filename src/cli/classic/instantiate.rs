@@ -97,10 +97,13 @@ pub fn main(argv: &[String]) -> i32 {
         Ok(i) => i,
         Err(reason) => fallback(NAME, argv, &reason),
     };
-    let (cfg, transport, options) = match super::settings(&i.c) {
+    // `nix-instantiate` builds nothing: the drvs, their sources and the
+    // `--add-root` links belong to the local store whatever `builder` says.
+    let (cfg, _, options) = match super::settings(&i.c) {
         Ok(t) => t,
         Err(reason) => fallback(NAME, argv, &reason),
     };
+    let transport = super::local();
     let ev = super::evaluator(&i.c, &cfg);
     let i = Arc::new(i);
     let inst = Arc::clone(&i);

@@ -9,7 +9,7 @@ use crate::store::locate::{drv_roots, locate_in_store};
 use crate::trace::run::Cache;
 
 struct BuildArgs {
-    url: String,
+    url: Option<String>,
     timings: bool,
     no_build: bool,
     fetch_to: Option<std::path::PathBuf>,
@@ -21,7 +21,7 @@ struct BuildArgs {
 /// take a `.drv` path and read its closure from `/nix/store`.
 pub fn cmd_build(argv: &[String]) -> i32 {
     let mut b = BuildArgs {
-        url: "daemon".to_string(),
+        url: None,
         timings: false,
         no_build: false,
         fetch_to: None,
@@ -34,7 +34,7 @@ pub fn cmd_build(argv: &[String]) -> i32 {
         match argv[i].as_str() {
             "--builder" => {
                 i += 1;
-                b.url = argv.get(i).cloned().unwrap_or_else(|| usage());
+                b.url = Some(argv.get(i).cloned().unwrap_or_else(|| usage()));
             }
             "--timings" => b.timings = true,
             "--no-build" => b.no_build = true,
@@ -89,7 +89,7 @@ pub fn cmd_build(argv: &[String]) -> i32 {
         }
         let (root_paths, outputs) = build_targets(&b.outputs, &roots);
         let prov = crate::provenance::Provenance::from_map(
-            crate::provenance::SourceMap::from_sources(&sources, config().as_ref()),
+            crate::provenance::SourceMap::from_sources(&sources),
         );
         let inputs = crate::remote::plan::Inputs {
             drvs: &drvs,
@@ -104,10 +104,11 @@ pub fn cmd_build(argv: &[String]) -> i32 {
     crate::parallel::run(a.workers, ev, move |ev| build_eval(ev, &b, a, t0, cache))
 }
 
-/// The Nix settings, for the `source-map` setting only; `ietsp build` takes
-/// no `--option`.
-fn config() -> Option<crate::config::Config> {
-    crate::config::Config::load(&[]).ok()
+/// The Nix settings, for `system` and the `store` that `--builder` defaults to;
+/// `ietsp build` takes no `--option`. An unreadable nix.conf leaves the
+/// defaults, as it did when nothing here read one.
+fn config() -> crate::config::Config {
+    crate::config::Config::load(&[]).unwrap_or_else(|_| crate::config::Config::empty())
 }
 
 fn build_eval(
@@ -145,7 +146,7 @@ fn build_eval(
         c.write(ev, &crate::trace::wire::encode_roots(&roots), true);
     }
     let (root_paths, outputs) = build_targets(&b.outputs, &roots);
-    let prov = crate::provenance::Provenance::snapshot(ev, config().as_ref());
+    let prov = crate::provenance::Provenance::snapshot(ev);
     let drvs = ev.drv.drvs.lock();
     let sources = ev.source_origins();
     let inputs = crate::remote::plan::Inputs {
@@ -203,7 +204,6 @@ fn build_drv_file(b: &BuildArgs, root_arg: &str) -> i32 {
     let sources = HashMap::new();
     let prov = crate::provenance::Provenance::from_map(crate::provenance::SourceMap::from_sources(
         &sources,
-        config().as_ref(),
     ));
     build_roots(
         b,
@@ -229,15 +229,13 @@ fn build_roots(
     use crate::build::{Dispatcher, Target};
     use crate::store::path::StorePath;
 
-    let transport = match crate::remote::worker::Transport::parse_checked(
-        &b.url,
-        &config().map_or_else(|| crate::config::DEFAULT_SYSTEM.to_string(), |c| c.system()),
-    ) {
+    let cfg = config();
+    let url = crate::settings::builder(b.url.as_deref(), &cfg);
+    let transport = match crate::remote::worker::Transport::parse_checked(&url, &cfg.system()) {
         Ok(Some(t)) => t,
         Ok(None) => {
             eprintln!(
-                "error: unsupported builder '{}': expected daemon, unix:///path, ssh-ng://[user@]host or grpc://host:port",
-                b.url
+                "error: unsupported builder '{url}': expected daemon, unix:///path, ssh-ng://[user@]host or grpc://host:port"
             );
             return 2;
         }
