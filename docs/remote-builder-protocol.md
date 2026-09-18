@@ -9,7 +9,8 @@ later.
 
 Fallback: the same `ietsp build` speaks the Nix worker protocol to any
 `nix-daemon` (`--builder daemon`, `unix://`, `ssh-ng://`); see the section at
-the end. What scheduling that protocol allows, measured: `docs/scheduling.md`.
+the end. What more scheduling over that protocol would buy, measured and rejected:
+`docs/scheduling.md`.
 
 ## Problem
 

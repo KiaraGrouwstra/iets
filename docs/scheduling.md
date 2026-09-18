@@ -1,11 +1,16 @@
 # Build scheduling over the worker protocol
 
-What `ietsp build` can gain, over a plain `nix-daemon`, by cutting the upload
-and the builds into more than one op and more than one connection. Every
-lever is a flag on `ietsp build` and off by default; the numbers below say
-which ones pay. `nu scripts/sched-bench.nu` runs the matrix.
+> The levers below were measured, found not to pay, and removed on
+> 2026-09-18 (commit bc64b0d); the tables stay as the record. `ietsp build`
+> keeps the plain five-op flow. The code, the shim, the bench script and the
+> raw results are in the history up to 6b93209.
 
-Levers (`src/remote/worker/sched.rs`):
+What `ietsp build` could gain, over a plain `nix-daemon`, by cutting the
+upload and the builds into more than one op and more than one connection.
+Every lever was a flag on `ietsp build`, off by default; the numbers below
+say which ones pay. `scripts/sched-bench.nu` ran the matrix.
+
+Levers (`src/remote/worker/sched.rs`, removed):
 
 | flag | what it changes |
 |---|---|
@@ -16,7 +21,7 @@ Levers (`src/remote/worker/sched.rs`):
 | `--critical-path` | uploads and submissions ordered by longest path to the root (a drv weighs 1, a fixed-output drv and a source 0) instead of plan order |
 | `--skip-substitutable` | do not upload paths the daemon can substitute when every referrer is skipped too |
 
-Today's flow, and the default: one connection, `QueryValidPaths`, one
+The flow, before and after the study: one connection, `QueryValidPaths`, one
 `AddMultipleToStore` of every missing object in topological order, one
 `BuildPathsWithResults` on the root, `QueryDerivationOutputMap`. Five ops.
 
@@ -600,8 +605,10 @@ What the bld1 tables say (uploads; every workload with `--no-build`):
 
 ## Recommendation
 
-Keep the defaults: one connection, one `AddMultipleToStore`, one
-`BuildPathsWithResults` on the root. No lever becomes the default:
+Keep the five-op flow: one connection, one `AddMultipleToStore`, one
+`BuildPathsWithResults` on the root. No lever became the default, so the
+levers and their flags were removed (bc64b0d) rather than kept as options
+nobody would set:
 
 - Per-derivation and batched submission never beat the root op on one
   connection (+42 ms and a round trip per op, a `Worker` per op) and lose
@@ -629,6 +636,8 @@ cost of a warm build on a real host.
 
 ## Commands
 
+The matrix ran as, at 6b93209:
+
 ```
 export TMPDIR=$HOME/tmp/nixtmp NIX_REMOTE=daemon
 nix develop -c cargo build --release
@@ -637,15 +646,10 @@ nix develop -c nu scripts/sched-bench.nu --host root@bld1.ztm.io --targets host 
   --workloads g8x6,g32x4,chain30,nixos-desktop
 ```
 
-One lever by hand, over the shim from `scripts/sched-bench.nu` (it writes the
-shims to `ROOT/bin`):
+Each run wrote `bench/results/sched/<stamp>.{json,md}`; the tables above are
+the merged `local.{json,md}` and `bld1.{json,md}`, kept in history at 6b93209.
+The synthetic graphs are still `bench/graph.nix`:
 
 ```
-export IETSP_SCHED_ROOT=$HOME/tmp/ietsp-sched/shim0 IETSP_SCHED_LATENCY_MS=20
-PATH=$HOME/tmp/ietsp-sched/bin:$PATH ietsp build --builder ssh-ng://shim --timings \
-  --connections 4 --overlap --critical-path --upload-batch 256 --build-batch 0 \
-  --arg width 8 --arg depth 6 bench/graph.nix
+nix-instantiate bench/graph.nix --arg width 8 --arg depth 6
 ```
-
-Each bench run writes `bench/results/sched/<stamp>.{json,md}`; the tables above
-are the merged `local.{json,md}` and `bld1.{json,md}` there.
