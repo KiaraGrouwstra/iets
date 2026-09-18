@@ -3,6 +3,7 @@
 //! See `docs/classic.md`.
 
 pub mod build;
+pub mod develop;
 pub mod instantiate;
 pub mod nix;
 

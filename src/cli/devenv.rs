@@ -214,6 +214,31 @@ fn ensure_gc_root(
     conn.add_indirect_root(root_s, &mut |_| {})
 }
 
+/// What the `-env` build produced: the environment `get-env.sh` dumped, the output that
+/// holds it (`nix develop` makes it `NIX_GCROOT`), and the shell derivation's builder.
+pub struct DevEnv {
+    pub env: crate::devenv::BuildEnvironment,
+    pub out_path: String,
+    /// `<store path>/bin/bash`: the bash the shell was built with.
+    pub builder: String,
+    /// When the daemon phase started, for the caller's `--timings` line.
+    t1: std::time::Instant,
+}
+
+/// `print-dev-env` without the printing: the build environment of the flake installable
+/// `a.input` names, on `ev`. `nix develop` (src/cli/classic/develop.rs) uses this.
+pub fn dev_env(
+    ev: Evaluator,
+    a: EvalArgs,
+    transport: crate::remote::worker::Transport,
+) -> Result<DevEnv, i32> {
+    let d = DevEnvArgs {
+        transport,
+        gc_root: None,
+    };
+    crate::parallel::run(a.workers, ev, move |ev| dev_env_build(ev, a, &d))
+}
+
 /// The cache-miss path: evaluate the shell, derive and build its `-env` derivation through
 /// the daemon, read the environment, print it, and remember the bytes.
 fn dev_env_full(
@@ -223,6 +248,69 @@ fn dev_env_full(
     cache: Option<Cache>,
     t0: std::time::Instant,
 ) -> i32 {
+    let (timings, json) = (a.timings, a.json);
+    let cwd = cwd();
+    let built = match dev_env_build(ev, a, d) {
+        Ok(b) => b,
+        Err(code) => return code,
+    };
+    let r = (|| -> crate::error::Result<Vec<u8>> {
+        let (mut output, files) = if json {
+            (
+                serde_json::to_vec(&built.env.to_json())
+                    .map_err(|e| CrateError::Protocol(e.to_string()))?,
+                Vec::new(),
+            )
+        } else {
+            let attrs_dir = match &d.gc_root {
+                Some(r) => std::path::PathBuf::from(format!("{}-attrs", r.display())),
+                None => std::env::temp_dir().join(format!("ietsp-dev-env-{}", std::process::id())),
+            };
+            let outputs_dir = std::path::Path::new(
+                <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&cwd),
+            )
+            .join("outputs");
+            let rc = crate::devenv::make_rc_script(&built.env, &attrs_dir, &outputs_dir)?;
+            (rc.script.into_bytes(), rc.files)
+        };
+        output.push(b'\n');
+        if let Some(c) = &cache {
+            c.write(
+                ev,
+                &crate::devenv::CachedResult {
+                    out_path: built.out_path.clone(),
+                    files,
+                    bytes: output.clone(),
+                }
+                .encode(),
+                false,
+            );
+        }
+        if timings {
+            eprintln!("daemon: {:.3}s", built.t1.elapsed().as_secs_f64());
+        }
+        Ok(output)
+    })();
+    match r {
+        Ok(out) => {
+            use std::io::Write;
+            let _ = std::io::stdout().write_all(&out);
+            let _ = std::io::stdout().flush();
+            if timings {
+                eprintln!("total: {:.3}s", t0.elapsed().as_secs_f64());
+            }
+            0
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            1
+        }
+    }
+}
+
+/// Evaluates the shell, derives and builds its `-env` derivation through the daemon and
+/// reads the environment back. The error is already reported; `Err` is the exit code.
+fn dev_env_build(ev: &mut Evaluator, a: EvalArgs, d: &DevEnvArgs) -> Result<DevEnv, i32> {
     use crate::builtins::derivation::{DrvInfo, load_drv_traced};
     use crate::devenv;
     use crate::eval::ErrorKind;
@@ -232,9 +320,8 @@ fn dev_env_full(
     use crate::store::source::SourceOrigin;
     use std::collections::BTreeSet;
 
+    let t0 = std::time::Instant::now();
     let timings = a.timings;
-    let json = a.json;
-    let cwd = cwd();
     let f = match &a.input {
         Some(Input::Flake(f)) => f.clone(),
         _ => usage(),
@@ -268,19 +355,19 @@ fn dev_env_full(
     })();
     if let Err(e) = r {
         report(ev, &e);
-        return 1;
+        return Err(1);
     }
     if roots.len() != 1 {
         eprintln!(
             "error: '{f}' needs to evaluate to a single derivation, but it evaluated to {} derivations",
             roots.len()
         );
-        return 1;
+        return Err(1);
     }
     let shell_path = roots[0].0.clone();
     let eval_time = t0.elapsed();
 
-    let r = (|| -> crate::error::Result<Vec<u8>> {
+    let r = (|| -> crate::error::Result<DevEnv> {
         let shell = match ev.drv.drvs.get(&shell_path).and_then(|i| i.aterm) {
             Some(aterm) => Derivation::parse(
                 std::str::from_utf8(&aterm).map_err(|e| CrateError::Store(e.to_string()))?,
@@ -387,58 +474,17 @@ fn dev_env_full(
             ensure_gc_root(&d.transport, root, &out_path, Some(&mut conn))?;
         }
         drop(conn);
-
-        let (mut output, files) = if json {
-            (
-                serde_json::to_vec(&env.to_json())
-                    .map_err(|e| CrateError::Protocol(e.to_string()))?,
-                Vec::new(),
-            )
-        } else {
-            let attrs_dir = match &d.gc_root {
-                Some(r) => std::path::PathBuf::from(format!("{}-attrs", r.display())),
-                None => std::env::temp_dir().join(format!("ietsp-dev-env-{}", std::process::id())),
-            };
-            let outputs_dir = std::path::Path::new(
-                <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&cwd),
-            )
-            .join("outputs");
-            let rc = devenv::make_rc_script(&env, &attrs_dir, &outputs_dir)?;
-            (rc.script.into_bytes(), rc.files)
-        };
-        output.push(b'\n');
-        if let Some(c) = &cache {
-            c.write(
-                ev,
-                &devenv::CachedResult {
-                    out_path,
-                    files,
-                    bytes: output.clone(),
-                }
-                .encode(),
-                false,
-            );
-        }
-        if timings {
-            eprintln!("daemon: {:.3}s", t1.elapsed().as_secs_f64());
-        }
-        Ok(output)
+        Ok(DevEnv {
+            env,
+            out_path,
+            builder: shell.builder.clone(),
+            t1,
+        })
     })();
-    match r {
-        Ok(out) => {
-            use std::io::Write;
-            let _ = std::io::stdout().write_all(&out);
-            let _ = std::io::stdout().flush();
-            if timings {
-                eprintln!("total: {:.3}s", t0.elapsed().as_secs_f64());
-            }
-            0
-        }
-        Err(e) => {
-            eprintln!("error: {e}");
-            1
-        }
-    }
+    r.map_err(|e| {
+        eprintln!("error: {e}");
+        1
+    })
 }
 
 /// develop.cc:getDerivationEnvironment, after the build: the first output (by name) whose

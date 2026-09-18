@@ -64,6 +64,7 @@ pub fn main(argv: &[String]) -> i32 {
         "eval" => eval_main(argv, &rest),
         "build" => build_main(argv, &rest),
         "print-dev-env" => dev_env_main(argv, &rest),
+        "develop" => super::develop::main(argv, &rest),
         s => fallback(NAME, argv, &format!("subcommand '{s}'")),
     }
 }
@@ -92,7 +93,7 @@ fn number(flag: &str, v: &str) -> Result<String, String> {
 }
 
 /// `Ok(true)`: consumed. `Ok(false)`: not one of ours. `Err`: fall back.
-fn global_flag(n: &mut Nix, a: &mut Argv, s: &str) -> Result<bool, String> {
+pub(super) fn global_flag(c: &mut Common, a: &mut Argv, s: &str) -> Result<bool, String> {
     let Some((_, arity)) = GLOBALS.iter().find(|(f, _)| *f == s) else {
         return Ok(false);
     };
@@ -103,15 +104,15 @@ fn global_flag(n: &mut Nix, a: &mut Argv, s: &str) -> Result<bool, String> {
     match s {
         "--impure" | "--accept-flake-config" => {}
         "--experimental-features" | "--extra-experimental-features" => {}
-        "--show-trace" => n.c.show_trace = true,
-        "--option" => n.c.overrides.push((v[0].clone(), v[1].clone())),
-        "-I" | "--include" => n.c.includes.push(parse_include(&v[0])),
-        "--arg" => n.c.args.push((v[0].clone(), ArgKind::Expr(v[1].clone()))),
-        "--argstr" => n.c.args.push((v[0].clone(), ArgKind::Str(v[1].clone()))),
-        "--store" => n.c.overrides.push(("store".into(), v[0].clone())),
-        "-j" | "--max-jobs" => n.c.overrides.push(("max-jobs".into(), number(s, &v[0])?)),
-        "--cores" => n.c.overrides.push(("cores".into(), number(s, &v[0])?)),
-        "-k" | "--keep-going" => n.c.overrides.push(("keep-going".into(), "true".into())),
+        "--show-trace" => c.show_trace = true,
+        "--option" => c.overrides.push((v[0].clone(), v[1].clone())),
+        "-I" | "--include" => c.includes.push(parse_include(&v[0])),
+        "--arg" => c.args.push((v[0].clone(), ArgKind::Expr(v[1].clone()))),
+        "--argstr" => c.args.push((v[0].clone(), ArgKind::Str(v[1].clone()))),
+        "--store" => c.overrides.push(("store".into(), v[0].clone())),
+        "-j" | "--max-jobs" => c.overrides.push(("max-jobs".into(), number(s, &v[0])?)),
+        "--cores" => c.overrides.push(("cores".into(), number(s, &v[0])?)),
+        "-k" | "--keep-going" => c.overrides.push(("keep-going".into(), "true".into())),
         _ => return Ok(false),
     }
     Ok(true)
@@ -128,7 +129,7 @@ fn parse_eval(argv: &[String]) -> Result<Nix, String> {
             "--expr" => n.expr = Some(a.value(&s)?),
             "-f" | "--file" => n.file = Some(a.value(&s)?),
             _ => {
-                if !global_flag(&mut n, &mut a, &s)? {
+                if !global_flag(&mut n.c, &mut a, &s)? {
                     if s.starts_with('-') {
                         return Err(format!("'{s}' is not implemented"));
                     }
@@ -167,7 +168,7 @@ fn parse_build(argv: &[String]) -> Result<Nix, String> {
             "--expr" => n.expr = Some(a.value(&s)?),
             "-f" | "--file" => n.file = Some(a.value(&s)?),
             _ => {
-                if !global_flag(&mut n, &mut a, &s)? {
+                if !global_flag(&mut n.c, &mut a, &s)? {
                     if s.starts_with('-') {
                         return Err(format!("'{s}' is not implemented"));
                     }
