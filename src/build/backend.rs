@@ -1,0 +1,385 @@
+//! The dispatcher's transport half. `Dispatcher` owns the batching, the
+//! provenance, the event stream and the records; a `Backend` owns the wire:
+//! what "ask whether these paths are valid", "register these objects" and
+//! "build this ready set" mean on one transport.
+//!
+//! Two of them. The worker backend holds one `Connection` and sends one
+//! `BuildPathsWithResults` per ready set, because the protocol is serial per
+//! connection and a per-derivation op idles the daemon between derivations
+//! (docs/scheduling.md measured 7-10x). The `grpc://` backend fans the ready
+//! set out instead: in farm mode one `BuildDerivation` per derivation with up
+//! to `max-builds` in flight, which the gRPC API tags with its derivation, so
+//! the events key correctly; in non-farm mode one `BuildPaths` over the whole
+//! set, as the store resolves the closure itself.
+
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use crate::error::{Error, Result};
+use crate::remote::event::Event;
+use crate::remote::plan::{Object, Plan};
+use crate::remote::worker::build::{Timings, write_object};
+use crate::remote::worker::{Connection, DEFAULT_SOCKET, Options, Transport, wire};
+use crate::store::path::StorePath;
+
+/// One derivation of a ready set, and the outputs the caller wants.
+#[derive(Debug, Clone)]
+pub struct Job {
+    pub drv: StorePath,
+    /// Empty means every output.
+    pub outputs: Vec<String>,
+}
+
+impl Job {
+    /// `<out1,out2>` or `*`, the output half of a derived path.
+    pub fn spec(&self) -> String {
+        if self.outputs.is_empty() {
+            return "*".to_string();
+        }
+        let names: std::collections::BTreeSet<&str> =
+            self.outputs.iter().map(String::as_str).collect();
+        names.into_iter().collect::<Vec<_>>().join(",")
+    }
+}
+
+/// What became of one derivation of a ready set.
+#[derive(Debug, Clone)]
+pub struct Status {
+    pub ok: bool,
+    /// The one-line reason, when it failed.
+    pub reason: String,
+}
+
+impl Status {
+    pub fn ok() -> Status {
+        Status {
+            ok: true,
+            reason: String::new(),
+        }
+    }
+
+    pub fn failed(reason: String) -> Status {
+        Status { ok: false, reason }
+    }
+}
+
+/// One derivation of a batch's closure: its path and the ATerm that hashes to
+/// it. A backend that schedules the builds itself needs the whole closure, not
+/// just the ready set.
+pub struct Drv {
+    pub path: StorePath,
+    pub aterm: Arc<Vec<u8>>,
+}
+
+/// One ready set, plus the derivations behind it.
+pub struct Batch<'a> {
+    pub jobs: &'a [Job],
+    /// The jobs' own derivations, or with `true` everything they need too,
+    /// references before referrers. Walked only when the backend asks, which
+    /// the worker backend never does: the daemon resolves the closure.
+    pub drvs: &'a dyn Fn(bool) -> Result<Vec<Drv>>,
+}
+
+/// What the client side of an upload measured, which no backend can see:
+/// `--timings` wants it in the same report.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Phase {
+    /// Planned paths the store lacked.
+    pub missing: usize,
+    pub resolve: Duration,
+    /// Missing sources the client located and hashed.
+    pub resolve_paths: usize,
+    /// Of those, the ones read from the local store.
+    pub store_sources: usize,
+}
+
+/// One transport, as the dispatcher uses it.
+pub trait Backend {
+    /// The subset of `paths` the store already has, by store path base name.
+    fn query_valid(
+        &mut self,
+        paths: &[&StorePath],
+        on_event: &mut dyn FnMut(Event),
+    ) -> Result<HashSet<String>>;
+
+    /// Realises the sources the client cannot produce (an input-addressed
+    /// build output pinned with `builtins.storePath`): the store substitutes
+    /// them, and must hold them before the drvs that name them.
+    fn substitute(&mut self, paths: &[StorePath], on_event: &mut dyn FnMut(Event)) -> Result<()>;
+
+    /// Registers `objects` on the store; returns the bytes it cost.
+    fn add_objects(&mut self, objects: &[&Object], on_event: &mut dyn FnMut(Event)) -> Result<u64>;
+
+    /// Builds a ready set. Every job gets a verdict, keyed by its derivation
+    /// path; a job the store never reached is absent from the map.
+    fn submit(
+        &mut self,
+        batch: &Batch<'_>,
+        on_event: &mut dyn FnMut(Event),
+    ) -> Result<HashMap<String, Status>>;
+
+    /// Output name to store path for a derivation that built.
+    fn outputs(
+        &mut self,
+        drv: &str,
+        on_event: &mut dyn FnMut(Event),
+    ) -> Result<BTreeMap<String, Option<String>>>;
+
+    /// Restores one output into `dir`, whose existence the caller checked.
+    fn fetch(&mut self, store_path: &str, dir: &Path) -> Result<()>;
+
+    /// An indirect GC root at `link` for `store_path`.
+    fn add_root(&mut self, store_path: &str, link: &Path) -> Result<()>;
+
+    /// `nix build`'s out-links: the symlink and its GC root live on the local
+    /// daemon, so an output the builder kept is registered there first.
+    fn out_links(&mut self, links: &[(String, String)]) -> Result<()>;
+
+    fn note_connect(&mut self, d: Duration);
+
+    fn note_upload(&mut self, p: Phase);
+
+    /// `--timings`: one line per phase, in the flow's order.
+    fn report(&self, plan: &Plan, plan_time: Duration) -> String;
+}
+
+/// The local daemon, where out-links and GC roots go whatever the builder is
+/// (docs/classic.md).
+pub fn local() -> Transport {
+    Transport::Unix(PathBuf::from(DEFAULT_SOCKET))
+}
+
+/// Connects the transport `url` names.
+pub fn open(
+    transport: &Transport,
+    options: &Options,
+    on_event: &mut dyn FnMut(Event),
+) -> Result<Box<dyn Backend>> {
+    if let Transport::Grpc(cfg) = transport {
+        return Ok(Box::new(crate::remote::grpc::backend::Grpc::open(
+            cfg, options,
+        )?));
+    }
+    Ok(Box::new(Worker::open(transport, options, on_event)?))
+}
+
+/// The worker protocol: one serial connection, one op per ready set.
+pub struct Worker {
+    conn: Connection,
+    transport: Transport,
+    t: Timings,
+}
+
+impl Worker {
+    pub fn open(
+        transport: &Transport,
+        options: &Options,
+        on_event: &mut dyn FnMut(Event),
+    ) -> Result<Worker> {
+        let conn = Connection::open_with(transport, options, on_event)?;
+        Ok(Worker {
+            t: Timings {
+                minor: conn.minor,
+                trusted: conn.trusted,
+                ..Timings::default()
+            },
+            conn,
+            transport: transport.clone(),
+        })
+    }
+}
+
+impl Backend for Worker {
+    fn query_valid(
+        &mut self,
+        paths: &[&StorePath],
+        on_event: &mut dyn FnMut(Event),
+    ) -> Result<HashSet<String>> {
+        if paths.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let full: Vec<String> = paths.iter().map(ToString::to_string).collect();
+        self.t.query_paths += full.len();
+        let t0 = Instant::now();
+        let valid = self.conn.query_valid_paths(&full, on_event)?;
+        self.t.query += t0.elapsed();
+        Ok(valid.into_iter().map(base_name).collect())
+    }
+
+    fn substitute(&mut self, paths: &[StorePath], on_event: &mut dyn FnMut(Event)) -> Result<()> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        self.t.substitute_paths += paths.len();
+        let t0 = Instant::now();
+        let targets: Vec<String> = paths.iter().map(ToString::to_string).collect();
+        let results = self.conn.build_paths_with_results(&targets, on_event)?;
+        self.t.substitute += t0.elapsed();
+        for r in results {
+            if !r.success() {
+                return Err(Error::Store(format!(
+                    "cannot substitute '{}' on the builder: status {}: {}",
+                    r.path, r.status, r.msg
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn add_objects(&mut self, objects: &[&Object], on_event: &mut dyn FnMut(Event)) -> Result<u64> {
+        if objects.is_empty() {
+            return Ok(0);
+        }
+        let t0 = Instant::now();
+        let before = self.conn.bytes_sent();
+        let mut body = |w: &mut dyn Write| -> io::Result<()> {
+            wire::write_u64(w, objects.len() as u64)?;
+            for o in objects {
+                write_object(w, o)?;
+            }
+            Ok(())
+        };
+        self.conn
+            .add_multiple_to_store(false, &mut body, on_event)?;
+        let bytes = self.conn.bytes_sent() - before;
+        self.t.add += t0.elapsed();
+        self.t.add_paths += objects.len();
+        self.t.add_bytes += bytes;
+        Ok(bytes)
+    }
+
+    fn submit(
+        &mut self,
+        batch: &Batch<'_>,
+        on_event: &mut dyn FnMut(Event),
+    ) -> Result<HashMap<String, Status>> {
+        let targets: Vec<String> = batch
+            .jobs
+            .iter()
+            .map(|j| format!("{}!{}", j.drv, j.spec()))
+            .collect();
+        let t0 = Instant::now();
+        let results = self.conn.build_paths_with_results(&targets, on_event)?;
+        self.t.build += t0.elapsed();
+        let mut out: HashMap<String, Status> = HashMap::new();
+        for r in &results {
+            let drv = r.path.split('!').next().unwrap_or(&r.path).to_string();
+            let e = out.entry(drv).or_insert_with(Status::ok);
+            if !r.success() {
+                *e = Status::failed(format!("status {}: {}", r.status, r.msg));
+            }
+        }
+        Ok(out)
+    }
+
+    fn outputs(
+        &mut self,
+        drv: &str,
+        on_event: &mut dyn FnMut(Event),
+    ) -> Result<BTreeMap<String, Option<String>>> {
+        let t0 = Instant::now();
+        let map = self.conn.query_derivation_output_map(drv, on_event)?;
+        self.t.outputs += t0.elapsed();
+        Ok(map)
+    }
+
+    fn fetch(&mut self, store_path: &str, dir: &Path) -> Result<()> {
+        let sp = StorePath::parse(store_path)?;
+        let dest = dir.join(sp.base_name());
+        let t0 = Instant::now();
+        self.conn.nar_from_path(store_path, &mut |_| {}, &mut |r| {
+            crate::store::nar::restore_path(r, &dest)
+        })?;
+        self.t.fetch += t0.elapsed();
+        self.t.fetched += 1;
+        Ok(())
+    }
+
+    fn add_root(&mut self, store_path: &str, link: &Path) -> Result<()> {
+        self.conn.add_perm_root(store_path, link)
+    }
+
+    fn out_links(&mut self, links: &[(String, String)]) -> Result<()> {
+        if links.is_empty() {
+            return Ok(());
+        }
+        if self.transport == local() {
+            for (path, link) in links {
+                self.conn.add_perm_root(path, Path::new(link))?;
+            }
+            return Ok(());
+        }
+        // A symlink and its GC root are worth nothing without the path they
+        // name, so the closure comes back to the local daemon first.
+        let mut paths: Vec<StorePath> = Vec::with_capacity(links.len());
+        for (p, _) in links {
+            paths.push(StorePath::parse(p)?);
+        }
+        let mut conn = Connection::open(&local(), &mut |_| {})?;
+        crate::remote::copy::closure(&mut self.conn, &mut conn, &paths, &mut |_| {})?;
+        for (path, link) in links {
+            conn.add_perm_root(path, Path::new(link))?;
+        }
+        Ok(())
+    }
+
+    fn note_connect(&mut self, d: Duration) {
+        self.t.connect = d;
+    }
+
+    fn note_upload(&mut self, p: Phase) {
+        self.t.missing += p.missing;
+        self.t.resolve += p.resolve;
+        self.t.resolve_paths += p.resolve_paths;
+        self.t.store_sources += p.store_sources;
+    }
+
+    fn report(&self, plan: &Plan, plan_time: Duration) -> String {
+        let mut t = self.t.clone();
+        t.stats = self.conn.stats;
+        t.report(plan, plan_time)
+    }
+}
+
+/// `/nix/store/<hash>-<name>` as `<hash>-<name>`.
+fn base_name(path: String) -> String {
+    match path.rsplit_once('/') {
+        Some((_, base)) => base.to_string(),
+        None => path,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn drv(name: &str) -> StorePath {
+        StorePath::parse(&format!(
+            "/nix/store/2ijv0g6069dsh55z3bdr5ln2iv69mw7r-{name}.drv"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn output_specs() {
+        let j = Job {
+            drv: drv("x"),
+            outputs: vec![],
+        };
+        assert_eq!(j.spec(), "*");
+        let j = Job {
+            drv: drv("x"),
+            outputs: vec!["dev".into(), "out".into(), "out".into()],
+        };
+        assert_eq!(j.spec(), "dev,out");
+    }
+
+    #[test]
+    fn base_names_drop_the_store_dir() {
+        assert_eq!(base_name("/nix/store/aaa-x".into()), "aaa-x");
+        assert_eq!(base_name("aaa-x".into()), "aaa-x");
+    }
+}

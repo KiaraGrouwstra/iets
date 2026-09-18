@@ -3,8 +3,8 @@
 //! The evaluator stays synchronous, so one tokio runtime lives inside `Client`
 //! and every call is a `block_on`. See `docs/remote-build.md`.
 
+pub mod backend;
 pub mod build;
-pub mod classic;
 pub mod drvwire;
 
 #[allow(clippy::all, clippy::pedantic)]

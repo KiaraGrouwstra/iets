@@ -1,22 +1,29 @@
 //! The one build path. Every ietsp command that realises a derivation goes
-//! through `Dispatcher`: one worker-protocol connection carries the uploads
-//! and the builds, each batch of ready derivations is one
-//! `BuildPathsWithResults` (docs/scheduling.md: one op per ready set beats
-//! one op per derivation by 7-10x, and the worker protocol is serial per
-//! connection, so one op is in flight at a time), and every build reports
-//! through one structured event stream with provenance attached.
+//! through `Dispatcher`: one connection carries the uploads and the builds of
+//! a batch of ready derivations, and every build reports through one
+//! structured event stream with provenance attached.
 //!
-//! `ietsp build`, `nix-build` and `nix build` hand over a fixed set of roots
-//! (`upload::PlanUpload`). `ietsp fast-build` hands over batches as the
-//! eval-jobs walk finishes attributes (`upload::StreamUpload`), which is
-//! what overlaps evaluation with building. See docs/fast-build.md.
+//! Three axes, kept apart:
+//!
+//! - **What to feed it.** `ietsp build`, `nix-build` and `nix build` hand over
+//!   a fixed set of roots (`upload::PlanUpload`). `ietsp fast-build` hands
+//!   over batches as the eval-jobs walk finishes attributes
+//!   (`upload::StreamUpload`), which is what overlaps evaluation with
+//!   building. See docs/fast-build.md.
+//! - **How to reach the store.** `backend::Backend`: the worker protocol
+//!   sends one `BuildPathsWithResults` per ready set (docs/scheduling.md: one
+//!   op per ready set beats one op per derivation by 7-10x, and the protocol
+//!   is serial per connection); `grpc://` fans the set out instead.
+//! - **What to say about it.** `render` and `results`, from one event stream.
 
+pub mod backend;
 pub mod event;
+pub mod fanout;
 pub mod render;
 pub mod results;
 pub mod upload;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,9 +33,11 @@ use std::time::{Duration, Instant};
 use crate::error::{Error, Result};
 use crate::provenance::Provenance;
 use crate::remote::event::Event;
-use crate::remote::worker::{Connection, Options, Transport};
+use crate::remote::plan::Plan;
+use crate::remote::worker::{Options, Transport};
 use crate::store::path::StorePath;
 
+use backend::Backend;
 use event::{FastBuildEvent, Kind};
 use render::{Renderer, Style};
 use results::Record;
@@ -49,6 +58,15 @@ pub struct Target {
     pub label: Option<String>,
 }
 
+impl From<&Target> for backend::Job {
+    fn from(t: &Target) -> backend::Job {
+        backend::Job {
+            drv: t.drv.clone(),
+            outputs: t.outputs.clone(),
+        }
+    }
+}
+
 impl Target {
     pub fn new(attr: &str, drv: StorePath, outputs: Vec<String>) -> Target {
         Target {
@@ -58,19 +76,6 @@ impl Target {
             cache_status: None,
             label: None,
         }
-    }
-
-    /// The derived path the worker protocol wants: `<drv>!out1,out2` or `!*`.
-    fn derived_path(&self) -> String {
-        if self.outputs.is_empty() {
-            return format!("{}!*", self.drv);
-        }
-        let names: BTreeSet<&str> = self.outputs.iter().map(String::as_str).collect();
-        format!(
-            "{}!{}",
-            self.drv,
-            names.into_iter().collect::<Vec<_>>().join(",")
-        )
     }
 }
 
@@ -156,11 +161,13 @@ pub struct Reporter {
 
 impl Reporter {
     pub fn new(style: Style) -> Reporter {
+        Reporter::with_output(style, Box::new(std::io::stderr()))
+    }
+
+    /// The same, writing the progress somewhere else than stderr.
+    pub fn with_output(style: Style, out: Box<dyn Write + Send>) -> Reporter {
         Reporter {
-            render: Arc::new(Mutex::new(Renderer::new(
-                style,
-                Box::new(std::io::stderr()),
-            ))),
+            render: Arc::new(Mutex::new(Renderer::new(style, out))),
             records: Vec::new(),
             jsonl: None,
             timing: HashMap::new(),
@@ -208,9 +215,9 @@ impl Reporter {
     }
 }
 
-/// The dispatcher: one connection, one event stream, batched build ops.
+/// The dispatcher: one backend, one event stream, batched build ops.
 pub struct Dispatcher {
-    pub conn: Connection,
+    backend: Box<dyn Backend>,
     pub reporter: Reporter,
     prov: Provenance,
     seen: HashSet<StorePath>,
@@ -220,10 +227,8 @@ pub struct Dispatcher {
     pub upload: upload::Stats,
     /// Batches and build ops sent, for `--timings`.
     pub ops: usize,
-    /// Time inside `BuildPathsWithResults` and `QueryDerivationOutputMap`.
-    pub build_time: Duration,
-    pub outputs_time: Duration,
-    heartbeat: Option<Heartbeat>,
+    /// Stops when the dispatcher drops.
+    _heartbeat: Heartbeat,
 }
 
 impl Dispatcher {
@@ -235,7 +240,8 @@ impl Dispatcher {
     ) -> Result<Dispatcher> {
         let reporter = Reporter::new(style);
         let render = reporter.render.clone();
-        let conn = {
+        let t0 = Instant::now();
+        let mut backend = {
             let mut first = |e: Event| {
                 if let Event::Log(l) = e {
                     render
@@ -244,20 +250,21 @@ impl Dispatcher {
                         .note(&String::from_utf8_lossy(&l.line));
                 }
             };
-            Connection::open_with(transport, options, &mut first)?
+            backend::open(transport, options, &mut first)?
         };
-        Ok(Dispatcher::with_reporter(conn, prov, reporter))
+        backend.note_connect(t0.elapsed());
+        Ok(Dispatcher::with_backend(backend, prov, reporter))
     }
 
-    /// Wraps an already-open connection.
-    pub fn with_connection(conn: Connection, prov: Provenance, style: Style) -> Dispatcher {
-        Dispatcher::with_reporter(conn, prov, Reporter::new(style))
-    }
-
-    fn with_reporter(conn: Connection, prov: Provenance, reporter: Reporter) -> Dispatcher {
+    /// Wraps an already-open backend.
+    pub fn with_backend(
+        backend: Box<dyn Backend>,
+        prov: Provenance,
+        reporter: Reporter,
+    ) -> Dispatcher {
         let heartbeat = Heartbeat::start(reporter.render.clone());
         Dispatcher {
-            conn,
+            backend,
             reporter,
             prov,
             seen: HashSet::new(),
@@ -265,9 +272,7 @@ impl Dispatcher {
             failed: false,
             upload: upload::Stats::default(),
             ops: 0,
-            build_time: Duration::ZERO,
-            outputs_time: Duration::ZERO,
-            heartbeat: Some(heartbeat),
+            _heartbeat: heartbeat,
         }
     }
 
@@ -341,30 +346,21 @@ impl Dispatcher {
 
         let stats = {
             let mut on_event = event_sink(&mut self.reporter, &self.prov, &by_drv);
-            up.upload(&mut self.conn, &roots, &mut on_event)?
+            up.upload(&mut *self.backend, &roots, &mut on_event)?
         };
         self.upload.merge(stats);
 
-        let targets: Vec<String> = batch.iter().map(Target::derived_path).collect();
+        let jobs: Vec<backend::Job> = batch.iter().map(backend::Job::from).collect();
         self.ops += 1;
-        let t_build = Instant::now();
-        let results = {
+        let status = {
+            let drvs = |deep: bool| up.drvs(&roots, deep);
+            let b = backend::Batch {
+                jobs: &jobs,
+                drvs: &drvs,
+            };
             let mut on_event = event_sink(&mut self.reporter, &self.prov, &by_drv);
-            self.conn
-                .build_paths_with_results(&targets, &mut on_event)?
+            self.backend.submit(&b, &mut on_event)?
         };
-        self.build_time += t_build.elapsed();
-
-        // `<drv>!<outputs>` back to the drv it names.
-        let mut status: HashMap<String, (bool, String)> = HashMap::new();
-        for r in &results {
-            let drv = r.path.split('!').next().unwrap_or(&r.path).to_string();
-            let entry = status.entry(drv).or_insert((true, String::new()));
-            if !r.success() {
-                entry.0 = false;
-                entry.1 = format!("status {}: {}", r.status, r.msg);
-            }
-        }
 
         let mut out = Vec::with_capacity(batch.len());
         for t in batch {
@@ -372,13 +368,11 @@ impl Dispatcher {
             let attr = labels.get(&drv).cloned().unwrap_or_else(|| t.attr.clone());
             let elapsed = self.reporter.duration(&drv);
             match status.get(&drv) {
-                Some((true, _)) => {
-                    let t_out = Instant::now();
+                Some(s) if s.ok => {
                     let map = {
                         let mut on_event = event_sink(&mut self.reporter, &self.prov, &by_drv);
-                        self.conn.query_derivation_output_map(&drv, &mut on_event)?
+                        self.backend.outputs(&drv, &mut on_event)?
                     };
-                    self.outputs_time += t_out.elapsed();
                     let outputs: BTreeMap<String, String> = map
                         .into_iter()
                         .filter_map(|(n, p)| p.map(|p| (n, p)))
@@ -404,11 +398,11 @@ impl Dispatcher {
                         cache_status: t.cache_status.clone(),
                     });
                 }
-                Some((false, reason)) => {
+                Some(s) => {
                     let tail = self.reporter.tail(&drv);
                     // The daemon's message is several coloured lines; the
                     // records want one plain one, the log tail has the rest.
-                    let reason = results::strip_ansi(&self.prov.rewrite_str(reason));
+                    let reason = results::strip_ansi(&self.prov.rewrite_str(&s.reason));
                     let reason = reason.lines().next().unwrap_or_default().to_string();
                     self.reporter.emit(&FastBuildEvent::new(
                         &attr,
@@ -463,7 +457,7 @@ impl Dispatcher {
         let by_drv = HashMap::new();
         let stats = {
             let mut on_event = event_sink(&mut self.reporter, &self.prov, &by_drv);
-            up.upload(&mut self.conn, roots, &mut on_event)?
+            up.upload(&mut *self.backend, roots, &mut on_event)?
         };
         self.upload.merge(stats);
         Ok(())
@@ -471,7 +465,12 @@ impl Dispatcher {
 
     /// An indirect GC root at `link` for `store_path`.
     pub fn out_link(&mut self, store_path: &str, link: &Path) -> Result<()> {
-        self.conn.add_perm_root(store_path, link)
+        self.backend.add_root(store_path, link)
+    }
+
+    /// `nix build`'s out-links, on the local daemon whatever the builder is.
+    pub fn out_links(&mut self, links: &[(String, String)]) -> Result<()> {
+        self.backend.out_links(links)
     }
 
     /// Restores one output of a remote store into `dir`.
@@ -479,16 +478,13 @@ impl Dispatcher {
         std::fs::create_dir_all(dir)
             .map_err(|e| Error::io(format!("cannot create {}", dir.display()), e))?;
         let sp = StorePath::parse(store_path)?;
-        let dest = dir.join(sp.base_name());
-        if dest.exists() {
+        if dir.join(sp.base_name()).exists() {
             return Err(Error::Usage(format!(
                 "fetch: '{}' already exists",
-                dest.display()
+                dir.join(sp.base_name()).display()
             )));
         }
-        self.conn.nar_from_path(store_path, &mut |_| {}, &mut |r| {
-            crate::store::nar::restore_path(r, &dest)
-        })
+        self.backend.fetch(store_path, dir)
     }
 
     /// Records an attribute that never reached a build.
@@ -496,9 +492,9 @@ impl Dispatcher {
         self.reporter.record(r);
     }
 
-    pub fn into_connection(mut self) -> Connection {
-        drop(self.heartbeat.take());
-        self.conn
+    /// `--timings`: the backend's own per-phase report.
+    pub fn report(&self, plan: &Plan, plan_time: Duration) -> String {
+        self.backend.report(plan, plan_time)
     }
 }
 
@@ -597,19 +593,11 @@ mod tests {
     }
 
     #[test]
-    fn derived_paths() {
-        let t = Target::new("a", drv("x"), vec![]);
-        assert!(t.derived_path().ends_with("-x.drv!*"));
-        let t = Target::new(
-            "a",
-            drv("x"),
-            vec!["dev".into(), "out".into(), "out".into()],
-        );
-        assert!(
-            t.derived_path().ends_with("-x.drv!dev,out"),
-            "{}",
-            t.derived_path()
-        );
+    fn targets_become_jobs() {
+        let t = Target::new("a", drv("x"), vec!["out".into(), "dev".into()]);
+        let j = backend::Job::from(&t);
+        assert_eq!(j.drv, t.drv);
+        assert_eq!(j.spec(), "dev,out");
     }
 
     #[test]

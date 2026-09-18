@@ -1,14 +1,14 @@
-//! The `grpc://` client flow, mirroring `worker/build.rs`:
-//! `StoreInfo` once, one `QueryValidPaths` over the plan, the missing sources
-//! located and hashed, the ones only the store can produce left to it, one
-//! `AddMultipleToStore`, then builds — `BuildDerivation` per derivation in
-//! farm mode, `BuildPaths` otherwise — and `FetchNars` for the outputs.
+//! The `grpc://` protocol calls, mirroring `worker/build.rs`: one
+//! `QueryValidPaths`, one `AddMultipleToStore` of what the store lacks, builds
+//! — `BuildDerivation` per derivation in farm mode, `BuildPaths` otherwise —
+//! and `FetchNars` for the outputs. `backend.rs` drives them as the
+//! dispatcher's backend.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::{self, Write};
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use tokio_stream::StreamExt;
@@ -20,16 +20,14 @@ use crate::store::nar::restore_path;
 use crate::store::path::StorePath;
 
 use super::super::copy::topo_sort;
-use super::super::event::{Done, Event, Log, Started};
-use super::super::plan::{Locator, Object, Plan};
+use super::super::event::{Event, Log, Phase};
+use super::super::plan::{Object, Plan};
 use super::super::worker::build::write_object;
 use super::super::worker::wire::write_u64;
-use super::super::worker::{built_event, failed_event};
 use super::drvwire::{
-    BUILD_PROTOCOL, BuildResult, PathInfo, basic_input_srcs, read_keyed_build_results,
-    write_basic_derivation,
+    BUILD_PROTOCOL, BuildResult, PathInfo, read_keyed_build_results, write_basic_derivation,
 };
-use super::{Client, GrpcConfig, Headers, c_request, first_line, gone_away, proto};
+use super::{Client, Headers, c_request, first_line, gone_away, proto};
 
 /// What one `build` call did, in the shape `--timings` prints.
 #[derive(Debug, Default, Clone)]
@@ -115,159 +113,6 @@ impl Timings {
     }
 }
 
-/// Uploads what the store lacks, builds `root`, reports its outputs and
-/// restores the wanted ones into `fetch_to`. With `upload_only` the call stops
-/// after the upload. `locate` answers for the missing sources that have no
-/// eval-time origin.
-#[allow(clippy::too_many_arguments)]
-pub fn build(
-    cfg: &GrpcConfig,
-    plan: &Plan,
-    locate: &Locator<'_>,
-    root: &StorePath,
-    outputs: &[String],
-    upload_only: bool,
-    fetch_to: Option<&Path>,
-    on_event: &mut dyn FnMut(Event),
-) -> Result<Timings> {
-    let mut c = Client::open(cfg)?;
-    let mut t = Timings::default();
-    let built = build_on(
-        &mut c,
-        plan,
-        locate,
-        root,
-        outputs,
-        upload_only,
-        &mut t,
-        on_event,
-    )?;
-
-    if let (Some(dir), Some(built)) = (fetch_to, &built) {
-        let t5 = Instant::now();
-        std::fs::create_dir_all(dir)
-            .map_err(|e| Error::io(format!("cannot create {}", dir.display()), e))?;
-        let wanted: Vec<StorePath> = built.iter().map(|(_, p)| p.clone()).collect();
-        for p in &wanted {
-            let dest = dir.join(p.base_name());
-            if dest.exists() {
-                return Err(Error::Usage(format!(
-                    "fetch: '{}' already exists",
-                    dest.display()
-                )));
-            }
-        }
-        fetch_into_dir(&mut c, &wanted, dir, &mut t)?;
-        t.fetched = wanted.len();
-        t.fetch = t5.elapsed();
-    }
-    on_event(Event::Done(Done {
-        success: built.is_some(),
-    }));
-    Ok(t)
-}
-
-/// `build` without the fetch step. `None` means a build failed; otherwise the
-/// root's wanted outputs and their store paths.
-#[allow(clippy::too_many_arguments)]
-pub fn build_on(
-    c: &mut Client,
-    plan: &Plan,
-    locate: &Locator<'_>,
-    root: &StorePath,
-    outputs: &[String],
-    upload_only: bool,
-    t: &mut Timings,
-    on_event: &mut dyn FnMut(Event),
-) -> Result<Option<Vec<(String, StorePath)>>> {
-    t.farm = c.info.farm;
-    t.trusted = c.info.trusted;
-    t.calls += 1;
-    let drvs = drv_table(plan)?;
-
-    let t1 = Instant::now();
-    let names: Vec<String> = plan
-        .sources
-        .iter()
-        .map(|p| p.base_name().to_string())
-        .chain(
-            plan.drvs
-                .iter()
-                .map(|d| d.store_path().base_name().to_string()),
-        )
-        .collect();
-    t.query_paths = names.len();
-    let valid = query_valid_paths(c, &names, t)?;
-    let missing_sources: Vec<StorePath> = plan
-        .sources
-        .iter()
-        .filter(|p| !valid.contains(p.base_name()))
-        .cloned()
-        .collect();
-    let missing_drvs: Vec<&Object> = plan
-        .drvs
-        .iter()
-        .filter(|o| !valid.contains(o.store_path().base_name()))
-        .collect();
-    t.missing = missing_sources.len() + missing_drvs.len();
-    t.query = t1.elapsed();
-
-    let t2 = Instant::now();
-    let resolved = plan.resolve(&missing_sources, locate)?;
-    t.resolve_paths = resolved.objects.len();
-    t.store_sources = resolved.store_sources;
-    t.substitute_paths = resolved.substitute.len();
-    t.resolve = t2.elapsed();
-
-    // A path registers only once its references are valid, so the store must
-    // have these before the drvs that name them.
-    let t3 = Instant::now();
-    substitute(c, &resolved.substitute, t, on_event)?;
-    t.substitute = t3.elapsed();
-
-    let t4 = Instant::now();
-    let missing: Vec<&Object> = resolved.objects.iter().chain(missing_drvs).collect();
-    if !missing.is_empty() {
-        t.add_bytes = add_multiple(c, &missing, t)?;
-        t.add_paths = missing.len();
-    }
-    t.add = t4.elapsed();
-    if upload_only {
-        return Ok(Some(Vec::new()));
-    }
-
-    let t5 = Instant::now();
-    let ok = if c.info.farm {
-        farm_build(c, plan, &resolved.objects, &drvs, t, on_event)?
-    } else {
-        store_build(c, root, outputs, t, on_event)?
-    };
-    t.build = t5.elapsed();
-    if !ok {
-        return Ok(None);
-    }
-
-    let t6 = Instant::now();
-    let root_drv = drvs
-        .get(root)
-        .ok_or_else(|| Error::Plan(format!("'{root}' is not in the plan")))?;
-    let mut built: Vec<(String, StorePath)> = Vec::new();
-    for (name, out) in &root_drv.outputs {
-        if !outputs.is_empty() && !outputs.contains(name) {
-            continue;
-        }
-        let Some(path) = out.path(&root_drv.name, name)? else {
-            return Err(Error::Plan(format!(
-                "'{root}': output '{name}' has no statically known path"
-            )));
-        };
-        on_event(built_event(&root.to_string(), name, &path.to_string()));
-        built.push((name.clone(), path));
-    }
-    t.outputs = t6.elapsed();
-    Ok(Some(built))
-}
-
 /// The sources the client cannot produce (an input-addressed build output
 /// pinned with `builtins.storePath`): the store fetches them instead. Non-farm
 /// realises them now, as `worker/build.rs` does with
@@ -275,7 +120,7 @@ pub fn build_on(
 /// for it (daemon/main.cc:`gatherInputs`), so there we only check that some
 /// substituter has them, which is what `QueryValidPaths` with `substitute`
 /// answers in farm mode.
-fn substitute(
+pub fn substitute(
     c: &mut Client,
     paths: &[StorePath],
     t: &mut Timings,
@@ -317,24 +162,22 @@ fn substitute(
     Ok(())
 }
 
-/// Every derivation of the plan, parsed from its ATerm. The plan holds the
-/// whole closure of the roots, so the map has an entry for every input
-/// derivation.
-pub fn drv_table(plan: &Plan) -> Result<BTreeMap<StorePath, Derivation>> {
+/// Derivations parsed from their ATerms. A farm build needs every derivation
+/// of the batch's closure; a non-farm build needs only the roots, whose
+/// outputs it reports.
+pub fn drv_table(drvs: &[crate::build::backend::Drv]) -> Result<BTreeMap<StorePath, Derivation>> {
     let mut out = BTreeMap::new();
-    for o in &plan.drvs {
-        if let Object::Drv { path, aterm, .. } = o {
-            let text = std::str::from_utf8(aterm)
-                .map_err(|_| Error::Plan(format!("derivation '{path}' is not UTF-8")))?;
-            let drv = Derivation::parse(text, Derivation::name_from_path(path)?)?;
-            out.insert(path.clone(), drv);
-        }
+    for d in drvs {
+        let text = std::str::from_utf8(&d.aterm)
+            .map_err(|_| Error::Plan(format!("derivation '{}' is not UTF-8", d.path)))?;
+        let drv = Derivation::parse(text, Derivation::name_from_path(&d.path)?)?;
+        out.insert(d.path.clone(), drv);
     }
     Ok(out)
 }
 
 /// The store path of `drv_path!output`, statically.
-fn output_path(
+pub fn output_path(
     drvs: &BTreeMap<StorePath, Derivation>,
     drv_path: &StorePath,
     output: &str,
@@ -350,7 +193,11 @@ fn output_path(
 // ---- the batched RPCs --------------------------------------------------------
 
 /// `QueryValidPaths` on store path base names, in one call.
-fn query_valid_paths(c: &mut Client, names: &[String], t: &mut Timings) -> Result<HashSet<String>> {
+pub fn query_valid_paths(
+    c: &mut Client,
+    names: &[String],
+    t: &mut Timings,
+) -> Result<HashSet<String>> {
     if names.is_empty() {
         return Ok(HashSet::new());
     }
@@ -445,7 +292,7 @@ impl Write for ChunkShip {
 /// the daemon recomputes its address. A caller holding only a `write` token
 /// gets `CheckSigs` forced on server-side anyway (daemon/main.cc), which those
 /// paths still pass.
-fn add_multiple(c: &mut Client, objects: &[&Object], t: &mut Timings) -> Result<u64> {
+pub fn add_multiple(c: &mut Client, objects: &[&Object], t: &mut Timings) -> Result<u64> {
     let deadline = Instant::now() + Duration::from_secs(c.cfg.connect_timeout);
     let mut pause = Duration::from_millis(500);
     loop {
@@ -527,7 +374,7 @@ fn upload(
 /// One `BuildPaths` call: the targets are `DerivedPath`s in nix's own string
 /// notation, and the reply carries the `vector<KeyedBuildResult>` bytes.
 /// `log_line` and `phase` become `Log` events while it runs.
-fn build_paths(
+pub fn build_paths(
     c: &mut Client,
     targets: Vec<String>,
     t: &mut Timings,
@@ -574,242 +421,25 @@ fn build_paths(
     results.ok_or_else(|| Error::Protocol("gRPC BuildPaths stream ended without a result".into()))
 }
 
-/// Non-farm: one `BuildPaths` on `<root>^<outputs>`.
-fn store_build(
-    c: &mut Client,
-    root: &StorePath,
-    outputs: &[String],
-    t: &mut Timings,
-    on_event: &mut dyn FnMut(Event),
-) -> Result<bool> {
-    let spec = if outputs.is_empty() {
-        "*".to_string()
-    } else {
-        let names: BTreeSet<&str> = outputs.iter().map(String::as_str).collect();
-        names.into_iter().collect::<Vec<_>>().join(",")
-    };
-    on_event(Event::Started(Started {
-        drv_path: root.to_string(),
-    }));
-    // The daemon parses these with `DerivedPath::parse`, whose separator is
-    // `^`, not the worker protocol's legacy `!` (derived-path.cc).
-    let results = build_paths(c, vec![format!("{root}^{spec}")], t, on_event)?;
-    t.drvs = 1;
-    let mut ok = true;
-    for (path, res) in &results {
-        if !res.success() {
-            ok = false;
-            on_event(failed_event(
-                path,
-                &format!("status {}: {}", res.status, res.error_msg),
-            ));
-        } else if matches!(res.status, 2 | 13) {
-            t.drvs_cached = 1;
-        }
-    }
-    Ok(ok)
+/// One derivation the farm must build, in the shape `BuildDerivation` wants.
+pub struct Job {
+    pub drv_path: StorePath,
+    pub drv: Derivation,
+    pub input_srcs: BTreeSet<StorePath>,
+    pub features: Vec<String>,
 }
 
-/// One derivation the farm must build.
-struct Job {
-    drv_path: StorePath,
-    drv: Derivation,
-    input_srcs: BTreeSet<StorePath>,
-    features: Vec<String>,
-    dependants: Vec<usize>,
-    deps: usize,
-}
-
-/// store.hh:`FarmRun`: the ready queue with one result slot per job.
-struct Run {
-    ready: VecDeque<usize>,
-    remaining: usize,
-    waiting: Vec<usize>,
-    results: Vec<Option<BuildResult>>,
-    failed_input: Vec<Option<StorePath>>,
-    calls: usize,
-}
-
-/// Farm mode: `BuildDerivation` per derivation, at most `max-builds` in
-/// flight, and a derivation only once every input derivation of it is done.
-///
-/// Derivations whose outputs the store already reports valid are skipped. The
-/// C++ plugin sends them anyway and lets the niks3 claim answer `AlreadyValid`,
-/// which costs one RPC per derivation; one extra `QueryValidPaths` over the
-/// output paths is cheaper and asks the same store.
-fn farm_build(
-    c: &mut Client,
-    plan: &Plan,
-    uploaded: &[Object],
-    drvs: &BTreeMap<StorePath, Derivation>,
-    t: &mut Timings,
-    on_event: &mut dyn FnMut(Event),
-) -> Result<bool> {
-    let mut out_names: Vec<String> = Vec::new();
-    let mut out_of: Vec<StorePath> = Vec::new();
-    for (drv_path, drv) in drvs {
-        for (name, out) in &drv.outputs {
-            let Some(p) = out.path(&drv.name, name)? else {
-                return Err(Error::Plan(format!(
-                    "'{drv_path}': output '{name}' has no statically known path; the build \
-                     farm needs statically known input and output paths"
-                )));
-            };
-            out_names.push(p.base_name().to_string());
-            out_of.push(drv_path.clone());
+impl Job {
+    /// The features the balancer routes on.
+    pub fn new(drv_path: StorePath, drv: Derivation, input_srcs: BTreeSet<StorePath>) -> Job {
+        let features = required_system_features(&drv);
+        Job {
+            drv_path,
+            drv,
+            input_srcs,
+            features,
         }
     }
-    let valid_outputs = query_valid_paths(c, &out_names, t)?;
-    let mut needs_build: HashSet<&StorePath> = HashSet::new();
-    for (name, drv_path) in out_names.iter().zip(&out_of) {
-        if !valid_outputs.contains(name) {
-            needs_build.insert(drvs.get_key_value(drv_path).expect("in the table").0);
-        }
-    }
-
-    let mut jobs: Vec<Job> = Vec::new();
-    let mut index: HashMap<&StorePath, usize> = HashMap::new();
-    for (drv_path, drv) in drvs {
-        if !needs_build.contains(drv_path) {
-            continue;
-        }
-        let srcs = basic_input_srcs(drv_path, drv, &|dep, output| output_path(drvs, dep, output))?;
-        index.insert(drv_path, jobs.len());
-        jobs.push(Job {
-            drv_path: drv_path.clone(),
-            drv: drv.clone(),
-            input_srcs: srcs,
-            features: required_system_features(drv),
-            dependants: Vec::new(),
-            deps: 0,
-        });
-    }
-    t.drvs = jobs.len();
-    t.drvs_cached = drvs.len() - jobs.len();
-    if jobs.is_empty() {
-        return Ok(true);
-    }
-    for i in 0..jobs.len() {
-        let deps: Vec<usize> = jobs[i]
-            .drv
-            .input_drvs
-            .keys()
-            .filter_map(|d| index.get(d).copied())
-            .collect();
-        jobs[i].deps = deps.len();
-        for d in deps {
-            jobs[d].dependants.push(i);
-        }
-    }
-
-    let run = Mutex::new(Run {
-        ready: (0..jobs.len()).filter(|&i| jobs[i].deps == 0).collect(),
-        remaining: jobs.len(),
-        waiting: jobs.iter().map(|j| j.deps).collect(),
-        results: vec![None; jobs.len()],
-        failed_input: vec![None; jobs.len()],
-        calls: 0,
-    });
-    let wake = Condvar::new();
-    let threads = c.cfg.max_builds.min(jobs.len());
-    let plan_index = PlanIndex::new(plan, uploaded);
-    let client: &Client = c;
-
-    std::thread::scope(|s| {
-        let (tx, rx) = std::sync::mpsc::channel::<Event>();
-        for _ in 0..threads {
-            let tx = tx.clone();
-            let run = &run;
-            let wake = &wake;
-            let jobs = &jobs;
-            let plan_index = &plan_index;
-            s.spawn(move || {
-                while let Some(i) = next_job(run, wake) {
-                    let job = &jobs[i];
-                    let failed_input = run.lock().unwrap().failed_input[i].clone();
-                    let res = match failed_input {
-                        // 10 = DependencyFailed.
-                        Some(dep) => BuildResult {
-                            status: 10,
-                            error_msg: format!("dependency '{dep}' failed"),
-                            ..BuildResult::default()
-                        },
-                        None => {
-                            let _ = tx.send(Event::Started(Started {
-                                drv_path: job.drv_path.to_string(),
-                            }));
-                            match build_derivation(client, job, plan_index, &tx) {
-                                Ok((res, calls)) => {
-                                    run.lock().unwrap().calls += calls;
-                                    res
-                                }
-                                // 9 = MiscFailure. nix reports only the top
-                                // level result, so name the leaf that broke.
-                                Err(e) => BuildResult {
-                                    status: 9,
-                                    error_msg: e.to_string(),
-                                    ..BuildResult::default()
-                                },
-                            }
-                        }
-                    };
-                    finish_job(run, wake, jobs, i, res);
-                }
-            });
-        }
-        drop(tx);
-        for ev in rx {
-            on_event(ev);
-        }
-    });
-
-    let g = run.into_inner().unwrap();
-    t.calls += g.calls;
-    let mut ok = true;
-    for (i, res) in g.results.iter().enumerate() {
-        match res {
-            Some(res) if res.success() => {}
-            Some(res) => {
-                ok = false;
-                on_event(failed_event(
-                    &jobs[i].drv_path.to_string(),
-                    &format!("status {}: {}", res.status, res.error_msg),
-                ));
-            }
-            None => ok = false,
-        }
-    }
-    Ok(ok)
-}
-
-fn next_job(run: &Mutex<Run>, wake: &Condvar) -> Option<usize> {
-    let mut g = run.lock().unwrap();
-    loop {
-        if let Some(i) = g.ready.pop_front() {
-            return Some(i);
-        }
-        if g.remaining == 0 {
-            return None;
-        }
-        g = wake.wait(g).unwrap();
-    }
-}
-
-fn finish_job(run: &Mutex<Run>, wake: &Condvar, jobs: &[Job], i: usize, res: BuildResult) {
-    let mut g = run.lock().unwrap();
-    let succeeded = res.success();
-    g.results[i] = Some(res);
-    g.remaining -= 1;
-    for &d in &jobs[i].dependants {
-        if !succeeded {
-            g.failed_input[d] = Some(jobs[i].drv_path.clone());
-        }
-        g.waiting[d] -= 1;
-        if g.waiting[d] == 0 {
-            g.ready.push_back(d);
-        }
-    }
-    wake.notify_all();
 }
 
 /// nix-compat.hh:`requiredSystemFeatures`, which the balancer routes on: the
@@ -843,10 +473,10 @@ fn required_system_features(drv: &Derivation) -> Vec<String> {
 /// once more; `UNAVAILABLE` means another worker should take it, so salt the
 /// `x-nix-drv` header the balancer hashes and try again, up to
 /// `unavailable-retries` times. Returns the result and the RPCs it cost.
-fn build_derivation(
+pub fn build_derivation(
     c: &Client,
     job: &Job,
-    plan: &PlanIndex<'_>,
+    objects: &Objects,
     tx: &std::sync::mpsc::Sender<Event>,
 ) -> Result<(BuildResult, usize)> {
     let mut drv_bytes = Vec::new();
@@ -878,7 +508,7 @@ fn build_derivation(
                     tonic::Code::NotFound | tonic::Code::FailedPrecondition
                 ) =>
             {
-                calls += upload_closure(c, plan, &job.drv_path, &headers)?;
+                calls += upload_closure(c, objects, &job.drv_path, &headers)?;
                 calls += 1;
                 return try_build_derivation(c, &req, &headers, &job.drv_path, tx)
                     .map(|r| (r, calls))
@@ -924,10 +554,12 @@ fn try_build_derivation(
                     line,
                 }));
             }
+            // The call knows its derivation, so the phase is attributed the
+            // way the daemon's `setPhase` result is.
             Some(proto::build_derivation_chunk::Event::Phase(phase)) => {
-                let _ = tx.send(Event::Log(Log {
+                let _ = tx.send(Event::Phase(Phase {
                     drv_path: drv.clone(),
-                    line: format!("phase: {phase}").into_bytes(),
+                    phase,
                 }));
             }
             Some(proto::build_derivation_chunk::Event::Done(done)) => {
@@ -944,31 +576,29 @@ fn try_build_derivation(
 
 /// What this run can re-send, by store path base name, so a `NOT_FOUND` retry
 /// re-sends just the closure of one derivation (store.cc:`uploadDrvClosure`).
-/// The plan names every source but hashes only the missing ones, so only those
-/// (`uploaded`) are here; a source the store already had is skipped, and a
-/// substituted one is not ours to send.
-struct PlanIndex<'a> {
-    by_name: HashMap<&'a str, &'a Object>,
+/// Everything this run registered is here; a path the store already had is not
+/// ours to send again, and neither is a substituted source.
+#[derive(Default)]
+pub struct Objects {
+    by_name: HashMap<String, Object>,
 }
 
-impl<'a> PlanIndex<'a> {
-    fn new(plan: &'a Plan, uploaded: &'a [Object]) -> PlanIndex<'a> {
-        PlanIndex {
-            by_name: uploaded
-                .iter()
-                .chain(&plan.drvs)
-                .map(|o| (o.store_path().base_name(), o))
-                .collect(),
+impl Objects {
+    /// Remembers what an `AddMultipleToStore` carried.
+    pub fn extend(&mut self, objects: &[&Object]) {
+        for o in objects {
+            self.by_name
+                .insert(o.store_path().base_name().to_string(), (*o).clone());
         }
     }
 
     /// `drv_path` and everything it references, references before referrers.
-    fn closure(&self, drv_path: &StorePath) -> Vec<&'a Object> {
+    fn closure(&self, drv_path: &StorePath) -> Vec<&Object> {
         let mut out = Vec::new();
-        let mut seen: HashSet<&'a str> = HashSet::new();
+        let mut seen: HashSet<&str> = HashSet::new();
         let mut stack = vec![(drv_path.base_name().to_string(), false)];
         while let Some((name, expanded)) = stack.pop() {
-            let Some(o) = self.by_name.get(name.as_str()).copied() else {
+            let Some(o) = self.by_name.get(name.as_str()) else {
                 continue;
             };
             if expanded {
@@ -993,11 +623,11 @@ impl<'a> PlanIndex<'a> {
 /// routing headers, then `AddMultipleToStore` of what the worker lacks.
 fn upload_closure(
     c: &Client,
-    plan: &PlanIndex<'_>,
+    objects: &Objects,
     drv_path: &StorePath,
     headers: &Headers,
 ) -> Result<usize> {
-    let closure = plan.closure(drv_path);
+    let closure = objects.closure(drv_path);
     if closure.is_empty() {
         return Ok(0);
     }
@@ -1092,7 +722,12 @@ fn fetch_nars(c: &Client, paths: &[StorePath], on_frame: OnFrame<'_>) -> Result<
 /// `--fetch-to DIR`: the farm never copies outputs into a local store, so the
 /// NARs come back over `FetchNars`. Each is spooled beside its destination, so
 /// the restore streams from disk instead of holding the whole NAR in memory.
-fn fetch_into_dir(c: &mut Client, paths: &[StorePath], dir: &Path, t: &mut Timings) -> Result<()> {
+pub fn fetch_into_dir(
+    c: &mut Client,
+    paths: &[StorePath],
+    dir: &Path,
+    t: &mut Timings,
+) -> Result<()> {
     t.calls += 1;
     let spool_path = |i: usize| dir.join(format!(".nar-{i}"));
     let mut open: Option<(usize, std::fs::File)> = None;

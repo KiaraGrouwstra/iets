@@ -575,43 +575,6 @@ fn realise(
         quiet: !n.print_build_logs,
         ..Style::detect()
     };
-    if let Transport::Grpc(cfg) = transport {
-        // The farm builds per derivation and publishes to the cache, so the
-        // whole flow differs; see `crate::remote::grpc::classic`. It blocks
-        // per derivation and tags no event with one, so it does not go
-        // through the dispatcher yet (docs/fast-build.md).
-        use crate::remote::event::Event;
-        use crate::remote::grpc::classic;
-        let logs = n.print_build_logs;
-        let failed = std::cell::Cell::new(false);
-        let mut on_event = |e: Event| match e {
-            Event::Log(l) if logs => eprintln!("{}", String::from_utf8_lossy(&l.line)),
-            Event::Failed(f) => {
-                failed.set(true);
-                eprintln!("error: build of '{}' failed: {}", f.drv_path, f.reason);
-            }
-            _ => {}
-        };
-        let gt: Vec<classic::Target> = targets
-            .iter()
-            .map(|t| classic::Target {
-                drv: t.drv.clone(),
-                outputs: t.outputs.clone(),
-            })
-            .collect();
-        let links = classic::Links {
-            out_link: (!n.no_link).then(|| n.out_link.clone()),
-            print_out_paths: n.print_out_paths,
-        };
-        return match classic::realise(cfg, plan, &super::locate_store, &gt, &links, &mut on_event) {
-            Ok(code) if failed.get() => code.max(1),
-            Ok(code) => code,
-            Err(e) => {
-                eprintln!("error: {e}");
-                1
-            }
-        };
-    }
     let mut d = match Dispatcher::open(
         transport,
         options,
@@ -697,7 +660,7 @@ fn realise(
             }
         }
     }
-    if let Err(e) = super::out_links(&mut d, transport, &links) {
+    if let Err(e) = d.out_links(&links) {
         eprintln!("error: {e}");
         return 1;
     }

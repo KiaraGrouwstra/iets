@@ -83,16 +83,9 @@ fn run(a: Args) -> Result<i32> {
     let store = crate::settings::builder(a.store.as_deref(), &cfg);
     let transport = Transport::parse_checked(&store, &cfg.system())?.ok_or_else(|| {
         CrateError::Usage(format!(
-            "--store '{store}': ietsp fast-build speaks the Nix worker protocol: daemon, unix:///path or ssh-ng://[user@]host"
+            "--store '{store}': ietsp fast-build speaks the Nix worker protocol and grpc://: daemon, unix:///path, ssh-ng://[user@]host or grpc://host:port"
         ))
     })?;
-    if matches!(transport, Transport::Grpc(_)) {
-        // The grpc client blocks per derivation and tags no event with one,
-        // so the dispatcher cannot drive it yet (docs/fast-build.md).
-        return Err(CrateError::Usage(
-            "--store grpc:// is not supported by ietsp fast-build yet: the grpc client needs a non-blocking submit and per-derivation events first (docs/fast-build.md). Use ssh-ng://".into(),
-        ));
-    }
     let mut options = Options::try_from(&cfg)?;
     if let Some(j) = a.max_jobs {
         // nix-fast-build's 0 means "unlimited"; the daemon wants a number.
@@ -275,7 +268,10 @@ fn dispatch(d: Dispatch, rx: Receiver<Line>) -> Result<Report> {
         // /nix/store, which an in-process evaluation has not written, so a
         // walk it cannot finish just means "build it".
         let mut lines = batch;
-        if d.skip_cached {
+        // The cache-status probe needs `QuerySubstitutablePathInfos`, which is
+        // a worker-protocol op; a `grpc://` store answers neither it nor a
+        // second connection cheaply, so the batch is simply built.
+        if d.skip_cached && !matches!(d.transport, Transport::Grpc(_)) {
             if resolver.is_none() {
                 resolver = Some(crate::jobs::cache::Resolver::open(&d.transport)?);
             }

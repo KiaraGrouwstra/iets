@@ -1,5 +1,5 @@
 //! Getting what a batch of derivations needs onto the builder, over the
-//! connection the builds themselves use.
+//! backend the builds themselves use.
 //!
 //! Two shapes. `PlanUpload` ships a `remote::plan::Plan` computed once, for
 //! the commands that evaluate to a fixed set of roots before they build
@@ -10,9 +10,11 @@
 //! duplicates `remote::plan::plan` on purpose: `plan` has no way to prune
 //! at a drv already known valid, and re-planning a whole closure per batch
 //! is quadratic on a big `checks` set.
+//!
+//! Neither shape knows the transport: both speak `build::backend::Backend`,
+//! so the same upload runs over the worker protocol and over `grpc://`.
 
 use std::collections::{BTreeSet, HashSet};
-use std::io::Write;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -21,11 +23,11 @@ use crate::error::{Error, Result};
 use crate::parallel::shared::SharedMap;
 use crate::remote::event::Event;
 use crate::remote::plan::{Locator, Object, Plan, SourceData, SourceInfo, SourceKind};
-use crate::remote::worker::build::write_object;
-use crate::remote::worker::{Connection, wire};
 use crate::store::drv::Derivation;
 use crate::store::path::{STORE_DIR, StorePath};
 use crate::store::source::SourceOrigin;
+
+use super::backend::{Backend, Drv, Phase};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Stats {
@@ -52,18 +54,22 @@ impl Stats {
 pub trait Uploader {
     fn upload(
         &mut self,
-        conn: &mut Connection,
+        b: &mut dyn Backend,
         roots: &[StorePath],
         on_event: &mut dyn FnMut(Event),
     ) -> Result<Stats>;
+
+    /// The derivations `roots` name, and with `deep` everything they need as
+    /// well, references before referrers: what a backend that reports outputs
+    /// itself, or schedules the builds itself, drives. The worker backend never
+    /// asks, so neither walk costs anything there.
+    fn drvs(&self, roots: &[StorePath], deep: bool) -> Result<Vec<Drv>>;
 }
 
 /// A closure planned once, shipped on the first call.
 pub struct PlanUpload<'a> {
     pub plan: &'a Plan,
     pub locate: &'a Locator<'a>,
-    /// What the upload half of the five-op flow measured, for `--timings`.
-    pub timings: Option<crate::remote::worker::build::Timings>,
     done: bool,
 }
 
@@ -72,7 +78,6 @@ impl<'a> PlanUpload<'a> {
         PlanUpload {
             plan,
             locate,
-            timings: None,
             done: false,
         }
     }
@@ -81,7 +86,7 @@ impl<'a> PlanUpload<'a> {
 impl Uploader for PlanUpload<'_> {
     fn upload(
         &mut self,
-        conn: &mut Connection,
+        b: &mut dyn Backend,
         roots: &[StorePath],
         on_event: &mut dyn FnMut(Event),
     ) -> Result<Stats> {
@@ -90,28 +95,69 @@ impl Uploader for PlanUpload<'_> {
         }
         self.done = true;
         let t0 = Instant::now();
-        let t = crate::remote::worker::build::build_on(
-            conn,
-            self.plan,
-            self.locate,
-            &roots[0],
-            &[],
-            true,
-            None,
-            on_event,
-        )?;
-        let st = Stats {
+        let plan = self.plan;
+        let paths: Vec<&StorePath> = plan
+            .sources
+            .iter()
+            .chain(plan.drvs.iter().map(Object::store_path))
+            .collect();
+        let queried = paths.len();
+        let valid = b.query_valid(&paths, on_event)?;
+        let missing_sources: Vec<StorePath> = plan
+            .sources
+            .iter()
+            .filter(|p| !valid.contains(p.base_name()))
+            .cloned()
+            .collect();
+        let missing_drvs: Vec<&Object> = plan
+            .drvs
+            .iter()
+            .filter(|o| !valid.contains(o.store_path().base_name()))
+            .collect();
+
+        let t1 = Instant::now();
+        let resolved = plan.resolve(&missing_sources, self.locate)?;
+        b.note_upload(Phase {
+            missing: missing_sources.len() + missing_drvs.len(),
+            resolve: t1.elapsed(),
+            resolve_paths: resolved.objects.len(),
+            store_sources: resolved.store_sources,
+        });
+
+        b.substitute(&resolved.substitute, on_event)?;
+
+        let missing: Vec<&Object> = resolved.objects.iter().chain(missing_drvs).collect();
+        let bytes = b.add_objects(&missing, on_event)?;
+        Ok(Stats {
             batches: 1,
-            queried: t.query_paths,
-            added: t.add_paths,
-            bytes: t.add_bytes,
-            substituted: t.substitute_paths,
+            queried,
+            added: missing.len(),
+            bytes,
+            substituted: resolved.substitute.len(),
             time: t0.elapsed(),
-        };
-        self.timings = Some(t);
-        Ok(st)
+        })
+    }
+
+    /// The plan is the closure of every root, in post-order already.
+    fn drvs(&self, roots: &[StorePath], deep: bool) -> Result<Vec<Drv>> {
+        let wanted: HashSet<&StorePath> = roots.iter().collect();
+        Ok(self
+            .plan
+            .drvs
+            .iter()
+            .filter_map(|o| match o {
+                Object::Drv { path, aterm, .. } if deep || wanted.contains(path) => Some(Drv {
+                    path: path.clone(),
+                    aterm: aterm.clone(),
+                }),
+                _ => None,
+            })
+            .collect())
     }
 }
+
+/// One derivation of a walk: its ATerm and what it references.
+type Node = (StorePath, Arc<Vec<u8>>, BTreeSet<StorePath>);
 
 /// The incremental one: the evaluation's tables plus what the builder is
 /// already known to hold.
@@ -149,21 +195,62 @@ impl StreamUpload {
         Ok((Arc::new(text.into_bytes()), references))
     }
 
+    /// The drvs `roots` need in post-order and the sources they name, pruned
+    /// at everything in `known`.
+    fn walk(
+        &self,
+        roots: &[StorePath],
+        known: &HashSet<StorePath>,
+    ) -> Result<(Vec<Node>, Vec<StorePath>)> {
+        let mut seen: HashSet<StorePath> = HashSet::new();
+        let mut drvs: Vec<Node> = Vec::new();
+        let mut srcs: Vec<StorePath> = Vec::new();
+        type Pending = Option<(Arc<Vec<u8>>, BTreeSet<StorePath>)>;
+        let mut stack: Vec<(StorePath, Pending)> =
+            roots.iter().rev().map(|p| (p.clone(), None)).collect();
+        // Iterative post-order: a drv after every drv it references.
+        while let Some((p, done)) = stack.pop() {
+            if let Some((aterm, refs)) = done {
+                drvs.push((p, aterm, refs));
+                continue;
+            }
+            if known.contains(&p) || !seen.insert(p.clone()) {
+                continue;
+            }
+            let (aterm, refs) = self.load_drv(&p)?;
+            stack.push((p, Some((aterm, refs.clone()))));
+            for r in refs {
+                if known.contains(&r) {
+                    continue;
+                }
+                if r.is_derivation() {
+                    if !seen.contains(&r) {
+                        stack.push((r, None));
+                    }
+                } else {
+                    self.collect_source(r, known, &mut seen, &mut srcs);
+                }
+            }
+        }
+        Ok((drvs, srcs))
+    }
+
     /// `p` after the sources a `toFile` text references: the daemon
     /// registers a path only once its references are valid.
     fn collect_source(
         &self,
         p: StorePath,
+        known: &HashSet<StorePath>,
         seen: &mut HashSet<StorePath>,
         out: &mut Vec<StorePath>,
     ) {
-        if self.valid.contains(&p) || !seen.insert(p.clone()) {
+        if known.contains(&p) || !seen.insert(p.clone()) {
             return;
         }
         if let Some(SourceOrigin::Text { references, .. }) = self.sources.get(&p) {
             for r in references {
                 if !r.is_derivation() {
-                    self.collect_source(r, seen, out);
+                    self.collect_source(r, known, seen, out);
                 }
             }
         }
@@ -202,7 +289,7 @@ impl StreamUpload {
 impl Uploader for StreamUpload {
     fn upload(
         &mut self,
-        conn: &mut Connection,
+        b: &mut dyn Backend,
         roots: &[StorePath],
         on_event: &mut dyn FnMut(Event),
     ) -> Result<Stats> {
@@ -211,55 +298,20 @@ impl Uploader for StreamUpload {
             batches: 1,
             ..Stats::default()
         };
-        let mut seen: HashSet<StorePath> = HashSet::new();
-        let mut drvs: Vec<(StorePath, Arc<Vec<u8>>, BTreeSet<StorePath>)> = Vec::new();
-        let mut srcs: Vec<StorePath> = Vec::new();
-        type Pending = Option<(Arc<Vec<u8>>, BTreeSet<StorePath>)>;
-        let mut stack: Vec<(StorePath, Pending)> =
-            roots.iter().rev().map(|p| (p.clone(), None)).collect();
-        // Iterative post-order: a drv after every drv it references.
-        while let Some((p, done)) = stack.pop() {
-            if let Some((aterm, refs)) = done {
-                drvs.push((p, aterm, refs));
-                continue;
-            }
-            if self.valid.contains(&p) || !seen.insert(p.clone()) {
-                continue;
-            }
-            let (aterm, refs) = self.load_drv(&p)?;
-            stack.push((p, Some((aterm, refs.clone()))));
-            for r in refs {
-                if self.valid.contains(&r) {
-                    continue;
-                }
-                if r.is_derivation() {
-                    if !seen.contains(&r) {
-                        stack.push((r, None));
-                    }
-                } else {
-                    self.collect_source(r, &mut seen, &mut srcs);
-                }
-            }
-        }
-        let paths: Vec<String> = srcs
-            .iter()
-            .chain(drvs.iter().map(|d| &d.0))
-            .map(|p| p.to_string())
-            .collect();
+        let (drvs, srcs) = self.walk(roots, &self.valid)?;
+        let paths: Vec<&StorePath> = srcs.iter().chain(drvs.iter().map(|d| &d.0)).collect();
         if paths.is_empty() {
             st.time = t0.elapsed();
             return Ok(st);
         }
         st.queried = paths.len();
-        let valid: HashSet<String> = conn
-            .query_valid_paths(&paths, on_event)?
-            .into_iter()
-            .collect();
+        let valid = b.query_valid(&paths, on_event)?;
 
+        let t1 = Instant::now();
         let mut objects: Vec<Object> = Vec::new();
-        let mut substitute: Vec<String> = Vec::new();
+        let mut substitute: Vec<StorePath> = Vec::new();
         for p in &srcs {
-            if valid.contains(&p.to_string()) {
+            if valid.contains(p.base_name()) {
                 continue;
             }
             match self.source_info(p)? {
@@ -267,44 +319,59 @@ impl Uploader for StreamUpload {
                     Object::source(p.clone(), info)
                         .map_err(|e| Error::io(format!("cannot dump '{p}'"), e))?,
                 ),
-                None => substitute.push(p.to_string()),
+                None => substitute.push(p.clone()),
             }
         }
+        let missing_drvs = drvs
+            .iter()
+            .filter(|(p, _, _)| !valid.contains(p.base_name()))
+            .count();
+        b.note_upload(Phase {
+            missing: objects.len() + substitute.len() + missing_drvs,
+            resolve: t1.elapsed(),
+            resolve_paths: objects.len(),
+            // A streamed batch never prints `--timings`.
+            store_sources: 0,
+        });
+
         // A path registers only once its references are valid, so the
         // substituted sources must land before the drvs that name them.
-        if !substitute.is_empty() {
-            st.substituted = substitute.len();
-            for r in conn.build_paths_with_results(&substitute, on_event)? {
-                if !r.success() {
-                    return Err(Error::Store(format!(
-                        "cannot substitute '{}' on the builder: status {}: {}",
-                        r.path, r.status, r.msg
-                    )));
-                }
-            }
-        }
+        st.substituted = substitute.len();
+        b.substitute(&substitute, on_event)?;
+
         for (path, aterm, references) in &drvs {
-            if valid.contains(&path.to_string()) {
+            if valid.contains(path.base_name()) {
                 continue;
             }
             objects.push(Object::drv(path.clone(), aterm.clone(), references.clone()));
         }
-        if !objects.is_empty() {
-            let before = conn.bytes_sent();
-            let mut body = |w: &mut dyn Write| -> std::io::Result<()> {
-                wire::write_u64(w, objects.len() as u64)?;
-                for o in &objects {
-                    write_object(w, o)?;
-                }
-                Ok(())
-            };
-            conn.add_multiple_to_store(false, &mut body, on_event)?;
-            st.added = objects.len();
-            st.bytes = conn.bytes_sent() - before;
-        }
+        let refs: Vec<&Object> = objects.iter().collect();
+        st.bytes = b.add_objects(&refs, on_event)?;
+        st.added = objects.len();
         self.valid.extend(srcs);
         self.valid.extend(drvs.into_iter().map(|d| d.0));
         st.time = t0.elapsed();
         Ok(st)
+    }
+
+    fn drvs(&self, roots: &[StorePath], deep: bool) -> Result<Vec<Drv>> {
+        if !deep {
+            return roots
+                .iter()
+                .map(|p| {
+                    self.load_drv(p).map(|(aterm, _)| Drv {
+                        path: p.clone(),
+                        aterm,
+                    })
+                })
+                .collect();
+        }
+        // No pruning: a derivation whose `.drv` the store already has still
+        // needs building when its outputs are missing.
+        let (drvs, _) = self.walk(roots, &HashSet::new())?;
+        Ok(drvs
+            .into_iter()
+            .map(|(path, aterm, _)| Drv { path, aterm })
+            .collect())
     }
 }

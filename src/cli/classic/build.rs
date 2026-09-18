@@ -224,7 +224,7 @@ fn realise(
         out.push_str(&path);
         out.push('\n');
     }
-    if let Err(e) = super::out_links(&mut d, transport, &links) {
+    if let Err(e) = d.out_links(&links) {
         eprintln!("error: {e}");
         return 1;
     }

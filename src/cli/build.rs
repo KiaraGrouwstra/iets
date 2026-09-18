@@ -261,15 +261,7 @@ fn build_roots(
     }
     let locate = |paths: &[StorePath]| locate_in_store(paths, &b.sources);
 
-    // grpc:// has its own client (src/remote/grpc), which blocks per root and
-    // tags nothing with a derivation, so it does not go through the
-    // dispatcher yet. See docs/fast-build.md.
-    if let crate::remote::worker::Transport::Grpc(cfg) = &transport {
-        return build_roots_grpc(b, cfg, roots, outputs, &plan, plan_time, &locate, prov);
-    }
-
     let mut up = PlanUpload::new(&plan, &locate);
-    let t_dispatch = std::time::Instant::now();
     let mut d = match Dispatcher::open(
         &transport,
         &crate::remote::worker::Options::default(),
@@ -282,14 +274,13 @@ fn build_roots(
             return 1;
         }
     };
-    let connect = t_dispatch.elapsed();
 
     if b.no_build {
         if let Err(e) = d.upload_only(&mut up, &roots[..1]) {
             eprintln!("error: {e}");
             return 1;
         }
-        timings(b, &d, &mut up, &plan, plan_time, connect);
+        timings(b, &d, &plan, plan_time);
         return 0;
     }
 
@@ -309,8 +300,6 @@ fn build_roots(
             return 1;
         }
     };
-    let mut fetched = 0usize;
-    let t_fetch = std::time::Instant::now();
     if let Some(dir) = &b.fetch_to {
         for o in &outcomes {
             for path in o.outputs.values() {
@@ -318,15 +307,10 @@ fn build_roots(
                     eprintln!("error: {e}");
                     return 1;
                 }
-                fetched += 1;
             }
         }
     }
-    let fetch = t_fetch.elapsed();
-    timings(b, &d, &mut up, &plan, plan_time, connect);
-    if fetched > 0 && b.timings {
-        eprintln!("fetch: {fetched} outputs, {:.3}s", fetch.as_secs_f64());
-    }
+    timings(b, &d, &plan, plan_time);
     for o in &outcomes {
         for path in o.outputs.values() {
             println!("{path}");
@@ -335,104 +319,14 @@ fn build_roots(
     if d.failed { 1 } else { 0 }
 }
 
-/// The grpc client's own flow: one call per root, the plain per-line
-/// printer, its own timing report. Unchanged from before the dispatcher.
-#[allow(clippy::too_many_arguments)]
-fn build_roots_grpc(
-    b: &BuildArgs,
-    cfg: &crate::remote::grpc::GrpcConfig,
-    roots: &[crate::store::path::StorePath],
-    outputs: &[String],
-    plan: &crate::remote::plan::Plan,
-    plan_time: std::time::Duration,
-    locate: &crate::remote::plan::Locator<'_>,
-    prov: &crate::provenance::Provenance,
-) -> i32 {
-    use crate::remote::event::Event;
-    use crate::store::path::StorePath;
-
-    let mut built = Vec::new();
-    let mut failed = false;
-    let roots = if b.no_build { &roots[..1] } else { roots };
-    for root in roots {
-        let mut on_event = |ev: Event| match ev {
-            Event::Started(s) => match prov.started(&s.drv_path) {
-                Some(l) => eprintln!("{l}"),
-                None => eprintln!("building {}", s.drv_path),
-            },
-            Event::Log(l) => {
-                let line = prov.rewrite(&l.line);
-                let line = String::from_utf8_lossy(&line);
-                match StorePath::parse(&l.drv_path) {
-                    Ok(p) => eprintln!("{}> {line}", p.name()),
-                    Err(_) => eprintln!("{line}"),
-                }
-            }
-            Event::Built(b) => built.push((b.output, b.store_path)),
-            Event::Failed(f) => {
-                failed = true;
-                match prov.failed(&f.drv_path, &f.reason) {
-                    Some(l) => eprintln!("{l}"),
-                    None => eprintln!(
-                        "error: build of {} failed: {}",
-                        f.drv_path,
-                        prov.rewrite_str(&f.reason)
-                    ),
-                }
-            }
-            Event::Done(d) => failed |= !d.success,
-            Event::Phase(_) | Event::Stopped(_) => {}
-        };
-        let report = crate::remote::grpc::build::build(
-            cfg,
-            plan,
-            locate,
-            root,
-            outputs,
-            b.no_build,
-            b.fetch_to.as_deref(),
-            &mut on_event,
-        )
-        .map(|t| t.report(plan, plan_time));
-        match report {
-            Ok(r) => {
-                if b.timings {
-                    eprintln!("{r}");
-                }
-            }
-            Err(e) => {
-                eprintln!("error: {e}");
-                return 1;
-            }
-        }
-    }
-    let wanted: Vec<&(String, String)> = built
-        .iter()
-        .filter(|(name, _)| outputs.is_empty() || outputs.contains(name))
-        .collect();
-    for (_, path) in &wanted {
-        println!("{path}");
-    }
-    if failed { 1 } else { 0 }
-}
-
-/// `--timings`: the five-op flow's own report, with the numbers the
-/// dispatcher measured for the ops it owns.
+/// `--timings`: one line per phase of the flow, as the backend measured it.
 fn timings(
     b: &BuildArgs,
     d: &crate::build::Dispatcher,
-    up: &mut crate::build::upload::PlanUpload<'_>,
     plan: &crate::remote::plan::Plan,
     plan_time: std::time::Duration,
-    connect: std::time::Duration,
 ) {
-    if !b.timings {
-        return;
+    if b.timings {
+        eprintln!("{}", d.report(plan, plan_time));
     }
-    let Some(t) = up.timings.as_mut() else { return };
-    t.connect = connect;
-    t.build = d.build_time;
-    t.outputs = d.outputs_time;
-    t.stats = d.conn.stats;
-    eprintln!("{}", t.report(plan, plan_time));
 }
