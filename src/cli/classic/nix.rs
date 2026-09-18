@@ -406,7 +406,7 @@ fn resolve(ev: &mut Evaluator, n: &Nix, what: &str, cwd: &[u8]) -> EvalResult<Wo
 }
 
 /// One installable's derivation and the outputs `nix build` installs.
-pub struct Target {
+struct Target {
     drv: StorePath,
     outputs: Vec<String>,
 }
