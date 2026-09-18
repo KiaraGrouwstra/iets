@@ -42,7 +42,7 @@ def show-matching [re: string, file: string] {
 # The nix-grpc-store build with bin/nix-grpc-daemon and lib/nix/plugins.
 def daemon-package []: nothing -> string {
   if ($env.DAEMON? | is-not-empty) { return $env.DAEMON }
-  print $"building ($FLAKE)#default (may take a few minutes)"
+  print $"building ($FLAKE)#default, this can take a few minutes"
   out-of nix build --no-link --print-out-paths $"($FLAKE)#default" | chomp | lines | last
 }
 
