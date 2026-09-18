@@ -167,6 +167,71 @@ def main [] {
   $ok = ($ok | append (verdict ($repl.stderr | str contains "ietsp: falling back to nix:")
     "the 'nix' name falls back" $"stderr was '($repl.stderr)'"))
 
+  # --- the `nix` name: a locked flake with no inputs, copied out of the
+  # repository so both sides see a `path:` flake instead of a git one.
+  let fdir = $"($tmp)/flake"
+  mkdir $fdir
+  cp $"($env.FILE_PWD)/../tests/fixtures/flake/flake.nix" $fdir
+  cp $"($env.FILE_PWD)/../tests/fixtures/flake/flake.lock" $fdir
+  let fref = $"path:($fdir)"
+
+  $ok = ($ok | append (cmp-case "nix eval --json .#x"
+    (run-both $farm nix eval --json $"($fref)#x")))
+  $ok = ($ok | append (cmp-case "nix eval --raw .#x"
+    (run-both $farm nix eval --raw $"($fref)#x")))
+  $ok = ($ok | append (cmp-case "nix eval .#s (attrset, list, float)"
+    (run-both $farm nix eval $"($fref)#s")))
+  $ok = ($ok | append (cmp-case "nix eval .#l"
+    (run-both $farm nix eval $"($fref)#l")))
+  $ok = ($ok | append (cmp-case "nix eval .#pkg (a derivation)"
+    (run-both $farm nix eval $"($fref)#pkg")))
+  $ok = ($ok | append (cmp-case "nix eval . (packages.<system>.default)"
+    (run-both $farm nix eval $fref)))
+  $ok = ($ok | append (cmp-case "nix eval --expr"
+    (run-both $farm nix eval --expr "{ a = 1; b = [ 1 2 ]; c = \"x\"; d = 123456789.5; }")))
+  $ok = ($ok | append (cmp-case "nix eval --expr, a nested error"
+    (run-both $farm nix eval --expr "{ a = throw \"boom\"; b = 1; }")))
+  $ok = ($ok | append (cmp-case "nix eval --expr, repeated and empty values"
+    (run-both $farm nix eval --expr "let a = { x = 1; }; in [ a a {} {} [] ]")))
+  $ok = ($ok | append (cmp-case "nix eval --expr, functions"
+    (run-both $farm nix eval --expr "{ f = x: x; p = builtins.add; q = builtins.add 1; }")))
+  $ok = ($ok | append (cmp-case "nix eval -f FILE ATTR"
+    (run-both $farm nix eval -f $"($d)/multi.nix" outputs)))
+  $ok = ($ok | append (cmp-case "nix eval --json -f FILE ATTR"
+    (run-both $farm nix eval --json -f $"($d)/multi.nix" outputs)))
+
+  # --- nix build: the out-link prefix, the printed paths and the link target
+  mut got = {}
+  for who in [real ours] {
+    let wd = $"($tmp)/nixbuild-($who)"
+    mkdir $wd
+    cd $wd
+    let cmd = if $who == "real" { "nix" } else { $"($farm)/nix" }
+    let r = (^$cmd build $"($fref)#pkg" --print-out-paths -o result-x | complete)
+    let link = (if ("result-x" | path exists) { ^readlink result-x | chomp } else { "MISSING" })
+    $got = ($got | insert $who {out: $r.stdout, code: $r.exit_code, link: $link, err: $r.stderr})
+  }
+  let same = (($got.ours.out | into binary) == ($got.real.out | into binary)) and ($got.ours.code == $got.real.code) and ($got.ours.link == $got.real.link)
+  if not $same {
+    print $"  ours: code=($got.ours.code) link=($got.ours.link) out=($got.ours.out)"
+    print $"  real: code=($got.real.code) link=($got.real.link) out=($got.real.out)"
+    print $"  ours stderr: ($got.ours.err | str substring 0..400)"
+  }
+  $ok = ($ok | append (verdict $same "nix build .#pkg --print-out-paths -o result-x" "see above"))
+
+  # `nix print-dev-env` is `ietsp print-dev-env`, so only the dispatch is new.
+  let pde_nix = (^$"($farm)/nix" print-dev-env $"($fref)#pkg" | complete)
+  let pde_own = (^(^readlink -f $"($farm)/nix" | chomp) print-dev-env $"($fref)#pkg" | complete)
+  $ok = ($ok | append (verdict (($pde_nix.stdout == $pde_own.stdout) and ($pde_nix.exit_code == $pde_own.exit_code))
+    "nix print-dev-env is ietsp print-dev-env" $"exit ($pde_nix.exit_code) vs ($pde_own.exit_code)"))
+
+  let meta = (^$"($farm)/nix" flake metadata $fref | complete)
+  $ok = ($ok | append (verdict ($meta.stderr | str contains "falling back to nix: subcommand 'flake'")
+    "nix flake metadata falls back" $"stderr was '($meta.stderr)'"))
+  let apply = (^$"($farm)/nix" eval --apply "x: x" --expr 1 | complete)
+  $ok = ($ok | append (verdict ($apply.stderr | str contains "'--apply' is not implemented")
+    "nix eval --apply falls back" $"stderr was '($apply.stderr)'"))
+
   cd /
   rm -rf $tmp
   let failed = ($ok | where $it == false | length)

@@ -12,8 +12,38 @@ Every symlink points at `bin/ietsp`; the basename of `argv[0]` picks the
 command. Without symlinks the same commands work as subcommands:
 `ietsp nix-instantiate ...`, `ietsp nix-build ...`.
 
-`nix/module.nix` does not install this package: where the farm sits on
-`PATH` relative to the real nix is a separate decision.
+## The NixOS module
+
+`nix/module.nix` installs `packages.default` and the direnv hook.
+`ietsp.classic.enable` (default `false`) adds the farm as well:
+
+```nix
+{
+  imports = [ ietsp.nixosModules.default ];
+  ietsp.classic.enable = true;
+}
+```
+
+The farm goes into `environment.systemPackages` under `lib.hiPrio`.
+`system.path` is a `buildEnv`, which resolves a collision between two
+`bin/nix-instantiate` by `meta.priority` — lower wins, `hiPrio` is -10
+against nix's default 5 — so the farm's symlinks are the ones in the
+system path. No `PATH` juggling in `environment.extraInit`, which shells
+that skip it would ignore.
+
+The loser of a `buildEnv` collision is not in the system path at all, so
+the fallback would find no second `nix` on `PATH`. The option therefore also
+sets `IETSP_NIX_BIN_DIR` to `${config.nix.package}/bin`, which is where the
+fallback looks first. Outside a login shell (`environment.variables` is
+`/etc/set-environment`), set it yourself or put the real nix's `bin` on
+`PATH`.
+
+To check a configuration, build its `system.path` and look at a symlink:
+
+```
+readlink $(nix build --no-link --print-out-paths \
+  --impure --expr '(...nixosSystem {...}).config.system.path')/bin/nix-instantiate
+```
 
 ## What each name handles
 
@@ -69,8 +99,61 @@ flag for flag. See `docs/eval-jobs.md`.
 
 ### `nix`
 
-Pure fallback: every subcommand execs the real `nix`. The name exists so
-the symlink set is complete.
+Three subcommands; every other one execs the real `nix`.
+
+`nix eval [INSTALLABLE]`: `--json`, `--raw`, `--expr E`, `-f`/`--file FILE`,
+`--impure` (accepted; ietsp is impure already), `-I`, `--arg`/`--argstr`,
+`--option`, `--store`, `--show-trace`, `--experimental-features` and
+`--extra-experimental-features` (accepted and ignored),
+`--accept-flake-config` (ignored).
+
+The output is `nix eval`'s, which is not `nix-instantiate --eval`'s
+(`print.cc:Printer` with `force`, `derivationPaths` and `trackRepeated`):
+every value is forced, a derivation prints as
+`«derivation /nix/store/….drv»`, a function as `«lambda f @ FILE:L:C»`,
+`«primop add»` or `«partially applied primop add»` (`eval.cc:addPrimOp`
+drops a leading `__` from the name), a value seen twice as `«repeated»`,
+and a value that fails to evaluate as `«error: …»` — only an error at the
+top level is reported and exits 1. `--json` is `printValueAsJSON` with
+`strict`, so a derivation becomes its output path. `--raw` coerces without
+quoting.
+
+An INSTALLABLE is `FLAKEREF[#ATTR]` on a locked local flake (`.`, `path:`,
+a directory inside a git repository — see `docs/flakes.md`), or the
+attribute path of the `-f`/`--expr` value. `.` is the whole value. The
+flake attr-path candidates are `installable-flake.cc:getActualAttrPaths`
+with `installables.cc`'s defaults:
+
+| fragment | candidates, in order |
+|---|---|
+| none | `packages.<system>.default`, `defaultPackage.<system>` |
+| `.foo` | `foo` |
+| `foo` | `packages.<system>.foo`, `legacyPackages.<system>.foo`, `foo` |
+
+`nix build [INSTALLABLE...]` (default `.`): `-o`/`--out-link PATH`,
+`--no-link`, `--print-out-paths`, `-L`/`--print-build-logs`, `-f`,
+`--expr`, plus the same global flags. It evaluates like `nix eval`, then
+builds through the daemon the way `nix-build` does. The outputs it installs
+are `get-drvs.cc:queryOutputs`: `outputSpecified` picks one, else
+`meta.outputsToInstall`, else every output of an `-f`/`--expr` installable
+and `out` of a flake one. The links are `build.cc:createOutLinks`:
+`result`, `result-<n>` for the n-th installable from 1 on, and
+`-<output>` appended for an output other than `out`. stdout is empty
+without `--print-out-paths`. Exit 1 on an evaluation, daemon or build
+error.
+
+`nix print-dev-env [FLAKEREF[#attr]] [--json]` is `ietsp print-dev-env`
+(`docs/direnv.md`).
+
+Falls back on: `nix eval --apply`, `--write-to` or more than one
+installable, `nix build --rebuild`, `--dry-run` or `--json`, an installable
+that is a store path (`/nix/store/…`, or an `^outputs` suffix), a
+non-local flake reference such as `nixpkgs#hello`, an installable that is
+not a derivation under `nix build`, `--arg`/`--argstr` with a flake (nix
+refuses that), `nix develop`, `nix flake …`, `nix run`, `nix shell`,
+`nix profile`, `nix store`, `nix copy`, `nix repl`, `nix log`,
+`nix why-depends`, `nix fmt`, every other subcommand, and any flag not
+listed above.
 
 ## Fallback rules
 
@@ -138,11 +221,25 @@ What is used:
 - `--add-root` does not refuse a link that already exists and points
   outside the store; it replaces it.
 - The tracing cache (`docs/tracing-cache.md`) is off in classic mode.
+- `nix eval` and `nix build` are always impure. The real `nix eval --expr`
+  keeps `pure-eval` on, so it refuses to copy a path to the store, and
+  `nix eval --raw ./.` fails where ours prints the store path.
+- `nix eval` does not register the derivations it evaluates. The real one
+  writes the `.drv` files while computing `drvPath`.
+- `nix build` prints the log lines only with `-L`. The real one shows the
+  last line in the progress bar and the whole log when a build fails.
+- Two installables that name the same derivation print one output path
+  each. The real `nix build` prints one per pair, so twice as many.
+- An evaluation error inside a value `nix eval` prints becomes
+  `«error: …»`, except `ErrorKind::Unsupported`, which must escape so the
+  run can fall back to the real nix.
 
 ## Tests
 
-`scripts/classic-e2e.nu` runs the real `nix-instantiate`/`nix-build` and
-ours for every case and compares stdout byte for byte, the exit code and
-the `result*` symlink targets. It writes to the store and needs a live
+`scripts/classic-e2e.nu` runs the real `nix-instantiate`/`nix-build`/`nix`
+and ours for every case and compares stdout byte for byte, the exit code and
+the `result*` symlink targets. The `nix` cases use
+`tests/fixtures/flake`, a flake with no inputs and a complete `flake.lock`,
+copied out of the repository so both sides see a `path:` flake. It writes to the store and needs a live
 `nix-daemon`, so it is not part of `nix flake check`; run it from the dev
 shell after `cargo build --release`.
