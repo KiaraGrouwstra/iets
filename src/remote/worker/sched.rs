@@ -190,7 +190,6 @@ impl Graph {
     }
 }
 
-
 enum Job {
     Query(Vec<String>),
     Substitutable(Vec<String>),
@@ -625,8 +624,8 @@ impl State<'_> {
                         stack.push((*r, want.clone()));
                     }
                 }
-                for i in 0..n {
-                    if self.g.is_drv[i] && !needed[i] {
+                for (i, need) in needed.iter().enumerate() {
+                    if self.g.is_drv[i] && !need {
                         self.build[i] = Build::Built;
                     }
                 }
