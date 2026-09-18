@@ -32,11 +32,11 @@ system path. No `PATH` juggling in `environment.extraInit`, which shells
 that skip it would ignore.
 
 The loser of a `buildEnv` collision is not in the system path at all, so
-the fallback would find no second `nix` on `PATH`. The option therefore also
-sets `IETSP_NIX_BIN_DIR` to `${config.nix.package}/bin`, which is where the
-fallback looks first. Outside a login shell (`environment.variables` is
-`/etc/set-environment`), set it yourself or put the real nix's `bin` on
-`PATH`.
+the fallback cannot find a second `nix` on `PATH`. The farm therefore
+records the nix it was built for in `share/ietsp/real-nix-bin`, and the
+fallback follows the symlink chain from the `PATH` entry to that file. It
+works in every process, login shell or not. The module builds the farm for
+`config.nix.package`; `IETSP_NIX_BIN_DIR` stays as an override.
 
 To check a configuration, build its `system.path` and look at a symlink:
 
@@ -259,9 +259,10 @@ ietsp: falling back to nix-instantiate: '--parse' is not implemented
 | `IETSP_NIX_BIN_DIR` | the directory the real binary is taken from |
 | `IETSP_NO_FALLBACK=1` | print the reason and exit 1 instead of exec'ing |
 
-Without `IETSP_NIX_BIN_DIR`, the first `<name>` on `PATH` whose canonical
-path is not `/proc/self/exe` wins, so the farm can sit ahead of the real
-nix. Nothing found at all:
+Lookup order: `IETSP_NIX_BIN_DIR/<name>` when it exists there; else the
+directory named by `share/ietsp/real-nix-bin` next to the farm entry on
+`PATH` that resolves to ietsp; else the first `<name>` on `PATH` whose
+canonical path is not `/proc/self/exe`. Nothing found at all:
 `ietsp: cannot fall back to <name>: not found on PATH`, exit 1.
 
 ## Config

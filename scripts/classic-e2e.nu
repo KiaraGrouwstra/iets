@@ -20,6 +20,8 @@ def make-farm [bin: string, dir: string]: nothing -> string {
   for n in [nix-instantiate nix-build nix-eval-jobs nix-shell nix] {
     ^ln -sf ($bin | path expand) $"($dir)/bin/($n)"
   }
+  mkdir $"($dir)/share/ietsp"
+  (real-bin-dir) | save -f $"($dir)/share/ietsp/real-nix-bin"
   $"($dir)/bin"
 }
 
@@ -224,6 +226,15 @@ def main [] {
   let ours = (with-env { PATH: $"($farm):($env.PATH)" } { ^$"($farm)/nix" eval --json $"path:($fdir2)#x" | complete })
   let real = (^nix eval --json $"path:($fdir2)#x" | complete)
   $ok = ($ok | append (cmp-case "nix eval, farm first on PATH, fresh tree" {ours: $ours, real: $real}))
+
+  # the farm shadows the real nix out of PATH and no IETSP_NIX_BIN_DIR is set:
+  # the fallback must find nix through the farm's own marker
+  let shadow = $"($tmp)/shadow"
+  mkdir $shadow
+  ^ln -sf (which bash | get 0.path) $"($shadow)/bash"
+  let ours = (with-env { PATH: $"($farm):($shadow)", IETSP_NIX_BIN_DIR: null } { ^$"($farm)/nix-instantiate" --parse -E "1 + 1" | complete })
+  let real = (^nix-instantiate --parse -E "1 + 1" | complete)
+  $ok = ($ok | append (cmp-case "fallback through the farm marker, real nix off PATH" {ours: $ours, real: $real}))
   $ok = ($ok | append (cmp-case "nix eval .#pkg (a derivation)"
     (run-both $farm nix eval $"($fref)#pkg")))
   $ok = ($ok | append (cmp-case "nix eval . (packages.<system>.default)"
