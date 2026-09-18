@@ -215,7 +215,7 @@ and main re-evaluates the cycle sequentially and reports the error.
    coerce, 4 WHNF) toggles them for experiments.
 2. **Creation-time speculation** (`mk_thunk_counted` and `map`/
    `mapAttrs` thunk applications): a thunk whose body has at least
-   `IETSP_SPEC_MIN` (48) IR nodes is a candidate. Candidates are *not*
+   `IETSP_SPEC_MIN` (24) IR nodes is a candidate. Candidates are *not*
    submitted where they are created: the `let`/`rec`/formals env may
    still be under construction and a helper reading an EMPTY slot
    dereferences null. They are buffered per fiber and submitted at the

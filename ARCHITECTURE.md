@@ -71,7 +71,13 @@ source bytes
 - `devenv/`: `ietsp print-dev-env`, the `nix print-dev-env` replacement for
   `.envrc`: the `-env` derivation, the environment JSON, the printed bash.
   See `docs/direnv.md`.
-- `main.rs`: CLI. `ietsp eval [--strict] [--json] [--raw] [--no-cache] [--no-ir-cache] [-I prefix=path] [-E expr | file | dir#attr]`,
+- `settings.rs`: every `IETSP_*` environment knob, read once into one
+  struct. See `docs/settings.md`.
+- `api.rs`: the library facade — evaluation arguments, `evaluate`, error
+  reporting, build targets, the cache key. Frontends use this and never
+  reach into `cli`; `examples/` holds three of them. See `docs/library.md`.
+- `main.rs` and `cli/`: the command line on top of `api`.
+  `ietsp eval [--strict] [--json] [--raw] [--no-cache] [--no-ir-cache] [-I prefix=path] [-E expr | file | dir#attr]`,
   `ietsp build`, `ietsp print-dev-env`, `ietsp parse`, `ietsp cache-dump`.
 
 ## Value model
