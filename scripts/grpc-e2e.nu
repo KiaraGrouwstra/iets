@@ -9,6 +9,10 @@
 # 3. hello warm: 0 missing.
 # 4. classic `nix build --store grpc://…?insecure=1 --eval-store auto`
 #    compared with the real nix plus its nix-grpc-store plugin.
+# 5. the out-link: the output is fetched back and registered locally.
+# 6. `ietsp fast-build --store grpc://…`: the same result file as the same
+#    flake built over the worker protocol on the same store.
+# 7. a multi-root `ietsp build` over grpc: one progress line per attribute.
 #
 # Farm mode is not covered: --niks3 needs a niks3 instance with build claims
 # and a `niks3 push` child, which this host has not got (src/daemon/farm.hh).
@@ -16,7 +20,7 @@
 # usage: nu scripts/grpc-e2e.nu            # uses target/release
 #        BIN=target/debug nu scripts/grpc-e2e.nu
 #        DAEMON=/nix/store/…-nix-grpc-store-0.1.0 nu scripts/grpc-e2e.nu
-use lib.nu [chomp show]
+use lib.nu [chomp show fastbuild-flake]
 
 const FLAKE = "github:Mic92/nix-grpc-store/8f3a2ecb58117448f28bae90304c3e24e8e42b79"
 
@@ -195,6 +199,51 @@ def run-tests [bin: string, nixpkgs: string, work: string] {
     if not (quiet-ok nix-store --check-validity $out) { fail $"($out) is not valid in the local store" }
     print $"ok: ($link) -> ($out), valid locally"
   }
+
+  print "== 6. fast-build over grpc: the same verdicts as over the worker protocol"
+  # Two flakes, so neither run finds the other's outputs already built. The
+  # attribute names are the same, the nonces are not.
+  fastbuild-flake $"($work)/fb-grpc"
+  fastbuild-flake $"($work)/fb-worker"
+  let verdicts = {|store: string, name: string|
+    let f = $"($work)/($name).json"
+    let r = (^$"($bin)/ietsp" fast-build --store $store --flake $"path:($work)/($name)#checks"
+      --systems $system --result-file $f | complete)
+    if not ($f | path exists) { print ($r.stderr | chomp); fail $"($name): no result file" }
+    {
+      exit: $r.exit_code,
+      stderr: $r.stderr,
+      rows: (open --raw $f | from json | get results
+        | each {|x| {type: $x.type, attr: $x.attr, success: $x.success, skipped: ($x.skipped? | default false)} }
+        | sort-by type attr),
+    }
+  }
+  let over_grpc = (do $verdicts $url "fb-grpc")
+  let over_worker = (do $verdicts $"unix://($work)/nix-daemon.sock" "fb-worker")
+  if $over_grpc.exit != $over_worker.exit {
+    fail $"exit ($over_grpc.exit) over grpc, ($over_worker.exit) over the worker protocol"
+  }
+  if $over_grpc.rows != $over_worker.rows {
+    print $"  grpc:   ($over_grpc.rows | to json -r)"
+    print $"  worker: ($over_worker.rows | to json -r)"
+    fail "the result file differs between the transports"
+  }
+  if not ($over_grpc.stderr | str contains $"($system).bad") { fail "the failing attribute is not named" }
+  if not ($over_grpc.stderr | str contains "about to fail") { fail "the failure log tail is missing" }
+  if not ($over_grpc.stderr | str contains "building fb-chain") { fail "the dependent check did not build" }
+  print $"ok: ($over_grpc.rows | length) records, exit ($over_grpc.exit), the same either way"
+
+  print "== 7. a multi-root ietsp build over grpc names every attribute"
+  make-case $"($work)/c7a" ietsp-grpc-e2e-multi-a $system
+  make-case $"($work)/c7b" ietsp-grpc-e2e-multi-b $system
+  let expr = $"[ \(import ($work)/c7a/case.nix\) \(import ($work)/c7b/case.nix\) ]"
+  let r = (^$"($bin)/ietsp" build --builder $url --no-cache -E $expr | complete)
+  if $r.exit_code != 0 { print ($r.stderr | chomp); print (open --raw $"($work)/grpc.log" | chomp); fail "multi-root build exited non-zero" }
+  for n in [ietsp-grpc-e2e-multi-a ietsp-grpc-e2e-multi-b] {
+    if not ($r.stderr | str contains $"building ($n)") { print ($r.stderr | chomp); fail $"no progress line for ($n)" }
+  }
+  if (($r.stdout | chomp | lines | length) != 2) { fail $"expected two output paths, got ($r.stdout)" }
+  print $"ok: ($r.stdout | chomp | lines | length) roots, one progress line each"
   print "PASS"
 }
 

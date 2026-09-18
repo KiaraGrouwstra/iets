@@ -142,9 +142,9 @@ published to `https://cache.numtide.com`. ietsp speaks it natively, so
 `--builder grpc://…` and `--store grpc://…` need no nix, no plugin and no
 local store. Code: `src/remote/grpc/` (`mod.rs` the URL, TLS, auth and the
 retry policy; `drvwire.rs` the worker-protocol payloads the messages carry;
-`build.rs` the flow; `classic.rs` `nix build --store grpc://…`). The service
-definition is vendored verbatim as `proto/nix_remote.proto` (rev `8f3a2ecb`)
-and compiled by `build.rs`.
+`build.rs` the calls; `backend.rs` the transport as one of the dispatcher's
+backends). The service definition is vendored verbatim as
+`proto/nix_remote.proto` (rev `8f3a2ecb`) and compiled by `build.rs`.
 
 ### URL
 
@@ -174,6 +174,29 @@ hash part, which the balancer hashes to pick a worker) and `x-nix-features`
 `x-nix-system` with the derivation's own `platform` (`store.cc:routingFor`).
 
 ### Flow
+
+Every build goes through `crate::build::Dispatcher`, as every other
+transport does (`docs/fast-build.md`): the same batching, the same
+structured events with provenance, the same per-build log blocks, the same
+records. `grpc://` is one `build::backend::Backend` and the worker protocol
+is the other, so what differs is only what the wire offers:
+
+- A ready set is one `BuildPathsWithResults` over the worker protocol,
+  because that protocol is serial per connection. Over `grpc://` a farm
+  takes one `BuildDerivation` per derivation, so the client fans the set's
+  whole derivation closure out, dependencies first, `min(max-builds, -j)` in
+  flight; a non-farm store resolves the closure itself, so one `BuildPaths`
+  takes the set.
+- A `BuildDerivation` knows its derivation, so its `log_line` and `phase`
+  become drv-tagged events and the renderer keys each build's log buffer on
+  them. A `BuildPaths` stream names no derivation: those lines fold into the
+  running build when there is exactly one, as a remote builder's own stderr
+  does through a daemon.
+- Output paths come from the derivations, computed statically, where the
+  worker path asks `QueryDerivationOutputMap`.
+- `BuildPaths` carries no `keep-going`, so a non-farm store stops at the
+  first failure and answers only for the targets it reached. The backend
+  re-asks for the rest, so every root still gets its own verdict.
 
 `StoreInfo` once, for the trust flag and the `farm` flag. Then:
 
@@ -229,8 +252,9 @@ it uploads only sources and derivations.
 Outputs land in the farm's binary cache, not in the local store. `--fetch-to`
 restores them into a directory. `nix build --store grpc://… --eval-store auto`
 (what the `nix-farm` wrapper runs) needs the `result` symlink to resolve, so
-`grpc::build::register` first reads the outputs' closure back with
-`QueryPathInfos`, fetches what the local store lacks with `FetchNars`, and
+the backend's out-link step (`grpc::build::register`) first reads the
+outputs' closure back with `QueryPathInfos`, fetches what the local store
+lacks with `FetchNars`, and
 registers it through one worker-protocol `AddMultipleToStore` with each path's
 signatures — the same thing `nix copy --from https://cache.numtide.com` does.
 The local `nix.conf` must therefore trust the cache's public key, or be a
@@ -265,11 +289,20 @@ back with `FetchNars` and handed to the local daemon, which refuses it for
 lacking a signature — correct, because a scratch daemon builds unsigned
 outputs and a real farm signs them with its cache key.
 
+Case 6 runs `ietsp fast-build --store grpc://…` on `scripts/lib.nu`'s
+`fastbuild-flake` and compares the whole result file — every record's type,
+attribute, success and skipped flag — with the same flake built over the
+worker protocol on the same store; case 7 checks that a multi-root
+`ietsp build` over `grpc://` names every attribute on stderr.
+
 Not covered: farm mode. `--niks3` needs a niks3 instance with build claims
 and spawns a `niks3 push` child (`src/daemon/farm.hh`), so `BuildDerivation`,
 the `max-builds` fan-out, the `BasicDerivation` wire form and the
 `BuildResult` decoder are exercised only by unit tests until a real token for
-`farm.numtide.com` is available.
+`farm.numtide.com` is available. The fan-out's own scheduling — the cap on
+builds in flight, the dependency order, a failed derivation blocking its
+dependants, and the drv-tagged merge into one event stream — is
+`build::fanout`, tested without a farm.
 
 ### Retries
 

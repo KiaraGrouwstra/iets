@@ -626,4 +626,192 @@ mod tests {
         assert!(r.outputs.is_none());
         assert_eq!(r.cache_status.as_deref(), Some("notBuilt"));
     }
+
+    // ---- a fan-out backend under the dispatcher ----------------------------
+
+    /// Somewhere to read the renderer's stderr back from.
+    #[derive(Clone, Default)]
+    struct Sink(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Sink {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A backend that builds every job of a batch concurrently, the way the
+    /// `grpc://` farm does, and tags every line it streams with its drv.
+    struct Fan {
+        limit: usize,
+        peak: Arc<AtomicBool>,
+    }
+
+    impl Backend for Fan {
+        fn query_valid(
+            &mut self,
+            _paths: &[&StorePath],
+            _on_event: &mut dyn FnMut(Event),
+        ) -> Result<HashSet<String>> {
+            Ok(HashSet::new())
+        }
+
+        fn substitute(
+            &mut self,
+            _paths: &[StorePath],
+            _on_event: &mut dyn FnMut(Event),
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn add_objects(
+            &mut self,
+            _objects: &[&crate::remote::plan::Object],
+            _on_event: &mut dyn FnMut(Event),
+        ) -> Result<u64> {
+            Ok(0)
+        }
+
+        fn submit(
+            &mut self,
+            batch: &backend::Batch<'_>,
+            on_event: &mut dyn FnMut(Event),
+        ) -> Result<HashMap<String, backend::Status>> {
+            use crate::remote::event::{Log, Started};
+            let live = std::sync::atomic::AtomicUsize::new(0);
+            let over = self.peak.clone();
+            let limit = self.limit;
+            let jobs = batch.jobs;
+            let build = |i: usize, tx: &std::sync::mpsc::Sender<Event>| -> bool {
+                let drv = jobs[i].drv.to_string();
+                if live.fetch_add(1, Ordering::SeqCst) + 1 > limit {
+                    over.store(true, Ordering::SeqCst);
+                }
+                let _ = tx.send(Event::Started(Started {
+                    drv_path: drv.clone(),
+                }));
+                for n in 0..4 {
+                    let _ = tx.send(Event::Log(Log {
+                        drv_path: drv.clone(),
+                        line: format!("{} line {n}", jobs[i].drv.name()).into_bytes(),
+                    }));
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                live.fetch_sub(1, Ordering::SeqCst);
+                true
+            };
+            let work = fanout::Work {
+                build: &build,
+                ok: &|ok: &bool| *ok,
+                blocked: &|_, _| false,
+            };
+            let graph: Vec<fanout::Job> =
+                jobs.iter().map(|_| fanout::Job { deps: vec![] }).collect();
+            fanout::run(&graph, self.limit, &work, on_event);
+            Ok(jobs
+                .iter()
+                .map(|j| (j.drv.to_string(), backend::Status::ok()))
+                .collect())
+        }
+
+        fn outputs(
+            &mut self,
+            drv: &str,
+            _on_event: &mut dyn FnMut(Event),
+        ) -> Result<BTreeMap<String, Option<String>>> {
+            let p = StorePath::parse(drv)?;
+            Ok(BTreeMap::from([(
+                "out".to_string(),
+                Some(format!("/nix/store/{}", p.base_name().replace(".drv", ""))),
+            )]))
+        }
+
+        fn fetch(&mut self, _store_path: &str, _dir: &Path) -> Result<()> {
+            Ok(())
+        }
+
+        fn add_root(&mut self, _store_path: &str, _link: &Path) -> Result<()> {
+            Ok(())
+        }
+
+        fn out_links(&mut self, _links: &[(String, String)]) -> Result<()> {
+            Ok(())
+        }
+
+        fn note_connect(&mut self, _d: Duration) {}
+
+        fn note_upload(&mut self, _p: backend::Phase) {}
+
+        fn report(&self, _plan: &Plan, _plan_time: Duration) -> String {
+            String::new()
+        }
+    }
+
+    struct NoUpload;
+
+    impl Uploader for NoUpload {
+        fn upload(
+            &mut self,
+            _b: &mut dyn Backend,
+            _roots: &[StorePath],
+            _on_event: &mut dyn FnMut(Event),
+        ) -> Result<upload::Stats> {
+            Ok(upload::Stats::default())
+        }
+
+        fn drvs(&self, _roots: &[StorePath], _deep: bool) -> Result<Vec<backend::Drv>> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// Concurrent builds keep the cap, and every build's log comes out as one
+    /// block: the events carry their drv, so the renderer's buffers key on it.
+    #[test]
+    fn a_fan_out_backend_keeps_the_cap_and_the_log_blocks() {
+        let sink = Sink::default();
+        let over = Arc::new(AtomicBool::new(false));
+        let style = Style {
+            mode: render::Mode::Ci,
+            color: false,
+            fold: false,
+            quiet: false,
+        };
+        let mut d = Dispatcher::with_backend(
+            Box::new(Fan {
+                limit: 2,
+                peak: over.clone(),
+            }),
+            Provenance::off(),
+            Reporter::with_output(style, Box::new(sink.clone())),
+        );
+        let names = ["alpha", "beta", "gamma", "delta"];
+        let targets: Vec<Target> = names
+            .iter()
+            .map(|n| Target::new(n, drv(n), vec!["out".into()]))
+            .collect();
+        let outcomes = d.submit(&mut NoUpload, targets).unwrap();
+        assert_eq!(outcomes.len(), 4);
+        assert!(outcomes.iter().all(|o| o.success));
+        assert!(!over.load(Ordering::SeqCst), "more than 2 builds in flight");
+
+        let out = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
+        for n in names {
+            let lines: Vec<usize> = out
+                .lines()
+                .enumerate()
+                .filter(|(_, l)| l.contains(&format!("{n}.drv line ")))
+                .map(|(i, _)| i)
+                .collect();
+            assert_eq!(lines.len(), 4, "{n}: {out}");
+            assert_eq!(
+                lines.last().unwrap() - lines[0],
+                3,
+                "{n}'s log block is interleaved: {out}"
+            );
+        }
+    }
 }

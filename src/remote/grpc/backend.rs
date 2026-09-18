@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
-use crate::build::backend::{Backend, Batch, Phase, Status, local};
+use crate::build::backend::{Backend, Batch, Job, Phase, Status, local};
 use crate::build::fanout;
 use crate::error::{Error, Result};
 use crate::remote::event::{Event, Started};
@@ -64,38 +64,49 @@ impl Grpc {
 /// Non-farm: one `BuildPaths` over the whole ready set. The store walks the
 /// closure, so the log lines it streams name no derivation; the renderer folds
 /// them into the running build when there is just one.
+///
+/// `BuildPaths` carries no `keep-going`, so the store stops at the first
+/// failure and answers for the targets it reached only. Every attribute still
+/// wants a verdict of its own, so the ones it did not reach go out in another
+/// call, until a call answers for none of them.
 fn store_build(
     c: &mut Client,
     t: &mut Timings,
     batch: &Batch<'_>,
     on_event: &mut dyn FnMut(Event),
 ) -> Result<HashMap<String, Status>> {
-    // The daemon parses these with `DerivedPath::parse`, whose separator is
-    // `^`, not the worker protocol's legacy `!` (derived-path.cc).
-    let targets: Vec<String> = batch
-        .jobs
-        .iter()
-        .map(|j| format!("{}^{}", j.drv, j.spec()))
-        .collect();
     for j in batch.jobs {
         on_event(Event::Started(Started {
             drv_path: j.drv.to_string(),
         }));
     }
-    let results = build::build_paths(c, targets, t, on_event)?;
     t.drvs += batch.jobs.len();
     let mut out: HashMap<String, Status> = HashMap::new();
-    for (path, res) in &results {
-        let drv = path
-            .split(['^', '!'])
-            .next()
-            .unwrap_or(path.as_str())
-            .to_string();
-        let e = out.entry(drv).or_insert_with(Status::ok);
-        if !res.success() {
-            *e = Status::failed(format!("status {}: {}", res.status, res.error_msg));
-        } else if matches!(res.status, 2 | 13) {
-            t.drvs_cached += 1;
+    let mut pending: Vec<&Job> = batch.jobs.iter().collect();
+    while !pending.is_empty() {
+        // The daemon parses these with `DerivedPath::parse`, whose separator is
+        // `^`, not the worker protocol's legacy `!` (derived-path.cc).
+        let targets: Vec<String> = pending
+            .iter()
+            .map(|j| format!("{}^{}", j.drv, j.spec()))
+            .collect();
+        for (path, res) in &build::build_paths(c, targets, t, on_event)? {
+            let drv = path
+                .split(['^', '!'])
+                .next()
+                .unwrap_or(path.as_str())
+                .to_string();
+            let e = out.entry(drv).or_insert_with(Status::ok);
+            if !res.success() {
+                *e = Status::failed(format!("status {}: {}", res.status, res.error_msg));
+            } else if matches!(res.status, 2 | 13) {
+                t.drvs_cached += 1;
+            }
+        }
+        let was = pending.len();
+        pending.retain(|j| !out.contains_key(&j.drv.to_string()));
+        if pending.len() == was {
+            break;
         }
     }
     Ok(out)

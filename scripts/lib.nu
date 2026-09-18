@@ -60,3 +60,47 @@ export def --wrapped scratch-daemon [root: string, ...options: string]: nothing 
   }
   $sock
 }
+
+# The shared build-test flake: four checks and a packages set, no nixpkgs. Every builder
+# carries a nonce so each run builds fresh derivations instead of finding the
+# previous run's outputs already in the store.
+export def fastbuild-flake [dir: string] {
+  mkdir $dir
+  let nonce = $"(random int 0..999999)-(date now | into int)"
+  r#'{
+  outputs = { self }:
+    let
+      systems = [ "x86_64-linux" "aarch64-linux" ];
+      forAll = f: builtins.listToAttrs (map (s: { name = s; value = f s; }) systems);
+      drv = system: name: args: derivation ({
+        inherit name system;
+        builder = "/bin/sh";
+      } // args);
+      nonce = "@NONCE@";
+    in {
+      checks = forAll (system: rec {
+        ok = drv system "fb-ok" {
+          args = [ "-c" "echo building fb-ok ${nonce}; echo done > $out" ];
+        };
+        dep = drv system "fb-dep" {
+          args = [ "-c" "echo building fb-dep ${nonce}; echo dep > $out" ];
+        };
+        chain = drv system "fb-chain" {
+          args = [ "-c" "echo building fb-chain ${nonce}; while read -r l; do echo \"$l\"; done < ${dep} > $out" ];
+        };
+        bad = drv system "fb-bad" {
+          args = [ "-c" "echo about to fail ${nonce}; echo line2; exit 1" ];
+        };
+      });
+      packages = forAll (system: {
+        lone = drv system "fb-lone" {
+          args = [ "-c" "echo building fb-lone ${nonce}; echo lone > $out" ];
+        };
+      });
+    };
+}
+'# | str replace -a "@NONCE@" $nonce | save -f $"($dir)/flake.nix"
+  # `nix flake lock` writes nothing for a flake with no inputs, and ietsp
+  # only evaluates locked flakes, so the empty lock is written here.
+  '{"nodes":{"root":{}},"root":"root","version":7}' | save -f $"($dir)/flake.lock"
+}

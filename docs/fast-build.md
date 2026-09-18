@@ -86,8 +86,8 @@ Smaller differences:
 
 Every ietsp command that realises a derivation goes through
 `crate::build::Dispatcher`: `ietsp build`, classic `nix-build` and classic
-`nix build` as well as `fast-build`. Builds are fast by default, not in a
-special mode.
+`nix build` as well as `fast-build`, over every transport. Builds are fast
+by default, not in a special mode.
 
 One dispatcher, two ways of feeding it:
 
@@ -105,6 +105,48 @@ The call sites in `src/cli/build.rs`, `src/cli/classic/build.rs` and
 `src/cli/classic/nix.rs` are one call each. Stdout of the classic names is
 byte-identical to what it was (`scripts/classic-e2e.nu` compares it); all
 the new progress goes to stderr.
+
+### The transport is a backend, not a branch
+
+`build::backend::Backend` is the other half: the dispatcher owns the
+batching, the provenance, the event stream and the records; a backend owns
+the wire. Nine methods — `query_valid`, `substitute`, `add_objects`,
+`submit`, `outputs`, `fetch`, `add_root`, `out_links`, and the `--timings`
+report — and two implementations:
+
+| | worker protocol (`daemon`, `unix://`, `ssh-ng://`) | `grpc://` |
+|---|---|---|
+| a ready set | one `BuildPathsWithResults` | farm: one `BuildDerivation` per derivation of the set's closure, `min(max-builds, -j)` in flight. Non-farm: one `BuildPaths` for the set |
+| build parallelism | the daemon's, `-j` through `SetOptions` | the client's, in flight; the store's within one `BuildPaths` |
+| log lines | attributed by the daemon's activity ids | farm: by the call, which knows its derivation. Non-farm: unattributed, folded into the running build when there is one |
+| output paths | `QueryDerivationOutputMap` | statically, from the derivations |
+| out-links | the local daemon, the closure copied back first | `FetchNars` from the cache, then the local daemon |
+
+The batched op is not a preference, it is what the worker protocol wants:
+it is serial per connection, so a per-derivation op would idle the daemon
+between derivations — `docs/scheduling.md` measured `--per-drv` at 7.3x
+slower on `g8x6` and 10x on `g32x4`. A farm has no such constraint: one
+call per derivation is the only shape it offers, the calls are independent,
+and fanning them out also drops the layer-synchronous barrier a batched op
+imposes, where every derivation of a batch waits for the slowest.
+
+The fan-out itself is `build::fanout`: a dependency-ordered runner with a
+cap on how many jobs run at once, whose events all reach the dispatcher on
+one thread. It is separate from the gRPC code so the cap and the merge are
+unit-tested without a farm (`build::fanout` tests, and
+`build::tests::a_fan_out_backend_keeps_the_cap_and_the_log_blocks` drives
+the dispatcher with a fake fan-out backend).
+
+Two `grpc://` differences a user sees:
+
+- `--skip-cached` is ignored. The cache-status resolver
+  (`jobs::cache::Resolver`) speaks `QuerySubstitutablePathInfos`, a worker
+  op; over `grpc://` the batch is simply built, and in farm mode a
+  derivation whose outputs the store already has is skipped anyway.
+- A non-farm `BuildPaths` carries no `keep-going`, so the store stops at
+  the first failure and answers only for what it reached. The backend
+  re-asks for the rest, so every attribute still gets its own verdict —
+  one extra call per failure, and none when nothing fails.
 
 ## Dispatch design
 
@@ -132,15 +174,18 @@ Each batch, in order:
    It runs before the upload so a cached attribute costs no bytes. It
    reads input derivations from `/nix/store`, which an in-process
    evaluation never wrote, so a walk it cannot finish just means "build
-   it", reported once on stderr.
+   it", reported once on stderr. Skipped over `grpc://`, which has no
+   substitutable-path op.
 2. Filter: `--systems`, then `cacheStatus` (`cached`, or `local` without
    `--out-link`). A filtered attribute gets an `EVAL` record carrying its
    cache status and no `BUILD` record, which is what nix-fast-build does.
 3. Dedupe by derivation path.
 4. Upload the missing part of the batch's closure.
-5. One `BuildPathsWithResults` with every derivation in the batch.
+5. Hand the batch to the backend: one `BuildPathsWithResults` with every
+   derivation in it over the worker protocol, a fan-out over `grpc://`.
 
-Step 5 is one op per batch, not one per derivation, because
+Step 5 on the worker protocol is one op per batch, not one per derivation,
+because
 `docs/scheduling.md` measured `--per-drv` at 7.3x slower on `g8x6` and 10x
 on `g32x4`: a per-derivation op serialises what the daemon runs in
 parallel, and each op costs a `Worker` plus a round trip in which nothing
@@ -152,33 +197,6 @@ parallelism.
 `--fail-fast` sets `keep-going` off on the connection and stops dispatch
 at the first failed batch; the attributes left are recorded skipped.
 `--retries N` re-submits the failed targets of a batch N more times.
-
-### grpc:// bypasses the dispatcher for now
-
-`Transport::Grpc` has its own client (`src/remote/grpc`), and
-`--builder grpc://…` on `ietsp build` and `--store grpc://…` on classic
-`nix build` take an early branch to it: `cli::build::build_roots_grpc` and
-`remote::grpc::classic::realise`. They keep the plain per-line printer and
-their own timing report; the dispatcher's batched op, per-build log
-blocks, heartbeat and structured events are not on that path.
-
-Two things are missing before the grpc flow can fold into the dispatcher.
-It submits one derivation at a time and blocks until that build finishes,
-so a batch would serialise; and its events are not tagged with the
-derivation they belong to, so per-build log buffers cannot be filled. Once
-the grpc client offers a non-blocking submit and drv-tagged events, the
-change is inside `Dispatcher::submit_once` alone: one request per
-derivation with `-j` of them in flight, which also drops the
-layer-synchronous barrier a batched op imposes (every derivation in a
-batch waits for the slowest). The batched op exists only because the
-worker protocol is serial per connection, where a per-derivation op would
-idle the daemon between derivations. The event mapping, the renderer, the
-records and every call site stay as they are.
-
-`ietsp fast-build --store grpc://…` is refused today with that reason: the
-dispatcher is the only path fast-build has. Use `--store ssh-ng://…` until
-the grpc client grows the two features above.
-
 
 ### Measured on the e2e flake
 
@@ -247,12 +265,11 @@ Numtide's `nix-farm` execs
 nix-fast-build --store grpc://farm.numtide.com:50051?token-file=… <user flags>
 ```
 
-To switch, exec `ietsp fast-build` with the same arguments. `grpc://` needs
-the grpc transport (`Transport::Grpc`, in progress); until it lands, use
-`--store ssh-ng://…`. Nothing else in the wrapper changes: the flags, the
-result files and the exit codes are the same. A flag ietsp does not know
-falls back to the real `nix-fast-build`, so the switch cannot strand a
-pipeline.
+To switch, exec `ietsp fast-build` with the same arguments. `grpc://` is one
+of the dispatcher's backends, so that URL needs no change. Nothing else in
+the wrapper changes either: the flags, the result files and the exit codes
+are the same. A flag ietsp does not know falls back to the real
+`nix-fast-build`, so the switch cannot strand a pipeline.
 
 ## Tests
 
@@ -269,7 +286,18 @@ per-attribute outcomes, not timings; it is skipped with a note when
 build it with
 `nix build github:Mic92/nix-fast-build/a3e9a5a17fa66f84bec8538ef8f98f0a1a9c6228`).
 
+The flake is `scripts/lib.nu`'s `fastbuild-flake`, so `scripts/grpc-e2e.nu`
+builds the same one: its case 6 runs `ietsp fast-build --store grpc://…`
+and compares the whole result file — every record's type, attribute,
+success and skipped flag — with the same flake built over the worker
+protocol on the same store, and its case 7 checks that a multi-root
+`ietsp build` over `grpc://` names every attribute on stderr.
+
 Unit tests cover the flag parser (`cli::fastbuild::flags`), the JSON,
 JUnit and step-summary rendering (`build::results`), the renderer's
-folding, log separation and verdicts (`build::render`), and the
-event-to-record mapping (`build`).
+folding, log separation and verdicts (`build::render`), the
+event-to-record mapping (`build`), and the fan-out: the cap on builds in
+flight, the dependency order and the blocking of a failed derivation's
+dependants (`build::fanout`), plus a fake fan-out backend under the
+dispatcher, which keeps the cap and emits one log block per build
+(`build::tests`).

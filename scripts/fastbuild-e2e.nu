@@ -22,7 +22,7 @@
 #
 # usage: nu scripts/fastbuild-e2e.nu
 #        BIN=target/debug nu scripts/fastbuild-e2e.nu
-use lib.nu [chomp show verdict]
+use lib.nu [chomp show verdict fastbuild-flake]
 
 def fail [msg: string] {
   print -e $"FAIL: ($msg)"
@@ -33,50 +33,6 @@ def --wrapped go [...cmd: string]: nothing -> record {
   ^($cmd | first) ...($cmd | skip 1) | complete
 }
 
-# The test flake: four checks and a packages set, no nixpkgs. Every builder
-# carries a nonce so each run builds fresh derivations instead of finding the
-# previous run's outputs already in the store.
-def make-flake [dir: string] {
-  mkdir $dir
-  let nonce = $"(random int 0..999999)-(date now | into int)"
-  r#'{
-  outputs = { self }:
-    let
-      systems = [ "x86_64-linux" "aarch64-linux" ];
-      forAll = f: builtins.listToAttrs (map (s: { name = s; value = f s; }) systems);
-      drv = system: name: args: derivation ({
-        inherit name system;
-        builder = "/bin/sh";
-      } // args);
-      nonce = "@NONCE@";
-    in {
-      checks = forAll (system: rec {
-        ok = drv system "fb-ok" {
-          args = [ "-c" "echo building fb-ok ${nonce}; echo done > $out" ];
-        };
-        dep = drv system "fb-dep" {
-          args = [ "-c" "echo building fb-dep ${nonce}; echo dep > $out" ];
-        };
-        chain = drv system "fb-chain" {
-          args = [ "-c" "echo building fb-chain ${nonce}; while read -r l; do echo \"$l\"; done < ${dep} > $out" ];
-        };
-        bad = drv system "fb-bad" {
-          args = [ "-c" "echo about to fail ${nonce}; echo line2; exit 1" ];
-        };
-      });
-      packages = forAll (system: {
-        lone = drv system "fb-lone" {
-          args = [ "-c" "echo building fb-lone ${nonce}; echo lone > $out" ];
-        };
-      });
-    };
-}
-'# | str replace -a "@NONCE@" $nonce | save -f $"($dir)/flake.nix"
-  # `nix flake lock` writes nothing for a flake with no inputs, and ietsp
-  # only evaluates locked flakes, so the empty lock is written here.
-  '{"nodes":{"root":{}},"root":"root","version":7}' | save -f $"($dir)/flake.lock"
-}
-
 def main [] {
   let bin = ($env | get -o BIN | default "target/release")
   let ietsp = ($"($bin)/ietsp" | path expand)
@@ -84,7 +40,7 @@ def main [] {
   let system = (^nix --extra-experimental-features nix-command eval --impure --raw --expr builtins.currentSystem | chomp)
   let tmp = (mktemp -d -t fastbuild-e2e-XXXXXX)
   let flake = $"($tmp)/flake"
-  make-flake $flake
+  fastbuild-flake $flake
   let target = $"path:($flake)#checks"
   mut ok = []
 
