@@ -81,9 +81,10 @@ impl Opts {
 struct Graph {
     is_drv: Vec<bool>,
     refs: Vec<Vec<usize>>,
-    input_drvs: Vec<Vec<usize>>,
-    /// Output store paths of each drv (empty for sources).
-    outputs: Vec<Vec<String>>,
+    /// Input derivations of each drv with the output names it wants of them.
+    input_drvs: Vec<Vec<(usize, Vec<String>)>>,
+    /// Output name and store path of each drv (empty for sources and unknown outputs).
+    outputs: Vec<Vec<(String, String)>>,
     /// Upload and submission order.
     order: Vec<usize>,
     root: usize,
@@ -128,15 +129,19 @@ impl Graph {
                         .iter()
                         .filter_map(|r| by_path.get(&r.to_string()).copied())
                         .collect();
-                    input_drvs[i] = refs[i]
-                        .iter()
-                        .copied()
-                        .filter(|&r| is_drv_path(plan, r))
-                        .collect();
                     let text = std::str::from_utf8(aterm)
                         .map_err(|_| WorkerError(format!("{path}: ATerm is not UTF-8")))?;
                     let name = Derivation::name_from_path(path).map_err(|e| WorkerError(e.0))?;
                     let drv = Derivation::parse(text, name).map_err(|e| WorkerError(e.0))?;
+                    input_drvs[i] = drv
+                        .input_drvs
+                        .iter()
+                        .filter_map(|(d, names)| {
+                            by_path
+                                .get(&d.to_string())
+                                .map(|&r| (r, names.iter().cloned().collect()))
+                        })
+                        .collect();
                     let fixed = drv
                         .outputs
                         .values()
@@ -146,7 +151,7 @@ impl Graph {
                         // a deferred (CA) output has no static path: leave the drv's
                         // outputs unknown, so validity never marks it built
                         match o.path(name, out_name).map_err(|e| WorkerError(e.0))? {
-                            Some(p) => outputs[i].push(p.to_string()),
+                            Some(p) => outputs[i].push((out_name.clone(), p.to_string())),
                             None => {
                                 outputs[i].clear();
                                 break;
@@ -185,9 +190,6 @@ impl Graph {
     }
 }
 
-fn is_drv_path(plan: &Plan, i: usize) -> bool {
-    matches!(plan.objects[i], Object::Drv { .. })
-}
 
 enum Job {
     Query(Vec<String>),
@@ -328,6 +330,8 @@ struct State<'a> {
     idle: Vec<bool>,
     upload: Vec<Upload>,
     build: Vec<Build>,
+    /// Output names each drv is wanted for, from the validity walk.
+    wanted: Vec<std::collections::BTreeSet<String>>,
     /// Which objects each in-flight upload carries, by connection.
     in_flight: Vec<Vec<usize>>,
     /// Which drvs each in-flight build op carries, by connection.
@@ -409,7 +413,10 @@ impl State<'_> {
             {
                 continue;
             }
-            if !self.g.input_drvs[i].iter().all(|&r| self.input_done(r)) {
+            if !self.g.input_drvs[i]
+                .iter()
+                .all(|(r, _)| self.input_done(*r))
+            {
                 continue;
             }
             batch.push(i);
@@ -420,12 +427,16 @@ impl State<'_> {
         batch
     }
 
+    /// `drv!outputs`: the root's requested outputs, an input's wanted ones.
     fn derived_path(&self, i: usize) -> String {
         let p = self.plan.objects[i].store_path();
         if i == self.g.root {
             format!("{p}!{}", self.spec)
-        } else {
+        } else if self.wanted[i].is_empty() {
             format!("{p}!*")
+        } else {
+            let names: Vec<&str> = self.wanted[i].iter().map(String::as_str).collect();
+            format!("{p}!{}", names.join(","))
         }
     }
 
@@ -445,7 +456,7 @@ impl State<'_> {
                     .collect();
                 if self.opts.per_drv.is_some() {
                     for outs in &self.g.outputs {
-                        paths.extend(outs.iter().cloned());
+                        paths.extend(outs.iter().map(|(_, p)| p.clone()));
                     }
                 }
                 self.t.query_paths = paths.len();
@@ -574,11 +585,48 @@ impl State<'_> {
                         self.upload[i] = Upload::Valid;
                     }
                 }
-                for i in 0..self.upload.len() {
-                    if self.g.is_drv[i]
-                        && !self.g.outputs[i].is_empty()
-                        && self.g.outputs[i].iter().all(|p| valid.contains(p))
-                    {
+                // What the daemon's goals would visit: from the root, a derivation with
+                // its wanted outputs; one whose wanted outputs are valid is built and its
+                // inputs are not visited (build/derivation-goal.cc). Everything else
+                // counts as built so it is neither submitted nor waited for.
+                let n = self.upload.len();
+                let root_names: Vec<String> = if self.spec == "*" {
+                    Vec::new()
+                } else {
+                    self.spec.split(',').map(str::to_string).collect()
+                };
+                let mut needed = vec![false; n];
+                let mut stack = vec![(self.g.root, root_names)];
+                while let Some((i, names)) = stack.pop() {
+                    let outs = &self.g.outputs[i];
+                    let names: Vec<String> = if names.is_empty() {
+                        outs.iter().map(|(n, _)| n.clone()).collect()
+                    } else {
+                        names
+                    };
+                    let new: Vec<String> = names
+                        .into_iter()
+                        .filter(|n| !self.wanted[i].contains(n))
+                        .collect();
+                    if new.is_empty() {
+                        continue;
+                    }
+                    self.wanted[i].extend(new);
+                    let built = !outs.is_empty()
+                        && self.wanted[i]
+                            .iter()
+                            .all(|n| outs.iter().any(|(name, p)| name == n && valid.contains(p)));
+                    if built {
+                        continue;
+                    }
+                    needed[i] = true;
+                    self.build[i] = Build::Pending;
+                    for (r, want) in &self.g.input_drvs[i] {
+                        stack.push((*r, want.clone()));
+                    }
+                }
+                for i in 0..n {
+                    if self.g.is_drv[i] && !needed[i] {
                         self.build[i] = Build::Built;
                     }
                 }
@@ -656,9 +704,14 @@ impl State<'_> {
                 }
                 for i in batch {
                     if self.build[i] == Build::Building {
-                        // no result for it: cancelled or never started
+                        // entry-points.cc skips goals that never ran (ecBusy): another
+                        // goal of the op failed and keep-going is off
                         failed = true;
                         self.build[i] = Build::Pending;
+                        on_event(failed_event(
+                            &self.plan.objects[i].store_path().to_string(),
+                            "no result: the daemon cancelled it after another failure",
+                        ));
                     }
                 }
                 if failed {
@@ -774,6 +827,7 @@ pub fn run(
         idle: vec![false; n],
         upload: vec![Upload::Missing; objects],
         build: vec![Build::Pending; objects],
+        wanted: vec![std::collections::BTreeSet::new(); objects],
         in_flight: vec![Vec::new(); n],
         building: vec![Vec::new(); n],
         queried: false,
