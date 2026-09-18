@@ -780,22 +780,29 @@ mod tests {
         }
     }
 
+    /// The whole input closure of `drv` is vendored under tests/fixtures/drv.
+    fn closure_in_fixtures(drv: &Derivation) -> bool {
+        drv.input_drvs.keys().all(|p| {
+            let Ok(text) = std::fs::read_to_string(fixture_dir().join(p.base_name())) else {
+                return false;
+            };
+            Derivation::name_from_path(p)
+                .and_then(|n| Derivation::parse(&text, n))
+                .is_ok_and(|d| closure_in_fixtures(&d))
+        })
+    }
+
     /// Resets every input-addressed output to Deferred with an empty env value, as
     /// primops.cc:derivationStrict does, then checks that finalize reproduces the original.
-    /// Needs the input .drv closure from /nix/store; fixtures that lack it are skipped.
-    #[test]
-    fn fixtures_output_paths_recompute() {
+    /// Fixtures whose input .drv closure `present` rejects are skipped.
+    fn recompute_fixtures(present: impl Fn(&Derivation) -> bool) -> usize {
         let mut cache = DrvHashCache::new();
         let mut loader = fixture_loader;
         let mut checked = 0;
         for (path, text) in fixtures() {
             let original =
                 Derivation::parse(&text, Derivation::name_from_path(&path).unwrap()).unwrap();
-            let closure_present = original.input_drvs.keys().all(|p| {
-                Path::new(&p.to_string()).exists() || fixture_dir().join(p.base_name()).exists()
-            });
-            if !closure_present {
-                eprintln!("skipping {path}: input .drv closure not in /nix/store");
+            if !present(&original) {
                 continue;
             }
             let mut drv = original.clone();
@@ -814,7 +821,25 @@ mod tests {
             assert_eq!(drv, original, "output paths differ for {path}");
             checked += 1;
         }
-        assert!(checked >= 20, "recomputed only {checked} derivations");
+        checked
+    }
+
+    #[test]
+    fn fixtures_output_paths_recompute() {
+        let n = recompute_fixtures(closure_in_fixtures);
+        assert!(n >= 7, "recomputed only {n} derivations");
+    }
+
+    /// The nixpkgs fixtures have closures of hundreds of .drv files, too many to vendor.
+    #[test]
+    #[ignore = "needs the input .drv closures in /nix/store"]
+    fn fixtures_output_paths_recompute_from_store() {
+        let n = recompute_fixtures(|drv| {
+            drv.input_drvs.keys().all(|p| {
+                Path::new(&p.to_string()).exists() || fixture_dir().join(p.base_name()).exists()
+            })
+        });
+        assert!(n >= 20, "recomputed only {n} derivations");
     }
 
     fn simple(name: &str, outputs: &[&str]) -> Derivation {

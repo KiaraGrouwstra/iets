@@ -5,6 +5,7 @@ A from-scratch Nix evaluator in Rust. Evaluation only. See ARCHITECTURE.md.
 ```
 nix develop -c cargo build --release
 ./target/release/ietsp eval --strict -E '1 + 1'
+nix flake check   # test, clippy, fmt, langtests, partest
 scripts/langtests.nu
 scripts/difftest.nu -I nixpkgs=/path -E '(import <nixpkgs> {}).hello.drvPath'
 bench/run.nu nixos-desktop

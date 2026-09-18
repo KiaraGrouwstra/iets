@@ -1,7 +1,15 @@
 #!/usr/bin/env nu
 # Runs tests/lang/eval-okay-*.nix and eval-fail-*.nix against ietsp, from
 # the tests/ directory like Nix's own harness (paths print as /pwd/lang/...).
+# Exits nonzero on a failure that tests/lang/expected-failures.txt does not
+# list, and on a listed case that starts passing.
 use lib.nu [chomp flags-of exit-code glob-sorted]
+
+def expected-failures []: nothing -> list<string> {
+  let f = "lang/expected-failures.txt"
+  if not ($f | path exists) { return [] }
+  open --raw $f | lines | each {|l| $l | str trim } | where {|l| $l != "" and not ($l | str starts-with "#") }
+}
 
 def main [] {
   cd ($env.FILE_PWD | path join "..")
@@ -14,6 +22,7 @@ def main [] {
   mut pass = 0
   mut fail = 0
   mut failed = []
+  mut detail = []
   for f in (glob-sorted lang/eval-okay-*.nix) {
     let n = ($f | str replace -r '\.nix$' '')
     if not ($"($n).exp" | path exists) { continue }
@@ -24,21 +33,33 @@ def main [] {
     } else {
       $fail += 1
       $failed = ($failed | append ($n | path basename))
+      $detail = ($detail | append ($n | path basename))
     }
   }
   for f in (glob-sorted lang/eval-fail-*.nix) {
     let n = ($f | str replace -r '\.nix$' '')
     let rc = (exit-code $ietsp eval --strict ...(flags-of $n) $f)
+    let base = ($n | path basename)
     if $rc == 0 {
       $fail += 1
-      $failed = ($failed | append $"($n | path basename) \(should fail\)")
+      $failed = ($failed | append $base)
+      $detail = ($detail | append $"($base) \(should fail\)")
     } else if $rc >= 128 {
       $fail += 1
-      $failed = ($failed | append $"($n | path basename) \(crashed rc=($rc)\)")
+      $failed = ($failed | append $base)
+      $detail = ($detail | append $"($base) \(crashed rc=($rc)\)")
     } else {
       $pass += 1
     }
   }
   print $"pass=($pass) fail=($fail)"
-  print ($failed | first ($env.SHOW? | default 40 | into int) | str join "\n")
+  print ($detail | first ($env.SHOW? | default 40 | into int) | str join "\n")
+  let expected = (expected-failures)
+  let new = ($failed | where {|n| $n not-in $expected })
+  let fixed = ($expected | where {|n| $n not-in $failed })
+  if ($new | is-not-empty) { print $"unexpected failures: ($new | str join ', ')" }
+  if ($fixed | is-not-empty) {
+    print $"now passing, drop from lang/expected-failures.txt: ($fixed | str join ', ')"
+  }
+  if ($new | is-not-empty) or ($fixed | is-not-empty) { exit 1 }
 }

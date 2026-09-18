@@ -560,20 +560,13 @@ mod tests {
     /// Both fixtures are this repo's devShell: `nix eval --raw .#devShells.x86_64-linux.default.drvPath`
     /// names the shell drv and `nix print-dev-env .` writes the `-env.drv` (2026-09-17); the
     /// transformation must reproduce the `-env.drv` byte for byte. Needs the shell's input
-    /// closure in /nix/store for the hash modulo.
+    /// closure in /nix/store for the hash modulo: 1815 .drv files, too many to vendor.
     #[test]
+    #[ignore = "needs the devShell input .drv closure in /nix/store"]
     fn env_derivation_matches_nix() {
         let shell_path = "1rpf3nddnjznxv3q2bf64vpn8zdz1ciw-nix-shell.drv";
         let env_path = "vlcxckkq3qad5dp748a5xypnkwq76azw-nix-shell-env.drv";
         let shell = Derivation::parse(&fixture(shell_path), "nix-shell").unwrap();
-        if !shell
-            .input_drvs
-            .keys()
-            .all(|p| Path::new(&p.to_string()).exists())
-        {
-            eprintln!("skipping: input .drv closure not in /nix/store");
-            return;
-        }
         let mut cache = DrvHashCache::new();
         let mut loader = load_derivation_from_store;
         let env = env_derivation(&shell, &mut cache, &mut loader).unwrap();

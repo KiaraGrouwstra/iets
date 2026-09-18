@@ -4,6 +4,14 @@
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAll = f: nixpkgs.lib.genAttrs systems (s: f nixpkgs.legacyPackages.${s});
+      ietsp = pkgs: pkgs.rustPlatform.buildRustPackage {
+        pname = "ietsp";
+        version = "0.1.0";
+        src = self;
+        cargoLock.lockFile = ./Cargo.lock;
+        # checks.test runs the suite; the package build stays a build.
+        doCheck = false;
+      };
     in {
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
@@ -11,16 +19,35 @@
         };
       });
       nixosModules.default = import ./nix/module.nix self;
-      packages = forAll (pkgs: {
-        default = pkgs.rustPlatform.buildRustPackage {
-          pname = "ietsp";
-          version = "0.1.0";
-          src = self;
-          cargoLock.lockFile = ./Cargo.lock;
-          # the store tests read real .drv files from /nix/store; the
-          # sandbox hides them. `cargo test` runs in the dev shell and CI.
-          doCheck = false;
-        };
-      });
+      packages = forAll (pkgs: { default = ietsp pkgs; });
+      checks = forAll (pkgs:
+        let
+          pkg = ietsp pkgs;
+          lint = name: tool: args: pkg.overrideAttrs (old: {
+            pname = "ietsp-${name}";
+            nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ tool ];
+            buildPhase = "cargo ${args}";
+            installPhase = "touch $out";
+            doCheck = false;
+            dontFixup = true;
+          });
+          # scripts/<name>.nu against the built binary. Only the scripts that
+          # need no nix-daemon, no network and no live /nix/store; the rest stay manual.
+          nuScript = name: pkgs.runCommand "ietsp-${name}" { nativeBuildInputs = [ pkgs.nushell ]; } ''
+            cp -r ${self}/scripts ${self}/tests .
+            chmod -R u+w scripts tests
+            export IETSP=${pkg}/bin/ietsp
+            nu scripts/${name}.nu
+            touch $out
+          '';
+        in {
+          # the tests that need a live /nix/store are #[ignore]d; run them
+          # with `cargo test -- --ignored` in the dev shell.
+          test = pkg.overrideAttrs { pname = "ietsp-test"; doCheck = true; };
+          clippy = lint "clippy" pkgs.clippy "clippy --all-targets -- -D warnings";
+          fmt = lint "fmt" pkgs.rustfmt "fmt --check";
+          langtests = nuScript "langtests";
+          partest = nuScript "partest";
+        });
     };
 }
