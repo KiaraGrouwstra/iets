@@ -333,6 +333,31 @@ Reverted: −1.7 % on outpaths is under the 2 % bar and desktop w1 lost
 memory change; the diff is small (a `marks` counter in the compiler, a
 `transient` flag on `LambdaIr` and `LetIr`, `eval::frames::FrameStack`).
 
+
+Idea 3, inline caches on `Select` (tried, rejected; before = 1f0a477).
+`AttrsObj::get` is 3.4-4.1 % of the one-worker profile, mostly the
+binary search. Every `Select1` node got a `hint: AtomicU32` (it fits the
+32-byte node) and a `SelectIr` one per path element; `get_hint` returns
+the entry at the hinted index when its `sym` matches and searches and
+stores the index otherwise. Keying on the index rather than the set
+pointer makes every set of the same shape hit. Hit rate: desktop 2.56 M
+hits / 0.55 M misses (82 %), outpaths chunk 8.71 M / 4.08 M (68 %).
+Output byte-identical, partest 12/12. The wall went the other way:
+
+| workload | wall before | wall after | change | user before | user after | sys before | sys after | RSS before | RSS after |
+|---|---|---|---|---|---|---|---|---|---|
+| nixos-desktop w1 | 1.479 | 1.512 | 2.2% | 1.29 | 1.32 | 0.2 | 0.19 | 654 | 654 |
+| nixos-desktop w4 | 1.012 | 1.018 | 0.6% | 2.42 | 2.46 | 0.32 | 0.33 | 811 | 861 |
+| nixos-minimal w1 | 1.135 | 1.201 | 5.8% | 0.99 | 1.03 | 0.13 | 0.15 | 522 | 522 |
+| outpaths 0/8 w1 | 31.944 | 32.698 | 2.4% | 27.39 | 28.09 | 4.26 | 4.11 | 7215 | 7215 |
+
+Reverted. A hit saves a binary search over a few cache-hot lines (sets
+under 9 entries are a linear scan anyway) and costs a load of the IR
+node's hint, a bounds check and a compare; a miss adds a store to a
+shared IR node on top of the search, and at 68 % hits on outpaths that
+store lands on lines other selects read. A two-entry cache would raise
+the hit rate but not remove the store. Not pursued.
+
 ## Assessed and not done
 
 Numbers are from the outpaths census unless stated; percentages are of
