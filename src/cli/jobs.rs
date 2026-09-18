@@ -331,7 +331,7 @@ fn jobs_single(
     if j.opts.no_instantiate {
         let em = emitter.clone();
         crate::jobs::run(ev, root, &mut |line| em.lock().unwrap().emit(line));
-        if std::env::var_os("IETSP_STATS").is_some() {
+        if crate::settings::get().stats >= 1 {
             ev.print_stats();
         }
     } else {

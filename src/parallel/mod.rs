@@ -63,10 +63,7 @@ impl Clone for Arena {
 
 /// Number of workers from `--workers`, `IETSP_WORKERS`, or the machine.
 pub fn default_workers() -> usize {
-    if let Ok(v) = std::env::var("IETSP_WORKERS")
-        && let Ok(n) = v.parse::<usize>()
-        && n >= 1
-    {
+    if let Some(n) = crate::settings::get().workers {
         return n;
     }
     // the critical chain, not core count, sets the floor; past 4 workers the
@@ -75,9 +72,8 @@ pub fn default_workers() -> usize {
 }
 
 fn stack_size() -> usize {
-    std::env::var("IETSP_FIBER_STACK_MB")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
+    crate::settings::get()
+        .fiber_stack_mb
         .map_or(fiber::DEFAULT_STACK, |mb| mb << 20)
 }
 
@@ -107,7 +103,7 @@ pub fn run<R: Send + 'static>(
             // SAFETY: as above.
             unsafe { force::init_ctx(ev, slot) };
             let r = f(ev);
-            if std::env::var("IETSP_PAR_STATS").is_ok_and(|v| v == "2") {
+            if crate::settings::get().par_stats >= 2 {
                 for i in 0..ev.files.len() {
                     eprintln!(
                         "file{i} base={} = {}",
@@ -116,7 +112,7 @@ pub fn run<R: Send + 'static>(
                     );
                 }
             }
-            if std::env::var_os("IETSP_PAR_STATS").is_some() {
+            if crate::settings::get().par_stats >= 1 {
                 use std::sync::atomic::Ordering::Relaxed;
                 // SAFETY: the main fiber still owns the slot; evaluation is
                 // over, so nothing else reads it.

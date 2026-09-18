@@ -32,10 +32,11 @@ impl IrCache {
     /// `--cache-dir DIR`, else `IETSP_CACHE_DIR`, else `$XDG_CACHE_HOME/ietsp`,
     /// else `~/.cache/ietsp`; the entries live in its `ir/` subdirectory.
     pub fn locate(override_dir: Option<&str>) -> Option<IrCache> {
+        let set = crate::settings::get();
         let base = if let Some(d) = override_dir {
             PathBuf::from(d)
-        } else if let Some(d) = std::env::var_os("IETSP_CACHE_DIR") {
-            PathBuf::from(d)
+        } else if let Some(d) = &set.cache_dir {
+            d.clone()
         } else {
             let base = match std::env::var_os("XDG_CACHE_HOME") {
                 Some(x) if !x.is_empty() => PathBuf::from(x),
@@ -43,14 +44,10 @@ impl IrCache {
             };
             base.join("ietsp")
         };
-        let min_size = std::env::var("IETSP_IR_MIN")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(1024);
         Some(IrCache {
             root: base.join("ir"),
-            min_size,
-            stats: std::env::var_os("IETSP_IR_STATS").is_some(),
+            min_size: set.ir_min,
+            stats: set.ir_stats,
         })
     }
 

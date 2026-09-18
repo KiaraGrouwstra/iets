@@ -15,14 +15,9 @@ pub const MIN_FANOUT: usize = 4;
 pub const BATCH: u32 = 16;
 
 /// `IETSP_FANOUT` bitmask for experiments: 1 deep, 2 coerce, 4 list builtins.
+#[inline]
 fn fanout_mask() -> u32 {
-    static MASK: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *MASK.get_or_init(|| {
-        std::env::var("IETSP_FANOUT")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(7)
-    })
+    crate::settings::get().fanout
 }
 
 pub const T_LIST_WHNF: u8 = 1;

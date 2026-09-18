@@ -11,8 +11,8 @@ fn executable(p: &Path) -> bool {
 /// `$IETSP_NIX_BIN_DIR/<name>`, else the first `<name>` on `PATH` that is not
 /// this executable.
 pub fn real(name: &str) -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("IETSP_NIX_BIN_DIR") {
-        let p = PathBuf::from(dir).join(name);
+    if let Some(dir) = &crate::settings::get().nix_bin_dir {
+        let p = dir.join(name);
         return executable(&p).then_some(p);
     }
     let me = std::fs::canonicalize("/proc/self/exe").ok();

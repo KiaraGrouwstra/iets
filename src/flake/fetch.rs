@@ -259,7 +259,7 @@ pub fn ensure_in_store(
             "ietsp: '{full}' is not in the store, fetching {} input with nix",
             str_attr(attrs, "type").unwrap_or("?")
         );
-        if std::env::var_os("IETSP_FETCHING").is_some() {
+        if crate::settings::get().fetching {
             bail!(
                 ErrorKind::Eval,
                 pos,

@@ -23,10 +23,8 @@ impl Store {
                 root: PathBuf::from(d),
             });
         }
-        if let Some(d) = std::env::var_os("IETSP_CACHE_DIR") {
-            return Some(Store {
-                root: PathBuf::from(d),
-            });
+        if let Some(d) = &crate::settings::get().cache_dir {
+            return Some(Store { root: d.clone() });
         }
         let base = match std::env::var_os("XDG_CACHE_HOME") {
             Some(x) if !x.is_empty() => PathBuf::from(x),

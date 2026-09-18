@@ -2117,7 +2117,7 @@ impl Evaluator {
         );
         // SAFETY: prints glibc heap statistics to stderr; no arguments.
         unsafe { libc::malloc_stats() };
-        if std::env::var("IETSP_STATS").is_ok_and(|v| v == "2") {
+        if crate::settings::get().stats >= 2 {
             #[cfg(feature = "stats2")]
             {
                 let mut out = String::new();

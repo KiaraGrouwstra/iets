@@ -20,13 +20,7 @@ const WARM_STACK: usize = 64 << 10;
 /// shorter spin (64 scans) saved no user time once searchers were capped,
 /// and cost 3-5 % wall in futex round trips. `IETSP_SPIN` overrides.
 fn spin_scans() -> u32 {
-    static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("IETSP_SPIN")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(2000)
-    })
+    crate::settings::get().spin
 }
 
 /// Queued tasks per awake worker that justify waking one more sleeper.
@@ -34,24 +28,12 @@ fn spin_scans() -> u32 {
 /// already awake than by a futex round trip; a deep queue recruits
 /// sleepers one handoff at a time (`IETSP_HANDOFF` overrides).
 fn handoff_factor() -> usize {
-    static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("IETSP_HANDOFF")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(8)
-    })
+    crate::settings::get().handoff
 }
 
 /// Idle workers allowed to search at once (`IETSP_SPINNERS` overrides).
 fn spinner_cap(n: usize) -> usize {
-    static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("IETSP_SPINNERS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or((n / 4).max(1))
-    })
+    crate::settings::get().spinners.unwrap_or((n / 4).max(1))
 }
 
 /// Per-worker counters on their own cache line; summed for the stats.
@@ -247,7 +229,7 @@ impl Runtime {
     /// Run `entry` in the main fiber on this thread (worker 0), draining
     /// other work while it is parked. Returns when `entry` has returned.
     pub fn run_main(&'static self, user: *mut (), entry: MainEntry) {
-        if std::env::var("IETSP_PAR_STATS").is_ok_and(|v| v == "2") {
+        if crate::settings::get().par_stats >= 2 {
             super::force::SAMPLE_POS.store(true, Ordering::Relaxed);
             let _ = super::force::START.set(std::time::Instant::now());
             self.spawn_timeline();

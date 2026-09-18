@@ -18,7 +18,7 @@ use crate::store::source::SourceOrigin;
 pub const SETTING: &str = "source-map";
 
 pub fn enabled() -> bool {
-    !std::env::var_os("IETSP_PROVENANCE").is_some_and(|v| v == "0")
+    crate::settings::get().provenance
 }
 
 /// How many times a mapping may point at another mapped tree.

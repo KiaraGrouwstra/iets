@@ -44,7 +44,7 @@ pub fn dispatch(name: &str, argv: &[String]) -> i32 {
 /// this an error instead, so a test can see which cases fall back.
 pub fn fallback(name: &str, argv: &[String], reason: &str) -> ! {
     eprintln!("ietsp: falling back to {name}: {reason}");
-    if std::env::var_os("IETSP_NO_FALLBACK").is_some_and(|v| v == "1") {
+    if crate::settings::get().no_fallback {
         eprintln!("ietsp: IETSP_NO_FALLBACK=1, not running {name}");
         exit(1)
     }

@@ -12,38 +12,23 @@ use crate::eval::Evaluator;
 use crate::runtime::*;
 
 /// Minimum IR node count of a body worth a speculative fiber.
+#[inline]
 fn min_nodes() -> u32 {
-    static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("IETSP_SPEC_MIN")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(24)
-    })
+    crate::settings::get().spec_min
 }
 
 /// `IETSP_SPEC` bitmask: 1 thunk bodies, 2 map/mapAttrs applications.
 /// Off by default: without a GC the undemanded work it pulls in stays
 /// resident, and the wall gain was within noise (docs/parallel.md).
+#[inline]
 fn mode() -> u32 {
-    static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("IETSP_SPEC")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0)
-    })
+    crate::settings::get().spec
 }
 
 /// Thunk creations a speculative task may make before it bails.
+#[inline]
 pub fn budget() -> u64 {
-    static V: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("IETSP_SPEC_BUDGET")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(4000)
-    })
+    crate::settings::get().spec_budget
 }
 
 /// Speculative tasks queued per helper before submission stops.
