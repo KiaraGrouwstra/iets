@@ -165,6 +165,22 @@ impl GrpcConfig {
     }
 }
 
+/// `tonic::transport::Error` prints only "transport error"; the reason (a TLS
+/// alert, a refused connection) is in its source chain.
+fn causes(e: &dyn std::error::Error) -> String {
+    let mut s = e.to_string();
+    let mut src = e.source();
+    while let Some(e) = src {
+        let next = e.to_string();
+        if !s.contains(&next) {
+            s.push_str(": ");
+            s.push_str(&next);
+        }
+        src = e.source();
+    }
+    s
+}
+
 fn read(p: &std::path::Path) -> Result<Vec<u8>> {
     std::fs::read(p).map_err(|e| Error::io(format!("cannot read '{}'", p.display()), e))
 }
@@ -200,7 +216,7 @@ impl Client {
         let ep = cfg.endpoint()?;
         let channel = rt
             .block_on(ep.connect())
-            .map_err(|e| connect_error(cfg, &e.to_string()))?;
+            .map_err(|e| connect_error(cfg, &causes(&e)))?;
         let mut c = Client {
             cfg: cfg.clone(),
             rt,

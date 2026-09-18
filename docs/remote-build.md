@@ -245,11 +245,12 @@ protocol: the same bytes, zstd level 1 in one stream across all 776 paths.
 cached backend connection.
 
 Case 4 of the script runs classic `nix build --store grpc://…?insecure=1
---eval-store auto` and compares stdout with the real nix. The `nix` on this
-host loads no nix-grpc-store plugin matching its own libnixstore, so the
-comparison falls back to the same store over the worker protocol
-(`--store unix://…`), which pins the output path but not the plugin's own
-behaviour. Case 5 checks the out-link path end to end: the output is fetched
+--eval-store auto` and compares stdout with the real nix and its
+nix-grpc-store plugin, which matched here. The script prefers the `nix` on
+`PATH`, falls back to `/run/current-system/sw/bin/nix` (the dev shell's nix is
+often a different libnixstore than the installed plugin was built against),
+and, failing both, compares against the same store over the worker protocol
+instead and says so. Case 5 checks the out-link path end to end: the output is fetched
 back with `FetchNars` and handed to the local daemon, which refuses it for
 lacking a signature — correct, because a scratch daemon builds unsigned
 outputs and a real farm signs them with its cache key.

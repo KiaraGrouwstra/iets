@@ -146,10 +146,13 @@ def run-tests [bin: string, nixpkgs: string, work: string] {
   print "ok"
 
   print "== 4. classic nix build --store grpc://… --eval-store auto"
-  # The nix-grpc-store plugin must load in the `nix` on PATH, or there is no
-  # grpc:// reference run; then compare against the worker protocol instead.
+  # The reference run needs a `nix` whose nix-grpc-store plugin matches its own
+  # libnixstore. The dev shell's nix often does not; the system one may.
   let probe = (^nix store info --store $url | complete)
-  let plugin_ok = ($probe.exit_code == 0)
+  let sys = "/run/current-system/sw/bin/nix"
+  let sys_probe = if ($sys | path exists) { (^$sys store info --store $url | complete) } else { {exit_code: 1} }
+  let ref_nix = if $probe.exit_code == 0 { "nix" } else if $sys_probe.exit_code == 0 { $sys } else { "" }
+  let plugin_ok = ($ref_nix != "")
   make-case $"($work)/c4" ietsp-grpc-e2e-classic $system
   mkdir $"($work)/farm/bin"
   for n in [nix-instantiate nix-build nix-eval-jobs nix] { ^ln -sf ($"($bin)/ietsp" | path expand) $"($work)/farm/bin/($n)" }
@@ -157,7 +160,8 @@ def run-tests [bin: string, nixpkgs: string, work: string] {
   let ours = (with-env {IETSP_NO_FALLBACK: "1"} { ^$"($work)/farm/bin/nix" build --store $url ...$tail | complete })
   if $ours.exit_code != 0 { print ($ours.stderr | chomp); print (open --raw $"($work)/grpc.log" | chomp); fail "ours exited non-zero" }
   let ref = if $plugin_ok {
-    ^nix build --store $url ...$tail | complete
+    print $"reference: ($ref_nix) with its nix-grpc-store plugin"
+    ^$ref_nix build --store $url ...$tail | complete
   } else {
     print "note: the `nix` on PATH loads no matching nix-grpc-store plugin; comparing against the worker protocol on the same store instead"
     ^nix build --store $"unix://($work)/nix-daemon.sock" ...$tail | complete
