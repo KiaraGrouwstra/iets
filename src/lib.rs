@@ -7,6 +7,7 @@ pub mod error;
 pub mod eval;
 pub mod flake;
 pub mod jobs;
+pub mod nixbin;
 pub mod parallel;
 pub mod print;
 pub mod provenance;

@@ -183,6 +183,16 @@ def main [] {
     (run-both $farm nix eval $"($fref)#s")))
   $ok = ($ok | append (cmp-case "nix eval .#l"
     (run-both $farm nix eval $"($fref)#l")))
+
+  # the farm first on PATH: copying a fresh tree must spawn the real nix, not us
+  let fdir2 = $"($tmp)/flake-fresh"
+  mkdir $fdir2
+  cp $"($fdir)/flake.nix" $fdir2
+  cp $"($fdir)/flake.lock" $fdir2
+  $"# ($tmp)\n" | save --append $"($fdir2)/flake.nix"
+  let ours = (with-env { PATH: $"($farm):($env.PATH)" } { ^$"($farm)/nix" eval --json $"path:($fdir2)#x" | complete })
+  let real = (^nix eval --json $"path:($fdir2)#x" | complete)
+  $ok = ($ok | append (cmp-case "nix eval, farm first on PATH, fresh tree" {ours: $ours, real: $real}))
   $ok = ($ok | append (cmp-case "nix eval .#pkg (a derivation)"
     (run-both $farm nix eval $"($fref)#pkg")))
   $ok = ($ok | append (cmp-case "nix eval . (packages.<system>.default)"

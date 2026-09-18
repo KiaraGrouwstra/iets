@@ -24,7 +24,7 @@ pub fn locate_in_store(
         .collect();
     let mut info: HashMap<String, serde_json::Value> = HashMap::new();
     if !ask.is_empty() {
-        let out = std::process::Command::new("nix")
+        let out = std::process::Command::new(crate::nixbin::nix())
             .args([
                 "--extra-experimental-features",
                 "nix-command",

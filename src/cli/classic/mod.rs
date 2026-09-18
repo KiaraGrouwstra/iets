@@ -39,40 +39,13 @@ pub fn fallback(name: &str, argv: &[String], reason: &str) -> ! {
         eprintln!("ietsp: IETSP_NO_FALLBACK=1, not running {name}");
         exit(1)
     }
-    let Some(real) = real_binary(name) else {
+    let Some(real) = crate::nixbin::real(name) else {
         eprintln!("ietsp: cannot fall back to {name}: not found on PATH");
         exit(1)
     };
     let e = Command::new(&real).arg0(name).args(argv).exec();
     eprintln!("ietsp: cannot exec '{}': {e}", real.display());
     exit(1)
-}
-
-fn executable(p: &std::path::Path) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.mode() & 0o111 != 0)
-}
-
-/// `$IETSP_NIX_BIN_DIR/<name>`, else the first `<name>` on `PATH` that is not
-/// this executable (the symlink farm puts ours on `PATH` under that name).
-fn real_binary(name: &str) -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("IETSP_NIX_BIN_DIR") {
-        let p = PathBuf::from(dir).join(name);
-        return executable(&p).then_some(p);
-    }
-    let me = std::fs::canonicalize("/proc/self/exe").ok();
-    for dir in std::env::split_paths(&std::env::var_os("PATH")?) {
-        let p = dir.join(name);
-        if !executable(&p) {
-            continue;
-        }
-        match std::fs::canonicalize(&p) {
-            Ok(c) if Some(&c) == me.as_ref() => continue,
-            Ok(_) => return Some(p),
-            Err(_) => continue,
-        }
-    }
-    None
 }
 
 /// An evaluation error that classic mode answers with the real nix.

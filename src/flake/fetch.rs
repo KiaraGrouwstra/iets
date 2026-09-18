@@ -259,7 +259,15 @@ pub fn ensure_in_store(
             "ietsp: '{full}' is not in the store, fetching {} input with nix",
             str_attr(attrs, "type").unwrap_or("?")
         );
-        let out = std::process::Command::new("nix")
+        if std::env::var_os("IETSP_FETCHING").is_some() {
+            bail!(
+                ErrorKind::Eval,
+                pos,
+                "ietsp: recursive fetch of {full}: the nix on PATH is ietsp itself"
+            );
+        }
+        let out = std::process::Command::new(crate::nixbin::nix())
+            .env("IETSP_FETCHING", "1")
             .args([
                 "--extra-experimental-features",
                 "nix-command flakes",
