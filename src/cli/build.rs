@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::cli::{EvalArgs, Input, evaluate, parse_eval_args, report, usage};
+use crate::cli::{EvalArgs, Input, build_targets, evaluate, parse_eval_args, report, usage};
 use crate::error::Error as CrateError;
 use crate::eval::Evaluator;
 use crate::store::locate::{drv_roots, locate_in_store};
@@ -87,7 +87,7 @@ pub fn cmd_build(argv: &[String]) -> i32 {
                 t0.elapsed().as_secs_f64()
             );
         }
-        let (root_paths, outputs) = build_targets(&b, &roots);
+        let (root_paths, outputs) = build_targets(&b.outputs, &roots);
         let prov = crate::provenance::Provenance::from_map(
             crate::provenance::SourceMap::from_sources(&sources, config().as_ref()),
         );
@@ -108,22 +108,6 @@ pub fn cmd_build(argv: &[String]) -> i32 {
 /// no `--option`.
 fn config() -> Option<crate::config::Config> {
     crate::config::Config::load(&[]).ok()
-}
-
-/// The drv paths to build and the outputs to print: `--out` plus the outputs the roots' context named.
-fn build_targets(
-    b: &BuildArgs,
-    roots: &[(crate::store::path::StorePath, Option<String>)],
-) -> (Vec<crate::store::path::StorePath>, Vec<String>) {
-    let mut outputs = b.outputs.clone();
-    for (_, out) in roots {
-        if let Some(o) = out
-            && !outputs.contains(o)
-        {
-            outputs.push(o.clone());
-        }
-    }
-    (roots.iter().map(|(p, _)| p.clone()).collect(), outputs)
 }
 
 fn build_eval(
@@ -160,7 +144,7 @@ fn build_eval(
     if let Some(c) = &cache {
         c.write(ev, &crate::trace::wire::encode_roots(&roots), true);
     }
-    let (root_paths, outputs) = build_targets(b, &roots);
+    let (root_paths, outputs) = build_targets(&b.outputs, &roots);
     let prov = crate::provenance::Provenance::snapshot(ev, config().as_ref());
     let drvs = ev.drv.drvs.lock();
     let sources = ev.source_origins();

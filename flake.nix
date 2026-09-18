@@ -54,6 +54,8 @@
           # with `cargo test -- --ignored` in the dev shell.
           test = pkg.overrideAttrs { pname = "ietsp-test"; doCheck = true; };
           clippy = lint "clippy" pkgs.clippy "clippy --all-targets -- -D warnings";
+          # the library facade: every example links the library only (docs/library.md)
+          examples = lint "examples" pkgs.cargo "build --examples --release";
           fmt = lint "fmt" pkgs.rustfmt "fmt --check";
           langtests = nuScript "langtests";
           partest = nuScript "partest";
