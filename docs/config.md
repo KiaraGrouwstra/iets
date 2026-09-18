@@ -62,6 +62,12 @@ client has always sent. `crate::cli::classic` builds a `Config` and uses it:
 `builtins.currentSystem`, and `Options::try_from` feeds `SetOptions`
 (`docs/classic.md`). The other subcommands still do not read `nix.conf`.
 
+## Settings of ietsp's own
+
+`source-map`: whitespace-separated `STOREPATH=LOCALDIR` entries that map a
+store path back to a local checkout for error messages and build logs.
+`extra-source-map` appends. See `docs/provenance.md`.
+
 ## Parsed but not used yet
 
 `substituters`, `trusted-public-keys`, `builders`, `experimental-features`,

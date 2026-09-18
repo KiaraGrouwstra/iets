@@ -196,7 +196,8 @@ calling the 'throw' builtin\n ...","fatal":false}`. The error text is
 ## ietsp eval-jobs
 
 ```
-ietsp eval-jobs [--workers N] [--force-recurse] [--meta] [--show-input-drvs]
+ietsp eval-jobs [--workers N] [--force-recurse] [--meta] [--provenance]
+                [--show-input-drvs]
                 [--no-instantiate] [--eval-store URL] [--gc-roots-dir DIR]
                 [--check-cache-status] [--constituents] [--apply EXPR]
                 [--select EXPR] [--max-memory-size MB]
@@ -238,6 +239,7 @@ identical, exit codes included.
 | `--quiet`, `--verbose`, `--debug` | accepted | `--quiet` drops the stderr summary. |
 | `--log-format raw` | accepted | `internal-json`, `bar`, `bar-with-logs`: error; ietsp logs plain lines. |
 | `--max-jobs N` | accepted, ignored | |
+| `--provenance` | ietsp only | Adds a `pos` key per job: `file:line:col` of the derivation, mapped back to the local tree (`docs/provenance.md`). nix-eval-jobs 2.35 has no such key, so the flag is off by default and the 40 cases stay identical. |
 | `--override-input`, `--override-flake`, `--reference-lock-file` | error | ietsp evaluates a flake from its own complete `flake.lock` only. |
 | `--repair` | error | ietsp never repairs store paths. |
 
