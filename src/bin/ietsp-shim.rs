@@ -159,7 +159,9 @@ fn main() {
         std::thread::sleep(Duration::from_millis(5));
     }
     let status = child.wait().map(|s| s.code().unwrap_or(1)).unwrap_or(1);
-    let _ = up.join();
+    // `up` may still sit in a read of our stdin; exiting closes our stdout, which is the
+    // EOF the client waits for when the daemon died (as a real ssh exits with its command)
+    drop(up);
     if let Some(f) = cpu_log
         && let Ok(mut l) = std::fs::OpenOptions::new()
             .append(true)

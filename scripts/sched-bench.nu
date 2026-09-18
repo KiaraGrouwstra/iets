@@ -9,9 +9,10 @@
 #          the daemon's own CPU time. One row per value of --latency.
 #   unix   unix://SOCK: a socat listener that runs the same daemon per connection.
 #   host   ssh-ng://HOST (--host): a real ssh target; the remote program is a scratch-store
-#          `nix-daemon --stdio` under /tmp/ietsp-sched with the same CPU accounting in sh.
-#          Rows with and without ControlMaster (NIX_SSHOPTS). Graph and upload workloads
-#          only: the hello seed lives on this machine.
+#          `nix-daemon --stdio` under /tmp/ietsp-sched, run under a shipped ietsp-shim for
+#          the same CPU accounting. Rows with and without ControlMaster (NIX_SSHOPTS).
+#          Upload only (`--no-build`, upload configs): a chroot store under /tmp cannot
+#          build on bld1 (docs/scheduling.md, "bld1 leg"), and the hello seed lives here.
 #
 # usage: nu scripts/sched-bench.nu [--host HOST] [--runs 3] [--latency 0,20]
 #          [--workloads g8x6,g32x4,chain30,hello,nixos-desktop] [--configs a,b,...]
@@ -112,19 +113,13 @@ done
 exec "$(dirname "$0")/daemon-stdio"
 '
 
-# The remote program on a real host: the same daemon, CPU read from /proc while the
-# process is a zombie (its own utime+stime, not the builders it reaped).
+# The remote program on a real host: the same daemon under the shipped ietsp-shim, run
+# through its own loader from /tmp/ietsp-sched/lib. Uploads only, so no build settings.
 const REMOTE_STDIO = '#!/bin/sh
 root=/tmp/ietsp-sched
-nix-daemon --store "local?root=$root/store" --option builders "" --option substituters "" --stdio 2>>$root/daemon.log &
-pid=$!
-while :; do
-  set -- $(cut -d" " -f3,14,15 /proc/$pid/stat 2>/dev/null)
-  [ -z "$1" ] && break
-  if [ "$1" = Z ]; then echo "$pid $(($2 + $3))" >> $root/cpu.ticks; break; fi
-  sleep 0.02
-done
-wait $pid
+$root/lib/@LD@ --library-path $root/lib $root/ietsp-shim --cpu-log $root/cpu.log -- \
+  nix-daemon --store "local?root=$root/store" --option builders "" --option substituters "" \
+  --stdio 2>>$root/daemon.log
 '
 
 def write-shims [] {
@@ -141,8 +136,11 @@ def target-root [t: record]: nothing -> string { $"(root)/($t.name)" }
 
 # Clears the store of a target for a cold run; `seed` copies a prepared store instead.
 def wipe-store [t: record, seed?: string] {
+  # A fresh store gets its SQLite schema now: N daemons creating it at once can die with
+  # "SQLite database is busy" (the busy handler is not yet installed while the schema is
+  # created), and a real remote store has one already.
   if $t.kind == host {
-    ^ssh $t.host "rm -rf /tmp/ietsp-sched/store /tmp/ietsp-sched/cpu.ticks; mkdir -p /tmp/ietsp-sched/store"
+    ^ssh $t.host "rm -rf /tmp/ietsp-sched/store /tmp/ietsp-sched/cpu.log; mkdir -p /tmp/ietsp-sched/store; nix-store --store 'local?root=/tmp/ietsp-sched/store' --init 2>/dev/null"
     return
   }
   let store = $"(target-root $t)/store"
@@ -154,12 +152,13 @@ def wipe-store [t: record, seed?: string] {
     ^cp -a $"(root)/($seed)/store" $store
   } else {
     mkdir $store
+    ^nix-store --store $"local?root=($store)" --init err> /dev/null
   }
 }
 
 def reset-cpu [t: record] {
   if $t.kind == host {
-    ^ssh $t.host "rm -f /tmp/ietsp-sched/cpu.ticks"
+    ^ssh $t.host "rm -f /tmp/ietsp-sched/cpu.log"
   } else {
     rm -f $"(target-root $t)/cpu.log"
   }
@@ -168,16 +167,15 @@ def reset-cpu [t: record] {
 # Seconds of daemon CPU logged since `reset-cpu`.
 def read-cpu [t: record]: nothing -> float {
   sleep 300ms
-  if $t.kind == host {
-    let ticks = (^ssh $t.host "cat /tmp/ietsp-sched/cpu.ticks 2>/dev/null; getconf CLK_TCK" | lines)
-    if ($ticks | is-empty) { return 0.0 }
-    let clk = ($ticks | last | into float)
-    $ticks | drop 1 | each { |l| $l | split row " " | get 1 | into float } | math sum | $in / $clk
-  } else {
-    let f = $"(target-root $t)/cpu.log"
-    if not ($f | path exists) { return 0.0 }
-    open --raw $f | lines | where $it != "" | each { |l| $l | split row " " | get 1 | into float } | math sum
-  }
+  let f = $"(target-root $t)/cpu.log"
+  let text = if $t.kind == host {
+    ^ssh $t.host "cat /tmp/ietsp-sched/cpu.log 2>/dev/null"
+  } else if ($f | path exists) {
+    open --raw $f
+  } else { "" }
+  # a shim may still be appending: take complete `pid seconds` lines only
+  let v = ($text | lines | parse -r '^(?<pid>\d+) (?<s>\d+\.\d+)$' | get s | each { into float })
+  if ($v | is-empty) { 0.0 } else { $v | math sum }
 }
 
 # ---- one run -----------------------------------------------------------------------------
@@ -276,8 +274,20 @@ def make-targets [host: string, latencies: list<int>, names: list<string>]: noth
   $ts
 }
 
-def setup-host [host: string] {
-  $REMOTE_STDIO | ^ssh $host "mkdir -p /tmp/ietsp-sched/store && cat > /tmp/ietsp-sched/daemon-stdio && chmod +x /tmp/ietsp-sched/daemon-stdio"
+# Ships ietsp-shim with its loader and libraries under /tmp/ietsp-sched on the host (the
+# host's real store is never touched), and the remote program that runs the daemon under it.
+def setup-host [host: string, bin: string] {
+  let shim = ($"($bin)/ietsp-shim" | path expand)
+  let libs = (^ldd $shim | lines | parse -r '(?<path>/nix/store/\S+)' | get path | each { |p| ^readlink -f $p | chomp } | uniq)
+  let ld = ($libs | where $it =~ 'ld-linux' | first)
+  let stage = (mktemp -d)
+  mkdir $"($stage)/lib"
+  for l in $libs { ^cp $l $"($stage)/lib/" }
+  ^cp $shim $"($stage)/ietsp-shim"
+  $REMOTE_STDIO | str replace "@LD@" ($ld | path basename) | save -f $"($stage)/daemon-stdio"
+  ^chmod +x $"($stage)/daemon-stdio"
+  ^sh -c $"tar -C ($stage) -cf - . | ssh ($host) 'mkdir -p /tmp/ietsp-sched/store && tar -C /tmp/ietsp-sched -xf -'"
+  rm -rf $stage
   let rtt = (^sh -c $"start=$\(date +%s%N\); ssh -o ControlMaster=no ($host) true; echo $\(\( \($\(date +%s%N\) - start\) / 1000000 \))" | chomp)
   print $"host ($host): ssh round trip incl. login ($rtt) ms"
 }
@@ -343,7 +353,7 @@ def main [
   # drv paths for the nix baseline; the same expressions ietsp evaluates
   let drvs = ($wls | reduce -f {} { |wl, acc| $acc | insert $wl.name (out-of nix-instantiate ...$wl.instantiate | chomp) })
 
-  if $host != "" and "host" in $tnames { setup-host $host }
+  if $host != "" and "host" in $tnames { setup-host $host $bin }
   mut jobs = []
   if "unix" in $tnames {
     mkdir $"(root)/unix/store"
@@ -363,6 +373,10 @@ def main [
           print $"skip hello: no seed store at ($hello_seed)"
           continue
         }
+        # on a host every workload is an upload: --no-build, upload configs
+        let wl = if $t.kind == host and $wl.build {
+          $wl | merge {build: false, class: upload, args: ($wl.args | prepend "--no-build")}
+        } else { $wl }
         let cfgs = (configs | where { |c| $wl.class in $c.classes } | where { |c| ($cfg_names | is-empty) or ($c.name in $cfg_names) })
         for cfg in $cfgs {
           for run in 1..$runs {
