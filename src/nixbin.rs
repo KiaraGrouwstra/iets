@@ -64,7 +64,26 @@ pub fn real(name: &str) -> Option<PathBuf> {
             _ => {}
         }
     }
-    on_path
+    on_path.or_else(|| sibling(name))
+}
+
+/// The farm never shadows `nix-store`, so its real location names the nix
+/// installation even on a system path built without the marker.
+fn sibling(name: &str) -> Option<PathBuf> {
+    for dir in std::env::split_paths(&std::env::var_os("PATH")?) {
+        let probe = dir.join("nix-store");
+        if !executable(&probe) {
+            continue;
+        }
+        let real = std::fs::canonicalize(&probe).ok()?;
+        let p = real.parent()?.join(name);
+        if executable(&p)
+            && std::fs::canonicalize(&p).ok() != std::fs::canonicalize("/proc/self/exe").ok()
+        {
+            return Some(p);
+        }
+    }
+    None
 }
 
 /// `nix` for a subprocess. A bare `nix` when none is found, so the spawn
