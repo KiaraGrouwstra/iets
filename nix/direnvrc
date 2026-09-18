@@ -1,0 +1,25 @@
+# `use flake [FLAKEREF]` through ietsp, replacing nix-direnv. Warm loads read
+# ietsp's tracing cache and skip nix entirely; a miss evaluates in well
+# under a second and builds through the daemon. Local flake refs only
+# (`.`, `./x`, `/abs`, `~/x`, `path:`), with an optional `#attr`.
+use_flake() {
+  local ref="${1:-.}" uri root
+  if ! has ietsp; then
+    log_error "use flake: ietsp is not installed; import the ietsp NixOS module"
+    return 1
+  fi
+  if [[ $# -gt 1 || $ref == -* ]]; then
+    log_error "use flake: only a flake ref is supported, got: $*"
+    return 1
+  fi
+  uri="${ref%#*}"
+  uri="${uri#path:}"
+  if [[ ! -f $uri/flake.lock ]]; then
+    log_error "use flake: $uri has no flake.lock (run nix flake lock)"
+    return 1
+  fi
+  root="$(direnv_layout_dir)/ietsp-env"
+  mkdir -p "$(direnv_layout_dir)"
+  watch_file "$uri/flake.nix" "$uri/flake.lock"
+  eval "$(ietsp print-dev-env --gc-root "$root" "$ref")"
+}

@@ -23,7 +23,8 @@ scripts/remote-e2e.nu
 ./target/release/ietsp print-dev-env --gc-root .direnv/ietsp-env .   # see docs/direnv.md
 ```
 
-See `docs/remote-builder-protocol.md`.
+See `docs/remote-builder-protocol.md`. NixOS hosts: import
+`nixosModules.default` and keep `use flake` in `.envrc` (`docs/direnv.md`).
 
 Runs are cached: a second `ietsp eval` or `ietsp build` of the same
 command validates the files, directories and environment variables the

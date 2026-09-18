@@ -23,7 +23,13 @@ ietsp print-dev-env [--builder URL] [--gc-root PATH] [--json] [--workers N]
   nix-direnv's `--profile` does with a profile.
 - `--json` prints what `nix print-dev-env --json` prints.
 
-## `.envrc`
+## NixOS
+
+`nixosModules.default` installs ietsp and replaces nix-direnv's `use flake`
+with `nix/direnvrc` (local flake refs only, optional `#attr`). Import it and
+keep `use flake` in `.envrc`.
+
+## `.envrc` by hand
 
 ```bash
 use_ietsp() {
