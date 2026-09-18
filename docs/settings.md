@@ -37,7 +37,7 @@ selects level 2, and any other value selects level 1.
 | `IETSP_IR_STATS` | | set = on | off | One line per compiled file on stderr. |
 | `IETSP_IR_MIN` | | usize (bytes) | 1024 | Sources smaller than this compile faster than their cache entry loads, so they are not cached. |
 | `IETSP_PROVENANCE` | `provenance` | `0` turns off | on | Rewrites store paths and positions back to local trees (docs/provenance.md). |
-| `IETSP_NIX_BIN_DIR` | `nix-bin-dir` | path | unset | Where the real Nix binaries live. Unset searches `PATH`, skipping this binary. |
+| `IETSP_NIX_BIN_DIR` | `nix-bin-dir` | path | unset | Where the real Nix binaries live. Unset searches `PATH`, skipping every ietsp. |
 | `IETSP_NO_FALLBACK` | `no-fallback` | `1` turns on | off | A classic command fails instead of running the real Nix (docs/classic.md). |
 | `IETSP_FETCHING` | | set = on | off | Set on the Nix subprocess that fetches a flake input, so a recursive fetch is an error, not a loop. |
 

@@ -248,10 +248,34 @@ fn nix_string_literal(s: &str) -> String {
     out
 }
 
+/// fetchers.cc:getAccessorUnchecked: a locked input carries `__final`, so
+/// Nix substitutes its store path before it runs any fetcher. An expression
+/// cannot mark an input final (`fetchFinalTree` is an internal primop), so
+/// the fallback substitutes the tree itself first, and only then fetches.
+/// `nix build` on a store path that no substituter has costs 0.33 s here,
+/// against seconds for any fetch, so every input type takes this step.
+fn substitute(nix: &Path, store_path: &str) -> bool {
+    std::process::Command::new(nix)
+        .env("IETSP_FETCHING", "1")
+        .args([
+            "--extra-experimental-features",
+            "nix-command flakes",
+            "build",
+            "--no-link",
+            store_path,
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
 /// A remote input's tree must exist at its store path so `import` reads
-/// exactly what Nix reads. A missing tree is fetched by handing the locked
-/// attrs to Nix's own `fetchTree`; the store path Nix reports must be the
-/// one the lock implies. Never called for the root tree or a `path` input.
+/// exactly what Nix reads. A missing tree is substituted, or else fetched by
+/// handing the locked attrs to Nix's own `fetchTree`; the store path Nix
+/// reports must be the one the lock implies. Never called for the root tree
+/// or a `path` input.
 pub fn ensure_in_store(
     ev: &mut Evaluator,
     sp: &StorePath,
@@ -262,10 +286,6 @@ pub fn ensure_in_store(
     let p = Path::new(&full);
     if crate::trace::stat_kind(p, true) == crate::trace::Kind::Missing {
         let name = input_name(ev, attrs);
-        let expr = format!(
-            "(builtins.fetchTree (builtins.fromJSON {})).outPath",
-            nix_string_literal(&attrs_to_json(attrs))
-        );
         eprintln!("ietsp: input '{name}' is not in the store ({full}), fetching it with nix");
         if crate::settings::get().fetching {
             bail!(
@@ -283,42 +303,48 @@ pub fn ensure_in_store(
                 to_url(attrs)
             );
         };
-        let out = std::process::Command::new(nix)
-            .env("IETSP_FETCHING", "1")
-            .args([
-                "--extra-experimental-features",
-                "nix-command flakes",
-                "eval",
-                "--raw",
-                "--impure",
-                "--expr",
-                &expr,
-            ])
-            .stdin(std::process::Stdio::null())
-            .stderr(std::process::Stdio::inherit())
-            .output()
-            .map_err(|e| {
-                Error::boxed(
-                    ErrorKind::Io,
-                    format!("ietsp: cannot run nix to fetch input '{name}': {e}"),
+        if !substitute(&nix, &full) {
+            let expr = format!(
+                "(builtins.fetchTree (builtins.fromJSON {})).outPath",
+                nix_string_literal(&attrs_to_json(attrs))
+            );
+            let out = std::process::Command::new(&nix)
+                .env("IETSP_FETCHING", "1")
+                .args([
+                    "--extra-experimental-features",
+                    "nix-command flakes",
+                    "eval",
+                    "--raw",
+                    "--impure",
+                    "--expr",
+                    &expr,
+                ])
+                .stdin(std::process::Stdio::null())
+                .stderr(std::process::Stdio::inherit())
+                .output()
+                .map_err(|e| {
+                    Error::boxed(
+                        ErrorKind::Io,
+                        format!("ietsp: cannot run nix to fetch input '{name}': {e}"),
+                        pos,
+                    )
+                })?;
+            if !out.status.success() {
+                bail!(
+                    ErrorKind::Eval,
                     pos,
-                )
-            })?;
-        if !out.status.success() {
-            bail!(
-                ErrorKind::Eval,
-                pos,
-                "ietsp: nix could not fetch input '{name}' ({})",
-                to_url(attrs)
-            );
-        }
-        let got = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if got != full {
-            bail!(
-                ErrorKind::Eval,
-                pos,
-                "ietsp: nix fetched '{got}' for input '{name}' but the lock implies '{full}'"
-            );
+                    "ietsp: nix could not fetch input '{name}' ({})",
+                    to_url(attrs)
+                );
+            }
+            let got = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if got != full {
+                bail!(
+                    ErrorKind::Eval,
+                    pos,
+                    "ietsp: nix fetched '{got}' for input '{name}' but the lock implies '{full}'"
+                );
+            }
         }
     }
     if ev.trace.stat_now(full.as_bytes(), true) == crate::trace::Kind::Missing {

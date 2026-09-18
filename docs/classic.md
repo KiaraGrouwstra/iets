@@ -285,9 +285,18 @@ ietsp: falling back to nix-instantiate: '--parse' is not implemented
 
 Lookup order: `IETSP_NIX_BIN_DIR/<name>` when it exists there; else the
 directory named by `share/ietsp/real-nix-bin` next to the farm entry on
-`PATH` that resolves to ietsp; else the first `<name>` on `PATH` whose
-canonical path is not `/proc/self/exe`. Nothing found at all:
+`PATH` that resolves to ietsp; else the first `<name>` on `PATH` that is not
+ietsp. Nothing found at all:
 `ietsp: cannot fall back to <name>: not found on PATH`, exit 1.
+
+A candidate is ietsp when its canonical path is `/proc/self/exe` **or** when
+that path's file name is `ietsp`. A host can hold two builds of ietsp, and
+the farm one of them made points at its own `bin/ietsp`, not at the binary
+that is running. Such a candidate is skipped like ourselves: its marker is
+read, and the walk over `PATH` goes on. Without the file-name rule the other
+build looked like a foreign nix, so a flake-input fetch spawned it and the
+child stopped at the `IETSP_FETCHING` guard
+(`ietsp: recursive fetch ...`, `docs/flakes.md`).
 
 ## Config
 

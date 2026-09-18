@@ -34,9 +34,43 @@ fn farm_real_dir(p: &Path) -> Option<PathBuf> {
     None
 }
 
+/// A candidate that is ietsp, whatever build of it: this executable, or a
+/// symlink chain that ends in a file named `ietsp`. A host can hold several
+/// builds of the same source, and a farm made by one of them points at its
+/// own `bin/ietsp`, which is not `/proc/self/exe`.
+fn is_ietsp(canonical: &Path, me: Option<&Path>) -> bool {
+    Some(canonical) == me || canonical.file_name() == Some(std::ffi::OsStr::new("ietsp"))
+}
+
+/// The first `<name>` in `dirs` that is not ietsp, or the bin directory the
+/// farm entry for an ietsp records. Every ietsp is skipped like ourselves,
+/// so a second build of ietsp under the name `nix` never wins.
+fn on_path(name: &str, dirs: impl Iterator<Item = PathBuf>, me: Option<&Path>) -> Option<PathBuf> {
+    let mut found = None;
+    for dir in dirs {
+        let p = dir.join(name);
+        if !executable(&p) {
+            continue;
+        }
+        match std::fs::canonicalize(&p) {
+            Ok(c) if is_ietsp(&c, me) => {
+                if let Some(real) = farm_real_dir(&p) {
+                    let r = real.join(name);
+                    if executable(&r) {
+                        return Some(r);
+                    }
+                }
+            }
+            Ok(_) if found.is_none() => found = Some(p),
+            _ => {}
+        }
+    }
+    found
+}
+
 /// The real `<name>`: `$IETSP_NIX_BIN_DIR/<name>` when it exists there, else
 /// the bin directory the farm on `PATH` was built for, else the first
-/// `<name>` on `PATH` that is not this executable.
+/// `<name>` on `PATH` that is not ietsp.
 pub fn real(name: &str) -> Option<PathBuf> {
     if let Some(dir) = &crate::settings::get().nix_bin_dir {
         let p = dir.join(name);
@@ -45,31 +79,14 @@ pub fn real(name: &str) -> Option<PathBuf> {
         }
     }
     let me = std::fs::canonicalize("/proc/self/exe").ok();
-    let mut on_path = None;
-    for dir in std::env::split_paths(&std::env::var_os("PATH")?) {
-        let p = dir.join(name);
-        if !executable(&p) {
-            continue;
-        }
-        match std::fs::canonicalize(&p) {
-            Ok(c) if Some(&c) == me.as_ref() => {
-                if let Some(real) = farm_real_dir(&p) {
-                    let r = real.join(name);
-                    if executable(&r) {
-                        return Some(r);
-                    }
-                }
-            }
-            Ok(_) if on_path.is_none() => on_path = Some(p),
-            _ => {}
-        }
-    }
-    on_path.or_else(|| sibling(name))
+    let dirs = std::env::split_paths(&std::env::var_os("PATH")?).collect::<Vec<_>>();
+    on_path(name, dirs.into_iter(), me.as_deref()).or_else(|| sibling(name))
 }
 
 /// The farm never shadows `nix-store`, so its real location names the nix
 /// installation even on a system path built without the marker.
 fn sibling(name: &str) -> Option<PathBuf> {
+    let me = std::fs::canonicalize("/proc/self/exe").ok();
     for dir in std::env::split_paths(&std::env::var_os("PATH")?) {
         let probe = dir.join("nix-store");
         if !executable(&probe) {
@@ -77,9 +94,7 @@ fn sibling(name: &str) -> Option<PathBuf> {
         }
         let real = std::fs::canonicalize(&probe).ok()?;
         let p = real.parent()?.join(name);
-        if executable(&p)
-            && std::fs::canonicalize(&p).ok() != std::fs::canonicalize("/proc/self/exe").ok()
-        {
+        if executable(&p) && !std::fs::canonicalize(&p).is_ok_and(|c| is_ietsp(&c, me.as_deref())) {
             return Some(p);
         }
     }
@@ -112,6 +127,39 @@ mod tests {
             Some(PathBuf::from("/real/bin"))
         );
         assert_eq!(farm_real_dir(&sys.join("bin/other")), None);
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    /// Two builds of ietsp on `PATH`, both shadowing `nix`: neither is the
+    /// real nix, whichever one is running.
+    #[test]
+    fn every_ietsp_build_is_skipped() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = std::env::temp_dir().join(format!("ietsp-nixbin-two-{}", std::process::id()));
+        let (x, y, real) = (tmp.join("x"), tmp.join("y"), tmp.join("real"));
+        let exe = |p: &Path| {
+            std::fs::write(p, "#!/bin/sh\nexit 0\n").unwrap();
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        for d in [&x, &y, &real] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        for d in [&x, &y] {
+            exe(&d.join("ietsp"));
+            std::os::unix::fs::symlink(d.join("ietsp"), d.join("nix")).unwrap();
+        }
+        let nix = real.join("nix");
+        exe(&nix);
+
+        let dirs = [x.clone(), y.clone(), real.clone()];
+        assert_eq!(
+            on_path("nix", dirs.iter().cloned(), None),
+            Some(nix.clone())
+        );
+        assert_eq!(on_path("nix", dirs[..2].iter().cloned(), None), None);
+        assert_eq!(on_path("nix", dirs.iter().cloned(), Some(&nix)), None);
+
         std::fs::remove_dir_all(&tmp).unwrap();
     }
 }

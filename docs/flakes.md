@@ -68,11 +68,29 @@ from the store when the tree is there, else from the local tree.
 
 A remote input (github, git, tarball, ...) whose locked tree is not in
 `/nix/store` must get there first: `flake::fetch::ensure_in_store` prints
-`ietsp: input '<name>' is not in the store (<path>), fetching it with nix`,
-runs `nix eval --raw --impure --expr '(builtins.fetchTree <locked attrs>).outPath'`
-once, then checks that the path Nix reports is the one the lock implies, so
-a difference in the file set is an error, not a silent divergence. When no
-nix other than ietsp itself is on `PATH`, the error is
+`ietsp: input '<name>' is not in the store (<path>), fetching it with nix`
+and then runs nix in two steps, the two steps Nix's own flake path takes.
+
+1. `nix build --no-link <store path>` substitutes the tree. Nix does this
+   itself for every input a lock file holds: `lockfile.cc` marks such an
+   input `__final`, and `fetchers.cc:getAccessorUnchecked` substitutes a
+   final input's store path before it runs any fetcher. An expression cannot
+   reach that path, because `builtins.fetchTree` rejects `__final`
+   (`fetchTree.cc:216`) and `fetchFinalTree` is an internal primop, absent
+   from `builtins` (`eval.cc:546`). So ietsp substitutes the tree itself.
+2. Only when nothing has the path:
+   `nix eval --raw --impure --expr '(builtins.fetchTree <locked attrs>).outPath'`,
+   then a check that the path Nix reports is the one the lock implies, so
+   a difference in the file set is an error, not a silent divergence.
+
+Step 1 is what makes ietsp agree with `nix eval` on a locked `git` input
+that a substituter holds but the fetcher cannot reach: `git.cc:884`
+(`Cannot find Git revision '<rev>' in ref '<ref>'`) is raised whenever the
+fetch of the rev fails and a stale local ref lets `git.cc:866` swallow the
+failure; the flake path never gets there, because the tree comes from the
+substituter. A store path no substituter has costs 0.33 s to probe here
+(four substituters), against seconds for any fetch, so every input type
+takes step 1. When no nix other than ietsp itself is on `PATH`, the error is
 `ietsp: input '<name>' is not in the store and nix is not on PATH; fetch it with nix (...) first`.
 The root tree and `path:` inputs are never fetched. Nothing else in ietsp
 runs nix; ietsp never writes to the store itself.
