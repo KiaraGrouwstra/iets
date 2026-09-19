@@ -149,3 +149,12 @@ stamp (the entry and then the store go, and the store works again), and
 `ietsp cache gc` over both stores (past the TTL goes, inside it stays, a
 dry run changes nothing). `src/cachefs.rs` unit tests cover the version
 file, the lock, the touch interval and the sweep.
+
+## The NAR hash of a source tree
+
+There is no third store for it. A tree's NAR hash is what `"${./tree}"`,
+`builtins.path` and `filterSource` cost, and re-dumping an unchanged tree for
+it is exactly what the tracing cache's `Obs::Tree` avoids: it holds the
+`nar_hash` beside a `stat_hash` over every entry, and validation walks with
+`lstat` only, re-dumping the NAR just when that signature differs
+(docs/tracing-cache.md). See docs/nar.md for what the dump itself costs.

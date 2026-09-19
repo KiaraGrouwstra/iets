@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::os::unix::ffi::OsStrExt;
@@ -44,6 +45,13 @@ pub type PathFilter<'a> = dyn FnMut(&Path, FileType) -> bool + 'a;
 
 pub(crate) const NAR_MAX_DEPTH: usize = 64;
 
+/// One buffer flush is one `write_all` on the sink, hence one hasher update:
+/// long enough that SHA-256 runs over long runs, short enough that the buffer
+/// and the file being read both stay in cache.
+const BUF: usize = 1 << 20;
+/// A content read never asks for less than this; the sink flushes first instead.
+const MIN_READ: usize = 1 << 16;
+
 pub(crate) fn write_u64(sink: &mut dyn Write, n: u64) -> io::Result<()> {
     sink.write_all(&n.to_le_bytes())
 }
@@ -63,80 +71,345 @@ pub(crate) fn write_str(sink: &mut dyn Write, s: &[u8]) -> io::Result<()> {
     write_padding(sink, s.len() as u64)
 }
 
-/// Mirrors archive.cc:SourceAccessor::dumpPath; writes the NAR of `path` into `sink`.
-pub fn dump_path(path: &Path, sink: &mut dyn Write, filter: &mut PathFilter<'_>) -> io::Result<()> {
-    write_str(sink, b"nix-archive-1")?;
-    dump(path, sink, filter, 0)
+/// The framed form of a run of constant tokens.
+///
+/// Most of a NAR is fixed keywords, and `write_str` of a literal is a
+/// compile-time byte string, so a whole run of them is one memcpy rather than a
+/// dozen bounds-checked appends. `N` is checked against the encoded length at
+/// compile time.
+pub const fn framed<const N: usize>(toks: &[&[u8]]) -> [u8; N] {
+    let mut out = [0u8; N];
+    let mut o = 0;
+    let mut t = 0;
+    while t < toks.len() {
+        let s = toks[t];
+        let mut i = 0;
+        while i < 8 {
+            out[o + i] = (s.len() >> (8 * i)) as u8;
+            i += 1;
+        }
+        o += 8;
+        let mut j = 0;
+        while j < s.len() {
+            out[o + j] = s[j];
+            j += 1;
+        }
+        o += s.len().next_multiple_of(8);
+        t += 1;
+    }
+    assert!(o == N, "framed: wrong N");
+    out
 }
 
-fn dump(
-    path: &Path,
-    sink: &mut dyn Write,
-    filter: &mut PathFilter<'_>,
-    depth: usize,
-) -> io::Result<()> {
-    if depth >= NAR_MAX_DEPTH {
-        return Err(io::Error::other(format!(
-            "path '{}' exceeds maximum NAR directory depth of {NAR_MAX_DEPTH}",
-            path.display()
-        )));
+// The groups nix-community/go-nix PR #123 (pkg/narv2, edef) cuts the format
+// into. They are chosen so that the reader can tell the four node shapes apart
+// from a single byte: peek 32 bytes at a node's type token and byte 16 is the
+// length prefix of whatever follows the type — `target` (6) after `symlink`,
+// `contents` (8) after `regular`, `executable` (10) after an executable
+// `regular` — except for `directory`, which is long enough that byte 16 is its
+// own last letter, `y`.
+const TOK_NAR: [u8; 56] = framed(&[b"nix-archive-1", b"(", b"type"]);
+const TOK_REG: [u8; 32] = framed(&[b"regular", b"contents"]);
+const TOK_EXE: [u8; 64] = framed(&[b"regular", b"executable", b"", b"contents"]);
+const TOK_SYM: [u8; 32] = framed(&[b"symlink", b"target"]);
+const TOK_DIR: [u8; 24] = framed(&[b"directory"]);
+const TOK_ENT: [u8; 48] = framed(&[b"entry", b"(", b"name"]);
+const TOK_NOD: [u8; 48] = framed(&[b"node", b"(", b"type"]);
+const TOK_PAR: [u8; 16] = framed(&[b")"]);
+
+/// What byte 16 of a peeked node header says the node is.
+const TAG_SYM: u8 = 6;
+const TAG_REG: u8 = 8;
+const TAG_EXE: u8 = 10;
+const TAG_DIR: u8 = b'y';
+
+/// The longest entry name the reader accepts: `NAME_MAX`, so a name it accepts
+/// is a name the file system can hold.
+const MAX_NAME: usize = 255;
+/// The longest symlink target: `PATH_MAX` less its NUL.
+const MAX_TARGET: usize = 4095;
+
+/// The staging buffer a NAR write funnels through.
+///
+/// NAR framing is 8-to-24-byte tokens, a dozen per file system object, and the
+/// sink behind them is a `dyn Write` — usually a hasher, so every token would
+/// otherwise cost an indirect call plus a SHA-256 block-buffer copy. Buffering
+/// turns a whole subtree of framing into one `write_all`, and file contents are
+/// read straight into the same buffer, so the bytes are still copied only once.
+pub struct NarSink<'a> {
+    out: &'a mut dyn Write,
+    buf: Box<[u8]>,
+    n: usize,
+}
+
+impl<'a> NarSink<'a> {
+    /// A sink that starts with the small buffer and grows to `BUF` only if a
+    /// file's contents ask for it. Most NARs an evaluation writes are a few
+    /// kilobytes, and the sink is built once per NAR, so zeroing a megabyte up
+    /// front costs more than the flushes it saves.
+    pub fn new(out: &'a mut dyn Write) -> NarSink<'a> {
+        NarSink::with_capacity(out, 0)
     }
-    let st = fs::symlink_metadata(path)?;
-    let ft = st.file_type();
-    write_str(sink, b"(")?;
-    if ft.is_file() {
-        write_str(sink, b"type")?;
-        write_str(sink, b"regular")?;
-        if st.permissions().mode() & 0o100 != 0 {
-            write_str(sink, b"executable")?;
-            write_str(sink, b"")?;
+
+    /// A sink whose buffer holds `cap` bytes, rounded up to fit one content read.
+    pub fn with_capacity(out: &'a mut dyn Write, cap: usize) -> NarSink<'a> {
+        NarSink {
+            out,
+            buf: vec![0u8; cap.max(2 * MIN_READ)].into_boxed_slice(),
+            n: 0,
         }
-        write_str(sink, b"contents")?;
-        write_u64(sink, st.len())?;
-        let mut f = fs::File::open(path)?;
-        let copied = io::copy(&mut f, sink)?;
-        if copied != st.len() {
+    }
+
+    /// Grows to `BUF` for a file that would not fit, which is where the larger
+    /// buffer pays for itself in read syscalls.
+    #[cold]
+    fn grow(&mut self) -> io::Result<()> {
+        self.flush()?;
+        self.buf = vec![0u8; BUF].into_boxed_slice();
+        Ok(())
+    }
+
+    fn put(&mut self, b: &[u8]) -> io::Result<()> {
+        if b.len() > self.buf.len() - self.n {
+            self.flush()?;
+            if b.len() > self.buf.len() {
+                self.out.write_all(b)?;
+                return Ok(());
+            }
+        }
+        self.buf[self.n..self.n + b.len()].copy_from_slice(b);
+        self.n += b.len();
+        Ok(())
+    }
+
+    fn u64(&mut self, n: u64) -> io::Result<()> {
+        self.put(&n.to_le_bytes())
+    }
+
+    fn padding(&mut self, len: u64) -> io::Result<()> {
+        let rem = (len % 8) as usize;
+        if rem != 0 {
+            self.put(&[0u8; 8][..8 - rem])?;
+        }
+        Ok(())
+    }
+
+    /// A run of tokens already in their framed form, from [`framed`].
+    /// `N` is a constant so the copy compiles to a few stores; through a plain
+    /// slice it would be a `memmove` call, which is most of the cost at this size.
+    #[inline]
+    pub fn preframed<const N: usize>(&mut self, run: &[u8; N]) -> io::Result<()> {
+        if N > self.buf.len() - self.n {
+            return self.put(run);
+        }
+        let n = self.n;
+        self.buf[n..n + N].copy_from_slice(run);
+        self.n = n + N;
+        Ok(())
+    }
+
+    /// One NAR token: length-prefixed, zero-padded to 8.
+    #[inline]
+    pub fn token(&mut self, s: &[u8]) -> io::Result<()> {
+        let need = 8 + s.len().next_multiple_of(8);
+        if need > self.buf.len() - self.n {
+            return self.token_slow(s, need);
+        }
+        let n = self.n;
+        self.buf[n..n + 8].copy_from_slice(&(s.len() as u64).to_le_bytes());
+        self.buf[n + 8..n + 8 + s.len()].copy_from_slice(s);
+        self.buf[n + 8 + s.len()..n + need].fill(0);
+        self.n = n + need;
+        Ok(())
+    }
+
+    #[cold]
+    fn token_slow(&mut self, s: &[u8], need: usize) -> io::Result<()> {
+        self.flush()?;
+        if need <= self.buf.len() {
+            return self.token(s);
+        }
+        self.u64(s.len() as u64)?;
+        self.put(s)?;
+        self.padding(s.len() as u64)
+    }
+
+    /// The `contents` field of a regular file: exactly `len` bytes read from
+    /// `src`, padded to 8.
+    pub fn contents(&mut self, src: &mut dyn Read, len: u64) -> io::Result<()> {
+        self.u64(len)?;
+        if len > self.buf.len() as u64 && self.buf.len() < BUF {
+            self.grow()?;
+        }
+        let mut left = len;
+        while left > 0 {
+            if self.buf.len() - self.n < MIN_READ {
+                self.flush()?;
+            }
+            let want = (self.buf.len() - self.n).min(left.min(BUF as u64) as usize);
+            let got = self.out_read(src, want)?;
+            left -= got as u64;
+        }
+        self.padding(len)
+    }
+
+    fn out_read(&mut self, src: &mut dyn Read, want: usize) -> io::Result<usize> {
+        let got = src.read(&mut self.buf[self.n..self.n + want])?;
+        if got == 0 {
+            return Err(io::Error::other("file ended early while reading contents"));
+        }
+        self.n += got;
+        Ok(got)
+    }
+
+    pub fn flush(&mut self) -> io::Result<()> {
+        if self.n > 0 {
+            self.out.write_all(&self.buf[..self.n])?;
+            self.n = 0;
+        }
+        Ok(())
+    }
+}
+
+/// Mirrors archive.cc:SourceAccessor::dumpPath; writes the NAR of `path` into `sink`.
+pub fn dump_path(path: &Path, sink: &mut dyn Write, filter: &mut PathFilter<'_>) -> io::Result<()> {
+    let ft = FileType::of(fs::symlink_metadata(path)?.file_type());
+    let mut root = path.as_os_str().as_bytes().to_vec();
+    // The walk appends "/name", so a trailing slash on the root would double it
+    // and change the paths the filter sees.
+    while root.len() > 1 && root.last() == Some(&b'/') {
+        root.pop();
+    }
+    let mut w = Walk {
+        sink: NarSink::new(sink),
+        path: root,
+        names: Vec::with_capacity(4096),
+        index: Vec::with_capacity(256),
+    };
+    w.sink.preframed(&TOK_NAR)?;
+    w.node(ft, filter, 0)?;
+    w.sink.flush()
+}
+
+/// The scratch a dump reuses at every level: one path buffer, one arena of entry
+/// names and one entry index, all kept to stack discipline, so walking 40k
+/// entries allocates nothing past the first few levels.
+struct Walk<'a> {
+    sink: NarSink<'a>,
+    /// The absolute path of the node being written, as bytes. `PathBuf::pop`
+    /// re-parses the whole path to find the last separator; truncation does not.
+    path: Vec<u8>,
+    names: Vec<u8>,
+    /// `(offset into the level's slice of `names`, name length, type)`.
+    index: Vec<(u32, u32, FileType)>,
+}
+
+impl Walk<'_> {
+    fn cur(&self) -> &Path {
+        Path::new(OsStr::from_bytes(&self.path))
+    }
+
+    /// Writes the node at `self.path`, whose type the parent's `readdir` — or the
+    /// root's `lstat` — already told us.
+    fn node(&mut self, ft: FileType, filter: &mut PathFilter<'_>, depth: usize) -> io::Result<()> {
+        if depth >= NAR_MAX_DEPTH {
             return Err(io::Error::other(format!(
-                "file '{}' changed size while reading",
-                path.display()
+                "path '{}' exceeds maximum NAR directory depth of {NAR_MAX_DEPTH}",
+                self.cur().display()
             )));
         }
-        write_padding(sink, copied)?;
-    } else if ft.is_dir() {
-        write_str(sink, b"type")?;
-        write_str(sink, b"directory")?;
-        let mut entries: Vec<(Vec<u8>, fs::FileType)> = fs::read_dir(path)?
-            .map(|e| {
-                let e = e?;
-                Ok((e.file_name().as_bytes().to_vec(), e.file_type()?))
-            })
-            .collect::<io::Result<_>>()?;
-        entries.sort_by(|a, b| a.0.cmp(&b.0));
-        for (name, eft) in entries {
-            let child = path.join(std::ffi::OsStr::from_bytes(&name));
-            if !filter(&child, FileType::of(eft)) {
-                continue;
+        match ft {
+            FileType::Regular => {
+                self.regular()?;
             }
-            write_str(sink, b"entry")?;
-            write_str(sink, b"(")?;
-            write_str(sink, b"name")?;
-            write_str(sink, &name)?;
-            write_str(sink, b"node")?;
-            dump(&child, sink, filter, depth + 1)?;
-            write_str(sink, b")")?;
+            FileType::Directory => {
+                self.sink.preframed(&TOK_DIR)?;
+                self.directory(filter, depth)?;
+            }
+            FileType::Symlink => {
+                self.sink.preframed(&TOK_SYM)?;
+                let target = fs::read_link(self.cur())?;
+                let target = target.as_os_str().as_bytes();
+                self.sink.token(target)?;
+            }
+            FileType::Unknown => {
+                return Err(io::Error::other(format!(
+                    "file '{}' has an unsupported type",
+                    self.cur().display()
+                )));
+            }
         }
-    } else if ft.is_symlink() {
-        write_str(sink, b"type")?;
-        write_str(sink, b"symlink")?;
-        write_str(sink, b"target")?;
-        write_str(sink, fs::read_link(path)?.as_os_str().as_bytes())?;
-    } else {
-        return Err(io::Error::other(format!(
-            "file '{}' has an unsupported type",
-            path.display()
-        )));
+        self.sink.preframed(&TOK_PAR)
     }
-    write_str(sink, b")")
+
+    /// `open` then `fstat`, not `lstat` then `open`: the same two syscalls, but
+    /// the kernel resolves the path once and the size and mode we announce
+    /// cannot disagree with the bytes that follow.
+    fn regular(&mut self) -> io::Result<()> {
+        let mut f = fs::File::open(self.cur())?;
+        let st = f.metadata()?;
+        if !st.is_file() {
+            return Err(io::Error::other(format!(
+                "file '{}' changed type while being read",
+                self.cur().display()
+            )));
+        }
+        let executable = st.permissions().mode() & 0o100 != 0;
+        if executable {
+            self.sink.preframed(&TOK_EXE)?;
+        } else {
+            self.sink.preframed(&TOK_REG)?;
+        }
+        self.sink.contents(&mut f, st.len())
+    }
+
+    fn directory(&mut self, filter: &mut PathFilter<'_>, depth: usize) -> io::Result<()> {
+        let name_base = self.names.len();
+        let idx_base = self.index.len();
+        for e in fs::read_dir(self.cur())? {
+            let e = e?;
+            let off = self.names.len() - name_base;
+            self.names.extend_from_slice(e.file_name().as_bytes());
+            let len = self.names.len() - name_base - off;
+            let ft = match e.file_type() {
+                Ok(ft) => FileType::of(ft),
+                // A file system whose `dirent` carries no `d_type`.
+                Err(_) => FileType::of(fs::symlink_metadata(e.path())?.file_type()),
+            };
+            self.index.push((off as u32, len as u32, ft));
+        }
+        let idx_end = self.index.len();
+        {
+            let Walk { names, index, .. } = self;
+            let arena = &names[name_base..];
+            let key = |e: &(u32, u32, FileType)| &arena[e.0 as usize..(e.0 + e.1) as usize];
+            index[idx_base..].sort_unstable_by(|a, b| key(a).cmp(key(b)));
+        }
+        let path_base = self.path.len();
+        for i in idx_base..idx_end {
+            let (off, len, ft) = self.index[i];
+            let from = name_base + off as usize;
+            let to = from + len as usize;
+            self.path.push(b'/');
+            self.path.extend_from_slice(&self.names[from..to]);
+            if filter(self.cur(), ft) {
+                {
+                    let Walk { names, sink, .. } = self;
+                    sink.preframed(&TOK_ENT)?;
+                    sink.token(&names[from..to])?;
+                    sink.preframed(&TOK_NOD)?;
+                }
+                // A child directory leaves `names` and `index` exactly as it
+                // found them, so the siblings still to come stay addressable.
+                self.node(ft, filter, depth + 1)?;
+                self.sink.preframed(&TOK_PAR)?;
+            }
+            self.path.truncate(path_base);
+        }
+        self.index.truncate(idx_base);
+        self.names.truncate(name_base);
+        Ok(())
+    }
 }
 
 /// Mirrors archive.cc:dumpString: the NAR of a regular, non-executable file with `contents`.
@@ -175,136 +448,368 @@ pub fn nar_size(path: &Path) -> io::Result<u64> {
 /// Mirrors store-api.cc:hashPath for Flat ingestion: hash of the file bytes.
 pub fn flat_hash(path: &Path, algo: HashAlgo) -> io::Result<Hash> {
     let mut h = Hasher::new(algo);
-    io::copy(&mut fs::File::open(path)?, &mut h)?;
-    Ok(h.finish())
-}
-
-fn read_u64(source: &mut dyn Read) -> io::Result<u64> {
-    let mut b = [0u8; 8];
-    source.read_exact(&mut b)?;
-    Ok(u64::from_le_bytes(b))
-}
-
-fn read_padding(source: &mut dyn Read, len: u64) -> io::Result<()> {
-    let rem = (len % 8) as usize;
-    if rem != 0 {
-        let mut pad = [0u8; 8];
-        source.read_exact(&mut pad[..8 - rem])?;
-        if pad.iter().any(|&b| b != 0) {
-            return Err(bad_nar("non-zero padding"));
+    let mut f = fs::File::open(path)?;
+    let cap = f.metadata().map_or(BUF as u64, |m| m.len());
+    let mut buf = vec![0u8; (cap.max(MIN_READ as u64).min(BUF as u64)) as usize];
+    loop {
+        let got = f.read(&mut buf)?;
+        if got == 0 {
+            return Ok(h.finish());
         }
+        h.update(&buf[..got]);
     }
-    Ok(())
 }
 
 fn bad_nar(why: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, format!("bad NAR: {why}"))
 }
 
-/// Mirrors serialise.hh:readString with a size cap: length-prefixed, zero-padded to 8.
-fn read_str(source: &mut dyn Read, max: u64) -> io::Result<Vec<u8>> {
-    let len = read_u64(source)?;
-    if len > max {
-        return Err(bad_nar("string too long"));
-    }
-    let mut buf = vec![0u8; len as usize];
-    source.read_exact(&mut buf)?;
-    read_padding(source, len)?;
-    Ok(buf)
+/// A NAR stream read through one refillable window.
+///
+/// The shape is the one nix-community/go-nix PR #123 (pkg/narv2) settled on: a
+/// synchronous state machine over a buffered reader with peek and discard, whole
+/// token groups matched with one compare against a pre-framed constant, the node
+/// shape picked from a single byte of a peeked header, contents streamed by their
+/// declared length, and nothing allocated per token.
+struct Reader<'a> {
+    src: &'a mut dyn Read,
+    buf: Box<[u8]>,
+    /// The filled region of `buf`.
+    start: usize,
+    end: usize,
+    eof: bool,
+    /// How much of the stream has been consumed: the NAR's length once done.
+    consumed: u64,
 }
 
-fn expect_str(source: &mut dyn Read, want: &[u8]) -> io::Result<()> {
-    let got = read_str(source, 64)?;
-    if got != want {
-        return Err(bad_nar(&format!(
-            "expected '{}', got '{}'",
-            String::from_utf8_lossy(want),
-            String::from_utf8_lossy(&got)
-        )));
+impl<'a> Reader<'a> {
+    fn new(src: &'a mut dyn Read) -> Reader<'a> {
+        Reader {
+            src,
+            buf: vec![0u8; BUF].into_boxed_slice(),
+            start: 0,
+            end: 0,
+            eof: false,
+            consumed: 0,
+        }
     }
-    Ok(())
+
+    /// Reads more of the source, sliding what is left of the window to the front.
+    fn refill(&mut self) -> io::Result<()> {
+        if self.start > 0 {
+            self.buf.copy_within(self.start..self.end, 0);
+            self.end -= self.start;
+            self.start = 0;
+        }
+        if self.end == self.buf.len() {
+            return Ok(());
+        }
+        let got = self.src.read(&mut self.buf[self.end..])?;
+        self.eof = got == 0;
+        self.end += got;
+        Ok(())
+    }
+
+    /// Makes the window hold at least `n` bytes. `n` must fit the buffer.
+    fn want(&mut self, n: usize) -> io::Result<()> {
+        while self.end - self.start < n {
+            self.refill()?;
+            if self.eof && self.end - self.start < n {
+                return Err(bad_nar("stream ended early"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Fills the window to `n` bytes if the source has them; returns how many it
+    /// holds. Unlike `want` it does not fail at the end of the stream.
+    fn avail(&mut self, n: usize) -> io::Result<usize> {
+        while self.end - self.start < n {
+            self.refill()?;
+            if self.eof {
+                break;
+            }
+        }
+        Ok((self.end - self.start).min(n))
+    }
+
+    fn advance(&mut self, n: usize) {
+        self.start += n;
+        self.consumed += n as u64;
+    }
+
+    /// `n` bytes of the stream without consuming them.
+    fn peek(&mut self, n: usize) -> io::Result<&[u8]> {
+        self.want(n)?;
+        Ok(&self.buf[self.start..self.start + n])
+    }
+
+    /// Consumes a run of constant tokens, which the stream must hold exactly.
+    fn consume<const N: usize>(&mut self, run: &[u8; N], what: &str) -> io::Result<()> {
+        if self.avail(N)? < N || self.buf[self.start..self.start + N] != *run {
+            return Err(bad_nar(&format!("expected {what}")));
+        }
+        self.advance(N);
+        Ok(())
+    }
+
+    fn u64(&mut self) -> io::Result<u64> {
+        self.want(8)?;
+        let n = u64::from_le_bytes(self.buf[self.start..self.start + 8].try_into().unwrap());
+        self.advance(8);
+        Ok(n)
+    }
+
+    /// Up to `n` bytes of contents, however many the window holds.
+    fn some(&mut self, n: usize) -> io::Result<&[u8]> {
+        if self.start == self.end {
+            self.refill()?;
+            if self.eof {
+                return Err(bad_nar("stream ended early"));
+            }
+        }
+        let take = n.min(self.end - self.start);
+        self.advance(take);
+        Ok(&self.buf[self.start - take..self.start])
+    }
+
+    /// Throws away `n` bytes: what a parse that wants only the framing does with
+    /// a file's body.
+    fn skip(&mut self, n: u64) -> io::Result<()> {
+        let mut left = n;
+        while left > 0 {
+            left -= self.some(left.min(BUF as u64) as usize)?.len() as u64;
+        }
+        Ok(())
+    }
+
+    fn padding(&mut self, len: u64) -> io::Result<()> {
+        let rem = (len % 8) as usize;
+        if rem != 0 {
+            self.want(8 - rem)?;
+            if self.buf[self.start..self.start + 8 - rem]
+                .iter()
+                .any(|&b| b != 0)
+            {
+                return Err(bad_nar("non-zero padding"));
+            }
+            self.advance(8 - rem);
+        }
+        Ok(())
+    }
+
+    /// Mirrors serialise.hh:readString with a size cap. The token is a slice of
+    /// the window, so it lives only until the next read.
+    fn token(&mut self, max: usize) -> io::Result<&[u8]> {
+        let len = self.u64()?;
+        if len > max as u64 {
+            return Err(bad_nar("string too long"));
+        }
+        let len = len as usize;
+        // Token and padding are checked together so the borrow of the window
+        // outlives neither.
+        let need = len.next_multiple_of(8);
+        self.want(need)?;
+        let s = self.start;
+        if self.buf[s + len..s + need].iter().any(|&b| b != 0) {
+            return Err(bad_nar("non-zero padding"));
+        }
+        self.advance(need);
+        Ok(&self.buf[s..s + len])
+    }
+
+    /// Which of the four node shapes comes next, from one byte of its header.
+    fn node_tag(&mut self) -> io::Result<u8> {
+        let tag = self.peek(32)?[16];
+        match tag {
+            TAG_SYM | TAG_REG | TAG_EXE | TAG_DIR => Ok(tag),
+            _ => Err(bad_nar("unknown node type")),
+        }
+    }
+
+    /// Copies `len` bytes of contents into `out`, then the padding.
+    fn contents_to(&mut self, out: &mut fs::File, len: u64) -> io::Result<()> {
+        let mut left = len;
+        while left > 0 {
+            let chunk = self.some(left.min(BUF as u64) as usize)?;
+            out.write_all(chunk)?;
+            left -= chunk.len() as u64;
+        }
+        self.padding(len)
+    }
 }
 
 /// Mirrors archive.cc:parseDump with RestoreSink: restores the NAR read from `source` at
 /// `dest`, which must not exist. Byte-exact inverse of `dump_path`.
 pub fn restore_path(source: &mut dyn Read, dest: &Path) -> io::Result<()> {
-    expect_str(source, b"nix-archive-1")?;
-    restore(source, dest, 0)
+    let mut r = Restorer {
+        r: Reader::new(source),
+        path: dest.as_os_str().as_bytes().to_vec(),
+        name: Vec::with_capacity(MAX_NAME),
+        prev: Vec::new(),
+    };
+    r.r.consume(&TOK_NAR, "a NAR header")?;
+    r.node(0)
 }
 
-fn restore(source: &mut dyn Read, dest: &Path, depth: usize) -> io::Result<()> {
+/// The scratch a restore reuses: one path buffer, one entry-name buffer, and the
+/// previous name at each depth, which the format requires to be increasing.
+struct Restorer<'a> {
+    r: Reader<'a>,
+    /// See `Walk::path`: truncation instead of `PathBuf::pop`.
+    path: Vec<u8>,
+    name: Vec<u8>,
+    prev: Vec<Vec<u8>>,
+}
+
+impl Restorer<'_> {
+    fn cur(&self) -> &Path {
+        Path::new(OsStr::from_bytes(&self.path))
+    }
+
+    fn node(&mut self, depth: usize) -> io::Result<()> {
+        if depth >= NAR_MAX_DEPTH {
+            return Err(bad_nar("directory nesting too deep"));
+        }
+        match self.r.node_tag()? {
+            TAG_REG => {
+                self.r.consume(&TOK_REG, "'regular' 'contents'")?;
+                self.regular(false)?;
+            }
+            TAG_EXE => {
+                self.r
+                    .consume(&TOK_EXE, "'regular' 'executable' 'contents'")?;
+                self.regular(true)?;
+            }
+            TAG_SYM => {
+                self.r.consume(&TOK_SYM, "'symlink' 'target'")?;
+                take(&mut self.r, MAX_TARGET, &mut self.name)?;
+                std::os::unix::fs::symlink(OsStr::from_bytes(&self.name), self.cur())?;
+            }
+            // The `)` that ends a directory's entry list is the node's own, so
+            // `directory` consumes it and this one must not look for a second.
+            _ => {
+                self.r.consume(&TOK_DIR, "'directory'")?;
+                return self.directory(depth);
+            }
+        }
+        self.r.consume(&TOK_PAR, "')'")
+    }
+
+    fn regular(&mut self, executable: bool) -> io::Result<()> {
+        let len = self.r.u64()?;
+        let mut f = fs::File::create(self.cur())?;
+        self.r.contents_to(&mut f, len)?;
+        if executable {
+            f.set_permissions(fs::Permissions::from_mode(0o755))?;
+        }
+        Ok(())
+    }
+
+    fn directory(&mut self, depth: usize) -> io::Result<()> {
+        fs::create_dir(self.cur())?;
+        if self.prev.len() <= depth {
+            self.prev.resize(depth + 1, Vec::new());
+        }
+        self.prev[depth].clear();
+        let base = self.path.len();
+        loop {
+            // 1 is the length prefix of ")", 5 that of "entry".
+            match self.r.peek(16)?[0] {
+                1 => {
+                    self.r.consume(&TOK_PAR, "')'")?;
+                    return Ok(());
+                }
+                5 => {}
+                _ => return Err(bad_nar("expected 'entry' or ')'")),
+            }
+            self.r.consume(&TOK_ENT, "'entry' '(' 'name'")?;
+            take(&mut self.r, MAX_NAME, &mut self.name)?;
+            let name = &self.name;
+            if name.is_empty()
+                || name.as_slice() == b"."
+                || name.as_slice() == b".."
+                || name.contains(&b'/')
+                || name.contains(&0)
+            {
+                return Err(bad_nar("bad entry name"));
+            }
+            if *name <= self.prev[depth] {
+                return Err(bad_nar("directory entries out of order"));
+            }
+            self.prev[depth].clear();
+            self.prev[depth].extend_from_slice(name);
+            self.r.consume(&TOK_NOD, "'node' '(' 'type'")?;
+            self.path.push(b'/');
+            self.path.extend_from_slice(&self.prev[depth]);
+            let res = self.node(depth + 1);
+            self.path.truncate(base);
+            res?;
+            self.r.consume(&TOK_PAR, "')'")?;
+        }
+    }
+}
+
+/// Parses the framing of the NAR in `source`, throwing the file contents away,
+/// and returns its length in bytes.
+///
+/// This is `restore_path` with no file system on the other end: it says whether
+/// a NAR is well formed and how long it is without unpacking it, and it prices
+/// the parser on its own.
+pub fn parse_length(source: &mut dyn Read) -> io::Result<u64> {
+    let mut r = Reader::new(source);
+    r.consume(&TOK_NAR, "a NAR header")?;
+    let mut name = Vec::with_capacity(MAX_NAME);
+    parse_node(&mut r, &mut name, 0)?;
+    Ok(r.consumed)
+}
+
+fn parse_node(r: &mut Reader<'_>, name: &mut Vec<u8>, depth: usize) -> io::Result<()> {
     if depth >= NAR_MAX_DEPTH {
         return Err(bad_nar("directory nesting too deep"));
     }
-    expect_str(source, b"(")?;
-    expect_str(source, b"type")?;
-    let ty = read_str(source, 64)?;
-    match ty.as_slice() {
-        b"regular" => {
-            let mut tag = read_str(source, 64)?;
-            let mut executable = false;
-            if tag == b"executable" {
-                expect_str(source, b"")?;
-                executable = true;
-                tag = read_str(source, 64)?;
+    match r.node_tag()? {
+        tag @ (TAG_REG | TAG_EXE) => {
+            if tag == TAG_EXE {
+                r.consume(&TOK_EXE, "'regular' 'executable' 'contents'")?;
+            } else {
+                r.consume(&TOK_REG, "'regular' 'contents'")?;
             }
-            if tag != b"contents" {
-                return Err(bad_nar("expected 'contents'"));
-            }
-            let len = read_u64(source)?;
-            let mut f = fs::File::create(dest)?;
-            let copied = io::copy(&mut source.take(len), &mut f)?;
-            if copied != len {
-                return Err(bad_nar("truncated file contents"));
-            }
-            read_padding(source, len)?;
-            if executable {
-                f.set_permissions(fs::Permissions::from_mode(0o755))?;
-            }
+            let len = r.u64()?;
+            r.skip(len)?;
+            r.padding(len)?;
         }
-        b"directory" => {
-            fs::create_dir(dest)?;
-            let mut prev: Vec<u8> = Vec::new();
+        TAG_SYM => {
+            r.consume(&TOK_SYM, "'symlink' 'target'")?;
+            r.token(MAX_TARGET)?;
+        }
+        _ => {
+            r.consume(&TOK_DIR, "'directory'")?;
             loop {
-                let tag = read_str(source, 64)?;
-                if tag == b")" {
-                    return Ok(());
+                match r.peek(16)?[0] {
+                    1 => return r.consume(&TOK_PAR, "')'"),
+                    5 => {}
+                    _ => return Err(bad_nar("expected 'entry' or ')'")),
                 }
-                if tag != b"entry" {
-                    return Err(bad_nar("expected 'entry' or ')'"));
-                }
-                expect_str(source, b"(")?;
-                expect_str(source, b"name")?;
-                let name = read_str(source, 4096)?;
-                if name.is_empty()
-                    || name == b"."
-                    || name == b".."
-                    || name.contains(&b'/')
-                    || name.contains(&0)
-                {
-                    return Err(bad_nar("bad entry name"));
-                }
-                if name <= prev {
-                    return Err(bad_nar("directory entries out of order"));
-                }
-                prev = name.clone();
-                expect_str(source, b"node")?;
-                restore(
-                    source,
-                    &dest.join(std::ffi::OsStr::from_bytes(&name)),
-                    depth + 1,
-                )?;
-                expect_str(source, b")")?;
+                r.consume(&TOK_ENT, "'entry' '(' 'name'")?;
+                take(r, MAX_NAME, name)?;
+                r.consume(&TOK_NOD, "'node' '(' 'type'")?;
+                // Nothing here keeps the name past this point, so one buffer
+                // serves the whole walk.
+                parse_node(r, name, depth + 1)?;
+                r.consume(&TOK_PAR, "')'")?;
             }
         }
-        b"symlink" => {
-            expect_str(source, b"target")?;
-            let target = read_str(source, 4096)?;
-            std::os::unix::fs::symlink(std::ffi::OsStr::from_bytes(&target), dest)?;
-        }
-        _ => return Err(bad_nar("unknown node type")),
     }
-    expect_str(source, b")")
+    r.consume(&TOK_PAR, "')'")
+}
+
+/// Reads one token into `out`, which the caller owns past the next read.
+fn take(r: &mut Reader<'_>, max: usize, out: &mut Vec<u8>) -> io::Result<()> {
+    let t = r.token(max)?;
+    out.clear();
+    out.extend_from_slice(t);
+    Ok(())
 }
 
 /// Hashes `contents` as a NAR regular file (what `nix hash path` gives for that file).
@@ -313,7 +818,6 @@ pub fn nar_hash_of_string(contents: &[u8]) -> Hash {
     dump_string(contents, &mut h).expect("hasher never fails");
     h.finish()
 }
-
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
