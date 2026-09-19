@@ -75,6 +75,10 @@ pub struct Settings {
     /// `IETSP_FETCHING`: set on the Nix we call to fetch a flake input, so
     /// a recursive fetch is an error instead of a loop.
     pub fetching: bool,
+    /// `IETSP_OFFLINE`: any download is an error. A flake whose inputs the
+    /// input store already holds evaluates; one that would fetch fails and says
+    /// which URL it wanted.
+    pub offline: bool,
 }
 
 /// The `--ietsp-option` pairs of this command line, recorded by
@@ -187,6 +191,7 @@ impl Settings {
                 .or_else(|| c.str("nix-bin-dir").map(PathBuf::from)),
             no_fallback: flag("IETSP_NO_FALLBACK", "1", c.bool("no-fallback")?, false),
             fetching: set("IETSP_FETCHING"),
+            offline: set("IETSP_OFFLINE"),
         })
     }
 }

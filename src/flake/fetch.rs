@@ -2,9 +2,11 @@
 //! store path follows from the `narHash` and the result attrset mirrors
 //! `emitTreeAttrs`. A `path` input is a virtual copy of the local
 //! directory, like the root tree. A remote input (github, git, tarball,
-//! ...) must be in `/nix/store`; one that is not is substituted by the daemon,
-//! else downloaded and registered by ietsp itself (`github`, `gitlab`,
-//! `sourcehut`, `tarball`), else fetched by running `nix` once (`git`, `hg`).
+//! ...) is read from `/nix/store` when it is there, else from the user-level
+//! input store (`crate::inputs`), else substituted by a daemon if one is
+//! reachable, else downloaded into the input store by ietsp itself (`github`,
+//! `gitlab`, `sourcehut`, `tarball`), else fetched by running `nix` once
+//! (`git`, `hg`). Only that last step needs a daemon.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -185,7 +187,7 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
             attrs.insert("narHash".into(), AttrVal::Str(hash.to_sri()));
             let sp = source_store_path(&hash)
                 .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
-            ensure_in_store(ev, &sp, &attrs, pos)?;
+            ensure_readable(ev, &sp, &attrs, pos)?;
             sp
         }
         other => bail!(
@@ -276,10 +278,13 @@ impl LazyStore {
             self.tried = true;
             match Transport::parse(&nix_conf().store()) {
                 Some(Transport::Grpc(_)) | None => {}
-                Some(t) => match Connection::open(&t, &mut |_| {}) {
-                    Ok(c) => self.conn = Some(c),
-                    Err(e) => eprintln!("ietsp: cannot reach the store to fetch inputs: {e}"),
-                },
+                // A daemon that is not there is not an error any more: the input
+                // store holds the fetched inputs and evaluation writes no store.
+                Some(t) => {
+                    if let Ok(c) = Connection::open(&t, &mut |_| {}) {
+                        self.conn = Some(c);
+                    }
+                }
             }
         }
         self.conn.as_mut()
@@ -307,40 +312,62 @@ fn substitute(ev: &mut Evaluator, store_path: &str) -> bool {
     }
 }
 
-/// A remote input's tree must exist at its store path so `import` reads
-/// exactly what Nix reads. A missing tree is substituted by the daemon, else
-/// downloaded and registered by ietsp (the tarball-shaped types), else fetched
-/// by handing the locked attrs to Nix's own `fetchTree`; whichever way, the
-/// store path must be the one the lock implies. Never called for the root tree
-/// or a `path` input.
-pub fn ensure_in_store(
+/// A remote input's tree must be readable at its store path so `import` reads
+/// exactly what Nix reads. `/nix/store` is checked first and used when it has
+/// the tree. Otherwise the user-level input store is, and a tarball-shaped
+/// input that is in neither is downloaded into it, so evaluation needs no
+/// daemon: reads come out of the spool by offset (`crate::inputs`). A daemon
+/// that is reachable is still asked to substitute first, because a local copy
+/// beats a download; when there is none the step is skipped without a word. A
+/// `git` or `hg` input still goes through Nix's own `fetchTree`, which does
+/// write `/nix/store`. Never called for the root tree or a `path` input.
+pub fn ensure_readable(
     ev: &mut Evaluator,
     sp: &StorePath,
     attrs: &Attrs,
     pos: Pos,
 ) -> EvalResult<()> {
     let full = sp.to_full_string();
-    let p = Path::new(&full);
-    if crate::trace::stat_kind(p, true) == crate::trace::Kind::Missing {
-        let name = input_name(ev, attrs);
-        eprintln!("ietsp: input '{name}' is not in the store ({full}), fetching it");
-        if !substitute(ev, &full) {
-            if is_tarball_type(attrs) {
-                fetch_tarball(ev, sp, attrs, pos)?;
-            } else {
-                fetch_with_nix(&full, &name, attrs, pos)?;
-            }
-        }
+    let on_disk = crate::trace::stat_kind(Path::new(&full), true);
+    if on_disk != crate::trace::Kind::Missing {
+        ev.trace.stat(full.as_bytes(), true, on_disk);
+        return Ok(());
     }
+    if let Some(entry) = crate::inputs::open(sp.base_name()) {
+        adopt(ev, sp, &entry);
+        return Ok(());
+    }
+    let name = input_name(ev, attrs);
+    eprintln!("ietsp: input '{name}' is not in the store ({full}), fetching it");
+    if substitute(ev, &full) {
+        ev.trace
+            .stat(full.as_bytes(), true, crate::trace::Kind::Directory);
+        return Ok(());
+    }
+    if is_tarball_type(attrs) {
+        let entry = fetch_tarball(ev, sp, attrs, pos)?;
+        adopt(ev, sp, &entry);
+        return Ok(());
+    }
+    fetch_with_nix(&full, &name, attrs, pos)?;
     if ev.trace.stat_now(full.as_bytes(), true) == crate::trace::Kind::Missing {
         bail!(
             ErrorKind::Io,
             pos,
-            "ietsp: input '{}' is not in the store ({full})",
-            input_name(ev, attrs)
+            "ietsp: input '{name}' is not in the store ({full})"
         );
     }
     Ok(())
+}
+
+/// Points every read of `sp` at the input store entry, and records the entry in
+/// the read set (`crate::inputs::record`).
+fn adopt(ev: &mut Evaluator, sp: &StorePath, entry: &crate::inputs::Entry) {
+    ev.sources.insert(
+        sp.clone(),
+        crate::inputs::origin(sp.base_name(), b"", entry.nar_hash, entry.nar_size),
+    );
+    crate::inputs::record(ev, sp);
 }
 
 /// nix.conf, read once: `store` for the eval store and `access-tokens` for the
@@ -443,14 +470,19 @@ fn tarball_url(
     Ok((url, headers))
 }
 
-/// Downloads the input's archive, indexes it like Nix unpacks it, checks the
-/// NAR hash against the lock, and registers the tree with one
-/// `AddMultipleToStore` as a `fixed:r:sha256` source, so the daemon recomputes
-/// the content address and the path it writes is the one the lock implies. The
-/// archive is streamed: the only copy is the decompressed tar in an unlinked
-/// temp file, which the NAR is written out of twice, once to hash and once to
-/// send, so a wrong tree never reaches the daemon.
-fn fetch_tarball(ev: &mut Evaluator, sp: &StorePath, attrs: &Attrs, pos: Pos) -> EvalResult<()> {
+/// Downloads the input's archive into the input store, indexes it like Nix
+/// unpacks it, checks the NAR hash against the lock and keeps the spool. The
+/// archive is streamed: the only copy is the decompressed tar, which the NAR is
+/// written out of once to hash it. A tree whose hash is not the lock's is thrown
+/// away, so a wrong tree is never named, never read and never uploaded. Nothing
+/// is registered anywhere: `remote::plan` sends the NAR out of this spool when a
+/// build needs it, and evaluation needs no store at all.
+fn fetch_tarball(
+    ev: &mut Evaluator,
+    sp: &StorePath,
+    attrs: &Attrs,
+    pos: Pos,
+) -> EvalResult<std::sync::Arc<crate::inputs::Entry>> {
     let name = input_name(ev, attrs);
     let fail = |e: String| Error::boxed(ErrorKind::Eval, e, pos);
     let (url, headers) = tarball_url(nix_conf(), attrs)
@@ -459,34 +491,29 @@ fn fetch_tarball(ev: &mut Evaluator, sp: &StorePath, attrs: &Attrs, pos: Pos) ->
         .and_then(|h| parse_nar_hash(h).ok())
         .ok_or_else(|| fail(format!("ietsp: input '{name}' has no usable 'narHash'")))?;
 
-    let mut spool = crate::flake::spool::scratch(sp.base_name())
+    let staged = crate::inputs::stage(sp.base_name()).ok_or_else(|| {
+        fail(format!(
+            "ietsp: cannot fetch input '{name}': no cache directory to hold it"
+        ))
+    })?;
+    let mut spool = crate::flake::spool::spool_file(staged.dir())
         .map_err(|e| fail(format!("ietsp: cannot fetch input '{name}': {e}")))?;
     crate::flake::http::get_decompressed(&url, &headers, &mut spool)
         .map_err(|e| fail(format!("ietsp: cannot fetch input '{name}': {e}")))?;
     let tree = crate::flake::spool::Tree::index(spool)
         .map_err(|e| fail(format!("ietsp: cannot unpack input '{name}': {e}")))?;
 
-    let object = crate::remote::plan::Object::source(
-        sp.clone(),
-        crate::remote::plan::SourceInfo {
-            data: crate::remote::plan::SourceData::Nar(std::sync::Arc::new(tree)),
-            kind: crate::remote::plan::SourceKind::Source,
-            // Not the lock's hash: hashing the spool here is what proves the fetched
-            // tree is the locked one before any of it reaches the daemon.
-            hashed: None,
-        },
-    )
-    .map_err(|e| {
+    let mut hasher = crate::store::hash::Hasher::new(HashAlgo::Sha256);
+    crate::remote::plan::NarSource::dump(&tree, &mut hasher).map_err(|e| {
         Error::boxed(
             ErrorKind::Io,
             format!("ietsp: cannot hash the tree of input '{name}': {e}"),
             pos,
         )
     })?;
-    let crate::remote::plan::Object::Source { nar_hash, .. } = &object else {
-        unreachable!("a source object");
-    };
-    if *nar_hash != expected {
+    let nar_size = hasher.bytes_written();
+    let nar_hash = hasher.finish();
+    if nar_hash != expected {
         bail!(
             ErrorKind::Eval,
             pos,
@@ -496,20 +523,16 @@ fn fetch_tarball(ev: &mut Evaluator, sp: &StorePath, attrs: &Attrs, pos: Pos) ->
             nar_hash.to_sri()
         );
     }
-    let Some(conn) = ev.store.get() else {
-        bail!(
-            ErrorKind::Eval,
-            pos,
-            "ietsp: input '{name}' was fetched but there is no store to register it in"
-        );
+    let entry = crate::inputs::Entry {
+        tree,
+        nar_hash,
+        nar_size,
     };
-    let mut body = |w: &mut dyn std::io::Write| -> std::io::Result<()> {
-        crate::remote::worker::wire::write_u64(w, 1)?;
-        crate::remote::worker::build::write_object(w, &object)
-    };
-    conn.add_multiple_to_store(false, &mut body, &mut |_| {})
-        .map_err(|e| fail(format!("ietsp: cannot register input '{name}': {e}")))?;
-    Ok(())
+    crate::inputs::store(sp.base_name(), staged, entry).ok_or_else(|| {
+        fail(format!(
+            "ietsp: cannot keep the fetched input '{name}' in the input store"
+        ))
+    })
 }
 
 /// The last shell-out: a `git` or `hg` input needs a repository, which ietsp

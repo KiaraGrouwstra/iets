@@ -45,6 +45,7 @@ pub fn cmd_cache_dump(file: &str) -> i32 {
                 argv.iter().map(|a| s(a)).collect::<Vec<_>>().join(" "),
                 &hex(hash)[..16]
             ),
+            Obs::Input { entry, version } => println!("input {} v{version}", s(entry)),
         }
     }
     0

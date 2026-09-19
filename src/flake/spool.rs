@@ -11,25 +11,35 @@
 //! The rules are `flake::unpack`'s, which are tarfile.cc's and
 //! git-utils.cc:GitFileSystemObjectSinkImpl's. `spool_matches_the_tree` in the
 //! tests holds both paths to the same NAR bytes.
+//!
+//! The same index also answers evaluation. `crate::inputs` keeps the spool and
+//! a serialized index in the user-level input store, and every read of a
+//! fetched flake input, `import` included, comes back out of the spool by
+//! offset instead of out of `/nix/store` (docs/flakes.md).
 
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::FileExt;
 use std::path::Path;
 
 use crate::error::{Error, Result};
-use crate::store::nar::{NAR_MAX_DEPTH, write_padding, write_str, write_u64};
+use crate::store::hash::{Hash, HashAlgo};
+use crate::store::nar::{FileType, NAR_MAX_DEPTH, PathFilter, write_padding, write_str, write_u64};
 
 /// One directory's entries, in the byte order a NAR wants them. A sorted vector,
 /// not a map: a full nixpkgs holds 38 000 directories of two or three entries
 /// each, and a `BTreeMap` pays for eleven of them per directory it has.
-type Dir = Vec<(Vec<u8>, Node)>;
+pub type Dir = Vec<(Vec<u8>, Node)>;
 
 /// A member path split into its components.
 type Parts = Vec<Vec<u8>>;
 
+/// Bytes moved per `pread` when a member is copied out of the spool.
+const CHUNK: usize = 128 * 1024;
+
 #[derive(Debug)]
-enum Node {
+pub enum Node {
     Dir(Dir),
     File { at: Blob, exec: bool },
     Symlink(Vec<u8>),
@@ -38,13 +48,27 @@ enum Node {
 /// Where a file's bytes are: in the spooled archive, or in the side file that
 /// holds the expanded GNU sparse members.
 #[derive(Clone, Copy, Debug)]
-struct Blob {
+pub struct Blob {
     offset: u64,
     size: u64,
     sparse: bool,
 }
 
+impl Blob {
+    pub fn size(self) -> u64 {
+        self.size
+    }
+}
+
 impl Node {
+    pub fn file_type(&self) -> FileType {
+        match self {
+            Node::Dir(_) => FileType::Directory,
+            Node::File { .. } => FileType::Regular,
+            Node::Symlink(_) => FileType::Symlink,
+        }
+    }
+
     /// What a hard link to this member becomes: the target's blob and mode
     /// (git-utils.cc:1348-1364). A directory has none.
     fn copy(&self) -> Option<Node> {
@@ -66,6 +90,10 @@ pub struct Tree {
     sparse: Option<File>,
     root: Node,
 }
+
+/// Version byte of the serialized index. A file that starts with anything else
+/// is not read; the entry holding it is wiped (`crate::inputs`).
+pub const INDEX_VERSION: u8 = 1;
 
 fn bad(why: String) -> Error {
     Error::Store(why)
@@ -304,16 +332,7 @@ impl Tree {
                 }
                 write_str(sink, b"contents")?;
                 write_u64(sink, at.size)?;
-                let mut src: &File = if at.sparse {
-                    self.sparse.as_ref().expect("a sparse side file")
-                } else {
-                    &self.spool
-                };
-                src.seek(SeekFrom::Start(at.offset))?;
-                let copied = io::copy(&mut src.take(at.size), sink)?;
-                if copied != at.size {
-                    return Err(io::Error::other("the spooled tarball is truncated"));
-                }
+                self.copy_blob(at, sink)?;
                 write_padding(sink, at.size)?;
             }
             Node::Symlink(target) => {
@@ -324,6 +343,347 @@ impl Tree {
         }
         write_str(sink, b")")
     }
+
+    /// A member's bytes, by `pread`: no seek, so two threads may read one tree
+    /// at once.
+    fn source(&self, at: &Blob) -> &File {
+        if at.sparse {
+            self.sparse.as_ref().expect("a sparse side file")
+        } else {
+            &self.spool
+        }
+    }
+
+    fn copy_blob(&self, at: &Blob, sink: &mut dyn Write) -> io::Result<()> {
+        let src = self.source(at);
+        let mut buf = vec![0u8; CHUNK.min(at.size.max(1) as usize)];
+        let mut done = 0u64;
+        while done < at.size {
+            let n = ((at.size - done) as usize).min(buf.len());
+            src.read_exact_at(&mut buf[..n], at.offset + done)
+                .map_err(|_| io::Error::other("the spooled tarball is truncated"))?;
+            sink.write_all(&buf[..n])?;
+            done += n as u64;
+        }
+        Ok(())
+    }
+
+    // ---- the accessor evaluation reads through ------------------------------
+
+    pub fn root(&self) -> &Node {
+        &self.root
+    }
+
+    /// The member at the resolved components `at`, without following a symlink.
+    fn at(&self, at: &[Vec<u8>]) -> Option<&Node> {
+        let mut n = &self.root;
+        for name in at {
+            let Node::Dir(d) = n else { return None };
+            n = find(d, name).ok().map(|i| &d[i].1)?;
+        }
+        Some(n)
+    }
+
+    /// The member at `rel` (`b""` is the tree itself), with symlinks followed
+    /// the way the kernel follows them for a path under `/nix/store`;
+    /// `follow_last` is false for an `lstat`. A target that leaves the tree is
+    /// not resolved: the spool holds no bytes for it.
+    pub fn resolve(&self, rel: &[u8], follow_last: bool) -> Option<&Node> {
+        let split = |p: &[u8]| -> Vec<Vec<u8>> {
+            p.split(|&b| b == b'/')
+                .filter(|c| !c.is_empty() && c != b".")
+                .map(<[u8]>::to_vec)
+                .collect()
+        };
+        let mut todo = split(rel);
+        todo.reverse();
+        let mut at: Vec<Vec<u8>> = Vec::new();
+        let mut hops = 0;
+        while let Some(c) = todo.pop() {
+            if c == b".." {
+                at.pop()?;
+                continue;
+            }
+            at.push(c);
+            if let Some(Node::Symlink(target)) = self.at(&at) {
+                if todo.is_empty() && !follow_last {
+                    break;
+                }
+                hops += 1;
+                if hops > 32 || target.starts_with(b"/") {
+                    return None;
+                }
+                at.pop();
+                let mut parts = split(target);
+                parts.reverse();
+                todo.extend(parts);
+            }
+        }
+        self.at(&at)
+    }
+
+    /// A regular member's whole contents.
+    pub fn read(&self, at: &Blob) -> io::Result<Vec<u8>> {
+        let mut out = Vec::with_capacity(at.size as usize);
+        self.copy_blob(at, &mut out)?;
+        Ok(out)
+    }
+
+    /// The NAR of `node`, with `filter` asked about every entry below it under
+    /// the path Nix would show (`shown`), as `nar::dump_path` asks.
+    pub fn dump_filtered(
+        &self,
+        node: &Node,
+        shown: &Path,
+        sink: &mut dyn Write,
+        filter: &mut PathFilter<'_>,
+    ) -> io::Result<()> {
+        write_str(sink, b"nix-archive-1")?;
+        self.filtered(node, shown, sink, filter, 0)
+    }
+
+    fn filtered(
+        &self,
+        n: &Node,
+        shown: &Path,
+        sink: &mut dyn Write,
+        filter: &mut PathFilter<'_>,
+        depth: usize,
+    ) -> io::Result<()> {
+        let Node::Dir(d) = n else {
+            return self.node(n, sink, depth);
+        };
+        if depth >= NAR_MAX_DEPTH {
+            return Err(io::Error::other(format!(
+                "the tarball exceeds the maximum NAR directory depth of {NAR_MAX_DEPTH}"
+            )));
+        }
+        write_str(sink, b"(")?;
+        write_str(sink, b"type")?;
+        write_str(sink, b"directory")?;
+        for (name, child) in d {
+            let child_path = shown.join(std::ffi::OsStr::from_bytes(name));
+            if !filter(&child_path, child.file_type()) {
+                continue;
+            }
+            write_str(sink, b"entry")?;
+            write_str(sink, b"(")?;
+            write_str(sink, b"name")?;
+            write_str(sink, name)?;
+            write_str(sink, b"node")?;
+            self.filtered(child, &child_path, sink, filter, depth + 1)?;
+            write_str(sink, b")")?;
+        }
+        write_str(sink, b")")
+    }
+
+    // ---- the persisted index -----------------------------------------------
+
+    /// Writes `index` into `dir`, and the expanded sparse members beside it when
+    /// the archive had any. The spool itself is `dir/spool`, written by the
+    /// caller as the download arrived. `nar` is the NAR hash and size the fetch
+    /// verified against the lock, so no reader ever hashes the tree again.
+    pub fn persist(&self, dir: &Path, nar: (&Hash, u64)) -> io::Result<()> {
+        if let Some(sparse) = &self.sparse {
+            let mut src = sparse.try_clone()?;
+            src.rewind()?;
+            let mut out = File::create(dir.join(SPARSE))?;
+            io::copy(&mut src, &mut out)?;
+            out.sync_all()?;
+        }
+        let bytes = self.encode_index(self.spool.metadata()?.len(), nar);
+        std::fs::write(dir.join(INDEX), bytes)
+    }
+
+    fn encode_index(&self, spool_len: u64, nar: (&Hash, u64)) -> Vec<u8> {
+        let mut e = Vec::with_capacity(1 << 16);
+        e.push(INDEX_VERSION);
+        put_bytes(&mut e, nar.0.bytes());
+        put_u64(&mut e, nar.1);
+        put_u64(&mut e, spool_len);
+        match &self.sparse {
+            Some(f) => {
+                e.push(1);
+                put_u64(&mut e, f.metadata().map_or(0, |m| m.len()));
+            }
+            None => e.push(0),
+        }
+        put_node(&mut e, &self.root);
+        e
+    }
+
+    /// Reopens a persisted entry: the spool, its sparse side file and the index,
+    /// with the NAR hash and size the fetch recorded. `None` on anything
+    /// unexpected, so the caller wipes the entry rather than repairing it.
+    pub fn reopen(dir: &Path) -> Option<(Tree, Hash, u64)> {
+        let bytes = std::fs::read(dir.join(INDEX)).ok()?;
+        let mut d = Idx { b: &bytes, i: 0 };
+        if d.u8()? != INDEX_VERSION {
+            return None;
+        }
+        let nar_hash = Hash::from_bytes(HashAlgo::Sha256, &d.bytes()?).ok()?;
+        let nar_size = d.u64()?;
+        let spool_len = d.u64()?;
+        let sparse_len = match d.u8()? {
+            0 => None,
+            1 => Some(d.u64()?),
+            _ => return None,
+        };
+        let root = get_node(&mut d, 0)?;
+        if d.i != bytes.len() {
+            return None;
+        }
+        let spool = File::open(dir.join(SPOOL)).ok()?;
+        if spool.metadata().ok()?.len() != spool_len {
+            return None;
+        }
+        let sparse = match sparse_len {
+            None => None,
+            Some(len) => {
+                let f = File::open(dir.join(SPARSE)).ok()?;
+                if f.metadata().ok()?.len() != len {
+                    return None;
+                }
+                Some(f)
+            }
+        };
+        Some((
+            Tree {
+                spool,
+                sparse,
+                root,
+            },
+            nar_hash,
+            nar_size,
+        ))
+    }
+}
+
+/// The three files a persisted entry holds.
+pub const SPOOL: &str = "spool";
+pub const INDEX: &str = "index";
+pub const SPARSE: &str = "sparse";
+
+/// The spool of a staged entry, created for writing and kept for reading.
+pub fn spool_file(dir: &Path) -> io::Result<File> {
+    File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(dir.join(SPOOL))
+}
+
+fn put_u64(e: &mut Vec<u8>, mut n: u64) {
+    loop {
+        let b = (n & 0x7f) as u8;
+        n >>= 7;
+        if n == 0 {
+            e.push(b);
+            return;
+        }
+        e.push(b | 0x80);
+    }
+}
+
+fn put_bytes(e: &mut Vec<u8>, b: &[u8]) {
+    put_u64(e, b.len() as u64);
+    e.extend_from_slice(b);
+}
+
+fn put_node(e: &mut Vec<u8>, n: &Node) {
+    match n {
+        Node::Dir(d) => {
+            e.push(0);
+            put_u64(e, d.len() as u64);
+            for (name, child) in d {
+                put_bytes(e, name);
+                put_node(e, child);
+            }
+        }
+        Node::File { at, exec } => {
+            e.push(1);
+            e.push(u8::from(*exec) | (u8::from(at.sparse) << 1));
+            put_u64(e, at.offset);
+            put_u64(e, at.size);
+        }
+        Node::Symlink(t) => {
+            e.push(2);
+            put_bytes(e, t);
+        }
+    }
+}
+
+struct Idx<'a> {
+    b: &'a [u8],
+    i: usize,
+}
+
+impl Idx<'_> {
+    fn u8(&mut self) -> Option<u8> {
+        let b = *self.b.get(self.i)?;
+        self.i += 1;
+        Some(b)
+    }
+
+    fn u64(&mut self) -> Option<u64> {
+        let mut n = 0u64;
+        let mut shift = 0;
+        loop {
+            let b = self.u8()?;
+            if shift >= 64 {
+                return None;
+            }
+            n |= u64::from(b & 0x7f) << shift;
+            if b & 0x80 == 0 {
+                return Some(n);
+            }
+            shift += 7;
+        }
+    }
+
+    fn bytes(&mut self) -> Option<Vec<u8>> {
+        let n = self.u64()? as usize;
+        let s = self.b.get(self.i..self.i.checked_add(n)?)?;
+        self.i += n;
+        Some(s.to_vec())
+    }
+}
+
+fn get_node(d: &mut Idx<'_>, depth: usize) -> Option<Node> {
+    if depth > NAR_MAX_DEPTH {
+        return None;
+    }
+    Some(match d.u8()? {
+        0 => {
+            let n = d.u64()? as usize;
+            if n > d.b.len().saturating_sub(d.i) {
+                return None;
+            }
+            let mut dir = Dir::with_capacity(n);
+            for _ in 0..n {
+                let name = d.bytes()?;
+                dir.push((name, get_node(d, depth + 1)?));
+            }
+            if dir.windows(2).any(|w| w[0].0 >= w[1].0) {
+                return None;
+            }
+            Node::Dir(dir)
+        }
+        1 => {
+            let flags = d.u8()?;
+            Node::File {
+                at: Blob {
+                    offset: d.u64()?,
+                    size: d.u64()?,
+                    sparse: flags & 2 != 0,
+                },
+                exec: flags & 1 != 0,
+            }
+        }
+        2 => Node::Symlink(d.bytes()?),
+        _ => return None,
+    })
 }
 
 fn link_target(

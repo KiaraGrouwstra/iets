@@ -224,6 +224,11 @@ fn put_obs(e: &mut Enc, o: &Obs) {
             e.list(argv);
             e.digest(hash);
         }
+        Obs::Input { entry, version } => {
+            e.u8(7);
+            e.bytes(entry);
+            e.u8(*version);
+        }
     }
 }
 
@@ -280,6 +285,10 @@ fn get_obs(d: &mut Dec<'_>) -> R<Obs> {
             dir: d.vec()?,
             argv: d.list()?,
             hash: d.digest()?,
+        },
+        7 => Obs::Input {
+            entry: d.vec()?,
+            version: d.u8()?,
         },
         _ => return Err(()),
     })
@@ -423,6 +432,18 @@ pub fn encode_sources(sources: &HashMap<StorePath, SourceOrigin>) -> Vec<u8> {
                     .collect();
                 e.list(&refs);
             }
+            SourceOrigin::Input {
+                entry,
+                rel,
+                nar_hash,
+                nar_size,
+            } => {
+                e.u8(2);
+                e.bytes(entry.as_bytes());
+                e.bytes(rel);
+                e.bytes(nar_hash.bytes());
+                e.u64(*nar_size);
+            }
         }
     }
     e.0
@@ -478,6 +499,16 @@ pub fn decode_sources(b: &[u8]) -> Option<HashMap<StorePath, SourceOrigin>> {
                     references,
                 }
             }
+            2 => SourceOrigin::Input {
+                entry: String::from_utf8(d.vec().ok()?).ok()?,
+                rel: d.vec().ok()?,
+                nar_hash: crate::store::hash::Hash::from_bytes(
+                    crate::store::hash::HashAlgo::Sha256,
+                    d.bytes().ok()?,
+                )
+                .ok()?,
+                nar_size: d.u64().ok()?,
+            },
             _ => return None,
         };
         m.insert(p, o);

@@ -46,23 +46,27 @@ pub enum Shape {
     /// One file per entry, named by its key past the two-character shard
     /// directory the key's first two characters make (IR cache).
     ShardedFiles,
-}
-
-impl Shape {
-    fn entry_len(self) -> usize {
-        match self {
-            Shape::Dirs => 64,
-            Shape::ShardedFiles => 62,
-        }
-    }
+    /// One directory per entry, named by a store path's base name (the input
+    /// store, `crate::inputs`).
+    StoreEntries,
 }
 
 /// A sweep only ever removes something named like a key, so the store-level
 /// files, the `ir/` store under a shared `--cache-dir`, and anything else a
 /// user put in the directory all survive.
-fn is_key(name: &std::ffi::OsStr, len: usize) -> bool {
+fn is_key(name: &std::ffi::OsStr, shape: Shape) -> bool {
     let b = name.as_bytes();
-    b.len() == len && b.iter().all(u8::is_ascii_hexdigit)
+    match shape {
+        Shape::StoreEntries => std::str::from_utf8(b)
+            .is_ok_and(|n| crate::store::path::StorePath::from_base_name(n).is_ok()),
+        Shape::Dirs => b.len() == 64 && b.iter().all(u8::is_ascii_hexdigit),
+        Shape::ShardedFiles => b.len() == 62 && b.iter().all(u8::is_ascii_hexdigit),
+    }
+}
+
+fn is_shard(name: &std::ffi::OsStr) -> bool {
+    let b = name.as_bytes();
+    b.len() == 2 && b.iter().all(u8::is_ascii_hexdigit)
 }
 
 fn is_tmp(name: &std::ffi::OsStr) -> bool {
@@ -242,7 +246,7 @@ pub struct Swept {
 fn entry_size(path: &Path, shape: Shape) -> u64 {
     match shape {
         Shape::ShardedFiles => fs::metadata(path).map_or(0, |m| m.len()),
-        Shape::Dirs => fs::read_dir(path).map_or(0, |d| {
+        Shape::Dirs | Shape::StoreEntries => fs::read_dir(path).map_or(0, |d| {
             d.flatten()
                 .filter_map(|e| e.metadata().ok())
                 .map(|m| m.len())
@@ -254,7 +258,7 @@ fn entry_size(path: &Path, shape: Shape) -> u64 {
 fn drop_entry(path: &Path, shape: Shape) -> bool {
     match shape {
         Shape::ShardedFiles => fs::remove_file(path).is_ok(),
-        Shape::Dirs => fs::remove_dir_all(path).is_ok(),
+        Shape::Dirs | Shape::StoreEntries => fs::remove_dir_all(path).is_ok(),
     }
 }
 
@@ -267,11 +271,13 @@ fn sweep_dir(dir: &Path, shape: Shape, ttl: Duration, dry_run: bool, out: &mut S
         let path = e.path();
         if is_tmp(&name) {
             if !dry_run && age(&path).is_some_and(|a| a >= TMP_TTL) {
-                let _ = fs::remove_file(&path);
+                // A killed writer leaves a file in the two hashed stores and a
+                // whole staged directory in the input store.
+                let _ = fs::remove_file(&path).or_else(|_| fs::remove_dir_all(&path));
             }
             continue;
         }
-        if !is_key(&name, shape.entry_len()) {
+        if !is_key(&name, shape) {
             continue;
         }
         out.scanned += 1;
@@ -292,13 +298,13 @@ fn sweep_dir(dir: &Path, shape: Shape, ttl: Duration, dry_run: bool, out: &mut S
 pub fn sweep(root: &Path, shape: Shape, ttl: Duration, dry_run: bool) -> Swept {
     let mut out = Swept::default();
     match shape {
-        Shape::Dirs => sweep_dir(root, shape, ttl, dry_run, &mut out),
+        Shape::Dirs | Shape::StoreEntries => sweep_dir(root, shape, ttl, dry_run, &mut out),
         Shape::ShardedFiles => {
             let Ok(rd) = fs::read_dir(root) else {
                 return out;
             };
             for shard in rd.flatten() {
-                if !is_key(&shard.file_name(), 2) {
+                if !is_shard(&shard.file_name()) {
                     continue;
                 }
                 let dir = shard.path();
@@ -350,7 +356,8 @@ pub fn maybe_sweep(root: &Path, shape: Shape, timings: bool) {
     }
 }
 
-/// The two stores a `cache gc` run walks: the tracing cache and the IR cache.
+/// The three stores a `cache gc` run walks: the tracing cache, the IR cache and
+/// the input store.
 pub fn stores(cache_dir: Option<&str>) -> Vec<(PathBuf, Shape)> {
     let mut v = Vec::new();
     if let Some(s) = crate::trace::store::Store::locate(cache_dir) {
@@ -358,6 +365,9 @@ pub fn stores(cache_dir: Option<&str>) -> Vec<(PathBuf, Shape)> {
     }
     if let Some(c) = crate::compile::cache::IrCache::locate(cache_dir, false) {
         v.push((c.root().to_path_buf(), Shape::ShardedFiles));
+    }
+    if let Some(r) = crate::inputs::locate(cache_dir) {
+        v.push((r, Shape::StoreEntries));
     }
     v
 }

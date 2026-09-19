@@ -1,6 +1,6 @@
 # Cache lifecycle and concurrency
 
-ietsp keeps two on-disk caches, and both live under the same rules
+ietsp keeps three on-disk stores, and all three live under the same rules
 (`src/cachefs.rs`). The ideas come from Mic92's nix-tarmac: a writer lock
 that a caller may give up on, a touch interval so a hit writes nothing, a
 TTL garbage collection run at most once a day, and poison-and-wipe instead
@@ -10,9 +10,21 @@ of in-place repair.
 |---|---|---|---|
 | compiled IR (`src/compile/cache.rs`, docs/memory.md) | `~/.cache/ietsp/ir` | `<2 hex>/<62 hex>`, one file | build id, path, system, store dir, source |
 | tracing runs (`src/trace/`, docs/tracing-cache.md) | `~/.cache/ietsp/trace` | `<64 hex>/`, one directory of files | the whole command (docs/tracing-cache.md, "Key") |
+| fetched flake inputs (`src/inputs.rs`, docs/flakes.md) | `~/.cache/ietsp/inputs` | `<store path base name>/`, one directory of files | the store path the lock implies |
 
-`--cache-dir DIR` or `IETSP_CACHE_DIR` moves both: the tracing store is
-then `DIR` itself and the IR store `DIR/ir`.
+`--cache-dir DIR` or `IETSP_CACHE_DIR` moves all three: the tracing store is
+then `DIR` itself, the IR store `DIR/ir` and the input store `DIR/inputs`.
+
+The input store is not a cache of a computation, it is where a fetched input
+*lives*: evaluation reads the input's bytes out of it, and a build uploads the
+input's NAR out of it. Losing an entry therefore costs a download, not a
+recomputation. It follows the same rules for the same reason the caches do,
+because the same set of processes share it: the key is a content address, so a
+writer may only ever write bytes another writer would have written, a staged
+directory is renamed into place under the store's `flock` so a reader sees no
+half-written entry, and an entry whose index does not decode is wiped rather
+than repaired. An entry unread for 30 days is swept like any other, and
+`ietsp cache gc` walks it too.
 
 ## Concurrency
 

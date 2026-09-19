@@ -30,4 +30,16 @@ pub enum SourceOrigin {
         contents: Vec<u8>,
         references: BTreeSet<StorePath>,
     },
+    /// A tree the user-level input store holds (`crate::inputs`): a fetched
+    /// flake input, or a subdirectory of one that an expression copied. `entry`
+    /// is the input's store path base name and `rel` the path inside it, empty
+    /// for the input itself. Reads go to the entry's spool by offset, so no
+    /// store copy need exist; a build uploads the NAR out of the same spool,
+    /// with the `nar_hash`/`nar_size` pair the lock and the index already give.
+    Input {
+        entry: String,
+        rel: Vec<u8>,
+        nar_hash: Hash,
+        nar_size: u64,
+    },
 }

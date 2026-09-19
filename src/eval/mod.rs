@@ -405,24 +405,9 @@ impl Evaluator {
         if p.starts_with(CorePkgs::PREFIX) {
             return Ok(p);
         }
-        let Some(phys) = crate::builtins::store_hooks::physical(self, &p) else {
-            bail!(
-                ErrorKind::Io,
-                pos,
-                "getting status of '{}': No such file or directory",
-                String::from_utf8_lossy(&p)
-            );
-        };
-        let meta = std::fs::metadata(std::path::Path::new(
-            <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&phys),
-        ));
-        match meta {
-            Ok(m) if m.is_dir() => {
-                // a regular file needs no Stat: its File observation checks the type
-                self.trace.stat(&phys, true, crate::trace::Kind::Directory);
-                p.extend_from_slice(b"/default.nix");
-            }
-            Ok(_) => {}
+        match crate::inputs::import_is_dir(self, &p) {
+            Ok(true) => p.extend_from_slice(b"/default.nix"),
+            Ok(false) => {}
             Err(e) => bail!(
                 ErrorKind::Io,
                 pos,
@@ -483,19 +468,7 @@ impl Evaluator {
         {
             return Ok(src.to_vec());
         }
-        let read = || -> std::io::Result<Vec<u8>> {
-            let phys = crate::builtins::store_hooks::physical(self, resolved)
-                .ok_or_else(|| std::io::Error::from_raw_os_error(libc::ENOENT))?;
-            let mut f = std::fs::File::open(std::path::Path::new(
-                <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&phys),
-            ))?;
-            let meta = f.metadata()?;
-            let mut s = Vec::with_capacity(meta.len() as usize);
-            std::io::Read::read_to_end(&mut f, &mut s)?;
-            self.trace.file(&phys, &meta, &s);
-            Ok(s)
-        };
-        match read() {
+        match crate::inputs::read_source(self, resolved) {
             Ok(s) => Ok(s),
             Err(e) => bail!(
                 ErrorKind::Io,

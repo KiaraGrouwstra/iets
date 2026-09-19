@@ -145,18 +145,27 @@ Full rules and numbers: docs/caches.md. In short:
 
 ## Virtual paths
 
-Backlog, not built. nix-tarmac keeps an index over content-addressed
-blobs and serves an accessor from it, so `readFile` and `readDir` answer
-for a path that is not in `/nix/store` at all: the index names the store
-path's tree, the blobs hold the bytes, and evaluation never waits for a
-realisation. That is the design to reach for if ietsp ever has to read a
-substitutable-but-absent path. Today it does not: `builtins.storePath`
-hands the path to the daemon, which substitutes it before any read, and
-import-from-derivation and `builtins.outputOf` are unsupported, so the
-evaluator never needs bytes that the store does not have yet. The read
-set would need one more observation kind (the blob hash behind a virtual
-path) so a hit can tell that the bytes it replayed are still the bytes
-the index would serve.
+Built, for the paths that need it: a fetched flake input is read out of the
+input store, not out of `/nix/store` (docs/flakes.md, "The input store"). The
+index over the downloaded tar names every member's offset, and
+`store_hooks::locate` serves `import`, `readFile`, `readDir`, `pathExists`,
+`readFileType`, `hashFile` and `builtins.path` from it, so evaluation waits for
+no realisation and needs no daemon.
+
+The read set records this as one `Input` observation per entry, not one per
+file: the entry's name is the NAR hash of its tree, so a name that is still
+there still holds the bytes the run read. Validation is therefore two `stat`
+calls and a version-byte comparison for a whole nixpkgs, against the 3,500
+`File` observations the same tree would cost if its files were stated one by
+one. An entry the sweep removed, or one written by a newer index version, is a
+miss; the next run fetches it again.
+
+The design idea is nix-tarmac's: keep an index over content-addressed blobs and
+serve an accessor from it. What is still not built is the same trick for a
+substitutable-but-absent `/nix/store` path. It is not needed:
+`builtins.storePath` hands such a path to the daemon, which substitutes it
+before any read, and import-from-derivation and `builtins.outputOf` are
+unsupported, so the evaluator never needs bytes the store does not have yet.
 
 ## Measurements
 

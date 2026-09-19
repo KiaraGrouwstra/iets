@@ -1,6 +1,14 @@
 //! Evaluator-side use of the pure `store` module: copying source paths to
 //! the (virtual) store, and reading a virtual store path back from the
-//! local tree it was copied from.
+//! local tree it was copied from or from the spool of a fetched input.
+//!
+//! This is the one place that maps a store path to its bytes. Everything the
+//! evaluator reads for a store path goes through [`locate`]: `import`,
+//! `readFile`, `readDir`, `pathExists`, `readFileType`, `hashFile`,
+//! `builtins.path`, `filterSource` and string coercion. The three answers are
+//! the real file system, a local tree a virtual copy stands for, and a member
+//! of a fetched flake input served out of its spool by offset
+//! (`crate::inputs`).
 
 use std::collections::{BTreeSet, HashSet};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -21,6 +29,13 @@ pub enum Access {
         path: PathBuf,
         accepted: Option<Arc<HashSet<PathBuf>>>,
     },
+    /// Under a fetched flake input the input store holds: read the member at
+    /// `rel` out of the entry's spool. `rel` is empty for the tree itself.
+    Input {
+        entry: Arc<crate::inputs::Entry>,
+        base: StorePath,
+        rel: Vec<u8>,
+    },
     /// Under such a tree, but its filter left the entry out (an untracked
     /// file of a git tree): the store copy has no such entry.
     Missing,
@@ -29,8 +44,9 @@ pub enum Access {
 /// Nix reads a copied tree from the store; ietsp never writes the store, so
 /// a path under a store path this evaluation produced from a local tree
 /// (`"${./x}"`, `builtins.path`, the flake root, a `path:` input) reads the
-/// local tree instead. The content is the same by construction: the store
-/// path is the NAR hash of exactly those files.
+/// local tree instead, and a path under a fetched input reads that input's
+/// spool. The content is the same by construction: the store path is the NAR
+/// hash of exactly those bytes.
 pub fn locate(ev: &Evaluator, path: &[u8]) -> Access {
     let Some(rest) = path
         .strip_prefix(STORE_DIR.as_bytes())
@@ -48,11 +64,14 @@ pub fn locate(ev: &Evaluator, path: &[u8]) -> Access {
     let Ok(sp) = StorePath::parse(&format!("{STORE_DIR}/{base}")) else {
         return Access::Store;
     };
-    let Some(SourceOrigin::Tree {
-        local, accepted, ..
-    }) = ev.sources.get(&sp)
-    else {
-        return Access::Store;
+    let (local, accepted) = match ev.sources.get(&sp) {
+        Some(SourceOrigin::Tree {
+            local, accepted, ..
+        }) => (local, accepted),
+        Some(SourceOrigin::Input { entry, rel, .. }) => {
+            return crate::inputs::access(&entry, &rel, sub);
+        }
+        _ => return Access::Store,
     };
     let path = if sub.is_empty() {
         local
@@ -68,13 +87,32 @@ pub fn locate(ev: &Evaluator, path: &[u8]) -> Access {
     Access::Local { path, accepted }
 }
 
-/// The file to open for `path`: `path` itself or its local original; `None`
-/// when the tree's filter left the entry out.
-pub fn physical(ev: &Evaluator, path: &[u8]) -> Option<Vec<u8>> {
+/// What a read of `path` opens.
+pub enum Whence {
+    /// A real file on disk, at this path.
+    Fs(Vec<u8>),
+    /// A member of a fetched flake input, served from the entry's spool.
+    In(Arc<crate::inputs::Entry>, StorePath, Vec<u8>),
+}
+
+/// Where the bytes of `path` are: the file itself, its local original, or a
+/// member of a fetched input; `None` when a tree's filter left the entry out.
+pub fn whence(ev: &Evaluator, path: &[u8]) -> Option<Whence> {
     match locate(ev, path) {
-        Access::Store => Some(path.to_vec()),
-        Access::Local { path, .. } => Some(path.into_os_string().into_vec()),
+        Access::Store => Some(Whence::Fs(path.to_vec())),
+        Access::Local { path, .. } => Some(Whence::Fs(path.into_os_string().into_vec())),
+        Access::Input { entry, base, rel } => Some(Whence::In(entry, base, rel)),
         Access::Missing => None,
+    }
+}
+
+/// The file to open for `path`: `path` itself or its local original; `None`
+/// when the tree's filter left the entry out or the bytes are in an input's
+/// spool rather than on disk.
+pub fn physical(ev: &Evaluator, path: &[u8]) -> Option<Vec<u8>> {
+    match whence(ev, path) {
+        Some(Whence::Fs(p)) => Some(p),
+        _ => None,
     }
 }
 
@@ -105,6 +143,10 @@ pub fn copy_path_to_store(
             None,
         ),
         Access::Local { path, accepted } => (path, accepted),
+        Access::Input { entry, base, rel } => {
+            let full = crate::inputs::copy_to_store(ev, &entry, &base, &rel, path, pos)?;
+            return Ok(full);
+        }
         Access::Missing => return Err(copy_err(std::io::Error::from_raw_os_error(2))),
     };
     let mut fp = ev.trace.fp(&local);

@@ -219,20 +219,25 @@ fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>> {
     Ok(p)
 }
 
+/// What a realised path reads: a file on disk, or a member of a fetched flake
+/// input served out of its spool (`crate::inputs`). The last field of `In` is
+/// the path Nix names in a message.
+enum Real {
+    Fs(Vec<u8>, crate::store::source::Accepted),
+    In(Arc<crate::inputs::Entry>, StorePath, Vec<u8>, Vec<u8>),
+}
+
 /// The file to read for a realised path, with the filter of the copied
 /// tree it lies in; an entry that filter left out is
 /// `path '...' does not exist`.
-fn realise_existing(
-    ev: &mut Evaluator,
-    w: Word,
-    pos: Pos,
-) -> EvalResult<(Vec<u8>, crate::store::source::Accepted)> {
+fn realise_existing(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Real> {
     let p = realise_path(ev, w, pos)?;
     match store_hooks::locate(ev, &p) {
-        store_hooks::Access::Store => Ok((p, None)),
+        store_hooks::Access::Store => Ok(Real::Fs(p, None)),
         store_hooks::Access::Local { path, accepted } => {
-            Ok((path.into_os_string().into_vec(), accepted))
+            Ok(Real::Fs(path.into_os_string().into_vec(), accepted))
         }
+        store_hooks::Access::Input { entry, base, rel } => Ok(Real::In(entry, base, rel, p)),
         store_hooks::Access::Missing => Err(io_error(
             io::Error::from_raw_os_error(libc::ENOENT),
             "getting status of",
@@ -245,7 +250,12 @@ fn realise_existing(
 /// Reads `st_size` bytes like `PosixSourceAccessor::readFile`, so a procfs
 /// file reads as empty.
 fn read_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
-    let (p, _) = realise_existing(ev, args[0], pos)?;
+    let (p, _) = match realise_existing(ev, args[0], pos)? {
+        Real::In(e, base, rel, shown) => {
+            return crate::inputs::read_file(ev, &e, &base, &rel, &shown, pos);
+        }
+        Real::Fs(p, a) => (p, a),
+    };
     let meta = fs::metadata(os_path(&p)).map_err(|e| io_error(e, "getting status of", &p, pos))?;
     if !meta.is_file() {
         bail!(
@@ -275,7 +285,12 @@ fn read_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
 /// files of a git tree); the `Dir` observation keeps the full listing, the
 /// one validation can re-read.
 fn read_dir(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
-    let (p, accepted) = realise_existing(ev, args[0], pos)?;
+    let (p, accepted) = match realise_existing(ev, args[0], pos)? {
+        Real::In(e, base, rel, shown) => {
+            return crate::inputs::read_dir(ev, &e, &base, &rel, &shown, pos);
+        }
+        Real::Fs(p, a) => (p, a),
+    };
     let rd = fs::read_dir(os_path(&p)).map_err(|e| {
         if e.raw_os_error() == Some(libc_enotdir()) {
             Error::boxed(
@@ -332,7 +347,12 @@ fn libc_enotdir() -> i32 {
 }
 
 fn read_file_type(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
-    let (p, _) = realise_existing(ev, args[0], pos)?;
+    let (p, _) = match realise_existing(ev, args[0], pos)? {
+        Real::In(e, base, rel, shown) => {
+            return crate::inputs::read_file_type(ev, &e, &base, &rel, &shown, pos);
+        }
+        Real::Fs(p, a) => (p, a),
+    };
     let meta = fs::symlink_metadata(os_path(&p));
     ev.trace.stat(&p, false, crate::trace::Kind::of(&meta));
     let meta = meta.map_err(|e| io_error(e, "getting status of", &p, pos))?;
@@ -346,8 +366,12 @@ fn path_exists(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> 
         Value::String(s) if s.bytes.ends_with(b"/") || s.bytes.ends_with(b"/.")
     );
     let p = realise_path(ev, w, pos)?;
-    let Some(p) = store_hooks::physical(ev, &p) else {
-        return Ok(Word::FALSE);
+    let p = match store_hooks::whence(ev, &p) {
+        Some(store_hooks::Whence::Fs(p)) => p,
+        Some(store_hooks::Whence::In(e, base, rel)) => {
+            return Ok(crate::inputs::path_exists(ev, &e, &base, &rel, must_be_dir));
+        }
+        None => return Ok(Word::FALSE),
     };
     let r = if must_be_dir {
         let m = fs::metadata(os_path(&p));
@@ -513,6 +537,20 @@ fn add_path_inner(
                 (resolved, None)
             }
             store_hooks::Access::Local { path, accepted } => (path, accepted),
+            store_hooks::Access::Input { entry, base, rel } => {
+                return add_input_path(
+                    ev,
+                    pos,
+                    name,
+                    path,
+                    filter,
+                    method,
+                    expected_sp,
+                    &entry,
+                    &base,
+                    &rel,
+                );
+            }
             store_hooks::Access::Missing => {
                 return Err(io_error(
                     io::Error::from_raw_os_error(libc::ENOENT),
@@ -795,5 +833,99 @@ fn to_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
             references: refs,
         },
     );
+    Ok(store_path_string(ev, &sp))
+}
+
+/// `builtins.path` and `filterSource` over a member of a fetched flake input:
+/// the NAR comes out of the entry's spool, and the filter sees the store path
+/// Nix would show it, exactly as it does for a tree on disk. Nothing is stated
+/// or read twice: the read set records the entry, not the members
+/// (`crate::inputs`).
+#[allow(clippy::too_many_arguments)]
+fn add_input_path(
+    ev: &mut Evaluator,
+    pos: Pos,
+    name: &str,
+    path: &[u8],
+    filter: Option<Word>,
+    method: IngestionMethod,
+    expected_sp: Option<StorePath>,
+    entry: &crate::inputs::Entry,
+    base: &StorePath,
+    rel: &[u8],
+) -> EvalResult<Word> {
+    if method == IngestionMethod::Flat {
+        let h = crate::inputs::hash_file(ev, entry, base, rel, HashAlgo::Sha256)
+            .map_err(|e| io_error(e, "reading file", path, pos))?;
+        return finish_added(ev, pos, path, expected_sp, &h, 0, base, rel, method, name);
+    }
+    crate::inputs::record(ev, base);
+    let mut err: Option<Box<Error>> = None;
+    let mut f = |p: &Path, t: FileType| -> bool {
+        let Some(filter) = filter else { return true };
+        if err.is_some() {
+            return false;
+        }
+        match call_filter(ev, filter, p, t, pos) {
+            Ok(b) => b,
+            Err(e) => {
+                err = Some(e);
+                false
+            }
+        }
+    };
+    let r = crate::inputs::nar_hash(entry, rel, os_path(path), &mut f);
+    if let Some(e) = err {
+        return Err(e);
+    }
+    let (hash, nar_size) = r.map_err(|e| io_error(e, "copying", path, pos))?;
+    finish_added(
+        ev,
+        pos,
+        path,
+        expected_sp,
+        &hash,
+        nar_size,
+        base,
+        rel,
+        method,
+        name,
+    )
+}
+
+/// The store path an added input member gets, and the origin that says where
+/// its bytes are. A filtered copy is a subtree of the entry, so its origin names
+/// the entry and the relative path, not a directory on disk.
+#[allow(clippy::too_many_arguments)]
+fn finish_added(
+    ev: &mut Evaluator,
+    pos: Pos,
+    path: &[u8],
+    expected_sp: Option<StorePath>,
+    hash: &Hash,
+    nar_size: u64,
+    base: &StorePath,
+    rel: &[u8],
+    method: IngestionMethod,
+    name: &str,
+) -> EvalResult<Word> {
+    let sp = make_fixed_output_path(method, hash, name, &BTreeSet::new())
+        .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, pos))?;
+    if method == IngestionMethod::Recursive {
+        ev.sources.insert(
+            sp.clone(),
+            crate::inputs::origin(base.base_name(), rel, *hash, nar_size),
+        );
+    }
+    if let Some(exp) = expected_sp
+        && exp != sp
+    {
+        bail!(
+            ErrorKind::Eval,
+            pos,
+            "store path mismatch in (possibly filtered) path added from '{}'",
+            lossy(path)
+        );
+    }
     Ok(store_path_string(ev, &sp))
 }

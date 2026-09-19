@@ -9,6 +9,7 @@ pub mod devenv;
 pub mod error;
 pub mod eval;
 pub mod flake;
+pub mod inputs;
 pub mod jobs;
 pub mod nixbin;
 pub mod parallel;

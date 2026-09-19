@@ -118,6 +118,15 @@ pub enum Obs {
         argv: Vec<Vec<u8>>,
         hash: Digest32,
     },
+    /// One entry of the input store read during the evaluation
+    /// (`crate::inputs`), whatever was read out of it. The entry's name is the
+    /// NAR hash of its tree, so nothing about the bytes can change under a
+    /// name that is still there: the check is that the store still holds the
+    /// entry and that its index is a version this binary reads.
+    Input {
+        entry: Vec<u8>,
+        version: u8,
+    },
 }
 
 impl Obs {
@@ -133,6 +142,7 @@ impl Obs {
             Obs::Canon { path, .. } => (4, Cow::Borrowed(path), 0),
             Obs::Env { name, .. } => (5, Cow::Borrowed(name), 0),
             Obs::Cmd { dir, argv, .. } => (6, Cow::Owned(cmd_subject(dir, argv)), 0),
+            Obs::Input { entry, .. } => (7, Cow::Borrowed(entry), 0),
         }
     }
 }

@@ -317,6 +317,16 @@ pub fn source_info(o: &SourceOrigin) -> SourceInfo {
             },
             hashed: None,
         },
+        SourceOrigin::Input {
+            entry,
+            rel,
+            nar_hash,
+            nar_size,
+        } => SourceInfo {
+            data: SourceData::Nar(crate::inputs::nar_source(entry, rel)),
+            kind: SourceKind::Source,
+            hashed: Some((*nar_hash, *nar_size)),
+        },
     }
 }
 

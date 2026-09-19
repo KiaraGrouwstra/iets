@@ -127,11 +127,20 @@ fn tls() -> Result<Arc<rustls::ClientConfig>> {
 /// `GET url` with `headers`, following redirects, with the body decompressed
 /// into `sink` as it arrives; the number of bytes written. A `file://` URL is
 /// read from the file system instead. Nothing buffers the whole body.
+///
+/// `IETSP_OFFLINE=1` makes any download an error. A run that has every input in
+/// the input store then costs nothing and needs nothing; a run that is missing
+/// one says which URL it wanted.
 pub fn get_decompressed(
     url: &str,
     headers: &[(String, String)],
     sink: &mut dyn Write,
 ) -> Result<u64> {
+    if crate::settings::get().offline {
+        return Err(Error::Usage(format!(
+            "cannot fetch '{url}': IETSP_OFFLINE is set"
+        )));
+    }
     if let Some(path) = url.strip_prefix("file://") {
         let path =
             crate::remote::worker::percent_decode(path.split(['?', '#']).next().unwrap_or(path));

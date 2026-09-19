@@ -64,13 +64,18 @@ The flake's `flake.nix` is imported under its store path, so positions,
 `./x` path literals and `readDir` see exactly what Nix sees; the bytes come
 from the store when the tree is there, else from the local tree.
 
-## Getting a missing input into the store
+## Getting a missing input readable
 
 A remote input (github, git, tarball, ...) whose locked tree is not in
-`/nix/store` must get there first. `flake::fetch::ensure_in_store` prints
-`ietsp: input '<name>' is not in the store (<path>), fetching it` and takes
-three steps in order. The root tree and `path:` inputs never reach it.
+`/nix/store` must become readable first. `flake::fetch::ensure_readable` takes
+four steps in order; from the second on it prints
+`ietsp: input '<name>' is not in the store (<path>), fetching it`. The root tree
+and `path:` inputs never reach it.
 
+0. **The input store, ietsp's own.** `$XDG_CACHE_HOME/ietsp/inputs/` holds the
+   spooled archive of every input ietsp has fetched, keyed by the store path
+   the lock implies (`src/inputs.rs`, "The input store" below). An entry that
+   is there costs two `open` calls and no network, no daemon and no store.
 1. **Substitution, as one daemon op.** `QueryValidPaths` with the substitute
    flag (`wopQueryValidPaths`, protocol >= 1.27) makes the daemon run
    `Store::substitutePaths` and answer with the paths it now has
@@ -81,9 +86,12 @@ three steps in order. The root tree and `path:` inputs never reach it.
    first. An expression cannot reach that path, because `builtins.fetchTree`
    rejects `__final` (`fetchTree.cc:216`) and `fetchFinalTree` is an internal
    primop, absent from `builtins` (`eval.cc:546`). So ietsp substitutes the
-   tree itself.
+   tree itself. A local copy beats a download, so this stays the first step
+   whenever a daemon answers; when none does, the step is skipped without a
+   word.
 2. **The archive types, fetched by ietsp.** `github`, `gitlab`, `sourcehut`
-   and `tarball` are one download and one unpack, so ietsp does them itself.
+   and `tarball` are one download and one index, so ietsp does them itself,
+   into the input store.
 3. **`git` and `hg`, the last shell-out.**
    `nix eval --raw --impure --expr '(builtins.fetchTree <locked attrs>).outPath'`,
    then a check that the path nix reports is the one the lock implies, so a
@@ -172,32 +180,83 @@ and then `treeHashToNarHash`, which is `hashPath` of the tree):
   (`ARCHIVE_EXTRACT_SECURE_NODOTDOT`, `ARCHIVE_EXTRACT_SECURE_SYMLINKS`).
 
 The NAR hash of the result is then compared with the lock's `narHash`. A
-mismatch names both hashes and registers nothing. A match is registered with
-one `AddMultipleToStore` as a `fixed:r:sha256` source, the same call
-`src/remote/worker/build.rs` makes for an eval-time source, so the daemon
-recomputes the content address and writes the path the lock implies. Nothing
-is cached on disk beyond the store: the spool is unlinked before it is written
-to, so it is gone when the fetch returns, and the tracing cache keys are
-unaffected. `spool_matches_the_tree` holds both readers to the same NAR bytes,
-member for member.
+mismatch names both hashes and keeps nothing: the staged directory goes, so a
+wrong tree is never named, never read and never uploaded. A match is moved into
+the input store with one `rename`, and the evaluation reads the input out of
+that spool. Nothing is registered in any store.
+`spool_matches_the_tree` holds both readers to the same NAR bytes, member for
+member.
 
 `file` is not in this set. Its store path is the flat hash of the bytes under
 the input's name (`tarball.cc:FileInputScheme`), which the lock's `narHash`
 does not give, so ietsp cannot say where the file belongs before it has it;
 the type stays unsupported.
 
-Step 2 is the only store write ietsp makes. Every other store path it
-produces stays in memory (`docs/remote-build.md`).
+`IETSP_OFFLINE=1` makes any download an error that names the URL. A flake whose
+inputs the input store already holds still evaluates, which is what the
+second-run assertions in `scripts/flaketest.nu` use.
+
+## The input store
+
+`$XDG_CACHE_HOME/ietsp/inputs/` (`--cache-dir DIR` or `IETSP_CACHE_DIR` moves it
+to `DIR/inputs`) holds one directory per fetched input, named by the store path
+base name the lock implies. Code: `src/inputs.rs`.
+
+| file | what |
+|---|---|
+| `spool` | the decompressed tar, exactly as it was downloaded |
+| `index` | the `spool::Tree` index: a version byte, the entry's NAR hash and size, the spool's length, then the tree as offsets, sizes, modes and symlink targets |
+| `sparse` | only when the archive had GNU sparse members, whose holes are not in the tar |
+
+The name is the content address of the tree, so an entry is safe to share
+between processes and safe to trust: the NAR hash was checked against the lock
+before the entry was named, and a reader never hashes it again. What a reader
+does check on open is the index's version byte and the spool's size against the
+length the index recorded; anything else wipes the entry, which costs one fetch.
+The store-level rules are the ones the two caches follow (`docs/caches.md`): a
+`version` file, one writer at a time through the store's `flock`, an atomic
+`rename` of a staged directory into place, and a TTL sweep.
+
+**Reads.** `src/builtins/store_hooks.rs:locate` is the one place that maps a
+store path to its bytes. It answers `Store` (read the real path), `Local` (read
+the local tree a virtual copy stands for) or `Input` (read the member out of an
+entry's spool, by `pread` at the offset the index holds). `import`, `readFile`,
+`readDir`, `pathExists`, `readFileType`, `hashFile`, `builtins.path`,
+`filterSource`, `"${path}"` and the `sourceInfo` attrs all go through it, so a
+fetched input needs no `/nix/store` entry and no daemon. `/nix/store` is checked
+first and wins when it has the tree; an input that appears there later, because
+a build registered it, changes nothing, since the two hold the same bytes by
+construction. Symlinks inside an entry are followed the way the kernel follows
+them; a target that leaves the tree is not resolved, because the spool holds no
+bytes for it.
+
+**Uploads.** Nothing is registered during evaluation. A source whose origin is an
+input-store entry becomes a `SourceData::Nar` in `remote::plan`, with the NAR
+hash and size the index already holds, and the NAR is written out of the spool
+straight into whichever builder or store the build targets
+(`docs/remote-build.md`). `ietsp build --no-build` on a flake with a fetched
+input therefore uploads that input from the spool and never writes the local
+daemon.
+
+**What still needs a daemon.** `git` and `hg` inputs go through
+`nix eval (builtins.fetchTree ...)`, which writes `/nix/store`; ietsp has no git
+fetcher. `builtins.storePath` on a path that is not on disk hands the path to
+the daemon to substitute; there is no entry for it, because its content address
+is not a flake `narHash`. Substitution of a locked input is an optimisation and
+is skipped when no daemon answers.
+
 ## Tracing cache
 
 Everything above is recorded (`docs/tracing-cache.md`): the git queries as
 `Cmd` observations, the working-tree file set as a filtered `Tree` (no
 `seen_hash`: unlisted entries cannot change the result), every file read
-under the root as a `File` on the local path, the lock file as a `File`,
-each remote input's store tree existence as a `Stat`. The key holds the
+under the root as a `File` on the local path, the lock file as a `File`, a
+remote input that `/nix/store` holds as a `Stat`, and one that the input store
+serves as a single `Input`, whatever was read out of it. The key holds the
 reference text, the resolved directory, cwd, and the hashes of `flake.nix`
-and `flake.lock`. A commit, an edit of a tracked file, `git add`, or a
-garbage-collected input all miss; an untracked file does not.
+and `flake.lock`. A commit, an edit of a tracked file, `git add`, a
+garbage-collected input, or a swept input-store entry all miss; an untracked
+file does not.
 
 ## Measurements
 

@@ -73,6 +73,42 @@ def fetch-only [ietsp: string, name: string, ref: string, expected: string, nobi
   }
 }
 
+# standalone NAME REF EXPECTED NOBIN CACHE: ietsp with no nix on PATH, no
+# IETSP_NIX_BIN_DIR, an unreachable store (nix.conf's `store`, which
+# `Connection::open` reads), and a cache root of its own. The first run must
+# fetch into the input store and print EXPECTED; the second must print it
+# again with IETSP_OFFLINE=1, which makes any download an error.
+def standalone [ietsp: string, name: string, ref: string, expected: string, nobin: string, cache: string]: nothing -> bool {
+  let env = {
+    IETSP_NIX_BIN_DIR: $nobin,
+    PATH: $nobin,
+    NIX_CONFIG: "store = unix:///nonexistent/ietsp-no-daemon",
+    XDG_CACHE_HOME: $cache,
+    IETSP_CACHE_DIR: $"($cache)/ietsp",
+  }
+  rm -rf $cache
+  let one = (with-env $env { ^$ietsp eval --raw --no-cache $ref | complete })
+  let two = (with-env ($env | merge {IETSP_OFFLINE: "1"}) { ^$ietsp eval --raw --no-cache $ref | complete })
+  let entries = (try { ls $"($cache)/ietsp/inputs" | where type == dir | length } catch { 0 })
+  let ok = (
+    $expected != "" and ($one.stdout | chomp) == $expected and ($two.stdout | chomp) == $expected
+      and ($one.stderr | str contains "fetching it") and not ($two.stderr | str contains "fetching it")
+      and $entries > 0
+  )
+  if $ok {
+    print $"ok   ($name)"
+    true
+  } else {
+    print $"FAIL ($name)"
+    print $"  want:      ($expected)"
+    print $"  first:     ($one.stdout | chomp) \(exit ($one.exit_code), ($entries) input store entries\)"
+    $one.stderr | lines | last 3 | show
+    print $"  second:    ($two.stdout | chomp) \(exit ($two.exit_code)\)"
+    $two.stderr | lines | last 3 | show
+    false
+  }
+}
+
 # the store path of a locked input of the flake at DIR
 def input-path [dir: string, input: string]: nothing -> string {
   nixf eval --raw --impure --expr $"\(builtins.getFlake \"($dir)\"\).inputs.($input).outPath" | complete | get stdout | chomp
@@ -263,10 +299,41 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let tb_exp = (nixf eval --raw --option eval-cache "false" $"($tbf)#v" | complete | get stdout | chomp)
   let tb_path = (input-path $tbf "tb")
   nixf store delete $tb_path | complete | ignore
-  $res ++= [(fetch-only $ietsp "tarball: file:// input unpacked and registered by ietsp" $"($tbf)#v" $tb_exp $nobin)]
+  $res ++= [(fetch-only $ietsp "tarball: file:// input indexed into ietsp's input store" $"($tbf)#v" $tb_exp $nobin)]
+  # nothing was registered: the tree lives in the input store, not the store
+  let tb_entry = $"($work)/cache/inputs/($tb_path | path basename)"
+  let virt_ok = (not ($tb_path | path exists)) and ($"($tb_entry)/spool" | path exists) and ($"($tb_entry)/index" | path exists)
+  $res ++= [(verdict $virt_ok "tarball: the fetch wrote the input store, not /nix/store" $"input store entry ($tb_entry)")]
+
+  # `ietsp build --no-build` is the only thing that uploads an input, and it
+  # sends the NAR out of that spool: the daemon never saw the path before.
+  let upf = $"($work)/upflake"
+  mkdir $upf
+  r#'{
+  inputs.tb.url = "file://@WORK@/tb2.tar.gz";
+  inputs.tb.flake = false;
+  outputs = { self, tb }: {
+    packages.x86_64-linux.default = derivation {
+      name = "usestb";
+      system = "x86_64-linux";
+      builder = "/bin/sh";
+      args = [ "-c" "cp ${tb}/a $out" ];
+    };
+  };
+}
+'# | str replace -a "@WORK@" $work | save $"($upf)/flake.nix"
+  do { cd $upf; nixf flake lock } | complete | ignore
+  let up_path = (input-path $upf "tb")
+  nixf store delete $up_path | complete | ignore
+  let ub = (^$ietsp build --no-build --timings $"($upf)#packages.x86_64-linux.default" | complete)
+  let uploaded = (nixf path-info $up_path | complete | get exit_code) == 0
+  let add = ($ub.stderr | lines | where $it =~ '^add:' | get -o 0 | default "")
+  $res ++= [(verdict ($ub.exit_code == 0 and $uploaded) "build --no-build uploads the input from its spool" $"build --no-build \(exit ($ub.exit_code), uploaded=($uploaded)\): ($add)")]
 
   # the lock's narHash is the contract: a tarball whose contents changed is
-  # refused, and nothing is registered.
+  # refused, and nothing is registered. The input store entry must go first,
+  # or the fetch never happens: the entry is the locked tree, already verified.
+  rm -rf $tb_entry
   nixf store delete $tb_path | complete | ignore
   "changed\n" | save -f $"($work)/tb2src/a"
   ^tar -C $work -czf $"($work)/tb2.tar.gz" tb2src
@@ -289,6 +356,13 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let gh_path = (input-path $ghf "tiny")
   nixf store delete $gh_path | complete | ignore
   $res ++= [(fetch-only $ietsp "github: input fetched over https by ietsp" $"($ghf)#v" $gh_exp $nobin)]
+
+  # the standalone case: no nix, no daemon (nix.conf's `store` points at a
+  # socket that is not there), a fresh cache. The first run fetches into the
+  # input store and evaluates; the second evaluates again with IETSP_OFFLINE=1,
+  # so any download would be an error.
+  nixf store delete $gh_path | complete | ignore
+  $res ++= [(standalone $ietsp "standalone: no nix, no daemon, fetch then an offline hit" $"($ghf)#v" $gh_exp $nobin $"($work)/alone")]
 
   # a path cache.nixos.org has and this machine has not: the daemon substitutes
   # it, so there is no download at all. The lock names a `github` input whose
