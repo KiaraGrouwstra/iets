@@ -18,6 +18,9 @@ pub enum Error {
     Store(String),
     Flake(String),
     Cache(String),
+    /// Something Nix does that ietsp does not, such as a flake registry
+    /// lookup: classic mode falls back on it (`ErrorKind::Unsupported`).
+    Unsupported(String),
     Eval(Box<crate::eval::error::Error>),
     /// Bad command-line input.
     Usage(String),
@@ -46,6 +49,7 @@ impl fmt::Display for Error {
             | Error::Store(m)
             | Error::Flake(m)
             | Error::Cache(m)
+            | Error::Unsupported(m)
             | Error::Usage(m)
             | Error::Config(m) => f.write_str(m),
             Error::Eval(e) => f.write_str(&e.msg),

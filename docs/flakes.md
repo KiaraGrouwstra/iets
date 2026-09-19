@@ -7,7 +7,9 @@
 ## Scope
 
 - `DIR` is `.`, `./x`, `/abs`, `~/x` or `path:/abs`. Registry refs
-  (`nixpkgs#hello`), URLs and `?query` parameters are errors.
+  (`nixpkgs#hello`, and `x#y` even where `./x` exists, as in
+  flakeref.cc:parseFlakeIdRef), URLs and `?query` parameters are
+  `ErrorKind::Unsupported`, so classic mode falls back on them.
 - `#attr.path` selects from the flake's outputs; elements may be quoted
   like Nix (`"x86_64-linux"`). No `#` or a bare `#` gives the outputs
   attrset. No `packages.<system>.` defaulting.

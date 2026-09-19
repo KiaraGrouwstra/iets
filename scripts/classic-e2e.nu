@@ -399,6 +399,17 @@ def main [] {
   let meta = (^$"($farm)/nix" flake metadata $fref | complete)
   $ok = ($ok | append (verdict ($meta.stderr | str contains "falling back to nix: subcommand 'flake'")
     "nix flake metadata falls back" $"stderr was '($meta.stderr)'"))
+  for case in [
+    {ref: "nixpkgs#lib.version", want: "flake registry references (nixpkgs#…) are not supported"}
+    {ref: "github:NixOS/nixpkgs#lib.version", want: "only local paths are supported"}
+  ] {
+    let err = (fallback-reason $farm [nix eval $case.ref])
+    $ok = ($ok | append (verdict (($err | str contains "falling back to nix: ietsp: ") and ($err | str contains $case.want))
+      $"nix eval ($case.ref) falls back" $"stderr was '($err)'"))
+    let r = (^$ietsp eval $case.ref | complete)
+    $ok = ($ok | append (verdict ($r.exit_code == 1 and ($r.stderr | str contains $case.want))
+      $"ietsp eval ($case.ref) says why" $"exit ($r.exit_code), stderr '($r.stderr)'"))
+  }
   let apply = (^$"($farm)/nix" eval --apply "x: x" --expr 1 | complete)
   $ok = ($ok | append (verdict ($apply.stderr | str contains "'--apply' is not implemented")
     "nix eval --apply falls back" $"stderr was '($apply.stderr)'"))

@@ -181,7 +181,11 @@ pub fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
         Some(Input::File(f)) => ev.eval_file(&abs_path(&f, &cwd), Pos::NONE)?,
         Some(Input::Flake(f)) => {
             let fr = flake_ref(&f, &cwd).map_err(|m| {
-                Error::boxed(crate::eval::ErrorKind::Eval, m.to_string(), Pos::NONE)
+                let kind = match m {
+                    crate::error::Error::Unsupported(_) => crate::eval::ErrorKind::Unsupported,
+                    _ => crate::eval::ErrorKind::Eval,
+                };
+                Error::boxed(kind, m.to_string(), Pos::NONE)
             })?;
             if a.flake_whole && fr.attr.is_empty() {
                 crate::flake::eval_flake_value(ev, &fr)?

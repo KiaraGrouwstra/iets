@@ -48,14 +48,37 @@ pub fn is_flake_ref(arg: &str) -> bool {
     p.join("flake.nix").is_file() && !p.join("default.nix").exists()
 }
 
+/// flakeref.cc:parseFlakeIdRef: `ID[/REF-OR-REV]`, with ID
+/// `[a-zA-Z][a-zA-Z0-9_-]*`, is a registry lookup even where a directory of
+/// that name exists; a path needs `./`.
+fn is_indirect(loc: &str) -> bool {
+    let loc = loc.strip_prefix("flake:").unwrap_or(loc);
+    let (id, rest) = loc
+        .split_once('/')
+        .map_or((loc, None), |(i, r)| (i, Some(r)));
+    let mut id = id.chars();
+    id.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && id.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        && rest.is_none_or(|r| {
+            r.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '@')
+                && r.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "_./@+-".contains(c))
+        })
+}
+
 /// `PATH[#attr.path]` where PATH is `.`, `./x`, `/abs`, `~/x` or `path:/abs`.
 pub fn parse_flake_ref(arg: &str, cwd: &[u8], home: Option<&[u8]>) -> Result<FlakeRef> {
     let (loc, frag) = match arg.split_once('#') {
         Some((l, f)) => (l, Some(f)),
         None => (arg, None),
     };
+    if is_indirect(loc) {
+        return Err(Error::Unsupported(format!(
+            "ietsp: flake registry references ({loc}#…) are not supported; use a path or a locked input"
+        )));
+    }
     if loc.contains('?') {
-        return Err(Error::Flake(format!(
+        return Err(Error::Unsupported(format!(
             "ietsp: query parameters in flake reference '{arg}' are not supported"
         )));
     }
@@ -65,7 +88,7 @@ pub fn parse_flake_ref(arg: &str, cwd: &[u8], home: Option<&[u8]>) -> Result<Fla
     };
     if loc.contains(':') && !loc.starts_with('/') && !loc.starts_with('.') && !loc.starts_with('~')
     {
-        return Err(Error::Flake(format!(
+        return Err(Error::Unsupported(format!(
             "ietsp: flake reference '{arg}' is not a path; only local paths are supported"
         )));
     }
@@ -372,7 +395,19 @@ mod tests {
         let r = parse_flake_ref("~/sub#", b"/", Some(cwd)).unwrap();
         assert_eq!(r.dir, d.join("sub"));
         assert!(parse_flake_ref("./missing", cwd, None).is_err());
-        assert!(parse_flake_ref("github:a/b", cwd, None).is_err());
+        let unsupported = |r: &str| match parse_flake_ref(r, cwd, None) {
+            Err(Error::Unsupported(m)) => m,
+            other => panic!("{r}: {other:?}"),
+        };
+        assert!(unsupported("github:a/b#x").contains("only local paths"));
+        for r in [
+            "nixpkgs#hello",
+            "nixpkgs/nixos-24.05#x",
+            "flake:nixpkgs",
+            "sub#x",
+        ] {
+            assert!(unsupported(r).contains("flake registry references"), "{r}");
+        }
 
         std::fs::create_dir_all(d.join(".git")).unwrap();
         let r = parse_flake_ref(&format!("{}/sub#x", d.display()), b"/", None).unwrap();
