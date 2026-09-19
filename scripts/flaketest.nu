@@ -55,6 +55,29 @@ def check-fresh [ietsp: string, name: string, ref: string]: nothing -> bool {
   }
 }
 
+# fetch-only NAME REF EXPECTED NOBIN: ietsp alone, with NOBIN (an empty
+# directory) as the whole PATH and as IETSP_NIX_BIN_DIR, so no nix exists to
+# fall back on. It must say it is fetching the input and print EXPECTED.
+def fetch-only [ietsp: string, name: string, ref: string, expected: string, nobin: string]: nothing -> bool {
+  let i = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp eval --raw --no-cache $ref | complete })
+  let got = ($i.stdout | chomp)
+  if $expected != "" and $got == $expected and ($i.stderr | str contains "fetching it") {
+    print $"ok   ($name)"
+    true
+  } else {
+    print $"FAIL ($name)"
+    print $"  want:  ($expected)"
+    print $"  ietsp: ($got)"
+    $i.stderr | lines | last 3 | show
+    false
+  }
+}
+
+# the store path of a locked input of the flake at DIR
+def input-path [dir: string, input: string]: nothing -> string {
+  nixf eval --raw --impure --expr $"\(builtins.getFlake \"($dir)\"\).inputs.($input).outPath" | complete | get stdout | chomp
+}
+
 # the `cache:` lines of a --timings run
 def cache-lines [ietsp: string, ref: string]: nothing -> list<string> {
   ^$ietsp eval --raw --timings $ref | complete | get stderr | lines | where $it =~ '^cache:'
@@ -213,14 +236,117 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let st = (cache-lines $ietsp $"($scratch).drvPath" | get -o 0 | default "")
   $res ++= [(verdict ($st =~ 'miss \(.*git') "cache: a commit misses on a git command" $"cache: a commit misses on a git command \(($st)\)")]
 
+  # ---- fetching an input, with no nix to fall back on -------------------------
+  # `nobin` is empty, so IETSP_NIX_BIN_DIR and PATH find no nix at all: every
+  # case below is ietsp's own substitution or its own fetch.
+  let nobin = $"($work)/nobin"
+  mkdir $nobin
+
+  # a `file://` tarball, offline: nix locks it, the store copy goes away, and
+  # ietsp downloads, unpacks (one leading component stripped), hashes and
+  # registers the tree again.
+  let tbf = $"($work)/tbflake"
+  mkdir $tbf $"($work)/tb2src/sub"
+  "hello\n" | save $"($work)/tb2src/a"
+  "#!/bin/sh\n" | save $"($work)/tb2src/run"
+  chmod 755 $"($work)/tb2src/run"
+  "x\n" | save $"($work)/tb2src/sub/b"
+  ^ln -s a $"($work)/tb2src/link"
+  ^tar -C $work -czf $"($work)/tb2.tar.gz" tb2src
+  r#'{
+  inputs.tb.url = "file://@WORK@/tb2.tar.gz";
+  inputs.tb.flake = false;
+  outputs = { self, tb }: { v = toString (builtins.attrNames (builtins.readDir tb)) + " " + builtins.readFile (tb + "/a"); };
+}
+'# | str replace -a "@WORK@" $work | save $"($tbf)/flake.nix"
+  do { cd $tbf; nixf flake lock } | complete | ignore
+  let tb_exp = (nixf eval --raw --option eval-cache "false" $"($tbf)#v" | complete | get stdout | chomp)
+  let tb_path = (input-path $tbf "tb")
+  nixf store delete $tb_path | complete | ignore
+  $res ++= [(fetch-only $ietsp "tarball: file:// input unpacked and registered by ietsp" $"($tbf)#v" $tb_exp $nobin)]
+
+  # the lock's narHash is the contract: a tarball whose contents changed is
+  # refused, and nothing is registered.
+  nixf store delete $tb_path | complete | ignore
+  "changed\n" | save -f $"($work)/tb2src/a"
+  ^tar -C $work -czf $"($work)/tb2.tar.gz" tb2src
+  let mm = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp eval --raw --no-cache $"($tbf)#v" | complete })
+  let mm_ok = ($mm.exit_code != 0 and $mm.stdout == "" and ($mm.stderr | str contains "NAR hash mismatch") and not ($tb_path | path exists))
+  $res ++= [(verdict $mm_ok "tarball: a changed tarball is refused, not registered" $"tarball mismatch \(exit ($mm.exit_code)\): ($mm.stderr | lines | first 1 | str join '')")]
+
+  # a `github` input over https: the public archive URL, one redirect to
+  # codeload, gzip, the same tree nix has.
+  let ghf = $"($work)/ghflake"
+  mkdir $ghf
+  r#'{
+  inputs.tiny.url = "github:numtide/flake-utils/471aed544aef9c610ea465cddf4a39c358ac5aa8";
+  inputs.tiny.flake = false;
+  outputs = { self, tiny }: { v = toString (builtins.attrNames (builtins.readDir tiny)); };
+}
+'# | save $"($ghf)/flake.nix"
+  do { cd $ghf; nixf flake lock } | complete | ignore
+  let gh_exp = (nixf eval --raw --option eval-cache "false" $"($ghf)#v" | complete | get stdout | chomp)
+  let gh_path = (input-path $ghf "tiny")
+  nixf store delete $gh_path | complete | ignore
+  $res ++= [(fetch-only $ietsp "github: input fetched over https by ietsp" $"($ghf)#v" $gh_exp $nobin)]
+
+  # a path cache.nixos.org has and this machine has not: the daemon substitutes
+  # it, so there is no download at all. The lock names a `github` input whose
+  # coordinates are never used, because the narHash alone says where the tree
+  # belongs.
+  let src = (nixf eval --raw --impure --expr $"\(import ($nixpkgs) {}).sl.src.outPath" | complete | get stdout | chomp)
+  let src_hash = (nixf path-info --store "https://cache.nixos.org" --json $src | complete | get stdout | from json | values | get 0.narHash)
+  nixf store delete $src | complete | ignore
+  let subf = $"($work)/subflake"
+  mkdir $subf
+  r#'{
+  inputs.sub.url = "github:x/y";
+  inputs.sub.flake = false;
+  outputs = { self, sub }: { v = sub.outPath; };
+}
+'# | save $"($subf)/flake.nix"
+  {
+    nodes: {
+      sub: { flake: false, locked: { type: "github", owner: "x", repo: "y", rev: "0000000000000000000000000000000000000000", narHash: $src_hash }, original: { type: "github", owner: "x", repo: "y" } }
+      root: { inputs: { sub: "sub" } }
+    }
+    root: "root"
+    version: 7
+  } | to json | save $"($subf)/flake.lock"
+  let sb = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp eval --raw --no-cache $"($subf)#v" | complete })
+  let sb_ok = (($sb.stdout | chomp) == $src and not ($sb.stderr | str contains "cannot fetch"))
+  $res ++= [(verdict $sb_ok "substitute: the daemon substitutes the input, ietsp downloads nothing" $"substitute \(exit ($sb.exit_code)\): ($sb.stdout | chomp) ($sb.stderr | lines | last 2 | str join ' | ')")]
+  nixf store delete $src | complete | ignore
+
+  # `git` and `hg` are the last shell-out: ietsp has no git fetcher, so a
+  # missing git input goes to nix, and without nix it is an error that names it.
+  let gitf = $"($work)/gitflake"
+  mkdir $gitf
+  r#'{
+  inputs.lib.url = "git+file://@WORK@/lib";
+  outputs = { self, lib }: { v = lib.greeting; };
+}
+'# | str replace -a "@WORK@" $work | save $"($gitf)/flake.nix"
+  do { cd $gitf; nixf flake lock } | complete | ignore
+  let git_exp = (nixf eval --raw --option eval-cache "false" $"($gitf)#v" | complete | get stdout | chomp)
+  let git_path = (input-path $gitf "lib")
+  nixf store delete $git_path | complete | ignore
+  let gf = (^$ietsp eval --raw --no-cache $"($gitf)#v" | complete)
+  let gf_ok = (($gf.stdout | chomp) == $git_exp and $git_exp != "")
+  $res ++= [(verdict $gf_ok "git: a missing git input still goes through nix" $"git input \(exit ($gf.exit_code)\): ($gf.stdout | chomp) vs ($git_exp)")]
+  nixf store delete $git_path | complete | ignore
+  let gn = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp eval --raw --no-cache $"($gitf)#v" | complete })
+  let gn_ok = ($gn.exit_code != 0 and ($gn.stderr | str contains "nix is not on PATH") and ($gn.stderr | str contains "input 'lib'"))
+  $res ++= [(verdict $gn_ok "git: without nix the error names the input" $"git input, no nix \(exit ($gn.exit_code)\): ($gn.stderr | lines | last 2 | str join ' | ')")]
+
   rm $"($repo)/flake.lock"
   let err = (^$ietsp eval --raw --no-cache $"($scratch).drvPath" | complete | get stderr)
   $res ++= [(verdict ($err | str contains "flake.lock missing or incomplete, run nix flake lock") "missing flake.lock is an error" $"missing flake.lock is an error \(($err)\)")]
 
-  # a locked remote input whose tree is not in the store, with no nix to fetch it:
-  # the two messages name the input, exit is non-zero, stdout stays empty
+  # a locked remote input that no substituter has and no forge serves: the two
+  # messages name the input, exit is non-zero, stdout stays empty
   let ghost = $"($work)/ghost"
-  mkdir $ghost $"($work)/nobin"
+  mkdir $ghost
   let hash = $"sha256-(('ghost-input-never-in-the-store!!' | encode base64))"
   '{ inputs.ghost.url = "github:NixOS/ghost"; outputs = { self, ghost }: { v = ghost.outPath; }; }' + "\n" | save $"($ghost)/flake.nix"
   {
@@ -231,9 +357,9 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
     root: "root"
     version: 7
   } | to json | save $"($ghost)/flake.lock"
-  let g = (with-env {IETSP_NIX_BIN_DIR: $"($work)/nobin", PATH: $"($work)/nobin"} { ^$ietsp eval --raw --no-cache $"($ghost)#v" | complete })
+  let g = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp eval --raw --no-cache $"($ghost)#v" | complete })
   let named = ($g.stderr | lines | where ($it | str contains "input 'ghost'") | length)
-  $res ++= [(verdict ($g.exit_code != 0 and $g.stdout == "" and $named == 2 and ($g.stderr | str contains "nix is not on PATH")) "unfetchable input: both messages name it, no nix anywhere is plain" $"unfetchable input \(exit ($g.exit_code)\): ($g.stderr | lines | first 2 | str join ' | ')")]
+  $res ++= [(verdict ($g.exit_code != 0 and $g.stdout == "" and $named == 2 and ($g.stderr | str contains "cannot fetch input 'ghost'")) "unfetchable input: both messages name it, the failed fetch was ietsp's own" $"unfetchable input \(exit ($g.exit_code)\): ($g.stderr | lines | first 2 | str join ' | ')")]
 
   let fail = ($res | where not $it | length)
   print $"pass=($res | where $it | length) fail=($fail)"
