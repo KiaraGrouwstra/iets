@@ -9,12 +9,13 @@
 # catching a lint error, and a warning replayed on a tracing-cache hit.
 # Then the scope cases in tests/lint/scope/: a site outside the entry's
 # directory is silent unless `--lint-scope all`, `--lint-root`, or the
-# `scope`/`roots` keys of ietsp.toml open it; a derivation-attribute lint
-# names the user's derivation, not the wrapper's binding; and a scratch
-# flake with a `path:` input (built in a temporary directory, the lock
-# written with the narHash ietsp computes) whose input is silent until
-# `--lint-scope all` or `[lint.inputs.dep]`, and inside which `"${./file}"`
-# is not a re-copy. UPDATE=1 rewrites the .warn.exp files.
+# `scope`/`roots` keys of ietsp.toml open it; `fod` names the user's
+# derivation, not the wrapper's binding, while `drv-list` is silent through
+# a wrapper outside the root; and a scratch flake with a `path:` input
+# (built in a temporary directory, the lock written with the narHash ietsp
+# computes) whose input is silent until `--lint-scope all` or
+# `[lint.inputs.dep]`, and inside which `"${./file}"` is not a re-copy and
+# `"${./dir}"` is `dir-copy-flake`. UPDATE=1 rewrites the .warn.exp files.
 use lib.nu [chomp flags-of glob-sorted verdict]
 
 def norm [pwd: string]: string -> string { $in | str replace -a $pwd "/pwd" | chomp }
@@ -97,10 +98,13 @@ def main [] {
   let ok = (not ($r1.stderr | str contains "warning:")) and (not ($r2.stderr | str contains "cache: hit")) and ($r2.stderr | norm $pwd | str contains $outside)
   $res ++= [(verdict $ok "scope: the scope is part of the cache key" "scope: a run with another scope hit the cache")]
 
-  # derivation attributes bound by a wrapper outside the root: the user's derivation is named
+  # derivation attributes bound by a wrapper outside the root: the list is the
+  # wrapper's contract (silent), a fixed-output hash is the user's value (named)
   let r = (^$ietsp eval --no-cache --lint drv-list=warn lint/scope/root/drv.nix | complete)
-  let exp = "warning: [drv-list] derivation attribute 'list' is a list, which is space-joined into one environment string\n  at /pwd/lint/scope/root/drv.nix:1:25"
-  $res ++= [(verdict (($r.stderr | norm $pwd) == $exp) "scope: drv-list names the user's derivation" $"scope: drv-list attribution: ($r.stderr | norm $pwd)")]
+  $res ++= [(verdict (not ($r.stderr | str contains "warning:")) "scope: drv-list is silent through a wrapper outside the root" $"scope: drv-list through a wrapper: ($r.stderr | norm $pwd)")]
+  let r = (^$ietsp eval --no-cache --lint fod=warn lint/scope/root/fod.nix | complete)
+  let exp = "warning: [fod] derivation 'wrapped' is fixed-output (recursive, sha256)\n  at /pwd/lint/scope/root/fod.nix:1:25"
+  $res ++= [(verdict (($r.stderr | norm $pwd) == $exp) "scope: fod names the user's derivation" $"scope: fod attribution: ($r.stderr | norm $pwd)")]
   let r = (^$ietsp eval --no-cache --lint drv-list=warn lint/scope/root/own.nix | complete)
   $res ++= [(verdict (not ($r.stderr | str contains "warning:")) "scope: the wrapper's own derivation is silent" "scope: wrapper's derivation reported")]
 
@@ -115,7 +119,7 @@ def main [] {
     let text = (open --raw $"($dir)/($f)" | str replace -a "@DEP@" $"($work)/dep" | str replace -a "@HASH@" $hash | str replace -a "@STORE@" $store)
     $text | save -f $"($dir)/($f)"
   }
-  let copies = [--lint store-path-recopy=warn --lint path-copy=warn]
+  let copies = [--lint store-path-recopy=warn --lint path-copy=warn --lint dir-copy-flake=warn]
   let root_site = $"at ($dir)/flake.nix:4:36"
   let dep_site = $"at ($work)/dep/flake.nix:1:33"
   let r = (^$ietsp eval --raw --no-cache --lint with=warn $"($dir)#value" | complete)
@@ -125,8 +129,8 @@ def main [] {
   let r = (^$ietsp eval --raw --no-cache ...$copies $"($dir)#file" | complete)
   $res ++= [(verdict (($r.stdout | str starts-with "/nix/store/") and not ($r.stderr | str contains "warning:")) "flake: \"${./file}\" under the root is neither a re-copy nor a path-copy" $"flake: file: ($r.stderr)")]
   let r = (^$ietsp eval --raw --no-cache ...$copies $"($dir)#dir" | complete)
-  let ok = (($r.stderr | str contains "warning: [path-copy] directory '") and ($r.stderr | str contains "copied to the store whole") and not ($r.stderr | str contains "[store-path-recopy]"))
-  $res ++= [(verdict $ok "flake: \"${./dir}\" under the root is a directory copied whole" $"flake: dir: ($r.stderr)")]
+  let ok = (($r.stderr | str contains "warning: [dir-copy-flake] directory '") and ($r.stderr | str contains "the tracked files") and not ($r.stderr | str contains "[path-copy]") and not ($r.stderr | str contains "[store-path-recopy]"))
+  $res ++= [(verdict $ok "flake: \"${./dir}\" under the root is dir-copy-flake, not path-copy" $"flake: dir: ($r.stderr)")]
   let r = (^$ietsp eval --raw --no-cache --lint-scope all ...$copies $"($dir)#inputFile" | complete)
   $res ++= [(verdict (($r.stdout | str starts-with "/nix/store/") and not ($r.stderr | str contains "warning:")) "flake: \"${./file}\" inside an input is neither a re-copy nor a path-copy" $"flake: input file: ($r.stderr)")]
   let r = (^$ietsp eval --raw --no-cache ...$copies $"($dir)#store" | complete)

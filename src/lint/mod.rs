@@ -148,12 +148,13 @@ registry! {
     UnusedBinding: "unused-binding", Scope, Compiler, Off, "a `let` binding its scope never references (`_`-prefixed names excepted)";
     UnusedFormal: "unused-formal", Scope, Compiler, Off, "a formal the lambda never references, when no `@` binding is used either; remove it from the pattern";
     RecUnused: "rec-unused", Scope, Compiler, Off, "`rec` on a set where no binding references a sibling";
-    PathCopy: "path-copy", Coerce, Evaluator, Off, "a path coerced to a string with a copy to the store (interpolation, `+`, derivation attrs)";
+    PathCopy: "path-copy", Coerce, Evaluator, Off, "a path coerced to a string with a copy to the store (interpolation, `+`, derivation attrs); not under a flake tree";
+    DirCopyFlake: "dir-copy-flake", Coerce, Evaluator, Off, "a directory of the flake tree (its tracked files) coerced to a string is copied to the store whole; narrow it with `lib.fileset` or `builtins.path` with a filter only when needed";
     StorePathRecopy: "store-path-recopy", Coerce, Evaluator, Off, "a path already under the store copied again, which doubles the hash in its name";
     ReadThroughCopy: "read-through-copy", Coerce, Evaluator, Off, "a read (readFile, readDir, import, ...) of a store copy this evaluation made, when the original path would do";
-    DrvBoolNull: "drv-bool-null", Coerce, Evaluator, Off, "a Boolean or null coerced into a derivation attribute (`\"1\"`, `\"\"`)";
-    DrvList: "drv-list", Coerce, Evaluator, Off, "a list space-joined into a derivation attribute (`outputs` and `args` excepted)";
-    EqTypeMismatch: "eq-type-mismatch", Coerce, Evaluator, Off, "`==` or `!=` on values of different types (int and float excepted)";
+    DrvBoolNull: "drv-bool-null", Coerce, Evaluator, Off, "a Boolean or null coerced into a derivation attribute (`\"1\"`, `\"\"`) by a `derivation` call in scope; Nix's own Boolean attributes excepted";
+    DrvList: "drv-list", Coerce, Evaluator, Off, "a list space-joined into a derivation attribute by a `derivation` call in scope (`outputs` and `args` excepted)";
+    EqTypeMismatch: "eq-type-mismatch", Coerce, Evaluator, Off, "`==` or `!=` on values of different types (int and float excepted, and null on either side)";
     EqFunction: "eq-function", Coerce, Evaluator, Off, "`==` or `!=` where a side is a function, which is never equal";
     OrNonAttrs: "or-non-attrs", Coerce, Evaluator, Off, "`x.a or d` where the subject of some element is not an attrset";
     LegacyLet: "legacy-let", Legacy, Parser, Off, "`let { body = ...; }`";

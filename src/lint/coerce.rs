@@ -11,23 +11,26 @@ fn lossy(b: &[u8]) -> std::borrow::Cow<'_, str> {
 }
 
 /// After a path was copied to the store by a string coercion. Inside a
-/// flake root or a locked input `"${./file}"` is the normal reference,
-/// so only a directory is reported there.
+/// flake root or a locked input `"${./file}"` is the normal reference:
+/// a file is silent, a directory is `dir-copy-flake`, not `path-copy`.
 pub fn path_copy(ev: &mut Evaluator, path: &[u8], store_path: &[u8], pos: Pos) -> EvalResult<()> {
-    if !ev.lint_on(LintId::PathCopy) {
+    if !ev.lint_on(LintId::PathCopy) && !ev.lint_on(LintId::DirCopyFlake) {
         return Ok(());
     }
     if ev.flake_tree_of(path).is_some() {
-        if !is_directory(ev, path) {
+        if !ev.lint_on(LintId::DirCopyFlake) || !is_directory(ev, path) {
             return Ok(());
         }
-        return ev.lint(LintId::PathCopy, pos, || {
+        return ev.lint(LintId::DirCopyFlake, pos, || {
             format!(
-                "directory '{}' is copied to the store whole as '{}' by this string coercion; use `builtins.path {{ path = ...; filter = ...; }}` to copy the files it needs",
+                "directory '{}' of the flake tree is copied to the store as '{}' by this string coercion: the tracked files, as the flake machinery kept them; use `lib.fileset.toSource` or `builtins.path {{ path = ...; filter = ...; }}` only to narrow it further",
                 lossy(path),
                 lossy(store_path)
             )
         });
+    }
+    if !ev.lint_on(LintId::PathCopy) {
+        return Ok(());
     }
     ev.lint(LintId::PathCopy, pos, || {
         format!(
@@ -104,12 +107,13 @@ pub fn read_through_copy(ev: &mut Evaluator, path: &[u8], pos: Pos) -> EvalResul
     })
 }
 
-/// The position the derivation-attribute lints (`drv-bool-null`,
-/// `drv-list`, `impure-path-in-drv`, `absolute-path-in-drv`, `fod`) fall
-/// back to when the attribute's own position is out of scope: nixpkgs's
-/// `mkDerivation` and `fetchurl` bind the attributes, so the user's
-/// derivation must be found elsewhere. The `derivationStrict` call, the
-/// `name` attribute, then the first attribute (in the set's order) whose
+/// The position the value lints on derivation attributes
+/// (`impure-path-in-drv`, `absolute-path-in-drv`, `fod`) fall back to
+/// when the attribute's own position is out of scope: nixpkgs's
+/// `mkDerivation` and `fetchurl` bind the attributes, but the offending
+/// value is the user's whatever the wrapper, so the user's derivation
+/// must be found elsewhere. The `derivationStrict` call, the `name`
+/// attribute, then the first attribute (in the set's order) whose
 /// position lies in a lint root; `Pos::NONE` when none does. The
 /// evaluator keeps no call trace, so a derivation whose attribute set
 /// holds no position from the root (a nixpkgs fetcher call) stays silent.
@@ -135,6 +139,24 @@ pub fn drv_fallback(
     Pos::NONE
 }
 
+/// The site of the derivation itself, for the encoding lints
+/// (`drv-bool-null`, `drv-list`): the `derivationStrict` call when the
+/// scope sees it (a direct call), else the `builder` attribute's
+/// position when the scope sees that. `derivation` is a wrapper in
+/// `«derivation-internal»`, so a direct `derivation { }` call is known
+/// by its `builder` binding. `None` when neither is seen: the derivation
+/// was made by a wrapper out of scope, such as nixpkgs's `mkDerivation`,
+/// and a list or Boolean there is the wrapper's contract, not a coercion
+/// the user chose.
+pub fn drv_owner(ev: &mut Evaluator, pos: Pos, builder_pos: Pos) -> Option<Pos> {
+    if !ev.lints.config.scoped() {
+        return Some(pos);
+    }
+    [pos, builder_pos]
+        .into_iter()
+        .find(|&p| ev.where_of(p) != Where::Elsewhere)
+}
+
 /// The site a derivation-attribute lint reports at: the attribute's own
 /// position when the scope keeps it, else `fallback`.
 pub fn drv_attr_pos(ev: &mut Evaluator, attr_pos: Pos, fallback: Pos) -> Pos {
@@ -145,10 +167,25 @@ pub fn drv_attr_pos(ev: &mut Evaluator, attr_pos: Pos, fallback: Pos) -> Pos {
     }
 }
 
+/// Nix's own Boolean derivation attributes: their `"1"`/`""` encoding is
+/// the protocol, so `drv-bool-null` never reports them.
+const PROTOCOL_BOOLS: &[&str] = &[
+    "__structuredAttrs",
+    "__ignoreNulls",
+    "__impureHostDeps",
+    "__propagatedImpureHostDeps",
+    "__sandboxProfile",
+    "__noChroot",
+    "__darwinAllowLocalNetworking",
+    "allowSubstitutes",
+    "preferLocalBuild",
+];
+
 /// A derivation attribute value, forced, about to be coerced into the
 /// environment.
 pub fn drv_value(ev: &mut Evaluator, key: &str, w: Word, attr_pos: Pos) -> EvalResult<()> {
     match w.view() {
+        Value::Bool(_) | Value::Null if PROTOCOL_BOOLS.contains(&key) => Ok(()),
         Value::Bool(b) => ev.lint(LintId::DrvBoolNull, attr_pos, || {
             format!(
                 "derivation attribute '{key}' is the Boolean {b}, which becomes \"{}\" in the environment",
@@ -169,7 +206,8 @@ pub fn drv_value(ev: &mut Evaluator, key: &str, w: Word, attr_pos: Pos) -> EvalR
     }
 }
 
-/// `==` or `!=` on the forced operands `a` and `b`.
+/// `==` or `!=` on the forced operands `a` and `b`. A `null` on either
+/// side is the language's test for absence, so it is no mismatch.
 pub fn eq(ev: &mut Evaluator, a: Word, b: Word, pos: Pos) -> EvalResult<()> {
     let (ta, tb) = (a.value_type(), b.value_type());
     if ta == ValueType::Function || tb == ValueType::Function {
@@ -179,10 +217,11 @@ pub fn eq(ev: &mut Evaluator, a: Word, b: Word, pos: Pos) -> EvalResult<()> {
         })?;
     }
     let numeric = |t| matches!(t, ValueType::Int | ValueType::Float);
-    if ta != tb && !(numeric(ta) && numeric(tb)) {
+    let null = ta == ValueType::Null || tb == ValueType::Null;
+    if ta != tb && !null && !(numeric(ta) && numeric(tb)) {
         ev.lint(LintId::EqTypeMismatch, pos, || {
             format!(
-                "`==` compares {} with {}: values of different types are never equal",
+                "`==` compares {} with {}: values of different types are never equal, so the result is constant",
                 ta.name(),
                 tb.name()
             )

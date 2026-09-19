@@ -211,6 +211,9 @@ struct Builder<'a> {
     /// Where a derivation-attribute lint reports when the attribute's own
     /// position is out of scope (`lint::coerce::drv_fallback`).
     lint_fallback: Pos,
+    /// The derivation's own site for `drv-bool-null` and `drv-list`
+    /// (`lint::coerce::drv_owner`); `None` keeps both silent.
+    lint_owner: Option<Pos>,
 }
 
 impl Builder<'_> {
@@ -354,9 +357,9 @@ fn process_attr(
         }
         return Ok(());
     }
-    if ev.lint_on(crate::lint::LintId::DrvBoolNull) || ev.lint_on(crate::lint::LintId::DrvList) {
+    if let Some(owner) = b.lint_owner {
         let forced = ev.force(w)?;
-        let site = crate::lint::coerce::drv_attr_pos(ev, attr_pos, b.lint_fallback);
+        let site = crate::lint::coerce::drv_attr_pos(ev, attr_pos, owner);
         crate::lint::coerce::drv_value(ev, key, forced, site)?;
     }
     // the attribute's own position, so a coercion lint names the binding
@@ -422,14 +425,18 @@ fn derivation_strict_internal(
 
     let path_lint = ev.lint_on(crate::lint::LintId::ImpurePathInDrv)
         || ev.lint_on(crate::lint::LintId::AbsolutePathInDrv);
-    let lint_fallback = if path_lint
-        || ev.lint_on(crate::lint::LintId::DrvBoolNull)
-        || ev.lint_on(crate::lint::LintId::DrvList)
-        || ev.lint_on(crate::lint::LintId::Fod)
-    {
+    let lint_fallback = if path_lint || ev.lint_on(crate::lint::LintId::Fod) {
         crate::lint::coerce::drv_fallback(ev, attrs, pos, name_pos)
     } else {
         Pos::NONE
+    };
+    let lint_owner = if ev.lint_on(crate::lint::LintId::DrvBoolNull)
+        || ev.lint_on(crate::lint::LintId::DrvList)
+    {
+        let builder_pos = attrs.get(s.builder).map_or(Pos::NONE, |a| a.pos);
+        crate::lint::coerce::drv_owner(ev, pos, builder_pos)
+    } else {
+        None
     };
     let mut b = Builder {
         s,
@@ -446,6 +453,7 @@ fn derivation_strict_internal(
         outputs: ["out".to_string()].into_iter().collect(),
         json: json_mode.then(|| vec![b'{']),
         lint_fallback,
+        lint_owner,
     };
 
     for attr in lexicographic_order(ev, attrs) {

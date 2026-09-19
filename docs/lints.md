@@ -70,22 +70,32 @@ scope, the roots and the input tables, because another scope is another
 warning set.
 
 For a compile-time lint the site is the node's position; for a runtime
-lint it is the call's position. The derivation-attribute lints
-(`drv-bool-null`, `drv-list`, `impure-path-in-drv`,
-`absolute-path-in-drv`, `fod`) are the exception: nixpkgs's
-`mkDerivation` and `fetchurl` bind the attributes of every derivation
-they make, so the attribute's position is in nixpkgs even when the value
-came from the user's file. When that position is out of scope the site
-falls back to the derivation's own position: the `derivationStrict` call
-when it is in a root (a direct call), else the `name` attribute, else the
-first attribute of the set (in the set's order) whose position is in a
-root, which `mkDerivation` keeps for the attributes it passes through
-(`pname`, `src`, ...). One site per (lint, position), so a derivation
-with several list attributes bound in nixpkgs gets one `drv-list` line
-naming the first. The evaluator keeps no call trace: a derivation whose
-attribute set holds no position from a root, such as a nixpkgs fetcher
-call (`fetchurl { url; hash }`), stays silent under `scope = "root"`;
-`[lint.inputs.nixpkgs] fod = "warn"` reports those at nixpkgs's site.
+lint it is the call's position. The derivation-attribute lints are the
+exception: nixpkgs's `mkDerivation` and `fetchurl` bind the attributes
+of every derivation they make, so the attribute's position is in nixpkgs
+even when the value came from the user's file. Two rules:
+
+- The value lints (`impure-path-in-drv`, `absolute-path-in-drv`, `fod`)
+  report the user's value whatever the wrapper. When the attribute's
+  position is out of scope the site falls back to the derivation's own
+  position: the `derivationStrict` call when it is in a root (a direct
+  call), else the `name` attribute, else the first attribute of the set
+  (in the set's order) whose position is in a root, which `mkDerivation`
+  keeps for the attributes it passes through (`pname`, `src`, ...). One
+  site per (lint, position). The evaluator keeps no call trace: a
+  derivation whose attribute set holds no position from a root, such as
+  a nixpkgs fetcher call (`fetchurl { url; hash }`), stays silent under
+  `scope = "root"`; `[lint.inputs.nixpkgs] fod = "warn"` reports those
+  at nixpkgs's site.
+- The encoding lints (`drv-bool-null`, `drv-list`) report a `derivation`
+  call the scope sees, and nothing else: a list or Boolean passed to
+  `mkDerivation` is nixpkgs's contract, and the `__structuredAttrs =
+  false` it injects is nixpkgs's binding. `derivation` is a wrapper in
+  `«derivation-internal»`, so the call is known by the `derivationStrict`
+  call position when that is in scope (a direct `builtins.derivationStrict`
+  call), else by the position of the `builder` attribute, which every
+  wrapper binds itself. The site is the attribute's own position when
+  the scope sees it, else the position the call was known by.
 
 ## Configuration file
 
@@ -113,6 +123,8 @@ all = "error"
 # the two lints nixpkgs' own idioms make unavoidable in a NixOS config
 with = "off"
 ellipsis-without-bind = "off"
+# a tracked directory copied whole is worth a look, not a failed run
+dir-copy-flake = "warn"
 ```
 
 ## Catalog
@@ -134,12 +146,13 @@ are part of the IR cache key and their warnings are stored in the entry;
 | `unused-binding` | scope | compiler | off | a `let` binding never referenced in its scope (`_`-prefixed exempt; a self-reference counts) |
 | `unused-formal` | scope | compiler | off | a formal never referenced in the body or a default, unless the `@name` binding is referenced; no `_` exemption, a formal is the caller's contract and `{ _pkgs, ... }:` still demands the attribute, so remove it from the pattern |
 | `rec-unused` | scope | compiler | off | `rec { }` where no binding references a sibling (`__overrides` counts as a reference) |
-| `path-copy` | coerce | evaluator | off | a path coerced to a string with a copy to the store: interpolation, `+`, a derivation attribute; not `toString`. Under a flake root or a locked input `"${./file}"` is the normal reference: silent for a regular file, and a directory is reported as copied whole (use `builtins.path` with a filter) |
+| `path-copy` | coerce | evaluator | off | a path coerced to a string with a copy to the store: interpolation, `+`, a derivation attribute; not `toString`. Under a flake root or a locked input `"${./file}"` is the normal reference: silent for a regular file, and a directory is `dir-copy-flake` |
+| `dir-copy-flake` | coerce | evaluator | off | a directory under a flake root or a locked input coerced to a string: the copy is the tracked file set the flake machinery already filtered, so the message suggests `lib.fileset` or `builtins.path { filter }` only to narrow it further; its own lint so `family:coerce = "error"` can keep it at `warn` |
 | `store-path-recopy` | coerce | evaluator | off | a path or `builtins.path`/`filterSource` argument already under the store dir copied again (`"${<nixpkgs>}"`, a `builtins.storePath` or pre-existing store path), which doubles the hash in the name; not for the flake root's or a locked input's virtual copy, whose paths already are store paths by construction |
 | `read-through-copy` | coerce | evaluator | off | readFile, readDir, pathExists, readFileType, hashFile, import, `builtins.path` or `filterSource` on a store copy this evaluation made by coercion, `builtins.path` or `filterSource` (flake roots and inputs excepted) |
-| `drv-bool-null` | coerce | evaluator | off | a Boolean or null coerced into a derivation attribute (`"1"`, `""`); null only outside `__ignoreNulls`; not with `__structuredAttrs` |
-| `drv-list` | coerce | evaluator | off | a list space-joined into a derivation attribute; `args` and `outputs` excepted |
-| `eq-type-mismatch` | coerce | evaluator | off | `==` or `!=` on values of different types, int and float excepted |
+| `drv-bool-null` | coerce | evaluator | off | a Boolean or null coerced into a derivation attribute (`"1"`, `""`) by a `derivation` call the scope sees (Scope); null only outside `__ignoreNulls`; not with `__structuredAttrs`; never for Nix's own Boolean attributes (`__structuredAttrs`, `__ignoreNulls`, `__impureHostDeps`, `__propagatedImpureHostDeps`, `__sandboxProfile`, `__noChroot`, `__darwinAllowLocalNetworking`, `allowSubstitutes`, `preferLocalBuild`), whose encoding is the protocol |
+| `drv-list` | coerce | evaluator | off | a list space-joined into a derivation attribute by a `derivation` call the scope sees (Scope); `args` and `outputs` excepted |
+| `eq-type-mismatch` | coerce | evaluator | off | `==` or `!=` on values of different types, int and float excepted; a `null` on either side is the test for absence and is exempt |
 | `eq-function` | coerce | evaluator | off | `==` or `!=` with a function on either side |
 | `or-non-attrs` | coerce | evaluator | off | `x.a or d` where the subject of some element is not an attrset |
 | `legacy-let` | legacy | parser | off | `let { body = ...; }` |
@@ -191,7 +204,11 @@ Warnings printed per lint with `--lint all=warn --lint-scope all`
 without lints; with worker processes each process deduplicates on its
 own, so the counts multiply); lang is every `tests/lang/eval-*.nix` and
 `tests/corpus/*.nix`. Stdout was identical with and without lints, and
-at 1 and 4 workers.
+at 1 and 4 workers. `eq-type-mismatch` (null exempt), `drv-bool-null`
+(Nix's Boolean attributes exempt) and `drv-list` were counted again on
+the build with those exemptions (outpaths then had 168 errors);
+`--lint-scope all` does not apply the `derivation`-call rule, and
+`dir-copy-flake` needs a flake entry, which none of these workloads is.
 
 | lint | desktop | outpaths 0/8 | lang + corpus |
 |---|---:|---:|---:|
@@ -204,11 +221,12 @@ at 1 and 4 workers.
 | `unused-formal` | 299 | 1422 | 22 |
 | `rec-unused` | 0 | 0 | 2 |
 | `path-copy` | 133 | 381 | 12 |
+| `dir-copy-flake` | 0 | 0 | 0 |
 | `store-path-recopy` | 142 | 395 | 0 |
 | `read-through-copy` | 0 | 580 | 0 |
-| `drv-bool-null` | 235 | 1569 | 0 |
-| `drv-list` | 533 | 9769 | 0 |
-| `eq-type-mismatch` | 337 | 841 | 2 |
+| `drv-bool-null` | 195 | 1515 | 0 |
+| `drv-list` | 533 | 9767 | 0 |
+| `eq-type-mismatch` | 26 | 30 | 0 |
 | `eq-function` | 4 | 5 | 3 |
 | `or-non-attrs` | 25 | 42 | 2 |
 | `url-literal` | 0 | 0 | 3 |
@@ -342,7 +360,13 @@ was measured:
 - The scope sees a site's file only. A derivation that nixpkgs builds
   from values the user passed is attributed through the positions of
   its attribute set (see Scope); a nixpkgs fetcher call keeps none from
-  the user's file and stays silent under `scope = "root"`.
+  the user's file and stays silent under `scope = "root"`. `drv-list`
+  and `drv-bool-null` know a `derivation` call by its `builder` binding,
+  so a wrapper in the user's repository is the user's contract and is
+  reported, and a list passed through such a wrapper from a file out of
+  scope is reported at the wrapper's `builder` binding.
+- `dir-copy-flake` needs a flake evaluation, so its fixture is the
+  scratch flake of `scripts/linttest.nu`, not a `tests/lint/*.nix` file.
 - `read-through-copy` only knows the copies this evaluation made through
   a coercion, `builtins.path` or `filterSource`; a flake root or input is
   a tracked tree and reading through it is the normal way.
