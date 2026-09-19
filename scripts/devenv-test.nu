@@ -228,6 +228,10 @@ def main [] {
     work: (mktemp -d --tmpdir ietsp-devenv.XXXXXX)
   }
   $env.NIX_REMOTE = ($env.NIX_REMOTE? | default "daemon")
+  # the host's ietsp.conf must not steer these builds (a remote `builder` changes cores)
+  $env.IETSP_CONF_DIR = ($ctx.work | path join "no-conf")
+  $env.XDG_CONFIG_HOME = ($ctx.work | path join "no-xdg")
+  hide-env -i IETSP_CONFIG
   let code = (try { run-tests $ctx } catch {|e| print -e $e.rendered; 1 })
   rm -rf $ctx.work
   exit $code
