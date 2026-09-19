@@ -56,9 +56,7 @@ pub fn path_tree(ev: &mut Evaluator, dir: &Path, pos: Pos) -> EvalResult<(Hash, 
             pos,
         )
     };
-    let (hash, nar_size) =
-        nar::nar_hash_filtered(dir, HashAlgo::Sha256, &mut |_, _| true).map_err(io)?;
-    let mtime = max_mtime(dir).map_err(io)?;
+    let (hash, nar_size, mtime) = dump_and_max_mtime(dir).map_err(io)?;
     ev.trace
         .tree(dir, crate::trace::hash_to_digest(&hash), None);
     let sp =
@@ -75,15 +73,19 @@ pub fn path_tree(ev: &mut Evaluator, dir: &Path, pos: Pos) -> EvalResult<(Hash, 
     Ok((hash, mtime))
 }
 
-fn max_mtime(p: &Path) -> std::io::Result<i64> {
-    let st = std::fs::symlink_metadata(p)?;
-    let mut m = st.mtime();
-    if st.is_dir() {
-        for e in std::fs::read_dir(p)? {
-            m = m.max(max_mtime(&e?.path())?);
+/// One walk for both answers, like `dumpPathAndGetMtime`: the dump already reaches every
+/// entry in the tree, so the newest `lstat` mtime comes from its filter callback instead of a
+/// second recursive `read_dir`.
+fn dump_and_max_mtime(dir: &Path) -> std::io::Result<(Hash, u64, i64)> {
+    let mut mtime = std::fs::symlink_metadata(dir)?.mtime();
+    let mut filter = |p: &Path, _: nar::FileType| {
+        if let Ok(st) = std::fs::symlink_metadata(p) {
+            mtime = mtime.max(st.mtime());
         }
-    }
-    Ok(m)
+        true
+    };
+    let (hash, nar_size) = nar::nar_hash_filtered(dir, HashAlgo::Sha256, &mut filter)?;
+    Ok((hash, nar_size, mtime))
 }
 
 fn git(ev: &mut Evaluator, root: &Path, args: &[&str], pos: Pos) -> EvalResult<Vec<u8>> {
@@ -282,6 +284,9 @@ mod tests {
             .set_modified(later)
             .unwrap();
         let want = std::fs::metadata(&f).unwrap().mtime();
-        assert_eq!(max_mtime(&d).unwrap(), want);
+        let (hash, size, mtime) = dump_and_max_mtime(&d).unwrap();
+        assert_eq!(mtime, want);
+        assert_eq!(hash, nar::nar_hash(&d).unwrap());
+        assert_eq!(size, nar::nar_size(&d).unwrap());
     }
 }
