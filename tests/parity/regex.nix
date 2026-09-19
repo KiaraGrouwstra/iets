@@ -4,6 +4,7 @@
 # builtins run on each. Failures are captured with tryEval, so an invalid
 # pattern compares as { err = true; } on both sides.
 let
+  long = s: n: builtins.concatStringsSep "" (builtins.genList (_: s) n);
   pairs = [
     # --- plain literals and concatenation
     { re = "a"; s = "a"; }
@@ -209,6 +210,108 @@ let
     { re = "(aa|a)*"; s = "aaa"; }
     { re = "(a|aa)(a|aa)"; s = "aaa"; }
     { re = "(a*a*)*b"; s = "aaab"; }
+
+    # --- a greedy quantifier keeps the first match it reaches
+    { re = "(x*)(xy)?"; s = "xy"; }
+    { re = "(x*)(xy)?"; s = "xyz"; }
+    { re = "(x?)(xy)?"; s = "xy"; }
+    { re = "(x+)(xy)?"; s = "xxy"; }
+    { re = "(x){0,1}(xy)?"; s = "xy"; }
+    { re = "(x|)(xy)?"; s = "xy"; }
+    { re = "(|x)(xy)?"; s = "xy"; }
+    { re = "(abc|a)(b*)(bcde)?"; s = "abcde"; }
+    { re = "(a|abc)(b*)(bcde)?"; s = "abcde"; }
+    { re = "(a)(b*)(bcde)?"; s = "abcde"; }
+    { re = "(a|abc)d*"; s = "abc"; }
+    { re = "(a|abc)(d?)"; s = "abc"; }
+    { re = "(a*)(a|b)*"; s = "aab"; }
+    { re = "(a|b)*(ab)?"; s = "ab"; }
+    { re = "(a|ab)(x|)(b*)"; s = "abb"; }
+    { re = "(ab|a)(b?)"; s = "ab"; }
+    { re = "x(a|ab)"; s = "xab"; }
+    { re = "(a|ab)(c|bcd)"; s = "abcd"; }
+
+    # --- captures persist across iterations
+    { re = "((a)|(b))*"; s = "ab"; }
+    { re = "(a(b)?)+"; s = "aba"; }
+    { re = "((a)|b)+"; s = "ab"; }
+    { re = "((a)|(b))+"; s = "ba"; }
+    { re = "((a)|(b)){2}"; s = "ab"; }
+    { re = "((a)|b)*c"; s = "abc"; }
+    { re = "((a)|ab)*"; s = "abab"; }
+
+    # --- empty iterations
+    { re = "(|a)*"; s = "aa"; }
+    { re = "(|a)+"; s = "aa"; }
+    { re = "((a*)*)*"; s = "aa"; }
+    { re = "(a*)*(b)"; s = "aab"; }
+    { re = "(a*|b)*"; s = "ba"; }
+    { re = "(a*){3}"; s = "aa"; }
+    { re = "(b|a*)*"; s = "ab"; }
+    { re = "(a|b*)*"; s = "ab"; }
+    { re = "()*a"; s = "a"; }
+    { re = "(^)*a"; s = "a"; }
+    { re = "($)+"; s = ""; }
+    { re = "(a{0})*"; s = "a"; }
+
+    # --- odd but valid syntax
+    { re = "a}"; s = "a}"; }
+    { re = "]"; s = "]"; }
+    { re = "a{1}{2}"; s = "aa"; }
+    { re = "a*{2}"; s = "aa"; }
+    { re = "a{02}"; s = "aa"; }
+    { re = "a{0,0}b"; s = "b"; }
+    { re = "(){2}"; s = ""; }
+    { re = "a||b"; s = "b"; }
+    { re = "a(|)"; s = "a"; }
+    { re = "(|)"; s = ""; }
+    { re = "a?+"; s = "aa"; }
+
+    # --- bracket edge cases
+    { re = "[[.hyphen.]-z]+"; s = "-az"; }
+    { re = "[[.a.]-c]+"; s = "abc"; }
+    { re = "[[.space.][.tilde.]]+"; s = " ~"; }
+    { re = "[[=a=]]+"; s = "aA"; }
+    { re = "[[=period=]x]+"; s = ".x"; }
+    { re = "[%--]+"; s = "%&-"; }
+    { re = "[--a]+"; s = "-0a"; }
+    { re = "[!--]"; s = ","; }
+    { re = "[---]"; s = "-"; }
+    { re = "[]-a]+"; s = "]^a"; }
+    { re = "[^]-a]+"; s = "bc"; }
+    { re = "[a-c-]+"; s = "a-c"; }
+    { re = "[[:alpha:]-]+"; s = "a-b"; }
+    { re = "[[a]+"; s = "[a"; }
+    { re = "[:alpha:]+"; s = ":ah"; }
+    { re = "[\\n]+"; s = "\\n"; }
+    { re = "[\\]]"; s = "\\]"; }
+    { re = "[[:w:]]+"; s = "a_1"; }
+    { re = "[[:ALPHA:]]+"; s = "aB"; }
+    { re = "[[:punct:]]+"; s = "!~"; }
+    { re = "[[:blank:]]+"; s = " \t"; }
+    { re = "[[:space:]]+"; s = "\r\n"; }
+    { re = "[[:xdigit:]]+"; s = "fF9"; }
+    { re = "[[:cntrl:]]"; s = "\t"; }
+
+    # --- bytes above 0x7f: ranges compare signed chars
+    { re = "."; s = "é"; }
+    { re = ".."; s = "é"; }
+    { re = "[^a]+"; s = "é"; }
+    { re = "[[:alpha:]]+"; s = "é"; }
+    { re = "[é-a]+"; s = "éa"; }
+    { re = "[à-ú]+"; s = "éa"; }
+    { re = "[é]"; s = "é"; }
+
+    # --- long inputs and backtracking-heavy patterns
+    { re = "(a|b)*c"; s = long "ab" 500; }
+    { re = "(a|b)*"; s = long "ab" 5000; }
+    { re = "(.*)-(.*)-(.*)"; s = long "x-" 300; }
+    { re = "([^-]*)-(.*)"; s = long "abc" 3000 + "-z"; }
+    { re = ".*"; s = long "0123456789" 2000; }
+    { re = "(a|aa)*b"; s = long "a" 30 + "b"; }
+    { re = "((a|b)(c|d))+"; s = long "ad" 400; }
+    { re = "[a-z]+"; s = long "ab " 700; }
+    { re = "(ab|a)*b"; s = long "ab" 200; }
   ];
   try = v: let r = builtins.tryEval v; in if r.success then { ok = r.value; } else { err = true; };
 in

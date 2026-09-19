@@ -4,8 +4,8 @@ Places where ietsp knowingly differs from `nix-instantiate`. Each entry
 says what differs, why, and how to observe it.
 
 `scripts/parity.nu` runs the differential corpora under `tests/parity/`
-(184 regex pattern/input pairs through both `builtins.match` and
-`builtins.split`, 24 patterns both sides must reject, 77 TOML documents
+(272 regex pattern/input pairs through both `builtins.match` and
+`builtins.split`, 46 patterns both sides must reject, 77 TOML documents
 and 46 rejected ones) against the real `nix-instantiate` and requires
 byte-equal `--strict --json` output. It needs a nix binary, so it is not
 a flake check; run it by hand in the dev shell. `NIX=` and `IETSP=`
@@ -14,15 +14,12 @@ override either side.
 ## Regular expressions (`builtins.match`, `builtins.split`)
 
 Nix compiles patterns with libstdc++ `std::regex` in `extended` (POSIX ERE)
-mode. ietsp builds the same NFA (`src/builtins/text/ere.rs`) and walks it
-with the same depth-first executor (`src/builtins/text/posix.rs`), so the
-matches, the capture groups and the accept/reject set agree. Only the
-error message differs:
-
-- **Error messages.** ietsp always reports `invalid regular expression
-  '<re>'`; Nix says `memory limit exceeded by regular expression` when the
-  NFA passes libstdc++'s 100000-state limit, which is where ietsp stops
-  too (`a{40000}` compiles, `a{99999}` does not).
+mode. ietsp has its own engine (`src/builtins/text/regex.rs`), written from
+the behaviour Nix shows and the POSIX spec. Its header lists the observed
+rules. No divergence is known: the matches, the capture groups, the
+accept/reject set and both error messages agree, including the
+`memory limit exceeded by regular expression` limit (`a{99993}` compiles,
+`a{99994}` does not).
 
 ## `builtins.fromTOML`
 

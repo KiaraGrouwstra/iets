@@ -1,10 +1,9 @@
 //! Regular expressions, string rewriting, hashing, JSON/XML/TOML conversion,
 //! rounding, `genericClosure`, and environment access.
 
-mod ere;
 mod fromtoml;
 mod json;
-mod posix;
+mod regex;
 mod xml;
 
 use std::cell::RefCell;
@@ -50,9 +49,9 @@ fn current_time(ev: &mut Evaluator, _args: &[Word], _pos: Pos) -> EvalResult<Wor
 
 // ---- regular expressions ------------------------------------------------------
 
-/// One ERE. `None` is a pattern libstdc++ would reject; the cache keeps the
-/// rejection so a repeated bad pattern is not re-parsed.
-type CompiledRegex = Option<posix::Prog>;
+/// One ERE, or why Nix would reject it; the cache keeps the rejection so a
+/// repeated bad pattern is not re-parsed.
+type CompiledRegex = Result<regex::Prog, regex::Error>;
 
 thread_local! {
     static REGEX_CACHE: RefCell<HashMap<Vec<u8>, Rc<CompiledRegex>>> = RefCell::new(HashMap::new());
@@ -64,13 +63,14 @@ pub fn regex_cache_len() -> usize {
     REGEX_CACHE.with(|c| c.borrow().len())
 }
 
-fn invalid_regex(re: &[u8], pos: Pos) -> Box<Error> {
+fn invalid_regex(re: &[u8], e: regex::Error, pos: Pos) -> Box<Error> {
+    let what = match e {
+        regex::Error::Invalid => "invalid regular expression",
+        regex::Error::TooBig => "memory limit exceeded by regular expression",
+    };
     Error::boxed(
         ErrorKind::Eval,
-        format!(
-            "invalid regular expression '{}'",
-            String::from_utf8_lossy(re)
-        ),
+        format!("{what} '{}'", String::from_utf8_lossy(re)),
         pos,
     )
 }
@@ -84,7 +84,7 @@ fn get_regex(re: &[u8]) -> Rc<CompiledRegex> {
         if let Some(r) = c.get(re) {
             return r.clone();
         }
-        let r = Rc::new(ere::compile(re));
+        let r = Rc::new(regex::compile(re));
         c.insert(re.to_vec(), r.clone());
         r
     })
@@ -117,10 +117,11 @@ fn match_(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         "while evaluating the second argument passed to builtins.match",
     )?;
     let cre = get_regex(re);
-    let Some(prog) = cre.as_ref() else {
-        return Err(invalid_regex(re, pos));
+    let prog = match cre.as_ref() {
+        Ok(p) => p,
+        Err(e) => return Err(invalid_regex(re, *e, pos)),
     };
-    let Some(groups) = posix::match_exact(prog, s.bytes) else {
+    let Some(groups) = regex::match_exact(prog, s.bytes) else {
         return Ok(Word::NULL);
     };
     Ok(Word::from_ptr(group_list(ev, &groups, s.bytes)))
@@ -141,13 +142,14 @@ fn split(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         "while evaluating the second argument passed to builtins.split",
     )?;
     let cre = get_regex(re);
-    let Some(prog) = cre.as_ref() else {
-        return Err(invalid_regex(re, pos));
+    let prog = match cre.as_ref() {
+        Ok(p) => p,
+        Err(e) => return Err(invalid_regex(re, *e, pos)),
     };
     let hay = s.bytes;
     let mut items: Vec<Word> = Vec::new();
     let mut prev_end = 0;
-    for m in posix::matches(prog, hay) {
+    for m in regex::matches(prog, hay) {
         items.push(ev.arena.mk_string_static(&hay[prev_end..m.start], &[]));
         items.push(Word::from_ptr(group_list(ev, &m.groups, hay)));
         prev_end = m.end;

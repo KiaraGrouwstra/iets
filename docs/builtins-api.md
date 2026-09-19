@@ -125,7 +125,7 @@ filterSource, path, toFile; fetchurl, fetchTarball, fetchGit, fetchTree,
 fetchMercurial, fetchClosure, getFlake, parseFlakeRef, flakeRefToString,
 outputOf exist but fail when called.
 context: getContext, appendContext, addDrvOutputDependencies.
-text: match, split (ERE via `text/ere.rs`, per-thread regex cache), replaceStrings,
+text: match, split (ERE via `text/regex.rs`, per-thread regex cache), replaceStrings,
 hashString, hashFile, convertHash, floor, ceil, genericClosure, getEnv, break,
 toJSON, fromJSON, toXML, fromTOML (`--extra-experimental-features
 parse-toml-timestamps` for datetimes), currentTime. Divergences:
