@@ -57,3 +57,10 @@ the same drvPath. ietsp runs with its default of 4 workers.
 
 Single-threaded ietsp: 1.67 s desktop, 1.32 s minimal. Details in
 `docs/parallel.md`.
+
+## Licence
+
+LGPL-2.1-or-later, like Nix (see COPYING). Some files are copied from Nix
+(corepkgs, `call-flake.nix`, `get-env.sh`, the `tests/lang` suite) under the
+same licence. `proto/nix_remote.proto` comes from Mic92/nix-grpc-store, which
+carries no licence yet.

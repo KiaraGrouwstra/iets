@@ -9,6 +9,7 @@
         version = "0.1.0";
         src = self;
         cargoLock.lockFile = ./Cargo.lock;
+        meta.license = pkgs.lib.licenses.lgpl21Plus;
         # checks.test runs the suite; the package build stays a build.
         doCheck = false;
       };
