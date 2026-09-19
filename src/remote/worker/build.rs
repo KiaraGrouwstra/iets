@@ -9,12 +9,12 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use crate::store::hash::{HashAlgo, Hasher, hash_bytes};
+use crate::store::hash::{HashAlgo, hash_bytes};
 use crate::store::nar::{dump_string, flat_hash, restore_path};
 use crate::store::path::StorePath;
 
 use super::super::event::{Done, Event};
-use super::super::plan::{Locator, Object, Plan, SourceData, SourceKind};
+use super::super::plan::{DrvHashes, Locator, Object, Plan, SourceData, SourceKind, prehash_drvs};
 use super::wire::{write_str, write_strs, write_u64};
 use crate::error::{Error, Result};
 
@@ -198,6 +198,7 @@ pub fn build_on(
     let t4 = Instant::now();
     let missing: Vec<&Object> = resolved.objects.iter().chain(missing_drvs).collect();
     if !missing.is_empty() {
+        prehash_drvs(&missing);
         let before = conn.bytes_sent();
         let mut body = |w: &mut dyn Write| -> io::Result<()> {
             write_u64(w, missing.len() as u64)?;
@@ -334,21 +335,17 @@ pub fn write_object(w: &mut dyn Write, o: &Object) -> io::Result<()> {
             path,
             aterm,
             references,
-            ..
+            hashes,
         } => {
-            let digest = hash_bytes(HashAlgo::Sha256, aterm);
-            let mut h = Hasher::new(HashAlgo::Sha256);
-            dump_string(aterm, &mut h)?;
-            let nar_size = h.bytes_written();
-            let nar_hash = h.finish();
+            let h = hashes.get_or_init(|| DrvHashes::of(aterm));
             let references: Vec<String> = references.iter().map(|r| r.to_string()).collect();
             write_info(
                 w,
                 &path.to_string(),
-                &nar_hash.to_base16(),
+                &h.nar_hash.to_base16(),
                 &references,
-                nar_size,
-                &format!("text:sha256:{}", digest.to_nix32()),
+                h.nar_size,
+                &format!("text:sha256:{}", h.text.to_nix32()),
             )?;
             dump_string(aterm, w)
         }

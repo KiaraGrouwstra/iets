@@ -234,6 +234,7 @@ impl Backend for Worker {
             return Ok(0);
         }
         let t0 = Instant::now();
+        crate::remote::plan::prehash_drvs(objects);
         let before = self.conn.bytes_sent();
         let mut body = |w: &mut dyn Write| -> io::Result<()> {
             wire::write_u64(w, objects.len() as u64)?;

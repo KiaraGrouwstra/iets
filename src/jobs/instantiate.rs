@@ -181,6 +181,8 @@ impl Store {
             objects.push(Object::drv(path.clone(), aterm.clone(), references.clone()));
         }
         if !objects.is_empty() {
+            let refs: Vec<&Object> = objects.iter().collect();
+            crate::remote::plan::prehash_drvs(&refs);
             let before = self.conn.bytes_sent();
             let mut body = |w: &mut dyn Write| -> std::io::Result<()> {
                 crate::remote::worker::wire::write_u64(w, objects.len() as u64)?;

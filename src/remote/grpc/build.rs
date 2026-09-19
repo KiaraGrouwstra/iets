@@ -323,6 +323,7 @@ fn upload(
     let mut stub = c.stub.clone();
     let rt = &c.rt;
     let n = objects.len();
+    crate::remote::plan::prehash_drvs(objects);
     let sent = Arc::new(AtomicU64::new(0));
     std::thread::scope(|s| {
         let producer = {

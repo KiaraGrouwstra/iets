@@ -4,7 +4,8 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::builtins::derivation::DrvInfo;
 use crate::error::{Error, Result};
@@ -103,12 +104,74 @@ pub enum Object {
         nar_size: u64,
     },
     /// A derivation: its ATerm. `references` is inputSrcs plus inputDrvs, what the worker
-    /// protocol needs to register the `.drv` as a text path.
+    /// protocol needs to register the `.drv` as a text path. `hashes` is filled by
+    /// `prehash_drvs` before the upload starts, so the connection only writes bytes.
     Drv {
         path: StorePath,
         aterm: Arc<Vec<u8>>,
         references: BTreeSet<StorePath>,
+        hashes: OnceLock<DrvHashes>,
     },
+}
+
+/// What registering a `.drv` needs beyond its bytes: the flat sha256 of the ATerm, which is
+/// its `text:sha256:` content address, and the hash and size of its NAR.
+#[derive(Clone, Debug)]
+pub struct DrvHashes {
+    pub text: Hash,
+    pub nar_hash: Hash,
+    pub nar_size: u64,
+}
+
+impl DrvHashes {
+    pub fn of(aterm: &[u8]) -> DrvHashes {
+        let mut nar = Hasher::new(HashAlgo::Sha256);
+        dump_string(aterm, &mut nar).expect("a hasher never fails");
+        DrvHashes {
+            text: crate::store::hash::hash_bytes(HashAlgo::Sha256, aterm),
+            nar_size: nar.bytes_written(),
+            nar_hash: nar.finish(),
+        }
+    }
+}
+
+/// Hashes the ATerm of every `.drv` in `objects` on a thread pool. Without this each ATerm is
+/// hashed twice inside the framed upload, one drv at a time, with the daemon waiting.
+pub fn prehash_drvs(objects: &[&Object]) {
+    let todo: Vec<(&OnceLock<DrvHashes>, &[u8])> = objects
+        .iter()
+        .filter_map(|o| match o {
+            Object::Drv { aterm, hashes, .. } if hashes.get().is_none() => {
+                Some((hashes, aterm.as_slice()))
+            }
+            _ => None,
+        })
+        .collect();
+    if todo.len() < 2 {
+        for (cell, aterm) in todo {
+            let _ = cell.set(DrvHashes::of(aterm));
+        }
+        return;
+    }
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(todo.len());
+    let next = AtomicUsize::new(0);
+    std::thread::scope(|s| {
+        for _ in 0..threads {
+            s.spawn(|| {
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    if i >= todo.len() {
+                        break;
+                    }
+                    let (cell, aterm) = todo[i];
+                    let _ = cell.set(DrvHashes::of(aterm));
+                }
+            });
+        }
+    });
 }
 
 impl Object {
@@ -133,6 +196,7 @@ impl Object {
             path,
             aterm,
             references,
+            hashes: OnceLock::new(),
         }
     }
 
