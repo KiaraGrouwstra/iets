@@ -549,26 +549,25 @@ fn walk_fp(
     Ok(())
 }
 
-/// NAR hash of `root` under the recorded filter, plus the `seen_hash` of the
-/// walk, for the slow path of `Tree` validation.
+/// NAR hash of `root` under the recorded filter, plus the `seen_hash` and the
+/// current `stat_hash`, for the slow path of `Tree` validation. The dump gives
+/// all three, so the caller never needs `tree_fingerprint` again afterwards.
 pub fn tree_rehash(
     root: &Path,
     accepted: Option<&HashSet<PathBuf>>,
-) -> io::Result<(Digest32, Digest32)> {
+) -> io::Result<(Digest32, Digest32, Digest32)> {
     use crate::store::hash::HashAlgo;
-    let mut seen_h = Sha256::new();
-    let root_len = root.as_os_str().as_bytes().len();
+    let mut fp = TreeFp::new(root).ok_or_else(|| io::Error::other("tree is gone"))?;
     let mut filter = |p: &Path, t: crate::store::nar::FileType| -> bool {
-        let rel = &p.as_os_str().as_bytes()[root_len..];
-        seen_h.update((rel.len() as u64).to_le_bytes());
-        seen_h.update(rel);
-        seen_h.update([nar_kind(t).to_u8()]);
-        accepts(accepted, p)
+        let keep = accepts(accepted, p);
+        fp.entry(p, t, keep);
+        keep
     };
     let (h, _) = crate::store::nar::nar_hash_filtered(root, HashAlgo::Sha256, &mut filter)?;
-    let mut nar = [0u8; 32];
-    nar.copy_from_slice(h.bytes());
-    Ok((nar, seen_h.finalize().into()))
+    let (stat_hash, seen_hash) = fp
+        .finish()
+        .ok_or_else(|| io::Error::other("tree changed while it was read"))?;
+    Ok((hash_to_digest(&h), seen_hash, stat_hash))
 }
 
 fn nar_kind(t: crate::store::nar::FileType) -> Kind {
@@ -652,7 +651,8 @@ mod tests {
         let (c, sc) = tree_fingerprint(&dir, None).unwrap();
         assert_ne!(a, c);
         assert_ne!(sa, sc);
-        let (nar, seen) = tree_rehash(&dir, None).unwrap();
+        let (nar, seen, stat) = tree_rehash(&dir, None).unwrap();
+        assert_eq!(stat, c);
         assert_eq!(seen, sc);
         assert_eq!(
             nar,

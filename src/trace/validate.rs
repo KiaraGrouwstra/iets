@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use super::{Obs, dir_listing_hash, mtime_ns, read_dir_kinds, sha256, stat_kind};
+use super::{Obs, dir_listing_hash, mtime_ns, read_dir_kinds, stat_kind};
 
 #[derive(Debug, Default)]
 pub struct Report {
@@ -41,6 +41,15 @@ fn lossy(p: &[u8]) -> String {
     String::from_utf8_lossy(p).into_owned()
 }
 
+/// sha256 of a file's bytes without holding them: a rehash pass over a big `nixpkgs` file
+/// would otherwise allocate the whole file to read it once.
+fn file_sha256(p: &Path) -> std::io::Result<super::Digest32> {
+    use crate::store::hash::{HashAlgo, Hasher};
+    let mut h = Hasher::new(HashAlgo::Sha256);
+    std::io::copy(&mut fs::File::open(p)?, &mut h)?;
+    Ok(super::hash_to_digest(&h.finish()))
+}
+
 fn check(o: &Obs, rehashed: &AtomicUsize) -> Outcome {
     match o {
         Obs::File {
@@ -60,10 +69,10 @@ fn check(o: &Obs, rehashed: &AtomicUsize) -> Outcome {
                 return Outcome::Same;
             }
             rehashed.fetch_add(1, Ordering::Relaxed);
-            let Ok(bytes) = fs::read(os(path)) else {
+            let Ok(now) = file_sha256(os(path)) else {
                 return Outcome::Changed(format!("{} is unreadable", lossy(path)));
             };
-            if sha256(&bytes) != *hash {
+            if now != *hash {
                 return Outcome::Changed(format!("{} changed", lossy(path)));
             }
             Outcome::Refresh(super::file_obs(path, &m, *hash))
@@ -104,7 +113,7 @@ fn check(o: &Obs, rehashed: &AtomicUsize) -> Outcome {
                 Err(_) => return Outcome::Changed(format!("tree {} is gone", lossy(root))),
             }
             rehashed.fetch_add(1, Ordering::Relaxed);
-            let Ok((nar, seen)) = super::tree_rehash(root_p, accepted.as_ref()) else {
+            let Ok((nar, seen, sh)) = super::tree_rehash(root_p, accepted.as_ref()) else {
                 return Outcome::Changed(format!("tree {} is unreadable", lossy(root)));
             };
             if nar != *nar_hash
@@ -114,9 +123,6 @@ fn check(o: &Obs, rehashed: &AtomicUsize) -> Outcome {
             {
                 return Outcome::Changed(format!("tree {} changed", lossy(root)));
             }
-            let Ok((sh, _)) = super::tree_fingerprint(root_p, accepted.as_ref()) else {
-                return Outcome::Changed(format!("tree {} is gone", lossy(root)));
-            };
             Outcome::Refresh(Obs::Tree {
                 root: root.clone(),
                 nar_hash: *nar_hash,
@@ -205,7 +211,7 @@ pub fn validate(obs: &mut [Obs], threads: usize) -> Result<Report, Mismatch> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::Kind;
+    use super::super::{Kind, sha256};
     use super::*;
 
     fn tmp(name: &str) -> PathBuf {
