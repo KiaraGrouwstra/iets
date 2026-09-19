@@ -50,15 +50,7 @@ fn import_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>> {
         Value::Path(p) => Ok(p.path.to_vec()),
         Value::String(s) => {
             crate::lint::purity::ifd(ev, s.ctx, pos)?;
-            if !s.bytes.starts_with(b"/") {
-                bail!(
-                    ErrorKind::Eval,
-                    pos,
-                    "string '{}' doesn't represent an absolute path",
-                    String::from_utf8_lossy(s.bytes)
-                );
-            }
-            Ok(crate::compile::canon_path(s.bytes))
+            super::paths::realise_path(ev, w, pos)
         }
         Value::Attrs(a) => match a.get(ev.s.out_path) {
             Some(o) => {

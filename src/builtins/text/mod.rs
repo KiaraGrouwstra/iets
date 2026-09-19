@@ -286,31 +286,7 @@ fn hash_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the first argument passed to builtins.hashFile",
     )?;
-    let w = ev.force(args[1])?;
-    let path: Vec<u8> = match w.view() {
-        Value::Path(p) => p.path.to_vec(),
-        _ => {
-            let mut ctx = Vec::new();
-            let s = ev.coerce_to_string(
-                w,
-                &mut ctx,
-                pos,
-                "while realising the context of a path",
-                false,
-                false,
-                true,
-            )?;
-            if !s.starts_with(b"/") {
-                bail!(
-                    ErrorKind::Eval,
-                    pos,
-                    "string '{}' doesn't represent an absolute path",
-                    String::from_utf8_lossy(&s)
-                );
-            }
-            crate::compile::canon_path(&s)
-        }
-    };
+    let path = crate::builtins::paths::realise_path(ev, args[1], pos)?;
     crate::lint::coerce::read_through_copy(ev, &path, pos)?;
     // `read_source` is the one reader: a file on disk, the local original of a
     // virtual copy, or a member of a fetched input's spool (`crate::inputs`).

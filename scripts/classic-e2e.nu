@@ -222,6 +222,13 @@ def main [] {
   $ok = ($ok | append (cmp-case "fetchTarball falls back and prints the real result"
     (run-both $farm nix-instantiate --eval -E $"builtins.fetchTarball \"file://($tmp)/x.tar.gz\"")))
 
+  let ifd = $"import \(derivation { name = \"x\"; system = builtins.currentSystem; builder = \"/bin/sh\"; args = [\"-c\" \"echo 42 > $out\"]; })"
+  $ok = ($ok | append (cmp-case "import from derivation falls back"
+    (run-both $farm nix-instantiate --eval -E $ifd)))
+  let r = (^$ietsp eval -E $ifd | complete)
+  $ok = ($ok | append (verdict ($r.exit_code == 1 and ($r.stderr | str contains "import from derivation is not supported"))
+    "ietsp eval refuses import from derivation" $"exit ($r.exit_code), stderr '($r.stderr)'"))
+
   # --- a file name that is not UTF-8
   let ff = $"($tmp)/ff"
   mkdir $ff

@@ -271,10 +271,12 @@ Two triggers:
 2. An evaluation that hits `ErrorKind::Unsupported`: the network fetchers
    (`fetchurl`, `fetchTarball`, `fetchGit`, `fetchMercurial`,
    `fetchClosure`), the flake primops (`getFlake`, `parseFlakeRef`,
-   `flakeRefToString`), `outputOf`, import-from-derivation, and a flake
-   whose `flake.lock` is missing or incomplete. Every other evaluation
-   error is reported and exits 1, because the real nix would fail the same
-   way and re-running it would double the cost.
+   `flakeRefToString`), `outputOf`, import-from-derivation (`import`,
+   `scopedImport`, `readFile`, `readDir`, `pathExists`, `readFileType` or
+   `hashFile` on a derivation output), and a flake whose `flake.lock` is
+   missing or incomplete. Every other evaluation error is reported and
+   exits 1, because the real nix would fail the same way and re-running it
+   would double the cost.
 
 The fallback prints one line on stderr and then `execve`s the real binary
 with the same `argv`:

@@ -140,3 +140,29 @@ fn derivation_wrapper_exists() {
         "\"lambda\""
     );
 }
+
+#[test]
+fn reading_a_derivation_output_is_unsupported() {
+    let drv = r#"(derivation { name = "x"; system = "x86_64-linux"; builder = "/bin/sh"; })"#;
+    for f in [
+        "import",
+        "scopedImport {}",
+        "builtins.readFile",
+        "builtins.readDir",
+        "builtins.pathExists",
+        "builtins.readFileType",
+        r#"builtins.hashFile "sha256""#,
+    ] {
+        let mut ev = Evaluator::new();
+        let e = ev
+            .eval_string(&format!("{f} {drv}"), b"/")
+            .and_then(|v| ev.force_deep(v))
+            .unwrap_err();
+        assert_eq!(
+            e.kind,
+            crate::eval::ErrorKind::Unsupported,
+            "{f}: {}",
+            e.msg
+        );
+    }
+}

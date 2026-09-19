@@ -191,7 +191,7 @@ pub fn coerce_to_path(
 /// cannot be realised here, and an opaque store path must exist or be a
 /// tree this evaluation copied. The result is the path as Nix names it;
 /// `store_hooks::locate` gives the file to read.
-fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>> {
+pub fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>> {
     let mut ctx = Vec::new();
     let p = coerce_to_path(
         ev,
@@ -215,7 +215,7 @@ fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>> {
             Ctx::DrvDeep(d) | Ctx::Built { drv: d, .. } => {
                 kind = ErrorKind::Unsupported;
                 format!(
-                    "ietsp: cannot build derivation '{}' (building is not supported)",
+                    "ietsp: import from derivation is not supported: '{}' is not built",
                     lossy(d)
                 )
             }
