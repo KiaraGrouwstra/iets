@@ -103,7 +103,13 @@ pub fn report(ev: &Evaluator, e: &Error) {
     use crate::provenance::{describe_pos, rewrite_msg};
     let at = |pos: Pos| describe_pos(ev, pos).unwrap_or_else(|| ev.describe_pos(pos));
     ev.lints.flush();
-    eprintln!("error: {}", rewrite_msg(ev, &e.msg));
+    // a lint message resolves its own paths (lint::Evaluator::lint_shown_path)
+    let msg = if e.kind == crate::eval::ErrorKind::Lint {
+        e.msg.clone()
+    } else {
+        rewrite_msg(ev, &e.msg)
+    };
+    eprintln!("error: {msg}");
     if !e.pos.is_none() {
         eprintln!("       at {}", at(e.pos));
     }

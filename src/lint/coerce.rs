@@ -17,6 +17,7 @@ pub fn path_copy(ev: &mut Evaluator, path: &[u8], store_path: &[u8], pos: Pos) -
     if !ev.lint_on(LintId::PathCopy) && !ev.lint_on(LintId::DirCopyFlake) {
         return Ok(());
     }
+    let shown = ev.lint_shown_path(path);
     if ev.flake_tree_of(path).is_some() {
         if !ev.lint_on(LintId::DirCopyFlake) || !is_directory(ev, path) {
             return Ok(());
@@ -24,7 +25,7 @@ pub fn path_copy(ev: &mut Evaluator, path: &[u8], store_path: &[u8], pos: Pos) -
         return ev.lint(LintId::DirCopyFlake, pos, || {
             format!(
                 "directory '{}' of the flake tree is copied to the store as '{}' by this string coercion: the tracked files, as the flake machinery kept them; use `lib.fileset.toSource` or `builtins.path {{ path = ...; filter = ...; }}` only to narrow it further",
-                lossy(path),
+                shown,
                 lossy(store_path)
             )
         });
@@ -35,7 +36,7 @@ pub fn path_copy(ev: &mut Evaluator, path: &[u8], store_path: &[u8], pos: Pos) -
     ev.lint(LintId::PathCopy, pos, || {
         format!(
             "path '{}' is copied to the store as '{}' by this string coercion; use `toString` for the name or `builtins.path` for an explicit copy",
-            lossy(path),
+            shown,
             lossy(store_path)
         )
     })

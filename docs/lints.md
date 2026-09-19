@@ -15,20 +15,42 @@ fixtures: `tests/lint/<name>.nix`, checked by `scripts/linttest.nu`.
 
 Nix's spellings `ignore` and `fatal` are accepted for `off` and `error`.
 
-The level of a lint resolves in this order, later wins:
+The level of a lint comes from these sources, in this order; a later
+source wins over an earlier one:
 
 1. the built-in default (the table below);
 2. the `[lint]` table of the nearest `ietsp.toml`, found by walking up
-   from the entry file's directory, the flake directory, or cwd for `-E`;
+   from the entry file's directory, the flake directory, or cwd for `-E`
+   (each `[lint.inputs.<node>]` table is a source of its own, see Scope);
 3. `IETSP_LINT="name=level,name=level"`;
-4. `--lint SELECTOR=LEVEL`, repeatable, in order.
+4. `--lint SELECTOR=LEVEL`, repeatable.
 
 A selector is a lint name, `all`, `family:NAME` (`path`, `scope`,
 `coerce`, `legacy`, `purity`, `style`), or one of Nix's setting names
 (`lint-absolute-path-literals`, `lint-short-path-literals`,
-`lint-url-literals`). The old flags `--lint-absolute-path-literals MODE`,
-`--lint-short-path-literals MODE` and `--lint-url-literals MODE` still
-work: each is `--lint <nix name>=MODE`.
+`lint-url-literals`), which count as lint names. The old flags
+`--lint-absolute-path-literals MODE`, `--lint-short-path-literals MODE`
+and `--lint-url-literals MODE` still work: each is `--lint <nix
+name>=MODE`.
+
+Inside one source the narrower selector wins, whatever the order: a lint
+name beats `family:NAME`, which beats `all`. A TOML table has no order,
+so this is the only rule that can hold there:
+
+```toml
+[lint]
+"family:coerce" = "error"
+dir-copy-flake = "warn"     # warn, in either order
+```
+
+The `--lint` flags of one command line are one source, and so are the
+pairs of one `IETSP_LINT`: among settings of the same specificity the
+later one wins, but a name given earlier still beats a family or `all`
+given later. `--lint all=error --lint with=off` and `--lint with=off
+--lint all=error` both give `with=off` with everything else at `error`;
+`--lint with=off --lint with=warn` gives `warn`. Between sources the
+specificity does not count: `all = "off"` in `IETSP_LINT` turns off a
+lint `ietsp.toml` names.
 
 `ietsp lint list [--lint ...] [--lint-root DIR]... [--lint-scope root|all]
 [PATH]` prints the registry with the levels a run from `PATH` (default

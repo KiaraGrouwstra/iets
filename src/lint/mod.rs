@@ -2,7 +2,8 @@
 //! The registry lives here, one line per lint; each family file holds
 //! the trigger logic its hooks call. Levels resolve from the built-in
 //! default, then `[lint]` in `ietsp.toml`, then `IETSP_LINT`, then
-//! `--lint`. A site is reported only inside the lint roots unless the
+//! `--lint`; inside one source a lint name beats `family:NAME`, which
+//! beats `all`. A site is reported only inside the lint roots unless the
 //! scope is `all` or the site's locked input has its own levels. See
 //! docs/lints.md.
 
@@ -283,24 +284,90 @@ impl Default for Config {
     }
 }
 
-/// `all`, `family:NAME`, a lint name, or a Nix alias.
-pub fn select(selector: &str) -> Result<Vec<LintId>, String> {
+/// How narrowly a selector names its lints: `all`, `family:NAME`, a name.
+/// Inside one source the narrower selector wins, whatever the order.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum Specificity {
+    All,
+    Family,
+    Name,
+}
+
+/// `all`, `family:NAME`, a lint name, or a Nix alias, with its specificity.
+pub fn select(selector: &str) -> Result<(Specificity, Vec<LintId>), String> {
     if selector == "all" {
-        return Ok(LINTS.iter().map(|d| d.id).collect());
+        return Ok((Specificity::All, LINTS.iter().map(|d| d.id).collect()));
     }
     if let Some(f) = selector.strip_prefix("family:") {
         let Some(f) = Family::parse(f) else {
             return Err(format!("unknown lint family '{f}'"));
         };
-        return Ok(LINTS
+        let ids = LINTS
             .iter()
             .filter(|d| d.family == f)
             .map(|d| d.id)
-            .collect());
+            .collect();
+        return Ok((Specificity::Family, ids));
     }
     match by_name(selector) {
-        Some(id) => Ok(vec![id]),
+        Some(id) => Ok((Specificity::Name, vec![id])),
         None => Err(format!("unknown lint '{selector}'")),
+    }
+}
+
+/// The settings of one source (a `[lint]` table, `IETSP_LINT`, the `--lint`
+/// flags) before they reach the levels. A TOML table has no order, so
+/// "later wins" cannot hold inside a source: a name beats `family:NAME`,
+/// which beats `all`; among settings of one specificity the later one
+/// wins. `apply` writes the result over the levels of the earlier sources.
+#[derive(Clone, Debug)]
+pub struct Layer {
+    levels: [Option<(Specificity, Level)>; N],
+}
+
+impl Default for Layer {
+    fn default() -> Layer {
+        Layer { levels: [None; N] }
+    }
+}
+
+impl Layer {
+    /// `all`, `family:NAME`, a lint name, or a Nix alias.
+    pub fn set(&mut self, selector: &str, level: Level) -> Result<(), String> {
+        let (spec, ids) = select(selector)?;
+        for id in ids {
+            let slot = &mut self.levels[id as usize];
+            if slot.is_none_or(|(s, _)| spec >= s) {
+                *slot = Some((spec, level));
+            }
+        }
+        Ok(())
+    }
+
+    /// `NAME=LEVEL`, as `--lint` and `IETSP_LINT` take it.
+    pub fn set_pair(&mut self, pair: &str) -> Result<(), String> {
+        let Some((name, level)) = pair.split_once('=') else {
+            return Err(format!("lint setting '{pair}' is not NAME=LEVEL"));
+        };
+        let Some(level) = Level::parse(level.trim()) else {
+            return Err(format!(
+                "invalid lint level '{level}' for '{name}': use off, warn or error"
+            ));
+        };
+        self.set(name.trim(), level)
+    }
+
+    pub fn get(&self, id: LintId) -> Option<Level> {
+        self.levels[id as usize].map(|(_, l)| l)
+    }
+
+    /// Writes every level this layer sets over `levels`.
+    pub fn apply(&self, levels: &mut [Level; N]) {
+        for (slot, level) in levels.iter_mut().zip(self.levels) {
+            if let Some((_, l)) = level {
+                *slot = l;
+            }
+        }
     }
 }
 
@@ -323,11 +390,12 @@ impl Config {
         self.levels.iter().any(|l| *l != Level::Off)
     }
 
-    /// `all`, `family:NAME`, a lint name, or a Nix alias.
+    /// One selector as a source of its own: `all`, `family:NAME`, a lint
+    /// name, or a Nix alias.
     pub fn set(&mut self, selector: &str, level: Level) -> Result<(), String> {
-        for id in select(selector)? {
-            self.levels[id as usize] = level;
-        }
+        let mut layer = Layer::default();
+        layer.set(selector, level)?;
+        layer.apply(&mut self.levels);
         Ok(())
     }
 
@@ -386,17 +454,18 @@ impl Config {
             let Some(levels) = levels.as_table() else {
                 return Err(format!("'inputs.{input}' is not a table"));
             };
-            let mut arr = [None; N];
+            let mut layer = Layer::default();
             for (selector, level) in levels {
                 let Some(level) = level.as_str() else {
                     return Err(format!(
                         "lint '{selector}' of input '{input}' must be a level string"
                     ));
                 };
-                let level = parse_level(level, selector)?;
-                for id in select(selector)? {
-                    arr[id as usize] = Some(level);
-                }
+                layer.set(selector, parse_level(level, selector)?)?;
+            }
+            let mut arr = [None; N];
+            for d in LINTS {
+                arr[d.id as usize] = layer.get(d.id);
             }
             match self.input_index(input) {
                 Some(i) => self.inputs[i].1 = arr,
@@ -406,24 +475,22 @@ impl Config {
         Ok(())
     }
 
-    /// `NAME=LEVEL`, as `--lint` and `IETSP_LINT` take it.
+    /// `NAME=LEVEL` as a source of its own, as `--lint` and `IETSP_LINT`
+    /// take it.
     pub fn set_pair(&mut self, pair: &str) -> Result<(), String> {
-        let Some((name, level)) = pair.split_once('=') else {
-            return Err(format!("lint setting '{pair}' is not NAME=LEVEL"));
-        };
-        let Some(level) = Level::parse(level.trim()) else {
-            return Err(format!(
-                "invalid lint level '{level}' for '{name}': use off, warn or error"
-            ));
-        };
-        self.set(name.trim(), level)
+        let mut layer = Layer::default();
+        layer.set_pair(pair)?;
+        layer.apply(&mut self.levels);
+        Ok(())
     }
 
-    /// `IETSP_LINT="name=level,name=level"`.
+    /// `IETSP_LINT="name=level,name=level"`: one source.
     pub fn apply_env(&mut self, s: &str) -> Result<(), String> {
+        let mut layer = Layer::default();
         for pair in s.split(',').map(str::trim).filter(|p| !p.is_empty()) {
-            self.set_pair(pair)?;
+            layer.set_pair(pair)?;
         }
+        layer.apply(&mut self.levels);
         Ok(())
     }
 
@@ -440,6 +507,7 @@ impl Config {
         let Some(lint) = lint.as_table() else {
             return Err(at("'lint' is not a table".into()));
         };
+        let mut layer = Layer::default();
         for (name, value) in lint {
             match (name.as_str(), value) {
                 ("scope", toml::Value::String(s)) => {
@@ -463,7 +531,7 @@ impl Config {
                 ("inputs", _) => return Err(at("'inputs' must be a table".into())),
                 (_, toml::Value::String(level)) => {
                     let level = parse_level(level, name).map_err(at)?;
-                    self.set(name, level).map_err(at)?;
+                    layer.set(name, level).map_err(at)?;
                 }
                 (_, toml::Value::Table(t)) => {
                     if by_name(name).is_none() {
@@ -473,7 +541,7 @@ impl Config {
                         match (name.as_str(), k.as_str(), v) {
                             (_, "level", toml::Value::String(level)) => {
                                 let level = parse_level(level, name).map_err(at)?;
-                                self.set(name, level).map_err(at)?;
+                                layer.set(name, level).map_err(at)?;
                             }
                             ("large-source-copy", "max-bytes", toml::Value::Integer(n)) => {
                                 self.max_bytes = (*n).max(0) as u64;
@@ -491,11 +559,12 @@ impl Config {
                 }
             }
         }
+        layer.apply(&mut self.levels);
         Ok(())
     }
 
     /// Default, then `ietsp.toml` found by walking up from `start`, then
-    /// `IETSP_LINT`, then `flags` in order. `start` is the first lint
+    /// `IETSP_LINT`, then `flags` as one source. `start` is the first lint
     /// root; `roots` (`--lint-root`) follow and `scope` (`--lint-scope`)
     /// wins over the file's.
     pub fn resolve(
@@ -517,9 +586,11 @@ impl Config {
         if let Ok(env) = std::env::var("IETSP_LINT") {
             c.apply_env(&env).map_err(|m| format!("IETSP_LINT: {m}"))?;
         }
+        let mut layer = Layer::default();
         for (selector, level) in flags {
-            c.set(selector, *level)?;
+            layer.set(selector, *level)?;
         }
+        layer.apply(&mut c.levels);
         for r in roots {
             c.add_root(r);
         }
@@ -939,6 +1010,20 @@ impl Evaluator {
         format!("{}:{l}:{c}", String::from_utf8_lossy(&path))
     }
 
+    /// A source path as a lint message shows it: the local path a store
+    /// copy stands for, like a site's position. The message resolves its
+    /// own paths so `api::report` can leave a lint error's text alone,
+    /// where `provenance::rewrite_msg` would turn the store path a copy
+    /// produced into the directory it was copied from.
+    pub fn lint_shown_path(&self, path: &[u8]) -> String {
+        let path = if crate::provenance::enabled() {
+            self.lint_local_path(path)
+        } else {
+            path.to_vec()
+        };
+        String::from_utf8_lossy(&path).into_owned()
+    }
+
     fn lint_local_path(&self, path: &[u8]) -> Vec<u8> {
         let mut p = path.to_vec();
         for _ in 0..8 {
@@ -1045,6 +1130,89 @@ mod tests {
         c.apply_env("with=warn, ifd=error").unwrap();
         assert_eq!(c.level(LintId::With), Level::Warn);
         assert_eq!(c.level(LintId::Ifd), Level::Error);
+    }
+
+    #[test]
+    fn specificity_inside_a_source_and_order_between_sources() {
+        // one table: a name beats its family, which beats `all`, whatever
+        // the order TOML hands the keys in
+        let mut c = Config::default();
+        c.apply_toml(
+            "[lint]\nwith = \"warn\"\n\"family:scope\" = \"error\"\nall = \"off\"\ndir-copy-flake = \"warn\"\n\"family:coerce\" = \"error\"\n",
+            Path::new("t"),
+        )
+        .unwrap();
+        assert_eq!(c.level(LintId::With), Level::Warn);
+        assert_eq!(c.level(LintId::WithNested), Level::Error);
+        assert_eq!(c.level(LintId::DirCopyFlake), Level::Warn);
+        assert_eq!(c.level(LintId::PathCopy), Level::Error);
+        assert_eq!(c.level(LintId::Ifd), Level::Off);
+        // a Nix alias is a name
+        let mut c = Config::default();
+        c.apply_toml(
+            "[lint]\n\"family:legacy\" = \"error\"\nlint-url-literals = \"warn\"\n",
+            Path::new("t"),
+        )
+        .unwrap();
+        assert_eq!(c.level(LintId::UrlLiteral), Level::Warn);
+        assert_eq!(c.level(LintId::LegacyLet), Level::Error);
+        // an input table follows the same rule
+        let mut c = Config::default();
+        c.apply_toml(
+            "[lint.inputs.dep]\nfod = \"warn\"\nall = \"error\"\n",
+            Path::new("t"),
+        )
+        .unwrap();
+        let i = c.input_index("dep").unwrap();
+        assert_eq!(c.site_level(LintId::Fod, Where::Input(i)), Level::Warn);
+        assert_eq!(c.site_level(LintId::Ifd, Where::Input(i)), Level::Error);
+        // between sources the later one wins, whatever its specificity
+        let mut c = Config::default();
+        c.apply_toml("[lint]\nwith = \"warn\"\n", Path::new("t"))
+            .unwrap();
+        c.apply_env("family:scope=error").unwrap();
+        assert_eq!(c.level(LintId::With), Level::Error);
+        c.set("all", Level::Off).unwrap();
+        assert_eq!(c.level(LintId::With), Level::Off);
+        // the flags are one source: a name given first still beats a
+        // family or `all` given later; equals keep the later one
+        let flags = |s: &[&str]| {
+            let mut l = Layer::default();
+            for p in s {
+                l.set_pair(p).unwrap();
+            }
+            let mut c = Config::default();
+            l.apply(&mut c.levels);
+            c
+        };
+        assert_eq!(
+            flags(&["with=off", "all=error"]).level(LintId::With),
+            Level::Off
+        );
+        assert_eq!(
+            flags(&["all=error", "with=off"]).level(LintId::With),
+            Level::Off
+        );
+        assert_eq!(
+            flags(&["all=error", "with=off"]).level(LintId::Ifd),
+            Level::Error
+        );
+        assert_eq!(
+            flags(&["with=off", "family:scope=error"]).level(LintId::With),
+            Level::Off
+        );
+        assert_eq!(
+            flags(&["with=off", "with=warn"]).level(LintId::With),
+            Level::Warn
+        );
+        assert_eq!(
+            flags(&["all=off", "all=warn"]).level(LintId::With),
+            Level::Warn
+        );
+        let mut c = Config::default();
+        c.apply_env("family:scope=error, with=off").unwrap();
+        assert_eq!(c.level(LintId::With), Level::Off);
+        assert_eq!(c.level(LintId::WithNested), Level::Error);
     }
 
     #[test]

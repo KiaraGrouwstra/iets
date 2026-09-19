@@ -5,7 +5,8 @@
 #   --lint NAME=warn: stderr equals <name>.warn.exp;
 #   --lint NAME=error: exit 1 and the first stderr line is `error: [NAME] ...`.
 # Then the framework cases in tests/lint/cases/: IETSP_LINT, ietsp.toml,
-# `all=` and `family:` selectors, one warning per site, tryEval not
+# `all=` and `family:` selectors, a name beating a family or `all` inside
+# one source (a table, the flags, IETSP_LINT), one warning per site, tryEval not
 # catching a lint error, and a warning replayed on a tracing-cache hit.
 # Then the scope cases in tests/lint/scope/: a site outside the entry's
 # directory is silent unless `--lint-scope all`, `--lint-root`, or the
@@ -59,6 +60,14 @@ def main [] {
   $res ++= [(verdict ($r.stderr | str contains $with_warn) "family:scope selects the family" "family selector ignored")]
   let r = (^$ietsp eval --no-cache --lint all=warn --lint with=off lint/with.nix | complete)
   $res ++= [(verdict (not ($r.stderr | str contains "[with]")) "later --lint wins over all=" "all= not overridden")]
+  let r = (^$ietsp eval --no-cache --lint with=off --lint all=warn lint/with.nix | complete)
+  $res ++= [(verdict (not ($r.stderr | str contains "[with]")) "a --lint name beats a later all=" "a name given first lost to a later all=")]
+  let r = (with-env {IETSP_LINT: "with=off,family:scope=warn"} { ^$ietsp eval --no-cache lint/with.nix | complete })
+  $res ++= [(verdict (not ($r.stderr | str contains "[with]")) "an IETSP_LINT name beats a later family" "an IETSP_LINT name lost to a later family")]
+  let r = (^$ietsp eval --no-cache lint/cases/family/main.nix | complete)
+  $res ++= [(verdict ($r.exit_code == 0 and ($r.stderr | str contains $with_warn)) "ietsp.toml: a lint name beats its family" $"toml family: rc=($r.exit_code) ($r.stderr)")]
+  let r = (^$ietsp eval --no-cache lint/cases/family/member.nix | complete)
+  $res ++= [(verdict ($r.exit_code == 1 and ($r.stderr | str contains "error: [with-non-literal]")) "ietsp.toml: the rest of the family keeps its level" $"toml family member: rc=($r.exit_code) ($r.stderr)")]
   let r = (^$ietsp eval --strict --no-cache --lint eq-type-mismatch=warn lint/cases/dedup.nix | complete)
   let n = ($r.stderr | lines | where ($it | str starts-with "warning: [eq-type-mismatch]") | length)
   $res ++= [(verdict ($n == 1) "one warning per site" $"one warning per site: got ($n)")]
@@ -129,8 +138,13 @@ def main [] {
   let r = (^$ietsp eval --raw --no-cache ...$copies $"($dir)#file" | complete)
   $res ++= [(verdict (($r.stdout | str starts-with "/nix/store/") and not ($r.stderr | str contains "warning:")) "flake: \"${./file}\" under the root is neither a re-copy nor a path-copy" $"flake: file: ($r.stderr)")]
   let r = (^$ietsp eval --raw --no-cache ...$copies $"($dir)#dir" | complete)
-  let ok = (($r.stderr | str contains "warning: [dir-copy-flake] directory '") and ($r.stderr | str contains "the tracked files") and not ($r.stderr | str contains "[path-copy]") and not ($r.stderr | str contains "[store-path-recopy]"))
+  # the message names the local directory, then the store path of the copy
+  let dir_msg = $"warning: [dir-copy-flake] directory '($dir)/sub' of the flake tree is copied to the store as '/nix/store/"
+  let ok = (($r.stderr | str contains $dir_msg) and ($r.stderr | str contains "-sub' by this string coercion") and ($r.stderr | str contains "the tracked files") and not ($r.stderr | str contains "[path-copy]") and not ($r.stderr | str contains "[store-path-recopy]"))
   $res ++= [(verdict $ok "flake: \"${./dir}\" under the root is dir-copy-flake, not path-copy" $"flake: dir: ($r.stderr)")]
+  let r = (^$ietsp eval --raw --no-cache --lint dir-copy-flake=error $"($dir)#dir" | complete)
+  let ok = (($r.exit_code == 1) and ($r.stderr | str contains ($dir_msg | str replace "warning:" "error:")) and ($r.stderr | str contains "-sub' by this string coercion"))
+  $res ++= [(verdict $ok "flake: the dir-copy-flake error names the store path of the copy" $"flake: dir at error: ($r.stderr)")]
   let r = (^$ietsp eval --raw --no-cache --lint-scope all ...$copies $"($dir)#inputFile" | complete)
   $res ++= [(verdict (($r.stdout | str starts-with "/nix/store/") and not ($r.stderr | str contains "warning:")) "flake: \"${./file}\" inside an input is neither a re-copy nor a path-copy" $"flake: input file: ($r.stderr)")]
   let r = (^$ietsp eval --raw --no-cache ...$copies $"($dir)#store" | complete)

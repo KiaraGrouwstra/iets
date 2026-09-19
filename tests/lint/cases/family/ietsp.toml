@@ -1,0 +1,3 @@
+[lint]
+"family:scope" = "error"
+with = "warn"

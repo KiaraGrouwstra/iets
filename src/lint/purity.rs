@@ -94,10 +94,11 @@ pub fn large_source_copy(ev: &mut Evaluator, path: &[u8], size: u64, pos: Pos) -
     if size <= max {
         return Ok(());
     }
+    let shown = ev.lint_shown_path(path);
     ev.lint(LintId::LargeSourceCopy, pos, || {
         format!(
             "copying '{}' to the store takes {} bytes of NAR, over the {} byte limit; filter the source",
-            String::from_utf8_lossy(path),
+            shown,
             size,
             max
         )
