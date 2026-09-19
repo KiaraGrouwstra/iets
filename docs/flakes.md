@@ -143,17 +143,16 @@ split on the first colon as a header of its own.
 
 The download is streamed. hyper runs on a thread of its own and hands its
 body frames to a queue of 16, the fetching thread reads that queue through the
-decompressor, and the decompressed tar goes into one temp file in `TMPDIR`,
-unlinked the moment it is open. `src/flake/spool.rs` then reads that file once
+decompressor, and the decompressed tar goes into `spool` inside a staged
+directory of the input store. `src/flake/spool.rs` then reads that file once
 to record where every member's bytes are, and writes the NAR straight out of
 the index, reading each file's bytes back by offset: no tree is ever unpacked.
-It writes the NAR twice, once into the hasher and, only if the hash matches
-the lock, once into the `AddMultipleToStore` stream, so a wrong tree never
-reaches the daemon; the second pass is disk against a download. Peak memory is
-therefore the queue plus the index, a few hundred bytes per member and nothing
-per byte: a full nixpkgs revision costs 19 MB of index over the evaluator's
-own 75 MB, where unpacking a tree cost 307 MB (13.5 s and 382 MB peak RSS
-before, 7.7 s and 94 MB after).
+It writes the NAR once, into the hasher, and the staged directory only becomes
+an entry if that hash is the lock's, so a wrong tree is never named, never read
+and never uploaded. Peak memory is therefore the queue plus the index, a few
+hundred bytes per member and nothing per byte: a full nixpkgs revision costs
+19 MB of index over the evaluator's own 75 MB, where unpacking a tree cost
+307 MB (13.5 s and 382 MB peak RSS before, 7.7 s and 94 MB after).
 
 `src/flake/spool.rs` applies the rules of `src/flake/unpack.rs`, which walks
 the tar as `tarfile.cc:unpackTarfileToSink`
@@ -237,6 +236,25 @@ straight into whichever builder or store the build targets
 (`docs/remote-build.md`). `ietsp build --no-build` on a flake with a fetched
 input therefore uploads that input from the spool and never writes the local
 daemon.
+
+**What it costs.** A flake whose only input is
+`github:NixOS/nixpkgs/e554fab`, evaluated with `--no-cache` and a warm page
+cache, five runs, the `eval:` line of `--timings` (so process start is out),
+2026-09-19, load average 2:
+
+| `#attr` | from the input store | from `/nix/store` |
+|---|---|---|
+| `nixpkgs.lib.version` | 0.271 s (0.263-0.279) | 0.238 s (0.200-0.242) |
+| `(import nixpkgs {}).hello.drvPath` | 0.573 s (0.497-0.661) | 0.619 s (0.495-0.660) |
+
+Reading a member is not the cost: it is one `pread` into the buffer the caller
+keeps, against an `open`, an `fstat` and a growing `Vec` for a file under
+`/nix/store`, and the heavier evaluation is 7 % faster out of the spool. What
+the input store does charge is opening the entry: 1.7 MB of index for a full
+nixpkgs, read and decoded in 11 ms, which `--timings` prints as
+`inputs: 1 entries opened, 0.011s`. That fixed cost is 4 % of the trivial
+evaluation and 2 % of the heavy one; the rest of the 0.033 s gap on
+`lib.version` is inside the run-to-run spread of either column.
 
 **What still needs a daemon.** `git` and `hg` inputs go through
 `nix eval (builtins.fetchTree ...)`, which writes `/nix/store`; ietsp has no git

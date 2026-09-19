@@ -3,10 +3,10 @@
 //! A tar is in archive order; a NAR needs every directory's entries sorted by
 //! name and nested inside it. `flake::unpack` gets there by writing a tree and
 //! walking it, which costs a second copy of every byte on disk. This module
-//! spools the decompressed archive into one unlinked temp file as it arrives,
-//! reads it once to record where each member's bytes are, and then writes the
-//! NAR out of that index, reading the bytes back by offset. Peak memory is the
-//! index plus one copy buffer; nothing holds a member whole.
+//! spools the decompressed archive into one file as it arrives, reads it once to
+//! record where each member's bytes are, and then writes the NAR out of that
+//! index, reading the bytes back by offset. Peak memory is the index plus one
+//! copy buffer; nothing holds a member whole.
 //!
 //! The rules are `flake::unpack`'s, which are tarfile.cc's and
 //! git-utils.cc:GitFileSystemObjectSinkImpl's. `spool_matches_the_tree` in the

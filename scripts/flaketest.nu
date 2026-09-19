@@ -8,6 +8,12 @@
 # dirty tree, and a `git worktree` at a path nix has never copied (ietsp
 # must not fetch the root tree). The only fetch is this repo's own nixpkgs
 # input; the scratch flakes reuse that store tree through a `path:` input.
+#
+# It also covers the input store (docs/flakes.md): a fetched input is kept
+# there and not registered anywhere, `ietsp` alone evaluates such a flake with
+# no nix, no daemon and a fresh cache, a second run does it with
+# `IETSP_OFFLINE=1`, and `build --no-build` sends the input's NAR out of the
+# same spool.
 use lib.nu [chomp show verdict]
 
 def --wrapped nixf [...args: string] { ^nix --extra-experimental-features "nix-command flakes" ...$args }
