@@ -471,6 +471,9 @@ fn fetch_tarball(ev: &mut Evaluator, sp: &StorePath, attrs: &Attrs, pos: Pos) ->
         crate::remote::plan::SourceInfo {
             data: crate::remote::plan::SourceData::Nar(std::sync::Arc::new(tree)),
             kind: crate::remote::plan::SourceKind::Source,
+            // Not the lock's hash: hashing the spool here is what proves the fetched
+            // tree is the locked one before any of it reaches the daemon.
+            hashed: None,
         },
     )
     .map_err(|e| {
