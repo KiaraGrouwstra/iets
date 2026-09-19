@@ -18,7 +18,7 @@ use crate::eval::{Evaluator, Pos};
 use crate::runtime::{Kind, Word};
 use crate::syntax::symbol::{FxHashMap, Sym};
 
-const MAGIC: &[u8; 8] = b"IETSPIR1";
+const MAGIC: &[u8; 8] = b"IETSPIR2";
 
 pub struct IrCache {
     root: PathBuf,
@@ -163,13 +163,14 @@ struct Ser {
     ok: bool,
 }
 
-/// The entry for `ir` and the lint warnings its compile produced, or
-/// `None` when a constant cannot be named.
+/// The entry for `ir`, the lint warnings its compile produced and the
+/// file's `# ietsp: allow` table, or `None` when a constant cannot be named.
 pub fn serialize(
     ev: &Evaluator,
     ir: IrRef,
     base: u32,
     diags: &[crate::lint::Diag],
+    allows: &crate::lint::allow::Allows,
 ) -> Option<Vec<u8>> {
     let mut rev = FxHashMap::default();
     if let Some(b) = ev.globals.builtins {
@@ -197,6 +198,12 @@ pub fn serialize(
         s.out.push(d.id as u8);
         s.pos(d.pos);
         put_bytes(&mut s.out, d.msg.as_bytes());
+    }
+    put_u32(&mut s.out, allows.lines().len() as u32);
+    for l in allows.lines() {
+        put_u32(&mut s.out, l.start);
+        put_u32(&mut s.out, l.end);
+        put_u64(&mut s.out, l.mask);
     }
     let mut file = Vec::with_capacity(s.out.len() + 16 * s.names.len() + 16);
     file.extend_from_slice(MAGIC);
@@ -542,13 +549,14 @@ struct De<'a, 'e> {
 }
 
 /// The IR of an entry, allocated in the evaluator's arena with positions
-/// rebased at `base`, plus its lint warnings; `None` on a malformed entry.
+/// rebased at `base`, plus its lint warnings and the file's allow table;
+/// `None` on a malformed entry.
 pub fn deserialize(
     ev: &mut Evaluator,
     data: &[u8],
     base: u32,
     stats: bool,
-) -> Option<(IrRef, Vec<crate::lint::Diag>)> {
+) -> Option<(IrRef, Vec<crate::lint::Diag>, crate::lint::allow::Allows)> {
     let t0 = std::time::Instant::now();
     if data.len() < MAGIC.len() || &data[..MAGIC.len()] != MAGIC {
         return None;
@@ -590,6 +598,17 @@ pub fn deserialize(
             None => d.ok = false,
         }
     }
+    let nallows = d.u32() as usize;
+    let mut allows = crate::lint::allow::Allows::default();
+    for _ in 0..nallows {
+        if !d.ok {
+            break;
+        }
+        let start = d.u32();
+        let end = d.u32();
+        let mask = d.u64();
+        allows.add(start, end, mask);
+    }
     if stats {
         eprintln!(
             "ir-cache   syms={} {}us nodes {}us",
@@ -599,7 +618,7 @@ pub fn deserialize(
         );
     }
     if d.ok && d.at == data.len() {
-        Some((ir, diags))
+        Some((ir, diags, allows))
     } else {
         None
     }

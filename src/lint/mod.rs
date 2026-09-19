@@ -7,6 +7,7 @@
 //! scope is `all` or the site's locked input has its own levels. See
 //! docs/lints.md.
 
+pub mod allow;
 pub mod coerce;
 pub mod legacy;
 pub mod path;
@@ -19,7 +20,7 @@ use std::hash::BuildHasherDefault;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
+use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, FileInfo, Pos};
 use crate::syntax::symbol::{FxHashMap, FxHasher};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -177,6 +178,7 @@ registry! {
     ManualInherit: "manual-inherit", Style, Compiler, Off, "`a = a;` or `a = b.a;` where `inherit` would do";
     EmptyLet: "empty-let", Style, Compiler, Warn, "`let in e`";
     EllipsisWithoutBind: "ellipsis-without-bind", Style, Compiler, Off, "`{ a, ... }:` with `...` and no `@name`";
+    UnknownAllow: "unknown-allow", Style, Parser, Warn, "a `# ietsp: allow` comment that names a lint the registry does not know, so a typo does not silence nothing";
 }
 
 pub const N: usize = LINTS.len();
@@ -864,9 +866,9 @@ impl Evaluator {
         self.lints.on(id)
     }
 
-    /// Reports a lint site: nothing at `off` or outside the scope, one
-    /// warning per (lint, pos) at `warn`, an error `tryEval` does not
-    /// catch at `error`.
+    /// Reports a lint site: nothing at `off`, outside the scope, or on a
+    /// line a `# ietsp: allow` comment covers (`allow`); one warning per
+    /// (lint, pos) at `warn`, an error `tryEval` does not catch at `error`.
     #[inline]
     pub fn lint(&mut self, id: LintId, pos: Pos, msg: impl FnOnce() -> String) -> EvalResult<()> {
         if self.lints.level(id) == Level::Off {
@@ -886,7 +888,20 @@ impl Evaluator {
         if self.lints.seen(id, pos) {
             return Ok(());
         }
-        match self.site_level(id, pos) {
+        let file = self.file_of(pos);
+        if let Some((f, off)) = file
+            && f.allows().covers(off, id)
+        {
+            self.lints.silence(id, pos);
+            return Ok(());
+        }
+        let level = if self.lints.config.scoped() {
+            let w = self.where_of_file(file);
+            self.lints.config.site_level(id, w)
+        } else {
+            self.lints.level(id)
+        };
+        match level {
             Level::Off => {
                 self.lints.silence(id, pos);
                 Ok(())
@@ -910,7 +925,12 @@ impl Evaluator {
 
     /// Where the file of `pos` lies, classified once per file and fiber.
     pub fn where_of(&mut self, pos: Pos) -> Where {
-        let Some((f, _)) = self.file_of(pos) else {
+        let file = self.file_of(pos);
+        self.where_of_file(file)
+    }
+
+    fn where_of_file(&mut self, file: Option<(&'static FileInfo, u32)>) -> Where {
+        let Some((f, _)) = file else {
             return Where::Elsewhere;
         };
         if let Some(w) = self.lints.where_cache.get(&f.base) {

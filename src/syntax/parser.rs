@@ -136,9 +136,32 @@ impl<'a> Parser<'a> {
         if t.kind != Tok::Eof {
             return Err(self.unexpected(t, Some("expecting end of file")));
         }
+        self.allows();
         self.ast.file = file;
         self.ast.root = root;
         Ok(self.ast)
+    }
+
+    /// The `# ietsp:` comments the lexer noted: their names go into the
+    /// allow table, the words it cannot resolve become `unknown-allow` notes.
+    fn allows(&mut self) {
+        for a in self.lx.take_allows() {
+            let text = &self.src[a.text.start as usize..a.text.end as usize];
+            let (mask, bad) = crate::lint::allow::parse_comment(text);
+            self.ast.allows.add(a.line.start, a.line.end, mask);
+            for (off, msg) in bad {
+                let start = self.ast.bytes.len() as u32;
+                self.ast.bytes.extend_from_slice(msg.as_bytes());
+                let msg = Range {
+                    start,
+                    len: msg.len() as u32,
+                };
+                self.ast.notes.push(Note::UnknownAllow {
+                    at: a.text.start + off,
+                    msg,
+                });
+            }
+        }
     }
 
     // ---- token plumbing ----

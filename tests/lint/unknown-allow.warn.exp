@@ -1,0 +1,4 @@
+warning: [unknown-allow] unknown lint 'wiht' in `# ietsp: allow`
+  at /pwd/lint/unknown-allow.nix:1:16
+warning: [unknown-allow] unknown lint 'nope' in `# ietsp: allow`
+  at /pwd/lint/unknown-allow.nix:2:35

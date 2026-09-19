@@ -16,7 +16,12 @@
 # (built in a temporary directory, the lock written with the narHash ietsp
 # computes) whose input is silent until `--lint-scope all` or
 # `[lint.inputs.dep]`, and inside which `"${./file}"` is not a re-copy and
-# `"${./dir}"` is `dir-copy-flake`. UPDATE=1 rewrites the .warn.exp files.
+# `"${./dir}"` is `dir-copy-flake`. Then the `# ietsp: allow` cases in
+# tests/lint/allow/: an own-line or trailing comment silences the named
+# lints, a family, or `all` on the line it covers, at `warn` and at `error`,
+# for a compile-time and a runtime site, through the IR cache and the
+# tracing cache; the next line only; an unknown directive is `unknown-allow`.
+# UPDATE=1 rewrites the .warn.exp files.
 use lib.nu [chomp flags-of glob-sorted verdict]
 
 def norm [pwd: string]: string -> string { $in | str replace -a $pwd "/pwd" | chomp }
@@ -153,6 +158,47 @@ def main [] {
   let r = (^$ietsp eval --raw --no-cache --lint with=warn $"($dir)#value" | complete)
   $res ++= [(verdict (($r.stderr | str contains $root_site) and ($r.stderr | str contains $dep_site)) "flake: [lint.inputs.dep] opens the input" $"flake: inputs table: ($r.stderr)")]
   rm -rf $work
+
+  # `# ietsp: allow`: with.nix-style sites on a covered line are silent
+  let allow = [--lint with=warn --lint eq-type-mismatch=warn]
+  for f in [own-line trailing multiple family all blank-lines runtime] {
+    let r = (^$ietsp eval --strict --no-cache ...$allow $"lint/allow/($f).nix" | complete)
+    let ok = ($r.exit_code == 0 and not ($r.stderr | str contains "warning:"))
+    $res ++= [(verdict $ok $"allow: ($f) is silent" $"allow: ($f): rc=($r.exit_code) ($r.stderr | norm $pwd)")]
+  }
+  let r = (^$ietsp eval --strict --no-cache --lint with=warn lint/allow/next-line-only.nix | complete)
+  let ok = ($r.stderr | norm $pwd | str contains "at /pwd/lint/allow/next-line-only.nix:3:4")
+  $res ++= [(verdict $ok "allow: covers the next line only" $"allow: next line only: ($r.stderr | norm $pwd)")]
+  let r = (^$ietsp eval --no-cache --lint with=error lint/allow/error-level.nix | complete)
+  let ok = ($r.exit_code == 0 and ($r.stdout | chomp) == "1")
+  $res ++= [(verdict $ok "allow: silences a lint at error" $"allow: error level: rc=($r.exit_code) ($r.stderr)")]
+  let r = (^$ietsp eval --no-cache --lint with=warn lint/allow/directive.nix | complete)
+  let ok = (($r.stderr | str contains "warning: [unknown-allow] unknown directive 'allo'") and ($r.stderr | str contains "warning: [with]"))
+  $res ++= [(verdict $ok "allow: an unknown directive is unknown-allow and silences nothing" $"allow: directive: ($r.stderr)")]
+  # the table travels in the IR cache entry: a load stays silent
+  let cache = (mktemp -d --tmpdir ietsp-linttest.XXXXXX)
+  let ir = {IETSP_CACHE_DIR: $cache, IETSP_IR_MIN: "0", IETSP_IR_STATS: "1"}
+  for f in [own-line runtime] {
+    let r1 = (with-env $ir { ^$ietsp eval --strict --no-cache ...$allow $"lint/allow/($f).nix" | complete })
+    let r2 = (with-env $ir { ^$ietsp eval --strict --no-cache ...$allow $"lint/allow/($f).nix" | complete })
+    let stored = ($r1.stderr | str contains $"ir-cache store ($pwd)/lint/allow/($f).nix")
+    let loaded = ($r2.stderr | str contains $"ir-cache load ($pwd)/lint/allow/($f).nix")
+    let ok = ($stored and $loaded and not ($r1.stderr | str contains "warning:") and not ($r2.stderr | str contains "warning:"))
+    $res ++= [(verdict $ok $"allow: ($f) is silent from the IR cache" $"allow: IR cache ($f): stored=($stored) loaded=($loaded) ($r2.stderr)")]
+  }
+  rm -rf $cache
+  # the tracing cache: a hit replays nothing, and the comment is part of the key
+  let cache = (mktemp -d --tmpdir ietsp-linttest.XXXXXX)
+  let work = (mktemp -d --tmpdir ietsp-lintallow.XXXXXX)
+  cp lint/allow/own-line.nix $"($work)/main.nix"
+  let r1 = (with-env {IETSP_CACHE_DIR: $cache} { ^$ietsp eval --strict --timings --lint with=warn $"($work)/main.nix" | complete })
+  let r2 = (with-env {IETSP_CACHE_DIR: $cache} { ^$ietsp eval --strict --timings --lint with=warn $"($work)/main.nix" | complete })
+  "with { x = 1; }; x\n" | save -f $"($work)/main.nix"
+  let r3 = (with-env {IETSP_CACHE_DIR: $cache} { ^$ietsp eval --strict --timings --lint with=warn $"($work)/main.nix" | complete })
+  rm -rf $cache $work
+  let hit = ($r2.stderr | str contains "cache: hit")
+  let ok = ($hit and not ($r1.stderr | str contains "warning:") and not ($r2.stderr | str contains "warning:") and not ($r3.stderr | str contains "cache: hit") and ($r3.stderr | str contains $with_warn))
+  $res ++= [(verdict $ok "allow: a tracing-cache hit replays nothing; the comment is in the key" $"allow: tracing cache: hit=($hit) r3=($r3.stderr)")]
 
   let fail = ($res | where not $it | length)
   print $"pass=($res | where $it | length) fail=($fail)"

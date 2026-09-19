@@ -119,6 +119,45 @@ even when the value came from the user's file. Two rules:
   wrapper binds itself. The site is the attribute's own position when
   the scope sees it, else the position the call was known by.
 
+## Silencing one site
+
+A comment `# ietsp: allow NAME[, NAME...]` silences the named lints for
+one source line, whatever their level (`warn` or `error`). The names
+are selectors: lint names, Nix's setting names, `family:NAME`, or
+`all`; commas or spaces separate them.
+
+```nix
+# ietsp: allow with
+with pkgs; [ hello ]
+
+x == "a" # ietsp: allow eq-type-mismatch
+```
+
+- On a line of its own the comment covers the next line that is neither
+  blank nor a comment. After code it covers its own line. Both forms
+  on one line add up.
+- The covered line is a set of positions: every site whose position
+  falls on it is silent, a compile-time lint (`with`) and a runtime lint
+  (`eq-type-mismatch`, `fod`) alike. A `with` that opens on the covered
+  line and spans ten more is silent; a `with` on the line after is not.
+- A name the registry does not know is the `unknown-allow` lint (family
+  `style`, default `warn`), reported at the word's position, so a typo
+  does not silently silence nothing. The known names of the same
+  comment still count. `allow` is the only directive; another word
+  after `# ietsp:` is `unknown-allow` too.
+- The comment must start with exactly `# ietsp:`; `#ietsp:` and `/* ietsp:
+  */` are plain comments.
+- An allow that silences nothing is not reported: a runtime lint fires
+  only when the value is computed, so an unused allow on one run may be
+  the one that matters on the next.
+
+The lexer notes the `# ietsp:` comments (other comments cost nothing
+more), the parser resolves the names into a per-file table of covered
+lines, and the compiler and the evaluator check that table before a
+site's level. The table travels in the IR cache entry with the
+warnings, and it is part of the file's bytes, so both cache keys cover
+it: a run whose comment changed misses.
+
 ## Configuration file
 
 ```toml
@@ -196,6 +235,7 @@ are part of the IR cache key and their warnings are stored in the entry;
 | `manual-inherit` | style | compiler | off | `a = a;` in a non-recursive set, or `a = e.a;` in any binding set |
 | `empty-let` | style | compiler | **warn** | `let in e` |
 | `ellipsis-without-bind` | style | compiler | off | `{ a, ... }:` with `...` and no `@name` |
+| `unknown-allow` | style | parser | **warn** | a word of a `# ietsp: allow` comment that is not a lint name, a family or `all`, or a `# ietsp:` directive other than `allow` (Silencing one site) |
 
 `impure-path-in-drv` works like Nix's store references: a coercion that
 keeps the text of a path outside the store (`toString ./x`, `"/x" +
@@ -273,6 +313,7 @@ the build with those exemptions (outpaths then had 168 errors);
 | `ellipsis-without-bind` | 2661 | 2781 | 2 |
 | `absolute-path-literal` | 2 | 9 | 26 |
 | `short-path-literal` | 0 | 1 | 6 |
+| `unknown-allow` | 0 | 0 | 0 |
 
 The pinned nixpkgs lives in the store, so every copy of a nixpkgs path is
 a `store-path-recopy` and never a `dir-copy-unfiltered`; the latter needs
@@ -341,6 +382,14 @@ was measured:
   freezes its map on first use and an error report needs the map of the
   whole run.
 
+The `# ietsp: allow` table costs the parse nothing measurable: `ietsp
+parse -q` over the 44,303 files of the pinned nixpkgs (hyperfine, 30
+runs, 2026-09-19) took 1.128 s ± 0.034 before and 1.122 s ± 0.025 after;
+the instruction count (`perf stat`) rose 0.5 %, from 6.728 G to 6.763 G.
+The `#` arm of the lexer's trivia loop is a function of its own: inlined,
+it grew `next_token` past what its callers inline, which cost 1.5 % of
+the instructions. At a site the check is one branch on an empty table.
+
 ## Caches and parallelism
 
 - A lint warning is an effect. `Cache::write` stores the printed lines in
@@ -350,9 +399,11 @@ was measured:
   run, and failed runs are never cached.
 - The IR cache keys an entry on the compile-time lint levels the file
   gets after the scope rule and stores the warnings the compile
-  produced, so a file loaded from the cache reports them again. With
-  every compile-time lint `off` for that file (every store file under
-  `scope = "root"`) the key is the same as before the registry existed.
+  produced, so a file loaded from the cache reports them again, and the
+  file's `# ietsp: allow` table, so a runtime lint on a loaded file is
+  silenced like on a compiled one. With every compile-time lint `off`
+  for that file (every store file under `scope = "root"`) the key is
+  the same as before the registry existed.
 - A site the scope silences enters the shared site set like a reported
   one, so it is classified once per fiber; the classification of a file
   is cached per fiber.
@@ -408,3 +459,7 @@ was measured:
   table above shows.
 - `eval-jobs` with worker processes (`--max-memory-size`, the default)
   deduplicates per process.
+- `# ietsp: allow` covers positions on one line, so the derivation
+  attribute lints, whose site can be the `name` binding or the
+  `derivationStrict` call (Scope), need the comment at that site, not
+  at the value.

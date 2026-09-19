@@ -30,6 +30,9 @@ pub struct FileInfo {
     pub path: Vec<u8>,
     pub base: u32,
     pub line_starts: Vec<u32>,
+    /// The `# ietsp: allow` lines, set once the file is parsed or its IR
+    /// cache entry loaded, before any of its IR runs.
+    allows: std::sync::OnceLock<crate::lint::allow::Allows>,
 }
 
 impl FileInfo {
@@ -54,7 +57,21 @@ impl FileInfo {
             path,
             base,
             line_starts,
+            allows: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Every compile of one path sees the same source, so a second set
+    /// (a helper fiber compiling the file again) carries the same table.
+    pub fn set_allows(&self, allows: crate::lint::allow::Allows) {
+        let _ = self.allows.set(allows);
+    }
+
+    #[inline]
+    pub fn allows(&self) -> &crate::lint::allow::Allows {
+        self.allows
+            .get()
+            .unwrap_or(crate::lint::allow::Allows::EMPTY)
     }
     /// 1-based line and column of a byte offset.
     pub fn line_col(&self, offset: u32) -> (u32, u32) {
@@ -273,6 +290,7 @@ impl Evaluator {
         let base = self.files[file.0 as usize].base;
         let ast = crate::syntax::parse(&src, file, &mut self.interner)
             .map_err(|e| Error::boxed(ErrorKind::Parse, e.msg, Pos(base + e.span.start)))?;
+        self.files[file.0 as usize].set_allows(ast.allows.clone());
         let t0 = std::time::Instant::now();
         let before = self.arena.bytes_allocated;
         let lints = lint.then(|| self.config_for_file(path));
@@ -311,7 +329,8 @@ impl Evaluator {
     /// the file gets (after the scope rule, so a store file under `scope =
     /// "root"` keys like an unlinted one) is loaded instead of parsing and
     /// compiling, and a fresh compile writes one. The entry carries the
-    /// lint warnings the compile produced, so a load reports them again.
+    /// lint warnings the compile produced, so a load reports them again,
+    /// and the file's `# ietsp: allow` table, which the runtime lints check.
     /// Files with `~/` paths bypass it. Embedded corepkgs are never linted.
     pub fn compile_file(
         &mut self,
@@ -342,7 +361,8 @@ impl Evaluator {
             if loaded.is_none() {
                 cache.discard(&key);
             }
-            if let Some((ir, diags)) = loaded {
+            if let Some((ir, diags, allows)) = loaded {
+                self.files[file.0 as usize].set_allows(allows);
                 self.report_diags(&diags);
                 if cache.stats {
                     eprintln!(
@@ -357,7 +377,9 @@ impl Evaluator {
         }
         let (ir, used_home, diags) = self.compile_source_inner(path, src, base_dir, None, true)?;
         let t1 = std::time::Instant::now();
-        if !used_home && let Some(bytes) = crate::compile::cache::serialize(self, ir, base, &diags)
+        let allows = self.files[file.0 as usize].allows();
+        if !used_home
+            && let Some(bytes) = crate::compile::cache::serialize(self, ir, base, &diags, allows)
         {
             cache.write(&key, &bytes);
         }

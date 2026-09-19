@@ -170,9 +170,23 @@ pub enum PathPart {
     End,
 }
 
+/// A `# ietsp:` comment: its text after the marker, and the byte range of
+/// the line it covers (docs/lints.md, "Silencing one site").
+#[derive(Clone, Copy, Debug)]
+pub struct Allow {
+    pub text: Span,
+    pub line: Span,
+}
+
 pub struct Lexer<'a> {
     src: &'a [u8],
     pos: usize,
+    /// `# ietsp:` comments as `#`-start and end offsets; `take_allows`
+    /// resolves their lines, so the token path pays nothing for them.
+    allows: Vec<(usize, usize)>,
+    /// End of the last `# ietsp:` comment noted: the parser rewinds for
+    /// its third token of lookahead, and a comment is noted once.
+    noted_to: usize,
 }
 
 #[inline]
@@ -216,7 +230,94 @@ fn is_uri_char(b: u8) -> bool {
 
 impl<'a> Lexer<'a> {
     pub fn new(src: &'a [u8]) -> Self {
-        Lexer { src, pos: 0 }
+        Lexer {
+            src,
+            pos: 0,
+            allows: Vec::new(),
+            noted_to: 0,
+        }
+    }
+
+    /// The `# ietsp:` comments lexed so far, in source order, each with
+    /// the line it covers: after code its own line; on a line of its own
+    /// the line of the next token, found by skipping trivia again from the
+    /// comment's end (an own-line comment at the end of the file covers
+    /// nothing).
+    pub fn take_allows(&mut self) -> Vec<Allow> {
+        let raw = std::mem::take(&mut self.allows);
+        raw.into_iter()
+            .filter_map(|(start, end)| {
+                let text = Span {
+                    start: (start + "# ietsp:".len()) as u32,
+                    end: end as u32,
+                };
+                let mut i = start;
+                while i > 0 && matches!(self.src[i - 1], b' ' | b'\t') {
+                    i -= 1;
+                }
+                let own_line = i == 0 || self.src[i - 1] == b'\n' || self.src[i - 1] == b'\r';
+                let line = if own_line {
+                    let save = self.pos;
+                    self.pos = end;
+                    self.skip_trivia();
+                    let p = self.pos;
+                    self.pos = save;
+                    if p >= self.src.len() {
+                        return None;
+                    }
+                    Span {
+                        start: self.line_start(p) as u32,
+                        end: self.line_end(p) as u32,
+                    }
+                } else {
+                    Span {
+                        start: self.line_start(start) as u32,
+                        end: end as u32,
+                    }
+                };
+                Some(Allow { text, line })
+            })
+            .collect()
+    }
+
+    /// Start of the line holding `p`.
+    fn line_start(&self, p: usize) -> usize {
+        let mut i = p;
+        while i > 0 && self.src[i - 1] != b'\n' {
+            i -= 1;
+        }
+        i
+    }
+
+    /// End of the line holding `p`: its newline, or the end of the file.
+    fn line_end(&self, p: usize) -> usize {
+        let mut i = p;
+        while i < self.src.len() && self.src[i] != b'\n' && self.src[i] != b'\r' {
+            i += 1;
+        }
+        i
+    }
+
+    /// A `#` comment to the end of its line, noted when it is `# ietsp:`.
+    /// Out of line so `next_token` stays small enough for its callers to
+    /// inline it: as part of `skip_trivia` this arm cost 1.5 % of the
+    /// instructions of a parse of nixpkgs.
+    #[inline(never)]
+    fn comment(&mut self) {
+        let src = self.src;
+        let start = self.pos;
+        let mut i = start;
+        while i < src.len() && src[i] != b'\n' && src[i] != b'\r' {
+            i += 1;
+        }
+        self.pos = i;
+        if self.at(start + 2) == b'i'
+            && src[start..i].starts_with(b"# ietsp:")
+            && start >= self.noted_to
+        {
+            self.noted_to = i;
+            self.allows.push((start, i));
+        }
     }
 
     pub fn pos(&self) -> usize {
@@ -232,16 +333,15 @@ impl<'a> Lexer<'a> {
         if i < self.src.len() { self.src[i] } else { 0 }
     }
 
+    /// Inlined into `next_token` whatever its other callers: as a call it
+    /// cost 5 % of the parse of nixpkgs.
+    #[inline(always)]
     fn skip_trivia(&mut self) {
         let src = self.src;
         while self.pos < src.len() {
             match src[self.pos] {
                 b' ' | b'\t' | b'\r' | b'\n' => self.pos += 1,
-                b'#' => {
-                    while self.pos < src.len() && src[self.pos] != b'\n' && src[self.pos] != b'\r' {
-                        self.pos += 1;
-                    }
-                }
+                b'#' => self.comment(),
                 b'/' if self.at(self.pos + 1) == b'*' => {
                     let mut i = self.pos + 2;
                     loop {

@@ -190,10 +190,15 @@ impl<'a> Compiler<'a> {
         self.lint_level(id) != Level::Off
     }
 
-    /// A lint site: nothing at `off`, a diagnostic for the evaluator to
-    /// report at `warn`, a compile error at `error`.
+    /// A lint site: nothing at `off` or on a line a `# ietsp: allow`
+    /// comment covers, a diagnostic for the evaluator to report at `warn`,
+    /// a compile error at `error`.
     fn lint(&mut self, id: LintId, pos: Pos, msg: impl FnOnce() -> String) -> CResult<()> {
-        match self.lint_level(id) {
+        let level = self.lint_level(id);
+        if level != Level::Off && !pos.is_none() && self.ast.allows.covers(pos.0 - self.base, id) {
+            return Ok(());
+        }
+        match level {
             Level::Off => Ok(()),
             Level::Warn => {
                 self.diags.push(lint::Diag {
@@ -214,9 +219,12 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    /// The URL literals and legacy lets the parser noted.
+    /// The URL literals, legacy lets and unknown allow names the parser noted.
     fn parser_notes(&mut self) -> CResult<()> {
-        if !self.lint_on(LintId::UrlLiteral) && !self.lint_on(LintId::LegacyLet) {
+        if !self.lint_on(LintId::UrlLiteral)
+            && !self.lint_on(LintId::LegacyLet)
+            && !self.lint_on(LintId::UnknownAllow)
+        {
             return Ok(());
         }
         let ast: &'a Ast = self.ast;
@@ -234,6 +242,11 @@ impl<'a> Compiler<'a> {
                 }
                 Note::LegacyLet(id) => {
                     self.lint(LintId::LegacyLet, self.pos(id), lint::legacy::legacy_let)?;
+                }
+                Note::UnknownAllow { at, msg } => {
+                    self.lint(LintId::UnknownAllow, Pos(self.base + at), || {
+                        String::from_utf8_lossy(ast.bytes(msg)).into_owned()
+                    })?;
                 }
             }
         }

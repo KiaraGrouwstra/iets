@@ -69,14 +69,19 @@ pub struct Ast {
     pub formals: Vec<Formal>,
     /// Constructs the parser accepts but a lint may report (docs/lints.md).
     pub notes: Vec<Note>,
+    /// The lines `# ietsp: allow` comments cover (docs/lints.md).
+    pub allows: crate::lint::allow::Allows,
 }
 
-/// A legacy construct the parser saw, for the `url-literal` and
-/// `legacy-let` lints; the node is the expression it produced.
+/// A construct the parser saw and a lint may report: the `url-literal`
+/// and `legacy-let` nodes, and a `# ietsp: allow` word the registry does
+/// not know (`unknown-allow`), with its byte offset and its message in
+/// `bytes`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Note {
     Url(ExprId),
     LegacyLet(ExprId),
+    UnknownAllow { at: u32, msg: Range },
 }
 
 impl Ast {
@@ -137,6 +142,7 @@ impl Ast {
         self.names.clear();
         self.formals.clear();
         self.notes.clear();
+        self.allows.clear();
         self.root = ExprId(0);
     }
 }

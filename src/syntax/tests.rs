@@ -315,6 +315,51 @@ fn line_col_counts_bytes() {
 }
 
 #[test]
+fn allow_comments() {
+    use super::ast::Note;
+    use crate::lint::LintId;
+    use crate::lint::allow::bit;
+    let parse_allows = |src: &str| {
+        let mut interner = Interner::new();
+        let ast = parse(src.as_bytes(), FileId(0), &mut interner).unwrap();
+        (ast.allows.clone(), ast.notes.clone())
+    };
+    // own line: the next non-blank, non-comment line; trailing: its own line
+    let src = "# ietsp: allow with\n\n# plain\n  with a; [\n  (with b; x) # ietsp: allow with, eq-bool\n]\n";
+    let (a, notes) = parse_allows(src);
+    assert!(notes.is_empty());
+    let l = a.lines();
+    assert_eq!(l.len(), 2);
+    assert_eq!(
+        (l[0].start, l[0].end, l[0].mask),
+        (29, 40, bit(LintId::With))
+    );
+    assert_eq!((l[1].start, l[1].end), (41, 83));
+    assert_eq!(l[1].mask, bit(LintId::With) | bit(LintId::EqBool));
+    assert!(a.covers(31, LintId::With));
+    assert!(!a.covers(40, LintId::With));
+    assert!(!a.covers(31, LintId::EqBool));
+    assert!(a.covers(45, LintId::EqBool));
+    // a comment before the third token of lookahead is noted once
+    let (a, _) = parse_allows("{\n# ietsp: allow with\nb = with x; y; }");
+    assert_eq!(a.lines().len(), 1);
+    assert_eq!((a.lines()[0].start, a.lines()[0].end), (22, 38));
+    // an own-line comment at the end of the file covers nothing
+    let (a, _) = parse_allows("1\n# ietsp: allow with\n");
+    assert!(a.is_empty());
+    // unknown names are notes; the known ones still count
+    let (a, notes) = parse_allows("# ietsp: allow wiht, with\n1");
+    assert_eq!(a.lines()[0].mask, bit(LintId::With));
+    assert!(matches!(notes[..], [Note::UnknownAllow { at: 15, .. }]));
+    let (a, notes) = parse_allows("1 # ietsp: allo with");
+    assert!(a.is_empty());
+    assert!(matches!(notes[..], [Note::UnknownAllow { at: 11, .. }]));
+    // other comments are not parsed
+    let (a, notes) = parse_allows("# ietsp allow with\n#ietsp: allow with\n1");
+    assert!(a.is_empty() && notes.is_empty());
+}
+
+#[test]
 fn spans_cover_tokens() {
     let src = "  f a.b  ";
     let mut interner = Interner::new();
