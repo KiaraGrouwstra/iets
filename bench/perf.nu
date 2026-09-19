@@ -1,9 +1,9 @@
 #!/usr/bin/env nu
 # Usage: bench/perf.nu [--runs N] [--label L] [--skip-outpaths] [IETSP]
-# The running perf table of docs/memory.md for one binary: wall, user, sys
-# and peak RSS on nixos-desktop at 1 and 4 workers (the run with the median
-# wall of N, default 5) and on outpaths chunk 0 of 8 at 1 and 4 workers
-# (one run each, about 14 GB). Run it on an idle box.
+# Wall, user, sys and peak RSS of one binary: nixos-desktop at 1 and 4
+# workers (the run with the median wall of N, default 5), and outpaths
+# chunk 0 of 8 at 1 and 4 workers (one run each, about 14 GB). Run it on an
+# idle box.
 
 def measure [ietsp: string, args: list<string>]: nothing -> record {
   let r = (^/usr/bin/env time -f "TIME %e %U %S %M" $ietsp ...$args | complete)
