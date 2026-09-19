@@ -1,14 +1,14 @@
 # ietsp
 
-A from-scratch Nix evaluator in Rust. Evaluation only. See ARCHITECTURE.md.
+A from-scratch Nix evaluator in Rust, and a client that builds what it
+evaluates on a Nix daemon or a nix-grpc-store service. See ARCHITECTURE.md;
+the test scripts are listed there.
 
 ```
 nix develop -c cargo build --release
 ./target/release/ietsp eval --strict -E '1 + 1'
-nix flake check   # test, clippy, fmt, langtests, partest
-scripts/langtests.nu
+nix flake check   # test, clippy, fmt, examples, langtests, partest, module
 scripts/difftest.nu -I nixpkgs=/path -E '(import <nixpkgs> {}).hello.drvPath'
-scripts/parity.nu   # match/split/fromTOML against the real nix-instantiate
 bench/run.nu nixos-desktop
 
 # remote builds: evaluate in memory, ship only what the daemon lacks, over the Nix worker protocol
@@ -17,16 +17,13 @@ bench/run.nu nixos-desktop
 ./target/release/ietsp build --builder unix:///path/to/socket --no-build FILE.nix   # upload only, no realise
 ./target/release/ietsp build /nix/store/<hash>-<name>.drv   # legacy: closure from the local store
 ./target/release/ietsp build --builder 'grpc://farm.numtide.com:50051?token-file=./jwt' --fetch-to out FILE.nix   # nix-grpc-store, natively
-scripts/daemon-e2e.nu; scripts/grpc-e2e.nu
 
 # locked flakes: a missing input is substituted by the daemon or downloaded and
 # unpacked by ietsp; only git and hg inputs still run nix (docs/flakes.md)
 ./target/release/ietsp eval --raw .#packages.x86_64-linux.default.drvPath
-scripts/flaketest.nu
 
 # nix-fast-build's flags, one process: eval and build overlap, results as json or junit
 ./target/release/ietsp fast-build --flake .#checks --skip-cached --result-file r.json
-scripts/fastbuild-e2e.nu
 
 # .envrc: what `nix print-dev-env` prints, byte-exact, from the in-memory shell drv
 ./target/release/ietsp print-dev-env --gc-root .direnv/ietsp-env .   # see docs/direnv.md
@@ -35,7 +32,6 @@ scripts/fastbuild-e2e.nu
 # exec'ing the real nix for anything it does not implement (docs/classic.md)
 nix build .#classic && ./result/bin/nix-instantiate -A hello /path/to/nixpkgs
 ./target/release/ietsp nix-build -A hello /path/to/nixpkgs   # same, without symlinks
-scripts/classic-e2e.nu
 ```
 
 See `docs/remote-build.md` and `docs/fast-build.md` (every build path shares
@@ -60,4 +56,4 @@ the same drvPath. ietsp runs with its default of 4 workers.
 | nixos-minimal | 2.86 s | 1.01 s | 0.85 s |
 
 Single-threaded ietsp: 1.67 s desktop, 1.32 s minimal. Details in
-`docs/parallel.md` and `bench/results/`.
+`docs/parallel.md`.

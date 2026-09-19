@@ -211,14 +211,6 @@ and main re-evaluates the cycle sequentially and reports the error.
    parks on cheap elements), coerce alone is a small win, all three
    together give the numbers below. `IETSP_FANOUT` bitmask (1 deep, 2
    coerce, 4 WHNF) toggles them for experiments.
-2. **Creation-time speculation**: removed. It shipped off by default and
-   stayed off. Measured again before it went (nixos-desktop, 15 runs):
-   1.401 s off, 1.544 s with `IETSP_SPEC=1`, 1.405 s with `=3`, and user
-   time rose from 2.58 s to 2.98 s — it burned CPU on work nobody
-   demanded, and without a GC the undemanded results stayed resident.
-   A speculative lane also needed a third deque per worker, a backlog
-   cap, a per-fiber candidate buffer and a creation budget. Cut.
-3. **Sibling prefetch**: not implemented.
 
 ## Cancellation and bail
 
@@ -287,90 +279,33 @@ claim/park stress on a shared DAG from 8 workers, deadlock resolution,
 interner); `scripts/partest.nu N` (twelve expressions at 1 versus N
 workers: shared graph, deep fan-out, cycles in one and two ranges,
 errors, `tryEval`, trace/warn exactly once, concurrent import,
-derivations, JSON); `IETSP_WORKERS=8 scripts/langtests.nu` (same 244/6
+derivations, JSON); `IETSP_WORKERS=8 scripts/langtests.nu` (same counts
 as sequential); `IETSP_WORKERS=8 scripts/difftest.nu` on nixos-desktop
 and nixos-minimal (`ok`).
 
 ## Measurements
 
-`bench/workloads/nixos-desktop.nix`, 16-core EPYC, hyperfine, 5 runs,
-load average ~2.4 from another agent's builds:
+Why the default is 4 workers: `bench/workloads/nixos-desktop.nix` and
+`nixos-minimal.nix`, 16-core EPYC, hyperfine 8 runs, after the second pass
+(wake policy, shared tables, flat AST; earlier passes in docs/history.md):
 
-| workers | wall | user | sys | max RSS |
+| workload | workers | wall | user | sys |
 |---|---|---|---|---|
-| pristine main, sequential | 2.118 ± 0.045 s | 1.84 s | 0.26 s | 1.53 GB |
-| 1 | 2.194 ± 0.128 s | 1.91 s | 0.26 s | 1.53 GB |
-| 2 | 1.465 ± 0.032 s | 2.39 s | 0.30 s | 1.55 GB |
-| 4 | 1.232 ± 0.019 s | 3.38 s | 0.36 s | 1.58 GB |
-| 8 | 1.257 ± 0.055 s | 4.98 s | 0.56 s | 1.61 GB |
-| 16 | 1.366 ± 0.049 s | 7.32 s | 0.83 s | 1.63 GB |
+| nixos-desktop | 1 | 1.67 s | 1.44 s | 0.21 s |
+| nixos-desktop | 4 | 1.01 s | 2.37 s | 0.31 s |
+| nixos-desktop | 16 | 1.27 s | 5.88 s | 0.74 s |
+| nixos-minimal | 1 | 1.32 s | 1.16 s | 0.15 s |
+| nixos-minimal | 4 | 0.89 s | 1.95 s | 0.27 s |
+| nixos-minimal | 16 | 1.18 s | 4.86 s | 0.59 s |
 
-fix on the same machine: 1.63 s. Sequential overhead of the shared
-tables is at most 4 % and inside the run-to-run noise; the interner is
-the only measurable item (a lock per intern; a 1024-entry per-handle
-cache in front of it recovers most of it).
-
-Where the time goes at 8 workers (`IETSP_PAR_STATS=1|2`): main spends
-~1.1 s of the 1.26 s parked, so helpers walk the critical chain. The
-timeline shows ~0.4 s where one fiber runs alone with nothing queued:
-`lib/modules.nix` `mergeDefinitions`, the module fixpoint, which has no
-strict consumer to fan out from. That is where the remaining headroom
-is. User time above the sequential 1.9 s is mostly the capped idle spin.
-
-### After the merge with the sequential pass
-
-Same workload, hyperfine `--warmup 1 --runs 5`, 16-core box:
-
-| workers | wall | user | sys |
-|---|---|---|---|
-| 1 | 1.822 ± 0.045 s | 1.55 s | 0.26 s |
-| 2 | 1.241 ± 0.053 s | 1.96 s | 0.30 s |
-| 4 | 1.133 ± 0.053 s | 3.03 s | 0.40 s |
-| 8 | 1.223 ± 0.031 s | 4.60 s | 0.70 s |
-| 16 | 1.264 ± 0.039 s | 6.02 s | 1.02 s |
-
-Main still parks ~0.95 s of the 1.22 s at 8 workers (`main-wait`), so
-the critical chain, not the sequential base, sets the floor.
-
-### Second pass (wake policy, shared tables, flat AST)
-
-Same box, load average 3-4 from other work, hyperfine 8 runs, A/B
-against the merge above run back to back:
-
-| workload | workers | before | after |
-|---|---|---|---|
-| nixos-desktop | 1 | 1.87 s (user 1.61, sys 0.24) | 1.67 s (user 1.44, sys 0.21) |
-| nixos-desktop | 4 | 1.15 s (user 3.08, sys 0.39) | 1.01 s (user 2.37, sys 0.31) |
-| nixos-desktop | 16 | 1.42 s (user 7.36, sys 1.13) | 1.27 s (user 5.88, sys 0.74) |
-| nixos-minimal | 1 | 1.54 s (user 1.34, sys 0.19) | 1.32 s (user 1.16, sys 0.15) |
-| nixos-minimal | 4 | 1.01 s (user 2.41, sys 0.34) | 0.89 s (user 1.95, sys 0.27) |
-| nixos-minimal | 16 | 1.26 s (user 5.85, sys 0.91) | 1.18 s (user 4.86, sys 0.59) |
-
-Where the wall goes at 4 workers on nixos-minimal (`IETSP_PAR_STATS=2`
-timeline and per-import log): ~0.6 s with all four workers busy, then
-~0.17 s where one helper alone reads, parses and compiles
-`pkgs/development/haskell-modules/hackage-packages.nix` (16.6 MB,
-pulled in by `shellcheck` through `writeShellApplication`) while main
-and the other helpers wait on it, plus a few 40 ms stretches with one
-runner. Nothing can be prefetched there: the file is imported the
-instant its importer is compiled. Parse and compile speed is the only
-lever on that phase; the flat AST took the import from 0.27 s to
-0.18 s. At w1, `compile_source` is still 28 % of the run (parse 19 %,
-compile 8 %).
-
-Tried and dropped in this pass, each measured A/B and inside noise or
-worse: a chunk prefault thread for the arena (a 17th busy thread on 16
-vCPUs; w16 +20 %); no stack trimming plus prefaulting the warm 64 KiB
-of new stacks (madvise count went up, not down); a shared lock-free
-interner cache in front of the shards (two dependent cold-line loads
-per probe, `intern` self time doubled; the 1024-entry per-handle cache
-stays); reusing AST buffers across parses; coerce batches of 8 cells;
-glibc malloc tunables (`top_pad`, `trim_threshold`: -0.05 s sys at
-w16, noise at w1; `arena_max=2` is a disaster). The `MADV_POPULATE_WRITE`
-of the arena chunks costs 27 ms total at w1 when huge pages are
-available; the rest of the sequential system time is ~20k page faults
-(glibc heap growth and parser buffers), ~25k file syscalls for ~4.5k
-opens, ~13k `mprotect` calls from glibc heap grow/shrink, and exit.
+More workers cost user time and gain no wall: the critical chain sets the
+floor. At 8 workers main spends ~0.95 s of 1.22 s parked while helpers walk
+that chain (`IETSP_PAR_STATS=1|2`). The chain is the module fixpoint
+(`lib/modules.nix` `mergeDefinitions`, no strict consumer to fan out from)
+and imports: on nixos-minimal at 4 workers, one helper spends ~0.17 s alone
+reading and compiling `hackage-packages.nix` (16.6 MB) while everyone else
+waits on it. Only parse and compile speed moves that phase; the IR cache
+(docs/memory.md) removes it on warm runs.
 
 ## Merge notes for the sequential work
 
@@ -394,5 +329,4 @@ opens, ~13k `mprotect` calls from glibc heap grow/shrink, and exit.
 
 ThreadSanitizer needs nightly; not run. Invariants above are the
 argument. No loom model. Sibling prefetch not implemented. The aarch64
-context switch is written but untested. Creation-time speculation was
-measured again and removed (see "Work sources").
+context switch is written but untested.

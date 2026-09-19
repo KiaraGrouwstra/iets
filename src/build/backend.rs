@@ -6,7 +6,7 @@
 //! Two of them. The worker backend holds one `Connection` and sends one
 //! `BuildPathsWithResults` per ready set, because the protocol is serial per
 //! connection and a per-derivation op idles the daemon between derivations
-//! (docs/scheduling.md measured 7-10x). The `grpc://` backend fans the ready
+//! (docs/remote-build.md: 7-10x slower). The `grpc://` backend fans the ready
 //! set out instead: in farm mode one `BuildDerivation` per derivation with up
 //! to `max-builds` in flight, which the gRPC API tags with its derivation, so
 //! the events key correctly; in non-farm mode one `BuildPaths` over the whole

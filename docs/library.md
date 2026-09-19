@@ -29,11 +29,11 @@ module it belongs to) and let `cli` call it there.
 | Derivations this run created | `Evaluator::drv.drvs` (`StorePath -> builtins::derivation::DrvInfo`) |
 | A drv's attribute path and position | `DrvInfo::attr`, `DrvInfo::pos`; `DrvState::set_attr` records the walk |
 | Position to file:line:col | `provenance::describe_pos`, else `Evaluator::describe_pos` |
-| Store paths back to local trees | `provenance::Provenance::snapshot(ev, cfg)` |
+| Store paths back to local trees | `provenance::Provenance::snapshot(ev)` |
 | Sources this run copied in | `Evaluator::source_origins()` |
 | Derivation roots of a value | `store::locate::drv_roots` |
 | Outputs to build | `api::build_targets(wanted, roots)` |
-| Upload plan | `remote::plan::plan(roots, Inputs { drvs, sources }, &locate)`; `store::locate::locate_in_store` |
+| Upload plan | `remote::plan::plan(roots, Inputs { drvs, sources })`; `Plan::resolve(missing, &locate)` with `store::locate::locate_in_store` |
 | Worker connection | `remote::worker::Transport::parse("daemon" \| "unix:///…" \| "ssh-ng://…")` |
 | Build | `build::Dispatcher::open(&transport, &options, prov, style)`, then `submit(&mut build::upload::PlanUpload::new(&plan, &locate), targets)` |
 | Build targets and results | `build::Target::new(attr, drv, outputs)`; `build::Outcome` per target |
@@ -41,7 +41,7 @@ module it belongs to) and let `cli` call it there.
 | Nix configuration | `config::Config::load(&[])` |
 | Evaluation cache | `api::setup_cache(&args, subcommand, &ev)`, `trace::run::Cache` |
 | Flake references | `api::flake_ref`, `flake::{eval_flake, eval_flake_value}` |
-| `eval-jobs` style walks | `jobs::run`, `jobs::Options` |
+| `eval-jobs` style walks | `jobs::run`, `jobs::Opts` |
 
 ## Shape of a frontend
 

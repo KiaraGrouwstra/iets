@@ -6,7 +6,7 @@ protocol (`src/libstore/worker-protocol.hh`, Nix 2.34.8) to any `nix-daemon`,
 and `grpc://` to a nix-grpc-store service such as Numtide's build farm. The
 client owns no local store: nothing on either path reads `/nix/store` unless
 an input drv came from there. What more scheduling over the worker protocol
-would buy, measured and rejected: `docs/scheduling.md`.
+would buy, measured and rejected: docs/history.md.
 
 ## Why not `nix-build`
 
@@ -71,8 +71,11 @@ below; the rest of this section is the worker protocol.
 `daemon` is `/nix/var/nix/daemon-socket/socket`; `ssh-ng://` runs `ssh host
 nix-daemon --stdio` and uses its stdio, as `ssh-store.cc` does, and reads
 `NIX_SSHOPTS`. Code: `src/remote/worker/` (`wire.rs` framing and the
-`FramedSink`; `mod.rs` transport, handshake, the `STDERR_*` loop, the ops;
-`build.rs` the client flow; `src/remote/event.rs` what the flow reports).
+`FramedSink`, and `write_object`, one `AddMultipleToStore` entry; `mod.rs`
+transport, handshake, the `STDERR_*` loop, the ops; `src/remote/event.rs`
+what the daemon reports). The flow below is `build::Dispatcher` over the
+worker backend (`build::backend::Worker`) with `build::upload::PlanUpload`;
+see "The dispatcher".
 No Nix library, no store; the protocol is written from the C++ source.
 
 Handshake as `initConnection`: `WORKER_MAGIC_1`, our version 1.38, the
@@ -117,10 +120,11 @@ One op per phase:
    an untrusted client because it needs no signature.
 4. `BuildPathsWithResults` in normal mode on `<root drv>!<out1,out2>` (`!*`
    without `--out`), the legacy `DerivedPath` string that protocol >= 1.30
-   reads. A failure status becomes a `Failed` event. `--no-build` stops
+   reads, one entry per root in the same op. A failed status is that root's
+   verdict. `--no-build` stops
    before this step; the substitution in step 2 still runs, or the drvs
    could not register.
-5. `QueryDerivationOutputMap` on the root: `Built` events per output.
+5. `QueryDerivationOutputMap` per root that built: its output paths.
 6. `NarFromPath` per wanted output with `--fetch-to DIR`, restored with
    `store::nar::restore_path`.
 
@@ -136,6 +140,51 @@ type `actBuild` (105) is `Started` and maps the activity id to its drv;
 `readError` (message plus traces). `--timings` counts worker ops and round
 trips (ops plus the three handshake exchanges) and bytes written to the
 socket.
+
+## The dispatcher
+
+Every ietsp command that realises a derivation goes through
+`crate::build::Dispatcher`, over every transport: `ietsp build`, classic
+`nix-build` and `nix build`, and `fast-build`. `nix-instantiate`,
+`nix-shell` and `print-dev-env` use the same two halves without the
+renderer: `build::upload::PlanUpload` over `build::backend::Worker`.
+
+One dispatcher, two ways of feeding it:
+
+- `build::upload::PlanUpload` ships a `remote::plan::Plan` computed once,
+  for the commands that know every root before they build anything.
+- `build::upload::StreamUpload` is incremental, for the eval-jobs walk of
+  `fast-build` (docs/fast-build.md). Per batch it walks only the part of the
+  closure it has not registered yet, then one `QueryValidPaths` and one
+  `AddMultipleToStore`. It duplicates `remote::plan::plan`'s walk on
+  purpose: `plan` cannot prune at a derivation already known valid, and
+  re-planning a whole closure per batch is quadratic on a large `checks`
+  set.
+
+The dispatcher owns the batching, the provenance, the event stream and the
+records; a `build::backend::Backend` owns the wire. Two implementations:
+
+| | worker protocol (`daemon`, `unix://`, `ssh-ng://`) | `grpc://` |
+|---|---|---|
+| a ready set | one `BuildPathsWithResults` | farm: one `BuildDerivation` per derivation of the set's closure, `min(max-builds, -j)` in flight. Non-farm: one `BuildPaths` for the set |
+| build parallelism | the daemon's, `-j` through `SetOptions` | the client's, in flight; the store's within one `BuildPaths` |
+| log lines | attributed by the daemon's activity ids | farm: by the call, which knows its derivation. Non-farm: unattributed, folded into the running build when there is exactly one |
+| output paths | `QueryDerivationOutputMap` | statically, from the derivations |
+| out-links | the local daemon, the closure copied back first | `FetchNars` from the cache, then the local daemon |
+
+Why one op per ready set on the worker protocol: the protocol is serial per
+connection, and every `BuildPathsWithResults` constructs a daemon `Worker`
+(build/entry-points.cc). A per-derivation op idles the daemon between
+derivations: measured 7.3x slower on a 8-wide, 6-deep graph and 10x on a
+32-wide, 4-deep one (docs/history.md). A farm has no such constraint: one
+call per derivation is the only shape it offers, and fanning out drops the
+barrier where every derivation of a batch waits for the slowest. The
+fan-out is `build::fanout`, a dependency-ordered runner with a cap on jobs
+in flight, unit-tested without a farm.
+
+Stdout of the classic names is byte-identical to the real nix
+(`scripts/classic-e2e.nu`); all progress goes to stderr, drawn by
+`build::render` (docs/fast-build.md, "Rendering").
 
 ## `grpc://`: nix-grpc-store and Numtide's build farm
 
@@ -179,30 +228,7 @@ hash part, which the balancer hashes to pick a worker) and `x-nix-features`
 
 ### Flow
 
-Every build goes through `crate::build::Dispatcher`, as every other
-transport does (`docs/fast-build.md`): the same batching, the same
-structured events with provenance, the same per-build log blocks, the same
-records. `grpc://` is one `build::backend::Backend` and the worker protocol
-is the other, so what differs is only what the wire offers:
-
-- A ready set is one `BuildPathsWithResults` over the worker protocol,
-  because that protocol is serial per connection. Over `grpc://` a farm
-  takes one `BuildDerivation` per derivation, so the client fans the set's
-  whole derivation closure out, dependencies first, `min(max-builds, -j)` in
-  flight; a non-farm store resolves the closure itself, so one `BuildPaths`
-  takes the set.
-- A `BuildDerivation` knows its derivation, so its `log_line` and `phase`
-  become drv-tagged events and the renderer keys each build's log buffer on
-  them. A `BuildPaths` stream names no derivation: those lines fold into the
-  running build when there is exactly one, as a remote builder's own stderr
-  does through a daemon.
-- Output paths come from the derivations, computed statically, where the
-  worker path asks `QueryDerivationOutputMap`.
-- `BuildPaths` carries no `keep-going`, so a non-farm store stops at the
-  first failure and answers only for the targets it reached. The backend
-  re-asks for the rest, so every root still gets its own verdict.
-
-`StoreInfo` once, for the trust flag and the `farm` flag. Then:
+The `grpc://` backend, in order. `StoreInfo` once, for the trust flag and the `farm` flag. Then:
 
 1. `QueryValidPaths` with every planned path's base name, in one call, then
    `Plan::resolve` on the missing sources — the same split the worker path
@@ -224,8 +250,8 @@ is the other, so what differs is only what the wire offers:
    of it is done. The request carries the `BasicDerivation` wire form
    (`derivation/aterm.cc:write`) at `protocol = 1 << 8 | 37` and
    `build_mode = 0`. `log_line` and `phase` become `Log` events;
-   `BuildDerivationDone.result` is a `BuildResult` at 1.37 and becomes `Built`
-   or `Failed`. Derivations whose outputs `QueryValidPaths` already reports
+   `BuildDerivationDone.result` is a `BuildResult` at 1.37 and becomes the
+   derivation's verdict, a `Failed` event on failure. Derivations whose outputs `QueryValidPaths` already reports
    valid are skipped — the C++ plugin sends them and lets the niks3 claim
    answer `AlreadyValid`, one RPC each.
 5. Non-farm: one `BuildPaths` on `<drv>^<outputs>` (note `^`: the daemon parses
@@ -357,8 +383,8 @@ source; in the scratch store the hello drv has the same hash as in the local
 store and every input source has the same `ca`.
 
 The upload is daemon-bound: about 0.5 ms per path for the sequential
-`addToStore` (restore, hash, check, lock, one SQLite transaction), see
-`docs/scheduling.md`.
+`addToStore` (restore, hash, check, lock, one SQLite transaction). No
+client-side cut of the upload changes that (docs/history.md).
 
 ## Gaps
 
@@ -369,11 +395,11 @@ The upload is daemon-bound: about 0.5 ms per path for the sequential
 - The client does not poll stderr while streaming `AddMultipleToStore`, so an
   error in the middle of a large upload surfaces after the whole stream is
   sent; the daemon's `FramedSource` drains the rest, so nothing deadlocks.
-- `max-jobs` is the CPU count; there is no flag for it, `keep-going`, or
-  substituters.
+- `ietsp build` sends `max-jobs` = the CPU count and has no flag for it,
+  `keep-going`, or substituters.
 - Protocol < 1.35 is refused, and no features are negotiated.
-- `QueryDerivationOutputMap` only on the root; no `Built` events for
-  dependencies.
+- Output paths are asked only for the roots; a dependency that built has no
+  line of its own beyond the renderer's verdict.
 - Connecting to the system daemon costs about 75 ms here against 10-20 ms
   on the scratch daemon; the system daemon forks a child per connection and
   loads two plugins (`plugin-files` in `nix.conf`), which is the likely
@@ -384,9 +410,6 @@ The upload is daemon-bound: about 0.5 ms per path for the sequential
 - `nix path-info --json` on this Nix prints a deprecation warning for the
   missing `--json-format`; it reaches stderr on every run that locates a
   source through the store.
-  no recorded origin; they fall back to the store locator, which rejects
-  them. Output paths used as `inputSrcs` (`builtins.storePath`) are
-  rejected at plan time too.
 
 `grpc://` adds:
 

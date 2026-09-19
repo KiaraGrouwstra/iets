@@ -5,7 +5,7 @@ handles the subset ietsp implements and execs the real binary for the rest,
 so it is a drop-in only where the real nix is also on `PATH`.
 
 ```
-nix build .#classic     # bin/{nix-instantiate,nix-build,nix-eval-jobs,nix-shell,nix}
+nix build .#classic     # bin/{nix-instantiate,nix-build,nix-eval-jobs,nix-shell,nix-fast-build,nix}
 ```
 
 Every symlink points at `bin/ietsp`; the basename of `argv[0]` picks the
@@ -162,6 +162,11 @@ derivation, any other flag.
 The existing `ietsp eval-jobs`, which already matches nix-eval-jobs 2.35
 flag for flag. See `docs/eval-jobs.md`.
 
+### `nix-fast-build`
+
+The existing `ietsp fast-build`, with nix-fast-build's flags and result
+files. See `docs/fast-build.md`.
+
 ### `nix`
 
 Four subcommands; every other one execs the real `nix`.
@@ -300,19 +305,12 @@ child stopped at the `IETSP_FETCHING` guard
 
 ## Config
 
-`src/config.rs` reads the same files Nix reads (`docs/config.md`). Order,
-later wins: `$NIX_CONF_DIR/nix.conf`, the user files, `$NIX_CONFIG`, then
-the command line, where `--option name value` and the flag aliases
-(`--store`, `-j`/`--max-jobs`, `--cores`, `-k`, `-K`) are overrides in
-command-line order.
-
-What is used:
-
-| setting | effect |
-|---|---|
-| `store` | where builds go: `auto`, empty and `daemon` are the daemon socket; `unix://PATH`, `ssh-ng://HOST` and `grpc://HOST:PORT[?…]` are honoured; anything else falls back |
-| `system` | the evaluator's `builtins.currentSystem` |
-| `max-jobs`, `cores`, `keep-going`, `keep-failed`, `substitute` | `SetOptions` on the connection |
+The classic names read nix.conf as Nix does, and what reaches the daemon is
+in `docs/config.md`. On the command line, `--option name value` and the flag
+aliases (`--store`, `-j`/`--max-jobs`, `--cores`, `-k`, `-K`) are overrides
+applied in command-line order. `store = auto`, empty or `daemon` is the
+daemon socket; `unix://PATH`, `ssh-ng://HOST` and `grpc://HOST:PORT[?…]` are
+honoured; any other store falls back.
 
 ## Known divergences
 

@@ -136,26 +136,10 @@ derivation: derivationStrict, placeholder, `import` of a `.drv` store path.
 State lives in `ev.drv` (`DrvState`: hash cache, created-drv table,
 `--dump-drvs` dir). `scripts/drvdiff.nu` finds the first derivation that
 differs from nix-instantiate.
-interim (src/builtins/interim.rs, delete after the strings family merges):
-match, split, replaceStrings, fromJSON, toJSON, fromTOML, hashString,
-hashFile, convertHash, genericClosure, getEnv, currentTime, floor, ceil,
-break; toXML errors.
-
-## TODO (next wave)
-
-match, split, replaceStrings, fromJSON, toJSON, toXML, fromTOML, hashString,
-hashFile, convertHash, derivationStrict, placeholder, getEnv, currentTime,
-floor, ceil, genericClosure, break, ... anything else in primops.cc.
-readFile, readDir, readFileType, pathExists,
-filterSource, path, toFile, derivationStrict, placeholder, outputOf,
-getContext, appendContext, storePath, fetchurl, fetchTarball,
-fetchGit, fetchTree, fetchClosure (all fetchers: error),
-toPath, flakeRefToString, parseFlakeRef,
-getFlake, ... anything else in primops.cc.
 
 ## Corpus tests
 
 `tests/corpus/<name>.nix` holds one case per builtin family member, with
 `.exp` captured from `nix-instantiate --eval --strict` and an optional
-`.flags` file. `scripts/corpus-update.nu` regenerates the `.exp` files;
+`.flags` file. `scripts/corpus.nu --update` regenerates the `.exp` files;
 `scripts/corpus.nu` checks them against `target/release/ietsp`.

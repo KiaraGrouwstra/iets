@@ -1,28 +1,27 @@
 # ietsp architecture
 
-ietsp is a from-scratch Nix language evaluator in Rust. Scope: evaluation
-only. It parses Nix, evaluates lazily, computes derivations and store paths
-in memory, and prints results. The one store write it makes is the flake input
-it fetches itself (`docs/flakes.md`), and it goes through the daemon.
+ietsp is a from-scratch Nix language evaluator in Rust. It parses Nix,
+evaluates lazily, computes derivations and store paths in memory, and prints
+results. It writes no store of its own: builds go to a Nix daemon or a
+nix-grpc-store service (`docs/remote-build.md`), and a flake input it fetches
+itself lives in its own cache (`docs/flakes.md`).
 
 ## Goals, in order
 
 1. Byte-exact parity with `nix-instantiate --eval --strict` on `.drvPath`
    of NixOS systems from nixpkgs. The judge is `scripts/difftest.nu`.
-2. Faster than fix (1.46 s) and Nix on `bench/workloads/nixos-desktop.nix`
-   with the pinned nixpkgs. Sequential speed first, parallel forcing second.
+2. Faster than fix and Nix on `bench/workloads/nixos-desktop.nix` with the
+   pinned nixpkgs. Sequential speed first, parallel forcing second.
 3. Small, readable code. One crate, modules by phase.
-
-4. Phase B: the fastest client to a remote builder. Evaluate in memory,
-   ask the daemon what it lacks, send only that in one op, wait for the
-   root. Any `nix-daemon` over the worker protocol; see `docs/remote-build.md`.
+4. The fastest client to a remote builder. Evaluate in memory, ask the
+   store what it lacks, send only that in one op, build.
 
 ## Non-goals
 
 Local store writes, local builds, a builder daemon of our own, unlocked
 flakes (registries, `nix flake lock`), fetchers that hit the network (they
-error; a locked flake input missing from `/nix/store` is the one exception,
-see `docs/flakes.md`), a REPL, a debugger, a bytecode VM.
+error; a locked flake input is the one exception, see `docs/flakes.md`), a
+REPL, a debugger, a bytecode VM.
 
 nix-grpc-store (github.com/Mic92/nix-grpc-store) is the supported gRPC
 transport, spoken natively from its vendored `proto/nix_remote.proto`. Its
@@ -34,57 +33,67 @@ client of it, not a replacement for it.
 ```
 source bytes
   -> syntax::lexer / syntax::parser     -> ast::Ast (per file, arena of Expr)
-  -> compile::resolve                   -> ir::Ir (scopes resolved, attrpaths merged)
+  -> compile                            -> ir::Ir (scopes resolved, attrpaths merged)
   -> eval                               -> runtime::Word (lazy graph, forced on demand)
   -> print / json / drvPath
 ```
 
 ## Modules
 
-- `syntax/`: `symbol.rs` (interner, `Sym` = u32), `ast.rs` (shared AST,
-  written first, do not change shape without updating compile), `lexer.rs`,
-  `parser.rs`. Parser output keeps raw bindings; attrpath merging and
-  scope resolution happen in `compile`. Variable-length node payloads
-  (attrpaths, string parts, bindings, arguments, formals, literal bytes)
-  live in side tables of the `Ast` addressed by `Range`; the parser
-  builds them on scratch stacks and commits each run when its parent
-  completes, so a file costs nine allocations instead of one per node.
-- `compile/`: AST -> IR. Every variable becomes `Local { depth, index }`
-  or `WithVar(sym)` (only when no lexical binder exists). Attrset bindings
-  are sorted by `Sym` id at compile time when static. Literal folding.
-  Records "cheap" expressions (literals, variables) so the evaluator can
-  skip thunk allocation. `cache.rs`: the compiled IR of every imported
-  file is written to `~/.cache/ietsp/ir/` and loaded instead of parsing
-  and compiling on the next run (docs/memory.md, change 5).
-- `runtime/`: `arena.rs` (bump allocator, no GC, per-thread later),
-  `word.rs` (8-byte tagged `Word`), `value.rs` (heap objects: string with
-  context, list, attrs, lambda, primop, thunk, env), `symbol` reuse.
-- `eval/`: tree-walking evaluator over IR. `force`, apply, `with` chain,
-  operators, equality, coercions, error and trace.
-- `builtins/`: primops, one file per family. Registered through one table.
-- `store/`: pure functions. Nix base32, sha1/sha256/sha512/md5 (crates
-  allowed), NAR serialization and hashing, store path computation, ATerm
-  derivation serialization, `hashDerivationModulo`, text and fixed-output
-  paths. No dependency on `runtime`.
+The evaluator:
+
+- `syntax/`: `symbol.rs` (interner, `Sym` = u32), `ast.rs`, `lexer.rs`,
+  `parser.rs`, `dump.rs` (`ietsp parse`). Parser output keeps raw bindings;
+  attrpath merging and scope resolution happen in `compile`. Variable-length
+  node payloads live in side tables of the `Ast` addressed by `Range`, so a
+  file costs nine allocations instead of one per node.
+- `compile/`: AST -> IR (`ir.rs`). Every variable becomes
+  `Local { depth, index }` or `WithVar(sym)` (only when no lexical binder
+  exists). Static attrset bindings are sorted by `Sym` id. Literal folding.
+  `cache.rs`: the compiled IR of every imported file, on disk
+  (docs/memory.md, "IR cache").
+- `runtime/`: `arena.rs` (bump allocator per worker, no GC), `word.rs`
+  (8-byte tagged `Word`), `value.rs` (heap objects), `census.rs` (the
+  `stats2` memory census).
+- `eval/`: tree-walking evaluator over IR: `force`, apply, `with` chain,
+  operators, equality, `coerce.rs`, `error.rs` (errors and traces).
+- `builtins/`: primops, one file per family (`docs/builtins-api.md`).
+- `parallel/`: worker threads, fibers, work-stealing deques, the thunk claim
+  protocol (`docs/parallel.md`).
+- `store/`: pure functions. Nix base32, the four hash algorithms, NAR
+  serialization and hashing (`docs/nar.md`), store paths, ATerm derivations,
+  `hashDerivationModulo`; `locate.rs` finds derivation roots and local-store
+  sources, `source.rs` records where each source came from.
 - `corepkgs/`: `derivation.nix`, `fetchurl.nix` embedded from Nix 2.34.8.
-- `trace/`: the tracing evaluation cache. Records every observation of
-  the outside world during evaluation (files, directories, stats, copied
-  trees, environment), keys the run on the command, and replays the
-  result when the read set still validates. See `docs/tracing-cache.md`.
+- `print.rs`: the `nix-instantiate --eval` printer and JSON.
+
+Around it:
+
 - `flake/`: locked flakes. `PATH#attr` on the command line, Nix's
   `call-flake.nix` embedded verbatim, `fetchTree` for locked inputs, the
-  root tree copied like `git+file://` or `path:`. See `docs/flakes.md`.
-- `devenv/`: `ietsp print-dev-env`, the `nix print-dev-env` replacement for
-  `.envrc`: the `-env` derivation, the environment JSON, the printed bash.
-  See `docs/direnv.md`.
-- `settings.rs`: every `IETSP_*` environment knob, read once into one
-  struct. See `docs/settings.md`.
-- `api.rs`: the library facade — evaluation arguments, `evaluate`, error
-  reporting, build targets, the cache key. Frontends use this and never
-  reach into `cli`; `examples/` holds three of them. See `docs/library.md`.
-- `main.rs` and `cli/`: the command line on top of `api`.
-  `ietsp eval [--strict] [--json] [--raw] [--no-cache] [--no-ir-cache] [-I prefix=path] [-E expr | file | dir#attr]`,
-  `ietsp build`, `ietsp print-dev-env`, `ietsp parse`, `ietsp cache-dump`.
+  HTTP client and the tarball spool (`docs/flakes.md`).
+- `inputs.rs`: the input store, where a fetched flake input lives.
+- `trace/`: the tracing evaluation cache (`docs/tracing-cache.md`).
+- `cachefs.rs`: on-disk hygiene both caches share (`docs/caches.md`).
+- `remote/`: the store transports. `plan.rs` (the upload plan), `worker/`
+  (the Nix worker protocol), `grpc/` (nix-grpc-store), `copy.rs` (a closure
+  between two worker stores), `event.rs` (what a daemon reports).
+- `build/`: the dispatcher every build goes through, its two backends, the
+  uploaders, the renderer and the result files (`docs/remote-build.md`).
+- `jobs/`: the eval-jobs walk (`docs/eval-jobs.md`).
+- `devenv/`: `print-dev-env` (`docs/direnv.md`).
+- `provenance.rs`: store paths and derivations back to local trees and
+  source positions (`docs/provenance.md`).
+- `config.rs`: nix.conf; `settings.rs`: ietsp.conf and every `IETSP_*`
+  variable (`docs/config.md`, `docs/settings.md`).
+- `nixbin.rs`: the real Nix binaries behind the classic fallback.
+- `error.rs`: the error type outside the evaluator.
+- `api.rs`: the library facade. Frontends use this and never reach into
+  `cli`; `examples/` holds three of them (`docs/library.md`).
+- `main.rs` and `cli/`: the command line on top of `api`: `ietsp eval`,
+  `build`, `eval-jobs`, `fast-build`, `print-dev-env`, `parse`,
+  `cache-dump`, `cache gc`, and the classic names (`cli/classic/`,
+  `docs/classic.md`).
 
 ## Value model
 
@@ -137,26 +146,42 @@ inputSrcs.
 Errors carry a message, a span, and a trace. Position information is kept
 per IR node for `unsafeGetAttrPos`, lambda positions, and error messages.
 
-## Parallelism (phase 2)
+## Parallelism
 
-Cells are atomic from day one so the sequential path never changes shape.
-Phase 2 adds: worker threads, work-stealing deques, stackful fibers that
-park on a BLACKHOLE claimed by another fiber, strict-demand fan-out on
-lists and attrsets, and a speculation gate. Designed after fix; see
-`docs/parallel.md` when it exists.
+Cells are atomic, so the sequential path and the parallel one share one
+shape. Worker threads, work-stealing deques, stackful fibers that park on a
+BLACKHOLE claimed by another fiber, and strict-demand fan-out on lists and
+attrsets; `--workers 1` is the sequential path. See `docs/parallel.md`.
 
 ## Testing
 
-- `tests/lang/`: Nix 2.34.8 functional language tests (`eval-okay-*.nix`
-  with `.exp`, `eval-fail-*.nix`). `scripts/langtests.nu` runs them.
-- `tests/corpus/`: our own cases; `.exp` captured from `nix-instantiate`.
-- `scripts/difftest.nu <expr-or-file>`: runs both evaluators and diffs.
-- `bench/`: the fix workloads and `bench/run.nu` (hyperfine).
+`cargo test` for the units; `nix flake check` adds clippy, fmt, the
+examples, `scripts/langtests.nu`, `scripts/partest.nu` and the NixOS module.
+The other scripts need a live `nix-daemon` or `nix` and run by hand in the
+dev shell (`scripts/lib.nu` holds what they share):
+
+| script | what it compares |
+|---|---|
+| `langtests.nu` | Nix 2.34.8's functional tests, `tests/lang/` |
+| `corpus.nu` | `tests/corpus/`, our own cases against `.exp` from `nix-instantiate` (`--update` rewrites them) |
+| `parity.nu` | `match`, `split`, `fromTOML` against the real `nix-instantiate` (`tests/parity/`) |
+| `partest.nu` | 1 against N workers |
+| `cachetest.nu` | the tracing cache's hits and misses |
+| `difftest.nu`, `drvdiff.nu` | one expression against `nix-instantiate`; the first differing derivation |
+| `classic-e2e.nu` | the classic names against the real nix, stdout byte for byte |
+| `daemon-e2e.nu`, `grpc-e2e.nu` | `ietsp build` over the worker protocol and over `grpc://` |
+| `fastbuild-e2e.nu` | `ietsp fast-build`, and against `nix-fast-build` |
+| `flaketest.nu` | flake evaluation and the input store against `nix eval` |
+| `devenv-test.nu` | `print-dev-env` against `nix print-dev-env` |
+| `provenance-e2e.nu` | the rewritten paths and positions |
+| `evaljobs-flags.nu`, `evaljobs-cmp.nu` | `ietsp eval-jobs` against `nix-eval-jobs`; two saved outputs |
+
+`bench/` holds the workloads and the runners (`bench/run.nu`, `ab.nu`,
+`perf.nu`, `eval-jobs.nu`, `nar.nu`, `cache-growth.nu`).
 
 ## Conventions
 
-- Rust 2024, no `unsafe` outside `runtime/`. Document every `unsafe` block
-  with the invariant it relies on.
+- Rust 2024. Every `unsafe` block names the invariant it relies on.
 - No comments that restate code. Comments explain why.
 - `cargo clippy` clean, `cargo fmt`.
 - Commit small, descriptive messages.

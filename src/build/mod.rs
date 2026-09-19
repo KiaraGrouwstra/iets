@@ -11,7 +11,7 @@
 //!   (`upload::StreamUpload`), which is what overlaps evaluation with
 //!   building. See docs/fast-build.md.
 //! - **How to reach the store.** `backend::Backend`: the worker protocol
-//!   sends one `BuildPathsWithResults` per ready set (docs/scheduling.md: one
+//!   sends one `BuildPathsWithResults` per ready set (docs/remote-build.md: one
 //!   op per ready set beats one op per derivation by 7-10x, and the protocol
 //!   is serial per connection); `grpc://` fans the set out instead.
 //! - **What to say about it.** `render` and `results`, from one event stream.

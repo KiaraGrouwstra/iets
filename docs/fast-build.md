@@ -43,13 +43,12 @@ system.
 **Downloads stay where the build happened.** For the default local daemon
 there is nothing to download: the outputs are already in `/nix/store` and
 `--out-link` points at them. For a remote `--store`, ietsp leaves the
-outputs on the builder, as `--no-download` asks for, and says so once. To
-register a foreign input-addressed path in the local store a client needs
-`QueryPathInfo` (worker op 26, not implemented) *and* trusted-user status
-on the local daemon, because an untrusted client can only add
-content-addressed paths. Neither holds in CI, which wants exit codes and
-logs rather than bytes. `--no-download` is therefore accepted and is the
-effective behaviour.
+outputs on the builder, as `--no-download` asks for, and says so once.
+Copying them back registers foreign input-addressed paths in the local
+store, which needs trusted-user status on the local daemon: an untrusted
+client can add only content-addressed paths. CI rarely has that status,
+and it wants exit codes and logs rather than bytes. `--no-download` is
+therefore accepted and is the effective behaviour.
 
 Smaller differences:
 
@@ -80,62 +79,14 @@ Smaller differences:
 
 | covered | erroring | accepted and ignored |
 |---|---|---|
-| `--flake`/`-f`, `--file` (+ `-A`, `--arg`, `--argstr`, `-I`, `--pure`), `--impure`, `--select`, `--option`, `-j`/`--max-jobs`, `--store`, `--eval-workers`, `--skip-cached`, `--skip-unsupported`, `--systems`, `--out-link`, `--retries`, `--fail-fast`, `--result-file`, `--result-format`,  `--stream-json-lines`, `--no-fold` | `--remote`, `--remote-ssh-option`, `--always-upload-source`, `--copy-to`, `--cachix-cache`, `--attic-cache`, `--attic-ignore-upstream-cache-filter`, `--push-build-closure`, `--niks3-server`, `--override-input`, `--reference-lock-file` | `--no-nom`, `--no-link`, `--no-download`, `--eval-max-memory-size`, `--stall-timeout`, `--nix`, `--nix-eval-jobs`, `--nix-build`, `--debug` |
+| `--flake`/`-f`, `--file` (+ `-A`, `--arg`, `--argstr`, `-I`, `--pure`), `--impure`, `--select`, `--option`, `-j`/`--max-jobs`, `--store`, `--eval-workers`, `--skip-cached`, `--skip-unsupported`, `--systems`, `--out-link`, `--retries`, `--fail-fast`, `--result-file`, `--result-format`,  `--stream-json-lines`, `--no-fold` | `--remote`, `--remote-ssh-option`, `--always-upload-source`, `--copy-to`, `--cachix-cache`, `--attic-cache`, `--attic-ignore-upstream-cache-filter`, `--attic-push-build-closure`, `--push-build-closure`, `--niks3-server`, `--override-input`, `--reference-lock-file` | `--no-nom`, `--no-link`, `--no-download`, `--eval-max-memory-size`, `--stall-timeout`, `--nix`, `--nix-eval-jobs`, `--nix-build`, `--debug` |
 
-## The dispatcher is not fast-build-only
+## The dispatcher
 
-Every ietsp command that realises a derivation goes through
-`crate::build::Dispatcher`: `ietsp build`, classic `nix-build` and classic
-`nix build` as well as `fast-build`, over every transport. Builds are fast
-by default, not in a special mode.
-
-One dispatcher, two ways of feeding it:
-
-- `build::upload::PlanUpload` ships a `remote::plan::Plan` computed once,
-  for the commands that know every root before they build anything. A
-  single-root build is one job through the same dispatcher.
-- `build::upload::StreamUpload` is incremental, for the eval-jobs walk.
-  Per batch it walks only the part of the closure it has not registered
-  yet, then one `QueryValidPaths` and one `AddMultipleToStore`. It
-  duplicates `remote::plan::plan`'s walk on purpose: `plan` cannot prune
-  at a derivation already known valid, and re-planning a whole closure per
-  batch is quadratic on a large `checks` set.
-
-The call sites in `src/cli/build.rs`, `src/cli/classic/build.rs` and
-`src/cli/classic/nix.rs` are one call each. Stdout of the classic names is
-byte-identical to what it was (`scripts/classic-e2e.nu` compares it); all
-the new progress goes to stderr.
-
-### The transport is a backend, not a branch
-
-`build::backend::Backend` is the other half: the dispatcher owns the
-batching, the provenance, the event stream and the records; a backend owns
-the wire. Nine methods — `query_valid`, `substitute`, `add_objects`,
-`submit`, `outputs`, `fetch`, `add_root`, `out_links`, and the `--timings`
-report — and two implementations:
-
-| | worker protocol (`daemon`, `unix://`, `ssh-ng://`) | `grpc://` |
-|---|---|---|
-| a ready set | one `BuildPathsWithResults` | farm: one `BuildDerivation` per derivation of the set's closure, `min(max-builds, -j)` in flight. Non-farm: one `BuildPaths` for the set |
-| build parallelism | the daemon's, `-j` through `SetOptions` | the client's, in flight; the store's within one `BuildPaths` |
-| log lines | attributed by the daemon's activity ids | farm: by the call, which knows its derivation. Non-farm: unattributed, folded into the running build when there is one |
-| output paths | `QueryDerivationOutputMap` | statically, from the derivations |
-| out-links | the local daemon, the closure copied back first | `FetchNars` from the cache, then the local daemon |
-
-The batched op is not a preference, it is what the worker protocol wants:
-it is serial per connection, so a per-derivation op would idle the daemon
-between derivations — `docs/scheduling.md` measured `--per-drv` at 7.3x
-slower on `g8x6` and 10x on `g32x4`. A farm has no such constraint: one
-call per derivation is the only shape it offers, the calls are independent,
-and fanning them out also drops the layer-synchronous barrier a batched op
-imposes, where every derivation of a batch waits for the slowest.
-
-The fan-out itself is `build::fanout`: a dependency-ordered runner with a
-cap on how many jobs run at once, whose events all reach the dispatcher on
-one thread. It is separate from the gRPC code so the cap and the merge are
-unit-tested without a farm (`build::fanout` tests, and
-`build::tests::a_fan_out_backend_keeps_the_cap_and_the_log_blocks` drives
-the dispatcher with a fake fan-out backend).
+`fast-build` builds through `crate::build::Dispatcher`, the one build path
+every ietsp command shares, fed by `build::upload::StreamUpload`. The
+dispatcher, its two backends and why the worker protocol gets one op per
+ready set: docs/remote-build.md, "The dispatcher".
 
 Two `grpc://` differences a user sees:
 
@@ -184,13 +135,9 @@ Each batch, in order:
 5. Hand the batch to the backend: one `BuildPathsWithResults` with every
    derivation in it over the worker protocol, a fan-out over `grpc://`.
 
-Step 5 on the worker protocol is one op per batch, not one per derivation,
-because
-`docs/scheduling.md` measured `--per-drv` at 7.3x slower on `g8x6` and 10x
-on `g32x4`: a per-derivation op serialises what the daemon runs in
-parallel, and each op costs a `Worker` plus a round trip in which nothing
-builds. The worker protocol is serial per connection, so exactly one op is
-in flight; `-j` reaches the daemon through `SetOptions`, where it is that
+Step 5 on the worker protocol is one op per batch, not one per derivation
+(docs/remote-build.md, "The dispatcher"). Exactly one op is in flight;
+`-j` reaches the daemon through `SetOptions`, where it is that
 connection's `Worker` limit (daemon.cc:240) and therefore the real build
 parallelism.
 
@@ -273,7 +220,7 @@ are the same. A flag ietsp does not know falls back to the real
 
 ## Tests
 
-`scripts/fastbuild-e2e.nu` (36 cases). A flake with four `checks` per
+`scripts/fastbuild-e2e.nu` (34 cases, 36 with `nix-fast-build` on `PATH`). A flake with four `checks` per
 system and no nixpkgs, built against the local daemon: the exit code, the
 failing attribute named, the failure log tail, the dependent check built,
 the JSON and JUnit result files, `--out-link`, `--fail-fast`,

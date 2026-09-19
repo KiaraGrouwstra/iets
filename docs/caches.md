@@ -165,9 +165,5 @@ file, the lock, the touch interval and the sweep.
 
 ## The NAR hash of a source tree
 
-There is no third store for it. A tree's NAR hash is what `"${./tree}"`,
-`builtins.path` and `filterSource` cost, and re-dumping an unchanged tree for
-it is exactly what the tracing cache's `Obs::Tree` avoids: it holds the
-`nar_hash` beside a `stat_hash` over every entry, and validation walks with
-`lstat` only, re-dumping the NAR just when that signature differs
-(docs/tracing-cache.md). See docs/nar.md for what the dump itself costs.
+There is no third store for it: the tracing cache's `Obs::Tree` already
+keeps it (docs/nar.md, "Why there is no separate NAR-hash cache").

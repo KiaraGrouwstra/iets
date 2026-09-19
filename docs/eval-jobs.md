@@ -401,7 +401,7 @@ rows of (a)-(c) predate instantiation: they are `--no-instantiate` runs
 in one process.
 
 How measured: every run went through a small wrapper
-(`scratchpad/memrun.sh`) that runs the command under `/usr/bin/env time
+(not in the repository) that runs the command under `/usr/bin/env time
 -f "wall=%e user=%U sys=%S maxrss_largest=%MKB"` and, in parallel,
 sums the RSS of the whole process group from `ps -eo pgid=,rss=` once a
 second, keeping the maximum (and killing the group above 23 GB). For
@@ -576,12 +576,6 @@ is a plain job on both sides (`namedConstituents: []` without
 | (b) release.nix x86_64-linux | 234.0 s (warm) | 93.7 s | 13.9 GB | 77708 | 4402 | 0 |
 | (c) nixos `tested` subset | killed (switchTest) | 79.4 s + switchTest killed | 14.1 GB | 116 | 0 | 0 |
 
-Gates at the end: `cargo test --release` 113 passed, clippy clean,
-`scripts/evaljobs-flags.nu` 40/40,
-`scripts/langtests.nu` 245/5, `scripts/flaketest.nu` 19/19,
-`scripts/cachetest.nu` 18/18, `scripts/difftest.nu -I nixpkgs=$NP
-bench/workloads/nixos-desktop.nix` ok.
-
 ## What is missing for Hydra or nixpkgs CI
 
 - **Memory ceiling** (`--max-memory-size`) costs a re-evaluation of the
@@ -613,8 +607,3 @@ bench/workloads/nixos-desktop.nix` ok.
 - **`--log-format internal-json`** is not produced; a driver that parses
   nix-eval-jobs's stderr (Hydra reads only stdout and the exit code)
   would see plain lines.
-- **`remote::plan`** (`ietsp build`) used to list the sources of a closure in
-  discovery order and does not walk a `toFile` text's references, so a
-  text that references another copied source can reach the daemon before
-  it ("path ... is not valid"); `jobs::instantiate` orders them, `plan`
-  does not yet.

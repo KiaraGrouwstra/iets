@@ -45,34 +45,21 @@ A file that is missing or unreadable is skipped, not an error.
 ## Values
 
 Raw strings, with typed accessors: `str`, `int`, `bool` (`true`/`yes`/`1` and
-`false`/`no`/`0`), `list` (whitespace-separated) and `paths` (the `builders`
-form: `;`-separated, `@file` reads that machines file).
-
-Typed getters carry Nix's defaults: `store` (`auto`), `system` (the build
-target), `max_jobs` (`auto` = CPU count), `cores` (`0` = all), `keep_going`,
-`keep_failed`, `substituters`, `trusted_public_keys`, `builders`,
-`experimental_features`, `nix_path` and `sandbox`.
+`false`/`no`/`0`) and `list` (whitespace-separated). Typed getters carry Nix's
+defaults: `store` (`auto`), `system` (the build target), `max_jobs` (`auto` =
+CPU count), `cores` (`0` = all), `keep_going` and `keep_failed`.
 
 `$NIX_PATH` replaces the `nix-path` setting, as `eval-gc.cc:129` does.
 
-## What is honoured today
+## What is honoured
 
 `worker::Options` carries `max-jobs`, `cores`, `keep-going`, `keep-failed` and
-`substitute` into the daemon's `SetOptions`
-(`remote-store.cc:setOptions`). Build `Options` with
-`Options::try_from(&config)`.
-
-Library call sites still pass `Options::default()`, which sends the values this
-client has always sent. `crate::cli::classic` builds a `Config` and uses it:
-`store` is the last fallback for `builder` below, `system` sets the evaluator's
-`builtins.currentSystem`, and `Options::try_from` feeds `SetOptions`
-(`docs/classic.md`). The other subcommands read `system` and `store` only.
-
-## Parsed but not used yet
-
-`substituters`, `trusted-public-keys`, `builders`, `experimental-features`,
-`nix-path`, `sandbox` and every unknown setting are read and exposed, but
-nothing in ietsp consults them yet.
+`substitute` into the daemon's `SetOptions` (`remote-store.cc:setOptions`),
+built with `Options::try_from(&config)`. `crate::cli::classic` uses it, and
+takes `store` as the last fallback for `builder` below and `system` for
+`builtins.currentSystem` (`docs/classic.md`). The other subcommands read
+`system` and `store` only and send `Options::default()`. Every other setting
+is read and kept, and nothing in ietsp consults it.
 
 # ietsp.conf
 
@@ -99,17 +86,13 @@ not know is a mistake, not a setting for somebody else.
 
 ## Keys
 
+Every key in the **File** column of `docs/settings.md`, with the type and
+default given there, plus two keys that have no environment variable:
+
 | Key | Type | Default |
 |:---|:---|:---|
 | `builder` | URL: `daemon`, `unix://PATH`, `ssh-ng://[user@]host`, `grpc://host:port` | the nix.conf `store` setting (itself `auto`) |
 | `source-map` | list of `STOREPATH=LOCALDIR` | empty |
-| `workers` | int ≥ 1 | cores, capped at 4 |
-| `provenance` | bool | `true` |
-| `nix-bin-dir` | path | unset: search `PATH` |
-| `no-fallback` | bool | `false` |
-| `cache` | bool | `true` |
-| `cache-dir` | path | `$XDG_CACHE_HOME/ietsp` |
-| `fiber-stack-mb` | int (MiB) | 256 |
 
 `extra-source-map` appends; no other key is a list.
 
@@ -124,12 +107,6 @@ no flag of their own and use it as it stands. Registration is not affected:
 drvs and sources for `nix-instantiate --add-root`, its GC roots and the
 `nix-build`/`nix build` out-links always go to the local daemon, and a remote
 `builder`'s outputs are copied back first (`docs/classic.md`).
-
-## Precedence
-
-For every key that also has an environment variable (`docs/settings.md`), the
-variable wins over the files: the environment stays the debugging override.
-`builder` and `source-map` have no variable.
 
 ## The NixOS module
 
