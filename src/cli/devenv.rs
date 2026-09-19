@@ -50,9 +50,6 @@ impl EventSink {
                     ),
                 });
             }
-            Event::Done(d) if !d.success && self.failed.is_none() => {
-                self.failed = Some("build failed".into());
-            }
             _ => {}
         }
     }
@@ -318,10 +315,12 @@ fn dev_env_full(
 /// Evaluates the shell, derives and builds its `-env` derivation through the daemon and
 /// reads the environment back. The error is already reported; `Err` is the exit code.
 fn dev_env_build(ev: &mut Evaluator, a: EvalArgs, d: &DevEnvArgs) -> Result<DevEnv, i32> {
+    use crate::build::backend::{Backend, Batch, Job, Worker};
+    use crate::build::upload::{PlanUpload, Uploader};
     use crate::builtins::derivation::{DrvInfo, load_drv_traced};
     use crate::devenv;
     use crate::eval::ErrorKind;
-    use crate::remote::worker::Connection;
+    use crate::remote::worker::{Options, failed_event};
     use crate::store::drv::Derivation;
     use crate::store::path::StorePath;
     use crate::store::source::SourceOrigin;
@@ -433,8 +432,10 @@ fn dev_env_build(ev: &mut Evaluator, a: EvalArgs, d: &DevEnvArgs) -> Result<DevE
             failed: None,
             prov: crate::provenance::Provenance::snapshot(ev),
         };
-        let mut conn = Connection::open(&d.transport, &mut |e| sink.event(e))?;
-        let valid = conn.query_valid_paths(&out_paths, &mut |e| sink.event(e))?;
+        let mut w = Worker::open(&d.transport, &Options::default(), &mut |e| sink.event(e))?;
+        let valid = w
+            .conn
+            .query_valid_paths(&out_paths, &mut |e| sink.event(e))?;
         if valid.len() != out_paths.len() {
             let t2 = std::time::Instant::now();
             let no_overrides = HashMap::new();
@@ -449,22 +450,30 @@ fn dev_env_build(ev: &mut Evaluator, a: EvalArgs, d: &DevEnvArgs) -> Result<DevE
                 crate::remote::plan::plan(std::slice::from_ref(&env_path), inputs)?
             };
             let plan_time = t2.elapsed();
-            let t = crate::remote::worker::build::build_on(
-                &mut conn,
-                &plan,
-                &locate,
-                &env_path,
-                &[],
-                false,
-                None,
+            PlanUpload::new(&plan, &locate).upload(
+                &mut w,
+                std::slice::from_ref(&env_path),
                 &mut |e| sink.event(e),
             )?;
+            let job = Job {
+                drv: env_path.clone(),
+                outputs: Vec::new(),
+            };
+            let batch = Batch {
+                jobs: std::slice::from_ref(&job),
+                drvs: &|_| Ok(Vec::new()),
+            };
+            for s in w.submit(&batch, &mut |e| sink.event(e))?.values() {
+                if !s.ok {
+                    sink.event(failed_event(&env_path.to_string(), &s.reason));
+                }
+            }
             if let Some(why) = &sink.failed {
                 sink.dump();
                 return Err(CrateError::Protocol(why.clone()));
             }
             if timings {
-                eprintln!("{}", t.report(&plan, plan_time));
+                eprintln!("{}", w.report(&plan, plan_time));
             }
         } else if timings {
             eprintln!(
@@ -473,12 +482,12 @@ fn dev_env_build(ev: &mut Evaluator, a: EvalArgs, d: &DevEnvArgs) -> Result<DevE
             );
         }
 
-        let (out_path, bytes) = read_env_output(&d.transport, &mut conn, &out_paths, &mut sink)?;
+        let (out_path, bytes) = read_env_output(&d.transport, &mut w.conn, &out_paths, &mut sink)?;
         let env = devenv::BuildEnvironment::parse(&bytes)?;
         if let Some(root) = &d.gc_root {
-            ensure_gc_root(&d.transport, root, &out_path, Some(&mut conn))?;
+            ensure_gc_root(&d.transport, root, &out_path, Some(&mut w.conn))?;
         }
-        drop(conn);
+        drop(w);
         Ok(DevEnv {
             env,
             out_path,

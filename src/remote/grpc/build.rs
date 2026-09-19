@@ -22,7 +22,7 @@ use crate::store::path::StorePath;
 use super::super::copy::topo_sort;
 use super::super::event::{Event, Log, Phase};
 use super::super::plan::{Object, Plan};
-use super::super::worker::build::write_object;
+use super::super::worker::wire::write_object;
 use super::super::worker::wire::write_u64;
 use super::drvwire::{
     BUILD_PROTOCOL, BuildResult, PathInfo, read_keyed_build_results, write_basic_derivation,

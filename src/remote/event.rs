@@ -4,9 +4,7 @@
 pub enum Event {
     Started(Started),
     Log(Log),
-    Built(Built),
     Failed(Failed),
-    Done(Done),
     Phase(Phase),
     Stopped(Stopped),
 }
@@ -24,21 +22,9 @@ pub struct Log {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Built {
-    pub drv_path: String,
-    pub output: String,
-    pub store_path: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Failed {
     pub drv_path: String,
     pub reason: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Done {
-    pub success: bool,
 }
 
 /// A build's `setPhase` result (logging.hh:resSetPhase).

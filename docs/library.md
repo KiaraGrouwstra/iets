@@ -35,8 +35,9 @@ module it belongs to) and let `cli` call it there.
 | Outputs to build | `api::build_targets(wanted, roots)` |
 | Upload plan | `remote::plan::plan(roots, Inputs { drvs, sources }, &locate)`; `store::locate::locate_in_store` |
 | Worker connection | `remote::worker::Transport::parse("daemon" \| "unix:///…" \| "ssh-ng://…")` |
-| Build | `remote::worker::build::build(&transport, &plan, root, outputs, upload_only, fetch_to, &mut on_event)` |
-| Build events | `remote::event::Event::{Started, Log, Built, Failed, Done}` |
+| Build | `build::Dispatcher::open(&transport, &options, prov, style)`, then `submit(&mut build::upload::PlanUpload::new(&plan, &locate), targets)` |
+| Build targets and results | `build::Target::new(attr, drv, outputs)`; `build::Outcome` per target |
+| Daemon events | `remote::event::Event::{Started, Log, Phase, Stopped, Failed}` |
 | Nix configuration | `config::Config::load(&[])` |
 | Evaluation cache | `api::setup_cache(&args, subcommand, &ev)`, `trace::run::Cache` |
 | Flake references | `api::flake_ref`, `flake::{eval_flake, eval_flake_value}` |

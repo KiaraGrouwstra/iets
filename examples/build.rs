@@ -1,5 +1,5 @@
-//! Evaluate to derivations, plan the upload, build through a Nix worker,
-//! print the events and the output paths.
+//! Evaluate to derivations, plan the upload, build through the dispatcher,
+//! print the output paths.
 //!
 //! `cargo run --example build -- [--builder URL] [-I prefix=path]... [-A attr] (-E EXPR | FILE)`
 //!
@@ -8,8 +8,10 @@
 use std::collections::HashMap;
 
 use ietsp::api::{self, EvalArgs, Input};
+use ietsp::build::render::Style;
+use ietsp::build::upload::PlanUpload;
+use ietsp::build::{Dispatcher, Target};
 use ietsp::eval::Evaluator;
-use ietsp::remote::event::Event;
 use ietsp::remote::{plan, worker};
 use ietsp::store::locate::{drv_roots, locate_in_store};
 use ietsp::store::path::StorePath;
@@ -81,47 +83,35 @@ fn eval_and_build(ev: &mut Evaluator, a: EvalArgs, url: String) -> u8 {
         return 2;
     };
 
-    let mut built: Vec<(String, String)> = Vec::new();
-    let mut failed = false;
-    for root in &root_paths {
-        let mut on_event = |e: Event| match e {
-            Event::Started(s) => match prov.started(&s.drv_path) {
-                Some(l) => eprintln!("{l}"),
-                None => eprintln!("building {}", s.drv_path),
-            },
-            Event::Log(l) => {
-                let line = prov.rewrite(&l.line);
-                eprintln!("{}", String::from_utf8_lossy(&line));
-            }
-            Event::Built(b) => built.push((b.output, b.store_path)),
-            Event::Failed(f) => {
-                failed = true;
-                eprintln!("error: build of {} failed: {}", f.drv_path, f.reason);
-            }
-            Event::Done(d) => failed |= !d.success,
-            Event::Phase(_) | Event::Stopped(_) => {}
-        };
-        let r = worker::build::build(
-            &transport,
-            &plan,
-            &locate,
-            root,
-            &outputs,
-            false,
-            None,
-            &mut on_event,
-        );
-        if let Err(e) = r {
+    let mut d = match Dispatcher::open(
+        &transport,
+        &worker::Options::default(),
+        prov,
+        Style::detect(),
+    ) {
+        Ok(d) => d,
+        Err(e) => {
             eprintln!("error: {e}");
             return 1;
         }
-    }
-    for (name, path) in &built {
-        if outputs.is_empty() || outputs.contains(name) {
+    };
+    let targets: Vec<Target> = root_paths
+        .iter()
+        .map(|r| Target::new(r.name(), r.clone(), outputs.clone()))
+        .collect();
+    let outcomes = match d.submit(&mut PlanUpload::new(&plan, &locate), targets) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+    for o in &outcomes {
+        for path in o.outputs.values() {
             println!("{path}");
         }
     }
-    u8::from(failed)
+    u8::from(d.failed)
 }
 
 fn die(msg: &str) -> ! {

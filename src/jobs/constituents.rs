@@ -13,7 +13,7 @@ use super::line::{Job, Line, json_str};
 use crate::error::{Error, Result};
 use crate::remote::plan::Object;
 use crate::remote::worker::Connection;
-use crate::remote::worker::build::write_object;
+use crate::remote::worker::wire::write_object;
 use crate::store::drv::{
     DerivationOutput, DrvHashCache, finalize_input_addressed_outputs, load_derivation_from_store,
 };

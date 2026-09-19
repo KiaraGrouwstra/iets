@@ -3,6 +3,10 @@
 
 use std::io::{self, Read, Write};
 
+use crate::remote::plan::{DrvHashes, Object, SourceData, SourceKind};
+use crate::store::hash::{HashAlgo, hash_bytes};
+use crate::store::nar::{dump_string, flat_hash};
+
 pub fn write_u64(w: &mut dyn Write, n: u64) -> io::Result<()> {
     w.write_all(&n.to_le_bytes())
 }
@@ -143,6 +147,95 @@ impl<W: Write> Write for Counting<W> {
     fn flush(&mut self) -> io::Result<()> {
         self.inner.flush()
     }
+}
+
+/// One `ValidPathInfo` (worker-protocol.cc, the 1.16 layout `addMultipleToStore` fixes) and
+/// the NAR after it. Registration time 0 and no signatures: the daemon recomputes the content
+/// address and accepts the path on that alone.
+pub fn write_object(w: &mut dyn Write, o: &Object) -> io::Result<()> {
+    match o {
+        Object::Source {
+            path,
+            data,
+            kind,
+            nar_hash,
+            nar_size,
+            ..
+        } => {
+            let (ca, references): (String, Vec<String>) = match kind {
+                SourceKind::Source => (format!("fixed:r:sha256:{}", nar_hash.to_nix32()), vec![]),
+                SourceKind::Text { references } => {
+                    let flat = match data {
+                        SourceData::Memory(contents) => hash_bytes(HashAlgo::Sha256, contents),
+                        SourceData::Local { path, .. } => flat_hash(path, HashAlgo::Sha256)?,
+                        SourceData::Nar(_) => {
+                            return Err(io::Error::other("a text path cannot come from a NAR"));
+                        }
+                    };
+                    (
+                        format!("text:sha256:{}", flat.to_nix32()),
+                        references.iter().map(|r| r.to_string()).collect(),
+                    )
+                }
+            };
+            write_info(
+                w,
+                &path.to_string(),
+                &nar_hash.to_base16(),
+                &references,
+                *nar_size,
+                &ca,
+            )?;
+            // The framed body declares `nar_size` before the bytes, so a tree that changed
+            // after evaluation must fail here rather than desynchronise the stream.
+            let mut counted = Counting { inner: w, bytes: 0 };
+            data.dump(&mut counted)?;
+            if counted.bytes != *nar_size {
+                return Err(io::Error::other(format!(
+                    "source '{path}' changed since evaluation: its NAR is {} bytes, not {nar_size}",
+                    counted.bytes
+                )));
+            }
+            Ok(())
+        }
+        Object::Drv {
+            path,
+            aterm,
+            references,
+            hashes,
+        } => {
+            let h = hashes.get_or_init(|| DrvHashes::of(aterm));
+            let references: Vec<String> = references.iter().map(|r| r.to_string()).collect();
+            write_info(
+                w,
+                &path.to_string(),
+                &h.nar_hash.to_base16(),
+                &references,
+                h.nar_size,
+                &format!("text:sha256:{}", h.text.to_nix32()),
+            )?;
+            dump_string(aterm, w)
+        }
+    }
+}
+
+fn write_info(
+    w: &mut dyn Write,
+    path: &str,
+    nar_hash_base16: &str,
+    references: &[String],
+    nar_size: u64,
+    ca: &str,
+) -> io::Result<()> {
+    write_str(w, path.as_bytes())?;
+    write_str(w, b"")?;
+    write_str(w, nar_hash_base16.as_bytes())?;
+    write_strs(w, references)?;
+    write_u64(w, 0)?;
+    write_u64(w, nar_size)?;
+    write_u64(w, 0)?;
+    write_strs::<&str>(w, &[])?;
+    write_str(w, ca.as_bytes())
 }
 
 #[cfg(test)]

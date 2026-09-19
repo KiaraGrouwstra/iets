@@ -13,12 +13,14 @@ use std::process::Command;
 use std::sync::Arc;
 
 use super::{Argv, Common, Root, common_flag, fallback, is_unsupported};
+use crate::build::backend::Worker;
+use crate::build::upload::{PlanUpload, Uploader};
 use crate::cli::{auto_args, cwd, report};
 use crate::devenv::escape_shell_arg_always as esc;
 use crate::error::Error as CrateError;
 use crate::eval::{Error, ErrorKind, Evaluator, Pos};
 use crate::remote::plan::Plan;
-use crate::remote::worker::{Connection, Options, Transport};
+use crate::remote::worker::{Options, Transport};
 use crate::store::drv::{Derivation, DerivationOutput};
 use crate::store::path::{STORE_DIR, StorePath, hash_placeholder};
 
@@ -389,7 +391,7 @@ fn realise(s: &Shell, transport: &Transport, options: &Options, r: Ready, cores:
             _ => {}
         }
     };
-    let mut conn = match Connection::open_with(transport, options, &mut on_event) {
+    let mut w = match Worker::open(transport, options, &mut on_event) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("error: {e}");
@@ -408,21 +410,16 @@ fn realise(s: &Shell, transport: &Transport, options: &Options, r: Ready, cores:
     if let Bash::Drv(p) = &r.bash {
         wanted.push(format!("{p}!out"));
     }
-    let upload = crate::remote::worker::build::build_on(
-        &mut conn,
-        &r.plan,
-        &super::locate_store,
-        &r.drv_path,
-        &[],
-        true,
-        None,
+    let upload = PlanUpload::new(&r.plan, &super::locate_store).upload(
+        &mut w,
+        std::slice::from_ref(&r.drv_path),
         &mut on_event,
     );
     if let Err(e) = upload {
         eprintln!("error: {e}");
         return 1;
     }
-    match conn.build_paths_with_results(&wanted, &mut on_event) {
+    match w.conn.build_paths_with_results(&wanted, &mut on_event) {
         Ok(results) => {
             for b in &results {
                 if !b.success() {
@@ -441,7 +438,10 @@ fn realise(s: &Shell, transport: &Transport, options: &Options, r: Ready, cores:
     }
     let shell = match &r.bash {
         Bash::Path(p) => p.clone(),
-        Bash::Drv(p) => match conn.query_derivation_output_map(&p.to_string(), &mut on_event) {
+        Bash::Drv(p) => match w
+            .conn
+            .query_derivation_output_map(&p.to_string(), &mut on_event)
+        {
             Ok(m) => match m.get("out").cloned().flatten() {
                 Some(out) => format!("{out}/bin/bash"),
                 None => {
@@ -455,7 +455,7 @@ fn realise(s: &Shell, transport: &Transport, options: &Options, r: Ready, cores:
             }
         },
     };
-    drop(conn);
+    drop(w);
     match exec(s, &r.drv, &shell, cores) {
         Ok(()) => unreachable!("exec replaces the process"),
         Err(e) => {

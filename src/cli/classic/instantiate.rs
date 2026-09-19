@@ -6,10 +6,12 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::{Argv, Common, Root, common_flag, fallback, is_unsupported};
+use crate::build::backend::Worker;
+use crate::build::upload::{PlanUpload, Uploader};
 use crate::cli::{abs_path, auto_args, cwd, report};
 use crate::eval::{Error, Evaluator, Pos};
 use crate::remote::plan::Plan;
-use crate::remote::worker::{Connection, Options, Transport};
+use crate::remote::worker::{Options, Transport};
 use crate::runtime::Word;
 
 const NAME: &str = "nix-instantiate";
@@ -218,44 +220,38 @@ fn finish(
             "warning: you did not specify '--add-root'; the result might be removed by the garbage collector"
         );
     }
-    let mut conn = None;
-    if plan.is_some() {
-        match Connection::open_with(transport, options, &mut log_event) {
-            Ok(c) => conn = Some(c),
+    let mut worker = None;
+    if let Some(plan) = plan {
+        let r = Worker::open(transport, options, &mut log_event).and_then(|mut w| {
+            PlanUpload::new(plan, &super::locate_store).upload(
+                &mut w,
+                std::slice::from_ref(&roots[0].drv),
+                &mut log_event,
+            )?;
+            Ok(w)
+        });
+        match r {
+            Ok(w) => worker = Some(w),
             Err(e) => {
                 eprintln!("error: {e}");
                 return 1;
             }
         }
     }
-    if let (Some(conn), Some(plan)) = (conn.as_mut(), plan) {
-        let r = crate::remote::worker::build::build_on(
-            conn,
-            plan,
-            &super::locate_store,
-            &roots[0].drv,
-            &[],
-            true,
-            None,
-            &mut log_event,
-        );
-        if let Err(e) = r {
-            eprintln!("error: {e}");
-            return 1;
-        }
-    }
     let cwd = cwd();
     let mut out = String::new();
     let mut root_nr = 0;
     for r in roots {
-        let shown = match (&i.add_root, conn.as_mut()) {
-            (Some(g), Some(conn)) => {
+        let shown = match (&i.add_root, worker.as_mut()) {
+            (Some(g), Some(w)) => {
                 root_nr += 1;
                 let mut name = String::from_utf8_lossy(&abs_path(g, &cwd)).into_owned();
                 if root_nr > 1 {
                     name.push_str(&format!("-{root_nr}"));
                 }
-                if let Err(e) = conn.add_perm_root(&r.drv.to_string(), std::path::Path::new(&name))
+                if let Err(e) = w
+                    .conn
+                    .add_perm_root(&r.drv.to_string(), std::path::Path::new(&name))
                 {
                     eprintln!("error: {e}");
                     return 1;

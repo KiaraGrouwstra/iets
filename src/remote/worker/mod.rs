@@ -2,7 +2,6 @@
 //! local `nix-daemon` socket or to `nix-daemon --stdio` over ssh. One serial connection; every
 //! op is one request and one `STDERR_*` reply loop.
 
-pub mod build;
 pub mod wire;
 
 use std::collections::{BTreeMap, HashMap};
@@ -11,7 +10,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
-use super::event::{Built, Event, Failed, Log, Phase, Started, Stopped};
+use super::event::{Event, Failed, Log, Phase, Started, Stopped};
 use crate::config::Config;
 use crate::error::{Error, Result};
 use wire::{Counting, FramedSink};
@@ -801,11 +800,6 @@ impl Connection {
         sink(&mut self.from).map_err(conn)?;
         Ok(())
     }
-
-    /// True when the daemon has sent bytes we have not consumed; a protocol bug otherwise.
-    pub fn has_pending(&mut self) -> bool {
-        !self.from.buffer().is_empty()
-    }
 }
 
 /// file-system.cc:replaceSymlink: a temporary link renamed over `link`.
@@ -830,14 +824,6 @@ pub fn replace_symlink(target: &str, link: &Path) -> io::Result<()> {
 enum Field {
     Int,
     Str(String),
-}
-
-pub fn built_event(drv_path: &str, output: &str, store_path: &str) -> Event {
-    Event::Built(Built {
-        drv_path: drv_path.to_string(),
-        output: output.to_string(),
-        store_path: store_path.to_string(),
-    })
 }
 
 pub fn failed_event(drv_path: &str, reason: &str) -> Event {

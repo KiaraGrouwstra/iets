@@ -17,7 +17,7 @@ use crate::builtins::derivation::DrvInfo;
 use crate::error::{Error, Result};
 use crate::parallel::shared::SharedMap;
 use crate::remote::plan::Object;
-use crate::remote::worker::build::write_object;
+use crate::remote::worker::wire::write_object;
 use crate::remote::worker::{Connection, Transport};
 use crate::store::drv::Derivation;
 use crate::store::path::{STORE_DIR, StorePath};

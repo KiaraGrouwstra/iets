@@ -5,7 +5,7 @@
 `nar_size`, `flat_hash`), and the reader (`restore_path`, `parse_length`).
 
 It is on the hot path of every build. `src/remote/plan.rs` hashes every
-source of a build in a thread pool, `src/remote/worker/build.rs` dumps each
+source of a build in a thread pool, `src/remote/worker/wire.rs` dumps each
 one again into the upload, `src/builtins/paths.rs` hashes a tree whenever
 `"${./tree}"`, `builtins.path` or `filterSource` needs its store path, and
 `src/remote/copy.rs` and `--fetch-to` restore NARs from a stream.

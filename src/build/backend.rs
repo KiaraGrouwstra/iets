@@ -21,8 +21,8 @@ use std::time::{Duration, Instant};
 use crate::error::{Error, Result};
 use crate::remote::event::Event;
 use crate::remote::plan::{Object, Plan};
-use crate::remote::worker::build::{Timings, write_object};
-use crate::remote::worker::{Connection, DEFAULT_SOCKET, Options, Transport, wire};
+use crate::remote::worker::wire::write_object;
+use crate::remote::worker::{Connection, DEFAULT_SOCKET, Options, Stats, Transport, wire};
 use crate::store::path::StorePath;
 
 /// One derivation of a ready set, and the outputs the caller wants.
@@ -166,9 +166,91 @@ pub fn open(
     Ok(Box::new(Worker::open(transport, options, on_event)?))
 }
 
+#[derive(Debug, Default, Clone)]
+struct Timings {
+    connect: Duration,
+    query: Duration,
+    resolve: Duration,
+    substitute: Duration,
+    add: Duration,
+    build: Duration,
+    outputs: Duration,
+    fetch: Duration,
+    minor: u64,
+    trusted: Option<bool>,
+    query_paths: usize,
+    missing: usize,
+    /// Missing sources the client located and hashed.
+    resolve_paths: usize,
+    /// Of those, the ones with no eval-time origin, found through the local store.
+    store_sources: usize,
+    /// Missing sources left to the daemon's substituters.
+    substitute_paths: usize,
+    add_paths: usize,
+    add_bytes: u64,
+    fetched: usize,
+    stats: Stats,
+}
+
+impl Timings {
+    fn report(&self, plan: &Plan, plan_time: Duration) -> String {
+        let trusted = match self.trusted {
+            Some(true) => "trusted",
+            Some(false) => "untrusted",
+            None => "trust unknown",
+        };
+        let mut s = format!(
+            "plan: {} sources, {} drvs, {:.3}s\nconnect: protocol 1.{}, {trusted}, {:.3}s\nquery: {} paths, {} missing, {:.3}s\nresolve: {} sources",
+            plan.sources.len(),
+            plan.drvs.len(),
+            plan_time.as_secs_f64(),
+            self.minor,
+            self.connect.as_secs_f64(),
+            self.query_paths,
+            self.missing,
+            self.query.as_secs_f64(),
+            self.resolve_paths,
+        );
+        if self.store_sources > 0 {
+            s.push_str(&format!(
+                ", {} not from this eval, read from /nix/store",
+                self.store_sources
+            ));
+        }
+        s.push_str(&format!(", {:.3}s", self.resolve.as_secs_f64()));
+        if self.substitute_paths > 0 {
+            s.push_str(&format!(
+                "\nsubstitute: {} paths left to the daemon, {:.3}s",
+                self.substitute_paths,
+                self.substitute.as_secs_f64()
+            ));
+        }
+        s.push_str(&format!(
+            "\nadd: {} paths, {} bytes, {:.3}s\nbuild: {:.3}s\noutputs: {:.3}s",
+            self.add_paths,
+            self.add_bytes,
+            self.add.as_secs_f64(),
+            self.build.as_secs_f64(),
+            self.outputs.as_secs_f64(),
+        ));
+        if self.fetched > 0 {
+            s.push_str(&format!(
+                "\nfetch: {} outputs, {:.3}s",
+                self.fetched,
+                self.fetch.as_secs_f64()
+            ));
+        }
+        s.push_str(&format!(
+            "\nworker: {} ops, {} round trips, {} bytes sent",
+            self.stats.ops, self.stats.round_trips, self.stats.bytes_sent
+        ));
+        s
+    }
+}
+
 /// The worker protocol: one serial connection, one op per ready set.
 pub struct Worker {
-    conn: Connection,
+    pub conn: Connection,
     transport: Transport,
     t: Timings,
 }

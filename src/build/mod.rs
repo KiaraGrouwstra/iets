@@ -575,7 +575,6 @@ fn event_sink<'a>(
                 d,
             ));
         }
-        Event::Built(_) | Event::Done(_) => {}
     }
 }
 

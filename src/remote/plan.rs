@@ -227,15 +227,6 @@ pub struct Resolved {
 }
 
 impl Plan {
-    /// Every path in the closure, sources then drvs, for `QueryValidPaths`.
-    pub fn paths(&self) -> Vec<String> {
-        self.sources
-            .iter()
-            .map(ToString::to_string)
-            .chain(self.drvs.iter().map(|d| d.store_path().to_string()))
-            .collect()
-    }
-
     /// Locates and hashes `missing`, a subset of `sources` in plan order: eval-time origins
     /// first, the rest through `locate` in one batch, hashed on a thread pool.
     pub fn resolve(&self, missing: &[StorePath], locate: &Locator<'_>) -> Result<Resolved> {
