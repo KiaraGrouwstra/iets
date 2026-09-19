@@ -149,7 +149,7 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   outputs = { self, lib }: { twice = lib.greeting + lib.greeting; inherit lib; };
 }
 '# | str replace -a "@WORK@" $work | save $"($work)/util/flake.nix"
-  '{ outputs = { self }: { value = "tarball-" + self.narHash; }; }' + "\n" | save $"($work)/tbsrc/flake.nix"
+  '{ outputs = { self }: { value = "tarball-" + self.narHash; }; }' + $"\n# ($work)\n" | save $"($work)/tbsrc/flake.nix"
   ^tar -C $work -czf $"($work)/tb.tar.gz" tbsrc
   r#'{
   inputs.nixpkgs.url = "path:@NIXPKGS@";
@@ -289,7 +289,7 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   # registers the tree again.
   let tbf = $"($work)/tbflake"
   mkdir $tbf $"($work)/tb2src/sub"
-  "hello\n" | save $"($work)/tb2src/a"
+  $"hello ($work)\n" | save $"($work)/tb2src/a"
   "#!/bin/sh\n" | save $"($work)/tb2src/run"
   chmod 755 $"($work)/tb2src/run"
   "x\n" | save $"($work)/tb2src/sub/b"
@@ -317,7 +317,7 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   # and its store path is one the daemon has never seen.
   let upf = $"($work)/upflake"
   mkdir $upf $"($work)/tb3src/sub"
-  "hello3\n" | save $"($work)/tb3src/a"
+  $"hello3 ($work)\n" | save $"($work)/tb3src/a"
   "y\n" | save $"($work)/tb3src/sub/b"
   ^tar -C $work -czf $"($work)/tb3.tar.gz" tb3src
   # dereferenceSingletonDirectory strips the one top-level entry, so the lock's
