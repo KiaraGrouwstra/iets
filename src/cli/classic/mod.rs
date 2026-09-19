@@ -54,7 +54,10 @@ pub fn fallback(name: &str, argv: &[String], reason: &str) -> ! {
         eprintln!("ietsp: cannot fall back to {name}: not found on PATH");
         exit(1)
     };
-    let e = Command::new(&real).arg0(name).args(argv).exec();
+    let e = Command::new(&real)
+        .arg0(name)
+        .args(argv.iter().map(|a| crate::argv::os(a)))
+        .exec();
     eprintln!("ietsp: cannot exec '{}': {e}", real.display());
     exit(1)
 }

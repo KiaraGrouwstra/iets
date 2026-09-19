@@ -84,21 +84,8 @@ pub enum Input {
 
 /// A `-I prefix=path` (or `-I path`) entry as an absolute pair.
 pub fn parse_include(s: &str) -> (Vec<u8>, Vec<u8>) {
-    let (prefix, path) = match s.split_once('=') {
-        Some((p, v)) => (p.as_bytes().to_vec(), v),
-        None => (Vec::new(), s),
-    };
-    let abs = if path.starts_with('/') {
-        path.as_bytes().to_vec()
-    } else {
-        let mut cwd = std::env::current_dir()
-            .map(|p| p.into_os_string().into_encoded_bytes())
-            .unwrap_or_else(|_| b"/".to_vec());
-        cwd.push(b'/');
-        cwd.extend_from_slice(path.as_bytes());
-        crate::compile::canon_path(&cwd)
-    };
-    (prefix, abs)
+    let (prefix, path) = s.split_once('=').unwrap_or(("", s));
+    (crate::argv::bytes(prefix), abs_path(path, &cwd()))
 }
 
 fn home() -> Option<Vec<u8>> {
@@ -242,11 +229,11 @@ pub fn auto_args(
         let w = match kind {
             ArgKind::Expr(e) => {
                 let ir =
-                    ev.compile_source(b"\xc2\xabarg\xc2\xbb", e.as_bytes().to_vec(), cwd, None)?;
+                    ev.compile_source(b"\xc2\xabarg\xc2\xbb", crate::argv::bytes(e), cwd, None)?;
                 let root = ev.root_env;
                 ev.arena.mk_thunk(root, ir)
             }
-            ArgKind::Str(s) => ev.mk_string(s.as_bytes()),
+            ArgKind::Str(s) => ev.mk_string(&crate::argv::bytes(s)),
         };
         let sym = ev.sym(name.as_bytes());
         entries.push((sym, Pos::NONE, w));
@@ -260,14 +247,15 @@ pub fn cwd() -> Vec<u8> {
         .unwrap_or_else(|_| b"/".to_vec())
 }
 
+/// `f` is in `crate::argv`'s encoding.
 pub fn abs_path(f: &str, cwd: &[u8]) -> Vec<u8> {
-    let p = f.as_bytes();
+    let p = crate::argv::bytes(f);
     if p.starts_with(b"/") {
-        return p.to_vec();
+        return p;
     }
     let mut full = cwd.to_vec();
     full.push(b'/');
-    full.extend_from_slice(p);
+    full.extend_from_slice(&p);
     crate::compile::canon_path(&full)
 }
 

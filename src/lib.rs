@@ -1,4 +1,5 @@
 pub mod api;
+pub mod argv;
 pub mod build;
 pub mod builtins;
 pub mod cachefs;

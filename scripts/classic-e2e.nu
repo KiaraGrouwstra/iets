@@ -14,6 +14,12 @@ def --wrapped run-both [farm: string, name: string, --cwd: string = ".", ...args
   {ours: $ours, real: $real}
 }
 
+# `cmd` with `DIR/\xff.nix` as its last argument, through bash: a nushell
+# string cannot hold the byte.
+def --wrapped with-ff [dir: string, ...cmd: string] {
+  ^bash -c r#'d=$1; shift; exec "$@" "$d"/$'\xff'.nix'# _ $dir ...$cmd | complete
+}
+
 # Compares stdout bytes and exit code; prints ok/FAIL and returns the verdict.
 def cmp-case [label: string, r: record]: nothing -> bool {
   let same_out = ($r.ours.stdout | into binary) == ($r.real.stdout | into binary)
@@ -215,6 +221,18 @@ def main [] {
   ^tar -czf $"($tmp)/x.tar.gz" -C $tmp tb
   $ok = ($ok | append (cmp-case "fetchTarball falls back and prints the real result"
     (run-both $farm nix-instantiate --eval -E $"builtins.fetchTarball \"file://($tmp)/x.tar.gz\"")))
+
+  # --- a file name that is not UTF-8
+  let ff = $"($tmp)/ff"
+  mkdir $ff
+  ^bash -c r#'echo "{ a = 1; }" > "$1"/$'\xff'.nix'# _ $ff
+  let real_ff = (with-ff $ff nix-instantiate --eval)
+  $ok = ($ok | append (cmp-case "instantiate --eval a non-UTF-8 file name"
+    {ours: (with-ff $ff $"($farm)/nix-instantiate" --eval), real: $real_ff}))
+  $ok = ($ok | append (cmp-case "ietsp eval a non-UTF-8 file name"
+    {ours: (with-ff $ff $ietsp eval), real: $real_ff}))
+  $ok = ($ok | append (cmp-case "a non-UTF-8 file name reaches the fallback intact"
+    {ours: (with-ff $ff $"($farm)/nix-instantiate" --parse), real: (with-ff $ff nix-instantiate --parse)}))
 
   let repl = (^$"($farm)/nix" repl --version | complete)
   $ok = ($ok | append (verdict ($repl.stderr | str contains "ietsp: falling back to nix:")

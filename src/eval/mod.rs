@@ -372,11 +372,11 @@ impl Evaluator {
         Ok(ir)
     }
 
-    /// Evaluate a string expression (`-E`).
+    /// Evaluate a string expression (`-E`), in `crate::argv`'s encoding.
     pub fn eval_string(&mut self, src: &str, base_dir: &[u8]) -> EvalResult<Word> {
         let ir = self.compile_source(
             b"\xc2\xabstring\xc2\xbb",
-            src.as_bytes().to_vec(),
+            crate::argv::bytes(src),
             base_dir,
             None,
         )?;
