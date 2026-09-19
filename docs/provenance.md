@@ -106,4 +106,24 @@ code, is unaffected.
 
 `IETSP_PROVENANCE=0` disables every rewrite and every provenance line, for a
 byte comparison against the real nix. `scripts/provenance-e2e.nu` checks both
-directions against a live daemon.
+directions against a live daemon (11 checks).
+
+## One position, one verdict
+
+The position is added in exactly one place, `build::Names` in the dispatcher:
+a caller hands over the bare attribute (`Provenance::attr_of`, falling back to
+the derivation's own name) and the dispatcher composes `<attr> (<pos>)` for the
+state-change lines and `, defined at <pos>` for the failure line. A caller that
+passed `name_of` instead would get the position twice.
+
+A local daemon with a remote builder runs the build behind a build hook, which
+means **two build activities for one derivation**: the hook's own
+`building X on 'ssh-ng://…'` and the build itself. So the renderer drops a
+`Started` for a derivation it is already showing, and while a build op owns a
+derivation (`Renderer::owns`) the end of an activity prints no verdict at all —
+it cannot: `STDERR_STOP_ACTIVITY` says a build ended, not whether it worked,
+and the hook's activity ends first. The op's own result decides, and the buffer
+stays open until then, so the daemon's error text lands inside that build's log
+block instead of being printed raw. A derivation the op does not own (a
+dependency) keeps the old behaviour: its verdict comes from the failure
+messages the daemon printed.

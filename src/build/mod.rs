@@ -184,6 +184,15 @@ impl Reporter {
         self.render.lock().unwrap().note(msg);
     }
 
+    /// The derivations the build op now running reports verdicts for.
+    fn owns(&mut self, drvs: impl IntoIterator<Item = String>) {
+        self.render.lock().unwrap().owns(drvs);
+    }
+
+    fn release(&mut self) {
+        self.render.lock().unwrap().release();
+    }
+
     /// Records a result and streams it when `--stream-json-lines` is on.
     pub fn record(&mut self, r: Record) {
         if let Some(w) = &mut self.jsonl {
@@ -276,20 +285,6 @@ impl Dispatcher {
         }
     }
 
-    /// What one derivation is called: the attribute the caller gave, plus
-    /// the source position when provenance knows it.
-    fn label(&self, by_drv: &HashMap<String, String>, drv: &str) -> String {
-        if let Some(attr) = by_drv.get(drv) {
-            return match self.prov.site(drv).and_then(|s| s.pos.clone()) {
-                Some(pos) => format!("{attr} ({pos})"),
-                None => attr.clone(),
-            };
-        }
-        self.prov
-            .name_of(drv)
-            .unwrap_or_else(|| strip_hash(drv).to_string())
-    }
-
     /// Uploads what the batch needs and builds it in one op. Targets whose
     /// drv was already dispatched are dropped.
     pub fn submit(&mut self, up: &mut dyn Uploader, batch: Vec<Target>) -> Result<Vec<Outcome>> {
@@ -338,11 +333,11 @@ impl Dispatcher {
                 )
             })
             .collect();
-        let labels: HashMap<String, String> = by_drv
-            .keys()
-            .map(|d| (d.clone(), self.label(&by_drv, d)))
-            .collect();
         let roots: Vec<StorePath> = batch.iter().map(|t| t.drv.clone()).collect();
+        // Until this op reports its verdicts, the end of a build's activity
+        // decides nothing: with a build hook the daemon runs two activities
+        // for one derivation, and neither says whether it succeeded.
+        self.reporter.owns(by_drv.keys().cloned());
 
         let stats = {
             let mut on_event = event_sink(&mut self.reporter, &self.prov, &by_drv);
@@ -362,10 +357,13 @@ impl Dispatcher {
             self.backend.submit(&b, &mut on_event)?
         };
 
+        let names = Names {
+            prov: &self.prov,
+            by_drv: &by_drv,
+        };
         let mut out = Vec::with_capacity(batch.len());
         for t in batch {
             let drv = t.drv.to_string();
-            let attr = labels.get(&drv).cloned().unwrap_or_else(|| t.attr.clone());
             let elapsed = self.reporter.duration(&drv);
             match status.get(&drv) {
                 Some(s) if s.ok => {
@@ -378,8 +376,7 @@ impl Dispatcher {
                         .filter_map(|(n, p)| p.map(|p| (n, p)))
                         .filter(|(n, _)| t.outputs.is_empty() || t.outputs.contains(n))
                         .collect();
-                    self.reporter.emit(&FastBuildEvent::new(
-                        &attr,
+                    self.reporter.emit(&names.event(
                         &drv,
                         Kind::Built {
                             outputs: outputs.clone(),
@@ -404,8 +401,7 @@ impl Dispatcher {
                     // records want one plain one, the log tail has the rest.
                     let reason = results::strip_ansi(&self.prov.rewrite_str(&s.reason));
                     let reason = reason.lines().next().unwrap_or_default().to_string();
-                    self.reporter.emit(&FastBuildEvent::new(
-                        &attr,
+                    self.reporter.emit(&names.event(
                         &drv,
                         Kind::Failed {
                             reason: reason.clone(),
@@ -429,8 +425,7 @@ impl Dispatcher {
                 // `keep-going` is off and something earlier failed.
                 None => {
                     let why = "an earlier build in the batch failed".to_string();
-                    self.reporter.emit(&FastBuildEvent::new(
-                        &attr,
+                    self.reporter.emit(&names.event(
                         &drv,
                         Kind::Skipped { why: why.clone() },
                         elapsed,
@@ -449,6 +444,7 @@ impl Dispatcher {
                 }
             }
         }
+        self.reporter.release();
         Ok(out)
     }
 
@@ -498,51 +494,66 @@ impl Dispatcher {
     }
 }
 
+/// What one derivation is called and where it was defined: the attribute the
+/// caller gave for it, else what provenance knows, else the derivation's own
+/// name. The position is added in one place, here.
+struct Names<'a> {
+    prov: &'a Provenance,
+    by_drv: &'a HashMap<String, String>,
+}
+
+impl Names<'_> {
+    fn pos(&self, drv: &str) -> Option<String> {
+        self.prov.site(drv).and_then(|s| s.pos.clone())
+    }
+
+    fn attr(&self, drv: &str) -> String {
+        if let Some(attr) = self.by_drv.get(drv) {
+            return attr.clone();
+        }
+        self.prov
+            .attr_of(drv)
+            .unwrap_or_else(|| strip_hash(drv).to_string())
+    }
+
+    /// `<attr> (<file>:<line>:<col>)` when the position is known.
+    fn label(&self, drv: &str) -> String {
+        let attr = self.attr(drv);
+        match self.pos(drv) {
+            Some(pos) => format!("{attr} ({pos})"),
+            None => attr,
+        }
+    }
+
+    fn event(&self, drv: &str, kind: Kind, elapsed: Duration) -> FastBuildEvent {
+        FastBuildEvent::new(&self.label(drv), drv, kind, elapsed).at(self.pos(drv))
+    }
+}
+
 /// The daemon's stream mapped onto `FastBuildEvent`s. A free function so the
-/// caller keeps `Dispatcher::conn` borrowed at the same time.
+/// caller keeps the backend borrowed at the same time.
 fn event_sink<'a>(
     reporter: &'a mut Reporter,
     prov: &'a Provenance,
     by_drv: &'a HashMap<String, String>,
 ) -> impl FnMut(Event) + 'a {
-    let label = move |drv: &str| -> String {
-        if let Some(attr) = by_drv.get(drv) {
-            return match prov.site(drv).and_then(|s| s.pos.clone()) {
-                Some(pos) => format!("{attr} ({pos})"),
-                None => attr.clone(),
-            };
-        }
-        prov.name_of(drv)
-            .unwrap_or_else(|| strip_hash(drv).to_string())
-    };
+    let names = Names { prov, by_drv };
     move |e: Event| match e {
         Event::Started(s) => {
             reporter
                 .timing
-                .insert(s.drv_path.clone(), (Instant::now(), None));
-            let l = label(&s.drv_path);
-            reporter.emit(&FastBuildEvent::new(
-                &l,
-                &s.drv_path,
-                Kind::Started,
-                Duration::ZERO,
-            ));
+                .entry(s.drv_path.clone())
+                .or_insert((Instant::now(), None));
+            reporter.emit(&names.event(&s.drv_path, Kind::Started, Duration::ZERO));
         }
         Event::Phase(p) => {
-            let l = label(&p.drv_path);
             let d = reporter.duration(&p.drv_path);
-            reporter.emit(&FastBuildEvent::new(
-                &l,
-                &p.drv_path,
-                Kind::Phase(p.phase),
-                d,
-            ));
+            reporter.emit(&names.event(&p.drv_path, Kind::Phase(p.phase), d));
         }
         Event::Log(l) => {
             let line = prov.rewrite(&l.line);
-            let name = label(&l.drv_path);
             let d = reporter.duration(&l.drv_path);
-            reporter.emit(&FastBuildEvent::new(&name, &l.drv_path, Kind::Log(line), d));
+            reporter.emit(&names.event(&l.drv_path, Kind::Log(line), d));
         }
         Event::Stopped(s) => {
             if let Some((t, slot)) = reporter.timing.get_mut(&s.drv_path)
@@ -553,11 +564,9 @@ fn event_sink<'a>(
             reporter.render.lock().unwrap().stopped(&s.drv_path);
         }
         Event::Failed(f) => {
-            let name = label(&f.drv_path);
             let d = reporter.duration(&f.drv_path);
             let tail = reporter.tail(&f.drv_path);
-            reporter.emit(&FastBuildEvent::new(
-                &name,
+            reporter.emit(&names.event(
                 &f.drv_path,
                 Kind::Failed {
                     reason: prov.rewrite_str(&f.reason),

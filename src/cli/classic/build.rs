@@ -157,9 +157,10 @@ fn realise(
                 }
             }
             None => {
+                // The bare attribute: the dispatcher adds the position, once.
                 let name = prov
-                    .name_of(&r.drv.to_string())
-                    .unwrap_or_else(|| r.drv.name().to_string());
+                    .attr_of(&r.drv.to_string())
+                    .unwrap_or_else(|| crate::provenance::drv_name(&r.drv.to_string()));
                 targets.push(Target::new(&name, r.drv.clone(), vec![r.output.clone()]));
             }
         }

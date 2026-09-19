@@ -229,7 +229,8 @@ pub fn real_pos(ev: &Evaluator, pos: Pos) -> Option<Pos> {
 }
 
 /// The derivation name inside a `.drv` store path: no hash, no extension.
-fn drv_name(drv_path: &str) -> String {
+/// What a build line calls a derivation no attribute points at.
+pub fn drv_name(drv_path: &str) -> String {
     let base = drv_path.rsplit('/').next().unwrap_or(drv_path);
     let name = base.strip_suffix(".drv").unwrap_or(base);
     match name.split_once('-') {
@@ -320,6 +321,11 @@ impl Provenance {
             return s.to_string();
         }
         String::from_utf8_lossy(&self.map.rewrite(s.as_bytes())).into_owned()
+    }
+
+    /// The attribute alone, for a caller that shows the position itself.
+    pub fn attr_of(&self, drv_path: &str) -> Option<String> {
+        self.site(drv_path)?.attr.clone()
     }
 
     /// What is being built: `<attr> (<file>:<line>:<col>)`, as much as is

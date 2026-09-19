@@ -287,9 +287,10 @@ fn build_roots(
     let targets: Vec<Target> = roots
         .iter()
         .map(|r| {
+            // The bare attribute: the dispatcher adds the position, once.
             let name = prov
-                .name_of(&r.to_string())
-                .unwrap_or_else(|| r.name().to_string());
+                .attr_of(&r.to_string())
+                .unwrap_or_else(|| crate::provenance::drv_name(&r.to_string()));
             Target::new(&name, r.clone(), outputs.to_vec())
         })
         .collect();

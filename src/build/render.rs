@@ -77,7 +77,12 @@ struct Build {
     label: String,
     /// The attribute alone, for the per-line log prefix.
     short: String,
+    /// Where the derivation was defined, for the failure line.
+    pos: Option<String>,
     started: Instant,
+    /// When the build's activity ended, for a build whose verdict the op that
+    /// owns it reports later.
+    ended: Option<Instant>,
     last_output: Instant,
     lines: VecDeque<String>,
     dropped: bool,
@@ -91,6 +96,14 @@ impl Build {
     fn tail(&self, n: usize) -> Vec<String> {
         let skip = self.lines.len().saturating_sub(n);
         self.lines.iter().skip(skip).cloned().collect()
+    }
+
+    /// How long the build ran: to its activity's end when that is known.
+    fn elapsed(&self) -> Duration {
+        match self.ended {
+            Some(t) => t.saturating_duration_since(self.started),
+            None => self.started.elapsed(),
+        }
     }
 }
 
@@ -108,6 +121,10 @@ pub struct Renderer {
     /// Derivations that already got a full verdict block, so the op's own
     /// result does not print the log a second time.
     verdicted: HashSet<String>,
+    /// Derivations the running build op reports a verdict for itself. The end
+    /// of their activity says nothing: a build hook ends two activities for
+    /// one build, and only the op's result knows whether it succeeded.
+    owned: HashSet<String>,
 }
 
 impl Renderer {
@@ -119,12 +136,23 @@ impl Renderer {
             finished: VecDeque::new(),
             failed: HashSet::new(),
             verdicted: HashSet::new(),
+            owned: HashSet::new(),
         }
     }
 
     /// True once the daemon has named `drv` in a failure message.
     pub fn is_failed(&self, drv: &str) -> bool {
         self.failed.contains(drv)
+    }
+
+    /// The derivations the build op now running reports verdicts for.
+    pub fn owns(&mut self, drvs: impl IntoIterator<Item = String>) {
+        self.owned = drvs.into_iter().collect();
+    }
+
+    /// The op is over: the end of an activity decides a verdict again.
+    pub fn release(&mut self) {
+        self.owned.clear();
     }
 
     fn sgr(&self, code: &str, s: &str) -> String {
@@ -174,13 +202,20 @@ impl Renderer {
     }
 
     fn started(&mut self, e: &FastBuildEvent) {
+        // A build hook starts two activities for one derivation: its own
+        // "building X on 'ssh-ng://…'" and the build behind it.
+        if self.running.contains_key(&e.drv) {
+            return;
+        }
         let now = Instant::now();
         self.running.insert(
             e.drv.clone(),
             Build {
                 label: e.attr.clone(),
                 short: short_label(&e.attr),
+                pos: e.pos.clone(),
                 started: now,
+                ended: None,
                 last_output: now,
                 lines: VecDeque::new(),
                 dropped: false,
@@ -261,7 +296,20 @@ impl Renderer {
 
     /// A build's activity ended: flush its block, with the verdict the
     /// daemon's messages imply, and keep the tail for the op's own result.
+    ///
+    /// Nothing is printed for a derivation the running op owns: the activity's
+    /// end says nothing about success, the op's result does, and a build hook
+    /// ends two activities for one build. The buffer stays open, so the
+    /// daemon's own error text still lands in that build's block.
     pub fn stopped(&mut self, drv: &str) {
+        if self.owned.contains(drv) {
+            if let Some(b) = self.running.get_mut(drv)
+                && b.ended.is_none()
+            {
+                b.ended = Some(Instant::now());
+            }
+            return;
+        }
         let Some(b) = self.running.remove(drv) else {
             return;
         };
@@ -279,6 +327,26 @@ impl Renderer {
         }
     }
 
+    /// `✘  <attr> failed after <t> (<reason>), defined at <file>:<line>:<col>`:
+    /// the attribute without its position, then the reason, then where the
+    /// derivation was defined.
+    fn failed_line(
+        &self,
+        attr: &str,
+        pos: Option<&str>,
+        elapsed: Duration,
+        reason: Option<&str>,
+    ) -> String {
+        let mut l = format!("✘  {} failed after {}", attr, fmt_duration(elapsed));
+        if let Some(r) = reason.filter(|r| !r.is_empty()) {
+            l.push_str(&format!(" ({r})"));
+        }
+        if let Some(p) = pos {
+            l.push_str(&format!(", defined at {p}"));
+        }
+        self.sgr(RED, &l)
+    }
+
     fn verdict(&mut self, e: &FastBuildEvent, ok: bool, reason: Option<&str>) {
         match self.running.remove(&e.drv) {
             Some(b) => {
@@ -287,15 +355,8 @@ impl Renderer {
                 self.verdict_block(&b, ok, reason);
             }
             None if !ok => {
-                let l = self.sgr(
-                    RED,
-                    &format!(
-                        "✘  {} failed after {}: {}",
-                        e.attr,
-                        fmt_duration(e.elapsed),
-                        reason.unwrap_or("")
-                    ),
-                );
+                let l =
+                    self.failed_line(&short_label(&e.attr), e.pos.as_deref(), e.elapsed, reason);
                 self.line(l);
             }
             None => {}
@@ -311,25 +372,21 @@ impl Renderer {
             // The block went out when the activity stopped. Say something
             // only when that block claimed a success the op now contradicts.
             if !self.failed.contains(&e.drv) {
-                let l = self.sgr(
-                    RED,
-                    &format!(
-                        "✘  {} failed after {} ({reason})",
-                        e.attr,
-                        fmt_duration(e.elapsed)
-                    ),
+                let l = self.failed_line(
+                    &short_label(&e.attr),
+                    e.pos.as_deref(),
+                    e.elapsed,
+                    Some(reason),
                 );
                 self.line(l);
             }
             return;
         }
-        let head = self.sgr(
-            RED,
-            &format!(
-                "✘  {} failed after {} ({reason})",
-                e.attr,
-                fmt_duration(e.elapsed)
-            ),
+        let head = self.failed_line(
+            &short_label(&e.attr),
+            e.pos.as_deref(),
+            e.elapsed,
+            Some(reason),
         );
         let prefix = self.sgr(DIM, &format!("{}>", e.attr));
         let mut out = vec![head];
@@ -342,21 +399,13 @@ impl Renderer {
     }
 
     fn verdict_block(&mut self, b: &Build, ok: bool, reason: Option<&str>) {
-        let duration = fmt_duration(b.started.elapsed());
         let verdict = if ok {
-            self.sgr(GREEN, &format!("✔  {} ({duration})", b.label))
-        } else {
             self.sgr(
-                RED,
-                &format!(
-                    "✘  {} failed after {duration}{}",
-                    b.label,
-                    match reason {
-                        Some(r) => format!(" ({r})"),
-                        None => String::new(),
-                    }
-                ),
+                GREEN,
+                &format!("✔  {} ({})", b.label, fmt_duration(b.elapsed())),
             )
+        } else {
+            self.failed_line(&b.short, b.pos.as_deref(), b.elapsed(), reason)
         };
         if b.streaming {
             // The log is already on screen.
@@ -658,6 +707,56 @@ mod tests {
         }));
         let t = text(&s);
         assert_eq!(t.matches("about to fail").count(), 1, "{t}");
+    }
+
+    /// A build hook: two activities for one derivation, and the op that owns
+    /// it has the only verdict there is.
+    #[test]
+    fn an_owned_build_is_verdicted_once_by_its_op() {
+        let (mut r, s) = ci(false);
+        let at = |kind: Kind| {
+            FastBuildEvent::new(
+                "prov-fail (/home/u/repo/default.nix:2:3)",
+                "/nix/store/a.drv",
+                kind,
+                Duration::ZERO,
+            )
+            .at(Some("/home/u/repo/default.nix:2:3".into()))
+        };
+        r.owns(["/nix/store/a.drv".to_string()]);
+        r.event(&at(Kind::Started));
+        r.event(&at(Kind::Started));
+        r.event(&at(Kind::Log(b"about to fail".to_vec())));
+        // The hook's activity ends, then the build's; neither is a verdict.
+        r.stopped("/nix/store/a.drv");
+        r.stopped("/nix/store/a.drv");
+        // The daemon's own error text is unattributed, and still belongs to
+        // the one build that is running.
+        r.event(&FastBuildEvent::new(
+            "",
+            "",
+            Kind::Log(b"error: build of '/nix/store/a.drv' on 'ssh-ng://b' failed".to_vec()),
+            Duration::ZERO,
+        ));
+        let t = text(&s);
+        assert_eq!(t.matches("▶ building").count(), 1, "{t}");
+        assert!(!t.contains("✔"), "{t}");
+
+        r.event(&at(Kind::Failed {
+            reason: "status 1: builder failed".into(),
+            log_tail: vec![],
+        }));
+        let t = text(&s);
+        assert!(
+            t.contains(
+                "✘  prov-fail failed after 0s (status 1: builder failed), \
+                 defined at /home/u/repo/default.nix:2:3"
+            ),
+            "{t}"
+        );
+        assert!(t.contains("prov-fail> about to fail"), "{t}");
+        // The daemon's text went through the build's own block, not raw.
+        assert!(t.contains("prov-fail> error: build of"), "{t}");
     }
 
     #[test]

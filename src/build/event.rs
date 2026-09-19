@@ -31,14 +31,17 @@ pub enum Kind {
 /// One event about one attribute.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FastBuildEvent {
-    /// The attribute path, or the derivation name for a build the
-    /// dispatcher was not asked for by name (a dependency).
+    /// The attribute path plus the source position when it is known, or the
+    /// derivation name for a build the dispatcher was not asked for by name
+    /// (a dependency).
     pub attr: String,
     pub drv: String,
     pub kind: Kind,
     /// Since this build started, or since the run started for an event
     /// that belongs to no build.
     pub elapsed: Duration,
+    /// `file:line:col` of the `derivation` call, for the failure line.
+    pub pos: Option<String>,
 }
 
 impl FastBuildEvent {
@@ -48,7 +51,14 @@ impl FastBuildEvent {
             drv: drv.to_string(),
             kind,
             elapsed,
+            pos: None,
         }
+    }
+
+    /// Where the derivation was defined.
+    pub fn at(mut self, pos: Option<String>) -> FastBuildEvent {
+        self.pos = pos;
+        self
     }
 }
 
