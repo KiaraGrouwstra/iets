@@ -3,7 +3,7 @@
 # the tests/ directory like Nix's own harness (paths print as /pwd/lang/...).
 # Exits nonzero on a failure that tests/lang/expected-failures.txt does not
 # list, and on a listed case that starts passing.
-use lib.nu [chomp flags-of exit-code glob-sorted]
+use lib.nu [chomp exit-code flags-of glob-sorted ietsp-bin]
 
 def expected-failures []: nothing -> list<string> {
   let f = "lang/expected-failures.txt"
@@ -13,7 +13,7 @@ def expected-failures []: nothing -> list<string> {
 
 def main [] {
   cd ($env.FILE_PWD | path join "..")
-  let ietsp = ($env.IETSP? | default ($env.PWD | path join "target/release/ietsp"))
+  let ietsp = (ietsp-bin)
   $env.HOME = "/fake-home"
   $env.TEST_VAR = "foo" # for eval-okay-getenv.nix
   cd tests

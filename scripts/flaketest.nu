@@ -14,7 +14,7 @@
 # no nix, no daemon and a fresh cache, a second run does it with
 # `IETSP_OFFLINE=1`, and `build --no-build` sends the input's NAR out of the
 # same spool.
-use lib.nu [chomp show verdict]
+use lib.nu [ROOT chomp ietsp-bin isolate run-in show verdict]
 
 def --wrapped nixf [...args: string] { ^nix --extra-experimental-features "nix-command flakes" ...$args }
 def --wrapped git-in [repo: string, ...args: string] {
@@ -473,13 +473,8 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
 }
 
 def main [] {
-  cd ($env.FILE_PWD | path join "..")
-  let ietsp = ($env.IETSP? | default ($env.PWD | path join "target/release/ietsp"))
-  let work = (mktemp -d --tmpdir ietsp-flaketest.XXXXXX)
-  $env.IETSP_CONF_DIR = ($work | path join "no-conf")
-  $env.XDG_CONFIG_HOME = ($work | path join "no-xdg")
-  hide-env -i IETSP_CONFIG
-  let code = (try { run-tests $ietsp $work } catch {|e| print -e $e.rendered; 1 })
-  rm -rf $work
-  exit $code
+  let ietsp = (ietsp-bin)
+  cd $ROOT
+  let work = (isolate flaketest)
+  run-in $work { run-tests $ietsp $work }
 }

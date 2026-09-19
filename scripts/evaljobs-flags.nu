@@ -5,7 +5,7 @@
 # `true`. Also compares the exit codes and, with --gc-roots-dir, the roots.
 #
 # usage: scripts/evaljobs-flags.nu          # NEJ=~/tmp/nej/bin/nix-eval-jobs
-use lib.nu [show diff-head]
+use lib.nu [ROOT diff-head ietsp-bin isolate nixpkgs run-in show]
 
 # `jq -S` per line, error text replaced by true, sorted.
 def norm []: string -> list<string> {
@@ -150,15 +150,11 @@ def run-all [ctx: record, np: string]: nothing -> int {
 }
 
 def main [] {
-  cd ($env.FILE_PWD | path join "../tests/evaljobs")
   let ctx = {
-    work: (mktemp -d --tmpdir ietsp-evaljobs-flags.XXXXXX)
-    ietsp: ($env.IETSP? | default ($env.PWD | path join "../../target/release/ietsp"))
+    ietsp: (ietsp-bin)
+    work: (isolate evaljobs-flags)
     nej: ($env.NEJ? | default $"($env.HOME)/tmp/nej/bin/nix-eval-jobs")
   }
-  let np = ($env.NIXPKGS? | default "/nix/store/ah3pxz4xa52hd6vhbx17vcsci0b8bmbr-source")
-  $env.NIX_REMOTE = ($env.NIX_REMOTE? | default "daemon")
-  let code = (try { run-all $ctx $np } catch {|e| print -e $e.rendered; 1 })
-  rm -rf $ctx.work
-  exit $code
+  cd ($ROOT | path join tests/evaljobs)
+  run-in $ctx.work { run-all $ctx (nixpkgs) }
 }

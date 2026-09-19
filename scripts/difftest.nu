@@ -1,11 +1,11 @@
 #!/usr/bin/env nu
 # Usage: scripts/difftest.nu [-I nixpkgs=PATH] (-E EXPR | FILE)
 # Runs nix-instantiate and ietsp on the same input and diffs stdout.
-use lib.nu [chomp show diff-head env-cmd]
+use lib.nu [chomp diff-head env-cmd ietsp-bin show]
 
 def --wrapped main [...args: string] {
   cd ($env.FILE_PWD | path join "..")
-  let ietsp = ($env.IETSP? | default "./target/release/ietsp")
+  let ietsp = (ietsp-bin)
   let nix = (env-cmd NIX nix-instantiate)
   let n = (^($nix | first) ...($nix | skip 1) --eval --strict --option pure-eval false ...$args | complete)
   $n.stderr | save -f /tmp/difftest.nix.err

@@ -8,7 +8,7 @@
 # derivation graph from the root and reports the first derivation whose
 # inputs ietsp reproduced exactly but which ietsp itself did not, then diffs
 # its ATerm against ietsp's derivation of the same name.
-use lib.nu [chomp show diff-head env-cmd]
+use lib.nu [chomp diff-head env-cmd ietsp-bin show]
 
 # Input .drv paths of a Nix derivation: the second ATerm section.
 def inputs [drv: string]: nothing -> list<string> {
@@ -74,7 +74,7 @@ def compare [ietsp: string, nix: list<string>, dump: string, argv: list<string>]
 
 def --wrapped main [...argv: string] {
   cd ($env.FILE_PWD | path join "..")
-  let ietsp = ($env.IETSP? | default "./target/release/ietsp")
+  let ietsp = (ietsp-bin)
   let nix = (env-cmd NIX nix-instantiate)
   let dump = (mktemp -d --tmpdir drvdiff.XXXXXX)
   let code = (try { compare $ietsp $nix $dump $argv } catch {|e| print -e $e.rendered; 1 })

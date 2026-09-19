@@ -6,24 +6,7 @@
 #
 # usage: nu scripts/classic-e2e.nu
 #        BIN=target/debug nu scripts/classic-e2e.nu
-use lib.nu [chomp scratch-daemon show verdict]
-
-const NIXPKGS = "/nix/store/ah3pxz4xa52hd6vhbx17vcsci0b8bmbr-source"
-
-def real-bin-dir []: nothing -> string {
-  (^readlink -f (^bash -c "command -v nix-instantiate" | chomp) | chomp | path dirname)
-}
-
-# The symlink farm: our binary under the classic names.
-def make-farm [bin: string, dir: string]: nothing -> string {
-  mkdir $"($dir)/bin"
-  for n in [nix-instantiate nix-build nix-eval-jobs nix-shell nix] {
-    ^ln -sf ($bin | path expand) $"($dir)/bin/($n)"
-  }
-  mkdir $"($dir)/share/ietsp"
-  (real-bin-dir) | save -f $"($dir)/share/ietsp/real-nix-bin"
-  $"($dir)/bin"
-}
+use lib.nu [chomp isolate ietsp-bin make-farm nixpkgs real-bin-dir scratch-daemon show verdict]
 
 def --wrapped run-both [farm: string, name: string, --cwd: string = ".", ...args: string] {
   let ours = (^$"($farm)/($name)" ...$args | complete)
@@ -79,29 +62,24 @@ def fallback-reason [farm: string, cmd: list<string>]: nothing -> string {
 }
 
 def main [] {
-  let bin = ($env | get -o BIN | default "target/release")
-  let ietsp = $"($bin)/ietsp"
-  if not ($ietsp | path exists) { print -e $"no ($ietsp); cargo build --release first"; exit 1 }
+  let ietsp = (ietsp-bin)
+  let tmp = (isolate classic-e2e)
+  let np = (nixpkgs)
   let real = (real-bin-dir)
   print $"real nix: ($real)"
   $env.IETSP_NIX_BIN_DIR = $real
-  let tmp = (mktemp -d -t classic-e2e-XXXXXX)
-  # the host's ietsp.conf must not steer these builds (a remote `builder` changes cores and out-links)
-  $env.IETSP_CONF_DIR = $"($tmp)/no-conf"
-  $env.XDG_CONFIG_HOME = $"($tmp)/no-xdg"
-  hide-env -i IETSP_CONFIG
   let farm = (make-farm $ietsp $tmp)
   mut ok = []
 
   # --- nix-instantiate: drv paths
   $ok = ($ok | append (cmp-case "instantiate <nixpkgs> -A hello"
-    (run-both $farm nix-instantiate -I $"nixpkgs=($NIXPKGS)" "<nixpkgs>" -A hello)))
+    (run-both $farm nix-instantiate -I $"nixpkgs=($np)" "<nixpkgs>" -A hello)))
   $ok = ($ok | append (cmp-case "instantiate <nixpkgs> -A glibc (multi-output)"
-    (run-both $farm nix-instantiate -I $"nixpkgs=($NIXPKGS)" "<nixpkgs>" -A glibc)))
+    (run-both $farm nix-instantiate -I $"nixpkgs=($np)" "<nixpkgs>" -A glibc)))
   $ok = ($ok | append (cmp-case "instantiate <nixpkgs> -A glibc.dev (!output suffix)"
-    (run-both $farm nix-instantiate -I $"nixpkgs=($NIXPKGS)" "<nixpkgs>" -A glibc.dev)))
+    (run-both $farm nix-instantiate -I $"nixpkgs=($np)" "<nixpkgs>" -A glibc.dev)))
   $ok = ($ok | append (cmp-case "instantiate two -A in one run"
-    (run-both $farm nix-instantiate -I $"nixpkgs=($NIXPKGS)" "<nixpkgs>" -A hello -A glibc.dev)))
+    (run-both $farm nix-instantiate -I $"nixpkgs=($np)" "<nixpkgs>" -A hello -A glibc.dev)))
 
   # --- nix-instantiate: --eval
   $ok = ($ok | append (cmp-case "instantiate --eval --strict --json"
@@ -323,18 +301,18 @@ def main [] {
   # `<nixpkgs>` resolves to nixpkgs/shell.nix, which fetches a pinned tree, so
   # the real code path needs default.nix by name.
   cd $tmp
-  let pkgs_nix = $"($NIXPKGS)/default.nix"
+  let pkgs_nix = $"($np)/default.nix"
   $ok = ($ok | append (cmp-case "nix-shell nixpkgs -A hello --run 'echo $name'"
-    (run-both $farm nix-shell -I $"nixpkgs=($NIXPKGS)" $pkgs_nix -A hello --run 'echo $name')))
+    (run-both $farm nix-shell -I $"nixpkgs=($np)" $pkgs_nix -A hello --run 'echo $name')))
   $ok = ($ok | append (cmp-env "nix-shell nixpkgs -A hello --run env"
-    (run-both $farm nix-shell -I $"nixpkgs=($NIXPKGS)" $pkgs_nix -A hello --run env)))
+    (run-both $farm nix-shell -I $"nixpkgs=($np)" $pkgs_nix -A hello --run env)))
   $ok = ($ok | append (cmp-env "nix-shell --pure --run env"
-    (run-both $farm nix-shell -I $"nixpkgs=($NIXPKGS)" $pkgs_nix -A hello --pure --run env)))
+    (run-both $farm nix-shell -I $"nixpkgs=($np)" $pkgs_nix -A hello --pure --run env)))
   $ok = ($ok | append (cmp-case "nix-shell --pure --keep FOO"
-    (with-env {FOO: "bar"} { run-both $farm nix-shell -I $"nixpkgs=($NIXPKGS)" $pkgs_nix -A hello --pure --keep FOO --run 'echo "[$FOO]"' })))
+    (with-env {FOO: "bar"} { run-both $farm nix-shell -I $"nixpkgs=($np)" $pkgs_nix -A hello --pure --keep FOO --run 'echo "[$FOO]"' })))
   # --command is interactive unless stdin is not a tty: an empty pipe settles it.
-  let cmd_ours = ("" | ^$"($farm)/nix-shell" -I $"nixpkgs=($NIXPKGS)" $pkgs_nix -A hello --command 'echo $name' | complete)
-  let cmd_real = ("" | ^nix-shell -I $"nixpkgs=($NIXPKGS)" $pkgs_nix -A hello --command 'echo $name' | complete)
+  let cmd_ours = ("" | ^$"($farm)/nix-shell" -I $"nixpkgs=($np)" $pkgs_nix -A hello --command 'echo $name' | complete)
+  let cmd_real = ("" | ^nix-shell -I $"nixpkgs=($np)" $pkgs_nix -A hello --command 'echo $name' | complete)
   $ok = ($ok | append (cmp-case "nix-shell --command, stdin not a tty" {ours: $cmd_ours, real: $cmd_real}))
 
   # a plain derivation: shell.nix wins over default.nix, and passAsFile
@@ -377,7 +355,7 @@ def main [] {
     {label: "nix-shell -p falls back", want: "'-p' is not implemented"
      args: [nix-shell -p hello --run "true"]}
     {label: "nix-shell <nixpkgs> falls back on the fetch in nixpkgs/shell.nix", want: "builtins.fetchTarball"
-     args: [nix-shell -I $"nixpkgs=($NIXPKGS)" "<nixpkgs>" -A hello --run "true"]}
+     args: [nix-shell -I $"nixpkgs=($np)" "<nixpkgs>" -A hello --run "true"]}
     {label: "nix develop --phase falls back", want: "'--phase' is not implemented"
      args: [nix develop --phase build]}
     {label: "nix develop --profile falls back", want: "'--profile' is not implemented"

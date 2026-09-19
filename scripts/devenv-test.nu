@@ -14,7 +14,7 @@
 #
 # usage: scripts/devenv-test.nu            # uses target/release
 #        IETSP=target/debug/ietsp scripts/devenv-test.nu
-use lib.nu [chomp show diff-head]
+use lib.nu [ROOT chomp diff-head ietsp-bin isolate run-in same-file show]
 
 def --wrapped nixf [...args: string] { ^nix --extra-experimental-features "nix-command flakes" ...$args }
 
@@ -26,7 +26,6 @@ def bad [msg: string, ...lines: string]: nothing -> bool {
 }
 def ms [t0: datetime, t1: datetime]: nothing -> int { (($t1 - $t0) / 1ms) | math floor }
 def tail-of [file: string, n: int]: nothing -> string { open --raw $file | lines | last $n | str join "\n" }
-def same [a: string, b: string]: nothing -> bool { (open --raw $a | into binary) == (open --raw $b | into binary) }
 def sorted-json [file: string]: nothing -> string { open --raw $file | ^jq -S . }
 
 # nix-env WORK FLAKE FILE [ARGS]: nix print-dev-env from inside FLAKE (the script names <cwd>/outputs).
@@ -83,7 +82,7 @@ def run-tests [ctx: record]: nothing -> int {
     let name = ($flake | path basename)
     if (nix-env $work $flake $"($work)/nix.sh") != 0 { $res ++= [(bad $"nix print-dev-env ($name)" (tail-of $"($work)/nix.err" 3))] }
     if (ietsp-env $ctx $flake $"($work)/ietsp.sh" --no-cache) != 0 { $res ++= [(bad $"ietsp print-dev-env ($name)" (tail-of $"($work)/ietsp.err" 3))] }
-    if (same $"($work)/nix.sh" $"($work)/ietsp.sh") {
+    if (same-file $"($work)/nix.sh" $"($work)/ietsp.sh") {
       $res ++= [(ok $"a. bash identical: ($name) \((open --raw $"($work)/nix.sh" | into binary | bytes length) bytes\)")]
     } else {
       $res ++= [(bad $"a. bash differs: ($name)" (diff-head $"($work)/nix.sh" $"($work)/ietsp.sh" 8 | str join "\n"))]
@@ -93,7 +92,7 @@ def run-tests [ctx: record]: nothing -> int {
     ietsp-env $ctx $flake $"($work)/ietsp.json" --no-cache --json
     sorted-json $"($work)/nix.json" | save -f $"($work)/nix.sorted.json"
     sorted-json $"($work)/ietsp.json" | save -f $"($work)/ietsp.sorted.json"
-    if (same $"($work)/nix.sorted.json" $"($work)/ietsp.sorted.json") {
+    if (same-file $"($work)/nix.sorted.json" $"($work)/ietsp.sorted.json") {
       $res ++= [(ok $"b. json identical: ($name)")]
     } else {
       $res ++= [(bad $"b. json differs: ($name)" (diff-head $"($work)/nix.sorted.json" $"($work)/ietsp.sorted.json" 8 | str join "\n"))]
@@ -103,7 +102,7 @@ def run-tests [ctx: record]: nothing -> int {
     let t0 = (date now)
     ietsp-env $ctx $flake $"($work)/hit.sh"
     let t1 = (date now)
-    if (same $"($work)/nix.sh" $"($work)/hit.sh") {
+    if (same-file $"($work)/nix.sh" $"($work)/hit.sh") {
       $res ++= [(ok $"c. warm run identical: ($name), (ms $t0 $t1) ms")]
     } else {
       $res ++= [(bad $"c. warm run differs: ($name)" (diff-head $"($work)/nix.sh" $"($work)/hit.sh" 5 | str join "\n"))]
@@ -158,7 +157,7 @@ def run-tests [ctx: record]: nothing -> int {
     }
   }
   nix-env $work $scratch $"($work)/scratch-nix.sh"
-  if (same $"($work)/scratch-nix.sh" $"($work)/scratch.sh") {
+  if (same-file $"($work)/scratch-nix.sh" $"($work)/scratch.sh") {
     $res ++= [(ok "a. bash identical: scratch")]
   } else {
     $res ++= [(bad "a. bash differs: scratch" (diff-head $"($work)/scratch-nix.sh" $"($work)/scratch.sh" 8 | str join "\n"))]
@@ -172,7 +171,7 @@ def run-tests [ctx: record]: nothing -> int {
     ietsp-env $ctx $scratch $"($work)/scratch2.sh" --gc-root $root --timings
     let t1 = (date now)
     let relinked = (^readlink $root | complete | get stdout | chomp) == $outpath
-    if ($outpath | path exists) and $relinked and (same $"($work)/scratch.sh" $"($work)/scratch2.sh") {
+    if ($outpath | path exists) and $relinked and (same-file $"($work)/scratch.sh" $"($work)/scratch2.sh") {
       let notices = (open --raw $"($work)/ietsp.err" | lines | where ($it | str contains "cache: env output") | length)
       $res ++= [(ok $"e. deleted env output rebuilt on the next run, (ms $t0 $t1) ms \(($notices) fallback notice\)")]
     } else {
@@ -187,7 +186,7 @@ def run-tests [ctx: record]: nothing -> int {
   do { cd $scratch; ^$ietsp print-dev-env $"($scratch)#other" | complete } | do {|r| $r.stdout | save -f $"($work)/other.sh"; $r.stderr | save -f $"($work)/ietsp.err" } $in
   do { cd $scratch; nixf print-dev-env --option eval-cache "false" $"($scratch)#other" | complete | get stdout } | save -f $"($work)/other-nix.sh"
   let has_foo = (open --raw $"($work)/other.sh" | lines | any {|l| $l == "FOO='bar'" })
-  if $has_foo and (same $"($work)/other.sh" $"($work)/other-nix.sh") {
+  if $has_foo and (same-file $"($work)/other.sh" $"($work)/other-nix.sh") {
     $res ++= [(ok "g. #other selects devShells.x86_64-linux.other, identical to nix")]
   } else {
     $res ++= [(bad "g. #other" (diff-head $"($work)/other-nix.sh" $"($work)/other.sh" 5 | str join "\n") (tail-of $"($work)/ietsp.err" 3))]
@@ -210,7 +209,7 @@ def run-tests [ctx: record]: nothing -> int {
   $r.stderr | save -f $"($work)/ietsp.err"
   nix-env $work $fresh $"($work)/fresh-nix.sh"
   ^git -C $env.PWD worktree remove --force $fresh
-  if $r.exit_code == 0 and not ($r.stderr | str contains "fetching") and (same $"($work)/fresh-nix.sh" $"($work)/fresh.sh") {
+  if $r.exit_code == 0 and not ($r.stderr | str contains "fetching") and (same-file $"($work)/fresh-nix.sh" $"($work)/fresh.sh") {
     $res ++= [(ok "h. worktree nix never saw: bash identical, nothing fetched")]
   } else {
     $res ++= [(bad $"h. worktree \(exit ($r.exit_code)\)" (tail-of $"($work)/ietsp.err" 3) (diff-head $"($work)/fresh-nix.sh" $"($work)/fresh.sh" 5 | str join "\n"))]
@@ -222,17 +221,8 @@ def run-tests [ctx: record]: nothing -> int {
 }
 
 def main [] {
-  cd ($env.FILE_PWD | path join "..")
-  let ctx = {
-    ietsp: ($env.IETSP? | default ($env.PWD | path join "target/release/ietsp"))
-    work: (mktemp -d --tmpdir ietsp-devenv.XXXXXX)
-  }
-  $env.NIX_REMOTE = ($env.NIX_REMOTE? | default "daemon")
-  # the host's ietsp.conf must not steer these builds (a remote `builder` changes cores)
-  $env.IETSP_CONF_DIR = ($ctx.work | path join "no-conf")
-  $env.XDG_CONFIG_HOME = ($ctx.work | path join "no-xdg")
-  hide-env -i IETSP_CONFIG
-  let code = (try { run-tests $ctx } catch {|e| print -e $e.rendered; 1 })
-  rm -rf $ctx.work
-  exit $code
+  let ietsp = (ietsp-bin)
+  cd $ROOT
+  let ctx = {ietsp: $ietsp, work: (isolate devenv)}
+  run-in $ctx.work { run-tests $ctx }
 }

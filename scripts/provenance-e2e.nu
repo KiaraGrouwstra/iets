@@ -13,14 +13,7 @@
 #
 # usage: nu scripts/provenance-e2e.nu
 #        BIN=target/debug nu scripts/provenance-e2e.nu
-use lib.nu [chomp verdict]
-
-# ietsp under the classic names.
-def make-farm [bin: string, dir: string]: nothing -> string {
-  mkdir $"($dir)/bin"
-  for n in [nix-instantiate nix-build] { ^ln -sf ($bin | path expand) $"($dir)/bin/($n)" }
-  $"($dir)/bin"
-}
+use lib.nu [current-system ietsp-bin isolate make-farm verdict]
 
 # A tree whose derivation fails after echoing its own source path.
 def make-case [dir: string] {
@@ -32,7 +25,7 @@ def make-case [dir: string] {
   builder = "/bin/sh";
   args = [ "-c" "echo source is ${./src}; exit 1" ];
 }
-'# | str replace -a "@SYSTEM@" (^nix-instantiate --eval -E builtins.currentSystem | str replace -a '"' '' | chomp) | save -f $"($dir)/default.nix"
+'# | str replace -a "@SYSTEM@" (current-system) | save -f $"($dir)/default.nix"
 }
 
 # A locked flake with one failing derivation and one throwing attribute.
@@ -54,15 +47,9 @@ def make-flake [dir: string, system: string] {
 }
 
 def main [] {
-  let bin = ($env | get -o BIN | default "target/release")
-  let ietsp = $"($bin)/ietsp"
-  if not ($ietsp | path exists) { print -e $"no ($ietsp); cargo build --release first"; exit 1 }
-  let system = (^nix-instantiate --eval -E builtins.currentSystem | str replace -a '"' '' | chomp)
-  let tmp = (mktemp -d -t provenance-e2e-XXXXXX)
-  # the host's ietsp.conf must not steer these builds (a remote `builder` changes cores and out-links)
-  $env.IETSP_CONF_DIR = $"($tmp)/no-conf"
-  $env.XDG_CONFIG_HOME = $"($tmp)/no-xdg"
-  hide-env -i IETSP_CONFIG
+  let ietsp = (ietsp-bin)
+  let tmp = (isolate provenance-e2e)
+  let system = (current-system)
   let farm = (make-farm $ietsp $tmp)
   let d = $"($tmp)/case"
   make-case $d

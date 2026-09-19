@@ -22,27 +22,16 @@
 #
 # usage: nu scripts/fastbuild-e2e.nu
 #        BIN=target/debug nu scripts/fastbuild-e2e.nu
-use lib.nu [chomp show verdict fastbuild-flake]
-
-def fail [msg: string] {
-  print -e $"FAIL: ($msg)"
-  error make -u {msg: "fail"}
-}
+use lib.nu [chomp current-system fastbuild-flake ietsp-bin isolate show verdict]
 
 def --wrapped go [...cmd: string]: nothing -> record {
   ^($cmd | first) ...($cmd | skip 1) | complete
 }
 
 def main [] {
-  let bin = ($env | get -o BIN | default "target/release")
-  let ietsp = ($"($bin)/ietsp" | path expand)
-  if not ($ietsp | path exists) { print -e $"no ($ietsp); cargo build --release first"; exit 1 }
-  let system = (^nix --extra-experimental-features nix-command eval --impure --raw --expr builtins.currentSystem | chomp)
-  let tmp = (mktemp -d -t fastbuild-e2e-XXXXXX)
-  # the host's ietsp.conf must not steer these builds (a remote `builder` changes cores and out-links)
-  $env.IETSP_CONF_DIR = $"($tmp)/no-conf"
-  $env.XDG_CONFIG_HOME = $"($tmp)/no-xdg"
-  hide-env -i IETSP_CONFIG
+  let ietsp = (ietsp-bin)
+  let tmp = (isolate fastbuild-e2e)
+  let system = (current-system)
   let flake = $"($tmp)/flake"
   fastbuild-flake $flake
   let target = $"path:($flake)#checks"

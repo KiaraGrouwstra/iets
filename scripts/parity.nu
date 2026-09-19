@@ -7,7 +7,7 @@
 #
 # It needs a working nix-instantiate, so it is not a flake check; run it by
 # hand in the dev shell. NIX=... picks another nix, IETSP=... another binary.
-use lib.nu [chomp show diff-head env-cmd verdict]
+use lib.nu [chomp diff-head env-cmd ietsp-bin show verdict]
 
 # Corpora evaluated in one process each and compared as JSON.
 const VALUE_CORPORA = [
@@ -38,7 +38,7 @@ def --wrapped run-nix [...args: string]: nothing -> record {
 }
 
 def --wrapped run-ietsp [...args: string]: nothing -> record {
-  let i = ($env.IETSP? | default "./target/release/ietsp")
+  let i = (ietsp-bin)
   ^$i eval --strict ...$args | complete
 }
 

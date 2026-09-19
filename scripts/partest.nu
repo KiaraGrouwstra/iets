@@ -2,7 +2,7 @@
 # Differential test of the parallel runtime: every case is evaluated with
 # 1 and N workers (default 8); stdout, exit code and the trace lines on
 # stderr must match. Usage: scripts/partest.nu [N]
-use lib.nu [chomp show diff-head]
+use lib.nu [chomp diff-head ietsp-bin show]
 
 # One case with 1 and N workers; prints the verdict, returns it.
 def run-case [ietsp: string, n: int, name: string, expr: string]: nothing -> bool {
@@ -30,7 +30,7 @@ def run-case [ietsp: string, n: int, name: string, expr: string]: nothing -> boo
 
 def main [n: int = 8] {
   cd ($env.FILE_PWD | path join "..")
-  let ietsp = ($env.IETSP? | default "./target/release/ietsp")
+  let ietsp = (ietsp-bin)
   # the second run of each case must evaluate again to print its traces
   $env.IETSP_CACHE = "0"
   let cases = [

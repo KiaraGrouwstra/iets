@@ -2,7 +2,7 @@
 # Semantics of the tracing evaluation cache (docs/tracing-cache.md): hits
 # print identical output, every kind of change misses, uncacheable runs and
 # failed runs write nothing, --no-cache touches nothing.
-use lib.nu [chomp verdict]
+use lib.nu [ROOT chomp ietsp-bin isolate run-in verdict]
 
 # ietsp eval --strict --timings ARGS: rc, stdout, and the `cache:` lines joined with spaces.
 def --wrapped run-eval [ietsp: string, ...args: string]: nothing -> record {
@@ -96,10 +96,8 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
 }
 
 def main [] {
-  cd ($env.FILE_PWD | path join "..")
-  let ietsp = ($env.IETSP? | default ($env.PWD | path join "target/release/ietsp"))
-  let work = (mktemp -d --tmpdir ietsp-cachetest.XXXXXX)
-  let code = (try { run-tests $ietsp $work } catch {|e| print -e $e.rendered; 1 })
-  rm -rf $work
-  exit $code
+  let ietsp = (ietsp-bin)
+  cd $ROOT
+  let work = (isolate cachetest)
+  run-in $work { run-tests $ietsp $work }
 }
