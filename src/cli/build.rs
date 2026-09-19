@@ -1,6 +1,7 @@
 //! `ietsp build`: evaluate to derivations and build them through a daemon.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::cli::{EvalArgs, Input, build_targets, evaluate, parse_eval_args, report, usage};
 use crate::error::Error as CrateError;
@@ -188,7 +189,7 @@ fn build_drv_file(b: &BuildArgs, root_arg: &str) -> i32 {
             Ok(DrvInfo {
                 outputs: drv.outputs.into_keys().collect(),
                 references,
-                aterm: Some(text.into_bytes()),
+                aterm: Some(Arc::new(text.into_bytes())),
                 pos: None,
                 attr: None,
             })

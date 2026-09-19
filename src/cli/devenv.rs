@@ -1,6 +1,7 @@
 //! `ietsp print-dev-env`: the shell environment of a flake's devShell.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::cli::{EvalArgs, Input, abs_path, cwd, evaluate, parse_eval_args, report, usage};
 use crate::error::Error as CrateError;
@@ -393,7 +394,7 @@ fn dev_env_build(ev: &mut Evaluator, a: EvalArgs, d: &DevEnvArgs) -> Result<DevE
             DrvInfo {
                 outputs: env_drv.outputs.keys().cloned().collect(),
                 references,
-                aterm: Some(text.into_bytes()),
+                aterm: Some(Arc::new(text.into_bytes())),
                 pos: None,
                 attr: None,
             },

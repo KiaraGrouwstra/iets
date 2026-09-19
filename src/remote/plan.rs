@@ -289,7 +289,7 @@ fn load_drv(path: &StorePath, inputs: &Inputs<'_>) -> Result<DrvNode> {
     {
         return Ok(DrvNode {
             references: info.references.clone(),
-            aterm: Arc::new(aterm.clone()),
+            aterm: aterm.clone(),
             from_store: false,
         });
     }

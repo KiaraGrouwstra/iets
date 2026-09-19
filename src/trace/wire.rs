@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use super::{Digest32, Filtered, Kind, Obs};
 use crate::builtins::derivation::DrvInfo;
@@ -330,7 +331,12 @@ pub fn encode_drvs(drvs: &HashMap<StorePath, DrvInfo>) -> Vec<u8> {
             .map(|r| r.base_name().as_bytes().to_vec())
             .collect();
         e.list(&refs);
-        e.bytes(info.aterm.as_deref().unwrap_or_default());
+        e.bytes(
+            info.aterm
+                .as_ref()
+                .map(|a| a.as_slice())
+                .unwrap_or_default(),
+        );
     }
     e.0
 }
@@ -363,7 +369,7 @@ pub fn decode_drvs(b: &[u8]) -> Option<HashMap<StorePath, DrvInfo>> {
             DrvInfo {
                 outputs,
                 references,
-                aterm: Some(aterm),
+                aterm: Some(Arc::new(aterm)),
                 pos: None,
                 attr: None,
             },
@@ -545,7 +551,7 @@ mod tests {
             DrvInfo {
                 outputs: ["out".to_string()].into(),
                 references: [s.clone()].into(),
-                aterm: Some(b"Derive(...)".to_vec()),
+                aterm: Some(Arc::new(b"Derive(...)".to_vec())),
                 pos: None,
                 attr: None,
             },
@@ -562,7 +568,10 @@ mod tests {
         );
         let back = decode_drvs(&encode_drvs(&drvs)).unwrap();
         assert_eq!(back.len(), 1);
-        assert_eq!(back[&p].aterm.as_deref(), Some(&b"Derive(...)"[..]));
+        assert_eq!(
+            back[&p].aterm.as_ref().map(|a| a.as_slice()),
+            Some(&b"Derive(...)"[..])
+        );
         assert_eq!(back[&p].references, [s.clone()].into());
 
         let mut sources = HashMap::new();

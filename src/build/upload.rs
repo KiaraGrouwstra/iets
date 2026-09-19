@@ -184,7 +184,7 @@ impl StreamUpload {
         if let Some(info) = self.drvs.get(p)
             && let Some(aterm) = info.aterm
         {
-            return Ok((Arc::new(aterm), info.references));
+            return Ok((aterm, info.references));
         }
         let full = format!("{STORE_DIR}/{}", p.base_name());
         let text = std::fs::read_to_string(&full)

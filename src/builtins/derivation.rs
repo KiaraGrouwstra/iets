@@ -4,6 +4,7 @@
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use super::Registry;
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
@@ -33,7 +34,7 @@ pub struct DrvInfo {
     pub outputs: BTreeSet<String>,
     pub references: BTreeSet<StorePath>,
     /// The ATerm this evaluation produced; `None` when the drv was read from `/nix/store`.
-    pub aterm: Option<Vec<u8>>,
+    pub aterm: Option<Arc<Vec<u8>>>,
     /// Where the derivation was defined. `derivation` is a wrapper around
     /// `derivationStrict`, so the primop's call position is inside
     /// `«derivation-internal»` for every normal call; the position of the
@@ -575,7 +576,7 @@ fn derivation_strict_internal(
         DrvInfo {
             outputs: drv.outputs.keys().cloned().collect(),
             references,
-            aterm: ev.drv.keep_aterm.then(|| text.into_bytes()),
+            aterm: ev.drv.keep_aterm.then(|| Arc::new(text.into_bytes())),
             pos: site,
             attr: None,
         },
