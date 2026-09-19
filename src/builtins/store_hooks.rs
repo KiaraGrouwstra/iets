@@ -106,16 +106,6 @@ pub fn whence(ev: &Evaluator, path: &[u8]) -> Option<Whence> {
     }
 }
 
-/// The file to open for `path`: `path` itself or its local original; `None`
-/// when the tree's filter left the entry out or the bytes are in an input's
-/// spool rather than on disk.
-pub fn physical(ev: &Evaluator, path: &[u8]) -> Option<Vec<u8>> {
-    match whence(ev, path) {
-        Some(Whence::Fs(p)) => Some(p),
-        _ => None,
-    }
-}
-
 /// Store path a source path would get when copied (`"${./foo}"`). Nothing
 /// is written; the NAR hash is what `fetchToStore` would compute.
 pub fn copy_path_to_store(
@@ -215,17 +205,21 @@ mod tests {
                 nar_size: 0,
             },
         );
+        let on_disk = |p: &[u8]| match whence(&ev, p) {
+            Some(Whence::Fs(p)) => Some(p),
+            _ => None,
+        };
         let full = sp.to_full_string();
-        assert_eq!(physical(&ev, full.as_bytes()).unwrap(), b"/r");
+        assert_eq!(on_disk(full.as_bytes()).unwrap(), b"/r");
         assert_eq!(
-            physical(&ev, format!("{full}/a/b.nix").as_bytes()).unwrap(),
+            on_disk(format!("{full}/a/b.nix").as_bytes()).unwrap(),
             b"/r/a/b.nix"
         );
-        assert!(physical(&ev, format!("{full}/untracked").as_bytes()).is_none());
-        assert!(physical(&ev, format!("{full}/.git/HEAD").as_bytes()).is_none());
+        assert!(on_disk(format!("{full}/untracked").as_bytes()).is_none());
+        assert!(on_disk(format!("{full}/.git/HEAD").as_bytes()).is_none());
         let other = b"/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-other/x";
-        assert_eq!(physical(&ev, other).unwrap(), other);
-        assert_eq!(physical(&ev, b"/etc/passwd").unwrap(), b"/etc/passwd");
+        assert_eq!(on_disk(other).unwrap(), other);
+        assert_eq!(on_disk(b"/etc/passwd").unwrap(), b"/etc/passwd");
         assert!(matches!(
             locate(&ev, b"/nix/store/not-a-store-path"),
             Access::Store
