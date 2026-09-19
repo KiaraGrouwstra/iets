@@ -1271,8 +1271,9 @@ impl<'a> Compiler<'a> {
                     }
                 }
 
-                let found = lint::style::pattern(&param, sorted.len());
-                self.lint_all(pos, found)?;
+                if let Some((id, msg)) = lint::style::pattern(&param) {
+                    self.lint(id, pos, || msg)?;
+                }
                 let mut frame = Frame::new(false);
                 let mut idx = 0u32;
                 if let Some(b) = bind {

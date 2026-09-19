@@ -168,7 +168,6 @@ registry! {
     DirCopyUnfiltered: "dir-copy-unfiltered", Purity, Evaluator, Off, "a directory coerced to a string is copied whole, untracked and ignored files included; use `builtins.path` with a filter";
     ImpurePathInDrv: "impure-path-in-drv", Purity, Evaluator, Off, "a derivation attribute holds the text of a path outside the store and outside any flake root (`toString ./x`), so the .drv depends on the checkout location";
     AbsolutePathInDrv: "absolute-path-in-drv", Purity, Evaluator, Off, "a derivation attribute holds the text of a path under a flake root, an absolute path a flake evaluation would have copied";
-    EmptyPattern: "empty-pattern", Style, Compiler, Off, "the pattern `{}:`";
     IfBoolLiteral: "if-bool-literal", Style, Compiler, Off, "`if c then true else false` or its negation";
     EqBool: "eq-bool", Style, Compiler, Off, "`x == true`, `x == false`, or the same with `!=`";
     ManualInherit: "manual-inherit", Style, Compiler, Off, "`a = a;` or `a = b.a;` where `inherit` would do";

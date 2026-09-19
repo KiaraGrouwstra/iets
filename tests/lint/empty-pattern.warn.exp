@@ -1,2 +1,0 @@
-warning: [empty-pattern] `{}:` accepts only the empty set; use `_:` for an ignored argument
-  at /pwd/lint/empty-pattern.nix:1:2

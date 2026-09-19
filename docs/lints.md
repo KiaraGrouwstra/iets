@@ -97,7 +97,6 @@ are part of the IR cache key and their warnings are stored in the entry;
 | `dir-copy-unfiltered` | purity | evaluator | off | a directory outside the store copied whole by a string coercion: no filter, and not a tree the flake machinery already turned into a tracked file set |
 | `impure-path-in-drv` | purity | evaluator | off | a derivation attribute (env, `args`, structured attrs) holds the text of a path outside the store and not under a `flake.nix` directory (`toString ./x`), so the .drv depends on the checkout location |
 | `absolute-path-in-drv` | purity | evaluator | off | as above, for a path under a `flake.nix` directory: an absolute path a flake evaluation would have copied |
-| `empty-pattern` | style | compiler | off | `{}:` |
 | `if-bool-literal` | style | compiler | off | `if c then true else false` or `if c then false else true` |
 | `eq-bool` | style | compiler | off | `x == true`, `x == false`, `x != true`, `x != false` |
 | `manual-inherit` | style | compiler | off | `a = a;` in a non-recursive set, or `a = e.a;` in any binding set |
@@ -167,7 +166,6 @@ at 1 and 4 workers.
 | `dir-copy-unfiltered` | 0 | 0 | 3 |
 | `impure-path-in-drv` | 0 | 0 | 0 |
 | `absolute-path-in-drv` | 0 | 0 | 0 |
-| `empty-pattern` | 19 | 23 | 4 |
 | `if-bool-literal` | 7 | 9 | 0 |
 | `eq-bool` | 205 | 220 | 2 |
 | `manual-inherit` | 1002 | 1539 | 19 |

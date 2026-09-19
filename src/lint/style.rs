@@ -1,4 +1,4 @@
-//! Style lints on the syntax tree: `{}:`, `if c then true else false`,
+//! Style lints on the syntax tree: `if c then true else false`,
 //! `x == true`, `a = b.a;`, `let in e`, `{ a, ... }:` without `@`. Hook:
 //! the compiler, which has the tree and knows what `true` resolves to.
 
@@ -94,23 +94,15 @@ pub fn empty_let(binds: usize) -> Option<(LintId, String)> {
     (binds == 0).then(|| (LintId::EmptyLet, "`let in e` binds nothing: use `e`".into()))
 }
 
-/// `{}:` and `{ a, ... }:` without an `@` binding.
-pub fn pattern(param: &Param, nformals: usize) -> Vec<(LintId, String)> {
+/// `{ a, ... }:` without an `@` binding.
+pub fn pattern(param: &Param) -> Option<(LintId, String)> {
     let Param::Formals { bind, ellipsis, .. } = param else {
-        return Vec::new();
+        return None;
     };
-    let mut out = Vec::new();
-    if nformals == 0 && !ellipsis {
-        out.push((
-            LintId::EmptyPattern,
-            "`{}:` accepts only the empty set; use `_:` for an ignored argument".into(),
-        ));
-    }
-    if *ellipsis && bind.is_none() {
-        out.push((
+    (*ellipsis && bind.is_none()).then(|| {
+        (
             LintId::EllipsisWithoutBind,
             "`...` without an `@name` binding drops the extra attributes silently".into(),
-        ));
-    }
-    out
+        )
+    })
 }
