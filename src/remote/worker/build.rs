@@ -302,6 +302,9 @@ pub fn write_object(w: &mut dyn Write, o: &Object) -> io::Result<()> {
                     let flat = match data {
                         SourceData::Memory(contents) => hash_bytes(HashAlgo::Sha256, contents),
                         SourceData::Local { path, .. } => flat_hash(path, HashAlgo::Sha256)?,
+                        SourceData::Nar(_) => {
+                            return Err(io::Error::other("a text path cannot come from a NAR"));
+                        }
                     };
                     (
                         format!("text:sha256:{}", flat.to_nix32()),

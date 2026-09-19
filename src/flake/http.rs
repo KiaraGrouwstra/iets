@@ -1,17 +1,25 @@
-//! The one HTTP client ietsp has: a GET that returns the bytes, for flake
-//! inputs (`flake::fetch`). hyper over tokio-rustls, the stack tonic already
+//! The one HTTP client ietsp has: a streaming GET, for flake inputs
+//! (`flake::fetch`). hyper over tokio-rustls, the stack tonic already
 //! brings; no libcurl. Redirects are followed like
 //! filetransfer.cc (`CURLOPT_FOLLOWLOCATION`, `CURLOPT_MAXREDIRS` 10) and
 //! `file://` reads the local file, as libcurl does for the `tarball` inputs
 //! `nix flake lock` writes with that scheme.
+//!
+//! The body is never held whole: hyper runs on a thread of its own and hands
+//! its frames to a bounded queue, the caller's thread reads that queue through
+//! the decompressor, and both ends stop when the other does.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::sync::{Arc, OnceLock};
 
 use crate::error::{Error, Result};
 
 /// filetransfer.cc:CURLOPT_MAXREDIRS.
 const MAX_REDIRECTS: usize = 10;
+
+/// Body frames in flight between hyper and the reader. hyper's frames are tens
+/// of kilobytes, so this is the download's whole memory cost.
+const QUEUE: usize = 16;
 
 /// What a URL was split into; `target` is the request line's path and query.
 struct Url {
@@ -116,34 +124,116 @@ fn tls() -> Result<Arc<rustls::ClientConfig>> {
     .map_err(Error::Config)
 }
 
-/// `GET url` with `headers`, following redirects; the response body on 200.
-/// A `file://` URL is read from the file system instead.
-pub fn get(url: &str, headers: &[(String, String)]) -> Result<Vec<u8>> {
+/// `GET url` with `headers`, following redirects, with the body decompressed
+/// into `sink` as it arrives; the number of bytes written. A `file://` URL is
+/// read from the file system instead. Nothing buffers the whole body.
+pub fn get_decompressed(
+    url: &str,
+    headers: &[(String, String)],
+    sink: &mut dyn Write,
+) -> Result<u64> {
     if let Some(path) = url.strip_prefix("file://") {
         let path =
             crate::remote::worker::percent_decode(path.split(['?', '#']).next().unwrap_or(path));
-        return std::fs::read(&path).map_err(|e| Error::io(format!("cannot read '{path}'"), e));
+        let file = std::fs::File::open(&path)
+            .map_err(|e| Error::io(format!("cannot read '{path}'"), e))?;
+        return drain(decompress_reader(Box::new(file))?, sink);
     }
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| Error::io("cannot start a tokio runtime", e))?;
-    rt.block_on(get_async(url, headers))
+    let (tx, rx) = tokio::sync::mpsc::channel(QUEUE);
+    let target = url.to_string();
+    let sent = headers.to_vec();
+    let download = std::thread::spawn(move || -> Result<()> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| Error::io("cannot start a tokio runtime", e))?;
+        rt.block_on(stream(&target, &sent, tx))
+    });
+    let read = decompress_reader(Box::new(Queued {
+        rx,
+        at: Vec::new(),
+        pos: 0,
+    }))
+    .and_then(|r| drain(r, sink));
+    download
+        .join()
+        .map_err(|_| Error::Store("the download thread panicked".into()))??;
+    read
 }
 
-async fn get_async(url: &str, headers: &[(String, String)]) -> Result<Vec<u8>> {
+/// The reading half of the queue: hyper's frames, one after the other.
+struct Queued {
+    rx: tokio::sync::mpsc::Receiver<std::result::Result<Vec<u8>, String>>,
+    at: Vec<u8>,
+    pos: usize,
+}
+
+impl Read for Queued {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        while self.pos == self.at.len() {
+            match self.rx.blocking_recv() {
+                None => return Ok(0),
+                Some(Err(e)) => return Err(std::io::Error::other(e)),
+                Some(Ok(chunk)) => {
+                    self.at = chunk;
+                    self.pos = 0;
+                }
+            }
+        }
+        let n = buf.len().min(self.at.len() - self.pos);
+        buf[..n].copy_from_slice(&self.at[self.pos..self.pos + n]);
+        self.pos += n;
+        Ok(n)
+    }
+}
+
+fn drain(mut read: Box<dyn Read>, sink: &mut dyn Write) -> Result<u64> {
+    std::io::copy(&mut read, sink).map_err(|e| Error::io("cannot read the download", e))
+}
+
+/// Follows redirects and pushes the frames of the 200 into `tx`.
+async fn stream(
+    url: &str,
+    headers: &[(String, String)],
+    tx: tokio::sync::mpsc::Sender<std::result::Result<Vec<u8>, String>>,
+) -> Result<()> {
+    use http_body_util::BodyExt;
+
     let mut current = url.to_string();
     for _ in 0..=MAX_REDIRECTS {
-        let (status, location, body) = once(&current, headers).await?;
+        let (status, location, mut body, driver) = once(&current, headers).await?;
         match status {
-            200 => return Ok(body),
+            200 => {
+                let mut sent = Ok(());
+                while let Some(frame) = body.frame().await {
+                    let frame = match frame {
+                        Ok(f) => f,
+                        Err(e) => {
+                            let why = format!("reading the response failed: {e}");
+                            let _ = tx.send(Err(bad(&current, &why).to_string())).await;
+                            sent = Err(bad(&current, &why));
+                            break;
+                        }
+                    };
+                    if let Ok(data) = frame.into_data()
+                        && tx.send(Ok(data.to_vec())).await.is_err()
+                    {
+                        break;
+                    }
+                }
+                driver.abort();
+                return sent;
+            }
             301 | 302 | 303 | 307 | 308 => {
+                let _ = body.collect().await;
+                driver.abort();
                 let Some(to) = location else {
                     return Err(bad(&current, &format!("HTTP {status} with no Location")));
                 };
                 current = resolve(&current, &to);
             }
             other => {
+                driver.abort();
                 return Err(bad(&current, &format!("HTTP status {other}")));
             }
         }
@@ -151,10 +241,16 @@ async fn get_async(url: &str, headers: &[(String, String)]) -> Result<Vec<u8>> {
     Err(bad(url, &format!("more than {MAX_REDIRECTS} redirects")))
 }
 
-/// One request: the status, the `Location` header and the body.
-async fn once(url: &str, headers: &[(String, String)]) -> Result<(u16, Option<String>, Vec<u8>)> {
-    use http_body_util::BodyExt;
+type Started = (
+    u16,
+    Option<String>,
+    hyper::body::Incoming,
+    tokio::task::JoinHandle<std::result::Result<(), hyper::Error>>,
+);
 
+/// One request: the status, the `Location` header, the body not yet read, and
+/// the connection task that must live as long as the body.
+async fn once(url: &str, headers: &[(String, String)]) -> Result<Started> {
     let u = Url::parse(url)?;
     let stream = tokio::net::TcpStream::connect((u.host.as_str(), u.port))
         .await
@@ -198,15 +294,7 @@ async fn once(url: &str, headers: &[(String, String)]) -> Result<(u16, Option<St
         .get("location")
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
-    let body = res
-        .into_body()
-        .collect()
-        .await
-        .map_err(|e| bad(url, &format!("reading the response failed: {e}")))?
-        .to_bytes()
-        .to_vec();
-    driver.abort();
-    Ok((status, location, body))
+    Ok((status, location, res.into_body(), driver))
 }
 
 trait Stream: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin {}
@@ -241,28 +329,63 @@ impl Compression {
     }
 }
 
+/// The magic bytes read ahead of the stream they came from.
+struct Sniffed {
+    head: Vec<u8>,
+    pos: usize,
+    rest: Box<dyn Read>,
+}
+
+impl Read for Sniffed {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.pos < self.head.len() {
+            let n = buf.len().min(self.head.len() - self.pos);
+            buf[..n].copy_from_slice(&self.head[self.pos..self.pos + n]);
+            self.pos += n;
+            return Ok(n);
+        }
+        self.rest.read(buf)
+    }
+}
+
+/// `read` with the compression its first bytes announce undone, as
+/// `archive_read_support_filter_all` does it, without holding the stream.
+pub fn decompress_reader(mut read: Box<dyn Read>) -> Result<Box<dyn Read>> {
+    let mut head = [0u8; 6];
+    let mut n = 0;
+    while n < head.len() {
+        match read.read(&mut head[n..]) {
+            Ok(0) => break,
+            Ok(k) => n += k,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(Error::io("cannot read the archive", e)),
+        }
+    }
+    let kind = Compression::sniff(&head[..n]);
+    let src = Sniffed {
+        head: head[..n].to_vec(),
+        pos: 0,
+        rest: read,
+    };
+    Ok(match kind {
+        Compression::None => Box::new(src),
+        Compression::Gzip => Box::new(flate2::read::MultiGzDecoder::new(src)),
+        Compression::Xz => Box::new(lzma_rust2::XzReader::new(src, true)),
+        Compression::Zstd => Box::new(
+            zstd::stream::read::Decoder::new(src)
+                .map_err(|e| Error::io("cannot start the zstd decoder", e))?,
+        ),
+        Compression::Bzip2 => Box::new(bzip2::read::MultiBzDecoder::new(src)),
+    })
+}
+
 /// `bytes` with the compression it announces undone.
 pub fn decompress(bytes: Vec<u8>) -> Result<Vec<u8>> {
-    let read = |mut r: Box<dyn Read>, what: &str| -> Result<Vec<u8>> {
-        let mut out = Vec::new();
-        r.read_to_end(&mut out)
-            .map_err(|e| Error::io(format!("cannot decompress the {what} stream"), e))?;
-        Ok(out)
-    };
-    let cur = std::io::Cursor::new(bytes);
-    match Compression::sniff(cur.get_ref()) {
-        Compression::None => Ok(cur.into_inner()),
-        Compression::Gzip => read(Box::new(flate2::read::MultiGzDecoder::new(cur)), "gzip"),
-        Compression::Xz => read(Box::new(lzma_rust2::XzReader::new(cur, true)), "xz"),
-        Compression::Zstd => read(
-            Box::new(
-                zstd::stream::read::Decoder::new(cur)
-                    .map_err(|e| Error::io("cannot start the zstd decoder", e))?,
-            ),
-            "zstd",
-        ),
-        Compression::Bzip2 => read(Box::new(bzip2::read::MultiBzDecoder::new(cur)), "bzip2"),
-    }
+    let mut out = Vec::new();
+    decompress_reader(Box::new(std::io::Cursor::new(bytes)))?
+        .read_to_end(&mut out)
+        .map_err(|e| Error::io("cannot decompress the stream", e))?;
+    Ok(out)
 }
 
 #[cfg(test)]

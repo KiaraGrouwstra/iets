@@ -34,6 +34,15 @@ pub enum SourceData {
     },
     /// One regular file whose contents are in memory (`builtins.toFile`).
     Memory(Arc<Vec<u8>>),
+    /// A NAR nothing holds: written on demand, once to hash it and once to send
+    /// it (`flake::spool`).
+    Nar(Arc<dyn NarSource>),
+}
+
+/// A NAR its owner can write as many times as asked, without a tree on disk.
+pub trait NarSource: std::fmt::Debug + Send + Sync {
+    fn dump(&self, sink: &mut dyn io::Write) -> io::Result<()>;
+    fn describe(&self) -> String;
 }
 
 impl SourceData {
@@ -45,6 +54,7 @@ impl SourceData {
                 None => dump_path(path, sink, &mut |_, _| true),
             },
             SourceData::Memory(contents) => dump_string(contents, sink),
+            SourceData::Nar(nar) => nar.dump(sink),
         }
     }
 
@@ -52,6 +62,7 @@ impl SourceData {
         match self {
             SourceData::Local { path, .. } => path.display().to_string(),
             SourceData::Memory(_) => "<in-memory text>".into(),
+            SourceData::Nar(nar) => nar.describe(),
         }
     }
 }

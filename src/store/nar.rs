@@ -42,13 +42,13 @@ impl FileType {
 /// archive.hh:PathFilter as used by primops.cc:addPath.
 pub type PathFilter<'a> = dyn FnMut(&Path, FileType) -> bool + 'a;
 
-const NAR_MAX_DEPTH: usize = 64;
+pub(crate) const NAR_MAX_DEPTH: usize = 64;
 
-fn write_u64(sink: &mut dyn Write, n: u64) -> io::Result<()> {
+pub(crate) fn write_u64(sink: &mut dyn Write, n: u64) -> io::Result<()> {
     sink.write_all(&n.to_le_bytes())
 }
 
-fn write_padding(sink: &mut dyn Write, len: u64) -> io::Result<()> {
+pub(crate) fn write_padding(sink: &mut dyn Write, len: u64) -> io::Result<()> {
     let rem = (len % 8) as usize;
     if rem != 0 {
         sink.write_all(&[0u8; 8][..8 - rem])?;
@@ -57,7 +57,7 @@ fn write_padding(sink: &mut dyn Write, len: u64) -> io::Result<()> {
 }
 
 /// Mirrors serialise.hh:operator<<(Sink, std::string_view): length-prefixed, zero-padded to 8.
-fn write_str(sink: &mut dyn Write, s: &[u8]) -> io::Result<()> {
+pub(crate) fn write_str(sink: &mut dyn Write, s: &[u8]) -> io::Result<()> {
     write_u64(sink, s.len() as u64)?;
     sink.write_all(s)?;
     write_padding(sink, s.len() as u64)

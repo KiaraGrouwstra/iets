@@ -7,7 +7,7 @@
 //! `sourcehut`, `tarball`), else fetched by running `nix` once (`git`, `hg`).
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
 use crate::remote::worker::{Connection, Transport};
@@ -443,20 +443,13 @@ fn tarball_url(
     Ok((url, headers))
 }
 
-/// A directory removed however the function that made it returns.
-struct Scratch(PathBuf);
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-/// Downloads the input's archive, unpacks it like Nix, checks the NAR hash
-/// against the lock, and registers the tree with one `AddMultipleToStore` as a
-/// `fixed:r:sha256` source, so the daemon recomputes the content address and
-/// the path it writes is the one the lock implies. Nothing is cached on disk:
-/// the unpacked copy is gone before this returns.
+/// Downloads the input's archive, indexes it like Nix unpacks it, checks the
+/// NAR hash against the lock, and registers the tree with one
+/// `AddMultipleToStore` as a `fixed:r:sha256` source, so the daemon recomputes
+/// the content address and the path it writes is the one the lock implies. The
+/// archive is streamed: the only copy is the decompressed tar in an unlinked
+/// temp file, which the NAR is written out of twice, once to hash and once to
+/// send, so a wrong tree never reaches the daemon.
 fn fetch_tarball(ev: &mut Evaluator, sp: &StorePath, attrs: &Attrs, pos: Pos) -> EvalResult<()> {
     let name = input_name(ev, attrs);
     let fail = |e: String| Error::boxed(ErrorKind::Eval, e, pos);
@@ -466,21 +459,19 @@ fn fetch_tarball(ev: &mut Evaluator, sp: &StorePath, attrs: &Attrs, pos: Pos) ->
         .and_then(|h| parse_nar_hash(h).ok())
         .ok_or_else(|| fail(format!("ietsp: input '{name}' has no usable 'narHash'")))?;
 
-    let bytes = crate::flake::http::get(&url, &headers)
-        .and_then(crate::flake::http::decompress)
+    let mut spool = crate::flake::spool::scratch(sp.base_name())
         .map_err(|e| fail(format!("ietsp: cannot fetch input '{name}': {e}")))?;
-    let scratch = Scratch(std::env::temp_dir().join(format!(
-        "ietsp-fetch-{}-{}",
-        std::process::id(),
-        sp.base_name()
-    )));
-    let _ = std::fs::remove_dir_all(&scratch.0);
-    let root = crate::flake::unpack::unpack(bytes, &scratch.0)
+    crate::flake::http::get_decompressed(&url, &headers, &mut spool)
+        .map_err(|e| fail(format!("ietsp: cannot fetch input '{name}': {e}")))?;
+    let tree = crate::flake::spool::Tree::index(spool)
         .map_err(|e| fail(format!("ietsp: cannot unpack input '{name}': {e}")))?;
 
     let object = crate::remote::plan::Object::source(
         sp.clone(),
-        crate::remote::plan::SourceInfo::tree(&root),
+        crate::remote::plan::SourceInfo {
+            data: crate::remote::plan::SourceData::Nar(std::sync::Arc::new(tree)),
+            kind: crate::remote::plan::SourceKind::Source,
+        },
     )
     .map_err(|e| {
         Error::boxed(

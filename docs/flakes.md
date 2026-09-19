@@ -133,7 +133,22 @@ host alone. Its header is the one each forge wants
 `Authorization: Bearer T`, `PAT:T` -> `Private-token: T`, anything else
 split on the first colon as a header of its own.
 
-`src/flake/unpack.rs` walks the tar as `tarfile.cc:unpackTarfileToSink`
+The download is streamed. hyper runs on a thread of its own and hands its
+body frames to a queue of 16, the fetching thread reads that queue through the
+decompressor, and the decompressed tar goes into one temp file in `TMPDIR`,
+unlinked the moment it is open. `src/flake/spool.rs` then reads that file once
+to record where every member's bytes are, and writes the NAR straight out of
+the index, reading each file's bytes back by offset: no tree is ever unpacked.
+It writes the NAR twice, once into the hasher and, only if the hash matches
+the lock, once into the `AddMultipleToStore` stream, so a wrong tree never
+reaches the daemon; the second pass is disk against a download. Peak memory is
+therefore the queue plus the index, a few hundred bytes per member and nothing
+per byte: a full nixpkgs revision costs 19 MB of index over the evaluator's
+own 75 MB, where unpacking a tree cost 307 MB (13.5 s and 382 MB peak RSS
+before, 7.7 s and 94 MB after).
+
+`src/flake/spool.rs` applies the rules of `src/flake/unpack.rs`, which walks
+the tar as `tarfile.cc:unpackTarfileToSink`
 does and keeps exactly what the git tree behind a locked input keeps
 (`git-utils.cc:GitFileSystemObjectSinkImpl`), because that tree is what the
 lock's `narHash` hashes (`tarball.cc` calls `dereferenceSingletonDirectory`
@@ -161,8 +176,10 @@ mismatch names both hashes and registers nothing. A match is registered with
 one `AddMultipleToStore` as a `fixed:r:sha256` source, the same call
 `src/remote/worker/build.rs` makes for an eval-time source, so the daemon
 recomputes the content address and writes the path the lock implies. Nothing
-is cached on disk beyond the store: the unpacked copy is gone before the
-fetch returns, and the tracing cache keys are unaffected.
+is cached on disk beyond the store: the spool is unlinked before it is written
+to, so it is gone when the fetch returns, and the tracing cache keys are
+unaffected. `spool_matches_the_tree` holds both readers to the same NAR bytes,
+member for member.
 
 `file` is not in this set. Its store path is the flat hash of the bytes under
 the input's name (`tarball.cc:FileInputScheme`), which the lock's `narHash`

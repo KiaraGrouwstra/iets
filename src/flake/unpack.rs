@@ -26,7 +26,7 @@ fn bad(why: String) -> Error {
 /// `std::filesystem::path(name).relative_path()` plus libarchive's
 /// `ARCHIVE_EXTRACT_SECURE_NODOTDOT` (tarfile.cc:135, 156): the member path with
 /// any root stripped, `.` dropped, and `..` refused.
-fn member_path(name: &Path) -> Result<PathBuf> {
+pub(crate) fn member_path(name: &Path) -> Result<PathBuf> {
     let mut out = PathBuf::new();
     for c in name.components() {
         match c {

@@ -8,6 +8,7 @@ pub mod fetch;
 pub mod http;
 pub mod lock;
 pub mod root;
+pub mod spool;
 pub mod unpack;
 
 use std::path::{Path, PathBuf};
