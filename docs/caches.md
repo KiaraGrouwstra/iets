@@ -75,9 +75,10 @@ entry simply misses next time.
 
 By hand: `ietsp cache gc [--ttl DAYS] [--dry-run] [--cache-dir DIR]`.
 
-A sweep only ever removes a name that looks like a key (64 hex characters,
-62 under a shard), so `version`, `lock`, `gc-stamp`, the `ir/` store under
-a shared `--cache-dir`, and anything else in the directory survive.
+A sweep only ever removes a name that looks like one of that store's keys (64
+hex characters, 62 under a shard, a store path base name in the input store), so
+`version`, `lock`, `gc-stamp`, the `ir/` and `inputs/` stores under a shared
+`--cache-dir`, and anything else in the directory survive.
 
 Cost on a tracing store of 10,000 entries (4 KiB each, 39.1 MiB of
 payload, 80 MB on disk), warm page cache, 16-core EPYC:

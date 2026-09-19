@@ -312,11 +312,19 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   $res ++= [(verdict $virt_ok "tarball: the fetch wrote the input store, not /nix/store" $"input store entry ($tb_entry)")]
 
   # `ietsp build --no-build` is the only thing that uploads an input, and it
-  # sends the NAR out of that spool: the daemon never saw the path before.
+  # sends the NAR out of that spool. The lock is written by hand from
+  # `nix hash path` of the tree the tar holds, so nix never fetches this input
+  # and its store path is one the daemon has never seen.
   let upf = $"($work)/upflake"
-  mkdir $upf
+  mkdir $upf $"($work)/tb3src/sub"
+  "hello3\n" | save $"($work)/tb3src/a"
+  "y\n" | save $"($work)/tb3src/sub/b"
+  ^tar -C $work -czf $"($work)/tb3.tar.gz" tb3src
+  # dereferenceSingletonDirectory strips the one top-level entry, so the lock's
+  # narHash is the hash of what is inside it.
+  let tb3_hash = (nixf hash path --type sha256 --sri $"($work)/tb3src" | complete | get stdout | chomp)
   r#'{
-  inputs.tb.url = "file://@WORK@/tb2.tar.gz";
+  inputs.tb.url = "file://@WORK@/tb3.tar.gz";
   inputs.tb.flake = false;
   outputs = { self, tb }: {
     packages.x86_64-linux.default = derivation {
@@ -328,9 +336,14 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   };
 }
 '# | str replace -a "@WORK@" $work | save $"($upf)/flake.nix"
-  do { cd $upf; nixf flake lock } | complete | ignore
-  let up_path = (input-path $upf "tb")
-  nixf store delete $up_path | complete | ignore
+  {
+    nodes: {
+      tb: { flake: false, locked: { type: "tarball", url: $"file://($work)/tb3.tar.gz", narHash: $tb3_hash }, original: { type: "tarball", url: $"file://($work)/tb3.tar.gz" } }
+      root: { inputs: { tb: "tb" } }
+    }
+    root: "root"
+    version: 7
+  } | to json | save $"($upf)/flake.lock"
   let ub = (^$ietsp build --no-build --timings $"($upf)#packages.x86_64-linux.default" | complete)
   let resolve = ($ub.stderr | lines | where $it =~ '^resolve:' | get -o 0 | default "")
   let add = ($ub.stderr | lines | where $it =~ '^add:' | get -o 0 | default "")
