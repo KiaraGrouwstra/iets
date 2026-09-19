@@ -124,6 +124,11 @@ pub struct Evaluator {
     pub input_names: crate::parallel::shared::SharedMap<String, String>,
     /// Lint levels and the warnings emitted so far (docs/lints.md).
     pub lints: crate::lint::Lints,
+    /// Store path base name -> lock node name of the flake root and every
+    /// locked input, when the entry is a flake: the trees whose files are
+    /// the user's or an input's (lint scope) and whose paths are not
+    /// re-copies.
+    pub flake_trees: crate::parallel::shared::SharedMap<Vec<u8>, String>,
     pub drv: crate::builtins::derivation::DrvState,
     pub par: crate::parallel::Ctx,
     /// Read-set recorder for the tracing cache; off unless `main` enables it.
@@ -190,6 +195,7 @@ impl Evaluator {
             sources: Default::default(),
             input_names: Default::default(),
             lints: Default::default(),
+            flake_trees: Default::default(),
             drv: Default::default(),
             par: Default::default(),
             trace: Default::default(),
@@ -269,7 +275,7 @@ impl Evaluator {
             .map_err(|e| Error::boxed(ErrorKind::Parse, e.msg, Pos(base + e.span.start)))?;
         let t0 = std::time::Instant::now();
         let before = self.arena.bytes_allocated;
-        let lints = lint.then_some(&self.lints.config);
+        let lints = lint.then(|| self.config_for_file(path));
         let mut c = Compiler::new(
             &ast,
             &mut self.arena,
@@ -277,7 +283,7 @@ impl Evaluator {
             &self.globals,
             base,
             base_dir,
-            lints,
+            lints.as_ref(),
         );
         let r = c.compile_root(extra_scope);
         let used_home = c.used_home.get();
@@ -302,10 +308,11 @@ impl Evaluator {
 
     /// `compile_source` for an imported file, through the IR cache when it
     /// is on: an entry keyed on the source and the compile-time lint levels
-    /// is loaded instead of parsing and compiling, and a fresh compile
-    /// writes one. The entry carries the lint warnings the compile
-    /// produced, so a load reports them again. Files with `~/` paths
-    /// bypass it. Embedded corepkgs are never linted.
+    /// the file gets (after the scope rule, so a store file under `scope =
+    /// "root"` keys like an unlinted one) is loaded instead of parsing and
+    /// compiling, and a fresh compile writes one. The entry carries the
+    /// lint warnings the compile produced, so a load reports them again.
+    /// Files with `~/` paths bypass it. Embedded corepkgs are never linted.
     pub fn compile_file(
         &mut self,
         path: &[u8],
@@ -322,7 +329,7 @@ impl Evaluator {
             return self.compile_source(path, src, base_dir, None);
         }
         let t0 = std::time::Instant::now();
-        let lint_key = self.lints.config.compile_key();
+        let lint_key = self.config_for_file(path).compile_key();
         let key = cache.key(path, &src, self.current_system, &self.store_dir, &lint_key);
         let file = self.add_file(path, &src);
         let base = self.files[file.0 as usize].base;

@@ -2,7 +2,9 @@
 //! The registry lives here, one line per lint; each family file holds
 //! the trigger logic its hooks call. Levels resolve from the built-in
 //! default, then `[lint]` in `ietsp.toml`, then `IETSP_LINT`, then
-//! `--lint`. See docs/lints.md.
+//! `--lint`. A site is reported only inside the lint roots unless the
+//! scope is `all` or the site's locked input has its own levels. See
+//! docs/lints.md.
 
 pub mod coerce;
 pub mod legacy;
@@ -17,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
-use crate::syntax::symbol::FxHasher;
+use crate::syntax::symbol::{FxHashMap, FxHasher};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Level {
@@ -144,7 +146,7 @@ registry! {
     ShadowBuiltin: "shadow-builtin", Scope, Compiler, Off, "a let, rec, or formal binding named like a global (`map`, `__add`, `builtins`, ...)";
     ShadowBinding: "shadow-binding", Scope, Compiler, Off, "a binding that hides an outer lexical binding of the same name (`_`-prefixed names excepted)";
     UnusedBinding: "unused-binding", Scope, Compiler, Off, "a `let` binding its scope never references (`_`-prefixed names excepted)";
-    UnusedFormal: "unused-formal", Scope, Compiler, Off, "a formal the lambda never references, when no `@` binding is used either";
+    UnusedFormal: "unused-formal", Scope, Compiler, Off, "a formal the lambda never references, when no `@` binding is used either; remove it from the pattern";
     RecUnused: "rec-unused", Scope, Compiler, Off, "`rec` on a set where no binding references a sibling";
     PathCopy: "path-copy", Coerce, Evaluator, Off, "a path coerced to a string with a copy to the store (interpolation, `+`, derivation attrs)";
     StorePathRecopy: "store-path-recopy", Coerce, Evaluator, Off, "a path already under the store copied again, which doubles the hash in its name";
@@ -210,12 +212,58 @@ pub fn by_name(name: &str) -> Option<LintId> {
         .or_else(|| ALIASES.iter().find(|(a, _)| *a == name).map(|(_, id)| *id))
 }
 
-/// The effective level of every lint plus the lint knobs.
+/// Which files a lint site is reported in.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Scope {
+    /// Sites inside a lint root only; a locked input's own levels
+    /// (`[lint.inputs.<node>]`) open that input's tree.
+    #[default]
+    Root,
+    /// Every site, the store included.
+    All,
+}
+
+impl Scope {
+    pub fn parse(s: &str) -> Option<Scope> {
+        match s {
+            "root" => Some(Scope::Root),
+            "all" => Some(Scope::All),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Scope::Root => "root",
+            Scope::All => "all",
+        }
+    }
+}
+
+/// Where a lint site lies, for the scope rule.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Where {
+    /// Under a lint root, through the virtual copies.
+    Root,
+    /// Inside the tree of the locked input at this index of `Config::inputs`.
+    Input(usize),
+    /// The store, an input without its own levels, a pseudo-file.
+    Elsewhere,
+}
+
+/// The effective level of every lint plus the lint knobs and the scope.
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Config {
     pub levels: [Level; N],
     /// `large-source-copy`: the NAR size a copy may reach.
     pub max_bytes: u64,
+    pub scope: Scope,
+    /// Canonical absolute directories: the entry directory, then `roots`
+    /// of `ietsp.toml`, then `--lint-root`.
+    pub roots: Vec<Vec<u8>>,
+    /// `[lint.inputs.<node>]`: the levels that hold inside that locked
+    /// input's tree, by lock node name; `None` leaves the scope rule.
+    pub inputs: Vec<(String, [Option<Level>; N])>,
 }
 
 impl Default for Config {
@@ -227,8 +275,41 @@ impl Default for Config {
         Config {
             levels,
             max_bytes: DEFAULT_MAX_BYTES,
+            scope: Scope::Root,
+            roots: Vec::new(),
+            inputs: Vec::new(),
         }
     }
+}
+
+/// `all`, `family:NAME`, a lint name, or a Nix alias.
+pub fn select(selector: &str) -> Result<Vec<LintId>, String> {
+    if selector == "all" {
+        return Ok(LINTS.iter().map(|d| d.id).collect());
+    }
+    if let Some(f) = selector.strip_prefix("family:") {
+        let Some(f) = Family::parse(f) else {
+            return Err(format!("unknown lint family '{f}'"));
+        };
+        return Ok(LINTS
+            .iter()
+            .filter(|d| d.family == f)
+            .map(|d| d.id)
+            .collect());
+    }
+    match by_name(selector) {
+        Some(id) => Ok(vec![id]),
+        None => Err(format!("unknown lint '{selector}'")),
+    }
+}
+
+fn parse_level(level: &str, name: &str) -> Result<Level, String> {
+    Level::parse(level)
+        .ok_or_else(|| format!("invalid lint level '{level}' for '{name}': use off, warn or error"))
+}
+
+fn under(path: &[u8], dir: &[u8]) -> bool {
+    path.starts_with(dir) && (path.len() == dir.len() || path[dir.len()] == b'/')
 }
 
 impl Config {
@@ -243,26 +324,85 @@ impl Config {
 
     /// `all`, `family:NAME`, a lint name, or a Nix alias.
     pub fn set(&mut self, selector: &str, level: Level) -> Result<(), String> {
-        if selector == "all" {
-            self.levels = [level; N];
-            return Ok(());
+        for id in select(selector)? {
+            self.levels[id as usize] = level;
         }
-        if let Some(f) = selector.strip_prefix("family:") {
-            let Some(f) = Family::parse(f) else {
-                return Err(format!("unknown lint family '{f}'"));
+        Ok(())
+    }
+
+    /// Adds a lint root; `dir` is made canonical.
+    pub fn add_root(&mut self, dir: &[u8]) {
+        let dir = crate::compile::canon_path(dir);
+        if !self.roots.contains(&dir) {
+            self.roots.push(dir);
+        }
+    }
+
+    pub fn input_index(&self, name: &str) -> Option<usize> {
+        self.inputs.iter().position(|(n, _)| n == name)
+    }
+
+    /// Whether any site can be silenced by where it lies: false with
+    /// `scope = "all"` and no input levels, the fast path.
+    #[inline]
+    pub fn scoped(&self) -> bool {
+        self.scope == Scope::Root || !self.inputs.is_empty()
+    }
+
+    /// The level of `id` at a site that lies at `w`.
+    pub fn site_level(&self, id: LintId, w: Where) -> Level {
+        let global = self.level(id);
+        let outside = match self.scope {
+            Scope::All => global,
+            Scope::Root => Level::Off,
+        };
+        match w {
+            Where::Root => global,
+            Where::Input(i) => self.inputs[i].1[id as usize].unwrap_or(outside),
+            Where::Elsewhere => outside,
+        }
+    }
+
+    /// Whether a lint root contains `path` (a local, canonical path).
+    pub fn in_root(&self, path: &[u8]) -> bool {
+        self.roots.iter().any(|r| under(path, r))
+    }
+
+    /// The configuration a file at `w` is compiled under: every level
+    /// replaced by its `site_level`.
+    pub fn for_where(&self, w: Where) -> Config {
+        let mut c = self.clone();
+        if w != Where::Root && self.scoped() {
+            for d in LINTS {
+                c.levels[d.id as usize] = self.site_level(d.id, w);
+            }
+        }
+        c
+    }
+
+    fn apply_inputs(&mut self, t: &toml::Table) -> Result<(), String> {
+        for (input, levels) in t {
+            let Some(levels) = levels.as_table() else {
+                return Err(format!("'inputs.{input}' is not a table"));
             };
-            for d in LINTS.iter().filter(|d| d.family == f) {
-                self.levels[d.id as usize] = level;
+            let mut arr = [None; N];
+            for (selector, level) in levels {
+                let Some(level) = level.as_str() else {
+                    return Err(format!(
+                        "lint '{selector}' of input '{input}' must be a level string"
+                    ));
+                };
+                let level = parse_level(level, selector)?;
+                for id in select(selector)? {
+                    arr[id as usize] = Some(level);
+                }
             }
-            return Ok(());
-        }
-        match by_name(selector) {
-            Some(id) => {
-                self.levels[id as usize] = level;
-                Ok(())
+            match self.input_index(input) {
+                Some(i) => self.inputs[i].1 = arr,
+                None => self.inputs.push((input.clone(), arr)),
             }
-            None => Err(format!("unknown lint '{selector}'")),
         }
+        Ok(())
     }
 
     /// `NAME=LEVEL`, as `--lint` and `IETSP_LINT` take it.
@@ -287,8 +427,10 @@ impl Config {
     }
 
     /// The `[lint]` table of an `ietsp.toml`: `name = "level"`, or
-    /// `name = { level = "warn", max-bytes = 1000 }` for a lint with knobs.
+    /// `name = { level = "warn", max-bytes = 1000 }` for a lint with knobs,
+    /// plus `scope`, `roots` (relative to the file) and `inputs.<node>`.
     pub fn apply_toml(&mut self, text: &str, origin: &Path) -> Result<(), String> {
+        use std::os::unix::ffi::OsStrExt;
         let at = |m: String| format!("{}: {m}", origin.display());
         let table: toml::Table = text.parse().map_err(|e| at(format!("{e}")))?;
         let Some(lint) = table.get("lint") else {
@@ -298,27 +440,38 @@ impl Config {
             return Err(at("'lint' is not a table".into()));
         };
         for (name, value) in lint {
-            match value {
-                toml::Value::String(level) => {
-                    let Some(level) = Level::parse(level) else {
-                        return Err(at(format!(
-                            "invalid lint level '{level}' for '{name}': use off, warn or error"
-                        )));
+            match (name.as_str(), value) {
+                ("scope", toml::Value::String(s)) => {
+                    let Some(s) = Scope::parse(s) else {
+                        return Err(at(format!("invalid lint scope '{s}': use root or all")));
                     };
+                    self.scope = s;
+                }
+                ("scope", _) => return Err(at("'scope' must be \"root\" or \"all\"".into())),
+                ("roots", toml::Value::Array(dirs)) => {
+                    let base = origin.parent().unwrap_or(Path::new("/"));
+                    for d in dirs {
+                        let Some(d) = d.as_str() else {
+                            return Err(at("'roots' must be a list of strings".into()));
+                        };
+                        self.add_root(base.join(d).as_os_str().as_bytes());
+                    }
+                }
+                ("roots", _) => return Err(at("'roots' must be a list of strings".into())),
+                ("inputs", toml::Value::Table(t)) => self.apply_inputs(t).map_err(at)?,
+                ("inputs", _) => return Err(at("'inputs' must be a table".into())),
+                (_, toml::Value::String(level)) => {
+                    let level = parse_level(level, name).map_err(at)?;
                     self.set(name, level).map_err(at)?;
                 }
-                toml::Value::Table(t) => {
+                (_, toml::Value::Table(t)) => {
                     if by_name(name).is_none() {
                         return Err(at(format!("unknown lint '{name}'")));
                     }
                     for (k, v) in t {
                         match (name.as_str(), k.as_str(), v) {
                             (_, "level", toml::Value::String(level)) => {
-                                let Some(level) = Level::parse(level) else {
-                                    return Err(at(format!(
-                                        "invalid lint level '{level}' for '{name}': use off, warn or error"
-                                    )));
-                                };
+                                let level = parse_level(level, name).map_err(at)?;
                                 self.set(name, level).map_err(at)?;
                             }
                             ("large-source-copy", "max-bytes", toml::Value::Integer(n)) => {
@@ -341,9 +494,20 @@ impl Config {
     }
 
     /// Default, then `ietsp.toml` found by walking up from `start`, then
-    /// `IETSP_LINT`, then `flags` in order.
-    pub fn resolve(start: Option<&Path>, flags: &[(String, Level)]) -> Result<Config, String> {
+    /// `IETSP_LINT`, then `flags` in order. `start` is the first lint
+    /// root; `roots` (`--lint-root`) follow and `scope` (`--lint-scope`)
+    /// wins over the file's.
+    pub fn resolve(
+        start: Option<&Path>,
+        flags: &[(String, Level)],
+        roots: &[Vec<u8>],
+        scope: Option<Scope>,
+    ) -> Result<Config, String> {
+        use std::os::unix::ffi::OsStrExt;
         let mut c = Config::default();
+        if let Some(dir) = start {
+            c.add_root(dir.as_os_str().as_bytes());
+        }
         if let Some(file) = start.and_then(find_config_file) {
             let text =
                 std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
@@ -355,14 +519,32 @@ impl Config {
         for (selector, level) in flags {
             c.set(selector, *level)?;
         }
+        for r in roots {
+            c.add_root(r);
+        }
+        if let Some(s) = scope {
+            c.scope = s;
+        }
         Ok(c)
     }
 
-    /// One byte per lint plus the knobs: the cache key field.
+    /// One byte per lint plus the knobs and the scope: the cache key field.
     pub fn key(&self) -> String {
         let mut s: String = self.levels.iter().map(|l| level_char(*l)).collect();
         s.push(':');
         s.push_str(&self.max_bytes.to_string());
+        s.push(':');
+        s.push_str(self.scope.name());
+        for r in &self.roots {
+            s.push(':');
+            s.push_str(&String::from_utf8_lossy(r));
+        }
+        for (name, levels) in &self.inputs {
+            s.push(':');
+            s.push_str(name);
+            s.push('=');
+            s.extend(levels.iter().map(|l| l.map_or('-', level_char)));
+        }
         s
     }
 
@@ -430,6 +612,23 @@ pub fn list(c: &Config) -> String {
             d.doc
         ));
     }
+    out.push_str(&format!("scope: {}", c.scope.name()));
+    if c.scope == Scope::Root {
+        let roots: Vec<_> = c
+            .roots
+            .iter()
+            .map(|r| String::from_utf8_lossy(r).into_owned())
+            .collect();
+        out.push_str(&format!(" (roots: {})", roots.join(", ")));
+    }
+    out.push('\n');
+    for (name, levels) in &c.inputs {
+        let on: Vec<String> = LINTS
+            .iter()
+            .filter_map(|d| levels[d.id as usize].map(|l| format!("{}={}", d.name, l.name())))
+            .collect();
+        out.push_str(&format!("input {name}: {}\n", on.join(", ")));
+    }
     out
 }
 
@@ -473,9 +672,12 @@ impl Drop for Emitted {
 pub struct Lints {
     pub config: Config,
     shared: Arc<Mutex<Emitted>>,
-    /// Sites this fiber saw reported: a hit skips the shared lock, and a
-    /// firing site is evaluated many times more than it is reported.
+    /// Sites this fiber saw reported or silenced: a hit skips the shared
+    /// lock, and a firing site is evaluated many times more than it is
+    /// reported.
     local_seen: SiteSet,
+    /// `Where` of every file this fiber classified, by the file's base.
+    where_cache: FxHashMap<u32, Where>,
 }
 
 impl Default for Lints {
@@ -495,6 +697,7 @@ impl Lints {
                 pending: Vec::new(),
             })),
             local_seen: SiteSet::default(),
+            where_cache: FxHashMap::default(),
         }
     }
 
@@ -546,6 +749,12 @@ impl Lints {
         false
     }
 
+    /// A site outside the scope: seen, so no fiber classifies it again.
+    fn silence(&mut self, id: LintId, pos: Pos) {
+        self.local_seen.insert((id, pos));
+        self.shared.lock().unwrap().seen.insert((id, pos));
+    }
+
     /// Records the site and queues its line; false when another fiber
     /// recorded it first.
     fn record(&mut self, id: LintId, pos: Pos, line: String) -> bool {
@@ -583,30 +792,133 @@ impl Evaluator {
         self.lints.on(id)
     }
 
-    /// Reports a lint site: nothing at `off`, one warning per (lint, pos)
-    /// at `warn`, an error `tryEval` does not catch at `error`.
+    /// Reports a lint site: nothing at `off` or outside the scope, one
+    /// warning per (lint, pos) at `warn`, an error `tryEval` does not
+    /// catch at `error`.
     #[inline]
     pub fn lint(&mut self, id: LintId, pos: Pos, msg: impl FnOnce() -> String) -> EvalResult<()> {
-        match self.lints.level(id) {
-            Level::Off => Ok(()),
+        if self.lints.level(id) == Level::Off {
+            return Ok(());
+        }
+        self.lint_site(id, pos, msg)
+    }
+
+    /// Any fiber reports: the site set keeps a warning to one line, so a
+    /// helper reporting a site the demand path reaches again costs
+    /// nothing, and bailing like `trace` does (docs/parallel.md, Effects)
+    /// cost 15 % of the wall on nixos-desktop at 4 workers. A site the
+    /// scope silences enters the set too; an `error` site never does, so
+    /// every fiber that reaches it fails.
+    #[inline(never)]
+    fn lint_site(&mut self, id: LintId, pos: Pos, msg: impl FnOnce() -> String) -> EvalResult<()> {
+        if self.lints.seen(id, pos) {
+            return Ok(());
+        }
+        match self.site_level(id, pos) {
+            Level::Off => {
+                self.lints.silence(id, pos);
+                Ok(())
+            }
             Level::Warn => {
-                self.lint_warn(id, pos, msg);
+                self.lint_print(id, pos, msg());
                 Ok(())
             }
             Level::Error => Err(error(id, pos, &msg())),
         }
     }
 
-    /// Any fiber reports: the site set keeps a warning to one line, so a
-    /// helper reporting a site the demand path reaches again costs
-    /// nothing, and bailing like `trace` does (docs/parallel.md, Effects)
-    /// cost 15 % of the wall on nixos-desktop at 4 workers.
-    #[inline(never)]
-    fn lint_warn(&mut self, id: LintId, pos: Pos, msg: impl FnOnce() -> String) {
-        if self.lints.seen(id, pos) {
-            return;
+    /// The level of `id` at the site `pos`, after the scope rule.
+    pub fn site_level(&mut self, id: LintId, pos: Pos) -> Level {
+        if !self.lints.config.scoped() {
+            return self.lints.level(id);
         }
-        self.lint_print(id, pos, msg());
+        let w = self.where_of(pos);
+        self.lints.config.site_level(id, w)
+    }
+
+    /// Where the file of `pos` lies, classified once per file and fiber.
+    pub fn where_of(&mut self, pos: Pos) -> Where {
+        let Some((f, _)) = self.file_of(pos) else {
+            return Where::Elsewhere;
+        };
+        if let Some(w) = self.lints.where_cache.get(&f.base) {
+            return *w;
+        }
+        let w = self.where_of_path(&f.path);
+        self.lints.where_cache.insert(f.base, w);
+        w
+    }
+
+    /// Where a file lies. The entry expression (`«string»`, `«arg»`) is
+    /// in root, the other pseudo-files are not. A store path resolves
+    /// through the virtual copies to the local tree it stands for, so a
+    /// flake root's files land in the root directory; the tree of a
+    /// locked input the configuration names is `Input`.
+    pub fn where_of_path(&self, path: &[u8]) -> Where {
+        if path.starts_with("\u{ab}".as_bytes()) {
+            let entry =
+                path == "\u{ab}string\u{bb}".as_bytes() || path == "\u{ab}arg\u{bb}".as_bytes();
+            return if entry { Where::Root } else { Where::Elsewhere };
+        }
+        let mut input = None;
+        let mut p = path.to_vec();
+        for _ in 0..8 {
+            let Some(root) = self.store_root_len(&p) else {
+                break;
+            };
+            if input.is_none()
+                && let Some(name) = self.flake_trees.get(&p[self.store_dir.len() + 1..root])
+            {
+                input = self.lints.config.input_index(&name);
+            }
+            let Some(sp) = std::str::from_utf8(&p[..root])
+                .ok()
+                .and_then(|s| crate::store::path::StorePath::parse(s).ok())
+            else {
+                break;
+            };
+            let Some(crate::store::source::SourceOrigin::Tree { local, .. }) =
+                self.sources.get(&sp)
+            else {
+                break;
+            };
+            let mut next = local.as_os_str().as_encoded_bytes().to_vec();
+            next.extend_from_slice(&p[root..]);
+            p = next;
+        }
+        for (store, local) in &crate::settings::get().source_map {
+            if let Some(rest) = p.strip_prefix(store.as_bytes())
+                && (rest.is_empty() || rest[0] == b'/')
+            {
+                let mut next = local.as_bytes().to_vec();
+                next.extend_from_slice(rest);
+                p = next;
+                break;
+            }
+        }
+        if self.lints.config.in_root(&p) {
+            return Where::Root;
+        }
+        match input {
+            Some(i) => Where::Input(i),
+            None => Where::Elsewhere,
+        }
+    }
+
+    /// The lint configuration the file `path` is compiled under.
+    pub fn config_for_file(&self, path: &[u8]) -> Config {
+        if !self.lints.config.scoped() {
+            return self.lints.config.clone();
+        }
+        let w = self.where_of_path(path);
+        self.lints.config.for_where(w)
+    }
+
+    /// The lock node name of the flake root or locked input whose tree
+    /// `path` lies in, when the entry is a flake.
+    pub fn flake_tree_of(&self, path: &[u8]) -> Option<String> {
+        let root = self.store_root_len(path)?;
+        self.flake_trees.get(&path[self.store_dir.len() + 1..root])
     }
 
     /// `file:line:col` of a lint site, the local path for a file inside a
@@ -763,10 +1075,57 @@ mod tests {
         assert_eq!(c.compile_key(), "");
         c.set("path-copy", Level::Warn).unwrap();
         assert_eq!(c.compile_key(), "");
-        let off = c;
+        let off = c.clone();
         c.set("with", Level::Warn).unwrap();
         assert!(c.compile_key().contains('w'));
         assert_ne!(c.key(), off.key());
         assert_eq!(off.key(), off.key());
+        let mut all = c.clone();
+        all.scope = Scope::All;
+        assert_ne!(all.key(), c.key());
+        let mut rooted = c.clone();
+        rooted.add_root(b"/r");
+        assert_ne!(rooted.key(), c.key());
+    }
+
+    #[test]
+    fn scope_and_inputs() {
+        let mut c = Config::default();
+        c.apply_toml(
+            "[lint]\nwith = \"warn\"\nroots = [\"lib\", \"/abs/../x\"]\n[lint.inputs.nixpkgs]\nfod = \"warn\"\n\"family:scope\" = \"off\"\n",
+            Path::new("/repo/ietsp.toml"),
+        )
+        .unwrap();
+        assert_eq!(c.scope, Scope::Root);
+        assert_eq!(c.roots, vec![b"/repo/lib".to_vec(), b"/x".to_vec()]);
+        assert!(c.in_root(b"/repo/lib/a.nix"));
+        assert!(!c.in_root(b"/repo/library/a.nix"));
+        let i = c.input_index("nixpkgs").unwrap();
+        assert_eq!(c.site_level(LintId::With, Where::Root), Level::Warn);
+        assert_eq!(c.site_level(LintId::With, Where::Elsewhere), Level::Off);
+        assert_eq!(c.site_level(LintId::With, Where::Input(i)), Level::Off);
+        assert_eq!(c.site_level(LintId::Fod, Where::Input(i)), Level::Warn);
+        assert_eq!(c.for_where(Where::Input(i)).level(LintId::Fod), Level::Warn);
+        assert_eq!(c.for_where(Where::Elsewhere).compile_key(), "");
+        c.scope = Scope::All;
+        assert_eq!(c.site_level(LintId::With, Where::Elsewhere), Level::Warn);
+        assert_eq!(c.site_level(LintId::With, Where::Input(i)), Level::Off);
+        assert!(
+            c.apply_toml("[lint]\nscope = \"some\"\n", Path::new("t"))
+                .is_err()
+        );
+        assert!(
+            c.apply_toml("[lint]\nroots = \"lib\"\n", Path::new("t"))
+                .is_err()
+        );
+        assert!(
+            c.apply_toml("[lint.inputs.x]\nnope = \"warn\"\n", Path::new("t"))
+                .is_err()
+        );
+        let mut d = Config::default();
+        d.apply_toml("[lint]\nscope = \"all\"\n", Path::new("t"))
+            .unwrap();
+        assert_eq!(d.scope, Scope::All);
+        assert!(!d.scoped());
     }
 }

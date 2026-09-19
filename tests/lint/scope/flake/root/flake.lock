@@ -1,0 +1,23 @@
+{
+  "nodes": {
+    "dep": {
+      "locked": {
+        "lastModified": 1,
+        "narHash": "@HASH@",
+        "path": "@DEP@",
+        "type": "path"
+      },
+      "original": {
+        "path": "@DEP@",
+        "type": "path"
+      }
+    },
+    "root": {
+      "inputs": {
+        "dep": "dep"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

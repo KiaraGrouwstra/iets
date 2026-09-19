@@ -22,6 +22,10 @@ pub struct EvalArgs {
     /// `--lint SELECTOR=LEVEL` in order; applied after `ietsp.toml` and
     /// `IETSP_LINT` (docs/lints.md).
     pub lints: Vec<(String, crate::lint::Level)>,
+    /// `--lint-root DIR`: lint roots after the entry directory.
+    pub lint_roots: Vec<String>,
+    /// `--lint-scope root|all`; `None` keeps `ietsp.toml`'s or the default.
+    pub lint_scope: Option<crate::lint::Scope>,
     pub xp_features: Vec<String>,
     pub workers: usize,
     pub timings: bool,
@@ -47,6 +51,8 @@ impl Default for EvalArgs {
             dump_drvs: None,
             attr: None,
             lints: Vec::new(),
+            lint_roots: Vec::new(),
+            lint_scope: None,
             xp_features: Vec::new(),
             workers: crate::parallel::default_workers(),
             timings: false,
@@ -142,7 +148,9 @@ pub fn entry_dir(a: &EvalArgs) -> std::path::PathBuf {
 
 /// The lint configuration of a run (docs/lints.md).
 pub fn lint_config(a: &EvalArgs) -> Result<crate::lint::Config, Box<Error>> {
-    crate::lint::Config::resolve(Some(&entry_dir(a)), &a.lints)
+    let cwd = cwd();
+    let roots: Vec<Vec<u8>> = a.lint_roots.iter().map(|r| abs_path(r, &cwd)).collect();
+    crate::lint::Config::resolve(Some(&entry_dir(a)), &a.lints, &roots, a.lint_scope)
         .map_err(|m| Error::boxed(crate::eval::ErrorKind::Eval, m, Pos::NONE))
 }
 

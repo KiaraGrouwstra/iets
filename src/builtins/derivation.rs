@@ -208,6 +208,9 @@ struct Builder<'a> {
     /// The structured-attrs JSON object under construction, when
     /// `__structuredAttrs = true`.
     json: Option<Vec<u8>>,
+    /// Where a derivation-attribute lint reports when the attribute's own
+    /// position is out of scope (`lint::coerce::drv_fallback`).
+    lint_fallback: Pos,
 }
 
 impl Builder<'_> {
@@ -353,7 +356,8 @@ fn process_attr(
     }
     if ev.lint_on(crate::lint::LintId::DrvBoolNull) || ev.lint_on(crate::lint::LintId::DrvList) {
         let forced = ev.force(w)?;
-        crate::lint::coerce::drv_value(ev, key, forced, attr_pos)?;
+        let site = crate::lint::coerce::drv_attr_pos(ev, attr_pos, b.lint_fallback);
+        crate::lint::coerce::drv_value(ev, key, forced, site)?;
     }
     // the attribute's own position, so a coercion lint names the binding
     let st = ev.coerce_to_string(w, &mut b.context, attr_pos, "", true, true, true)?;
@@ -416,6 +420,17 @@ fn derivation_strict_internal(
         None => false,
     };
 
+    let path_lint = ev.lint_on(crate::lint::LintId::ImpurePathInDrv)
+        || ev.lint_on(crate::lint::LintId::AbsolutePathInDrv);
+    let lint_fallback = if path_lint
+        || ev.lint_on(crate::lint::LintId::DrvBoolNull)
+        || ev.lint_on(crate::lint::LintId::DrvList)
+        || ev.lint_on(crate::lint::LintId::Fod)
+    {
+        crate::lint::coerce::drv_fallback(ev, attrs, pos, name_pos)
+    } else {
+        Pos::NONE
+    };
     let mut b = Builder {
         s,
         drv: Derivation {
@@ -430,10 +445,9 @@ fn derivation_strict_internal(
         ingestion_method: None,
         outputs: ["out".to_string()].into_iter().collect(),
         json: json_mode.then(|| vec![b'{']),
+        lint_fallback,
     };
 
-    let path_lint = ev.lint_on(crate::lint::LintId::ImpurePathInDrv)
-        || ev.lint_on(crate::lint::LintId::AbsolutePathInDrv);
     for attr in lexicographic_order(ev, attrs) {
         if attr.sym == s.ignore_nulls {
             continue;
@@ -457,8 +471,9 @@ fn derivation_strict_internal(
                     _ => None,
                 })
                 .collect();
+            let site = crate::lint::coerce::drv_attr_pos(ev, attr.pos, b.lint_fallback);
             for p in impure {
-                crate::lint::purity::path_in_drv(ev, drv_name, &key, p, attr.pos)?;
+                crate::lint::purity::path_in_drv(ev, drv_name, &key, p, site)?;
             }
         }
     }
@@ -554,7 +569,8 @@ fn derivation_strict_internal(
                 IngestionMethod::Flat => "flat",
                 IngestionMethod::Recursive => "recursive",
             };
-            crate::lint::purity::fod(ev, drv_name, mode, algo, name_pos)?;
+            let site = crate::lint::coerce::drv_attr_pos(ev, name_pos, lint_fallback);
+            crate::lint::purity::fod(ev, drv_name, mode, algo, site)?;
         }
         let out = DerivationOutput::Fixed { method, hash };
         let path = out

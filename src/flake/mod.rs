@@ -185,6 +185,12 @@ pub fn eval_flake_value(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
     })?;
     for (hash, name) in lock.nar_hash_names() {
         ev.input_names.insert(hash.to_string(), name.to_string());
+        if let Ok(h) = fetch::parse_nar_hash(hash)
+            && let Ok(sp) = fetch::source_store_path(&h)
+        {
+            ev.flake_trees
+                .insert(sp.base_name().as_bytes().to_vec(), name.to_string());
+        }
     }
 
     let (source_info, subdir) = root::source_info(ev, &fr.source, pos)?;
@@ -208,6 +214,11 @@ pub fn eval_flake_value(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
             .bytes
             .to_vec()
     };
+    if let Some(base) = out_path.strip_prefix(ev.store_dir.as_slice())
+        && let Some(base) = base.strip_prefix(b"/")
+    {
+        ev.flake_trees.insert(base.to_vec(), lock.root.clone());
+    }
     let mut flake_dir = out_path.clone();
     if !subdir.is_empty() {
         flake_dir.push(b'/');

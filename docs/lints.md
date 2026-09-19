@@ -30,8 +30,62 @@ A selector is a lint name, `all`, `family:NAME` (`path`, `scope`,
 `--lint-short-path-literals MODE` and `--lint-url-literals MODE` still
 work: each is `--lint <nix name>=MODE`.
 
-`ietsp lint list [--lint ...] [PATH]` prints the registry with the levels
-a run from `PATH` (default cwd) gets.
+`ietsp lint list [--lint ...] [--lint-root DIR]... [--lint-scope root|all]
+[PATH]` prints the registry with the levels a run from `PATH` (default
+cwd) gets, then the scope and its roots.
+
+## Scope
+
+A level says whether a lint runs; the scope says where its sites are
+reported. The default scope is `root`: a site is reported only when it
+lies inside a lint root. The first root is the entry's directory: the
+flake directory when the entry is a flake reference (its tracked tree,
+which the evaluation also serves as a virtual copy under `/nix/store`),
+else the directory of the entry file, or cwd for `-E` (the expression
+itself is in root). Everything else under `/nix/store` is silent: the
+locked inputs, nixpkgs, corepkgs, `«derivation-internal»`. So `--lint
+all=warn` on a NixOS configuration reports the sites in that repository
+and nothing from its inputs.
+
+- `--lint-root DIR` (repeatable) adds a root; `roots = ["dir", ...]` in
+  `ietsp.toml` does the same, relative to the file.
+- `--lint-scope all`, or `scope = "all"`, reports every site.
+- `[lint.inputs.<node>]`, with the same `name = level` keys (selectors
+  included), gives the tree of that locked input its own levels; `<node>`
+  is the lock file's node name. A lint not named there follows the scope.
+
+A site's file is "in root" when its path, resolved through the virtual
+copies to the local tree it stands for, lies under a root directory. So
+`/nix/store/<hash>-source/modules/x.nix` of the root flake is in root, a
+`path:` input checked out beside the repository is not, and one inside
+the flake directory is (containment wins). A relative `path:` input lives
+under its parent's tree and follows it.
+
+The scope resolves with the levels (default, `ietsp.toml`, `IETSP_LINT`,
+`--lint`); `--lint-scope` and `--lint-root` come last. It is part of
+both cache keys: a file is compiled under the levels its location gets,
+so a store file under `scope = "root"` keys the IR cache like an unlinted
+one and its entry holds no warnings, and the tracing-cache key holds the
+scope, the roots and the input tables, because another scope is another
+warning set.
+
+For a compile-time lint the site is the node's position; for a runtime
+lint it is the call's position. The derivation-attribute lints
+(`drv-bool-null`, `drv-list`, `impure-path-in-drv`,
+`absolute-path-in-drv`, `fod`) are the exception: nixpkgs's
+`mkDerivation` and `fetchurl` bind the attributes of every derivation
+they make, so the attribute's position is in nixpkgs even when the value
+came from the user's file. When that position is out of scope the site
+falls back to the derivation's own position: the `derivationStrict` call
+when it is in a root (a direct call), else the `name` attribute, else the
+first attribute of the set (in the set's order) whose position is in a
+root, which `mkDerivation` keeps for the attributes it passes through
+(`pname`, `src`, ...). One site per (lint, position), so a derivation
+with several list attributes bound in nixpkgs gets one `drv-list` line
+naming the first. The evaluator keeps no call trace: a derivation whose
+attribute set holds no position from a root, such as a nixpkgs fetcher
+call (`fetchurl { url; hash }`), stays silent under `scope = "root"`;
+`[lint.inputs.nixpkgs] fod = "warn"` reports those at nixpkgs's site.
 
 ## Configuration file
 
@@ -41,6 +95,11 @@ a run from `PATH` (default cwd) gets.
 with = "warn"
 unused-binding = "error"
 large-source-copy = { level = "warn", max-bytes = 1048576 }
+scope = "root"          # or "all"
+roots = ["../shared"]   # relative to this file
+
+[lint.inputs.nixpkgs]   # levels inside that locked input's tree
+fod = "warn"
 ```
 
 A value is a level string, or a table with `level` and the lint's knobs.
@@ -73,10 +132,10 @@ are part of the IR cache key and their warnings are stored in the entry;
 | `shadow-builtin` | scope | compiler | off | a let, rec, formal or argument binding named like a global (`map`, `__add`, `builtins`, `true`, ...) |
 | `shadow-binding` | scope | compiler | off | a binding that hides an outer lexical binding of the same name; `_`-prefixed names are exempt, `x: let x = ...` is not |
 | `unused-binding` | scope | compiler | off | a `let` binding never referenced in its scope (`_`-prefixed exempt; a self-reference counts) |
-| `unused-formal` | scope | compiler | off | a formal never referenced in the body or a default, unless the `@name` binding is referenced |
+| `unused-formal` | scope | compiler | off | a formal never referenced in the body or a default, unless the `@name` binding is referenced; no `_` exemption, a formal is the caller's contract and `{ _pkgs, ... }:` still demands the attribute, so remove it from the pattern |
 | `rec-unused` | scope | compiler | off | `rec { }` where no binding references a sibling (`__overrides` counts as a reference) |
-| `path-copy` | coerce | evaluator | off | a path coerced to a string with a copy to the store: interpolation, `+`, a derivation attribute; not `toString` |
-| `store-path-recopy` | coerce | evaluator | off | a path or `builtins.path`/`filterSource` argument already under the store dir copied again (`"${<nixpkgs>}"`), which doubles the hash in the name |
+| `path-copy` | coerce | evaluator | off | a path coerced to a string with a copy to the store: interpolation, `+`, a derivation attribute; not `toString`. Under a flake root or a locked input `"${./file}"` is the normal reference: silent for a regular file, and a directory is reported as copied whole (use `builtins.path` with a filter) |
+| `store-path-recopy` | coerce | evaluator | off | a path or `builtins.path`/`filterSource` argument already under the store dir copied again (`"${<nixpkgs>}"`, a `builtins.storePath` or pre-existing store path), which doubles the hash in the name; not for the flake root's or a locked input's virtual copy, whose paths already are store paths by construction |
 | `read-through-copy` | coerce | evaluator | off | readFile, readDir, pathExists, readFileType, hashFile, import, `builtins.path` or `filterSource` on a store copy this evaluation made by coercion, `builtins.path` or `filterSource` (flake roots and inputs excepted) |
 | `drv-bool-null` | coerce | evaluator | off | a Boolean or null coerced into a derivation attribute (`"1"`, `""`); null only outside `__ignoreNulls`; not with `__structuredAttrs` |
 | `drv-list` | coerce | evaluator | off | a list space-joined into a derivation attribute; `args` and `outputs` excepted |
@@ -123,7 +182,8 @@ language tests defaults to `off`; only lints that fire nowhere may default
 to `warn`. `url-literal`, `absolute-path-literal` and `short-path-literal`
 keep Nix's default (`off`).
 
-Warnings printed per lint with `--lint all=warn`, pinned nixpkgs
+Warnings printed per lint with `--lint all=warn --lint-scope all`
+(the default scope reports nothing from a store tree), pinned nixpkgs
 (`/nix/store/ah3pxz4x…-source`), release build, 2026-09-19. Desktop is
 `bench/workloads/nixos-desktop.nix` at `--workers 1`; outpaths is
 `eval-jobs --no-instantiate --workers 4 --max-memory-size 0 --chunks 8
@@ -180,6 +240,25 @@ a checkout outside the store. `ifd` never fires on these workloads
 because ietsp cannot build (an IFD is an `Unsupported` error), `git-in-
 source` because a git flake root is a filtered tree.
 
+`impure-path-in-drv` and `absolute-path-in-drv` are zero above for the
+same reason: the text of a store path is not a checkout path. Measured
+on a plain copy of the pinned tree under `~/tmp` (`cp -r`, so no `.git`),
+with `-I nixpkgs=<copy> --lint-scope all --lint impure-path-in-drv=warn
+--lint absolute-path-in-drv=warn`, same workloads, 2026-09-19:
+
+| lint | desktop | outpaths 0/8 |
+|---|---:|---:|
+| `impure-path-in-drv` | 0 | 0 |
+| `absolute-path-in-drv` | 3 | 3 |
+
+The copy holds nixpkgs's `flake.nix`, so every path under it is under a
+flake root and the sites are all `absolute-path-in-drv`; the three, on
+both workloads:
+
+- `pkgs/tools/package-management/nix/modular/packaging/components.nix:97:7`
+- `pkgs/build-support/trivial-builders/default.nix:84:17`
+- `nixos/modules/misc/documentation.nix:139:11`
+
 ## Cost
 
 At the defaults the lints cost nothing measurable: `bench/ab.nu` on the
@@ -226,13 +305,17 @@ was measured:
 
 - A lint warning is an effect. `Cache::write` stores the printed lines in
   the entry's `warnings` file and a hit prints them again before the
-  result (docs/tracing-cache.md). The lint configuration is part of the
-  cache key. A lint at `error` fails the run, and failed runs are never
-  cached.
-- The IR cache keys an entry on the compile-time lint levels and stores
-  the warnings the compile produced, so a file loaded from the cache
-  reports them again. With every compile-time lint `off` the key is the
-  same as before the registry existed.
+  result (docs/tracing-cache.md). The lint configuration, scope and
+  roots included, is part of the cache key. A lint at `error` fails the
+  run, and failed runs are never cached.
+- The IR cache keys an entry on the compile-time lint levels the file
+  gets after the scope rule and stores the warnings the compile
+  produced, so a file loaded from the cache reports them again. With
+  every compile-time lint `off` for that file (every store file under
+  `scope = "root"`) the key is the same as before the registry existed.
+- A site the scope silences enters the shared site set like a reported
+  one, so it is classified once per fiber; the classification of a file
+  is cached per fiber.
 - Warnings are buffered; the buffer is written before `builtins.trace`
   and `builtins.warn` print, before an error report, at the end of every
   command, and when the last evaluator handle drops.
@@ -253,7 +336,13 @@ was measured:
   seen.
 - `unused-formal` cannot see `builtins.functionArgs` introspection and
   does not report the formals of a lambda whose `@name` is referenced.
-- `unused-binding` treats a self-reference (`let x = x + 1;`) as a use.
+- `unused-binding` treats a self-reference (`let x = x + 1;`) as a use
+  and exempts `_`-prefixed names: a let name is the author's, unlike a
+  formal.
+- The scope sees a site's file only. A derivation that nixpkgs builds
+  from values the user passed is attributed through the positions of
+  its attribute set (see Scope); a nixpkgs fetcher call keeps none from
+  the user's file and stays silent under `scope = "root"`.
 - `read-through-copy` only knows the copies this evaluation made through
   a coercion, `builtins.path` or `filterSource`; a flake root or input is
   a tracked tree and reading through it is the normal way.

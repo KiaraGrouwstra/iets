@@ -146,19 +146,19 @@ pub fn closed(
             continue;
         }
         let name = name_of(b.sym);
-        if ignored(&name) {
-            continue;
-        }
         match b.kind {
-            BindKind::Let => out.push((
+            // a let name is the author's: `_x` says unused on purpose
+            BindKind::Let if !ignored(&name) => out.push((
                 LintId::UnusedBinding,
                 b.pos,
                 format!("let binding `{name}` is never used"),
             )),
+            // a formal is the caller's contract: `{ _pkgs }:` still
+            // demands the attribute, so no spelling marks it unused
             BindKind::Formal if !frame.bind_used.get() => out.push((
                 LintId::UnusedFormal,
                 b.pos,
-                format!("formal `{name}` is never used"),
+                format!("formal `{name}` is never used; remove it from the pattern"),
             )),
             _ => {}
         }
