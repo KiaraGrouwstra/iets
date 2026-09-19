@@ -609,9 +609,30 @@ impl Connection {
         paths: &[String],
         on_event: &mut dyn FnMut(Event),
     ) -> Result<Vec<String>> {
+        self.valid_paths(paths, false, on_event)
+    }
+
+    /// `QueryValidPaths` with the substitute flag set (protocol >= 1.27), which
+    /// runs `Store::substitutePaths` on the daemon before it answers
+    /// (daemon.cc:performOp): the valid subset is what the substituters gave us.
+    /// Nothing is evaluated and no derivation is built.
+    pub fn substitute_paths(
+        &mut self,
+        paths: &[String],
+        on_event: &mut dyn FnMut(Event),
+    ) -> Result<Vec<String>> {
+        self.valid_paths(paths, true, on_event)
+    }
+
+    fn valid_paths(
+        &mut self,
+        paths: &[String],
+        substitute: bool,
+        on_event: &mut dyn FnMut(Event),
+    ) -> Result<Vec<String>> {
         self.op(Op::QueryValidPaths)?;
         write_strs(self.w(), paths)?;
-        write_u64(self.w(), 0)?;
+        write_u64(self.w(), u64::from(substitute))?;
         self.process_stderr(on_event)?;
         read_strs(self.r())
     }

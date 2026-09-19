@@ -14,6 +14,7 @@ use crate::error::{Error, Result};
 /// Settings whose values are whitespace-separated lists, so `extra-<name>`
 /// appends instead of replacing (configuration.cc:Config::set, `isAppendable`).
 const APPENDABLE: &[&str] = &[
+    "access-tokens",
     "allowed-uris",
     "allowed-users",
     "experimental-features",
