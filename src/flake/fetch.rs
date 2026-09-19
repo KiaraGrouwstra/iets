@@ -367,7 +367,7 @@ fn adopt(ev: &mut Evaluator, sp: &StorePath, entry: &crate::inputs::Entry) {
         sp.clone(),
         crate::inputs::origin(sp.base_name(), b"", entry.nar_hash, entry.nar_size),
     );
-    crate::inputs::record(ev, sp);
+    crate::inputs::record(ev, entry, sp);
 }
 
 /// nix.conf, read once: `store` for the eval store and `access-tokens` for the
@@ -523,11 +523,7 @@ fn fetch_tarball(
             nar_hash.to_sri()
         );
     }
-    let entry = crate::inputs::Entry {
-        tree,
-        nar_hash,
-        nar_size,
-    };
+    let entry = crate::inputs::Entry::new(tree, nar_hash, nar_size);
     crate::inputs::store(sp.base_name(), staged, entry).ok_or_else(|| {
         fail(format!(
             "ietsp: cannot keep the fetched input '{name}' in the input store"

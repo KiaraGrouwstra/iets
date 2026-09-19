@@ -82,6 +82,7 @@ fn eval_and_print(ev: &mut Evaluator, a: EvalArgs, cache: Option<Cache>) -> i32 
             let _ = std::io::stdout().flush();
             if timings {
                 eprintln!("eval: {:.3}s", t0.elapsed().as_secs_f64());
+                crate::inputs::report_timings();
             }
             if let Some(c) = &cache {
                 c.write(ev, &out, false);

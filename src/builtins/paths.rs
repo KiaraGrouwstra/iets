@@ -859,7 +859,7 @@ fn add_input_path(
             .map_err(|e| io_error(e, "reading file", path, pos))?;
         return finish_added(ev, pos, path, expected_sp, &h, 0, base, rel, method, name);
     }
-    crate::inputs::record(ev, base);
+    crate::inputs::record(ev, entry, base);
     let mut err: Option<Box<Error>> = None;
     let mut f = |p: &Path, t: FileType| -> bool {
         let Some(filter) = filter else { return true };

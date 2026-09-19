@@ -422,10 +422,14 @@ impl Tree {
         self.at(&at)
     }
 
-    /// A regular member's whole contents.
+    /// A regular member's whole contents, in one `pread` into one buffer: no
+    /// `open`, no copy through a staging buffer, so a read of a member costs
+    /// less than a read of the same file under `/nix/store`.
     pub fn read(&self, at: &Blob) -> io::Result<Vec<u8>> {
-        let mut out = Vec::with_capacity(at.size as usize);
-        self.copy_blob(at, &mut out)?;
+        let mut out = vec![0u8; at.size as usize];
+        self.source(at)
+            .read_exact_at(&mut out, at.offset)
+            .map_err(|_| io::Error::other("the spooled tarball is truncated"))?;
         Ok(out)
     }
 

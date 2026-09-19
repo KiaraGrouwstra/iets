@@ -79,7 +79,7 @@ def fetch-only [ietsp: string, name: string, ref: string, expected: string, nobi
 # fetch into the input store and print EXPECTED; the second must print it
 # again with IETSP_OFFLINE=1, which makes any download an error.
 def standalone [ietsp: string, name: string, ref: string, expected: string, nobin: string, cache: string]: nothing -> bool {
-  let env = {
+  let vars = {
     IETSP_NIX_BIN_DIR: $nobin,
     PATH: $nobin,
     NIX_CONFIG: "store = unix:///nonexistent/ietsp-no-daemon",
@@ -87,8 +87,8 @@ def standalone [ietsp: string, name: string, ref: string, expected: string, nobi
     IETSP_CACHE_DIR: $"($cache)/ietsp",
   }
   rm -rf $cache
-  let one = (with-env $env { ^$ietsp eval --raw --no-cache $ref | complete })
-  let two = (with-env ($env | merge {IETSP_OFFLINE: "1"}) { ^$ietsp eval --raw --no-cache $ref | complete })
+  let one = (with-env $vars { ^$ietsp eval --raw --no-cache $ref | complete })
+  let two = (with-env ($vars | merge {IETSP_OFFLINE: "1"}) { ^$ietsp eval --raw --no-cache $ref | complete })
   let entries = (try { ls $"($cache)/ietsp/inputs" | where type == dir | length } catch { 0 })
   let ok = (
     $expected != "" and ($one.stdout | chomp) == $expected and ($two.stdout | chomp) == $expected
@@ -326,9 +326,19 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let up_path = (input-path $upf "tb")
   nixf store delete $up_path | complete | ignore
   let ub = (^$ietsp build --no-build --timings $"($upf)#packages.x86_64-linux.default" | complete)
-  let uploaded = (nixf path-info $up_path | complete | get exit_code) == 0
+  let resolve = ($ub.stderr | lines | where $it =~ '^resolve:' | get -o 0 | default "")
   let add = ($ub.stderr | lines | where $it =~ '^add:' | get -o 0 | default "")
-  $res ++= [(verdict ($ub.exit_code == 0 and $uploaded) "build --no-build uploads the input from its spool" $"build --no-build \(exit ($ub.exit_code), uploaded=($uploaded)\): ($add)")]
+  # The input is the plan's only source, it is not in the store and there is no
+  # local tree behind it, so a resolved source that was not "read from
+  # /nix/store" came out of the spool, and the daemon took its NAR.
+  let ub_ok = (
+    $ub.exit_code == 0
+      and ($ub.stderr | str contains "fetching it")
+      and ($resolve | str starts-with "resolve: 1 sources")
+      and not ($resolve | str contains "/nix/store")
+      and ($add | parse -r 'add: (?<n>\d+) paths, (?<b>\d+) bytes' | get -o 0.b | default "0" | into int) > 200
+  )
+  $res ++= [(verdict $ub_ok "build --no-build sends the input's NAR out of its spool" $"build --no-build \(exit ($ub.exit_code)\): ($resolve) | ($add)")]
 
   # the lock's narHash is the contract: a tarball whose contents changed is
   # refused, and nothing is registered. The input store entry must go first,

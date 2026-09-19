@@ -44,6 +44,21 @@ pub struct Entry {
     pub tree: Tree,
     pub nar_hash: Hash,
     pub nar_size: u64,
+    /// Whether this run's read set already names the entry. One observation
+    /// covers every read of it, so the flag turns a nixpkgs-sized input's
+    /// thousands of reads into a single record and one atomic per read.
+    recorded: std::sync::atomic::AtomicBool,
+}
+
+impl Entry {
+    pub fn new(tree: Tree, nar_hash: Hash, nar_size: u64) -> Entry {
+        Entry {
+            tree,
+            nar_hash,
+            nar_size,
+            recorded: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
 }
 
 /// `--cache-dir DIR`, else `IETSP_CACHE_DIR`, else `$XDG_CACHE_HOME/ietsp`,
@@ -89,6 +104,22 @@ fn opened() -> &'static Mutex<HashMap<String, Option<Arc<Entry>>>> {
     OPEN.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// What opening the entries of this run cost, for `--timings`: reading each
+/// index and decoding it is the one fixed cost the input store adds to an
+/// evaluation that `/nix/store` does not pay.
+static OPENED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static OPEN_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn report_timings() {
+    let n = OPENED.load(std::sync::atomic::Ordering::Relaxed);
+    if n > 0 {
+        eprintln!(
+            "inputs: {n} entries opened, {:.3}s",
+            OPEN_NANOS.load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e9
+        );
+    }
+}
+
 /// The entry named `name`, opened once per process. An entry whose index does
 /// not decode, or whose spool is not the size the index recorded, is wiped: the
 /// next evaluation fetches it again.
@@ -96,14 +127,11 @@ pub fn open(name: &str) -> Option<Arc<Entry>> {
     if let Some(hit) = opened().lock().unwrap().get(name) {
         return hit.clone();
     }
+    let t0 = std::time::Instant::now();
     let found = dir_of(name).and_then(|dir| match Tree::reopen(&dir) {
         Some((tree, nar_hash, nar_size)) => {
             cachefs::touch(&dir);
-            Some(Arc::new(Entry {
-                tree,
-                nar_hash,
-                nar_size,
-            }))
+            Some(Arc::new(Entry::new(tree, nar_hash, nar_size)))
         }
         None => {
             if dir.exists() {
@@ -112,6 +140,13 @@ pub fn open(name: &str) -> Option<Arc<Entry>> {
             None
         }
     });
+    if found.is_some() {
+        OPENED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        OPEN_NANOS.fetch_add(
+            t0.elapsed().as_nanos() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
     opened()
         .lock()
         .unwrap()
@@ -307,8 +342,12 @@ fn io_err(e: &io::Error, shown: &[u8], pos: Pos) -> Box<Error> {
 /// name is the NAR hash of its tree, so its presence, plus the index version
 /// that says the spool can still be read, is the whole check: there is nothing
 /// per file to stat and nothing to rehash (docs/tracing-cache.md).
-pub fn record(ev: &Evaluator, base: &StorePath) {
-    if ev.trace.is_on() {
+pub fn record(ev: &Evaluator, entry: &Entry, base: &StorePath) {
+    if ev.trace.is_on()
+        && !entry
+            .recorded
+            .swap(true, std::sync::atomic::Ordering::Relaxed)
+    {
         ev.trace.record(crate::trace::Obs::Input {
             entry: base.base_name().as_bytes().to_vec(),
             version: spool::INDEX_VERSION,
@@ -322,7 +361,7 @@ fn read_at(ev: &Evaluator, entry: &Entry, base: &StorePath, rel: &[u8]) -> io::R
     let Node::File { at, .. } = node else {
         return Err(io::Error::from_raw_os_error(libc::EISDIR));
     };
-    record(ev, base);
+    record(ev, entry, base);
     entry.tree.read(at)
 }
 
@@ -332,7 +371,7 @@ pub fn import_is_dir(ev: &Evaluator, path: &[u8]) -> io::Result<bool> {
     match whence(ev, path).ok_or_else(missing)? {
         Whence::In(entry, base, rel) => {
             let node = entry.tree.resolve(&rel, true).ok_or_else(missing)?;
-            record(ev, &base);
+            record(ev, &entry, &base);
             Ok(matches!(node, Node::Dir(_)))
         }
         Whence::Fs(phys) => {
@@ -417,7 +456,7 @@ pub fn read_dir(
             pos,
         ));
     };
-    record(ev, base);
+    record(ev, entry, base);
     let names = [
         ev.mk_string(FileType::Regular.nix_name().as_bytes()),
         ev.mk_string(FileType::Directory.nix_name().as_bytes()),
@@ -449,7 +488,7 @@ pub fn read_file_type(
         .tree
         .resolve(rel, false)
         .ok_or_else(|| io_err(&enoent(), shown, pos))?;
-    record(ev, base);
+    record(ev, entry, base);
     Ok(ev.mk_string(node.file_type().nix_name().as_bytes()))
 }
 
@@ -462,7 +501,7 @@ pub fn path_exists(
     rel: &[u8],
     must_be_dir: bool,
 ) -> Word {
-    record(ev, base);
+    record(ev, entry, base);
     match entry.tree.resolve(rel, must_be_dir) {
         Some(Node::Dir(_)) => Word::TRUE,
         Some(_) => Word::from_bool(!must_be_dir),
@@ -509,7 +548,7 @@ pub fn copy_to_store(
     path: &'static [u8],
     pos: Pos,
 ) -> EvalResult<&'static [u8]> {
-    record(ev, base);
+    record(ev, entry, base);
     let (sp, nar) = if rel.is_empty() {
         (base.clone(), (entry.nar_hash, entry.nar_size))
     } else {
