@@ -56,9 +56,10 @@ pub fn path_tree(ev: &mut Evaluator, dir: &Path, pos: Pos) -> EvalResult<(Hash, 
             pos,
         )
     };
-    let (hash, nar_size, mtime) = dump_and_max_mtime(dir).map_err(io)?;
+    let mut fp = ev.trace.fp(dir);
+    let (hash, nar_size, mtime) = dump_and_max_mtime(dir, &mut fp).map_err(io)?;
     ev.trace
-        .tree(dir, crate::trace::hash_to_digest(&hash), None);
+        .tree(dir, crate::trace::hash_to_digest(&hash), None, fp);
     let sp =
         source_store_path(&hash).map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
     ev.sources.insert(
@@ -76,11 +77,17 @@ pub fn path_tree(ev: &mut Evaluator, dir: &Path, pos: Pos) -> EvalResult<(Hash, 
 /// One walk for both answers, like `dumpPathAndGetMtime`: the dump already reaches every
 /// entry in the tree, so the newest `lstat` mtime comes from its filter callback instead of a
 /// second recursive `read_dir`.
-fn dump_and_max_mtime(dir: &Path) -> std::io::Result<(Hash, u64, i64)> {
+fn dump_and_max_mtime(
+    dir: &Path,
+    fp: &mut Option<crate::trace::TreeFp>,
+) -> std::io::Result<(Hash, u64, i64)> {
     let mut mtime = std::fs::symlink_metadata(dir)?.mtime();
-    let mut filter = |p: &Path, _: nar::FileType| {
+    let mut filter = |p: &Path, t: nar::FileType| {
         if let Ok(st) = std::fs::symlink_metadata(p) {
             mtime = mtime.max(st.mtime());
+        }
+        if let Some(fp) = fp.as_mut() {
+            fp.entry(p, t, true);
         }
         true
     };
@@ -178,7 +185,14 @@ pub fn accepted_set(root: &Path, files: &HashSet<PathBuf>) -> HashSet<PathBuf> {
 fn git_tree(ev: &mut Evaluator, root: &Path, pos: Pos) -> EvalResult<Word> {
     let wd = workdir(ev, root, pos)?;
     let accepted = accepted_set(root, &wd.files);
-    let mut filter = |p: &Path, _: nar::FileType| accepted.contains(p);
+    let mut fp = ev.trace.fp(root);
+    let mut filter = |p: &Path, t: nar::FileType| {
+        let keep = accepted.contains(p);
+        if let Some(fp) = &mut fp {
+            fp.entry(p, t, keep);
+        }
+        keep
+    };
     let (hash, nar_size) =
         nar::nar_hash_filtered(root, HashAlgo::Sha256, &mut filter).map_err(|e| {
             Error::boxed(
@@ -188,7 +202,7 @@ fn git_tree(ev: &mut Evaluator, root: &Path, pos: Pos) -> EvalResult<Word> {
             )
         })?;
     ev.trace
-        .tree_external(root, crate::trace::hash_to_digest(&hash), &accepted);
+        .tree_external(root, crate::trace::hash_to_digest(&hash), &accepted, fp);
     let sp =
         source_store_path(&hash).map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
     ev.sources.insert(
@@ -284,7 +298,7 @@ mod tests {
             .set_modified(later)
             .unwrap();
         let want = std::fs::metadata(&f).unwrap().mtime();
-        let (hash, size, mtime) = dump_and_max_mtime(&d).unwrap();
+        let (hash, size, mtime) = dump_and_max_mtime(&d, &mut None).unwrap();
         assert_eq!(mtime, want);
         assert_eq!(hash, nar::nar_hash(&d).unwrap());
         assert_eq!(size, nar::nar_size(&d).unwrap());

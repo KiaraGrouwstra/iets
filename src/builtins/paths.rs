@@ -554,29 +554,40 @@ fn add_path_inner(
             h
         }
         IngestionMethod::Recursive => {
+            // The observation records `accepted`, which is the dump's own decisions unless
+            // an enclosing tree's `parent` set is the only thing narrowing them: then the
+            // recorded filter is accept-all and only a separate walk matches it.
+            let mut fp = (filter.is_some() || parent.is_none())
+                .then(|| ev.trace.fp(&resolved))
+                .flatten();
             let mut err: Option<Box<Error>> = None;
             let mut f = |p: &Path, t: FileType| -> bool {
-                if parent.as_ref().is_some_and(|a| !a.contains(p)) {
-                    return false;
-                }
-                let Some(filter) = filter else {
-                    return true;
-                };
-                if err.is_some() {
-                    return false;
-                }
-                match call_filter(ev, filter, &shown(p), t, pos) {
-                    Ok(b) => {
-                        if b && let Some(a) = &mut accepted {
-                            a.insert(p.to_path_buf());
-                        }
-                        b
-                    }
-                    Err(e) => {
-                        err = Some(e);
+                let keep = if parent.as_ref().is_some_and(|a| !a.contains(p)) {
+                    false
+                } else if let Some(filter) = filter {
+                    if err.is_some() {
                         false
+                    } else {
+                        match call_filter(ev, filter, &shown(p), t, pos) {
+                            Ok(b) => {
+                                if b && let Some(a) = &mut accepted {
+                                    a.insert(p.to_path_buf());
+                                }
+                                b
+                            }
+                            Err(e) => {
+                                err = Some(e);
+                                false
+                            }
+                        }
                     }
+                } else {
+                    true
+                };
+                if let Some(fp) = &mut fp {
+                    fp.entry(p, t, keep);
                 }
+                keep
             };
             let r = nar::nar_hash_filtered(&resolved, HashAlgo::Sha256, &mut f);
             if let Some(e) = err {
@@ -588,6 +599,7 @@ fn add_path_inner(
                 &resolved,
                 crate::trace::hash_to_digest(&h),
                 accepted.as_ref(),
+                fp,
             );
             h
         }

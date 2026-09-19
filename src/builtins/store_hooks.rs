@@ -107,8 +107,14 @@ pub fn copy_path_to_store(
         Access::Local { path, accepted } => (path, accepted),
         Access::Missing => return Err(copy_err(std::io::Error::from_raw_os_error(2))),
     };
-    let mut filter =
-        |p: &Path, _: crate::store::nar::FileType| accepted.as_ref().is_none_or(|a| a.contains(p));
+    let mut fp = ev.trace.fp(&local);
+    let mut filter = |p: &Path, t: crate::store::nar::FileType| {
+        let keep = accepted.as_ref().is_none_or(|a| a.contains(p));
+        if let Some(fp) = &mut fp {
+            fp.entry(p, t, keep);
+        }
+        keep
+    };
     let (hash, nar_size) = crate::store::nar::nar_hash_filtered(
         &local,
         crate::store::hash::HashAlgo::Sha256,
@@ -119,6 +125,7 @@ pub fn copy_path_to_store(
         &local,
         crate::trace::hash_to_digest(&hash),
         accepted.as_deref(),
+        fp,
     );
     let name = Path::new(std::ffi::OsStr::from_bytes(path))
         .file_name()

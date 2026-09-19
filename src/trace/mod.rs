@@ -283,16 +283,38 @@ impl Trace {
         }
     }
 
+    /// A fingerprint accumulator for a tree about to be dumped, `None` when
+    /// tracing is off so the dump's filter wrapper costs nothing.
+    pub fn fp(&self, root: &Path) -> Option<TreeFp> {
+        if !self.is_on() {
+            return None;
+        }
+        TreeFp::new(root)
+    }
+
     /// A tree copied to the store. `accepted` is the filter result, `None`
-    /// for an unfiltered copy. Walks the tree once more with `lstat` only.
-    pub fn tree(&self, root: &Path, nar_hash: Digest32, accepted: Option<&HashSet<PathBuf>>) {
-        self.tree_with(root, nar_hash, accepted, true);
+    /// for an unfiltered copy. `fp` is what the NAR dump's filter recorded;
+    /// without it the tree is walked once more with `lstat` only.
+    pub fn tree(
+        &self,
+        root: &Path,
+        nar_hash: Digest32,
+        accepted: Option<&HashSet<PathBuf>>,
+        fp: Option<TreeFp>,
+    ) {
+        self.tree_with(root, nar_hash, accepted, true, fp);
     }
 
     /// A tree whose accepted set comes from outside (a git index): only the
     /// accepted entries matter, so no `seen_hash` is kept.
-    pub fn tree_external(&self, root: &Path, nar_hash: Digest32, accepted: &HashSet<PathBuf>) {
-        self.tree_with(root, nar_hash, Some(accepted), false);
+    pub fn tree_external(
+        &self,
+        root: &Path,
+        nar_hash: Digest32,
+        accepted: &HashSet<PathBuf>,
+        fp: Option<TreeFp>,
+    ) {
+        self.tree_with(root, nar_hash, Some(accepted), false, fp);
     }
 
     fn tree_with(
@@ -301,11 +323,15 @@ impl Trace {
         nar_hash: Digest32,
         accepted: Option<&HashSet<PathBuf>>,
         keep_seen: bool,
+        fp: Option<TreeFp>,
     ) {
         if !self.is_on() {
             return;
         }
-        let Ok((stat_hash, seen_hash)) = tree_fingerprint(root, accepted) else {
+        let Some((stat_hash, seen_hash)) = fp
+            .and_then(TreeFp::finish)
+            .or_else(|| tree_fingerprint(root, accepted).ok())
+        else {
             self.mark_uncacheable();
             return;
         };
@@ -393,6 +419,74 @@ pub fn read_dir_kinds(p: &Path) -> io::Result<Vec<(Vec<u8>, Kind)>> {
 /// The `accepted` filter of a recorded copy, or accept-all.
 fn accepts(accepted: Option<&HashSet<PathBuf>>, p: &Path) -> bool {
     accepted.is_none_or(|a| a.contains(p))
+}
+
+/// The same two hashes `tree_fingerprint` computes, taken from the NAR dump
+/// that is already walking the tree. The dump offers every directory entry to
+/// its filter in NAR order, which is the order `tree_fingerprint` walks in, so
+/// feeding each offer to `entry` reproduces both digests byte for byte and no
+/// second `read_dir` walk is needed.
+pub struct TreeFp {
+    root_len: usize,
+    stat_h: Sha256,
+    seen_h: Sha256,
+    ok: bool,
+}
+
+impl TreeFp {
+    /// Seeds the fingerprint with the root's own `lstat`, the one node the
+    /// dump never offers to the filter. `None` when the root cannot be read.
+    pub fn new(root: &Path) -> Option<TreeFp> {
+        let mut fp = TreeFp {
+            root_len: root.as_os_str().as_bytes().len(),
+            stat_h: Sha256::new(),
+            seen_h: Sha256::new(),
+            ok: true,
+        };
+        fp.stat(root, b"");
+        fp.ok.then_some(fp)
+    }
+
+    /// One directory entry the dump offered to the filter, and what the filter
+    /// answered. Rejected entries reach `seen_hash` only, as in `walk_fp`.
+    pub fn entry(&mut self, p: &Path, t: crate::store::nar::FileType, accepted: bool) {
+        let rel = &p.as_os_str().as_bytes()[self.root_len..];
+        self.seen_h.update((rel.len() as u64).to_le_bytes());
+        self.seen_h.update(rel);
+        self.seen_h.update([nar_kind(t).to_u8()]);
+        if accepted {
+            let rel = rel.to_vec();
+            self.stat(p, &rel);
+        }
+    }
+
+    fn stat(&mut self, p: &Path, rel: &[u8]) {
+        let Ok(st) = fs::symlink_metadata(p) else {
+            self.ok = false;
+            return;
+        };
+        let kind = Kind::of(&Ok(st.clone()));
+        self.stat_h.update((rel.len() as u64).to_le_bytes());
+        self.stat_h.update(rel);
+        self.stat_h.update([kind.to_u8()]);
+        self.stat_h.update(st.len().to_le_bytes());
+        self.stat_h.update(mtime_ns(&st).to_le_bytes());
+        self.stat_h.update(st.ino().to_le_bytes());
+        self.stat_h.update((st.mode() & 0o100).to_le_bytes());
+        if kind == Kind::Symlink {
+            match fs::read_link(p) {
+                Ok(t) => self.stat_h.update(t.as_os_str().as_bytes()),
+                Err(_) => self.ok = false,
+            }
+        }
+    }
+
+    /// `(stat_hash, seen_hash)`, or `None` when any `lstat` on the way failed
+    /// and the fingerprint would not be the tree's.
+    pub fn finish(self) -> Option<(Digest32, Digest32)> {
+        self.ok
+            .then(|| (self.stat_h.finalize().into(), self.seen_h.finalize().into()))
+    }
 }
 
 /// Walks `root` like the NAR dump does (sorted entries, no descent into
@@ -514,6 +608,38 @@ mod tests {
         t.record(o2.clone());
         let v = t.take();
         assert_eq!(v, vec![o1, o2]);
+    }
+
+    /// The fused fingerprint must be byte-identical to the separate walk, or
+    /// every cache entry a dump writes would miss on validation.
+    #[test]
+    fn dump_fingerprint_matches_the_separate_walk() {
+        let dir = crate::store::nar::tests::fixture_tree("trace-fused");
+        for accepted in [
+            None,
+            Some(
+                [dir.join("a.txt"), dir.join("sub")]
+                    .into_iter()
+                    .collect::<HashSet<PathBuf>>(),
+            ),
+        ] {
+            let mut fp = TreeFp::new(&dir).unwrap();
+            let mut filter = |p: &Path, t: crate::store::nar::FileType| {
+                let keep = accepts(accepted.as_ref(), p);
+                fp.entry(p, t, keep);
+                keep
+            };
+            crate::store::nar::nar_hash_filtered(
+                &dir,
+                crate::store::hash::HashAlgo::Sha256,
+                &mut filter,
+            )
+            .unwrap();
+            assert_eq!(
+                fp.finish().unwrap(),
+                tree_fingerprint(&dir, accepted.as_ref()).unwrap()
+            );
+        }
     }
 
     #[test]
