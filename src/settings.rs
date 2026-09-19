@@ -15,6 +15,7 @@ const KEYS: &[&str] = &[
     "builder",
     "cache",
     "cache-dir",
+    "fetch-max-size",
     "fiber-stack-mb",
     "nix-bin-dir",
     "no-fallback",
@@ -73,6 +74,8 @@ pub struct Settings {
     /// input store already holds evaluates; one that would fetch fails and says
     /// which URL it wanted.
     pub offline: bool,
+    /// `fetch-max-size`: the most bytes one download may decompress to.
+    pub fetch_max_size: u64,
 }
 
 /// The `--ietsp-option` pairs of this command line, recorded by
@@ -183,6 +186,7 @@ impl Settings {
             no_fallback: flag("IETSP_NO_FALLBACK", "1", c.bool("no-fallback")?, false),
             fetching: set("IETSP_FETCHING"),
             offline: set("IETSP_OFFLINE"),
+            fetch_max_size: c.num("fetch-max-size")?.unwrap_or(16 << 30),
         })
     }
 }

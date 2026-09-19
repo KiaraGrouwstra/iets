@@ -499,7 +499,8 @@ fn fetch_tarball(
     })?;
     let mut spool = crate::flake::spool::spool_file(staged.dir())
         .map_err(|e| fail(format!("ietsp: cannot fetch input '{name}': {e}")))?;
-    crate::flake::http::get_decompressed(&url, &headers, &mut spool)
+    crate::flake::http::Limits::new(nix_conf())
+        .and_then(|l| crate::flake::http::get_decompressed(&url, &headers, l, &mut spool))
         .map_err(|e| fail(format!("ietsp: cannot fetch input '{name}': {e}")))?;
     let tree = crate::flake::spool::Tree::index(spool)
         .map_err(|e| fail(format!("ietsp: cannot unpack input '{name}': {e}")))?;

@@ -58,8 +58,11 @@ CPU count), `cores` (`0` = all), `keep_going` and `keep_failed`.
 built with `Options::try_from(&config)`. `crate::cli::classic` uses it, and
 takes `store` as the last fallback for `builder` below and `system` for
 `builtins.currentSystem` (`docs/classic.md`). The other subcommands read
-`system` and `store` only and send `Options::default()`. Every other setting
-is read and kept, and nothing in ietsp consults it.
+`system` and `store` only and send `Options::default()`. The flake input
+fetcher reads `access-tokens`, `connect-timeout` (default 15 s) and
+`stalled-download-timeout` (default 300 s); 0 is no limit, as in
+`filetransfer.hh`. Every other setting is read and kept, and nothing in ietsp
+consults it.
 
 # ietsp.conf
 
@@ -87,14 +90,17 @@ not know is a mistake, not a setting for somebody else.
 ## Keys
 
 Every key in the **File** column of `docs/settings.md`, with the type and
-default given there, plus two keys that have no environment variable:
+default given there, plus three keys that have no environment variable:
 
 | Key | Type | Default |
 |:---|:---|:---|
 | `builder` | URL: `daemon`, `unix://PATH`, `ssh-ng://[user@]host`, `grpc://host:port` | the nix.conf `store` setting (itself `auto`) |
 | `source-map` | list of `STOREPATH=LOCALDIR` | empty |
+| `fetch-max-size` | bytes | 17179869184 (16 GiB) |
 
-`extra-source-map` appends; no other key is a list.
+`extra-source-map` appends; no other key is a list. `fetch-max-size` caps the
+decompressed bytes of one flake input download; a stream that decompresses
+over 1000 times its size past its first 16 MiB is refused too.
 
 ietsp has no local store of its own, so `auto` and an empty value both mean the
 local daemon.
