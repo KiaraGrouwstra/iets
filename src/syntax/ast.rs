@@ -33,16 +33,13 @@ pub struct Range {
 }
 
 impl Range {
-    pub const EMPTY: Range = Range { start: 0, len: 0 };
-
-    #[inline]
-    pub fn is_empty(self) -> bool {
-        self.len == 0
-    }
-
     #[inline]
     pub fn len(self) -> usize {
         self.len as usize
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.len() == 0
     }
 
     #[inline]
@@ -130,19 +127,6 @@ impl Ast {
         self.names.clear();
         self.formals.clear();
         self.root = ExprId(0);
-    }
-
-    /// Bytes of heap capacity held by the buffers.
-    pub fn capacity_bytes(&self) -> usize {
-        self.exprs.capacity() * size_of::<Expr>()
-            + self.spans.capacity() * size_of::<Span>()
-            + self.ids.capacity() * size_of::<ExprId>()
-            + self.elems.capacity() * size_of::<AttrElem>()
-            + self.parts.capacity() * size_of::<StrPart>()
-            + self.bytes.capacity()
-            + self.binds.capacity() * size_of::<Bind>()
-            + self.names.capacity() * size_of::<(Sym, Span)>()
-            + self.formals.capacity() * size_of::<Formal>()
     }
 }
 

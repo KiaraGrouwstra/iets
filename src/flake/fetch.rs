@@ -672,7 +672,9 @@ mod tests {
     }
 
     fn conf(text: &str) -> crate::config::Config {
-        crate::config::Config::from_str(text, "test").unwrap()
+        let mut c = crate::config::Config::empty();
+        c.apply(text, std::path::Path::new("test")).unwrap();
+        c
     }
 
     const REV: &str = "b1d9ab70662946ef0850d488da1c9019f3a9752a";

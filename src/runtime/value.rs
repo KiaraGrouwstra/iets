@@ -1008,12 +1008,6 @@ impl Arena {
         Word::from_ptr(l)
     }
 
-    /// Allocate attrs with `n` uninitialised entries. Caller fills them in
-    /// sorted order through `attrs_mut`.
-    pub fn alloc_attrs(&mut self, n: usize) -> &'static mut AttrsObj {
-        self.alloc_attrs_as(n, Stat::Attrs)
-    }
-
     /// `alloc_attrs` with a stats bucket naming the producer.
     pub fn alloc_attrs_as(&mut self, n: usize, bucket: Stat) -> &'static mut AttrsObj {
         self.stats
@@ -1263,38 +1257,6 @@ impl AttrsObj {
             std::slice::from_raw_parts_mut(p, self.len_raw() as usize)
         }
     }
-}
-
-/// Merge two sorted, deduplicated context slices.
-pub fn merge_ctx(arena: &mut Arena, a: &'static [Ctx], b: &'static [Ctx]) -> &'static [Ctx] {
-    if a.is_empty() {
-        return b;
-    }
-    if b.is_empty() {
-        return a;
-    }
-    let mut out: Vec<Ctx> = Vec::with_capacity(a.len() + b.len());
-    let (mut i, mut j) = (0, 0);
-    while i < a.len() && j < b.len() {
-        match a[i].cmp(&b[j]) {
-            std::cmp::Ordering::Less => {
-                out.push(a[i]);
-                i += 1;
-            }
-            std::cmp::Ordering::Greater => {
-                out.push(b[j]);
-                j += 1;
-            }
-            std::cmp::Ordering::Equal => {
-                out.push(a[i]);
-                i += 1;
-                j += 1;
-            }
-        }
-    }
-    out.extend_from_slice(&a[i..]);
-    out.extend_from_slice(&b[j..]);
-    arena.intern_ctx(&out)
 }
 
 /// Sort and dedup a context vector, then move it to the arena.

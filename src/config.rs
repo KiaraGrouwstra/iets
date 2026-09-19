@@ -108,14 +108,6 @@ impl Config {
         Ok(c)
     }
 
-    /// Parses one settings file's text. `origin` is what include paths resolve
-    /// against and what errors name.
-    pub fn from_str(text: &str, origin: impl AsRef<Path>) -> Result<Config> {
-        let mut c = Config::empty();
-        c.apply(text, origin.as_ref())?;
-        Ok(c)
-    }
-
     /// An unreadable file is skipped, as loadConfFile's `catch (SystemError &)` does.
     fn apply_file_if_present(&mut self, path: &Path) -> Result<()> {
         match std::fs::read_to_string(path) {
@@ -190,17 +182,6 @@ impl Config {
             .collect()
     }
 
-    /// `builders`-style lists: `;`- and newline-separated, `#` comments, and a
-    /// leading `@` reads the rest as a file of more entries
-    /// (machines.cc:expandBuilderLines). A missing `@file` is skipped.
-    pub fn paths(&self, name: &str) -> Result<Vec<String>> {
-        let mut out = Vec::new();
-        if let Some(s) = self.str(name) {
-            expand_builder_lines(s, &mut out, 0)?;
-        }
-        Ok(out)
-    }
-
     /// `store`, default `auto` (globals.cc:storeUri).
     pub fn store(&self) -> String {
         self.str("store").unwrap_or("auto").to_string()
@@ -232,50 +213,7 @@ impl Config {
     pub fn keep_failed(&self) -> Result<bool> {
         Ok(self.bool("keep-failed")?.unwrap_or(false))
     }
-
-    pub fn substituters(&self) -> Vec<String> {
-        match self.str("substituters") {
-            None => vec!["https://cache.nixos.org/".to_string()],
-            Some(_) => self.list("substituters"),
-        }
-    }
-
-    pub fn trusted_public_keys(&self) -> Vec<String> {
-        match self.str("trusted-public-keys") {
-            None => vec![CACHE_NIXOS_ORG_KEY.to_string()],
-            Some(_) => self.list("trusted-public-keys"),
-        }
-    }
-
-    pub fn builders(&self) -> Result<Vec<String>> {
-        self.paths("builders")
-    }
-
-    pub fn experimental_features(&self) -> Vec<String> {
-        self.list("experimental-features")
-    }
-
-    /// `nix-path`, which `$NIX_PATH` replaces wholesale (eval-gc.cc:129).
-    pub fn nix_path(&self) -> Vec<String> {
-        match env("NIX_PATH") {
-            Some(s) => parse_nix_path(&s),
-            None => self.list("nix-path"),
-        }
-    }
-
-    /// `sandbox`: `true`, `false` or `relaxed`. Default `true` on Linux only.
-    pub fn sandbox(&self) -> String {
-        self.str("sandbox")
-            .unwrap_or(if cfg!(target_os = "linux") {
-                "true"
-            } else {
-                "false"
-            })
-            .to_string()
-    }
 }
-
-const CACHE_NIXOS_ORG_KEY: &str = "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=";
 
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 pub const DEFAULT_SYSTEM: &str = "x86_64-linux";
@@ -392,83 +330,6 @@ fn abs_path(path: &str, base: &Path) -> PathBuf {
     }
 }
 
-fn expand_builder_lines(s: &str, out: &mut Vec<String>, depth: usize) -> Result<()> {
-    if depth > MAX_INCLUDE_DEPTH {
-        return Err(Error::Config("too many nested machines files".into()));
-    }
-    for line in s.split('\n') {
-        let line = match line.find('#') {
-            Some(i) => &line[..i],
-            None => line,
-        };
-        for entry in line.split(';') {
-            let entry = entry.trim();
-            if entry.is_empty() {
-                continue;
-            }
-            match entry.strip_prefix('@') {
-                Some(path) => match std::fs::read_to_string(path.trim()) {
-                    Ok(text) => expand_builder_lines(&text, out, depth + 1)?,
-                    Err(_) => continue,
-                },
-                None => out.push(entry.to_string()),
-            }
-        }
-    }
-    Ok(())
-}
-
-/// eval-settings.cc:EvalSettings::parseNixPath. Colon-separated, except that a
-/// value which is a URL keeps the colon that follows its scheme.
-pub fn parse_nix_path(s: &str) -> Vec<String> {
-    let b = s.as_bytes();
-    let mut res = Vec::new();
-    let mut p = 0;
-    while p < b.len() {
-        let start = p;
-        let mut start2 = p;
-        while p < b.len() && b[p] != b':' {
-            if b[p] == b'=' {
-                start2 = p + 1;
-            }
-            p += 1;
-        }
-        if p == b.len() {
-            if p != start {
-                res.push(s[start..p].to_string());
-            }
-            break;
-        }
-        let prefix = &s[start2..];
-        if is_pseudo_url(prefix) || prefix.starts_with("flake:") {
-            p += 1;
-            while p < b.len() && b[p] != b':' {
-                p += 1;
-            }
-        }
-        res.push(s[start..p].to_string());
-        if p == b.len() {
-            break;
-        }
-        p += 1;
-    }
-    res
-}
-
-/// eval-settings.cc:EvalSettings::isPseudoUrl.
-fn is_pseudo_url(s: &str) -> bool {
-    if s.starts_with("channel:") {
-        return true;
-    }
-    match s.find("://") {
-        None => false,
-        Some(i) => matches!(
-            &s[..i],
-            "http" | "https" | "file" | "channel" | "git" | "s3" | "ssh"
-        ),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -477,10 +338,16 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/conf")
     }
 
+    fn from_str(text: &str, origin: impl AsRef<Path>) -> Result<Config> {
+        let mut c = Config::empty();
+        c.apply(text, origin.as_ref())?;
+        Ok(c)
+    }
+
     fn load(name: &str) -> Config {
         let path = fixtures().join(name);
         let text = std::fs::read_to_string(&path).unwrap();
-        Config::from_str(&text, &path).unwrap()
+        from_str(&text, &path).unwrap()
     }
 
     #[test]
@@ -515,23 +382,21 @@ mod tests {
     #[test]
     fn missing_include_errors_and_bang_include_does_not() {
         let dir = fixtures();
-        let err = Config::from_str("include nope.conf\n", dir.join("x.conf")).unwrap_err();
+        let err = from_str("include nope.conf\n", dir.join("x.conf")).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("included from"), "{msg}");
         assert!(msg.contains("not found"), "{msg}");
-        let c = Config::from_str("!include nope.conf\ncores = 1\n", dir.join("x.conf")).unwrap();
+        let c = from_str("!include nope.conf\ncores = 1\n", dir.join("x.conf")).unwrap();
         assert_eq!(c.cores().unwrap(), 1);
     }
 
     #[test]
     fn syntax_errors() {
-        let e = Config::from_str("cores\n", "t").unwrap_err().to_string();
+        let e = from_str("cores\n", "t").unwrap_err().to_string();
         assert!(e.contains("syntax error in configuration line"), "{e}");
-        let e = Config::from_str("cores 4\n", "t").unwrap_err().to_string();
+        let e = from_str("cores 4\n", "t").unwrap_err().to_string();
         assert!(e.contains("syntax error in configuration line"), "{e}");
-        let e = Config::from_str("include a b\n", "t")
-            .unwrap_err()
-            .to_string();
+        let e = from_str("include a b\n", "t").unwrap_err().to_string();
         assert!(e.contains("syntax error in configuration line"), "{e}");
     }
 
@@ -539,7 +404,7 @@ mod tests {
     fn extra_appends_to_list_settings_only() {
         let c = load("extra.conf");
         assert_eq!(
-            c.substituters(),
+            c.list("substituters"),
             vec![
                 "https://cache.nixos.org/".to_string(),
                 "https://one.example".to_string(),
@@ -547,7 +412,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            c.experimental_features(),
+            c.list("experimental-features"),
             vec!["nix-command".to_string(), "flakes".to_string()]
         );
         // `cores` is not a list, so `extra-cores` stays a setting of its own.
@@ -563,44 +428,32 @@ mod tests {
         assert!(!c.keep_going().unwrap());
         assert!(!c.keep_failed().unwrap());
         assert_eq!(c.max_jobs().unwrap(), cpus());
-        assert_eq!(c.substituters(), vec!["https://cache.nixos.org/"]);
-        assert_eq!(c.trusted_public_keys(), vec![CACHE_NIXOS_ORG_KEY]);
-        assert!(c.builders().unwrap().is_empty());
-        assert!(c.experimental_features().is_empty());
+        assert!(c.list("substituters").is_empty());
         assert!(c.system().ends_with("-linux") || c.system().ends_with("-darwin"));
-        assert_eq!(
-            c.sandbox(),
-            if cfg!(target_os = "linux") {
-                "true"
-            } else {
-                "false"
-            }
-        );
 
         let c = load("typed.conf");
         assert_eq!(c.store(), "daemon");
         assert_eq!(c.system(), "aarch64-linux");
         assert_eq!(c.max_jobs().unwrap(), 3);
         assert_eq!(c.cores().unwrap(), 7);
-        assert_eq!(c.sandbox(), "relaxed");
         assert_eq!(
-            c.trusted_public_keys(),
+            c.list("trusted-public-keys"),
             vec!["k1:AAAA=".to_string(), "k2:BBBB=".to_string()]
         );
     }
 
     #[test]
     fn max_jobs_auto_is_the_cpu_count() {
-        let c = Config::from_str("max-jobs = auto\n", "t").unwrap();
+        let c = from_str("max-jobs = auto\n", "t").unwrap();
         assert_eq!(c.max_jobs().unwrap(), cpus());
     }
 
     #[test]
     fn bad_typed_values_error() {
-        let c = Config::from_str("keep-going = maybe\n", "t").unwrap();
+        let c = from_str("keep-going = maybe\n", "t").unwrap();
         let e = c.keep_going().unwrap_err().to_string();
         assert!(e.contains("Boolean setting 'keep-going'"), "{e}");
-        let c = Config::from_str("cores = many\n", "t").unwrap();
+        let c = from_str("cores = many\n", "t").unwrap();
         assert!(c.cores().is_err());
     }
 
@@ -614,37 +467,9 @@ mod tests {
             ("no", false),
             ("0", false),
         ] {
-            let c = Config::from_str(&format!("keep-failed = {text}\n"), "t").unwrap();
+            let c = from_str(&format!("keep-failed = {text}\n"), "t").unwrap();
             assert_eq!(c.keep_failed().unwrap(), want, "{text}");
         }
-    }
-
-    #[test]
-    fn builders_read_the_machines_file() {
-        let c = load("builders.conf");
-        assert_eq!(
-            c.builders().unwrap(),
-            vec![
-                "ssh://direct x86_64-linux".to_string(),
-                "ssh://other aarch64-linux".to_string(),
-            ]
-        );
-        let text = format!(
-            "builders = ssh://direct x86_64-linux ; @{}\n",
-            fixtures().join("machines").display()
-        );
-        let c = Config::from_str(&text, "t").unwrap();
-        assert_eq!(
-            c.builders().unwrap(),
-            vec![
-                "ssh://direct x86_64-linux".to_string(),
-                "ssh://mach1 x86_64-linux - 4".to_string(),
-                "ssh://mach2 aarch64-linux - 2".to_string(),
-            ]
-        );
-        // A machines file that is not there is skipped, not an error.
-        let c = Config::from_str("builders = @/nonexistent/machines\n", "t").unwrap();
-        assert!(c.builders().unwrap().is_empty());
     }
 
     #[test]
@@ -652,31 +477,6 @@ mod tests {
         let mut c = load("basic.conf");
         c.set("cores", "16");
         assert_eq!(c.cores().unwrap(), 16);
-    }
-
-    #[test]
-    fn nix_path_urls_keep_their_colon() {
-        assert_eq!(
-            parse_nix_path("nixpkgs=https://example.com/n.tar.gz:/etc/nixos"),
-            vec![
-                "nixpkgs=https://example.com/n.tar.gz".to_string(),
-                "/etc/nixos".to_string()
-            ]
-        );
-        assert_eq!(
-            parse_nix_path("a=/x:b=channel:nixos-24.05"),
-            vec!["a=/x".to_string(), "b=channel:nixos-24.05".to_string()]
-        );
-        let c = Config::from_str("nix-path = nixpkgs=/a /nix/var/nix/profiles/x\n", "t").unwrap();
-        if std::env::var_os("NIX_PATH").is_none() {
-            assert_eq!(
-                c.nix_path(),
-                vec![
-                    "nixpkgs=/a".to_string(),
-                    "/nix/var/nix/profiles/x".to_string()
-                ]
-            );
-        }
     }
 
     #[test]

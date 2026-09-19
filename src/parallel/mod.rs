@@ -17,8 +17,8 @@ use crate::runtime;
 use crate::runtime::Arena;
 
 pub use force::{
-    fanout_attrs, fanout_attrs_coerce, fanout_list, fanout_list_coerce, force_deep, force_thunk,
-    import_thunk, journal,
+    fanout_attrs_coerce, fanout_list, fanout_list_coerce, force_deep, force_thunk, import_thunk,
+    journal,
 };
 pub use spec::{speculate, speculate_app};
 

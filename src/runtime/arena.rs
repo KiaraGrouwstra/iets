@@ -171,11 +171,6 @@ impl Arena {
         self.alloc_slice(b)
     }
 
-    pub fn alloc_str(&mut self, s: &str) -> &'static str {
-        // SAFETY: bytes copied from a valid str.
-        unsafe { std::str::from_utf8_unchecked(self.alloc_bytes(s.as_bytes())) }
-    }
-
     /// Concatenate byte slices into one arena allocation.
     pub fn alloc_concat(&mut self, parts: &[&[u8]]) -> &'static [u8] {
         let len: usize = parts.iter().map(|p| p.len()).sum();

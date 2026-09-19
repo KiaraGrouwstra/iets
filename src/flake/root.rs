@@ -214,15 +214,6 @@ fn git_tree(ev: &mut Evaluator, root: &Path, pos: Pos) -> EvalResult<Word> {
             nar_size,
         },
     );
-    if let Some(h) = &wd.head {
-        let rev = if wd.dirty {
-            format!("{h}-dirty")
-        } else {
-            h.clone()
-        };
-        crate::provenance::record_rev(&sp.to_string(), &rev);
-    }
-
     let mut attrs = Attrs::new();
     attrs.insert("type".into(), AttrVal::Str("git".into()));
     attrs.insert(

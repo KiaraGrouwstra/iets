@@ -296,17 +296,6 @@ impl crate::remote::plan::NarSource for Spooled {
             .tree
             .dump_filtered(node, Path::new("/"), sink, &mut |_, _| true)
     }
-
-    fn describe(&self) -> String {
-        match self.rel.is_empty() {
-            true => format!("<the input store entry {}>", self.name),
-            false => format!(
-                "<the input store entry {}, {}>",
-                self.name,
-                String::from_utf8_lossy(&self.rel)
-            ),
-        }
-    }
 }
 
 // ---- what evaluation reads ---------------------------------------------------

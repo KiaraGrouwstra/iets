@@ -6,15 +6,11 @@
 //! the real nix sees the plain store paths.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 use crate::eval::{Evaluator, Pos};
 use crate::store::path::STORE_DIR;
 use crate::store::source::SourceOrigin;
-
-/// The `ietsp.conf` setting that maps store paths to local checkouts, for
-/// trees this evaluation did not copy itself (a nixpkgs checkout, mainly).
-pub const SETTING: &str = "source-map";
 
 pub fn enabled() -> bool {
     crate::settings::get().provenance
@@ -37,7 +33,6 @@ fn is_pseudo(path: &[u8]) -> bool {
 struct Entry {
     prefix: Vec<u8>,
     local: Vec<u8>,
-    rev: Option<String>,
 }
 
 /// Store-path prefix to local directory, longest match first.
@@ -49,20 +44,11 @@ pub struct SourceMap {
 }
 
 impl SourceMap {
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
     /// Adds one mapping. Call `sort` once every mapping is in.
-    pub fn insert(&mut self, prefix: &[u8], local: &[u8], rev: Option<String>) {
+    pub fn insert(&mut self, prefix: &[u8], local: &[u8]) {
         self.entries.push(Entry {
             prefix: prefix.to_vec(),
             local: local.to_vec(),
-            rev,
         });
     }
 
@@ -102,11 +88,6 @@ impl SourceMap {
         let mut out = e.local.clone();
         out.extend_from_slice(&path[e.prefix.len()..]);
         Some(out)
-    }
-
-    /// The revision recorded for the tree holding `path`, if any.
-    pub fn rev_of(&self, path: &[u8]) -> Option<&str> {
-        self.find(path)?.rev.as_deref()
     }
 
     /// Every store path this map knows, replaced by its local path. Only
@@ -154,35 +135,20 @@ impl SourceMap {
         sources: &HashMap<crate::store::path::StorePath, SourceOrigin>,
     ) -> SourceMap {
         let mut m = SourceMap::default();
-        let revs = revs().lock().unwrap();
         for (p, o) in sources.iter() {
             if let SourceOrigin::Tree { local, .. } = o {
-                let full = p.to_string();
-                let rev = revs.get(&full).cloned();
-                m.insert(full.as_bytes(), local.as_os_str().as_encoded_bytes(), rev);
+                m.insert(
+                    p.to_string().as_bytes(),
+                    local.as_os_str().as_encoded_bytes(),
+                );
             }
         }
-        drop(revs);
         for (store, local) in &crate::settings::get().source_map {
-            m.insert(store.as_bytes(), local.as_bytes(), None);
+            m.insert(store.as_bytes(), local.as_bytes());
         }
         m.sort();
         m
     }
-}
-
-/// Revisions of the trees the flake machinery copied, by store path. The
-/// evaluator does not keep them, so they are recorded here as they are found.
-fn revs() -> &'static Mutex<HashMap<String, String>> {
-    static REVS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
-    REVS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-pub fn record_rev(store_path: &str, rev: &str) {
-    revs()
-        .lock()
-        .unwrap()
-        .insert(store_path.to_string(), rev.to_string());
 }
 
 /// The map for the commands that cannot build one at a known point: the
@@ -298,10 +264,6 @@ impl Provenance {
         }
     }
 
-    pub fn is_on(&self) -> bool {
-        self.on
-    }
-
     pub fn site(&self, drv_path: &str) -> Option<&Site> {
         if !self.on {
             return None;
@@ -366,13 +328,9 @@ mod tests {
 
     fn map() -> SourceMap {
         let mut m = SourceMap::default();
-        m.insert(b"/nix/store/aaaa-source", b"/home/u/repo", None);
-        m.insert(
-            b"/nix/store/bbbb-source",
-            b"/home/u/nixpkgs",
-            Some("cafe".into()),
-        );
-        m.insert(b"/nix/store/aaaa-source-extra", b"/home/u/other", None);
+        m.insert(b"/nix/store/aaaa-source", b"/home/u/repo");
+        m.insert(b"/nix/store/bbbb-source", b"/home/u/nixpkgs");
+        m.insert(b"/nix/store/aaaa-source-extra", b"/home/u/other");
         m.sort();
         m
     }
@@ -411,12 +369,8 @@ mod tests {
         // `./.` inside a flake that is already in the store copies the store
         // tree again; the log line names the second copy.
         let mut m = SourceMap::default();
-        m.insert(b"/nix/store/aaaa-source", b"/home/u/repo", None);
-        m.insert(
-            b"/nix/store/bbbb-aaaa-source",
-            b"/nix/store/aaaa-source",
-            None,
-        );
+        m.insert(b"/nix/store/aaaa-source", b"/home/u/repo");
+        m.insert(b"/nix/store/bbbb-aaaa-source", b"/nix/store/aaaa-source");
         m.sort();
         assert_eq!(
             m.locate(b"/nix/store/bbbb-aaaa-source/flake.nix").unwrap(),
@@ -436,13 +390,6 @@ mod tests {
             m.rewrite(line),
             b"at \x1b[35;1m/home/u/repo/x.nix\x1b[0m!".to_vec()
         );
-    }
-
-    #[test]
-    fn rev_is_kept_for_display() {
-        let m = map();
-        assert_eq!(m.rev_of(b"/nix/store/bbbb-source/pkgs"), Some("cafe"));
-        assert_eq!(m.rev_of(b"/nix/store/aaaa-source"), None);
     }
 
     #[test]

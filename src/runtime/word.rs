@@ -97,11 +97,6 @@ impl Word {
     }
 
     #[inline]
-    pub fn is_bool(self) -> bool {
-        self == Word::TRUE || self == Word::FALSE
-    }
-
-    #[inline]
     pub fn ptr<T>(self) -> *const T {
         (self.0 & !TAG_MASK) as *const T
     }

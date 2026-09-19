@@ -385,8 +385,8 @@ impl Derivation {
             .ok_or_else(|| DrvError(format!("'{drv_path}' is not a derivation path")))
     }
 
-    /// Mirrors derivations.cc:computeStorePath: the text path of the unparsed ATerm with
-    /// references = inputSrcs + inputDrvs.
+    /// The path of this derivation, for a caller with no ATerm at hand. Mirrors
+    /// derivations.cc:computeStorePath. Used by the drv and devenv tests.
     pub fn drv_path(&self) -> Result<StorePath, DrvError> {
         self.drv_path_for(&self.unparse()?)
     }

@@ -323,14 +323,6 @@ pub fn fanout_list(ev: &Evaluator, l: &'static ListObj) {
     }
 }
 
-#[inline]
-pub fn fanout_attrs(ev: &mut Evaluator, a: &'static AttrsObj) {
-    if ev.par.on && fanout_mask() & 4 != 0 {
-        let a = ev.arena.flat(a);
-        fanout(ev, T_ATTRS_WHNF, Word::from_ptr(a), a.len());
-    }
-}
-
 /// A list whose elements are about to be coerced to strings.
 #[inline]
 pub fn fanout_list_coerce(ev: &Evaluator, l: &'static ListObj) {

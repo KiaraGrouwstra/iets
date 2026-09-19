@@ -328,17 +328,6 @@ pub struct Root {
     pub output: String,
 }
 
-impl Root {
-    /// How `nix-instantiate` prints it: the plain drv path for `out`.
-    pub fn print(&self) -> String {
-        if self.output == "out" {
-            self.drv.to_string()
-        } else {
-            format!("{}!{}", self.drv, self.output)
-        }
-    }
-}
-
 /// get-drvs.cc:getDerivations. A derivation is one root; an attrset is walked
 /// in lexicographic name order and recursed into only with
 /// `recurseForDerivations = true`; a list is always walked.

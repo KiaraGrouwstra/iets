@@ -100,12 +100,6 @@ impl Deque {
         }
         None
     }
-
-    /// Approximate; for scan short-cuts only.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.top.0.load(Ordering::Relaxed) >= self.bottom.0.load(Ordering::Relaxed)
-    }
 }
 
 #[cfg(test)]

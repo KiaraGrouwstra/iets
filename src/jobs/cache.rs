@@ -65,10 +65,6 @@ impl Resolver {
         }
     }
 
-    pub fn into_connection(self) -> Connection {
-        self.conn
-    }
-
     /// Fills the cache-status fields of every job in `lines`.
     pub fn resolve(&mut self, lines: &mut [Line]) -> Result<()> {
         let mut left: Vec<usize> = lines

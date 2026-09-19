@@ -181,14 +181,6 @@ impl LambdaIr {
     }
 }
 
-impl Ir {
-    /// Cheap expressions are never thunked: the evaluator reads them directly.
-    #[inline]
-    pub fn is_cheap(&self) -> bool {
-        matches!(self, Ir::Const(_) | Ir::Local { .. } | Ir::Lambda(_))
-    }
-}
-
 pub struct SelectIr {
     pub subject: IrRef,
     pub path: &'static [AttrElemIr],

@@ -28,10 +28,6 @@ impl<K, V> Default for SharedMap<K, V> {
 }
 
 impl<K: Hash + Eq, V: Clone> SharedMap<K, V> {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn get<Q: ?Sized + Hash + Eq>(&self, k: &Q) -> Option<V>
     where
         K: std::borrow::Borrow<Q>,

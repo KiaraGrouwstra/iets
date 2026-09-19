@@ -54,12 +54,6 @@ pub struct Blob {
     sparse: bool,
 }
 
-impl Blob {
-    pub fn size(self) -> u64 {
-        self.size
-    }
-}
-
 impl Node {
     pub fn file_type(&self) -> FileType {
         match self {
@@ -369,10 +363,6 @@ impl Tree {
     }
 
     // ---- the accessor evaluation reads through ------------------------------
-
-    pub fn root(&self) -> &Node {
-        &self.root
-    }
 
     /// The member at the resolved components `at`, without following a symlink.
     fn at(&self, at: &[Vec<u8>]) -> Option<&Node> {
@@ -718,10 +708,6 @@ impl crate::remote::plan::NarSource for Tree {
     fn dump(&self, sink: &mut dyn Write) -> io::Result<()> {
         write_str(sink, b"nix-archive-1")?;
         self.node(&self.root, sink, 0)
-    }
-
-    fn describe(&self) -> String {
-        "<the spooled archive>".into()
     }
 }
 

@@ -5,7 +5,6 @@ use std::collections::HashSet;
 
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::runtime::*;
-use crate::syntax::symbol::Sym;
 
 /// C's `%g` with precision 6, as `std::ostream << double` prints.
 pub fn format_g(f: f64) -> String {
@@ -453,10 +452,6 @@ fn print_json_inner(
         }
     }
     Ok(())
-}
-
-pub fn sym_name(ev: &Evaluator, s: Sym) -> &str {
-    ev.interner.name_str(s)
 }
 
 #[cfg(test)]

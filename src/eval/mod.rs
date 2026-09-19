@@ -72,7 +72,6 @@ pub struct WellKnown {
     pub out_path: Sym,
     pub drv_path: Sym,
     pub type_: Sym,
-    pub derivation: Sym,
     pub functor: Sym,
     pub to_string: Sym,
     pub name: Sym,
@@ -151,7 +150,6 @@ impl Evaluator {
             out_path: interner.intern(b"outPath"),
             drv_path: interner.intern(b"drvPath"),
             type_: interner.intern(b"type"),
-            derivation: interner.intern(b"derivation"),
             functor: interner.intern(b"__functor"),
             to_string: interner.intern(b"__toString"),
             name: interner.intern(b"name"),
@@ -207,10 +205,6 @@ impl Evaluator {
     /// 40 MB of nixpkgs text does not stay resident.
     pub fn add_file(&mut self, path: &[u8], src: &[u8]) -> FileId {
         self.files.add(path, src)
-    }
-
-    pub fn file(&self, id: FileId) -> Option<&'static FileInfo> {
-        self.files.get(id.0 as usize)
     }
 
     /// Every source this evaluation added to the (virtual) store and where its content is.
@@ -894,10 +888,6 @@ impl Evaluator {
 
     pub fn mk_string(&mut self, bytes: &[u8]) -> Word {
         self.arena.mk_string(bytes)
-    }
-
-    pub fn mk_string_ctx(&mut self, bytes: &[u8], ctx: &[Ctx]) -> Word {
-        self.arena.mk_string_ctx(bytes, ctx)
     }
 
     pub fn mk_int(&mut self, i: i64) -> Word {

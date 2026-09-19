@@ -43,7 +43,6 @@ pub enum SourceData {
 /// A NAR its owner can write as many times as asked, without a tree on disk.
 pub trait NarSource: std::fmt::Debug + Send + Sync {
     fn dump(&self, sink: &mut dyn io::Write) -> io::Result<()>;
-    fn describe(&self) -> String;
 }
 
 impl SourceData {
@@ -56,14 +55,6 @@ impl SourceData {
             },
             SourceData::Memory(contents) => dump_string(contents, sink),
             SourceData::Nar(nar) => nar.dump(sink),
-        }
-    }
-
-    pub fn describe(&self) -> String {
-        match self {
-            SourceData::Local { path, .. } => path.display().to_string(),
-            SourceData::Memory(_) => "<in-memory text>".into(),
-            SourceData::Nar(nar) => nar.describe(),
         }
     }
 }

@@ -140,11 +140,6 @@ impl Renderer {
         }
     }
 
-    /// True once the daemon has named `drv` in a failure message.
-    pub fn is_failed(&self, drv: &str) -> bool {
-        self.failed.contains(drv)
-    }
-
     /// The derivations the build op now running reports verdicts for.
     pub fn owns(&mut self, drvs: impl IntoIterator<Item = String>) {
         self.owned = drvs.into_iter().collect();
@@ -186,12 +181,6 @@ impl Renderer {
             Kind::Log(bytes) => self.log(e, bytes),
             Kind::Built { .. } => self.verdict(e, true, None),
             Kind::Failed { reason, log_tail } => self.failure(e, reason, log_tail),
-            Kind::Cached => {
-                if !self.style.quiet {
-                    let l = self.sgr(DIM, &format!("· {} cached", e.attr));
-                    self.line(l);
-                }
-            }
             Kind::Skipped { why } => {
                 if !self.style.quiet {
                     let l = self.sgr(DIM, &format!("· {} skipped: {why}", e.attr));

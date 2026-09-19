@@ -261,10 +261,6 @@ impl Runtime {
         Ok(())
     }
 
-    pub fn driver(&self) -> &dyn Driver {
-        &*self.driver
-    }
-
     fn drain_loop(&self, w: &mut Worker, done: impl Fn() -> bool) {
         let mut idle: u32 = 0;
         let scans = spin_scans();
@@ -662,6 +658,7 @@ impl Runtime {
         awake <= 1 || tasks > handoff_factor() * awake
     }
 
+    /// Wakes a sleeper on every push, for tests that need the wake to happen.
     pub fn set_eager_wakes(&self) {
         self.eager_wakes.store(true, Ordering::Relaxed);
     }

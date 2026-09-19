@@ -21,8 +21,6 @@ pub enum Kind {
         /// The last `FAILURE_TAIL_LINES` of the build's own log.
         log_tail: Vec<String>,
     },
-    /// Every output was already there, or a substituter has them all.
-    Cached,
     Skipped {
         why: String,
     },
