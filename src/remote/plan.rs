@@ -72,10 +72,13 @@ impl SourceData {
 pub struct SourceInfo {
     pub data: SourceData,
     pub kind: SourceKind,
+    /// The NAR hash and size evaluation already computed under this source's exact filter.
+    /// `None` for a source the evaluation did not record, which the plan must hash itself.
+    pub hashed: Option<(Hash, u64)>,
 }
 
 impl SourceInfo {
-    /// A plain, unfiltered local tree.
+    /// A plain, unfiltered local tree, not hashed yet.
     pub fn tree(local: impl Into<PathBuf>) -> SourceInfo {
         SourceInfo {
             data: SourceData::Local {
@@ -83,6 +86,7 @@ impl SourceInfo {
                 accepted: None,
             },
             kind: SourceKind::Source,
+            hashed: None,
         }
     }
 }
@@ -108,9 +112,13 @@ pub enum Object {
 }
 
 impl Object {
-    /// Hashes a source.
+    /// A source object, hashing the tree only when evaluation did not already report the
+    /// hash under the same filter.
     pub fn source(path: StorePath, info: SourceInfo) -> io::Result<Object> {
-        let (nar_hash, nar_size) = hash_source(&info.data)?;
+        let (nar_hash, nar_size) = match info.hashed {
+            Some(h) => h,
+            None => hash_source(&info.data)?,
+        };
         Ok(Object::Source {
             path,
             data: info.data,
@@ -179,24 +187,7 @@ impl Plan {
         let mut infos: Vec<Option<SourceInfo>> = Vec::with_capacity(missing.len());
         let mut unknown: Vec<StorePath> = Vec::new();
         for p in missing {
-            let info = self.origins.get(p).map(|o| match o {
-                SourceOrigin::Tree { local, accepted } => SourceInfo {
-                    data: SourceData::Local {
-                        path: local.clone(),
-                        accepted: accepted.clone(),
-                    },
-                    kind: SourceKind::Source,
-                },
-                SourceOrigin::Text {
-                    contents,
-                    references,
-                } => SourceInfo {
-                    data: SourceData::Memory(Arc::new(contents.clone())),
-                    kind: SourceKind::Text {
-                        references: references.clone(),
-                    },
-                },
-            });
+            let info = self.origins.get(p).map(source_info);
             if info.is_none() {
                 unknown.push(p.clone());
             }
@@ -235,8 +226,42 @@ impl Plan {
     }
 }
 
+/// What to upload for one recorded source. A tree carries the NAR hash and size the
+/// evaluation computed under the very filter it recorded, so nothing walks the tree again.
+pub fn source_info(o: &SourceOrigin) -> SourceInfo {
+    match o {
+        SourceOrigin::Tree {
+            local,
+            accepted,
+            nar_hash,
+            nar_size,
+        } => SourceInfo {
+            data: SourceData::Local {
+                path: local.clone(),
+                accepted: accepted.clone(),
+            },
+            kind: SourceKind::Source,
+            hashed: Some((*nar_hash, *nar_size)),
+        },
+        SourceOrigin::Text {
+            contents,
+            references,
+        } => SourceInfo {
+            data: SourceData::Memory(Arc::new(contents.clone())),
+            kind: SourceKind::Text {
+                references: references.clone(),
+            },
+            hashed: None,
+        },
+    }
+}
+
 /// Checks that a planned source still hashes to its store path: the NAR of the original tree
-/// must yield the path eval computed, or the daemon rejects it.
+/// must yield the path eval computed, or the daemon rejects it. Only sources the plan hashed
+/// itself need this. A tree whose hash comes from evaluation cannot fail it by construction;
+/// if such a tree changed on disk after evaluation, the daemon catches it, because
+/// `AddMultipleToStore` recomputes the NAR hash of a `fixed:r` path and rejects a mismatch,
+/// and `write_object` refuses to send a NAR whose length is not the recorded `nar_size`.
 fn check_source_path(path: &StorePath, kind: &SourceKind, nar_hash: &Hash) -> Result<()> {
     use crate::store::path::{IngestionMethod, make_fixed_output_path};
     if let SourceKind::Source = kind {
@@ -401,10 +426,13 @@ fn hash_sources(sources: &[&StorePath], infos: &[SourceInfo]) -> Result<Vec<Obje
                     }
                     let path = sources[i];
                     let info = &infos[i];
+                    let from_eval = info.hashed.is_some();
                     let r = Object::source(path.clone(), info.clone())
                         .map_err(|e| Error::io(format!("cannot dump '{path}'"), e))
                         .and_then(|o| {
-                            if let Object::Source { nar_hash, kind, .. } = &o {
+                            if let Object::Source { nar_hash, kind, .. } = &o
+                                && !from_eval
+                            {
                                 check_source_path(path, kind, nar_hash)?;
                             }
                             Ok(o)

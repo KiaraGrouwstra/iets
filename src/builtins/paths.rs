@@ -529,6 +529,7 @@ fn add_path_inner(
         }
     };
     let mut accepted: Option<HashSet<PathBuf>> = filter.map(|_| HashSet::new());
+    let mut nar_size = 0u64;
     let hash = match method {
         IngestionMethod::Flat => {
             let meta =
@@ -581,7 +582,8 @@ fn add_path_inner(
             if let Some(e) = err {
                 return Err(e);
             }
-            let h = r.map_err(|e| io_error(e, "copying", path, pos))?.0;
+            let (h, size) = r.map_err(|e| io_error(e, "copying", path, pos))?;
+            nar_size = size;
             ev.trace.tree(
                 &resolved,
                 crate::trace::hash_to_digest(&h),
@@ -597,6 +599,8 @@ fn add_path_inner(
             SourceOrigin::Tree {
                 local: resolved,
                 accepted: accepted.map(Arc::new).or(parent),
+                nar_hash: hash,
+                nar_size,
             },
         );
     }

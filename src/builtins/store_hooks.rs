@@ -48,7 +48,10 @@ pub fn locate(ev: &Evaluator, path: &[u8]) -> Access {
     let Ok(sp) = StorePath::parse(&format!("{STORE_DIR}/{base}")) else {
         return Access::Store;
     };
-    let Some(SourceOrigin::Tree { local, accepted }) = ev.sources.get(&sp) else {
+    let Some(SourceOrigin::Tree {
+        local, accepted, ..
+    }) = ev.sources.get(&sp)
+    else {
         return Access::Store;
     };
     let path = if sub.is_empty() {
@@ -106,7 +109,7 @@ pub fn copy_path_to_store(
     };
     let mut filter =
         |p: &Path, _: crate::store::nar::FileType| accepted.as_ref().is_none_or(|a| a.contains(p));
-    let (hash, _) = crate::store::nar::nar_hash_filtered(
+    let (hash, nar_size) = crate::store::nar::nar_hash_filtered(
         &local,
         crate::store::hash::HashAlgo::Sha256,
         &mut filter,
@@ -126,8 +129,15 @@ pub fn copy_path_to_store(
         .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, pos))?;
     let full = ev.arena.alloc_bytes(sp.to_full_string().as_bytes());
     ev.src_to_store.insert(path.to_vec(), full);
-    ev.sources
-        .insert(sp, SourceOrigin::Tree { local, accepted });
+    ev.sources.insert(
+        sp,
+        SourceOrigin::Tree {
+            local,
+            accepted,
+            nar_hash: hash,
+            nar_size,
+        },
+    );
     Ok(full)
 }
 
@@ -148,6 +158,12 @@ mod tests {
             SourceOrigin::Tree {
                 local: root.clone(),
                 accepted: Some(Arc::new(accepted)),
+                nar_hash: crate::store::hash::Hash::from_bytes(
+                    crate::store::hash::HashAlgo::Sha256,
+                    &[0u8; 32],
+                )
+                .unwrap(),
+                nar_size: 0,
             },
         );
         let full = sp.to_full_string();

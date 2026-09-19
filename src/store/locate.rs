@@ -76,6 +76,7 @@ pub fn locate_in_store(
                     accepted: None,
                 },
                 kind,
+                hashed: None,
             }))
         })
         .collect()

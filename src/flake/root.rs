@@ -56,7 +56,8 @@ pub fn path_tree(ev: &mut Evaluator, dir: &Path, pos: Pos) -> EvalResult<(Hash, 
             pos,
         )
     };
-    let hash = nar::nar_hash(dir).map_err(io)?;
+    let (hash, nar_size) =
+        nar::nar_hash_filtered(dir, HashAlgo::Sha256, &mut |_, _| true).map_err(io)?;
     let mtime = max_mtime(dir).map_err(io)?;
     ev.trace
         .tree(dir, crate::trace::hash_to_digest(&hash), None);
@@ -67,6 +68,8 @@ pub fn path_tree(ev: &mut Evaluator, dir: &Path, pos: Pos) -> EvalResult<(Hash, 
         SourceOrigin::Tree {
             local: dir.to_path_buf(),
             accepted: None,
+            nar_hash: hash,
+            nar_size,
         },
     );
     Ok((hash, mtime))
@@ -174,13 +177,14 @@ fn git_tree(ev: &mut Evaluator, root: &Path, pos: Pos) -> EvalResult<Word> {
     let wd = workdir(ev, root, pos)?;
     let accepted = accepted_set(root, &wd.files);
     let mut filter = |p: &Path, _: nar::FileType| accepted.contains(p);
-    let (hash, _) = nar::nar_hash_filtered(root, HashAlgo::Sha256, &mut filter).map_err(|e| {
-        Error::boxed(
-            ErrorKind::Io,
-            format!("copying '{}' to the store: {e}", root.display()),
-            pos,
-        )
-    })?;
+    let (hash, nar_size) =
+        nar::nar_hash_filtered(root, HashAlgo::Sha256, &mut filter).map_err(|e| {
+            Error::boxed(
+                ErrorKind::Io,
+                format!("copying '{}' to the store: {e}", root.display()),
+                pos,
+            )
+        })?;
     ev.trace
         .tree_external(root, crate::trace::hash_to_digest(&hash), &accepted);
     let sp =
@@ -190,6 +194,8 @@ fn git_tree(ev: &mut Evaluator, root: &Path, pos: Pos) -> EvalResult<Word> {
         SourceOrigin::Tree {
             local: root.to_path_buf(),
             accepted: Some(Arc::new(accepted)),
+            nar_hash: hash,
+            nar_size,
         },
     );
     if let Some(h) = &wd.head {

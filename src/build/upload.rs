@@ -22,7 +22,7 @@ use crate::builtins::derivation::DrvInfo;
 use crate::error::{Error, Result};
 use crate::parallel::shared::SharedMap;
 use crate::remote::event::Event;
-use crate::remote::plan::{Locator, Object, Plan, SourceData, SourceInfo, SourceKind};
+use crate::remote::plan::{Locator, Object, Plan, SourceInfo};
 use crate::store::drv::Derivation;
 use crate::store::path::{STORE_DIR, StorePath};
 use crate::store::source::SourceOrigin;
@@ -261,22 +261,7 @@ impl StreamUpload {
     /// else from the local store, else `None` and the builder substitutes it.
     fn source_info(&self, p: &StorePath) -> Result<Option<SourceInfo>> {
         if let Some(origin) = self.sources.get(p) {
-            return Ok(Some(match origin {
-                SourceOrigin::Tree { local, accepted } => SourceInfo {
-                    data: SourceData::Local {
-                        path: local,
-                        accepted,
-                    },
-                    kind: SourceKind::Source,
-                },
-                SourceOrigin::Text {
-                    contents,
-                    references,
-                } => SourceInfo {
-                    data: SourceData::Memory(Arc::new(contents)),
-                    kind: SourceKind::Text { references },
-                },
-            }));
+            return Ok(Some(crate::remote::plan::source_info(&origin)));
         }
         let found = crate::store::locate::locate_in_store(
             std::slice::from_ref(p),

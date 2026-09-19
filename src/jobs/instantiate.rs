@@ -16,7 +16,7 @@ use super::line::{Job, Line};
 use crate::builtins::derivation::DrvInfo;
 use crate::error::{Error, Result};
 use crate::parallel::shared::SharedMap;
-use crate::remote::plan::{Object, SourceData, SourceInfo, SourceKind};
+use crate::remote::plan::Object;
 use crate::remote::worker::build::write_object;
 use crate::remote::worker::{Connection, Transport};
 use crate::store::drv::Derivation;
@@ -168,22 +168,7 @@ impl Store {
                     "source '{p}' is not valid in the store and this evaluation did not create it"
                 )));
             };
-            let info = match origin {
-                SourceOrigin::Tree { local, accepted } => SourceInfo {
-                    data: SourceData::Local {
-                        path: local,
-                        accepted,
-                    },
-                    kind: SourceKind::Source,
-                },
-                SourceOrigin::Text {
-                    contents,
-                    references,
-                } => SourceInfo {
-                    data: SourceData::Memory(Arc::new(contents)),
-                    kind: SourceKind::Text { references },
-                },
-            };
+            let info = crate::remote::plan::source_info(&origin);
             objects.push(
                 Object::source(p.clone(), info)
                     .map_err(|e| Error::io(format!("cannot dump '{p}'"), e))?,

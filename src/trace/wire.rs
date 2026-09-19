@@ -10,7 +10,7 @@ use crate::builtins::derivation::DrvInfo;
 use crate::store::path::StorePath;
 use crate::store::source::SourceOrigin;
 
-const VERSION: u8 = 2;
+const VERSION: u8 = 3;
 
 struct Enc(Vec<u8>);
 
@@ -388,9 +388,16 @@ pub fn encode_sources(sources: &HashMap<StorePath, SourceOrigin>) -> Vec<u8> {
     for (p, o) in items {
         e.bytes(p.base_name().as_bytes());
         match o {
-            SourceOrigin::Tree { local, accepted } => {
+            SourceOrigin::Tree {
+                local,
+                accepted,
+                nar_hash,
+                nar_size,
+            } => {
                 e.u8(0);
                 e.bytes(local.as_os_str().as_encoded_bytes());
+                e.bytes(nar_hash.bytes());
+                e.u64(*nar_size);
                 match accepted {
                     None => e.u8(0),
                     Some(a) => {
@@ -434,6 +441,12 @@ pub fn decode_sources(b: &[u8]) -> Option<HashMap<StorePath, SourceOrigin>> {
         let o = match d.u8().ok()? {
             0 => {
                 let local = path_buf(d.bytes().ok()?);
+                let nar_hash = crate::store::hash::Hash::from_bytes(
+                    crate::store::hash::HashAlgo::Sha256,
+                    d.bytes().ok()?,
+                )
+                .ok()?;
+                let nar_size = d.u64().ok()?;
                 let accepted = match d.u8().ok()? {
                     0 => None,
                     1 => Some(std::sync::Arc::new(
@@ -445,7 +458,12 @@ pub fn decode_sources(b: &[u8]) -> Option<HashMap<StorePath, SourceOrigin>> {
                     )),
                     _ => return None,
                 };
-                SourceOrigin::Tree { local, accepted }
+                SourceOrigin::Tree {
+                    local,
+                    accepted,
+                    nar_hash,
+                    nar_size,
+                }
             }
             1 => {
                 let contents = d.vec().ok()?;
@@ -580,6 +598,8 @@ mod tests {
             SourceOrigin::Tree {
                 local: PathBuf::from("/tmp/x"),
                 accepted: Some(std::sync::Arc::new([PathBuf::from("/tmp/x/a")].into())),
+                nar_hash: crate::store::nar::nar_hash_of_string(b"x"),
+                nar_size: 152,
             },
         );
         sources.insert(
@@ -591,7 +611,12 @@ mod tests {
         );
         let back = decode_sources(&encode_sources(&sources)).unwrap();
         match &back[&s] {
-            SourceOrigin::Tree { local, accepted } => {
+            SourceOrigin::Tree {
+                local,
+                accepted,
+                nar_hash,
+                nar_size,
+            } => {
                 assert_eq!(local, &PathBuf::from("/tmp/x"));
                 assert!(
                     accepted
@@ -599,6 +624,8 @@ mod tests {
                         .unwrap()
                         .contains(&PathBuf::from("/tmp/x/a"))
                 );
+                assert_eq!(nar_hash, &crate::store::nar::nar_hash_of_string(b"x"));
+                assert_eq!(*nar_size, 152);
             }
             _ => panic!(),
         }

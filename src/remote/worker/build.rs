@@ -320,7 +320,15 @@ pub fn write_object(w: &mut dyn Write, o: &Object) -> io::Result<()> {
                 *nar_size,
                 &ca,
             )?;
-            data.dump(w)
+            let mut counted = Counting { inner: w, n: 0 };
+            data.dump(&mut counted)?;
+            if counted.n != *nar_size {
+                return Err(io::Error::other(format!(
+                    "source '{path}' changed since evaluation: its NAR is {} bytes, not {nar_size}",
+                    counted.n
+                )));
+            }
+            Ok(())
         }
         Object::Drv {
             path,
@@ -344,6 +352,26 @@ pub fn write_object(w: &mut dyn Write, o: &Object) -> io::Result<()> {
             )?;
             dump_string(aterm, w)
         }
+    }
+}
+
+/// Counts what a source's NAR actually was. The framed body declares `nar_size` before the
+/// bytes, so a tree that changed after evaluation must fail here rather than desynchronise
+/// the stream.
+struct Counting<'a> {
+    inner: &'a mut dyn Write,
+    n: u64,
+}
+
+impl Write for Counting<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.n += n as u64;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
     }
 }
 
