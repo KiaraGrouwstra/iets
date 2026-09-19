@@ -344,7 +344,9 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
     root: "root"
     version: 7
   } | to json | save $"($upf)/flake.lock"
-  let ub = (^$ietsp build --no-build --timings $"($upf)#packages.x86_64-linux.default" | complete)
+  let ub = (^$ietsp build --no-build --timings --ietsp-option builder daemon $"($upf)#packages.x86_64-linux.default" | complete)
+  let tb3_path = (^$ietsp eval --raw --no-cache -E $"\(builtins.fetchTree { type = \"tarball\"; url = \"file://($work)/tb3.tar.gz\"; narHash = \"($tb3_hash)\"; }).outPath" | complete | get stdout | str trim)
+  let tb3_valid = ((nixf path-info $tb3_path | complete).exit_code == 0)
   let resolve = ($ub.stderr | lines | where $it =~ '^resolve:' | get -o 0 | default "")
   let add = ($ub.stderr | lines | where $it =~ '^add:' | get -o 0 | default "")
   # The input is the plan's only source, it is not in the store and there is no
@@ -356,8 +358,9 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
       and ($resolve | str starts-with "resolve: 1 sources")
       and not ($resolve | str contains "/nix/store")
       and ($add | parse -r 'add: (?<n>\d+) paths, (?<b>\d+) bytes' | get -o 0.b | default "0" | into int) > 200
+      and $tb3_valid
   )
-  $res ++= [(verdict $ub_ok "build --no-build sends the input's NAR out of its spool" $"build --no-build \(exit ($ub.exit_code)\): ($resolve) | ($add)")]
+  $res ++= [(verdict $ub_ok "build --no-build sends the input's NAR out of its spool and the daemon holds it" $"build --no-build \(exit ($ub.exit_code)\): ($resolve) | ($add) | ($tb3_path) valid=($tb3_valid)")]
 
   # the lock's narHash is the contract: a tarball whose contents changed is
   # refused, and nothing is registered. The input store entry must go first,
@@ -473,6 +476,9 @@ def main [] {
   cd ($env.FILE_PWD | path join "..")
   let ietsp = ($env.IETSP? | default ($env.PWD | path join "target/release/ietsp"))
   let work = (mktemp -d --tmpdir ietsp-flaketest.XXXXXX)
+  $env.IETSP_CONF_DIR = ($work | path join "no-conf")
+  $env.XDG_CONFIG_HOME = ($work | path join "no-xdg")
+  hide-env -i IETSP_CONFIG
   let code = (try { run-tests $ietsp $work } catch {|e| print -e $e.rendered; 1 })
   rm -rf $work
   exit $code
