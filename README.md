@@ -19,6 +19,11 @@ bench/run.nu nixos-desktop
 ./target/release/ietsp build --builder 'grpc://farm.numtide.com:50051?token-file=./jwt' --fetch-to out FILE.nix   # nix-grpc-store, natively
 scripts/daemon-e2e.nu; scripts/grpc-e2e.nu
 
+# locked flakes: a missing input is substituted by the daemon or downloaded and
+# unpacked by ietsp; only git and hg inputs still run nix (docs/flakes.md)
+./target/release/ietsp eval --raw .#packages.x86_64-linux.default.drvPath
+scripts/flaketest.nu
+
 # nix-fast-build's flags, one process: eval and build overlap, results as json or junit
 ./target/release/ietsp fast-build --flake .#checks --skip-cached --result-file r.json
 scripts/fastbuild-e2e.nu

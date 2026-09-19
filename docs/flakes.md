@@ -64,37 +64,113 @@ The flake's `flake.nix` is imported under its store path, so positions,
 `./x` path literals and `readDir` see exactly what Nix sees; the bytes come
 from the store when the tree is there, else from the local tree.
 
-## The one place ietsp runs nix
+## Getting a missing input into the store
 
 A remote input (github, git, tarball, ...) whose locked tree is not in
-`/nix/store` must get there first: `flake::fetch::ensure_in_store` prints
-`ietsp: input '<name>' is not in the store (<path>), fetching it with nix`
-and then runs nix in two steps, the two steps Nix's own flake path takes.
+`/nix/store` must get there first. `flake::fetch::ensure_in_store` prints
+`ietsp: input '<name>' is not in the store (<path>), fetching it` and takes
+three steps in order. The root tree and `path:` inputs never reach it.
 
-1. `nix build --no-link <store path>` substitutes the tree. Nix does this
-   itself for every input a lock file holds: `lockfile.cc` marks such an
-   input `__final`, and `fetchers.cc:getAccessorUnchecked` substitutes a
-   final input's store path before it runs any fetcher. An expression cannot
-   reach that path, because `builtins.fetchTree` rejects `__final`
-   (`fetchTree.cc:216`) and `fetchFinalTree` is an internal primop, absent
-   from `builtins` (`eval.cc:546`). So ietsp substitutes the tree itself.
-2. Only when nothing has the path:
+1. **Substitution, as one daemon op.** `QueryValidPaths` with the substitute
+   flag (`wopQueryValidPaths`, protocol >= 1.27) makes the daemon run
+   `Store::substitutePaths` and answer with the paths it now has
+   (`daemon.cc:performOp`). Nothing is evaluated and no derivation is built.
+   Nix does the same before any fetcher runs, for every input a lock file
+   holds: `lockfile.cc` marks such an input `__final`, and
+   `fetchers.cc:getAccessorUnchecked` substitutes a final input's store path
+   first. An expression cannot reach that path, because `builtins.fetchTree`
+   rejects `__final` (`fetchTree.cc:216`) and `fetchFinalTree` is an internal
+   primop, absent from `builtins` (`eval.cc:546`). So ietsp substitutes the
+   tree itself.
+2. **The archive types, fetched by ietsp.** `github`, `gitlab`, `sourcehut`
+   and `tarball` are one download and one unpack, so ietsp does them itself.
+3. **`git` and `hg`, the last shell-out.**
    `nix eval --raw --impure --expr '(builtins.fetchTree <locked attrs>).outPath'`,
-   then a check that the path Nix reports is the one the lock implies, so
-   a difference in the file set is an error, not a silent divergence.
+   then a check that the path nix reports is the one the lock implies, so a
+   difference in the file set is an error, not a silent divergence. These two
+   types need a repository, which ietsp cannot clone yet. When no nix other
+   than ietsp itself is on `PATH`, the error is
+   `ietsp: input '<name>' is not in the store and nix is not on PATH; fetch it with nix (...) first`.
 
 Step 1 is what makes ietsp agree with `nix eval` on a locked `git` input
 that a substituter holds but the fetcher cannot reach: `git.cc:884`
 (`Cannot find Git revision '<rev>' in ref '<ref>'`) is raised whenever the
 fetch of the rev fails and a stale local ref lets `git.cc:866` swallow the
 failure; the flake path never gets there, because the tree comes from the
-substituter. A store path no substituter has costs 0.33 s to probe here
-(four substituters), against seconds for any fetch, so every input type
-takes step 1. When no nix other than ietsp itself is on `PATH`, the error is
-`ietsp: input '<name>' is not in the store and nix is not on PATH; fetch it with nix (...) first`.
-The root tree and `path:` inputs are never fetched. Nothing else in ietsp
-runs nix; ietsp never writes to the store itself.
+substituter. The connection it uses goes to the eval store (nix.conf's
+`store`, never the `builder` setting: a remote builder has no say in what
+`import` reads), is opened on the first input that is missing and is reused
+for the rest of the evaluation, the registration in step 2 included. A
+`grpc://` store is not a worker-protocol daemon, so there is nothing to
+substitute with and step 2 decides. The op costs 0.002 s against 0.13 s for
+the warm `nix build --no-link` it replaced (0.49 s cold), plus 0.05 s once
+for the connection.
 
+### The archive fetch (step 2)
+
+`src/flake/http.rs` is the GET: hyper over tokio-rustls, the stack tonic
+already brings, no libcurl. It follows redirects as `filetransfer.cc` does
+(`CURLOPT_FOLLOWLOCATION`, `CURLOPT_MAXREDIRS` 10), reads a `file://` URL
+from disk, and undoes the four compressions libarchive autodetects for us:
+gzip, xz, zstd, bzip2 (`tarfile.cc:TarArchive`). The URL and headers are the
+ones `github.cc:getDownloadUrl` and `tarball.cc` build, per type:
+
+| type | URL |
+|---|---|
+| `github`, no token | `https://<host>/<owner>/<repo>/archive/<rev>.tar.gz` |
+| `github`, with a token | `https://api.<host>/repos/<owner>/<repo>/tarball/<rev>` |
+| `github`, `host` != github.com | `https://<host>/api/v3/repos/<owner>/<repo>/tarball/<rev>` |
+| `gitlab` | `https://<host>/api/v4/projects/<owner>%2F<repo>/repository/archive.tar.gz?sha=<rev>` |
+| `sourcehut` | `https://<host>/<owner>/<repo>/archive/<rev>.tar.gz` |
+| `tarball` | the lock's `url`, verbatim |
+
+The token comes from nix.conf's `access-tokens`, matched as
+`github.cc:getAccessToken` matches it: the longest key that is a prefix of
+`<host>/<owner>/<repo>` and ends on a path segment, else the entry for the
+host alone. Its header is the one each forge wants
+(`github.cc:accessHeaderFromToken`): `Authorization: token T` for github,
+`Authorization: Bearer T` for sourcehut, and for gitlab `OAuth2:T` ->
+`Authorization: Bearer T`, `PAT:T` -> `Private-token: T`, anything else
+split on the first colon as a header of its own.
+
+`src/flake/unpack.rs` walks the tar as `tarfile.cc:unpackTarfileToSink`
+does and keeps exactly what the git tree behind a locked input keeps
+(`git-utils.cc:GitFileSystemObjectSinkImpl`), because that tree is what the
+lock's `narHash` hashes (`tarball.cc` calls `dereferenceSingletonDirectory`
+and then `treeHashToNarHash`, which is `hashPath` of the tree):
+
+- directories, empty ones included: the sink writes an empty tree object for
+  them, so they survive into the NAR.
+- regular files with one bit of mode, `archive_entry_mode() & S_IXUSR`
+  (`tarfile.cc:226`); everything else about the mode is dropped.
+- symlinks, as the target string.
+- hard links, resolved to a second entry with the target's blob and mode
+  (`git-utils.cc:1348-1364`).
+- the last copy of a member listed twice (`git-utils.cc:1213`, "only import
+  the latest version of a path").
+- one leading directory stripped, but only when it is the only entry at the
+  top (`git-utils.cc:dereferenceSingletonDirectory`).
+- the pax global header GitHub's tarballs start with is archive metadata,
+  not a member.
+- any other member type is an error (`tarfile.cc:253`), and so is a `..` in
+  a member name or a member under a symlink
+  (`ARCHIVE_EXTRACT_SECURE_NODOTDOT`, `ARCHIVE_EXTRACT_SECURE_SYMLINKS`).
+
+The NAR hash of the result is then compared with the lock's `narHash`. A
+mismatch names both hashes and registers nothing. A match is registered with
+one `AddMultipleToStore` as a `fixed:r:sha256` source, the same call
+`src/remote/worker/build.rs` makes for an eval-time source, so the daemon
+recomputes the content address and writes the path the lock implies. Nothing
+is cached on disk beyond the store: the unpacked copy is gone before the
+fetch returns, and the tracing cache keys are unaffected.
+
+`file` is not in this set. Its store path is the flat hash of the bytes under
+the input's name (`tarball.cc:FileInputScheme`), which the lock's `narHash`
+does not give, so ietsp cannot say where the file belongs before it has it;
+the type stays unsupported.
+
+Step 2 is the only store write ietsp makes. Every other store path it
+produces stays in memory (`docs/remote-build.md`).
 ## Tracing cache
 
 Everything above is recorded (`docs/tracing-cache.md`): the git queries as

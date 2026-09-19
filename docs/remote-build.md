@@ -92,6 +92,10 @@ One op per phase:
    call, substitute flag off. Then, off the wire, `Plan::resolve` on the
    missing sources: eval-time origins and `--source` overrides first, one
    `nix path-info --json` batch for the rest.
+   (`Connection::substitute_paths` is the same op with the flag on, which asks
+   the daemon to substitute before it answers. No build phase uses it; the
+   flake fetcher does, on the eval store, for a locked input that is missing
+   from it: `docs/flakes.md`.)
 2. `BuildPathsWithResults` on the missing sources the client cannot produce
    (plain store paths, the `DerivedPath::Opaque` case that the daemon turns
    into a substitution goal), before any upload: `registerValidPaths`

@@ -2,7 +2,8 @@
 
 ietsp is a from-scratch Nix language evaluator in Rust. Scope: evaluation
 only. It parses Nix, evaluates lazily, computes derivations and store paths
-in memory, and prints results. It never writes to a store.
+in memory, and prints results. The one store write it makes is the flake input
+it fetches itself (`docs/flakes.md`), and it goes through the daemon.
 
 ## Goals, in order
 
