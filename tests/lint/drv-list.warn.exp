@@ -1,0 +1,2 @@
+warning: [drv-list] derivation attribute 'list' is a list, which is space-joined into one environment string
+  at /pwd/lint/drv-list.nix:1:56

@@ -272,6 +272,7 @@ fn process_attr(
     key: &str,
     w: Word,
     pos: Pos,
+    attr_pos: Pos,
 ) -> EvalResult<()> {
     let s = *b.s;
     if b.ignore_nulls && ev.force(w)? == Word::NULL {
@@ -299,7 +300,7 @@ fn process_attr(
             let st = ev.coerce_to_string(
                 c.get(),
                 &mut b.context,
-                pos,
+                attr_pos,
                 "while evaluating an element of the argument list",
                 true,
                 true,
@@ -350,7 +351,12 @@ fn process_attr(
         }
         return Ok(());
     }
-    let st = ev.coerce_to_string(w, &mut b.context, pos, "", true, true, true)?;
+    if ev.lint_on(crate::lint::LintId::DrvBoolNull) || ev.lint_on(crate::lint::LintId::DrvList) {
+        let forced = ev.force(w)?;
+        crate::lint::coerce::drv_value(ev, key, forced, attr_pos)?;
+    }
+    // the attribute's own position, so a coercion lint names the binding
+    let st = ev.coerce_to_string(w, &mut b.context, attr_pos, "", true, true, true)?;
     let st = utf8(&st, pos)?;
     if sym == s.json {
         b.drv.structured_attrs = Some(st);
@@ -426,18 +432,35 @@ fn derivation_strict_internal(
         json: json_mode.then(|| vec![b'{']),
     };
 
+    let path_lint = ev.lint_on(crate::lint::LintId::ImpurePathInDrv)
+        || ev.lint_on(crate::lint::LintId::AbsolutePathInDrv);
     for attr in lexicographic_order(ev, attrs) {
         if attr.sym == s.ignore_nulls {
             continue;
         }
         let key = utf8(ev.interner.name(attr.sym), pos)?;
-        process_attr(ev, &mut b, attr.sym, &key, attr.cell.get(), pos).map_err(|mut e| {
-            e.add_trace(
-                attr.pos,
-                format!("while evaluating attribute '{key}' of derivation '{drv_name}'"),
-            );
-            e
-        })?;
+        let before = b.context.len();
+        process_attr(ev, &mut b, attr.sym, &key, attr.cell.get(), pos, attr.pos).map_err(
+            |mut e| {
+                e.add_trace(
+                    attr.pos,
+                    format!("while evaluating attribute '{key}' of derivation '{drv_name}'"),
+                );
+                e
+            },
+        )?;
+        if path_lint {
+            let impure: Vec<&'static [u8]> = b.context[before..]
+                .iter()
+                .filter_map(|c| match c {
+                    Ctx::Impure(p) => Some(*p),
+                    _ => None,
+                })
+                .collect();
+            for p in impure {
+                crate::lint::purity::path_in_drv(ev, drv_name, &key, p, attr.pos)?;
+            }
+        }
     }
 
     let Builder {
@@ -461,6 +484,7 @@ fn derivation_strict_internal(
     context.dedup();
     for c in &context {
         match c {
+            Ctx::Impure(_) => {}
             Ctx::Opaque(p) => {
                 drv.input_srcs.insert(parse_store_path(p, pos)?);
             }
@@ -522,10 +546,17 @@ fn derivation_strict_internal(
             Hash::parse_any(&h, output_hash_algo)
                 .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, pos))?
         };
-        let out = DerivationOutput::Fixed {
-            method: ingestion_method.unwrap_or(IngestionMethod::Flat),
-            hash,
-        };
+        let method = ingestion_method.unwrap_or(IngestionMethod::Flat);
+        if ev.lint_on(crate::lint::LintId::Fod) {
+            let sri = hash.to_sri();
+            let algo = sri.split('-').next().unwrap_or("");
+            let mode = match method {
+                IngestionMethod::Flat => "flat",
+                IngestionMethod::Recursive => "recursive",
+            };
+            crate::lint::purity::fod(ev, drv_name, mode, algo, name_pos)?;
+        }
+        let out = DerivationOutput::Fixed { method, hash };
         let path = out
             .fixed_path(drv_name, "out")
             .map_err(|e| drv_err(e, pos))?
@@ -770,11 +801,9 @@ pub fn import_derivation(ev: &mut Evaluator, path: &[u8], pos: Pos) -> EvalResul
     let f = match ev.drv.imported_drv_fn {
         Some(f) => f,
         None => {
-            let ir = ev.compile_source(
+            let ir = ev.compile_internal(
                 b"\xc2\xabimported-drv-to-derivation\xc2\xbb",
-                IMPORTED_DRV_TO_DERIVATION.to_vec(),
-                b"/",
-                None,
+                IMPORTED_DRV_TO_DERIVATION,
             )?;
             let root = ev.root_env;
             let f = ev.eval(root, ir)?;

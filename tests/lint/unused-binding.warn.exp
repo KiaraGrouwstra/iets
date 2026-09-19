@@ -1,0 +1,2 @@
+warning: [unused-binding] let binding `b` is never used
+  at /pwd/lint/unused-binding.nix:1:12

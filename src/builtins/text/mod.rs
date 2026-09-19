@@ -311,6 +311,7 @@ fn hash_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
             crate::compile::canon_path(&s)
         }
     };
+    crate::lint::coerce::read_through_copy(ev, &path, pos)?;
     // `read_source` is the one reader: a file on disk, the local original of a
     // virtual copy, or a member of a fetched input's spool (`crate::inputs`).
     let data = match crate::inputs::read_source(ev, &path) {
@@ -550,6 +551,7 @@ fn get_env(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the first argument passed to builtins.getEnv",
     )?;
+    crate::lint::purity::get_env(ev, name, pos)?;
     let os = <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(name);
     ev.trace.env(name);
     let v = std::env::var_os(os).unwrap_or_default();

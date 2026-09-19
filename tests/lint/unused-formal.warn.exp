@@ -1,0 +1,2 @@
+warning: [unused-formal] formal `b` is never used
+  at /pwd/lint/unused-formal.nix:1:14

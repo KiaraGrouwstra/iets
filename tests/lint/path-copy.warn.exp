@@ -1,0 +1,2 @@
+warning: [path-copy] path '/pwd/lint/data' is copied to the store as '/nix/store/lk8f98fz5l95dq48y20rglhdvwgs6bvg-data' by this string coercion; use `toString` for the name or `builtins.path` for an explicit copy
+  at /pwd/lint/path-copy.nix:1:1

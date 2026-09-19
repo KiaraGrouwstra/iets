@@ -1,0 +1,2 @@
+warning: [absolute-path-literal] absolute path literals are not portable. Consider replacing path literal '/etc' by a string, relative path, or parameter
+  at /pwd/lint/absolute-path-literal.nix:1:17

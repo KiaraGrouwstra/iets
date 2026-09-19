@@ -64,13 +64,17 @@ impl Evaluator {
                 Ok(Cow::Borrowed(s.bytes))
             }
             Value::Path(p) => {
-                if !canonicalize && !copy_to_store {
-                    Ok(Cow::Borrowed(p.path))
-                } else if copy_to_store {
+                if copy_to_store {
                     let sp = self.copy_path_to_store(p.path, pos)?;
+                    crate::lint::coerce::path_copy(self, p.path, sp, pos)?;
                     ctx.push(Ctx::Opaque(sp));
                     Ok(Cow::Borrowed(sp))
                 } else {
+                    // the text of a path outside the store: marked so a
+                    // derivation that receives it can be linted
+                    if !self.is_store_path_text(p.path) {
+                        ctx.push(Ctx::Impure(p.path));
+                    }
                     Ok(Cow::Borrowed(p.path))
                 }
             }
@@ -142,6 +146,12 @@ impl Evaluator {
         }
     }
 
+    /// `path` lies under the store directory.
+    pub fn is_store_path_text(&self, path: &[u8]) -> bool {
+        path.starts_with(&self.store_dir)
+            && path.get(self.store_dir.len()).is_none_or(|b| *b == b'/')
+    }
+
     fn cannot_coerce<T>(&self, w: Word, pos: Pos, err_ctx: &str) -> EvalResult<T> {
         let mut e = Error::new(
             ErrorKind::Type,
@@ -172,6 +182,7 @@ impl Evaluator {
                 "file names are not allowed to end in '.drv'"
             );
         }
+        crate::lint::coerce::store_path_recopy(self, path, pos)?;
         crate::builtins::store_hooks::copy_path_to_store(self, path, pos)
     }
 
@@ -181,6 +192,11 @@ impl Evaluator {
     pub fn eq_values_top(&mut self, a: Word, b: Word, pos: Pos) -> EvalResult<bool> {
         let a = self.force(a)?;
         let b = self.force(b)?;
+        if self.lint_on(crate::lint::LintId::EqTypeMismatch)
+            || self.lint_on(crate::lint::LintId::EqFunction)
+        {
+            crate::lint::coerce::eq(self, a, b, pos)?;
+        }
         if a == b && a.value_type() == ValueType::Function {
             return Ok(false);
         }

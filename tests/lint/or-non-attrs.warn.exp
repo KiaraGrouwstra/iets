@@ -1,0 +1,4 @@
+warning: [or-non-attrs] `or` falls back because the subject is an integer, not an attrset
+  at /pwd/lint/or-non-attrs.nix:1:3
+warning: [or-non-attrs] `or` falls back because the subject is an integer, not an attrset
+  at /pwd/lint/or-non-attrs.nix:1:15

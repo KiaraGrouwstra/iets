@@ -53,7 +53,8 @@ The key is computed before evaluation from the command alone:
   directory and the sha256 of `flake.nix` and `flake.lock` (cwd is then
   always in the key);
 - `--arg`/`--argstr` name and value pairs in order; `-A`; `--strict`;
-  `--json`; `--raw`; the lint flags; experimental features;
+  `--json`; `--raw`; the effective lint levels and knobs (docs/lints.md);
+  experimental features;
 - `-I` entries and `NIX_PATH` entries as absolute `(prefix, path)` pairs
   in resolution order;
 - `builtins.currentSystem`;
@@ -77,7 +78,9 @@ evaluator, so they do not enter the key either.
 - `drvs` (`build` only): every `DrvInfo` this evaluation produced (store
   path, outputs, references, ATerm);
 - `sources` (`build` only): the `SourceOrigin` table (store path -> `Tree {
-  local, accepted }` | `Text { bytes, refs }`).
+  local, accepted }` | `Text { bytes, refs }`);
+- `warnings`, only when the run printed lint warnings: the lines, in
+  order. A hit prints them to stderr again before the result.
 
 Every file is written to a temporary name in the entry directory and
 renamed into place. An entry is written only after a successful,
@@ -106,7 +109,8 @@ rehashed, T s` on stderr.
 - A hit prints the same stdout bytes as a miss.
 - `builtins.trace` and `builtins.warn` write to stderr during evaluation.
   A hit does not evaluate, so it prints none of them. Run with
-  `--no-cache` to see them again.
+  `--no-cache` to see them again. Lint warnings are different: the entry
+  records them and a hit replays them.
 - Errors are never cached: an entry is written only after the result was
   printed (or the roots were resolved) without error.
 - `--no-cache` and `IETSP_CACHE=0` disable lookup and write. `--cache-dir

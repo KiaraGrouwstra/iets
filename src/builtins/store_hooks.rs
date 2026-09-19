@@ -139,11 +139,24 @@ pub fn copy_path_to_store(
         }
         Access::Missing => return Err(copy_err(std::io::Error::from_raw_os_error(2))),
     };
+    // a plain local directory, not a tree the flake machinery filtered
+    if ev.lint_on(crate::lint::LintId::DirCopyUnfiltered)
+        && accepted.is_none()
+        && !ev.is_store_path_text(path)
+        && ev.trace.stat_now(local.as_os_str().as_bytes(), true) == crate::trace::Kind::Directory
+    {
+        crate::lint::purity::dir_copy_unfiltered(ev, path, pos)?;
+    }
+    let git_lint = ev.lint_on(crate::lint::LintId::GitInSource);
+    let mut saw_git = false;
     let mut fp = ev.trace.fp(&local);
     let mut filter = |p: &Path, t: crate::store::nar::FileType| {
         let keep = accepted.as_ref().is_none_or(|a| a.contains(p));
         if let Some(fp) = &mut fp {
             fp.entry(p, t, keep);
+        }
+        if keep && git_lint && is_git_entry(&local, p) {
+            saw_git = true;
         }
         keep
     };
@@ -159,6 +172,10 @@ pub fn copy_path_to_store(
         accepted.as_deref(),
         fp,
     );
+    if saw_git {
+        crate::lint::purity::git_in_source(ev, path, pos)?;
+    }
+    crate::lint::purity::large_source_copy(ev, path, nar_size, pos)?;
     let name = Path::new(std::ffi::OsStr::from_bytes(path))
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -167,6 +184,7 @@ pub fn copy_path_to_store(
     let sp = make_fixed_output_path(IngestionMethod::Recursive, &hash, &name, &BTreeSet::new())
         .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, pos))?;
     let full = ev.arena.alloc_bytes(sp.to_full_string().as_bytes());
+    ev.lints.note_copy(full);
     ev.src_to_store.insert(path.to_vec(), full);
     ev.sources.insert(
         sp,
@@ -178,6 +196,11 @@ pub fn copy_path_to_store(
         },
     );
     Ok(full)
+}
+
+/// `p` is the `.git` entry at the top of the tree rooted at `root`.
+pub fn is_git_entry(root: &Path, p: &Path) -> bool {
+    p.file_name().is_some_and(|n| n == ".git") && p.parent() == Some(root)
 }
 
 #[cfg(test)]

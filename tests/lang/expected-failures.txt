@@ -4,4 +4,3 @@ eval-okay-flake-ref-to-string
 eval-okay-parse-flake-ref
 eval-fail-string-nul-1
 eval-fail-string-nul-2
-eval-fail-url-literal

@@ -77,6 +77,7 @@ fn main() {
         "cache" if argv.get(1).is_some_and(|s| s == "gc") => {
             exit(cli::cache_gc::cmd_cache_gc(&argv[2..]))
         }
+        "lint" => exit(cli::cmd_lint(&argv[1..])),
         "parse" if argv.len() > 1 => {
             let rest = &argv[1..];
             let quiet = rest[0] == "-q";

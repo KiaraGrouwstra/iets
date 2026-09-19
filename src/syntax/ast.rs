@@ -67,6 +67,16 @@ pub struct Ast {
     /// `inherit` names.
     pub names: Vec<(Sym, Span)>,
     pub formals: Vec<Formal>,
+    /// Constructs the parser accepts but a lint may report (docs/lints.md).
+    pub notes: Vec<Note>,
+}
+
+/// A legacy construct the parser saw, for the `url-literal` and
+/// `legacy-let` lints; the node is the expression it produced.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Note {
+    Url(ExprId),
+    LegacyLet(ExprId),
 }
 
 impl Ast {
@@ -126,6 +136,7 @@ impl Ast {
         self.binds.clear();
         self.names.clear();
         self.formals.clear();
+        self.notes.clear();
         self.root = ExprId(0);
     }
 }

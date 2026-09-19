@@ -85,7 +85,7 @@ impl Cache {
     /// `currentTime` or called a fetcher writes nothing. `tables` adds the
     /// drv and source tables, which only a `build` hit reads back.
     pub fn write(&self, ev: &Evaluator, result: &[u8], tables: bool) {
-        use crate::trace::store::{DRVS, READSET, RESULT, SOURCES};
+        use crate::trace::store::{DRVS, READSET, RESULT, SOURCES, WARNINGS};
         use crate::trace::wire;
         if !ev.trace.is_cacheable() {
             if self.timings {
@@ -97,7 +97,20 @@ impl Cache {
         let obs = ev.trace.take();
         // `readset` goes last: a write the store lock cut short leaves no
         // entry to hit rather than a half-written one.
+        let warnings = ev.lints.lines();
         let r = (|| -> std::io::Result<bool> {
+            if warnings.is_empty() {
+                let _ = std::fs::remove_file(self.store.entry_dir(&self.key).join(WARNINGS));
+            } else {
+                let mut bytes = Vec::new();
+                for w in &warnings {
+                    bytes.extend_from_slice(w.as_bytes());
+                    bytes.push(b'\n');
+                }
+                if !self.store.write(&self.key, WARNINGS, &bytes)? {
+                    return Ok(false);
+                }
+            }
             if tables {
                 if !self
                     .store
@@ -139,6 +152,14 @@ impl Cache {
             ),
         }
         crate::cachefs::maybe_sweep(self.store.root(), crate::cachefs::Shape::Dirs, self.timings);
+    }
+
+    /// On a hit: the lint warnings the recorded run printed, to stderr.
+    pub fn replay_warnings(&self) {
+        use std::io::Write;
+        if let Some(bytes) = self.store.read(&self.key, crate::trace::store::WARNINGS) {
+            let _ = std::io::stderr().write_all(&bytes);
+        }
     }
 
     /// The roots, drv table and source table of a `build` entry.

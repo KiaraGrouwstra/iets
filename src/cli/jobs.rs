@@ -231,6 +231,10 @@ pub fn cmd_eval_jobs(argv: &[String]) -> i32 {
     if j.worker {
         let mut ev = Evaluator::new();
         ev.drv.keep_aterm = !j.opts.no_instantiate;
+        if let Err(e) = crate::api::configure_lints(&mut ev, &a) {
+            report(&ev, &e);
+            return 1;
+        }
         return crate::parallel::run(1, ev, move |ev| jobs_worker(ev, a, &j, &transport));
     }
     if j.max_memory > 0 {
@@ -239,6 +243,10 @@ pub fn cmd_eval_jobs(argv: &[String]) -> i32 {
     let workers = a.workers;
     let mut ev = Evaluator::new();
     ev.drv.keep_aterm = !j.opts.no_instantiate;
+    if let Err(e) = crate::api::configure_lints(&mut ev, &a) {
+        report(&ev, &e);
+        return 1;
+    }
     crate::parallel::run(workers, ev, move |ev| {
         jobs_single(ev, a, &j, &transport, t0)
     })

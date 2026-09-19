@@ -124,7 +124,7 @@ pub fn drv_roots(
                     roots.push((parse(drv)?, None));
                     found = true;
                 }
-                Ctx::Opaque(_) => {}
+                Ctx::Opaque(_) | Ctx::Impure(_) => {}
             }
         }
         if !found {

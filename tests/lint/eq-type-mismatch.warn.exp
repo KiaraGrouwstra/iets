@@ -1,0 +1,4 @@
+warning: [eq-type-mismatch] `==` compares an integer with a string: values of different types are never equal
+  at /pwd/lint/eq-type-mismatch.nix:1:4
+warning: [eq-type-mismatch] `==` compares null with a set: values of different types are never equal
+  at /pwd/lint/eq-type-mismatch.nix:1:26

@@ -1,0 +1,6 @@
+warning: [unhashed-fetch] `fetchTarball` is called without a hash, narHash or rev: the result is not reproducible
+  at /pwd/lint/unhashed-fetch.nix:1:1
+error: ietsp: network fetchers are not supported (builtins.fetchTarball)
+       at /pwd/lint/unhashed-fetch.nix:1:1
+       … while calling the 'fetchTarball' builtin at /pwd/lint/unhashed-fetch.nix:1:1
+       … while calling the 'importRaw' builtin

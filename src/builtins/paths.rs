@@ -53,18 +53,28 @@ macro_rules! unsupported {
             bail!(ErrorKind::Unsupported, pos, "{}", $msg)
         }
     };
+    ($fn:ident, $name:literal, $msg:expr) => {
+        fn $fn(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
+            ev.trace.mark_uncacheable();
+            crate::lint::purity::unhashed_fetch(ev, $name, args[0], pos)?;
+            bail!(ErrorKind::Unsupported, pos, "{}", $msg)
+        }
+    };
 }
 
 unsupported!(
     fetchurl,
+    "fetchurl",
     "ietsp: network fetchers are not supported (builtins.fetchurl)"
 );
 unsupported!(
     fetch_tarball,
+    "fetchTarball",
     "ietsp: network fetchers are not supported (builtins.fetchTarball)"
 );
 unsupported!(
     fetch_git,
+    "fetchGit",
     "ietsp: network fetchers are not supported (builtins.fetchGit)"
 );
 unsupported!(
@@ -193,6 +203,7 @@ fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>> {
     for c in &ctx {
         let mut kind = ErrorKind::Eval;
         let msg = match c {
+            Ctx::Impure(_) => continue,
             Ctx::Opaque(sp) => {
                 if !matches!(store_hooks::locate(ev, sp), store_hooks::Access::Store)
                     || ev.trace.stat_now(sp, true) != crate::trace::Kind::Missing
@@ -235,6 +246,7 @@ fn realise_existing(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Real> {
     match store_hooks::locate(ev, &p) {
         store_hooks::Access::Store => Ok(Real::Fs(p, None)),
         store_hooks::Access::Local { path, accepted } => {
+            crate::lint::coerce::read_through_copy(ev, &p, pos)?;
             Ok(Real::Fs(path.into_os_string().into_vec(), accepted))
         }
         store_hooks::Access::Input { entry, base, rel } => Ok(Real::In(entry, base, rel, p)),
@@ -366,6 +378,7 @@ fn path_exists(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> 
         Value::String(s) if s.bytes.ends_with(b"/") || s.bytes.ends_with(b"/.")
     );
     let p = realise_path(ev, w, pos)?;
+    crate::lint::coerce::read_through_copy(ev, &p, pos)?;
     let p = match store_hooks::whence(ev, &p) {
         Some(store_hooks::Whence::Fs(p)) => p,
         Some(store_hooks::Whence::In(e, base, rel)) => {
@@ -513,6 +526,8 @@ fn add_path_inner(
 ) -> EvalResult<Word> {
     let name = utf8(name, pos)?;
     let refs = BTreeSet::new();
+    crate::lint::coerce::store_path_recopy(ev, path, pos)?;
+    crate::lint::coerce::read_through_copy(ev, path, pos)?;
     let store_err = |e: crate::store::path::StorePathError| Error::boxed(ErrorKind::Eval, e.0, pos);
     let expected_sp = expected
         .map(|h| make_fixed_output_path(method, &h, name, &refs))
@@ -599,6 +614,8 @@ fn add_path_inner(
                 .then(|| ev.trace.fp(&resolved))
                 .flatten();
             let mut err: Option<Box<Error>> = None;
+            let git_lint = ev.lint_on(crate::lint::LintId::GitInSource);
+            let mut saw_git = false;
             let mut f = |p: &Path, t: FileType| -> bool {
                 let keep = if parent.as_ref().is_some_and(|a| !a.contains(p)) {
                     false
@@ -625,6 +642,9 @@ fn add_path_inner(
                 if let Some(fp) = &mut fp {
                     fp.entry(p, t, keep);
                 }
+                if keep && git_lint && store_hooks::is_git_entry(&resolved, p) {
+                    saw_git = true;
+                }
                 keep
             };
             let r = nar::nar_hash_filtered(&resolved, HashAlgo::Sha256, &mut f);
@@ -639,11 +659,16 @@ fn add_path_inner(
                 accepted.as_ref(),
                 fp,
             );
+            if saw_git {
+                crate::lint::purity::git_in_source(ev, path, pos)?;
+            }
+            crate::lint::purity::large_source_copy(ev, path, size, pos)?;
             h
         }
     };
     let sp = make_fixed_output_path(method, &hash, name, &refs).map_err(store_err)?;
     if method == IngestionMethod::Recursive {
+        ev.lints.note_copy(sp.to_full_string().as_bytes());
         ev.sources.insert(
             sp.clone(),
             SourceOrigin::Tree {
@@ -792,6 +817,7 @@ fn ctx_internal(c: &Ctx) -> String {
         Ctx::Opaque(p) => base(p),
         Ctx::DrvDeep(d) => format!("={}", base(d)),
         Ctx::Built { drv, output } => format!("!{}!{}", lossy(output), base(drv)),
+        Ctx::Impure(p) => lossy(p).into_owned(),
     }
 }
 
@@ -809,6 +835,7 @@ fn to_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let mut refs = BTreeSet::new();
     for c in contents.ctx {
         match c {
+            Ctx::Impure(_) => {}
             Ctx::Opaque(p) => {
                 let sp = StorePath::parse(utf8(p, pos)?)
                     .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, pos))?;

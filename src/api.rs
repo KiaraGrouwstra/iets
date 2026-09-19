@@ -19,8 +19,9 @@ pub struct EvalArgs {
     pub input: Option<Input>,
     pub dump_drvs: Option<String>,
     pub attr: Option<String>,
-    pub lint_absolute: crate::compile::Lint,
-    pub lint_short: crate::compile::Lint,
+    /// `--lint SELECTOR=LEVEL` in order; applied after `ietsp.toml` and
+    /// `IETSP_LINT` (docs/lints.md).
+    pub lints: Vec<(String, crate::lint::Level)>,
     pub xp_features: Vec<String>,
     pub workers: usize,
     pub timings: bool,
@@ -45,8 +46,7 @@ impl Default for EvalArgs {
             input: None,
             dump_drvs: None,
             attr: None,
-            lint_absolute: crate::compile::Lint::Ignore,
-            lint_short: crate::compile::Lint::Ignore,
+            lints: Vec::new(),
             xp_features: Vec::new(),
             workers: crate::parallel::default_workers(),
             timings: false,
@@ -109,6 +109,7 @@ pub fn flake_ref(f: &str, cwd: &[u8]) -> crate::error::Result<crate::flake::Flak
 pub fn report(ev: &Evaluator, e: &Error) {
     use crate::provenance::{describe_pos, rewrite_msg};
     let at = |pos: Pos| describe_pos(ev, pos).unwrap_or_else(|| ev.describe_pos(pos));
+    ev.lints.flush();
     eprintln!("error: {}", rewrite_msg(ev, &e.msg));
     if !e.pos.is_none() {
         eprintln!("       at {}", at(e.pos));
@@ -123,10 +124,42 @@ pub fn report(ev: &Evaluator, e: &Error) {
     }
 }
 
+/// The directory the `ietsp.toml` walk starts from: the entry file's
+/// directory, the flake directory, or cwd for an expression.
+pub fn entry_dir(a: &EvalArgs) -> std::path::PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+    let cwd = cwd();
+    let bytes = match &a.input {
+        Some(Input::File(f)) => crate::eval::dir_of(&abs_path(f, &cwd)).to_vec(),
+        Some(Input::Flake(f)) => match flake_ref(f, &cwd) {
+            Ok(fr) => return fr.dir,
+            Err(_) => cwd,
+        },
+        _ => cwd,
+    };
+    std::path::PathBuf::from(std::ffi::OsStr::from_bytes(&bytes))
+}
+
+/// The lint configuration of a run (docs/lints.md).
+pub fn lint_config(a: &EvalArgs) -> Result<crate::lint::Config, Box<Error>> {
+    crate::lint::Config::resolve(Some(&entry_dir(a)), &a.lints)
+        .map_err(|m| Error::boxed(crate::eval::ErrorKind::Eval, m, Pos::NONE))
+}
+
+/// Installs the lint configuration. Call before `parallel::run`: helper
+/// fibers clone the evaluator then, and every fiber must lint alike.
+/// `evaluate` calls it too, so a frontend that runs sequentially may skip it.
+pub fn configure_lints(ev: &mut Evaluator, a: &EvalArgs) -> Result<(), Box<Error>> {
+    let c = lint_config(a)?;
+    if ev.lints.config != c {
+        ev.lints = crate::lint::Lints::new(c);
+    }
+    Ok(())
+}
+
 /// Applies the shared `eval` settings and evaluates the input, `--arg`s and `-A` included.
 pub fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
-    ev.compile_settings.lint_absolute_path_literals = a.lint_absolute;
-    ev.compile_settings.lint_short_path_literals = a.lint_short;
+    configure_lints(ev, &a)?;
     if !a.no_ir_cache {
         ev.ir_cache = crate::compile::cache::IrCache::locate(a.cache_dir.as_deref(), a.timings)
             .map(std::sync::Arc::new);
@@ -314,8 +347,7 @@ pub fn setup_cache(a: &EvalArgs, subcommand: &str, ev: &Evaluator) -> Option<Cac
     k.flag("strict", a.strict);
     k.flag("json", a.json);
     k.flag("raw", a.raw);
-    k.field("lint-absolute", format!("{:?}", a.lint_absolute).as_bytes());
-    k.field("lint-short", format!("{:?}", a.lint_short).as_bytes());
+    k.field("lints", lint_config(a).ok()?.key().as_bytes());
     for f in &a.xp_features {
         k.field("xp", f.as_bytes());
     }

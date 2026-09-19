@@ -1,0 +1,1 @@
+"${./git-in-source.d}"

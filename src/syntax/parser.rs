@@ -741,7 +741,9 @@ impl<'a> Parser<'a> {
                 self.bump();
                 let text = self.text(t);
                 let parts = self.single_str(text);
-                Ok(self.add(Expr::Str(parts), t.start, t.end))
+                let id = self.add(Expr::Str(parts), t.start, t.end);
+                self.ast.notes.push(Note::Url(id));
+                Ok(id)
             }
             Tok::LParen => {
                 self.bump();
@@ -758,7 +760,7 @@ impl<'a> Parser<'a> {
                 let mark = self.sc_elems.len();
                 self.sc_elems.push(AttrElem::Static(self.sym_body));
                 let path = commit(&mut self.ast.elems, &mut self.sc_elems, mark);
-                Ok(self.add(
+                let id = self.add(
                     Expr::Select {
                         subject: attrs,
                         path,
@@ -766,7 +768,9 @@ impl<'a> Parser<'a> {
                     },
                     t.start,
                     self.last_end,
-                ))
+                );
+                self.ast.notes.push(Note::LegacyLet(id));
+                Ok(id)
             }
             Tok::Rec => {
                 self.bump();

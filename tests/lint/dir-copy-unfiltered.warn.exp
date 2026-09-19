@@ -1,0 +1,2 @@
+warning: [dir-copy-unfiltered] directory '/pwd/lint/data' is copied to the store whole, untracked and ignored files included; use `builtins.path { path = ...; filter = ...; }`
+  at /pwd/lint/dir-copy-unfiltered.nix:1:3

@@ -92,7 +92,9 @@ pub fn try_run<R: Send + 'static>(
     f: impl FnOnce(&mut Evaluator) -> R + Send + 'static,
 ) -> Result<R, fiber::StackError> {
     if workers <= 1 {
-        return Ok(f(&mut ev));
+        let r = f(&mut ev);
+        ev.lints.flush();
+        return Ok(r);
     }
     let template = force::SyncEv(ev.clone());
     let rt = sched::Runtime::start(workers, Box::new(template), stack_size())?;
@@ -110,6 +112,7 @@ pub fn try_run<R: Send + 'static>(
             // SAFETY: as above.
             unsafe { force::init_ctx(ev, slot) };
             let r = f(ev);
+            ev.lints.flush();
             if crate::settings::get().par_stats >= 2 {
                 for i in 0..ev.files.len() {
                     eprintln!(

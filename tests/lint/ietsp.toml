@@ -1,0 +1,4 @@
+# Lint knobs for the fixtures in this directory; the levels come from
+# `--lint NAME=LEVEL` in scripts/linttest.nu.
+[lint]
+large-source-copy = { max-bytes = 64 }

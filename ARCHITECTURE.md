@@ -74,6 +74,10 @@ Around it:
   HTTP client and the tarball spool (`docs/flakes.md`).
 - `inputs.rs`: the input store, where a fetched flake input lives.
 - `trace/`: the tracing evaluation cache (`docs/tracing-cache.md`).
+- `lint/`: the lint registry (name, family, hook, default level, doc), the
+  level resolution (`ietsp.toml`, `IETSP_LINT`, `--lint`), the emission with
+  per-site deduplication, and one file per family with the triggers the
+  parser, compiler and evaluator call (`docs/lints.md`).
 - `cachefs.rs`: on-disk hygiene both caches share (`docs/caches.md`).
 - `remote/`: the store transports. `plan.rs` (the upload plan), `worker/`
   (the Nix worker protocol), `grpc/` (nix-grpc-store), `copy.rs` (a closure
@@ -142,7 +146,8 @@ inputSrcs.
 
 ## Errors
 
-`Result<Word, Box<Error>>`. `tryEval` catches `Throw` and `Assert` only.
+`Result<Word, Box<Error>>`. `tryEval` catches `Throw` and `Assert` only;
+a lint at level `error` is kind `Lint` and escapes it (docs/lints.md).
 Errors carry a message, a span, and a trace. Position information is kept
 per IR node for `unsafeGetAttrPos`, lambda positions, and error messages.
 

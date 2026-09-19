@@ -132,6 +132,7 @@ fn collect_attrs(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Attrs> {
 }
 
 pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
+    crate::lint::purity::unhashed_fetch(ev, "fetchTree", args[0], pos)?;
     let mut attrs = collect_attrs(ev, args[0], pos)?;
     let ty = str_attr(&attrs, "type").unwrap_or("").to_string();
     let sp = match ty.as_str() {

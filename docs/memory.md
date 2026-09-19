@@ -100,7 +100,9 @@ differs between processes: the loader re-sorts them and rewrites every
 `Local` index through a permutation stack.
 
 Only `import` uses the cache; `scopedImport`, `-E`, and files with a `~/`
-path or a lint diagnostic compile from source. `--no-ir-cache` or
+path compile from source. The compile-time lint levels are part of the key
+and the entry carries the lint warnings the compile produced
+(docs/lints.md). `--no-ir-cache` or
 `IETSP_CACHE=0` turns it off; `--no-cache` leaves it on.
 `IETSP_IR_STATS=1` prints a line per file. Locking, touching, garbage
 collection and the version file are shared with the tracing cache:

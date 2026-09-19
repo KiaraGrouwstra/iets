@@ -1,0 +1,2 @@
+warning: [read-through-copy] '/nix/store/lk8f98fz5l95dq48y20rglhdvwgs6bvg-data/hello.txt' is read through the store copy '/nix/store/lk8f98fz5l95dq48y20rglhdvwgs6bvg-data' (copied from '/pwd/lint/data'); read the original path instead
+  at /pwd/lint/read-through-copy.nix:1:28

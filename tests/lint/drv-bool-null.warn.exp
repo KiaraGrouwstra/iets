@@ -1,0 +1,4 @@
+warning: [drv-bool-null] derivation attribute 'flag' is the Boolean true, which becomes "1" in the environment
+  at /pwd/lint/drv-bool-null.nix:1:56
+warning: [drv-bool-null] derivation attribute 'nothing' is null, which becomes "" in the environment; set `__ignoreNulls` to drop it
+  at /pwd/lint/drv-bool-null.nix:1:69

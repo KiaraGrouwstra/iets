@@ -1,0 +1,2 @@
+warning: [store-path-recopy] '/nix/store/lk8f98fz5l95dq48y20rglhdvwgs6bvg-data' is already a store path and is copied again, which doubles the hash in its name; use `builtins.storePath` or keep it a string
+  at /pwd/lint/store-path-recopy.nix:1:49

@@ -1,0 +1,2 @@
+warning: [rec-unused] `rec` on a set where no binding references a sibling
+  at /pwd/lint/rec-unused.nix:1:9

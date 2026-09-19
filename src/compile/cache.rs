@@ -60,13 +60,23 @@ impl IrCache {
         &self.root
     }
 
-    pub fn key(&self, path: &[u8], src: &[u8], system: &str, store_dir: &[u8]) -> String {
+    /// `lint_key` is `lint::Config::compile_key`: the compile-time lint
+    /// levels, whose warnings the entry carries.
+    pub fn key(
+        &self,
+        path: &[u8],
+        src: &[u8],
+        system: &str,
+        store_dir: &[u8],
+        lint_key: &str,
+    ) -> String {
         let mut h = blake3::Hasher::new();
         for part in [
             crate::trace::key::BUILD_ID.as_bytes(),
             path,
             system.as_bytes(),
             store_dir,
+            lint_key.as_bytes(),
         ] {
             h.update(part);
             h.update(b"\0");
@@ -153,8 +163,14 @@ struct Ser {
     ok: bool,
 }
 
-/// The entry for `ir`, or `None` when a constant cannot be named.
-pub fn serialize(ev: &Evaluator, ir: IrRef, base: u32) -> Option<Vec<u8>> {
+/// The entry for `ir` and the lint warnings its compile produced, or
+/// `None` when a constant cannot be named.
+pub fn serialize(
+    ev: &Evaluator,
+    ir: IrRef,
+    base: u32,
+    diags: &[crate::lint::Diag],
+) -> Option<Vec<u8>> {
     let mut rev = FxHashMap::default();
     if let Some(b) = ev.globals.builtins {
         for a in b.iter() {
@@ -175,6 +191,12 @@ pub fn serialize(ev: &Evaluator, ir: IrRef, base: u32) -> Option<Vec<u8>> {
     s.node(ir);
     if !s.ok {
         return None;
+    }
+    put_u32(&mut s.out, diags.len() as u32);
+    for d in diags {
+        s.out.push(d.id as u8);
+        s.pos(d.pos);
+        put_bytes(&mut s.out, d.msg.as_bytes());
     }
     let mut file = Vec::with_capacity(s.out.len() + 16 * s.names.len() + 16);
     file.extend_from_slice(MAGIC);
@@ -520,8 +542,13 @@ struct De<'a, 'e> {
 }
 
 /// The IR of an entry, allocated in the evaluator's arena with positions
-/// rebased at `base`; `None` on a malformed entry.
-pub fn deserialize(ev: &mut Evaluator, data: &[u8], base: u32, stats: bool) -> Option<IrRef> {
+/// rebased at `base`, plus its lint warnings; `None` on a malformed entry.
+pub fn deserialize(
+    ev: &mut Evaluator,
+    data: &[u8],
+    base: u32,
+    stats: bool,
+) -> Option<(IrRef, Vec<crate::lint::Diag>)> {
     let t0 = std::time::Instant::now();
     if data.len() < MAGIC.len() || &data[..MAGIC.len()] != MAGIC {
         return None;
@@ -549,6 +576,20 @@ pub fn deserialize(ev: &mut Evaluator, data: &[u8], base: u32, stats: bool) -> O
     }
     let t1 = t0.elapsed();
     let ir = d.node();
+    let ndiags = d.u32() as usize;
+    let mut diags = Vec::with_capacity(ndiags.min(1024));
+    for _ in 0..ndiags {
+        if !d.ok {
+            break;
+        }
+        let id = crate::lint::LintId::from_u8(d.u8());
+        let pos = d.pos();
+        let msg = String::from_utf8_lossy(d.bytes()).into_owned();
+        match id {
+            Some(id) => diags.push(crate::lint::Diag { id, pos, msg }),
+            None => d.ok = false,
+        }
+    }
     if stats {
         eprintln!(
             "ir-cache   syms={} {}us nodes {}us",
@@ -558,7 +599,7 @@ pub fn deserialize(ev: &mut Evaluator, data: &[u8], base: u32, stats: bool) -> O
         );
     }
     if d.ok && d.at == data.len() {
-        Some(ir)
+        Some((ir, diags))
     } else {
         None
     }

@@ -122,7 +122,8 @@ pub struct Evaluator {
     /// Locked `narHash` -> flake input name, from the lock file, for messages
     /// about an input that must be fetched.
     pub input_names: crate::parallel::shared::SharedMap<String, String>,
-    pub compile_settings: crate::compile::CompileSettings,
+    /// Lint levels and the warnings emitted so far (docs/lints.md).
+    pub lints: crate::lint::Lints,
     pub drv: crate::builtins::derivation::DrvState,
     pub par: crate::parallel::Ctx,
     /// Read-set recorder for the tracing cache; off unless `main` enables it.
@@ -188,7 +189,7 @@ impl Evaluator {
             src_to_store: Default::default(),
             sources: Default::default(),
             input_names: Default::default(),
-            compile_settings: Default::default(),
+            lints: Default::default(),
             drv: Default::default(),
             par: Default::default(),
             trace: Default::default(),
@@ -241,24 +242,34 @@ impl Evaluator {
         base_dir: &[u8],
         extra_scope: Option<&[Sym]>,
     ) -> EvalResult<IrRef> {
-        self.compile_source_inner(path, src, base_dir, extra_scope)
-            .map(|(ir, _)| ir)
+        self.compile_source_inner(path, src, base_dir, extra_scope, true)
+            .map(|(ir, _, _)| ir)
     }
 
-    /// `compile_source` plus whether a `~/` path literal was compiled.
+    /// `compile_source` for an embedded source (corepkgs, `call-flake.nix`):
+    /// never linted.
+    pub fn compile_internal(&mut self, path: &[u8], src: &[u8]) -> EvalResult<IrRef> {
+        self.compile_source_inner(path, src.to_vec(), b"/", None, false)
+            .map(|(ir, _, _)| ir)
+    }
+
+    /// `compile_source` plus whether a `~/` path literal was compiled and
+    /// the lint diagnostics, already reported.
     fn compile_source_inner(
         &mut self,
         path: &[u8],
         src: Vec<u8>,
         base_dir: &[u8],
         extra_scope: Option<&[Sym]>,
-    ) -> EvalResult<(IrRef, bool)> {
+        lint: bool,
+    ) -> EvalResult<(IrRef, bool, Vec<crate::lint::Diag>)> {
         let file = self.add_file(path, &src);
         let base = self.files[file.0 as usize].base;
         let ast = crate::syntax::parse(&src, file, &mut self.interner)
             .map_err(|e| Error::boxed(ErrorKind::Parse, e.msg, Pos(base + e.span.start)))?;
         let t0 = std::time::Instant::now();
         let before = self.arena.bytes_allocated;
+        let lints = lint.then_some(&self.lints.config);
         let mut c = Compiler::new(
             &ast,
             &mut self.arena,
@@ -266,10 +277,11 @@ impl Evaluator {
             &self.globals,
             base,
             base_dir,
-            self.compile_settings,
+            lints,
         );
         let r = c.compile_root(extra_scope);
         let used_home = c.used_home.get();
+        let diags = std::mem::take(&mut c.diags);
         self.arena
             .stats
             .note(Stat::Ir, self.arena.bytes_allocated - before);
@@ -283,44 +295,48 @@ impl Evaluator {
         if used_home {
             self.trace.env(b"HOME");
         }
-        r.map(|ir| (ir, used_home))
+        let ir = r?;
+        self.report_diags(&diags);
+        Ok((ir, used_home, diags))
     }
 
     /// `compile_source` for an imported file, through the IR cache when it
-    /// is on: an entry keyed on the source is loaded instead of parsing and
-    /// compiling, and a fresh compile writes one. Files with `~/` paths and
-    /// runs with lint diagnostics bypass it (the warnings live in the
-    /// compiler).
+    /// is on: an entry keyed on the source and the compile-time lint levels
+    /// is loaded instead of parsing and compiling, and a fresh compile
+    /// writes one. The entry carries the lint warnings the compile
+    /// produced, so a load reports them again. Files with `~/` paths
+    /// bypass it. Embedded corepkgs are never linted.
     pub fn compile_file(
         &mut self,
         path: &[u8],
         src: Vec<u8>,
         base_dir: &[u8],
     ) -> EvalResult<IrRef> {
+        if path.starts_with(CorePkgs::PREFIX) {
+            return self.compile_internal(path, &src);
+        }
         let Some(cache) = self.ir_cache.clone() else {
             return self.compile_source(path, src, base_dir, None);
         };
-        let lint = self.compile_settings;
-        if src.len() < cache.min_size
-            || lint.lint_absolute_path_literals != crate::compile::Lint::Ignore
-            || lint.lint_short_path_literals != crate::compile::Lint::Ignore
-        {
+        if src.len() < cache.min_size {
             return self.compile_source(path, src, base_dir, None);
         }
         let t0 = std::time::Instant::now();
-        let key = cache.key(path, &src, self.current_system, &self.store_dir);
+        let lint_key = self.lints.config.compile_key();
+        let key = cache.key(path, &src, self.current_system, &self.store_dir, &lint_key);
         let file = self.add_file(path, &src);
         let base = self.files[file.0 as usize].base;
         if let Some(bytes) = cache.read(&key) {
             let before = self.arena.bytes_allocated;
-            let ir = crate::compile::cache::deserialize(self, &bytes, base, cache.stats);
+            let loaded = crate::compile::cache::deserialize(self, &bytes, base, cache.stats);
             self.arena
                 .stats
                 .note(Stat::Ir, self.arena.bytes_allocated - before);
-            if ir.is_none() {
+            if loaded.is_none() {
                 cache.discard(&key);
             }
-            if let Some(ir) = ir {
+            if let Some((ir, diags)) = loaded {
+                self.report_diags(&diags);
                 if cache.stats {
                     eprintln!(
                         "ir-cache load {} {} {}us",
@@ -332,9 +348,10 @@ impl Evaluator {
                 return Ok(ir);
             }
         }
-        let (ir, used_home) = self.compile_source_inner(path, src, base_dir, None)?;
+        let (ir, used_home, diags) = self.compile_source_inner(path, src, base_dir, None, true)?;
         let t1 = std::time::Instant::now();
-        if !used_home && let Some(bytes) = crate::compile::cache::serialize(self, ir, base) {
+        if !used_home && let Some(bytes) = crate::compile::cache::serialize(self, ir, base, &diags)
+        {
             cache.write(&key, &bytes);
         }
         if cache.stats {
@@ -399,6 +416,7 @@ impl Evaluator {
         if p.starts_with(CorePkgs::PREFIX) {
             return Ok(p);
         }
+        crate::lint::coerce::read_through_copy(self, &p, pos)?;
         match crate::inputs::import_is_dir(self, &p) {
             Ok(true) => p.extend_from_slice(b"/default.nix"),
             Ok(false) => {}
@@ -837,13 +855,13 @@ impl Evaluator {
         ctx: &str,
     ) -> EvalResult<&'static [u8]> {
         let s = self.force_string(w, pos, ctx)?;
-        if !s.ctx.is_empty() {
+        if let Some(first) = s.ctx.iter().find(|c| c.is_store()) {
             let mut e = Error::new(
                 ErrorKind::Eval,
                 format!(
                     "the string '{}' is not allowed to refer to a store path (such as '{}')",
                     String::from_utf8_lossy(s.bytes),
-                    crate::print::ctx_display(&s.ctx[0])
+                    crate::print::ctx_display(first)
                 ),
                 pos,
             );
@@ -1453,7 +1471,12 @@ impl Evaluator {
                             e
                         })?;
                     }
-                    None => return self.eval(env, d),
+                    None => {
+                        if v.as_attrs().is_none() {
+                            crate::lint::coerce::or_non_attrs(self, v, pos)?;
+                        }
+                        return self.eval(env, d);
+                    }
                 },
                 None => {
                     let attrs = self.force_attrs(v, pos, "while selecting an attribute")?;
@@ -1498,7 +1521,12 @@ impl Evaluator {
         let attr = match default {
             Some(d) => match v.as_attrs().and_then(|a| a.get(sym)) {
                 Some(a) => a,
-                None => return self.eval(env, d),
+                None => {
+                    if v.as_attrs().is_none() {
+                        crate::lint::coerce::or_non_attrs(self, v, pos)?;
+                    }
+                    return self.eval(env, d);
+                }
             },
             None => {
                 let attrs = self.force_attrs(v, pos, "while selecting an attribute")?;
@@ -1698,6 +1726,8 @@ impl Evaluator {
         for part in parts {
             let v = self.eval(env, part)?;
             let ppos = ir_pos(part);
+            // a literal part has no position of its own: the whole concat's stands in
+            let ppos = if ppos.is_none() { pos } else { ppos };
             if first {
                 first_type = v.value_type();
             }
@@ -1771,7 +1801,7 @@ impl Evaluator {
             ValueType::Int => Ok(self.mk_int(n)),
             ValueType::Float => Ok(self.mk_float(nf)),
             ValueType::Path => {
-                if !ctx.is_empty() {
+                if ctx.iter().any(Ctx::is_store) {
                     bail!(
                         ErrorKind::Eval,
                         pos,

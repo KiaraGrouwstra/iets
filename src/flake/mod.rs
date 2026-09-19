@@ -215,12 +215,7 @@ pub fn eval_flake_value(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
     }
     check_declared_inputs(ev, &flake_dir, &lock, pos)?;
 
-    let ir = ev.compile_source(
-        b"\xc2\xabcall-flake\xc2\xbb",
-        CALL_FLAKE.as_bytes().to_vec(),
-        b"/",
-        None,
-    )?;
+    let ir = ev.compile_internal(b"\xc2\xabcall-flake\xc2\xbb", CALL_FLAKE.as_bytes())?;
     let root_env = ev.root_env;
     let call_flake = ev.eval(root_env, ir)?;
     let lock_str = ev.mk_string(&lock_bytes);

@@ -100,6 +100,19 @@ pub enum Ctx {
         drv: &'static [u8],
         output: &'static [u8],
     },
+    /// An absolute path outside the store that a coercion kept as text
+    /// (`toString ./x`). Invisible to `getContext` and `hasContext`, never
+    /// in an ATerm; the `impure-path-in-drv` lint reads it. Last so the
+    /// store elements sort first.
+    Impure(&'static [u8]),
+}
+
+impl Ctx {
+    /// A store reference, as Nix's context holds: not an `Impure` marker.
+    #[inline]
+    pub fn is_store(&self) -> bool {
+        !matches!(self, Ctx::Impure(_))
+    }
 }
 
 #[repr(C)]

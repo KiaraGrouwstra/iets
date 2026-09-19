@@ -1,0 +1,2 @@
+warning: [large-source-copy] copying '/pwd/lint/data' to the store takes 560 bytes of NAR, over the 64 byte limit; filter the source
+  at /pwd/lint/large-source-copy.nix:1:1

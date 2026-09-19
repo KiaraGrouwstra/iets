@@ -74,11 +74,16 @@ pub fn cmd_build(argv: &[String]) -> i32 {
         timings: a.timings || b.timings,
         ..a
     };
+    if let Err(e) = super::configure_lints(&mut ev, &a) {
+        report(&ev, &e);
+        return 1;
+    }
     let cache = super::setup_cache(&a, "build", &ev);
     if let Some(c) = &cache
         && c.lookup()
         && let Some(hit) = c.read_build()
     {
+        c.replay_warnings();
         let (roots, drvs, sources) = hit;
         if b.timings {
             eprintln!(

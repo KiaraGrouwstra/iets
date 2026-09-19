@@ -12,6 +12,8 @@ pub const READSET: &str = "readset";
 pub const RESULT: &str = "result";
 pub const DRVS: &str = "drvs";
 pub const SOURCES: &str = "sources";
+/// The lint warnings the run printed, newline-separated; a hit prints them again.
+pub const WARNINGS: &str = "warnings";
 
 pub struct Store {
     root: PathBuf,

@@ -34,6 +34,7 @@ fn get_context(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> 
             Ctx::Opaque(p) => infos.entry(p).or_default().path = true,
             Ctx::DrvDeep(d) => infos.entry(d).or_default().all_outputs = true,
             Ctx::Built { drv, output } => infos.entry(drv).or_default().outputs.push(output),
+            Ctx::Impure(_) => {}
         }
     }
     let s_path = ev.s.path;
@@ -163,6 +164,7 @@ fn add_drv_output_dependencies(ev: &mut Evaluator, args: &[Word], pos: Pos) -> E
         false,
         true,
     )?;
+    ctx.retain(Ctx::is_store);
     ctx.sort();
     ctx.dedup();
     if ctx.len() != 1 {
@@ -193,6 +195,7 @@ fn add_drv_output_dependencies(ev: &mut Evaluator, args: &[Word], pos: Pos) -> E
             String::from_utf8_lossy(output)
         ),
         d @ Ctx::DrvDeep(_) => d,
+        Ctx::Impure(_) => unreachable!("impure markers were dropped above"),
     };
     let bytes = ev.arena.alloc_bytes(&s);
     let ctx = ev.arena.alloc_slice(&[c]);

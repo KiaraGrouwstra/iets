@@ -1,0 +1,2 @@
+warning: [short-path-literal] relative path literal 'data/hello.txt' should be prefixed with '.' for clarity: './data/hello.txt'
+  at /pwd/lint/short-path-literal.nix:1:17

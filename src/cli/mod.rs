@@ -18,13 +18,13 @@ use crate::eval::{Error, Evaluator};
 use crate::runtime::Word;
 
 pub use crate::api::{
-    ArgKind, EvalArgs, Input, abs_path, auto_args, build_targets, cwd, flake_ref, full_includes,
-    parse_include, report, setup_cache,
+    ArgKind, EvalArgs, Input, abs_path, auto_args, build_targets, configure_lints, cwd, flake_ref,
+    full_includes, parse_include, report, setup_cache,
 };
 
 pub fn usage() -> ! {
     eprintln!(
-        "usage: ietsp eval [--strict] [--json] [--raw] [--workers N] [--timings] [--no-cache] [--no-ir-cache] [--cache-dir DIR] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] (-E EXPR | FILE)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp cache-dump READSET   (print a cache entry's read set)\n       ietsp cache gc [--ttl DAYS] [--dry-run] [--cache-dir DIR]   (sweep old cache entries)\n       ietsp build [--builder URL] [--timings] [--no-build] [--fetch-to DIR] [--no-cache] [--cache-dir DIR] [--out NAME]... [--workers N] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--fetch-to DIR] [--out NAME]... [--source STOREPATH=LOCAL]... DRV\n       ietsp eval-jobs [--workers N] [--force-recurse] [--meta] [--provenance] [--show-input-drvs] [--chunks M --chunk N [--chunk-depth D]] [--max-memory-size MB (0: one process)] [-I prefix=path]... [--arg name expr] [--argstr name str] (-E EXPR | FILE | FLAKEREF#attr)\n       ietsp fast-build [--flake FLAKEREF[#attr] | --file [FILE] [-A attr]] [--store URL] [-j N] [--systems \"a b\"] [--skip-cached] [--skip-unsupported] [--out-link PREFIX] [--retries N] [--fail-fast] [--result-file PATH] [--result-format json|junit] [--stream-json-lines] [--select EXPR]   (default: .#checks, docs/fast-build.md)\n       ietsp print-dev-env [--builder URL] [--gc-root PATH] [--json] [--workers N] [--no-cache] [--cache-dir DIR] [--timings] [FLAKEREF[#attr]]   (default: ., a daemon URL)\n       URL: daemon, unix:///path, ssh-ng://[user@]host (Nix worker protocol), grpc://host:port (nix-grpc-store); without a flag, the `builder` setting\n       every command also takes --ietsp-option NAME VALUE\n       ietsp.conf settings: docs/config.md; IETSP_* environment settings: docs/settings.md"
+        "usage: ietsp eval [--strict] [--json] [--raw] [--workers N] [--timings] [--no-cache] [--no-ir-cache] [--cache-dir DIR] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] [--lint NAME=LEVEL]... (-E EXPR | FILE)\n       ietsp lint list [--lint NAME=LEVEL]... [PATH]   (the lint registry with effective levels; docs/lints.md)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp cache-dump READSET   (print a cache entry's read set)\n       ietsp cache gc [--ttl DAYS] [--dry-run] [--cache-dir DIR]   (sweep old cache entries)\n       ietsp build [--builder URL] [--timings] [--no-build] [--fetch-to DIR] [--no-cache] [--cache-dir DIR] [--out NAME]... [--workers N] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--fetch-to DIR] [--out NAME]... [--source STOREPATH=LOCAL]... DRV\n       ietsp eval-jobs [--workers N] [--force-recurse] [--meta] [--provenance] [--show-input-drvs] [--chunks M --chunk N [--chunk-depth D]] [--max-memory-size MB (0: one process)] [-I prefix=path]... [--arg name expr] [--argstr name str] (-E EXPR | FILE | FLAKEREF#attr)\n       ietsp fast-build [--flake FLAKEREF[#attr] | --file [FILE] [-A attr]] [--store URL] [-j N] [--systems \"a b\"] [--skip-cached] [--skip-unsupported] [--out-link PREFIX] [--retries N] [--fail-fast] [--result-file PATH] [--result-format json|junit] [--stream-json-lines] [--select EXPR]   (default: .#checks, docs/fast-build.md)\n       ietsp print-dev-env [--builder URL] [--gc-root PATH] [--json] [--workers N] [--no-cache] [--cache-dir DIR] [--timings] [FLAKEREF[#attr]]   (default: ., a daemon URL)\n       URL: daemon, unix:///path, ssh-ng://[user@]host (Nix worker protocol), grpc://host:port (nix-grpc-store); without a flag, the `builder` setting\n       every command also takes --ietsp-option NAME VALUE\n       ietsp.conf settings: docs/config.md; IETSP_* environment settings: docs/settings.md"
     );
     exit(2)
 }
@@ -87,20 +87,21 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
                 // accepted for nix-instantiate compatibility; ignored
                 i += 2;
             }
+            "--lint" => {
+                i += 1;
+                let v = argv.get(i).unwrap_or_else(|| usage());
+                a.lints.push(parse_lint_flag(v));
+            }
             "--lint-absolute-path-literals"
             | "--lint-short-path-literals"
             | "--lint-url-literals" => {
                 i += 1;
                 let v = argv.get(i).unwrap_or_else(|| usage());
-                let Some(mode) = crate::compile::Lint::parse(v) else {
+                let Some(level) = crate::lint::Level::parse(v) else {
                     eprintln!("error: invalid lint mode '{v}'");
                     usage()
                 };
-                match s {
-                    "--lint-absolute-path-literals" => a.lint_absolute = mode,
-                    "--lint-short-path-literals" => a.lint_short = mode,
-                    _ => {}
-                }
+                a.lints.push((s[2..].to_string(), level));
             }
             "--impure" | "--pure-eval" | "--readonly-mode" => {}
             "--extra-experimental-features" | "--experimental-features" => {
@@ -120,6 +121,53 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
         i += 1;
     }
     a
+}
+
+/// `--lint SELECTOR=LEVEL`: the selector is checked against the registry
+/// now, so a typo is a usage error before anything runs.
+pub fn parse_lint_flag(v: &str) -> (String, crate::lint::Level) {
+    let mut probe = crate::lint::Config::default();
+    if let Err(m) = probe.set_pair(v) {
+        eprintln!("error: --lint {v}: {m}");
+        usage()
+    }
+    let (name, level) = v.split_once('=').expect("set_pair accepted the pair");
+    (
+        name.trim().to_string(),
+        crate::lint::Level::parse(level.trim()).expect("set_pair accepted the level"),
+    )
+}
+
+/// `ietsp lint list [--lint SELECTOR=LEVEL]... [PATH]`: the registry with
+/// the levels a run from `PATH` (default: cwd) would use.
+pub fn cmd_lint(argv: &[String]) -> i32 {
+    if argv.first().map(String::as_str) != Some("list") {
+        usage()
+    }
+    let mut a = EvalArgs::new();
+    let mut i = 1;
+    while i < argv.len() {
+        match argv[i].as_str() {
+            "--lint" => {
+                i += 1;
+                a.lints
+                    .push(parse_lint_flag(argv.get(i).unwrap_or_else(|| usage())));
+            }
+            s if s.starts_with('-') => usage(),
+            s => a.input = Some(Input::File(s.to_string())),
+        }
+        i += 1;
+    }
+    match crate::api::lint_config(&a) {
+        Ok(c) => {
+            print!("{}", crate::lint::list(&c));
+            0
+        }
+        Err(e) => {
+            eprintln!("error: {}", e.msg);
+            1
+        }
+    }
 }
 
 /// `api::evaluate`, with a missing input reported as a usage error.

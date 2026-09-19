@@ -1,0 +1,4 @@
+warning: [impure-builtin] `currentTime` is impure: the result changes with every run
+  at /pwd/lint/impure-builtin.nix:1:29
+warning: [impure-builtin] `getEnv "HOME"` is impure: the result depends on the environment
+  at /pwd/lint/impure-builtin.nix:1:4

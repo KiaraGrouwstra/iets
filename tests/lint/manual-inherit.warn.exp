@@ -1,0 +1,4 @@
+warning: [manual-inherit] `a = a;` is `inherit a;`
+  at /pwd/lint/manual-inherit.nix:1:35
+warning: [manual-inherit] `a = e.a;` is `inherit (e) a;`
+  at /pwd/lint/manual-inherit.nix:1:46

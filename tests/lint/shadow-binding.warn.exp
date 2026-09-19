@@ -1,0 +1,4 @@
+warning: [shadow-binding] argument `x` shadows an outer binding of the same name
+  at /pwd/lint/shadow-binding.nix:1:16
+warning: [shadow-binding] let binding `x` shadows an outer binding of the same name
+  at /pwd/lint/shadow-binding.nix:1:41

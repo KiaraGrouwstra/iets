@@ -49,6 +49,7 @@ fn import_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>> {
     match w.view() {
         Value::Path(p) => Ok(p.path.to_vec()),
         Value::String(s) => {
+            crate::lint::purity::ifd(ev, s.ctx, pos)?;
             if !s.bytes.starts_with(b"/") {
                 bail!(
                     ErrorKind::Eval,
@@ -196,6 +197,7 @@ fn trace(ev: &mut Evaluator, args: &[Word], _pos: Pos) -> EvalResult<Word> {
     let line = format!("trace: {msg}");
     if !crate::parallel::journal(ev, line.clone()) {
         // parallel: helpers journal, the demand path prints
+        ev.lints.flush();
         eprintln!("{line}");
     }
     ev.force(args[1])
@@ -210,6 +212,7 @@ fn warn(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let line = format!("evaluation warning: {}", String::from_utf8_lossy(s.bytes));
     if !crate::parallel::journal(ev, line.clone()) {
         // parallel: helpers journal, the demand path prints
+        ev.lints.flush();
         eprintln!("{line}");
     }
     ev.force(args[1])
@@ -313,7 +316,7 @@ fn has_context(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> 
         pos,
         "while evaluating the argument passed to builtins.hasContext",
     )?;
-    Ok(Word::from_bool(!s.ctx.is_empty()))
+    Ok(Word::from_bool(s.ctx.iter().any(Ctx::is_store)))
 }
 
 fn unsafe_discard_string_context(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {

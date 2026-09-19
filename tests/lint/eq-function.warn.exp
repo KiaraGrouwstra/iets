@@ -1,0 +1,2 @@
+warning: [eq-function] `==` on a function is never true: functions compare by identity of one temporary
+  at /pwd/lint/eq-function.nix:1:18

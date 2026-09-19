@@ -11,6 +11,7 @@ pub mod eval;
 pub mod flake;
 pub mod inputs;
 pub mod jobs;
+pub mod lint;
 pub mod nixbin;
 pub mod parallel;
 pub mod print;

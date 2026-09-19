@@ -1,0 +1,2 @@
+warning: [fod] derivation 'x' is fixed-output (recursive, sha256)
+  at /pwd/lint/fod.nix:1:15

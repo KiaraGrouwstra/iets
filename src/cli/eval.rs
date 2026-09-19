@@ -8,12 +8,17 @@ use crate::trace::run::Cache;
 
 pub fn run_eval(a: EvalArgs) -> i32 {
     let mut ev = Evaluator::new();
+    if let Err(e) = super::configure_lints(&mut ev, &a) {
+        report(&ev, &e);
+        return 1;
+    }
     let cache = super::setup_cache(&a, "eval", &ev);
     if let Some(c) = &cache
         && c.lookup()
         && let Some(out) = c.store.read(&c.key, crate::trace::store::RESULT)
     {
         use std::io::Write;
+        c.replay_warnings();
         let _ = std::io::stdout().write_all(&out);
         let _ = std::io::stdout().flush();
         return 0;

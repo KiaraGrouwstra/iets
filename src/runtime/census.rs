@@ -188,6 +188,10 @@ impl Census {
                     key.push(0);
                     key.extend_from_slice(output);
                 }
+                super::value::Ctx::Impure(p) => {
+                    key.push(4);
+                    key.extend_from_slice(p);
+                }
             }
             key.push(0);
         }

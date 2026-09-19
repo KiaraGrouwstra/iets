@@ -83,6 +83,14 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let r = (run-eval $ietsp ...$main)
   $res ++= [(verdict ($r.rc == 0 and ($r.status | str contains "miss (")) "after the failure the fixed file misses, not a stale hit" $"after failure \(($r.status)\)")]
 
+  # a lint warning is an effect: the entry records it and a hit prints it again
+  "with { z = 1; }; z\n" | save -f $"($work)/src/with.nix"
+  let w1 = (run-eval $ietsp --lint with=warn $"($work)/src/with.nix")
+  let w2 = (run-eval $ietsp --lint with=warn $"($work)/src/with.nix")
+  let r1 = (^$ietsp eval --strict --timings --lint with=warn $"($work)/src/with.nix" | complete)
+  let warned = ($r1.stderr | lines | where ($it | str starts-with "warning: [with]") | length)
+  $res ++= [(verdict ($w1.status =~ 'miss' and ($w2.status | str contains "cache: hit") and $warned == 1 and ($r1.stderr | str contains "cache: hit")) "a lint warning is replayed on a hit" $"lint warning replay \(($w2.status) warned=($warned)\)")]
+
   # identical output on a hit for a lang test with paths and positions
   let t = "tests/lang/eval-okay-getattrpos.nix"
   let o1 = (^$ietsp eval --strict $t | complete | get stdout | chomp)

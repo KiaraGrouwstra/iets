@@ -123,12 +123,7 @@ pub fn install(ev: &mut Evaluator) {
 
     let src = include_str!("../corepkgs/derivation.nix");
     let ir = ev
-        .compile_source(
-            b"\xc2\xabderivation-internal\xc2\xbb",
-            src.as_bytes().to_vec(),
-            b"/",
-            None,
-        )
+        .compile_internal(b"\xc2\xabderivation-internal\xc2\xbb", src.as_bytes())
         .expect("derivation.nix compiles");
     let root = ev.root_env;
     let d = ev.eval(root, ir).expect("derivation.nix evaluates");

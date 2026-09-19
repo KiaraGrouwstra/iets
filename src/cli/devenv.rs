@@ -116,6 +116,10 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
 
     let t0 = std::time::Instant::now();
     let mut ev = Evaluator::new();
+    if let Err(e) = super::configure_lints(&mut ev, &a) {
+        super::report(&ev, &e);
+        return 1;
+    }
     let cache = super::setup_cache(&a, "print-dev-env", &ev);
     if let Some(c) = &cache
         && c.lookup()
@@ -125,6 +129,7 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
         match dev_env_hit(&d, &hit) {
             Ok(true) => {
                 use std::io::Write;
+                c.replay_warnings();
                 let _ = std::io::stdout().write_all(&hit.bytes);
                 let _ = std::io::stdout().flush();
                 if a.timings {

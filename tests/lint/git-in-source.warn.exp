@@ -1,0 +1,2 @@
+warning: [git-in-source] copying '/pwd/lint/git-in-source.d' to the store includes its `.git` entry; filter the source or use a git fetcher
+  at /pwd/lint/git-in-source.nix:1:1

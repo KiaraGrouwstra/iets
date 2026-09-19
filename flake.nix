@@ -62,6 +62,7 @@
           examples = lint "examples" pkgs.cargo "build --examples --release";
           fmt = lint "fmt" pkgs.rustfmt "fmt --check";
           langtests = nuScript "langtests";
+          linttest = nuScript "linttest";
           partest = nuScript "partest";
           # `ietsp.settings` reaches /etc/ietsp/ietsp.conf in the shape the
           # reader wants: one `name = value` line, lists joined by spaces.

@@ -1,0 +1,2 @@
+warning: [impure-path-in-drv] derivation 'x': attribute 'src' holds the checkout path '/etc/ietsp-lint-example', so the .drv depends on where the repository lives; interpolate the path to copy it to the store
+  at /pwd/lint/impure-path-in-drv.nix:1:56

@@ -35,6 +35,8 @@ pub enum ErrorKind {
     /// lock, import-from-derivation). Classic mode turns this into an exec of
     /// the real nix; see `crate::cli::classic`.
     Unsupported,
+    /// A lint at level `error`. Never caught by `tryEval`.
+    Lint,
 }
 
 #[derive(Debug)]

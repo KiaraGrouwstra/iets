@@ -1,0 +1,2 @@
+warning: [empty-let] `let in e` binds nothing: use `e`
+  at /pwd/lint/empty-let.nix:1:1
