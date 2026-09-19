@@ -24,7 +24,6 @@ pub const T_LIST_WHNF: u8 = 1;
 pub const T_ATTRS_WHNF: u8 = 2;
 pub const T_LIST_DEEP: u8 = 3;
 pub const T_ATTRS_DEEP: u8 = 4;
-pub const T_THUNK: u8 = 5;
 /// Coercion-shaped walk: lists element-wise, derivations to `outPath`,
 /// other attrsets attribute-wise. What `derivationStrict`, `toJSON` and
 /// `concatStringsSep` demand.
@@ -34,18 +33,17 @@ pub const T_ATTRS_COERCE: u8 = 7;
 pub const T_JOB: u8 = 8;
 const COERCE_BATCH: u32 = 4;
 
-/// The root evaluator, cloned for every fiber.
-pub struct EvalDriver(pub SyncEv);
-
+/// The root evaluator, cloned for every fiber. The `Sync`/`Send` impls
+/// below are why it is a type of its own.
 pub struct SyncEv(pub Evaluator);
 // SAFETY: the template is only read through `Clone`, which copies scalars
 // and bumps reference counts on the shared handles.
 unsafe impl Sync for SyncEv {}
 unsafe impl Send for SyncEv {}
 
-impl Driver for EvalDriver {
+impl Driver for SyncEv {
     fn new_user(&self, _rt: &Runtime) -> *mut () {
-        Box::into_raw(Box::new(self.0.0.clone())) as *mut ()
+        Box::into_raw(Box::new(self.0.clone())) as *mut ()
     }
 
     fn run_task(&self, _rt: &Runtime, slot: &mut Slot) {
@@ -98,12 +96,8 @@ pub unsafe fn init_ctx(ev: &mut Evaluator, slot: *mut Slot) {
         id,
         is_main,
         cancelled: false,
-        speculating: false,
-        spec_buf: std::mem::take(&mut ev.par.spec_buf),
-        task_thunks: ev.nr_thunks,
         slot,
     };
-    ev.par.spec_buf.clear();
     ev.call_depth = 0;
     ev.try_level = 0;
 }
@@ -142,8 +136,7 @@ fn cancelled() -> Box<Error> {
     Error::boxed(ErrorKind::Cancelled, "cancelled", Pos::NONE)
 }
 
-/// True once this helper fiber must stop: cancelled by deadlock
-/// resolution, or speculative after the main result exists.
+/// True once this helper fiber must stop: cancelled by deadlock resolution.
 #[inline]
 pub fn bail_requested(ev: &Evaluator) -> bool {
     if ev.par.is_main {
@@ -152,11 +145,7 @@ pub fn bail_requested(ev: &Evaluator) -> bool {
     if ev.par.cancelled {
         return true;
     }
-    let slot = slot_ref(ev);
-    slot.cancel.load(Ordering::Relaxed)
-        || (ev.par.speculating
-            && (slot.runtime().suppress.load(Ordering::Relaxed)
-                || ev.nr_thunks - ev.par.task_thunks > super::spec::budget()))
+    slot_ref(ev).cancel.load(Ordering::Relaxed)
 }
 
 /// Position of the thunk the main fiber forced last (diagnostics: the
@@ -202,9 +191,6 @@ pub fn force_thunk(ev: &mut Evaluator, w: Word) -> EvalResult<Word> {
         ev.par.cancelled = true;
         thunk::publish(unsafe { slot_mut(ev) }, cell, payload);
         return Err(cancelled());
-    }
-    if !ev.par.spec_buf.is_empty() {
-        super::spec::flush(ev);
     }
     match ev.run_thunk(w, payload) {
         Ok(v) => {
@@ -560,12 +546,6 @@ fn run_task(ev: &mut Evaluator, t: Task) {
             let a = obj.as_attrs().expect("attrs task");
             crate::jobs::prefetch_range(ev, a, start, end);
         }
-        T_THUNK => {
-            ev.par.speculating = true;
-            if obj.thunk_unforced(obj.thunk_state_cell().get()) {
-                let _ = ev.force(obj);
-            }
-        }
         k => panic!("unknown task kind {k}"),
     }
 }
@@ -604,7 +584,10 @@ pub fn import_thunk(ev: &mut Evaluator, resolved: &[u8], pos: Pos) -> Word {
     let path = ev.mk_string(resolved);
     let posw = Word::imm_int(pos.0 as i64);
     let op = ev.arena.mk_primop("importRaw", 2, import_raw);
-    let app = ev.arena.mk_primop_app(op.view_primop(), &[path]);
+    let Value::PrimOp(p) = op.view() else {
+        unreachable!("mk_primop makes a primop")
+    };
+    let app = ev.arena.mk_primop_app(p, &[path]);
     ev.arena.mk_thunk_app(app, posw)
 }
 
@@ -632,17 +615,4 @@ fn import_raw(ev: &mut Evaluator, args: &[Word], _pos: Pos) -> EvalResult<Word> 
     }
     let root = ev.root_env;
     ev.eval(root, ir)
-}
-
-trait ViewPrimop {
-    fn view_primop(self) -> &'static PrimOpObj;
-}
-
-impl ViewPrimop for Word {
-    fn view_primop(self) -> &'static PrimOpObj {
-        match self.view() {
-            Value::PrimOp(p) => p,
-            _ => unreachable!(),
-        }
-    }
 }

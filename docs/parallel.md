@@ -17,8 +17,7 @@ marked `// parallel:`.
   that called `parallel::run`. Each worker owns a bump `Arena`, a fiber
   pool, and work-stealing deques.
 - **Task**: a unit of not-yet-started work: force a range of list cells or
-  attr cells (fan-out), or force one thunk (speculation). A task runs in a
-  pooled fiber.
+  attr cells (fan-out). A task runs in a pooled fiber.
 - **Main fiber**: runs the CLI closure (import, force, print). When it
   returns, evaluation is done. Its `Evaluator` is the one `main.rs` built.
 
@@ -133,16 +132,15 @@ with `MADV_DONTNEED` when the worker parks.
 ## Scheduler
 
 Per worker: `ready` deque of fiber pointers, `urgent` deque of tasks
-(fan-out), `spec` deque of tasks (speculation). All three are
-fixed-capacity Chase-Lev deques (owner LIFO push/pop, thieves FIFO steal;
-push fails when full and the caller falls back to doing the work inline).
-No dynamic buffer means no memory reclamation and no thread-local storage
-inside the scheduler.
+(fan-out). Both are fixed-capacity Chase-Lev deques (owner LIFO
+push/pop, thieves FIFO steal; push fails when full and the caller falls
+back to doing the work inline). No dynamic buffer means no memory
+reclamation and no thread-local storage inside the scheduler.
 
 Drain step, in priority order: own ready, steal ready, own urgent, steal
-urgent, own spec, steal spec. Ready fibers first because a woken fiber
-is usually on the critical path. A task runs by taking a pooled fiber,
-installing the task, and resuming it.
+urgent. Ready fibers first because a woken fiber is usually on the
+critical path. A task runs by taking a pooled fiber, installing the
+task, and resuming it.
 
 Two global summary words, `pending_ready` and `pending_tasks`, say
 whether any lane holds work. Idle workers poll only those; scanning the
@@ -213,26 +211,19 @@ and main re-evaluates the cycle sequentially and reports the error.
    parks on cheap elements), coerce alone is a small win, all three
    together give the numbers below. `IETSP_FANOUT` bitmask (1 deep, 2
    coerce, 4 WHNF) toggles them for experiments.
-2. **Creation-time speculation** (`mk_thunk_counted` and `map`/
-   `mapAttrs` thunk applications): a thunk whose body has at least
-   `IETSP_SPEC_MIN` (24) IR nodes is a candidate. Candidates are *not*
-   submitted where they are created: the `let`/`rec`/formals env may
-   still be under construction and a helper reading an EMPTY slot
-   dereferences null. They are buffered per fiber and submitted at the
-   next `force_thunk`, after the claim, once the last 64 slots of their
-   env are all filled. A speculative task bails (transient reset) after
-   `IETSP_SPEC_BUDGET` (4000) thunk creations or once main has finished.
-   **Off by default** (`IETSP_SPEC=1` thunks, `2` applications): the
-   mean gain was inside the noise (1.22 ± 0.14 s vs 1.29 ± 0.04 s at 8
-   workers) while peak RSS went from 1.6 GB to 2.5–6 GB, because nothing
-   frees the undemanded work. Parity holds with it on.
+2. **Creation-time speculation**: removed. It shipped off by default and
+   stayed off. Measured again before it went (nixos-desktop, 15 runs):
+   1.401 s off, 1.544 s with `IETSP_SPEC=1`, 1.405 s with `=3`, and user
+   time rose from 2.58 s to 2.98 s — it burned CPU on work nobody
+   demanded, and without a GC the undemanded results stayed resident.
+   A speculative lane also needed a third deque per worker, a backlog
+   cap, a per-fiber candidate buffer and a creation budget. Cut.
 3. **Sibling prefetch**: not implemented.
 
 ## Cancellation and bail
 
 Every helper fiber (any fiber except main) checks for a bail at each
-`force_thunk` entry: the slot's `cancel` flag (deadlock resolution), the
-global `suppress` flag and the creation budget (speculative fibers), or
+`force_thunk` entry: the slot's `cancel` flag (deadlock resolution), or
 an effect (below). A cancelled fiber gets `Err(ErrorKind::Cancelled)`
 from every force and unwinds. **Cancel is sticky**: once set, every
 publish this fiber would still do becomes a reset, so a swallowed error
@@ -323,9 +314,8 @@ Where the time goes at 8 workers (`IETSP_PAR_STATS=1|2`): main spends
 ~1.1 s of the 1.26 s parked, so helpers walk the critical chain. The
 timeline shows ~0.4 s where one fiber runs alone with nothing queued:
 `lib/modules.nix` `mergeDefinitions`, the module fixpoint, which has no
-strict consumer to fan out from. That is the phase speculation targets
-and where the remaining headroom is. User time above the sequential
-1.9 s is mostly the capped idle spin.
+strict consumer to fan out from. That is where the remaining headroom
+is. User time above the sequential 1.9 s is mostly the capped idle spin.
 
 ### After the merge with the sequential pass
 
@@ -396,11 +386,6 @@ opens, ~13k `mprotect` calls from glibc heap grow/shrink, and exit.
   container (one line; a no-op with one worker).
 - A new place that writes a forced value into a cell must do so only on
   `Ok` (all current sites do), or a cancelled helper could leak a value.
-- Envs carry no length. `spec::flush` submits every buffered candidate
-  at the next `force_thunk`, which is safe only while `maybe_thunk`
-  never forces: a fiber finishes filling an env before it forces
-  anything. A new fill site that forces mid-way must flush the buffer
-  first or defer the candidates.
 - `Files` (shared) owns the global `Pos` base offsets: `add` hands out
   the next base under the lock, `file_of` searches under it. The source
   text is not kept.
@@ -409,5 +394,5 @@ opens, ~13k `mprotect` calls from glibc heap grow/shrink, and exit.
 
 ThreadSanitizer needs nightly; not run. Invariants above are the
 argument. No loom model. Sibling prefetch not implemented. The aarch64
-context switch is written but untested. Speculation is still off by
-default and was not re-tuned in the second pass.
+context switch is written but untested. Creation-time speculation was
+measured again and removed (see "Work sources").

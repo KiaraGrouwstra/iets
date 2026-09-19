@@ -177,11 +177,22 @@ on-disk formats at once. **Proposed, not cut.**
 
 ### `parallel::spec`
 
-Speculation has been off since day one (`IETSP_SPEC` defaults to 0,
-docs/parallel.md line 412). Its cost is `spec.rs` 248 lines, a second
-deque lane per worker in `sched.rs`, hooks in `force.rs`, and three
-`Settings` keys. Measured (`bench/run.nu nixos-desktop`): see the
-Measurement section below. Cut only if it does not pay.
+Speculation shipped off (`IETSP_SPEC` defaulted to 0) and stayed off.
+Measured on `bench/workloads/nixos-desktop.nix`, one hyperfine run,
+2 warmups, 15 runs each:
+
+| | wall | user |
+|:---|---:|---:|
+| off | 1.401 s ± 0.082 | 2.580 s |
+| `IETSP_SPEC=1` | 1.544 s ± 0.103 | 2.982 s |
+| `IETSP_SPEC=3` | 1.405 s ± 0.106 | 2.757 s |
+
+It does not pay: 10% slower at `=1`, level at `=3`, and user time rises
+in both — it burns CPU on work nobody demands, and with no GC the
+undemanded results stay resident. **Cut**: `spec.rs`, the third deque
+lane and its backlog counter in `sched.rs`, the `T_THUNK` task kind and
+the creation-budget half of `bail_requested`, three `Ctx` fields, the
+three call sites, and `IETSP_SPEC`/`_MIN`/`_BUDGET`.
 
 ## 5. Dependencies
 
@@ -214,7 +225,21 @@ cut today:
   feature already pulls in, but `flake::http` drives its own
   `tokio-rustls` client and needs the root store directly.
 
-## 6. Measurement
+## 6. What was cut, and what was not
 
-`bench/run.nu nixos-desktop`, `IETSP_SPEC=1` against the default off:
-recorded in the commit that acts on it.
+Cut:
+
+1. the dead code of section 2, minus the four items the `is_empty` lint
+   requires, the three test-support items and `Kind::Env`;
+2. `parallel::spec` and its scheduler lane, on the numbers above;
+3. the three one-implementation abstractions verdicted `inline`:
+   `ViewPrimop`, `Shared<T>`, and the `EvalDriver(SyncEv(_))` double
+   wrapper (`Driver` is now implemented on `SyncEv` itself).
+
+Not cut, with the reason in its own section: the second build flow
+(`worker::build::build_on`, alive, three callers, folding it into
+`Dispatcher` risks classic stdout), the flag table (negative saving),
+the shared varint codec (~40 net lines across three on-disk formats),
+`flake::unpack` (the test oracle for `flake::spool`), and the two
+archive-filter dependencies (`bzip2`, `lzma-rust2` — dropping them drops
+`fetchTarball` support for two formats, a behaviour change).

@@ -119,7 +119,6 @@ pub struct Worker {
 struct Lanes {
     ready: Deque,
     urgent: Deque,
-    spec: Deque,
 }
 
 #[repr(align(128))]
@@ -134,8 +133,6 @@ pub struct Runtime {
     /// touching every lane's deque lines.
     pending_tasks: Padded<AtomicUsize>,
     pending_ready: Padded<AtomicUsize>,
-    /// Queued speculative tasks (subset of `pending_tasks`), for the cap.
-    pending_spec: Padded<AtomicUsize>,
     /// Per-worker running flag, busy time and task count.
     wstat: Vec<WorkerStat>,
     /// Idle workers searching for work. A push wakes a sleeper only when
@@ -192,14 +189,12 @@ impl Runtime {
                 .map(|_| Lanes {
                     ready: Deque::new(READY_CAP),
                     urgent: Deque::new(TASK_CAP),
-                    spec: Deque::new(TASK_CAP),
                 })
                 .collect(),
             overflow: Mutex::new(Vec::new()),
             overflow_len: Padded(AtomicUsize::new(0)),
             pending_tasks: Padded(AtomicUsize::new(0)),
             pending_ready: Padded(AtomicUsize::new(0)),
-            pending_spec: Padded(AtomicUsize::new(0)),
             wstat: (0..n).map(|_| WorkerStat::default()).collect(),
             spinners: Padded(AtomicUsize::new(0)),
             sleepers: Padded(AtomicUsize::new(0)),
@@ -552,23 +547,6 @@ impl Runtime {
         }
     }
 
-    #[inline]
-    pub fn pending_spec(&self) -> usize {
-        self.pending_spec.0.load(Ordering::Relaxed)
-    }
-
-    pub fn submit_spec(&self, w: &Worker, t: Task) -> bool {
-        let (a, b) = t.pack();
-        if self.lanes[w.idx].spec.push(a, b) {
-            self.pending_spec.0.fetch_add(1, Ordering::Relaxed);
-            self.pending_tasks.0.fetch_add(1, Ordering::SeqCst);
-            self.notify();
-            true
-        } else {
-            false
-        }
-    }
-
     fn take_task(&self, w: &mut Worker) -> Option<Task> {
         if self.suppress.load(Ordering::Relaxed)
             || self.pending_tasks.0.load(Ordering::Acquire) == 0
@@ -594,21 +572,6 @@ impl Runtime {
             }
             if let Some((a, b)) = self.lanes[v].urgent.steal() {
                 w.steals += 1;
-                return Some(Task::unpack(a, b));
-            }
-        }
-        if let Some((a, b)) = self.lanes[w.idx].spec.pop() {
-            self.pending_spec.0.fetch_sub(1, Ordering::Relaxed);
-            return Some(Task::unpack(a, b));
-        }
-        for k in 0..self.n {
-            let v = (start + k) % self.n;
-            if v == w.idx {
-                continue;
-            }
-            if let Some((a, b)) = self.lanes[v].spec.steal() {
-                w.steals += 1;
-                self.pending_spec.0.fetch_sub(1, Ordering::Relaxed);
                 return Some(Task::unpack(a, b));
             }
         }
@@ -776,13 +739,12 @@ impl Runtime {
                 let tasks = self.stat_tasks();
                 let pos = super::force::MAIN_POS.load(Ordering::Relaxed);
                 eprintln!(
-                    "t={:4}ms running={:2} busy-workers={:.1} tasks/20ms={:5} queued={:5} spec={:5} sleepers={:2} main-at=pos{}",
+                    "t={:4}ms running={:2} busy-workers={:.1} tasks/20ms={:5} queued={:5} sleepers={:2} main-at=pos{}",
                     t0.elapsed().as_millis(),
                     self.stat_running(),
                     (busy - last_busy) as f64 / 20e6,
                     tasks - last_tasks,
                     self.pending_tasks.0.load(Ordering::Relaxed),
-                    self.pending_spec.0.load(Ordering::Relaxed),
                     self.sleepers.0.load(Ordering::Relaxed),
                     pos,
                 );

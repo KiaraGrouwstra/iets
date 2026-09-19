@@ -50,7 +50,7 @@ pub struct DrvInfo {
 /// derivations this evaluation created).
 #[derive(Clone)]
 pub struct DrvState {
-    pub hash_cache: crate::parallel::shared::Shared<DrvHashCache>,
+    pub hash_cache: Arc<std::sync::Mutex<DrvHashCache>>,
     pub drvs: crate::parallel::shared::SharedMap<StorePath, DrvInfo>,
     /// `ietsp eval --dump-drvs DIR`: every created derivation is written as
     /// `DIR/<drv basename>` in ATerm form.
@@ -545,15 +545,28 @@ fn derivation_strict_internal(
             drv.env_set(o, String::new());
             drv.outputs.insert(o.clone(), DerivationOutput::Deferred);
         }
-        finalize_input_addressed_outputs(&mut drv, &mut ev.drv.hash_cache.lock(), &mut loader)
-            .map_err(|e| drv_err(e, pos))?;
+        finalize_input_addressed_outputs(
+            &mut drv,
+            &mut ev.drv.hash_cache.lock().unwrap(),
+            &mut loader,
+        )
+        .map_err(|e| drv_err(e, pos))?;
     }
 
     let text = drv.unparse().map_err(|e| drv_err(e, pos))?;
     let drv_path = drv.drv_path_for(&text).map_err(|e| drv_err(e, pos))?;
-    let h = hash_derivation_modulo(&drv, false, &mut ev.drv.hash_cache.lock(), &mut loader)
-        .map_err(|e| drv_err(e, pos))?;
-    ev.drv.hash_cache.lock().insert(drv_path.clone(), h);
+    let h = hash_derivation_modulo(
+        &drv,
+        false,
+        &mut ev.drv.hash_cache.lock().unwrap(),
+        &mut loader,
+    )
+    .map_err(|e| drv_err(e, pos))?;
+    ev.drv
+        .hash_cache
+        .lock()
+        .unwrap()
+        .insert(drv_path.clone(), h);
     ev.drv.nr_derivations += 1;
 
     if let Some(dir) = &ev.drv.dump_dir {

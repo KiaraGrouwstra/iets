@@ -9,7 +9,7 @@ a knob cannot change halfway through a run.
 A variable in the **File** column below is also an `ietsp.conf` key, under the
 kebab-case name given. The variable wins over the file: the file is the
 configuration, the environment is the override. The perf-tuning knobs
-(`IETSP_SPIN`, `IETSP_SPINNERS`, `IETSP_HANDOFF`, `IETSP_FANOUT`, `IETSP_SPEC*`)
+(`IETSP_SPIN`, `IETSP_SPINNERS`, `IETSP_HANDOFF`, `IETSP_FANOUT`)
 and the statistics knobs stay environment-only.
 
 `--ietsp-option name value` sets any `ietsp.conf` key for one run. Every ietsp
@@ -28,9 +28,6 @@ selects level 2, and any other value selects level 1.
 | `IETSP_HANDOFF` | | usize | 8 | Queued tasks per awake worker that justify waking a sleeper. |
 | `IETSP_FANOUT` | | u32 bitmask | 7 | Strict-demand fan-out: 1 deep walks, 2 coercions, 4 list builtins. |
 | `IETSP_PAR_STATS` | | level | 0 | 1 prints the scheduler summary, 2 adds the sample timeline and the file table. |
-| `IETSP_SPEC` | | u32 bitmask | 0 (off) | Creation-time speculation: 1 thunk bodies, 2 `map`/`mapAttrs` applications. |
-| `IETSP_SPEC_MIN` | | u32 | 24 | IR nodes a body needs before speculation is worth a fiber. |
-| `IETSP_SPEC_BUDGET` | | u64 | 4000 | Thunk creations a speculative task may make before it bails. |
 | `IETSP_STATS` | | level | 0 | 1 prints the evaluator counters, 2 adds the memory census (`stats2` feature). |
 | `IETSP_CACHE` | `cache` | `0` turns off | on | The tracing cache and the IR cache. Same as `--no-cache --no-ir-cache`. |
 | `IETSP_CACHE_DIR` | `cache-dir` | path | `$XDG_CACHE_HOME/ietsp` | Cache root, for the tracing cache, the IR cache and the input store. `--cache-dir DIR` overrides it. |

@@ -50,12 +50,6 @@ pub struct Settings {
     pub fanout: u32,
     /// `IETSP_PAR_STATS`: 1 the summary line, 2 adds the timeline.
     pub par_stats: u8,
-    /// `IETSP_SPEC` bitmask: 1 thunk bodies, 2 map/mapAttrs applications.
-    pub spec: u32,
-    /// `IETSP_SPEC_MIN`: IR nodes a body needs to be worth speculating.
-    pub spec_min: u32,
-    /// `IETSP_SPEC_BUDGET`: thunk creations a speculative task may make.
-    pub spec_budget: u64,
     /// `IETSP_STATS`: 1 the evaluator counters, 2 adds the memory census.
     pub stats: u8,
     /// `cache`, `IETSP_CACHE`: the tracing and IR caches.
@@ -178,9 +172,6 @@ impl Settings {
             handoff: num("IETSP_HANDOFF").unwrap_or(8),
             fanout: num("IETSP_FANOUT").unwrap_or(7),
             par_stats: level("IETSP_PAR_STATS"),
-            spec: num("IETSP_SPEC").unwrap_or(0),
-            spec_min: num("IETSP_SPEC_MIN").unwrap_or(24),
-            spec_budget: num("IETSP_SPEC_BUDGET").unwrap_or(4000),
             stats: level("IETSP_STATS"),
             cache: flag("IETSP_CACHE", "0", c.bool("cache")?, true),
             cache_dir: dir("IETSP_CACHE_DIR").or_else(|| c.str("cache-dir").map(PathBuf::from)),

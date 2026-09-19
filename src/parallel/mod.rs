@@ -7,20 +7,17 @@ pub mod force;
 pub mod interner;
 pub mod sched;
 pub mod shared;
-pub mod spec;
 pub mod thunk;
 
 use std::sync::Mutex;
 
 use crate::eval::Evaluator;
-use crate::runtime;
 use crate::runtime::Arena;
 
 pub use force::{
     fanout_attrs_coerce, fanout_list, fanout_list_coerce, force_deep, force_thunk, import_thunk,
     journal,
 };
-pub use spec::{speculate, speculate_app};
 
 /// Per-fiber evaluator state. `on` is false on the sequential path.
 #[derive(Clone)]
@@ -30,11 +27,6 @@ pub struct Ctx {
     pub id: u32,
     pub is_main: bool,
     pub cancelled: bool,
-    pub speculating: bool,
-    /// Thunks to speculate once their env is complete (`spec::flush`).
-    pub spec_buf: Vec<runtime::Word>,
-    /// `nr_thunks` when this speculative task started (budget base).
-    pub task_thunks: u64,
     pub slot: *mut sched::Slot,
 }
 
@@ -45,9 +37,6 @@ impl Default for Ctx {
             id: 0,
             is_main: true,
             cancelled: false,
-            speculating: false,
-            spec_buf: Vec::new(),
-            task_thunks: 0,
             slot: std::ptr::null_mut(),
         }
     }
@@ -106,7 +95,7 @@ pub fn try_run<R: Send + 'static>(
         return Ok(f(&mut ev));
     }
     let template = force::SyncEv(ev.clone());
-    let rt = sched::Runtime::start(workers, Box::new(force::EvalDriver(template)), stack_size())?;
+    let rt = sched::Runtime::start(workers, Box::new(template), stack_size())?;
     let user = Box::into_raw(Box::new(ev)) as *mut ();
     let out: &'static Mutex<Option<R>> = Box::leak(Box::new(Mutex::new(None)));
     rt.run_main(
@@ -137,10 +126,9 @@ pub fn try_run<R: Send + 'static>(
                 let slot = unsafe { &*slot };
                 let rt = slot.runtime();
                 eprintln!(
-                    "parallel: fibers={} tasks={} spec-submitted={} effect-bails={} steals={} parks={} fiber-parks={} main-parks={} main-wait={}ms busy={}ms deadlocks={} main-stack-resident={}K",
+                    "parallel: fibers={} tasks={} effect-bails={} steals={} parks={} fiber-parks={} main-parks={} main-wait={}ms busy={}ms deadlocks={} main-stack-resident={}K",
                     rt.stats_fibers(),
                     rt.stat_tasks(),
-                    spec::SUBMITTED.load(Relaxed),
                     force::EFFECT_BAILS.load(Relaxed),
                     rt.stat_steals.load(Relaxed),
                     rt.stat_parks.load(Relaxed),

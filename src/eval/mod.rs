@@ -642,11 +642,7 @@ impl Evaluator {
     #[inline]
     fn mk_thunk_counted(&mut self, env: &'static EnvObj, ir: IrRef) -> Word {
         self.nr_thunks += 1;
-        let w = self.arena.mk_thunk(env, ir);
-        if self.par.on {
-            crate::parallel::speculate(self, w, ir); // parallel: candidate
-        }
-        w
+        self.arena.mk_thunk(env, ir)
     }
 
     fn shared_select(

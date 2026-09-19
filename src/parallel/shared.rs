@@ -72,27 +72,6 @@ impl<K: Hash + Eq, V: Clone> SharedMap<K, V> {
     }
 }
 
-/// `Mutex`-wrapped value with the same handle semantics.
-pub struct Shared<T>(Arc<Mutex<T>>);
-
-impl<T> Clone for Shared<T> {
-    fn clone(&self) -> Self {
-        Shared(self.0.clone())
-    }
-}
-
-impl<T: Default> Default for Shared<T> {
-    fn default() -> Self {
-        Shared(Arc::new(Mutex::new(T::default())))
-    }
-}
-
-impl<T> Shared<T> {
-    pub fn lock(&self) -> MutexGuard<'_, T> {
-        self.0.lock().unwrap()
-    }
-}
-
 struct FilesInner {
     list: Vec<&'static FileInfo>,
     ids: HashMap<Vec<u8>, FileId>,

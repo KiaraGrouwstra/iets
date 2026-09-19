@@ -384,7 +384,8 @@ fn dev_env_build(ev: &mut Evaluator, a: EvalArgs, d: &DevEnvArgs) -> Result<DevE
         }?;
         let trace = ev.trace.clone();
         let mut loader = move |p: &StorePath| load_drv_traced(&trace, p);
-        let env_drv = devenv::env_derivation(&shell, &mut ev.drv.hash_cache.lock(), &mut loader)?;
+        let env_drv =
+            devenv::env_derivation(&shell, &mut ev.drv.hash_cache.lock().unwrap(), &mut loader)?;
         let text = env_drv.unparse()?;
         let env_path = env_drv.drv_path_for(&text)?;
         let mut references = env_drv.input_srcs.clone();
