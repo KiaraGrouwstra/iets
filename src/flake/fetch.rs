@@ -2,13 +2,15 @@
 //! store path follows from the `narHash` and the result attrset mirrors
 //! `emitTreeAttrs`. A `path` input is a virtual copy of the local
 //! directory, like the root tree. A remote input (github, git, tarball,
-//! ...) must be in `/nix/store`; one that is not is fetched by running
-//! `nix` once. This is the only place ietsp runs nix.
+//! ...) must be in `/nix/store`; one that is not is substituted by the daemon,
+//! else downloaded and registered by ietsp itself (`github`, `gitlab`,
+//! `sourcehut`, `tarball`), else fetched by running `nix` once (`git`, `hg`).
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
+use crate::remote::worker::{Connection, Transport};
 use crate::runtime::*;
 use crate::store::hash::{Hash, HashAlgo};
 use crate::store::path::{IngestionMethod, StorePath, make_fixed_output_path};
@@ -248,33 +250,68 @@ fn nix_string_literal(s: &str) -> String {
     out
 }
 
-/// fetchers.cc:getAccessorUnchecked: a locked input carries `__final`, so
-/// Nix substitutes its store path before it runs any fetcher. An expression
-/// cannot mark an input final (`fetchFinalTree` is an internal primop), so
-/// the fallback substitutes the tree itself first, and only then fetches.
-/// `nix build` on a store path that no substituter has costs 0.33 s here,
-/// against seconds for any fetch, so every input type takes this step.
-fn substitute(nix: &Path, store_path: &str) -> bool {
-    std::process::Command::new(nix)
-        .env("IETSP_FETCHING", "1")
-        .args([
-            "--extra-experimental-features",
-            "nix-command flakes",
-            "build",
-            "--no-link",
-            store_path,
-        ])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+/// The evaluator's connection to the eval store, opened on the first input
+/// that is missing from it and kept for the rest of the evaluation. The eval
+/// store is nix.conf's `store`, never the `builder` setting: a remote builder
+/// has no say in what `import` reads. A `grpc://` store is not a
+/// worker-protocol daemon, so there is nothing to open and nothing to
+/// substitute with.
+#[derive(Default)]
+pub struct LazyStore {
+    conn: Option<Connection>,
+    tried: bool,
+}
+
+impl Clone for LazyStore {
+    /// A fiber's evaluator starts without one: the worker protocol is one
+    /// request at a time, so a connection is never shared.
+    fn clone(&self) -> LazyStore {
+        LazyStore::default()
+    }
+}
+
+impl LazyStore {
+    fn get(&mut self) -> Option<&mut Connection> {
+        if !self.tried {
+            self.tried = true;
+            match Transport::parse(&nix_conf().store()) {
+                Some(Transport::Grpc(_)) | None => {}
+                Some(t) => match Connection::open(&t, &mut |_| {}) {
+                    Ok(c) => self.conn = Some(c),
+                    Err(e) => eprintln!("ietsp: cannot reach the store to fetch inputs: {e}"),
+                },
+            }
+        }
+        self.conn.as_mut()
+    }
+}
+
+/// fetchers.cc:getAccessorUnchecked: a locked input carries `__final`, so Nix
+/// substitutes its store path before it runs any fetcher. An expression cannot
+/// mark an input final (`fetchFinalTree` is an internal primop), so ietsp
+/// substitutes the tree itself first, and only then fetches. One
+/// `QueryValidPaths` with the substitute flag does it: the daemon runs
+/// `Store::substitutePaths` and answers with the paths it now has
+/// (daemon.cc:performOp, worker-protocol.hh:wopQueryValidPaths, >= 1.27).
+/// Nothing is evaluated and no derivation is built.
+fn substitute(ev: &mut Evaluator, store_path: &str) -> bool {
+    let Some(conn) = ev.store.get() else {
+        return false;
+    };
+    match conn.substitute_paths(std::slice::from_ref(&store_path.to_string()), &mut |_| {}) {
+        Ok(valid) => valid.iter().any(|p| p == store_path),
+        Err(e) => {
+            eprintln!("ietsp: cannot substitute '{store_path}': {e}");
+            false
+        }
+    }
 }
 
 /// A remote input's tree must exist at its store path so `import` reads
-/// exactly what Nix reads. A missing tree is substituted, or else fetched by
-/// handing the locked attrs to Nix's own `fetchTree`; the store path Nix
-/// reports must be the one the lock implies. Never called for the root tree
+/// exactly what Nix reads. A missing tree is substituted by the daemon, else
+/// downloaded and registered by ietsp (the tarball-shaped types), else fetched
+/// by handing the locked attrs to Nix's own `fetchTree`; whichever way, the
+/// store path must be the one the lock implies. Never called for the root tree
 /// or a `path` input.
 pub fn ensure_in_store(
     ev: &mut Evaluator,
@@ -286,64 +323,12 @@ pub fn ensure_in_store(
     let p = Path::new(&full);
     if crate::trace::stat_kind(p, true) == crate::trace::Kind::Missing {
         let name = input_name(ev, attrs);
-        eprintln!("ietsp: input '{name}' is not in the store ({full}), fetching it with nix");
-        if crate::settings::get().fetching {
-            bail!(
-                ErrorKind::Eval,
-                pos,
-                "ietsp: recursive fetch of input '{name}': the nix on PATH is ietsp itself"
-            );
-        }
-        let Some(nix) = crate::nixbin::real("nix") else {
-            bail!(
-                ErrorKind::Eval,
-                pos,
-                "ietsp: input '{name}' is not in the store and nix is not on PATH; \
-                 fetch it with nix ({}) first",
-                to_url(attrs)
-            );
-        };
-        if !substitute(&nix, &full) {
-            let expr = format!(
-                "(builtins.fetchTree (builtins.fromJSON {})).outPath",
-                nix_string_literal(&attrs_to_json(attrs))
-            );
-            let out = std::process::Command::new(&nix)
-                .env("IETSP_FETCHING", "1")
-                .args([
-                    "--extra-experimental-features",
-                    "nix-command flakes",
-                    "eval",
-                    "--raw",
-                    "--impure",
-                    "--expr",
-                    &expr,
-                ])
-                .stdin(std::process::Stdio::null())
-                .stderr(std::process::Stdio::inherit())
-                .output()
-                .map_err(|e| {
-                    Error::boxed(
-                        ErrorKind::Io,
-                        format!("ietsp: cannot run nix to fetch input '{name}': {e}"),
-                        pos,
-                    )
-                })?;
-            if !out.status.success() {
-                bail!(
-                    ErrorKind::Eval,
-                    pos,
-                    "ietsp: nix could not fetch input '{name}' ({})",
-                    to_url(attrs)
-                );
-            }
-            let got = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if got != full {
-                bail!(
-                    ErrorKind::Eval,
-                    pos,
-                    "ietsp: nix fetched '{got}' for input '{name}' but the lock implies '{full}'"
-                );
+        eprintln!("ietsp: input '{name}' is not in the store ({full}), fetching it");
+        if !substitute(ev, &full) {
+            if is_tarball_type(attrs) {
+                fetch_tarball(ev, sp, attrs, pos)?;
+            } else {
+                fetch_with_nix(&full, &name, attrs, pos)?;
             }
         }
     }
@@ -353,6 +338,245 @@ pub fn ensure_in_store(
             pos,
             "ietsp: input '{}' is not in the store ({full})",
             input_name(ev, attrs)
+        );
+    }
+    Ok(())
+}
+
+/// nix.conf, read once: `store` for the eval store and `access-tokens` for the
+/// forge headers. The file cannot change under a running evaluation.
+fn nix_conf() -> &'static crate::config::Config {
+    static CFG: std::sync::OnceLock<crate::config::Config> = std::sync::OnceLock::new();
+    CFG.get_or_init(|| {
+        crate::config::Config::load(&[]).unwrap_or_else(|_| crate::config::Config::empty())
+    })
+}
+
+/// The types whose fetch is "download one archive and unpack it"
+/// (github.cc:GitArchiveInputScheme, tarball.cc:TarballInputScheme). `git` and
+/// `hg` are not here: they need a repository, so they still go through nix.
+/// `file` is not either: its store path is the flat hash of the bytes under the
+/// input's name, which the lock's `narHash` does not give, so ietsp cannot say
+/// where the file belongs before it has it.
+fn is_tarball_type(attrs: &Attrs) -> bool {
+    matches!(
+        str_attr(attrs, "type").unwrap_or(""),
+        "github" | "gitlab" | "sourcehut" | "tarball"
+    )
+}
+
+/// github.cc:getAccessToken: the longest `access-tokens` key that is a prefix of
+/// `host/owner/repo` and ends on a path segment, else the entry for the host.
+fn access_token(cfg: &crate::config::Config, host: &str, host_and_path: &str) -> Option<String> {
+    let mut best: Option<(usize, String)> = None;
+    let mut for_host = None;
+    for entry in cfg.list("access-tokens") {
+        let Some((key, value)) = entry.split_once('=') else {
+            continue;
+        };
+        if key == host {
+            for_host = Some(value.to_string());
+        }
+        if host_and_path.starts_with(key)
+            && (host_and_path.len() == key.len() || host_and_path.as_bytes()[key.len()] == b'/')
+            && best.as_ref().is_none_or(|(len, _)| key.len() > *len)
+        {
+            best = Some((key.len(), value.to_string()));
+        }
+    }
+    best.map(|(_, v)| v).or(for_host)
+}
+
+/// The `Authorization`-style header each forge wants for its token
+/// (github.cc:accessHeaderFromToken, one override per scheme).
+fn access_header(ty: &str, token: &str) -> (String, String) {
+    match ty {
+        "sourcehut" => ("Authorization".into(), format!("Bearer {token}")),
+        "gitlab" => match token.split_once(':') {
+            Some(("OAuth2", t)) => ("Authorization".into(), format!("Bearer {t}")),
+            Some(("PAT", t)) => ("Private-token".into(), t.into()),
+            Some((name, value)) => (name.into(), value.into()),
+            None => (token.into(), token.into()),
+        },
+        _ => ("Authorization".into(), format!("token {token}")),
+    }
+}
+
+/// github.cc:getDownloadUrl and tarball.cc: the URL and headers Nix downloads a
+/// locked archive input from. The `rev` is the 40 hex digits the lock holds.
+fn tarball_url(
+    cfg: &crate::config::Config,
+    attrs: &Attrs,
+) -> std::result::Result<(String, Vec<(String, String)>), String> {
+    let ty = str_attr(attrs, "type").unwrap_or("");
+    if ty == "tarball" {
+        let url = str_attr(attrs, "url").ok_or("the lock has no 'url'")?;
+        return Ok((url.to_string(), Vec::new()));
+    }
+    let owner = str_attr(attrs, "owner").ok_or("the lock has no 'owner'")?;
+    let repo = str_attr(attrs, "repo").ok_or("the lock has no 'repo'")?;
+    let rev = str_attr(attrs, "rev").ok_or("the lock has no 'rev'")?;
+    let default_host = match ty {
+        "gitlab" => "gitlab.com",
+        "sourcehut" => "git.sr.ht",
+        _ => "github.com",
+    };
+    let host = str_attr(attrs, "host").unwrap_or(default_host);
+    let headers: Vec<(String, String)> = access_token(cfg, host, &format!("{host}/{owner}/{repo}"))
+        .map(|t| vec![access_header(ty, &t)])
+        .unwrap_or_default();
+    let url = match ty {
+        "gitlab" => format!(
+            "https://{host}/api/v4/projects/{owner}%2F{repo}/repository/archive.tar.gz?sha={rev}"
+        ),
+        "sourcehut" => format!("https://{host}/{owner}/{repo}/archive/{rev}.tar.gz"),
+        // With a token the API endpoint; without one the public archive, which
+        // has the looser rate limit.
+        _ if host != "github.com" => {
+            format!("https://{host}/api/v3/repos/{owner}/{repo}/tarball/{rev}")
+        }
+        _ if headers.is_empty() => {
+            format!("https://{host}/{owner}/{repo}/archive/{rev}.tar.gz")
+        }
+        _ => format!("https://api.{host}/repos/{owner}/{repo}/tarball/{rev}"),
+    };
+    Ok((url, headers))
+}
+
+/// A directory removed however the function that made it returns.
+struct Scratch(PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Downloads the input's archive, unpacks it like Nix, checks the NAR hash
+/// against the lock, and registers the tree with one `AddMultipleToStore` as a
+/// `fixed:r:sha256` source, so the daemon recomputes the content address and
+/// the path it writes is the one the lock implies. Nothing is cached on disk:
+/// the unpacked copy is gone before this returns.
+fn fetch_tarball(ev: &mut Evaluator, sp: &StorePath, attrs: &Attrs, pos: Pos) -> EvalResult<()> {
+    let name = input_name(ev, attrs);
+    let fail = |e: String| Error::boxed(ErrorKind::Eval, e, pos);
+    let (url, headers) = tarball_url(nix_conf(), attrs)
+        .map_err(|e| fail(format!("ietsp: cannot fetch input '{name}': {e}")))?;
+    let expected = str_attr(attrs, "narHash")
+        .and_then(|h| parse_nar_hash(h).ok())
+        .ok_or_else(|| fail(format!("ietsp: input '{name}' has no usable 'narHash'")))?;
+
+    let bytes = crate::flake::http::get(&url, &headers)
+        .and_then(crate::flake::http::decompress)
+        .map_err(|e| fail(format!("ietsp: cannot fetch input '{name}': {e}")))?;
+    let scratch = Scratch(std::env::temp_dir().join(format!(
+        "ietsp-fetch-{}-{}",
+        std::process::id(),
+        sp.base_name()
+    )));
+    let _ = std::fs::remove_dir_all(&scratch.0);
+    let root = crate::flake::unpack::unpack(bytes, &scratch.0)
+        .map_err(|e| fail(format!("ietsp: cannot unpack input '{name}': {e}")))?;
+
+    let object = crate::remote::plan::Object::source(
+        sp.clone(),
+        crate::remote::plan::SourceInfo::tree(&root),
+    )
+    .map_err(|e| {
+        Error::boxed(
+            ErrorKind::Io,
+            format!("ietsp: cannot hash the tree of input '{name}': {e}"),
+            pos,
+        )
+    })?;
+    let crate::remote::plan::Object::Source { nar_hash, .. } = &object else {
+        unreachable!("a source object");
+    };
+    if *nar_hash != expected {
+        bail!(
+            ErrorKind::Eval,
+            pos,
+            "ietsp: NAR hash mismatch in input '{name}' ({url}): the lock says '{}' \
+             but the tree ietsp fetched hashes to '{}'",
+            expected.to_sri(),
+            nar_hash.to_sri()
+        );
+    }
+    let Some(conn) = ev.store.get() else {
+        bail!(
+            ErrorKind::Eval,
+            pos,
+            "ietsp: input '{name}' was fetched but there is no store to register it in"
+        );
+    };
+    let mut body = |w: &mut dyn std::io::Write| -> std::io::Result<()> {
+        crate::remote::worker::wire::write_u64(w, 1)?;
+        crate::remote::worker::build::write_object(w, &object)
+    };
+    conn.add_multiple_to_store(false, &mut body, &mut |_| {})
+        .map_err(|e| fail(format!("ietsp: cannot register input '{name}': {e}")))?;
+    Ok(())
+}
+
+/// The last shell-out: a `git` or `hg` input needs a repository, which ietsp
+/// cannot clone yet, so its locked attrs go to Nix's own `fetchTree` and the
+/// store path Nix reports must be the one the lock implies.
+fn fetch_with_nix(full: &str, name: &str, attrs: &Attrs, pos: Pos) -> EvalResult<()> {
+    if crate::settings::get().fetching {
+        bail!(
+            ErrorKind::Eval,
+            pos,
+            "ietsp: recursive fetch of input '{name}': the nix on PATH is ietsp itself"
+        );
+    }
+    let Some(nix) = crate::nixbin::real("nix") else {
+        bail!(
+            ErrorKind::Eval,
+            pos,
+            "ietsp: input '{name}' is not in the store and nix is not on PATH; \
+             fetch it with nix ({}) first",
+            to_url(attrs)
+        );
+    };
+    let expr = format!(
+        "(builtins.fetchTree (builtins.fromJSON {})).outPath",
+        nix_string_literal(&attrs_to_json(attrs))
+    );
+    let out = std::process::Command::new(&nix)
+        .env("IETSP_FETCHING", "1")
+        .args([
+            "--extra-experimental-features",
+            "nix-command flakes",
+            "eval",
+            "--raw",
+            "--impure",
+            "--expr",
+            &expr,
+        ])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::inherit())
+        .output()
+        .map_err(|e| {
+            Error::boxed(
+                ErrorKind::Io,
+                format!("ietsp: cannot run nix to fetch input '{name}': {e}"),
+                pos,
+            )
+        })?;
+    if !out.status.success() {
+        bail!(
+            ErrorKind::Eval,
+            pos,
+            "ietsp: nix could not fetch input '{name}' ({})",
+            to_url(attrs)
+        );
+    }
+    let got = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if got != full {
+        bail!(
+            ErrorKind::Eval,
+            pos,
+            "ietsp: nix fetched '{got}' for input '{name}' but the lock implies '{full}'"
         );
     }
     Ok(())
@@ -425,6 +649,179 @@ mod tests {
             nix_string_literal(r#"{"a":"x\"y${z}\\"}"#),
             r#""{\"a\":\"x\\\"y\${z}\\\\\"}""#
         );
+    }
+
+    fn attrs(pairs: &[(&str, &str)]) -> Attrs {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), AttrVal::Str((*v).to_string())))
+            .collect()
+    }
+
+    fn conf(text: &str) -> crate::config::Config {
+        crate::config::Config::from_str(text, "test").unwrap()
+    }
+
+    const REV: &str = "b1d9ab70662946ef0850d488da1c9019f3a9752a";
+
+    #[test]
+    fn download_urls_match_the_fetchers() {
+        let none = conf("");
+        let gh = attrs(&[
+            ("type", "github"),
+            ("owner", "numtide"),
+            ("repo", "flake-utils"),
+            ("rev", REV),
+        ]);
+        assert_eq!(
+            tarball_url(&none, &gh).unwrap(),
+            (
+                format!("https://github.com/numtide/flake-utils/archive/{REV}.tar.gz"),
+                vec![]
+            )
+        );
+        // A token moves github.com to the API endpoint (github.cc:getDownloadUrl).
+        assert_eq!(
+            tarball_url(&conf("access-tokens = github.com=T"), &gh).unwrap(),
+            (
+                format!("https://api.github.com/repos/numtide/flake-utils/tarball/{REV}"),
+                vec![("Authorization".into(), "token T".into())]
+            )
+        );
+        let mut ghe = gh.clone();
+        ghe.insert("host".into(), AttrVal::Str("git.corp".into()));
+        assert_eq!(
+            tarball_url(&none, &ghe).unwrap().0,
+            format!("https://git.corp/api/v3/repos/numtide/flake-utils/tarball/{REV}")
+        );
+
+        let gl = attrs(&[
+            ("type", "gitlab"),
+            ("owner", "o"),
+            ("repo", "r"),
+            ("rev", REV),
+        ]);
+        assert_eq!(
+            tarball_url(&conf("access-tokens = gitlab.com=PAT:T"), &gl).unwrap(),
+            (
+                format!(
+                    "https://gitlab.com/api/v4/projects/o%2Fr/repository/archive.tar.gz?sha={REV}"
+                ),
+                vec![("Private-token".into(), "T".into())]
+            )
+        );
+        assert_eq!(
+            tarball_url(&conf("access-tokens = gitlab.com=OAuth2:T"), &gl)
+                .unwrap()
+                .1,
+            vec![("Authorization".into(), "Bearer T".into())]
+        );
+
+        let sh = attrs(&[
+            ("type", "sourcehut"),
+            ("owner", "~o"),
+            ("repo", "r"),
+            ("rev", REV),
+        ]);
+        assert_eq!(
+            tarball_url(&conf("access-tokens = git.sr.ht=T"), &sh).unwrap(),
+            (
+                format!("https://git.sr.ht/~o/r/archive/{REV}.tar.gz"),
+                vec![("Authorization".into(), "Bearer T".into())]
+            )
+        );
+
+        let tb = attrs(&[("type", "tarball"), ("url", "https://x.example/a.tar.xz")]);
+        assert_eq!(
+            tarball_url(&none, &tb).unwrap(),
+            ("https://x.example/a.tar.xz".to_string(), vec![])
+        );
+
+        assert!(tarball_url(&none, &attrs(&[("type", "github")])).is_err());
+    }
+
+    /// github.cc:getAccessToken: the longest key that is a prefix of
+    /// `host/owner/repo` on a path boundary wins, else the host's own entry.
+    #[test]
+    fn access_tokens_match_the_longest_prefix() {
+        let c = conf(
+            "access-tokens = github.com=host github.com/a=owner github.com/a/b=repo github.com/ab=other",
+        );
+        assert_eq!(
+            access_token(&c, "github.com", "github.com/a/b").as_deref(),
+            Some("repo")
+        );
+        assert_eq!(
+            access_token(&c, "github.com", "github.com/a/c").as_deref(),
+            Some("owner")
+        );
+        assert_eq!(
+            access_token(&c, "github.com", "github.com/ab/c").as_deref(),
+            Some("other")
+        );
+        assert_eq!(
+            access_token(&c, "github.com", "github.com/z/y").as_deref(),
+            Some("host")
+        );
+        assert_eq!(access_token(&c, "gitlab.com", "gitlab.com/z/y"), None);
+    }
+
+    /// What the substitution step costs, against the `nix build --no-link` it
+    /// replaced, on a store path no substituter has: both must answer "no", and
+    /// the op must be the cheaper way to hear it. Needs a running daemon and a
+    /// nix on `PATH`, so it is ignored by default:
+    /// `cargo test --release -- --ignored --nocapture substitution`.
+    #[test]
+    #[ignore]
+    fn substitution_costs_less_than_the_subprocess() {
+        let path = "/nix/store/zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-source";
+        let mut store = LazyStore::default();
+        let t = std::time::Instant::now();
+        let conn = store.get().expect("a daemon");
+        let connect = t.elapsed();
+        let t = std::time::Instant::now();
+        let valid = conn
+            .substitute_paths(&[path.to_string()], &mut |_| {})
+            .unwrap();
+        let op = t.elapsed();
+        assert!(valid.is_empty());
+
+        let nix = crate::nixbin::real("nix").expect("a nix");
+        let t = std::time::Instant::now();
+        let status = std::process::Command::new(&nix)
+            .args([
+                "--extra-experimental-features",
+                "nix-command flakes",
+                "build",
+                "--no-link",
+                path,
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        let subprocess = t.elapsed();
+        assert!(!status.success());
+        eprintln!(
+            "connect: {:.3}s, QueryValidPaths(substitute): {:.3}s, nix build --no-link: {:.3}s",
+            connect.as_secs_f64(),
+            op.as_secs_f64(),
+            subprocess.as_secs_f64()
+        );
+        // The connection is opened once and the registration reuses it; the op
+        // is what replaces the subprocess.
+        assert!(op < subprocess);
+    }
+
+    #[test]
+    fn only_the_archive_types_are_fetched_by_ietsp() {
+        for ty in ["github", "gitlab", "sourcehut", "tarball"] {
+            assert!(is_tarball_type(&attrs(&[("type", ty)])), "{ty}");
+        }
+        for ty in ["git", "hg", "path", "file"] {
+            assert!(!is_tarball_type(&attrs(&[("type", ty)])), "{ty}");
+        }
     }
 
     #[test]

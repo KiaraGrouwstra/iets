@@ -130,6 +130,9 @@ pub struct Evaluator {
     pub trace: crate::trace::Trace,
     /// Compiled-IR cache for imported files; `None` when disabled.
     pub ir_cache: Option<std::sync::Arc<crate::compile::cache::IrCache>>,
+    /// The eval store, opened on the first flake input that is missing from it
+    /// (`flake::fetch`).
+    pub store: crate::flake::fetch::LazyStore,
 }
 
 macro_rules! bail {
@@ -192,6 +195,7 @@ impl Evaluator {
             par: Default::default(),
             trace: Default::default(),
             ir_cache: None,
+            store: Default::default(),
         };
         crate::builtins::install(&mut ev);
         ev
