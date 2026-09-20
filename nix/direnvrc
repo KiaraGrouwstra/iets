@@ -21,5 +21,6 @@ use_flake() {
   root="$(direnv_layout_dir)/ietsp-env"
   mkdir -p "$(direnv_layout_dir)"
   watch_file "$uri/flake.nix" "$uri/flake.lock"
-  eval "$(ietsp print-dev-env --gc-root "$root" "$ref")"
+  # --gc-root needs the local daemon; a remote `builder` in ietsp.conf refuses it
+  eval "$(ietsp print-dev-env --builder daemon --gc-root "$root" "$ref")"
 }

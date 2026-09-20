@@ -35,7 +35,7 @@ keep `use flake` in `.envrc`.
 use_ietsp() {
   local root; root="$(direnv_layout_dir)/ietsp-env"
   watch_file flake.nix flake.lock
-  eval "$(ietsp print-dev-env --gc-root "$root" "${1:-.}")"
+  eval "$(ietsp print-dev-env --builder daemon --gc-root "$root" "${1:-.}")"
 }
 use_ietsp
 ```
