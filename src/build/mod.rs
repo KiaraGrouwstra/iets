@@ -464,8 +464,9 @@ impl Dispatcher {
         self.backend.add_root(store_path, link)
     }
 
-    /// `nix build`'s out-links, on the local daemon whatever the builder is.
-    pub fn out_links(&mut self, links: &[(String, String)]) -> Result<()> {
+    /// `nix build`'s outputs and out-links, on the local daemon whatever the
+    /// builder is.
+    pub fn out_links(&mut self, links: &[(String, Option<String>)]) -> Result<()> {
         self.backend.out_links(links)
     }
 
@@ -746,7 +747,7 @@ mod tests {
             Ok(())
         }
 
-        fn out_links(&mut self, _links: &[(String, String)]) -> Result<()> {
+        fn out_links(&mut self, _links: &[(String, Option<String>)]) -> Result<()> {
             Ok(())
         }
 

@@ -290,12 +290,12 @@ impl Backend for Grpc {
     }
 
     fn add_root(&mut self, store_path: &str, link: &Path) -> Result<()> {
-        self.out_links(&[(store_path.to_string(), link.display().to_string())])
+        self.out_links(&[(store_path.to_string(), Some(link.display().to_string()))])
     }
 
     /// The store published the outputs to its cache, so they are copied into
     /// the local store before the symlink that names them.
-    fn out_links(&mut self, links: &[(String, String)]) -> Result<()> {
+    fn out_links(&mut self, links: &[(String, Option<String>)]) -> Result<()> {
         if links.is_empty() {
             return Ok(());
         }
@@ -306,7 +306,9 @@ impl Backend for Grpc {
         let mut conn = Connection::open(&local(), &mut |_| {})?;
         build::register(&mut self.c, &paths, &mut conn, &mut |_| {})?;
         for (path, link) in links {
-            conn.add_perm_root(path, Path::new(link))?;
+            if let Some(link) = link {
+                conn.add_perm_root(path, Path::new(link))?;
+            }
         }
         Ok(())
     }

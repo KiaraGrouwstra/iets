@@ -133,9 +133,11 @@ pub trait Backend {
     /// An indirect GC root at `link` for `store_path`.
     fn add_root(&mut self, store_path: &str, link: &Path) -> Result<()>;
 
-    /// `nix build`'s out-links: the symlink and its GC root live on the local
-    /// daemon, so an output the builder kept is registered there first.
-    fn out_links(&mut self, links: &[(String, String)]) -> Result<()>;
+    /// `nix build`'s outputs on the local daemon, an output the builder kept
+    /// registered there first, and a symlink with its GC root where a link is
+    /// named. `--no-link` names none, yet the path stays valid, as the build
+    /// hook leaves it.
+    fn out_links(&mut self, links: &[(String, Option<String>)]) -> Result<()>;
 
     fn note_connect(&mut self, d: Duration);
 
@@ -384,13 +386,15 @@ impl Backend for Worker {
         self.conn.add_perm_root(store_path, link)
     }
 
-    fn out_links(&mut self, links: &[(String, String)]) -> Result<()> {
+    fn out_links(&mut self, links: &[(String, Option<String>)]) -> Result<()> {
         if links.is_empty() {
             return Ok(());
         }
         if self.transport == local() {
             for (path, link) in links {
-                self.conn.add_perm_root(path, Path::new(link))?;
+                if let Some(link) = link {
+                    self.conn.add_perm_root(path, Path::new(link))?;
+                }
             }
             return Ok(());
         }
@@ -403,7 +407,9 @@ impl Backend for Worker {
         let mut conn = Connection::open(&local(), &mut |_| {})?;
         crate::remote::copy::closure(&mut self.conn, &mut conn, &paths, &mut |_| {})?;
         for (path, link) in links {
-            conn.add_perm_root(path, Path::new(link))?;
+            if let Some(link) = link {
+                conn.add_perm_root(path, Path::new(link))?;
+            }
         }
         Ok(())
     }

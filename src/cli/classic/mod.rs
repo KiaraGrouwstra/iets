@@ -182,17 +182,20 @@ pub fn transport_of(store: &str, system: &str) -> Result<Transport, String> {
 /// one, else the `builder` setting, else nix.conf's `store` (docs/config.md).
 pub fn settings(c: &Common) -> Result<(Config, Transport, Options), String> {
     let cfg = Config::load(&c.overrides).map_err(|e| e.to_string())?;
-    let flag = c
-        .overrides
-        .iter()
-        .any(|(k, _)| k == "store")
-        .then(|| cfg.store());
+    let flag = store_given(c).then(|| cfg.store());
     let transport = transport_of(
         &crate::settings::builder(flag.as_deref(), &cfg),
         &cfg.system(),
     )?;
     let options = Options::try_from(&cfg).map_err(|e| e.to_string())?;
     Ok((cfg, transport, options))
+}
+
+/// `--store` names the store the outputs belong to. Without it the builder
+/// stands in for the local store, as a build hook does, so outputs come back
+/// even under `--no-link`.
+pub fn store_given(c: &Common) -> bool {
+    c.overrides.iter().any(|(k, _)| k == "store")
 }
 
 /// The local daemon, where GC roots, out-links and `--add-root` registrations

@@ -628,7 +628,7 @@ fn realise(
 
     let cwd = cwd();
     let mut out = String::new();
-    let mut links: Vec<(String, String)> = Vec::new();
+    let mut links: Vec<(String, Option<String>)> = Vec::new();
     for (i, t) in targets.iter().enumerate() {
         let drv = t.drv.to_string();
         for output in &t.outputs {
@@ -640,7 +640,11 @@ fn realise(
                 eprintln!("error: derivation '{drv}' has no output '{output}'");
                 return 1;
             };
-            if !n.no_link {
+            if n.no_link {
+                if !super::store_given(&n.c) {
+                    links.push((path.clone(), None));
+                }
+            } else {
                 // build.cc: the n-th installable adds `-n` from 1 on, an
                 // output other than `out` adds `-<output>`.
                 let mut link = n.out_link.clone();
@@ -652,7 +656,7 @@ fn realise(
                     link.push_str(output);
                 }
                 let link = String::from_utf8_lossy(&abs_path(&link, &cwd)).into_owned();
-                links.push((path.clone(), link));
+                links.push((path.clone(), Some(link)));
             }
             if n.print_out_paths {
                 out.push_str(&path);

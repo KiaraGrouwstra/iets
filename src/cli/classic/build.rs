@@ -198,7 +198,7 @@ fn realise(
     }
     let cwd = cwd();
     let mut out = String::new();
-    let mut links: Vec<(String, String)> = Vec::new();
+    let mut links: Vec<(String, Option<String>)> = Vec::new();
     for r in roots {
         let drv = r.drv.to_string();
         let path = maps
@@ -209,7 +209,11 @@ fn realise(
             eprintln!("error: derivation '{drv}' has no output '{}'", r.output);
             return 1;
         };
-        if !b.no_out_link {
+        if b.no_out_link {
+            if !super::store_given(&b.c) {
+                links.push((path.clone(), None));
+            }
+        } else {
             let mut link = b.out_link.clone();
             let c = counter[&drv];
             if c > 0 {
@@ -220,7 +224,7 @@ fn realise(
                 link.push_str(&r.output);
             }
             let link = String::from_utf8_lossy(&abs_path(&link, &cwd)).into_owned();
-            links.push((path.clone(), link));
+            links.push((path.clone(), Some(link)));
         }
         out.push_str(&path);
         out.push('\n');

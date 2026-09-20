@@ -219,10 +219,13 @@ wrapper makes — `nix build --store 'grpc://farm.numtide.com:50051?token-file=�
 --eval-store auto .#pkg` — works as it stands; any other `--eval-store` value
 falls back, since ietsp always evaluates in its own process. A build farm
 publishes its outputs to a binary cache instead of a local store, so an
-out-link needs them copied in first: ietsp reads their closure back with
-`QueryPathInfos`, fetches what the local store lacks with `FetchNars`, and
-registers it with their signatures over the worker protocol before it makes
-the symlink. `--no-link` skips all of that. See `docs/remote-build.md`.
+out-link needs them copied in first: the local daemon substitutes them from
+its caches, and ietsp fetches the rest with `FetchNars` and registers it with
+their signatures over the worker protocol before it makes the symlink. With
+`--store` given, `--no-link` skips all of that. Without it the `builder`
+setting stands in for the local store, as a build hook does, so the outputs
+come back even under `--no-link`: `nix build --no-link` followed by
+`nix copy` works. See `docs/remote-build.md`.
 
 `nix print-dev-env [FLAKEREF[#attr]] [--json]` is `ietsp print-dev-env`
 (`docs/direnv.md`).
