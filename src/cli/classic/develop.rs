@@ -76,7 +76,7 @@ pub fn main(argv: &[String], rest: &[String]) -> i32 {
         Ok(d) => d,
         Err(reason) => fallback(NAME, argv, &reason),
     };
-    let (cfg, transport, _) = match super::settings(&d.c) {
+    let (cfg, transport, _) = match super::shell_settings(&d.c) {
         Ok(t) => t,
         Err(reason) => fallback(NAME, argv, &reason),
     };

@@ -132,7 +132,7 @@ pub fn main(argv: &[String]) -> i32 {
         eprintln!("error: {reason}");
         return 1;
     }
-    let (cfg, transport, options) = match super::settings(&s.c) {
+    let (cfg, transport, options) = match super::shell_settings(&s.c) {
         Ok(t) => t,
         Err(reason) => fallback(NAME, argv, &reason),
     };

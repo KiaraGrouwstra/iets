@@ -181,12 +181,24 @@ pub fn transport_of(store: &str, system: &str) -> Result<Transport, String> {
 /// build target is `--store` or `--option store` when the command line gave
 /// one, else the `builder` setting, else nix.conf's `store` (docs/config.md).
 pub fn settings(c: &Common) -> Result<(Config, Transport, Options), String> {
+    settings_with(c, true)
+}
+
+/// `settings` for a shell, which runs here and so needs its inputs in the
+/// local store: the `builder` setting is skipped; `--store` still wins.
+pub fn shell_settings(c: &Common) -> Result<(Config, Transport, Options), String> {
+    settings_with(c, false)
+}
+
+fn settings_with(c: &Common, use_builder: bool) -> Result<(Config, Transport, Options), String> {
     let cfg = Config::load(&c.overrides).map_err(|e| e.to_string())?;
-    let flag = store_given(c).then(|| cfg.store());
-    let transport = transport_of(
-        &crate::settings::builder(flag.as_deref(), &cfg),
-        &cfg.system(),
-    )?;
+    let url = if use_builder {
+        let flag = store_given(c).then(|| cfg.store());
+        crate::settings::builder(flag.as_deref(), &cfg)
+    } else {
+        cfg.store()
+    };
+    let transport = transport_of(&url, &cfg.system())?;
     let options = Options::try_from(&cfg).map_err(|e| e.to_string())?;
     Ok((cfg, transport, options))
 }

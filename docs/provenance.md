@@ -61,10 +61,13 @@ Three sources fill it:
 own call position is inside `«derivation-internal»` for every normal call and
 is useless; a direct `builtins.derivationStrict` call does keep its own
 position. This is the same position Nix names in "whose name attribute is
-located at". For `stdenv.mkDerivation` it therefore points into
-`mk-derivation.nix`, not at the package; the flake root and `./.` cases, which
-build `derivation` directly or set `name` in the package file, point where you
-want.
+located at". `stdenv.mkDerivation` computes `name` in `make-derivation.nix`
+but passes the package's `pname` through, so the position of `pname` comes
+first, as nixpkgs' `meta.position` does: a package that sets `pname` points
+at its own file. One that sets only `name` through a nixpkgs builder
+(`runCommand`, `writeShellApplication`) still points into nixpkgs; the flake
+root and `./.` cases, which build `derivation` directly or set `name` in the
+package file, point where you want.
 
 `attr` comes from the cli walk, not from the evaluator: `getDerivations` in
 classic mode records the path it walked

@@ -91,7 +91,9 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
     let mut a = parse_eval_args(&rest);
     a.input = Some(Input::Flake(flake.unwrap_or_else(|| ".".into())));
     let cfg = crate::config::Config::load(&[]).unwrap_or_else(|_| crate::config::Config::empty());
-    let url = crate::settings::builder(url.as_deref(), &cfg);
+    // the environment runs here, so its inputs belong in the local store:
+    // the `builder` setting does not apply
+    let url = url.unwrap_or_else(|| cfg.store());
     let Some(transport) = crate::remote::worker::Transport::parse(&url) else {
         eprintln!(
             "error: print-dev-env needs a Nix daemon: --builder daemon, unix:///path or ssh-ng://host"

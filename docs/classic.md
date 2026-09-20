@@ -30,9 +30,9 @@ Registration stays local whatever `builder` says:
   (`QueryPathInfo` and `NarFromPath` there, one `AddMultipleToStore` here)
   before `result` is linked and `AddIndirectRoot`ed, so the link names a path
   this machine has. The same thing the `grpc://` path has always done.
-- `nix-shell` and `nix develop` build the shell's inputs on the builder and
-  then run a local shell, so a remote `builder` leaves them pointing at paths
-  the local store has not got. Use the local daemon for those.
+- `nix-shell`, `nix develop` and `nix print-dev-env` skip the `builder`
+  setting: the shell runs here, so its inputs belong in the local store, and
+  the local daemon builds or substitutes them. `--store` still wins.
 
 ## The NixOS module
 

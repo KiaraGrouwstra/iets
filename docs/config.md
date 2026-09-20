@@ -94,7 +94,7 @@ default given there, plus three keys that have no environment variable:
 
 | Key | Type | Default |
 |:---|:---|:---|
-| `builder` | URL: `daemon`, `unix://PATH`, `ssh-ng://[user@]host`, `grpc://host:port` | the nix.conf `store` setting (itself `auto`) |
+| `builder` | URL: `daemon`, `unix://PATH`, `ssh-ng://[user@]host`, `grpc://host:port`; not used by the shell commands (`docs/classic.md`) | the nix.conf `store` setting (itself `auto`) |
 | `source-map` | list of `STOREPATH=LOCALDIR` | empty |
 | `fetch-max-size` | bytes | 17179869184 (16 GiB) |
 

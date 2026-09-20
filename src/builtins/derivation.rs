@@ -108,6 +108,7 @@ struct DrvSyms {
     content_addressed: Sym,
     impure: Sym,
     json: Sym,
+    pname: Sym,
 }
 
 fn syms(ev: &mut Evaluator) -> DrvSyms {
@@ -127,6 +128,7 @@ fn syms(ev: &mut Evaluator) -> DrvSyms {
         content_addressed: ev.sym(b"__contentAddressed"),
         impure: ev.sym(b"__impure"),
         json: ev.sym(b"__json"),
+        pname: ev.sym(b"pname"),
     };
     ev.drv.syms = Some(s);
     s
@@ -637,8 +639,12 @@ fn derivation_strict_internal(
 
     let mut references: BTreeSet<StorePath> = drv.input_srcs.clone();
     references.extend(drv.input_drvs.keys().cloned());
-    let site =
-        crate::provenance::real_pos(ev, pos).or_else(|| crate::provenance::real_pos(ev, name_pos));
+    // stdenv.mkDerivation computes `name` in make-derivation.nix but passes
+    // the package's own `pname` through, as nixpkgs' meta.position does.
+    let pname_pos = attrs.get(s.pname).map(|a| a.pos);
+    let site = crate::provenance::real_pos(ev, pos)
+        .or_else(|| pname_pos.and_then(|p| crate::provenance::real_pos(ev, p)))
+        .or_else(|| crate::provenance::real_pos(ev, name_pos));
     ev.drv.drvs.insert(
         drv_path.clone(),
         DrvInfo {
