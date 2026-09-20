@@ -88,16 +88,11 @@ every ietsp command shares, fed by `build::upload::StreamUpload`. The
 dispatcher, its two backends and why the worker protocol gets one op per
 ready set: docs/remote-build.md, "The dispatcher".
 
-Two `grpc://` differences a user sees:
-
-- `--skip-cached` is ignored. The cache-status resolver
-  (`jobs::cache::Resolver`) speaks `QuerySubstitutablePathInfos`, a worker
-  op; over `grpc://` the batch is simply built, and in farm mode a
-  derivation whose outputs the store already has is skipped anyway.
-- A non-farm `BuildPaths` carries no `keep-going`, so the store stops at
-  the first failure and answers only for what it reached. The backend
-  re-asks for the rest, so every attribute still gets its own verdict —
-  one extra call per failure, and none when nothing fails.
+One `grpc://` difference a user sees: `--skip-cached` is ignored. The
+cache-status resolver (`jobs::cache::Resolver`) speaks
+`QuerySubstitutablePathInfos`, a worker op; over `grpc://` the batch is
+simply built, and a derivation whose outputs the store already has is
+skipped anyway.
 
 ## Dispatch design
 

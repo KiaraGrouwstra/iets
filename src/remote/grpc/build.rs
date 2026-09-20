@@ -1,6 +1,7 @@
 //! The `grpc://` protocol calls, mirroring `worker/build.rs`: one
 //! `QueryValidPaths`, one `AddMultipleToStore` of what the store lacks, builds
-//! — `BuildDerivation` per derivation in farm mode, `BuildPaths` otherwise —
+//! — a `Want` on the `Schedule` stream, then `BuildDerivation` on the worker the
+//! scheduler assigned, per derivation —
 //! and `FetchNars` for the outputs. `backend.rs` drives them as the
 //! dispatcher's backend.
 
@@ -24,9 +25,8 @@ use super::super::event::{Event, Log, Phase};
 use super::super::plan::{Object, Plan};
 use super::super::worker::wire::write_object;
 use super::super::worker::wire::write_u64;
-use super::drvwire::{
-    BUILD_PROTOCOL, BuildResult, PathInfo, read_keyed_build_results, write_basic_derivation,
-};
+use super::drvwire::{BUILD_PROTOCOL, BuildResult, PathInfo, write_basic_derivation};
+use super::sched::{Answer, Sched};
 use super::{Client, Headers, c_request, first_line, gone_away, proto};
 
 /// What one `build` call did, in the shape `--timings` prints.
@@ -40,7 +40,6 @@ pub struct Timings {
     pub build: Duration,
     pub outputs: Duration,
     pub fetch: Duration,
-    pub farm: bool,
     pub trusted: Option<bool>,
     pub query_paths: usize,
     pub missing: usize,
@@ -65,9 +64,8 @@ impl Timings {
             Some(false) => "untrusted",
             None => "trust unknown",
         };
-        let mode = if self.farm { "farm" } else { "store" };
         let mut s = format!(
-            "plan: {} sources, {} drvs, {:.3}s\nconnect: gRPC {mode}, {trusted}, {:.3}s\nquery: {} paths, {} missing, {:.3}s\nresolve: {} sources",
+            "plan: {} sources, {} drvs, {:.3}s\nconnect: gRPC, {trusted}, {:.3}s\nquery: {} paths, {} missing, {:.3}s\nresolve: {} sources",
             plan.sources.len(),
             plan.drvs.len(),
             plan_time.as_secs_f64(),
@@ -114,57 +112,37 @@ impl Timings {
 }
 
 /// The sources the client cannot produce (an input-addressed build output
-/// pinned with `builtins.storePath`): the store fetches them instead. Non-farm
-/// realises them now, as `worker/build.rs` does with
-/// `BuildPathsWithResults`; a farm substitutes an input when the build asks
-/// for it (daemon/main.cc:`gatherInputs`), so there we only check that some
-/// substituter has them, which is what `QueryValidPaths` with `substitute`
-/// answers in farm mode.
-pub fn substitute(
-    c: &mut Client,
-    paths: &[StorePath],
-    t: &mut Timings,
-    on_event: &mut dyn FnMut(Event),
-) -> Result<()> {
+/// pinned with `builtins.storePath`): the store fetches them instead. A worker
+/// substitutes an input when the build asks for it (daemon/main.cc:
+/// `gatherInputs`), so here we only check that some substituter has them,
+/// which is what `QueryValidPaths` with `substitute` answers.
+pub fn substitute(c: &mut Client, paths: &[StorePath], t: &mut Timings) -> Result<()> {
     if paths.is_empty() {
         return Ok(());
     }
-    if c.info.farm {
-        t.calls += 1;
-        let req = proto::QueryValidPathsRequest {
-            paths: paths.iter().map(|p| p.base_name().to_string()).collect(),
-            substitute: true,
-        };
-        let reply = c.call("QueryValidPaths", |mut stub, h| {
-            let req = req.clone();
-            async move { stub.query_valid_paths(c_request(req, &h)).await }
-        })?;
-        let known: HashSet<String> = reply.paths.into_iter().collect();
-        for p in paths {
-            if !known.contains(p.base_name()) {
-                return Err(Error::Store(format!(
-                    "'{p}' is not in the local store and no substituter of '{}' has it",
-                    c.cfg.authority
-                )));
-            }
-        }
-        return Ok(());
-    }
-    let targets: Vec<String> = paths.iter().map(ToString::to_string).collect();
-    for (path, res) in build_paths(c, targets, t, on_event)? {
-        if !res.success() {
+    t.calls += 1;
+    let req = proto::QueryValidPathsRequest {
+        paths: paths.iter().map(|p| p.base_name().to_string()).collect(),
+        substitute: true,
+    };
+    let reply = c.call("QueryValidPaths", |mut stub, h| {
+        let req = req.clone();
+        async move { stub.query_valid_paths(c_request(req, &h)).await }
+    })?;
+    let known: HashSet<String> = reply.paths.into_iter().collect();
+    for p in paths {
+        if !known.contains(p.base_name()) {
             return Err(Error::Store(format!(
-                "cannot substitute '{path}' on the builder: status {}: {}",
-                res.status, res.error_msg
+                "'{p}' is not in the local store and no substituter of '{}' has it",
+                c.cfg.authority
             )));
         }
     }
     Ok(())
 }
 
-/// Derivations parsed from their ATerms. A farm build needs every derivation
-/// of the batch's closure; a non-farm build needs only the roots, whose
-/// outputs it reports.
+/// Derivations parsed from their ATerms: every derivation of the batch's
+/// closure, since the client walks it.
 pub fn drv_table(drvs: &[crate::build::backend::Drv]) -> Result<BTreeMap<StorePath, Derivation>> {
     let mut out = BTreeMap::new();
     for d in drvs {
@@ -214,7 +192,7 @@ pub fn query_valid_paths(
 }
 
 /// `QueryPathInfos`: the 1.16 `UnkeyedValidPathInfo` of each path the store
-/// has, signatures included. In farm mode the worker substitutes a path it
+/// has, signatures included. The worker substitutes a path it
 /// lacks from the cache first, so this also answers for cached outputs.
 fn query_path_infos(
     c: &mut Client,
@@ -372,56 +350,6 @@ fn upload(
 
 // ---- builds -----------------------------------------------------------------
 
-/// One `BuildPaths` call: the targets are `DerivedPath`s in nix's own string
-/// notation, and the reply carries the `vector<KeyedBuildResult>` bytes.
-/// `log_line` and `phase` become `Log` events while it runs.
-pub fn build_paths(
-    c: &mut Client,
-    targets: Vec<String>,
-    t: &mut Timings,
-    on_event: &mut dyn FnMut(Event),
-) -> Result<Vec<(String, BuildResult)>> {
-    let req = proto::BuildPathsRequest {
-        targets,
-        build_mode: 0,
-        protocol: BUILD_PROTOCOL,
-    };
-    t.calls += 1;
-    let headers = c.headers()?;
-    let mut stub = c.stub.clone();
-    let mut stream =
-        c.rt.block_on(async { stub.build_paths(c_request(req, &headers)).await })
-            .map_err(|s| c.status_error(&s, "BuildPaths"))?
-            .into_inner();
-
-    let mut results: Option<Vec<(String, BuildResult)>> = None;
-    while let Some(msg) =
-        c.rt.block_on(stream.next())
-            .transpose()
-            .map_err(|s| c.status_error(&s, "BuildPaths"))?
-    {
-        match msg.event {
-            Some(proto::build_paths_chunk::Event::LogLine(line)) => {
-                on_event(Event::Log(Log {
-                    drv_path: String::new(),
-                    line,
-                }));
-            }
-            Some(proto::build_paths_chunk::Event::Phase(phase)) => {
-                on_event(Event::Log(Log {
-                    drv_path: String::new(),
-                    line: format!("phase: {phase}").into_bytes(),
-                }));
-            }
-            Some(proto::build_paths_chunk::Event::Done(done)) => {
-                results = Some(read_keyed_build_results(&mut done.results.as_slice())?);
-            }
-            None => {}
-        }
-    }
-    results.ok_or_else(|| Error::Protocol("gRPC BuildPaths stream ended without a result".into()))
-}
-
 /// One derivation the farm must build, in the shape `BuildDerivation` wants.
 pub struct Job {
     pub drv_path: StorePath,
@@ -439,6 +367,26 @@ impl Job {
             drv,
             input_srcs,
             features,
+        }
+    }
+
+    /// build.cc:`fillWant`. `drv_path` is the base name, as C++
+    /// `StorePath::to_string` prints it.
+    fn want(&self) -> proto::Want {
+        proto::Want {
+            drv_path: self.drv_path.base_name().to_string(),
+            out_keys: self
+                .drv
+                .outputs
+                .iter()
+                .filter_map(|(name, o)| o.path(&self.drv.name, name).ok().flatten())
+                .map(|p| format!("{}.narinfo", p.hash_part()))
+                .collect(),
+            inputs: self.input_srcs.iter().map(ToString::to_string).collect(),
+            cp_hint_ms: 0,
+            build_mode: 0,
+            required_features: self.features.clone(),
+            system: self.drv.platform.clone(),
         }
     }
 }
@@ -469,17 +417,55 @@ fn required_system_features(drv: &Derivation) -> Vec<String> {
         .collect()
 }
 
-/// `BuildDerivation` for one derivation, with the retries store.cc does:
-/// `NOT_FOUND` means the worker lacks the `.drv` closure, so upload it and ask
-/// once more; `UNAVAILABLE` means another worker should take it, so salt the
-/// `x-nix-drv` header the balancer hashes and try again, up to
-/// `unavailable-retries` times. Returns the result and the RPCs it cost.
-pub fn build_derivation(
+/// One derivation through the scheduler (build.cc:`Run::resultFor`): a `Want`,
+/// then `BuildDerivation` on the worker it names. A worker that bounces the
+/// build sends it back to the scheduler, up to `reschedule-retries` times.
+/// Returns the result and the RPCs it cost.
+pub fn build(
     c: &Client,
+    sched: &Sched,
     job: &Job,
     objects: &Objects,
     tx: &std::sync::mpsc::Sender<Event>,
 ) -> Result<(BuildResult, usize)> {
+    let mut calls = 0usize;
+    for _ in 0..=c.cfg.reschedule_retries {
+        let (worker, assign_id) = match sched.place(job.want())? {
+            // 2 = AlreadyValid.
+            Answer::Cached => {
+                return Ok((
+                    BuildResult {
+                        status: 2,
+                        ..BuildResult::default()
+                    },
+                    calls,
+                ));
+            }
+            Answer::Assigned { worker, assign_id } => (worker, assign_id),
+        };
+        match build_derivation(c, job, &worker, assign_id, objects, tx, &mut calls)? {
+            Some(res) => return Ok((res, calls)),
+            None => continue,
+        }
+    }
+    Err(Error::Store(format!(
+        "'{}': gave up after {} reschedules",
+        job.drv_path, c.cfg.reschedule_retries
+    )))
+}
+
+/// build.cc:`buildAssigned`: `NOT_FOUND` means the worker lacks the `.drv`
+/// closure, so upload it and ask once more. `None` when the worker bounced
+/// the build and the scheduler must place it again.
+fn build_derivation(
+    c: &Client,
+    job: &Job,
+    worker: &str,
+    assign_id: u64,
+    objects: &Objects,
+    tx: &std::sync::mpsc::Sender<Event>,
+    calls: &mut usize,
+) -> Result<Option<BuildResult>> {
     let mut drv_bytes = Vec::new();
     write_basic_derivation(&mut drv_bytes, &job.drv, &job.input_srcs)
         .map_err(|e| Error::io("serialising a derivation", e))?;
@@ -489,47 +475,40 @@ pub fn build_derivation(
         drv: drv_bytes,
         build_mode: 0,
         protocol: BUILD_PROTOCOL,
+        assign_id,
     };
+    // build.cc:routingFor.
     let mut headers = c.headers()?;
-    // store.cc:routingFor. `x-nix-drv` is the hash part only.
     headers.retain(|(k, _)| *k != "x-nix-system");
-    headers.push(("x-nix-drv", job.drv_path.hash_part().to_string()));
     headers.push(("x-nix-system", job.drv.platform.clone()));
     headers.push(("x-nix-features", job.features.join(",")));
+    headers.push(("x-nix-worker", worker.to_string()));
 
-    let mut attempt = 0u32;
-    let mut calls = 0usize;
-    loop {
-        calls += 1;
-        match try_build_derivation(c, &req, &headers, &job.drv_path, tx) {
-            Ok(r) => return Ok((r, calls)),
-            Err(s)
-                if matches!(
-                    s.code(),
-                    tonic::Code::NotFound | tonic::Code::FailedPrecondition
-                ) =>
-            {
-                calls += upload_closure(c, objects, &job.drv_path, &headers)?;
-                calls += 1;
-                return try_build_derivation(c, &req, &headers, &job.drv_path, tx)
-                    .map(|r| (r, calls))
-                    .map_err(|s| c.status_error(&s, "BuildDerivation"));
+    *calls += 1;
+    let mut r = try_build_derivation(c, &req, &headers, &job.drv_path, tx);
+    if matches!(&r, Err(s) if s.code() == tonic::Code::NotFound) {
+        *calls += upload_closure(c, objects, &job.drv_path, &headers)? + 1;
+        r = try_build_derivation(c, &req, &headers, &job.drv_path, tx);
+    }
+    match r {
+        Ok(res) => Ok(Some(res)),
+        Err(s) => match s.code() {
+            // Superseded, not expected there (any more), worker draining or
+            // gone, or died mid-stream.
+            tonic::Code::Aborted
+            | tonic::Code::FailedPrecondition
+            | tonic::Code::Unavailable
+            | tonic::Code::Unknown
+            | tonic::Code::Internal => {
+                eprintln!(
+                    "{}: {}, asking the scheduler again",
+                    job.drv_path,
+                    first_line(s.message())
+                );
+                Ok(None)
             }
-            Err(s)
-                if s.code() == tonic::Code::Unavailable && attempt < c.cfg.unavailable_retries =>
-            {
-                eprintln!("{}, retrying elsewhere", first_line(s.message()));
-                std::thread::sleep(Duration::from_secs(u64::from(attempt) + 1));
-                attempt += 1;
-                let salted = format!("{}-{attempt}", job.drv_path.hash_part());
-                for h in &mut headers {
-                    if h.0 == "x-nix-drv" {
-                        h.1 = salted.clone();
-                    }
-                }
-            }
-            Err(s) => return Err(c.status_error(&s, "BuildDerivation")),
-        }
+            _ => Err(c.status_error(&s, "BuildDerivation")),
+        },
     }
 }
 
@@ -755,19 +734,34 @@ pub fn fetch_into_dir(
 }
 
 /// Registers `paths` and their closure in the local nix-daemon so an out-link
-/// points at a real local store path: `QueryPathInfos` on the remote for the
-/// closure, then `FetchNars` for what the local store lacks, written straight
-/// into one worker-protocol `AddMultipleToStore` with each path's
-/// `ValidPathInfo` — signatures included, so the daemon accepts what the cache
-/// signed. This is what `nix-farm`'s `nix copy --from <cache>` does.
+/// points at a real local store path. The local daemon substitutes first: a
+/// farm publishes its outputs to a binary cache under the cache key, while a
+/// worker's own path infos carry only the worker's key. What it cannot
+/// substitute comes from the remote: `QueryPathInfos` for the closure, then
+/// `FetchNars` for what the local store lacks, written straight into one
+/// worker-protocol `AddMultipleToStore` with each path's `ValidPathInfo`,
+/// signatures included, so the daemon checks them as `nix copy --from` does.
 pub fn register(
     c: &mut Client,
     paths: &[StorePath],
     conn: &mut super::super::worker::Connection,
     on_event: &mut dyn FnMut(Event),
 ) -> Result<usize> {
+    let names: Vec<String> = paths.iter().map(StorePath::to_string).collect();
+    let local: HashSet<String> = conn
+        .substitute_paths(&names, on_event)?
+        .into_iter()
+        .collect();
+    let paths: Vec<StorePath> = paths
+        .iter()
+        .filter(|p| !local.contains(&p.to_string()))
+        .cloned()
+        .collect();
+    if paths.is_empty() {
+        return Ok(0);
+    }
     let mut t = Timings::default();
-    let infos = remote_closure(c, paths, &mut t)?;
+    let infos = remote_closure(c, &paths, &mut t)?;
     let all: Vec<String> = infos.keys().map(StorePath::to_string).collect();
     let valid: HashSet<String> = conn
         .query_valid_paths(&all, on_event)?

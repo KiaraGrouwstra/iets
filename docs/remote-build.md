@@ -166,11 +166,11 @@ records; a `build::backend::Backend` owns the wire. Two implementations:
 
 | | worker protocol (`daemon`, `unix://`, `ssh-ng://`) | `grpc://` |
 |---|---|---|
-| a ready set | one `BuildPathsWithResults` | farm: one `BuildDerivation` per derivation of the set's closure, `min(max-builds, -j)` in flight. Non-farm: one `BuildPaths` for the set |
-| build parallelism | the daemon's, `-j` through `SetOptions` | the client's, in flight; the store's within one `BuildPaths` |
-| log lines | attributed by the daemon's activity ids | farm: by the call, which knows its derivation. Non-farm: unattributed, folded into the running build when there is exactly one |
+| a ready set | one `BuildPathsWithResults` | a `Want` on the `Schedule` stream and one `BuildDerivation` per derivation of the set's closure, `min(max-builds, -j)` in flight |
+| build parallelism | the daemon's, `-j` through `SetOptions` | the client's, in flight, placed by the scheduler |
+| log lines | attributed by the daemon's activity ids | by the call, which knows its derivation |
 | output paths | `QueryDerivationOutputMap` | statically, from the derivations |
-| out-links | the local daemon, the closure copied back first | `FetchNars` from the cache, then the local daemon |
+| out-links | the local daemon, the closure copied back first | the local daemon substitutes from its caches; the rest by `FetchNars` |
 
 Why one op per ready set on the worker protocol: the protocol is serial per
 connection, and every `BuildPathsWithResults` constructs a daemon `Worker`
@@ -195,9 +195,11 @@ published to `https://cache.numtide.com`. ietsp speaks it natively, so
 `--builder grpc://…` and `--store grpc://…` need no nix, no plugin and no
 local store. Code: `src/remote/grpc/` (`mod.rs` the URL, TLS, auth and the
 retry policy; `drvwire.rs` the worker-protocol payloads the messages carry;
-`build.rs` the calls; `backend.rs` the transport as one of the dispatcher's
-backends). The service definition is vendored verbatim as
-`proto/nix_remote.proto` (rev `8f3a2ecb`) and compiled by `build.rs`.
+`build.rs` the calls; `sched.rs` the `Schedule` stream; `backend.rs` the
+transport as one of the dispatcher's backends). The service definition is
+vendored verbatim as
+`proto/nix_remote.proto` (rev `4f6d239e`, the one numtide/org deploys) and
+compiled by `build.rs`.
 
 ### URL
 
@@ -212,8 +214,9 @@ defaults (`src/client/store.hh`):
 | `ca-cert` | platform roots | PEM CA that verifies the server. The farm's balancer has a public ACME certificate, so this is rarely needed |
 | `insecure` | `false` | plaintext instead of TLS. Local testing only |
 | `connect-timeout` | 30 | seconds the first call waits for the service |
-| `unavailable-retries` | 5 | how often a build bounced with `UNAVAILABLE` is retried elsewhere |
-| `max-builds` | 64 | concurrent `BuildDerivation` calls in farm mode |
+| `reschedule-retries` | 8 | how often a build a worker bounced goes back to the scheduler |
+| `restart-grace` | 120 | seconds to wait for a scheduler that went away, or for a worker that can take an `Unplaceable` derivation |
+| `max-builds` | 64 | concurrent `BuildDerivation` calls |
 | `nar-connections` | 4 | accepted for URL compatibility; this client fetches over its one channel |
 
 ### Auth and headers
@@ -221,43 +224,44 @@ defaults (`src/client/store.hh`):
 `authorization: Bearer <token>` from `token-file`, read fresh for each call so
 a rotating projected volume or a CI refresher works (`channel.hh:TokenFileCredentials`).
 `x-nix-system` rides on every call, so an upload and the build that follows
-land on the same cluster. A `BuildDerivation` adds `x-nix-drv` (the drv path's
-hash part, which the balancer hashes to pick a worker) and `x-nix-features`
-(the derivation's `requiredSystemFeatures`, comma separated), and overrides
-`x-nix-system` with the derivation's own `platform` (`store.cc:routingFor`).
+land on the same cluster. A `BuildDerivation` adds `x-nix-worker` (the
+address the scheduler assigned, which the balancer routes to) and
+`x-nix-features` (the derivation's `requiredSystemFeatures`, comma separated),
+and overrides `x-nix-system` with the derivation's own `platform`
+(`build.cc:routingFor`).
 
 ### Flow
 
-The `grpc://` backend, in order. `StoreInfo` once, for the trust flag and the `farm` flag. Then:
+The `grpc://` backend, in order. `StoreInfo` once, for the trust flag. Then:
 
 1. `QueryValidPaths` with every planned path's base name, in one call, then
    `Plan::resolve` on the missing sources — the same split the worker path
    makes.
-2. The sources the client cannot produce go to the store: non-farm realises
-   them with one `BuildPaths` over their plain store paths, as the worker path
-   does with `BuildPathsWithResults`; a farm substitutes an input when the
-   build asks for it (daemon/main.cc:`gatherInputs`), so there ietsp only
-   checks that some substituter has them, which is what `QueryValidPaths` with
-   `substitute` answers in farm mode.
+2. The sources the client cannot produce go to the store: a worker
+   substitutes an input when the build asks for it (daemon/main.cc:
+   `gatherInputs`), so ietsp only checks that some substituter has them,
+   which is what `QueryValidPaths` with `substitute` answers.
 3. `AddMultipleToStore`: one client-streamed zstd stream whose decompressed
    bytes are exactly the worker-protocol `AddMultipleToStore` framing the
    `unix://` path already writes — the same `write_object`, count first, then
    each `ValidPathInfo` at 1.16 followed by its NAR. The flags travel alone in
    the first message; the data follows in 256 KiB chunks, as the C++ sink does,
    and the stream is ended (not flushed) once at the end.
-4. Farm mode (`StoreInfoReply.farm`): `BuildDerivation` per derivation, at
-   most `max-builds` in flight, a derivation only once every input derivation
-   of it is done. The request carries the `BasicDerivation` wire form
-   (`derivation/aterm.cc:write`) at `protocol = 1 << 8 | 37` and
-   `build_mode = 0`. `log_line` and `phase` become `Log` events;
-   `BuildDerivationDone.result` is a `BuildResult` at 1.37 and becomes the
-   derivation's verdict, a `Failed` event on failure. Derivations whose outputs `QueryValidPaths` already reports
-   valid are skipped — the C++ plugin sends them and lets the niks3 claim
-   answer `AlreadyValid`, one RPC each.
-5. Non-farm: one `BuildPaths` on `<drv>^<outputs>` (note `^`: the daemon parses
-   with `DerivedPath::parse`, not the worker protocol's legacy `!`), whose
-   reply is a `vector<KeyedBuildResult>` at 1.37.
-6. `--fetch-to DIR`: the farm never copies an output into a local store, so
+4. Per derivation, at most `max-builds` in flight, a derivation only once
+   every input derivation of it is done: a `Want` on the batch's one
+   `Scheduler.Schedule` stream (`sched.rs`, build.cc:`GrpcStore::Run`), with
+   the output keys, the inputs, the features and the platform. The scheduler
+   answers `Cached` (the verdict is `AlreadyValid`), `Assigned` with a worker
+   address and an `assign_id`, or `Unplaceable`, which is advisory: the
+   `Want` stays queued and fails after `restart-grace`. On `Assigned`,
+   `BuildDerivation` to that worker carries the `BasicDerivation` wire form
+   (`derivation/aterm.cc:write`) at `protocol = 1 << 8 | 37`,
+   `build_mode = 0` and the `assign_id`. `log_line` and `phase` become `Log`
+   events; `BuildDerivationDone.result` is a `BuildResult` at 1.37 and
+   becomes the derivation's verdict, a `Failed` event on failure.
+   Derivations whose outputs `QueryValidPaths` already reports valid are
+   skipped, so they cost no `Want`.
+5. `--fetch-to DIR`: the farm never copies an output into a local store, so
    `FetchNars` streams the NARs back — one zstd stream across all paths,
    flushed per frame, each frame tagged with its `path_index` and the last one
    of a path marked `eof`. Each NAR is spooled beside its destination and
@@ -282,24 +286,27 @@ it uploads only sources and derivations.
 Outputs land in the farm's binary cache, not in the local store. `--fetch-to`
 restores them into a directory. `nix build --store grpc://… --eval-store auto`
 (what the `nix-farm` wrapper runs) needs the `result` symlink to resolve, so
-the backend's out-link step (`grpc::build::register`) first reads the
-outputs' closure back with `QueryPathInfos`, fetches what the local store
-lacks with `FetchNars`, and
-registers it through one worker-protocol `AddMultipleToStore` with each path's
-signatures — the same thing `nix copy --from https://cache.numtide.com` does.
-The local `nix.conf` must therefore trust the cache's public key, or be a
-trusted user.
+the backend's out-link step (`grpc::build::register`) first asks the local
+daemon to substitute the outputs (`QueryValidPaths` with `substitute`), which
+fetches them from the farm's cache when `nix.conf` lists it. A worker's own
+path infos carry only the worker's key, not the cache key, so this is the
+path a farm takes. What the local daemon cannot substitute is read back with
+`QueryPathInfos`, fetched with `FetchNars`, and registered through one
+worker-protocol `AddMultipleToStore` with each path's signatures, which the
+daemon checks as `nix copy --from` does. The local `nix.conf` must therefore
+list and trust the cache (`substituters`, `trusted-public-keys`), or the user
+must be trusted.
 
 ### Measured (`scripts/grpc-e2e.nu`, release build)
 
-`nix-grpc-daemon` in plaintext non-farm mode in front of a scratch chroot
-store on this machine (`--proxy-socket` a `nix-daemon` on that store,
-`--proxy-store local?root=DIR`), so these are the transport's own figures, not
-a farm's.
+`nix-grpc-daemon` in plaintext standalone mode (it schedules onto itself) in
+front of a scratch chroot store on this machine (`--proxy-socket` a
+`nix-daemon` on that store, `--proxy-store local?root=DIR`), so these are the
+transport's own figures, not a farm's.
 
 | case | connect | QueryValidPaths | AddMultipleToStore | build | RPCs |
 |---|---|---|---|---|---|
-| custom drv + 1 source tree, `--fetch-to` | 0.000 s | 2 paths, 2 missing, 0.001 s | 2 paths, 720 B, 0.007 s | 0.41 s | 5 |
+| custom drv + 1 source tree, `--fetch-to` | 0.009 s | 2 paths, 2 missing, 0.020 s | 2 paths, 721 B, 0.009 s | 0.63 s | 6 |
 | hello cold, `--no-build` | 0.000 s | 776 paths, 776 missing, 0.006 s | 776 paths, 490 KB, 0.26 s | skipped | 3 |
 | hello warm, `--no-build` | 0.000 s | 776 paths, 0 missing, 0.006 s | skipped | skipped | 2 |
 
@@ -314,10 +321,11 @@ nix-grpc-store plugin, which matched here. The script prefers the `nix` on
 `PATH`, falls back to `/run/current-system/sw/bin/nix` (the dev shell's nix is
 often a different libnixstore than the installed plugin was built against),
 and, failing both, compares against the same store over the worker protocol
-instead and says so. Case 5 checks the out-link path end to end: the output is fetched
-back with `FetchNars` and handed to the local daemon, which refuses it for
-lacking a signature — correct, because a scratch daemon builds unsigned
-outputs and a real farm signs them with its cache key.
+instead and says so. Case 5 checks the out-link path end to end: no local
+substituter has the output, so it is fetched back with `FetchNars` and handed
+to the local daemon, which refuses it for lacking a signature — correct,
+because a scratch daemon builds unsigned outputs. On a real farm the local
+daemon substitutes the output from the cache instead.
 
 Case 6 runs `ietsp fast-build --store grpc://…` on `scripts/lib.nu`'s
 `fastbuild-flake` and compares the whole result file — every record's type,
@@ -325,26 +333,27 @@ attribute, success and skipped flag — with the same flake built over the
 worker protocol on the same store; case 7 checks that a multi-root
 `ietsp build` over `grpc://` names every attribute on stderr.
 
-Not covered: farm mode. `--niks3` needs a niks3 instance with build claims
-and spawns a `niks3 push` child (`src/daemon/farm.hh`), so `BuildDerivation`,
-the `max-builds` fan-out, the `BasicDerivation` wire form and the
-`BuildResult` decoder are exercised only by unit tests until a real token for
-`farm.numtide.com` is available. The fan-out's own scheduling — the cap on
-builds in flight, the dependency order, a failed derivation blocking its
-dependants, and the drv-tagged merge into one event stream — is
+Against `farm.numtide.com` with a Keycloak `write` token (2026-09-20): a
+`runCommand` with 572 cached inputs went `Want`, `Assigned`, `BuildDerivation`
+on bld1 in 2.6 s, 5 RPCs; a classic `nix-build` out-link then came from
+cache.numtide.com through the local daemon. The fan-out's own scheduling —
+the cap on builds in flight, the dependency order, a failed derivation
+blocking its dependants, and the drv-tagged merge into one event stream — is
 `build::fanout`, tested without a farm.
 
 ### Retries
 
-`UNAVAILABLE` is what gRPC folds every connect failure into, and what a worker
-says when it is draining, lacks a feature, or lost its niks3 claim. Unary calls
+`UNAVAILABLE` is what gRPC folds every connect failure into. Unary calls
 retry with the `GrpcStore::retrying` policy: 500 ms doubling to 4 s, until
-`connect-timeout` has passed. A `BuildDerivation` retries up to
-`unavailable-retries` times with a one-second-per-attempt pause and a salted
-`x-nix-drv`, so a consistent-hashing balancer picks a different worker.
-`NOT_FOUND` or `FAILED_PRECONDITION` means the worker has not got the `.drv`
-closure: ietsp uploads that closure (`QueryValidPaths` then
-`AddMultipleToStore`, with the same routing headers) and asks once more.
+`connect-timeout` has passed. The `Schedule` stream reconnects when the
+scheduler says `Restarting`, or goes away with `UNAVAILABLE`, `UNKNOWN` or
+`INTERNAL`, for up to `restart-grace`, and sends every unanswered `Want`
+again. A `BuildDerivation` that the worker bounces (`ABORTED`,
+`FAILED_PRECONDITION`, `UNAVAILABLE`, `UNKNOWN`, `INTERNAL`) goes back to the
+scheduler, up to `reschedule-retries` times (build.cc:`buildAssigned`).
+`NOT_FOUND` means the worker has not got the `.drv` closure: ietsp uploads
+that closure (`QueryValidPaths` then `AddMultipleToStore`, with the same
+routing headers) and asks once more.
 
 ## Measured (`scripts/daemon-e2e.nu`, release build)
 
@@ -413,18 +422,15 @@ client-side cut of the upload changes that (docs/history.md).
 
 `grpc://` adds:
 
-- Farm mode has not run against a real farm: `farm.numtide.com` needs a
-  Keycloak token and a local `nix-grpc-daemon --niks3` needs a niks3
-  instance, so `BuildDerivation`, the fan-out, the `BasicDerivation` writer
-  and the `BuildResult` decoder are covered by unit tests and by non-farm
-  `BuildPaths` runs, not by an end-to-end farm build.
+- `Want.cp_hint_ms` is 0: a `Want` goes out only when a build slot is free,
+  so the scheduler never orders a backlog by critical path.
 - `nar-connections` is parsed and ignored: `FetchNars` runs over the one
   channel, so a large closure does not fan out over several connections the
   way the C++ `NarFetcher` does.
 - A `BuildDerivation` cancelled by ^C is not cancelled server-side; the C++
   plugin calls `TryCancel` on interrupt.
 - No `QueryMissing` use: the client decides what to upload from its own
-  `QueryValidPaths` answer, and in farm mode which derivations to build from
+  `QueryValidPaths` answer, and which derivations to build from
   a second `QueryValidPaths` over the output paths.
 - Floating content-addressed and dynamic derivations are rejected, as they
   are by the C++ farm path.

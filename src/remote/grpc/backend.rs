@@ -1,13 +1,13 @@
 //! `grpc://` as one of the dispatcher's backends (`build::backend`).
 //!
 //! Where the worker protocol sends one `BuildPathsWithResults` per ready set,
-//! this fans the set out. A farm builds one derivation per `BuildDerivation`
-//! call, so the client is the scheduler: the batch's whole derivation closure,
-//! dependencies first, up to `min(max-builds, max-jobs)` in flight. Every
-//! call knows its derivation, so its `log_line` and `phase` events carry the
-//! drv path and the renderer keys its per-build buffers on them. A non-farm
-//! store resolves the closure itself, so there one `BuildPaths` takes the
-//! whole ready set.
+//! this fans the set out. The store builds one derivation per
+//! `BuildDerivation` call, so the client walks the batch's whole derivation
+//! closure, dependencies first, up to `min(max-builds, max-jobs)` in flight.
+//! Each derivation goes to the scheduler first (`sched.rs`), which names the
+//! worker or answers that the cache has it. Every call knows its derivation,
+//! so its `log_line` and `phase` events carry the drv path and the renderer
+//! keys its per-build buffers on them.
 //!
 //! Outputs land in the farm's binary cache, not in a local store, so an
 //! out-link needs them registered locally first (docs/remote-build.md).
@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
-use crate::build::backend::{Backend, Batch, Job, Phase, Status, local};
+use crate::build::backend::{Backend, Batch, Phase, Status, local};
 use crate::build::fanout;
 use crate::error::{Error, Result};
 use crate::remote::event::{Event, Started};
@@ -29,6 +29,7 @@ use crate::store::path::StorePath;
 
 use super::build::{self, Objects, Timings};
 use super::drvwire::{BuildResult, basic_input_srcs};
+use super::sched::Sched;
 use super::{Client, GrpcConfig};
 
 pub struct Grpc {
@@ -48,7 +49,6 @@ impl Grpc {
         let c = Client::open(cfg)?;
         Ok(Grpc {
             t: Timings {
-                farm: c.info.farm,
                 trusted: c.info.trusted,
                 calls: 1,
                 ..Timings::default()
@@ -61,58 +61,7 @@ impl Grpc {
     }
 }
 
-/// Non-farm: one `BuildPaths` over the whole ready set. The store walks the
-/// closure, so the log lines it streams name no derivation; the renderer folds
-/// them into the running build when there is just one.
-///
-/// `BuildPaths` carries no `keep-going`, so the store stops at the first
-/// failure and answers for the targets it reached only. Every attribute still
-/// wants a verdict of its own, so the ones it did not reach go out in another
-/// call, until a call answers for none of them.
-fn store_build(
-    c: &mut Client,
-    t: &mut Timings,
-    batch: &Batch<'_>,
-    on_event: &mut dyn FnMut(Event),
-) -> Result<HashMap<String, Status>> {
-    for j in batch.jobs {
-        on_event(Event::Started(Started {
-            drv_path: j.drv.to_string(),
-        }));
-    }
-    t.drvs += batch.jobs.len();
-    let mut out: HashMap<String, Status> = HashMap::new();
-    let mut pending: Vec<&Job> = batch.jobs.iter().collect();
-    while !pending.is_empty() {
-        // The daemon parses these with `DerivedPath::parse`, whose separator is
-        // `^`, not the worker protocol's legacy `!` (derived-path.cc).
-        let targets: Vec<String> = pending
-            .iter()
-            .map(|j| format!("{}^{}", j.drv, j.spec()))
-            .collect();
-        for (path, res) in &build::build_paths(c, targets, t, on_event)? {
-            let drv = path
-                .split(['^', '!'])
-                .next()
-                .unwrap_or(path.as_str())
-                .to_string();
-            let e = out.entry(drv).or_insert_with(Status::ok);
-            if !res.success() {
-                *e = Status::failed(format!("status {}: {}", res.status, res.error_msg));
-            } else if matches!(res.status, 2 | 13) {
-                t.drvs_cached += 1;
-            }
-        }
-        let was = pending.len();
-        pending.retain(|j| !out.contains_key(&j.drv.to_string()));
-        if pending.len() == was {
-            break;
-        }
-    }
-    Ok(out)
-}
-
-/// Farm mode: `BuildDerivation` per derivation of the batch's closure, at most
+/// A `Want` and a `BuildDerivation` per derivation of the batch's closure, at most
 /// `min(max-builds, -j)` in flight, a derivation only once every input
 /// derivation of it is done.
 ///
@@ -120,7 +69,7 @@ fn store_build(
 /// C++ plugin sends them anyway and lets the niks3 claim answer `AlreadyValid`,
 /// which costs one RPC per derivation; one extra `QueryValidPaths` over the
 /// output paths is cheaper and asks the same store.
-fn farm_build(
+fn build_batch(
     c: &mut Client,
     t: &mut Timings,
     objects: &Objects,
@@ -185,6 +134,7 @@ fn farm_build(
         })
         .collect();
 
+    let sched = Sched::open(c)?;
     let client: &Client = c;
     let jobs = &jobs;
     let calls = AtomicUsize::new(0);
@@ -193,7 +143,7 @@ fn farm_build(
         let _ = tx.send(Event::Started(Started {
             drv_path: job.drv_path.to_string(),
         }));
-        match build::build_derivation(client, job, objects, tx) {
+        match build::build(client, &sched, job, objects, tx) {
             Ok((res, n)) => {
                 calls.fetch_add(n, Ordering::Relaxed);
                 res
@@ -262,7 +212,8 @@ impl Backend for Grpc {
         }
         self.t.substitute_paths += paths.len();
         let t0 = Instant::now();
-        let r = build::substitute(&mut self.c, paths, &mut self.t, on_event);
+        let _ = on_event;
+        let r = build::substitute(&mut self.c, paths, &mut self.t);
         self.t.substitute += t0.elapsed();
         r
     }
@@ -286,26 +237,20 @@ impl Backend for Grpc {
         batch: &Batch<'_>,
         on_event: &mut dyn FnMut(Event),
     ) -> Result<HashMap<String, Status>> {
-        // Both modes report the outputs from the derivations themselves; a farm
-        // also schedules them, so it needs the whole closure.
-        let farm = self.c.info.farm;
-        let drvs = (batch.drvs)(farm)?;
+        // The client walks the closure, so it needs all of it.
+        let drvs = (batch.drvs)(true)?;
         self.drvs.extend(build::drv_table(&drvs)?);
 
         let t0 = Instant::now();
-        let r = if farm {
-            farm_build(
-                &mut self.c,
-                &mut self.t,
-                &self.objects,
-                &self.drvs,
-                self.max_jobs,
-                batch,
-                on_event,
-            )
-        } else {
-            store_build(&mut self.c, &mut self.t, batch, on_event)
-        };
+        let r = build_batch(
+            &mut self.c,
+            &mut self.t,
+            &self.objects,
+            &self.drvs,
+            self.max_jobs,
+            batch,
+            on_event,
+        );
         self.t.build += t0.elapsed();
         r
     }

@@ -4,6 +4,17 @@ What was tried, measured and removed, newest first. The code and the
 full tables are in git at the commit each entry names. The numbers that
 justify a current default live in the doc of that feature, not here.
 
+## 2026-09-20: `BuildPaths` and the non-farm gRPC path removed
+
+nix-grpc-store `4f6d239e` (what numtide/org deploys) dropped `BuildPaths`
+and the `farm` flag in `StoreInfoReply`: every node now builds through its
+scheduler, so a standalone daemon schedules onto itself. ietsp followed:
+one `Schedule` stream per batch, a `Want` per derivation, `BuildDerivation`
+to the assigned worker (`src/remote/grpc/sched.rs`). The client-side
+`x-nix-drv` salting for `UNAVAILABLE` went with it; a bounced build goes
+back to the scheduler instead. Before this, every build against
+farm.numtide.com failed with an empty `UNIMPLEMENTED`.
+
 ## 2026-09-19: second slimming pass
 
 The last build flow outside the dispatcher went. `nix-instantiate`,

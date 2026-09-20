@@ -1,7 +1,7 @@
 #!/usr/bin/env nu
 # End-to-end test of the `grpc://` transport against a local nix-grpc-daemon
-# in plaintext non-farm mode (`--listen 127.0.0.1:PORT`, no TLS, no niks3), so
-# `?insecure=1` is the URL.
+# in plaintext standalone mode (`--listen 127.0.0.1:PORT`, no TLS, no niks3;
+# the node schedules onto itself), so `?insecure=1` is the URL.
 #
 # 1. custom derivation with a source tree, drv and source deleted first:
 #    builds on the daemon's chroot store, checks --fetch-to and the bytes.
@@ -14,15 +14,15 @@
 #    flake built over the worker protocol on the same store.
 # 7. a multi-root `ietsp build` over grpc: one progress line per attribute.
 #
-# Farm mode is not covered: --niks3 needs a niks3 instance with build claims
-# and a `niks3 push` child, which this host has not got (src/daemon/farm.hh).
+# A real farm (balancer, niks3, several workers) is not covered here; see
+# docs/remote-build.md for the run against farm.numtide.com.
 #
 # usage: nu scripts/grpc-e2e.nu            # uses target/release
 #        BIN=target/debug nu scripts/grpc-e2e.nu
 #        DAEMON=/nix/store/…-nix-grpc-store-0.1.0 nu scripts/grpc-e2e.nu
 use lib.nu [ROOT bytes-of chomp current-system fail fastbuild-flake ietsp-bin isolate make-farm nixpkgs out-of quiet-ok run-in same-file scratch-daemon show show-matching]
 
-const FLAKE = "github:Mic92/nix-grpc-store/8f3a2ecb58117448f28bae90304c3e24e8e42b79"
+const FLAKE = "github:Mic92/nix-grpc-store/4f6d239e834f96bd1544a8b243d46c41a892016e"
 
 # The nix-grpc-store build with bin/nix-grpc-daemon and lib/nix/plugins.
 def daemon-package []: nothing -> string {
