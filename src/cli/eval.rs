@@ -28,6 +28,7 @@ pub fn run_eval(a: EvalArgs) -> i32 {
     }
     // only the cache and --dump-drvs read the ATerm text after evaluation
     ev.drv.keep_aterm = cache.is_some() || a.dump_drvs.is_some();
+    ev.drv.keep_site = false;
     // parallel: the rest runs as the main fiber
     crate::parallel::run(a.workers, ev, move |ev| eval_and_print(ev, a, cache))
 }

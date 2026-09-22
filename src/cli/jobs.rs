@@ -246,6 +246,7 @@ pub fn cmd_eval_jobs(argv: &[String]) -> i32 {
     if j.worker {
         let mut ev = a.evaluator();
         ev.drv.keep_aterm = !j.opts.no_instantiate;
+        ev.drv.keep_site = j.opts.provenance;
         if let Err(e) = crate::api::configure_lints(&mut ev, &a) {
             report(&ev, &e);
             return 1;
@@ -258,6 +259,7 @@ pub fn cmd_eval_jobs(argv: &[String]) -> i32 {
     let workers = a.workers;
     let mut ev = a.evaluator();
     ev.drv.keep_aterm = !j.opts.no_instantiate;
+    ev.drv.keep_site = j.opts.provenance;
     if let Err(e) = crate::api::configure_lints(&mut ev, &a) {
         report(&ev, &e);
         return 1;

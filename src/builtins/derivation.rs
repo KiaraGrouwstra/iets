@@ -60,6 +60,10 @@ pub struct DrvState {
     /// cache, `--dump-drvs` and `build`. Off for runs that only print
     /// paths: 331 MB on the outpaths chunk (docs/memory.md).
     pub keep_aterm: bool,
+    /// Find each derivation's source position (`DrvInfo::pos`), which only
+    /// build progress lines and `eval-jobs --provenance` show; the search
+    /// walks the attributes of every derivation.
+    pub keep_site: bool,
     syms: Option<DrvSyms>,
     imported_drv_fn: Option<Word>,
 }
@@ -88,6 +92,7 @@ impl Default for DrvState {
             dump_dir: None,
             nr_derivations: 0,
             keep_aterm: true,
+            keep_site: true,
             syms: None,
             imported_drv_fn: None,
         }
@@ -644,13 +649,17 @@ fn derivation_strict_internal(
     // name-only builder (runCommand) loses the caller's `name` binding the
     // same way, so the first attribute still bound in a root tree is next.
     let pname_pos = attrs.get(s.pname).map(|a| a.pos);
-    let site = crate::provenance::real_pos(ev, pos)
-        .or_else(|| pname_pos.and_then(|p| crate::provenance::real_pos(ev, p)))
-        .or_else(|| {
-            let p = crate::lint::coerce::drv_fallback(ev, attrs, pos, name_pos);
-            crate::provenance::real_pos(ev, p)
-        })
-        .or_else(|| crate::provenance::real_pos(ev, name_pos));
+    let site = if ev.drv.keep_site {
+        crate::provenance::real_pos(ev, pos)
+            .or_else(|| pname_pos.and_then(|p| crate::provenance::real_pos(ev, p)))
+            .or_else(|| {
+                let p = crate::lint::coerce::drv_fallback(ev, attrs, pos, name_pos);
+                crate::provenance::real_pos(ev, p)
+            })
+            .or_else(|| crate::provenance::real_pos(ev, name_pos))
+    } else {
+        None
+    };
     ev.drv.drvs.insert(
         drv_path.clone(),
         DrvInfo {
