@@ -3,7 +3,7 @@
 //! entries that still exist), with the working tree contents and modes;
 //! nothing untracked, no `.git`, no submodules. A plain directory is copied
 //! whole (path.cc). The copy is virtual: the store path is computed from
-//! the NAR hash and registered as a `SourceOrigin::Tree`, so reads under it
+//! the NAR hash and registered as a `SourceOrigin`, so reads under it
 //! go to the working tree (`store_hooks::locate`); nothing is fetched and
 //! the store is never consulted. Every git query is a `Cmd` observation and
 //! the copied file set a `Tree` observation, so the tracing cache follows
@@ -21,7 +21,7 @@ use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
 use crate::runtime::Word;
 use crate::store::hash::{Hash, HashAlgo};
 use crate::store::nar;
-use crate::store::source::SourceOrigin;
+use crate::store::source::{SourceOrigin, SrcPath};
 
 const NULL_REV: &str = "0000000000000000000000000000000000000000";
 
@@ -64,12 +64,7 @@ pub fn path_tree(ev: &mut Evaluator, dir: &Path, pos: Pos) -> EvalResult<(Hash, 
         source_store_path(&hash).map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
     ev.sources.insert(
         sp,
-        SourceOrigin::Tree {
-            local: dir.to_path_buf(),
-            accepted: None,
-            nar_hash: hash,
-            nar_size,
-        },
+        SourceOrigin::tree(SrcPath::fs(dir, None), hash, nar_size),
     );
     Ok((hash, mtime))
 }
@@ -207,12 +202,7 @@ fn git_tree(ev: &mut Evaluator, root: &Path, pos: Pos) -> EvalResult<Word> {
         source_store_path(&hash).map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
     ev.sources.insert(
         sp.clone(),
-        SourceOrigin::Tree {
-            local: root.to_path_buf(),
-            accepted: Some(Arc::new(accepted)),
-            nar_hash: hash,
-            nar_size,
-        },
+        SourceOrigin::tree(SrcPath::fs(root, Some(Arc::new(accepted))), hash, nar_size),
     );
     let mut attrs = Attrs::new();
     attrs.insert("type".into(), AttrVal::Str("git".into()));

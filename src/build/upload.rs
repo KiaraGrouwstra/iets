@@ -21,7 +21,7 @@ use crate::builtins::derivation::DrvInfo;
 use crate::error::{Error, Result};
 use crate::parallel::shared::SharedMap;
 use crate::remote::event::Event;
-use crate::remote::plan::{Locator, Node, Object, Plan, SourceInfo};
+use crate::remote::plan::{Locator, Node, Object, Plan};
 use crate::store::path::StorePath;
 use crate::store::source::SourceOrigin;
 
@@ -182,21 +182,17 @@ impl StreamUpload {
         known: &HashSet<StorePath>,
     ) -> Result<(Vec<Node>, Vec<StorePath>)> {
         let (drvs, srcs, _) =
-            crate::remote::plan::walk(roots, known, &|p| self.drvs.get(p), &|p| match self
-                .sources
-                .get(p)
-            {
-                Some(SourceOrigin::Text { references, .. }) => Some(references),
-                _ => None,
+            crate::remote::plan::walk(roots, known, &|p| self.drvs.get(p), &|p| {
+                self.sources.get(p)?.text_refs().cloned()
             })?;
         Ok((drvs, srcs))
     }
 
     /// Where to read a source and how it was addressed: from the evaluation,
     /// else from the local store, else `None` and the builder substitutes it.
-    fn source_info(&self, p: &StorePath) -> Result<Option<SourceInfo>> {
+    fn source_info(&self, p: &StorePath) -> Result<Option<SourceOrigin>> {
         if let Some(origin) = self.sources.get(p) {
-            return Ok(Some(crate::remote::plan::source_info(&origin)));
+            return Ok(Some(origin));
         }
         let found = crate::store::locate::locate_in_store(
             std::slice::from_ref(p),

@@ -536,6 +536,6 @@ pub fn plan_roots(
 /// The plan's locator: the local store, no `--source` overrides.
 pub fn locate_store(
     paths: &[StorePath],
-) -> crate::error::Result<Vec<Option<crate::remote::plan::SourceInfo>>> {
+) -> crate::error::Result<Vec<Option<crate::store::source::SourceOrigin>>> {
     crate::store::locate::locate_in_store(paths, &std::collections::HashMap::new())
 }

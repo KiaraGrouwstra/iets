@@ -79,8 +79,9 @@ expression answers.
   and the wanted output named by `!out!drv` context;
 - `drvs` (`build` only): every `DrvInfo` this evaluation produced (store
   path, outputs, references, ATerm);
-- `sources` (`build` only): the `SourceOrigin` table (store path -> `Tree {
-  local, accepted }` | `Text { bytes, refs }`);
+- `sources` (`build` only): the `SourceOrigin` table (store path -> a
+  `SrcPath`, `Fs { root, accepted }` | `Spool(name)` | `Mem(bytes)` plus the
+  path inside it, the refs of a text, and the NAR hash and size);
 - `warnings`, only when the run printed lint warnings: the lines, in
   order. A hit prints them to stderr again before the result.
 

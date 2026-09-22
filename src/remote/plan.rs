@@ -3,7 +3,6 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -11,77 +10,9 @@ use crate::builtins::derivation::DrvInfo;
 use crate::error::{Error, Result};
 use crate::store::drv::Derivation;
 use crate::store::hash::{Hash, HashAlgo, Hasher};
-use crate::store::nar::{dump_path, dump_string};
+use crate::store::nar::dump_string;
 use crate::store::path::{STORE_DIR, StorePath};
-use crate::store::source::SourceOrigin;
-
-/// How an input source was content-addressed (store-api.hh:ContentAddress, the two kinds
-/// eval produces).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SourceKind {
-    /// Recursive sha256 of the NAR, no references: `./path`, `fetchTarball`.
-    Source,
-    /// Flat sha256 of one regular file plus references: `builtins.toFile`.
-    Text { references: BTreeSet<StorePath> },
-}
-
-/// Where the bytes of a source come from when it is hashed and uploaded.
-#[derive(Clone, Debug)]
-pub enum SourceData {
-    /// A local tree; `accepted` is the filter result recorded at eval time.
-    Local {
-        path: PathBuf,
-        accepted: Option<Arc<HashSet<PathBuf>>>,
-    },
-    /// One regular file whose contents are in memory (`builtins.toFile`).
-    Memory(Arc<Vec<u8>>),
-    /// A NAR nothing holds: written on demand, once to hash it and once to send
-    /// it (`flake::spool`).
-    Nar(Arc<dyn NarSource>),
-}
-
-/// A NAR its owner can write as many times as asked, without a tree on disk.
-pub trait NarSource: std::fmt::Debug + Send + Sync {
-    fn dump(&self, sink: &mut dyn io::Write) -> io::Result<()>;
-}
-
-impl SourceData {
-    /// Writes the NAR of this source into `sink`.
-    pub fn dump(&self, sink: &mut dyn io::Write) -> io::Result<()> {
-        match self {
-            SourceData::Local { path, accepted } => match accepted {
-                Some(a) => dump_path(path, sink, &mut |p, _| a.contains(p)),
-                None => dump_path(path, sink, &mut |_, _| true),
-            },
-            SourceData::Memory(contents) => dump_string(contents, sink),
-            SourceData::Nar(nar) => nar.dump(sink),
-        }
-    }
-}
-
-/// Where to read an input source and how it was addressed.
-#[derive(Clone, Debug)]
-pub struct SourceInfo {
-    pub data: SourceData,
-    pub kind: SourceKind,
-    /// The NAR hash and size evaluation already computed under this source's exact filter.
-    /// `None` for a source the evaluation did not record, which the plan must hash itself.
-    pub hashed: Option<(Hash, u64)>,
-}
-
-impl SourceInfo {
-    /// A plain, unfiltered local tree, not hashed yet.
-    pub fn tree(local: impl Into<PathBuf>) -> SourceInfo {
-        SourceInfo {
-            data: SourceData::Local {
-                path: local.into(),
-                accepted: None,
-            },
-            kind: SourceKind::Source,
-            hashed: None,
-        }
-    }
-}
+use crate::store::source::{SourceKind, SourceOrigin, SrcPath};
 
 /// One object the daemon must hold before it can build the root.
 #[derive(Clone, Debug)]
@@ -89,7 +20,7 @@ pub enum Object {
     /// A source tree plus the NAR hash Nix addresses it by.
     Source {
         path: StorePath,
-        data: SourceData,
+        at: SrcPath,
         kind: SourceKind,
         nar_hash: Hash,
         nar_size: u64,
@@ -168,15 +99,15 @@ pub fn prehash_drvs(objects: &[&Object]) {
 impl Object {
     /// A source object, hashing the tree only when evaluation did not already report the
     /// hash under the same filter.
-    pub fn source(path: StorePath, info: SourceInfo) -> io::Result<Object> {
-        let (nar_hash, nar_size) = match info.hashed {
+    pub fn source(path: StorePath, o: SourceOrigin) -> io::Result<Object> {
+        let (nar_hash, nar_size) = match o.nar {
             Some(h) => h,
-            None => hash_source(&info.data)?,
+            None => hash_source(&o.at)?,
         };
         Ok(Object::Source {
             path,
-            data: info.data,
-            kind: info.kind,
+            at: o.at,
+            kind: o.kind,
             nar_hash,
             nar_size,
         })
@@ -230,10 +161,10 @@ impl Plan {
     /// Locates and hashes `missing`, a subset of `sources` in plan order: eval-time origins
     /// first, the rest through `locate` in one batch, hashed on a thread pool.
     pub fn resolve(&self, missing: &[StorePath], locate: &Locator<'_>) -> Result<Resolved> {
-        let mut infos: Vec<Option<SourceInfo>> = Vec::with_capacity(missing.len());
+        let mut infos: Vec<Option<SourceOrigin>> = Vec::with_capacity(missing.len());
         let mut unknown: Vec<StorePath> = Vec::new();
         for p in missing {
-            let info = self.origins.get(p).map(source_info);
+            let info = self.origins.get(p).cloned();
             if info.is_none() {
                 unknown.push(p.clone());
             }
@@ -258,7 +189,7 @@ impl Plan {
                 }
             }
         }
-        let (paths, infos): (Vec<&StorePath>, Vec<SourceInfo>) = missing
+        let (paths, infos): (Vec<&StorePath>, Vec<SourceOrigin>) = missing
             .iter()
             .zip(infos)
             .filter_map(|(p, i)| i.map(|i| (p, i)))
@@ -269,46 +200,6 @@ impl Plan {
             substitute,
             store_sources,
         })
-    }
-}
-
-/// What to upload for one recorded source. A tree carries the NAR hash and size the
-/// evaluation computed under the very filter it recorded, so nothing walks the tree again.
-pub fn source_info(o: &SourceOrigin) -> SourceInfo {
-    match o {
-        SourceOrigin::Tree {
-            local,
-            accepted,
-            nar_hash,
-            nar_size,
-        } => SourceInfo {
-            data: SourceData::Local {
-                path: local.clone(),
-                accepted: accepted.clone(),
-            },
-            kind: SourceKind::Source,
-            hashed: Some((*nar_hash, *nar_size)),
-        },
-        SourceOrigin::Text {
-            contents,
-            references,
-        } => SourceInfo {
-            data: SourceData::Memory(Arc::new(contents.clone())),
-            kind: SourceKind::Text {
-                references: references.clone(),
-            },
-            hashed: None,
-        },
-        SourceOrigin::Input {
-            entry,
-            rel,
-            nar_hash,
-            nar_size,
-        } => SourceInfo {
-            data: SourceData::Nar(crate::inputs::nar_source(entry, rel)),
-            kind: SourceKind::Source,
-            hashed: Some((*nar_hash, *nar_size)),
-        },
     }
 }
 
@@ -339,7 +230,7 @@ fn check_source_path(path: &StorePath, kind: &SourceKind, nar_hash: &Hash) -> Re
 /// Maps input source store paths that eval did not record, in one batch, to where to read
 /// them and how they were addressed; `None` when the local side cannot produce the path and
 /// the daemon must substitute it. `ietsp build` asks the local store.
-pub type Locator<'a> = dyn Fn(&[StorePath]) -> Result<Vec<Option<SourceInfo>>> + 'a;
+pub type Locator<'a> = dyn Fn(&[StorePath]) -> Result<Vec<Option<SourceOrigin>>> + 'a;
 
 /// What the evaluation knows: the drv table and the origin of every added source. Both may
 /// be empty, in which case everything is read from `/nix/store`.
@@ -350,9 +241,9 @@ pub struct Inputs<'a> {
 }
 
 /// The NAR hash and size of a source, one pass over the bytes.
-pub fn hash_source(data: &SourceData) -> io::Result<(Hash, u64)> {
+pub fn hash_source(at: &SrcPath) -> io::Result<(Hash, u64)> {
     let mut nar = Hasher::new(HashAlgo::Sha256);
-    data.dump(&mut nar)?;
+    at.nar(&mut nar)?;
     let size = nar.bytes_written();
     Ok((nar.finish(), size))
 }
@@ -448,10 +339,7 @@ pub fn plan(roots: &[StorePath], inputs: Inputs<'_>) -> Result<Plan> {
         roots,
         &HashSet::new(),
         &|p| inputs.drvs.get(p).cloned(),
-        &|p| match inputs.sources.get(p) {
-            Some(SourceOrigin::Text { references, .. }) => Some(references.clone()),
-            _ => None,
-        },
+        &|p| inputs.sources.get(p)?.text_refs().cloned(),
     )?;
     let origins = sources
         .iter()
@@ -469,7 +357,7 @@ pub fn plan(roots: &[StorePath], inputs: Inputs<'_>) -> Result<Plan> {
 }
 
 /// Dumps and hashes every source on a thread pool; results keep the input order.
-fn hash_sources(sources: &[&StorePath], infos: &[SourceInfo]) -> Result<Vec<Object>> {
+fn hash_sources(sources: &[&StorePath], infos: &[SourceOrigin]) -> Result<Vec<Object>> {
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4)
@@ -492,7 +380,7 @@ fn hash_sources(sources: &[&StorePath], infos: &[SourceInfo]) -> Result<Vec<Obje
                     }
                     let path = sources[i];
                     let info = &infos[i];
-                    let from_eval = info.hashed.is_some();
+                    let from_eval = info.nar.is_some();
                     let r = Object::source(path.clone(), info.clone())
                         .map_err(|e| Error::io(format!("cannot dump '{path}'"), e))
                         .and_then(|o| {
@@ -522,19 +410,15 @@ mod tests {
     #[test]
     fn hash_source_matches_nar_hash() {
         let tree = crate::store::nar::tests::fixture_tree("plan");
-        let data = SourceData::Local {
-            path: tree.clone(),
-            accepted: None,
-        };
-        let (h, size) = hash_source(&data).unwrap();
+        let (h, size) = hash_source(&SrcPath::fs(tree.clone(), None)).unwrap();
         assert_eq!(h, nar_hash(&tree).unwrap());
         assert_eq!(size, nar_size(&tree).unwrap());
     }
 
     #[test]
     fn memory_source_matches_dump_string() {
-        let data = SourceData::Memory(Arc::new(b"hello\n".to_vec()));
-        let (h, size) = hash_source(&data).unwrap();
+        let o = SourceOrigin::text(b"hello\n".to_vec(), BTreeSet::new());
+        let (h, size) = hash_source(&o.at).unwrap();
         assert_eq!(h, crate::store::nar::nar_hash_of_string(b"hello\n"));
         assert!(size > 0);
     }

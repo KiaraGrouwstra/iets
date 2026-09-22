@@ -73,12 +73,8 @@ impl Store {
         let t0 = Instant::now();
         let roots: Vec<StorePath> = jobs.iter().map(|j| j.drv_path.clone()).collect();
         let (drvs, srcs, _) =
-            crate::remote::plan::walk(&roots, &self.valid, &|p| self.drvs.get(p), &|p| match self
-                .sources
-                .get(p)
-            {
-                Some(SourceOrigin::Text { references, .. }) => Some(references),
-                _ => None,
+            crate::remote::plan::walk(&roots, &self.valid, &|p| self.drvs.get(p), &|p| {
+                self.sources.get(p)?.text_refs().cloned()
             })?;
         let paths: Vec<String> = srcs
             .iter()
@@ -104,9 +100,8 @@ impl Store {
                     "source '{p}' is not valid in the store and this evaluation did not create it"
                 )));
             };
-            let info = crate::remote::plan::source_info(&origin);
             objects.push(
-                Object::source(p.clone(), info)
+                Object::source(p.clone(), origin)
                     .map_err(|e| Error::io(format!("cannot dump '{p}'"), e))?,
             );
         }

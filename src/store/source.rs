@@ -1,5 +1,6 @@
-//! Where an input source came from during evaluation. The remote client ships sources from
-//! these records, so it never needs a local store.
+//! Where the bytes of a path are, and where an input source came from during
+//! evaluation. The remote client ships sources from these records, so it
+//! never needs a local store.
 
 use std::collections::{BTreeSet, HashSet};
 use std::path::PathBuf;
@@ -11,35 +12,109 @@ use super::path::StorePath;
 /// The entries a tree filter kept, `None` for no filter.
 pub type Accepted = Option<Arc<HashSet<PathBuf>>>;
 
+/// What holds the bytes (source-accessor.hh:SourceAccessor). The readers are
+/// in `builtins::store_hooks`.
 #[derive(Clone, Debug)]
-pub enum SourceOrigin {
-    /// A local tree copied by `./path`, `filterSource`, `builtins.path` or the flake
-    /// machinery. `accepted` holds every entry the filter kept; `None` means there was no
-    /// filter. Reads under the store path go to `local` (`builtins::store_hooks::locate`),
-    /// so the store copy need not exist. `nar_hash` and `nar_size` are what the dump under
-    /// that filter produced, the exact pair `AddMultipleToStore` needs, so no upload path
-    /// hashes the tree a second time.
-    Tree {
-        local: PathBuf,
-        accepted: Accepted,
-        nar_hash: Hash,
-        nar_size: u64,
-    },
-    /// `builtins.toFile`: the contents and references, held in memory.
-    Text {
-        contents: Vec<u8>,
-        references: BTreeSet<StorePath>,
-    },
-    /// A tree the user-level input store holds (`crate::inputs`): a fetched
-    /// flake input, or a subdirectory of one that an expression copied. `entry`
-    /// is the input's store path base name and `rel` the path inside it, empty
-    /// for the input itself. Reads go to the entry's spool by offset, so no
-    /// store copy need exist; a build uploads the NAR out of the same spool,
-    /// with the `nar_hash`/`nar_size` pair the lock and the index already give.
-    Input {
-        entry: String,
-        rel: Vec<u8>,
-        nar_hash: Hash,
-        nar_size: u64,
-    },
+pub enum Src {
+    /// A directory on disk, or any path of the real file system as its own
+    /// root. `accepted` holds every entry a tree filter kept (the tracked
+    /// files of a git tree): an entry it left out does not exist
+    /// (filtering-source-accessor.hh).
+    Fs { root: PathBuf, accepted: Accepted },
+    /// An entry of the user-level input store (`crate::inputs`), by store
+    /// path base name. Opened on first read, so a tracing-cache hit that only
+    /// uploads needs no evaluation.
+    Spool(String),
+    /// One regular file: a `toFile` text or a `.drv` this evaluation holds.
+    Mem(Arc<Vec<u8>>),
+}
+
+/// A path inside a [`Src`] (source-path.hh:SourcePath). `rel` has no leading
+/// `/` and is empty for the root.
+#[derive(Clone, Debug)]
+pub struct SrcPath {
+    pub src: Src,
+    pub rel: Vec<u8>,
+}
+
+impl SrcPath {
+    pub fn fs(root: impl Into<PathBuf>, accepted: Accepted) -> SrcPath {
+        SrcPath {
+            src: Src::Fs {
+                root: root.into(),
+                accepted,
+            },
+            rel: Vec::new(),
+        }
+    }
+
+    pub fn spool(name: &str, rel: &[u8]) -> SrcPath {
+        SrcPath {
+            src: Src::Spool(name.to_string()),
+            rel: rel.to_vec(),
+        }
+    }
+
+    /// `sub` below this path.
+    pub fn join(mut self, sub: &[u8]) -> SrcPath {
+        if !sub.is_empty() {
+            if !self.rel.is_empty() {
+                self.rel.push(b'/');
+            }
+            self.rel.extend_from_slice(sub);
+        }
+        self
+    }
+}
+
+/// How an input source was content-addressed (store-api.hh:ContentAddress, the two kinds
+/// eval produces).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SourceKind {
+    /// Recursive sha256 of the NAR, no references: `./path`, `fetchTarball`.
+    Source,
+    /// Flat sha256 of one regular file plus references: `builtins.toFile`.
+    Text { references: BTreeSet<StorePath> },
+}
+
+/// Where an input source's bytes are and how it was addressed. Reads under its
+/// store path go to `at` (`builtins::store_hooks::locate`), so the store copy
+/// need not exist.
+#[derive(Clone, Debug)]
+pub struct SourceOrigin {
+    pub at: SrcPath,
+    pub kind: SourceKind,
+    /// The NAR hash and size the dump under the recorded filter produced, the exact pair
+    /// `AddMultipleToStore` needs, so no upload path hashes the tree a second time. `None`
+    /// for a text, and for a store path the plan must hash itself.
+    pub nar: Option<(Hash, u64)>,
+}
+
+impl SourceOrigin {
+    pub fn tree(at: SrcPath, nar_hash: Hash, nar_size: u64) -> SourceOrigin {
+        SourceOrigin {
+            at,
+            kind: SourceKind::Source,
+            nar: Some((nar_hash, nar_size)),
+        }
+    }
+
+    pub fn text(contents: Vec<u8>, references: BTreeSet<StorePath>) -> SourceOrigin {
+        SourceOrigin {
+            at: SrcPath {
+                src: Src::Mem(Arc::new(contents)),
+                rel: Vec::new(),
+            },
+            kind: SourceKind::Text { references },
+            nar: None,
+        }
+    }
+
+    /// The references of a `toFile` text.
+    pub fn text_refs(&self) -> Option<&BTreeSet<StorePath>> {
+        match &self.kind {
+            SourceKind::Text { references } => Some(references),
+            SourceKind::Source => None,
+        }
+    }
 }

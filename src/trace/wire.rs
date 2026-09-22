@@ -1,16 +1,16 @@
 //! Binary format of the cache entry files: a tag byte per record, LEB128
 //! lengths, raw bytes. One format version byte leads every file.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::{Digest32, Filtered, Kind, Obs};
 use crate::builtins::derivation::DrvInfo;
 use crate::store::path::StorePath;
-use crate::store::source::SourceOrigin;
+use crate::store::source::{SourceKind, SourceOrigin, Src, SrcPath};
 
-const VERSION: u8 = 3;
+const VERSION: u8 = 4;
 
 struct Enc(Vec<u8>);
 
@@ -396,17 +396,10 @@ pub fn encode_sources(sources: &HashMap<StorePath, SourceOrigin>) -> Vec<u8> {
     e.u64(items.len() as u64);
     for (p, o) in items {
         e.bytes(p.base_name().as_bytes());
-        match o {
-            SourceOrigin::Tree {
-                local,
-                accepted,
-                nar_hash,
-                nar_size,
-            } => {
+        match &o.at.src {
+            Src::Fs { root, accepted } => {
                 e.u8(0);
-                e.bytes(local.as_os_str().as_encoded_bytes());
-                e.bytes(nar_hash.bytes());
-                e.u64(*nar_size);
+                e.bytes(root.as_os_str().as_encoded_bytes());
                 match accepted {
                     None => e.u8(0),
                     Some(a) => {
@@ -420,29 +413,33 @@ pub fn encode_sources(sources: &HashMap<StorePath, SourceOrigin>) -> Vec<u8> {
                     }
                 }
             }
-            SourceOrigin::Text {
-                contents,
-                references,
-            } => {
+            Src::Spool(name) => {
                 e.u8(1);
+                e.bytes(name.as_bytes());
+            }
+            Src::Mem(contents) => {
+                e.u8(2);
                 e.bytes(contents);
-                let refs: Vec<Vec<u8>> = references
+            }
+        }
+        e.bytes(&o.at.rel);
+        match o.text_refs() {
+            None => e.u8(0),
+            Some(refs) => {
+                e.u8(1);
+                let refs: Vec<Vec<u8>> = refs
                     .iter()
                     .map(|r| r.base_name().as_bytes().to_vec())
                     .collect();
                 e.list(&refs);
             }
-            SourceOrigin::Input {
-                entry,
-                rel,
-                nar_hash,
-                nar_size,
-            } => {
-                e.u8(2);
-                e.bytes(entry.as_bytes());
-                e.bytes(rel);
-                e.bytes(nar_hash.bytes());
-                e.u64(*nar_size);
+        }
+        match &o.nar {
+            None => e.u8(0),
+            Some((hash, size)) => {
+                e.u8(1);
+                e.bytes(hash.bytes());
+                e.u64(*size);
             }
         }
     }
@@ -459,59 +456,50 @@ pub fn decode_sources(b: &[u8]) -> Option<HashMap<StorePath, SourceOrigin>> {
     let mut m = HashMap::with_capacity(n.min(1 << 20));
     for _ in 0..n {
         let p = store_path(d.bytes().ok()?).ok()?;
-        let o = match d.u8().ok()? {
-            0 => {
-                let local = path_buf(d.bytes().ok()?);
-                let nar_hash = crate::store::hash::Hash::from_bytes(
-                    crate::store::hash::HashAlgo::Sha256,
-                    d.bytes().ok()?,
-                )
-                .ok()?;
-                let nar_size = d.u64().ok()?;
-                let accepted = match d.u8().ok()? {
+        let src = match d.u8().ok()? {
+            0 => Src::Fs {
+                root: path_buf(d.bytes().ok()?),
+                accepted: match d.u8().ok()? {
                     0 => None,
-                    1 => Some(std::sync::Arc::new(
-                        d.list()
-                            .ok()?
-                            .iter()
-                            .map(|p| path_buf(p))
-                            .collect::<HashSet<PathBuf>>(),
+                    1 => Some(Arc::new(
+                        d.list().ok()?.iter().map(|p| path_buf(p)).collect(),
                     )),
                     _ => return None,
-                };
-                SourceOrigin::Tree {
-                    local,
-                    accepted,
-                    nar_hash,
-                    nar_size,
-                }
-            }
-            1 => {
-                let contents = d.vec().ok()?;
-                let references: BTreeSet<StorePath> = d
+                },
+            },
+            1 => Src::Spool(String::from_utf8(d.vec().ok()?).ok()?),
+            2 => Src::Mem(Arc::new(d.vec().ok()?)),
+            _ => return None,
+        };
+        let at = SrcPath {
+            src,
+            rel: d.vec().ok()?,
+        };
+        let kind = match d.u8().ok()? {
+            0 => SourceKind::Source,
+            1 => SourceKind::Text {
+                references: d
                     .list()
                     .ok()?
                     .iter()
                     .map(|r| store_path(r).ok())
-                    .collect::<Option<_>>()?;
-                SourceOrigin::Text {
-                    contents,
-                    references,
-                }
-            }
-            2 => SourceOrigin::Input {
-                entry: String::from_utf8(d.vec().ok()?).ok()?,
-                rel: d.vec().ok()?,
-                nar_hash: crate::store::hash::Hash::from_bytes(
+                    .collect::<Option<_>>()?,
+            },
+            _ => return None,
+        };
+        let nar = match d.u8().ok()? {
+            0 => None,
+            1 => Some((
+                crate::store::hash::Hash::from_bytes(
                     crate::store::hash::HashAlgo::Sha256,
                     d.bytes().ok()?,
                 )
                 .ok()?,
-                nar_size: d.u64().ok()?,
-            },
+                d.u64().ok()?,
+            )),
             _ => return None,
         };
-        m.insert(p, o);
+        m.insert(p, SourceOrigin { at, kind, nar });
     }
     d.done().then_some(m)
 }
@@ -547,6 +535,7 @@ pub fn decode_roots(b: &[u8]) -> Option<Vec<(StorePath, Option<String>)>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn readset_roundtrip() {
@@ -623,53 +612,40 @@ mod tests {
         );
         assert_eq!(back[&p].references, [s.clone()].into());
 
+        let i = StorePath::from_base_name("a3ck4d9zzk4l1r76rz5zv2wgycmpsy1y-input").unwrap();
+        let hash = crate::store::nar::nar_hash_of_string(b"x");
         let mut sources = HashMap::new();
         sources.insert(
             s.clone(),
-            SourceOrigin::Tree {
-                local: PathBuf::from("/tmp/x"),
-                accepted: Some(std::sync::Arc::new([PathBuf::from("/tmp/x/a")].into())),
-                nar_hash: crate::store::nar::nar_hash_of_string(b"x"),
-                nar_size: 152,
-            },
+            SourceOrigin::tree(
+                SrcPath::fs("/tmp/x", Some(Arc::new([PathBuf::from("/tmp/x/a")].into()))),
+                hash,
+                152,
+            ),
         );
         sources.insert(
             p.clone(),
-            SourceOrigin::Text {
-                contents: b"hi".to_vec(),
-                references: [s.clone()].into(),
-            },
+            SourceOrigin::text(b"hi".to_vec(), [s.clone()].into()),
+        );
+        sources.insert(
+            i.clone(),
+            SourceOrigin::tree(SrcPath::spool(i.base_name(), b"lib"), hash, 7),
         );
         let back = decode_sources(&encode_sources(&sources)).unwrap();
-        match &back[&s] {
-            SourceOrigin::Tree {
-                local,
-                accepted,
-                nar_hash,
-                nar_size,
-            } => {
-                assert_eq!(local, &PathBuf::from("/tmp/x"));
-                assert!(
-                    accepted
-                        .as_ref()
-                        .unwrap()
-                        .contains(&PathBuf::from("/tmp/x/a"))
-                );
-                assert_eq!(nar_hash, &crate::store::nar::nar_hash_of_string(b"x"));
-                assert_eq!(*nar_size, 152);
-            }
-            _ => panic!(),
-        }
-        match &back[&p] {
-            SourceOrigin::Text {
-                contents,
-                references,
-            } => {
-                assert_eq!(contents, b"hi");
-                assert_eq!(references, &[s.clone()].into());
-            }
-            _ => panic!(),
-        }
+        let o = &back[&s];
+        assert_eq!(o.at.local(), Some(PathBuf::from("/tmp/x")));
+        assert!(!o.at.accepts(Path::new("/tmp/x/b")) && o.at.accepts(Path::new("/tmp/x/a")));
+        assert_eq!(
+            (o.kind.clone(), o.nar),
+            (SourceKind::Source, Some((hash, 152)))
+        );
+        let o = &back[&p];
+        assert!(matches!(&o.at.src, Src::Mem(c) if c.as_slice() == b"hi"));
+        assert_eq!(o.text_refs(), Some(&[s.clone()].into()));
+        assert_eq!(o.nar, None);
+        let o = &back[&i];
+        assert!(matches!(&o.at.src, Src::Spool(n) if n == i.base_name()));
+        assert_eq!((o.at.rel.as_slice(), o.nar), (&b"lib"[..], Some((hash, 7))));
 
         let roots = vec![(p.clone(), Some("out".to_string())), (p, None)];
         assert_eq!(decode_roots(&encode_roots(&roots)).unwrap(), roots);

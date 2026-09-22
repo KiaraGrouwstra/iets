@@ -7,22 +7,23 @@
 use std::collections::{BTreeSet, HashSet};
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{self, Read};
+use std::io;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::Registry;
-use super::store_hooks;
+use super::store_hooks::{self, At};
 use crate::compile::canon_path;
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
 use crate::runtime::*;
-use crate::store::hash::{Hash, HashAlgo, hash_bytes};
-use crate::store::nar::{self, FileType};
+use crate::store::hash::{Hash, HashAlgo, Hasher, hash_bytes};
+use crate::store::nar::FileType;
 use crate::store::path::{
     IngestionMethod, STORE_DIR, StorePath, make_fixed_output_path, make_text_path,
 };
-use crate::store::source::SourceOrigin;
+use crate::store::source::{SourceOrigin, Src, SrcPath};
+use crate::trace::Kind;
 
 pub fn register(r: &mut Registry) {
     r.op("__readFile", 1, read_file);
@@ -133,15 +134,25 @@ fn utf8(b: &[u8], pos: Pos) -> EvalResult<&str> {
     })
 }
 
-fn file_type_name(ft: fs::FileType) -> &'static str {
-    if ft.is_symlink() {
-        FileType::Symlink.nix_name()
-    } else if ft.is_dir() {
-        FileType::Directory.nix_name()
-    } else if ft.is_file() {
-        FileType::Regular.nix_name()
+fn kind_name(k: Kind) -> &'static str {
+    match k {
+        Kind::Symlink => FileType::Symlink.nix_name(),
+        Kind::Directory => FileType::Directory.nix_name(),
+        Kind::Regular => FileType::Regular.nix_name(),
+        _ => FileType::Unknown.nix_name(),
+    }
+}
+
+/// A failed [`SrcPath::read`] of a file, `readFile`'s way.
+fn read_error((verb, e): (&str, io::Error), p: &[u8], pos: Pos) -> Box<Error> {
+    if e.raw_os_error() == Some(libc::EISDIR) {
+        Error::boxed(
+            ErrorKind::Io,
+            format!("file '{}' is not a regular file", lossy(p)),
+            pos,
+        )
     } else {
-        FileType::Unknown.nix_name()
+        io_error(e, verb, p, pos)
     }
 }
 
@@ -201,7 +212,7 @@ pub fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>
         let msg = match c {
             Ctx::Impure(_) => continue,
             Ctx::Opaque(sp) | Ctx::DrvDeep(sp) => {
-                if !matches!(store_hooks::locate(ev, sp), store_hooks::Access::Store)
+                if store_hooks::locate(ev, sp).is_some()
                     || ev.trace.stat_now(sp, true) != crate::trace::Kind::Missing
                 {
                     continue;
@@ -236,61 +247,30 @@ pub fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>
     Ok(p)
 }
 
-/// What a realised path reads: a file on disk, a member of a fetched flake
-/// input served out of its spool (`crate::inputs`), or bytes in memory. The
-/// last field of `In` and `Mem` is the path Nix names in a message.
-enum Real {
-    Fs(Vec<u8>, crate::store::source::Accepted),
-    In(Arc<crate::inputs::Entry>, StorePath, Vec<u8>, Vec<u8>),
-    Mem(Arc<Vec<u8>>, Vec<u8>),
-}
-
-/// The file to read for a realised path, with the filter of the copied
-/// tree it lies in; an entry that filter left out is
+/// What a realised path reads, and the path its messages name: the file on
+/// disk, else the path itself. An entry a copied tree's filter left out is
 /// `path '...' does not exist`.
-fn realise_existing(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Real> {
+fn realise_existing(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<(SrcPath, Vec<u8>)> {
     let p = realise_path(ev, w, pos)?;
-    match store_hooks::open(ev, &p, pos)? {
-        store_hooks::Access::Store => Ok(Real::Fs(p, None)),
-        store_hooks::Access::Local { path, accepted } => {
-            crate::lint::coerce::read_through_copy(ev, &p, pos)?;
-            Ok(Real::Fs(path.into_os_string().into_vec(), accepted))
-        }
-        store_hooks::Access::Input { entry, base, rel } => Ok(Real::In(entry, base, rel, p)),
-        store_hooks::Access::Mem(bytes) => Ok(Real::Mem(bytes, p)),
-        store_hooks::Access::Missing => Err(io_error(
+    let at = store_hooks::open(ev, &p, pos)?;
+    if at.hidden() {
+        return Err(io_error(
             io::Error::from_raw_os_error(libc::ENOENT),
             "getting status of",
             &p,
             pos,
-        )),
+        ));
     }
+    crate::lint::coerce::read_through_copy(ev, &p, pos)?;
+    let shown = at.local().map_or(p, |l| l.into_os_string().into_vec());
+    Ok((at, shown))
 }
 
 /// Reads `st_size` bytes like `PosixSourceAccessor::readFile`, so a procfs
 /// file reads as empty.
 fn read_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
-    let (p, _) = match realise_existing(ev, args[0], pos)? {
-        Real::In(e, base, rel, shown) => {
-            return crate::inputs::read_file(ev, &e, &base, &rel, &shown, pos);
-        }
-        Real::Mem(bytes, _) => return Ok(ev.mk_string(&bytes)),
-        Real::Fs(p, a) => (p, a),
-    };
-    let meta = fs::metadata(os_path(&p)).map_err(|e| io_error(e, "getting status of", &p, pos))?;
-    if !meta.is_file() {
-        bail!(
-            ErrorKind::Io,
-            pos,
-            "file '{}' is not a regular file",
-            lossy(&p)
-        );
-    }
-    let mut bytes = Vec::with_capacity(meta.len() as usize);
-    fs::File::open(os_path(&p))
-        .and_then(|f| io::Read::take(f, meta.len()).read_to_end(&mut bytes))
-        .map_err(|e| io_error(e, "reading file", &p, pos))?;
-    ev.trace.file(&p, &meta, &bytes);
+    let (at, p) = realise_existing(ev, args[0], pos)?;
+    let bytes = at.read(ev, true).map_err(|e| read_error(e, &p, pos))?;
     if bytes.contains(&0) {
         bail!(
             ErrorKind::Eval,
@@ -302,26 +282,17 @@ fn read_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     Ok(ev.mk_string(&bytes))
 }
 
-/// The listing hides entries a copied tree's filter left out (untracked
-/// files of a git tree); the `Dir` observation keeps the full listing, the
-/// one validation can re-read.
 fn read_dir(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
-    let (p, accepted) = match realise_existing(ev, args[0], pos)? {
-        Real::In(e, base, rel, shown) => {
-            return crate::inputs::read_dir(ev, &e, &base, &rel, &shown, pos);
-        }
-        Real::Mem(_, shown) => bail!(ErrorKind::Io, pos, "'{}' is not a directory", lossy(&shown)),
-        Real::Fs(p, a) => (p, a),
-    };
-    let rd = fs::read_dir(os_path(&p)).map_err(|e| {
-        if e.raw_os_error() == Some(libc_enotdir()) {
+    let (at, p) = realise_existing(ev, args[0], pos)?;
+    let listing = at.read_dir(ev).map_err(|(verb, e)| {
+        if e.raw_os_error() == Some(libc::ENOTDIR) {
             Error::boxed(
                 ErrorKind::Io,
                 format!("'{}' is not a directory", lossy(&p)),
                 pos,
             )
         } else {
-            io_error(e, "opening directory", &p, pos)
+            io_error(e, verb, &p, pos)
         }
     })?;
     let names = [
@@ -330,56 +301,19 @@ fn read_dir(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         ev.mk_string(FileType::Symlink.nix_name().as_bytes()),
         ev.mk_string(FileType::Unknown.nix_name().as_bytes()),
     ];
-    let mut entries = Vec::new();
-    let mut listing = Vec::new();
-    for e in rd {
-        let e = e.map_err(|e| io_error(e, "reading directory", &p, pos))?;
-        let ft = e
-            .file_type()
-            .map_err(|e| io_error(e, "getting status of", &p, pos))?;
-        let (idx, kind) = if ft.is_symlink() {
-            (2, crate::trace::Kind::Symlink)
-        } else if ft.is_dir() {
-            (1, crate::trace::Kind::Directory)
-        } else if ft.is_file() {
-            (0, crate::trace::Kind::Regular)
-        } else {
-            (3, crate::trace::Kind::Other)
-        };
-        if ev.trace.is_on() {
-            listing.push((e.file_name().as_bytes().to_vec(), kind));
-        }
-        if accepted.as_ref().is_some_and(|a| !a.contains(&e.path())) {
-            continue;
-        }
-        let sym = ev.sym(e.file_name().as_bytes());
-        entries.push((sym, Pos::NONE, names[idx]));
-    }
-    if ev.trace.is_on() {
-        ev.trace.record(crate::trace::Obs::Dir {
-            path: p.clone(),
-            hash: crate::trace::dir_listing_hash(&mut listing),
-        });
+    let mut entries = Vec::with_capacity(listing.len());
+    for (name, t) in listing {
+        entries.push((ev.sym(&name), Pos::NONE, names[t as usize]));
     }
     ev.mk_attrs(&mut entries, pos)
 }
 
-fn libc_enotdir() -> i32 {
-    20
-}
-
 fn read_file_type(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
-    let (p, _) = match realise_existing(ev, args[0], pos)? {
-        Real::In(e, base, rel, shown) => {
-            return crate::inputs::read_file_type(ev, &e, &base, &rel, &shown, pos);
-        }
-        Real::Mem(..) => return Ok(ev.mk_string(FileType::Regular.nix_name().as_bytes())),
-        Real::Fs(p, a) => (p, a),
-    };
-    let meta = fs::symlink_metadata(os_path(&p));
-    ev.trace.stat(&p, false, crate::trace::Kind::of(&meta));
-    let meta = meta.map_err(|e| io_error(e, "getting status of", &p, pos))?;
-    Ok(ev.mk_string(file_type_name(meta.file_type()).as_bytes()))
+    let (at, p) = realise_existing(ev, args[0], pos)?;
+    let kind = at
+        .stat(ev, false)
+        .map_err(|e| io_error(e, "getting status of", &p, pos))?;
+    Ok(ev.mk_string(kind_name(kind).as_bytes()))
 }
 
 fn path_exists(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
@@ -393,31 +327,18 @@ fn path_exists(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> 
         return Ok(Word::FALSE);
     }
     crate::lint::coerce::read_through_copy(ev, &p, pos)?;
-    let p = match store_hooks::whence(ev, &p) {
-        Some(store_hooks::Whence::Fs(p)) => p,
-        Some(store_hooks::Whence::In(e, base, rel)) => {
-            return Ok(crate::inputs::path_exists(ev, &e, &base, &rel, must_be_dir));
-        }
-        Some(store_hooks::Whence::Mem(_)) => return Ok(Word::from_bool(!must_be_dir)),
-        None => return Ok(Word::FALSE),
-    };
-    let r = if must_be_dir {
-        let m = fs::metadata(os_path(&p));
-        ev.trace.stat(&p, true, crate::trace::Kind::of(&m));
-        m.map(|m| m.is_dir())
-    } else {
-        let m = fs::symlink_metadata(os_path(&p));
-        ev.trace.stat(&p, false, crate::trace::Kind::of(&m));
-        m.map(|_| true)
-    };
-    match r {
-        Ok(b) => Ok(Word::from_bool(b)),
+    let at = store_hooks::resolve(ev, &p);
+    match at.stat(ev, must_be_dir) {
+        Ok(k) => Ok(Word::from_bool(k == Kind::Directory || !must_be_dir)),
         Err(e)
-            if e.kind() == io::ErrorKind::NotFound || e.raw_os_error() == Some(libc_enotdir()) =>
+            if e.kind() == io::ErrorKind::NotFound || e.raw_os_error() == Some(libc::ENOTDIR) =>
         {
             Ok(Word::FALSE)
         }
-        Err(e) => Err(io_error(e, "getting status of", &p, pos)),
+        Err(e) => {
+            let shown = at.local().map_or(p, |l| l.into_os_string().into_vec());
+            Err(io_error(e, "getting status of", &shown, pos))
+        }
     }
 }
 
@@ -466,12 +387,7 @@ fn store_path(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the first argument passed to 'builtins.storePath'",
     )?;
-    if !is_store_path(&p)
-        && matches!(
-            store_hooks::locate(ev, &p),
-            store_hooks::Access::Store | store_hooks::Access::Missing
-        )
-    {
+    if !is_store_path(&p) && store_hooks::locate(ev, &p).is_none_or(|at| at.hidden()) {
         let resolved = fs::canonicalize(os_path(&p));
         ev.trace.canon(&p, resolved.as_deref().ok());
         let resolved = resolved.map_err(|e| io_error(e, "getting status of", &p, pos))?;
@@ -567,86 +483,66 @@ fn add_path_inner(
         return Ok(sp.clone());
     }
     // A path under a tree this evaluation copied reads the local tree, with
-    // that tree's filter applied before this call's `filter`; the filter
-    // function still sees the store path Nix would show it.
-    let (resolved, parent): (PathBuf, Option<Arc<HashSet<PathBuf>>>) =
-        match store_hooks::open(ev, path, pos)? {
-            store_hooks::Access::Store => {
-                let resolved =
-                    fs::canonicalize(os_path(path)).unwrap_or_else(|_| os_path(path).to_path_buf());
-                if resolved.as_os_str().as_bytes() != path {
-                    ev.trace.canon(path, Some(&resolved));
-                }
-                (resolved, None)
-            }
-            store_hooks::Access::Local { path, accepted } => (path, accepted),
-            store_hooks::Access::Input { entry, base, rel } => {
-                return add_input_path(
-                    ev,
-                    pos,
-                    name,
-                    path,
-                    filter,
-                    method,
-                    expected_sp,
-                    &entry,
-                    &base,
-                    &rel,
-                );
-            }
-            store_hooks::Access::Missing => {
-                return Err(io_error(
-                    io::Error::from_raw_os_error(libc::ENOENT),
-                    "getting status of",
-                    path,
-                    pos,
-                ));
-            }
-            store_hooks::Access::Mem(_) => return Err(store_hooks::recopy_unsupported(path, pos)),
-        };
+    // that tree's filter applied before this call's `filter`, or the input's
+    // spool; the filter function still sees the store path Nix would show it.
+    let at = store_hooks::open(ev, path, pos)?;
+    let at = if store_hooks::locate(ev, path).is_none() {
+        let resolved =
+            fs::canonicalize(os_path(path)).unwrap_or_else(|_| os_path(path).to_path_buf());
+        if resolved.as_os_str().as_bytes() != path {
+            ev.trace.canon(path, Some(&resolved));
+        }
+        SrcPath::fs(resolved, None)
+    } else {
+        at
+    };
+    let on_disk = match at.at() {
+        None => {
+            return Err(io_error(
+                io::Error::from_raw_os_error(libc::ENOENT),
+                "getting status of",
+                path,
+                pos,
+            ));
+        }
+        Some(At::Mem(_)) => return Err(store_hooks::recopy_unsupported(path, pos)),
+        Some(At::Spool(entry, base)) => {
+            crate::inputs::record(ev, &entry, base);
+            false
+        }
+        Some(At::Disk(_)) => true,
+    };
+    // a spool dump names its members under `/`
+    let resolved = at.local().unwrap_or_else(|| PathBuf::from("/"));
+    let parent = match &at.src {
+        Src::Fs { accepted, .. } => accepted.clone(),
+        _ => None,
+    };
     let shown = |p: &Path| -> PathBuf {
         match p.strip_prefix(&resolved) {
-            Ok(rest) if parent.is_some() => os_path(path).join(rest),
+            Ok(rest) if parent.is_some() || !on_disk => os_path(path).join(rest),
             _ => p.to_path_buf(),
         }
     };
     let mut accepted: Option<HashSet<PathBuf>> = filter.map(|_| HashSet::new());
     let mut nar_size = 0u64;
     let hash = match method {
-        IngestionMethod::Flat => {
-            let meta =
-                fs::metadata(&resolved).map_err(|e| io_error(e, "getting status of", path, pos))?;
-            if !meta.is_file() {
-                bail!(
-                    ErrorKind::Io,
-                    pos,
-                    "file '{}' is not a regular file",
-                    lossy(path)
-                );
-            }
-            let h = nar::flat_hash(&resolved, HashAlgo::Sha256)
-                .map_err(|e| io_error(e, "reading file", path, pos))?;
-            if ev.trace.is_on() {
-                ev.trace.record(crate::trace::file_obs(
-                    resolved.as_os_str().as_bytes(),
-                    &meta,
-                    crate::trace::hash_to_digest(&h),
-                ));
-            }
-            h
-        }
+        IngestionMethod::Flat => hash_bytes(
+            HashAlgo::Sha256,
+            &at.read(ev, true).map_err(|e| read_error(e, path, pos))?,
+        ),
         IngestionMethod::Recursive => {
             // The observation records `accepted`, which is the dump's own decisions unless
             // an enclosing tree's `parent` set is the only thing narrowing them: then the
             // recorded filter is accept-all and only a separate walk matches it.
-            let mut fp = (filter.is_some() || parent.is_none())
+            let mut fp = (on_disk && (filter.is_some() || parent.is_none()))
                 .then(|| ev.trace.fp(&resolved))
                 .flatten();
             let mut err: Option<Box<Error>> = None;
-            let git_lint = ev.lint_on(crate::lint::LintId::GitInSource);
+            let git_lint = on_disk && ev.lint_on(crate::lint::LintId::GitInSource);
             let mut saw_git = false;
             let mut f = |p: &Path, t: FileType| -> bool {
-                let keep = if parent.as_ref().is_some_and(|a| !a.contains(p)) {
+                let keep = if !at.accepts(p) {
                     false
                 } else if let Some(filter) = filter {
                     if err.is_some() {
@@ -676,37 +572,43 @@ fn add_path_inner(
                 }
                 keep
             };
-            let r = nar::nar_hash_filtered(&resolved, HashAlgo::Sha256, &mut f);
+            let mut h = Hasher::new(HashAlgo::Sha256);
+            let r = at.dump(&mut h, &mut f);
             if let Some(e) = err {
                 return Err(e);
             }
-            let (h, size) = r.map_err(|e| io_error(e, "copying", path, pos))?;
-            nar_size = size;
-            ev.trace.tree(
-                &resolved,
-                crate::trace::hash_to_digest(&h),
-                accepted.as_ref(),
-                fp,
-            );
+            r.map_err(|e| io_error(e, "copying", path, pos))?;
+            nar_size = h.bytes_written();
+            let h = h.finish();
+            if on_disk {
+                ev.trace.tree(
+                    &resolved,
+                    crate::trace::hash_to_digest(&h),
+                    accepted.as_ref(),
+                    fp,
+                );
+            }
             if saw_git {
                 crate::lint::purity::git_in_source(ev, path, pos)?;
             }
-            crate::lint::purity::large_source_copy(ev, path, size, pos)?;
+            if on_disk {
+                crate::lint::purity::large_source_copy(ev, path, nar_size, pos)?;
+            }
             h
         }
     };
     let sp = make_fixed_output_path(method, &hash, name, &refs).map_err(store_err)?;
     if method == IngestionMethod::Recursive {
-        ev.lints.note_copy(sp.to_full_string().as_bytes());
-        ev.sources.insert(
-            sp.clone(),
-            SourceOrigin::Tree {
-                local: resolved,
-                accepted: accepted.map(Arc::new).or(parent),
-                nar_hash: hash,
-                nar_size,
-            },
-        );
+        // an input member's origin keeps no `filter`: a filtered copy would
+        // upload the whole member, which its recorded NAR size refuses
+        let origin = if on_disk {
+            ev.lints.note_copy(sp.to_full_string().as_bytes());
+            SrcPath::fs(resolved, accepted.map(Arc::new).or(parent))
+        } else {
+            at
+        };
+        ev.sources
+            .insert(sp.clone(), SourceOrigin::tree(origin, hash, nar_size));
     }
     if let Some(exp) = expected_sp
         && exp != sp
@@ -886,104 +788,7 @@ fn to_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, pos))?;
     ev.sources.insert(
         sp.clone(),
-        SourceOrigin::Text {
-            contents: contents.bytes.to_vec(),
-            references: refs,
-        },
+        SourceOrigin::text(contents.bytes.to_vec(), refs),
     );
     Ok(store_path_string(ev, &sp))
-}
-
-/// `builtins.path` and `filterSource` over a member of a fetched flake input:
-/// the NAR comes out of the entry's spool, and the filter sees the store path
-/// Nix would show it, exactly as it does for a tree on disk. Nothing is stated
-/// or read twice: the read set records the entry, not the members
-/// (`crate::inputs`).
-#[allow(clippy::too_many_arguments)]
-fn add_input_path(
-    ev: &mut Evaluator,
-    pos: Pos,
-    name: &str,
-    path: &[u8],
-    filter: Option<Word>,
-    method: IngestionMethod,
-    expected_sp: Option<StorePath>,
-    entry: &crate::inputs::Entry,
-    base: &StorePath,
-    rel: &[u8],
-) -> EvalResult<StorePath> {
-    if method == IngestionMethod::Flat {
-        let h = crate::inputs::hash_file(ev, entry, base, rel, HashAlgo::Sha256)
-            .map_err(|e| io_error(e, "reading file", path, pos))?;
-        return finish_added(ev, pos, path, expected_sp, &h, 0, base, rel, method, name);
-    }
-    crate::inputs::record(ev, entry, base);
-    let mut err: Option<Box<Error>> = None;
-    let mut f = |p: &Path, t: FileType| -> bool {
-        let Some(filter) = filter else { return true };
-        if err.is_some() {
-            return false;
-        }
-        match call_filter(ev, filter, p, t, pos) {
-            Ok(b) => b,
-            Err(e) => {
-                err = Some(e);
-                false
-            }
-        }
-    };
-    let r = crate::inputs::nar_hash(entry, rel, os_path(path), &mut f);
-    if let Some(e) = err {
-        return Err(e);
-    }
-    let (hash, nar_size) = r.map_err(|e| io_error(e, "copying", path, pos))?;
-    finish_added(
-        ev,
-        pos,
-        path,
-        expected_sp,
-        &hash,
-        nar_size,
-        base,
-        rel,
-        method,
-        name,
-    )
-}
-
-/// The store path an added input member gets, and the origin that says where
-/// its bytes are. A filtered copy is a subtree of the entry, so its origin names
-/// the entry and the relative path, not a directory on disk.
-#[allow(clippy::too_many_arguments)]
-fn finish_added(
-    ev: &mut Evaluator,
-    pos: Pos,
-    path: &[u8],
-    expected_sp: Option<StorePath>,
-    hash: &Hash,
-    nar_size: u64,
-    base: &StorePath,
-    rel: &[u8],
-    method: IngestionMethod,
-    name: &str,
-) -> EvalResult<StorePath> {
-    let sp = make_fixed_output_path(method, hash, name, &BTreeSet::new())
-        .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, pos))?;
-    if method == IngestionMethod::Recursive {
-        ev.sources.insert(
-            sp.clone(),
-            crate::inputs::origin(base.base_name(), rel, *hash, nar_size),
-        );
-    }
-    if let Some(exp) = expected_sp
-        && exp != sp
-    {
-        bail!(
-            ErrorKind::Eval,
-            pos,
-            "store path mismatch in (possibly filtered) path added from '{}'",
-            lossy(path)
-        );
-    }
-    Ok(sp)
 }

@@ -3,9 +3,10 @@
 
 use std::io::{self, Read, Write};
 
-use crate::remote::plan::{DrvHashes, Object, SourceData, SourceKind};
+use crate::remote::plan::{DrvHashes, Object};
 use crate::store::hash::{HashAlgo, hash_bytes};
 use crate::store::nar::{dump_string, flat_hash};
+use crate::store::source::{SourceKind, Src};
 
 pub fn write_u64(w: &mut dyn Write, n: u64) -> io::Result<()> {
     w.write_all(&n.to_le_bytes())
@@ -156,7 +157,7 @@ pub fn write_object(w: &mut dyn Write, o: &Object) -> io::Result<()> {
     match o {
         Object::Source {
             path,
-            data,
+            at,
             kind,
             nar_hash,
             nar_size,
@@ -165,12 +166,10 @@ pub fn write_object(w: &mut dyn Write, o: &Object) -> io::Result<()> {
             let (ca, references): (String, Vec<String>) = match kind {
                 SourceKind::Source => (format!("fixed:r:sha256:{}", nar_hash.to_nix32()), vec![]),
                 SourceKind::Text { references } => {
-                    let flat = match data {
-                        SourceData::Memory(contents) => hash_bytes(HashAlgo::Sha256, contents),
-                        SourceData::Local { path, .. } => flat_hash(path, HashAlgo::Sha256)?,
-                        SourceData::Nar(_) => {
-                            return Err(io::Error::other("a text path cannot come from a NAR"));
-                        }
+                    let flat = match (&at.src, at.local()) {
+                        (Src::Mem(contents), _) => hash_bytes(HashAlgo::Sha256, contents),
+                        (_, Some(path)) => flat_hash(&path, HashAlgo::Sha256)?,
+                        _ => return Err(io::Error::other("a text path cannot come from a NAR")),
                     };
                     (
                         format!("text:sha256:{}", flat.to_nix32()),
@@ -189,7 +188,7 @@ pub fn write_object(w: &mut dyn Write, o: &Object) -> io::Result<()> {
             // The framed body declares `nar_size` before the bytes, so a tree that changed
             // after evaluation must fail here rather than desynchronise the stream.
             let mut counted = Counting { inner: w, bytes: 0 };
-            data.dump(&mut counted)?;
+            at.nar(&mut counted)?;
             if counted.bytes != *nar_size {
                 return Err(io::Error::other(format!(
                     "source '{path}' changed since evaluation: its NAR is {} bytes, not {nar_size}",

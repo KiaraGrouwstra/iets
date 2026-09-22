@@ -15,9 +15,9 @@ use crate::runtime::Word;
 pub fn locate_in_store(
     paths: &[crate::store::path::StorePath],
     overrides: &HashMap<String, std::path::PathBuf>,
-) -> crate::error::Result<Vec<Option<crate::remote::plan::SourceInfo>>> {
-    use crate::remote::plan::{SourceData, SourceInfo, SourceKind};
+) -> crate::error::Result<Vec<Option<crate::store::source::SourceOrigin>>> {
     use crate::store::path::{STORE_DIR, StorePath};
+    use crate::store::source::{SourceKind, SourceOrigin, SrcPath};
 
     let ask: Vec<String> = paths
         .iter()
@@ -47,8 +47,16 @@ pub fn locate_in_store(
         .iter()
         .map(|p| {
             let full = p.to_string();
+            let unhashed = |at, kind| SourceOrigin {
+                at,
+                kind,
+                nar: None,
+            };
             if let Some(local) = overrides.get(&full) {
-                return Ok(Some(SourceInfo::tree(local.clone())));
+                return Ok(Some(unhashed(
+                    SrcPath::fs(local.clone(), None),
+                    SourceKind::Source,
+                )));
             }
             // `null` is what `nix path-info` prints for a path that is not valid.
             let v = match info.get(&full) {
@@ -70,14 +78,10 @@ pub fn locate_in_store(
             } else {
                 return Ok(None);
             };
-            Ok(Some(SourceInfo {
-                data: SourceData::Local {
-                    path: std::path::PathBuf::from(format!("{STORE_DIR}/{}", p.base_name())),
-                    accepted: None,
-                },
+            Ok(Some(unhashed(
+                SrcPath::fs(format!("{STORE_DIR}/{}", p.base_name()), None),
                 kind,
-                hashed: None,
-            }))
+            )))
         })
         .collect()
 }

@@ -33,10 +33,12 @@ builds each root.
   through string context or `import`; the plan reads that file and
   `--timings` reports the count as `read from /nix/store`.
 - Every source the evaluation added is in `Evaluator::sources`
-  (`store::source::SourceOrigin`, accessor `source_origins()`): `./path`
-  and `builtins.path` record the original local tree plus the set of
-  entries a `filterSource` filter accepted, so the client re-dumps the same
-  NAR; `builtins.toFile` records the contents and references in memory.
+  (`store::source::SourceOrigin`, accessor `source_origins()`): a
+  `SrcPath` plus the NAR hash and size. `./path` and `builtins.path` record
+  the original local tree plus the set of entries a `filterSource` filter
+  accepted, so the client re-dumps the same NAR; a fetched input records its
+  input-store entry; `builtins.toFile` records the contents in memory and
+  the references.
   After hashing, the client checks that the NAR still yields the planned
   store path and fails if the tree changed since evaluation.
 - Sources with no recorded origin (under a drv read from the store, or a

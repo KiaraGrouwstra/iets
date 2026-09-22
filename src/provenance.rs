@@ -136,7 +136,7 @@ impl SourceMap {
     ) -> SourceMap {
         let mut m = SourceMap::default();
         for (p, o) in sources.iter() {
-            if let SourceOrigin::Tree { local, .. } = o {
+            if let Some(local) = o.at.local() {
                 m.insert(
                     p.to_string().as_bytes(),
                     local.as_os_str().as_encoded_bytes(),

@@ -51,8 +51,8 @@
      `lstat` mtime in it.
    The store path is `make_fixed_output_path(recursive, narHash, "source")`.
    The copy is virtual: nothing is written or fetched. The store path is
-   registered as a `SourceOrigin::Tree` (local directory plus the
-   tracked-file set), and every read under it, `import`, `readFile`,
+   registered as a `SourceOrigin` whose `SrcPath` is the local directory
+   with the tracked-file set, and every read under it, `import`, `readFile`,
    `readDir`, `pathExists`, `hashFile`, `"${./x}"`, `builtins.path`, goes
    to the working tree through `builtins::store_hooks::locate`, with the
    tracked-file set as filter (an untracked file does not exist, `readDir`
@@ -229,10 +229,13 @@ The store-level rules are the ones the two caches follow (`docs/caches.md`): a
 `rename` of a staged directory into place, and a TTL sweep.
 
 **Reads.** `src/builtins/store_hooks.rs:locate` is the one place that maps a
-store path to its bytes. It answers `Store` (read the real path), `Local` (read
-the local tree a virtual copy stands for), `Input` (read the member out of an
-entry's spool, by `pread` at the offset the index holds) or `Mem` (a `toFile`
-text or a `.drv` this evaluation holds in memory). `import`, `readFile`,
+store path to its bytes. It answers a `SrcPath` (`src/store/source.rs`, Nix's
+`SourcePath`): a path in a `Src`, which is `Fs` (the real file system, or the
+local tree a virtual copy stands for, with its filter), `Spool` (an entry of
+the input store, read by `pread` at the offset the index holds) or `Mem` (a
+`toFile` text or a `.drv` this evaluation holds in memory). Its methods
+(`stat`, `read`, `read_dir`, `dump`) are the only readers, and each records
+its own read-set observation. `import`, `readFile`,
 `readDir`, `pathExists`, `readFileType`, `hashFile`, `findFile`, `storePath`,
 `fetchTree { type = "path"; }`, `builtins.path`, `filterSource`, `"${path}"`
 and the `sourceInfo` attrs all go through it, so a
@@ -244,8 +247,9 @@ them; a target that leaves the tree is not resolved, because the spool holds no
 bytes for it.
 
 **Uploads.** Nothing is registered during evaluation. A source whose origin is an
-input-store entry becomes a `SourceData::Nar` in `remote::plan`, with the NAR
-hash and size the index already holds, and the NAR is written out of the spool
+input-store entry keeps its `Src::Spool` name, which the tracing cache stores
+as is, with the NAR hash and size the index already holds; `remote::plan`
+opens the entry only when it dumps the NAR, and writes it out of the spool
 straight into whichever builder or store the build targets
 (`docs/remote-build.md`). `ietsp build --no-build` on a flake with a fetched
 input therefore uploads that input from the spool and never writes the local

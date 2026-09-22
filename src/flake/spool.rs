@@ -704,8 +704,8 @@ fn dereference(mut root: Dir) -> Dir {
     }
 }
 
-impl crate::remote::plan::NarSource for Tree {
-    fn dump(&self, sink: &mut dyn Write) -> io::Result<()> {
+impl Tree {
+    pub fn dump(&self, sink: &mut dyn Write) -> io::Result<()> {
         write_str(sink, b"nix-archive-1")?;
         self.node(&self.root, sink, 0)
     }
@@ -714,7 +714,6 @@ impl crate::remote::plan::NarSource for Tree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::remote::plan::NarSource;
 
     const DIR: tar::EntryType = tar::EntryType::Directory;
     const REG: tar::EntryType = tar::EntryType::Regular;

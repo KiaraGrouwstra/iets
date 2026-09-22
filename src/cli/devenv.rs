@@ -408,10 +408,7 @@ fn dev_env_build(ev: &mut Evaluator, a: EvalArgs, d: &DevEnvArgs) -> Result<DevE
         );
         ev.sources.insert(
             devenv::get_env_sh_path(),
-            SourceOrigin::Text {
-                contents: devenv::GET_ENV_SH.as_bytes().to_vec(),
-                references: BTreeSet::new(),
-            },
+            SourceOrigin::text(devenv::GET_ENV_SH.as_bytes().to_vec(), BTreeSet::new()),
         );
         let mut out_paths = Vec::new();
         for (name, out) in &env_drv.outputs {

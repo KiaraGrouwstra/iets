@@ -464,9 +464,9 @@ impl Evaluator {
         if p.starts_with(CorePkgs::PREFIX) {
             return Ok(p);
         }
-        let w = crate::builtins::store_hooks::open(self, &p, pos)?.whence(&p);
+        let at = crate::builtins::store_hooks::open(self, &p, pos)?;
         crate::lint::coerce::read_through_copy(self, &p, pos)?;
-        match crate::inputs::import_is_dir(self, w) {
+        match at.is_dir(self) {
             Ok(true) => p.extend_from_slice(b"/default.nix"),
             Ok(false) => {}
             Err(e) => bail!(
@@ -538,10 +538,9 @@ impl Evaluator {
         {
             return Ok(src.to_vec());
         }
-        match crate::inputs::read_source(self, crate::builtins::store_hooks::whence(self, resolved))
-        {
+        match crate::builtins::store_hooks::resolve(self, resolved).read(self, false) {
             Ok(s) => Ok(s),
-            Err(e) => bail!(
+            Err((_, e)) => bail!(
                 ErrorKind::Io,
                 pos,
                 "opening file '{}': {}",

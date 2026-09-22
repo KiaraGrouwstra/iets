@@ -63,7 +63,9 @@ The evaluator:
 - `store/`: pure functions. Nix base32, the four hash algorithms, NAR
   serialization and hashing (`docs/nar.md`), store paths, ATerm derivations,
   `hashDerivationModulo`; `locate.rs` finds derivation roots and local-store
-  sources, `source.rs` records where each source came from.
+  sources, `source.rs` holds `SrcPath` (where the bytes of a path are: disk,
+  input-store spool or memory; read by `builtins::store_hooks`) and the
+  `SourceOrigin` each source came from.
 - `corepkgs/`: `derivation.nix`, `fetchurl.nix` embedded from Nix 2.34.8.
 - `print.rs`: the `nix-instantiate --eval` printer and JSON.
 

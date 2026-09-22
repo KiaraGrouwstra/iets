@@ -16,7 +16,7 @@ use crate::remote::worker::{Connection, Transport};
 use crate::runtime::*;
 use crate::store::hash::{Hash, HashAlgo};
 use crate::store::path::{IngestionMethod, StorePath, make_fixed_output_path};
-use crate::store::source::SourceOrigin;
+use crate::store::source::{SourceOrigin, SrcPath};
 use crate::syntax::symbol::Sym;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -200,11 +200,9 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
                 );
             }
             let (hash, mtime) = match crate::builtins::store_hooks::locate(ev, path.as_bytes()) {
-                crate::builtins::store_hooks::Access::Store => {
-                    super::root::path_tree(ev, Path::new(path), pos)?
-                }
+                None => super::root::path_tree(ev, Path::new(path), pos)?,
                 // a store tree's mtimes are all 1, so that is its lastModified
-                _ => {
+                Some(_) => {
                     let sp = crate::builtins::paths::add_path(
                         ev,
                         pos,
@@ -214,14 +212,8 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
                         IngestionMethod::Recursive,
                         None,
                     )?;
-                    let nar_hash = match ev.sources.get(&sp) {
-                        Some(
-                            SourceOrigin::Tree { nar_hash, .. }
-                            | SourceOrigin::Input { nar_hash, .. },
-                        ) => nar_hash,
-                        _ => unreachable!("add_path records a recursive copy"),
-                    };
-                    (nar_hash, 1)
+                    let nar = ev.sources.get(&sp).and_then(|o| o.nar);
+                    (nar.expect("add_path records a recursive copy").0, 1)
                 }
             };
             if let Some(expected) = str_attr(&attrs, "narHash") {
@@ -513,9 +505,13 @@ pub fn ensure_readable(
 fn adopt(ev: &mut Evaluator, sp: &StorePath, entry: &crate::inputs::Entry) {
     ev.sources.insert(
         sp.clone(),
-        crate::inputs::origin(sp.base_name(), b"", entry.nar_hash, entry.nar_size),
+        SourceOrigin::tree(
+            SrcPath::spool(sp.base_name(), b""),
+            entry.nar_hash,
+            entry.nar_size,
+        ),
     );
-    crate::inputs::record(ev, entry, sp);
+    crate::inputs::record(ev, entry, sp.base_name());
 }
 
 /// nix.conf, read once: `store` for the eval store and `access-tokens` for the
@@ -653,7 +649,7 @@ fn fetch_tarball(
         .map_err(|e| fail(format!("ietsp: cannot unpack input '{name}': {e}")))?;
 
     let mut hasher = crate::store::hash::Hasher::new(HashAlgo::Sha256);
-    crate::remote::plan::NarSource::dump(&tree, &mut hasher).map_err(|e| {
+    tree.dump(&mut hasher).map_err(|e| {
         Error::boxed(
             ErrorKind::Io,
             format!("ietsp: cannot hash the tree of input '{name}': {e}"),

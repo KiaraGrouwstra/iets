@@ -280,7 +280,7 @@ pub fn eval_flake_value(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
 /// directory, and getFlake passes none. A virtual copy stands for its local
 /// tree.
 pub fn get_flake(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
-    use crate::builtins::store_hooks::{Access, locate};
+    use crate::builtins::store_hooks::locate;
     let s = ev.force_string_no_ctx(
         args[0],
         pos,
@@ -331,15 +331,17 @@ pub fn get_flake(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word
         });
     }
     let arg = match locate(ev, path.as_bytes()) {
-        Access::Local { path, .. } => format!("path:{}", path.display()),
-        Access::Input { .. } | Access::Mem(_) => {
-            return Err(EvalError::boxed(
-                ErrorKind::Unsupported,
-                format!("ietsp: builtins.getFlake on '{s}', a fetched input, is not supported"),
-                pos,
-            ));
-        }
-        Access::Store | Access::Missing => format!("path:{path}"),
+        Some(at) if !at.hidden() => match at.local() {
+            Some(local) => format!("path:{}", local.display()),
+            None => {
+                return Err(EvalError::boxed(
+                    ErrorKind::Unsupported,
+                    format!("ietsp: builtins.getFlake on '{s}', a fetched input, is not supported"),
+                    pos,
+                ));
+            }
+        },
+        _ => format!("path:{path}"),
     };
     let fr = parse_flake_ref(&arg, b"/", None).map_err(|e| {
         let kind = match e {

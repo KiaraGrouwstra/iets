@@ -289,13 +289,11 @@ fn hash_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         "while evaluating the first argument passed to builtins.hashFile",
     )?;
     let path = crate::builtins::paths::realise_path(ev, args[1], pos)?;
-    let w = crate::builtins::store_hooks::open(ev, &path, pos)?.whence(&path);
+    let at = crate::builtins::store_hooks::open(ev, &path, pos)?;
     crate::lint::coerce::read_through_copy(ev, &path, pos)?;
-    // `read_source` is the one reader: a file on disk, the local original of a
-    // virtual copy, or a member of a fetched input's spool (`crate::inputs`).
-    let data = match crate::inputs::read_source(ev, w) {
+    let data = match at.read(ev, false) {
         Ok(d) => d,
-        Err(e) => bail!(
+        Err((_, e)) => bail!(
             ErrorKind::Io,
             pos,
             "opening file '{}': {}",

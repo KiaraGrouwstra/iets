@@ -969,9 +969,7 @@ impl Evaluator {
             else {
                 break;
             };
-            let Some(crate::store::source::SourceOrigin::Tree { local, .. }) =
-                self.sources.get(&sp)
-            else {
+            let Some(local) = self.sources.get(&sp).and_then(|o| o.at.local()) else {
                 break;
             };
             let mut next = local.as_os_str().as_encoded_bytes().to_vec();
@@ -1056,9 +1054,7 @@ impl Evaluator {
             else {
                 break;
             };
-            let Some(crate::store::source::SourceOrigin::Tree { local, .. }) =
-                self.sources.get(&sp)
-            else {
+            let Some(local) = self.sources.get(&sp).and_then(|o| o.at.local()) else {
                 break;
             };
             let mut next = local.as_os_str().as_encoded_bytes().to_vec();
