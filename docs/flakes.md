@@ -232,7 +232,8 @@ The store-level rules are the ones the two caches follow (`docs/caches.md`): a
 store path to its bytes. It answers a `SrcPath` (`src/store/source.rs`, Nix's
 `SourcePath`): a path in a `Src`, which is `Fs` (the real file system, or the
 local tree a virtual copy stands for, with its filter), `Spool` (an entry of
-the input store, read by `pread` at the offset the index holds) or `Mem` (a
+the input store, read by `pread` at the offset the index holds, with the
+filter of a `builtins.path` or `filterSource` copy of a member) or `Mem` (a
 `toFile` text or a `.drv` this evaluation holds in memory). Its methods
 (`stat`, `read`, `read_dir`, `dump`) are the only readers, and each records
 its own read-set observation. `import`, `readFile`,

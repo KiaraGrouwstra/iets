@@ -54,7 +54,7 @@ pub fn locate(ev: &Evaluator, path: &[u8]) -> Option<SrcPath> {
         },
     };
     // a vanished entry falls back to the store, which a build has usually filled by then
-    if let Src::Spool(name) = &at.src
+    if let Src::Spool { name, .. } = &at.src
         && crate::inputs::open(name).is_none()
     {
         return None;
@@ -163,14 +163,23 @@ impl SrcPath {
         Some(below(root, &self.rel))
     }
 
-    /// Whether the tree's filter kept `p`, a path on disk.
+    /// Whether the tree's filter kept `p`: a path on disk, or a member's
+    /// path in its spool.
     pub fn accepts(&self, p: &Path) -> bool {
         match &self.src {
             Src::Fs {
                 accepted: Some(a), ..
+            }
+            | Src::Spool {
+                accepted: Some(a), ..
             } => a.contains(p),
             _ => true,
         }
+    }
+
+    /// Where a spool dump names this path: `/` plus its path in the entry.
+    pub fn in_spool(&self) -> PathBuf {
+        below(Path::new("/"), &self.rel)
     }
 
     /// `None` when the store copy has no such entry: the tree's filter left
@@ -182,7 +191,12 @@ impl SrcPath {
                 (self.rel.is_empty() || self.accepts(&p))
                     .then(|| At::Disk(p.into_os_string().into_vec()))
             }
-            Src::Spool(name) => Some(At::Spool(crate::inputs::open(name)?, name)),
+            Src::Spool { name, .. } => {
+                if !self.accepts(&self.in_spool()) {
+                    return None;
+                }
+                Some(At::Spool(crate::inputs::open(name)?, name))
+            }
             Src::Mem(b) => self.rel.is_empty().then_some(At::Mem(b)),
         }
     }
@@ -311,7 +325,9 @@ impl SrcPath {
                     return Err(notdir());
                 };
                 crate::inputs::record(ev, &entry, name);
+                let here = self.in_spool();
                 Ok(d.iter()
+                    .filter(|(n, _)| self.accepts(&here.join(OsStr::from_bytes(n))))
                     .map(|(n, child)| (n.clone(), child.file_type()))
                     .collect())
             }
@@ -328,14 +344,16 @@ impl SrcPath {
             Src::Fs { root, .. } => {
                 crate::store::nar::dump_path(&below(root, &self.rel), sink, filter)
             }
-            Src::Spool(name) => {
+            Src::Spool { name, .. } => {
                 let entry = crate::inputs::open(name).ok_or_else(|| {
                     io::Error::other(format!(
                         "the input store no longer holds '{name}'; evaluate again to fetch it"
                     ))
                 })?;
                 let node = entry.tree.resolve(&self.rel, true).ok_or_else(enoent)?;
-                entry.tree.dump_filtered(node, Path::new("/"), sink, filter)
+                entry
+                    .tree
+                    .dump_filtered(node, &self.in_spool(), sink, filter)
             }
             Src::Mem(b) => crate::store::nar::dump_string(b, sink),
         }
@@ -383,7 +401,9 @@ pub fn copy_path_to_store(
         Some(At::Mem(_)) => return Err(recopy_unsupported(path, pos)),
         // the input itself needs no hashing: its store path is the one the
         // lock named and its NAR hash is in the index
-        Some(At::Spool(entry, base)) if at.rel.is_empty() => {
+        Some(At::Spool(entry, base))
+            if at.rel.is_empty() && matches!(at.src, Src::Spool { accepted: None, .. }) =>
+        {
             crate::inputs::record(ev, &entry, base);
             let sp = StorePath::from_base_name(base)
                 .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, pos))?;
@@ -392,7 +412,7 @@ pub fn copy_path_to_store(
         Some(At::Spool(entry, base)) => {
             crate::inputs::record(ev, &entry, base);
             let mut h = Hasher::new(HashAlgo::Sha256);
-            at.dump(&mut h, &mut |_, _| true).map_err(copy_err)?;
+            at.nar(&mut h).map_err(copy_err)?;
             let size = h.bytes_written();
             let hash = h.finish();
             (fixed(&hash)?, at.clone(), hash, size)

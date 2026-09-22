@@ -10,7 +10,7 @@ use crate::builtins::derivation::DrvInfo;
 use crate::store::path::StorePath;
 use crate::store::source::{SourceKind, SourceOrigin, Src, SrcPath};
 
-const VERSION: u8 = 4;
+const VERSION: u8 = 5;
 
 struct Enc(Vec<u8>);
 
@@ -400,22 +400,12 @@ pub fn encode_sources(sources: &HashMap<StorePath, SourceOrigin>) -> Vec<u8> {
             Src::Fs { root, accepted } => {
                 e.u8(0);
                 e.bytes(root.as_os_str().as_encoded_bytes());
-                match accepted {
-                    None => e.u8(0),
-                    Some(a) => {
-                        e.u8(1);
-                        let mut v: Vec<Vec<u8>> = a
-                            .iter()
-                            .map(|p| p.as_os_str().as_encoded_bytes().to_vec())
-                            .collect();
-                        v.sort();
-                        e.list(&v);
-                    }
-                }
+                accepted_set(&mut e, accepted);
             }
-            Src::Spool(name) => {
+            Src::Spool { name, accepted } => {
                 e.u8(1);
                 e.bytes(name.as_bytes());
+                accepted_set(&mut e, accepted);
             }
             Src::Mem(contents) => {
                 e.u8(2);
@@ -450,6 +440,31 @@ fn path_buf(b: &[u8]) -> PathBuf {
     PathBuf::from(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b))
 }
 
+fn accepted_set(e: &mut Enc, accepted: &crate::store::source::Accepted) {
+    match accepted {
+        None => e.u8(0),
+        Some(a) => {
+            e.u8(1);
+            let mut v: Vec<Vec<u8>> = a
+                .iter()
+                .map(|p| p.as_os_str().as_encoded_bytes().to_vec())
+                .collect();
+            v.sort();
+            e.list(&v);
+        }
+    }
+}
+
+fn read_accepted(d: &mut Dec<'_>) -> Option<crate::store::source::Accepted> {
+    match d.u8().ok()? {
+        0 => Some(None),
+        1 => Some(Some(Arc::new(
+            d.list().ok()?.iter().map(|p| path_buf(p)).collect(),
+        ))),
+        _ => None,
+    }
+}
+
 pub fn decode_sources(b: &[u8]) -> Option<HashMap<StorePath, SourceOrigin>> {
     let mut d = Dec::new(b).ok()?;
     let n = d.u64().ok()? as usize;
@@ -459,15 +474,12 @@ pub fn decode_sources(b: &[u8]) -> Option<HashMap<StorePath, SourceOrigin>> {
         let src = match d.u8().ok()? {
             0 => Src::Fs {
                 root: path_buf(d.bytes().ok()?),
-                accepted: match d.u8().ok()? {
-                    0 => None,
-                    1 => Some(Arc::new(
-                        d.list().ok()?.iter().map(|p| path_buf(p)).collect(),
-                    )),
-                    _ => return None,
-                },
+                accepted: read_accepted(&mut d)?,
             },
-            1 => Src::Spool(String::from_utf8(d.vec().ok()?).ok()?),
+            1 => Src::Spool {
+                name: String::from_utf8(d.vec().ok()?).ok()?,
+                accepted: read_accepted(&mut d)?,
+            },
             2 => Src::Mem(Arc::new(d.vec().ok()?)),
             _ => return None,
         };
@@ -629,7 +641,12 @@ mod tests {
         );
         sources.insert(
             i.clone(),
-            SourceOrigin::tree(SrcPath::spool(i.base_name(), b"lib"), hash, 7),
+            SourceOrigin::tree(
+                SrcPath::spool(i.base_name(), b"lib")
+                    .filtered(Some(Arc::new([PathBuf::from("/lib")].into()))),
+                hash,
+                7,
+            ),
         );
         let back = decode_sources(&encode_sources(&sources)).unwrap();
         let o = &back[&s];
@@ -644,8 +661,9 @@ mod tests {
         assert_eq!(o.text_refs(), Some(&[s.clone()].into()));
         assert_eq!(o.nar, None);
         let o = &back[&i];
-        assert!(matches!(&o.at.src, Src::Spool(n) if n == i.base_name()));
+        assert!(matches!(&o.at.src, Src::Spool { name, .. } if name == i.base_name()));
         assert_eq!((o.at.rel.as_slice(), o.nar), (&b"lib"[..], Some((hash, 7))));
+        assert!(o.at.accepts(Path::new("/lib")) && !o.at.accepts(Path::new("/lib/x")));
 
         let roots = vec![(p.clone(), Some("out".to_string())), (p, None)];
         assert_eq!(decode_roots(&encode_roots(&roots)).unwrap(), roots);

@@ -512,11 +512,10 @@ fn add_path_inner(
         }
         Some(At::Disk(_)) => true,
     };
-    // a spool dump names its members under `/`
-    let resolved = at.local().unwrap_or_else(|| PathBuf::from("/"));
+    let resolved = at.local().unwrap_or_else(|| at.in_spool());
     let parent = match &at.src {
-        Src::Fs { accepted, .. } => accepted.clone(),
-        _ => None,
+        Src::Fs { accepted, .. } | Src::Spool { accepted, .. } => accepted.clone(),
+        Src::Mem(_) => None,
     };
     let shown = |p: &Path| -> PathBuf {
         match p.strip_prefix(&resolved) {
@@ -599,13 +598,16 @@ fn add_path_inner(
     };
     let sp = make_fixed_output_path(method, &hash, name, &refs).map_err(store_err)?;
     if method == IngestionMethod::Recursive {
-        // an input member's origin keeps no `filter`: a filtered copy would
-        // upload the whole member, which its recorded NAR size refuses
         if on_disk {
             let at = SrcPath::fs(resolved, accepted.map(Arc::new).or(parent));
             ev.known
                 .add_copy(sp.clone(), SourceOrigin::tree(at, hash, nar_size));
         } else {
+            // a spool origin's root is itself a member, which no filter was asked about
+            if let Some(a) = &mut accepted {
+                a.insert(resolved);
+            }
+            let at = at.filtered(accepted.map(Arc::new).or(parent));
             ev.known
                 .add(sp.clone(), SourceOrigin::tree(at, hash, nar_size));
         }

@@ -23,8 +23,9 @@ pub enum Src {
     Fs { root: PathBuf, accepted: Accepted },
     /// An entry of the user-level input store (`crate::inputs`), by store
     /// path base name. Opened on first read, so a tracing-cache hit that only
-    /// uploads needs no evaluation.
-    Spool(String),
+    /// uploads needs no evaluation. `accepted` is as for `Fs`, with each
+    /// member named by its path in the entry under `/`.
+    Spool { name: String, accepted: Accepted },
     /// One regular file: a `toFile` text or a `.drv` this evaluation holds.
     Mem(Arc<Vec<u8>>),
 }
@@ -50,9 +51,20 @@ impl SrcPath {
 
     pub fn spool(name: &str, rel: &[u8]) -> SrcPath {
         SrcPath {
-            src: Src::Spool(name.to_string()),
+            src: Src::Spool {
+                name: name.to_string(),
+                accepted: None,
+            },
             rel: rel.to_vec(),
         }
+    }
+
+    /// This path under the filter `accepted` instead of its own.
+    pub fn filtered(mut self, accepted: Accepted) -> SrcPath {
+        if let Src::Fs { accepted: a, .. } | Src::Spool { accepted: a, .. } = &mut self.src {
+            *a = accepted;
+        }
+        self
     }
 
     /// `sub` below this path.

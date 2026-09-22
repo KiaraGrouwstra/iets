@@ -362,6 +362,39 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   )
   $res ++= [(verdict $ub_ok "build --no-build sends the input's NAR out of its spool and the daemon holds it" $"build --no-build \(exit ($ub.exit_code)\): ($resolve) | ($add) | ($tb3_path) valid=($tb3_valid)")]
 
+  # a filtered `builtins.path` of an input member uploads the NAR evaluation
+  # hashed: the daemon checks it against the store path.
+  let upg = $"($work)/upflake2"
+  mkdir $upg $"($work)/tb4src/sub"
+  "b\n" | save $"($work)/tb4src/sub/b"
+  "c\n" | save $"($work)/tb4src/sub/c"
+  ^tar -C $work -czf $"($work)/tb4.tar.gz" tb4src
+  let tb4_hash = (nixf hash path --type sha256 --sri $"($work)/tb4src" | complete | get stdout | chomp)
+  r#'{
+  inputs.tb.url = "file://@WORK@/tb4.tar.gz";
+  inputs.tb.flake = false;
+  outputs = { self, tb }: {
+    packages.x86_64-linux.default = derivation {
+      name = "usestbsub";
+      system = "x86_64-linux";
+      builder = "/bin/sh";
+      args = [ "-c" "cat ${builtins.path { path = "${tb}/sub"; name = "tbsub"; filter = p: t: baseNameOf p != "c"; }}/b > $out" ];
+    };
+  };
+}
+'# | str replace -a "@WORK@" $work | save $"($upg)/flake.nix"
+  {
+    nodes: {
+      tb: { flake: false, locked: { type: "tarball", url: $"file://($work)/tb4.tar.gz", narHash: $tb4_hash }, original: { type: "tarball", url: $"file://($work)/tb4.tar.gz" } }
+      root: { inputs: { tb: "tb" } }
+    }
+    root: "root"
+    version: 7
+  } | to json | save $"($upg)/flake.lock"
+  let fb = (^$ietsp build --no-build --ietsp-option builder daemon $"($upg)#packages.x86_64-linux.default" | complete)
+  let fb_ok = ($fb.exit_code == 0 and ($fb.stderr | str contains "fetching it"))
+  $res ++= [(verdict $fb_ok "build --no-build uploads a filtered copy of an input member" $"build --no-build \(exit ($fb.exit_code)\): ($fb.stderr | lines | last 1 | str join '')")]
+
   # the lock's narHash is the contract: a tarball whose contents changed is
   # refused, and nothing is registered. The input store entry must go first,
   # or the fetch never happens: the entry is the locked tree, already verified.
