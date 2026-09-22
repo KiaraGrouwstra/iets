@@ -160,9 +160,7 @@ pub fn open(
     on_event: &mut dyn FnMut(Event),
 ) -> Result<Box<dyn Backend>> {
     if let Transport::Grpc(cfg) = transport {
-        return Ok(Box::new(crate::remote::grpc::backend::Grpc::open(
-            cfg, options,
-        )?));
+        return Ok(Box::new(crate::remote::grpc::backend::Grpc::open(cfg)?));
     }
     Ok(Box::new(Worker::open(transport, options, on_event)?))
 }

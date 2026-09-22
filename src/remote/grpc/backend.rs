@@ -23,7 +23,7 @@ use crate::build::fanout;
 use crate::error::{Error, Result};
 use crate::remote::event::{Event, Started};
 use crate::remote::plan::{Object, Plan};
-use crate::remote::worker::{Connection, Options, failed_event};
+use crate::remote::worker::{Connection, failed_event};
 use crate::store::drv::Derivation;
 use crate::store::path::StorePath;
 
@@ -35,8 +35,6 @@ use super::{Client, GrpcConfig};
 pub struct Grpc {
     c: Client,
     t: Timings,
-    /// `-j`: the other cap on how many builds are in flight.
-    max_jobs: usize,
     /// Everything this run uploaded, so a `NOT_FOUND` retry can re-send one
     /// derivation's closure.
     objects: Objects,
@@ -45,7 +43,7 @@ pub struct Grpc {
 }
 
 impl Grpc {
-    pub fn open(cfg: &GrpcConfig, options: &Options) -> Result<Grpc> {
+    pub fn open(cfg: &GrpcConfig) -> Result<Grpc> {
         let c = Client::open(cfg)?;
         Ok(Grpc {
             t: Timings {
@@ -54,7 +52,6 @@ impl Grpc {
                 ..Timings::default()
             },
             c,
-            max_jobs: options.max_jobs.max(1) as usize,
             objects: Objects::default(),
             drvs: BTreeMap::new(),
         })
@@ -62,7 +59,7 @@ impl Grpc {
 }
 
 /// A `Want` and a `BuildDerivation` per derivation of the batch's closure, at most
-/// `min(max-builds, -j)` in flight, a derivation only once every input
+/// `max-builds` in flight, a derivation only once every input
 /// derivation of it is done.
 ///
 /// Derivations whose outputs the store already reports valid are skipped. The
@@ -74,7 +71,6 @@ fn build_batch(
     t: &mut Timings,
     objects: &Objects,
     drvs: &BTreeMap<StorePath, Derivation>,
-    max_jobs: usize,
     batch: &Batch<'_>,
     on_event: &mut dyn FnMut(Event),
 ) -> Result<HashMap<String, Status>> {
@@ -167,8 +163,7 @@ fn build_batch(
             ..BuildResult::default()
         },
     };
-    let limit = client.cfg.max_builds.min(max_jobs);
-    let results = fanout::run(&graph, limit, &work, on_event);
+    let results = fanout::run(&graph, client.cfg.max_builds, &work, on_event);
     t.calls += calls.load(Ordering::Relaxed);
 
     for (i, res) in results.iter().enumerate() {
@@ -247,7 +242,6 @@ impl Backend for Grpc {
             &mut self.t,
             &self.objects,
             &self.drvs,
-            self.max_jobs,
             batch,
             on_event,
         );

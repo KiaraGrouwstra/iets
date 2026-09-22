@@ -109,7 +109,7 @@ one connection         │ build op   │ │ build op  │
 The walk is `jobs::run` with a `jobs::stream::Stream` sink instead of the
 emitter, so the eval-jobs walk is shared, not copied. A `Batcher` takes
 the first line blocking, then everything else already queued (20 ms
-settle, capped at `-j`), so a batch is whatever finished while the last
+settle, capped at `-j`, or at `max-builds` over `grpc://`), so a batch is whatever finished while the last
 build op ran. That is the overlap: building starts before the tree is
 fully evaluated.
 

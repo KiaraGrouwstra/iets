@@ -80,16 +80,13 @@ pub fn cmd_fast_build(argv: &[String]) -> i32 {
 fn run(a: Args) -> Result<i32> {
     let cfg = Config::load(&a.overrides)?;
     let store = crate::settings::builder(a.store.as_deref(), &cfg);
-    let transport = Transport::parse_checked(&store, &cfg.system())?.ok_or_else(|| {
+    let mut transport = Transport::parse_checked(&store, &cfg.system())?.ok_or_else(|| {
         CrateError::Usage(format!(
             "--store '{store}': ietsp fast-build speaks the Nix worker protocol and grpc://: daemon, unix:///path, ssh-ng://[user@]host or grpc://host:port"
         ))
     })?;
     let mut options = Options::try_from(&cfg)?;
-    if let Some(j) = a.max_jobs {
-        // nix-fast-build's 0 means "unlimited"; the daemon wants a number.
-        options.max_jobs = if j == 0 { options.max_jobs } else { j };
-    }
+    let max_jobs = jobs(a.max_jobs, &mut transport, &mut options);
     // Every attribute gets a verdict unless --fail-fast says to stop.
     options.keep_going = !a.fail_fast;
     if !matches!(transport, Transport::Unix(_)) && !a.no_download {
@@ -127,7 +124,7 @@ fn run(a: Args) -> Result<i32> {
         options,
         style,
         systems,
-        max_jobs: options.max_jobs.max(1) as usize,
+        max_jobs,
         skip_cached: a.skip_cached,
         skip_unsupported: a.skip_unsupported,
         out_link: a.out_link.clone(),
@@ -241,6 +238,23 @@ fn walk(ev: &mut Evaluator, a: Args, stream: Stream) -> bool {
     let mut sink = stream.sink();
     crate::jobs::run(ev, root, &mut sink);
     true
+}
+
+/// The attributes per batch: the backend's build parallelism. Over `grpc://`
+/// that is `max-builds`, as in nix-grpc-store; nix.conf max-jobs is about local
+/// builds, so only an explicit `-j` lowers it.
+fn jobs(j: Option<u64>, transport: &mut Transport, options: &mut Options) -> usize {
+    // nix-fast-build's 0 means "unlimited"; the daemon wants a number.
+    if let Some(j) = j.filter(|&j| j > 0) {
+        options.max_jobs = j;
+        if let Transport::Grpc(g) = transport {
+            g.max_builds = g.max_builds.min(j as usize);
+        }
+    }
+    match transport {
+        Transport::Grpc(g) => g.max_builds,
+        _ => options.max_jobs.max(1) as usize,
+    }
 }
 
 /// The build side: batches in, verdicts out, one connection.
@@ -475,4 +489,36 @@ fn summary(r: &Report) {
             .collect::<Vec<_>>()
             .join(", ")
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cap(url: &str, j: Option<u64>) -> (usize, u64) {
+        let mut t = Transport::parse(url).unwrap();
+        let mut o = Options {
+            max_jobs: 2,
+            ..Options::default()
+        };
+        let n = jobs(j, &mut t, &mut o);
+        if let Transport::Grpc(g) = &t {
+            assert_eq!(g.max_builds, n);
+        }
+        (n, o.max_jobs)
+    }
+
+    #[test]
+    fn grpc_ignores_nix_conf_max_jobs() {
+        assert_eq!(cap("grpc://farm:50051", None), (64, 2));
+        assert_eq!(cap("grpc://farm:50051?max-builds=8", Some(0)), (8, 2));
+    }
+
+    #[test]
+    fn explicit_jobs_lower_max_builds() {
+        assert_eq!(cap("grpc://farm:50051", Some(16)), (16, 16));
+        assert_eq!(cap("grpc://farm:50051?max-builds=8", Some(16)), (8, 16));
+        assert_eq!(cap("daemon", None), (2, 2));
+        assert_eq!(cap("daemon", Some(5)), (5, 5));
+    }
 }

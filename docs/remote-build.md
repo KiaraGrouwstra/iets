@@ -168,7 +168,7 @@ records; a `build::backend::Backend` owns the wire. Two implementations:
 
 | | worker protocol (`daemon`, `unix://`, `ssh-ng://`) | `grpc://` |
 |---|---|---|
-| a ready set | one `BuildPathsWithResults` | a `Want` on the `Schedule` stream and one `BuildDerivation` per derivation of the set's closure, `min(max-builds, -j)` in flight |
+| a ready set | one `BuildPathsWithResults` | a `Want` on the `Schedule` stream and one `BuildDerivation` per derivation of the set's closure, `max-builds` in flight |
 | build parallelism | the daemon's, `-j` through `SetOptions` | the client's, in flight, placed by the scheduler |
 | log lines | attributed by the daemon's activity ids | by the call, which knows its derivation |
 | output paths | `QueryDerivationOutputMap` | statically, from the derivations |
@@ -218,7 +218,7 @@ defaults (`src/client/store.hh`):
 | `connect-timeout` | 30 | seconds the first call waits for the service |
 | `reschedule-retries` | 8 | how often a build a worker bounced goes back to the scheduler |
 | `restart-grace` | 120 | seconds to wait for a scheduler that went away, or for a worker that can take an `Unplaceable` derivation |
-| `max-builds` | 64 | concurrent `BuildDerivation` calls |
+| `max-builds` | 64 | concurrent `BuildDerivation` calls; nix.conf `max-jobs` does not apply, fast-build's `-j` lowers it |
 | `nar-connections` | 4 | accepted for URL compatibility; this client fetches over its one channel |
 
 ### Auth and headers
