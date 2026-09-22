@@ -66,8 +66,8 @@ The key is computed before evaluation from the command alone:
   depend on cwd.
 
 `--workers`, `--builder`, `--out`, `--no-build`, `--timings` are not in
-the key. `--impure` and `--pure-eval` are accepted and ignored by the
-evaluator, so they do not enter the key either.
+the key. `pure-eval` is (`docs/pure-eval.md`): it changes what the same
+expression answers.
 
 ## Entry
 

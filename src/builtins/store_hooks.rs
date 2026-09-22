@@ -99,6 +99,44 @@ pub fn locate(ev: &Evaluator, path: &[u8]) -> Access {
     Access::Local { path, accepted }
 }
 
+/// Whether a pure evaluation may read `path` (eval.cc: rootFS is the store
+/// behind an allow list): only under a store path this evaluation added or a
+/// fetch found on disk. Always true when impure.
+pub fn allowed(ev: &Evaluator, path: &[u8]) -> bool {
+    if !ev.pure {
+        return true;
+    }
+    let Some(rest) = path
+        .strip_prefix(STORE_DIR.as_bytes())
+        .and_then(|r| r.strip_prefix(b"/"))
+    else {
+        return false;
+    };
+    let base = rest.split(|&b| b == b'/').next().unwrap_or_default();
+    let Ok(sp) = std::str::from_utf8(base).map(StorePath::from_base_name) else {
+        return false;
+    };
+    let Ok(sp) = sp else {
+        return false;
+    };
+    ev.sources.lock().contains_key(&sp) || ev.allowed.lock().contains_key(&sp)
+}
+
+/// `allowed`, as the error Nix's `AllowListSourceAccessor` throws.
+pub fn check_access(ev: &Evaluator, path: &[u8], pos: Pos) -> EvalResult<()> {
+    if allowed(ev, path) {
+        return Ok(());
+    }
+    Err(Error::boxed(
+        ErrorKind::Eval,
+        format!(
+            "access to absolute path '{}' is forbidden in pure evaluation mode (use '--impure' to override)",
+            String::from_utf8_lossy(path)
+        ),
+        pos,
+    ))
+}
+
 /// Copying a [`Access::Mem`] path again would need a source origin that
 /// uploads a NAR from memory. It is refused instead, so the classic names
 /// fall back to nix.
@@ -172,6 +210,7 @@ pub fn copy_path_to_store(
     if let Some(sp) = ev.src_to_store.get(path) {
         return Ok(sp);
     }
+    check_access(ev, path, pos)?;
     let copy_err = |e: std::io::Error| {
         Error::boxed(
             ErrorKind::Io,

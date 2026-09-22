@@ -79,6 +79,9 @@ pub struct Common {
     pub includes: Vec<(Vec<u8>, Vec<u8>)>,
     /// `--option name value` and the settings the flags alias, in flag order.
     pub overrides: Vec<(String, String)>,
+    /// `--pure-eval`, `--no-pure-eval`, `--impure` or `--option pure-eval`,
+    /// the last one given; nix.conf's `pure-eval` when `None`.
+    pub pure: Option<bool>,
     pub show_trace: bool,
     pub quiet: bool,
 }
@@ -134,8 +137,10 @@ pub fn common_flag(c: &mut Common, a: &mut Argv, s: &str) -> Result<bool, String
         "--option" => {
             let name = a.value(s)?;
             let val = a.value(s)?;
-            c.overrides.push((name, val));
+            option(c, name, val)?;
         }
+        "--pure-eval" => c.pure = Some(true),
+        "--no-pure-eval" | "--impure" => c.pure = Some(false),
         "--store" => {
             let v = a.value(s)?;
             c.overrides.push(("store".into(), v));
@@ -159,6 +164,16 @@ pub fn common_flag(c: &mut Common, a: &mut Argv, s: &str) -> Result<bool, String
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+/// `--option NAME VALUE`: `pure-eval` is the evaluator's, the rest nix.conf's.
+pub fn option(c: &mut Common, name: String, val: String) -> Result<(), String> {
+    if name == "pure-eval" {
+        c.pure = Some(crate::config::parse_bool(&name, &val).map_err(|e| e.to_string())?);
+    } else {
+        c.overrides.push((name, val));
+    }
+    Ok(())
 }
 
 /// Where the builds go, from the `store` setting. `system` is the `system=`
@@ -216,7 +231,8 @@ pub fn local() -> Transport {
     Transport::Unix(PathBuf::from(DEFAULT_SOCKET))
 }
 
-/// An evaluator with the search path and the `system` setting applied.
+/// An evaluator with the search path, the `system` setting and `pure-eval`
+/// applied.
 pub fn evaluator(c: &Common, cfg: &Config) -> Evaluator {
     let mut ev = Evaluator::new();
     let system = cfg.system();
@@ -224,6 +240,12 @@ pub fn evaluator(c: &Common, cfg: &Config) -> Evaluator {
         ev.current_system = Box::leak(system.into_boxed_str());
     }
     crate::builtins::set_search_path(&mut ev, full_includes(&c.includes));
+    let pure = c
+        .pure
+        .unwrap_or_else(|| cfg.bool("pure-eval").ok().flatten().unwrap_or(false));
+    if pure {
+        crate::builtins::set_pure(&mut ev);
+    }
     ev
 }
 

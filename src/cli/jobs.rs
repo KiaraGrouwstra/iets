@@ -220,6 +220,17 @@ pub fn cmd_eval_jobs(argv: &[String]) -> i32 {
         eprintln!("error: no expression specified");
         return 1;
     }
+    // nix-eval-jobs.cc: `--impure` wins, then `--flake` makes it pure, then
+    // `--pure-eval`, `--option pure-eval` and nix.conf decide.
+    if a.impure {
+        a.pure_eval = Some(false);
+    } else if j.flake {
+        a.pure_eval = Some(true);
+    } else if a.pure_eval.is_none() {
+        a.pure_eval = crate::config::Config::load(&[])
+            .ok()
+            .and_then(|c| c.bool("pure-eval").ok().flatten());
+    }
     let transport = match check_jobs_args(&j) {
         Ok(t) => t,
         Err(e) => {
@@ -230,6 +241,9 @@ pub fn cmd_eval_jobs(argv: &[String]) -> i32 {
     let t0 = std::time::Instant::now();
     if j.worker {
         let mut ev = Evaluator::new();
+        if a.is_pure() {
+            crate::builtins::set_pure(&mut ev);
+        }
         ev.drv.keep_aterm = !j.opts.no_instantiate;
         if let Err(e) = crate::api::configure_lints(&mut ev, &a) {
             report(&ev, &e);
@@ -242,6 +256,9 @@ pub fn cmd_eval_jobs(argv: &[String]) -> i32 {
     }
     let workers = a.workers;
     let mut ev = Evaluator::new();
+    if a.is_pure() {
+        crate::builtins::set_pure(&mut ev);
+    }
     ev.drv.keep_aterm = !j.opts.no_instantiate;
     if let Err(e) = crate::api::configure_lints(&mut ev, &a) {
         report(&ev, &e);

@@ -72,7 +72,7 @@ fn parse(argv: &[String]) -> Result<Develop, String> {
 
 /// `nix develop [INSTALLABLE]`. `rest` is the arguments after the subcommand.
 pub fn main(argv: &[String], rest: &[String]) -> i32 {
-    let d = match parse(rest) {
+    let mut d = match parse(rest) {
         Ok(d) => d,
         Err(reason) => fallback(NAME, argv, &reason),
     };
@@ -80,6 +80,9 @@ pub fn main(argv: &[String], rest: &[String]) -> i32 {
         Ok(t) => t,
         Err(reason) => fallback(NAME, argv, &reason),
     };
+    if let Err(reason) = super::nix::nix_pure(&mut d.c, &cfg, false) {
+        fallback(NAME, argv, &reason)
+    }
     let ev = super::evaluator(&d.c, &cfg);
     let mut a = parse_eval_args(&[]);
     a.includes = d.c.includes.clone();

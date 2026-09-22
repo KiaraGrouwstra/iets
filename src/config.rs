@@ -79,6 +79,17 @@ pub fn user_conf_files() -> Vec<PathBuf> {
     files
 }
 
+/// configuration.cc:BaseSetting<bool>::parse.
+pub fn parse_bool(name: &str, s: &str) -> Result<bool> {
+    match s {
+        "true" | "yes" | "1" => Ok(true),
+        "false" | "no" | "0" => Ok(false),
+        _ => Err(Error::Config(format!(
+            "Boolean setting '{name}' has invalid value '{s}'"
+        ))),
+    }
+}
+
 /// The Nix settings that apply to this process.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Config {
@@ -161,16 +172,8 @@ impl Config {
         }
     }
 
-    /// configuration.cc:BaseSetting<bool>::parse.
     pub fn bool(&self, name: &str) -> Result<Option<bool>> {
-        match self.str(name) {
-            None => Ok(None),
-            Some("true" | "yes" | "1") => Ok(Some(true)),
-            Some("false" | "no" | "0") => Ok(Some(false)),
-            Some(s) => Err(Error::Config(format!(
-                "Boolean setting '{name}' has invalid value '{s}'"
-            ))),
-        }
+        self.str(name).map(|s| parse_bool(name, s)).transpose()
     }
 
     /// A whitespace-separated list setting. Unset is the empty list.

@@ -166,3 +166,68 @@ fn reading_a_derivation_output_is_unsupported() {
         );
     }
 }
+
+fn eval_pure(src: &str) -> Result<String, String> {
+    let mut ev = Evaluator::new();
+    crate::builtins::set_pure(&mut ev);
+    let v = ev
+        .eval_string(src, b"/")
+        .and_then(|v| ev.force_deep(v))
+        .map_err(|e| e.msg)?;
+    let mut out = Vec::new();
+    crate::print::print_ambiguous(&mut ev, v, 1, &mut out, &mut HashSet::new(), 0).unwrap();
+    Ok(String::from_utf8(out).unwrap())
+}
+
+/// The answers of `nix-instantiate --pure-eval --read-write-mode` (Nix 2.34.8).
+#[test]
+fn pure_eval_answers_like_nix() {
+    let ok = |src: &str, want: &str| assert_eq!(eval_pure(src), Ok(want.to_string()), "{src}");
+    let err = |src: &str, want: &str| assert_eq!(eval_pure(src), Err(want.to_string()), "{src}");
+    ok("builtins ? currentSystem", "false");
+    ok("builtins ? currentTime", "false");
+    ok(r#"builtins.getEnv "HOME""#, r#""""#);
+    ok("builtins.nixPath", "[ ]");
+    ok("builtins.pathExists /etc/hostname", "false");
+    ok(r#"builtins.readFile (builtins.toFile "a" "b")"#, r#""b""#);
+    ok(r#"import (builtins.toFile "a.nix" "1")"#, "1");
+    let drv = r#"(derivation { name = "p"; builder = "/bin/sh"; system = "x"; })"#;
+    ok(&format!("(import {drv}.drvPath).name"), r#""p""#);
+    err(
+        "builtins.currentSystem",
+        "attribute 'currentSystem' missing",
+    );
+    err("__currentSystem", "undefined variable '__currentSystem'");
+    err(
+        "<nixpkgs>",
+        "cannot look up '<nixpkgs>' in pure evaluation mode (use '--impure' to override)",
+    );
+    err(
+        "builtins.readFile /etc/hostname",
+        "access to absolute path '/etc/hostname' is forbidden in pure evaluation mode (use '--impure' to override)",
+    );
+    err(
+        &format!("builtins.readFile {drv}.drvPath"),
+        "access to absolute path '/nix/store/z4c1kxpa2xx2wq9gyqmmmxfvxl4fcjax-p.drv' is forbidden in pure evaluation mode (use '--impure' to override)",
+    );
+    err(
+        "builtins.storePath /nix/store/ah3pxz4xa52hd6vhbx17vcsci0b8bmbr-source",
+        "'builtins.storePath' is not allowed in pure evaluation mode",
+    );
+    err(
+        r#"builtins.fetchTarball "https://example.com/x.tar.gz""#,
+        "in pure evaluation mode, 'fetchTarball' requires a 'sha256' argument",
+    );
+    err(
+        r#"builtins.fetchTree { type = "tarball"; url = "https://example.com/x.tar.gz"; }"#,
+        "in pure evaluation mode, 'fetchTree' doesn't fetch unlocked input 'https://example.com/x.tar.gz'",
+    );
+    err(
+        r#"builtins.fetchTree { type = "github"; owner = "o"; repo = "r"; ref = "main"; }"#,
+        "in pure evaluation mode, 'fetchTree' doesn't fetch unlocked input 'github:o/r/main'",
+    );
+    err(
+        r#"builtins.getFlake "/tmp""#,
+        "cannot call 'getFlake' on unlocked flake reference '/tmp', at «none»:0 (use --impure to override)",
+    );
+}

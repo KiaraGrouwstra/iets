@@ -22,6 +22,8 @@ const NAME: &str = "nix";
 /// `global_flag` applies them; `find_sub` only needs the arity.
 const GLOBALS: &[(&str, usize)] = &[
     ("--impure", 0),
+    ("--pure-eval", 0),
+    ("--no-pure-eval", 0),
     ("--accept-flake-config", 0),
     ("--show-trace", 0),
     ("--experimental-features", 1),
@@ -107,10 +109,12 @@ pub(super) fn global_flag(c: &mut Common, a: &mut Argv, s: &str) -> Result<bool,
         v.push(a.value(s)?);
     }
     match s {
-        "--impure" | "--accept-flake-config" => {}
+        "--accept-flake-config" => {}
+        "--pure-eval" => c.pure = Some(true),
+        "--impure" | "--no-pure-eval" => c.pure = Some(false),
         "--experimental-features" | "--extra-experimental-features" => {}
         "--show-trace" => c.show_trace = true,
-        "--option" => c.overrides.push((v[0].clone(), v[1].clone())),
+        "--option" => super::option(c, v[0].clone(), v[1].clone())?,
         "-I" | "--include" => c.includes.push(parse_include(&v[0])),
         "--arg" => c.args.push((v[0].clone(), ArgKind::Expr(v[1].clone()))),
         "--argstr" => c.args.push((v[0].clone(), ArgKind::Str(v[1].clone()))),
@@ -215,8 +219,25 @@ enum Run {
     Ready(Vec<Target>, Box<Plan>),
 }
 
+/// main.cc: the `nix` command evaluates purely unless a flag says otherwise;
+/// nix.conf's `pure-eval` does not change that, it only counts as set.
+/// installables.cc: `--file` is impure, and refuses a `pure-eval` set anywhere.
+pub(super) fn nix_pure(
+    c: &mut super::Common,
+    cfg: &crate::config::Config,
+    file: bool,
+) -> Result<(), String> {
+    let set = c.pure.is_some() || cfg.bool("pure-eval").ok().flatten().is_some();
+    let pure = c.pure.unwrap_or(true);
+    if file && pure && set {
+        return Err("'--file' is not compatible with '--pure-eval'".into());
+    }
+    c.pure = Some(pure && !file);
+    Ok(())
+}
+
 fn eval_main(argv: &[String], rest: &[String]) -> i32 {
-    let n = match parse_eval(rest) {
+    let mut n = match parse_eval(rest) {
         Ok(n) => n,
         Err(reason) => fallback(NAME, argv, &reason),
     };
@@ -224,6 +245,9 @@ fn eval_main(argv: &[String], rest: &[String]) -> i32 {
         Ok(t) => t,
         Err(reason) => fallback(NAME, argv, &reason),
     };
+    if let Err(reason) = nix_pure(&mut n.c, &cfg, n.file.is_some()) {
+        fallback(NAME, argv, &reason)
+    }
     let ev = super::evaluator(&n.c, &cfg);
     let n = Arc::new(n);
     let run = Arc::clone(&n);
@@ -283,7 +307,7 @@ fn eval_run(ev: &mut Evaluator, n: &Nix) -> Run {
 }
 
 fn build_main(argv: &[String], rest: &[String]) -> i32 {
-    let n = match parse_build(rest) {
+    let mut n = match parse_build(rest) {
         Ok(n) => n,
         Err(reason) => fallback(NAME, argv, &reason),
     };
@@ -291,6 +315,9 @@ fn build_main(argv: &[String], rest: &[String]) -> i32 {
         Ok(t) => t,
         Err(reason) => fallback(NAME, argv, &reason),
     };
+    if let Err(reason) = nix_pure(&mut n.c, &cfg, n.file.is_some()) {
+        fallback(NAME, argv, &reason)
+    }
     let ev = super::evaluator(&n.c, &cfg);
     let n = Arc::new(n);
     let run = Arc::clone(&n);
@@ -346,6 +373,8 @@ fn dev_env_main(argv: &[String], rest: &[String]) -> i32 {
     if flakes > 1 {
         fallback(NAME, argv, "'nix print-dev-env' takes one installable");
     }
+    // no flag reached here, so main.cc's default stands
+    pass.push("--pure-eval".into());
     crate::cli::devenv::cmd_print_dev_env(&pass)
 }
 

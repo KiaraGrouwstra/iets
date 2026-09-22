@@ -286,6 +286,25 @@ def main [] {
     (run-both $farm nix eval $fref)))
   $ok = ($ok | append (cmp-case "nix eval --expr"
     (run-both $farm nix eval --expr "{ a = 1; b = [ 1 2 ]; c = \"x\"; d = 123456789.5; }")))
+  # --- pure-eval (docs/pure-eval.md): `nix` is pure unless told otherwise,
+  # `--file` is impure, and the legacy names are impure.
+  let env_expr = 'builtins.getEnv "HOME"'
+  $env_expr | save -f $"($tmp)/env.nix"
+  let pure_probe = '[ (builtins ? currentSystem) (builtins.getEnv "HOME") builtins.nixPath ]'
+  for case in [
+    [label args];
+    ["nix eval --expr is pure" [nix eval --expr $env_expr]]
+    ["nix eval --impure --expr" [nix eval --impure --expr $env_expr]]
+    ["nix --option pure-eval false eval --expr" [nix --option pure-eval false eval --expr $env_expr]]
+    ["nix eval -f is impure" [nix eval -f $"($tmp)/env.nix"]]
+    ["nix eval .#x is pure" [nix eval $"($fref)#x"]]
+    ["nix-instantiate is impure" [nix-instantiate --eval -E $env_expr]]
+    ["nix-instantiate --pure-eval" [nix-instantiate --pure-eval --eval --strict -E $pure_probe]]
+    ["nix-instantiate --option pure-eval true" [nix-instantiate --option pure-eval true --eval --strict -E $pure_probe]]
+    ["nix-instantiate --pure-eval refuses a local file" [nix-instantiate --pure-eval --eval -E "builtins.readFile /etc/hostname"]]
+  ] {
+    $ok = ($ok | append (cmp-case $case.label (run-both $farm ($case.args | first) ...($case.args | skip 1))))
+  }
   $ok = ($ok | append (cmp-case "nix eval --expr, a nested error"
     (run-both $farm nix eval --expr "{ a = throw \"boom\"; b = 1; }")))
   $ok = ($ok | append (cmp-case "nix eval --expr, repeated and empty values"

@@ -36,6 +36,11 @@ pub struct EvalArgs {
     /// `eval-jobs --flake DIR` with no fragment: the whole `callFlake` result,
     /// not its `outputs`.
     pub flake_whole: bool,
+    /// `--impure`: beats `pure_eval`, as `common-eval-args.cc` does.
+    pub impure: bool,
+    /// `--pure-eval`, `--no-pure-eval` or `--option pure-eval`; `None` when
+    /// none was given (docs/pure-eval.md).
+    pub pure_eval: Option<bool>,
 }
 
 impl Default for EvalArgs {
@@ -60,6 +65,8 @@ impl Default for EvalArgs {
             no_ir_cache: !cache,
             cache_dir: None,
             flake_whole: false,
+            impure: false,
+            pure_eval: None,
         }
     }
 }
@@ -67,6 +74,10 @@ impl Default for EvalArgs {
 impl EvalArgs {
     pub fn new() -> EvalArgs {
         EvalArgs::default()
+    }
+
+    pub fn is_pure(&self) -> bool {
+        !self.impure && self.pure_eval == Some(true)
     }
 }
 
@@ -168,7 +179,11 @@ pub fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
     if a.xp_features.iter().any(|f| f == "parse-toml-timestamps") {
         crate::builtins::text::set_parse_toml_timestamps(true);
     }
-    crate::builtins::set_search_path(ev, full_includes(&a.includes));
+    if a.is_pure() || ev.pure {
+        crate::builtins::set_pure(ev);
+    } else {
+        crate::builtins::set_search_path(ev, full_includes(&a.includes));
+    }
     if let Some(dir) = &a.dump_drvs {
         std::fs::create_dir_all(dir).map_err(|e| {
             Error::boxed(
@@ -306,6 +321,9 @@ pub fn setup_cache(a: &EvalArgs, subcommand: &str, ev: &Evaluator) -> Option<Cac
     }
     let cwd = cwd();
     let mut k = Key::new(subcommand);
+    if a.is_pure() {
+        k.field("pure-eval", b"1");
+    }
     let mut needs_cwd = false;
     match a.input.as_ref()? {
         Input::Expr(e) => {

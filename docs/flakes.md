@@ -20,8 +20,9 @@
   A `flake.nix` input whose URL changed without re-locking is not detected;
   the lock wins.
 - `builtins.getFlake REF` takes an absolute `/abs` or `path:/abs` and
-  returns what `callFlake` returns, as Nix does with `--impure` (ietsp has
-  no pure mode). REF is always a `path:` input, also inside a git
+  returns what `callFlake` returns. It is impure only: every REF ietsp
+  resolves is unlocked, which pure evaluation refuses (`docs/pure-eval.md`).
+  REF is always a `path:` input, also inside a git
   repository, because flakeref.cc looks for `.git` only when it has a base
   directory and getFlake passes none. A relative REF and a `#fragment` are
   errors, as in Nix. A virtual copy (`"${./.}"` without its context) stands

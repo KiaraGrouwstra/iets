@@ -84,7 +84,15 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
                     .unwrap_or_else(|| usage());
             }
             "--option" => {
-                // accepted for nix-instantiate compatibility; ignored
+                let (Some(name), Some(v)) = (argv.get(i + 1), argv.get(i + 2)) else {
+                    usage()
+                };
+                if name == "pure-eval" {
+                    a.pure_eval = Some(crate::config::parse_bool(name, v).unwrap_or_else(|e| {
+                        eprintln!("error: {e}");
+                        usage()
+                    }));
+                }
                 i += 2;
             }
             "--lint" => {
@@ -112,7 +120,10 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
                 };
                 a.lints.push((s[2..].to_string(), level));
             }
-            "--impure" | "--pure-eval" | "--readonly-mode" => {}
+            "--impure" => a.impure = true,
+            "--pure-eval" => a.pure_eval = Some(true),
+            "--no-pure-eval" => a.pure_eval = Some(false),
+            "--readonly-mode" => {}
             "--extra-experimental-features" | "--experimental-features" => {
                 i += 1;
                 let v = argv.get(i).unwrap_or_else(|| usage());

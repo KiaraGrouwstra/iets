@@ -221,7 +221,7 @@ identical, exit codes included.
 | `FILE`, `-E`/`--expr EXPR` | identical | The argument is a file unless `--flake`; the top level is auto-called with the `--arg`s like `releaseExprTopLevelValue`. |
 | `--arg`, `--argstr`, `--arg-from-file`, `--arg-from-stdin` | identical | |
 | `-I`, `--include` | identical | |
-| `--flake REF[#attr]` | identical for locked local flakes | `REF` is a directory (`.`, `./x`, `path:/x`); the fragment is looked up in `outputs` verbatim. Without a fragment the root is the `callFlake` result (`_type`, `inputs`, `outputs`, `sourceInfo`), to be `--select`ed like nix-eval-jobs. Registries, unlocked inputs and pure evaluation are out of scope (`docs/flakes.md`). |
+| `--flake REF[#attr]` | identical for locked local flakes | `REF` is a directory (`.`, `./x`, `path:/x`); the fragment is looked up in `outputs` verbatim. Without a fragment the root is the `callFlake` result (`_type`, `inputs`, `outputs`, `sourceInfo`), to be `--select`ed like nix-eval-jobs. Registries and unlocked inputs are out of scope (`docs/flakes.md`); evaluation is pure unless `--impure` (`docs/pure-eval.md`). |
 | `--force-recurse`, `--meta`, `--show-input-drvs` | identical | |
 | instantiation (the default) | identical result | nix-eval-jobs writes every `.drv` inside `derivationStrict`; ietsp registers the job drvs and their closures in batches on a thread beside the walk (below). |
 | `--no-instantiate` | identical | `system` from the `system` attribute (`unknown` without one), no `requiredSystemFeatures`, no `inputDrvs`, no roots; refused together with `--show-input-drvs`, `--check-cache-status` or `--constituents`, same message. |
@@ -234,7 +234,7 @@ identical, exit codes included.
 | `--workers N` | different meaning | Worker processes (default 4; nix-eval-jobs: 1), or fibers of one process with `--max-memory-size 0`. |
 | `--max-memory-size MB` | identical default | Worker processes restarted above `MB`, 4096 like nix-eval-jobs (below). `0` is ietsp's own: one process with no ceiling, which no jobset larger than the box can finish. |
 | `--chunks M --chunk N`, `--chunk-depth D` | ietsp only | See above. |
-| `--impure` | accepted | ietsp never enforces pure evaluation. |
+| `--impure` | identical | Turns off the pure evaluation `--flake` implies (`docs/pure-eval.md`). |
 | `--show-trace` | accepted | The trace is always in the error text. |
 | `--option k v` | accepted, ignored | `restrict-eval`, `allow-import-from-derivation` (IFD is unsupported anyway), `eval-cache`, substituters: none takes effect. |
 | `--quiet`, `--verbose`, `--debug` | accepted | `--quiet` drops the stderr summary. |
@@ -597,8 +597,9 @@ is a plain job on both sides (`namedConstituents: []` without
   `… while` chain) would have to be copied for parity.
 - **Flakes**: locked local flakes only. `--override-input`,
   `--override-flake`, `--reference-lock-file` error; registries and
-  `github:` references are not fetched; `--flake` does not switch to
-  pure evaluation. `--option restrict-eval true` (Hydra) is ignored:
+  `github:` references are not fetched. `--flake` switches to pure
+  evaluation unless `--impure` is given, as in nix-eval-jobs
+  (`docs/pure-eval.md`). `--option restrict-eval true` (Hydra) is ignored:
   ietsp reads any path.
 - **`--eval-store`** other than the local daemon: instantiation works
   over `ssh-ng://`, but `--check-cache-status` and `--constituents` read

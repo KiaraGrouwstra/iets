@@ -132,9 +132,55 @@ fn collect_attrs(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Attrs> {
     Ok(out)
 }
 
+/// fetchTree.cc:fetchTree: a pure evaluation refuses an input that is not
+/// locked (a `narHash` for `path` and `tarball`, a `rev` for the rest). The
+/// message names the input the way `Input::to_string` does; where ietsp does
+/// not print that name like Nix (`git` adds `?shallow=1`), it is unsupported
+/// and classic mode falls back.
+fn check_locked(attrs: &Attrs, pos: Pos) -> EvalResult<()> {
+    let ty = str_attr(attrs, "type").unwrap_or("");
+    let locked = match ty {
+        "path" | "tarball" => attrs.contains_key("narHash"),
+        _ => attrs.contains_key("rev"),
+    };
+    if locked {
+        return Ok(());
+    }
+    let only = |keys: &[&str]| attrs.keys().all(|k| keys.contains(&k.as_str()));
+    let shown = match ty {
+        "path" if only(&["type", "path"]) => str_attr(attrs, "path").map(|p| format!("path:{p}")),
+        "tarball" if only(&["type", "url"]) => str_attr(attrs, "url").map(str::to_string),
+        "github" | "gitlab" | "sourcehut" if only(&["type", "owner", "repo", "ref"]) => {
+            match (str_attr(attrs, "owner"), str_attr(attrs, "repo")) {
+                (Some(o), Some(r)) => Some(match str_attr(attrs, "ref") {
+                    Some(f) => format!("{ty}:{o}/{r}/{f}"),
+                    None => format!("{ty}:{o}/{r}"),
+                }),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    match shown {
+        Some(s) => bail!(
+            ErrorKind::Eval,
+            pos,
+            "in pure evaluation mode, 'fetchTree' doesn't fetch unlocked input '{s}'"
+        ),
+        None => bail!(
+            ErrorKind::Unsupported,
+            pos,
+            "ietsp: an unlocked '{ty}' input in pure evaluation mode is not supported"
+        ),
+    }
+}
+
 pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     crate::lint::purity::unhashed_fetch(ev, "fetchTree", args[0], pos)?;
     let mut attrs = collect_attrs(ev, args[0], pos)?;
+    if ev.pure {
+        check_locked(&attrs, pos)?;
+    }
     let ty = str_attr(&attrs, "type").unwrap_or("").to_string();
     let sp = match ty.as_str() {
         "path" => {
@@ -264,6 +310,13 @@ pub fn fetch_tarball_builtin(ev: &mut Evaluator, args: &[Word], pos: Pos) -> Eva
         Some(c) => format!("https://channels.nixos.org/{c}/nixexprs.tar.xz"),
         None => url,
     };
+    if ev.pure && sha256.is_none() {
+        bail!(
+            ErrorKind::Eval,
+            pos,
+            "in pure evaluation mode, 'fetchTarball' requires a 'sha256' argument"
+        );
+    }
     let Some(hash) = sha256
         .filter(|h| !h.is_empty())
         .and_then(|h| Hash::parse_any(&h, Some(HashAlgo::Sha256)).ok())
@@ -421,6 +474,7 @@ pub fn ensure_readable(
     attrs: &Attrs,
     pos: Pos,
 ) -> EvalResult<()> {
+    ev.allowed.insert(sp.clone(), ());
     let full = sp.to_full_string();
     let on_disk = crate::trace::stat_kind(Path::new(&full), true);
     if on_disk != crate::trace::Kind::Missing {

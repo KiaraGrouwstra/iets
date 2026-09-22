@@ -250,6 +250,7 @@ enum Real {
 /// `path '...' does not exist`.
 fn realise_existing(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Real> {
     let p = realise_path(ev, w, pos)?;
+    store_hooks::check_access(ev, &p, pos)?;
     match store_hooks::locate(ev, &p) {
         store_hooks::Access::Store => Ok(Real::Fs(p, None)),
         store_hooks::Access::Local { path, accepted } => {
@@ -389,6 +390,9 @@ fn path_exists(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> 
         Value::String(s) if s.bytes.ends_with(b"/") || s.bytes.ends_with(b"/.")
     );
     let p = realise_path(ev, w, pos)?;
+    if !store_hooks::allowed(ev, &p) {
+        return Ok(Word::FALSE);
+    }
     crate::lint::coerce::read_through_copy(ev, &p, pos)?;
     let p = match store_hooks::whence(ev, &p) {
         Some(store_hooks::Whence::Fs(p)) => p,
@@ -448,6 +452,13 @@ fn to_store_path(p: &[u8]) -> Option<(Result<StorePath, ()>, &[u8])> {
 }
 
 fn store_path(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
+    if ev.pure {
+        bail!(
+            ErrorKind::Eval,
+            pos,
+            "'builtins.storePath' is not allowed in pure evaluation mode"
+        );
+    }
     let mut ctx = Vec::new();
     let mut p = coerce_to_path(
         ev,
@@ -553,8 +564,10 @@ fn add_path_inner(
     if let Some(sp) = &expected_sp
         && ev.trace.stat_now(sp.to_full_string().as_bytes(), true) != crate::trace::Kind::Missing
     {
+        ev.allowed.insert(sp.clone(), ());
         return Ok(sp.clone());
     }
+    store_hooks::check_access(ev, path, pos)?;
     // A path under a tree this evaluation copied reads the local tree, with
     // that tree's filter applied before this call's `filter`; the filter
     // function still sees the store path Nix would show it.

@@ -74,6 +74,8 @@ Around it:
   HTTP client and the tarball spool (`docs/flakes.md`).
 - `inputs.rs`: the input store, where a fetched flake input lives.
 - `trace/`: the tracing evaluation cache (`docs/tracing-cache.md`).
+- `pure-eval`: `Evaluator::pure`, set by `builtins::set_pure`, checked by
+  `builtins::store_hooks::check_access` (`docs/pure-eval.md`).
 - `lint/`: the lint registry (name, family, hook, default level, doc), the
   level resolution (`ietsp.toml`, `IETSP_LINT`, `--lint`), the emission with
   per-site deduplication, and one file per family with the triggers the

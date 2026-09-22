@@ -155,6 +155,11 @@ pub struct Evaluator {
     /// The eval store, opened on the first flake input that is missing from it
     /// (`flake::fetch`).
     pub store: crate::flake::fetch::LazyStore,
+    /// `pure-eval` (docs/pure-eval.md); set by `builtins::set_pure`.
+    pub pure: bool,
+    /// Store paths a fetch found in `/nix/store`: with `sources`, the paths a
+    /// pure evaluation may read (eval.cc:allowPath).
+    pub allowed: crate::parallel::shared::SharedMap<crate::store::path::StorePath, ()>,
 }
 
 macro_rules! bail {
@@ -218,6 +223,8 @@ impl Evaluator {
             trace: Default::default(),
             ir_cache: None,
             store: Default::default(),
+            pure: false,
+            allowed: Default::default(),
         };
         crate::builtins::install(&mut ev);
         ev
@@ -445,6 +452,7 @@ impl Evaluator {
         if p.starts_with(CorePkgs::PREFIX) {
             return Ok(p);
         }
+        crate::builtins::store_hooks::check_access(self, &p, pos)?;
         crate::lint::coerce::read_through_copy(self, &p, pos)?;
         match crate::inputs::import_is_dir(self, &p) {
             Ok(true) => p.extend_from_slice(b"/default.nix"),
@@ -472,6 +480,7 @@ impl Evaluator {
             None => (name, &b""[..]),
         };
         for (prefix, path) in entries {
+            crate::builtins::store_hooks::check_access(self, path, pos)?;
             let candidate = if prefix.is_empty() {
                 let mut c = path.clone();
                 c.push(b'/');
@@ -494,6 +503,14 @@ impl Evaluator {
             let mut p = CorePkgs::PREFIX.to_vec();
             p.extend_from_slice(&rest[1..]);
             return Ok(p);
+        }
+        if self.pure {
+            bail!(
+                ErrorKind::Throw,
+                pos,
+                "cannot look up '<{}>' in pure evaluation mode (use '--impure' to override)",
+                String::from_utf8_lossy(name)
+            )
         }
         bail!(
             ErrorKind::Throw,

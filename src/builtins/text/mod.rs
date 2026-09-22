@@ -289,6 +289,7 @@ fn hash_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         "while evaluating the first argument passed to builtins.hashFile",
     )?;
     let path = crate::builtins::paths::realise_path(ev, args[1], pos)?;
+    crate::builtins::store_hooks::check_access(ev, &path, pos)?;
     crate::lint::coerce::read_through_copy(ev, &path, pos)?;
     // `read_source` is the one reader: a file on disk, the local original of a
     // virtual copy, or a member of a fetched input's spool (`crate::inputs`).
@@ -530,6 +531,9 @@ fn get_env(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         "while evaluating the first argument passed to builtins.getEnv",
     )?;
     crate::lint::purity::get_env(ev, name, pos)?;
+    if ev.pure {
+        return Ok(ev.mk_string(b""));
+    }
     let os = <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(name);
     ev.trace.env(name);
     let v = std::env::var_os(os).unwrap_or_default();

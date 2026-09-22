@@ -172,7 +172,8 @@ files. See `docs/fast-build.md`.
 Four subcommands; every other one execs the real `nix`.
 
 `nix eval [INSTALLABLE]`: `--json`, `--raw`, `--expr E`, `-f`/`--file FILE`,
-`--impure` (accepted; ietsp is impure already), `-I`, `--arg`/`--argstr`,
+`--impure`, `--pure-eval`, `--no-pure-eval` (`docs/pure-eval.md`: `nix`
+evaluates purely unless told otherwise, `-f` is impure), `-I`, `--arg`/`--argstr`,
 `--option`, `--store`, `--show-trace`, `--experimental-features` and
 `--extra-experimental-features` (accepted and ignored),
 `--accept-flake-config` (ignored).
@@ -338,9 +339,6 @@ honoured; any other store falls back.
 - `--add-root` does not refuse a link that already exists and points
   outside the store; it replaces it.
 - The tracing cache (`docs/tracing-cache.md`) is off in classic mode.
-- `nix eval` and `nix build` are always impure. The real `nix eval --expr`
-  keeps `pure-eval` on, so it refuses to copy a path to the store, and
-  `nix eval --raw ./.` fails where ours prints the store path.
 - `nix eval` does not register the derivations it evaluates. The real one
   writes the `.drv` files while computing `drvPath`.
 - `nix build` prints the log lines only with `-L`. The real one shows the

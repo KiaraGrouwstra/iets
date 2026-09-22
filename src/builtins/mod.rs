@@ -131,6 +131,35 @@ pub fn install(ev: &mut Evaluator) {
     ev.globals.table.insert(derivation_sym, d);
 }
 
+/// `pure-eval`: the `impureOnly` constants (`currentSystem`, `currentTime`)
+/// are gone from `builtins` and the globals, and the search path is empty,
+/// `-I` included (eval.cc:EvalState). Call before anything is compiled.
+pub fn set_pure(ev: &mut Evaluator) {
+    ev.pure = true;
+    set_search_path(ev, Vec::new());
+    let gone = [ev.sym(b"currentSystem"), ev.sym(b"currentTime")];
+    for g in [b"__currentSystem".as_slice(), b"__currentTime"] {
+        let s = ev.sym(g);
+        ev.globals.table.remove(&s);
+    }
+    let builtins_sym = ev.sym(b"builtins");
+    let old = ev.globals.builtins.expect("builtins installed");
+    let mut entries: Vec<(Sym, Pos, Word)> = old
+        .iter()
+        .filter(|a| !gone.contains(&a.sym))
+        .map(|a| (a.sym, Pos::NONE, a.cell.get()))
+        .collect();
+    let bw = ev
+        .arena
+        .mk_attrs(&mut entries)
+        .expect("builtin names are unique");
+    let battrs = bw.as_attrs().unwrap();
+    battrs.get(builtins_sym).unwrap().cell.set(bw);
+    ev.builtins_word = bw;
+    ev.globals.table.insert(builtins_sym, bw);
+    ev.globals.builtins = Some(battrs);
+}
+
 /// Install `-I`/`NIX_PATH` entries and refresh `builtins.nixPath`.
 pub fn set_search_path(ev: &mut Evaluator, entries: Vec<(Vec<u8>, Vec<u8>)>) {
     let mut items = Vec::with_capacity(entries.len());

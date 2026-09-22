@@ -273,9 +273,9 @@ pub fn eval_flake_value(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
 }
 
 /// flake-primops.cc:prim_getFlake on the references `parse_flake_ref` takes.
-/// ietsp has no pure mode, so an unlocked reference is accepted as under
-/// `--impure`; the flake still needs a complete `flake.lock`, because nothing
-/// is locked here. A directory is always a `path:` input, even inside a git
+/// Impure only: every reference ietsp resolves is unlocked, which a pure
+/// evaluation refuses. The flake still needs a complete `flake.lock`,
+/// because nothing is locked here. A directory is always a `path:` input, even inside a git
 /// repository: flakeref.cc looks for `.git` only when it has a base
 /// directory, and getFlake passes none. A virtual copy stands for its local
 /// tree.
@@ -304,6 +304,31 @@ pub fn get_flake(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word
             format!("flake reference '{s}' is not an absolute path"),
             pos,
         ));
+    }
+    if ev.pure {
+        // a `?query` or a 40-digit rev may lock it; the real nix decides those
+        let maybe_locked = loc.contains('?')
+            || loc
+                .split(|c: char| !c.is_ascii_hexdigit())
+                .any(|run| run.len() == 40);
+        return Err(if maybe_locked {
+            EvalError::boxed(
+                ErrorKind::Unsupported,
+                format!(
+                    "ietsp: builtins.getFlake on '{s}' in pure evaluation mode is not supported"
+                ),
+                pos,
+            )
+        } else {
+            // flake-primops.cc prints the primop's position, which it never has
+            EvalError::boxed(
+                ErrorKind::Eval,
+                format!(
+                    "cannot call 'getFlake' on unlocked flake reference '{s}', at «none»:0 (use --impure to override)"
+                ),
+                pos,
+            )
+        });
     }
     let arg = match locate(ev, path.as_bytes()) {
         Access::Local { path, .. } => format!("path:{}", path.display()),
