@@ -52,6 +52,32 @@ Nix returns a copy of the unforced argument thunk; inside a list,
 argument and prints the value. Selecting from the result behaves the same
 in both.
 
+## Unforced values in lazy positions
+
+In a list element, an attribute value, a `let` binding or a function
+argument, Nix makes a thunk of every expression except a literal and an
+already evaluated variable (`Expr::maybeThunk`). ietsp keeps a value there
+instead of a thunk when it costs nothing to have it: a lambda, a folded
+`builtins.x`, an attribute of an attrset that is already forced, and `+`
+or `-` on ints that are already forced (`Evaluator::maybe_thunk`,
+`Compiler::fold_builtins_select`). The results are the same; only a
+printer that stops at thunks can see it. `nix-instantiate --eval` without
+`--strict` prints `[ builtins.nixPath (1 + 1) (x: x) ]` as
+`[ <CODE> <CODE> <CODE> ]`, ietsp as `[ [ ] 2 <LAMBDA> ]`. These are
+speed shortcuts, kept on purpose; `--strict`, `--json` and `nix eval`
+print the same.
+
+## Experimental-feature builtins
+
+Nix leaves `fetchTree` out of `builtins` unless `fetch-tree` or `flakes`
+is on, `fetchClosure` unless `fetch-closure` is, and `outputOf` unless
+`dynamic-derivations` is (`experimental-features` in nix.conf or
+`--extra-experimental-features`). ietsp always has all three, so
+`builtins ? fetchTree` is true under ietsp where nix, with no feature
+on, says false; code that branches on it (flake-compat) takes the
+`fetchTree` branch. `builtins.fetchClosure` and `builtins.outputOf` are
+unsupported either way, so classic mode falls back when they are called.
+
 ## Classic mode
 
 `nix-instantiate`, `nix-build` and `nix-eval-jobs` under Nix's own names
