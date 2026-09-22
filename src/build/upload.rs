@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 use crate::builtins::derivation::DrvInfo;
 use crate::error::{Error, Result};
+use crate::eval::Known;
 use crate::parallel::shared::SharedMap;
 use crate::remote::event::Event;
 use crate::remote::plan::{Locator, Node, Object, Plan, SourceInfo};
@@ -158,14 +159,14 @@ impl Uploader for PlanUpload<'_> {
 /// already known to hold.
 pub struct StreamUpload {
     drvs: SharedMap<StorePath, DrvInfo>,
-    sources: SharedMap<StorePath, SourceOrigin>,
+    sources: SharedMap<StorePath, Known>,
     valid: HashSet<StorePath>,
 }
 
 impl StreamUpload {
     pub fn new(
         drvs: SharedMap<StorePath, DrvInfo>,
-        sources: SharedMap<StorePath, SourceOrigin>,
+        sources: SharedMap<StorePath, Known>,
     ) -> StreamUpload {
         StreamUpload {
             drvs,
@@ -184,7 +185,7 @@ impl StreamUpload {
         let (drvs, srcs, _) =
             crate::remote::plan::walk(roots, known, &|p| self.drvs.get(p), &|p| match self
                 .sources
-                .get(p)
+                .origin(p)
             {
                 Some(SourceOrigin::Text { references, .. }) => Some(references),
                 _ => None,
@@ -195,7 +196,7 @@ impl StreamUpload {
     /// Where to read a source and how it was addressed: from the evaluation,
     /// else from the local store, else `None` and the builder substitutes it.
     fn source_info(&self, p: &StorePath) -> Result<Option<SourceInfo>> {
-        if let Some(origin) = self.sources.get(p) {
+        if let Some(origin) = self.sources.origin(p) {
             return Ok(Some(crate::remote::plan::source_info(&origin)));
         }
         let found = crate::store::locate::locate_in_store(

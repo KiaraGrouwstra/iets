@@ -566,8 +566,8 @@ pub fn copy_to_store(
     };
     let full = ev.arena.alloc_bytes(sp.to_full_string().as_bytes());
     ev.src_to_store.insert(path.to_vec(), full);
-    ev.sources
-        .insert(sp, origin(base.base_name(), rel, nar.0, nar.1));
+    ev.known
+        .add(sp, origin(base.base_name(), rel, nar.0, nar.1));
     Ok(full)
 }
 

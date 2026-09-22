@@ -262,7 +262,7 @@ Differences that stay:
 thread that holds one daemon connection. Every 256 jobs (or at the end)
 it computes the closure of the batch's `drvPath`s from the evaluator's
 derivation table (ATerm and references; an imported `.drv` is read from
-`/nix/store`) and the sources they reference (`ev.sources`: local trees
+`/nix/store`) and the sources they reference (origins in `ev.known`: local trees
 and `toFile` texts, hashed on the way), stops at paths already known
 valid, asks `QueryValidPaths` once, sends what is missing in one
 `AddMultipleToStore` (sources first, drvs in post-order, the same

@@ -406,7 +406,7 @@ fn dev_env_build(ev: &mut Evaluator, a: EvalArgs, d: &DevEnvArgs) -> Result<DevE
                 attr: None,
             },
         );
-        ev.sources.insert(
+        ev.known.add(
             devenv::get_env_sh_path(),
             SourceOrigin::Text {
                 contents: devenv::GET_ENV_SH.as_bytes().to_vec(),
@@ -449,7 +449,7 @@ fn dev_env_build(ev: &mut Evaluator, a: EvalArgs, d: &DevEnvArgs) -> Result<DevE
             let locate = |paths: &[StorePath]| locate_in_store(paths, &no_overrides);
             let plan = {
                 let drvs = ev.drv.drvs.lock();
-                let sources = ev.source_origins();
+                let sources = ev.known.origins();
                 let inputs = crate::remote::plan::Inputs {
                     drvs: &drvs,
                     sources: &sources,

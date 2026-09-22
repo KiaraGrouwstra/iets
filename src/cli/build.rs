@@ -144,7 +144,7 @@ fn build_eval(
         eprintln!(
             "eval: {} derivations, {} sources, {:.3}s",
             ev.drv.nr_derivations,
-            ev.source_origins().len(),
+            ev.known.origins().len(),
             eval_time.as_secs_f64()
         );
     }
@@ -154,7 +154,7 @@ fn build_eval(
     let (root_paths, outputs) = build_targets(&b.outputs, &roots);
     let prov = crate::provenance::Provenance::snapshot(ev);
     let drvs = ev.drv.drvs.lock();
-    let sources = ev.source_origins();
+    let sources = ev.known.origins();
     let inputs = crate::remote::plan::Inputs {
         drvs: &drvs,
         sources: &sources,

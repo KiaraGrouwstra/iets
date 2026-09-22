@@ -30,7 +30,7 @@ module it belongs to) and let `cli` call it there.
 | A drv's attribute path and position | `DrvInfo::attr`, `DrvInfo::pos`; `DrvState::set_attr` records the walk |
 | Position to file:line:col | `provenance::describe_pos`, else `Evaluator::describe_pos` |
 | Store paths back to local trees | `provenance::Provenance::snapshot(ev)` |
-| Sources this run copied in | `Evaluator::source_origins()` |
+| Sources this run copied in | `Evaluator::known.origins()` |
 | Derivation roots of a value | `store::locate::drv_roots` |
 | Outputs to build | `api::build_targets(wanted, roots)` |
 | Upload plan | `remote::plan::plan(roots, Inputs { drvs, sources })`; `Plan::resolve(missing, &locate)` with `store::locate::locate_in_store` |

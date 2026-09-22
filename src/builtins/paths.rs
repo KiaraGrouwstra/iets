@@ -563,7 +563,7 @@ fn add_path_inner(
     if let Some(sp) = &expected_sp
         && ev.trace.stat_now(sp.to_full_string().as_bytes(), true) != crate::trace::Kind::Missing
     {
-        ev.allowed.insert(sp.clone(), ());
+        ev.known.lock().entry(sp.clone()).or_default();
         return Ok(sp.clone());
     }
     // A path under a tree this evaluation copied reads the local tree, with
@@ -698,7 +698,7 @@ fn add_path_inner(
     let sp = make_fixed_output_path(method, &hash, name, &refs).map_err(store_err)?;
     if method == IngestionMethod::Recursive {
         ev.lints.note_copy(sp.to_full_string().as_bytes());
-        ev.sources.insert(
+        ev.known.add(
             sp.clone(),
             SourceOrigin::Tree {
                 local: resolved,
@@ -884,7 +884,7 @@ fn to_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let h = hash_bytes(HashAlgo::Sha256, contents.bytes);
     let sp = make_text_path(utf8(name, pos)?, &h, &refs)
         .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, pos))?;
-    ev.sources.insert(
+    ev.known.add(
         sp.clone(),
         SourceOrigin::Text {
             contents: contents.bytes.to_vec(),
@@ -970,7 +970,7 @@ fn finish_added(
     let sp = make_fixed_output_path(method, hash, name, &BTreeSet::new())
         .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, pos))?;
     if method == IngestionMethod::Recursive {
-        ev.sources.insert(
+        ev.known.add(
             sp.clone(),
             crate::inputs::origin(base.base_name(), rel, *hash, nar_size),
         );

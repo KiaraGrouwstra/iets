@@ -71,7 +71,7 @@ pub fn locate(ev: &Evaluator, path: &[u8]) -> Access {
     let Ok(sp) = StorePath::parse(&format!("{STORE_DIR}/{base}")) else {
         return Access::Store;
     };
-    let (local, accepted) = match ev.sources.get(&sp) {
+    let (local, accepted) = match ev.known.origin(&sp) {
         Some(SourceOrigin::Tree {
             local, accepted, ..
         }) => (local, accepted),
@@ -104,23 +104,7 @@ pub fn locate(ev: &Evaluator, path: &[u8]) -> Access {
 /// behind an allow list): only under a store path this evaluation added or a
 /// fetch found on disk. Always true when impure.
 pub fn allowed(ev: &Evaluator, path: &[u8]) -> bool {
-    if !ev.pure {
-        return true;
-    }
-    let Some(rest) = path
-        .strip_prefix(STORE_DIR.as_bytes())
-        .and_then(|r| r.strip_prefix(b"/"))
-    else {
-        return false;
-    };
-    let base = rest.split(|&b| b == b'/').next().unwrap_or_default();
-    let Ok(sp) = std::str::from_utf8(base).map(StorePath::from_base_name) else {
-        return false;
-    };
-    let Ok(sp) = sp else {
-        return false;
-    };
-    ev.sources.lock().contains_key(&sp) || ev.allowed.lock().contains_key(&sp)
+    !ev.pure || ev.known.under(path).is_some()
 }
 
 /// [`locate`] behind the pure-eval allow list, with the error Nix's
@@ -293,7 +277,7 @@ pub fn copy_path_to_store(
     let full = ev.arena.alloc_bytes(sp.to_full_string().as_bytes());
     ev.lints.note_copy(full);
     ev.src_to_store.insert(path.to_vec(), full);
-    ev.sources.insert(
+    ev.known.add(
         sp,
         SourceOrigin::Tree {
             local,
@@ -322,7 +306,7 @@ mod tests {
         let accepted: HashSet<PathBuf> = ["/r/flake.nix", "/r/a", "/r/a/b.nix"]
             .map(PathBuf::from)
             .into();
-        ev.sources.insert(
+        ev.known.add(
             sp.clone(),
             SourceOrigin::Tree {
                 local: root.clone(),

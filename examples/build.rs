@@ -64,7 +64,7 @@ fn eval_and_build(ev: &mut Evaluator, a: EvalArgs, url: String) -> u8 {
     // Every derivation and source this evaluation created, straight from
     // memory: the plan reads `/nix/store` only for what it did not create.
     let drvs = ev.drv.drvs.lock();
-    let sources = ev.source_origins();
+    let sources = ev.known.origins();
     let inputs = plan::Inputs {
         drvs: &drvs,
         sources: &sources,

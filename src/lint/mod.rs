@@ -955,23 +955,15 @@ impl Evaluator {
         let mut input = None;
         let mut p = path.to_vec();
         for _ in 0..8 {
-            let Some(root) = self.store_root_len(&p) else {
+            let Some((root, known)) = self.known.under(&p) else {
                 break;
             };
             if input.is_none()
-                && let Some(name) = self.flake_trees.get(&p[self.store_dir.len() + 1..root])
+                && let Some(name) = &known.flake
             {
-                input = self.lints.config.input_index(&name);
+                input = self.lints.config.input_index(name);
             }
-            let Some(sp) = std::str::from_utf8(&p[..root])
-                .ok()
-                .and_then(|s| crate::store::path::StorePath::parse(s).ok())
-            else {
-                break;
-            };
-            let Some(crate::store::source::SourceOrigin::Tree { local, .. }) =
-                self.sources.get(&sp)
-            else {
+            let Some(crate::store::source::SourceOrigin::Tree { local, .. }) = known.origin else {
                 break;
             };
             let mut next = local.as_os_str().as_encoded_bytes().to_vec();
@@ -1009,8 +1001,7 @@ impl Evaluator {
     /// The lock node name of the flake root or locked input whose tree
     /// `path` lies in, when the entry is a flake.
     pub fn flake_tree_of(&self, path: &[u8]) -> Option<String> {
-        let root = self.store_root_len(path)?;
-        self.flake_trees.get(&path[self.store_dir.len() + 1..root])
+        self.known.under(path)?.1.flake
     }
 
     /// `file:line:col` of a lint site, the local path for a file inside a
@@ -1047,18 +1038,10 @@ impl Evaluator {
     fn lint_local_path(&self, path: &[u8]) -> Vec<u8> {
         let mut p = path.to_vec();
         for _ in 0..8 {
-            let Some(root) = self.store_root_len(&p) else {
+            let Some((root, known)) = self.known.under(&p) else {
                 break;
             };
-            let Some(sp) = std::str::from_utf8(&p[..root])
-                .ok()
-                .and_then(|s| crate::store::path::StorePath::parse(s).ok())
-            else {
-                break;
-            };
-            let Some(crate::store::source::SourceOrigin::Tree { local, .. }) =
-                self.sources.get(&sp)
-            else {
+            let Some(crate::store::source::SourceOrigin::Tree { local, .. }) = known.origin else {
                 break;
             };
             let mut next = local.as_os_str().as_encoded_bytes().to_vec();
@@ -1075,15 +1058,6 @@ impl Evaluator {
             }
         }
         p
-    }
-
-    /// The length of the `/nix/store/<base>` prefix of `p`, if any.
-    fn store_root_len(&self, p: &[u8]) -> Option<usize> {
-        let rest = p
-            .strip_prefix(self.store_dir.as_slice())?
-            .strip_prefix(b"/")?;
-        let end = rest.iter().position(|&b| b == b'/').unwrap_or(rest.len());
-        (end > 0).then_some(self.store_dir.len() + 1 + end)
     }
 
     fn lint_print(&mut self, id: LintId, pos: Pos, msg: String) {

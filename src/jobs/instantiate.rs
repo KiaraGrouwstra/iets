@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use super::line::{Job, Line};
 use crate::builtins::derivation::DrvInfo;
 use crate::error::{Error, Result};
+use crate::eval::Known;
 use crate::parallel::shared::SharedMap;
 use crate::remote::plan::Object;
 use crate::remote::worker::wire::write_object;
@@ -41,7 +42,7 @@ pub struct Store {
     gc_roots_dir: Option<PathBuf>,
     valid: HashSet<StorePath>,
     drvs: SharedMap<StorePath, DrvInfo>,
-    sources: SharedMap<StorePath, SourceOrigin>,
+    sources: SharedMap<StorePath, Known>,
     pub stats: Stats,
 }
 
@@ -50,7 +51,7 @@ impl Store {
         transport: &Transport,
         gc_roots_dir: Option<PathBuf>,
         drvs: SharedMap<StorePath, DrvInfo>,
-        sources: SharedMap<StorePath, SourceOrigin>,
+        sources: SharedMap<StorePath, Known>,
     ) -> Result<Store> {
         let conn = Connection::open(transport, &mut |_| {})?;
         if let Some(dir) = &gc_roots_dir {
@@ -75,7 +76,7 @@ impl Store {
         let (drvs, srcs, _) =
             crate::remote::plan::walk(&roots, &self.valid, &|p| self.drvs.get(p), &|p| match self
                 .sources
-                .get(p)
+                .origin(p)
             {
                 Some(SourceOrigin::Text { references, .. }) => Some(references),
                 _ => None,
@@ -99,7 +100,7 @@ impl Store {
             if valid.contains(&p.to_string()) {
                 continue;
             }
-            let Some(origin) = self.sources.get(p) else {
+            let Some(origin) = self.sources.origin(p) else {
                 return Err(Error::Store(format!(
                     "source '{p}' is not valid in the store and this evaluation did not create it"
                 )));

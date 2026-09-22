@@ -32,8 +32,8 @@ builds each root.
   is not in the table came from a pre-existing `/nix/store/*.drv` reached
   through string context or `import`; the plan reads that file and
   `--timings` reports the count as `read from /nix/store`.
-- Every source the evaluation added is in `Evaluator::sources`
-  (`store::source::SourceOrigin`, accessor `source_origins()`): `./path`
+- Every source the evaluation added has an origin in `Evaluator::known`
+  (`store::source::SourceOrigin`, all of them via `known.origins()`): `./path`
   and `builtins.path` record the original local tree plus the set of
   entries a `filterSource` filter accepted, so the client re-dumps the same
   NAR; `builtins.toFile` records the contents and references in memory.

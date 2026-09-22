@@ -62,7 +62,7 @@ pub fn path_tree(ev: &mut Evaluator, dir: &Path, pos: Pos) -> EvalResult<(Hash, 
         .tree(dir, crate::trace::hash_to_digest(&hash), None, fp);
     let sp =
         source_store_path(&hash).map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
-    ev.sources.insert(
+    ev.known.add(
         sp,
         SourceOrigin::Tree {
             local: dir.to_path_buf(),
@@ -205,7 +205,7 @@ fn git_tree(ev: &mut Evaluator, root: &Path, pos: Pos) -> EvalResult<Word> {
         .tree_external(root, crate::trace::hash_to_digest(&hash), &accepted, fp);
     let sp =
         source_store_path(&hash).map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
-    ev.sources.insert(
+    ev.known.add(
         sp.clone(),
         SourceOrigin::Tree {
             local: root.to_path_buf(),
