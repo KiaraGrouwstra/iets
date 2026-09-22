@@ -212,7 +212,7 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
                         IngestionMethod::Recursive,
                         None,
                     )?;
-                    let nar = ev.sources.get(&sp).and_then(|o| o.nar);
+                    let nar = ev.known.origin(&sp).and_then(|o| o.nar);
                     (nar.expect("add_path records a recursive copy").0, 1)
                 }
             };
@@ -260,6 +260,9 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
             "ietsp: fetchTree input type '{other}' is not supported"
         ),
     };
+    if let Some(name) = str_attr(&attrs, "narHash").and_then(|h| ev.input_names.get(h)) {
+        ev.known.name_flake(&sp, name);
+    }
     emit_tree_attrs(ev, &sp, &attrs, pos)
 }
 
@@ -466,7 +469,7 @@ pub fn ensure_readable(
     attrs: &Attrs,
     pos: Pos,
 ) -> EvalResult<()> {
-    ev.allowed.insert(sp.clone(), ());
+    ev.known.lock().entry(sp.clone()).or_default();
     let full = sp.to_full_string();
     let on_disk = crate::trace::stat_kind(Path::new(&full), true);
     if on_disk != crate::trace::Kind::Missing {
@@ -503,7 +506,7 @@ pub fn ensure_readable(
 /// Points every read of `sp` at the input store entry, and records the entry in
 /// the read set (`crate::inputs::record`).
 fn adopt(ev: &mut Evaluator, sp: &StorePath, entry: &crate::inputs::Entry) {
-    ev.sources.insert(
+    ev.known.add(
         sp.clone(),
         SourceOrigin::tree(
             SrcPath::spool(sp.base_name(), b""),

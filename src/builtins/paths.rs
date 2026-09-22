@@ -479,7 +479,7 @@ fn add_path_inner(
     if let Some(sp) = &expected_sp
         && ev.trace.stat_now(sp.to_full_string().as_bytes(), true) != crate::trace::Kind::Missing
     {
-        ev.allowed.insert(sp.clone(), ());
+        ev.known.lock().entry(sp.clone()).or_default();
         return Ok(sp.clone());
     }
     // A path under a tree this evaluation copied reads the local tree, with
@@ -601,14 +601,14 @@ fn add_path_inner(
     if method == IngestionMethod::Recursive {
         // an input member's origin keeps no `filter`: a filtered copy would
         // upload the whole member, which its recorded NAR size refuses
-        let origin = if on_disk {
-            ev.lints.note_copy(sp.to_full_string().as_bytes());
-            SrcPath::fs(resolved, accepted.map(Arc::new).or(parent))
+        if on_disk {
+            let at = SrcPath::fs(resolved, accepted.map(Arc::new).or(parent));
+            ev.known
+                .add_copy(sp.clone(), SourceOrigin::tree(at, hash, nar_size));
         } else {
-            at
-        };
-        ev.sources
-            .insert(sp.clone(), SourceOrigin::tree(origin, hash, nar_size));
+            ev.known
+                .add(sp.clone(), SourceOrigin::tree(at, hash, nar_size));
+        }
     }
     if let Some(exp) = expected_sp
         && exp != sp
@@ -786,7 +786,7 @@ fn to_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let h = hash_bytes(HashAlgo::Sha256, contents.bytes);
     let sp = make_text_path(utf8(name, pos)?, &h, &refs)
         .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, pos))?;
-    ev.sources.insert(
+    ev.known.add(
         sp.clone(),
         SourceOrigin::text(contents.bytes.to_vec(), refs),
     );

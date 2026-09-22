@@ -522,7 +522,7 @@ pub fn plan_roots(
     roots: &[Root],
 ) -> crate::error::Result<crate::remote::plan::Plan> {
     let drvs = ev.drv.drvs.lock();
-    let sources = ev.source_origins();
+    let sources = ev.known.origins();
     let paths: Vec<StorePath> = roots.iter().map(|r| r.drv.clone()).collect();
     crate::remote::plan::plan(
         &paths,

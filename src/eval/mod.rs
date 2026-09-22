@@ -13,8 +13,11 @@ pub use error::{Error, ErrorKind, EvalResult, Pos};
 
 use crate::compile::ir::{AttrElemIr, AttrsIr, BindIr, BindScope, Ir, IrRef, LambdaIr, ParamIr};
 use crate::compile::{Compiler, Globals};
+use crate::parallel::shared::SharedMap;
 use crate::runtime::arena::{STAT_NAMES, Stat};
 use crate::runtime::*;
+use crate::store::path::{STORE_DIR, StorePath};
+use crate::store::source::SourceOrigin;
 use crate::syntax::ast::FileId;
 use crate::syntax::symbol::{FxHashMap, Interner, Sym};
 
@@ -131,21 +134,14 @@ pub struct Evaluator {
     sym_strings: crate::parallel::shared::SymWords,
     /// Source path -> virtual store path, like Nix's `srcToStore`.
     pub src_to_store: crate::parallel::shared::SharedMap<Vec<u8>, &'static [u8]>,
-    /// Store path -> where its content lives, for every source this evaluation added.
-    pub sources: crate::parallel::shared::SharedMap<
-        crate::store::path::StorePath,
-        crate::store::source::SourceOrigin,
-    >,
+    /// Every store path this evaluation added or a fetch found on disk: the
+    /// paths a pure evaluation may read (eval.cc:allowPath).
+    pub known: SharedMap<StorePath, Known>,
     /// Locked `narHash` -> flake input name, from the lock file, for messages
     /// about an input that must be fetched.
     pub input_names: crate::parallel::shared::SharedMap<String, String>,
     /// Lint levels and the warnings emitted so far (docs/lints.md).
     pub lints: crate::lint::Lints,
-    /// Store path base name -> lock node name of the flake root and every
-    /// locked input, when the entry is a flake: the trees whose files are
-    /// the user's or an input's (lint scope) and whose paths are not
-    /// re-copies.
-    pub flake_trees: crate::parallel::shared::SharedMap<Vec<u8>, String>,
     pub drv: crate::builtins::derivation::DrvState,
     pub par: crate::parallel::Ctx,
     /// Read-set recorder for the tracing cache; off unless `main` enables it.
@@ -157,9 +153,63 @@ pub struct Evaluator {
     pub store: crate::flake::fetch::LazyStore,
     /// `pure-eval` (docs/pure-eval.md), fixed by `Evaluator::with`.
     pub pure: bool,
-    /// Store paths a fetch found in `/nix/store`: with `sources`, the paths a
-    /// pure evaluation may read (eval.cc:allowPath).
-    pub allowed: crate::parallel::shared::SharedMap<crate::store::path::StorePath, ()>,
+}
+
+/// What an evaluation knows about one store path.
+#[derive(Clone, Default)]
+pub struct Known {
+    /// Where the content lives when this evaluation added the path; `None`
+    /// for a path that is simply on disk.
+    pub origin: Option<SourceOrigin>,
+    /// The lock node name when the path is the flake root or a locked input:
+    /// a tree whose files are the user's or an input's (lint scope) and whose
+    /// paths are not re-copies.
+    pub flake: Option<String>,
+    /// Copied from a local path by this evaluation (`read-through-copy`).
+    pub copy: bool,
+}
+
+impl SharedMap<StorePath, Known> {
+    pub fn origin(&self, p: &StorePath) -> Option<SourceOrigin> {
+        self.lock().get(p)?.origin.clone()
+    }
+
+    pub fn add(&self, p: StorePath, o: SourceOrigin) {
+        self.lock().entry(p).or_default().origin = Some(o);
+    }
+
+    pub fn add_copy(&self, p: StorePath, o: SourceOrigin) {
+        let mut t = self.lock();
+        let k = t.entry(p).or_default();
+        k.origin = Some(o);
+        k.copy = true;
+    }
+
+    /// The length of the `/nix/store/<base>` prefix of `path` and what the
+    /// table has for that store path.
+    pub fn under(&self, path: &[u8]) -> Option<(usize, Known)> {
+        let rest = path
+            .strip_prefix(STORE_DIR.as_bytes())?
+            .strip_prefix(b"/")?;
+        let end = rest.iter().position(|&b| b == b'/').unwrap_or(rest.len());
+        let sp = StorePath::from_base_name(std::str::from_utf8(&rest[..end]).ok()?).ok()?;
+        Some((STORE_DIR.len() + 1 + end, self.get(&sp)?))
+    }
+
+    /// The root is named before any input is fetched and keeps its name.
+    pub fn name_flake(&self, p: &StorePath, name: String) {
+        if let Some(k) = self.lock().get_mut(p) {
+            k.flake.get_or_insert(name);
+        }
+    }
+
+    /// Every source this evaluation added to the (virtual) store and where its content is.
+    pub fn origins(&self) -> HashMap<StorePath, SourceOrigin> {
+        self.lock()
+            .iter()
+            .filter_map(|(p, k)| Some((p.clone(), k.origin.clone()?)))
+            .collect()
+    }
 }
 
 macro_rules! bail {
@@ -226,17 +276,15 @@ impl Evaluator {
             t_compile: std::time::Duration::ZERO,
             sym_strings: crate::parallel::shared::SymWords::new(),
             src_to_store: Default::default(),
-            sources: Default::default(),
+            known: Default::default(),
             input_names: Default::default(),
             lints: Default::default(),
-            flake_trees: Default::default(),
             drv: Default::default(),
             par: Default::default(),
             trace: Default::default(),
             ir_cache: None,
             store: Default::default(),
             pure,
-            allowed: Default::default(),
         };
         crate::builtins::install(&mut ev);
         ev
@@ -248,16 +296,6 @@ impl Evaluator {
     /// 40 MB of nixpkgs text does not stay resident.
     pub fn add_file(&mut self, path: &[u8], src: &[u8]) -> FileId {
         self.files.add(path, src)
-    }
-
-    /// Every source this evaluation added to the (virtual) store and where its content is.
-    pub fn source_origins(
-        &self,
-    ) -> std::sync::MutexGuard<
-        '_,
-        HashMap<crate::store::path::StorePath, crate::store::source::SourceOrigin>,
-    > {
-        self.sources.lock()
     }
 
     /// The file holding `pos` and the offset inside it.

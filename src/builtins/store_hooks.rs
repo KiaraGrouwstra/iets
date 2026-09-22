@@ -46,7 +46,7 @@ pub fn locate(ev: &Evaluator, path: &[u8]) -> Option<SrcPath> {
         None => (rest, &b""[..]),
     };
     let sp = StorePath::parse(&format!("{STORE_DIR}/{}", std::str::from_utf8(base).ok()?)).ok()?;
-    let at = match ev.sources.get(&sp) {
+    let at = match ev.known.origin(&sp) {
         Some(o) => o.at,
         None => SrcPath {
             src: Src::Mem(ev.drv.drvs.get(&sp)?.aterm?),
@@ -71,23 +71,7 @@ pub fn resolve(ev: &Evaluator, path: &[u8]) -> SrcPath {
 /// behind an allow list): only under a store path this evaluation added or a
 /// fetch found on disk. Always true when impure.
 pub fn allowed(ev: &Evaluator, path: &[u8]) -> bool {
-    if !ev.pure {
-        return true;
-    }
-    let Some(rest) = path
-        .strip_prefix(STORE_DIR.as_bytes())
-        .and_then(|r| r.strip_prefix(b"/"))
-    else {
-        return false;
-    };
-    let base = rest.split(|&b| b == b'/').next().unwrap_or_default();
-    let Ok(sp) = std::str::from_utf8(base).map(StorePath::from_base_name) else {
-        return false;
-    };
-    let Ok(sp) = sp else {
-        return false;
-    };
-    ev.sources.lock().contains_key(&sp) || ev.allowed.lock().contains_key(&sp)
+    !ev.pure || ev.known.under(path).is_some()
 }
 
 /// [`resolve`] behind the pure-eval allow list, with the error Nix's
@@ -453,15 +437,18 @@ pub fn copy_path_to_store(
                 crate::lint::purity::git_in_source(ev, path, pos)?;
             }
             crate::lint::purity::large_source_copy(ev, path, nar_size, pos)?;
-            let sp = fixed(&hash)?;
-            ev.lints.note_copy(sp.to_full_string().as_bytes());
-            (sp, SrcPath::fs(local, accepted), hash, nar_size)
+            (fixed(&hash)?, SrcPath::fs(local, accepted), hash, nar_size)
         }
     };
     let full = ev.arena.alloc_bytes(sp.to_full_string().as_bytes());
     ev.src_to_store.insert(path.to_vec(), full);
-    ev.sources
-        .insert(sp, SourceOrigin::tree(origin, hash, nar_size));
+    let origin_on_disk = origin.local().is_some();
+    let o = SourceOrigin::tree(origin, hash, nar_size);
+    if origin_on_disk {
+        ev.known.add_copy(sp, o);
+    } else {
+        ev.known.add(sp, o);
+    }
     Ok(full)
 }
 
@@ -483,7 +470,7 @@ mod tests {
         let accepted: HashSet<PathBuf> = ["/r/flake.nix", "/r/a", "/r/a/b.nix"]
             .map(PathBuf::from)
             .into();
-        ev.sources.insert(
+        ev.known.add(
             sp.clone(),
             SourceOrigin::tree(
                 SrcPath::fs(root, Some(Arc::new(accepted))),

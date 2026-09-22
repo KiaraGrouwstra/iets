@@ -394,7 +394,7 @@ fn jobs_single(
             transport,
             j.gc_roots_dir.clone(),
             ev.drv.drvs.clone(),
-            ev.sources.clone(),
+            ev.known.clone(),
         )
         .and_then(|store| {
             let resolver = if j.check_cache_status {
@@ -475,7 +475,7 @@ fn jobs_worker(
             transport,
             j.gc_roots_dir.clone(),
             ev.drv.drvs.clone(),
-            ev.sources.clone(),
+            ev.known.clone(),
         ) {
             Ok(store) => {
                 let o = out.clone();

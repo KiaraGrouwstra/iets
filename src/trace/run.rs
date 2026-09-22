@@ -121,7 +121,7 @@ impl Cache {
                 if !self.store.write(
                     &self.key,
                     SOURCES,
-                    &wire::encode_sources(&ev.source_origins()),
+                    &wire::encode_sources(&ev.known.origins()),
                 )? {
                     return Ok(false);
                 }

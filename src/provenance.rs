@@ -126,7 +126,7 @@ impl SourceMap {
 
     /// The trees this evaluation copied, plus the `source-map` setting.
     pub fn from_eval(ev: &Evaluator) -> SourceMap {
-        SourceMap::from_sources(&ev.source_origins())
+        SourceMap::from_sources(&ev.known.origins())
     }
 
     /// The same map from a set of source records, for a run that replayed

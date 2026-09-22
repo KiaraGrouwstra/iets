@@ -65,12 +65,8 @@ pub fn store_path_recopy(ev: &mut Evaluator, path: &[u8], pos: Pos) -> EvalResul
 
 /// The store path `path` lies under, when this evaluation copied it.
 fn copied_root(ev: &Evaluator, path: &[u8]) -> Option<Vec<u8>> {
-    let mut prefix = ev.store_dir.clone();
-    prefix.push(b'/');
-    let rest = path.strip_prefix(prefix.as_slice())?;
-    let end = rest.iter().position(|&b| b == b'/').unwrap_or(rest.len());
-    let root = &path[..prefix.len() + end];
-    ev.lints.is_copy(root).then(|| root.to_vec())
+    let (end, k) = ev.known.under(path)?;
+    k.copy.then(|| path[..end].to_vec())
 }
 
 /// A read of `path` (readFile, readDir, import, ...) that goes through a

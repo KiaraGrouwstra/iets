@@ -23,13 +23,12 @@ use crate::build::{Dispatcher, Target};
 use crate::builtins::derivation::DrvInfo;
 use crate::config::Config;
 use crate::error::{Error as CrateError, Result};
-use crate::eval::{Evaluator, Pos};
+use crate::eval::{Evaluator, Known, Pos};
 use crate::jobs::line::Line;
 use crate::jobs::stream::{Batcher, Info, Stream};
 use crate::parallel::shared::SharedMap;
 use crate::remote::worker::{Options, Transport};
 use crate::store::path::StorePath;
-use crate::store::source::SourceOrigin;
 
 const NAME: &str = "nix-fast-build";
 
@@ -51,7 +50,7 @@ struct Dispatch {
     fail_fast: bool,
     stream_json_lines: bool,
     drvs: SharedMap<StorePath, DrvInfo>,
-    sources: SharedMap<StorePath, SourceOrigin>,
+    sources: SharedMap<StorePath, Known>,
 }
 
 /// What the run produced, for the result file and the exit code.
@@ -136,7 +135,7 @@ fn run(a: Args) -> Result<i32> {
         fail_fast: a.fail_fast,
         stream_json_lines: a.stream_json_lines,
         drvs: ev.drv.drvs.clone(),
-        sources: ev.sources.clone(),
+        sources: ev.known.clone(),
     };
 
     let (stream, rx) = Stream::new();
@@ -336,7 +335,7 @@ fn dispatch(d: Dispatch, rx: Receiver<Line>) -> Result<Report> {
                 // The first batch: the sources the flake copied are in the
                 // table now, so the log rewriter can be built.
                 let prov = crate::provenance::Provenance::from_map(
-                    crate::provenance::SourceMap::from_sources(&d.sources.lock().clone()),
+                    crate::provenance::SourceMap::from_sources(&d.sources.origins()),
                 );
                 let mut fresh = Dispatcher::open(&d.transport, &d.options, prov, d.style)?;
                 fresh.retries = d.retries;
