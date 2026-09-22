@@ -36,11 +36,9 @@ pub struct EvalArgs {
     /// `eval-jobs --flake DIR` with no fragment: the whole `callFlake` result,
     /// not its `outputs`.
     pub flake_whole: bool,
-    /// `--impure`: beats `pure_eval`, as `common-eval-args.cc` does.
-    pub impure: bool,
-    /// `--pure-eval`, `--no-pure-eval` or `--option pure-eval`; `None` when
-    /// none was given (docs/pure-eval.md).
-    pub pure_eval: Option<bool>,
+    /// The last of `--pure-eval`, `--no-pure-eval`, `--impure` and `--option
+    /// pure-eval`; `None` when none was given (docs/pure-eval.md).
+    pub pure: Option<bool>,
 }
 
 impl Default for EvalArgs {
@@ -65,8 +63,7 @@ impl Default for EvalArgs {
             no_ir_cache: !cache,
             cache_dir: None,
             flake_whole: false,
-            impure: false,
-            pure_eval: None,
+            pure: None,
         }
     }
 }
@@ -76,8 +73,9 @@ impl EvalArgs {
         EvalArgs::default()
     }
 
-    pub fn is_pure(&self) -> bool {
-        !self.impure && self.pure_eval == Some(true)
+    /// The evaluator these arguments ask for: `pure-eval` fixes its builtins.
+    pub fn evaluator(&self) -> Evaluator {
+        Evaluator::with(crate::eval::DEFAULT_SYSTEM, self.pure == Some(true))
     }
 }
 
@@ -179,11 +177,7 @@ pub fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
     if a.xp_features.iter().any(|f| f == "parse-toml-timestamps") {
         crate::builtins::text::set_parse_toml_timestamps(true);
     }
-    if a.is_pure() || ev.pure {
-        crate::builtins::set_pure(ev);
-    } else {
-        crate::builtins::set_search_path(ev, full_includes(&a.includes));
-    }
+    crate::builtins::set_search_path(ev, full_includes(&a.includes));
     if let Some(dir) = &a.dump_drvs {
         std::fs::create_dir_all(dir).map_err(|e| {
             Error::boxed(
@@ -321,7 +315,7 @@ pub fn setup_cache(a: &EvalArgs, subcommand: &str, ev: &Evaluator) -> Option<Cac
     }
     let cwd = cwd();
     let mut k = Key::new(subcommand);
-    if a.is_pure() {
+    if a.pure == Some(true) {
         k.field("pure-eval", b"1");
     }
     let mut needs_cwd = false;

@@ -110,8 +110,7 @@ pub(super) fn global_flag(c: &mut Common, a: &mut Argv, s: &str) -> Result<bool,
     }
     match s {
         "--accept-flake-config" => {}
-        "--pure-eval" => c.pure = Some(true),
-        "--impure" | "--no-pure-eval" => c.pure = Some(false),
+        _ if crate::cli::pure_flag(s).is_some() => c.pure = crate::cli::pure_flag(s),
         "--experimental-features" | "--extra-experimental-features" => {}
         "--show-trace" => c.show_trace = true,
         "--option" => super::option(c, v[0].clone(), v[1].clone())?,
@@ -219,21 +218,27 @@ enum Run {
     Ready(Vec<Target>, Box<Plan>),
 }
 
-/// main.cc: the `nix` command evaluates purely unless a flag says otherwise;
-/// nix.conf's `pure-eval` does not change that, it only counts as set.
-/// installables.cc: `--file` is impure, and refuses a `pure-eval` set anywhere.
-pub(super) fn nix_pure(
-    c: &mut super::Common,
-    cfg: &crate::config::Config,
+/// `settings` (`shell_settings` without `builder`) plus the `nix` command's
+/// `pure-eval`. main.cc: pure unless a flag says otherwise; nix.conf's
+/// setting does not change that, it only counts as set. installables.cc:
+/// `--file` is impure, and refuses a `pure-eval` set anywhere.
+pub(super) fn nix_settings(
+    c: &mut Common,
     file: bool,
-) -> Result<(), String> {
-    let set = c.pure.is_some() || cfg.bool("pure-eval").ok().flatten().is_some();
+    builder: bool,
+) -> Result<(crate::config::Config, Transport, Options), String> {
+    let s = if builder {
+        super::settings(c)
+    } else {
+        super::shell_settings(c)
+    }?;
+    let set = c.pure.is_some() || s.0.bool("pure-eval").ok().flatten().is_some();
     let pure = c.pure.unwrap_or(true);
     if file && pure && set {
         return Err("'--file' is not compatible with '--pure-eval'".into());
     }
     c.pure = Some(pure && !file);
-    Ok(())
+    Ok(s)
 }
 
 fn eval_main(argv: &[String], rest: &[String]) -> i32 {
@@ -241,13 +246,10 @@ fn eval_main(argv: &[String], rest: &[String]) -> i32 {
         Ok(n) => n,
         Err(reason) => fallback(NAME, argv, &reason),
     };
-    let (cfg, _, _) = match super::settings(&n.c) {
+    let (cfg, _, _) = match nix_settings(&mut n.c, n.file.is_some(), true) {
         Ok(t) => t,
         Err(reason) => fallback(NAME, argv, &reason),
     };
-    if let Err(reason) = nix_pure(&mut n.c, &cfg, n.file.is_some()) {
-        fallback(NAME, argv, &reason)
-    }
     let ev = super::evaluator(&n.c, &cfg);
     let n = Arc::new(n);
     let run = Arc::clone(&n);
@@ -311,13 +313,10 @@ fn build_main(argv: &[String], rest: &[String]) -> i32 {
         Ok(n) => n,
         Err(reason) => fallback(NAME, argv, &reason),
     };
-    let (cfg, transport, options) = match super::settings(&n.c) {
+    let (cfg, transport, options) = match nix_settings(&mut n.c, n.file.is_some(), true) {
         Ok(t) => t,
         Err(reason) => fallback(NAME, argv, &reason),
     };
-    if let Err(reason) = nix_pure(&mut n.c, &cfg, n.file.is_some()) {
-        fallback(NAME, argv, &reason)
-    }
     let ev = super::evaluator(&n.c, &cfg);
     let n = Arc::new(n);
     let run = Arc::clone(&n);

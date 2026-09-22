@@ -139,8 +139,7 @@ pub fn common_flag(c: &mut Common, a: &mut Argv, s: &str) -> Result<bool, String
             let val = a.value(s)?;
             option(c, name, val)?;
         }
-        "--pure-eval" => c.pure = Some(true),
-        "--no-pure-eval" | "--impure" => c.pure = Some(false),
+        _ if crate::cli::pure_flag(s).is_some() => c.pure = crate::cli::pure_flag(s),
         "--store" => {
             let v = a.value(s)?;
             c.overrides.push(("store".into(), v));
@@ -234,18 +233,11 @@ pub fn local() -> Transport {
 /// An evaluator with the search path, the `system` setting and `pure-eval`
 /// applied.
 pub fn evaluator(c: &Common, cfg: &Config) -> Evaluator {
-    let mut ev = Evaluator::new();
-    let system = cfg.system();
-    if system != ev.current_system {
-        ev.current_system = Box::leak(system.into_boxed_str());
-    }
-    crate::builtins::set_search_path(&mut ev, full_includes(&c.includes));
     let pure = c
         .pure
         .unwrap_or_else(|| cfg.bool("pure-eval").ok().flatten().unwrap_or(false));
-    if pure {
-        crate::builtins::set_pure(&mut ev);
-    }
+    let mut ev = Evaluator::with(&cfg.system(), pure);
+    crate::builtins::set_search_path(&mut ev, full_includes(&c.includes));
     // lints stay off, as in nix; the root alone feeds the provenance fallback.
     let cwd = crate::api::cwd();
     let entry = match (c.from_args, c.files.first()) {

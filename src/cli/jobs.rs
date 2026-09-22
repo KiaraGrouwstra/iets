@@ -29,6 +29,8 @@ struct JobsArgs {
     stdin_args: Vec<(String, String)>,
     worker: bool,
     flake: bool,
+    /// Its own flag, not `EvalArgs::pure`: nix-eval-jobs.cc lets it beat `--flake`.
+    impure: bool,
     quiet: bool,
 }
 
@@ -54,6 +56,7 @@ fn parse_jobs_args(argv: &[String]) -> (JobsArgs, Vec<String>) {
         stdin_args: Vec::new(),
         worker: false,
         flake: false,
+        impure: false,
         quiet: false,
     };
     let mut rest: Vec<String> = Vec::new();
@@ -106,6 +109,7 @@ fn parse_jobs_args(argv: &[String]) -> (JobsArgs, Vec<String>) {
                 }
             }
             "--flake" => j.flake = true,
+            "--impure" => j.impure = true,
             "--worker" => j.worker = true,
             "--quiet" => j.quiet = true,
             "--show-trace" | "--verbose" | "--debug" => {}
@@ -222,12 +226,12 @@ pub fn cmd_eval_jobs(argv: &[String]) -> i32 {
     }
     // nix-eval-jobs.cc: `--impure` wins, then `--flake` makes it pure, then
     // `--pure-eval`, `--option pure-eval` and nix.conf decide.
-    if a.impure {
-        a.pure_eval = Some(false);
+    if j.impure {
+        a.pure = Some(false);
     } else if j.flake {
-        a.pure_eval = Some(true);
-    } else if a.pure_eval.is_none() {
-        a.pure_eval = crate::config::Config::load(&[])
+        a.pure = Some(true);
+    } else if a.pure.is_none() {
+        a.pure = crate::config::Config::load(&[])
             .ok()
             .and_then(|c| c.bool("pure-eval").ok().flatten());
     }
@@ -240,10 +244,7 @@ pub fn cmd_eval_jobs(argv: &[String]) -> i32 {
     };
     let t0 = std::time::Instant::now();
     if j.worker {
-        let mut ev = Evaluator::new();
-        if a.is_pure() {
-            crate::builtins::set_pure(&mut ev);
-        }
+        let mut ev = a.evaluator();
         ev.drv.keep_aterm = !j.opts.no_instantiate;
         if let Err(e) = crate::api::configure_lints(&mut ev, &a) {
             report(&ev, &e);
@@ -255,10 +256,7 @@ pub fn cmd_eval_jobs(argv: &[String]) -> i32 {
         return jobs_collector(&worker_argv(argv, &j), a.workers, &j, &transport, t0);
     }
     let workers = a.workers;
-    let mut ev = Evaluator::new();
-    if a.is_pure() {
-        crate::builtins::set_pure(&mut ev);
-    }
+    let mut ev = a.evaluator();
     ev.drv.keep_aterm = !j.opts.no_instantiate;
     if let Err(e) = crate::api::configure_lints(&mut ev, &a) {
         report(&ev, &e);

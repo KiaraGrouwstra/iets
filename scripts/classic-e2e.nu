@@ -305,6 +305,8 @@ def main [] {
   ] {
     $ok = ($ok | append (cmp-case $case.label (run-both $farm ($case.args | first) ...($case.args | skip 1))))
   }
+  $ok = ($ok | append (cmp-case "nix.conf system reaches builtins.currentSystem"
+    (with-env {NIX_CONFIG: "system = aarch64-linux"} { run-both $farm nix-instantiate --eval -E "builtins.currentSystem" })))
   $ok = ($ok | append (cmp-case "nix eval --expr, a nested error"
     (run-both $farm nix eval --expr "{ a = throw \"boom\"; b = 1; }")))
   $ok = ($ok | append (cmp-case "nix eval --expr, repeated and empty values"

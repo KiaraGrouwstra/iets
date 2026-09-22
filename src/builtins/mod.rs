@@ -70,8 +70,11 @@ pub fn install(ev: &mut Evaluator) {
     r.constant("true", Word::TRUE);
     r.constant("false", Word::FALSE);
     r.constant("null", Word::NULL);
-    let sys = ev.mk_string(ev.current_system.as_bytes());
-    r.constant("__currentSystem", sys);
+    // eval.cc:addConstant: the `impureOnly` ones do not exist when pure
+    if !ev.pure {
+        let sys = ev.mk_string(ev.current_system.as_bytes());
+        r.constant("__currentSystem", sys);
+    }
     let ver = ev.mk_string(b"2.34.8");
     r.constant("__nixVersion", ver);
     r.constant("__langVersion", Word::imm_int(6));
@@ -86,8 +89,10 @@ pub fn install(ev: &mut Evaluator) {
         .find(|(n, ..)| *n == "currentTimeRaw")
         .map(|(n, a, f, _)| ev.arena.mk_primop(n, *a, *f))
         .expect("currentTimeRaw registered");
-    let ct = ev.arena.mk_thunk_app(ct_op, Word::NULL);
-    r.constant("__currentTime", ct);
+    if !ev.pure {
+        let ct = ev.arena.mk_thunk_app(ct_op, Word::NULL);
+        r.constant("__currentTime", ct);
+    }
 
     let mut entries: Vec<(Sym, Pos, Word)> = Vec::new();
     for (name, arity, f, global) in &r.ops {
@@ -131,37 +136,12 @@ pub fn install(ev: &mut Evaluator) {
     ev.globals.table.insert(derivation_sym, d);
 }
 
-/// `pure-eval`: the `impureOnly` constants (`currentSystem`, `currentTime`)
-/// are gone from `builtins` and the globals, and the search path is empty,
-/// `-I` included (eval.cc:EvalState). Call before anything is compiled.
-pub fn set_pure(ev: &mut Evaluator) {
-    ev.pure = true;
-    set_search_path(ev, Vec::new());
-    let gone = [ev.sym(b"currentSystem"), ev.sym(b"currentTime")];
-    for g in [b"__currentSystem".as_slice(), b"__currentTime"] {
-        let s = ev.sym(g);
-        ev.globals.table.remove(&s);
-    }
-    let builtins_sym = ev.sym(b"builtins");
-    let old = ev.globals.builtins.expect("builtins installed");
-    let mut entries: Vec<(Sym, Pos, Word)> = old
-        .iter()
-        .filter(|a| !gone.contains(&a.sym))
-        .map(|a| (a.sym, Pos::NONE, a.cell.get()))
-        .collect();
-    let bw = ev
-        .arena
-        .mk_attrs(&mut entries)
-        .expect("builtin names are unique");
-    let battrs = bw.as_attrs().unwrap();
-    battrs.get(builtins_sym).unwrap().cell.set(bw);
-    ev.builtins_word = bw;
-    ev.globals.table.insert(builtins_sym, bw);
-    ev.globals.builtins = Some(battrs);
-}
-
-/// Install `-I`/`NIX_PATH` entries and refresh `builtins.nixPath`.
+/// Install `-I`/`NIX_PATH` entries and refresh `builtins.nixPath`. A pure
+/// evaluation keeps the empty one (eval.cc:EvalState).
 pub fn set_search_path(ev: &mut Evaluator, entries: Vec<(Vec<u8>, Vec<u8>)>) {
+    if ev.pure {
+        return;
+    }
     let mut items = Vec::with_capacity(entries.len());
     for (prefix, path) in &entries {
         let p = ev.mk_string(path);

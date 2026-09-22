@@ -168,8 +168,7 @@ fn reading_a_derivation_output_is_unsupported() {
 }
 
 fn eval_pure(src: &str) -> Result<String, String> {
-    let mut ev = Evaluator::new();
-    crate::builtins::set_pure(&mut ev);
+    let mut ev = Evaluator::with(super::DEFAULT_SYSTEM, true);
     let v = ev
         .eval_string(src, b"/")
         .and_then(|v| ev.force_deep(v))

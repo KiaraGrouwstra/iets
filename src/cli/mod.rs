@@ -29,6 +29,15 @@ pub fn usage() -> ! {
     exit(2)
 }
 
+/// The `pure-eval` a flag sets (common-eval-args.cc), `None` for any other.
+pub fn pure_flag(s: &str) -> Option<bool> {
+    match s {
+        "--pure-eval" => Some(true),
+        "--no-pure-eval" | "--impure" => Some(false),
+        _ => None,
+    }
+}
+
 pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
     let mut a = EvalArgs::new();
     let mut i = 0;
@@ -88,7 +97,7 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
                     usage()
                 };
                 if name == "pure-eval" {
-                    a.pure_eval = Some(crate::config::parse_bool(name, v).unwrap_or_else(|e| {
+                    a.pure = Some(crate::config::parse_bool(name, v).unwrap_or_else(|e| {
                         eprintln!("error: {e}");
                         usage()
                     }));
@@ -120,9 +129,7 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
                 };
                 a.lints.push((s[2..].to_string(), level));
             }
-            "--impure" => a.impure = true,
-            "--pure-eval" => a.pure_eval = Some(true),
-            "--no-pure-eval" => a.pure_eval = Some(false),
+            _ if pure_flag(s).is_some() => a.pure = pure_flag(s),
             "--readonly-mode" => {}
             "--extra-experimental-features" | "--experimental-features" => {
                 i += 1;

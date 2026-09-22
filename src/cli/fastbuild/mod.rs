@@ -115,19 +115,13 @@ fn run(a: Args) -> Result<i32> {
         quiet: false,
     };
 
-    let mut ev = Evaluator::new();
-    let system = cfg.system();
-    if system != ev.current_system {
-        ev.current_system = Box::leak(system.into_boxed_str());
-    }
+    // nix-fast-build hands nix-eval-jobs `--flake`, and `--impure` when impure
+    let conf_pure = cfg.bool("pure-eval").ok().flatten() == Some(true);
+    let pure = !a.impure && (a.mode == EvalMode::Flake || conf_pure);
+    let mut ev = Evaluator::with(&cfg.system(), pure);
     // The uploader ships each job's closure from memory, so the ATerms stay.
     ev.drv.keep_aterm = true;
     crate::builtins::set_search_path(&mut ev, crate::cli::full_includes(&a.includes));
-    // nix-fast-build hands nix-eval-jobs `--flake`, and `--impure` when impure
-    let conf_pure = cfg.bool("pure-eval").ok().flatten() == Some(true);
-    if !a.impure && (a.mode == EvalMode::Flake || conf_pure) {
-        crate::builtins::set_pure(&mut ev);
-    }
 
     let d = Dispatch {
         transport,

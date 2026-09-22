@@ -155,7 +155,7 @@ pub struct Evaluator {
     /// The eval store, opened on the first flake input that is missing from it
     /// (`flake::fetch`).
     pub store: crate::flake::fetch::LazyStore,
-    /// `pure-eval` (docs/pure-eval.md); set by `builtins::set_pure`.
+    /// `pure-eval` (docs/pure-eval.md), fixed by `Evaluator::with`.
     pub pure: bool,
     /// Store paths a fetch found in `/nix/store`: with `sources`, the paths a
     /// pure evaluation may read (eval.cc:allowPath).
@@ -169,8 +169,16 @@ macro_rules! bail {
 }
 pub(crate) use bail;
 
+pub const DEFAULT_SYSTEM: &str = "x86_64-linux";
+
 impl Evaluator {
     pub fn new() -> Evaluator {
+        Evaluator::with(DEFAULT_SYSTEM, false)
+    }
+
+    /// `system` and `pure-eval` shape the builtins, so they are fixed here,
+    /// before `builtins::install` (docs/pure-eval.md).
+    pub fn with(system: &str, pure: bool) -> Evaluator {
         let mut arena = Arena::new();
         let mut interner = Interner::new();
         let root_env = arena.alloc_env(None, 0);
@@ -208,7 +216,11 @@ impl Evaluator {
             s,
             builtins_word: Word::NULL,
             store_dir: b"/nix/store".to_vec(),
-            current_system: "x86_64-linux",
+            current_system: if system == DEFAULT_SYSTEM {
+                DEFAULT_SYSTEM
+            } else {
+                Box::leak(system.into())
+            },
             nr_thunks: 0,
             nr_function_calls: 0,
             t_compile: std::time::Duration::ZERO,
@@ -223,7 +235,7 @@ impl Evaluator {
             trace: Default::default(),
             ir_cache: None,
             store: Default::default(),
-            pure: false,
+            pure,
             allowed: Default::default(),
         };
         crate::builtins::install(&mut ev);
@@ -452,9 +464,9 @@ impl Evaluator {
         if p.starts_with(CorePkgs::PREFIX) {
             return Ok(p);
         }
-        crate::builtins::store_hooks::check_access(self, &p, pos)?;
+        let w = crate::builtins::store_hooks::open(self, &p, pos)?.whence(&p);
         crate::lint::coerce::read_through_copy(self, &p, pos)?;
-        match crate::inputs::import_is_dir(self, &p) {
+        match crate::inputs::import_is_dir(self, w) {
             Ok(true) => p.extend_from_slice(b"/default.nix"),
             Ok(false) => {}
             Err(e) => bail!(
@@ -480,7 +492,7 @@ impl Evaluator {
             None => (name, &b""[..]),
         };
         for (prefix, path) in entries {
-            crate::builtins::store_hooks::check_access(self, path, pos)?;
+            crate::builtins::store_hooks::open(self, path, pos)?;
             let candidate = if prefix.is_empty() {
                 let mut c = path.clone();
                 c.push(b'/');
@@ -526,7 +538,8 @@ impl Evaluator {
         {
             return Ok(src.to_vec());
         }
-        match crate::inputs::read_source(self, resolved) {
+        match crate::inputs::read_source(self, crate::builtins::store_hooks::whence(self, resolved))
+        {
             Ok(s) => Ok(s),
             Err(e) => bail!(
                 ErrorKind::Io,

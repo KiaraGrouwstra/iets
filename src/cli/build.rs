@@ -69,11 +69,11 @@ pub fn cmd_build(argv: &[String]) -> i32 {
     }
 
     let t0 = std::time::Instant::now();
-    let mut ev = Evaluator::new();
     let a = EvalArgs {
         timings: a.timings || b.timings,
         ..a
     };
+    let mut ev = a.evaluator();
     if let Err(e) = super::configure_lints(&mut ev, &a) {
         report(&ev, &e);
         return 1;

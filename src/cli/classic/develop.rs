@@ -76,13 +76,10 @@ pub fn main(argv: &[String], rest: &[String]) -> i32 {
         Ok(d) => d,
         Err(reason) => fallback(NAME, argv, &reason),
     };
-    let (cfg, transport, _) = match super::shell_settings(&d.c) {
+    let (cfg, transport, _) = match super::nix::nix_settings(&mut d.c, false, false) {
         Ok(t) => t,
         Err(reason) => fallback(NAME, argv, &reason),
     };
-    if let Err(reason) = super::nix::nix_pure(&mut d.c, &cfg, false) {
-        fallback(NAME, argv, &reason)
-    }
     let ev = super::evaluator(&d.c, &cfg);
     let mut a = parse_eval_args(&[]);
     a.includes = d.c.includes.clone();

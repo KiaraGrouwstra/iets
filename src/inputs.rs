@@ -26,7 +26,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use crate::builtins::store_hooks::{Access, Whence, whence};
+use crate::builtins::store_hooks::{Access, Whence};
 use crate::cachefs;
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::flake::spool::{self, Node, Tree};
@@ -356,8 +356,8 @@ fn read_at(ev: &Evaluator, entry: &Entry, base: &StorePath, rel: &[u8]) -> io::R
 
 /// `import`'s stat: `true` when the path is a directory, so `/default.nix` is
 /// appended. The one hook `eval::resolve_import_path` needs.
-pub fn import_is_dir(ev: &Evaluator, path: &[u8]) -> io::Result<bool> {
-    match whence(ev, path).ok_or_else(missing)? {
+pub fn import_is_dir(ev: &Evaluator, w: Option<Whence>) -> io::Result<bool> {
+    match w.ok_or_else(missing)? {
         Whence::In(entry, base, rel) => {
             let node = entry.tree.resolve(&rel, true).ok_or_else(missing)?;
             record(ev, &entry, &base);
@@ -378,8 +378,8 @@ pub fn import_is_dir(ev: &Evaluator, path: &[u8]) -> io::Result<bool> {
 
 /// The bytes `import` compiles, recorded in the read set. The one hook
 /// `eval::read_source` needs.
-pub fn read_source(ev: &Evaluator, path: &[u8]) -> io::Result<Vec<u8>> {
-    match whence(ev, path).ok_or_else(enoent)? {
+pub fn read_source(ev: &Evaluator, w: Option<Whence>) -> io::Result<Vec<u8>> {
+    match w.ok_or_else(enoent)? {
         Whence::In(entry, base, rel) => read_at(ev, &entry, &base, &rel),
         Whence::Mem(bytes) => Ok(Arc::unwrap_or_clone(bytes)),
         Whence::Fs(phys) => {

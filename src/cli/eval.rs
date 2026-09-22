@@ -7,7 +7,7 @@ use crate::eval::{Evaluator, Pos};
 use crate::trace::run::Cache;
 
 pub fn run_eval(a: EvalArgs) -> i32 {
-    let mut ev = Evaluator::new();
+    let mut ev = a.evaluator();
     if let Err(e) = super::configure_lints(&mut ev, &a) {
         report(&ev, &e);
         return 1;

@@ -250,8 +250,7 @@ enum Real {
 /// `path '...' does not exist`.
 fn realise_existing(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Real> {
     let p = realise_path(ev, w, pos)?;
-    store_hooks::check_access(ev, &p, pos)?;
-    match store_hooks::locate(ev, &p) {
+    match store_hooks::open(ev, &p, pos)? {
         store_hooks::Access::Store => Ok(Real::Fs(p, None)),
         store_hooks::Access::Local { path, accepted } => {
             crate::lint::coerce::read_through_copy(ev, &p, pos)?;
@@ -567,12 +566,11 @@ fn add_path_inner(
         ev.allowed.insert(sp.clone(), ());
         return Ok(sp.clone());
     }
-    store_hooks::check_access(ev, path, pos)?;
     // A path under a tree this evaluation copied reads the local tree, with
     // that tree's filter applied before this call's `filter`; the filter
     // function still sees the store path Nix would show it.
     let (resolved, parent): (PathBuf, Option<Arc<HashSet<PathBuf>>>) =
-        match store_hooks::locate(ev, path) {
+        match store_hooks::open(ev, path, pos)? {
             store_hooks::Access::Store => {
                 let resolved =
                     fs::canonicalize(os_path(path)).unwrap_or_else(|_| os_path(path).to_path_buf());

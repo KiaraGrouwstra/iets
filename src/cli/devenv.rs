@@ -117,7 +117,7 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
     let d = DevEnvArgs { transport, gc_root };
 
     let t0 = std::time::Instant::now();
-    let mut ev = Evaluator::new();
+    let mut ev = a.evaluator();
     if let Err(e) = super::configure_lints(&mut ev, &a) {
         super::report(&ev, &e);
         return 1;

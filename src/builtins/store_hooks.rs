@@ -7,7 +7,8 @@
 //! evaluator reads for a store path goes through [`locate`]: `import`,
 //! `readFile`, `readDir`, `pathExists`, `readFileType`, `hashFile`,
 //! `findFile`, `storePath`, `fetchTree`, `builtins.path`, `filterSource` and
-//! string coercion. The four answers are the real file system, a local tree a
+//! string coercion, and a read of a file through [`open`], which applies
+//! pure evaluation's allow list first. The four answers are the real file system, a local tree a
 //! virtual copy stands for, a member of a fetched flake input served out of
 //! its spool by offset (`crate::inputs`), and a `toFile` text or `.drv` this
 //! evaluation holds in memory.
@@ -122,10 +123,13 @@ pub fn allowed(ev: &Evaluator, path: &[u8]) -> bool {
     ev.sources.lock().contains_key(&sp) || ev.allowed.lock().contains_key(&sp)
 }
 
-/// `allowed`, as the error Nix's `AllowListSourceAccessor` throws.
-pub fn check_access(ev: &Evaluator, path: &[u8], pos: Pos) -> EvalResult<()> {
+/// [`locate`] behind the pure-eval allow list, with the error Nix's
+/// `AllowListSourceAccessor` throws: what every read of a file goes through.
+/// `pathExists` (false, not an error) and a `.drv` import (read through the
+/// store, as Nix does) are the readers that call `locate` itself.
+pub fn open(ev: &Evaluator, path: &[u8], pos: Pos) -> EvalResult<Access> {
     if allowed(ev, path) {
-        return Ok(());
+        return Ok(locate(ev, path));
     }
     Err(Error::boxed(
         ErrorKind::Eval,
@@ -169,16 +173,23 @@ pub enum Whence {
     Mem(Arc<Vec<u8>>),
 }
 
-/// Where the bytes of `path` are: the file itself, its local original, or a
-/// member of a fetched input; `None` when a tree's filter left the entry out.
-pub fn whence(ev: &Evaluator, path: &[u8]) -> Option<Whence> {
-    match locate(ev, path) {
-        Access::Store => Some(Whence::Fs(path.to_vec())),
-        Access::Local { path, .. } => Some(Whence::Fs(path.into_os_string().into_vec())),
-        Access::Input { entry, base, rel } => Some(Whence::In(entry, base, rel)),
-        Access::Mem(bytes) => Some(Whence::Mem(bytes)),
-        Access::Missing => None,
+impl Access {
+    /// Where the bytes of `path`, located as `self`, are: the file itself, its
+    /// local original, a member of a fetched input or memory; `None` when a
+    /// tree's filter left the entry out.
+    pub fn whence(self, path: &[u8]) -> Option<Whence> {
+        match self {
+            Access::Store => Some(Whence::Fs(path.to_vec())),
+            Access::Local { path, .. } => Some(Whence::Fs(path.into_os_string().into_vec())),
+            Access::Input { entry, base, rel } => Some(Whence::In(entry, base, rel)),
+            Access::Mem(bytes) => Some(Whence::Mem(bytes)),
+            Access::Missing => None,
+        }
     }
+}
+
+pub fn whence(ev: &Evaluator, path: &[u8]) -> Option<Whence> {
+    locate(ev, path).whence(path)
 }
 
 /// `Trace::stat_now` through [`whence`].
@@ -210,7 +221,7 @@ pub fn copy_path_to_store(
     if let Some(sp) = ev.src_to_store.get(path) {
         return Ok(sp);
     }
-    check_access(ev, path, pos)?;
+    let access = open(ev, path, pos)?;
     let copy_err = |e: std::io::Error| {
         Error::boxed(
             ErrorKind::Io,
@@ -222,7 +233,7 @@ pub fn copy_path_to_store(
             pos,
         )
     };
-    let (local, accepted) = match locate(ev, path) {
+    let (local, accepted) = match access {
         Access::Store => (
             Path::new(std::ffi::OsStr::from_bytes(path)).to_path_buf(),
             None,
