@@ -45,13 +45,15 @@ pub fn locate(ev: &Evaluator, path: &[u8]) -> Option<SrcPath> {
         Some(i) => (&rest[..i], &rest[i + 1..]),
         None => (rest, &b""[..]),
     };
-    let sp = StorePath::parse(&format!("{STORE_DIR}/{}", std::str::from_utf8(base).ok()?)).ok()?;
+    let base = std::str::from_utf8(base).ok()?;
+    let sp = StorePath::from_base_name(base).ok()?;
     let at = match ev.known.origin(&sp) {
         Some(o) => o.at,
-        None => SrcPath {
+        None if base.ends_with(".drv") => SrcPath {
             src: Src::Mem(ev.drv.drvs.get(&sp)?.aterm?),
             rel: Vec::new(),
         },
+        None => return None,
     };
     // a vanished entry falls back to the store, which a build has usually filled by then
     if let Src::Spool { name, .. } = &at.src
