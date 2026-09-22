@@ -4,10 +4,9 @@
 //! and one `AddMultipleToStore` per batch, then `--gc-roots-dir` roots
 //! (worker.cc:registerGCRoot) and the batch's lines go on to the sink.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::mpsc::{Sender, channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -19,8 +18,7 @@ use crate::parallel::shared::SharedMap;
 use crate::remote::plan::Object;
 use crate::remote::worker::wire::write_object;
 use crate::remote::worker::{Connection, Transport};
-use crate::store::drv::Derivation;
-use crate::store::path::{STORE_DIR, StorePath};
+use crate::store::path::StorePath;
 use crate::store::source::SourceOrigin;
 
 /// Jobs per daemon round trip.
@@ -69,81 +67,19 @@ impl Store {
         })
     }
 
-    /// ATerm and references of `p`: this evaluation's, else `/nix/store`'s.
-    fn load_drv(&self, p: &StorePath) -> Result<(Arc<Vec<u8>>, BTreeSet<StorePath>)> {
-        if let Some(info) = self.drvs.get(p)
-            && let Some(aterm) = info.aterm
-        {
-            return Ok((aterm, info.references));
-        }
-        let full = format!("{STORE_DIR}/{}", p.base_name());
-        let text = std::fs::read_to_string(&full)
-            .map_err(|e| Error::io(format!("cannot read derivation '{full}'"), e))?;
-        let name = Derivation::name_from_path(p)?;
-        let drv = Derivation::parse(&text, name)?;
-        let mut references = drv.input_srcs;
-        references.extend(drv.input_drvs.into_keys());
-        Ok((Arc::new(text.into_bytes()), references))
-    }
-
-    /// `p` after the sources a `toFile` text references: the daemon
-    /// registers a path only when its references are valid.
-    fn collect_source(
-        &self,
-        p: StorePath,
-        seen: &mut HashSet<StorePath>,
-        srcs: &mut Vec<StorePath>,
-    ) {
-        if self.valid.contains(&p) || !seen.insert(p.clone()) {
-            return;
-        }
-        if let Some(SourceOrigin::Text { references, .. }) = self.sources.get(&p) {
-            for r in references {
-                if !r.is_derivation() {
-                    self.collect_source(r, seen, srcs);
-                }
-            }
-        }
-        srcs.push(p);
-    }
-
     /// Registers the closures of `jobs`' drvs that the daemon lacks, then
     /// roots each job's `.drv`.
     pub fn instantiate(&mut self, jobs: &[&Job]) -> Result<()> {
         let t0 = Instant::now();
-        let mut seen: HashSet<StorePath> = HashSet::new();
-        let mut drvs: Vec<(StorePath, Arc<Vec<u8>>, BTreeSet<StorePath>)> = Vec::new();
-        let mut srcs: Vec<StorePath> = Vec::new();
-        type Pending = Option<(Arc<Vec<u8>>, BTreeSet<StorePath>)>;
-        let mut stack: Vec<(StorePath, Pending)> = jobs
-            .iter()
-            .rev()
-            .map(|j| (j.drv_path.clone(), None))
-            .collect();
-        // Iterative post-order: a drv after every drv it references.
-        while let Some((p, done)) = stack.pop() {
-            if let Some((aterm, refs)) = done {
-                drvs.push((p, aterm, refs));
-                continue;
-            }
-            if self.valid.contains(&p) || !seen.insert(p.clone()) {
-                continue;
-            }
-            let (aterm, refs) = self.load_drv(&p)?;
-            stack.push((p, Some((aterm, refs.clone()))));
-            for r in refs {
-                if self.valid.contains(&r) {
-                    continue;
-                }
-                if r.is_derivation() {
-                    if !seen.contains(&r) {
-                        stack.push((r, None));
-                    }
-                } else {
-                    self.collect_source(r, &mut seen, &mut srcs);
-                }
-            }
-        }
+        let roots: Vec<StorePath> = jobs.iter().map(|j| j.drv_path.clone()).collect();
+        let (drvs, srcs, _) =
+            crate::remote::plan::walk(&roots, &self.valid, &|p| self.drvs.get(p), &|p| match self
+                .sources
+                .get(p)
+            {
+                Some(SourceOrigin::Text { references, .. }) => Some(references),
+                _ => None,
+            })?;
         let paths: Vec<String> = srcs
             .iter()
             .chain(drvs.iter().map(|d| &d.0))

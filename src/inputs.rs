@@ -363,6 +363,7 @@ pub fn import_is_dir(ev: &Evaluator, path: &[u8]) -> io::Result<bool> {
             record(ev, &entry, &base);
             Ok(matches!(node, Node::Dir(_)))
         }
+        Whence::Mem(_) => Ok(false),
         Whence::Fs(phys) => {
             let meta = std::fs::metadata(os(&phys))?;
             if meta.is_dir() {
@@ -380,6 +381,7 @@ pub fn import_is_dir(ev: &Evaluator, path: &[u8]) -> io::Result<bool> {
 pub fn read_source(ev: &Evaluator, path: &[u8]) -> io::Result<Vec<u8>> {
     match whence(ev, path).ok_or_else(enoent)? {
         Whence::In(entry, base, rel) => read_at(ev, &entry, &base, &rel),
+        Whence::Mem(bytes) => Ok(Arc::unwrap_or_clone(bytes)),
         Whence::Fs(phys) => {
             let mut f = std::fs::File::open(os(&phys))?;
             let meta = f.metadata()?;

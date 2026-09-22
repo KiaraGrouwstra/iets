@@ -272,11 +272,13 @@ Two triggers:
 1. A flag or subcommand the parser does not implement, seen before any
    work starts.
 2. An evaluation that hits `ErrorKind::Unsupported`: the network fetchers
-   (`fetchurl`, `fetchTarball`, `fetchGit`, `fetchMercurial`,
+   (`fetchurl`, `fetchTarball` without a `sha256`, `fetchGit`, `fetchMercurial`,
    `fetchClosure`), the flake primops (`getFlake`, `parseFlakeRef`,
    `flakeRefToString`), `outputOf`, import-from-derivation (`import`,
    `scopedImport`, `readFile`, `readDir`, `pathExists`, `readFileType` or
-   `hashFile` on a derivation output), and a flake whose `flake.lock` is
+   `hashFile` on a derivation output), a second copy of a `toFile` text or
+   `.drv`, a read of a `.drv` this run made under `--no-cache`, and a flake
+   whose `flake.lock` is
    missing or incomplete. Every other evaluation error is reported and
    exits 1, because the real nix would fail the same way and re-running it
    would double the cost.

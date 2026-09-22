@@ -16,6 +16,7 @@ use crate::remote::worker::{Connection, Transport};
 use crate::runtime::*;
 use crate::store::hash::{Hash, HashAlgo};
 use crate::store::path::{IngestionMethod, StorePath, make_fixed_output_path};
+use crate::store::source::SourceOrigin;
 use crate::syntax::symbol::Sym;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -152,7 +153,31 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
                     to_url(&attrs)
                 );
             }
-            let (hash, mtime) = super::root::path_tree(ev, Path::new(path), pos)?;
+            let (hash, mtime) = match crate::builtins::store_hooks::locate(ev, path.as_bytes()) {
+                crate::builtins::store_hooks::Access::Store => {
+                    super::root::path_tree(ev, Path::new(path), pos)?
+                }
+                // a store tree's mtimes are all 1, so that is its lastModified
+                _ => {
+                    let sp = crate::builtins::paths::add_path(
+                        ev,
+                        pos,
+                        b"source",
+                        path.as_bytes(),
+                        None,
+                        IngestionMethod::Recursive,
+                        None,
+                    )?;
+                    let nar_hash = match ev.sources.get(&sp) {
+                        Some(
+                            SourceOrigin::Tree { nar_hash, .. }
+                            | SourceOrigin::Input { nar_hash, .. },
+                        ) => nar_hash,
+                        _ => unreachable!("add_path records a recursive copy"),
+                    };
+                    (nar_hash, 1)
+                }
+            };
             if let Some(expected) = str_attr(&attrs, "narHash") {
                 let exp = parse_nar_hash(expected)
                     .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
@@ -198,6 +223,74 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
         ),
     };
     emit_tree_attrs(ev, &sp, &attrs, pos)
+}
+
+/// fetchTree.cc:fetch for `builtins.fetchTarball`: with a `sha256` the store
+/// path is known before the download, so it is the same fetch as a locked
+/// `tarball` input. Without one it is not, and the call is unsupported.
+pub fn fetch_tarball_builtin(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
+    crate::lint::purity::unhashed_fetch(ev, "fetchTarball", args[0], pos)?;
+    let w = ev.force(args[0])?;
+    let (mut url, mut sha256, mut name) = (None, None, "source".to_string());
+    if let Some(a) = w.as_attrs() {
+        for attr in a.iter() {
+            let n = String::from_utf8_lossy(ev.interner.name(attr.sym)).into_owned();
+            let what = match n.as_str() {
+                "url" => "while evaluating the url we should fetch",
+                "sha256" => "while evaluating the sha256 of the content we should fetch",
+                "name" => "while evaluating the name of the content we should fetch",
+                _ => bail!(
+                    ErrorKind::Eval,
+                    pos,
+                    "unsupported argument '{n}' to 'fetchTarball'"
+                ),
+            };
+            let v = ev.force_string_no_ctx(attr.cell.get(), pos, what)?;
+            let v = String::from_utf8_lossy(v).into_owned();
+            match n.as_str() {
+                "url" => url = Some(v),
+                "sha256" => sha256 = Some(v),
+                _ => name = v,
+            }
+        }
+    } else {
+        let v = ev.force_string_no_ctx(w, pos, "while evaluating the url we should fetch")?;
+        url = Some(String::from_utf8_lossy(v).into_owned());
+    }
+    let Some(url) = url else {
+        bail!(ErrorKind::Eval, pos, "'url' argument required");
+    };
+    let url = match url.strip_prefix("channel:") {
+        Some(c) => format!("https://channels.nixos.org/{c}/nixexprs.tar.xz"),
+        None => url,
+    };
+    let Some(hash) = sha256
+        .filter(|h| !h.is_empty())
+        .and_then(|h| Hash::parse_any(&h, Some(HashAlgo::Sha256)).ok())
+    else {
+        ev.trace.mark_uncacheable();
+        bail!(
+            ErrorKind::Unsupported,
+            pos,
+            "ietsp: builtins.fetchTarball without a sha256 is not supported"
+        );
+    };
+    let sp = make_fixed_output_path(
+        IngestionMethod::Recursive,
+        &hash,
+        &name,
+        &std::collections::BTreeSet::new(),
+    )
+    .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, pos))?;
+    let attrs = Attrs::from([
+        ("type".into(), AttrVal::Str("tarball".into())),
+        ("url".into(), AttrVal::Str(url)),
+        ("narHash".into(), AttrVal::Str(hash.to_sri())),
+    ]);
+    ensure_readable(ev, &sp, &attrs, pos)?;
+    let full = ev.arena.alloc_bytes(sp.to_full_string().as_bytes());
+    let ctx = ev.arena.alloc_slice(&[Ctx::Opaque(full)]);
+    Ok(ev.arena.mk_string_static(full, ctx))
 }
 
 /// The lock file's name for a locked input, else its attrs as a URL.
@@ -519,7 +612,7 @@ fn fetch_tarball(
         bail!(
             ErrorKind::Eval,
             pos,
-            "ietsp: NAR hash mismatch in input '{name}' ({url}): the lock says '{}' \
+            "ietsp: NAR hash mismatch in input '{name}' ({url}): expected '{}' \
              but the tree ietsp fetched hashes to '{}'",
             expected.to_sri(),
             nar_hash.to_sri()

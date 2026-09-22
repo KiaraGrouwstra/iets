@@ -19,7 +19,9 @@ pub fn path_copy(ev: &mut Evaluator, path: &[u8], store_path: &[u8], pos: Pos) -
     }
     let shown = ev.lint_shown_path(path);
     if ev.flake_tree_of(path).is_some() {
-        if !ev.lint_on(LintId::DirCopyFlake) || !is_directory(ev, path) {
+        if !ev.lint_on(LintId::DirCopyFlake)
+            || crate::builtins::store_hooks::stat(ev, path, true) != crate::trace::Kind::Directory
+        {
             return Ok(());
         }
         return ev.lint(LintId::DirCopyFlake, pos, || {
@@ -40,19 +42,6 @@ pub fn path_copy(ev: &mut Evaluator, path: &[u8], store_path: &[u8], pos: Pos) -
             lossy(store_path)
         )
     })
-}
-
-/// Whether the (possibly virtual) store path `path` is a directory.
-fn is_directory(ev: &Evaluator, path: &[u8]) -> bool {
-    use crate::builtins::store_hooks::{Whence, whence};
-    match whence(ev, path) {
-        Some(Whence::Fs(p)) => ev.trace.stat_now(&p, true) == crate::trace::Kind::Directory,
-        Some(Whence::In(entry, _, rel)) => matches!(
-            entry.tree.resolve(&rel, true),
-            Some(crate::flake::spool::Node::Dir(_))
-        ),
-        None => false,
-    }
 }
 
 /// Before `path` is copied: a path that already lies under the store dir,

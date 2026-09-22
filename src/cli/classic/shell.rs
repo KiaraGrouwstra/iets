@@ -264,7 +264,7 @@ fn prepare(ev: &mut Evaluator, s: &Shell) -> Run {
         eprintln!("error: nix-shell requires a single derivation");
         return Run::Failed(1);
     }
-    let drv = match load_drv(ev, &roots[0].drv) {
+    let drv = match crate::builtins::derivation::load_drv(ev, &roots[0].drv) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("error: {e}");
@@ -299,18 +299,6 @@ fn prepare(ev: &mut Evaluator, s: &Shell) -> Run {
             eprintln!("error: {e}");
             Run::Failed(1)
         }
-    }
-}
-
-/// The derivation as ietsp wrote it during this evaluation, else from the store.
-fn load_drv(ev: &Evaluator, p: &StorePath) -> crate::error::Result<Derivation> {
-    use crate::builtins::derivation::load_drv_traced;
-    match ev.drv.drvs.get(p).and_then(|i| i.aterm) {
-        Some(aterm) => Ok(Derivation::parse(
-            std::str::from_utf8(&aterm).map_err(|e| CrateError::Store(e.to_string()))?,
-            Derivation::name_from_path(p)?,
-        )?),
-        None => Ok(load_drv_traced(&ev.trace, p)?),
     }
 }
 

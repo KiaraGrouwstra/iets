@@ -734,6 +734,18 @@ pub fn load_drv_traced(trace: &crate::trace::Trace, p: &StorePath) -> Result<Der
     Derivation::parse(&text, Derivation::name_from_path(p)?)
 }
 
+/// The derivation as this evaluation wrote it, else from the store.
+pub fn load_drv(ev: &Evaluator, p: &StorePath) -> Result<Derivation, DrvError> {
+    match ev.drv.drvs.get(p).and_then(|i| i.aterm) {
+        Some(aterm) => Derivation::parse(
+            std::str::from_utf8(&aterm)
+                .map_err(|_| DrvError(format!("derivation '{p}' is not valid UTF-8")))?,
+            Derivation::name_from_path(p)?,
+        ),
+        None => load_drv_traced(&ev.trace, p),
+    }
+}
+
 /// Output names and `.drv` references of `p`: from this evaluation's table,
 /// else parsed from `/nix/store`.
 fn drv_info(ev: &mut Evaluator, p: &StorePath, pos: Pos) -> EvalResult<DrvInfo> {
@@ -803,10 +815,10 @@ pub fn import_derivation(ev: &mut Evaluator, path: &[u8], pos: Pos) -> EvalResul
     let Ok(sp) = sp else {
         return Ok(None);
     };
-    if ev.trace.stat_now(sp.to_string().as_bytes(), true) != crate::trace::Kind::Regular {
+    if super::store_hooks::stat(ev, path, true) != crate::trace::Kind::Regular {
         return Ok(None);
     }
-    let drv = load_drv_traced(&ev.trace, &sp).map_err(|e| drv_err(e, pos))?;
+    let drv = load_drv(ev, &sp).map_err(|e| drv_err(e, pos))?;
     let drv_name = Derivation::name_from_path(&sp)
         .map_err(|e| drv_err(e, pos))?
         .to_string();

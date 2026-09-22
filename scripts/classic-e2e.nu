@@ -379,8 +379,6 @@ def main [] {
   for case in [
     {label: "nix-shell -p falls back", want: "'-p' is not implemented"
      args: [nix-shell -p hello --run "true"]}
-    {label: "nix-shell <nixpkgs> falls back on the fetch in nixpkgs/shell.nix", want: "builtins.fetchTarball"
-     args: [nix-shell -I $"nixpkgs=($np)" "<nixpkgs>" -A hello --run "true"]}
     {label: "nix develop --phase falls back", want: "'--phase' is not implemented"
      args: [nix develop --phase build]}
     {label: "nix develop --profile falls back", want: "'--profile' is not implemented"
@@ -391,6 +389,8 @@ def main [] {
     let err = (fallback-reason $farm $case.args)
     $ok = ($ok | append (verdict ($err | str contains $case.want) $case.label $"stderr was '($err)'"))
   }
+  $ok = ($ok | append (cmp-case "nix-shell <nixpkgs> fetches the sha256-pinned tarball of nixpkgs/shell.nix itself"
+    (with-env {IETSP_NO_FALLBACK: "1"} { run-both $farm nix-shell -I $"nixpkgs=($np)" "<nixpkgs>" -A hello --run 'echo $name' })))
   let shebang = $"($tmp)/script.sh"
   "#! /usr/bin/env nix-shell\n#! nix-shell -p hello -i bash\necho hi\n" | save -f $shebang
   let err = (fallback-reason $farm [nix-shell $shebang])

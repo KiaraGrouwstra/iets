@@ -1,8 +1,8 @@
 //! File system primops (primops.cc): readFile, readDir, readFileType,
 //! pathExists, toPath, storePath, filterSource, path, toFile. The network
 //! fetchers and flake primops are registered so `builtins ? fetchGit`
-//! holds, but they fail when called; only `fetchTree` on a locked input
-//! works (`flake::fetch`).
+//! holds, but they fail when called; only `fetchTree` on a locked input and
+//! `fetchTarball` with a `sha256` work (`flake::fetch`).
 
 use std::collections::{BTreeSet, HashSet};
 use std::ffi::OsStr;
@@ -36,7 +36,11 @@ pub fn register(r: &mut Registry) {
     r.op("__toFile", 2, to_file);
     r.op("__outputOf", 2, output_of);
     r.op("__fetchurl", 1, fetchurl);
-    r.op("fetchTarball", 1, fetch_tarball);
+    r.op(
+        "fetchTarball",
+        1,
+        crate::flake::fetch::fetch_tarball_builtin,
+    );
     r.op("fetchGit", 1, fetch_git);
     r.op("fetchTree", 1, crate::flake::fetch::fetch_tree);
     r.op("fetchMercurial", 1, fetch_mercurial);
@@ -66,11 +70,6 @@ unsupported!(
     fetchurl,
     "fetchurl",
     "ietsp: network fetchers are not supported (builtins.fetchurl)"
-);
-unsupported!(
-    fetch_tarball,
-    "fetchTarball",
-    "ietsp: network fetchers are not supported (builtins.fetchTarball)"
 );
 unsupported!(
     fetch_git,
@@ -187,9 +186,10 @@ pub fn coerce_to_path(
     Ok(canon_path(&s))
 }
 
-/// Nix's `realisePath` without building: a path with derivation context
-/// cannot be realised here, and an opaque store path must exist or be a
-/// tree this evaluation copied. The result is the path as Nix names it;
+/// Nix's `realisePath` without building: a path with a derivation output in
+/// its context cannot be realised here, and an opaque store path or `.drv`
+/// (primops.cc:realiseContext treats `DrvDeep` as opaque) must exist or be
+/// one this evaluation made. The result is the path as Nix names it;
 /// `store_hooks::locate` gives the file to read.
 pub fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>> {
     let mut ctx = Vec::new();
@@ -204,15 +204,25 @@ pub fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>
         let mut kind = ErrorKind::Eval;
         let msg = match c {
             Ctx::Impure(_) => continue,
-            Ctx::Opaque(sp) => {
+            Ctx::Opaque(sp) | Ctx::DrvDeep(sp) => {
                 if !matches!(store_hooks::locate(ev, sp), store_hooks::Access::Store)
                     || ev.trace.stat_now(sp, true) != crate::trace::Kind::Missing
                 {
                     continue;
                 }
-                format!("path '{}' is not valid", lossy(sp))
+                if let Ok(Ok(d)) = std::str::from_utf8(sp).map(StorePath::parse)
+                    && ev.drv.drvs.lock().contains_key(&d)
+                {
+                    kind = ErrorKind::Unsupported;
+                    format!(
+                        "ietsp: '{}' is not in the store and this run did not keep its text (--no-cache)",
+                        lossy(sp)
+                    )
+                } else {
+                    format!("path '{}' is not valid", lossy(sp))
+                }
             }
-            Ctx::DrvDeep(d) | Ctx::Built { drv: d, .. } => {
+            Ctx::Built { drv: d, .. } => {
                 kind = ErrorKind::Unsupported;
                 format!(
                     "ietsp: import from derivation is not supported: '{}' is not built",
@@ -230,12 +240,13 @@ pub fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>
     Ok(p)
 }
 
-/// What a realised path reads: a file on disk, or a member of a fetched flake
-/// input served out of its spool (`crate::inputs`). The last field of `In` is
-/// the path Nix names in a message.
+/// What a realised path reads: a file on disk, a member of a fetched flake
+/// input served out of its spool (`crate::inputs`), or bytes in memory. The
+/// last field of `In` and `Mem` is the path Nix names in a message.
 enum Real {
     Fs(Vec<u8>, crate::store::source::Accepted),
     In(Arc<crate::inputs::Entry>, StorePath, Vec<u8>, Vec<u8>),
+    Mem(Arc<Vec<u8>>, Vec<u8>),
 }
 
 /// The file to read for a realised path, with the filter of the copied
@@ -250,6 +261,7 @@ fn realise_existing(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Real> {
             Ok(Real::Fs(path.into_os_string().into_vec(), accepted))
         }
         store_hooks::Access::Input { entry, base, rel } => Ok(Real::In(entry, base, rel, p)),
+        store_hooks::Access::Mem(bytes) => Ok(Real::Mem(bytes, p)),
         store_hooks::Access::Missing => Err(io_error(
             io::Error::from_raw_os_error(libc::ENOENT),
             "getting status of",
@@ -266,6 +278,7 @@ fn read_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         Real::In(e, base, rel, shown) => {
             return crate::inputs::read_file(ev, &e, &base, &rel, &shown, pos);
         }
+        Real::Mem(bytes, _) => return Ok(ev.mk_string(&bytes)),
         Real::Fs(p, a) => (p, a),
     };
     let meta = fs::metadata(os_path(&p)).map_err(|e| io_error(e, "getting status of", &p, pos))?;
@@ -301,6 +314,7 @@ fn read_dir(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         Real::In(e, base, rel, shown) => {
             return crate::inputs::read_dir(ev, &e, &base, &rel, &shown, pos);
         }
+        Real::Mem(_, shown) => bail!(ErrorKind::Io, pos, "'{}' is not a directory", lossy(&shown)),
         Real::Fs(p, a) => (p, a),
     };
     let rd = fs::read_dir(os_path(&p)).map_err(|e| {
@@ -363,6 +377,7 @@ fn read_file_type(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
         Real::In(e, base, rel, shown) => {
             return crate::inputs::read_file_type(ev, &e, &base, &rel, &shown, pos);
         }
+        Real::Mem(..) => return Ok(ev.mk_string(FileType::Regular.nix_name().as_bytes())),
         Real::Fs(p, a) => (p, a),
     };
     let meta = fs::symlink_metadata(os_path(&p));
@@ -384,6 +399,7 @@ fn path_exists(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> 
         Some(store_hooks::Whence::In(e, base, rel)) => {
             return Ok(crate::inputs::path_exists(ev, &e, &base, &rel, must_be_dir));
         }
+        Some(store_hooks::Whence::Mem(_)) => return Ok(Word::from_bool(!must_be_dir)),
         None => return Ok(Word::FALSE),
     };
     let r = if must_be_dir {
@@ -444,7 +460,12 @@ fn store_path(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the first argument passed to 'builtins.storePath'",
     )?;
-    if !is_store_path(&p) {
+    if !is_store_path(&p)
+        && matches!(
+            store_hooks::locate(ev, &p),
+            store_hooks::Access::Store | store_hooks::Access::Missing
+        )
+    {
         let resolved = fs::canonicalize(os_path(&p));
         ev.trace.canon(&p, resolved.as_deref().ok());
         let resolved = resolved.map_err(|e| io_error(e, "getting status of", &p, pos))?;
@@ -500,7 +521,7 @@ fn call_filter(
 
 /// Mirrors primops.cc:addPath. References of a store path are unknown here
 /// (no store database), so an in-store source gets none.
-fn add_path(
+pub(crate) fn add_path(
     ev: &mut Evaluator,
     pos: Pos,
     name: &[u8],
@@ -508,7 +529,7 @@ fn add_path(
     filter: Option<Word>,
     method: IngestionMethod,
     expected: Option<Hash>,
-) -> EvalResult<Word> {
+) -> EvalResult<StorePath> {
     add_path_inner(ev, pos, name, path, filter, method, expected).map_err(|mut e| {
         e.add_trace(pos, format!("while adding path '{}'", lossy(path)));
         e
@@ -523,7 +544,7 @@ fn add_path_inner(
     filter: Option<Word>,
     method: IngestionMethod,
     expected: Option<Hash>,
-) -> EvalResult<Word> {
+) -> EvalResult<StorePath> {
     let name = utf8(name, pos)?;
     let refs = BTreeSet::new();
     crate::lint::coerce::store_path_recopy(ev, path, pos)?;
@@ -536,7 +557,7 @@ fn add_path_inner(
     if let Some(sp) = &expected_sp
         && ev.trace.stat_now(sp.to_full_string().as_bytes(), true) != crate::trace::Kind::Missing
     {
-        return Ok(store_path_string(ev, sp));
+        return Ok(sp.clone());
     }
     // A path under a tree this evaluation copied reads the local tree, with
     // that tree's filter applied before this call's `filter`; the filter
@@ -574,6 +595,7 @@ fn add_path_inner(
                     pos,
                 ));
             }
+            store_hooks::Access::Mem(_) => return Err(store_hooks::recopy_unsupported(path, pos)),
         };
     let shown = |p: &Path| -> PathBuf {
         match p.strip_prefix(&resolved) {
@@ -689,7 +711,7 @@ fn add_path_inner(
             lossy(path)
         );
     }
-    Ok(store_path_string(ev, &sp))
+    Ok(sp)
 }
 
 fn filter_source(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
@@ -707,7 +729,7 @@ fn filter_source(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word
         "while evaluating the first argument passed to builtins.filterSource",
     )?;
     let name = base_name(&p).to_vec();
-    add_path(
+    let sp = add_path(
         ev,
         pos,
         &name,
@@ -715,7 +737,8 @@ fn filter_source(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word
         Some(f),
         IngestionMethod::Recursive,
         None,
-    )
+    )?;
+    Ok(store_path_string(ev, &sp))
 }
 
 /// Mirrors `newHashAllowEmpty`: an empty hash string means all zeros.
@@ -807,7 +830,8 @@ fn path(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     if name.is_empty() {
         name = base_name(&p).to_vec();
     }
-    add_path(ev, pos, &name, &p, filter, method, expected)
+    let sp = add_path(ev, pos, &name, &p, filter, method, expected)?;
+    Ok(store_path_string(ev, &sp))
 }
 
 /// Nix's internal context form: base names, `=` and `!out!` prefixes.
@@ -880,7 +904,7 @@ fn add_input_path(
     entry: &crate::inputs::Entry,
     base: &StorePath,
     rel: &[u8],
-) -> EvalResult<Word> {
+) -> EvalResult<StorePath> {
     if method == IngestionMethod::Flat {
         let h = crate::inputs::hash_file(ev, entry, base, rel, HashAlgo::Sha256)
             .map_err(|e| io_error(e, "reading file", path, pos))?;
@@ -935,7 +959,7 @@ fn finish_added(
     rel: &[u8],
     method: IngestionMethod,
     name: &str,
-) -> EvalResult<Word> {
+) -> EvalResult<StorePath> {
     let sp = make_fixed_output_path(method, hash, name, &BTreeSet::new())
         .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, pos))?;
     if method == IngestionMethod::Recursive {
@@ -954,5 +978,5 @@ fn finish_added(
             lossy(path)
         );
     }
-    Ok(store_path_string(ev, &sp))
+    Ok(sp)
 }

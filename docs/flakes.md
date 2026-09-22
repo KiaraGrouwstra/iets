@@ -220,10 +220,12 @@ The store-level rules are the ones the two caches follow (`docs/caches.md`): a
 
 **Reads.** `src/builtins/store_hooks.rs:locate` is the one place that maps a
 store path to its bytes. It answers `Store` (read the real path), `Local` (read
-the local tree a virtual copy stands for) or `Input` (read the member out of an
-entry's spool, by `pread` at the offset the index holds). `import`, `readFile`,
-`readDir`, `pathExists`, `readFileType`, `hashFile`, `builtins.path`,
-`filterSource`, `"${path}"` and the `sourceInfo` attrs all go through it, so a
+the local tree a virtual copy stands for), `Input` (read the member out of an
+entry's spool, by `pread` at the offset the index holds) or `Mem` (a `toFile`
+text or a `.drv` this evaluation holds in memory). `import`, `readFile`,
+`readDir`, `pathExists`, `readFileType`, `hashFile`, `findFile`, `storePath`,
+`fetchTree { type = "path"; }`, `builtins.path`, `filterSource`, `"${path}"`
+and the `sourceInfo` attrs all go through it, so a
 fetched input needs no `/nix/store` entry and no daemon. `/nix/store` is checked
 first and wins when it has the tree; an input that appears there later, because
 a build registered it, changes nothing, since the two hold the same bytes by

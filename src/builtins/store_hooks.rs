@@ -1,14 +1,16 @@
 //! Evaluator-side use of the pure `store` module: copying source paths to
 //! the (virtual) store, and reading a virtual store path back from the
-//! local tree it was copied from or from the spool of a fetched input.
+//! local tree it was copied from, from the spool of a fetched input, or from
+//! memory.
 //!
 //! This is the one place that maps a store path to its bytes. Everything the
 //! evaluator reads for a store path goes through [`locate`]: `import`,
 //! `readFile`, `readDir`, `pathExists`, `readFileType`, `hashFile`,
-//! `builtins.path`, `filterSource` and string coercion. The three answers are
-//! the real file system, a local tree a virtual copy stands for, and a member
-//! of a fetched flake input served out of its spool by offset
-//! (`crate::inputs`).
+//! `findFile`, `storePath`, `fetchTree`, `builtins.path`, `filterSource` and
+//! string coercion. The four answers are the real file system, a local tree a
+//! virtual copy stands for, a member of a fetched flake input served out of
+//! its spool by offset (`crate::inputs`), and a `toFile` text or `.drv` this
+//! evaluation holds in memory.
 
 use std::collections::{BTreeSet, HashSet};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -18,6 +20,7 @@ use std::sync::Arc;
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::store::path::{IngestionMethod, STORE_DIR, StorePath, make_fixed_output_path};
 use crate::store::source::SourceOrigin;
+use crate::trace::Kind;
 
 /// Where a read of `path` goes.
 pub enum Access {
@@ -36,6 +39,9 @@ pub enum Access {
         base: StorePath,
         rel: Vec<u8>,
     },
+    /// A `toFile` text or a `.drv` this evaluation produced: the bytes it
+    /// holds in memory.
+    Mem(Arc<Vec<u8>>),
     /// Under such a tree, but its filter left the entry out (an untracked
     /// file of a git tree): the store copy has no such entry.
     Missing,
@@ -71,7 +77,13 @@ pub fn locate(ev: &Evaluator, path: &[u8]) -> Access {
         Some(SourceOrigin::Input { entry, rel, .. }) => {
             return crate::inputs::access(&entry, &rel, sub);
         }
-        _ => return Access::Store,
+        Some(SourceOrigin::Text { contents, .. }) => {
+            return mem(sub, Arc::new(contents));
+        }
+        None => match ev.drv.drvs.get(&sp).and_then(|i| i.aterm) {
+            Some(aterm) => return mem(sub, aterm),
+            None => return Access::Store,
+        },
     };
     let path = if sub.is_empty() {
         local
@@ -87,12 +99,36 @@ pub fn locate(ev: &Evaluator, path: &[u8]) -> Access {
     Access::Local { path, accepted }
 }
 
+/// Copying a [`Access::Mem`] path again would need a source origin that
+/// uploads a NAR from memory. It is refused instead, so the classic names
+/// fall back to nix.
+pub fn recopy_unsupported(path: &[u8], pos: Pos) -> Box<Error> {
+    Error::boxed(
+        ErrorKind::Unsupported,
+        format!(
+            "ietsp: copying '{}' to the store again is not supported",
+            String::from_utf8_lossy(path)
+        ),
+        pos,
+    )
+}
+
+fn mem(sub: &[u8], bytes: Arc<Vec<u8>>) -> Access {
+    if sub.is_empty() {
+        Access::Mem(bytes)
+    } else {
+        Access::Missing
+    }
+}
+
 /// What a read of `path` opens.
 pub enum Whence {
     /// A real file on disk, at this path.
     Fs(Vec<u8>),
     /// A member of a fetched flake input, served from the entry's spool.
     In(Arc<crate::inputs::Entry>, StorePath, Vec<u8>),
+    /// A regular file held in memory ([`Access::Mem`]).
+    Mem(Arc<Vec<u8>>),
 }
 
 /// Where the bytes of `path` are: the file itself, its local original, or a
@@ -102,7 +138,27 @@ pub fn whence(ev: &Evaluator, path: &[u8]) -> Option<Whence> {
         Access::Store => Some(Whence::Fs(path.to_vec())),
         Access::Local { path, .. } => Some(Whence::Fs(path.into_os_string().into_vec())),
         Access::Input { entry, base, rel } => Some(Whence::In(entry, base, rel)),
+        Access::Mem(bytes) => Some(Whence::Mem(bytes)),
         Access::Missing => None,
+    }
+}
+
+/// `Trace::stat_now` through [`whence`].
+pub fn stat(ev: &Evaluator, path: &[u8], follow: bool) -> Kind {
+    use crate::flake::spool::Node;
+    match whence(ev, path) {
+        Some(Whence::Fs(p)) => ev.trace.stat_now(&p, follow),
+        Some(Whence::In(entry, base, rel)) => {
+            crate::inputs::record(ev, &entry, &base);
+            match entry.tree.resolve(&rel, follow) {
+                Some(Node::Dir(_)) => Kind::Directory,
+                Some(Node::File { .. }) => Kind::Regular,
+                Some(Node::Symlink(_)) => Kind::Symlink,
+                None => Kind::Missing,
+            }
+        }
+        Some(Whence::Mem(_)) => Kind::Regular,
+        None => Kind::Missing,
     }
 }
 
@@ -138,6 +194,7 @@ pub fn copy_path_to_store(
             return Ok(full);
         }
         Access::Missing => return Err(copy_err(std::io::Error::from_raw_os_error(2))),
+        Access::Mem(_) => return Err(recopy_unsupported(path, pos)),
     };
     // a plain local directory, not a tree the flake machinery filtered
     if ev.lint_on(crate::lint::LintId::DirCopyUnfiltered)

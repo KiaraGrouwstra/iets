@@ -485,7 +485,7 @@ impl Evaluator {
                 continue;
             };
             let cp = crate::compile::canon_path(&candidate);
-            let kind = self.trace.stat_now(&cp, true);
+            let kind = crate::builtins::store_hooks::stat(self, &cp, true);
             if kind != crate::trace::Kind::Missing {
                 return Ok(cp);
             }

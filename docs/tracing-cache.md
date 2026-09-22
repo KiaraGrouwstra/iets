@@ -32,8 +32,9 @@ would have accepted or rejected is a miss. For an unfiltered tree the
 `stat_hash` already covers that.
 
 `builtins.currentTime` and every network fetcher (`fetchurl`,
-`fetchTarball`, `fetchGit`, `fetchMercurial`, `fetchClosure`, `getFlake`)
-mark the run uncacheable. `fetchTree` on a locked input is cacheable: its
+`fetchTarball` without a `sha256`, `fetchGit`, `fetchMercurial`,
+`fetchClosure`, `getFlake`) mark the run uncacheable. `fetchTree` on a locked
+input and `fetchTarball` with a `sha256` are cacheable: its
 result follows from the attrs and a `Stat` of the store path (see
 `docs/flakes.md`). `currentTime` is a lazy thunk over an internal
 primop so the mark happens only when a program forces it. `--dump-drvs`

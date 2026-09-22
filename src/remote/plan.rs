@@ -357,34 +357,86 @@ pub fn hash_source(data: &SourceData) -> io::Result<(Hash, u64)> {
     Ok((nar.finish(), size))
 }
 
-/// A drv's ATerm and references, from the eval table or from `/nix/store`.
-struct DrvNode {
-    references: BTreeSet<StorePath>,
-    aterm: Arc<Vec<u8>>,
-    from_store: bool,
-}
+/// One derivation of a walk: its ATerm and what it references.
+pub type Node = (StorePath, Arc<Vec<u8>>, BTreeSet<StorePath>);
 
-fn load_drv(path: &StorePath, inputs: &Inputs<'_>) -> Result<DrvNode> {
-    if let Some(info) = inputs.drvs.get(path)
-        && let Some(aterm) = &info.aterm
+/// A drv's ATerm and references: this evaluation's (`drv`), else
+/// `/nix/store`'s. The flag is true for the second.
+pub fn load_drv(
+    p: &StorePath,
+    drv: &dyn Fn(&StorePath) -> Option<DrvInfo>,
+) -> Result<(Arc<Vec<u8>>, BTreeSet<StorePath>, bool)> {
+    if let Some(info) = drv(p)
+        && let Some(aterm) = info.aterm
     {
-        return Ok(DrvNode {
-            references: info.references.clone(),
-            aterm: aterm.clone(),
-            from_store: false,
-        });
+        return Ok((aterm, info.references, false));
     }
-    let full = format!("{STORE_DIR}/{}", path.base_name());
+    let full = format!("{STORE_DIR}/{}", p.base_name());
     let text = std::fs::read_to_string(&full)
         .map_err(|e| Error::io(format!("cannot read derivation '{full}'"), e))?;
-    let drv = Derivation::parse(&text, Derivation::name_from_path(path)?)?;
+    let drv = Derivation::parse(&text, Derivation::name_from_path(p)?)?;
     let mut references = drv.input_srcs;
     references.extend(drv.input_drvs.into_keys());
-    Ok(DrvNode {
-        references,
-        aterm: Arc::new(text.into_bytes()),
-        from_store: true,
-    })
+    Ok((Arc::new(text.into_bytes()), references, true))
+}
+
+/// The drvs `roots` need, each after every drv it references, and the
+/// sources they name, each after the sources its `toFile` text references
+/// (`text_refs`): the daemon registers a path only once its references are
+/// valid, and a text can point at a copied path no derivation lists. The walk
+/// stops at `known`. The count is the drvs read from `/nix/store`.
+pub fn walk(
+    roots: &[StorePath],
+    known: &HashSet<StorePath>,
+    drv: &dyn Fn(&StorePath) -> Option<DrvInfo>,
+    text_refs: &dyn Fn(&StorePath) -> Option<BTreeSet<StorePath>>,
+) -> Result<(Vec<Node>, Vec<StorePath>, usize)> {
+    fn source(
+        p: StorePath,
+        known: &HashSet<StorePath>,
+        text_refs: &dyn Fn(&StorePath) -> Option<BTreeSet<StorePath>>,
+        seen: &mut HashSet<StorePath>,
+        out: &mut Vec<StorePath>,
+    ) {
+        if known.contains(&p) || !seen.insert(p.clone()) {
+            return;
+        }
+        for r in text_refs(&p).unwrap_or_default() {
+            if !r.is_derivation() {
+                source(r, known, text_refs, seen, out);
+            }
+        }
+        out.push(p);
+    }
+    let mut seen: HashSet<StorePath> = HashSet::new();
+    let mut drvs: Vec<Node> = Vec::new();
+    let mut srcs: Vec<StorePath> = Vec::new();
+    let mut from_store = 0;
+    type Pending = Option<(Arc<Vec<u8>>, BTreeSet<StorePath>)>;
+    let mut stack: Vec<(StorePath, Pending)> =
+        roots.iter().rev().map(|p| (p.clone(), None)).collect();
+    while let Some((p, done)) = stack.pop() {
+        if let Some((aterm, refs)) = done {
+            drvs.push((p, aterm, refs));
+            continue;
+        }
+        if known.contains(&p) || !seen.insert(p.clone()) {
+            continue;
+        }
+        let (aterm, refs, stored) = load_drv(&p, drv)?;
+        from_store += usize::from(stored);
+        stack.push((p, Some((aterm, refs.clone()))));
+        for r in refs {
+            if r.is_derivation() {
+                if !known.contains(&r) && !seen.contains(&r) {
+                    stack.push((r, None));
+                }
+            } else {
+                source(r, known, text_refs, &mut seen, &mut srcs);
+            }
+        }
+    }
+    Ok((drvs, srcs, from_store))
 }
 
 /// Computes the closure of `roots`: input drvs recursively and every input source, without
@@ -392,38 +444,15 @@ fn load_drv(path: &StorePath, inputs: &Inputs<'_>) -> Result<DrvNode> {
 /// `/nix/store` and counted in the plan. Fixed-output drvs are ordinary drvs here; the builder
 /// fetches them.
 pub fn plan(roots: &[StorePath], inputs: Inputs<'_>) -> Result<Plan> {
-    let mut sources: Vec<StorePath> = Vec::new();
-    let mut drvs: Vec<Object> = Vec::new();
-    let mut seen_src: HashSet<StorePath> = HashSet::new();
-    let mut seen_drv: HashSet<StorePath> = HashSet::new();
-    let mut store_drvs = 0;
-
-    // Iterative post-order: a drv is emitted after every drv it references.
-    type Pending = Option<(Arc<Vec<u8>>, BTreeSet<StorePath>)>;
-    let mut stack: Vec<(StorePath, Pending)> =
-        roots.iter().rev().map(|r| (r.clone(), None)).collect();
-    while let Some((path, done)) = stack.pop() {
-        if let Some((aterm, references)) = done {
-            drvs.push(Object::drv(path, aterm, references));
-            continue;
-        }
-        if !seen_drv.insert(path.clone()) {
-            continue;
-        }
-        let node = load_drv(&path, &inputs)?;
-        store_drvs += usize::from(node.from_store);
-        stack.push((path, Some((node.aterm, node.references.clone()))));
-        for r in node.references {
-            if r.is_derivation() {
-                if !seen_drv.contains(&r) {
-                    stack.push((r, None));
-                }
-            } else {
-                collect_source(r, inputs.sources, &mut seen_src, &mut sources);
-            }
-        }
-    }
-
+    let (drvs, sources, store_drvs) = walk(
+        roots,
+        &HashSet::new(),
+        &|p| inputs.drvs.get(p).cloned(),
+        &|p| match inputs.sources.get(p) {
+            Some(SourceOrigin::Text { references, .. }) => Some(references.clone()),
+            _ => None,
+        },
+    )?;
     let origins = sources
         .iter()
         .filter_map(|p| inputs.sources.get(p).map(|o| (p.clone(), o.clone())))
@@ -431,31 +460,12 @@ pub fn plan(roots: &[StorePath], inputs: Inputs<'_>) -> Result<Plan> {
     Ok(Plan {
         sources,
         origins,
-        drvs,
+        drvs: drvs
+            .into_iter()
+            .map(|(p, aterm, refs)| Object::drv(p, aterm, refs))
+            .collect(),
         store_drvs,
     })
-}
-
-/// Adds `p` to `sources` after the sources it references: a `toFile`
-/// text can point at a copied path that no derivation lists directly,
-/// and the daemon registers a path only once its references are valid.
-fn collect_source(
-    p: StorePath,
-    origins: &HashMap<StorePath, SourceOrigin>,
-    seen: &mut HashSet<StorePath>,
-    sources: &mut Vec<StorePath>,
-) {
-    if !seen.insert(p.clone()) {
-        return;
-    }
-    if let Some(SourceOrigin::Text { references, .. }) = origins.get(&p) {
-        for r in references {
-            if !r.is_derivation() {
-                collect_source(r.clone(), origins, seen, sources);
-            }
-        }
-    }
-    sources.push(p);
 }
 
 /// Dumps and hashes every source on a thread pool; results keep the input order.

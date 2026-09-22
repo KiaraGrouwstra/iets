@@ -14,17 +14,15 @@
 //! Neither shape knows the transport: both speak `build::backend::Backend`,
 //! so the same upload runs over the worker protocol and over `grpc://`.
 
-use std::collections::{BTreeSet, HashSet};
-use std::sync::Arc;
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use crate::builtins::derivation::DrvInfo;
 use crate::error::{Error, Result};
 use crate::parallel::shared::SharedMap;
 use crate::remote::event::Event;
-use crate::remote::plan::{Locator, Object, Plan, SourceInfo};
-use crate::store::drv::Derivation;
-use crate::store::path::{STORE_DIR, StorePath};
+use crate::remote::plan::{Locator, Node, Object, Plan, SourceInfo};
+use crate::store::path::StorePath;
 use crate::store::source::SourceOrigin;
 
 use super::backend::{Backend, Drv, Phase};
@@ -156,9 +154,6 @@ impl Uploader for PlanUpload<'_> {
     }
 }
 
-/// One derivation of a walk: its ATerm and what it references.
-type Node = (StorePath, Arc<Vec<u8>>, BTreeSet<StorePath>);
-
 /// The incremental one: the evaluation's tables plus what the builder is
 /// already known to hold.
 pub struct StreamUpload {
@@ -179,82 +174,22 @@ impl StreamUpload {
         }
     }
 
-    /// ATerm and references of `p`: this evaluation's, else `/nix/store`'s.
-    fn load_drv(&self, p: &StorePath) -> Result<(Arc<Vec<u8>>, BTreeSet<StorePath>)> {
-        if let Some(info) = self.drvs.get(p)
-            && let Some(aterm) = info.aterm
-        {
-            return Ok((aterm, info.references));
-        }
-        let full = format!("{STORE_DIR}/{}", p.base_name());
-        let text = std::fs::read_to_string(&full)
-            .map_err(|e| Error::io(format!("cannot read derivation '{full}'"), e))?;
-        let drv = Derivation::parse(&text, Derivation::name_from_path(p)?)?;
-        let mut references = drv.input_srcs;
-        references.extend(drv.input_drvs.into_keys());
-        Ok((Arc::new(text.into_bytes()), references))
-    }
-
-    /// The drvs `roots` need in post-order and the sources they name, pruned
-    /// at everything in `known`.
+    /// The drvs `roots` need and the sources they name, pruned at `known`
+    /// (`plan::walk`).
     fn walk(
         &self,
         roots: &[StorePath],
         known: &HashSet<StorePath>,
     ) -> Result<(Vec<Node>, Vec<StorePath>)> {
-        let mut seen: HashSet<StorePath> = HashSet::new();
-        let mut drvs: Vec<Node> = Vec::new();
-        let mut srcs: Vec<StorePath> = Vec::new();
-        type Pending = Option<(Arc<Vec<u8>>, BTreeSet<StorePath>)>;
-        let mut stack: Vec<(StorePath, Pending)> =
-            roots.iter().rev().map(|p| (p.clone(), None)).collect();
-        // Iterative post-order: a drv after every drv it references.
-        while let Some((p, done)) = stack.pop() {
-            if let Some((aterm, refs)) = done {
-                drvs.push((p, aterm, refs));
-                continue;
-            }
-            if known.contains(&p) || !seen.insert(p.clone()) {
-                continue;
-            }
-            let (aterm, refs) = self.load_drv(&p)?;
-            stack.push((p, Some((aterm, refs.clone()))));
-            for r in refs {
-                if known.contains(&r) {
-                    continue;
-                }
-                if r.is_derivation() {
-                    if !seen.contains(&r) {
-                        stack.push((r, None));
-                    }
-                } else {
-                    self.collect_source(r, known, &mut seen, &mut srcs);
-                }
-            }
-        }
+        let (drvs, srcs, _) =
+            crate::remote::plan::walk(roots, known, &|p| self.drvs.get(p), &|p| match self
+                .sources
+                .get(p)
+            {
+                Some(SourceOrigin::Text { references, .. }) => Some(references),
+                _ => None,
+            })?;
         Ok((drvs, srcs))
-    }
-
-    /// `p` after the sources a `toFile` text references: the daemon
-    /// registers a path only once its references are valid.
-    fn collect_source(
-        &self,
-        p: StorePath,
-        known: &HashSet<StorePath>,
-        seen: &mut HashSet<StorePath>,
-        out: &mut Vec<StorePath>,
-    ) {
-        if known.contains(&p) || !seen.insert(p.clone()) {
-            return;
-        }
-        if let Some(SourceOrigin::Text { references, .. }) = self.sources.get(&p) {
-            for r in references {
-                if !r.is_derivation() {
-                    self.collect_source(r, known, seen, out);
-                }
-            }
-        }
-        out.push(p);
     }
 
     /// Where to read a source and how it was addressed: from the evaluation,
@@ -344,7 +279,7 @@ impl Uploader for StreamUpload {
             return roots
                 .iter()
                 .map(|p| {
-                    self.load_drv(p).map(|(aterm, _)| Drv {
+                    crate::remote::plan::load_drv(p, &|p| self.drvs.get(p)).map(|(aterm, ..)| Drv {
                         path: p.clone(),
                         aterm,
                     })
