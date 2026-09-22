@@ -17,8 +17,8 @@ use crate::runtime::*;
 use crate::syntax::symbol::Sym;
 
 pub struct Registry {
-    pub ops: Vec<(&'static str, u8, PrimFn, bool)>,
-    pub consts: Vec<(&'static str, Word, bool)>,
+    pub ops: Vec<(&'static str, u8, PrimFn)>,
+    pub consts: Vec<(&'static str, Word)>,
 }
 
 impl Registry {
@@ -26,16 +26,11 @@ impl Registry {
     /// prefix are also visible as globals; prefixed ones are globals under
     /// their prefixed name and appear in `builtins` unprefixed.
     pub fn op(&mut self, name: &'static str, arity: u8, f: PrimFn) {
-        self.ops.push((name, arity, f, true));
-    }
-
-    /// Only in `builtins`, no global at all.
-    pub fn op_hidden(&mut self, name: &'static str, arity: u8, f: PrimFn) {
-        self.ops.push((name, arity, f, false));
+        self.ops.push((name, arity, f));
     }
 
     pub fn constant(&mut self, name: &'static str, w: Word) {
-        self.consts.push((name, w, true));
+        self.consts.push((name, w));
     }
 }
 
@@ -83,34 +78,25 @@ pub fn install(ev: &mut Evaluator) {
     r.constant("__storeDir", sd);
     let np = ev.mk_list(&[]);
     r.constant("__nixPath", np);
-    let ct_op = r
-        .ops
-        .iter()
-        .find(|(n, ..)| *n == "currentTimeRaw")
-        .map(|(n, a, f, _)| ev.arena.mk_primop(n, *a, *f))
-        .expect("currentTimeRaw registered");
     if !ev.pure {
+        let ct_op = ev.arena.mk_primop("currentTimeRaw", 1, text::current_time);
         let ct = ev.arena.mk_thunk_app(ct_op, Word::NULL);
         r.constant("__currentTime", ct);
     }
 
     let mut entries: Vec<(Sym, Pos, Word)> = Vec::new();
-    for (name, arity, f, global) in &r.ops {
+    for (name, arity, f) in &r.ops {
         let w = ev.arena.mk_primop(name, *arity, *f);
         let bsym = ev.sym(builtins_name(name).as_bytes());
         entries.push((bsym, Pos::NONE, w));
-        if *global {
-            let gsym = ev.sym(name.as_bytes());
-            ev.globals.table.insert(gsym, w);
-        }
+        let gsym = ev.sym(name.as_bytes());
+        ev.globals.table.insert(gsym, w);
     }
-    for (name, w, global) in &r.consts {
+    for (name, w) in &r.consts {
         let bsym = ev.sym(builtins_name(name).as_bytes());
         entries.push((bsym, Pos::NONE, *w));
-        if *global {
-            let gsym = ev.sym(name.as_bytes());
-            ev.globals.table.insert(gsym, *w);
-        }
+        let gsym = ev.sym(name.as_bytes());
+        ev.globals.table.insert(gsym, *w);
     }
     let derivation_sym = ev.sym(b"derivation");
     let builtins_sym = ev.sym(b"builtins");

@@ -33,12 +33,11 @@ pub fn register(r: &mut Registry) {
     r.op("__fromJSON", 1, json::from_json);
     r.op("__toXML", 1, xml::to_xml);
     r.op("fromTOML", 1, fromtoml::from_toml);
-    r.op_hidden("currentTimeRaw", 1, current_time);
 }
 
 /// `builtins.currentTime` is a thunk over this, so the run is marked
 /// uncacheable only when a program forces it.
-fn current_time(ev: &mut Evaluator, _args: &[Word], _pos: Pos) -> EvalResult<Word> {
+pub(super) fn current_time(ev: &mut Evaluator, _args: &[Word], _pos: Pos) -> EvalResult<Word> {
     ev.trace.mark_uncacheable();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
