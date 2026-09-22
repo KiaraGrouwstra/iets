@@ -353,6 +353,9 @@ scheduler says `Restarting`, or goes away with `UNAVAILABLE`, `UNKNOWN` or
 again. A `BuildDerivation` that the worker bounces (`ABORTED`,
 `FAILED_PRECONDITION`, `UNAVAILABLE`, `UNKNOWN`, `INTERNAL`) goes back to the
 scheduler, up to `reschedule-retries` times (build.cc:`buildAssigned`).
+Unlike build.cc, each ask after the first waits: 1 s doubling to 30 s. A
+worker that crashed stays placeable until the scheduler notices, and every
+bounce off it is instant.
 `NOT_FOUND` means the worker has not got the `.drv` closure: ietsp uploads
 that closure (`QueryValidPaths` then `AddMultipleToStore`, with the same
 routing headers) and asks once more.

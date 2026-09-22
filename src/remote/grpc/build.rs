@@ -429,7 +429,8 @@ pub fn build(
     tx: &std::sync::mpsc::Sender<Event>,
 ) -> Result<(BuildResult, usize)> {
     let mut calls = 0usize;
-    for _ in 0..=c.cfg.reschedule_retries {
+    for n in 0..=c.cfg.reschedule_retries {
+        std::thread::sleep(reschedule_pause(n));
         let (worker, assign_id) = match sched.place(job.want())? {
             // 2 = AlreadyValid.
             Answer::Cached => {
@@ -452,6 +453,17 @@ pub fn build(
         "'{}': gave up after {} reschedules",
         job.drv_path, c.cfg.reschedule_retries
     )))
+}
+
+/// None before the first ask, then 1 s doubling to 30 s: 121 s over the
+/// default 8 reschedules. build.cc asks again at once, but a worker that
+/// crashed stays placeable until the scheduler notices (42 s seen), and every
+/// bounce off it is instant, so back-to-back asks spent the budget first.
+fn reschedule_pause(n: u32) -> Duration {
+    match n {
+        0 => Duration::ZERO,
+        n => Duration::from_secs((1u64 << (n - 1).min(5)).min(30)),
+    }
 }
 
 /// build.cc:`buildAssigned`: `NOT_FOUND` means the worker lacks the `.drv`
@@ -843,6 +855,13 @@ fn remote_closure(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reschedules_back_off_past_a_dead_worker() {
+        let p: Vec<u64> = (0..=8).map(|n| reschedule_pause(n).as_secs()).collect();
+        assert_eq!(p, [0, 1, 2, 4, 8, 16, 30, 30, 30]);
+        assert_eq!(reschedule_pause(u32::MAX).as_secs(), 30);
+    }
 
     fn info(name: &str, refs: &[&str]) -> PathInfo {
         PathInfo {
