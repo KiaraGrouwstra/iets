@@ -186,9 +186,8 @@ impl Evaluator {
         crate::builtins::store_hooks::copy_path_to_store(self, path, pos)
     }
 
-    /// The `==` operator. Nix compares the two operand temporaries, so two
-    /// references to one function are unequal here but equal when reached
-    /// through a shared cell (see `eq_values`).
+    /// The `==` operator. Nix compares two fresh operand temporaries
+    /// (`ExprOpEq::eval`), so a function is never equal here.
     pub fn eq_values_top(&mut self, a: Word, b: Word, pos: Pos) -> EvalResult<bool> {
         let a = self.force(a)?;
         let b = self.force(b)?;
@@ -200,17 +199,35 @@ impl Evaluator {
         if a == b && a.value_type() == ValueType::Function {
             return Ok(false);
         }
-        self.eq_values(a, b, pos)
+        self.eq_values(a, a, b, b, pos)
     }
 
-    /// Nix `eqValues`: identical words are equal (pointer shortcut).
-    #[allow(clippy::only_used_in_recursion)]
-    pub fn eq_values(&mut self, a: Word, b: Word, pos: Pos) -> EvalResult<bool> {
-        let a = self.force(a)?;
-        let b = self.force(b)?;
-        if a == b {
+    /// Nix `eqValues` on `a` and `b`, the words before forcing. Equal forced
+    /// words are equal (the pointer shortcut, kept for speed where Nix would
+    /// compare two slots); a function only when it is one slot, the word
+    /// before forcing, since two thunks can force to one function.
+    pub fn eq_values(
+        &mut self,
+        a: Word,
+        fa: Word,
+        b: Word,
+        fb: Word,
+        pos: Pos,
+    ) -> EvalResult<bool> {
+        if fa == fb && (a == b || fa.value_type() != ValueType::Function) {
             return Ok(true);
         }
+        self.eq_forced(fa, fb, pos)
+    }
+
+    fn eq_cells(&mut self, x: &Cell, y: &Cell, pos: Pos) -> EvalResult<bool> {
+        let (a, b) = (x.get(), y.get());
+        let fa = self.force_cell(x)?;
+        let fb = self.force_cell(y)?;
+        self.eq_values(a, fa, b, fb, pos)
+    }
+
+    fn eq_forced(&mut self, a: Word, b: Word, pos: Pos) -> EvalResult<bool> {
         match (a.view(), b.view()) {
             (Value::Int(x), Value::Int(y)) => Ok(x == y),
             (Value::Int(x), Value::Float(y)) => Ok(x as f64 == y),
@@ -218,16 +235,14 @@ impl Evaluator {
             (Value::Float(x), Value::Float(y)) => Ok(x == y),
             (Value::Bool(x), Value::Bool(y)) => Ok(x == y),
             (Value::Null, Value::Null) => Ok(true),
-            (Value::String(x), Value::String(y)) => Ok(x.bytes == y.bytes),
+            (Value::String(x), Value::String(y)) => Ok(a == b || x.bytes == y.bytes),
             (Value::Path(x), Value::Path(y)) => Ok(x.path == y.path),
             (Value::List(x), Value::List(y)) => {
                 if x.len != y.len {
                     return Ok(false);
                 }
                 for (cx, cy) in x.cells().iter().zip(y.cells()) {
-                    let vx = self.force_cell(cx)?;
-                    let vy = self.force_cell(cy)?;
-                    if !self.eq_values(vx, vy, pos)? {
+                    if !self.eq_cells(cx, cy, pos)? {
                         return Ok(false);
                     }
                 }
@@ -238,21 +253,14 @@ impl Evaluator {
                     let i = x.get(self.s.out_path);
                     let j = y.get(self.s.out_path);
                     if let (Some(i), Some(j)) = (i, j) {
-                        let vi = self.force_cell(&i.cell)?;
-                        let vj = self.force_cell(&j.cell)?;
-                        return self.eq_values(vi, vj, pos);
+                        return self.eq_cells(&i.cell, &j.cell, pos);
                     }
                 }
                 if x.len() != y.len() {
                     return Ok(false);
                 }
                 for (ax, ay) in x.iter().zip(y.iter()) {
-                    if ax.sym != ay.sym {
-                        return Ok(false);
-                    }
-                    let vx = self.force_cell(&ax.cell)?;
-                    let vy = self.force_cell(&ay.cell)?;
-                    if !self.eq_values(vx, vy, pos)? {
+                    if ax.sym != ay.sym || !self.eq_cells(&ax.cell, &ay.cell, pos)? {
                         return Ok(false);
                     }
                 }
@@ -283,10 +291,8 @@ impl Evaluator {
                     if i == cx.len() {
                         return Ok(true);
                     }
-                    let vx = self.force_cell(&cx[i])?;
-                    let vy = self.force_cell(&cy[i])?;
-                    if !self.eq_values(vx, vy, pos)? {
-                        return self.less_than(vx, vy, pos);
+                    if !self.eq_cells(&cx[i], &cy[i], pos)? {
+                        return self.less_than(cx[i].get(), cy[i].get(), pos);
                     }
                     i += 1;
                 }

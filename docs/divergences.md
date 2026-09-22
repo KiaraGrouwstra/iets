@@ -67,6 +67,22 @@ printer that stops at thunks can see it. `nix-instantiate --eval` without
 speed shortcuts, kept on purpose; `--strict`, `--json` and `nix eval`
 print the same.
 
+`==` can see them too. Nix's `eqValues` forces both sides, then takes two
+elements from one slot as equal without looking inside, and a function
+equals only its own slot; the two operands of `==` are fresh copies, so
+that shortcut never applies to them. ietsp keeps its faster rule, equal
+forced words are equal, at every level, and makes one exception: a
+function is equal only when the words before forcing are the same, so
+`[ (id id) ] == [ (id id) ]` and `with foo; [ bar ] == [ bar ]` are false,
+as in Nix. What stays different: `let x = { a = throw "a"; }; in x == x`
+is true where Nix throws, and a function reached through a shortcut above
+still equals itself (`[ builtins.add ] == [ builtins.add ]`, `{ inherit
+(builtins) import; } == { inherit (builtins) import; }`, `builtins.elem
+builtins.map [ builtins.map ]`). Forcing a cell writes its value over the
+thunk, so two thunks that give the same function and are both forced in
+place look like one slot. Nix's exact rules cost about 1% of the
+instructions of a NixOS evaluation, for no difference in nixpkgs.
+
 ## Experimental-feature builtins
 
 Nix leaves `fetchTree` out of `builtins` unless `fetch-tree` or `flakes`

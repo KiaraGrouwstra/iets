@@ -73,8 +73,10 @@ fn elem(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     )?;
     crate::parallel::fanout_list(ev, l); // parallel
     for c in l.cells() {
+        let x = ev.force(args[0])?;
         let v = c.get();
-        if ev.eq_values(args[0], v, pos)? {
+        let fv = ev.force_cell(c)?;
+        if ev.eq_values(args[0], x, v, fv, pos)? {
             return Ok(Word::TRUE);
         }
     }
