@@ -217,13 +217,9 @@ fn convert(ev: &mut Evaluator, v: ::toml::Value, pos: Pos) -> EvalResult<Word> {
 }
 
 fn no_nul(s: &[u8], pos: Pos) -> EvalResult<()> {
-    if s.contains(&0) {
-        bail!(
-            ErrorKind::Eval,
-            pos,
-            "input string '{}' cannot be represented as Nix string because it contains null bytes",
-            String::from_utf8_lossy(s)
-        );
+    if let Err(msg) = crate::syntax::lexer::no_nul(s) {
+        // prim_fromTOML wraps the thrown Error's what(), prefix included
+        bail!(ErrorKind::Eval, pos, "while parsing TOML: error: {}", msg);
     }
     Ok(())
 }

@@ -740,6 +740,21 @@ impl<'a> Lexer<'a> {
     /// Lex literal text of a `"..."` string into `out` until `${` or the
     /// closing quote. Escapes are decoded and CR / CRLF become LF.
     pub fn lex_str_chunk(&mut self, out: &mut Vec<u8>) -> Result<StrEnd, ParseError> {
+        let (start, base) = (self.pos, out.len());
+        let end = self.str_chunk(out);
+        // lexer.l:unescapeStr tests the raw bytes, so an escaped NUL passes
+        let mut i = start;
+        while i < self.pos {
+            match self.src[i] {
+                b'\\' => i += 2,
+                0 => return Err(nul_error(start, &out[base..])),
+                _ => i += 1,
+            }
+        }
+        end
+    }
+
+    fn str_chunk(&mut self, out: &mut Vec<u8>) -> Result<StrEnd, ParseError> {
         let src = self.src;
         loop {
             if self.pos >= src.len() {
@@ -864,6 +879,9 @@ impl<'a> Lexer<'a> {
                 }
             }
             if i > start {
+                if src[start..i].contains(&0) {
+                    return Err(nul_error(start, &src[start..i]));
+                }
                 parts.push(IndPart::Src(start as u32, i as u32));
                 self.pos = i;
                 continue;
@@ -920,6 +938,25 @@ impl<'a> Lexer<'a> {
             span: Span { start: p, end: p },
             msg: format!("syntax error, unexpected end of file, {expecting}"),
         }
+    }
+}
+
+/// `eval.cc:forceNoNullByte`.
+pub fn no_nul(s: &[u8]) -> Result<(), String> {
+    if !s.contains(&0) {
+        return Ok(());
+    }
+    let s = String::from_utf8_lossy(s).replace('\0', "␀");
+    Err(format!(
+        "input string '{s}' cannot be represented as Nix string because it contains null bytes"
+    ))
+}
+
+fn nul_error(at: usize, s: &[u8]) -> ParseError {
+    let at = at as u32;
+    ParseError {
+        span: Span { start: at, end: at },
+        msg: no_nul(s).unwrap_err(),
     }
 }
 

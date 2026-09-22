@@ -230,3 +230,25 @@ fn pure_eval_answers_like_nix() {
         "cannot call 'getFlake' on unlocked flake reference '/tmp', at «none»:0 (use --impure to override)",
     );
 }
+
+#[test]
+fn from_json_and_toml_reject_null_bytes() {
+    let msg = |s: &str| {
+        format!(
+            "input string '{s}' cannot be represented as Nix string because it contains null bytes"
+        )
+    };
+    assert_eq!(eval_err(r#"builtins.fromJSON "\"a\\u0000b\"""#), msg("a␀b"));
+    assert_eq!(
+        eval_err(r#"builtins.fromJSON "{\"a\\u0000\": 1}""#),
+        msg("a␀")
+    );
+    assert_eq!(
+        eval_err(r#"builtins.fromTOML "a = \"x\\u0000y\"""#),
+        format!("while parsing TOML: error: {}", msg("x␀y"))
+    );
+    assert_eq!(
+        eval_err(r#"builtins.fromTOML "\"k\\u0000\" = 1""#),
+        format!("while parsing TOML: error: {}", msg("k␀"))
+    );
+}

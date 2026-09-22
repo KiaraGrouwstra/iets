@@ -48,6 +48,8 @@ fn lang_corpus() {
         "eval-fail-dynamic-attrs-let-2.nix",
         "eval-fail-dynamic-attrs-let-3.nix",
         "eval-fail-path-slash.nix",
+        "eval-fail-string-nul-1.nix",
+        "eval-fail-string-nul-2.nix",
     ];
     let mut okay = 0;
     let mut failed = 0;
@@ -501,4 +503,37 @@ fn differential_strings_against_nix() {
         rejected.len(),
         mismatches.join("\n")
     );
+}
+
+#[test]
+fn nul_in_string_literals() {
+    let cases = [
+        ("\"foo\0bar\"", "foo␀bar", (1, 2)),
+        ("''\n  foo\n  \0\n  bar\n''", "  foo\n  ␀\n  bar\n", (2, 1)),
+        ("let x = \"q\"; in \"a${x}\0b\"", "␀b", (1, 23)),
+        ("''x${\"y\"}\0z''", "␀z", (1, 10)),
+        ("let y = \"a\0b\"; in 1", "a␀b", (1, 10)),
+        ("{ \"a\0b\" = 1; }", "a␀b", (1, 4)),
+        ("\"a\\n\0b\"", "a\n␀b", (1, 2)),
+        ("\"a\r\n\0b\"", "a\n␀b", (1, 2)),
+        ("\"$\0\"", "$␀", (1, 2)),
+    ];
+    for (src, shown, pos) in cases {
+        let e = parse(src.as_bytes(), FileId(0), &mut Interner::new())
+            .err()
+            .unwrap_or_else(|| panic!("{src:?} parsed"));
+        assert_eq!(
+            (e.msg, line_col(src.as_bytes(), e.span.start)),
+            (
+                format!(
+                    "input string '{shown}' cannot be represented as Nix string because it contains null bytes"
+                ),
+                pos
+            ),
+            "{src:?}"
+        );
+    }
+    // escaped NULs pass, as in Nix
+    dump_src("\"a\\\0b\"");
+    dump_src("''a''\\\0b''");
 }

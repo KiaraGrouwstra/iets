@@ -24,12 +24,9 @@ pub fn from_json(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word
         i: 0,
         ev,
         depth: 0,
+        pos,
     };
-    let r = p.document();
-    r.map_err(|mut e| {
-        e.add_trace(pos, "while decoding a JSON string");
-        e
-    })
+    p.document()
 }
 
 struct Parser<'a> {
@@ -37,6 +34,7 @@ struct Parser<'a> {
     i: usize,
     ev: &'a mut Evaluator,
     depth: u32,
+    pos: Pos,
 }
 
 impl Parser<'_> {
@@ -51,13 +49,17 @@ impl Parser<'_> {
                 col += 1;
             }
         }
-        Err(Error::boxed(
+        let mut e = Error::boxed(
             ErrorKind::Eval,
             format!(
                 "[json.exception.parse_error.101] parse error at line {line}, column {col}: {what}"
             ),
             Pos::NONE,
-        ))
+        );
+        // primops.cc:prim_fromJSON traces only JSONParseError, not the
+        // integer range or null byte errors
+        e.add_trace(self.pos, "while decoding a JSON string");
+        Err(e)
     }
 
     fn peek(&self) -> Option<u8> {
@@ -253,13 +255,6 @@ impl Parser<'_> {
                             } else if (0xDC00..0xE000).contains(&cp) {
                                 return self.err("syntax error while parsing value - invalid string: low surrogate must follow a high surrogate");
                             }
-                            if cp == 0 {
-                                return Err(Error::boxed(
-                                    ErrorKind::Eval,
-                                    "input string cannot be represented as Nix string because it contains null bytes",
-                                    Pos::NONE,
-                                ));
-                            }
                             let ch = char::from_u32(cp).expect("valid scalar");
                             let mut buf = [0u8; 4];
                             out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
@@ -287,6 +282,10 @@ impl Parser<'_> {
                 }
                 _ => out.push(c),
             }
+        }
+        // json-to-value.cc checks each key and string value once it is whole
+        if let Err(msg) = crate::syntax::lexer::no_nul(&out) {
+            bail!(ErrorKind::Eval, Pos::NONE, "{}", msg);
         }
         Ok(out)
     }
