@@ -118,7 +118,9 @@ and N collector threads each drive one worker process. A worker:
 2. For each path it is handed: `findAlongAttrPath` from the root
    (auto-calling at every step; an all-digit component is a list index,
    so `foo."1"` under an attrset is the error "the expression selected by
-   the selection path 'foo.1' should be a list but is a set"), then
+   the selection path 'foo.1' should be a list but is a set". ietsp
+   departs here: under an attrset the component names the attribute, so
+   a `listToAttrs` jobset keyed by numbers evaluates), then
    `autoCallFunction` on the value: a lambda with formals is called with
    the autoArgs and defaults, a formal without either is the error
    "cannot evaluate a function that has an argument without a value".

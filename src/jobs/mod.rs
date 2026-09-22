@@ -25,7 +25,7 @@ use crate::syntax::symbol::Sym;
 
 pub use line::{ErrorLine, Job, Line};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct Opts {
     pub force_recurse: bool,
     pub meta: bool,
@@ -263,7 +263,9 @@ pub fn admit(hash: u64, depth: u32, leaf: bool) -> bool {
     hash % o.chunks as u64 == o.chunk as u64
 }
 
-/// attr-path.cc: an all-digit component is a list index.
+/// attr-path.cc: an all-digit component is a list index. Under an attrset it
+/// names an attribute instead, where nix-eval-jobs fails: a `listToAttrs`
+/// jobset keyed by numbers must build.
 fn is_index(name: &str) -> bool {
     !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit()) && name.parse::<u32>().is_ok()
 }
@@ -281,19 +283,6 @@ fn is_derivation(ev: &mut Evaluator, a: &'static AttrsObj) -> EvalResult<bool> {
 /// where to recurse.
 pub fn node(ev: &mut Evaluator, w: Word, path: &[String], hash: u64) -> EvalResult<Node> {
     let cfg = config();
-    if let Some(last) = path.last()
-        && is_index(last)
-    {
-        // The parent is an attrset, so nix-eval-jobs's list-index lookup fails.
-        return Err(Error::boxed(
-            ErrorKind::Type,
-            format!(
-                "the expression selected by the selection path '{}' should be a list but is a set",
-                attr_join(path)
-            ),
-            Pos::NONE,
-        ));
-    }
     let v = ev.auto_call(w, Word(cfg.auto_args))?;
     let v = ev.force(v)?;
     let Some(attrs) = v.as_attrs() else {
@@ -332,7 +321,7 @@ pub fn find_along_attr_path(ev: &mut Evaluator, root: Word, path: &[String]) -> 
         v = ev.auto_call(v, Word(cfg.auto_args))?;
         v = ev.force(v)?;
         let selection = attr_join(&path[..=i]);
-        if is_index(name) {
+        if is_index(name) && v.as_attrs().is_none() {
             let Some(l) = v.as_list() else {
                 return Err(Error::boxed(
                     ErrorKind::Type,
@@ -882,4 +871,28 @@ fn prefetch_job(ev: &mut Evaluator, a: &'static AttrsObj) -> EvalResult<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_numeric_name_selects_an_attribute_under_a_set() {
+        let mut ev = Evaluator::new();
+        let args = ev.eval_string("{ }", b"/").unwrap();
+        configure(&mut ev, Opts::default(), args, None);
+        let root = ev
+            .eval_string(r#"{ "9" = { a = 1; }; l = [ 7 ]; }"#, b"/")
+            .unwrap();
+        let mut at = |p: &[&str]| {
+            let p: Vec<String> = p.iter().map(|s| s.to_string()).collect();
+            let v = find_along_attr_path(&mut ev, root, &p).unwrap();
+            assert!(node(&mut ev, v, &p, 0).is_ok());
+            ev.force(v).unwrap().as_int()
+        };
+        assert_eq!(at(&["9", "a"]), Some(1));
+        assert_eq!(at(&["9"]), None);
+        assert_eq!(at(&["l", "0"]), Some(7));
+    }
 }
