@@ -242,7 +242,7 @@ impl ChunkShip {
                 check_sigs: false,
                 data,
             })
-            .map_err(|_| io::Error::other("gRPC stream closed by peer during bulk import"))
+            .map_err(|_| closed())
     }
 }
 
@@ -315,7 +315,7 @@ fn upload(
                     check_sigs: false,
                     data: Vec::new(),
                 })
-                .map_err(|_| io::Error::other("gRPC stream closed by peer"))?;
+                .map_err(|_| closed())?;
                 let ship = ChunkShip {
                     tx,
                     buf: Vec::with_capacity(CHUNK + (1 << 16)),
@@ -337,15 +337,29 @@ fn upload(
         let written = producer.join().map_err(|_| {
             tonic::Status::internal("the AddMultipleToStore producer thread panicked")
         })?;
-        match reply {
-            // The server status explains a broken stream better than the local
-            // write error does (transfer.cc:addMultipleToStoreOnce).
-            Ok(_) => written
-                .map(|()| sent.load(Ordering::Relaxed))
-                .map_err(|e| tonic::Status::internal(e.to_string())),
-            Err(status) => Err(status),
-        }
+        upload_outcome(reply, written).map(|()| sent.load(Ordering::Relaxed))
     })
+}
+
+fn closed() -> io::Error {
+    io::Error::new(io::ErrorKind::BrokenPipe, "gRPC stream closed by peer")
+}
+
+/// The server status explains a stream the server broke better than the local
+/// write error does (transfer.cc:addMultipleToStoreOnce). A stream this side
+/// broke, a source that no longer dumps as evaluated, reaches the server only
+/// as its end ("gRPC stream ended"), so the local error wins then.
+fn upload_outcome<T>(
+    reply: std::result::Result<T, tonic::Status>,
+    written: io::Result<()>,
+) -> std::result::Result<(), tonic::Status> {
+    match (reply, written) {
+        (_, Err(e)) if e.kind() != io::ErrorKind::BrokenPipe => {
+            Err(tonic::Status::internal(e.to_string()))
+        }
+        (Err(status), _) => Err(status),
+        (Ok(_), w) => w.map_err(|e| tonic::Status::internal(e.to_string())),
+    }
 }
 
 // ---- builds -----------------------------------------------------------------
@@ -855,6 +869,17 @@ fn remote_closure(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_local_upload_failure_beats_the_stream_ended_status() {
+        let ended = || Err::<(), _>(tonic::Status::unavailable("gRPC stream ended"));
+        let local = io::Error::other("source 'x' changed since evaluation");
+        let e = upload_outcome(ended(), Err(local)).unwrap_err();
+        assert!(e.message().contains("changed since evaluation"), "{e}");
+        let e = upload_outcome(ended(), Err(closed())).unwrap_err();
+        assert_eq!(e.code(), tonic::Code::Unavailable);
+        assert!(upload_outcome(Ok(()), Ok(())).is_ok());
+    }
 
     #[test]
     fn reschedules_back_off_past_a_dead_worker() {
