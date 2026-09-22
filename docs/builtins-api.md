@@ -122,8 +122,9 @@ compareVersions, parseDrvName, baseNameOf, dirOf.
 math: add, sub, mul, div, bitAnd, bitOr, bitXor, lessThan.
 paths: readFile, readDir, readFileType, pathExists, toPath, storePath,
 filterSource, path, toFile; fetchTree on a locked input and fetchTarball with
-a sha256 (`flake/fetch.rs`); fetchurl, fetchGit, fetchMercurial, fetchClosure,
-getFlake, parseFlakeRef, flakeRefToString, outputOf exist but fail when called.
+a sha256 (`flake/fetch.rs`); getFlake on a local flake (`flake/mod.rs`);
+fetchurl, fetchGit, fetchMercurial, fetchClosure, parseFlakeRef,
+flakeRefToString, outputOf exist but fail when called.
 context: getContext, appendContext, addDrvOutputDependencies.
 text: match, split (ERE via `text/regex.rs`, per-thread regex cache), replaceStrings,
 hashString, hashFile, convertHash, floor, ceil, genericClosure, getEnv, break,

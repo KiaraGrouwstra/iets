@@ -1,8 +1,8 @@
 //! File system primops (primops.cc): readFile, readDir, readFileType,
 //! pathExists, toPath, storePath, filterSource, path, toFile. The network
 //! fetchers and flake primops are registered so `builtins ? fetchGit`
-//! holds, but they fail when called; only `fetchTree` on a locked input and
-//! `fetchTarball` with a `sha256` work (`flake::fetch`).
+//! holds, but they fail when called; only `fetchTree` on a locked input,
+//! `fetchTarball` with a `sha256` and `getFlake` work (`flake`).
 
 use std::collections::{BTreeSet, HashSet};
 use std::ffi::OsStr;
@@ -45,7 +45,7 @@ pub fn register(r: &mut Registry) {
     r.op("fetchTree", 1, crate::flake::fetch::fetch_tree);
     r.op("fetchMercurial", 1, fetch_mercurial);
     r.op("__fetchClosure", 1, fetch_closure);
-    r.op("__getFlake", 1, get_flake);
+    r.op("__getFlake", 1, crate::flake::get_flake);
     r.op("__parseFlakeRef", 1, parse_flake_ref);
     r.op("__flakeRefToString", 1, flake_ref_to_string);
 }
@@ -83,10 +83,6 @@ unsupported!(
 unsupported!(
     fetch_closure,
     "ietsp: network fetchers are not supported (builtins.fetchClosure)"
-);
-unsupported!(
-    get_flake,
-    "ietsp: flakes are not supported (builtins.getFlake)"
 );
 unsupported!(
     parse_flake_ref,

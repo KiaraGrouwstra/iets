@@ -1,4 +1,5 @@
-//! Locked flakes: `PATH#attr.path` on the command line, evaluated through
+//! Locked flakes: `PATH#attr.path` on the command line and
+//! `builtins.getFlake`, evaluated through
 //! Nix 2.34.8's `call-flake.nix` (embedded verbatim) with `fetchTree` for
 //! the locked inputs and the root tree copied like Nix copies it. Only a
 //! complete `flake.lock` is accepted; nothing is locked or looked up in a
@@ -269,6 +270,60 @@ pub fn eval_flake_value(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
         .map(|a| a.cell.get())
         .expect("builtins.fetchTree is registered");
     ev.apply(call_flake, &[lock_str, overrides, fetch_tree], pos)
+}
+
+/// flake-primops.cc:prim_getFlake on the references `parse_flake_ref` takes.
+/// ietsp has no pure mode, so an unlocked reference is accepted as under
+/// `--impure`; the flake still needs a complete `flake.lock`, because nothing
+/// is locked here. A directory is always a `path:` input, even inside a git
+/// repository: flakeref.cc looks for `.git` only when it has a base
+/// directory, and getFlake passes none. A virtual copy stands for its local
+/// tree.
+pub fn get_flake(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
+    use crate::builtins::store_hooks::{Access, locate};
+    let s = ev.force_string_no_ctx(
+        args[0],
+        pos,
+        "while evaluating the argument passed to builtins.getFlake",
+    )?;
+    let s = String::from_utf8_lossy(s).into_owned();
+    let (loc, frag) = s
+        .split_once('#')
+        .map_or((s.as_str(), None), |(l, f)| (l, Some(f)));
+    if let Some(f) = frag {
+        return Err(EvalError::boxed(
+            ErrorKind::Eval,
+            format!("unexpected fragment '{f}' in flake reference '{s}'"),
+            pos,
+        ));
+    }
+    let path = loc.strip_prefix("path:").unwrap_or(loc);
+    if !is_indirect(loc) && !path.contains(':') && !path.starts_with('/') {
+        return Err(EvalError::boxed(
+            ErrorKind::Eval,
+            format!("flake reference '{s}' is not an absolute path"),
+            pos,
+        ));
+    }
+    let arg = match locate(ev, path.as_bytes()) {
+        Access::Local { path, .. } => format!("path:{}", path.display()),
+        Access::Input { .. } | Access::Mem(_) => {
+            return Err(EvalError::boxed(
+                ErrorKind::Unsupported,
+                format!("ietsp: builtins.getFlake on '{s}', a fetched input, is not supported"),
+                pos,
+            ));
+        }
+        Access::Store | Access::Missing => format!("path:{path}"),
+    };
+    let fr = parse_flake_ref(&arg, b"/", None).map_err(|e| {
+        let kind = match e {
+            Error::Unsupported(_) => ErrorKind::Unsupported,
+            _ => ErrorKind::Eval,
+        };
+        EvalError::boxed(kind, e.to_string(), pos)
+    })?;
+    eval_flake_value(ev, &fr)
 }
 
 /// Evaluates the flake and selects `attr` from its outputs (or returns the

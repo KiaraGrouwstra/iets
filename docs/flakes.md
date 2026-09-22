@@ -19,6 +19,15 @@
   `ietsp: flake.lock missing or incomplete, run nix flake lock`.
   A `flake.nix` input whose URL changed without re-locking is not detected;
   the lock wins.
+- `builtins.getFlake REF` takes an absolute `/abs` or `path:/abs` and
+  returns what `callFlake` returns, as Nix does with `--impure` (ietsp has
+  no pure mode). REF is always a `path:` input, also inside a git
+  repository, because flakeref.cc looks for `.git` only when it has a base
+  directory and getFlake passes none. A relative REF and a `#fragment` are
+  errors, as in Nix. A virtual copy (`"${./.}"` without its context) stands
+  for its local tree. The lock rule above holds: Nix locks a missing input in
+  memory, ietsp falls back. Remote refs (`github:`, `git+https:`) and a
+  fetched input's tree are `ErrorKind::Unsupported`.
 - `--strict`, `--json` and `--raw` work as with a file. `--raw` mirrors
   `nix eval --raw`: the value is coerced to a string without copying paths
   to the store, and printed without a newline.
