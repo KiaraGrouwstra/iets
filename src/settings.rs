@@ -158,14 +158,20 @@ impl Settings {
         for (name, value) in overrides {
             c.set(name, value, FLAG)?;
         }
+        let source_map: Vec<(String, String)> = c
+            .list("source-map")
+            .iter()
+            .filter_map(|e| e.split_once('='))
+            .map(|(s, l)| (s.to_string(), l.to_string()))
+            .collect();
+        for (_, local) in &source_map {
+            if !Path::new(local).is_dir() {
+                eprintln!("warning: source-map: '{local}' is not a directory");
+            }
+        }
         Ok(Settings {
             builder: c.str("builder").map(str::to_string),
-            source_map: c
-                .list("source-map")
-                .iter()
-                .filter_map(|e| e.split_once('='))
-                .map(|(s, l)| (s.to_string(), l.to_string()))
-                .collect(),
+            source_map,
             workers: num("IETSP_WORKERS")
                 .or(c.num("workers")?)
                 .filter(|n| *n >= 1),

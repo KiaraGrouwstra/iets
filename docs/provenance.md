@@ -47,7 +47,9 @@ Three sources fill it:
    ```
 
    It was a `nix.conf` setting before. Nix warns about a key it does not know,
-   so the setting moved to ietsp's own file.
+   so the setting moved to ietsp's own file. A `LOCALDIR` that is not a
+   directory gets a warning at startup and is still used; nothing checks
+   that the directory holds the same tree as the store path.
 3. **A revision**, for display only, when the root flake is a git working
    tree: the `HEAD` commit, with `-dirty` when the tree is dirty.
 
@@ -65,7 +67,11 @@ located at". `stdenv.mkDerivation` computes `name` in `make-derivation.nix`
 but passes the package's `pname` through, so the position of `pname` comes
 first, as nixpkgs' `meta.position` does: a package that sets `pname` points
 at its own file. One that sets only `name` through a nixpkgs builder
-(`runCommand`, `writeShellApplication`) still points into nixpkgs; the flake
+(`runCommand`, `writeShellApplication`) loses that binding to
+`make-derivation.nix`, so the first attribute the set still holds from a
+lint root stands in (`src`, an attribute of `runCommand`'s env), the same
+fallback the value lints use (`docs/lints.md`). A bare
+`runCommand "x" { } "…"` holds none and points into nixpkgs. The flake
 root and `./.` cases, which build `derivation` directly or set `name` in the
 package file, point where you want.
 

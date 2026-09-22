@@ -246,6 +246,13 @@ pub fn evaluator(c: &Common, cfg: &Config) -> Evaluator {
     if pure {
         crate::builtins::set_pure(&mut ev);
     }
+    // lints stay off, as in nix; the root alone feeds the provenance fallback.
+    let cwd = crate::api::cwd();
+    let entry = match (c.from_args, c.files.first()) {
+        (false, Some(f)) => crate::eval::dir_of(&abs_path(f, &cwd)).to_vec(),
+        _ => cwd,
+    };
+    ev.lints.config.add_root(&entry);
     ev
 }
 

@@ -640,10 +640,16 @@ fn derivation_strict_internal(
     let mut references: BTreeSet<StorePath> = drv.input_srcs.clone();
     references.extend(drv.input_drvs.keys().cloned());
     // stdenv.mkDerivation computes `name` in make-derivation.nix but passes
-    // the package's own `pname` through, as nixpkgs' meta.position does.
+    // the package's own `pname` through, as nixpkgs' meta.position does. A
+    // name-only builder (runCommand) loses the caller's `name` binding the
+    // same way, so the first attribute still bound in a root tree is next.
     let pname_pos = attrs.get(s.pname).map(|a| a.pos);
     let site = crate::provenance::real_pos(ev, pos)
         .or_else(|| pname_pos.and_then(|p| crate::provenance::real_pos(ev, p)))
+        .or_else(|| {
+            let p = crate::lint::coerce::drv_fallback(ev, attrs, pos, name_pos);
+            crate::provenance::real_pos(ev, p)
+        })
         .or_else(|| crate::provenance::real_pos(ev, name_pos));
     ev.drv.drvs.insert(
         drv_path.clone(),
