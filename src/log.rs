@@ -224,6 +224,7 @@ impl Drop for Activity {
 /// `text` as it goes to stderr, without the newline: itself, or a `msg`
 /// record at the verbosity its prefix implies.
 pub fn format(text: &str) -> String {
+    note_mismatch(text);
     let level = if text.starts_with("error:") || text.starts_with("trace:") {
         0
     } else if text.starts_with("warning:") || text.starts_with("evaluation warning:") {
@@ -456,6 +457,29 @@ pub fn mismatch(raw: &str) -> Option<(String, String)> {
 }
 
 static MISMATCHES: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+static WANT_MISMATCH: Mutex<Option<String>> = Mutex::new(None);
+
+/// `ietsp prefetch` builds a derivation whose hash is wrong on purpose: a
+/// mismatch of a derivation called `name` is its answer, not a failure.
+pub fn want_mismatch(name: &str) {
+    *WANT_MISMATCH.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("-{name}.drv"));
+}
+
+/// Whether `text` is about the derivation `want_mismatch` named.
+fn wanted(text: &str) -> bool {
+    let want = WANT_MISMATCH.lock().unwrap_or_else(|e| e.into_inner());
+    want.as_ref().is_some_and(|n| text.contains(n.as_str()))
+}
+
+/// The daemon reports a resolved derivation's mismatch as a line of its own,
+/// not as the build's result, so the line is read here too.
+fn note_mismatch(text: &str) {
+    if wanted(text)
+        && let Some(m) = mismatch(&crate::build::results::strip_ansi(text))
+    {
+        MISMATCHES.lock().unwrap_or_else(|e| e.into_inner()).push(m);
+    }
+}
 
 /// The `(specified, got)` pairs of the hash mismatches reported since the
 /// last call.
@@ -513,6 +537,9 @@ pub fn build_failed(pos: Option<String>, reason: &str, exit: i32, text: Option<&
         && let Some(m) = mismatch(&r.raw)
     {
         MISMATCHES.lock().unwrap_or_else(|e| e.into_inner()).push(m);
+        if wanted(&r.raw) {
+            return;
+        }
     }
     out(&r.record(&r.text()), text);
 }
