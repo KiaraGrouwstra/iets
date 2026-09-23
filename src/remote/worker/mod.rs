@@ -86,6 +86,7 @@ enum Op {
     AddIndirectRoot = 12,
     QuerySubstitutablePathInfos = 30,
     NarFromPath = 38,
+    QueryMissing = 40,
     QueryDerivationOutputMap = 41,
     AddMultipleToStore = 44,
     BuildPathsWithResults = 46,
@@ -253,6 +254,16 @@ pub struct Stats {
     /// Ops plus the handshake exchanges that each wait for the daemon.
     pub round_trips: usize,
     pub bytes_sent: u64,
+}
+
+/// What building some paths takes (remote-store.cc:queryMissing).
+#[derive(Debug, Default, Clone)]
+pub struct Missing {
+    pub will_build: Vec<String>,
+    pub will_substitute: Vec<String>,
+    pub unknown: Vec<String>,
+    pub download_size: u64,
+    pub nar_size: u64,
 }
 
 /// worker-protocol.cc:BuildResult, the fields this client reads.
@@ -739,6 +750,24 @@ impl Connection {
             });
         }
         Ok(results)
+    }
+
+    /// `QueryMissing`; `paths` are derived paths, as for `BuildPathsWithResults`.
+    pub fn query_missing(
+        &mut self,
+        paths: &[String],
+        on_event: &mut dyn FnMut(Event),
+    ) -> Result<Missing> {
+        self.op(Op::QueryMissing)?;
+        write_strs(self.w(), paths)?;
+        self.process_stderr(on_event)?;
+        Ok(Missing {
+            will_build: read_strs(self.r())?,
+            will_substitute: read_strs(self.r())?,
+            unknown: read_strs(self.r())?,
+            download_size: read_u64(self.r())?,
+            nar_size: read_u64(self.r())?,
+        })
     }
 
     /// `QueryDerivationOutputMap`: output name to store path when the daemon knows it.

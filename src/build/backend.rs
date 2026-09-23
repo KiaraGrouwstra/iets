@@ -22,7 +22,7 @@ use crate::remote::copy::Copying;
 use crate::remote::event::Event;
 use crate::remote::plan::{Object, Plan};
 use crate::remote::worker::wire::write_object;
-use crate::remote::worker::{Connection, DEFAULT_SOCKET, Options, Stats, Transport, wire};
+use crate::remote::worker::{Connection, DEFAULT_SOCKET, Missing, Options, Stats, Transport, wire};
 use crate::store::path::StorePath;
 
 /// One derivation of a ready set, and the outputs the caller wants.
@@ -127,6 +127,14 @@ pub trait Backend {
         batch: &Batch<'_>,
         on_event: &mut dyn FnMut(Event),
     ) -> Result<HashMap<String, Status>>;
+
+    /// What building `jobs` would build and fetch.
+    fn missing(&mut self, jobs: &[Job], on_event: &mut dyn FnMut(Event)) -> Result<Missing> {
+        let _ = (jobs, on_event);
+        Err(Error::Usage(
+            "--dry-run needs a worker-protocol builder".into(),
+        ))
+    }
 
     /// Output name to store path for a derivation that built.
     fn outputs(
@@ -366,6 +374,14 @@ impl Backend for Worker {
             }
         }
         Ok(out)
+    }
+
+    fn missing(&mut self, jobs: &[Job], on_event: &mut dyn FnMut(Event)) -> Result<Missing> {
+        let paths: Vec<String> = jobs
+            .iter()
+            .map(|j| format!("{}!{}", j.drv, j.spec()))
+            .collect();
+        self.conn.query_missing(&paths, on_event)
     }
 
     fn outputs(

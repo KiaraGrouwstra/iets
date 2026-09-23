@@ -196,6 +196,14 @@ pub fn format(text: &str) -> String {
     }
 }
 
+/// logging.cc:JSONLogger::log: `text` at `level`, whatever its prefix.
+pub fn msg(level: u8, text: &str) {
+    out(
+        &json!({"action": "msg", "level": level, "msg": text}),
+        Some(text),
+    );
+}
+
 /// A line that is not an error record.
 pub fn line(text: &str) {
     eprintln!("{}", format(text));

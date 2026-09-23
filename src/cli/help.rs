@@ -68,6 +68,8 @@ build, and print the output paths (docs/remote-build.md).
   --builder URL         daemon, unix:///path, ssh-ng://[user@]host or
                         grpc://host:port (default: the builder setting)
   --no-build            upload the closure, do not build
+  --dry-run             upload the closure, print what would be built and
+                        fetched, do not build; --json: as JSON on stdout
   --out NAME            build the output NAME only (repeatable)
   --fetch-to DIR        copy the outputs from the builder to DIR
   --source SP=LOCAL     with DRV: the local tree of the input source SP

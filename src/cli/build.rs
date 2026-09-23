@@ -16,6 +16,8 @@ struct BuildArgs {
     url: Option<String>,
     timings: bool,
     no_build: bool,
+    dry_run: bool,
+    json: bool,
     fetch_to: Option<std::path::PathBuf>,
     outputs: Vec<String>,
     sources: HashMap<String, std::path::PathBuf>,
@@ -81,6 +83,8 @@ fn parse(argv: &[String]) -> (BuildArgs, EvalArgs) {
         url: None,
         timings: false,
         no_build: false,
+        dry_run: false,
+        json: false,
         fetch_to: None,
         outputs: Vec::new(),
         sources: HashMap::new(),
@@ -97,6 +101,8 @@ fn parse(argv: &[String]) -> (BuildArgs, EvalArgs) {
             "--builder" => b.url = Some(next()),
             "--timings" => b.timings = true,
             "--no-build" => b.no_build = true,
+            "--dry-run" => b.dry_run = true,
+            "--json" => b.json = true,
             "--fetch-to" => b.fetch_to = Some(next().into()),
             "--out" => b.outputs.push(next()),
             "--source" => {
@@ -357,6 +363,12 @@ fn build_roots(
             Target::new(&name, r.clone(), outputs.to_vec())
         })
         .collect();
+    if b.dry_run {
+        return match d.missing(&mut up, &targets) {
+            Ok(m) => print_missing(&m, &plan, b.json),
+            Err(e) => e.report(),
+        };
+    }
     let outcomes = match d.submit(&mut up, targets) {
         Ok(o) => o,
         Err(e) => return e.report(),
@@ -379,6 +391,72 @@ fn build_roots(
     d.exit
 }
 
+/// shared.cc:printMissing at lvlError, as `nix build --dry-run` prints it;
+/// with `--json` the same sets on stdout. `willBuild` goes in the plan's
+/// order, references first, as Nix's reversed topoSortPaths does.
+fn print_missing(
+    m: &crate::remote::worker::Missing,
+    plan: &crate::remote::plan::Plan,
+    json: bool,
+) -> i32 {
+    let at: HashMap<String, usize> = (plan.drvs.iter().enumerate())
+        .map(|(i, o)| (o.store_path().to_string(), i))
+        .collect();
+    let mut build = m.will_build.clone();
+    build.sort_by_key(|p| at.get(p).copied().unwrap_or(usize::MAX));
+    let mut fetch = m.will_substitute.clone();
+    fetch.sort_by_key(|p| (p.get(44..).unwrap_or(p).to_string(), p.clone()));
+    let sizes = format!(
+        "{} download, {} unpacked",
+        render_size(m.download_size),
+        render_size(m.nar_size)
+    );
+    let unknown = "don't know how to build these paths:".to_string();
+    let sections = [
+        (
+            &build,
+            "this derivation will be built:".into(),
+            format!("these {} derivations will be built:", build.len()),
+        ),
+        (
+            &fetch,
+            format!("this path will be fetched ({sizes}):"),
+            format!("these {} paths will be fetched ({sizes}):", fetch.len()),
+        ),
+        (&m.unknown, unknown.clone(), unknown),
+    ];
+    for (paths, one, many) in sections {
+        if !paths.is_empty() {
+            crate::log::msg(0, if paths.len() == 1 { &one } else { &many });
+            paths
+                .iter()
+                .for_each(|p| crate::log::msg(0, &format!("  {p}")));
+        }
+    }
+    if json {
+        let v = serde_json::json!({
+            "willBuild": build,
+            "willSubstitute": fetch,
+            "unknown": m.unknown,
+            "downloadSize": m.download_size,
+            "narSize": m.nar_size,
+        });
+        println!("{v}");
+    }
+    0
+}
+
+/// util.cc:renderSize: KiB at least, one decimal.
+fn render_size(bytes: u64) -> String {
+    let (mut unit, mut v) = (0, bytes);
+    while v > 1024 && unit < 8 {
+        unit += 1;
+        v /= 1024;
+    }
+    let scaled = bytes as f64 / 1024f64.powi(unit.max(1));
+    format!("{scaled:.1} {}iB", b"KKMGTPEZY"[unit as usize] as char)
+}
+
 /// `--timings`: one line per phase of the flow, as the backend measured it.
 fn timings(
     b: &BuildArgs,
@@ -388,5 +466,19 @@ fn timings(
 ) {
     if b.timings {
         eprintln!("{}", d.report(plan, plan_time));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn sizes_render_as_nix_renders_them() {
+        let got: Vec<String> = [100, 2000, 10547, 1_572_864, 6_000_000_000]
+            .map(super::render_size)
+            .to_vec();
+        assert_eq!(
+            got,
+            ["0.1 KiB", "2.0 KiB", "10.3 KiB", "1.5 MiB", "5.6 GiB"]
+        );
     }
 }

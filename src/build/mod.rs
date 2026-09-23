@@ -468,6 +468,21 @@ impl Dispatcher {
         Ok(())
     }
 
+    /// `--dry-run`: register the closure, then ask what building `targets`
+    /// takes.
+    pub fn missing(
+        &mut self,
+        up: &mut dyn Uploader,
+        targets: &[Target],
+    ) -> Result<crate::remote::worker::Missing> {
+        let roots: Vec<StorePath> = targets.iter().map(|t| t.drv.clone()).collect();
+        self.upload_only(up, &roots)?;
+        let jobs: Vec<backend::Job> = targets.iter().map(backend::Job::from).collect();
+        let by_drv = HashMap::new();
+        let mut on_event = event_sink(&mut self.reporter, &self.prov, &by_drv);
+        self.backend.missing(&jobs, &mut on_event)
+    }
+
     /// An indirect GC root at `link` for `store_path`.
     pub fn out_link(&mut self, store_path: &str, link: &Path) -> Result<()> {
         self.backend.add_root(store_path, link)
