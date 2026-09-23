@@ -168,13 +168,16 @@ fn build_batch(
 
     for (i, res) in results.iter().enumerate() {
         let drv = jobs[i].drv_path.to_string();
-        let reason = match res {
+        let (reason, exit) = match res {
             Some(res) if res.success() => continue,
-            Some(res) => format!("status {}: {}", res.status, res.error_msg),
-            None => "the farm never reached this derivation".to_string(),
+            Some(res) => (
+                format!("status {}: {}", res.status, res.error_msg),
+                crate::log::build_exit(res.status, &res.error_msg),
+            ),
+            None => ("the farm never reached this derivation".to_string(), 1),
         };
         match out.get_mut(&drv) {
-            Some(slot) => *slot = Status::failed(reason),
+            Some(slot) => *slot = Status::failed(reason, exit),
             // A dependency, not something the caller asked for: the renderer
             // still wants its verdict.
             None => on_event(failed_event(&drv, &reason)),

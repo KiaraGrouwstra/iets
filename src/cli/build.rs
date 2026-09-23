@@ -297,7 +297,7 @@ fn build_roots(
             println!("{path}");
         }
     }
-    if d.failed { 1 } else { 0 }
+    d.exit
 }
 
 /// `--timings`: one line per phase of the flow, as the backend measured it.

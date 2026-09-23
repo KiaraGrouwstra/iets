@@ -608,7 +608,8 @@ fn realise(
         Ok(o) => o,
         Err(e) => return e.report(),
     };
-    if d.failed {
+    // a daemon client nix exits 1 on a failed build, whatever the status
+    if d.exit != 0 {
         return 1;
     }
     let maps: HashMap<String, BTreeMap<String, Option<String>>> = outcomes

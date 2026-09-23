@@ -223,6 +223,63 @@ fn pos_fields(pos: Option<&str>) -> [(String, Value); 3] {
     ]
 }
 
+/// build-result.cc:failingExitStatus of one failed build, from its
+/// worker-protocol status. The daemon sends a hash mismatch as
+/// OutputRejected, so its message tells it apart.
+pub fn build_exit(status: u8, msg: &str) -> i32 {
+    match status {
+        3 | 4 => 100,
+        8 => 101,
+        5 if msg.contains("hash mismatch in fixed-output derivation") => 102,
+        12 => 104,
+        _ => 1,
+    }
+}
+
+/// failingExitStatus over several builds: the flags of the special codes
+/// combine, any other failure is 1.
+pub fn combine_exit(a: i32, b: i32) -> i32 {
+    if a >= 100 && b >= 100 {
+        a | b
+    } else {
+        a.max(b)
+    }
+}
+
+/// A failed build as a record; `reason` is `status N: MSG` or a plain
+/// message, `pos` where the derivation was defined.
+fn build_report(pos: Option<String>, reason: &str, exit: i32) -> Report {
+    let msg = match reason.split_once(": ") {
+        Some((s, m)) if s.starts_with("status ") => m,
+        _ => reason,
+    };
+    let raw = crate::build::results::strip_ansi(msg);
+    let got = raw.lines().find_map(|l| l.trim().strip_prefix("got:"));
+    let (code, hint) = match got {
+        Some(h) if exit == 102 => (
+            "hash-mismatch",
+            Some(format!("set the expected hash to '{}'", h.trim())),
+        ),
+        _ => ("build-failed", None),
+    };
+    Report {
+        pos,
+        hint,
+        ..Report::new(code, raw.trim_end())
+    }
+}
+
+/// A failed build: its record under internal-json, else `text`, if any;
+/// the renderer prints its own.
+pub fn build_failed(pos: Option<String>, reason: &str, exit: i32, text: Option<&str>) {
+    if json() {
+        let r = build_report(pos, reason, exit);
+        write(&r.record(&r.text()));
+    } else if let Some(t) = text {
+        eprintln!("{t}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,5 +318,42 @@ mod tests {
         let text = "warning: [url-literal] URL literal\n  at /a.nix:2:5";
         let want = r#"@nix {"action":"msg","code":"lint","column":5,"file":"/a.nix:2:5","level":1,"line":2,"msg":"warning: [url-literal] URL literal\n  at /a.nix:2:5","raw_msg":"[url-literal] URL literal"}"#;
         assert_eq!(lint_record(text), want);
+    }
+
+    #[test]
+    fn exit_status_flags_combine_like_nix() {
+        assert_eq!(build_exit(3, ""), 100);
+        assert_eq!(build_exit(8, ""), 101);
+        assert_eq!(
+            build_exit(5, "hash mismatch in fixed-output derivation 'x':"),
+            102
+        );
+        assert_eq!(build_exit(5, "output rejected"), 1);
+        assert_eq!(build_exit(12, ""), 104);
+        assert_eq!(build_exit(10, ""), 1);
+        assert_eq!(combine_exit(100, 101), 101);
+        assert_eq!(combine_exit(100, 104), 108);
+        assert_eq!(combine_exit(1, 102), 102);
+        assert_eq!(combine_exit(0, 1), 1);
+        assert_eq!(combine_exit(0, 0), 0);
+    }
+
+    #[test]
+    fn a_hash_mismatch_names_the_hash_it_got() {
+        let reason = "status 5: hash mismatch in fixed-output derivation '/nix/store/x.drv':\n  specified: sha256-AAAA=\n     got:    sha256-BBBB=";
+        let r = build_report(Some("/a.nix:4:3".into()), reason, 102);
+        assert_eq!(r.code, "hash-mismatch");
+        assert_eq!(
+            r.hint.as_deref(),
+            Some("set the expected hash to 'sha256-BBBB='")
+        );
+        assert!(
+            r.raw
+                .starts_with("hash mismatch in fixed-output derivation")
+        );
+        assert_eq!(
+            build_report(None, "status 3: Cannot build", 100).code,
+            "build-failed"
+        );
     }
 }

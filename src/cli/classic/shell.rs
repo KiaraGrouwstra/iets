@@ -359,7 +359,10 @@ fn realise(s: &Shell, transport: &Transport, options: &Options, r: Ready, cores:
             Event::Log(l) if !quiet => crate::log::line(&String::from_utf8_lossy(&l.line)),
             Event::Failed(f) => {
                 failed.set(true);
-                eprintln!("error: build of '{}' failed: {}", f.drv_path, f.reason);
+                crate::log::line(&format!(
+                    "error: build of '{}' failed: {}",
+                    f.drv_path, f.reason
+                ));
             }
             _ => {}
         }
@@ -392,8 +395,11 @@ fn realise(s: &Shell, transport: &Transport, options: &Options, r: Ready, cores:
         Ok(results) => {
             for b in &results {
                 if !b.success() {
+                    let code = crate::log::build_exit(b.status, &b.msg);
                     failed.set(true);
-                    eprintln!("error: build failed: status {}: {}", b.status, b.msg);
+                    let reason = format!("status {}: {}", b.status, b.msg);
+                    let text = format!("error: build failed: {reason}");
+                    crate::log::build_failed(None, &reason, code, Some(&text));
                 }
             }
         }

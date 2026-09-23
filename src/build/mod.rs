@@ -92,6 +92,8 @@ pub struct Outcome {
     pub outputs: BTreeMap<String, String>,
     pub elapsed: Duration,
     pub cache_status: Option<String>,
+    /// `log::build_exit` of a failure, 0 otherwise.
+    pub exit: i32,
 }
 
 impl Outcome {
@@ -232,7 +234,8 @@ pub struct Dispatcher {
     seen: HashSet<StorePath>,
     /// `--retries N`: how many more times a failed target is submitted.
     pub retries: usize,
-    pub failed: bool,
+    /// Nix's failingExitStatus of the failed builds, 0 while none failed.
+    pub exit: i32,
     pub upload: upload::Stats,
     /// Batches and build ops sent, for `--timings`.
     pub ops: usize,
@@ -278,7 +281,7 @@ impl Dispatcher {
             prov,
             seen: HashSet::new(),
             retries: 0,
-            failed: false,
+            exit: 0,
             upload: upload::Stats::default(),
             ops: 0,
             _heartbeat: heartbeat,
@@ -317,7 +320,7 @@ impl Dispatcher {
                 }
             }
         }
-        self.failed |= out.iter().any(|o| !o.success && !o.skipped);
+        self.exit = (out.iter()).fold(self.exit, |e, o| crate::log::combine_exit(e, o.exit));
         Ok(out)
     }
 
@@ -393,6 +396,7 @@ impl Dispatcher {
                         outputs,
                         elapsed,
                         cache_status: t.cache_status.clone(),
+                        exit: 0,
                     });
                 }
                 Some(s) => {
@@ -409,6 +413,8 @@ impl Dispatcher {
                         },
                         elapsed,
                     ));
+                    let full = self.prov.rewrite_str(&s.reason);
+                    crate::log::build_failed(names.pos(&drv), &full, s.exit, None);
                     out.push(Outcome {
                         attr: t.attr.clone(),
                         drv: t.drv.clone(),
@@ -419,6 +425,7 @@ impl Dispatcher {
                         outputs: BTreeMap::new(),
                         elapsed,
                         cache_status: t.cache_status.clone(),
+                        exit: s.exit,
                     });
                 }
                 // The daemon stopped before it reached this target:
@@ -440,6 +447,7 @@ impl Dispatcher {
                         outputs: BTreeMap::new(),
                         elapsed,
                         cache_status: t.cache_status.clone(),
+                        exit: 0,
                     });
                 }
             }
@@ -627,6 +635,7 @@ mod tests {
             outputs: BTreeMap::new(),
             elapsed: Duration::from_millis(1500),
             cache_status: Some("notBuilt".into()),
+            exit: 1,
         };
         let r = o.record();
         assert_eq!(r.kind, results::Kind::Build);

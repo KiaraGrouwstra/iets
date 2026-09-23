@@ -416,13 +416,13 @@ fn dispatch(d: Dispatch, rx: Receiver<Line>) -> Result<Report> {
             }
             dispatcher.record(o.record());
         }
-        failed |= dispatcher.failed;
-        stop |= d.fail_fast && dispatcher.failed;
+        failed |= dispatcher.exit != 0;
+        stop |= d.fail_fast && dispatcher.exit != 0;
     }
 
     if let Some(mut dd) = dispatcher {
         records = std::mem::take(&mut dd.reporter.records);
-        failed |= dd.failed;
+        failed |= dd.exit != 0;
         let total = t0.elapsed();
         crate::log::line(&format!(
             "fast-build: {} built, {n_cached} cached, {n_other_system} for another system, {} build ops, {} paths uploaded ({} MB), first build at {:.3}s, total {:.3}s",

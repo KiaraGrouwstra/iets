@@ -50,6 +50,8 @@ pub struct Status {
     pub ok: bool,
     /// The one-line reason, when it failed.
     pub reason: String,
+    /// `log::build_exit` of the failure, 0 for a success.
+    pub exit: i32,
 }
 
 impl Status {
@@ -57,11 +59,16 @@ impl Status {
         Status {
             ok: true,
             reason: String::new(),
+            exit: 0,
         }
     }
 
-    pub fn failed(reason: String) -> Status {
-        Status { ok: false, reason }
+    pub fn failed(reason: String, exit: i32) -> Status {
+        Status {
+            ok: false,
+            reason,
+            exit,
+        }
     }
 }
 
@@ -351,7 +358,8 @@ impl Backend for Worker {
             let drv = r.path.split('!').next().unwrap_or(&r.path).to_string();
             let e = out.entry(drv).or_insert_with(Status::ok);
             if !r.success() {
-                *e = Status::failed(format!("status {}: {}", r.status, r.msg));
+                let exit = crate::log::build_exit(r.status, &r.msg);
+                *e = Status::failed(format!("status {}: {}", r.status, r.msg), exit);
             }
         }
         Ok(out)

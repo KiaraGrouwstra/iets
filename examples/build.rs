@@ -111,7 +111,7 @@ fn eval_and_build(ev: &mut Evaluator, a: EvalArgs, url: String) -> u8 {
             println!("{path}");
         }
     }
-    u8::from(d.failed)
+    d.exit as u8
 }
 
 fn die(msg: &str) -> ! {
