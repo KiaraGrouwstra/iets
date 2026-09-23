@@ -43,7 +43,7 @@ fn main() {
     let argv = match ietsp::settings::take_options(&argv) {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("error: {e}");
+            e.report();
             exit(2)
         }
     };

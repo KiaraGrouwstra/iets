@@ -99,10 +99,11 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
     // the `builder` setting does not apply
     let url = url.unwrap_or_else(|| cfg.store());
     let Some(transport) = crate::remote::worker::Transport::parse(&url) else {
-        eprintln!(
-            "error: print-dev-env needs a Nix daemon: --builder daemon, unix:///path or ssh-ng://host"
-        );
-        return 1;
+        return CrateError::Usage(
+            "print-dev-env needs a Nix daemon: --builder daemon, unix:///path or ssh-ng://host"
+                .into(),
+        )
+        .report();
     };
     let cwd = cwd();
     let gc_root = gc_root.map(|r| {
@@ -111,20 +112,19 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
         )
     });
     if matches!(transport, crate::remote::worker::Transport::Grpc(_)) {
-        eprintln!("error: print-dev-env needs a Nix daemon; grpc:// only builds");
-        return 1;
+        return CrateError::Usage("print-dev-env needs a Nix daemon; grpc:// only builds".into())
+            .report();
     }
     if gc_root.is_some() && !matches!(transport, crate::remote::worker::Transport::Unix(_)) {
-        eprintln!("error: --gc-root needs a local daemon (daemon or unix://)");
-        return 1;
+        return CrateError::Usage("--gc-root needs a local daemon (daemon or unix://)".into())
+            .report();
     }
     let d = DevEnvArgs { transport, gc_root };
 
     let t0 = std::time::Instant::now();
     let mut ev = a.evaluator();
     if let Err(e) = super::configure_lints(&mut ev, &a) {
-        super::report(&ev, &e);
-        return 1;
+        return super::report(&ev, &e);
     }
     let cache = super::setup_cache(&a, "print-dev-env", &ev);
     if let Some(c) = &cache
@@ -148,10 +148,7 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
                     eprintln!("cache: env output '{}' is gone, rebuilding", hit.out_path);
                 }
             }
-            Err(e) => {
-                eprintln!("error: {e}");
-                return 1;
-            }
+            Err(e) => return e.report(),
         }
     }
     if cache.is_some() {
@@ -316,10 +313,7 @@ fn dev_env_full(
             }
             0
         }
-        Err(e) => {
-            eprintln!("error: {e}");
-            1
-        }
+        Err(e) => e.report(),
     }
 }
 
@@ -371,15 +365,14 @@ fn dev_env_build(ev: &mut Evaluator, a: EvalArgs, d: &DevEnvArgs) -> Result<DevE
         ))
     })();
     if let Err(e) = r {
-        report(ev, &e);
-        return Err(1);
+        return Err(report(ev, &e));
     }
     if roots.len() != 1 {
-        eprintln!(
-            "error: '{f}' needs to evaluate to a single derivation, but it evaluated to {} derivations",
+        let msg = format!(
+            "'{f}' needs to evaluate to a single derivation, but it evaluated to {} derivations",
             roots.len()
         );
-        return Err(1);
+        return Err(CrateError::Eval(Error::boxed(ErrorKind::Eval, msg, Pos::NONE)).report());
     }
     let shell_path = roots[0].0.clone();
     let eval_time = t0.elapsed();
@@ -503,10 +496,7 @@ fn dev_env_build(ev: &mut Evaluator, a: EvalArgs, d: &DevEnvArgs) -> Result<DevE
             t1,
         })
     })();
-    r.map_err(|e| {
-        eprintln!("error: {e}");
-        1
-    })
+    r.map_err(|e| e.report())
 }
 
 /// develop.cc:getDerivationEnvironment, after the build: the first output (by name) whose

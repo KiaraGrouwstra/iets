@@ -69,8 +69,7 @@ pub fn cmd_build(argv: &[String]) -> i32 {
     };
     let mut ev = a.evaluator();
     if let Err(e) = super::configure_lints(&mut ev, &a) {
-        report(&ev, &e);
-        return 1;
+        return report(&ev, &e);
     }
     let cache = super::setup_cache(&a, "build", &ev);
     if let Some(c) = &cache
@@ -125,8 +124,7 @@ fn build_eval(
     });
     let r = evaluate(ev, a).and_then(|v| drv_roots(ev, v, &mut roots));
     if let Err(e) = r {
-        report(ev, &e);
-        return 1;
+        return report(ev, &e);
     }
     if let Some(t) = &target {
         for (p, _) in &roots {
@@ -169,13 +167,9 @@ fn build_drv_file(b: &BuildArgs, root_arg: &str) -> i32 {
     let root = match StorePath::from_base_name(&base) {
         Ok(p) if p.is_derivation() => p,
         Ok(p) => {
-            eprintln!("error: '{p}' is not a derivation");
-            return 1;
+            return CrateError::Store(format!("'{p}' is not a derivation")).report();
         }
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
+        Err(e) => return CrateError::from(e).report(),
     };
     // The root may be a copy outside the store; its inputs are read from `/nix/store`.
     let info = std::fs::read_to_string(root_arg)
@@ -196,8 +190,8 @@ fn build_drv_file(b: &BuildArgs, root_arg: &str) -> i32 {
     let info = match info {
         Ok(i) => i,
         Err(e) => {
-            eprintln!("error: cannot read derivation '{root_arg}': {e}");
-            return 1;
+            let msg = format!("cannot read derivation '{root_arg}': {e}");
+            return crate::log::Report::new(e.code(), msg).emit();
         }
     };
     let drvs = HashMap::from([(root.clone(), info)]);
@@ -234,23 +228,17 @@ fn build_roots(
     let transport = match crate::remote::worker::Transport::parse_checked(&url, &cfg.system()) {
         Ok(Some(t)) => t,
         Ok(None) => {
-            eprintln!(
-                "error: unsupported builder '{url}': expected daemon, unix:///path, ssh-ng://[user@]host or grpc://host:port"
-            );
-            return 2;
+            return CrateError::Usage(format!(
+                "unsupported builder '{url}': expected daemon, unix:///path, ssh-ng://[user@]host or grpc://host:port"
+            ))
+            .report();
         }
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 2;
-        }
+        Err(e) => return CrateError::Usage(e.to_string()).report(),
     };
     let t0 = std::time::Instant::now();
     let plan = match crate::remote::plan::plan(roots, inputs) {
         Ok(p) => p,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
+        Err(e) => return e.report(),
     };
     let plan_time = t0.elapsed();
     if b.timings && plan.store_drvs > 0 {
@@ -269,16 +257,12 @@ fn build_roots(
         Style::detect(),
     ) {
         Ok(d) => d,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
+        Err(e) => return e.report(),
     };
 
     if b.no_build {
         if let Err(e) = d.upload_only(&mut up, &roots[..1]) {
-            eprintln!("error: {e}");
-            return 1;
+            return e.report();
         }
         timings(b, &d, &plan, plan_time);
         return 0;
@@ -296,17 +280,13 @@ fn build_roots(
         .collect();
     let outcomes = match d.submit(&mut up, targets) {
         Ok(o) => o,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
+        Err(e) => return e.report(),
     };
     if let Some(dir) = &b.fetch_to {
         for o in &outcomes {
             for path in o.outputs.values() {
                 if let Err(e) = d.fetch(path, dir) {
-                    eprintln!("error: {e}");
-                    return 1;
+                    return e.report();
                 }
             }
         }

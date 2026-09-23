@@ -155,8 +155,7 @@ fn run(ev: &mut Evaluator, i: &Inst) -> Run {
         if is_unsupported(&e) {
             return Run::Unsupported(e.msg.clone());
         }
-        report(ev, &e);
-        return Run::Failed(1);
+        return Run::Failed(report(ev, &e));
     }
     if i.eval_only {
         return Run::Values(text);
@@ -166,10 +165,7 @@ fn run(ev: &mut Evaluator, i: &Inst) -> Run {
     }
     match super::plan_roots(ev, &roots) {
         Ok(p) => Run::Drvs(roots, Some(Box::new(p))),
-        Err(e) => {
-            eprintln!("error: {e}");
-            Run::Failed(1)
-        }
+        Err(e) => Run::Failed(e.report()),
     }
 }
 
@@ -232,10 +228,7 @@ fn finish(
         });
         match r {
             Ok(w) => worker = Some(w),
-            Err(e) => {
-                eprintln!("error: {e}");
-                return 1;
-            }
+            Err(e) => return e.report(),
         }
     }
     let cwd = cwd();
@@ -253,8 +246,7 @@ fn finish(
                     .conn
                     .add_perm_root(&r.drv.to_string(), std::path::Path::new(&name))
                 {
-                    eprintln!("error: {e}");
-                    return 1;
+                    return e.report();
                 }
                 name
             }

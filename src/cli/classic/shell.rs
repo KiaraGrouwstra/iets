@@ -129,8 +129,7 @@ pub fn main(argv: &[String]) -> i32 {
         Err(reason) => fallback(NAME, argv, &reason),
     };
     if let Err(reason) = default_file(&mut s) {
-        eprintln!("error: {reason}");
-        return 1;
+        return CrateError::Usage(reason).report();
     }
     let (cfg, transport, options) = match super::shell_settings(&s.c) {
         Ok(t) => t,
@@ -146,10 +145,7 @@ pub fn main(argv: &[String]) -> i32 {
     let run = Arc::clone(&s);
     let cores = match cfg.cores() {
         Ok(c) => c,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
+        Err(e) => return e.report(),
     };
     match crate::parallel::run(crate::parallel::default_workers(), ev, move |ev| {
         prepare(ev, &run)
@@ -255,21 +251,15 @@ fn prepare(ev: &mut Evaluator, s: &Shell) -> Run {
     let bash = match r {
         Ok(b) => b,
         Err(e) if is_unsupported(&e) => return Run::Unsupported(e.msg.clone()),
-        Err(e) => {
-            report(ev, &e);
-            return Run::Failed(1);
-        }
+        Err(e) => return Run::Failed(report(ev, &e)),
     };
     if roots.len() != 1 {
-        eprintln!("error: nix-shell requires a single derivation");
-        return Run::Failed(1);
+        let e = CrateError::Usage("nix-shell requires a single derivation".into());
+        return Run::Failed(e.report());
     }
     let drv = match crate::builtins::derivation::load_drv(ev, &roots[0].drv) {
         Ok(d) => d,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return Run::Failed(1);
-        }
+        Err(e) => return Run::Failed(CrateError::from(e).report()),
     };
     if !drv
         .outputs
@@ -295,10 +285,7 @@ fn prepare(ev: &mut Evaluator, s: &Shell) -> Run {
             bash,
             plan,
         })),
-        Err(e) => {
-            eprintln!("error: {e}");
-            Run::Failed(1)
-        }
+        Err(e) => Run::Failed(e.report()),
     }
 }
 
@@ -317,9 +304,9 @@ fn bash(ev: &mut Evaluator, cwd: &[u8]) -> Bash {
     match r {
         Ok(()) if roots.len() == 1 => Bash::Drv(roots[0].drv.clone()),
         Ok(()) => {
-            eprintln!(
-                "error: the 'bashInteractive' attribute in <nixpkgs> did not evaluate to a derivation"
-            );
+            let msg =
+                "the 'bashInteractive' attribute in <nixpkgs> did not evaluate to a derivation";
+            CrateError::Eval(Error::boxed(ErrorKind::Type, msg, Pos::NONE)).report();
             eprintln!("uses bash from your environment");
             Bash::Path("bash".into())
         }
@@ -381,10 +368,7 @@ fn realise(s: &Shell, transport: &Transport, options: &Options, r: Ready, cores:
     };
     let mut w = match Worker::open(transport, options, &mut on_event) {
         Ok(c) => c,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
+        Err(e) => return e.report(),
     };
     // nix-shell realises the derivation's inputs, never the derivation itself.
     let mut wanted: Vec<String> = r
@@ -404,8 +388,7 @@ fn realise(s: &Shell, transport: &Transport, options: &Options, r: Ready, cores:
         &mut on_event,
     );
     if let Err(e) = upload {
-        eprintln!("error: {e}");
-        return 1;
+        return e.report();
     }
     match w.conn.build_paths_with_results(&wanted, &mut on_event) {
         Ok(results) => {
@@ -416,10 +399,7 @@ fn realise(s: &Shell, transport: &Transport, options: &Options, r: Ready, cores:
                 }
             }
         }
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
+        Err(e) => return e.report(),
     }
     if failed.get() {
         return 1;
@@ -433,23 +413,17 @@ fn realise(s: &Shell, transport: &Transport, options: &Options, r: Ready, cores:
             Ok(m) => match m.get("out").cloned().flatten() {
                 Some(out) => format!("{out}/bin/bash"),
                 None => {
-                    eprintln!("error: derivation '{p}' has no output 'out'");
-                    return 1;
+                    let e = format!("derivation '{p}' has no output 'out'");
+                    return CrateError::Store(e).report();
                 }
             },
-            Err(e) => {
-                eprintln!("error: {e}");
-                return 1;
-            }
+            Err(e) => return e.report(),
         },
     };
     drop(w);
     match exec(s, &r.drv, &shell, cores) {
         Ok(()) => unreachable!("exec replaces the process"),
-        Err(e) => {
-            eprintln!("error: {e}");
-            1
-        }
+        Err(e) => e.report(),
     }
 }
 

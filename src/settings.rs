@@ -114,10 +114,8 @@ pub fn take_options(argv: &[String]) -> Result<Vec<String>> {
 pub fn get() -> &'static Settings {
     static S: OnceLock<Settings> = OnceLock::new();
     S.get_or_init(|| {
-        Settings::load(CLI.get().map_or(&[], Vec::as_slice)).unwrap_or_else(|e| {
-            eprintln!("error: {e}");
-            std::process::exit(1)
-        })
+        Settings::load(CLI.get().map_or(&[], Vec::as_slice))
+            .unwrap_or_else(|e| std::process::exit(e.report()))
     })
 }
 

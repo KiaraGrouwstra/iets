@@ -31,7 +31,7 @@ pub fn cmd_parse(files: &[String], quiet: bool) -> i32 {
         let src = match std::fs::read(file) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("error: cannot read {file}: {}", crate::error::io_text(&e));
+                crate::error::Error::io(format!("cannot read {file}"), e).report();
                 errors += 1;
                 continue;
             }
@@ -45,7 +45,11 @@ pub fn cmd_parse(files: &[String], quiet: bool) -> i32 {
             }
             Err(e) => {
                 let (line, col) = line_col(&src, e.span.start);
-                eprintln!("error: {}\n       at {file}:{line}:{col}", e.msg);
+                crate::log::Report {
+                    pos: Some(format!("{file}:{line}:{col}")),
+                    ..crate::log::Report::new("parse", e.msg)
+                }
+                .emit();
                 errors += 1;
             }
         }

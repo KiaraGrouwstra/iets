@@ -9,8 +9,7 @@ use crate::trace::run::Cache;
 pub fn run_eval(a: EvalArgs) -> i32 {
     let mut ev = a.evaluator();
     if let Err(e) = super::configure_lints(&mut ev, &a) {
-        report(&ev, &e);
-        return 1;
+        return report(&ev, &e);
     }
     let cache = super::setup_cache(&a, "eval", &ev);
     if let Some(c) = &cache
@@ -41,10 +40,7 @@ fn eval_and_print(ev: &mut Evaluator, a: EvalArgs, cache: Option<Cache>) -> i32 
     let timings = a.timings;
     let v = match evaluate(ev, a) {
         Ok(v) => v,
-        Err(e) => {
-            report(ev, &e);
-            return 1;
-        }
+        Err(e) => return report(ev, &e),
     };
 
     let mut out: Vec<u8> = Vec::new();
@@ -95,9 +91,6 @@ fn eval_and_print(ev: &mut Evaluator, a: EvalArgs, cache: Option<Cache>) -> i32 
             }
             0
         }
-        Err(e) => {
-            report(ev, &e);
-            1
-        }
+        Err(e) => report(ev, &e),
     }
 }

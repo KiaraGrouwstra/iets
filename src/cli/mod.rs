@@ -187,10 +187,7 @@ pub fn cmd_lint(argv: &[String]) -> i32 {
             print!("{}", crate::lint::list(&c));
             0
         }
-        Err(e) => {
-            eprintln!("error: {}", e.msg);
-            1
-        }
+        Err(e) => crate::error::Error::Eval(e).report(),
     }
 }
 

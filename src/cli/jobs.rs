@@ -70,8 +70,12 @@ fn parse_jobs_args(argv: &[String]) -> (JobsArgs, Vec<String>) {
             .unwrap_or_else(|_| arg_error(format!("{} wants a number, got '{v}'", argv[*i - 1])))
     };
     let unsupported = |flag: &str, why: &str| -> ! {
-        eprintln!("error: {flag} is not supported by ietsp: {why} (docs/eval-jobs.md)");
-        exit(1)
+        exit(
+            CrateError::Unsupported(format!(
+                "{flag} is not supported by ietsp: {why} (docs/eval-jobs.md)"
+            ))
+            .report(),
+        )
     };
     while i < argv.len() {
         let s = argv[i].as_str();
@@ -128,17 +132,14 @@ fn parse_jobs_args(argv: &[String]) -> (JobsArgs, Vec<String>) {
                 let name = arg(&mut i);
                 let path = arg(&mut i);
                 let contents = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-                    eprintln!("error: cannot read '{path}': {}", crate::error::io_text(&e));
-                    exit(1)
+                    exit(CrateError::io(format!("cannot read '{path}'"), e).report())
                 });
                 rest.extend(["--argstr".to_string(), name, contents]);
             }
             "--arg-from-stdin" => {
                 let name = arg(&mut i);
-                let contents = std::io::read_to_string(std::io::stdin()).unwrap_or_else(|e| {
-                    eprintln!("error: cannot read stdin: {}", crate::error::io_text(&e));
-                    exit(1)
-                });
+                let contents = std::io::read_to_string(std::io::stdin())
+                    .unwrap_or_else(|e| exit(CrateError::io("cannot read stdin", e).report()));
                 rest.extend(["--argstr".to_string(), name.clone(), contents.clone()]);
                 j.stdin_args.push((name, contents));
             }
@@ -224,8 +225,7 @@ pub fn cmd_eval_jobs(argv: &[String]) -> i32 {
         other => other,
     };
     if a.input.is_none() {
-        eprintln!("error: no expression specified");
-        return 1;
+        return CrateError::Usage("no expression specified".into()).report();
     }
     // nix-eval-jobs.cc: `--impure` wins, then `--flake` makes it pure, then
     // `--pure-eval`, `--option pure-eval` and nix.conf decide.
@@ -240,10 +240,7 @@ pub fn cmd_eval_jobs(argv: &[String]) -> i32 {
     }
     let transport = match check_jobs_args(&j) {
         Ok(t) => t,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
+        Err(e) => return e.report(),
     };
     let t0 = std::time::Instant::now();
     if j.worker {
@@ -251,8 +248,7 @@ pub fn cmd_eval_jobs(argv: &[String]) -> i32 {
         ev.drv.keep_aterm = !j.opts.no_instantiate;
         ev.drv.keep_site = j.opts.provenance;
         if let Err(e) = crate::api::configure_lints(&mut ev, &a) {
-            report(&ev, &e);
-            return 1;
+            return report(&ev, &e);
         }
         return crate::parallel::run(1, ev, move |ev| jobs_worker(ev, a, &j, &transport));
     }
@@ -264,8 +260,7 @@ pub fn cmd_eval_jobs(argv: &[String]) -> i32 {
     ev.drv.keep_aterm = !j.opts.no_instantiate;
     ev.drv.keep_site = j.opts.provenance;
     if let Err(e) = crate::api::configure_lints(&mut ev, &a) {
-        report(&ev, &e);
-        return 1;
+        return report(&ev, &e);
     }
     crate::parallel::run(workers, ev, move |ev| {
         jobs_single(ev, a, &j, &transport, t0)
@@ -363,8 +358,7 @@ fn jobs_finish(
             .unwrap()
             .finish(conn, j.gc_roots_dir.as_deref())
     {
-        eprintln!("error: {e}");
-        return 1;
+        return e.report();
     }
     let em = emitter.lock().unwrap();
     jobs_summary(j, em.stats, inst, t0);
@@ -387,10 +381,7 @@ fn jobs_single(
 
     let root = match jobs_root(ev, a, j) {
         Ok(r) => r,
-        Err(e) => {
-            report(ev, &e);
-            return 1;
-        }
+        Err(e) => return report(ev, &e),
     };
     let stdout = Box::new(std::io::BufWriter::new(std::io::stdout()));
     let emitter = Arc::new(Mutex::new(Emitter::new(stdout, j.opts.constituents)));
@@ -419,10 +410,7 @@ fn jobs_single(
         });
         let (store, mut resolver) = match setup {
             Ok(s) => s,
-            Err(e) => {
-                eprintln!("error: {e}");
-                return 1;
-            }
+            Err(e) => return e.report(),
         };
         let em = emitter.clone();
         let inst = Instantiator::start(
@@ -441,10 +429,7 @@ fn jobs_single(
         crate::jobs::run(ev, root, &mut |line| inst.push(line));
         let store = match inst.finish() {
             Ok(r) => r,
-            Err(e) => {
-                eprintln!("error: {e}");
-                return 1;
-            }
+            Err(e) => return e.report(),
         };
         inst_stats = Some(store.stats);
         conn = Some(store.into_connection());
@@ -534,10 +519,7 @@ fn jobs_collector(
     let resolver_thread = if j.check_cache_status {
         let mut resolver = match Resolver::open(transport) {
             Ok(r) => r,
-            Err(e) => {
-                eprintln!("error: {e}");
-                return 1;
-            }
+            Err(e) => return e.report(),
         };
         let em = emitter.clone();
         Some(
@@ -583,17 +565,13 @@ fn jobs_collector(
         None => Ok(()),
     });
     if let Err(e) = r {
-        eprintln!("error: {e}");
-        return 1;
+        return e.report();
     }
     let mut conn = None;
     if j.opts.constituents {
         match Connection::open(transport, &mut |_| {}) {
             Ok(c) => conn = Some(c),
-            Err(e) => {
-                eprintln!("error: {e}");
-                return 1;
-            }
+            Err(e) => return e.report(),
         }
     }
     jobs_finish(&emitter, j, conn.as_mut(), None, t0)

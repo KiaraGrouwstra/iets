@@ -34,8 +34,10 @@ pub fn cmd_cache_gc(argv: &[String]) -> i32 {
     }
     let stores = cachefs::stores(cache_dir.as_deref());
     if stores.is_empty() {
-        eprintln!("error: no cache directory (no HOME and no --cache-dir)");
-        return 1;
+        return crate::error::Error::Cache(
+            "no cache directory (no HOME and no --cache-dir)".into(),
+        )
+        .report();
     }
     let ttl = Duration::from_secs(ttl_days * 24 * 60 * 60);
     for (root, shape) in stores {

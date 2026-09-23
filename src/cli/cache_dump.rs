@@ -5,14 +5,10 @@ pub fn cmd_cache_dump(file: &str) -> i32 {
     use crate::trace::Obs;
     let bytes = match std::fs::read(file) {
         Ok(b) => b,
-        Err(e) => {
-            eprintln!("error: cannot read {file}: {}", crate::error::io_text(&e));
-            return 1;
-        }
+        Err(e) => return crate::error::Error::io(format!("cannot read {file}"), e).report(),
     };
     let Some(obs) = crate::trace::wire::decode_readset(&bytes) else {
-        eprintln!("error: {file} is not a readset");
-        return 1;
+        return crate::error::Error::Cache(format!("{file} is not a readset")).report();
     };
     let hex = |d: &[u8]| d.iter().map(|b| format!("{b:02x}")).collect::<String>();
     let s = |b: &[u8]| String::from_utf8_lossy(b).into_owned();

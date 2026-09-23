@@ -92,10 +92,7 @@ pub fn main(argv: &[String], rest: &[String]) -> i32 {
     };
     match run(&d, &cfg, &env) {
         Ok(()) => unreachable!("exec replaces the process"),
-        Err(e) => {
-            eprintln!("error: {e}");
-            1
-        }
+        Err(e) => e.report(),
     }
 }
 

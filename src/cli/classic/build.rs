@@ -110,8 +110,7 @@ fn run(ev: &mut Evaluator, b: &Build) -> Run {
         if is_unsupported(&e) {
             return Run::Unsupported(e.msg.clone());
         }
-        report(ev, &e);
-        return Run::Failed(1);
+        return Run::Failed(report(ev, &e));
     }
     if roots.is_empty() {
         return Run::Empty;
@@ -119,10 +118,7 @@ fn run(ev: &mut Evaluator, b: &Build) -> Run {
     let prov = Provenance::snapshot(ev);
     match super::plan_roots(ev, &roots) {
         Ok(p) => Run::Ready(roots, Box::new(p), Box::new(prov)),
-        Err(e) => {
-            eprintln!("error: {e}");
-            Run::Failed(1)
-        }
+        Err(e) => Run::Failed(e.report()),
     }
 }
 
@@ -141,10 +137,7 @@ fn realise(
     };
     let mut d = match Dispatcher::open(transport, options, prov.clone(), style) {
         Ok(d) => d,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
+        Err(e) => return e.report(),
     };
     // nix-build asks for every root in one op, one output per root; roots
     // that share a derivation become one target with both outputs.
@@ -168,10 +161,7 @@ fn realise(
     let mut up = PlanUpload::new(plan, &super::locate_store);
     let outcomes = match d.submit(&mut up, targets) {
         Ok(o) => o,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
+        Err(e) => return e.report(),
     };
     if d.failed {
         return 1;
@@ -206,8 +196,11 @@ fn realise(
             .and_then(|m| m.get(&r.output).cloned())
             .flatten();
         let Some(path) = path else {
-            eprintln!("error: derivation '{drv}' has no output '{}'", r.output);
-            return 1;
+            return crate::error::Error::Store(format!(
+                "derivation '{drv}' has no output '{}'",
+                r.output
+            ))
+            .report();
         };
         if b.no_out_link {
             if !super::store_given(&b.c) {
@@ -230,8 +223,7 @@ fn realise(
         out.push('\n');
     }
     if let Err(e) = d.out_links(&links) {
-        eprintln!("error: {e}");
-        return 1;
+        return e.report();
     }
     use std::io::Write;
     let mut stdout = std::io::stdout();

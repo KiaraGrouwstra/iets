@@ -283,10 +283,7 @@ fn eval_run(ev: &mut Evaluator, n: &Nix) -> Run {
     match r {
         Ok(()) => Run::Out(out),
         Err(e) if is_unsupported(&e) => Run::Unsupported(e.msg.clone()),
-        Err(e) => {
-            report(ev, &e);
-            Run::Failed(1)
-        }
+        Err(e) => Run::Failed(report(ev, &e)),
     }
 }
 
@@ -326,16 +323,12 @@ fn build_run(ev: &mut Evaluator, n: &Nix) -> Run {
         if is_unsupported(&e) {
             return Run::Unsupported(e.msg.clone());
         }
-        report(ev, &e);
-        return Run::Failed(1);
+        return Run::Failed(report(ev, &e));
     }
     let roots = flat_roots(&targets);
     match super::plan_roots(ev, &roots) {
         Ok(p) => Run::Ready(targets, Box::new(p)),
-        Err(e) => {
-            eprintln!("error: {e}");
-            Run::Failed(1)
-        }
+        Err(e) => Run::Failed(e.report()),
     }
 }
 
@@ -592,10 +585,7 @@ fn realise(
         style,
     ) {
         Ok(d) => d,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
+        Err(e) => return e.report(),
     };
     let mut batch: Vec<BuildTarget> = Vec::new();
     for r in &roots {
@@ -615,10 +605,7 @@ fn realise(
     let mut up = PlanUpload::new(plan, &super::locate_store);
     let outcomes = match d.submit(&mut up, batch) {
         Ok(o) => o,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
+        Err(e) => return e.report(),
     };
     if d.failed {
         return 1;
@@ -647,8 +634,10 @@ fn realise(
                 .and_then(|m| m.get(output).cloned())
                 .flatten();
             let Some(path) = path else {
-                eprintln!("error: derivation '{drv}' has no output '{output}'");
-                return 1;
+                return crate::error::Error::Store(format!(
+                    "derivation '{drv}' has no output '{output}'"
+                ))
+                .report();
             };
             if n.no_link {
                 if !super::store_given(&n.c) {
@@ -675,8 +664,7 @@ fn realise(
         }
     }
     if let Err(e) = d.out_links(&links) {
-        eprintln!("error: {e}");
-        return 1;
+        return e.report();
     }
     print_bytes(out.as_bytes());
     0

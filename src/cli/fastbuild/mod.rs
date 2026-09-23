@@ -62,10 +62,7 @@ struct Report {
 pub fn cmd_fast_build(argv: &[String]) -> i32 {
     let a = match flags::parse(argv) {
         Ok(a) => a,
-        Err(Reject::Refuse(m)) => {
-            eprintln!("error: {m}");
-            return 1;
-        }
+        Err(Reject::Refuse(m)) => return CrateError::Unsupported(m).report(),
         Err(r) => {
             let native = crate::cli::help::command().is_some();
             match r {
@@ -82,10 +79,7 @@ pub fn cmd_fast_build(argv: &[String]) -> i32 {
     };
     match run(a) {
         Ok(code) => code,
-        Err(e) => {
-            eprintln!("error: {e}");
-            1
-        }
+        Err(e) => e.report(),
     }
 }
 
@@ -412,7 +406,8 @@ fn dispatch(d: Dispatch, rx: Receiver<Line>) -> Result<Report> {
                     let abs = crate::cli::abs_path(&link, &crate::cli::cwd());
                     let abs = String::from_utf8_lossy(&abs).into_owned();
                     if let Err(e) = dispatcher.out_link(path, std::path::Path::new(&abs)) {
-                        eprintln!("error: cannot create '{abs}': {e}");
+                        crate::log::Report::new(e.code(), format!("cannot create '{abs}': {e}"))
+                            .emit();
                         failed = true;
                     }
                 }
