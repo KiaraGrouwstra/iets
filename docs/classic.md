@@ -169,7 +169,7 @@ files. See `docs/fast-build.md`.
 
 ### `nix`
 
-Five subcommands; every other one execs the real `nix`.
+Six subcommands; every other one execs the real `nix`.
 
 `nix eval [INSTALLABLE]`: `--json`, `--raw`, `--expr E`, `-f`/`--file FILE`,
 `--impure`, `--pure-eval`, `--no-pure-eval` (`docs/pure-eval.md`: `nix`
@@ -227,6 +227,14 @@ their signatures over the worker protocol before it makes the symlink. With
 setting stands in for the local store, as a build hook does, so the outputs
 come back even under `--no-link`: `nix build --no-link` followed by
 `nix copy` works. See `docs/remote-build.md`.
+
+`nix search INSTALLABLE REGEX...`: `-e`/`--exclude REGEX`, `--json`,
+`--pretty`, `--no-pretty`, `-f`/`--file`, `--expr`, plus the same global
+flags. The output is `search.cc`'s, byte for byte, escape sequences
+included; the index of the walk is cached, so a second search over the
+same package set answers without evaluating (`docs/search.md`). An
+installable ietsp cannot evaluate — a flake registry reference such as
+`nixpkgs`, an unlocked flake — falls back, as does any other flag.
 
 `nix print-dev-env [FLAKEREF[#attr]] [--json]` is `ietsp print-dev-env`
 (`docs/direnv.md`).

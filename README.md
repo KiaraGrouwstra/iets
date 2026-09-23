@@ -30,6 +30,10 @@ bench/run.nu nixos-desktop
 ./target/release/ietsp prefetch --unpack https://example.org/src.tar.gz   # docs/prefetch.md
 ./target/release/ietsp prefetch -E '(import <nixpkgs> {}).hello.src'
 
+# package search, `nix search`'s output; the index is cached, so the second run
+# over the same package set does not evaluate (docs/search.md)
+./target/release/ietsp search -I nixpkgs=/path ripgrep
+
 # .envrc: what `nix print-dev-env` prints, byte-exact, from the in-memory shell drv
 ./target/release/ietsp print-dev-env --gc-root .direnv/ietsp-env .   # see docs/direnv.md
 

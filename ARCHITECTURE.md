@@ -89,6 +89,7 @@ Around it:
 - `build/`: the dispatcher every build goes through, its two backends, the
   uploaders, the renderer and the result files (`docs/remote-build.md`).
 - `jobs/`: the eval-jobs walk (`docs/eval-jobs.md`).
+- `cli/search.rs`: the package search and its index (`docs/search.md`).
 - `devenv/`: `print-dev-env` (`docs/direnv.md`).
 - `provenance.rs`: store paths and derivations back to local trees and
   source positions (`docs/provenance.md`).
@@ -99,7 +100,7 @@ Around it:
 - `api.rs`: the library facade. Frontends use this and never reach into
   `cli`; `examples/` holds three of them (`docs/library.md`).
 - `main.rs` and `cli/`: the command line on top of `api`: `ietsp eval`,
-  `build`, `eval-jobs`, `fast-build`, `print-dev-env`, `parse`,
+  `build`, `search`, `eval-jobs`, `fast-build`, `print-dev-env`, `parse`,
   `lint`, `cache gc`, `cache dump`, the help texts (`cli/help.rs`), and
   the classic names (`cli/classic/`, `docs/classic.md`).
 

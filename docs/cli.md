@@ -37,6 +37,7 @@ in `src/error.rs` for the rest, and the daemon's build status for builds.
 | `protocol` | `Error::Protocol` | bad data from another process (daemon, worker) |
 | `cache` | `Error::Cache` | the tracing cache |
 | `plan` | `Error::Plan` | a derivation closure that cannot be built |
+| `no-results` | `ietsp search` | no package matched every regex (docs/search.md) |
 | `build-failed` | build status | a build that failed |
 
 ## Exit codes
