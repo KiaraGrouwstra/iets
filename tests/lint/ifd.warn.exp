@@ -1,6 +1,6 @@
 warning: [ifd] import from derivation: this import needs '/nix/store/5wq5jx7219pmi3xklyhl77fjbqvy6qaj-x.drv' built first
   at /pwd/lint/ifd.nix:1:1
-error: ietsp: import from derivation is not supported: '/nix/store/5wq5jx7219pmi3xklyhl77fjbqvy6qaj-x.drv' is not built
+error: import from derivation is not supported: '/nix/store/5wq5jx7219pmi3xklyhl77fjbqvy6qaj-x.drv' is not built
        at /pwd/lint/ifd.nix:1:1
        … while realising the context of path '/nix/store/gwwjwi08fyrbrz2d8zkfvy65nzzq2czp-x' at /pwd/lint/ifd.nix:1:1
        … while calling the 'import' builtin at /pwd/lint/ifd.nix:1:1

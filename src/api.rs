@@ -118,7 +118,8 @@ pub fn report(ev: &Evaluator, e: &Error) {
     } else {
         rewrite_msg(ev, &e.msg)
     };
-    eprintln!("error: {msg}");
+    // "ietsp: " marks what classic mode falls back on; here it only doubles "error: "
+    eprintln!("error: {}", msg.strip_prefix("ietsp: ").unwrap_or(&msg));
     if !e.pos.is_none() {
         eprintln!("       at {}", at(e.pos));
     }
