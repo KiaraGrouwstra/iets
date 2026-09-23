@@ -226,6 +226,14 @@ fn pure_eval_answers_like_nix() {
         "in pure evaluation mode, 'fetchTree' doesn't fetch unlocked input 'github:o/r/main'",
     );
     err(
+        r#"builtins.fetchTree { type = "path"; path = "/a b"; lastModified = 3; }"#,
+        "in pure evaluation mode, 'fetchTree' doesn't fetch unlocked input 'path:/a%20b?lastModified=3'",
+    );
+    err(
+        r#"builtins.fetchTree { type = "gitlab"; owner = "o"; repo = "r"; host = "x.org"; }"#,
+        "in pure evaluation mode, 'fetchTree' doesn't fetch unlocked input 'gitlab:o/r?host=x.org'",
+    );
+    err(
         r#"builtins.getFlake "/tmp""#,
         "cannot call 'getFlake' on unlocked flake reference '/tmp', at «none»:0 (use --impure to override)",
     );

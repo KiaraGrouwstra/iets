@@ -134,9 +134,9 @@ fn collect_attrs(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Attrs> {
 
 /// fetchTree.cc:fetchTree: a pure evaluation refuses an input that is not
 /// locked (a `narHash` for `path` and `tarball`, a `rev` for the rest). The
-/// message names the input the way `Input::to_string` does; where ietsp does
-/// not print that name like Nix (`git` adds `?shallow=1`), it is unsupported
-/// and classic mode falls back.
+/// message names the input the way `Input::to_string` does
+/// (`flakeref::attrs_to_string`); for `git` (fetchTree adds `?shallow=1`) and
+/// what ietsp cannot show, it is unsupported and classic mode falls back.
 fn check_locked(attrs: &Attrs, pos: Pos) -> EvalResult<()> {
     let ty = str_attr(attrs, "type").unwrap_or("");
     let locked = match ty {
@@ -146,18 +146,11 @@ fn check_locked(attrs: &Attrs, pos: Pos) -> EvalResult<()> {
     if locked {
         return Ok(());
     }
-    let only = |keys: &[&str]| attrs.keys().all(|k| keys.contains(&k.as_str()));
+    // fetchTree.cc rejects `name` first, and only warns on a `narHash`
     let shown = match ty {
-        "path" if only(&["type", "path"]) => str_attr(attrs, "path").map(|p| format!("path:{p}")),
-        "tarball" if only(&["type", "url"]) => str_attr(attrs, "url").map(str::to_string),
-        "github" | "gitlab" | "sourcehut" if only(&["type", "owner", "repo", "ref"]) => {
-            match (str_attr(attrs, "owner"), str_attr(attrs, "repo")) {
-                (Some(o), Some(r)) => Some(match str_attr(attrs, "ref") {
-                    Some(f) => format!("{ty}:{o}/{r}/{f}"),
-                    None => format!("{ty}:{o}/{r}"),
-                }),
-                _ => None,
-            }
+        _ if attrs.contains_key("name") || attrs.contains_key("narHash") => None,
+        "path" | "tarball" | "github" | "gitlab" => {
+            super::flakeref::attrs_to_string(attrs.clone()).ok()
         }
         _ => None,
     };
