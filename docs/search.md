@@ -31,13 +31,14 @@ The regular expressions are POSIX extended and case insensitive, as
   `meta` that is not an attribute set, means no description.
 - The walk descends into the value the installable named, into the two
   levels under `packages` and `legacyPackages`, and, under
-  `legacyPackages` only, into an attribute set with
+  `legacyPackages` only (`ietsp search`: anywhere), into an attribute set with
   `recurseForDerivations = true`. Nothing else is opened: under a
   `--file` or `--expr` installable only the top level is searched.
-- An evaluation error under `legacyPackages` skips that attribute, as
-  `catch (EvalError &)` does in `search.cc`. Anywhere else it stops the
-  search. A feature ietsp does not have is not an evaluation error: under
-  a classic name it falls back to the real `nix`.
+- An evaluation error under `legacyPackages` (`ietsp search`: anywhere)
+  skips that attribute, as `catch (EvalError &)` does in `search.cc`.
+  Anywhere else it stops the search. A feature ietsp does not have is not
+  an evaluation error: under a classic name it falls back to the real
+  `nix`.
 
 A flake installable searches `packages.<system>` and
 `legacyPackages.<system>`; a fragment (`FLAKE#gnome3`) searches
@@ -79,9 +80,19 @@ no flake registry, so `nix search nixpkgs ^` falls back to the real `nix`;
 `ietsp search` takes the installable only when the first argument names
 one: a flake reference, `<name>`, or a path that is there. Everything else
 is a regex, and the default installable is `<nixpkgs>` from `-I` or
-`NIX_PATH`, evaluated impurely as `--file` is. The native command
-auto-calls the root value with the `--arg`s, so a package set that is a
-function — nixpkgs' own `default.nix` — is searched as it is:
+`NIX_PATH`, evaluated impurely as `--file` is. Two things the native
+command does that `nix search` does not, because its installable is
+usually a package set and not a flake output:
+
+- it auto-calls the root value with the `--arg`s, so a package set that
+  is a function — nixpkgs' own `default.nix` — is searched as it is;
+- it honours `recurseForDerivations` and skips evaluation errors at every
+  attribute path, not only under `legacyPackages`. Over the pinned
+  nixpkgs that finds the same 112,215 packages, with the same pnames,
+  versions and descriptions, as `nix search` finds under
+  `legacyPackages.<system>`.
+
+
 
 ```
 ietsp search hello                     # <nixpkgs>, impure

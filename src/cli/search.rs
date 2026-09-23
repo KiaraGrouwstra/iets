@@ -193,7 +193,7 @@ fn build(ev: &mut Evaluator, s: &Search, cache: Option<Cache>) -> Built {
     let r = (|| -> EvalResult<Vec<Entry>> {
         let mut index = Vec::new();
         for (v, mut path) in cursors(ev, s, &cwd())? {
-            visit(ev, v, &mut path, true, &mut index)?;
+            visit(ev, v, &mut path, true, &mut index, s.native)?;
         }
         Ok(index)
     })();
@@ -276,15 +276,18 @@ fn cursors(ev: &mut Evaluator, s: &Search, cwd: &[u8]) -> EvalResult<Vec<(Word, 
 
 /// search.cc:visit for one attribute path. `initial` marks a value the
 /// installable named. An evaluation error under `legacyPackages` is skipped,
-/// as in Nix; anywhere else it stops the search.
+/// as in Nix; anywhere else it stops the search. `lenient` (the native
+/// command) treats every path as `legacyPackages` does, so that a package set
+/// that is not a flake output is searched whole (docs/search.md).
 fn visit(
     ev: &mut Evaluator,
     w: Word,
     path: &mut Vec<Vec<u8>>,
     initial: bool,
     out: &mut Vec<Entry>,
+    lenient: bool,
 ) -> EvalResult<()> {
-    let under_legacy = path.first().is_some_and(|p| p == b"legacyPackages");
+    let skips_errors = lenient || path.first().is_some_and(|p| p == b"legacyPackages");
     let r = (|| -> EvalResult<()> {
         let attrs = ev.force(w)?.as_attrs();
         if let Some(a) = attrs {
@@ -297,7 +300,7 @@ fn visit(
                 return Ok(());
             }
         }
-        if !recurses(ev, path, initial, attrs, under_legacy)? {
+        if !recurses(ev, path, initial, attrs, lenient)? {
             return Ok(());
         }
         let Some(a) = attrs else {
@@ -312,14 +315,14 @@ fn visit(
         fanout(ev, T_ATTRS_WHNF, Word::from_ptr(a), a.len());
         for attr in crate::print::lexicographic_order(ev, a) {
             path.push(ev.interner.name(attr.sym).to_vec());
-            let r = visit(ev, attr.cell.get(), path, false, out);
+            let r = visit(ev, attr.cell.get(), path, false, out, lenient);
             path.pop();
             r?;
         }
         Ok(())
     })();
     match r {
-        Err(e) if under_legacy && swallowed(&e) => Ok(()),
+        Err(e) if skips_errors && swallowed(&e) => Ok(()),
         r => r,
     }
 }
@@ -335,19 +338,21 @@ fn swallowed(e: &Error) -> bool {
 
 /// Whether the walk descends into an attribute set: everything the
 /// installable named, the two levels under `packages` and `legacyPackages`,
-/// and under `legacyPackages` a set with `recurseForDerivations = true`.
+/// and under `legacyPackages` (or anywhere, when `lenient`) a set with
+/// `recurseForDerivations = true`.
 fn recurses(
     ev: &mut Evaluator,
     path: &[Vec<u8>],
     initial: bool,
     attrs: Option<&'static AttrsObj>,
-    under_legacy: bool,
+    lenient: bool,
 ) -> EvalResult<bool> {
     let head = |n: &[u8]| path.first().is_some_and(|p| p == n);
-    if path.is_empty() || initial || ((under_legacy || head(b"packages")) && path.len() <= 2) {
+    let two = head(b"legacyPackages") || head(b"packages");
+    if path.is_empty() || initial || (two && path.len() <= 2) {
         return Ok(true);
     }
-    if under_legacy
+    if (lenient || head(b"legacyPackages"))
         && let Some(a) = attrs
         && let Some(r) = a.get(ev.sym(b"recurseForDerivations"))
     {
@@ -590,6 +595,9 @@ fn key_args(s: &Search) -> EvalArgs {
     if s.expr.is_some() || s.file.is_some() {
         a.attr = s.what.clone();
     }
+    // the native walk recurses and skips errors everywhere, so its index is
+    // another index; `strict` is the key field that is free here
+    a.strict = s.native;
     a.args =
         s.c.flags
             .args
