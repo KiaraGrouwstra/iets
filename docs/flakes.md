@@ -104,8 +104,10 @@ what most command lines need.
    with the tracked-file set, and every read under it, `import`, `readFile`,
    `readDir`, `pathExists`, `hashFile`, `"${./x}"`, `builtins.path`, goes
    to the working tree through `builtins::store_hooks::locate`, with the
-   tracked-file set as filter (an untracked file does not exist, `readDir`
-   does not list it). The store is never consulted for the root tree.
+   tracked-file set as filter: reading an untracked file fails with Nix's
+   "Path '...' in the repository ... is not tracked by Git" error, while
+   `pathExists` says `false` and `readDir` does not list it. The store is
+   never consulted for the root tree.
 2. `call-flake.nix` from Nix 2.34.8 is embedded verbatim and called with
    the lock file text, `{ root = { sourceInfo; dir; }; }` and
    `builtins.fetchTree`.
