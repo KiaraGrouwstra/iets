@@ -97,10 +97,10 @@ fn tee(v: &Value) {
 
 fn sink() -> Option<&'static Mutex<Box<dyn Write + Send>>> {
     static SINK: OnceLock<Option<Mutex<Box<dyn Write + Send>>>> = OnceLock::new();
-    // Config::load must not log: that would re-enter this get_or_init
+    // Config::read, not load: a warning would re-enter this get_or_init
     let sink = SINK.get_or_init(|| {
         let path = JSON_LOG_PATH.get().cloned().or_else(|| {
-            let c = crate::config::Config::load(&[]).ok()?;
+            let c = crate::config::Config::read(&[]).ok()?;
             c.str("json-log-path").map(str::to_string)
         })?;
         match open_sink(std::path::Path::new(&path)) {
@@ -461,6 +461,16 @@ static MISMATCHES: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 /// last call.
 pub fn take_mismatches() -> Vec<(String, String)> {
     std::mem::take(&mut MISMATCHES.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+/// `warning: RAW`, a level-1 record with its own code.
+pub fn warning(code: &'static str, raw: String) {
+    let text = format!("warning: {raw}");
+    let r = Report {
+        level: 1,
+        ..Report::new(code, raw)
+    };
+    out(&r.record(&text), Some(&text));
 }
 
 /// A hash that `fix-hashes` rewrote at `pos`, `file:line:col`.

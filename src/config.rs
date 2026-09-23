@@ -31,6 +31,92 @@ const APPENDABLE: &[&str] = &[
     "trusted-users",
 ];
 
+/// The settings Determinate Nix has and Nix 2.34.8 does not (the `Setting`s
+/// of DeterminateSystems/nix-src, 2026-09): the Booleans, then the rest. Each
+/// is warned about once and never read (docs/config.md).
+const DETERMINATE_BOOLS: &[&str] = &[
+    "filetransfer-retry-jitter",
+    "http3",
+    "lazy-locks",
+    "lazy-trees",
+    "nix-219-compat",
+    "otlp",
+];
+const DETERMINATE_VALUES: &[&str] = &[
+    "build-provenance-tags",
+    "eval-cores",
+    "eval-max-fibers",
+    "filetransfer-retry-attempts",
+    "filetransfer-retry-delay",
+    "filetransfer-retry-delay-rate-limited",
+    "filetransfer-retry-max-delay",
+    "host-name",
+    "otlp-compression",
+    "otlp-endpoint",
+    "otlp-headers",
+    "session-id",
+];
+
+static HUSHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// No Determinate warnings from this process: an `eval-jobs` worker, whose
+/// parent already gave them.
+pub fn hush() {
+    HUSHED.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The Determinate settings this process saw, and whether each was warned about.
+static NOTED: std::sync::Mutex<Vec<(String, bool)>> = std::sync::Mutex::new(Vec::new());
+
+/// Remembers `name` when it is a Determinate Nix setting. The warning waits
+/// for `warn_determinate`, so a later `--log-format` still applies to it, as
+/// Nix warns only once every flag is read (common-args.cc:initialFlagsProcessed).
+pub fn note_determinate(name: &str) {
+    let name = name.strip_prefix("extra-").unwrap_or(name);
+    if DETERMINATE_BOOLS.contains(&name) || DETERMINATE_VALUES.contains(&name) {
+        let mut noted = NOTED.lock().unwrap_or_else(|e| e.into_inner());
+        if !noted.iter().any(|(n, _)| n == name) {
+            noted.push((name.to_string(), false));
+        }
+    }
+}
+
+/// `warning: 'NAME' is a Determinate Nix setting; ietsp ignores it` for each
+/// noted name not yet warned about, as a `determinate-setting` record.
+pub fn warn_determinate() {
+    let hushed = HUSHED.load(std::sync::atomic::Ordering::Relaxed);
+    let mut noted = NOTED.lock().unwrap_or_else(|e| e.into_inner());
+    for (name, warned) in noted.iter_mut().filter(|(_, w)| !*w) {
+        *warned = true;
+        if !hushed {
+            let raw = format!("'{name}' is a Determinate Nix setting; ietsp ignores it");
+            crate::log::warning("determinate-setting", raw);
+        }
+    }
+}
+
+/// A Determinate Nix setting as a flag (configuration.cc, `convertToArg`):
+/// `--lazy-trees` and `--no-lazy-trees` for a Boolean, `--eval-cores N` for
+/// the rest. It is noted and ignored; `Ok(false)` for any other flag.
+pub fn determinate_flag(
+    flag: &str,
+    mut next: impl FnMut() -> std::result::Result<String, String>,
+) -> std::result::Result<bool, String> {
+    let Some(name) = flag.strip_prefix("--") else {
+        return Ok(false);
+    };
+    let boolean = name.strip_prefix("no-").unwrap_or(name);
+    if DETERMINATE_BOOLS.contains(&boolean) {
+        note_determinate(boolean);
+    } else if DETERMINATE_VALUES.contains(&name) {
+        next()?;
+        note_determinate(name);
+    } else {
+        return Ok(false);
+    }
+    Ok(true)
+}
+
 fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|s| !s.is_empty())
 }
@@ -103,8 +189,19 @@ impl Config {
 
     /// The whole discovery: `$NIX_CONF_DIR/nix.conf`, then the user files from
     /// lowest to highest precedence, then `$NIX_CONFIG`, then `--option`
-    /// overrides last (globals.cc:loadConfFile, common-args.cc:42).
+    /// overrides last (globals.cc:loadConfFile, common-args.cc:42). A
+    /// Determinate Nix setting among them is warned about, as Nix warns about
+    /// an unknown one (configuration.cc:warnUnknownSettings).
     pub fn load(overrides: &[(String, String)]) -> Result<Config> {
+        let c = Config::read(overrides)?;
+        c.settings.keys().for_each(|k| note_determinate(k));
+        warn_determinate();
+        Ok(c)
+    }
+
+    /// `load` without the warnings, for a reader inside ietsp: the log sink,
+    /// the fetcher.
+    pub fn read(overrides: &[(String, String)]) -> Result<Config> {
         let mut c = Config::empty();
         c.apply_file_if_present(&conf_dir().join("nix.conf"))?;
         for f in user_conf_files().iter().rev() {
@@ -370,6 +467,28 @@ mod tests {
         let c = load("basic.conf");
         assert_eq!(c.str("not-a-real-setting"), Some("kept"));
         assert!(c.iter().any(|(k, _)| k == "not-a-real-setting"));
+    }
+
+    #[test]
+    fn determinate_settings_as_flags() {
+        let none = || -> std::result::Result<String, String> { panic!("no value") };
+        assert_eq!(determinate_flag("--lazy-trees", none), Ok(true));
+        assert_eq!(determinate_flag("--no-lazy-trees", none), Ok(true));
+        let mut taken = 0;
+        let value = || {
+            taken += 1;
+            Ok("4".to_string())
+        };
+        assert_eq!(determinate_flag("--eval-cores", value), Ok(true));
+        assert_eq!(taken, 1);
+        assert_eq!(determinate_flag("--no-eval-cores", none), Ok(false));
+        assert_eq!(determinate_flag("--max-jobs", none), Ok(false));
+        assert_eq!(determinate_flag("lazy-trees", none), Ok(false));
+        note_determinate("extra-build-provenance-tags");
+        note_determinate("max-jobs");
+        let noted = NOTED.lock().unwrap();
+        assert!(noted.iter().any(|(n, _)| n == "build-provenance-tags"));
+        assert!(!noted.iter().any(|(n, _)| n == "max-jobs"));
     }
 
     #[test]

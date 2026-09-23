@@ -537,7 +537,7 @@ fn adopt(ev: &mut Evaluator, sp: &StorePath, entry: &crate::inputs::Entry) {
 fn nix_conf() -> &'static crate::config::Config {
     static CFG: std::sync::OnceLock<crate::config::Config> = std::sync::OnceLock::new();
     CFG.get_or_init(|| {
-        crate::config::Config::load(&[]).unwrap_or_else(|_| crate::config::Config::empty())
+        crate::config::Config::read(&[]).unwrap_or_else(|_| crate::config::Config::empty())
     })
 }
 

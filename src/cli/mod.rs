@@ -46,6 +46,9 @@ pub fn eval_flag(
     s: &str,
     mut next: impl FnMut() -> Result<String, String>,
 ) -> Result<bool, String> {
+    if crate::config::determinate_flag(s, &mut next)? {
+        return Ok(true);
+    }
     match s {
         "-I" | "--include" => f.includes.push(parse_include(&next()?)),
         _ if s.starts_with("-I") && s.len() > 2 => f.includes.push(parse_include(&s[2..])),
@@ -54,6 +57,7 @@ pub fn eval_flag(
         "--argstr" => f.args.push((next()?, ArgKind::Str(next()?))),
         "--option" => {
             let (name, v) = (next()?, next()?);
+            crate::config::note_determinate(&name);
             if name == "pure-eval" {
                 let b = crate::config::parse_bool(&name, &v).map_err(|e| e.to_string())?;
                 f.pure = Some(b);
@@ -127,6 +131,9 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
         }
         i += 1;
     }
+    // nix.conf only for its warnings: Nix warns about the settings it lacks
+    let _ = crate::config::Config::load(&f.overrides);
+    crate::config::warn_determinate();
     (a.includes, a.args, a.pure) = (f.includes, f.args, f.pure);
     a.attr = f.attrs.pop();
     a

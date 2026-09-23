@@ -203,6 +203,9 @@ fn check_jobs_args(j: &JobsArgs) -> crate::error::Result<crate::remote::worker::
 /// See docs/eval-jobs.md.
 pub fn cmd_eval_jobs(argv: &[String]) -> i32 {
     let (j, rest) = parse_jobs_args(argv);
+    if j.worker {
+        crate::config::hush();
+    }
     let mut a = parse_eval_args(&rest);
     a.no_cache = true;
     a.flake_whole = true;

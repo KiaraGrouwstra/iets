@@ -103,6 +103,9 @@ fn find_sub(argv: &[String]) -> Result<usize, String> {
 
 /// `Ok(true)`: consumed. `Ok(false)`: not one of ours. `Err`: fall back.
 pub(super) fn global_flag(c: &mut Common, a: &mut Argv, s: &str) -> Result<bool, String> {
+    if crate::config::determinate_flag(s, || a.value(s))? {
+        return Ok(true);
+    }
     if !GLOBALS.iter().any(|(f, _)| *f == s) {
         return Ok(false);
     }

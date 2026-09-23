@@ -40,7 +40,33 @@ A file that is missing or unreadable is skipped, not an error.
   list, the pair is kept under its literal name, as Nix keeps it in
   `unknownSettings`.
 - An unknown setting is kept and readable with `Config::str`. Nix warns about
-  it; this reader is silent.
+  it; this reader is silent, except for the Determinate Nix settings below.
+
+## Determinate Nix settings
+
+A host with Determinate Nix often has settings in its `nix.conf` that Nix
+2.34.8 does not know: `lazy-trees`, `eval-cores`, `session-id` and the rest of
+`DETERMINATE` in `src/config.rs` (the `Setting`s of DeterminateSystems/nix-src
+that upstream Nix does not have). Nix 2.34.8 prints `warning: unknown setting
+'NAME'` for each (configuration.cc:`warnUnknownSettings`). ietsp prints one
+warning per key and process instead, and ignores the value:
+
+```
+warning: 'lazy-trees' is a Determinate Nix setting; ietsp ignores it
+```
+
+Under `--log-format internal-json` it is a level-1 record with code
+`determinate-setting` (docs/cli.md). The same holds when the setting comes
+from `$NIX_CONFIG`, from `--option NAME VALUE`, or from its flag form:
+`--lazy-trees` and `--no-lazy-trees` for a Boolean, `--eval-cores N` for the
+others (configuration.cc:`convertToArg`). The warning goes out once every flag
+is read, so a later `--log-format` applies to it. `eval-jobs` workers do not
+repeat their parent's warnings.
+
+Nothing in ietsp reads these settings, and none of them reaches a daemon:
+`SetOptions` carries a fixed set (`What is honoured` below). So they cannot
+change a result. `eval-cores` does not set `workers`, and `session-id` does not
+set the `sid` of the log records (`IETSP_SESSION_ID` does).
 
 ## Values
 

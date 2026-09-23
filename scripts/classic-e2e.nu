@@ -447,6 +447,20 @@ def main [] {
   $ok = ($ok | append (verdict ($jb.exit_code == 0 and ($jrecs | where {|r| $r.action == "start" and $r.type? == 105 } | length) == 2 and not ($jb.stderr | str contains "@nix"))
     "json-log-path: the file gets a build's activity records, stderr stays text" $"exit ($jb.exit_code), stderr '($jb.stderr | str substring 0..300)'"))
 
+  # --- a Determinate Nix nix.conf: the same result, and one warning per key
+  # where Nix says "unknown setting"
+  let dconf = $"($d)/determinate.conf"
+  "lazy-trees = true\neval-cores = 0\n" | save -f $dconf
+  let dn = (with-env {NIX_USER_CONF_FILES: $dconf} { run-both $farm nix-instantiate --eval -E "1 + 1" })
+  $ok = ($ok | append (cmp-case "a Determinate nix.conf changes nothing" $dn))
+  let dw = ($dn.ours.stderr | lines | where ($it | str contains "is a Determinate Nix setting; ietsp ignores it") | length)
+  $ok = ($ok | append (verdict ($dw == 2 and ($dn.real.stderr | str contains "unknown setting 'lazy-trees'"))
+    "a Determinate setting is one warning per key" $"ours '($dn.ours.stderr)' real '($dn.real.stderr)'"))
+  let dj = (with-env {NIX_USER_CONF_FILES: $dconf} { ^$ietsp eval --log-format internal-json --no-lazy-trees --option eval-cores 4 -E "1" | complete })
+  let drec = ($dj.stderr | lines | where ($it | str starts-with "@nix ") | each { str substring 5.. | from json } | where code? == "determinate-setting")
+  $ok = ($ok | append (verdict ($dj.exit_code == 0 and $dj.stdout == "1\n" and ($drec | length) == 2 and ($drec | all { $in.level == 1 }))
+    "a Determinate flag or --option is a level-1 determinate-setting record, once per key" $"stderr '($dj.stderr)'"))
+
   # --- nix build: the out-link prefix, the printed paths and the link target
   mut got = {}
   for who in [real ours] {
