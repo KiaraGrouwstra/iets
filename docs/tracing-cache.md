@@ -34,7 +34,8 @@ would have accepted or rejected is a miss. For an unfiltered tree the
 `builtins.currentTime` and every network fetcher (`fetchurl`,
 `fetchTarball` without a `sha256`, `fetchGit`, `fetchMercurial`,
 `fetchClosure`) mark the run uncacheable. `getFlake` records what a flake on
-the command line records. `fetchTree` on a locked input and `fetchTarball`
+the command line records. `parseFlakeRef` and `flakeRefToString` read
+nothing and are cacheable. `fetchTree` on a locked input and `fetchTarball`
 with a `sha256` are cacheable: its
 result follows from the attrs and a `Stat` of the store path (see
 `docs/flakes.md`). `currentTime` is a lazy thunk over an internal

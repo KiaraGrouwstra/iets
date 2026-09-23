@@ -94,6 +94,48 @@ on, says false; code that branches on it (flake-compat) takes the
 `fetchTree` branch. `builtins.fetchClosure` and `builtins.outputOf` are
 unsupported either way, so classic mode falls back when they are called.
 
+## Flake references (`parseFlakeRef`, `flakeRefToString`, the command line)
+
+`src/flake/flakeref.rs` parses and renders the common schemes like Nix
+2.34.8 (flakeref.cc, url.cc and the libfetchers schemes): indirect ids,
+`flake:`, `github:`, `gitlab:`, `path:` and absolute paths, `git:` and
+`git+…`, `tarball+…`, `file+…` and plain `http(s)`/`file` URLs, with the
+query parameters each scheme keeps. For valid input the output is Nix's.
+
+ietsp accepts some flake refs Nix rejects. The checks whose only effect
+is to refuse invalid input are left out, so these parse or render where
+Nix fails:
+
+- a character boost.url does not allow where it stands (`github:a/b/x y`,
+  `https://x.org/é`), and a `%` followed by `+` and a hex digit;
+- a branch or tag name libgit2 refuses (`a..b`, `-x`), a `rev` next to a
+  `ref`, the same parameter twice in the path and the query, an indirect
+  id or a `host` outside Nix's patterns, a third indirect component that
+  is not a commit hash;
+- an attribute or a query parameter the scheme does not allow
+  (`flakeRefToString { type = "github"; owner = "a"; repo = "b"; foo = 1; }`
+  gives `github:a/b`; `path:/a?x=1` keeps `x`), a `revCount` or
+  `lastModified` that is no number (dropped), an attribute of the wrong
+  type (ignored; `path` prints it), a `rev` or `narHash` Nix cannot
+  parse in `parseFlakeRef` (kept as given), and a `narHash` that is not
+  SHA-256 SRI in `flakeRefToString` (printed as given);
+- a `file://` URL with a host, a path component with an encoded `/`, and
+  a `path` whose URL starts with `///` (Nix aborts on it);
+- a string that is not UTF-8 or decodes to a NUL byte (read lossily).
+
+Where ietsp still errors, the wording is its own. These are
+`ErrorKind::Unsupported`, so classic mode falls back:
+
+- `sourcehut:`, `hg+…` and any other scheme or type;
+- a URL authority with a character that is not unreserved (an IP literal
+  `[::1]`, a `%XX` escape, a sub-delim), and a port that is not 1-65535;
+- a git `url` in `flakeRefToString` that is not a URL (scp-style
+  `git@host:x`, a plain path).
+
+`flakeRefToString` on a git input leaves out `keytype`, `publicKey` and
+`publicKeys`, which Nix renders only with the `verified-fetches`
+experimental feature on.
+
 ## Classic mode
 
 `nix-instantiate`, `nix-build` and `nix-eval-jobs` under Nix's own names

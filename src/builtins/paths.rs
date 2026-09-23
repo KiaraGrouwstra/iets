@@ -2,7 +2,8 @@
 //! pathExists, toPath, storePath, filterSource, path, toFile. The network
 //! fetchers and flake primops are registered so `builtins ? fetchGit`
 //! holds, but they fail when called; only `fetchTree` on a locked input,
-//! `fetchTarball` with a `sha256` and `getFlake` work (`flake`).
+//! `fetchTarball` with a `sha256`, `getFlake`, `parseFlakeRef` and
+//! `flakeRefToString` work (`flake`).
 
 use std::collections::{BTreeSet, HashSet};
 use std::ffi::OsStr;
@@ -47,8 +48,16 @@ pub fn register(r: &mut Registry) {
     r.op("fetchMercurial", 1, fetch_mercurial);
     r.op("__fetchClosure", 1, fetch_closure);
     r.op("__getFlake", 1, crate::flake::get_flake);
-    r.op("__parseFlakeRef", 1, parse_flake_ref);
-    r.op("__flakeRefToString", 1, flake_ref_to_string);
+    r.op(
+        "__parseFlakeRef",
+        1,
+        crate::flake::flakeref::parse_flake_ref,
+    );
+    r.op(
+        "__flakeRefToString",
+        1,
+        crate::flake::flakeref::flake_ref_to_string,
+    );
 }
 
 macro_rules! unsupported {
@@ -84,14 +93,6 @@ unsupported!(
 unsupported!(
     fetch_closure,
     "ietsp: network fetchers are not supported (builtins.fetchClosure)"
-);
-unsupported!(
-    parse_flake_ref,
-    "ietsp: flakes are not supported (builtins.parseFlakeRef)"
-);
-unsupported!(
-    flake_ref_to_string,
-    "ietsp: flakes are not supported (builtins.flakeRefToString)"
 );
 unsupported!(
     output_of,

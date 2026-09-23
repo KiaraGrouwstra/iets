@@ -29,7 +29,7 @@ pub enum AttrVal {
 /// fetchers::Attrs: the input attributes in name order.
 pub type Attrs = BTreeMap<String, AttrVal>;
 
-fn str_attr<'a>(a: &'a Attrs, name: &str) -> Option<&'a str> {
+pub(super) fn str_attr<'a>(a: &'a Attrs, name: &str) -> Option<&'a str> {
     match a.get(name) {
         Some(AttrVal::Str(s)) => Some(s),
         _ => None,

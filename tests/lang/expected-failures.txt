@@ -1,4 +1,2 @@
 # langtests cases ietsp does not pass yet; scripts/langtests.nu fails on any
 # name that is not listed here, and on any listed name that starts passing.
-eval-okay-flake-ref-to-string
-eval-okay-parse-flake-ref

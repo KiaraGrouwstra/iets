@@ -6,6 +6,7 @@
 //! registry. See docs/flakes.md.
 
 pub mod fetch;
+pub mod flakeref;
 pub mod http;
 pub mod lock;
 pub mod root;
@@ -345,6 +346,15 @@ pub fn get_flake(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word
         EvalError::boxed(kind, e.to_string(), pos)
     })?;
     eval_flake_value(ev, &fr)
+}
+
+/// An error outside the evaluator as an evaluation error at `pos`.
+pub(crate) fn eval_error(e: Error, pos: Pos) -> Box<EvalError> {
+    let kind = match e {
+        Error::Unsupported(_) => ErrorKind::Unsupported,
+        _ => ErrorKind::Eval,
+    };
+    EvalError::boxed(kind, e.to_string(), pos)
 }
 
 /// Evaluates the flake and selects `attr` from its outputs (or returns the

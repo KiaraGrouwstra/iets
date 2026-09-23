@@ -292,8 +292,9 @@ Two triggers:
    work starts.
 2. An evaluation that hits `ErrorKind::Unsupported`: the network fetchers
    (`fetchurl`, `fetchTarball` without a `sha256`, `fetchGit`, `fetchMercurial`,
-   `fetchClosure`), the flake primops (`getFlake` on anything but a local
-   path, `parseFlakeRef`, `flakeRefToString`), `outputOf`, import-from-derivation (`import`,
+   `fetchClosure`), `getFlake` on anything but a local path, a flake
+   reference outside the subset `src/flake/flakeref.rs` parses (`hg+…`,
+   `sourcehut:`, an IP-literal host), `outputOf`, import-from-derivation (`import`,
    `scopedImport`, `readFile`, `readDir`, `pathExists`, `readFileType` or
    `hashFile` on a derivation output), a second copy of a `toFile` text or
    `.drv`, a read of a `.drv` this run made under `--no-cache`, and a flake
