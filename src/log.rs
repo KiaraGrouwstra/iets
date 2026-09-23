@@ -5,7 +5,7 @@
 //! format.
 
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use serde_json::{Value, json};
@@ -45,6 +45,13 @@ pub fn set_json_log_path(path: String) {
 /// to the `json-log-path` file or unix socket. A path that does not open is
 /// reported once and ignored, as Nix does.
 fn tee(v: &Value) {
+    if let Some(w) = sink() {
+        let mut w = w.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = writeln!(w, "{v}");
+    }
+}
+
+fn sink() -> Option<&'static Mutex<Box<dyn Write + Send>>> {
     static SINK: OnceLock<Option<Mutex<Box<dyn Write + Send>>>> = OnceLock::new();
     // Config::load must not log: that would re-enter this get_or_init
     let sink = SINK.get_or_init(|| {
@@ -61,10 +68,7 @@ fn tee(v: &Value) {
             }
         }
     });
-    if let Some(w) = sink {
-        let mut w = w.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = writeln!(w, "{v}");
-    }
+    sink.as_ref()
 }
 
 fn open_sink(path: &std::path::Path) -> std::io::Result<Box<dyn Write + Send>> {
@@ -80,14 +84,94 @@ fn open_sink(path: &std::path::Path) -> std::io::Result<Box<dyn Write + Send>> {
     Ok(Box::new(f))
 }
 
-/// One message: `text` on stderr, or `v` under internal-json.
-fn out(v: &Value, text: &str) {
+/// One record: `v` under internal-json, else `text` if any.
+fn out(v: &Value, text: Option<&str>) {
     if json() {
         eprintln!("@nix {v}");
-    } else {
-        eprintln!("{text}");
+    } else if let Some(t) = text {
+        eprintln!("{t}");
     }
     tee(v);
+}
+
+/// logging.hh:ActivityType and ResultType, the ones ietsp emits itself.
+pub const ACT_COPY_PATH: u64 = 100;
+pub const ACT_REALISE: u64 = 102;
+pub const ACT_COPY_PATHS: u64 = 103;
+pub const ACT_BUILDS: u64 = 104;
+pub const ACT_BUILD: u64 = 105;
+pub const RES_BUILD_LOG_LINE: u64 = 101;
+pub const RES_SET_PHASE: u64 = 104;
+pub const RES_PROGRESS: u64 = 105;
+pub const RES_SET_EXPECTED: u64 = 106;
+
+/// Whether activity records go anywhere, so nobody builds one for nothing.
+pub fn activities() -> bool {
+    json() || sink().is_some()
+}
+
+/// logging.cc:Activity: the pid in the high half, a counter below.
+pub fn activity_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    NEXT.fetch_add(1, Ordering::Relaxed) + (u64::from(std::process::id()) << 32)
+}
+
+fn fields(mut v: Value, f: Vec<Value>) -> Value {
+    if !f.is_empty() {
+        v["fields"] = f.into();
+    }
+    v
+}
+
+fn start_record(id: u64, level: u64, ty: u64, text: &str, f: Vec<Value>, parent: u64) -> Value {
+    let v = json!({"action": "start", "id": id, "level": level, "parent": parent, "text": text, "type": ty});
+    fields(v, f)
+}
+
+fn result_record(id: u64, ty: u64, f: Vec<Value>) -> Value {
+    fields(json!({"action": "result", "id": id, "type": ty}), f)
+}
+
+/// logging.cc:JSONLogger::startActivity.
+pub fn start(id: u64, level: u64, ty: u64, text: &str, f: Vec<Value>, parent: u64) {
+    if activities() {
+        out(&start_record(id, level, ty, text, f, parent), None);
+    }
+}
+
+/// logging.cc:JSONLogger::stopActivity.
+pub fn stop(id: u64) {
+    if activities() {
+        out(&json!({"action": "stop", "id": id}), None);
+    }
+}
+
+/// logging.cc:JSONLogger::result.
+pub fn result(id: u64, ty: u64, f: Vec<Value>) {
+    if activities() {
+        out(&result_record(id, ty, f), None);
+    }
+}
+
+/// An activity of ietsp's own, without a parent; it stops when dropped.
+pub struct Activity(pub u64);
+
+impl Activity {
+    pub fn new(level: u64, ty: u64, text: &str, f: Vec<Value>) -> Activity {
+        let id = activity_id();
+        start(id, level, ty, text, f, 0);
+        Activity(id)
+    }
+
+    pub fn result(&self, ty: u64, f: Vec<Value>) {
+        result(self.0, ty, f);
+    }
+}
+
+impl Drop for Activity {
+    fn drop(&mut self) {
+        stop(self.0);
+    }
 }
 
 /// `text` as it goes to stderr, without the newline: itself, or a `msg`
@@ -257,7 +341,7 @@ impl Report {
     /// a native command, 1 for the rest.
     pub fn emit(&self) -> i32 {
         let text = self.text();
-        out(&self.record(&text), &text);
+        out(&self.record(&text), Some(&text));
         if self.code == "usage" && crate::cli::help::command().is_some() {
             2
         } else {
@@ -333,7 +417,7 @@ pub fn fixed(pos: &str, old: &str, new: &str) {
         pos: Some(pos.to_string()),
         ..Report::new("hash-fixed", raw)
     };
-    out(&r.record(&text), &text);
+    out(&r.record(&text), Some(&text));
 }
 
 fn build_report(pos: Option<String>, reason: &str, exit: i32) -> Report {
@@ -365,13 +449,7 @@ pub fn build_failed(pos: Option<String>, reason: &str, exit: i32, text: Option<&
     {
         MISMATCHES.lock().unwrap_or_else(|e| e.into_inner()).push(m);
     }
-    let v = r.record(&r.text());
-    if json() {
-        eprintln!("@nix {v}");
-    } else if let Some(t) = text {
-        eprintln!("{t}");
-    }
-    tee(&v);
+    out(&r.record(&r.text()), text);
 }
 
 #[cfg(test)]
@@ -412,6 +490,24 @@ mod tests {
         let text = "warning: [url-literal] URL literal\n  at /a.nix:2:5";
         let want = r#"@nix {"action":"msg","code":"lint","column":5,"file":"/a.nix:2:5","level":1,"line":2,"msg":"warning: [url-literal] URL literal\n  at /a.nix:2:5","raw_msg":"[url-literal] URL literal"}"#;
         assert_eq!(format!("@nix {}", lint_record(text)), want);
+    }
+
+    #[test]
+    fn activity_records_are_nix_json_logger_records() {
+        let f = vec!["/nix/store/x.drv".into(), "".into(), 1.into(), 1.into()];
+        let want = r#"{"action":"start","fields":["/nix/store/x.drv","",1,1],"id":7,"level":3,"parent":0,"text":"building '/nix/store/x.drv'","type":105}"#;
+        let v = start_record(7, 3, ACT_BUILD, "building '/nix/store/x.drv'", f, 0);
+        assert_eq!(v.to_string(), want);
+        let want = r#"{"action":"start","id":8,"level":0,"parent":7,"text":"","type":102}"#;
+        assert_eq!(
+            start_record(8, 0, ACT_REALISE, "", vec![], 7).to_string(),
+            want
+        );
+        let p = vec![1.into(), 2.into(), 1.into(), 0.into()];
+        let want = r#"{"action":"result","fields":[1,2,1,0],"id":8,"type":105}"#;
+        assert_eq!(result_record(8, RES_PROGRESS, p).to_string(), want);
+        assert_eq!(activity_id() >> 32, u64::from(std::process::id()));
+        assert_ne!(activity_id(), activity_id());
     }
 
     #[test]
