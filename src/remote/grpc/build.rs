@@ -16,6 +16,7 @@ use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::error::{Error, Result};
+use crate::log::{Activity, RES_BUILD_LOG_LINE, RES_SET_PHASE};
 use crate::store::drv::Derivation;
 use crate::store::nar::restore_path;
 use crate::store::path::StorePath;
@@ -441,6 +442,7 @@ pub fn build(
     job: &Job,
     objects: &Objects,
     tx: &std::sync::mpsc::Sender<Event>,
+    act: &Activity,
 ) -> Result<(BuildResult, usize)> {
     let mut calls = 0usize;
     for n in 0..=c.cfg.reschedule_retries {
@@ -458,7 +460,7 @@ pub fn build(
             }
             Answer::Assigned { worker, assign_id } => (worker, assign_id),
         };
-        match build_derivation(c, job, &worker, assign_id, objects, tx, &mut calls)? {
+        match build_derivation(c, job, &worker, assign_id, objects, tx, act, &mut calls)? {
             Some(res) => return Ok((res, calls)),
             None => continue,
         }
@@ -483,6 +485,7 @@ fn reschedule_pause(n: u32) -> Duration {
 /// build.cc:`buildAssigned`: `NOT_FOUND` means the worker lacks the `.drv`
 /// closure, so upload it and ask once more. `None` when the worker bounced
 /// the build and the scheduler must place it again.
+#[allow(clippy::too_many_arguments)]
 fn build_derivation(
     c: &Client,
     job: &Job,
@@ -490,6 +493,7 @@ fn build_derivation(
     assign_id: u64,
     objects: &Objects,
     tx: &std::sync::mpsc::Sender<Event>,
+    act: &Activity,
     calls: &mut usize,
 ) -> Result<Option<BuildResult>> {
     let mut drv_bytes = Vec::new();
@@ -511,10 +515,10 @@ fn build_derivation(
     headers.push(("x-nix-worker", worker.to_string()));
 
     *calls += 1;
-    let mut r = try_build_derivation(c, &req, &headers, &job.drv_path, tx);
+    let mut r = try_build_derivation(c, &req, &headers, &job.drv_path, tx, act);
     if matches!(&r, Err(s) if s.code() == tonic::Code::NotFound) {
         *calls += upload_closure(c, objects, &job.drv_path, &headers)? + 1;
-        r = try_build_derivation(c, &req, &headers, &job.drv_path, tx);
+        r = try_build_derivation(c, &req, &headers, &job.drv_path, tx, act);
     }
     match r {
         Ok(res) => Ok(Some(res)),
@@ -544,6 +548,7 @@ fn try_build_derivation(
     headers: &Headers,
     drv_path: &StorePath,
     tx: &std::sync::mpsc::Sender<Event>,
+    act: &Activity,
 ) -> std::result::Result<BuildResult, tonic::Status> {
     let mut stub = c.stub.clone();
     let req = c_request(req.clone(), headers);
@@ -555,6 +560,8 @@ fn try_build_derivation(
     while let Some(msg) = c.rt.block_on(stream.next()).transpose()? {
         match msg.event {
             Some(proto::build_derivation_chunk::Event::LogLine(line)) => {
+                let l = String::from_utf8_lossy(&line);
+                act.result(RES_BUILD_LOG_LINE, vec![l.trim_end_matches('\n').into()]);
                 let _ = tx.send(Event::Log(Log {
                     drv_path: drv.clone(),
                     line,
@@ -563,6 +570,7 @@ fn try_build_derivation(
             // The call knows its derivation, so the phase is attributed the
             // way the daemon's `setPhase` result is.
             Some(proto::build_derivation_chunk::Event::Phase(phase)) => {
+                act.result(RES_SET_PHASE, vec![phase.as_str().into()]);
                 let _ = tx.send(Event::Phase(Phase {
                     drv_path: drv.clone(),
                     phase,

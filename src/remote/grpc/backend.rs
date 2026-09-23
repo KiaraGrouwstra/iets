@@ -14,6 +14,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
@@ -21,6 +22,9 @@ use std::time::{Duration, Instant};
 use crate::build::backend::{Backend, Batch, Phase, Status, local};
 use crate::build::fanout;
 use crate::error::{Error, Result};
+use crate::log::{
+    ACT_BUILD, ACT_BUILDS, ACT_COPY_PATHS, ACT_REALISE, Activity, LVL_ERROR, LVL_INFO, RES_PROGRESS,
+};
 use crate::remote::event::{Event, Started};
 use crate::remote::plan::{Object, Plan};
 use crate::remote::worker::{Connection, failed_event};
@@ -134,12 +138,30 @@ fn build_batch(
     let client: &Client = c;
     let jobs = &jobs;
     let calls = AtomicUsize::new(0);
+    // no daemon to report, so the activities of build/worker.cc come from here
+    let _realise = Activity::new(LVL_ERROR, ACT_REALISE, "", vec![]);
+    let builds = Activity::new(LVL_ERROR, ACT_BUILDS, "", vec![]);
+    let _substitutions = Activity::new(LVL_ERROR, ACT_COPY_PATHS, "", vec![]);
+    let counts = Mutex::new([0u64, jobs.len() as u64, 0, 0]);
+    let progress = |f: &dyn Fn(&mut [u64; 4])| {
+        let mut n = counts.lock().unwrap();
+        f(&mut n);
+        builds.result(RES_PROGRESS, n.iter().map(|&v| v.into()).collect());
+    };
+    let url = client.cfg.url();
     let build = |i: usize, tx: &Sender<Event>| -> BuildResult {
         let job = &jobs[i];
-        let _ = tx.send(Event::Started(Started {
-            drv_path: job.drv_path.to_string(),
-        }));
-        match build::build(client, &sched, job, objects, tx) {
+        let drv = job.drv_path.to_string();
+        let f = vec![drv.as_str().into(), url.as_str().into(), 1.into(), 1.into()];
+        let act = Activity::new(
+            LVL_INFO,
+            ACT_BUILD,
+            &format!("building '{drv}' on '{url}'"),
+            f,
+        );
+        progress(&|n| n[2] += 1);
+        let _ = tx.send(Event::Started(Started { drv_path: drv }));
+        let res = match build::build(client, &sched, job, objects, tx, &act) {
             Ok((res, n)) => {
                 calls.fetch_add(n, Ordering::Relaxed);
                 res
@@ -151,7 +173,12 @@ fn build_batch(
                 error_msg: e.to_string(),
                 ..BuildResult::default()
             },
-        }
+        };
+        progress(&|n| {
+            n[2] -= 1;
+            n[if res.success() { 0 } else { 3 }] += 1;
+        });
+        res
     };
     let work = fanout::Work {
         build: &build,
