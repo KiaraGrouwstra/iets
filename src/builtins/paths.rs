@@ -106,20 +106,11 @@ fn os_path(p: &[u8]) -> &Path {
     Path::new(OsStr::from_bytes(p))
 }
 
-/// Strip Rust's " (os error N)" suffix so messages read like Nix's strerror text.
-fn io_text(e: &io::Error) -> String {
-    let s = e.to_string();
-    match s.find(" (os error") {
-        Some(i) => s[..i].to_string(),
-        None => s,
-    }
-}
-
 fn io_error(e: io::Error, verb: &str, p: &[u8], pos: Pos) -> Box<Error> {
     let msg = if e.kind() == io::ErrorKind::NotFound {
         format!("path '{}' does not exist", lossy(p))
     } else {
-        format!("{verb} '{}': {}", lossy(p), io_text(&e))
+        format!("{verb} '{}': {}", lossy(p), crate::error::io_text(&e))
     };
     Error::boxed(ErrorKind::Io, msg, pos)
 }

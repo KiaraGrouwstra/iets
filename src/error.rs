@@ -30,6 +30,15 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// `strerror` text without Rust's " (os error N)" suffix, as Nix shows it.
+pub fn io_text(e: &io::Error) -> String {
+    let s = e.to_string();
+    match s.find(" (os error") {
+        Some(i) => s[..i].to_string(),
+        None => s,
+    }
+}
+
 impl Error {
     pub fn io(context: impl Into<String>, source: io::Error) -> Error {
         Error::Io {
@@ -42,8 +51,8 @@ impl Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Io { context, source } if context.is_empty() => write!(f, "{source}"),
-            Error::Io { context, source } => write!(f, "{context}: {source}"),
+            Error::Io { context, source } if context.is_empty() => f.write_str(&io_text(source)),
+            Error::Io { context, source } => write!(f, "{context}: {}", io_text(source)),
             Error::Protocol(m)
             | Error::Plan(m)
             | Error::Store(m)

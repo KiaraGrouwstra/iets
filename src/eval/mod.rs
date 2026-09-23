@@ -512,7 +512,7 @@ impl Evaluator {
                 pos,
                 "getting status of '{}': {}",
                 String::from_utf8_lossy(&p),
-                e
+                crate::error::io_text(&e)
             ),
         }
         Ok(p)

@@ -297,7 +297,7 @@ fn hash_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
             pos,
             "opening file '{}': {}",
             String::from_utf8_lossy(&path),
-            io_message(&e)
+            crate::error::io_text(&e)
         ),
     };
     let h = hash_bytes(algo, &data).to_base16();
@@ -540,13 +540,4 @@ fn get_env(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
 
 fn break_(ev: &mut Evaluator, args: &[Word], _pos: Pos) -> EvalResult<Word> {
     ev.force(args[0])
-}
-
-/// `strerror` text without Rust's " (os error N)" suffix.
-fn io_message(e: &std::io::Error) -> String {
-    let s = e.to_string();
-    match s.find(" (os error") {
-        Some(i) => s[..i].to_string(),
-        None => s,
-    }
 }
