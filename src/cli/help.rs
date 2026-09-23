@@ -13,6 +13,7 @@ commands:
   eval           evaluate an expression or a file and print the value
   build          evaluate to derivations and build them on a daemon
   search         find packages by regex, like 'nix search'
+  diff           print what differs between two derivations
   eval-jobs      print a jobset's derivations as JSON lines (nix-eval-jobs)
   fast-build     evaluate and build a flake's checks (nix-fast-build)
   print-dev-env  print the environment of a flake's devShell, for direnv
@@ -94,6 +95,22 @@ REGEX (docs/search.md). INSTALLABLE is a flake reference, a path or
   --timings             report the index cache on stderr
   --log-format F        internal-json: stderr as Nix JSON records (docs/cli.md)
   --show-trace          put the trace in the JSON error records too
+";
+
+const DIFF: &str = "\
+usage: ietsp diff [FLAGS] A B
+       ietsp diff [FLAGS] -A X -A Y (-E EXPR | FILE | FLAKEREF)
+
+Print what differs between two derivations, in place of nix-diff: the local
+differences first, then the input derivations that differ (docs/diff.md).
+A and B are .drv store paths, flake references or files. Exit: 0 they are
+equal, 1 they differ, 2 trouble.
+
+  --depth N             levels of input derivations to walk (default 2)
+  --all                 walk every level
+  --json                print the difference as one JSON object
+  -I P=PATH, --arg N E, --argstr N S, --option N V, --impure  as for eval
+  --log-format F, --show-trace  as for 'ietsp eval'
 ";
 
 const EVAL_JOBS: &str = "\
@@ -199,7 +216,7 @@ read set of a tracing-cache entry (docs/tracing-cache.md).
 ";
 
 pub const COMMANDS: &str =
-    "eval build search eval-jobs fast-build print-dev-env prefetch lint parse cache";
+    "eval build search diff eval-jobs fast-build print-dev-env prefetch lint parse cache";
 
 /// The native command being parsed, "ietsp" before the command word; unset
 /// under a classic name.
@@ -219,6 +236,7 @@ fn parts(cmd: Option<&str>) -> Option<[&'static str; 2]> {
         "eval" => [EVAL, INPUT],
         "build" => [BUILD, INPUT],
         "search" => [SEARCH, ""],
+        "diff" => [DIFF, ""],
         "eval-jobs" => [EVAL_JOBS, ""],
         "fast-build" => [FAST_BUILD, ""],
         "print-dev-env" => [PRINT_DEV_ENV, ""],

@@ -34,6 +34,10 @@ bench/run.nu nixos-desktop
 # over the same package set does not evaluate (docs/search.md)
 ./target/release/ietsp search -I nixpkgs=/path ripgrep
 
+# why two derivations differ, in place of nix-diff (docs/diff.md); exit 1 when they do
+./target/release/ietsp diff -A hello -A figlet /path/to/nixpkgs/default.nix
+./target/release/ietsp diff --json /nix/store/<a>.drv /nix/store/<b>.drv
+
 # .envrc: what `nix print-dev-env` prints, byte-exact, from the in-memory shell drv
 ./target/release/ietsp print-dev-env --gc-root .direnv/ietsp-env .   # see docs/direnv.md
 

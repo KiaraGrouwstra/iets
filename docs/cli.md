@@ -47,6 +47,7 @@ in `src/error.rs` for the rest, and the daemon's build status for builds.
 | 0 | Success. |
 | 1 | Any error. Also a build failure that has no code of its own. |
 | 2 | A usage error of a native command (`ietsp eval --bogus`). Under a classic name the code is 1, as in Nix. |
+| 1, 2 | `ietsp diff` alone follows `diff(1)`: 0 the two are equal, 1 they differ, 2 a usage error or any other failure (docs/diff.md). |
 | 100 | A build failed (`PermanentFailure`, `InputRejected`). |
 | 101 | A build timed out. |
 | 102 | A fixed-output build had a hash mismatch. |
@@ -70,7 +71,7 @@ A NAR hash mismatch of a fetched tree has code `hash-mismatch` but exits
 
 ## `--log-format internal-json`
 
-The native commands (`eval`, `build`, `eval-jobs`, `fast-build`,
+The native commands (`eval`, `build`, `diff`, `eval-jobs`, `fast-build`,
 `print-dev-env`) and the classic names take `--log-format FORMAT` and
 `--show-trace`. `internal-json` is the format; `raw`, `raw-with-logs`,
 `bar` and `bar-with-logs` give the plain text. Any other value is a usage

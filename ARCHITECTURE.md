@@ -62,7 +62,8 @@ The evaluator:
   protocol (`docs/parallel.md`).
 - `store/`: pure functions. Nix base32, the four hash algorithms, NAR
   serialization and hashing (`docs/nar.md`), store paths, ATerm derivations,
-  `hashDerivationModulo`; `locate.rs` finds derivation roots and local-store
+  `hashDerivationModulo`, `drvdiff.rs` (what differs between two derivations,
+  `docs/diff.md`); `locate.rs` finds derivation roots and local-store
   sources, `source.rs` holds `SrcPath` (where the bytes of a path are: disk,
   input-store spool or memory; read by `builtins::store_hooks`) and the
   `SourceOrigin` each source came from.
@@ -100,7 +101,7 @@ Around it:
 - `api.rs`: the library facade. Frontends use this and never reach into
   `cli`; `examples/` holds three of them (`docs/library.md`).
 - `main.rs` and `cli/`: the command line on top of `api`: `ietsp eval`,
-  `build`, `search`, `eval-jobs`, `fast-build`, `print-dev-env`, `parse`,
+  `build`, `search`, `diff`, `eval-jobs`, `fast-build`, `print-dev-env`, `parse`,
   `lint`, `cache gc`, `cache dump`, the help texts (`cli/help.rs`), and
   the classic names (`cli/classic/`, `docs/classic.md`).
 
