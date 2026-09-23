@@ -361,6 +361,62 @@ def main [] {
   $ok = ($ok | append (cmp-case "nix eval --json -f FILE ATTR"
     (run-both $farm nix eval --json -f $"($d)/multi.nix" outputs)))
 
+  # --- nix search: a package set with nested recurseForDerivations sets, an
+  # attribute that throws, a bad `type` and a description with a newline.
+  r#'let
+  mk = { pname, version ? "", description ? null }:
+    derivation {
+      name = if version == "" then pname else "${pname}-${version}";
+      system = builtins.currentSystem;
+      builder = "/bin/sh";
+      args = [ "-c" "echo hi > $out" ];
+    } // (if description == null then { } else { meta = { inherit description; }; });
+in
+{
+  legacyPackages.${builtins.currentSystem} = {
+    hello = mk { pname = "hello"; version = "2.12"; description = "A program that produces a familiar, friendly greeting"; };
+    goodbye = mk { pname = "goodbye"; version = "1.0"; description = "Says goodbye\nacross two lines"; };
+    plain = mk { pname = "plain"; };
+    broken = throw "this attribute is broken";
+    brokenSet = { recurseForDerivations = true; inner = throw "deep throw"; ok = mk { pname = "survivor"; version = "1"; description = "Found after a throw"; }; };
+    notASet = 42;
+    badType = { type = "derivation"; name = 7; };
+    nested = {
+      recurseForDerivations = true;
+      tool = mk { pname = "nested-tool"; version = "0.1"; description = "A nested tool"; };
+      deeper = { recurseForDerivations = true; deepest = mk { pname = "deepest"; version = "3"; description = "Deep package"; }; };
+      unmarked = { hidden = mk { pname = "hidden"; version = "9"; description = "Not reachable"; }; };
+    };
+    metaNotASet = mk { pname = "metaless"; version = "2"; } // { meta = 5; };
+    quotes = mk { pname = "quotes"; version = "1"; description = "Uses \"quotes\", a tab\tand a backslash \\"; };
+    unicode = mk { pname = "unicode"; version = "1"; description = "Ünïcödé — em dash and ▲"; };
+  };
+  packages.${builtins.currentSystem}.direct = mk { pname = "direct"; version = "4"; description = "Under packages"; };
+}
+'# | save -f $"($d)/pkgs.nix"
+  for case in [
+    {label: "nix search, every package", args: ["^"]}
+    {label: "nix search --json", args: ["^" --json]}
+    {label: "nix search --json --pretty", args: ["^" --json --pretty]}
+    {label: "nix search, two regexes are ANDed", args: [deep est]}
+    {label: "nix search --exclude", args: [e -e good]}
+    {label: "nix search is case insensitive", args: [HELLO]}
+    {label: "nix search, a bracket expression", args: ['[Ff]riendly']}
+    {label: "nix search, an alternation", args: ['hell|good']}
+    {label: "nix search, no results", args: [zzz]}
+    {label: "nix search --json, no results", args: [zzz --json]}
+  ] {
+    $ok = ($ok | append (cmp-case $case.label
+      (run-both $farm nix search -f $"($d)/pkgs.nix" "" ...$case.args)))
+  }
+  # over the pinned nixpkgs: the walk that costs, under `legacyPackages` so
+  # that both sides skip the attributes that throw.
+  let npexpr = $"{ legacyPackages.${builtins.currentSystem} = import ($np) {}; }"
+  for re in ["^hello$" ripgrep] {
+    $ok = ($ok | append (cmp-case $"nix search nixpkgs --json ($re)"
+      (run-both $farm nix search --impure --expr $npexpr "" $re --json)))
+  }
+
   # --- --log-format internal-json: the same error record and exit code
   "let\n  x = 1;\nin\n  y + x\n" | save -f $"($d)/undef.nix"
   let json = [--log-format internal-json]
