@@ -105,15 +105,98 @@ where the derivation was defined.
 Any other line is `{"action":"msg","level":N,"msg":TEXT}`: level 0 for
 `error:` and `trace:` lines, 1 for warnings, 3 for the rest (build
 progress, summaries, classic fallback notes). The lines that `--timings`
-and `IETSP_STATS` add stay plain text. The activity records of Nix
-(`start`, `stop`, `result`) are not produced yet; they will go out
-through `log::out` and `log::tee` in `src/log.rs`.
+and `IETSP_STATS` add stay plain text.
+
+### Activity records
+
+A command that talks to a store also puts out Nix's activity records,
+the ones `nix-output-monitor` (`nom --json`) reads. These are `startActivity`,
+`stopActivity` and `result` of `JSONLogger` in `src/libutil/logging.cc`:
+
+```json
+{"action":"start","fields":["/nix/store/…-hello.drv","",1,1],"id":…,"level":3,"parent":0,"text":"building '/nix/store/…-hello.drv'","type":105}
+{"action":"result","fields":["hello"],"id":…,"type":101}
+{"action":"stop","id":…}
+```
+
+The type numbers are `ActivityType` and `ResultType` of
+`src/libutil/include/nix/util/logging.hh`: activities 100 copy path, 101
+file transfer, 102 realise, 103 copy paths, 104 builds, 105 build, 108
+substitute, 109 query path info; results 101 build log line, 104 set
+phase, 105 progress, 106 set expected.
+
+- **From the daemon.** A worker-protocol daemon (`daemon`, `unix://`,
+  `ssh-ng://`) sends its activities during a build or a substitution.
+  ietsp forwards each one, as `worker-protocol-connection.cc:processStderr`
+  does. Each forwarded activity gets an id of this process, and its
+  `parent` follows.
+- **ietsp's own uploads.** The derivations and sources ietsp sends with
+  `AddMultipleToStore`, and a remote builder's outputs copied back to the
+  local daemon, are one `copying N paths` activity (type 103) with
+  progress results and one `copying path` activity (type 100) per path,
+  as `nix copy` shows them (`store-api.cc:copyPaths`).
+- **`grpc://`.** There is no daemon stream, so ietsp makes the records of
+  `build/worker.cc` itself. They are the realise, builds and copy-paths
+  activities around a batch, and one `building 'DRV' on 'URL'` activity
+  per derivation. The build's log lines and phases are its results. The
+  builds activity gets progress results `[done, expected, running,
+  failed]`.
+
+An id is Nix's form: the pid in the high 32 bits and a counter below.
+Records go out only under `internal-json` or with a `json-log-path`.
+Under `internal-json` the build renderer leaves the builds to these
+records: it puts out no start, phase, log or verdict lines. The failed
+build's error record, notes and daemon messages outside a build still go
+out. The text output does not change.
+
+## The build plan: `ietsp build --dry-run`
+
+`ietsp build --dry-run` registers the closure, as `--no-build` does, and
+asks the daemon what a build would do (`QueryMissing`,
+`remote-store.cc:queryMissing`). It builds nothing. It prints what
+`nix build --dry-run` prints (`printMissing` in `src/libmain/shared.cc`),
+at level 0:
+
+```
+these 2 derivations will be built:
+  /nix/store/…-dep.drv
+  /nix/store/…-top.drv
+this path will be fetched (1.5 MiB download, 5.9 MiB unpacked):
+  /nix/store/…-figlet-2.2.5
+don't know how to build these paths:
+  /nix/store/…
+```
+
+The derivations come references first. The fetched paths are sorted by
+name. The sizes are Nix's `renderSize`: at least KiB, one decimal. A
+`grpc://` builder has no `QueryMissing`, so `--dry-run` is a usage error
+there.
+
+With `--json`, stdout also gets the plan as one JSON object. This is an
+ietsp extension: `nix build --dry-run --json` prints the installables'
+derived paths, not the plan.
+
+```json
+{"downloadSize":1553696,"narSize":6180152,"unknown":[],
+ "willBuild":["/nix/store/…-dep.drv","/nix/store/…-top.drv"],
+ "willSubstitute":["/nix/store/…-figlet-2.2.5"]}
+```
+
+| Key | Value |
+| --- | --- |
+| `willBuild` | the derivations to build, in the order of the text |
+| `willSubstitute` | the paths to fetch from a substituter, in the order of the text |
+| `unknown` | the paths nothing can build or fetch |
+| `downloadSize` | bytes to download for `willSubstitute` |
+| `narSize` | bytes of those paths unpacked |
+
+The names are the fields of Nix's `MissingPaths`.
 
 ## `json-log-path`
 
 The `json-log-path` setting (nix.conf, `--option json-log-path PATH` or
-`--json-log-path PATH`) names a file or a unix socket. Every record above
-also goes there, without the `@nix ` prefix, whatever `--log-format` says;
+`--json-log-path PATH`) names a file or a unix socket. Every record above,
+activity records too, also goes there, without the `@nix ` prefix, whatever `--log-format` says;
 stderr does not change. A file is opened for append and created with mode
 0644. A path that does not open gives one `error (ignored): opening log
 file` line, and the run goes on. This is `applyJSONLogger` in Nix's

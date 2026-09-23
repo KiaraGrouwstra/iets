@@ -122,9 +122,33 @@ Nix 2.34:
   has none.
 - **eval-jobs** puts out a record for each failed job; nix-eval-jobs
   prints those errors as plain text even under `internal-json`.
-- **No activity records** (`start`, `stop`, `result`) yet, so a
-  progress display that reads them (nix-output-monitor) sees messages
-  only. The `--timings` and `IETSP_STATS` lines stay plain text.
+- **Activity records** (`start`, `stop`, `result`, docs/cli.md) have
+  Nix's shape, and nix-output-monitor reads them. The daemon's
+  activities during a build are the same as in Nix: realise, builds,
+  copy paths, one build activity per derivation, and the same result
+  types. `scripts/classic-e2e.nu` compares that sequence with Nix 2.34.8
+  for `nix-build` and `nix build`. What differs:
+  - Ids are new ids of the ietsp process; Nix passes the daemon's ids on.
+  - Nix sends `QueryMissing` before a build. So Nix has a `querying info
+    about missing paths` activity and the substituter queries first,
+    then `these N derivations will be built:`. ietsp does not send it:
+    the queries come inside the build op, and no plan text is printed.
+    `ietsp build --dry-run` prints the plan.
+  - Nix writes the `.drv` files during evaluation, with no activity.
+    ietsp uploads them before the build, under `copying N paths` and
+    `copying path` activities, as `nix copy` does. Nix's copy activities
+    also report the bytes of each path; ietsp's report the paths only.
+  - Under `internal-json` the build renderer's lines (start, phase, log
+    block, verdict, heartbeat) are not put out; the records carry them.
+  - With a `grpc://` builder ietsp makes the records itself. There is
+    one build activity per derivation from the start of its scheduling,
+    and a derivation the cache already has also gets one. Its uploads
+    have no copy activities.
+  - The `--timings` and `IETSP_STATS` lines stay plain text.
+- **`ietsp build --dry-run --json`** prints the plan (`willBuild`,
+  `willSubstitute`, `unknown`, `downloadSize`, `narSize`). `nix build
+  --dry-run --json` prints the installables' derived paths. The text on
+  stderr is the same as Nix's.
 - **`json-log-path`** applies to every command. Nix applies it to the
   `nix` command only: the classic names return before `applyJSONLogger`
   (`src/nix/main.cc`).

@@ -19,7 +19,7 @@ the build starts. ietsp sends the same closure in one op.
 
 ## Client flow
 
-`ietsp build [--builder URL] [--timings] [--no-build] [--fetch-to DIR] [--out NAME]...
+`ietsp build [--builder URL] [--timings] [--no-build] [--dry-run [--json]] [--fetch-to DIR] [--out NAME]...
 [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr]
 (-E EXPR | FILE)` evaluates like `ietsp eval`, forces the result to
 derivations (an attrset with `drvPath`, a string with derivation context,
@@ -123,7 +123,7 @@ One op per phase:
 4. `BuildPathsWithResults` in normal mode on `<root drv>!<out1,out2>` (`!*`
    without `--out`), the legacy `DerivedPath` string that protocol >= 1.30
    reads, one entry per root in the same op. A failed status is that root's
-   verdict. `--no-build` stops
+   verdict. `--no-build` and `--dry-run` stop
    before this step; the substitution in step 2 still runs, or the drvs
    could not register.
 5. `QueryDerivationOutputMap` per root that built: its output paths.
@@ -141,7 +141,8 @@ type `actBuild` (105) is `Started` and maps the activity id to its drv;
 (107) is a `Log` attributed through that map; `STDERR_ERROR` is decoded as
 `readError` (message plus traces). `--timings` counts worker ops and round
 trips (ops plus the three handshake exchanges) and bytes written to the
-socket.
+socket. Under `internal-json` or with a `json-log-path` every activity
+message is also forwarded to the log (`docs/cli.md`).
 
 ## The dispatcher
 

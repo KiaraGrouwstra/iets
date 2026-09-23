@@ -607,6 +607,6 @@ is a plain job on both sides (`namedConstituents: []` without
   over `ssh-ng://`, but `--check-cache-status` and `--constituents` read
   `.drv`s from `/nix/store` and need the local one, like nix-eval-jobs's
   `LocalFSStore` requirement.
-- **`--log-format internal-json`** gives the `msg` records only, with
-  ietsp's plain text in `msg`; the activity records (`start`, `stop`,
-  `result`) are not produced yet (`docs/cli.md`).
+- **`--log-format internal-json`** gives ietsp's plain text in `msg`
+  records. The activity records a daemon sends (`start`, `stop`,
+  `result`) are forwarded (`docs/cli.md`).

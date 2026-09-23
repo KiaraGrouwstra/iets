@@ -188,7 +188,9 @@ on `GITHUB_ACTIONS`/`GITEA_ACTIONS`/`FORGEJO_ACTIONS` unless `--no-fold`.
 A failure prints the last 200 lines and is never folded. A heartbeat
 thread names the running builds every 30 s, and a build silent for 300 s
 has its last lines dumped and switches to live streaming
-(`ci_renderer.py:34-197`).
+(`ci_renderer.py:34-197`). Under `--log-format internal-json` the
+renderer prints none of this; the activity records carry the builds
+(`docs/cli.md`).
 
 The worker protocol carries no per-derivation verdict: `STDERR_STOP_ACTIVITY`
 says a build ended, not whether it succeeded, and only the op's own

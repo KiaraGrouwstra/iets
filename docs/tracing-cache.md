@@ -65,7 +65,7 @@ The key is computed before evaluation from the command alone:
   before it enters the key, so the key of `ietsp eval x.nix` does not
   depend on cwd.
 
-`--workers`, `--builder`, `--out`, `--no-build`, `--timings` are not in
+`--workers`, `--builder`, `--out`, `--no-build`, `--dry-run`, `--json`, `--timings` are not in
 the key. `pure-eval` is (`docs/pure-eval.md`): it changes what the same
 expression answers.
 
