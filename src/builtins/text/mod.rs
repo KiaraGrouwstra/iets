@@ -3,7 +3,7 @@
 
 mod fromtoml;
 mod json;
-mod regex;
+pub(crate) mod regex;
 mod xml;
 
 use std::cell::RefCell;

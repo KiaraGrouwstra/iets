@@ -65,6 +65,18 @@ struct Parser<'a> {
     groups: u32,
     depth: u32,
     states: u64,
+    /// `std::regex::icase`: a letter matches in either case (the C locale's).
+    icase: bool,
+}
+
+/// Both cases of every ASCII letter the set holds. A bracket folds before it
+/// is negated, so `[^a]` matches neither case.
+fn fold_case(set: &mut ByteSet) {
+    for c in b'A'..=b'Z' {
+        let (u, l) = (c as usize, c.to_ascii_lowercase() as usize);
+        let both = set[u] | set[l];
+        (set[u], set[l]) = (both, both);
+    }
 }
 
 impl Parser<'_> {
@@ -161,11 +173,23 @@ impl Parser<'_> {
             b'[' => Node::Set(self.bracket()?),
             b'\\' => {
                 self.i -= 1;
-                Node::Byte(self.escape()?)
+                let c = self.escape()?;
+                self.literal(c)
             }
-            c => Node::Byte(c),
+            c => self.literal(c),
         };
         Ok((node, true))
+    }
+
+    /// One literal byte, as a set when it must match either case.
+    fn literal(&self, c: u8) -> Node {
+        if !self.icase || !c.is_ascii_alphabetic() {
+            return Node::Byte(c);
+        }
+        let mut set = Box::new([false; 256]);
+        set[c as usize] = true;
+        fold_case(&mut set);
+        Node::Set(set)
     }
 
     fn escape(&mut self) -> Res<u8> {
@@ -267,6 +291,9 @@ impl Parser<'_> {
                 }
             }
             first = false;
+        }
+        if self.icase {
+            fold_case(&mut set);
         }
         if negate {
             for b in set.iter_mut() {
@@ -509,12 +536,18 @@ fn first_bytes(insts: &[Inst], sets: &[ByteSet], stop_at_bol: bool) -> Option<By
 }
 
 pub fn compile(re: &[u8]) -> Result<Prog, Error> {
+    compile_opt(re, false)
+}
+
+/// `compile`, with `std::regex::icase` when `icase` (`nix search`).
+pub fn compile_opt(re: &[u8], icase: bool) -> Result<Prog, Error> {
     let mut p = Parser {
         re,
         i: 0,
         groups: 0,
         depth: 0,
         states: 0,
+        icase,
     };
     let node = p.alt()?;
     if p.i < re.len() {
