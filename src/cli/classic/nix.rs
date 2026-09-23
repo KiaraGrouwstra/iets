@@ -76,6 +76,7 @@ pub fn main(argv: &[String]) -> i32 {
         "build" => build_main(argv, &rest),
         "print-dev-env" => dev_env_main(argv, &rest),
         "develop" => super::develop::main(argv, &rest),
+        "search" => crate::cli::search::classic_main(argv, &rest),
         "flake" if rest.get(k).is_some_and(|s| s == "prefetch-inputs") => {
             rest.remove(k);
             prefetch_inputs_main(argv, &rest)
@@ -102,7 +103,7 @@ fn find_sub(argv: &[String]) -> Result<usize, String> {
 }
 
 /// `Ok(true)`: consumed. `Ok(false)`: not one of ours. `Err`: fall back.
-pub(super) fn global_flag(c: &mut Common, a: &mut Argv, s: &str) -> Result<bool, String> {
+pub fn global_flag(c: &mut Common, a: &mut Argv, s: &str) -> Result<bool, String> {
     if crate::config::determinate_flag(s, || a.value(s))? {
         return Ok(true);
     }
@@ -215,7 +216,7 @@ enum Run {
 /// `pure-eval`. main.cc: pure unless a flag says otherwise; nix.conf's
 /// setting does not change that, it only counts as set. installables.cc:
 /// `--file` is impure, and refuses a `pure-eval` set anywhere.
-pub(super) fn nix_settings(
+pub fn nix_settings(
     c: &mut Common,
     file: bool,
     builder: bool,
@@ -761,7 +762,7 @@ fn realise(
 
 // ---- printing ----------------------------------------------------------------
 
-fn print_bytes(b: &[u8]) {
+pub(crate) fn print_bytes(b: &[u8]) {
     use std::io::Write;
     let mut out = std::io::stdout();
     let _ = out.write_all(b);

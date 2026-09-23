@@ -79,6 +79,7 @@ impl EvalArgs {
     }
 }
 
+#[derive(Clone)]
 pub enum ArgKind {
     Expr(String),
     Str(String),

@@ -13,6 +13,7 @@ pub mod help;
 pub mod jobs;
 pub mod parse;
 pub mod prefetch;
+pub mod search;
 
 use help::{arg_error, value};
 

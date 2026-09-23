@@ -12,6 +12,7 @@ A Nix evaluator, and a client that builds what it evaluates.
 commands:
   eval           evaluate an expression or a file and print the value
   build          evaluate to derivations and build them on a daemon
+  search         find packages by regex, like 'nix search'
   eval-jobs      print a jobset's derivations as JSON lines (nix-eval-jobs)
   fast-build     evaluate and build a flake's checks (nix-fast-build)
   print-dev-env  print the environment of a flake's devShell, for direnv
@@ -74,6 +75,25 @@ build, and print the output paths (docs/remote-build.md).
   --out NAME            build the output NAME only (repeatable)
   --fetch-to DIR        copy the outputs from the builder to DIR
   --source SP=LOCAL     with DRV: the local tree of the input source SP
+";
+
+const SEARCH: &str = "\
+usage: ietsp search [INSTALLABLE] [FLAGS] REGEX...
+
+Print the packages whose attribute path, name or description match every
+REGEX (docs/search.md). INSTALLABLE is a flake reference, a path or
+<name>; the default is <nixpkgs>. '^' matches every package.
+
+  -e, --exclude REGEX   hide the packages this matches
+  --json                print one object per package, keyed by attribute
+  --pretty, --no-pretty  indent the JSON, or do not (default: a terminal)
+  -f, --file FILE, --expr EXPR  search a file or an expression instead
+  --arg N EXPR, --argstr N STR  call a top-level function with N = EXPR/\"STR\"
+  -I, --include P=PATH  make <P> resolve to PATH
+  --impure, --pure-eval  turn pure evaluation off or on (docs/pure-eval.md)
+  --timings             report the index cache on stderr
+  --log-format F        internal-json: stderr as Nix JSON records (docs/cli.md)
+  --show-trace          put the trace in the JSON error records too
 ";
 
 const EVAL_JOBS: &str = "\
@@ -179,7 +199,7 @@ read set of a tracing-cache entry (docs/tracing-cache.md).
 ";
 
 pub const COMMANDS: &str =
-    "eval build eval-jobs fast-build print-dev-env prefetch lint parse cache";
+    "eval build search eval-jobs fast-build print-dev-env prefetch lint parse cache";
 
 /// The native command being parsed, "ietsp" before the command word; unset
 /// under a classic name.
@@ -198,6 +218,7 @@ fn parts(cmd: Option<&str>) -> Option<[&'static str; 2]> {
     Some(match cmd? {
         "eval" => [EVAL, INPUT],
         "build" => [BUILD, INPUT],
+        "search" => [SEARCH, ""],
         "eval-jobs" => [EVAL_JOBS, ""],
         "fast-build" => [FAST_BUILD, ""],
         "print-dev-env" => [PRINT_DEV_ENV, ""],
