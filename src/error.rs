@@ -26,6 +26,8 @@ pub enum Error {
     Usage(String),
     /// nix.conf: a syntax error, a missing include, or a bad setting value.
     Config(String),
+    /// Another error and the fix for it, which the record shows as `hint`.
+    Hint(Box<Error>, String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -60,12 +62,14 @@ impl Error {
             Error::Eval(e) => e.kind.code(),
             Error::Usage(_) => "usage",
             Error::Config(_) => "config",
+            Error::Hint(e, _) => e.code(),
         }
     }
 
     pub fn to_report(&self) -> crate::log::Report {
         let hint = match self {
             Error::Eval(e) => e.hint.clone(),
+            Error::Hint(_, h) => Some(h.clone()),
             _ => None,
         };
         crate::log::Report {
@@ -94,6 +98,7 @@ impl fmt::Display for Error {
             | Error::Usage(m)
             | Error::Config(m) => f.write_str(m),
             Error::Eval(e) => f.write_str(&e.msg),
+            Error::Hint(e, _) => e.fmt(f),
         }
     }
 }

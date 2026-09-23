@@ -228,6 +228,17 @@ A hint is there only when it is certain:
 - A NAR hash mismatch of a fetched tree names the hash of the tree and,
   for a `fetchTree` call, the position of its `narHash` attribute.
 - A usage error repeats the text's own `did you mean` and `--help` lines.
+- A `flake.lock` entry without a `narHash` names the input by its path
+  from the root (`a/nixpkgs`) and the `nix flake update` that locks it
+  again.
+- A `git` input whose tree is not the one the lock names (nix reports a
+  NAR hash mismatch, fetchers.cc:`Input::checkLocks`) has code
+  `hash-mismatch`, and the hint names the usual causes: a `.gitattributes`
+  filter such as git-lfs, `export-subst`, or a submodule.
+- A file that is in the working tree of a git flake but that git does not
+  track is Nix's error (git.cc:`makeNotAllowedError`, `Path 'F' in the
+  repository "R" is not tracked by Git.`), and the hint is the
+  `git -C "R" add "F"` that makes it visible.
 
 A missing attribute or an undefined variable has no hint: ietsp has no
 did-you-mean suggestion for them yet.

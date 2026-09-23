@@ -21,6 +21,11 @@ def --wrapped git-in [repo: string, ...args: string] {
   ^git -c user.name=ietsp -c user.email=ietsp@example.com -c init.defaultBranch=main -C $repo ...$args
 }
 
+# the `--log-format internal-json` records in STDERR
+def records [stderr: string]: nothing -> list<record> {
+  $stderr | lines | where ($it | str starts-with "@nix ") | each { str substring 5.. | from json }
+}
+
 # check NAME REF ENV: both evaluators must agree and succeed. Prints the verdict, returns it.
 def check [ietsp: string, name: string, ref: string, extra?: record]: nothing -> bool {
   let n = (nixf eval --raw --option eval-cache "false" $ref | complete)
@@ -251,6 +256,22 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   $res ++= [(check $ietsp "scratch: --raw on a derivation prints its outPath" $scratch)]
   "untracked\n" | save $"($repo)/untracked"
   $res ++= [(check $ietsp "scratch: untracked file is ignored" $"($scratch).drvPath")]
+  # reading an untracked file is Nix's error, and the hint is the `git add`
+  let ut = $"($work)/untracked"
+  mkdir $ut
+  '{ outputs = _: { v = builtins.readFile ./extra; }; }' | save $"($ut)/flake.nix"
+  '{"nodes":{"root":{}},"root":"root","version":7}' | save $"($ut)/flake.lock"
+  "x\n" | save $"($ut)/extra"
+  git-in $ut init -q
+  git-in $ut add flake.nix flake.lock
+  let ut_line = $"Path 'extra' in the repository \"($ut)\" is not tracked by Git."
+  let ut_n = (nixf eval --raw $"($ut)#v" | complete)
+  let ut_i = (^$ietsp eval --raw --no-cache --log-format internal-json $"($ut)#v" | complete)
+  let ut_rec = (records $ut_i.stderr | where level? == 0 | get -o 0 | default {})
+  let ut_ok = ($ut_n.exit_code == 1 and ($ut_n.stderr | str contains $ut_line) and $ut_i.exit_code == 1
+    and ($ut_rec.raw_msg? | default "" | str starts-with $ut_line)
+    and ($ut_rec.hint? | default "") == $"run 'git -C \"($ut)\" add \"extra\"'")
+  $res ++= [(verdict $ut_ok "git: reading an untracked file is Nix's error, the hint is the git add" $"untracked read \(exit ($ut_n.exit_code)/($ut_i.exit_code)\): ($ut_rec | to json -r)")]
   "three\n" | save -f $"($repo)/file"
   $res ++= [(check $ietsp "scratch: dirty tree (modified tracked file)" $"($scratch).drvPath")]
   rm $"($repo)/nested/tracked"
@@ -527,6 +548,15 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let gn = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp eval --raw --no-cache $"($gitf)#v" | complete })
   let gn_ok = ($gn.exit_code != 0 and ($gn.stderr | str contains "nix is not on PATH") and ($gn.stderr | str contains "input 'lib'"))
   $res ++= [(verdict $gn_ok "git: without nix the error names the input" $"git input, no nix \(exit ($gn.exit_code)\): ($gn.stderr | lines | last 2 | str join ' | ')")]
+  # a git input whose tree is not the one the lock names: nix reports a NAR
+  # hash mismatch, and ietsp's record names the usual causes
+  let gm = $"($work)/gitmismatch"
+  mkdir $gm
+  cp $"($gitf)/flake.nix" $gm
+  open --raw $"($gitf)/flake.lock" | from json | update nodes.lib.locked.narHash $"sha256-('ietsp-git-mismatch-never-stored!' | encode base64)" | to json | save $"($gm)/flake.lock"
+  let gmr = (^$ietsp eval --raw --no-cache --log-format internal-json $"($gm)#v" | complete)
+  let gm_rec = (records $gmr.stderr | where code? == "hash-mismatch" | get -o 0 | default {})
+  $res ++= [(verdict ($gmr.exit_code == 1 and ($gm_rec.hint? | default "" | str contains "export-subst")) "git: a NAR hash mismatch is hash-mismatch, and the hint names filters, export-subst, submodules" $"git mismatch \(exit ($gmr.exit_code)\): ($gm_rec | to json -r)")]
 
   rm $"($repo)/flake.lock"
   let err = (^$ietsp eval --raw --no-cache $"($scratch).drvPath" | complete | get stderr)
@@ -549,6 +579,15 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let g = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp eval --raw --no-cache $"($ghost)#v" | complete })
   let named = ($g.stderr | lines | where ($it | str contains "input 'ghost'") | length)
   $res ++= [(verdict ($g.exit_code != 0 and $g.stdout == "" and $named == 2 and ($g.stderr | str contains "cannot fetch input 'ghost'")) "unfetchable input: both messages name it, the failed fetch was ietsp's own" $"unfetchable input \(exit ($g.exit_code)\): ($g.stderr | lines | first 2 | str join ' | ')")]
+  # a lock entry without a narHash: the hint names the input and the command
+  let unl = $"($work)/unlocked"
+  mkdir $unl
+  cp $"($ghost)/flake.nix" $unl
+  open --raw $"($ghost)/flake.lock" | from json | reject nodes.ghost.locked.narHash | to json | save $"($unl)/flake.lock"
+  let u = (^$ietsp eval --raw --no-cache --log-format internal-json $"($unl)#v" | complete)
+  let u_rec = (records $u.stderr | where level? == 0 | get -o 0 | default {})
+  $res ++= [(verdict ($u.exit_code == 1 and ($u_rec.hint? | default "" | str contains "run 'nix flake update ghost'")) "lock: an entry without narHash has a hint that names the input" $"unlocked entry \(exit ($u.exit_code)\): ($u_rec | to json -r)")]
+
   let gp = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp nix flake prefetch-inputs $ghost | complete })
   $res ++= [(verdict ($gp.exit_code == 1 and ($gp.stderr | str contains "cannot fetch input 'ghost'")) "prefetch-inputs: an unfetchable input is an error that names it, exit 1" $"prefetch-inputs ghost \(exit ($gp.exit_code)\): ($gp.stderr | lines | last 2 | str join ' | ')")]
 

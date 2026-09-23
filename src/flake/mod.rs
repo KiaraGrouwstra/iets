@@ -205,7 +205,9 @@ pub fn eval_flake_value(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
     let lock_bytes = read_traced(ev, &fr.dir.join("flake.lock"))
         .map_err(|_| EvalError::boxed(ErrorKind::Unsupported, LOCK_ERROR, pos))?;
     let lock = lock::check(&lock_bytes).map_err(|why| {
-        EvalError::boxed(ErrorKind::Unsupported, format!("{LOCK_ERROR} ({why})"), pos)
+        let mut e = EvalError::boxed(ErrorKind::Unsupported, format!("{LOCK_ERROR} ({why})"), pos);
+        e.hint = why.to_report().hint;
+        e
     })?;
     for (hash, name) in lock.nar_hash_names() {
         ev.input_names.insert(hash.to_string(), name.to_string());

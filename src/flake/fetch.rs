@@ -247,12 +247,17 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
         }
         "github" | "gitlab" | "sourcehut" | "git" | "tarball" | "hg" => {
             let Some(nar_hash) = str_attr(&attrs, "narHash") else {
-                bail!(
-                    ErrorKind::Unsupported,
-                    pos,
+                let msg = format!(
                     "ietsp: cannot fetch unlocked input '{}' (no narHash); run nix flake lock",
                     to_url(&attrs)
                 );
+                let mut e = Error::new(ErrorKind::Unsupported, msg, pos);
+                e.hint = Some(
+                    "ietsp needs the 'narHash' to know the store path: pass it to fetchTree, \
+                     or run 'nix flake update' to write it into flake.lock"
+                        .into(),
+                );
+                return Err(Box::new(e));
             };
             let hash = parse_nar_hash(nar_hash)
                 .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
@@ -732,7 +737,6 @@ fn fetch_with_nix(full: &str, name: &str, attrs: &Attrs, pos: Pos) -> EvalResult
             &expr,
         ])
         .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::inherit())
         .output()
         .map_err(|e| {
             Error::boxed(
@@ -741,13 +745,27 @@ fn fetch_with_nix(full: &str, name: &str, attrs: &Attrs, pos: Pos) -> EvalResult
                 pos,
             )
         })?;
+    use std::io::Write;
+    let _ = std::io::stderr().write_all(&out.stderr);
     if !out.status.success() {
-        bail!(
-            ErrorKind::Eval,
-            pos,
+        let msg = format!(
             "ietsp: nix could not fetch input '{name}' ({})",
             to_url(attrs)
         );
+        // fetchers.cc:Input::checkLocks
+        if str_attr(attrs, "type") == Some("git")
+            && String::from_utf8_lossy(&out.stderr).contains("NAR hash mismatch in input")
+        {
+            let mut e = Error::new(ErrorKind::HashMismatch, msg, pos);
+            e.hint = Some(
+                "git gave a different tree than the lock names: a .gitattributes filter \
+                 (such as git-lfs), 'export-subst' or a submodule can cause that; \
+                 fix it, or run 'nix flake update' to lock the tree git gives"
+                    .into(),
+            );
+            return Err(Box::new(e));
+        }
+        bail!(ErrorKind::Eval, pos, "{msg}");
     }
     let got = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if got != full {

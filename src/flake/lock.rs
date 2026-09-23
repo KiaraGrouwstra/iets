@@ -118,9 +118,11 @@ pub fn check(bytes: &[u8]) -> Result<Lock> {
     let Some(nodes) = json["nodes"].as_object() else {
         return Err(Error::Flake("no nodes".into()));
     };
-    let mut todo = vec![root.as_str()];
+    // a follows target is reached through its owner too, so only direct
+    // edges extend the input path the hint names
+    let mut todo = vec![(root.as_str(), String::new())];
     let mut seen: HashSet<&str> = HashSet::new();
-    while let Some(key) = todo.pop() {
+    while let Some((key, path)) = todo.pop() {
         if !seen.insert(key) {
             continue;
         }
@@ -128,11 +130,19 @@ pub fn check(bytes: &[u8]) -> Result<Lock> {
             return Err(Error::Flake(format!("node '{key}' is missing")));
         };
         if key != root && !is_locked(node) {
-            return Err(Error::Flake(format!("node '{key}' is not locked")));
+            let e = Error::Flake(format!("node '{key}' is not locked"));
+            let fix = format!(
+                "input '{path}' has no 'narHash' in flake.lock; run 'nix flake update {path}' to lock it again"
+            );
+            return Err(Error::Hint(Box::new(e), fix));
         }
         if let Some(inputs) = node["inputs"].as_object() {
-            for spec in inputs.values() {
-                todo.push(resolve_spec(nodes, &root, spec, 0)?);
+            for (name, spec) in inputs {
+                let to = resolve_spec(nodes, &root, spec, 0)?;
+                if spec.is_string() {
+                    let sep = if path.is_empty() { "" } else { "/" };
+                    todo.push((to, format!("{path}{sep}{name}")));
+                }
             }
         }
     }
@@ -188,11 +198,13 @@ mod tests {
                 .contains("'b'")
         );
         let unlocked = LOCK.replace(r#", "narHash": "sha256-BBBB""#, "");
-        assert!(
-            check(unlocked.as_bytes())
-                .unwrap_err()
-                .to_string()
-                .contains("not locked")
+        let e = check(unlocked.as_bytes()).unwrap_err();
+        assert_eq!(e.to_string(), "node 'nixpkgs' is not locked");
+        assert_eq!(
+            e.to_report().hint.as_deref(),
+            Some(
+                "input 'a/nixpkgs' has no 'narHash' in flake.lock; run 'nix flake update a/nixpkgs' to lock it again"
+            )
         );
         let bad_follows = LOCK.replace(r#"["a", "nixpkgs"]"#, r#"["a", "nope"]"#);
         assert!(

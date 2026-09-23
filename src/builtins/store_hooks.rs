@@ -82,7 +82,13 @@ pub fn allowed(ev: &Evaluator, path: &[u8]) -> bool {
 /// store, as Nix does) are the readers that resolve the path themselves.
 pub fn open(ev: &Evaluator, path: &[u8], pos: Pos) -> EvalResult<SrcPath> {
     if allowed(ev, path) {
-        return Ok(resolve(ev, path));
+        let at = resolve(ev, path);
+        if at.hidden()
+            && let Some(e) = untracked(&at, pos)
+        {
+            return Err(e);
+        }
+        return Ok(at);
     }
     Err(Error::boxed(
         ErrorKind::Eval,
@@ -92,6 +98,39 @@ pub fn open(ev: &Evaluator, path: &[u8], pos: Pos) -> EvalResult<SrcPath> {
         ),
         pos,
     ))
+}
+
+/// git.cc:makeNotAllowedError, in Nix's words: a path on disk that a git
+/// tree leaves out because git does not track it.
+fn untracked(at: &SrcPath, pos: Pos) -> Option<Box<Error>> {
+    let Src::Fs { root, .. } = &at.src else {
+        return None;
+    };
+    let rel = OsStr::from_bytes(&at.rel);
+    if !root.join(".git").exists() || fs::symlink_metadata(root.join(rel)).is_err() {
+        return None;
+    }
+    let tracked = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "--error-unmatch", "--"])
+        .arg(rel)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .ok()?;
+    if tracked.success() {
+        return None;
+    }
+    let (rel, root) = (String::from_utf8_lossy(&at.rel), root.display());
+    let add = format!("git -C \"{root}\" add \"{rel}\"");
+    let msg = format!(
+        "Path '{rel}' in the repository \"{root}\" is not tracked by Git.\n\n\
+         To make it visible to Nix, run:\n\n{add}"
+    );
+    let mut e = Error::new(ErrorKind::Io, msg, pos);
+    e.hint = Some(format!("run '{add}'"));
+    Some(Box::new(e))
 }
 
 /// Copying a [`Src::Mem`] path again would need a source origin that
