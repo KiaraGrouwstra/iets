@@ -94,7 +94,10 @@ fn out(v: &Value, text: Option<&str>) {
     tee(v);
 }
 
-/// logging.hh:ActivityType and ResultType, the ones ietsp emits itself.
+/// error.hh:Verbosity, and logging.hh:ActivityType and ResultType, the ones
+/// ietsp emits itself.
+pub const LVL_ERROR: u64 = 0;
+pub const LVL_INFO: u64 = 3;
 pub const ACT_COPY_PATH: u64 = 100;
 pub const ACT_REALISE: u64 = 102;
 pub const ACT_COPY_PATHS: u64 = 103;

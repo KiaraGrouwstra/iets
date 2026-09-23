@@ -6,6 +6,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::{self, Read, Write};
 
 use crate::error::{Error, Result};
+use crate::log::{ACT_COPY_PATH, ACT_COPY_PATHS, Activity, LVL_INFO, RES_PROGRESS};
 use crate::store::path::StorePath;
 
 use super::event::Event;
@@ -19,6 +20,7 @@ use super::worker::wire::write_u64;
 /// client only, so an unsigned output of a remote builder still lands.
 pub fn closure(
     from: &mut Connection,
+    from_uri: &str,
     to: &mut Connection,
     paths: &[StorePath],
     on_event: &mut dyn FnMut(Event),
@@ -36,9 +38,11 @@ pub fn closure(
     let n = order.len();
     let infos = &infos;
     let order = &order;
+    let mut copying = Copying::new(n, from_uri, "daemon");
     let mut body = |w: &mut dyn Write| -> io::Result<()> {
         write_u64(w, n as u64)?;
         for p in order {
+            let _act = copying.path(&p.to_string());
             let info = &infos[p];
             info.write(w)?;
             let size = info.nar_size;
@@ -119,4 +123,43 @@ pub fn topo_sort(infos: &HashMap<StorePath, PathInfo>) -> Vec<StorePath> {
         }
     }
     out
+}
+
+/// store-api.cc:copyPaths as the log shows it: `copying N paths`, and a
+/// `copying path` activity per path while it goes out.
+pub struct Copying {
+    all: Activity,
+    n: usize,
+    done: usize,
+    from: String,
+    to: String,
+}
+
+impl Copying {
+    pub fn new(n: usize, from: &str, to: &str) -> Copying {
+        let text = format!("copying {n} paths");
+        Copying {
+            all: Activity::new(LVL_INFO, ACT_COPY_PATHS, &text, vec![]),
+            n,
+            done: 0,
+            from: from.to_string(),
+            to: to.to_string(),
+        }
+    }
+
+    /// `path` goes out until the activity drops; the text is
+    /// store-api.cc:makeCopyPathMessage's.
+    pub fn path(&mut self, path: &str) -> Activity {
+        let p = vec![self.done.into(), self.n.into(), 1.into(), 0.into()];
+        self.all.result(RES_PROGRESS, p);
+        self.done += 1;
+        let (from, to) = (&self.from, &self.to);
+        let text = match (from.as_str(), to.as_str()) {
+            ("local", _) => format!("copying path '{path}' to '{to}'"),
+            (_, "daemon") => format!("copying path '{path}' from '{from}'"),
+            _ => format!("copying path '{path}' from '{from}' to '{to}'"),
+        };
+        let f = vec![path.into(), from.as_str().into(), to.as_str().into()];
+        Activity::new(LVL_INFO, ACT_COPY_PATH, &text, f)
+    }
 }

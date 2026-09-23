@@ -15,6 +15,7 @@ use serde_json::Value;
 use super::event::{Event, Failed, Log, Phase, Started, Stopped};
 use crate::config::Config;
 use crate::error::{Error, Result};
+use crate::log::{ACT_BUILD, LVL_INFO, RES_BUILD_LOG_LINE, RES_SET_PHASE};
 use wire::{Counting, FramedSink};
 
 /// What `SetOptions` sends (remote-store.cc:setOptions). `Default` is what this
@@ -90,12 +91,10 @@ enum Op {
     BuildPathsWithResults = 46,
 }
 
-use crate::log::{ACT_BUILD, RES_BUILD_LOG_LINE, RES_SET_PHASE};
 /// logging.hh:resPostBuildLogLine.
 const RES_POST_BUILD_LOG_LINE: u64 = 107;
 
 /// error.hh:Verbosity.
-const LVL_INFO: u64 = 3;
 const LVL_VOMIT: u64 = 7;
 
 pub const DEFAULT_SOCKET: &str = "/nix/var/nix/daemon-socket/socket";
@@ -134,6 +133,21 @@ impl Transport {
             return Ok(Some(Transport::Grpc(Box::new(cfg?))));
         }
         Ok(Transport::parse_worker(url))
+    }
+
+    /// The store as Nix's getHumanReadableURI names it, for the log.
+    pub fn uri(&self) -> String {
+        match self {
+            Transport::Unix(p) if p == Path::new(DEFAULT_SOCKET) => "daemon".into(),
+            Transport::Unix(p) => format!("unix://{}", p.display()),
+            Transport::Grpc(cfg) => cfg.url(),
+            Transport::Ssh {
+                user: Some(u),
+                host,
+                ..
+            } => format!("ssh-ng://{u}@{host}"),
+            Transport::Ssh { host, .. } => format!("ssh-ng://{host}"),
+        }
     }
 
     fn parse_worker(url: &str) -> Option<Transport> {

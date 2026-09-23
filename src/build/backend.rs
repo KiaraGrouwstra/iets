@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::error::{Error, Result};
+use crate::remote::copy::Copying;
 use crate::remote::event::Event;
 use crate::remote::plan::{Object, Plan};
 use crate::remote::worker::wire::write_object;
@@ -324,9 +325,11 @@ impl Backend for Worker {
         let t0 = Instant::now();
         crate::remote::plan::prehash_drvs(objects);
         let before = self.conn.bytes_sent();
+        let mut copying = Copying::new(objects.len(), "local", &self.transport.uri());
         let mut body = |w: &mut dyn Write| -> io::Result<()> {
             wire::write_u64(w, objects.len() as u64)?;
             for o in objects {
+                let _act = copying.path(&o.store_path().to_string());
                 write_object(w, o)?;
             }
             Ok(())
@@ -411,7 +414,8 @@ impl Backend for Worker {
             paths.push(StorePath::parse(p)?);
         }
         let mut conn = Connection::open(&local(), &mut |_| {})?;
-        crate::remote::copy::closure(&mut self.conn, &mut conn, &paths, &mut |_| {})?;
+        let from = self.transport.uri();
+        crate::remote::copy::closure(&mut self.conn, &from, &mut conn, &paths, &mut |_| {})?;
         for (path, link) in links {
             if let Some(link) = link {
                 conn.add_perm_root(path, Path::new(link))?;
