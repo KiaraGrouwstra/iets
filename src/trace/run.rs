@@ -135,13 +135,13 @@ impl Cache {
         match r {
             Ok(wrote) => {
                 if self.timings {
-                    if wrote {
+                    if wrote && !obs.is_empty() {
                         eprintln!(
                             "cache: wrote {} entries, {:.3}s",
                             obs.len(),
                             t0.elapsed().as_secs_f64()
                         );
-                    } else {
+                    } else if !wrote {
                         eprintln!("cache: not written (a sibling holds the store lock)");
                     }
                 }
