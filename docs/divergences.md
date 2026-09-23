@@ -125,3 +125,6 @@ Nix 2.34:
 - **No activity records** (`start`, `stop`, `result`) yet, so a
   progress display that reads them (nix-output-monitor) sees messages
   only. The `--timings` and `IETSP_STATS` lines stay plain text.
+- **`json-log-path`** applies to every command. Nix applies it to the
+  `nix` command only: the classic names return before `applyJSONLogger`
+  (`src/nix/main.cc`).
