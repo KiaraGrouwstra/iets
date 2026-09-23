@@ -106,6 +106,7 @@ def run-all [ctx: record, np: string]: nothing -> int {
     [check arg-from-stdin [--arg-from-stdin system ci.nix] system.txt]
     [check include [--include $"nixpkgs=($np)" --expr '{ inherit ((import <nixpkgs> { }).hello) drvPath; }' --no-instantiate]]
     [check option [--option allow-import-from-derivation false --show-trace --quiet --max-jobs 1 --log-format raw ci.nix]]
+    [check log-format-json [--log-format internal-json --show-trace ci.nix]]
     [check impure [--impure --expr '{ x = derivation { name = "x-${builtins.currentSystem}"; system = builtins.currentSystem; builder = ":"; }; }']]
     [check flake [--flake ./flake#hydraJobs --meta --gc-roots-dir GCROOTS]]
     [check flake-whole [--flake ./flake]]

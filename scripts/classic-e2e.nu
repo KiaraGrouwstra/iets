@@ -36,6 +36,28 @@ def cmp-case [label: string, r: record]: nothing -> bool {
   }
 }
 
+# The first level-0 `--log-format internal-json` error record on stderr, with
+# the fields both sides fill alike: Nix colours raw_msg, ietsp does not.
+def err-record [stderr: string]: nothing -> record {
+  let recs = ($stderr | lines | where ($it | str starts-with "@nix ") | each { str substring 5.. | from json })
+  let r = ($recs | where {|r| $r.level? == 0 and ($r.raw_msg? != null) } | get -o 0 | default {})
+  {raw_msg: ($r.raw_msg? | default "" | ansi strip), line: $r.line?, column: $r.column?, file: $r.file?, code: $r.code?}
+}
+
+# Compares the error records and the exit codes; ours must carry CODE.
+def cmp-record [label: string, code: string, r: record]: nothing -> bool {
+  let a = (err-record $r.real.stderr | reject code)
+  let b = (err-record $r.ours.stderr)
+  if $a == ($b | reject code) and $b.code == $code and $r.ours.exit_code == $r.real.exit_code and $a.raw_msg != "" {
+    verdict true $label ""
+  } else {
+    print $"FAIL ($label): exit ours=($r.ours.exit_code) real=($r.real.exit_code)"
+    print $"  real: ($a | to json -r)"
+    print $"  ours: ($b | to json -r)"
+    false
+  }
+}
+
 # `env` output is only comparable without the variables that legitimately
 # differ: the per-run temporary directory, bash's own bookkeeping, the prompt.
 const ENV_SKIP = '^(NIX_BUILD_TOP|TMPDIR|TMP|TEMP|TEMPDIR|NIX_ATTRS_SH_FILE|NIX_ATTRS_JSON_FILE|__[A-Za-z_]*|SHLVL|_|PWD|OLDPWD|PS1)='
@@ -317,6 +339,31 @@ def main [] {
     (run-both $farm nix eval -f $"($d)/multi.nix" outputs)))
   $ok = ($ok | append (cmp-case "nix eval --json -f FILE ATTR"
     (run-both $farm nix eval --json -f $"($d)/multi.nix" outputs)))
+
+  # --- --log-format internal-json: the same error record and exit code
+  "let\n  x = 1;\nin\n  y + x\n" | save -f $"($d)/undef.nix"
+  let json = [--log-format internal-json]
+  $ok = ($ok | append (cmp-record "internal-json: undefined variable in a file" undefined-var
+    (run-both $farm nix-instantiate ...$json --eval $"($d)/undef.nix")))
+  $ok = ($ok | append (cmp-record "internal-json: missing attribute" missing-attr
+    (run-both $farm nix-instantiate ...$json --eval -E "{ a = 1; }.b")))
+  $ok = ($ok | append (cmp-record "internal-json: syntax error" parse
+    (run-both $farm nix-instantiate ...$json --eval -E "1 +")))
+  $ok = ($ok | append (cmp-record "internal-json: nix eval, missing attribute" missing-attr
+    (run-both $farm nix eval ...$json --expr "{ a = 1; }.b")))
+  # A daemon client nix exits 1 on any failed build, and so do the classic
+  # names; `ietsp build` exits with the build status (docs/cli.md).
+  let fail = 'derivation { name = "classic-e2e-fail"; system = "x86_64-linux"; builder = "/bin/sh"; args = [ "-c" "echo oops; exit 3" ]; }'
+  $ok = ($ok | append (cmp-record "internal-json: a failed build" build-failed
+    (run-both $farm nix-build ...$json --no-out-link -E $fail)))
+  let fod = 'derivation { name = "classic-e2e-fod"; system = "x86_64-linux"; builder = "/bin/sh"; args = [ "-c" "echo hi > $out" ]; outputHashMode = "flat"; outputHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; }'
+  $ok = ($ok | append (cmp-record "internal-json: a hash mismatch" hash-mismatch
+    (run-both $farm nix-build ...$json --no-out-link -E $fod)))
+  let bf = (^$ietsp build -E $fail | complete)
+  $ok = ($ok | append (verdict ($bf.exit_code == 100) "ietsp build: a failed build exits 100" $"exit ($bf.exit_code)"))
+  let hm = (^$ietsp build ...$json -E $fod | complete)
+  $ok = ($ok | append (verdict ($hm.exit_code == 102 and ($hm.stderr | str contains '"hint":"set the expected hash to '))
+    "ietsp build: a hash mismatch exits 102 and names the hash" $"exit ($hm.exit_code), stderr '($hm.stderr | str substring 0..400)'"))
 
   # --- nix build: the out-link prefix, the printed paths and the link target
   mut got = {}
