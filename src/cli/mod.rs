@@ -57,12 +57,15 @@ pub fn eval_flag(
             if name == "pure-eval" {
                 let b = crate::config::parse_bool(&name, &v).map_err(|e| e.to_string())?;
                 f.pure = Some(b);
+            } else if name == "json-log-path" {
+                crate::log::set_json_log_path(v);
             } else {
                 f.overrides.push((name, v));
             }
         }
         "--log-format" => crate::log::set_format(&next()?)?,
         "--show-trace" => crate::log::set_show_trace(),
+        "--json-log-path" => crate::log::set_json_log_path(next()?),
         "--pure-eval" => f.pure = Some(true),
         "--no-pure-eval" | "--impure" => f.pure = Some(false),
         _ => return Ok(false),

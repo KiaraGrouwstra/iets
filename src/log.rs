@@ -1,14 +1,18 @@
 //! Everything a command says on stderr goes through here: Nix's plain text,
 //! or with `--log-format internal-json` one `@nix {...}` line per message in
 //! the format of logging.cc:JSONLogger, plus `code` and `hint` on an error
-//! (docs/cli.md).
+//! (docs/cli.md). The `json-log-path` file gets every record in either
+//! format.
 
+use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use serde_json::{Value, json};
 
 static JSON: AtomicBool = AtomicBool::new(false);
 static SHOW_TRACE: AtomicBool = AtomicBool::new(false);
+static JSON_LOG_PATH: OnceLock<String> = OnceLock::new();
 
 /// `--log-format F`, loggers.cc:parseLogFormat. Every format but
 /// `internal-json` is plain text here.
@@ -31,17 +35,64 @@ pub fn set_show_trace() {
     SHOW_TRACE.store(true, Ordering::Relaxed);
 }
 
-/// One `@nix` line. The activity records will go out through this too.
-pub fn write(v: &Value) {
-    eprintln!("@nix {v}");
+/// `json-log-path` from the command line; it wins over nix.conf. Set it
+/// before the first line goes out.
+pub fn set_json_log_path(path: String) {
+    let _ = JSON_LOG_PATH.set(path);
+}
+
+/// logging.cc:applyJSONLogger: a copy of `v`, without the `@nix ` prefix,
+/// to the `json-log-path` file or unix socket. A path that does not open is
+/// reported once and ignored, as Nix does.
+fn tee(v: &Value) {
+    static SINK: OnceLock<Option<Mutex<Box<dyn Write + Send>>>> = OnceLock::new();
+    // Config::load must not log: that would re-enter this get_or_init
+    let sink = SINK.get_or_init(|| {
+        let path = JSON_LOG_PATH.get().cloned().or_else(|| {
+            let c = crate::config::Config::load(&[]).ok()?;
+            c.str("json-log-path").map(str::to_string)
+        })?;
+        match open_sink(std::path::Path::new(&path)) {
+            Ok(w) => Some(Mutex::new(w)),
+            Err(e) => {
+                let e = crate::error::io_text(&e);
+                eprintln!("error (ignored): opening log file \"{path}\": {e}");
+                None
+            }
+        }
+    });
+    if let Some(w) = sink {
+        let mut w = w.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = writeln!(w, "{v}");
+    }
+}
+
+fn open_sink(path: &std::path::Path) -> std::io::Result<Box<dyn Write + Send>> {
+    use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
+    if std::fs::metadata(path).is_ok_and(|m| m.file_type().is_socket()) {
+        return Ok(Box::new(std::os::unix::net::UnixStream::connect(path)?));
+    }
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o644)
+        .open(path)?;
+    Ok(Box::new(f))
+}
+
+/// One message: `text` on stderr, or `v` under internal-json.
+fn out(v: &Value, text: &str) {
+    if json() {
+        eprintln!("@nix {v}");
+    } else {
+        eprintln!("{text}");
+    }
+    tee(v);
 }
 
 /// `text` as it goes to stderr, without the newline: itself, or a `msg`
 /// record at the verbosity its prefix implies.
 pub fn format(text: &str) -> String {
-    if !json() {
-        return text.to_string();
-    }
     let level = if text.starts_with("error:") || text.starts_with("trace:") {
         0
     } else if text.starts_with("warning:") || text.starts_with("evaluation warning:") {
@@ -49,10 +100,13 @@ pub fn format(text: &str) -> String {
     } else {
         3
     };
-    format!(
-        "@nix {}",
-        json!({"action": "msg", "level": level, "msg": text})
-    )
+    let v = json!({"action": "msg", "level": level, "msg": text});
+    tee(&v);
+    if json() {
+        format!("@nix {v}")
+    } else {
+        text.to_string()
+    }
 }
 
 /// A line that is not an error record.
@@ -63,14 +117,16 @@ pub fn line(text: &str) {
 /// A lint warning, `warning: [NAME] MSG` and maybe `\n  at POS`, as it goes
 /// to stderr.
 pub fn lint(text: &str) -> String {
+    let v = lint_record(text);
+    tee(&v);
     if json() {
-        lint_record(text)
+        format!("@nix {v}")
     } else {
         text.to_string()
     }
 }
 
-fn lint_record(text: &str) -> String {
+fn lint_record(text: &str) -> Value {
     let rest = text.strip_prefix("warning: ").unwrap_or(text);
     let (raw, pos) = match rest.split_once("\n  at ") {
         Some((raw, pos)) => (raw, Some(pos.to_string())),
@@ -81,14 +137,11 @@ fn lint_record(text: &str) -> String {
         pos,
         ..Report::new("lint", raw)
     };
-    format!("@nix {}", r.record(text))
+    r.record(text)
 }
 
 /// The warnings a cache entry recorded, as `lint` puts them out.
 pub fn replay_lints(bytes: &[u8]) -> Vec<u8> {
-    if !json() {
-        return bytes.to_vec();
-    }
     let mut warnings: Vec<String> = Vec::new();
     for l in String::from_utf8_lossy(bytes).lines() {
         match warnings.last_mut() {
@@ -99,8 +152,16 @@ pub fn replay_lints(bytes: &[u8]) -> Vec<u8> {
             _ => warnings.push(l.to_string()),
         }
     }
-    let out: String = warnings.iter().map(|w| lint_record(w) + "\n").collect();
-    out.into_bytes()
+    let records: Vec<Value> = warnings.iter().map(|w| lint_record(w)).collect();
+    records.iter().for_each(tee);
+    if !json() {
+        return bytes.to_vec();
+    }
+    records
+        .iter()
+        .map(|v| format!("@nix {v}\n"))
+        .collect::<String>()
+        .into_bytes()
 }
 
 /// One error (or, at level 1, warning) for stderr.
@@ -196,11 +257,7 @@ impl Report {
     /// a native command, 1 for the rest.
     pub fn emit(&self) -> i32 {
         let text = self.text();
-        if json() {
-            write(&self.record(&text));
-        } else {
-            eprintln!("{text}");
-        }
+        out(&self.record(&text), &text);
         if self.code == "usage" && crate::cli::help::command().is_some() {
             2
         } else {
@@ -272,12 +329,14 @@ fn build_report(pos: Option<String>, reason: &str, exit: i32) -> Report {
 /// A failed build: its record under internal-json, else `text`, if any;
 /// the renderer prints its own.
 pub fn build_failed(pos: Option<String>, reason: &str, exit: i32, text: Option<&str>) {
+    let r = build_report(pos, reason, exit);
+    let v = r.record(&r.text());
     if json() {
-        let r = build_report(pos, reason, exit);
-        write(&r.record(&r.text()));
+        eprintln!("@nix {v}");
     } else if let Some(t) = text {
         eprintln!("{t}");
     }
+    tee(&v);
 }
 
 #[cfg(test)]
@@ -317,7 +376,7 @@ mod tests {
     fn lint_warning_is_a_level_1_record() {
         let text = "warning: [url-literal] URL literal\n  at /a.nix:2:5";
         let want = r#"@nix {"action":"msg","code":"lint","column":5,"file":"/a.nix:2:5","level":1,"line":2,"msg":"warning: [url-literal] URL literal\n  at /a.nix:2:5","raw_msg":"[url-literal] URL literal"}"#;
-        assert_eq!(lint_record(text), want);
+        assert_eq!(format!("@nix {}", lint_record(text)), want);
     }
 
     #[test]

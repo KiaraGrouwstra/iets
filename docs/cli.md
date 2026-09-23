@@ -105,8 +105,19 @@ Any other line is `{"action":"msg","level":N,"msg":TEXT}`: level 0 for
 `error:` and `trace:` lines, 1 for warnings, 3 for the rest (build
 progress, summaries, classic fallback notes). The lines that `--timings`
 and `IETSP_STATS` add stay plain text. The activity records of Nix
-(`start`, `stop`, `result`) are not produced yet; `log::write` is the
-writer they will use.
+(`start`, `stop`, `result`) are not produced yet; they will go out
+through `log::out` and `log::tee` in `src/log.rs`.
+
+## `json-log-path`
+
+The `json-log-path` setting (nix.conf, `--option json-log-path PATH` or
+`--json-log-path PATH`) names a file or a unix socket. Every record above
+also goes there, without the `@nix ` prefix, whatever `--log-format` says;
+stderr does not change. A file is opened for append and created with mode
+0644. A path that does not open gives one `error (ignored): opening log
+file` line, and the run goes on. This is `applyJSONLogger` in Nix's
+`src/libutil/logging.cc`. As in Nix, two processes that write the same file
+can interleave their records.
 
 ### Hints
 

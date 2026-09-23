@@ -365,6 +365,16 @@ def main [] {
   $ok = ($ok | append (verdict ($hm.exit_code == 102 and ($hm.stderr | str contains '"hint":"set the expected hash to '))
     "ietsp build: a hash mismatch exits 102 and names the hash" $"exit ($hm.exit_code), stderr '($hm.stderr | str substring 0..400)'"))
 
+  # --- json-log-path: stderr stays text, the file gets the same records unprefixed
+  let jlog = {|f| {stderr: (open --raw $f | lines | each {|l| $"@nix ($l)" } | str join "\n")} }
+  let jo = (^$"($farm)/nix-instantiate" --option json-log-path $"($d)/jlog-ours" --eval -E "{ a = 1; }.b" | complete)
+  let jr = (^nix-instantiate --option json-log-path $"($d)/jlog-real" --eval -E "{ a = 1; }.b" | complete)
+  $ok = ($ok | append (cmp-record "json-log-path: the file holds the error record" missing-attr
+    {ours: ({exit_code: $jo.exit_code} | merge (do $jlog $"($d)/jlog-ours")),
+     real: ({exit_code: $jr.exit_code} | merge (do $jlog $"($d)/jlog-real"))}))
+  $ok = ($ok | append (verdict ($jo.stderr | str starts-with "error: attribute 'b' missing")
+    "json-log-path: stderr stays text" $"stderr '($jo.stderr | str substring 0..200)'"))
+
   # --- nix build: the out-link prefix, the printed paths and the link target
   mut got = {}
   for who in [real ours] {
