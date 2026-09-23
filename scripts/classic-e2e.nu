@@ -58,6 +58,23 @@ def cmp-record [label: string, code: string, r: record]: nothing -> bool {
   }
 }
 
+# The structure of a build's activity records: the starts and stops of the
+# daemon worker's realise, builds and copy-paths activities and of each
+# build, in order, and which result types each activity type got. Ids,
+# timings, texts, the substituter queries and ietsp's own upload ("copying N
+# paths", which has a text) are left out.
+def act-shape [stderr: string]: nothing -> record {
+  let recs = ($stderr | lines | where ($it | str starts-with "@nix ") | each { str substring 5.. | from json })
+  let kept = ($recs | where {|r| $r.action == "start" and $r.type in [102 103 104 105] and ($r.type == 105 or $r.text == "") })
+  let ty = ($kept | reduce -f {} {|a, m| $m | insert ($a.id | into string) $a.type })
+  let ids = ($ty | columns)
+  let mine = ($recs | where {|r| ($r.id? | default "" | into string) in $ids })
+  {
+    order: ($mine | where action in [start stop] | each {|r| $"($r.action) ($ty | get ($r.id | into string))" })
+    results: ($mine | where action == result | each {|r| $"($ty | get ($r.id | into string))/($r.type)" } | uniq | sort)
+  }
+}
+
 # `env` output is only comparable without the variables that legitimately
 # differ: the per-run temporary directory, bash's own bookkeeping, the prompt.
 const ENV_SKIP = '^(NIX_BUILD_TOP|TMPDIR|TMP|TEMP|TEMPDIR|NIX_ATTRS_SH_FILE|NIX_ATTRS_JSON_FILE|__[A-Za-z_]*|SHLVL|_|PWD|OLDPWD|PS1)='
@@ -377,6 +394,36 @@ def main [] {
   $ok = ($ok | append (verdict ($fa.exit_code == 102 and (open --raw $"($d)/fix/default.nix" | str contains "AAAAAAAA"))
     "ietsp build without a terminal: fix-hashes asks nobody, the file stays" $"exit ($fa.exit_code)"))
 
+  # --- activity records: a build's stream has the shape of Nix's, and nom reads it
+  let act = {|| 'derivation { name = "classic-e2e-act"; system = "x86_64-linux"; builder = "/bin/sh"; args = [ "-c" "echo top; echo $0 > $out" (derivation { name = "classic-e2e-act-dep"; system = "x86_64-linux"; builder = "/bin/sh"; args = [ "-c" "echo dep; echo x > $out" ]; salt = "SALT"; }) ]; }' | str replace SALT (random uuid) }
+  mut streams = []
+  for cmd in [[nix-build --no-out-link -E] [nix build --no-link --expr]] {
+    let run = {|bin| ^$bin --log-format internal-json ...($cmd | skip 1) (do $act) | complete }
+    let o = (do $run $"($farm)/($cmd.0)")
+    let r = (do $run $cmd.0)
+    let a = (act-shape $r.stderr)
+    let b = (act-shape $o.stderr)
+    $ok = ($ok | append (verdict ($o.exit_code == 0 and $r.exit_code == 0 and $a == $b and ($a.order | length) > 0)
+      $"internal-json: ($cmd | take 2 | str join ' ') activity records match Nix's" $"exit ours=($o.exit_code) real=($r.exit_code)\n  real: ($a | to json -r)\n  ours: ($b | to json -r)"))
+    $streams = ($streams | append $o.stderr)
+  }
+  let nom = (^nix build --no-link --print-out-paths -f $np nix-output-monitor | complete)
+  let seen = if $nom.exit_code == 0 {
+    $streams | each {|s| $s | ^$"($nom.stdout | chomp)/bin/nom" --json | complete | get stderr | ansi strip }
+  } else { [$"cannot build nom: ($nom.stderr | str substring 0..400)"] }
+  for s in $seen {
+    $ok = ($ok | append (verdict ((not ($s | str contains "nix-output-monitor error")) and ($s | str contains "classic-e2e-act-dep") and ($s | str contains "Finished at"))
+      "nom --json reads ietsp's activity records" $"nom said '($s | str substring (-600)..)'"))
+  }
+
+  # --- ietsp build --dry-run: nix build --dry-run's text, and the same sets as JSON
+  let dry = (do $act)
+  let dr = (^nix build --dry-run --expr $dry | complete)
+  let dj = (^$ietsp build --dry-run --json -E $dry | complete)
+  let plan = ($dj.stdout | from json)
+  $ok = ($ok | append (verdict ($dj.exit_code == 0 and $dj.stderr == $dr.stderr and ($plan.willBuild | length) == 2 and ($dr.stderr | str contains ($plan.willBuild | str join "\n  ")))
+    "ietsp build --dry-run: nix build --dry-run's text, and the plan as JSON" $"exit ($dj.exit_code)\n  real: ($dr.stderr)\n  ours: ($dj.stderr)\n  json: ($dj.stdout)"))
+
   # --- json-log-path: stderr stays text, the file gets the same records unprefixed
   let jlog = {|f| {stderr: (open --raw $f | lines | each {|l| $"@nix ($l)" } | str join "\n")} }
   let jo = (^$"($farm)/nix" eval --option json-log-path $"($d)/jlog-ours" --expr "{ a = 1; }.b" | complete)
@@ -386,6 +433,10 @@ def main [] {
      real: ({exit_code: $jr.exit_code} | merge (do $jlog $"($d)/jlog-real"))}))
   $ok = ($ok | append (verdict ($jo.stderr | str starts-with "error: attribute 'b' missing")
     "json-log-path: stderr stays text" $"stderr '($jo.stderr | str substring 0..200)'"))
+  let jb = (^$ietsp build --json-log-path $"($d)/jlog-build" -E (do $act) | complete)
+  let jrecs = (open --raw $"($d)/jlog-build" | lines | each { from json })
+  $ok = ($ok | append (verdict ($jb.exit_code == 0 and ($jrecs | where {|r| $r.action == "start" and $r.type? == 105 } | length) == 2 and not ($jb.stderr | str contains "@nix"))
+    "json-log-path: the file gets a build's activity records, stderr stays text" $"exit ($jb.exit_code), stderr '($jb.stderr | str substring 0..300)'"))
 
   # --- nix build: the out-link prefix, the printed paths and the link target
   mut got = {}
