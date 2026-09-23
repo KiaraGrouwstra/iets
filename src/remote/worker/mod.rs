@@ -10,6 +10,8 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
+use serde_json::Value;
+
 use super::event::{Event, Failed, Log, Phase, Started, Stopped};
 use crate::config::Config;
 use crate::error::{Error, Result};
@@ -88,11 +90,9 @@ enum Op {
     BuildPathsWithResults = 46,
 }
 
-/// logging.hh:ActivityType and ResultType, the ones that carry build output.
-const ACT_BUILD: u64 = 105;
-const RES_BUILD_LOG_LINE: u64 = 101;
+use crate::log::{ACT_BUILD, RES_BUILD_LOG_LINE, RES_SET_PHASE};
+/// logging.hh:resPostBuildLogLine.
 const RES_POST_BUILD_LOG_LINE: u64 = 107;
-const RES_SET_PHASE: u64 = 104;
 
 /// error.hh:Verbosity.
 const LVL_INFO: u64 = 3;
@@ -270,6 +270,8 @@ pub struct Connection {
     /// `parents` follows a nested activity back to the build it belongs to.
     activities: HashMap<u64, String>,
     parents: HashMap<u64, u64>,
+    /// The daemon's activity ids to the ones this process logs them under.
+    ids: HashMap<u64, u64>,
 }
 
 impl Drop for Connection {
@@ -361,6 +363,7 @@ impl Connection {
             stats: Stats::default(),
             activities: HashMap::new(),
             parents: HashMap::new(),
+            ids: HashMap::new(),
         };
         conn.handshake()?;
         conn.process_stderr(on_event)?;
@@ -480,13 +483,21 @@ impl Connection {
                 }
                 STDERR_START_ACTIVITY => {
                     let act = read_u64(self.r())?;
-                    let _lvl = read_u64(self.r())?;
+                    let lvl = read_u64(self.r())?;
                     let ty = read_u64(self.r())?;
-                    let _s = read_str(self.r())?;
+                    let s = read_str(self.r())?;
                     let fields = self.read_fields()?;
                     let parent = read_u64(self.r())?;
+                    // worker-protocol-connection.cc:processStderr hands these to
+                    // the client's logger; fresh ids keep two connections apart
+                    if crate::log::activities() {
+                        let id = crate::log::activity_id();
+                        self.ids.insert(act, id);
+                        let up = self.ids.get(&parent).copied().unwrap_or(0);
+                        crate::log::start(id, lvl, ty, &s, fields.clone(), up);
+                    }
                     if ty == ACT_BUILD
-                        && let Some(Field::Str(drv)) = fields.first()
+                        && let Some(Value::String(drv)) = fields.first()
                     {
                         self.activities.insert(act, drv.clone());
                         on_event(Event::Started(Started {
@@ -501,6 +512,9 @@ impl Connection {
                 }
                 STDERR_STOP_ACTIVITY => {
                     let act = read_u64(self.r())?;
+                    if let Some(id) = self.ids.remove(&act) {
+                        crate::log::stop(id);
+                    }
                     self.parents.remove(&act);
                     if let Some(drv) = self.activities.remove(&act) {
                         on_event(Event::Stopped(Stopped { drv_path: drv }));
@@ -510,8 +524,11 @@ impl Connection {
                     let act = read_u64(self.r())?;
                     let ty = read_u64(self.r())?;
                     let fields = self.read_fields()?;
+                    if let Some(&id) = self.ids.get(&act) {
+                        crate::log::result(id, ty, fields.clone());
+                    }
                     if matches!(ty, RES_BUILD_LOG_LINE | RES_POST_BUILD_LOG_LINE)
-                        && let Some(Field::Str(line)) = fields.first()
+                        && let Some(Value::String(line)) = fields.first()
                     {
                         on_event(Event::Log(Log {
                             drv_path: self.build_of(act).unwrap_or_default(),
@@ -519,7 +536,7 @@ impl Connection {
                         }));
                     }
                     if ty == RES_SET_PHASE
-                        && let Some(Field::Str(phase)) = fields.first()
+                        && let Some(Value::String(phase)) = fields.first()
                         && let Some(drv) = self.build_of(act)
                     {
                         on_event(Event::Phase(Phase {
@@ -561,16 +578,13 @@ impl Connection {
     }
 
     /// worker-protocol-connection.cc:readFields.
-    fn read_fields(&mut self) -> Result<Vec<Field>> {
+    fn read_fields(&mut self) -> Result<Vec<Value>> {
         let n = read_u64(self.r())?;
         let mut fields = Vec::with_capacity(n.min(16) as usize);
         for _ in 0..n {
             let f = match read_u64(self.r())? {
-                0 => {
-                    read_u64(self.r())?;
-                    Field::Int
-                }
-                1 => Field::Str(read_str(self.r())?),
+                0 => read_u64(self.r())?.into(),
+                1 => read_str(self.r())?.into(),
                 t => {
                     return Err(Error::Protocol(format!(
                         "got unsupported field type {t:#x} from Nix daemon"
@@ -819,11 +833,6 @@ pub fn replace_symlink(target: &str, link: &Path) -> io::Result<()> {
         });
     }
     unreachable!()
-}
-
-enum Field {
-    Int,
-    Str(String),
 }
 
 pub fn failed_event(drv_path: &str, reason: &str) -> Event {
