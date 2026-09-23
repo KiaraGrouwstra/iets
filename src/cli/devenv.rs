@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::cli::{EvalArgs, Input, abs_path, cwd, evaluate, parse_eval_args, report, usage};
+use crate::cli::help::{arg_error, value};
+use crate::cli::{EvalArgs, Input, abs_path, cwd, evaluate, parse_eval_args, report};
 use crate::error::Error as CrateError;
 use crate::eval::{Error, Evaluator, Pos};
 use crate::store::locate::{drv_roots, locate_in_store};
@@ -70,19 +71,22 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
     let mut flake: Option<String> = None;
     let mut i = 0;
     while i < argv.len() {
-        match argv[i].as_str() {
-            "--builder" => {
-                i += 1;
-                url = Some(argv.get(i).cloned().unwrap_or_else(|| usage()));
-            }
-            "--gc-root" => {
-                i += 1;
-                gc_root = Some(argv.get(i).cloned().unwrap_or_else(|| usage()));
+        let s = argv[i].as_str();
+        let mut next = || {
+            i += 1;
+            value(argv, i, s).clone()
+        };
+        match s {
+            "--builder" => url = Some(next()),
+            "--gc-root" => gc_root = Some(next()),
+            "--workers" | "--cache-dir" | "-I" | "--include" => {
+                let v = next();
+                rest.extend([s.to_string(), v]);
             }
             s if s.starts_with('-') => rest.push(s.to_string()),
             s => {
-                if flake.replace(s.to_string()).is_some() {
-                    usage()
+                if let Some(old) = flake.replace(s.to_string()) {
+                    arg_error(format!("one FLAKEREF only, got '{old}' and '{s}'"))
                 }
             }
         }
@@ -337,7 +341,7 @@ fn dev_env_build(ev: &mut Evaluator, a: EvalArgs, d: &DevEnvArgs) -> Result<DevE
     let timings = a.timings;
     let f = match &a.input {
         Some(Input::Flake(f)) => f.clone(),
-        _ => usage(),
+        _ => arg_error("print-dev-env needs a FLAKEREF"),
     };
     let (loc, frag) = f.split_once('#').unwrap_or((f.as_str(), ""));
     let candidates = devenv::attr_paths(frag, ev.current_system);

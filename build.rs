@@ -41,5 +41,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let id: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
     println!("cargo:rustc-env=IETSP_BUILD_ID={id}");
+    let version = std::env::var("CARGO_PKG_VERSION")?;
+    println!(
+        "cargo:rustc-env=IETSP_VERSION=ietsp {version} ({})",
+        git_rev()
+    );
     Ok(())
+}
+
+/// For `ietsp --version`: the flake sets IETSP_GIT_REV, because its source
+/// tree has no .git; a cargo build in a checkout asks git.
+fn git_rev() -> String {
+    println!("cargo:rerun-if-env-changed=IETSP_GIT_REV");
+    if let Ok(rev) = std::env::var("IETSP_GIT_REV") {
+        return rev;
+    }
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git").args(args).output().ok()?;
+        let s = String::from_utf8(out.stdout).ok()?;
+        (out.status.success() && !s.trim().is_empty()).then(|| s.trim().to_string())
+    };
+    if let Some(log) = git(&["rev-parse", "--git-path", "logs/HEAD"])
+        && Path::new(&log).exists()
+    {
+        println!("cargo:rerun-if-changed={log}");
+    }
+    git(&["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "unknown".into())
 }

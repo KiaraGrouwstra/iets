@@ -100,8 +100,8 @@ Around it:
   `cli`; `examples/` holds three of them (`docs/library.md`).
 - `main.rs` and `cli/`: the command line on top of `api`: `ietsp eval`,
   `build`, `eval-jobs`, `fast-build`, `print-dev-env`, `parse`,
-  `cache-dump`, `cache gc`, and the classic names (`cli/classic/`,
-  `docs/classic.md`).
+  `lint`, `cache gc`, `cache dump`, the help texts (`cli/help.rs`), and
+  the classic names (`cli/classic/`, `docs/classic.md`).
 
 ## Value model
 

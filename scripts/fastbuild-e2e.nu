@@ -15,7 +15,8 @@
 # 5. --fail-fast: the attributes after the failure are reported skipped.
 # 6. --stream-json-lines: every line on stdout parses as JSON.
 # 7. --systems with a system nothing is built for: no build.
-# 8. the flags nix-fast-build has and ietsp refuses, and an unknown flag.
+# 8. the flags nix-fast-build has and ietsp refuses, and an unknown flag
+#    (an error here, a fallback under the classic name).
 # 9. the same flake through the real nix-fast-build, comparing the JSON
 #    result file's attributes and per-attribute outcomes (not timings).
 #    Skipped with a note when nix-fast-build is not available.
@@ -125,10 +126,12 @@ def main [] {
   }
   let rr = (go $ietsp fast-build --remote host --flake $target)
   $ok = ($ok | append (verdict (($rr.exit_code == 1) and ($rr.stderr =~ 'not supported')) "--remote is refused" $rr.stderr))
-  # An unknown flag falls back to the real nix-fast-build; with
-  # IETSP_NO_FALLBACK=1 the fallback is visible without running it.
-  let ru = (with-env {IETSP_NO_FALLBACK: "1"} { go $ietsp fast-build --nonsense })
-  $ok = ($ok | append (verdict ($ru.stderr =~ 'falling back to nix-fast-build') "an unknown flag falls back" $ru.stderr))
+  # An unknown flag is an error for `ietsp fast-build`. Under the classic
+  # name it falls back to the real nix-fast-build; IETSP_NO_FALLBACK=1 shows it.
+  let ru = (go $ietsp fast-build --nonsense)
+  $ok = ($ok | append (verdict (($ru.exit_code == 2) and ($ru.stderr =~ "unknown flag '--nonsense'")) "an unknown flag is an error" $ru.stderr))
+  let rc = (with-env {IETSP_NO_FALLBACK: "1"} { go $ietsp nix-fast-build --nonsense })
+  $ok = ($ok | append (verdict ($rc.stderr =~ 'falling back to nix-fast-build') "under the classic name it falls back" $rc.stderr))
 
   # --- 9. the nixpkgs-free packages set, and --file mode with -A
   print "== 9. --flake #packages and --file -A"

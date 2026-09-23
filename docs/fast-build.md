@@ -69,11 +69,12 @@ Smaller differences:
   `▶ building checks.x86_64-linux.foo (pkgs/foo.nix:12:5)`. That comes
   from the `pos` key `ietsp eval-jobs --provenance` adds
   (`docs/provenance.md`); nix-eval-jobs has no such key.
-- An unknown flag is not an error. `nix-fast-build` is a real binary on
-  many hosts, so an unknown flag falls back to it with
-  `nixbin::real("nix-fast-build")`, exactly as classic mode falls back
-  (`docs/classic.md`). A missing feature degrades instead of breaking a
-  pipeline.
+- An unknown flag is an error for `ietsp fast-build`, with a suggestion
+  when it is close to a known one. Under the classic name it is not:
+  `nix-fast-build` is a real binary on many hosts, so an unknown flag
+  falls back to it with `nixbin::real("nix-fast-build")`, exactly as
+  classic mode falls back (`docs/classic.md`). A missing feature degrades
+  instead of breaking a pipeline.
 
 ## Flag coverage
 
@@ -215,12 +216,13 @@ are the same. A flag ietsp does not know falls back to the real
 
 ## Tests
 
-`scripts/fastbuild-e2e.nu` (34 cases, 36 with `nix-fast-build` on `PATH`). A flake with four `checks` per
+`scripts/fastbuild-e2e.nu` (35 cases, 37 with `nix-fast-build` on `PATH`). A flake with four `checks` per
 system and no nixpkgs, built against the local daemon: the exit code, the
 failing attribute named, the failure log tail, the dependent check built,
 the JSON and JUnit result files, `--out-link`, `--fail-fast`,
 `--stream-json-lines`, `--systems` with no match, every refused flag, the
-fallback on an unknown flag, the nixpkgs-free `packages` set, and `--file`
+unknown flag (an error, and a fallback under the classic name), the
+nixpkgs-free `packages` set, and `--file`
 mode with `-A`. Case 10 runs the same flake through the
 real `nix-fast-build` and compares the JSON result file's attributes and
 per-attribute outcomes, not timings; it is skipped with a note when

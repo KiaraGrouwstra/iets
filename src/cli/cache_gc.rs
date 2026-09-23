@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use crate::cachefs;
+use crate::cli::help::{arg_error, unknown_flag, value};
 
 /// `ietsp cache gc [--ttl DAYS] [--dry-run] [--cache-dir DIR]`. Entries unread
 /// for longer than the TTL go; a swept tracing entry simply misses next time.
@@ -12,33 +13,22 @@ pub fn cmd_cache_gc(argv: &[String]) -> i32 {
     let mut cache_dir: Option<String> = None;
     let mut i = 0;
     while i < argv.len() {
-        match argv[i].as_str() {
+        let s = argv[i].as_str();
+        match s {
             "--dry-run" | "-n" => dry_run = true,
             "--ttl" => {
                 i += 1;
-                match argv.get(i).and_then(|v| v.parse().ok()) {
-                    Some(d) => ttl_days = d,
-                    None => {
-                        eprintln!("error: --ttl wants a number of days");
-                        return 2;
-                    }
-                }
+                let v = value(argv, i, s);
+                ttl_days = v.parse().unwrap_or_else(|_| {
+                    arg_error(format!("--ttl wants a number of days, got '{v}'"))
+                });
             }
             "--cache-dir" => {
                 i += 1;
-                match argv.get(i) {
-                    Some(d) => cache_dir = Some(d.clone()),
-                    None => {
-                        eprintln!("error: --cache-dir wants a directory");
-                        return 2;
-                    }
-                }
+                cache_dir = Some(value(argv, i, s).clone());
             }
-            s => {
-                eprintln!("error: unknown flag '{s}'");
-                eprintln!("usage: ietsp cache gc [--ttl DAYS] [--dry-run] [--cache-dir DIR]");
-                return 2;
-            }
+            s if s.starts_with('-') => unknown_flag(s),
+            s => arg_error(format!("unexpected argument '{s}'")),
         }
         i += 1;
     }

@@ -4,6 +4,22 @@ use crate::syntax::ast::FileId;
 use crate::syntax::symbol::Interner;
 use crate::syntax::{dump, line_col, parse};
 
+/// `ietsp parse [-q] FILE...`; a lone `-` reads the list of files from stdin.
+pub fn main(argv: &[String]) -> i32 {
+    let quiet = argv.first().is_some_and(|s| s == "-q");
+    let files = &argv[usize::from(quiet)..];
+    let files: Vec<String> = match files {
+        [] => crate::cli::help::arg_error("parse needs FILE... or - to read them from stdin"),
+        [dash] if dash == "-" => std::io::read_to_string(std::io::stdin())
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect(),
+        _ => files.to_vec(),
+    };
+    cmd_parse(&files, quiet)
+}
+
 /// With `-q`, parse every file, report errors, and print totals. Used to
 /// check and time the parser on whole trees such as nixpkgs.
 pub fn cmd_parse(files: &[String], quiet: bool) -> i32 {
@@ -15,7 +31,7 @@ pub fn cmd_parse(files: &[String], quiet: bool) -> i32 {
         let src = match std::fs::read(file) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("error: cannot read {file}: {e}");
+                eprintln!("error: cannot read {file}: {}", crate::error::io_text(&e));
                 errors += 1;
                 continue;
             }

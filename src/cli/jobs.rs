@@ -2,9 +2,8 @@
 
 use std::process::exit;
 
-use crate::cli::{
-    EvalArgs, Input, abs_path, auto_args, cwd, evaluate, parse_eval_args, report, usage,
-};
+use crate::cli::help::{arg_error, value};
+use crate::cli::{EvalArgs, Input, abs_path, auto_args, cwd, evaluate, parse_eval_args, report};
 use crate::error::Error as CrateError;
 use crate::eval::{Error, Evaluator, Pos};
 use crate::runtime::Word;
@@ -63,9 +62,13 @@ fn parse_jobs_args(argv: &[String]) -> (JobsArgs, Vec<String>) {
     let mut i = 0;
     let arg = |i: &mut usize| -> String {
         *i += 1;
-        argv.get(*i).cloned().unwrap_or_else(|| usage())
+        value(argv, *i, &argv[*i - 1]).clone()
     };
-    let num = |i: &mut usize| -> u64 { arg(i).parse().unwrap_or_else(|_| usage()) };
+    let num = |i: &mut usize| -> u64 {
+        let v = arg(i);
+        v.parse()
+            .unwrap_or_else(|_| arg_error(format!("{} wants a number, got '{v}'", argv[*i - 1])))
+    };
     let unsupported = |flag: &str, why: &str| -> ! {
         eprintln!("error: {flag} is not supported by ietsp: {why} (docs/eval-jobs.md)");
         exit(1)
@@ -125,7 +128,7 @@ fn parse_jobs_args(argv: &[String]) -> (JobsArgs, Vec<String>) {
                 let name = arg(&mut i);
                 let path = arg(&mut i);
                 let contents = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-                    eprintln!("error: cannot read '{path}': {e}");
+                    eprintln!("error: cannot read '{path}': {}", crate::error::io_text(&e));
                     exit(1)
                 });
                 rest.extend(["--argstr".to_string(), name, contents]);
@@ -133,7 +136,7 @@ fn parse_jobs_args(argv: &[String]) -> (JobsArgs, Vec<String>) {
             "--arg-from-stdin" => {
                 let name = arg(&mut i);
                 let contents = std::io::read_to_string(std::io::stdin()).unwrap_or_else(|e| {
-                    eprintln!("error: cannot read stdin: {e}");
+                    eprintln!("error: cannot read stdin: {}", crate::error::io_text(&e));
                     exit(1)
                 });
                 rest.extend(["--argstr".to_string(), name.clone(), contents.clone()]);
@@ -323,6 +326,14 @@ fn jobs_summary(
             format!("peak RSS {} MB", crate::jobs::collector::peak_rss_mb())
         }
     );
+    if stats.jobs + stats.errors == 0 && j.opts.chunks == 1 {
+        s.push_str("\nhint: the root has no derivations");
+        if !j.opts.force_recurse {
+            s.push_str(
+                "; a nested set counts with recurseForDerivations = true or --force-recurse",
+            );
+        }
+    }
     if let Some(i) = inst {
         s.push_str(&format!(
             "\ninstantiate: {} batches, {} paths queried, {} added ({} MB), {} roots, {:.3}s",

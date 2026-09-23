@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::cli::{EvalArgs, Input, build_targets, evaluate, parse_eval_args, report, usage};
+use crate::cli::help::{arg_error, value};
+use crate::cli::{EvalArgs, Input, build_targets, evaluate, parse_eval_args, report};
 use crate::error::Error as CrateError;
 use crate::eval::Evaluator;
 use crate::store::locate::{drv_roots, locate_in_store};
@@ -32,30 +33,23 @@ pub fn cmd_build(argv: &[String]) -> i32 {
     let mut rest: Vec<String> = Vec::new();
     let mut i = 0;
     while i < argv.len() {
-        match argv[i].as_str() {
-            "--builder" => {
-                i += 1;
-                b.url = Some(argv.get(i).cloned().unwrap_or_else(|| usage()));
-            }
+        let s = argv[i].as_str();
+        let mut next = || {
+            i += 1;
+            value(argv, i, s).clone()
+        };
+        match s {
+            "--builder" => b.url = Some(next()),
             "--timings" => b.timings = true,
             "--no-build" => b.no_build = true,
-            "--fetch-to" => {
-                i += 1;
-                b.fetch_to = Some(std::path::PathBuf::from(
-                    argv.get(i).cloned().unwrap_or_else(|| usage()),
-                ));
-            }
-            "--out" => {
-                i += 1;
-                b.outputs
-                    .push(argv.get(i).cloned().unwrap_or_else(|| usage()));
-            }
+            "--fetch-to" => b.fetch_to = Some(next().into()),
+            "--out" => b.outputs.push(next()),
             "--source" => {
-                i += 1;
-                let spec = argv.get(i).unwrap_or_else(|| usage());
-                let (store, local) = spec.split_once('=').unwrap_or_else(|| usage());
-                b.sources
-                    .insert(store.to_string(), std::path::PathBuf::from(local));
+                let spec = next();
+                let Some((store, local)) = spec.split_once('=') else {
+                    arg_error(format!("--source wants STOREPATH=LOCAL, got '{spec}'"))
+                };
+                b.sources.insert(store.to_string(), local.into());
             }
             s => rest.push(s.to_string()),
         }

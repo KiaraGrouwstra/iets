@@ -7,6 +7,7 @@ the test scripts are listed there.
 ```
 nix develop -c cargo build --release
 ./target/release/ietsp eval --strict -E '1 + 1'
+./target/release/ietsp --help   # the commands; ietsp COMMAND --help for its flags
 nix flake check   # test, clippy, fmt, examples, langtests, partest, module
 scripts/difftest.nu -I nixpkgs=/path -E '(import <nixpkgs> {}).hello.drvPath'
 bench/run.nu nixos-desktop

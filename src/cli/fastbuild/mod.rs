@@ -66,7 +66,19 @@ pub fn cmd_fast_build(argv: &[String]) -> i32 {
             eprintln!("error: {m}");
             return 1;
         }
-        Err(Reject::Unknown(m)) => crate::cli::classic::fallback(NAME, argv, &m),
+        Err(r) => {
+            let native = crate::cli::help::command().is_some();
+            match r {
+                Reject::Flag(f) if native => crate::cli::help::unknown_flag(&f),
+                Reject::Flag(f) => {
+                    crate::cli::classic::fallback(NAME, argv, &format!("'{f}' is not implemented"))
+                }
+                Reject::Unknown(m) if native => crate::cli::help::arg_error(m),
+                Reject::Unknown(m) | Reject::Refuse(m) => {
+                    crate::cli::classic::fallback(NAME, argv, &m)
+                }
+            }
+        }
     };
     match run(a) {
         Ok(code) => code,

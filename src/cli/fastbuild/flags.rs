@@ -2,8 +2,8 @@
 //! nix-fast-build's (options.py). Three classes of flag: the ones ietsp
 //! implements, the ones it accepts and ignores, and the ones it refuses
 //! because the feature is not its job. Anything else is not a flag ietsp
-//! knows, so the run falls back to the real `nix-fast-build`, the way
-//! classic mode falls back (docs/fast-build.md).
+//! knows: `nix-fast-build` falls back to the real one, the way classic
+//! mode falls back; `ietsp fast-build` is an error (docs/fast-build.md).
 
 use crate::cli::ArgKind;
 
@@ -87,8 +87,11 @@ impl Default for Args {
 pub enum Reject {
     /// A feature ietsp will not grow; the run stops.
     Refuse(String),
-    /// Not a flag ietsp knows; the run falls back to the real binary.
+    /// Not a command line ietsp runs: `nix-fast-build` falls back to the
+    /// real binary, `ietsp fast-build` reports it.
     Unknown(String),
+    /// A flag ietsp does not know, handled the same way.
+    Flag(String),
 }
 
 /// The uploaders nix-fast-build has and ietsp does not: pushing to a binary
@@ -252,7 +255,7 @@ pub fn parse(argv: &[String]) -> Result<Args, Reject> {
                     "--reference-lock-file is not supported by ietsp fast-build: ietsp reads the flake's own flake.lock only".into(),
                 ));
             }
-            other => return Err(Reject::Unknown(format!("'{other}' is not implemented"))),
+            other => return Err(Reject::Flag(other.to_string())),
         }
         i += 1;
     }
@@ -288,7 +291,7 @@ mod tests {
     fn args(v: &[&str]) -> Args {
         match parse(&v.iter().map(|s| s.to_string()).collect::<Vec<_>>()) {
             Ok(a) => a,
-            Err(Reject::Refuse(m)) | Err(Reject::Unknown(m)) => panic!("{m}"),
+            Err(Reject::Refuse(m) | Reject::Unknown(m) | Reject::Flag(m)) => panic!("{m}"),
         }
     }
 
@@ -366,7 +369,7 @@ mod tests {
             reject(&["--override-input", "nixpkgs", "x"]),
             Reject::Refuse(_)
         ));
-        assert!(matches!(reject(&["--what"]), Reject::Unknown(_)));
+        assert!(matches!(reject(&["--what"]), Reject::Flag(_)));
         assert!(matches!(reject(&["--flake"]), Reject::Unknown(_)));
     }
 

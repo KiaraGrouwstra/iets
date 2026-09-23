@@ -1,6 +1,6 @@
 use std::process::exit;
 
-use ietsp::cli;
+use ietsp::cli::{self, help};
 
 const STACK_SIZE: usize = 4 << 30;
 
@@ -51,51 +51,57 @@ fn main() {
         exit(on_big_stack(move || cli::classic::dispatch(&name, &argv)))
     }
     let Some(cmd) = argv.first() else {
-        cli::usage()
+        eprint!("{}", help::OVERVIEW);
+        exit(2)
     };
     if cli::classic::NAMES.contains(&cmd.as_str()) {
         let name = cmd.clone();
         let rest: Vec<String> = argv[1..].to_vec();
         exit(on_big_stack(move || cli::classic::dispatch(&name, &rest)))
     }
-    match cmd.as_str() {
-        "build" | "eval" | "eval-jobs" | "print-dev-env" | "fast-build" => {
-            let rest: Vec<String> = argv[1..].to_vec();
-            let cmd = cmd.clone();
-            let code = std::thread::Builder::new()
-                .stack_size(STACK_SIZE)
-                .spawn(move || match cmd.as_str() {
-                    "build" => cli::build::cmd_build(&rest),
-                    "eval-jobs" => cli::jobs::cmd_eval_jobs(&rest),
-                    "fast-build" => cli::fastbuild::cmd_fast_build(&rest),
-                    "print-dev-env" => cli::devenv::cmd_print_dev_env(&rest),
-                    _ => cli::eval::run_eval(cli::parse_eval_args(&rest)),
-                })
-                .expect("spawn evaluator thread")
-                .join()
-                .unwrap_or(1);
-            exit(code)
+    let mut rest: Vec<String> = argv[1..].to_vec();
+    help::set_command("ietsp");
+    let cmd = match cmd.as_str() {
+        "--help" | "-h" | "help" => help::help(rest.first().map(String::as_str)),
+        "--version" | "version" => {
+            println!(env!("IETSP_VERSION"));
+            exit(0)
         }
-        "cache-dump" if argv.len() == 2 => exit(cli::cache_dump::cmd_cache_dump(&argv[1])),
-        "cache" if argv.get(1).is_some_and(|s| s == "gc") => {
-            exit(cli::cache_gc::cmd_cache_gc(&argv[2..]))
+        "cache-dump" => {
+            rest.insert(0, "dump".into());
+            "cache"
         }
-        "lint" => exit(cli::cmd_lint(&argv[1..])),
-        "parse" if argv.len() > 1 => {
-            let rest = &argv[1..];
-            let quiet = rest[0] == "-q";
-            let files = if quiet { &rest[1..] } else { rest };
-            let files: Vec<String> = if files == ["-"] {
-                std::io::read_to_string(std::io::stdin())
-                    .unwrap_or_default()
-                    .lines()
-                    .map(str::to_owned)
-                    .collect()
-            } else {
-                files.to_vec()
-            };
-            exit(cli::parse::cmd_parse(&files, quiet))
+        c => c,
+    };
+    let Some(name) = help::COMMANDS.split(' ').find(|c| *c == cmd) else {
+        if cmd.starts_with('-') {
+            help::unknown_flag(cmd)
         }
-        _ => cli::usage(),
+        help::unknown_command(cmd)
+    };
+    help::set_command(name);
+    if rest.iter().any(|a| a == "--help" || a == "-h") {
+        help::help(Some(name))
     }
+    let code = match name {
+        "lint" => cli::cmd_lint(&rest),
+        "parse" => cli::parse::main(&rest),
+        "cache" => match rest.first().map(String::as_str) {
+            Some("gc") => cli::cache_gc::cmd_cache_gc(&rest[1..]),
+            Some("dump") => match &rest[1..] {
+                [file] => cli::cache_dump::cmd_cache_dump(file),
+                [] => help::arg_error("cache dump needs a READSET file"),
+                [_, extra, ..] => help::arg_error(format!("unexpected argument '{extra}'")),
+            },
+            w => help::unknown_subcommand(w, &["gc", "dump"]),
+        },
+        _ => on_big_stack(move || match name {
+            "build" => cli::build::cmd_build(&rest),
+            "eval-jobs" => cli::jobs::cmd_eval_jobs(&rest),
+            "fast-build" => cli::fastbuild::cmd_fast_build(&rest),
+            "print-dev-env" => cli::devenv::cmd_print_dev_env(&rest),
+            _ => cli::eval::run_eval(cli::parse_eval_args(&rest)),
+        }),
+    };
+    exit(code)
 }

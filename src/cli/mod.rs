@@ -9,10 +9,11 @@ pub mod classic;
 pub mod devenv;
 pub mod eval;
 pub mod fastbuild;
+pub mod help;
 pub mod jobs;
 pub mod parse;
 
-use std::process::exit;
+use help::{arg_error, value};
 
 use crate::eval::{Error, Evaluator};
 use crate::runtime::Word;
@@ -21,13 +22,6 @@ pub use crate::api::{
     ArgKind, EvalArgs, Input, abs_path, auto_args, build_targets, configure_lints, cwd, flake_ref,
     full_includes, parse_include, report, setup_cache,
 };
-
-pub fn usage() -> ! {
-    eprintln!(
-        "usage: ietsp eval [--strict] [--json] [--raw] [--workers N] [--timings] [--no-cache] [--no-ir-cache] [--cache-dir DIR] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] [--dump-drvs DIR] [--lint NAME=LEVEL]... [--lint-root DIR]... [--lint-scope root|all] (-E EXPR | FILE)\n       ietsp lint list [--lint NAME=LEVEL]... [--lint-root DIR]... [--lint-scope root|all] [PATH]   (the lint registry with effective levels; docs/lints.md)\n       ietsp parse [-q] FILE...   (FILE may be - to read a list from stdin)\n       ietsp cache-dump READSET   (print a cache entry's read set)\n       ietsp cache gc [--ttl DAYS] [--dry-run] [--cache-dir DIR]   (sweep old cache entries)\n       ietsp build [--builder URL] [--timings] [--no-build] [--fetch-to DIR] [--no-cache] [--cache-dir DIR] [--out NAME]... [--workers N] [-I prefix=path]... [--arg name expr] [--argstr name str] [-A attr] (-E EXPR | FILE)\n       ietsp build [--builder URL] [--timings] [--fetch-to DIR] [--out NAME]... [--source STOREPATH=LOCAL]... DRV\n       ietsp eval-jobs [--workers N] [--force-recurse] [--meta] [--provenance] [--show-input-drvs] [--chunks M --chunk N [--chunk-depth D]] [--max-memory-size MB (0: one process)] [-I prefix=path]... [--arg name expr] [--argstr name str] (-E EXPR | FILE | FLAKEREF#attr)\n       ietsp fast-build [--flake FLAKEREF[#attr] | --file [FILE] [-A attr]] [--store URL] [-j N] [--systems \"a b\"] [--skip-cached] [--skip-unsupported] [--out-link PREFIX] [--retries N] [--fail-fast] [--result-file PATH] [--result-format json|junit] [--stream-json-lines] [--select EXPR]   (default: .#checks, docs/fast-build.md)\n       ietsp print-dev-env [--builder URL] [--gc-root PATH] [--json] [--workers N] [--no-cache] [--cache-dir DIR] [--timings] [FLAKEREF[#attr]]   (default: ., a daemon URL)\n       URL: daemon, unix:///path, ssh-ng://[user@]host (Nix worker protocol), grpc://host:port (nix-grpc-store); without a flag, the `builder` setting\n       every command also takes --ietsp-option NAME VALUE\n       ietsp.conf settings: docs/config.md; IETSP_* environment settings: docs/settings.md"
-    );
-    exit(2)
-}
 
 /// The `pure-eval` a flag sets (common-eval-args.cc), `None` for any other.
 pub fn pure_flag(s: &str) -> Option<bool> {
@@ -43,6 +37,10 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
     let mut i = 0;
     while i < argv.len() {
         let s = argv[i].as_str();
+        let mut next = || {
+            i += 1;
+            value(argv, i, s).clone()
+        };
         match s {
             "--strict" => a.strict = true,
             "--json" => a.json = true,
@@ -50,22 +48,14 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
             "--timings" => a.timings = true,
             "--no-cache" => a.no_cache = true,
             "--no-ir-cache" => a.no_ir_cache = true,
-            "--cache-dir" => {
-                i += 1;
-                a.cache_dir = Some(argv.get(i).unwrap_or_else(|| usage()).clone());
-            }
-            "-I" | "--include" => {
-                i += 1;
-                a.includes
-                    .push(parse_include(argv.get(i).unwrap_or_else(|| usage())));
-            }
+            "--cache-dir" => a.cache_dir = Some(next()),
+            "-I" | "--include" => a.includes.push(parse_include(&next())),
             "-E" | "--expr" => {
-                i += 1;
-                a.input = Some(Input::Expr(argv.get(i).unwrap_or_else(|| usage()).clone()));
+                let e = next();
+                set_input(&mut a, Input::Expr(e));
             }
             "--arg" | "--argstr" => {
-                let name = argv.get(i + 1).unwrap_or_else(|| usage()).clone();
-                let val = argv.get(i + 2).unwrap_or_else(|| usage()).clone();
+                let (name, val) = (next(), next());
                 a.args.push((
                     name,
                     if s == "--arg" {
@@ -74,80 +64,62 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
                         ArgKind::Str(val)
                     },
                 ));
-                i += 2;
             }
-            "-A" | "--attr" => {
-                i += 1;
-                a.attr = Some(argv.get(i).unwrap_or_else(|| usage()).clone());
-            }
-            "--dump-drvs" => {
-                i += 1;
-                a.dump_drvs = Some(argv.get(i).unwrap_or_else(|| usage()).clone());
-            }
+            "-A" | "--attr" => a.attr = Some(next()),
+            "--dump-drvs" => a.dump_drvs = Some(next()),
             "--workers" => {
-                i += 1;
-                a.workers = argv
-                    .get(i)
-                    .and_then(|v| v.parse().ok())
-                    .filter(|n| *n >= 1)
-                    .unwrap_or_else(|| usage());
+                let v = next();
+                a.workers = v.parse().ok().filter(|n| *n >= 1).unwrap_or_else(|| {
+                    arg_error(format!("--workers wants a number >= 1, got '{v}'"))
+                });
             }
             "--option" => {
-                let (Some(name), Some(v)) = (argv.get(i + 1), argv.get(i + 2)) else {
-                    usage()
-                };
+                let (name, v) = (next(), next());
                 if name == "pure-eval" {
-                    a.pure = Some(crate::config::parse_bool(name, v).unwrap_or_else(|e| {
-                        eprintln!("error: {e}");
-                        usage()
-                    }));
+                    a.pure = Some(
+                        crate::config::parse_bool(&name, &v)
+                            .unwrap_or_else(|e| arg_error(e.to_string())),
+                    );
                 }
-                i += 2;
             }
-            "--lint" => {
-                i += 1;
-                let v = argv.get(i).unwrap_or_else(|| usage());
-                a.lints.push(parse_lint_flag(v));
-            }
-            "--lint-root" => {
-                i += 1;
-                a.lint_roots
-                    .push(argv.get(i).unwrap_or_else(|| usage()).clone());
-            }
-            "--lint-scope" => {
-                i += 1;
-                a.lint_scope = Some(parse_lint_scope(argv.get(i).unwrap_or_else(|| usage())));
-            }
+            "--lint" => a.lints.push(parse_lint_flag(&next())),
+            "--lint-root" => a.lint_roots.push(next()),
+            "--lint-scope" => a.lint_scope = Some(parse_lint_scope(&next())),
             "--lint-absolute-path-literals"
             | "--lint-short-path-literals"
             | "--lint-url-literals" => {
-                i += 1;
-                let v = argv.get(i).unwrap_or_else(|| usage());
-                let Some(level) = crate::lint::Level::parse(v) else {
-                    eprintln!("error: invalid lint mode '{v}'");
-                    usage()
+                let v = next();
+                let Some(level) = crate::lint::Level::parse(&v) else {
+                    arg_error(format!("invalid lint mode '{v}'"))
                 };
                 a.lints.push((s[2..].to_string(), level));
             }
             _ if pure_flag(s).is_some() => a.pure = pure_flag(s),
             "--readonly-mode" => {}
             "--extra-experimental-features" | "--experimental-features" => {
-                i += 1;
-                let v = argv.get(i).unwrap_or_else(|| usage());
+                let v = next();
                 a.xp_features
                     .extend(v.split_whitespace().map(str::to_owned));
             }
             _ if s.starts_with("-I") && s.len() > 2 => a.includes.push(parse_include(&s[2..])),
-            _ if s.starts_with('-') && s != "-" => {
-                eprintln!("error: unknown flag '{s}'");
-                usage()
-            }
-            _ if crate::flake::is_flake_ref(s) => a.input = Some(Input::Flake(s.to_string())),
-            _ => a.input = Some(Input::File(s.to_string())),
+            _ if s.starts_with('-') && s != "-" => help::unknown_flag(s),
+            _ if crate::flake::is_flake_ref(s) => set_input(&mut a, Input::Flake(s.to_string())),
+            _ => set_input(&mut a, Input::File(s.to_string())),
         }
         i += 1;
     }
     a
+}
+
+/// The last input wins, as it did, but an expression and a file together is
+/// a mistake worth naming.
+fn set_input(a: &mut EvalArgs, input: Input) {
+    if let Some(old) = &a.input
+        && matches!(old, Input::Expr(_)) != matches!(input, Input::Expr(_))
+    {
+        arg_error("-E and FILE cannot be combined")
+    }
+    a.input = Some(input);
 }
 
 /// `--lint SELECTOR=LEVEL`: the selector is checked against the registry
@@ -155,8 +127,7 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
 pub fn parse_lint_flag(v: &str) -> (String, crate::lint::Level) {
     let mut probe = crate::lint::Config::default();
     if let Err(m) = probe.set_pair(v) {
-        eprintln!("error: --lint {v}: {m}");
-        usage()
+        arg_error(format!("--lint {v}: {m}"))
     }
     let (name, level) = v.split_once('=').expect("set_pair accepted the pair");
     (
@@ -167,38 +138,31 @@ pub fn parse_lint_flag(v: &str) -> (String, crate::lint::Level) {
 
 /// `--lint-scope root|all`.
 pub fn parse_lint_scope(v: &str) -> crate::lint::Scope {
-    crate::lint::Scope::parse(v).unwrap_or_else(|| {
-        eprintln!("error: --lint-scope {v}: use root or all");
-        usage()
-    })
+    crate::lint::Scope::parse(v)
+        .unwrap_or_else(|| arg_error(format!("--lint-scope {v}: use root or all")))
 }
 
 /// `ietsp lint list [--lint SELECTOR=LEVEL]... [--lint-root DIR]...
 /// [--lint-scope root|all] [PATH]`: the registry with the levels a run
 /// from `PATH` (default: cwd) would use.
 pub fn cmd_lint(argv: &[String]) -> i32 {
-    if argv.first().map(String::as_str) != Some("list") {
-        usage()
+    match argv.first().map(String::as_str) {
+        Some("list") => {}
+        w => help::unknown_subcommand(w, &["list"]),
     }
     let mut a = EvalArgs::new();
     let mut i = 1;
     while i < argv.len() {
-        match argv[i].as_str() {
-            "--lint" => {
-                i += 1;
-                a.lints
-                    .push(parse_lint_flag(argv.get(i).unwrap_or_else(|| usage())));
-            }
-            "--lint-root" => {
-                i += 1;
-                a.lint_roots
-                    .push(argv.get(i).unwrap_or_else(|| usage()).clone());
-            }
-            "--lint-scope" => {
-                i += 1;
-                a.lint_scope = Some(parse_lint_scope(argv.get(i).unwrap_or_else(|| usage())));
-            }
-            s if s.starts_with('-') => usage(),
+        let s = argv[i].as_str();
+        let mut next = || {
+            i += 1;
+            value(argv, i, s).clone()
+        };
+        match s {
+            "--lint" => a.lints.push(parse_lint_flag(&next())),
+            "--lint-root" => a.lint_roots.push(next()),
+            "--lint-scope" => a.lint_scope = Some(parse_lint_scope(&next())),
+            s if s.starts_with('-') => help::unknown_flag(s),
             s => a.input = Some(Input::File(s.to_string())),
         }
         i += 1;
@@ -218,7 +182,7 @@ pub fn cmd_lint(argv: &[String]) -> i32 {
 /// `api::evaluate`, with a missing input reported as a usage error.
 pub fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
     if a.input.is_none() {
-        usage()
+        arg_error("nothing to evaluate: give -E EXPR or FILE")
     }
     crate::api::evaluate(ev, a)
 }
