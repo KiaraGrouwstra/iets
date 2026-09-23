@@ -202,6 +202,25 @@ pub fn get_decompressed(
     limits: Limits,
     sink: &mut dyn Write,
 ) -> Result<u64> {
+    get(url, headers, limits, true, sink)
+}
+
+/// [`get_decompressed`], with the decompression optional: `ietsp prefetch`
+/// hashes the bytes the URL serves, as `nix store prefetch-file` does.
+pub fn get(
+    url: &str,
+    headers: &[(String, String)],
+    limits: Limits,
+    decompress: bool,
+    sink: &mut dyn Write,
+) -> Result<u64> {
+    let undo = |r: Box<dyn Read>| {
+        if decompress {
+            decompress_reader(r)
+        } else {
+            Ok(r)
+        }
+    };
     if crate::settings::get().offline {
         return Err(Error::Usage(format!(
             "cannot fetch '{url}': IETSP_OFFLINE is set"
@@ -214,13 +233,7 @@ pub fn get_decompressed(
         let file = std::fs::File::open(&path)
             .map_err(|e| Error::io(format!("cannot read '{path}'"), e))?;
         let raw = Counted(Box::new(file), read_in.clone());
-        return drain(
-            url,
-            decompress_reader(Box::new(raw))?,
-            &read_in,
-            limits,
-            sink,
-        );
+        return drain(url, undo(Box::new(raw))?, &read_in, limits, sink);
     }
     let (tx, rx) = tokio::sync::mpsc::channel(QUEUE);
     let target = url.to_string();
@@ -237,7 +250,7 @@ pub fn get_decompressed(
         at: Vec::new(),
         pos: 0,
     };
-    let read = decompress_reader(Box::new(Counted(Box::new(queued), read_in.clone())))
+    let read = undo(Box::new(Counted(Box::new(queued), read_in.clone())))
         .and_then(|r| drain(url, r, &read_in, limits, sink));
     download
         .join()
