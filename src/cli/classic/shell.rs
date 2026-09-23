@@ -356,7 +356,10 @@ fn realise(s: &Shell, transport: &Transport, options: &Options, r: Ready, cores:
     let mut on_event = |e: crate::remote::event::Event| {
         use crate::remote::event::Event;
         match e {
-            Event::Log(l) if !quiet => crate::log::line(&String::from_utf8_lossy(&l.line)),
+            // under internal-json a line of a build is already its result record
+            Event::Log(l) if !quiet && (l.drv_path.is_empty() || !crate::log::json()) => {
+                crate::log::line(&String::from_utf8_lossy(&l.line))
+            }
             Event::Failed(f) => {
                 failed.set(true);
                 crate::log::line(&format!(

@@ -158,7 +158,14 @@ impl Renderer {
         }
     }
 
+    /// What a build says; under internal-json its activity records say it.
     fn print(&mut self, lines: &[String]) {
+        if !crate::log::json() {
+            self.write(lines);
+        }
+    }
+
+    fn write(&mut self, lines: &[String]) {
         for l in lines {
             let _ = writeln!(self.out, "{}", crate::log::format(l));
         }
@@ -171,7 +178,7 @@ impl Renderer {
 
     /// One line, outside any build: a plan note, a daemon message.
     pub fn note(&mut self, msg: &str) {
-        self.line(msg.to_string());
+        self.write(&[msg.to_string()]);
     }
 
     pub fn event(&mut self, e: &FastBuildEvent) {
@@ -245,13 +252,19 @@ impl Renderer {
         // A line the daemon did not attribute belongs to the running build
         // when there is exactly one: that is what a remote builder's own
         // stderr looks like coming back through the daemon.
+        let daemon = e.drv.is_empty() && !self.style.quiet;
         let key = match self.running.contains_key(&e.drv) {
             true => e.drv.clone(),
             false if self.running.len() == 1 => {
+                if daemon && crate::log::json() {
+                    self.note(&text);
+                }
                 self.running.keys().next().expect("one running").clone()
             }
             false => {
-                if !self.style.quiet {
+                if daemon {
+                    self.note(&text);
+                } else if !self.style.quiet {
                     self.line(text);
                 }
                 return;
