@@ -100,3 +100,28 @@ unsupported either way, so classic mode falls back when they are called.
 diverge in a few more places (store `auto`, `-Q`, `--show-trace`,
 `--no-out-link`, `getDerivations` recursion, `--add-root` clobbering).
 They are listed in `docs/classic.md`.
+
+## Errors, exit codes and `--log-format internal-json`
+
+`docs/cli.md` has the codes and the record format. Where it differs from
+Nix 2.34:
+
+- **Build exit codes.** `ietsp build` exits 100, 101, 102 or 104 on a
+  failed build (`failingExitStatus`) through a daemon, where Nix exits 1.
+  Nix computes these codes only when it builds in its own store. The
+  classic names exit 1, as Nix does as a daemon client.
+- **Usage errors of native commands** exit 2. Nix exits 1; under a
+  classic name ietsp does too.
+- **`msg`** holds ietsp's plain text: no ANSI colours, no source
+  excerpt. `raw_msg`, `line`, `column` and `file` are the fields to
+  compare; they differ from Nix where the text differs. An error that
+  Nix reports without a position and with the position in its trace,
+  such as `throw`, has the position here.
+- **`code` and `hint`** are extra keys; Nix has neither.
+- **A failed build's record** has the position of the derivation; Nix's
+  has none.
+- **eval-jobs** puts out a record for each failed job; nix-eval-jobs
+  prints those errors as plain text even under `internal-json`.
+- **No activity records** (`start`, `stop`, `result`) yet, so a
+  progress display that reads them (nix-output-monitor) sees messages
+  only. The `--timings` and `IETSP_STATS` lines stay plain text.

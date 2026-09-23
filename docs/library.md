@@ -24,7 +24,7 @@ module it belongs to) and let `cli` call it there.
 | Run on worker threads | `parallel::try_run(workers, ev, f)`; `parallel::default_workers()` |
 | Force a value | `Evaluator::force`, `force_deep`, `force_attrs` |
 | Print a value | `print::print_json`, `print::print_ambiguous`; `Evaluator::coerce_to_string` for `--raw` |
-| Report an error | `api::report(&Evaluator, &Error)`; positions rewritten to local trees |
+| Report an error | `api::report(&Evaluator, &Error) -> i32`, the exit code; positions rewritten to local trees, text or a `--log-format internal-json` record (docs/cli.md) |
 | Error types | `eval::{Error, ErrorKind, EvalResult}`; `error::Error` for store and io |
 | Derivations this run created | `Evaluator::drv.drvs` (`StorePath -> builtins::derivation::DrvInfo`) |
 | A drv's attribute path and position | `DrvInfo::attr`, `DrvInfo::pos`; `DrvState::set_attr` records the walk |
