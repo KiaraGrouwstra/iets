@@ -17,6 +17,7 @@ const KEYS: &[&str] = &[
     "cache-dir",
     "fetch-max-size",
     "fiber-stack-mb",
+    "fix-hashes",
     "nix-bin-dir",
     "no-fallback",
     "provenance",
@@ -76,6 +77,17 @@ pub struct Settings {
     pub offline: bool,
     /// `fetch-max-size`: the most bytes one download may decompress to.
     pub fetch_max_size: u64,
+    /// `fix-hashes`: what `ietsp build` does with a wrong fixed-output hash
+    /// (docs/settings.md).
+    pub fix_hashes: FixHashes,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FixHashes {
+    /// Asks on a terminal; elsewhere only the hint.
+    Ask,
+    Always,
+    Never,
 }
 
 /// The `--ietsp-option` pairs of this command line, recorded by
@@ -193,6 +205,16 @@ impl Settings {
             fetching: set("IETSP_FETCHING"),
             offline: set("IETSP_OFFLINE"),
             fetch_max_size: c.num("fetch-max-size")?.unwrap_or(16 << 30),
+            fix_hashes: match c.str("fix-hashes").unwrap_or("ask") {
+                "ask" => FixHashes::Ask,
+                "always" => FixHashes::Always,
+                "never" => FixHashes::Never,
+                s => {
+                    return Err(Error::Config(format!(
+                        "ietsp setting 'fix-hashes' wants ask, always or never, got '{s}'"
+                    )));
+                }
+            },
         })
     }
 }

@@ -364,6 +364,18 @@ def main [] {
   let hm = (^$ietsp build ...$json -E $fod | complete)
   $ok = ($ok | append (verdict ($hm.exit_code == 102 and ($hm.stderr | str contains '"hint":"set the expected hash to '))
     "ietsp build: a hash mismatch exits 102 and names the hash" $"exit ($hm.exit_code), stderr '($hm.stderr | str substring 0..400)'"))
+  # fix-hashes: the fake hash in the file becomes the one the build got, and the rebuild succeeds
+  mkdir $"($d)/fix"
+  $"{ pkg = ($fod); }\n" | save -f $"($d)/fix/default.nix"
+  let fx = (do { cd $"($d)/fix"; ^$ietsp --ietsp-option fix-hashes always build ./default.nix -A pkg | complete })
+  let fixed = (open --raw $"($d)/fix/default.nix")
+  $ok = ($ok | append (verdict ($fx.exit_code == 0 and not ($fixed | str contains "AAAAAAAA") and ($fx.stderr | str contains "fixed: "))
+    "ietsp build with fix-hashes: rewrites the hash and builds" $"exit ($fx.exit_code), file '($fixed)', stderr '($fx.stderr | str substring 0..400)'"))
+  # the default asks, and with no terminal nobody can answer: the file stays
+  $"{ pkg = ($fod); }\n" | save -f $"($d)/fix/default.nix"
+  let fa = (do { cd $"($d)/fix"; ^$ietsp build ./default.nix -A pkg | complete })
+  $ok = ($ok | append (verdict ($fa.exit_code == 102 and (open --raw $"($d)/fix/default.nix" | str contains "AAAAAAAA"))
+    "ietsp build without a terminal: fix-hashes asks nobody, the file stays" $"exit ($fa.exit_code)"))
 
   # --- json-log-path: stderr stays text, the file gets the same records unprefixed
   let jlog = {|f| {stderr: (open --raw $f | lines | each {|l| $"@nix ($l)" } | str join "\n")} }

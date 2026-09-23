@@ -38,6 +38,7 @@ selects level 2, and any other value selects level 1.
 | `IETSP_NO_FALLBACK` | `no-fallback` | `1` turns on | off | A classic command fails instead of running the real Nix (docs/classic.md). |
 | `IETSP_FETCHING` | | set = on | off | Set on the Nix subprocess that fetches a flake input, so a recursive fetch is an error, not a loop. |
 | `IETSP_OFFLINE` | | set = on | off | Any download is an error. A flake whose inputs the input store already holds still evaluates (docs/flakes.md). |
+| | `fix-hashes` | `ask`, `always`, `never` | `ask` | `ask` asks `[y/n/a]` for each fix when stdin and stderr are terminals and the log format is not `internal-json`; `a` takes this fix and the rest of the run. Elsewhere `ask` only prints the hint. `always` fixes without asking, for CI and agents. With a fix, `ietsp build` rewrites the hash of a fixed-output build that failed on it and builds again. The old hash must appear once, in any spelling, in the local files evaluation parsed; store paths are never edited. It stops when a hash it wrote mismatches again (a build that is not reproducible). Each fix is a `hash-fixed` record (docs/cli.md). After a mismatch, one more evaluation without the tracing cache lists the files. Files read with `readFile` or `importJSON` are not searched. 
 
 Two keys are file-only: `builder` and `source-map` (`docs/config.md`).
 

@@ -305,17 +305,47 @@ pub fn combine_exit(a: i32, b: i32) -> i32 {
 
 /// A failed build as a record; `reason` is `status N: MSG` or a plain
 /// message, `pos` where the derivation was defined.
+/// The `specified` and `got` hashes of a fixed-output hash mismatch
+/// message.
+pub fn mismatch(raw: &str) -> Option<(String, String)> {
+    let field = |k: &str| {
+        raw.lines()
+            .find_map(|l| l.trim().strip_prefix(k))
+            .map(|h| h.trim().to_string())
+    };
+    Some((field("specified:")?, field("got:")?))
+}
+
+static MISMATCHES: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+/// The `(specified, got)` pairs of the hash mismatches reported since the
+/// last call.
+pub fn take_mismatches() -> Vec<(String, String)> {
+    std::mem::take(&mut MISMATCHES.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+/// A hash that `fix-hashes` rewrote at `pos`, `file:line:col`.
+pub fn fixed(pos: &str, old: &str, new: &str) {
+    let raw = format!("'{old}' is now '{new}'");
+    let text = format!("fixed: {pos}: {raw}");
+    let r = Report {
+        level: 3,
+        pos: Some(pos.to_string()),
+        ..Report::new("hash-fixed", raw)
+    };
+    out(&r.record(&text), &text);
+}
+
 fn build_report(pos: Option<String>, reason: &str, exit: i32) -> Report {
     let msg = match reason.split_once(": ") {
         Some((s, m)) if s.starts_with("status ") => m,
         _ => reason,
     };
     let raw = crate::build::results::strip_ansi(msg);
-    let got = raw.lines().find_map(|l| l.trim().strip_prefix("got:"));
-    let (code, hint) = match got {
-        Some(h) if exit == 102 => (
+    let (code, hint) = match mismatch(&raw) {
+        Some((_, got)) if exit == 102 => (
             "hash-mismatch",
-            Some(format!("set the expected hash to '{}'", h.trim())),
+            Some(format!("set the expected hash to '{got}'")),
         ),
         _ => ("build-failed", None),
     };
@@ -330,6 +360,11 @@ fn build_report(pos: Option<String>, reason: &str, exit: i32) -> Report {
 /// the renderer prints its own.
 pub fn build_failed(pos: Option<String>, reason: &str, exit: i32, text: Option<&str>) {
     let r = build_report(pos, reason, exit);
+    if r.code == "hash-mismatch"
+        && let Some(m) = mismatch(&r.raw)
+    {
+        MISMATCHES.lock().unwrap_or_else(|e| e.into_inner()).push(m);
+    }
     let v = r.record(&r.text());
     if json() {
         eprintln!("@nix {v}");

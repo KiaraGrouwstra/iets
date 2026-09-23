@@ -25,6 +25,7 @@ in `src/error.rs` for the rest, and the daemon's build status for builds.
 | `parse` | `ErrorKind::Parse` | a syntax error |
 | `lint` | `ErrorKind::Lint` | a lint at level `error`; at `warn`, a level-1 record |
 | `hash-mismatch` | `ErrorKind::HashMismatch`, build status | a fetched tree or a fixed-output build whose hash is not the one given |
+| `hash-fixed` | `fix-hashes` | a level-3 record: the hash `fix-hashes` wrote, at the file, line and column it changed |
 | `io` | `ErrorKind::Io`, `Error::Io` | a file that cannot be read or written |
 | `unsupported` | `ErrorKind::Unsupported`, `Error::Unsupported` | a feature ietsp does not have; classic mode falls back to Nix |
 | `cancelled` | `ErrorKind::Cancelled` | a parallel helper was stopped; never reaches the user |

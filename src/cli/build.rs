@@ -1,8 +1,10 @@
 //! `ietsp build`: evaluate to derivations and build them through a daemon.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::build::fixhash::{self, Answer};
 use crate::cli::help::{arg_error, value};
 use crate::cli::{EvalArgs, Input, build_targets, evaluate, parse_eval_args, report};
 use crate::error::Error as CrateError;
@@ -20,8 +22,61 @@ struct BuildArgs {
 }
 
 /// `ietsp build`: evaluate to derivations and ship their closure from memory, or (legacy)
-/// take a `.drv` path and read its closure from `/nix/store`.
+/// take a `.drv` path and read its closure from `/nix/store`. A fixed-output
+/// build that fails on its hash gets it fixed per the `fix-hashes` setting.
 pub fn cmd_build(argv: &[String]) -> i32 {
+    use crate::settings::FixHashes;
+    let mut ask = match crate::settings::get().fix_hashes {
+        FixHashes::Never => return build_once(argv),
+        FixHashes::Ask if !fixhash::interactive() => return build_once(argv),
+        FixHashes::Ask => true,
+        FixHashes::Always => false,
+    };
+    let mut wrote: Vec<String> = Vec::new();
+    loop {
+        let code = build_once(argv);
+        let mismatches = crate::log::take_mismatches();
+        if code == 0 || mismatches.is_empty() {
+            return code;
+        }
+        let files = local_files(argv);
+        let mut fixed = false;
+        for (specified, got) in mismatches {
+            if wrote.contains(&specified) {
+                crate::log::line(&format!(
+                    "warning: fix-hashes: the hash changed again, from '{specified}' to '{got}': the output is not reproducible"
+                ));
+                return code;
+            }
+            let fix = match fixhash::locate(&files, &specified, &got) {
+                Ok(f) => f,
+                Err(why) => {
+                    crate::log::line(&format!("warning: fix-hashes: {why}"));
+                    continue;
+                }
+            };
+            if ask {
+                match fixhash::prompt(&fix) {
+                    Answer::No => continue,
+                    Answer::All => ask = false,
+                    Answer::Yes => {}
+                }
+            }
+            if let Err(e) = fix.write() {
+                crate::log::line(&format!("warning: fix-hashes: {e}"));
+                continue;
+            }
+            crate::log::fixed(&fix.pos(), &fix.old, &fix.new);
+            wrote.push(got);
+            fixed = true;
+        }
+        if !fixed {
+            return code;
+        }
+    }
+}
+
+fn parse(argv: &[String]) -> (BuildArgs, EvalArgs) {
     let mut b = BuildArgs {
         url: None,
         timings: false,
@@ -56,6 +111,30 @@ pub fn cmd_build(argv: &[String]) -> i32 {
         i += 1;
     }
     let a = parse_eval_args(&rest);
+    (b, a)
+}
+
+/// The local files the evaluation of `argv` parses, from a fresh
+/// evaluation: a cache hit does not know them.
+fn local_files(argv: &[String]) -> Vec<PathBuf> {
+    let (_, a) = parse(argv);
+    let a = EvalArgs {
+        no_cache: true,
+        ..a
+    };
+    let mut ev = a.evaluator();
+    if super::configure_lints(&mut ev, &a).is_err() {
+        return Vec::new();
+    }
+    crate::parallel::run(a.workers, ev, move |ev| {
+        let mut roots = Vec::new();
+        let _ = evaluate(ev, a).and_then(|v| drv_roots(ev, v, &mut roots));
+        fixhash::local_files(ev)
+    })
+}
+
+fn build_once(argv: &[String]) -> i32 {
+    let (b, a) = parse(argv);
     if let Some(Input::File(f)) = &a.input
         && f.ends_with(".drv")
     {
