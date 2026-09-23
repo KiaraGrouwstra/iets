@@ -458,6 +458,14 @@ in
   let fa = (do { cd $"($d)/fix"; ^$ietsp build ./default.nix -A pkg | complete })
   $ok = ($ok | append (verdict ($fa.exit_code == 102 and (open --raw $"($d)/fix/default.nix" | str contains "AAAAAAAA"))
     "ietsp build without a terminal: fix-hashes asks nobody, the file stays" $"exit ($fa.exit_code)"))
+  # a fixed-output derivation with an input derivation is built as a resolved
+  # copy, whose mismatch the daemon reports as a line, not as the build's result
+  let fodin = ('derivation { name = "classic-e2e-fod-in"; system = "x86_64-linux"; builder = "/bin/sh"; args = [ "-c" "echo hi > $out" ]; dep = derivation { name = "classic-e2e-fod-dep"; system = "x86_64-linux"; builder = "/bin/sh"; args = [ "-c" "echo SALT > $out" ]; }; outputHashMode = "flat"; outputHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; }' | str replace SALT (random uuid))
+  $"{ pkg = ($fodin); }\n" | save -f $"($d)/fix/default.nix"
+  let fr = (do { cd $"($d)/fix"; ^$ietsp --ietsp-option fix-hashes always build ./default.nix -A pkg | complete })
+  let frfile = (open --raw $"($d)/fix/default.nix")
+  $ok = ($ok | append (verdict ($fr.exit_code == 0 and not ($frfile | str contains "AAAAAAAA") and ($fr.stderr | str contains "fixed: "))
+    "ietsp build with fix-hashes: a resolved derivation's mismatch is fixed too" $"exit ($fr.exit_code), file '($frfile)', stderr '($fr.stderr | str substring 0..600)'"))
 
   # --- activity records: a build's stream has the shape of Nix's, and nom reads it
   let act = {|| 'derivation { name = "classic-e2e-act"; system = "x86_64-linux"; builder = "/bin/sh"; args = [ "-c" "echo top; echo $0 > $out" (derivation { name = "classic-e2e-act-dep"; system = "x86_64-linux"; builder = "/bin/sh"; args = [ "-c" "echo dep; echo x > $out" ]; salt = "SALT"; }) ]; }' | str replace SALT (random uuid) }
