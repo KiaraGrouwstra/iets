@@ -167,7 +167,8 @@ attrsets; `--workers 1` is the sequential path. See `docs/parallel.md`.
 ## Testing
 
 `cargo test` for the units; `nix flake check` adds clippy, fmt, the
-examples, `scripts/langtests.nu`, `scripts/partest.nu` and the NixOS module.
+examples, `scripts/langtests.nu`, `scripts/partest.nu`, `scripts/diff-e2e.nu`
+and the NixOS module.
 The other scripts need a live `nix-daemon` or `nix` and run by hand in the
 dev shell (`scripts/lib.nu` holds what they share):
 
@@ -179,6 +180,7 @@ dev shell (`scripts/lib.nu` holds what they share):
 | `partest.nu` | 1 against N workers |
 | `cachetest.nu` | the tracing cache's hits and misses |
 | `difftest.nu`, `drvdiff.nu` | one expression against `nix-instantiate`; the first differing derivation |
+| `diff-e2e.nu` | `ietsp diff` on two small derivations (no daemon, no store) |
 | `classic-e2e.nu` | the classic names against the real nix, stdout byte for byte |
 | `daemon-e2e.nu`, `grpc-e2e.nu` | `ietsp build` over the worker protocol and over `grpc://` |
 | `fastbuild-e2e.nu` | `ietsp fast-build`, and against `nix-fast-build` |

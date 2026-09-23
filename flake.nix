@@ -63,6 +63,7 @@
           # the library facade: every example links the library only (docs/library.md)
           examples = lint "examples" pkgs.cargo "build --examples --release";
           fmt = lint "fmt" pkgs.rustfmt "fmt --check";
+          diff-e2e = nuScript "diff-e2e";
           langtests = nuScript "langtests";
           linttest = nuScript "linttest";
           partest = nuScript "partest";
