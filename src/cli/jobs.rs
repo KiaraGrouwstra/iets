@@ -337,12 +337,12 @@ fn jobs_summary(
     if let Some(i) = inst {
         s.push_str(&format!(
             "\ninstantiate: {} batches, {} paths queried, {} added ({} MB), {} roots, {:.3}s",
-            i.batches,
-            i.queried,
-            i.added,
-            i.bytes >> 20,
+            i.upload.batches,
+            i.upload.queried,
+            i.upload.added,
+            i.upload.bytes >> 20,
             i.roots,
-            i.time.as_secs_f64()
+            i.upload.time.as_secs_f64()
         ));
     }
     eprintln!("{s}");
@@ -439,14 +439,14 @@ fn jobs_single(
             }),
         );
         crate::jobs::run(ev, root, &mut |line| inst.push(line));
-        let (store, stats) = match inst.finish() {
+        let store = match inst.finish() {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("error: {e}");
                 return 1;
             }
         };
-        inst_stats = Some(stats);
+        inst_stats = Some(store.stats);
         conn = Some(store.into_connection());
     }
     jobs_finish(&emitter, j, conn.as_mut(), inst_stats, t0)

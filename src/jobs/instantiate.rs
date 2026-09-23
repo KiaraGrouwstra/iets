@@ -1,24 +1,23 @@
 //! The instantiation nix-eval-jobs does inside `derivationStrict`: every
 //! job's `.drv` and its input closure registered through the daemon. Here
-//! it happens in batches on a thread beside the walk: one `QueryValidPaths`
-//! and one `AddMultipleToStore` per batch, then `--gc-roots-dir` roots
-//! (worker.cc:registerGCRoot) and the batch's lines go on to the sink.
+//! it happens in batches on a thread beside the walk: one
+//! `build::upload::StreamUpload` per batch over the worker backend, then
+//! `--gc-roots-dir` roots (worker.cc:registerGCRoot) and the batch's lines
+//! go on to the sink.
 
-use std::collections::HashSet;
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::mpsc::{Sender, channel};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::line::{Job, Line};
+use crate::build::backend::{Backend, Worker};
+use crate::build::upload::{self, StreamUpload, Uploader};
 use crate::builtins::derivation::DrvInfo;
 use crate::error::{Error, Result};
 use crate::eval::Known;
 use crate::parallel::shared::SharedMap;
-use crate::remote::plan::Object;
-use crate::remote::worker::wire::write_object;
-use crate::remote::worker::{Connection, Transport};
+use crate::remote::worker::{Connection, Options, Transport};
 use crate::store::path::StorePath;
 
 /// Jobs per daemon round trip.
@@ -26,22 +25,16 @@ pub const BATCH: usize = 256;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Stats {
-    pub batches: usize,
-    pub queried: usize,
-    pub added: usize,
-    pub bytes: u64,
+    pub upload: upload::Stats,
     pub roots: usize,
-    pub time: Duration,
 }
 
-/// The daemon side: one connection, the paths known valid so far, and the
-/// evaluation's tables to read ATerms and source trees from.
+/// The daemon side: one connection and the upload that remembers what it
+/// holds.
 pub struct Store {
-    conn: Connection,
+    worker: Worker,
+    up: StreamUpload,
     gc_roots_dir: Option<PathBuf>,
-    valid: HashSet<StorePath>,
-    drvs: SharedMap<StorePath, DrvInfo>,
-    sources: SharedMap<StorePath, Known>,
     pub stats: Stats,
 }
 
@@ -52,17 +45,15 @@ impl Store {
         drvs: SharedMap<StorePath, DrvInfo>,
         sources: SharedMap<StorePath, Known>,
     ) -> Result<Store> {
-        let conn = Connection::open(transport, &mut |_| {})?;
+        let worker = Worker::open(transport, &Options::default(), &mut |_| {})?;
         if let Some(dir) = &gc_roots_dir {
             std::fs::create_dir_all(dir)
                 .map_err(|e| Error::io(format!("cannot create '{}'", dir.display()), e))?;
         }
         Ok(Store {
-            conn,
+            worker,
+            up: StreamUpload::new(drvs, sources),
             gc_roots_dir,
-            valid: HashSet::new(),
-            drvs,
-            sources,
             stats: Stats::default(),
         })
     }
@@ -72,88 +63,30 @@ impl Store {
     pub fn instantiate(&mut self, jobs: &[&Job]) -> Result<()> {
         let t0 = Instant::now();
         let roots: Vec<StorePath> = jobs.iter().map(|j| j.drv_path.clone()).collect();
-        let (drvs, srcs, _) =
-            crate::remote::plan::walk(&roots, &self.valid, &|p| self.drvs.get(p), &|p| {
-                self.sources.origin(p)?.text_refs().cloned()
-            })?;
-        let paths: Vec<String> = srcs
-            .iter()
-            .chain(drvs.iter().map(|d| &d.0))
-            .map(|p| p.to_string())
-            .collect();
-        self.stats.queried += paths.len();
-        let valid: HashSet<String> = if paths.is_empty() {
-            HashSet::new()
-        } else {
-            self.conn
-                .query_valid_paths(&paths, &mut |_| {})?
-                .into_iter()
-                .collect()
-        };
-        let mut objects: Vec<Object> = Vec::new();
-        for p in &srcs {
-            if valid.contains(&p.to_string()) {
-                continue;
-            }
-            let Some(origin) = self.sources.origin(p) else {
-                return Err(Error::Store(format!(
-                    "source '{p}' is not valid in the store and this evaluation did not create it"
-                )));
-            };
-            objects.push(
-                Object::source(p.clone(), origin)
-                    .map_err(|e| Error::io(format!("cannot dump '{p}'"), e))?,
-            );
-        }
-        for (path, aterm, references) in drvs.iter() {
-            if valid.contains(&path.to_string()) {
-                continue;
-            }
-            objects.push(Object::drv(path.clone(), aterm.clone(), references.clone()));
-        }
-        if !objects.is_empty() {
-            let refs: Vec<&Object> = objects.iter().collect();
-            crate::remote::plan::prehash_drvs(&refs);
-            let before = self.conn.bytes_sent();
-            let mut body = |w: &mut dyn Write| -> std::io::Result<()> {
-                crate::remote::worker::wire::write_u64(w, objects.len() as u64)?;
-                for o in &objects {
-                    write_object(w, o)?;
-                }
-                Ok(())
-            };
-            self.conn
-                .add_multiple_to_store(false, &mut body, &mut |_| {})?;
-            self.stats.added += objects.len();
-            self.stats.bytes += self.conn.bytes_sent() - before;
-        }
-        self.valid.extend(srcs);
-        self.valid.extend(drvs.into_iter().map(|d| d.0));
+        let mut st = self.up.upload(&mut self.worker, &roots, &mut |_| {})?;
         if let Some(dir) = &self.gc_roots_dir {
             for j in jobs {
                 let root = dir.join(j.drv_path.base_name());
                 if std::fs::symlink_metadata(&root).is_ok() {
                     continue;
                 }
-                self.conn.add_perm_root(&j.drv_path.to_string(), &root)?;
-
+                self.worker.add_root(&j.drv_path.to_string(), &root)?;
                 self.stats.roots += 1;
             }
         }
-        self.stats.batches += 1;
-        self.stats.time += t0.elapsed();
+        st.time = t0.elapsed();
+        self.stats.upload.merge(st);
         Ok(())
     }
 
     pub fn into_connection(self) -> Connection {
-        self.conn
+        self.worker.conn
     }
 }
-
 /// The thread: lines in, instantiated batches out to `sink`, in order.
 pub struct Instantiator {
     tx: Option<Sender<Line>>,
-    thread: Option<JoinHandle<Result<(Store, Stats)>>>,
+    thread: Option<JoinHandle<Result<Store>>>,
 }
 
 impl Instantiator {
@@ -192,8 +125,7 @@ impl Instantiator {
                     }
                 }
                 flush(&mut store, &mut pending)?;
-                let stats = store.stats;
-                Ok((store, stats))
+                Ok(store)
             })
             .expect("spawn instantiate thread");
         Instantiator {
@@ -209,7 +141,7 @@ impl Instantiator {
     }
 
     /// Flushes the last batch and returns the store for later use.
-    pub fn finish(mut self) -> Result<(Store, Stats)> {
+    pub fn finish(mut self) -> Result<Store> {
         drop(self.tx.take());
         self.thread
             .take()
