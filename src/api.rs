@@ -85,6 +85,7 @@ pub enum ArgKind {
     Str(String),
 }
 
+#[derive(Clone)]
 pub enum Input {
     Expr(String),
     File(String),
