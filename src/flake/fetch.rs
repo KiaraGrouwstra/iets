@@ -220,14 +220,22 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
                 let exp = parse_nar_hash(expected)
                     .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
                 if exp != hash {
-                    bail!(
-                        ErrorKind::Eval,
-                        pos,
+                    let msg = format!(
                         "NAR hash mismatch in input '{}', expected '{}' but got '{}'",
                         to_url(&attrs),
                         exp.to_sri(),
                         hash.to_sri()
                     );
+                    let sym = ev.sym(b"narHash");
+                    let at = ev
+                        .force(args[0])?
+                        .as_attrs()
+                        .and_then(|a| a.get(sym))
+                        .map(|a| a.pos);
+                    let at = at.map(|p| {
+                        crate::provenance::describe_pos(ev, p).unwrap_or_else(|| ev.describe_pos(p))
+                    });
+                    return Err(Error::hash_mismatch(msg, &hash, at, pos));
                 }
             }
             attrs.insert("narHash".into(), AttrVal::Str(hash.to_sri()));
@@ -664,14 +672,13 @@ fn fetch_tarball(
     let nar_size = hasher.bytes_written();
     let nar_hash = hasher.finish();
     if nar_hash != expected {
-        bail!(
-            ErrorKind::Eval,
-            pos,
+        let msg = format!(
             "ietsp: NAR hash mismatch in input '{name}' ({url}): expected '{}' \
              but the tree ietsp fetched hashes to '{}'",
             expected.to_sri(),
             nar_hash.to_sri()
         );
+        return Err(Error::hash_mismatch(msg, &nar_hash, None, pos));
     }
     let entry = crate::inputs::Entry::new(tree, nar_hash, nar_size);
     crate::inputs::store(sp.base_name(), staged, entry).ok_or_else(|| {
