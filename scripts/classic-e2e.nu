@@ -385,6 +385,11 @@ def main [] {
   let hm = (^$ietsp build ...$json -E $fod | complete)
   $ok = ($ok | append (verdict ($hm.exit_code == 102 and ($hm.stderr | str contains '"hint":"set the expected hash to '))
     "ietsp build: a hash mismatch exits 102 and names the hash" $"exit ($hm.exit_code), stderr '($hm.stderr | str substring 0..400)'"))
+  # every record of the run, activity records included, has the one sid
+  let hm_recs = ($hm.stderr | lines | where ($it | str starts-with "@nix ") | each { str substring 5.. | from json })
+  let hm_sids = ($hm_recs | get -o sid | uniq)
+  $ok = ($ok | append (verdict (($hm_recs | where action == start | length) > 0 and ($hm_sids | length) == 1 and ($hm_recs | all { $in.sid? != null }))
+    "ietsp build: every record, activities too, has one sid" $"sids ($hm_sids | to json -r)"))
   # fix-hashes: the fake hash in the file becomes the one the build got, and the rebuild succeeds
   mkdir $"($d)/fix"
   $"{ pkg = ($fod); }\n" | save -f $"($d)/fix/default.nix"

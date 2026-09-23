@@ -41,13 +41,57 @@ pub fn set_json_log_path(path: String) {
     let _ = JSON_LOG_PATH.set(path);
 }
 
+/// `sid`, the session of every record: `IETSP_SESSION_ID` when a parent
+/// ietsp or the user set it, else a UUIDv7 made for this process. The
+/// `eval-jobs` workers get their parent's, so one run's records share one
+/// id (docs/cli.md).
+pub fn session() -> &'static str {
+    static SID: OnceLock<String> = OnceLock::new();
+    SID.get_or_init(|| {
+        std::env::var("IETSP_SESSION_ID")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| uuid_v7(std::time::SystemTime::now()))
+    })
+}
+
+/// RFC 9562 version 7: 48 bits of Unix milliseconds, then random bits.
+fn uuid_v7(now: std::time::SystemTime) -> String {
+    let ms = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
+    let mut b = [0u8; 16];
+    b[..6].copy_from_slice(&ms.to_be_bytes()[2..]);
+    unsafe { libc::getrandom(b[6..].as_mut_ptr().cast(), 10, 0) };
+    b[6] = 0x70 | (b[6] & 0x0f);
+    b[8] = 0x80 | (b[8] & 0x3f);
+    let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &h[..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..]
+    )
+}
+
+/// A record as it goes out, with its `sid`.
+fn wire(v: &Value) -> String {
+    let mut v = v.clone();
+    if let Some(o) = v.as_object_mut() {
+        o.insert("sid".into(), session().into());
+    }
+    v.to_string()
+}
+
 /// logging.cc:applyJSONLogger: a copy of `v`, without the `@nix ` prefix,
 /// to the `json-log-path` file or unix socket. A path that does not open is
 /// reported once and ignored, as Nix does.
 fn tee(v: &Value) {
     if let Some(w) = sink() {
         let mut w = w.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = writeln!(w, "{v}");
+        let _ = writeln!(w, "{}", wire(v));
     }
 }
 
@@ -87,7 +131,7 @@ fn open_sink(path: &std::path::Path) -> std::io::Result<Box<dyn Write + Send>> {
 /// One record: `v` under internal-json, else `text` if any.
 fn out(v: &Value, text: Option<&str>) {
     if json() {
-        eprintln!("@nix {v}");
+        eprintln!("@nix {}", wire(v));
     } else if let Some(t) = text {
         eprintln!("{t}");
     }
@@ -190,7 +234,7 @@ pub fn format(text: &str) -> String {
     let v = json!({"action": "msg", "level": level, "msg": text});
     tee(&v);
     if json() {
-        format!("@nix {v}")
+        format!("@nix {}", wire(&v))
     } else {
         text.to_string()
     }
@@ -215,7 +259,7 @@ pub fn lint(text: &str) -> String {
     let v = lint_record(text);
     tee(&v);
     if json() {
-        format!("@nix {v}")
+        format!("@nix {}", wire(&v))
     } else {
         text.to_string()
     }
@@ -254,7 +298,7 @@ pub fn replay_lints(bytes: &[u8]) -> Vec<u8> {
     }
     records
         .iter()
-        .map(|v| format!("@nix {v}\n"))
+        .map(|v| format!("@nix {}\n", wire(v)))
         .collect::<String>()
         .into_bytes()
 }
@@ -487,6 +531,21 @@ mod tests {
         SHOW_TRACE.store(false, Ordering::Relaxed);
         let t = r#"[{"column":9,"file":"«string»:1:9","line":1,"raw_msg":"while calling 'f'"}]"#;
         assert_eq!(v["trace"].to_string(), t);
+    }
+
+    #[test]
+    fn a_session_id_is_a_uuid_v7() {
+        let t = std::time::UNIX_EPOCH + std::time::Duration::from_millis(0x019e_037b_f603);
+        let (a, b) = (uuid_v7(t), uuid_v7(t));
+        assert!(a.starts_with("019e037b-f603-7"), "{a}");
+        assert!(matches!(&a[19..20], "8" | "9" | "a" | "b"), "{a}");
+        assert_eq!(
+            a.split('-').map(str::len).collect::<Vec<_>>(),
+            [8, 4, 4, 4, 12]
+        );
+        assert_ne!(a, b);
+        let v: Value = serde_json::from_str(&wire(&json!({"action": "msg"}))).unwrap();
+        assert_eq!(v["sid"], session());
     }
 
     #[test]

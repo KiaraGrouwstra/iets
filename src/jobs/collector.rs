@@ -165,6 +165,7 @@ impl Proc {
         let mut child = Command::new(exe)
             .arg("eval-jobs")
             .arg("--worker")
+            .env("IETSP_SESSION_ID", crate::log::session())
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

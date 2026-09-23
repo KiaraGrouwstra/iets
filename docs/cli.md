@@ -95,6 +95,7 @@ knows the fix, `hint`:
 | `file` | `FILE:LINE:COL`, as Nix fills it, or `null` |
 | `code` | the error code (ietsp only) |
 | `hint` | what to do about it (ietsp only, only when known) |
+| `sid` | the session: one id for every record of one run (ietsp only) |
 | `trace` | with `--show-trace` only: `[{raw_msg, line, column, file}]`, innermost first |
 
 A lint warning is a level-1 record with code `lint`; its `raw_msg` starts
@@ -191,6 +192,22 @@ derived paths, not the plan.
 | `narSize` | bytes of those paths unpacked |
 
 The names are the fields of Nix's `MissingPaths`.
+
+### `sid`: the session
+
+Every record carries `sid`, activity records included, on stderr and in the
+`json-log-path` file. It lets a program that reads several streams group
+the records of one run.
+This is an ietsp extension: Nix 2.34.8 has no such field. The key and the
+default value have the shape Determinate Nix uses (`sid`, a UUIDv7).
+
+- By default each process makes a new UUIDv7, for example
+  `019e037b-f603-7443-8071-cfd8585ec8c6`. It starts with the time in
+  milliseconds, so ids sort by start time.
+- `IETSP_SESSION_ID=ID` sets it. Use this to give several invocations one
+  session.
+- `eval-jobs` starts its worker processes with `IETSP_SESSION_ID` set to its
+  own id, so the workers' records have the id of the run that started them.
 
 ## `json-log-path`
 

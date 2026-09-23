@@ -87,6 +87,19 @@ def expect-fail [ctx: record, name: string, args: list<string>]: nothing -> bool
   }
 }
 
+# session: every internal-json record of one run, the workers' `trace:`
+# lines and the main process's summary, carries one `sid`; IETSP_SESSION_ID
+# sets it (docs/cli.md). ietsp only: nix-eval-jobs has no such field.
+def session [ctx: record]: nothing -> bool {
+  let e = '{ a = builtins.trace "a" (derivation { name = "a"; system = "x"; builder = ":"; }); b = builtins.trace "b" (derivation { name = "b"; system = "x"; builder = ":"; }); }'
+  let sids = {|| ^($ctx.ietsp) eval-jobs --workers 2 --no-instantiate --log-format internal-json --expr $e | complete | get stderr | lines | where ($it | str starts-with "@nix ") | each { str substring 5.. | from json | get -o sid } }
+  let own = (do $sids)
+  let given = (with-env {IETSP_SESSION_ID: "run-42"} { do $sids })
+  let ok = ($own | length) == 3 and ($own | uniq | length) == 1 and ($own.0 =~ '^[0-9a-f]{8}-[0-9a-f]{4}-7') and ($given | uniq) == ["run-42"]
+  if $ok { print "ok   session (3 records, one sid)" } else { print $"FAIL session: own ($own | to json -r), given ($given | to json -r)" }
+  $ok
+}
+
 def run-all [ctx: record, np: string]: nothing -> int {
   let cases = [
     [check basic [ci.nix]]
@@ -131,6 +144,7 @@ def run-all [ctx: record, np: string]: nothing -> int {
     [expect-fail no-instantiate-input-drvs [--no-instantiate --show-input-drvs ci.nix]]
     [expect-fail select-not-attrs [--select 'x: "str"' ci.nix]]
     [expect-fail no-expr []]
+    [session session []]
   ]
   let res = ($cases | each {|c|
     # bare `false` and numbers in a list literal are bool/int values
@@ -142,6 +156,7 @@ def run-all [ctx: record, np: string]: nothing -> int {
         "check" => (check $ctx $c.1 $args)
         "chunks" => (chunks $ctx $c.1 $args)
         "expect-fail" => (expect-fail $ctx $c.1 $args)
+        "session" => (session $ctx)
       }
     }
   })
