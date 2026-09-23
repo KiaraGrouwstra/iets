@@ -2,7 +2,9 @@
 
 `ietsp diff A B` prints why two derivations are not the same, in place of
 `nix-diff`. It compares the two derivations, then the input derivations
-that differ, paired by name, down a bounded number of levels.
+that differ, paired by name, down a bounded number of levels. `--closure`
+compares two built output closures by package and version instead, in
+place of `nvd`.
 
 Nothing is built and nothing is written to the store. A derivation that an
 evaluation produced is read from that evaluation's memory; every other
@@ -32,6 +34,8 @@ The common evaluation flags work as they do for `ietsp eval`: `-I`,
 | `--depth N` | walk N levels of input derivations (default 2) |
 | `--all` | walk every level |
 | `--json` | print one JSON object instead of text |
+| `--closure` | compare the output closures, not the derivations |
+| `--builder URL` | the store `--closure` reads (default: `daemon`, the local one) |
 
 ## Exit codes
 
@@ -131,3 +135,24 @@ An entry of `changes` is `{what, key, a, b}`:
 `args` is one quoted argument per line, so a long command line diffs line
 by line.
 
+## `--closure`
+
+`--closure` compares what the two derivations' outputs refer to, as `nvd`
+does: the closure of every output of each side, grouped by package name and
+version. The name ends at the first dash before a digit, as Nix's
+`parseDrvName` splits it.
+
+```
+$ ietsp diff --closure ./a.drv ./b.drv
+removed libfoo 1.2
+added   libbar 0.9
+changed hello 2.12 -> 2.12.1
+```
+
+The outputs must be in the store: the daemon answers with `QueryPathInfo`,
+and a path it has not got is an error that names the `ietsp build` which
+makes it.
+
+`--json` prints `{a, b, equal, packages}`. Each entry of `packages` is
+`{change, name, a, b}`, with `change` one of `added`, `removed` or
+`changed`, and `a` and `b` the versions of that name on each side.

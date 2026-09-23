@@ -109,6 +109,9 @@ equal, 1 they differ, 2 trouble.
   --depth N             levels of input derivations to walk (default 2)
   --all                 walk every level
   --json                print the difference as one JSON object
+  --closure             compare the output closures by package and version,
+                        as nvd does; the outputs must be in the store
+  --builder URL         the store --closure asks (default: daemon)
   -I P=PATH, --arg N E, --argstr N S, --option N V, --impure  as for eval
   --log-format F, --show-trace  as for 'ietsp eval'
 ";

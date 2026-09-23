@@ -1,5 +1,7 @@
 //! `ietsp diff A B`: what differs between two derivations (docs/diff.md).
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use crate::cli::help::{arg_error, unknown_flag, value};
 use crate::cli::{EvalArgs, EvalFlags, Input, eval_flag, evaluate, report};
 use crate::error::{Error, Result};
@@ -10,6 +12,8 @@ use crate::store::path::StorePath;
 struct Opts {
     json: bool,
     depth: usize,
+    closure: bool,
+    builder: Option<String>,
 }
 
 /// One of the two things being compared: a `.drv` in the store, or an
@@ -46,6 +50,8 @@ fn parse(argv: &[String]) -> (Opts, Vec<Side>) {
     let mut o = Opts {
         json: false,
         depth: 2,
+        closure: false,
+        builder: None,
     };
     let mut f = EvalFlags::default();
     let mut pos: Vec<String> = Vec::new();
@@ -61,6 +67,8 @@ fn parse(argv: &[String]) -> (Opts, Vec<Side>) {
             _ if eval_flag(&mut f, s, || Ok(next())).unwrap_or_else(|e| arg_error(e)) => {}
             "--json" => o.json = true,
             "--all" => o.depth = usize::MAX,
+            "--closure" => o.closure = true,
+            "--builder" => o.builder = Some(next()),
             "--depth" => {
                 let v = next();
                 o.depth = v
@@ -115,6 +123,9 @@ fn base_name(arg: &str) -> &str {
 
 fn run(o: &Opts, load: &mut crate::store::drv::DrvLoader<'_>, roots: &[StorePath]) -> Result<i32> {
     let (a, b) = (&roots[0], &roots[1]);
+    if o.closure {
+        return closure_diff(o, load, a, b);
+    }
     let d = crate::store::drvdiff::diff(load, a, b, o.depth)?;
     if o.json {
         let mut v = d.json();
@@ -176,4 +187,127 @@ fn resolve(sides: Vec<Side>) -> std::result::Result<(Aterms, Vec<StorePath>), i3
             .collect();
         Ok((aterms, roots))
     })
+}
+
+/// `--closure`: the output closures compared by package name and version,
+/// as nvd does. The daemon answers what each path refers to.
+fn closure_diff(
+    o: &Opts,
+    load: &mut crate::store::drv::DrvLoader<'_>,
+    a: &StorePath,
+    b: &StorePath,
+) -> Result<i32> {
+    use crate::remote::worker::{Connection, Transport};
+    // the closure is read where the outputs are, so this is the local daemon
+    // and not the `builder` setting
+    let url = o.builder.as_deref().unwrap_or("daemon");
+    let Some(t) = Transport::parse(url) else {
+        return Err(Error::Usage(format!(
+            "unsupported store '{url}': expected daemon, unix:///path or ssh-ng://[user@]host"
+        )));
+    };
+    let mut conn = Connection::open(&t, &mut |_| {})?;
+    let (ca, cb) = (closure(&mut conn, load, a)?, closure(&mut conn, load, b)?);
+    let mut names: BTreeSet<&String> = ca.keys().collect();
+    names.extend(cb.keys());
+    let none = BTreeSet::new();
+    let rows: Vec<(&str, &String, &BTreeSet<String>, &BTreeSet<String>)> = (names.into_iter())
+        .map(|n| (n, ca.get(n).unwrap_or(&none), cb.get(n).unwrap_or(&none)))
+        .filter(|(_, x, y)| x != y)
+        .map(|(n, x, y)| match (x.is_empty(), y.is_empty()) {
+            (true, _) => ("added", n, x, y),
+            (_, true) => ("removed", n, x, y),
+            _ => ("changed", n, x, y),
+        })
+        .collect();
+    let join = |v: &BTreeSet<String>| v.iter().cloned().collect::<Vec<_>>().join(", ");
+    if o.json {
+        let p: Vec<_> = (rows.iter())
+            .map(|(k, n, x, y)| serde_json::json!({"change": k, "name": n, "a": x, "b": y}))
+            .collect();
+        let v = serde_json::json!({
+            "a": a.to_string(), "b": b.to_string(), "equal": rows.is_empty(), "packages": p,
+        });
+        println!("{v}");
+    } else if rows.is_empty() {
+        println!("the two closures hold the same packages");
+    } else {
+        for (k, n, x, y) in &rows {
+            match *k {
+                "added" => println!("added   {n} {}", join(y)),
+                "removed" => println!("removed {n} {}", join(x)),
+                _ => println!("changed {n} {} -> {}", join(x), join(y)),
+            }
+        }
+    }
+    Ok(i32::from(!rows.is_empty()))
+}
+
+/// The versions of each package name in the closure of every output of the
+/// derivation `p`.
+fn closure(
+    conn: &mut crate::remote::worker::Connection,
+    load: &mut crate::store::drv::DrvLoader<'_>,
+    p: &StorePath,
+) -> Result<BTreeMap<String, BTreeSet<String>>> {
+    let drv = load(p)?;
+    let outs = (drv.outputs.iter()).map(|(name, out)| out.path(&drv.name, name));
+    let mut todo: Vec<String> = outs
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .map(|sp| sp.to_string())
+        .collect();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut by_name: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    while let Some(path) = todo.pop() {
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        let Some(info) = conn.query_path_info(&path, &mut |_| {})? else {
+            let e = Error::Store(format!("'{path}' is not in the store"));
+            return Err(Error::Hint(
+                e.into(),
+                format!("build it first: ietsp build {p}"),
+            ));
+        };
+        let (n, v) = name_version(base_name(&path));
+        by_name.entry(n.into()).or_default().insert(v.into());
+        todo.extend(info.references.into_iter().filter(|r| !seen.contains(r)));
+    }
+    Ok(by_name)
+}
+
+/// `<hash>-NAME-VERSION`: the name ends at the first dash before a digit,
+/// as Nix's `parseDrvName` and nvd split it.
+fn name_version(base: &str) -> (&str, &str) {
+    let n = base
+        .get(crate::store::path::HASH_PART_LEN + 1..)
+        .unwrap_or(base);
+    let dash = |i: usize| n.as_bytes()[i] == b'-' && n.as_bytes()[i + 1].is_ascii_digit();
+    match (0..n.len().saturating_sub(1)).find(|i| dash(*i)) {
+        Some(i) => (&n[..i], &n[i + 1..]),
+        None => (n, ""),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_name_ends_at_the_first_dash_before_a_digit() {
+        let cases = [
+            (
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-hello-2.12.1",
+                ("hello", "2.12.1"),
+            ),
+            (
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bash-interactive-5.2",
+                ("bash-interactive", "5.2"),
+            ),
+            ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-source", ("source", "")),
+        ];
+        for (base, want) in cases {
+            assert_eq!(super::name_version(base), want, "{base}");
+        }
+    }
 }
