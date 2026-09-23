@@ -30,7 +30,7 @@ Run 'ietsp COMMAND --help' for the flags of a command.
 ";
 
 const INPUT: &str = "
-input:
+common:
   -E, --expr EXPR       evaluate EXPR instead of FILE
   -A, --attr PATH       select the attribute PATH of the value
   --arg N EXPR, --argstr N STR  call a top-level function with N = EXPR/\"STR\"
