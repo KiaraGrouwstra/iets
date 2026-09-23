@@ -68,51 +68,48 @@ fn is_indirect(loc: &str) -> bool {
         })
 }
 
-/// `PATH[#attr.path]` where PATH is `.`, `./x`, `/abs`, `~/x` or `path:/abs`.
+/// `PATH[#attr.path]`, parsed by `flakeref::parse` with cwd as the base
+/// directory. Only a local path is taken: `.`, `./x`, `/abs`, `~/x` or
+/// `path:…`.
 pub fn parse_flake_ref(arg: &str, cwd: &[u8], home: Option<&[u8]>) -> Result<FlakeRef> {
-    let (loc, frag) = match arg.split_once('#') {
-        Some((l, f)) => (l, Some(f)),
-        None => (arg, None),
+    let p = flakeref::parse(arg)?;
+    let loc = arg.split('#').next().unwrap_or(arg);
+    let why = match fetch::str_attr(&p.input, "type") {
+        Some("path") => None,
+        Some("indirect") => Some(format!(
+            "flake registry references ({loc}#…) are not supported; use a path or a locked input"
+        )),
+        ty => Some(format!(
+            "flake reference '{loc}' is a '{}' input; only local paths are supported (ietsp cannot fetch a root flake)",
+            ty.unwrap_or("")
+        )),
     };
-    if is_indirect(loc) {
-        return Err(Error::Unsupported(format!(
-            "ietsp: flake registry references ({loc}#…) are not supported; use a path or a locked input"
-        )));
+    if let Some(why) = why {
+        return Err(Error::Unsupported(format!("ietsp: {why}")));
     }
-    if loc.contains('?') {
+    if p.input.len() > 2 || !p.dir.is_empty() {
         return Err(Error::Unsupported(format!(
             "ietsp: query parameters in flake reference '{arg}' are not supported"
         )));
     }
-    let (explicit_path, loc) = match loc.strip_prefix("path:") {
-        Some(rest) => (true, rest),
-        None => (false, loc),
+    let loc = fetch::str_attr(&p.input, "path").unwrap_or("");
+    let full = match loc.strip_prefix('~') {
+        Some(rest) if p.bare && (rest.is_empty() || rest.starts_with('/')) => {
+            let Some(h) = home else {
+                return Err(Error::Flake("ietsp: $HOME is not set".to_string()));
+            };
+            [h, rest.as_bytes()].concat()
+        }
+        _ if loc.starts_with('/') => loc.as_bytes().to_vec(),
+        _ => [cwd, b"/", loc.as_bytes()].concat(),
     };
-    if loc.contains(':') && !loc.starts_with('/') && !loc.starts_with('.') && !loc.starts_with('~')
-    {
-        return Err(Error::Unsupported(format!(
-            "ietsp: flake reference '{arg}' is not a path; only local paths are supported"
-        )));
-    }
-    let mut full: Vec<u8> = if loc == "~" || loc.starts_with("~/") {
-        let Some(h) = home else {
-            return Err(Error::Flake("ietsp: $HOME is not set".to_string()));
-        };
-        let mut v = h.to_vec();
-        v.extend_from_slice(&loc.as_bytes()[1..]);
-        v
-    } else if loc.starts_with('/') {
-        loc.as_bytes().to_vec()
-    } else {
-        let mut v = cwd.to_vec();
-        v.push(b'/');
-        v.extend_from_slice(loc.as_bytes());
-        v
-    };
-    if full.is_empty() {
-        full = cwd.to_vec();
-    }
-    let full = crate::compile::canon_path(&full);
+    local_flake(&full, !p.bare, parse_attr_path(&p.fragment)?)
+}
+
+/// The flake in directory `full`: a `path:` input, or unless `explicit_path`
+/// the `git+file:` input of the repository holding it.
+fn local_flake(full: &[u8], explicit_path: bool, attr: Vec<String>) -> Result<FlakeRef> {
+    let full = crate::compile::canon_path(full);
     let dir = PathBuf::from(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&full));
     if !dir.is_dir() {
         return Err(Error::Flake(format!(
@@ -139,10 +136,6 @@ pub fn parse_flake_ref(arg: &str, cwd: &[u8], home: Option<&[u8]>) -> Result<Fla
                 root,
             },
         )
-    };
-    let attr = match frag {
-        Some(f) => parse_attr_path(f)?,
-        None => Vec::new(),
     };
     Ok(FlakeRef { dir, source, attr })
 }
@@ -267,13 +260,13 @@ pub fn eval_flake_value(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
     ev.apply(call_flake, &[lock_str, overrides, fetch_tree], pos)
 }
 
-/// flake-primops.cc:prim_getFlake on the references `parse_flake_ref` takes.
-/// Impure only: every reference ietsp resolves is unlocked, which a pure
-/// evaluation refuses. The flake still needs a complete `flake.lock`,
-/// because nothing is locked here. A directory is always a `path:` input, even inside a git
-/// repository: flakeref.cc looks for `.git` only when it has a base
-/// directory, and getFlake passes none. A virtual copy stands for its local
-/// tree.
+/// flake-primops.cc:prim_getFlake on a local path, parsed by
+/// `flakeref::parse_absolute`. Impure only: every reference ietsp resolves
+/// is unlocked, which a pure evaluation refuses. The flake still needs a
+/// complete `flake.lock`, because nothing is locked here. A directory is
+/// always a `path:` input, even inside a git repository: flakeref.cc looks
+/// for `.git` only when it has a base directory, and getFlake passes none.
+/// A virtual copy stands for its local tree.
 pub fn get_flake(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     use crate::builtins::store_hooks::locate;
     let s = ev.force_string_no_ctx(
@@ -282,69 +275,37 @@ pub fn get_flake(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word
         "while evaluating the argument passed to builtins.getFlake",
     )?;
     let s = String::from_utf8_lossy(s).into_owned();
-    let (loc, frag) = s
-        .split_once('#')
-        .map_or((s.as_str(), None), |(l, f)| (l, Some(f)));
-    if let Some(f) = frag {
-        return Err(EvalError::boxed(
-            ErrorKind::Eval,
-            format!("unexpected fragment '{f}' in flake reference '{s}'"),
-            pos,
-        ));
-    }
-    let path = loc.strip_prefix("path:").unwrap_or(loc);
-    if !is_indirect(loc) && !path.contains(':') && !path.starts_with('/') {
-        return Err(EvalError::boxed(
-            ErrorKind::Eval,
-            format!("flake reference '{s}' is not an absolute path"),
-            pos,
-        ));
-    }
-    if ev.pure {
-        // a `?query` or a 40-digit rev may lock it; the real nix decides those
-        let maybe_locked = loc.contains('?')
-            || loc
-                .split(|c: char| !c.is_ascii_hexdigit())
-                .any(|run| run.len() == 40);
-        return Err(if maybe_locked {
-            EvalError::boxed(
-                ErrorKind::Unsupported,
-                format!(
-                    "ietsp: builtins.getFlake on '{s}' in pure evaluation mode is not supported"
-                ),
-                pos,
-            )
-        } else {
-            // flake-primops.cc prints the primop's position, which it never has
-            EvalError::boxed(
-                ErrorKind::Eval,
-                format!(
-                    "cannot call 'getFlake' on unlocked flake reference '{s}', at «none»:0 (use --impure to override)"
-                ),
-                pos,
-            )
-        });
-    }
-    let arg = match locate(ev, path.as_bytes()) {
-        Some(at) if !at.hidden() => match at.local() {
-            Some(local) => format!("path:{}", local.display()),
-            None => {
-                return Err(EvalError::boxed(
-                    ErrorKind::Unsupported,
-                    format!("ietsp: builtins.getFlake on '{s}', a fetched input, is not supported"),
-                    pos,
-                ));
-            }
-        },
-        _ => format!("path:{path}"),
+    let p = flakeref::parse_absolute(&s).map_err(|e| eval_error(e, pos))?;
+    let unsupported = |why: &str| {
+        let msg = format!("ietsp: builtins.getFlake on '{s}' {why} is not supported");
+        EvalError::boxed(ErrorKind::Unsupported, msg, pos)
     };
-    let fr = parse_flake_ref(&arg, b"/", None).map_err(|e| {
-        let kind = match e {
-            Error::Unsupported(_) => ErrorKind::Unsupported,
-            _ => ErrorKind::Eval,
-        };
-        EvalError::boxed(kind, e.to_string(), pos)
-    })?;
+    if ev.pure {
+        // a rev or a narHash may lock it; the real nix decides those
+        if p.input.contains_key("rev") || p.input.contains_key("narHash") {
+            return Err(unsupported("in pure evaluation mode"));
+        }
+        // flake-primops.cc prints the primop's position, which it never has
+        return Err(EvalError::boxed(
+            ErrorKind::Eval,
+            format!(
+                "cannot call 'getFlake' on unlocked flake reference '{s}', at «none»:0 (use --impure to override)"
+            ),
+            pos,
+        ));
+    }
+    let local = p.input.len() == 2 && p.dir.is_empty();
+    let Some(path) = fetch::str_attr(&p.input, "path").filter(|_| local) else {
+        return Err(unsupported("(only a local path)"));
+    };
+    let full = match locate(ev, path.as_bytes()) {
+        Some(at) if !at.hidden() => match at.local() {
+            Some(local) => local.into_os_string().into_encoded_bytes(),
+            None => return Err(unsupported("(a fetched input)")),
+        },
+        _ => path.as_bytes().to_vec(),
+    };
+    let fr = local_flake(&full, true, Vec::new()).map_err(|e| eval_error(e, pos))?;
     eval_flake_value(ev, &fr)
 }
 
@@ -485,7 +446,23 @@ mod tests {
             Err(Error::Unsupported(m)) => m,
             other => panic!("{r}: {other:?}"),
         };
-        assert!(unsupported("github:a/b#x").contains("only local paths"));
+        for r in [
+            "github:a/b#x",
+            "git+https://x.org/a",
+            "https://x.org/a.tar.gz#x",
+        ] {
+            assert!(unsupported(r).contains("only local paths"), "{r}");
+        }
+        assert!(unsupported(".?dir=sub").contains("query parameters"));
+        assert!(unsupported("hg+https://x.org/a#x").contains("not supported"));
+        assert!(matches!(
+            parse_flake_ref("./x#%zz", cwd, None),
+            Err(Error::Flake(_))
+        ));
+        assert_eq!(
+            parse_flake_ref("path:./sub", cwd, None).unwrap().dir,
+            d.join("sub")
+        );
         for r in [
             "nixpkgs#hello",
             "nixpkgs/nixos-24.05#x",

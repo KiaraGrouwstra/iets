@@ -6,10 +6,23 @@
 
 ## Scope
 
-- `DIR` is `.`, `./x`, `/abs`, `~/x` or `path:/abs`. Registry refs
-  (`nixpkgs#hello`, and `x#y` even where `./x` exists, as in
-  flakeref.cc:parseFlakeIdRef), URLs and `?query` parameters are
-  `ErrorKind::Unsupported`, so classic mode falls back on them.
+- `DIR` goes through the parser `builtins.parseFlakeRef` uses
+  (`src/flake/flakeref.rs`, see "Flake references" below), with cwd as
+  the base directory. Only a local path is taken: `.`, `./x`, `/abs`,
+  `~/x`, or a `path:` URL (`path:/abs`, `path:./x`, percent-escapes
+  decoded). The fragment is percent-decoded, as in Nix. These are
+  `ErrorKind::Unsupported`, so classic mode falls back on them:
+  - registry refs (`nixpkgs#hello`, and `x#y` even where `./x` exists, as
+    in flakeref.cc:parseFlakeIdRef);
+  - remote refs (`github:`, `gitlab:`, `git+https:`, `git+file:`,
+    `https://….tar.gz`): ietsp cannot fetch a root flake, see "A remote
+    root flake" below;
+  - `?query` parameters on a path (`?dir=`, `?rev=`, `?narHash=`);
+  - what the parser itself leaves out (`hg+…`, `sourcehut:`,
+    docs/divergences.md).
+
+  Some invalid references are accepted (docs/divergences.md); an unknown
+  scheme (`foo:bar#x`) is unsupported.
 - `#attr.path` selects from the flake's outputs; elements may be quoted
   like Nix (`"x86_64-linux"`). No `#` or a bare `#` gives the outputs
   attrset. No `packages.<system>.` defaulting.
@@ -19,7 +32,8 @@
   `ietsp: flake.lock missing or incomplete, run nix flake lock`.
   A `flake.nix` input whose URL changed without re-locking is not detected;
   the lock wins.
-- `builtins.getFlake REF` takes an absolute `/abs` or `path:/abs` and
+- `builtins.getFlake REF` takes an absolute `/abs` or `path:/abs` (parsed
+  like `parseFlakeRef`) and
   returns what `callFlake` returns. It is impure only: every REF ietsp
   resolves is unlocked, which pure evaluation refuses (`docs/pure-eval.md`).
   REF is always a `path:` input, also inside a git
@@ -32,6 +46,41 @@
 - `--strict`, `--json` and `--raw` work as with a file. `--raw` mirrors
   `nix eval --raw`: the value is coerced to a string without copying paths
   to the store, and printed without a newline.
+
+## Flake references
+
+`src/flake/flakeref.rs` is the one parser: `builtins.parseFlakeRef`,
+`builtins.flakeRefToString`, `builtins.getFlake`, the command line and the
+unlocked-input message of `fetchTree` all use it. It follows
+flakeref.cc:parseFlakeRefWithFragment (a flake id first, then a URL, then
+a path) and the inputFromURL, inputFromAttrs and toURL of the github,
+gitlab, git, path, tarball, file and indirect schemes (libfetchers). As in
+Nix, `parseFlakeRef` has no base directory, so a relative path is an
+error. The corners it leaves out are in docs/divergences.md.
+
+## A remote root flake
+
+The command line parses `github:NixOS/nixpkgs/<rev>#hello` but refuses it
+as unsupported. The download itself exists (the archive fetch below), but
+four parts do not:
+
+1. A root has no lock entry, so no `narHash` names and checks the tree
+   before the download. `fetch_tarball` would have to stage the archive,
+   hash it, and only then name the input-store entry by the hash it got.
+2. `sourceInfo.lastModified` of an archive comes from the archive
+   (tarball.cc), and the spool index keeps no mtimes.
+3. `FlakeRef` is a local directory: `eval_flake_value` reads `flake.lock`
+   from disk, `root::source_info` copies a local tree, and the tracing
+   cache key and the `ietsp.toml` walk (`src/api.rs`) read `fr.dir`. A
+   root in the input store needs a third `Source` that reads through
+   `store_hooks::locate`.
+4. An unlocked ref (`github:o/r`, `github:o/r/branch`, a registry id)
+   must first resolve to a rev: the forge API per scheme
+   (github.cc:getRevFromRef), `tarball-ttl`, the flake registries. `git`
+   refs need a git fetcher, which ietsp does not have.
+
+1 to 3 make a locked `github:`, `gitlab:` or `tarball` root work; 4 is
+what most command lines need.
 
 ## How it works (flake.cc:callFlake)
 

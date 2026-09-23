@@ -58,8 +58,8 @@ Nix's:
 
 - an unlocked `git` or `hg` input: Nix names it with query parameters
   (`?shallow=1`) that ietsp does not reproduce;
-- `getFlake` on a reference that may be locked (a `?query` or a 40-digit
-  rev);
+- `getFlake` on a reference that may be locked (one with a `rev` or a
+  `narHash`);
 - `restrict-eval`, which is a separate setting: ignored, as before.
 
 ## Caches
