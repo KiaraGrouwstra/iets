@@ -448,7 +448,7 @@ fn substitute(ev: &mut Evaluator, store_path: &str) -> bool {
     match conn.substitute_paths(std::slice::from_ref(&store_path.to_string()), &mut |_| {}) {
         Ok(valid) => valid.iter().any(|p| p == store_path),
         Err(e) => {
-            eprintln!("ietsp: cannot substitute '{store_path}': {e}");
+            crate::log::line(&format!("ietsp: cannot substitute '{store_path}': {e}"));
             false
         }
     }
@@ -481,7 +481,9 @@ pub fn ensure_readable(
         return Ok(());
     }
     let name = input_name(ev, attrs);
-    eprintln!("ietsp: input '{name}' is not in the store ({full}), fetching it");
+    crate::log::line(&format!(
+        "ietsp: input '{name}' is not in the store ({full}), fetching it"
+    ));
     if substitute(ev, &full) {
         ev.trace
             .stat(full.as_bytes(), true, crate::trace::Kind::Directory);

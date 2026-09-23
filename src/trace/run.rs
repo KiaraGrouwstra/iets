@@ -146,10 +146,10 @@ impl Cache {
                     }
                 }
             }
-            Err(e) => eprintln!(
+            Err(e) => crate::log::line(&format!(
                 "warning: cannot write cache entry {}: {e}",
                 self.store.entry_dir(&self.key).display()
-            ),
+            )),
         }
         crate::cachefs::maybe_sweep(self.store.root(), crate::cachefs::Shape::Dirs, self.timings);
     }
@@ -158,7 +158,7 @@ impl Cache {
     pub fn replay_warnings(&self) {
         use std::io::Write;
         if let Some(bytes) = self.store.read(&self.key, crate::trace::store::WARNINGS) {
-            let _ = std::io::stderr().write_all(&bytes);
+            let _ = std::io::stderr().write_all(&crate::log::replay_lints(&bytes));
         }
     }
 

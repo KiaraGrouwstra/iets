@@ -96,8 +96,8 @@ fn run(a: Args) -> Result<i32> {
     // Every attribute gets a verdict unless --fail-fast says to stop.
     options.keep_going = !a.fail_fast;
     if !matches!(transport, Transport::Unix(_)) && !a.no_download {
-        eprintln!(
-            "ietsp fast-build: --store is not the local daemon, so the outputs stay there; --out-link points at nothing local (docs/fast-build.md)"
+        crate::log::line(
+            "ietsp fast-build: --store is not the local daemon, so the outputs stay there; --out-link points at nothing local (docs/fast-build.md)",
         );
     }
 
@@ -296,7 +296,9 @@ fn dispatch(d: Dispatch, rx: Receiver<Line>) -> Result<Report> {
             if let Some(r) = &mut resolver
                 && let Err(e) = r.resolve(&mut lines)
             {
-                eprintln!("ietsp fast-build: --skip-cached: {e}; building this batch");
+                crate::log::line(&format!(
+                    "ietsp fast-build: --skip-cached: {e}; building this batch"
+                ));
             }
         }
 
@@ -422,7 +424,7 @@ fn dispatch(d: Dispatch, rx: Receiver<Line>) -> Result<Report> {
         records = std::mem::take(&mut dd.reporter.records);
         failed |= dd.failed;
         let total = t0.elapsed();
-        eprintln!(
+        crate::log::line(&format!(
             "fast-build: {} built, {n_cached} cached, {n_other_system} for another system, {} build ops, {} paths uploaded ({} MB), first build at {:.3}s, total {:.3}s",
             records
                 .iter()
@@ -433,7 +435,7 @@ fn dispatch(d: Dispatch, rx: Receiver<Line>) -> Result<Report> {
             dd.upload.bytes >> 20,
             first_build.unwrap_or_default().as_secs_f64(),
             total.as_secs_f64()
-        );
+        ));
     }
     Ok(Report { records, failed })
 }
@@ -469,10 +471,16 @@ fn write_step_summary(path: &std::path::Path, records: &[Record], code: i32) {
         Ok(f) => {
             let mut w = std::io::BufWriter::new(f);
             if let Err(e) = results::step_summary(&mut w, records, code) {
-                eprintln!("ietsp fast-build: cannot write '{}': {e}", path.display());
+                crate::log::line(&format!(
+                    "ietsp fast-build: cannot write '{}': {e}",
+                    path.display()
+                ));
             }
         }
-        Err(e) => eprintln!("ietsp fast-build: cannot write '{}': {e}", path.display()),
+        Err(e) => crate::log::line(&format!(
+            "ietsp fast-build: cannot write '{}': {e}",
+            path.display()
+        )),
     }
 }
 
@@ -484,10 +492,10 @@ fn summary(r: &Report) {
         .collect();
     let bad: Vec<&&Record> = builds.iter().filter(|b| !b.success && !b.skipped).collect();
     if bad.is_empty() {
-        eprintln!("fast-build: {} succeeded, 0 failed", builds.len());
+        crate::log::line(&format!("fast-build: {} succeeded, 0 failed", builds.len()));
         return;
     }
-    eprintln!(
+    crate::log::line(&format!(
         "fast-build: {} succeeded, {} failed: {}",
         builds.iter().filter(|b| b.success).count(),
         bad.len(),
@@ -495,7 +503,7 @@ fn summary(r: &Report) {
             .map(|b| b.attr.as_str())
             .collect::<Vec<_>>()
             .join(", ")
-    );
+    ));
 }
 
 #[cfg(test)]

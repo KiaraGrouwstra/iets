@@ -36,6 +36,73 @@ pub fn write(v: &Value) {
     eprintln!("@nix {v}");
 }
 
+/// `text` as it goes to stderr, without the newline: itself, or a `msg`
+/// record at the verbosity its prefix implies.
+pub fn format(text: &str) -> String {
+    if !json() {
+        return text.to_string();
+    }
+    let level = if text.starts_with("error:") || text.starts_with("trace:") {
+        0
+    } else if text.starts_with("warning:") || text.starts_with("evaluation warning:") {
+        1
+    } else {
+        3
+    };
+    format!(
+        "@nix {}",
+        json!({"action": "msg", "level": level, "msg": text})
+    )
+}
+
+/// A line that is not an error record.
+pub fn line(text: &str) {
+    eprintln!("{}", format(text));
+}
+
+/// A lint warning, `warning: [NAME] MSG` and maybe `\n  at POS`, as it goes
+/// to stderr.
+pub fn lint(text: &str) -> String {
+    if json() {
+        lint_record(text)
+    } else {
+        text.to_string()
+    }
+}
+
+fn lint_record(text: &str) -> String {
+    let rest = text.strip_prefix("warning: ").unwrap_or(text);
+    let (raw, pos) = match rest.split_once("\n  at ") {
+        Some((raw, pos)) => (raw, Some(pos.to_string())),
+        None => (rest, None),
+    };
+    let r = Report {
+        level: 1,
+        pos,
+        ..Report::new("lint", raw)
+    };
+    format!("@nix {}", r.record(text))
+}
+
+/// The warnings a cache entry recorded, as `lint` puts them out.
+pub fn replay_lints(bytes: &[u8]) -> Vec<u8> {
+    if !json() {
+        return bytes.to_vec();
+    }
+    let mut warnings: Vec<String> = Vec::new();
+    for l in String::from_utf8_lossy(bytes).lines() {
+        match warnings.last_mut() {
+            Some(w) if l.starts_with("  at ") => {
+                w.push('\n');
+                w.push_str(l);
+            }
+            _ => warnings.push(l.to_string()),
+        }
+    }
+    let out: String = warnings.iter().map(|w| lint_record(w) + "\n").collect();
+    out.into_bytes()
+}
+
 /// One error (or, at level 1, warning) for stderr.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Report {
@@ -187,5 +254,12 @@ mod tests {
         let r = Report::new("usage", "unknown flag '--x'");
         let want = r#"{"action":"msg","code":"usage","column":null,"file":null,"level":0,"line":null,"msg":"m","raw_msg":"unknown flag '--x'"}"#;
         assert_eq!(r.record("m").to_string(), want);
+    }
+
+    #[test]
+    fn lint_warning_is_a_level_1_record() {
+        let text = "warning: [url-literal] URL literal\n  at /a.nix:2:5";
+        let want = r#"@nix {"action":"msg","code":"lint","column":5,"file":"/a.nix:2:5","level":1,"line":2,"msg":"warning: [url-literal] URL literal\n  at /a.nix:2:5","raw_msg":"[url-literal] URL literal"}"#;
+        assert_eq!(lint_record(text), want);
     }
 }

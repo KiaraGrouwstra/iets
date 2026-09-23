@@ -307,12 +307,12 @@ fn bash(ev: &mut Evaluator, cwd: &[u8]) -> Bash {
             let msg =
                 "the 'bashInteractive' attribute in <nixpkgs> did not evaluate to a derivation";
             CrateError::Eval(Error::boxed(ErrorKind::Type, msg, Pos::NONE)).report();
-            eprintln!("uses bash from your environment");
+            crate::log::line("uses bash from your environment");
             Bash::Path("bash".into())
         }
         Err(e) => {
             report(ev, &e);
-            eprintln!("uses bash from your environment");
+            crate::log::line("uses bash from your environment");
             Bash::Path("bash".into())
         }
     }
@@ -356,9 +356,7 @@ fn realise(s: &Shell, transport: &Transport, options: &Options, r: Ready, cores:
     let mut on_event = |e: crate::remote::event::Event| {
         use crate::remote::event::Event;
         match e {
-            Event::Log(l) if !quiet => {
-                eprintln!("{}", String::from_utf8_lossy(&l.line))
-            }
+            Event::Log(l) if !quiet => crate::log::line(&String::from_utf8_lossy(&l.line)),
             Event::Failed(f) => {
                 failed.set(true);
                 eprintln!("error: build of '{}' failed: {}", f.drv_path, f.reason);

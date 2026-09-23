@@ -124,7 +124,7 @@ const IGNORED: &[(&str, usize)] = &[
 const IGNORED_BINARIES: &[&str] = &["--nix", "--nix-eval-jobs", "--nix-build"];
 
 fn note(msg: &str) {
-    eprintln!("ietsp fast-build: {msg}");
+    crate::log::line(&format!("ietsp fast-build: {msg}"));
 }
 
 pub fn parse(argv: &[String]) -> Result<Args, Reject> {
@@ -174,7 +174,8 @@ pub fn parse(argv: &[String]) -> Result<Args, Reject> {
                     i += 1;
                 }
             }
-            "-A" | "--attr" | "--arg" | "--argstr" | "-I" | "--include" => {
+            "-A" | "--attr" | "--arg" | "--argstr" | "-I" | "--include" | "--log-format"
+            | "--show-trace" => {
                 eval_flag(&mut a.flags, &s, || value(&mut i, &s))?;
             }
             "--impure" => a.impure = true,

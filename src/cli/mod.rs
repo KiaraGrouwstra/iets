@@ -38,7 +38,8 @@ pub struct EvalFlags {
     pub pure: Option<bool>,
 }
 
-/// `Ok(true)`: `s` is one of the `EvalFlags` flags, and `next` gave its values.
+/// `Ok(true)`: `s` is one of the `EvalFlags` flags or a logging flag of
+/// common-args.cc, and `next` gave its values.
 /// `Err`: a value is missing or wrong; each family reports that its own way.
 pub fn eval_flag(
     f: &mut EvalFlags,
@@ -60,6 +61,8 @@ pub fn eval_flag(
                 f.overrides.push((name, v));
             }
         }
+        "--log-format" => crate::log::set_format(&next()?)?,
+        "--show-trace" => crate::log::set_show_trace(),
         "--pure-eval" => f.pure = Some(true),
         "--no-pure-eval" | "--impure" => f.pure = Some(false),
         _ => return Ok(false),

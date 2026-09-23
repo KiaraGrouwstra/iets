@@ -106,20 +106,11 @@ fn parse_jobs_args(argv: &[String]) -> (JobsArgs, Vec<String>) {
             "--max-jobs" | "-j" => {
                 let _ = arg(&mut i);
             }
-            "--log-format" => {
-                let f = arg(&mut i);
-                if f != "raw" {
-                    unsupported(
-                        &format!("--log-format {f}"),
-                        "ietsp logs plain lines to stderr; only 'raw' is accepted",
-                    );
-                }
-            }
             "--flake" => j.flake = true,
             "--impure" => j.impure = true,
             "--worker" => j.worker = true,
             "--quiet" => j.quiet = true,
-            "--show-trace" | "--verbose" | "--debug" => {}
+            "--verbose" | "--debug" => {}
             "--override-input" | "--override-flake" => unsupported(
                 s,
                 "ietsp evaluates locked flakes only; an override makes the lock file incomplete",
@@ -340,7 +331,7 @@ fn jobs_summary(
             i.upload.time.as_secs_f64()
         ));
     }
-    eprintln!("{s}");
+    crate::log::line(&s);
 }
 
 /// The tail every role shares: the emitter's `finish` when a connection is

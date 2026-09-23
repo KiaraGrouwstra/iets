@@ -40,6 +40,8 @@ common:
   --timings             report each phase and the cache on stderr
   --no-cache, --no-ir-cache  do not use the tracing or the compiled-file cache
   --cache-dir DIR       keep the tracing cache in DIR (docs/tracing-cache.md)
+  --log-format F        internal-json: stderr as Nix JSON records (docs/cli.md)
+  --show-trace          put the trace in the JSON error records too
 ";
 
 const EVAL: &str = "\
@@ -98,6 +100,7 @@ Walk a jobset and print one JSON line per derivation, like nix-eval-jobs
   --chunks M, --chunk N  evaluate part N (0 to M-1) of M parts of the tree
   --chunk-depth D       split the tree at depth D (default 2)
   --quiet               no summary line on stderr
+  --log-format F, --show-trace  as for 'ietsp eval'
 ";
 
 const FAST_BUILD: &str = "\
@@ -124,6 +127,7 @@ flags and result files (docs/fast-build.md).
   --result-file PATH, --result-format json|junit  write the results
   --stream-json-lines   print each result as a JSON line
   --no-fold             no GitHub Actions log groups
+  --log-format F, --show-trace  as for 'ietsp eval'
 ";
 
 const PRINT_DEV_ENV: &str = "\
@@ -137,6 +141,7 @@ Print the bash that 'nix print-dev-env' prints for a flake's devShell
   --gc-root PATH        link PATH to the environment and keep it as a GC root
   --json                print what 'nix print-dev-env --json' prints
   --workers N, --timings, --no-cache, --cache-dir DIR  as for 'ietsp eval'
+  --log-format F, --show-trace  as for 'ietsp eval'
 ";
 
 const LINT: &str = "\

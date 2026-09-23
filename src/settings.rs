@@ -164,7 +164,9 @@ impl Settings {
             .collect();
         for (_, local) in &source_map {
             if !Path::new(local).is_dir() {
-                eprintln!("warning: source-map: '{local}' is not a directory");
+                crate::log::line(&format!(
+                    "warning: source-map: '{local}' is not a directory"
+                ));
             }
         }
         Ok(Settings {

@@ -154,7 +154,9 @@ fn resolve_named(jobs: &Jobs) -> BTreeMap<String, Aggregate> {
         let mut results = BTreeSet::new();
         let is_broken = |broken: &mut BTreeMap<String, String>, child: &str, e: &Entry| -> bool {
             if let Some(err) = &e.error {
-                eprintln!("error: aggregate job '{name}' references broken job '{child}': {err}");
+                crate::log::line(&format!(
+                    "error: aggregate job '{name}' references broken job '{child}': {err}"
+                ));
                 broken.insert(child.to_string(), err.clone());
                 return true;
             }
@@ -168,9 +170,9 @@ fn resolve_named(jobs: &Jobs) -> BTreeMap<String, Aggregate> {
                     }
                 }
                 None if !job.glob_constituents => {
-                    eprintln!(
+                    crate::log::line(&format!(
                         "error: aggregate job '{name}' references non-existent job '{child}'"
-                    );
+                    ));
                     broken.insert(child.clone(), "does not exist".into());
                 }
                 None => {
@@ -187,9 +189,9 @@ fn resolve_named(jobs: &Jobs) -> BTreeMap<String, Aggregate> {
                         }
                     }
                     if !found {
-                        eprintln!(
+                        crate::log::line(&format!(
                             "warning: aggregate job '{name}' references constituent glob pattern '{child}' with no matches"
-                        );
+                        ));
                         broken.insert(
                             child.clone(),
                             "constituent glob pattern had no matches".into(),
@@ -271,10 +273,10 @@ pub fn rewrite(
         Ok(s) => s,
         Err(cycle) => {
             let msg = format!("Dependency cycle: {} <-> {}", cycle.a, cycle.b);
-            eprintln!(
+            crate::log::line(&format!(
                 "error: Found dependency cycle between jobs '{}' and '{}'",
                 cycle.a, cycle.b
-            );
+            ));
             for name in [&cycle.a, &cycle.b] {
                 if let Some(mut job) = jobs.get_mut(name).and_then(|e| e.held.take()) {
                     set_error(&mut job, &msg);

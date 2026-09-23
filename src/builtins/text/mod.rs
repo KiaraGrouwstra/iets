@@ -347,7 +347,9 @@ fn convert_hash(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word>
         b"base16" => HashFormat::Base16,
         b"nix32" => HashFormat::Nix32,
         b"base32" => {
-            eprintln!("warning: \"base32\" is a deprecated alias for hash format \"nix32\".");
+            crate::log::line(
+                "warning: \"base32\" is a deprecated alias for hash format \"nix32\".",
+            );
             HashFormat::Nix32
         }
         b"base64" => HashFormat::Base64,

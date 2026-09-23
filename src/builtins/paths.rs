@@ -648,7 +648,10 @@ fn parse_sha256_allow_empty(s: &[u8], pos: Pos) -> EvalResult<Hash> {
     let s = utf8(s, pos)?;
     if s.is_empty() {
         let zero = Hash::from_bytes(HashAlgo::Sha256, &[0u8; 32]).expect("32 bytes");
-        eprintln!("warning: found empty hash, assuming '{}'", zero.to_sri());
+        crate::log::line(&format!(
+            "warning: found empty hash, assuming '{}'",
+            zero.to_sri()
+        ));
         return Ok(zero);
     }
     Hash::parse_any(s, Some(HashAlgo::Sha256)).map_err(|e| Error::boxed(ErrorKind::Eval, e.0, pos))

@@ -570,7 +570,10 @@ fn derivation_strict_internal(
             };
             let zero = Hash::from_bytes(algo, &vec![0u8; algo.size()])
                 .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, pos))?;
-            eprintln!("warning: found empty hash, assuming '{}'", zero.to_sri());
+            crate::log::line(&format!(
+                "warning: found empty hash, assuming '{}'",
+                zero.to_sri()
+            ));
             zero
         } else {
             Hash::parse_any(&h, output_hash_algo)

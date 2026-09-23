@@ -45,9 +45,9 @@ pub fn dispatch(name: &str, argv: &[String]) -> i32 {
 /// Execs the real `name` with the same arguments. `IETSP_NO_FALLBACK=1` makes
 /// this an error instead, so a test can see which cases fall back.
 pub fn fallback(name: &str, argv: &[String], reason: &str) -> ! {
-    eprintln!("ietsp: falling back to {name}: {reason}");
+    crate::log::line(&format!("ietsp: falling back to {name}: {reason}"));
     if crate::settings::get().no_fallback {
-        eprintln!("ietsp: IETSP_NO_FALLBACK=1, not running {name}");
+        crate::log::line(&format!("ietsp: IETSP_NO_FALLBACK=1, not running {name}"));
         exit(1)
     }
     let Some(real) = crate::nixbin::real(name) else {
@@ -75,7 +75,6 @@ pub struct Common {
     pub files: Vec<String>,
     /// `-E`: the positional arguments are expressions, not paths.
     pub from_args: bool,
-    pub show_trace: bool,
     pub quiet: bool,
 }
 
@@ -116,7 +115,6 @@ pub fn common_flag(c: &mut Common, a: &mut Argv, s: &str) -> Result<bool, String
         "--cores" => set.push(("cores".into(), a.number(s)?)),
         "-k" | "--keep-going" => set.push(("keep-going".into(), "true".into())),
         "-K" | "--keep-failed" => set.push(("keep-failed".into(), "true".into())),
-        "--show-trace" => c.show_trace = true,
         "--quiet" => c.quiet = true,
         "-v" | "--verbose" | "--no-gc-warning" | "--indirect" => {}
         _ => return Ok(false),

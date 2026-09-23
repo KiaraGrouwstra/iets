@@ -190,7 +190,7 @@ fn trace(ev: &mut Evaluator, args: &[Word], _pos: Pos) -> EvalResult<Word> {
     if !crate::parallel::journal(ev, line.clone()) {
         // parallel: helpers journal, the demand path prints
         ev.lints.flush();
-        eprintln!("{line}");
+        crate::log::line(&line);
     }
     ev.force(args[1])
 }
@@ -205,7 +205,7 @@ fn warn(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     if !crate::parallel::journal(ev, line.clone()) {
         // parallel: helpers journal, the demand path prints
         ev.lints.flush();
-        eprintln!("{line}");
+        crate::log::line(&line);
     }
     ev.force(args[1])
 }

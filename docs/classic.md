@@ -328,7 +328,8 @@ honoured; any other store falls back.
   store directly when it is writable.
 - `-Q`/`--no-build-output` drops the daemon's log lines. In Nix 2.34 it
   only switches the log format to `raw`.
-- `--show-trace` is accepted and ignored: ietsp always prints the full
+- `--show-trace` only puts the trace into the `--log-format internal-json`
+  error records (`docs/cli.md`): ietsp always prints the full
   trace it has.
 - `--no-out-link` creates no symlink at all. `nix-build` links into a
   temporary directory and lets it be deleted, which roots the output for

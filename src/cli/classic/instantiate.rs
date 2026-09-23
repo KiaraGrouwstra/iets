@@ -212,8 +212,8 @@ fn finish(
     plan: Option<&Plan>,
 ) -> i32 {
     if i.add_root.is_none() && i.gc_warning && !roots.is_empty() {
-        eprintln!(
-            "warning: you did not specify '--add-root'; the result might be removed by the garbage collector"
+        crate::log::line(
+            "warning: you did not specify '--add-root'; the result might be removed by the garbage collector",
         );
     }
     let mut worker = None;
@@ -265,6 +265,6 @@ fn finish(
 
 fn log_event(e: crate::remote::event::Event) {
     if let crate::remote::event::Event::Log(l) = e {
-        eprintln!("{}", String::from_utf8_lossy(&l.line));
+        crate::log::line(&String::from_utf8_lossy(&l.line));
     }
 }

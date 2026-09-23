@@ -32,14 +32,14 @@ impl EventSink {
             Event::Log(l) => {
                 let line = self.prov.rewrite_str(&String::from_utf8_lossy(&l.line));
                 if self.live {
-                    eprintln!("ietsp: {line}");
+                    crate::log::line(&format!("ietsp: {line}"));
                 } else {
                     self.log.push(line);
                 }
             }
             Event::Started(s) if self.live => match self.prov.started(&s.drv_path) {
-                Some(l) => eprintln!("ietsp: {l}"),
-                None => eprintln!("ietsp: building {}", s.drv_path),
+                Some(l) => crate::log::line(&format!("ietsp: {l}")),
+                None => crate::log::line(&format!("ietsp: building {}", s.drv_path)),
             },
             Event::Failed(f) => {
                 self.failed = Some(match self.prov.failed(&f.drv_path, &f.reason) {
@@ -57,7 +57,7 @@ impl EventSink {
 
     fn dump(&self) {
         for l in &self.log {
-            eprintln!("ietsp: {l}");
+            crate::log::line(&format!("ietsp: {l}"));
         }
     }
 }
@@ -79,7 +79,7 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
         match s {
             "--builder" => url = Some(next()),
             "--gc-root" => gc_root = Some(next()),
-            "--workers" | "--cache-dir" | "-I" | "--include" => {
+            "--workers" | "--cache-dir" | "-I" | "--include" | "--log-format" => {
                 let v = next();
                 rest.extend([s.to_string(), v]);
             }

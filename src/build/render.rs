@@ -53,7 +53,7 @@ impl Style {
     pub fn detect() -> Style {
         Style {
             mode: if is_tty() { Mode::Tty } else { Mode::Ci },
-            color: is_tty() && std::env::var_os("NO_COLOR").is_none(),
+            color: is_tty() && std::env::var_os("NO_COLOR").is_none() && !crate::log::json(),
             fold: actions_ci(),
             quiet: false,
         }
@@ -160,7 +160,7 @@ impl Renderer {
 
     fn print(&mut self, lines: &[String]) {
         for l in lines {
-            let _ = writeln!(self.out, "{l}");
+            let _ = writeln!(self.out, "{}", crate::log::format(l));
         }
         let _ = self.out.flush();
     }

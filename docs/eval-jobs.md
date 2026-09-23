@@ -237,10 +237,10 @@ identical, exit codes included.
 | `--max-memory-size MB` | identical default | Worker processes restarted above `MB`, 4096 like nix-eval-jobs (below). `0` is ietsp's own: one process with no ceiling, which no jobset larger than the box can finish. |
 | `--chunks M --chunk N`, `--chunk-depth D` | ietsp only | See above. |
 | `--impure` | identical | Turns off the pure evaluation `--flake` implies (`docs/pure-eval.md`). |
-| `--show-trace` | accepted | The trace is always in the error text. |
+| `--show-trace` | accepted | The trace is always in the error text; with `--log-format internal-json` it also goes into the error records, as in Nix. |
 | `--option k v` | accepted, ignored | `restrict-eval`, `allow-import-from-derivation` (IFD is unsupported anyway), `eval-cache`, substituters: none takes effect. |
 | `--quiet`, `--verbose`, `--debug` | accepted | `--quiet` drops the stderr summary. |
-| `--log-format raw` | accepted | `internal-json`, `bar`, `bar-with-logs`: error; ietsp logs plain lines. |
+| `--log-format F` | accepted | `internal-json`: stderr is Nix's `@nix {...}` records, with a `code` (and a `hint`) on each error (`docs/cli.md`). `raw`, `raw-with-logs`, `bar`, `bar-with-logs`: plain lines. |
 | `--max-jobs N` | accepted, ignored | |
 | `--provenance` | ietsp only | Adds a `pos` key per job: `file:line:col` of the derivation, mapped back to the local tree (`docs/provenance.md`). nix-eval-jobs 2.35 has no such key, so the flag is off by default and the 41 cases stay identical. |
 | `--override-input`, `--override-flake`, `--reference-lock-file` | error | ietsp evaluates a flake from its own complete `flake.lock` only. |
@@ -607,6 +607,6 @@ is a plain job on both sides (`namedConstituents: []` without
   over `ssh-ng://`, but `--check-cache-status` and `--constituents` read
   `.drv`s from `/nix/store` and need the local one, like nix-eval-jobs's
   `LocalFSStore` requirement.
-- **`--log-format internal-json`** is not produced; a driver that parses
-  nix-eval-jobs's stderr (Hydra reads only stdout and the exit code)
-  would see plain lines.
+- **`--log-format internal-json`** gives the `msg` records only, with
+  ietsp's plain text in `msg`; the activity records (`start`, `stop`,
+  `result`) are not produced yet (`docs/cli.md`).

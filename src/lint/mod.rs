@@ -818,7 +818,8 @@ impl Lints {
         if !g.seen.insert((id, pos)) {
             return false;
         }
-        g.pending.extend_from_slice(line.as_bytes());
+        g.pending
+            .extend_from_slice(crate::log::lint(&line).as_bytes());
         g.pending.push(b'\n');
         g.lines.push(line);
         if g.pending.len() >= FLUSH_AT {
