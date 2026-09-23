@@ -427,7 +427,7 @@ pub fn build_exit(status: u8, msg: &str) -> i32 {
     match status {
         3 | 4 => 100,
         8 => 101,
-        5 if msg.contains("hash mismatch in fixed-output derivation") => 102,
+        5 if msg.contains(MISMATCH) => 102,
         12 => 104,
         _ => 1,
     }
@@ -442,6 +442,9 @@ pub fn combine_exit(a: i32, b: i32) -> i32 {
         a.max(b)
     }
 }
+
+/// What every fixed-output hash mismatch message starts with.
+pub const MISMATCH: &str = "hash mismatch in fixed-output derivation";
 
 /// A failed build as a record; `reason` is `status N: MSG` or a plain
 /// message, `pos` where the derivation was defined.
@@ -472,12 +475,23 @@ fn wanted(text: &str) -> bool {
 }
 
 /// The daemon reports a resolved derivation's mismatch as a line of its own,
-/// not as the build's result, so the line is read here too.
-fn note_mismatch(text: &str) {
-    if wanted(text)
+/// not as the build's result, so the line is read here too. The resolved copy
+/// has a drv path of its own, so only the pair of hashes carries over; that
+/// is all `fix-hashes` and `prefetch` need.
+pub fn note_mismatch(text: &str) {
+    if text.contains(MISMATCH)
         && let Some(m) = mismatch(&crate::build::results::strip_ansi(text))
     {
-        MISMATCHES.lock().unwrap_or_else(|e| e.into_inner()).push(m);
+        push_mismatch(m);
+    }
+}
+
+/// One `(specified, got)` pair, skipping one that is already there: a
+/// mismatch can reach both paths that note one.
+fn push_mismatch(m: (String, String)) {
+    let mut v = MISMATCHES.lock().unwrap_or_else(|e| e.into_inner());
+    if !v.contains(&m) {
+        v.push(m);
     }
 }
 
@@ -536,7 +550,7 @@ pub fn build_failed(pos: Option<String>, reason: &str, exit: i32, text: Option<&
     if r.code == "hash-mismatch"
         && let Some(m) = mismatch(&r.raw)
     {
-        MISMATCHES.lock().unwrap_or_else(|e| e.into_inner()).push(m);
+        push_mismatch(m);
         if wanted(&r.raw) {
             return;
         }
@@ -633,6 +647,25 @@ mod tests {
         assert_eq!(combine_exit(1, 102), 102);
         assert_eq!(combine_exit(0, 1), 1);
         assert_eq!(combine_exit(0, 0), 0);
+    }
+
+    #[test]
+    fn a_resolved_copy_reports_its_mismatch_as_a_line() {
+        let a = "sha256-AoAoAoAoAo=";
+        let mine = |v: Vec<(String, String)>| -> Vec<(String, String)> {
+            v.into_iter().filter(|(s, _)| s == a).collect()
+        };
+        let line = format!(
+            "error: hash mismatch in fixed-output derivation '/nix/store/r-x.drv':\n         specified: {a}\n            got:    sha256-BoBoBoBoBo="
+        );
+        note_mismatch(&line);
+        note_mismatch(&line);
+        assert_eq!(
+            mine(take_mismatches()),
+            vec![(a.to_string(), "sha256-BoBoBoBoBo=".to_string())]
+        );
+        note_mismatch("error: build of resolved derivation '/nix/store/r-x.drv' failed");
+        assert_eq!(mine(take_mismatches()), Vec::new());
     }
 
     #[test]
