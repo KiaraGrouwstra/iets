@@ -15,6 +15,7 @@ commands:
   eval-jobs      print a jobset's derivations as JSON lines (nix-eval-jobs)
   fast-build     evaluate and build a flake's checks (nix-fast-build)
   print-dev-env  print the environment of a flake's devShell, for direnv
+  prefetch       print the hash of a URL or of a fixed-output derivation
   lint           list the lints and the levels a run would use
   parse          parse Nix files and print or check the syntax tree
   cache          sweep old cache entries, or dump a cache entry's read set
@@ -177,7 +178,8 @@ read set of a tracing-cache entry (docs/tracing-cache.md).
   --cache-dir DIR       sweep DIR instead of the default cache
 ";
 
-pub const COMMANDS: &str = "eval build eval-jobs fast-build print-dev-env lint parse cache";
+pub const COMMANDS: &str =
+    "eval build eval-jobs fast-build print-dev-env prefetch lint parse cache";
 
 /// The native command being parsed, "ietsp" before the command word; unset
 /// under a classic name.
@@ -199,6 +201,7 @@ fn parts(cmd: Option<&str>) -> Option<[&'static str; 2]> {
         "eval-jobs" => [EVAL_JOBS, ""],
         "fast-build" => [FAST_BUILD, ""],
         "print-dev-env" => [PRINT_DEV_ENV, ""],
+        "prefetch" => [crate::cli::prefetch::HELP, INPUT],
         "lint" => [LINT, ""],
         "parse" => [PARSE, ""],
         "cache" | "cache-dump" => [CACHE, ""],

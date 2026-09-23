@@ -12,6 +12,7 @@ pub mod fastbuild;
 pub mod help;
 pub mod jobs;
 pub mod parse;
+pub mod prefetch;
 
 use help::{arg_error, value};
 

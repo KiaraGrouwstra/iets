@@ -284,6 +284,11 @@ refuses that), `nix flake …` but `prefetch-inputs`, `nix run`, `nix shell`,
 `nix why-depends`, `nix fmt`, every other subcommand, and any flag not
 listed above.
 
+`nix store prefetch-file` and `nix-prefetch-url` keep falling back on
+purpose. Both add the file to the store and print its path, and ietsp has no
+store to add it to. `ietsp prefetch` prints the same hash and nothing else
+(`docs/prefetch.md`).
+
 ## Fallback rules
 
 Two triggers:

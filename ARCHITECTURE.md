@@ -181,6 +181,7 @@ dev shell (`scripts/lib.nu` holds what they share):
 | `daemon-e2e.nu`, `grpc-e2e.nu` | `ietsp build` over the worker protocol and over `grpc://` |
 | `fastbuild-e2e.nu` | `ietsp fast-build`, and against `nix-fast-build` |
 | `flaketest.nu` | flake evaluation and the input store against `nix eval` |
+| `prefetch-e2e.nu` | `ietsp prefetch` against `nix store prefetch-file` and `nix hash` |
 | `devenv-test.nu` | `print-dev-env` against `nix print-dev-env` |
 | `provenance-e2e.nu` | the rewritten paths and positions |
 | `evaljobs-flags.nu`, `evaljobs-cmp.nu` | `ietsp eval-jobs` against `nix-eval-jobs`; two saved outputs |

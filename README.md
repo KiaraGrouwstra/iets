@@ -26,6 +26,10 @@ bench/run.nu nixos-desktop
 # nix-fast-build's flags, one process: eval and build overlap, results as json or junit
 ./target/release/ietsp fast-build --flake .#checks --skip-cached --result-file r.json
 
+# the hash of a URL or of a fixed-output derivation, for nurl and nix-prefetch
+./target/release/ietsp prefetch --unpack https://example.org/src.tar.gz   # docs/prefetch.md
+./target/release/ietsp prefetch -E '(import <nixpkgs> {}).hello.src'
+
 # .envrc: what `nix print-dev-env` prints, byte-exact, from the in-memory shell drv
 ./target/release/ietsp print-dev-env --gc-root .direnv/ietsp-env .   # see docs/direnv.md
 
