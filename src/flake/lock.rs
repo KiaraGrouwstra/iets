@@ -11,6 +11,8 @@ use crate::error::{Error, Result};
 pub struct Lock {
     pub root: String,
     json: Value,
+    /// The nodes the root reaches, itself included.
+    reached: Vec<String>,
 }
 
 impl Lock {
@@ -19,6 +21,15 @@ impl Lock {
             .as_object()
             .into_iter()
             .flat_map(|m| m.keys().map(String::as_str))
+    }
+
+    /// `(node name, locked attrs)` of every node but the root that the root
+    /// reaches, as `nix flake prefetch-inputs` visits them.
+    pub fn reached_inputs(&self) -> impl Iterator<Item = (&str, &serde_json::Map<String, Value>)> {
+        self.reached
+            .iter()
+            .filter(|n| **n != self.root)
+            .filter_map(|n| Some((n.as_str(), self.json["nodes"][n]["locked"].as_object()?)))
     }
 
     /// `(narHash, node name)` of every locked node, for messages that name
@@ -125,7 +136,13 @@ pub fn check(bytes: &[u8]) -> Result<Lock> {
             }
         }
     }
-    Ok(Lock { root, json })
+    let mut reached: Vec<String> = seen.into_iter().map(str::to_owned).collect();
+    reached.sort();
+    Ok(Lock {
+        root,
+        json,
+        reached,
+    })
 }
 
 #[cfg(test)]
@@ -152,6 +169,13 @@ mod tests {
         let mut names: Vec<&str> = l.root_inputs().collect();
         names.sort();
         assert_eq!(names, ["a", "nixpkgs", "p"]);
+        let reached: Vec<&str> = l.reached_inputs().map(|(n, _)| n).collect();
+        assert_eq!(reached, ["a", "nixpkgs", "p"]);
+        let stale = LOCK.replace(
+            r#""nodes": {"#,
+            r#""nodes": { "x": { "locked": { "type": "github", "narHash": "sha256-C" } },"#,
+        );
+        assert_eq!(check(stale.as_bytes()).unwrap().reached_inputs().count(), 3);
     }
 
     #[test]

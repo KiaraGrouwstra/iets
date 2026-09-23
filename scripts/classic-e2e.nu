@@ -301,6 +301,10 @@ def main [] {
   $ok = ($ok | append (cmp-case "nix eval .#l"
     (run-both $farm nix eval $"($fref)#l")))
 
+  let pf = (run-both $farm nix flake prefetch-inputs $fref)
+  $ok = ($ok | append ((cmp-case "nix flake prefetch-inputs, no inputs" $pf) and (verdict (not ($pf.ours.stderr | str contains "falling back"))
+    "nix flake prefetch-inputs is ietsp's own" $"stderr '($pf.ours.stderr)'")))
+
   # the farm first on PATH: copying a fresh tree must spawn the real nix, not us
   let fdir2 = $"($tmp)/flake-fresh"
   mkdir $fdir2

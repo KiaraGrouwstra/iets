@@ -169,7 +169,7 @@ files. See `docs/fast-build.md`.
 
 ### `nix`
 
-Four subcommands; every other one execs the real `nix`.
+Five subcommands; every other one execs the real `nix`.
 
 `nix eval [INSTALLABLE]`: `--json`, `--raw`, `--expr E`, `-f`/`--file FILE`,
 `--impure`, `--pure-eval`, `--no-pure-eval` (`docs/pure-eval.md`: `nix`
@@ -256,12 +256,30 @@ Falls back on: `--phase`, `--unpack`, `--configure`, `--build`, `--check`,
 `--install`, `--installcheck`, `--profile`, `--redirect`, more than one
 installable, any other flag.
 
+`nix flake prefetch-inputs [FLAKEREF]` (default `.`), plus the global flags,
+is `flake-prefetch-inputs.cc`: it fetches every locked input that the root
+of `flake.lock` reaches, on up to 25 threads (the default of
+`http-connections`). Each input takes the path an evaluation takes
+(`docs/flakes.md`): `/nix/store`, then the input store, then a substitute,
+then ietsp's own download for `github`, `gitlab`, `sourcehut` and `tarball`,
+then the real nix for `git` and `hg`. So a tarball-shaped input lands in the
+input store, not in `/nix/store`. A `path:` input is read in place and has
+nothing to fetch. An input that fails prints its error, the others go on, and
+the exit code is 1. Falls back on: a missing or incomplete `flake.lock`
+(the real one locks the flake first), an input of another type, a non-local
+flake reference, any other flag.
+
+`fast-build` and `eval-jobs --flake` do not prefetch. An evaluation often
+uses only some of the inputs, so a prefetch can download trees that nothing
+reads, and parallel workers already share one download per tree
+(`docs/caches.md`).
+
 Falls back on: `nix eval --apply`, `--write-to` or more than one
 installable, `nix build --rebuild`, `--dry-run` or `--json`, an installable
 that is a store path (`/nix/store/…`, or an `^outputs` suffix), a
 non-local flake reference such as `nixpkgs#hello`, an installable that is
 not a derivation under `nix build`, `--arg`/`--argstr` with a flake (nix
-refuses that), `nix flake …`, `nix run`, `nix shell`,
+refuses that), `nix flake …` but `prefetch-inputs`, `nix run`, `nix shell`,
 `nix profile`, `nix store`, `nix copy`, `nix repl`, `nix log`,
 `nix why-depends`, `nix fmt`, every other subcommand, and any flag not
 listed above.

@@ -1,6 +1,7 @@
-//! `nix` (src/nix): the subcommands ietsp implements — `eval`, `build` and
-//! `print-dev-env` — with the same exec fallback as the other classic names
-//! for everything else. See `docs/classic.md`.
+//! `nix` (src/nix): the subcommands ietsp implements — `eval`, `build`,
+//! `print-dev-env`, `develop` and `flake prefetch-inputs` — with the same exec
+//! fallback as the other classic names for everything else. See
+//! `docs/classic.md`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -17,6 +18,8 @@ use crate::runtime::{Value, Word};
 use crate::store::path::StorePath;
 
 const NAME: &str = "nix";
+/// filetransfer.hh: the default of `http-connections`.
+const HTTP_CONNECTIONS: usize = 25;
 
 /// The flags accepted before the subcommand, and how many values each takes.
 /// `global_flag` applies them; `find_sub` only needs the arity.
@@ -73,6 +76,10 @@ pub fn main(argv: &[String]) -> i32 {
         "build" => build_main(argv, &rest),
         "print-dev-env" => dev_env_main(argv, &rest),
         "develop" => super::develop::main(argv, &rest),
+        "flake" if rest.get(k).is_some_and(|s| s == "prefetch-inputs") => {
+            rest.remove(k);
+            prefetch_inputs_main(argv, &rest)
+        }
         s => fallback(NAME, argv, &format!("subcommand '{s}'")),
     }
 }
@@ -331,6 +338,83 @@ fn build_run(ev: &mut Evaluator, n: &Nix) -> Run {
         Ok(p) => Run::Ready(targets, Box::new(p)),
         Err(e) => Run::Failed(e.report()),
     }
+}
+
+/// flake-prefetch-inputs.cc: every locked input the lock reaches, fetched in
+/// parallel the way an evaluation fetches it (`fetch::ensure_readable`), on
+/// as many threads as `http-connections`' default. A lock that is missing or
+/// incomplete needs locking, which the real nix does.
+fn prefetch_inputs_main(argv: &[String], rest: &[String]) -> i32 {
+    use crate::flake::fetch::{AttrVal, Attrs, ensure_readable, parse_nar_hash, source_store_path};
+    let mut c = Common::default();
+    let mut refs = Vec::new();
+    let mut a = Argv { all: rest, i: 0 };
+    while a.i < rest.len() {
+        let s = rest[a.i].clone();
+        match global_flag(&mut c, &mut a, &s) {
+            Ok(true) => {}
+            Ok(false) if !s.starts_with('-') => refs.push(s),
+            Ok(false) => fallback(NAME, argv, &format!("'{s}' is not implemented")),
+            Err(why) => fallback(NAME, argv, &why),
+        }
+        a.i += 1;
+    }
+    if refs.len() > 1 {
+        fallback(NAME, argv, "'nix flake prefetch-inputs' takes one flake");
+    }
+    let fr = crate::api::flake_ref(refs.first().map_or(".", String::as_str), &cwd())
+        .unwrap_or_else(|e| fallback(NAME, argv, &e.to_string()));
+    let lock = std::fs::read(fr.dir.join("flake.lock"))
+        .map_err(|e| e.to_string())
+        .and_then(|b| crate::flake::lock::check(&b).map_err(|e| e.to_string()))
+        .unwrap_or_else(|why| fallback(NAME, argv, &format!("flake.lock: {why}")));
+    let mut todo = Vec::new();
+    for (name, locked) in lock.reached_inputs() {
+        let mut attrs: Attrs = locked
+            .iter()
+            .filter_map(|(k, v)| {
+                let v = match v {
+                    serde_json::Value::String(s) => AttrVal::Str(s.clone()),
+                    serde_json::Value::Bool(b) => AttrVal::Bool(*b),
+                    v => AttrVal::Int(v.as_u64()?),
+                };
+                Some((k.clone(), v))
+            })
+            .collect();
+        match (locked["type"].as_str(), locked["narHash"].as_str()) {
+            // a path input is read in place, and a relative one is the root's
+            (Some("path"), _) => {}
+            (Some("github" | "gitlab" | "sourcehut" | "tarball" | "git" | "hg"), Some(h)) => {
+                let (h, sp) = parse_nar_hash(h)
+                    .and_then(|h| Ok((h.to_sri(), source_store_path(&h)?)))
+                    .unwrap_or_else(|e| fallback(NAME, argv, &format!("input '{name}': {e}")));
+                attrs.insert("narHash".into(), AttrVal::Str(h.clone()));
+                todo.push((name.to_string(), h, sp, attrs));
+            }
+            (t, _) => fallback(NAME, argv, &format!("input '{name}' of type {t:?}")),
+        }
+    }
+    let system = crate::config::Config::load(&c.flags.overrides)
+        .unwrap_or_else(|e| fallback(NAME, argv, &e.to_string()))
+        .system();
+    let threads = todo.len().min(HTTP_CONNECTIONS);
+    let queue = std::sync::Mutex::new(todo.into_iter());
+    let failed = std::sync::atomic::AtomicBool::new(false);
+    std::thread::scope(|s| {
+        for _ in 0..threads {
+            s.spawn(|| {
+                while let Some((name, hash, sp, attrs)) = queue.lock().unwrap().next() {
+                    let mut ev = Evaluator::with(&system, true);
+                    ev.input_names.insert(hash, name);
+                    if let Err(e) = ensure_readable(&mut ev, &sp, &attrs, Pos::NONE) {
+                        report(&ev, &e);
+                        failed.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            });
+        }
+    });
+    i32::from(failed.into_inner())
 }
 
 fn dev_env_main(argv: &[String], rest: &[String]) -> i32 {

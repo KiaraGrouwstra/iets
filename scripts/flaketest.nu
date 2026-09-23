@@ -424,6 +424,27 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let w_ok = ($first.exit_code == 0 and $w.exit_code == 0 and $w.stdout == $"hello5 ($work)\n" and ($w.stderr | str contains "waiting for another process to fetch input 'tb'"))
   $res ++= [(verdict $w_ok "tarball: a second process waits for the first one's download and reads its entry" $"fetch lock \(exit ($first.exit_code)/($w.exit_code)\): ($w.stdout) ($w.stderr | lines | last 2 | str join ' | ')")]
 
+  # `nix flake prefetch-inputs`: both tarball inputs land in the input store,
+  # with no nix to fall back on, and an evaluation then downloads nothing.
+  let pf = $"($work)/prefetchflake"
+  mkdir $pf $"($work)/tb6src"
+  $"hello6 ($work)\n" | save $"($work)/tb6src/a"
+  ^tar -C $work -czf $"($work)/tb6.tar.gz" tb6src
+  let tb6_hash = (nixf hash path --type sha256 --sri $"($work)/tb6src" | complete | get stdout | chomp)
+  '{ inputs.a = { url = "file://@WORK@/tb5.tar.gz"; flake = false; }; inputs.b = { url = "file://@WORK@/tb6.tar.gz"; flake = false; }; outputs = { self, a, b }: { v = builtins.readFile (a + "/a") + builtins.readFile (b + "/a"); }; }' | str replace -a "@WORK@" $work | save $"($pf)/flake.nix"
+  let tbnode = {|f, h| { flake: false, locked: { type: "tarball", url: $"file://($work)/($f)", narHash: $h }, original: { type: "tarball", url: $"file://($work)/($f)" } } }
+  {
+    nodes: { a: (do $tbnode "tb5.tar.gz" $tb5_hash), b: (do $tbnode "tb6.tar.gz" $tb6_hash), root: { inputs: { a: "a", b: "b" } } }
+    root: "root"
+    version: 7
+  } | to json | save $"($pf)/flake.lock"
+  let pvars = ($no_daemon | merge {IETSP_CACHE_DIR: $"($work)/prefetchcache", PATH: $nobin})
+  let p = (with-env $pvars { ^$ietsp nix flake prefetch-inputs $pf | complete })
+  let pe = (with-env ($pvars | merge {IETSP_OFFLINE: "1"}) { ^$ietsp eval --raw --no-cache $"($pf)#v" | complete })
+  let p_ok = ($p.exit_code == 0 and $p.stdout == "" and ($p.stderr | lines | where ($it | str contains "fetching it") | length) == 2
+    and $pe.exit_code == 0 and $pe.stdout == $"hello5 ($work)\nhello6 ($work)\n" and not ($pe.stderr | str contains "fetching it"))
+  $res ++= [(verdict $p_ok "prefetch-inputs: fetches every input, then an offline eval downloads nothing" $"prefetch-inputs \(exit ($p.exit_code)/($pe.exit_code)\): ($p.stderr | lines | last 2 | str join ' | ') / ($pe.stderr | lines | last 2 | str join ' | ')")]
+
   # the lock's narHash is the contract: a tarball whose contents changed is
   # refused, and nothing is registered. The input store entry must go first,
   # or the fetch never happens: the entry is the locked tree, already verified.
@@ -528,6 +549,8 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let g = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp eval --raw --no-cache $"($ghost)#v" | complete })
   let named = ($g.stderr | lines | where ($it | str contains "input 'ghost'") | length)
   $res ++= [(verdict ($g.exit_code != 0 and $g.stdout == "" and $named == 2 and ($g.stderr | str contains "cannot fetch input 'ghost'")) "unfetchable input: both messages name it, the failed fetch was ietsp's own" $"unfetchable input \(exit ($g.exit_code)\): ($g.stderr | lines | first 2 | str join ' | ')")]
+  let gp = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp nix flake prefetch-inputs $ghost | complete })
+  $res ++= [(verdict ($gp.exit_code == 1 and ($gp.stderr | str contains "cannot fetch input 'ghost'")) "prefetch-inputs: an unfetchable input is an error that names it, exit 1" $"prefetch-inputs ghost \(exit ($gp.exit_code)\): ($gp.stderr | lines | last 2 | str join ' | ')")]
 
   let fail = ($res | where not $it | length)
   print $"pass=($res | where $it | length) fail=($fail)"
