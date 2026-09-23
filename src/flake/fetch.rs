@@ -648,6 +648,14 @@ fn fetch_tarball(
         .and_then(|h| parse_nar_hash(h).ok())
         .ok_or_else(|| fail(format!("ietsp: input '{name}' has no usable 'narHash'")))?;
 
+    let _fetching = crate::inputs::fetch_lock(sp.base_name(), || {
+        crate::log::line(&format!(
+            "ietsp: waiting for another process to fetch input '{name}'"
+        ))
+    });
+    if let Some(entry) = crate::inputs::reopen(sp.base_name()) {
+        return Ok(entry);
+    }
     let staged = crate::inputs::stage(sp.base_name()).ok_or_else(|| {
         fail(format!(
             "ietsp: cannot fetch input '{name}': no cache directory to hold it"

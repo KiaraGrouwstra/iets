@@ -8,8 +8,9 @@
 //! so a reader either sees the whole previous entry or the whole new one and
 //! never locks; a writer holds the store's `flock` for exactly one file, and a
 //! writer that cannot take it within `LOCK_TIMEOUT` drops the write.** A
-//! dropped write costs one cache miss later, which is why no path here ever
-//! waits on a sibling worker or fails a run.
+//! dropped write costs one cache miss later, which is why no path here waits
+//! on a sibling worker or fails a run. The one exception is `wait_lock`, for a
+//! download a sibling is already doing.
 
 use std::fs;
 use std::io;
@@ -184,6 +185,30 @@ pub fn write_lock(root: &Path) -> Option<WriteLock> {
         std::thread::sleep(LOCK_POLL);
         waited += LOCK_POLL;
     }
+}
+
+/// An exclusive `flock` on the file `path`, taken without a timeout: the one
+/// wait in the caches, for work that costs far more than waiting (a
+/// download). `on_wait` runs once when a sibling holds it. The file is
+/// touched, so a sweep never takes a lock file that is in use.
+pub fn wait_lock(path: &Path, on_wait: impl FnOnce()) -> Option<WriteLock> {
+    let f = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+        .ok()?;
+    let fd = f.as_raw_fd();
+    if unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        on_wait();
+        while unsafe { libc::flock(fd, libc::LOCK_EX) } != 0 {
+            if io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+                return None;
+            }
+        }
+    }
+    set_now(fd, None);
+    Some(WriteLock(f))
 }
 
 // ---- touching --------------------------------------------------------------
@@ -441,6 +466,24 @@ mod tests {
         assert!(write_lock(&d).is_none());
         drop(held);
         assert!(write_lock(&d).is_some());
+    }
+
+    #[test]
+    fn a_wait_lock_waits_for_its_holder() {
+        let d = tmp("waitlock");
+        prepare(&d, false);
+        let f = d.join(".x.fetching.tmp");
+        let held = wait_lock(&f, || panic!("nobody holds it")).expect("first lock");
+        let waited = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (w, f2) = (waited.clone(), f.clone());
+        let t = std::thread::spawn(move || {
+            wait_lock(&f2, || w.store(true, std::sync::atomic::Ordering::SeqCst)).is_some()
+        });
+        while !waited.load(std::sync::atomic::Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        drop(held);
+        assert!(t.join().expect("waiter"));
     }
 
     #[test]

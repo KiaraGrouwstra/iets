@@ -189,6 +189,20 @@ pub fn stage(name: &str) -> Option<Staged> {
     Some(Staged { dir })
 }
 
+/// One download per tree: every process that is about to fetch `name` takes
+/// this lock first, and one that had to wait finds the tree its sibling
+/// stored (`reopen`). The lock file is named like a temporary, so the sweep
+/// removes it once it is a day old and unused.
+pub fn fetch_lock(name: &str, on_wait: impl FnOnce()) -> Option<cachefs::WriteLock> {
+    cachefs::wait_lock(&root()?.join(format!(".{name}.fetching.tmp")), on_wait)
+}
+
+/// `open`, past a miss this process recorded earlier.
+pub fn reopen(name: &str) -> Option<Arc<Entry>> {
+    opened().lock().unwrap().remove(name);
+    open(name)
+}
+
 /// Moves a staged entry into place and keeps it open. The rename is atomic, so
 /// a reader sees either no entry or a whole one; a sibling that got there first
 /// wins and its files stay. `None` leaves the tree unstored, which costs a

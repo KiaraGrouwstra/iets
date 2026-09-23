@@ -45,6 +45,18 @@ hook, the classic command names, a second terminal. The invariant:
 - a killed writer leaves a `.name.pid.n.tmp` file, which no reader looks
   at and the sweep removes after a day.
 
+**One download per tree.** A fetch is the one place a process waits for a
+sibling. Before it downloads an input, a process takes an `flock` on
+`inputs/.<store path base name>.fetching.tmp`. A second process that needs
+the same tree (another `eval-jobs` worker, a second build) prints `ietsp:
+waiting for another process to fetch input 'NAME'`, blocks until the first
+one is done, and then reads the entry the first one stored. When the first
+fetch failed, the second one downloads it itself. The lock is per tree, so
+different inputs still download in parallel. The download already runs on
+its own thread while the main thread decompresses into the spool; the index
+is a second pass that seeks over the spool's headers in the page cache, so
+it is not overlapped with the download.
+
 The tracing cache writes `readset` last. A write the lock cut short leaves
 an entry with no read set, which the next lookup treats as a miss.
 

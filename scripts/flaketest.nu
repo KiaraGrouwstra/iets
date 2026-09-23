@@ -395,6 +395,35 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let fb_ok = ($fb.exit_code == 0 and ($fb.stderr | str contains "fetching it"))
   $res ++= [(verdict $fb_ok "build --no-build uploads a filtered copy of an input member" $"build --no-build \(exit ($fb.exit_code)\): ($fb.stderr | lines | last 1 | str join '')")]
 
+  # one download per tree: a sibling holds the tree's fetch lock and stores
+  # the entry before it lets go, so ietsp waits and then reads that entry,
+  # with every download refused.
+  let wf = $"($work)/waitflake"
+  mkdir $wf $"($work)/tb5src"
+  $"hello5 ($work)\n" | save $"($work)/tb5src/a"
+  ^tar -C $work -czf $"($work)/tb5.tar.gz" tb5src
+  let tb5_hash = (nixf hash path --type sha256 --sri $"($work)/tb5src" | complete | get stdout | chomp)
+  '{ inputs.tb = { url = "file://@WORK@/tb5.tar.gz"; flake = false; }; outputs = { self, tb }: { v = builtins.readFile (tb + "/a"); }; }' | str replace -a "@WORK@" $work | save $"($wf)/flake.nix"
+  {
+    nodes: {
+      tb: { flake: false, locked: { type: "tarball", url: $"file://($work)/tb5.tar.gz", narHash: $tb5_hash }, original: { type: "tarball", url: $"file://($work)/tb5.tar.gz" } }
+      root: { inputs: { tb: "tb" } }
+    }
+    root: "root"
+    version: 7
+  } | to json | save $"($wf)/flake.lock"
+  let no_daemon = {IETSP_NIX_BIN_DIR: $nobin, NIX_CONFIG: "store = unix:///nonexistent/ietsp-no-daemon"}
+  let first = (with-env ($no_daemon | merge {IETSP_CACHE_DIR: $"($work)/waitsrc"}) { ^$ietsp eval --raw --no-cache $"($wf)#v" | complete })
+  let entry5 = (try { ls $"($work)/waitsrc/inputs" | where type == dir | get 0.name } catch { "" })
+  let wc = $"($work)/waitcache"
+  mkdir $"($wc)/inputs"
+  cp $"($work)/waitsrc/inputs/version" $"($wc)/inputs/"
+  let lockf = $"($wc)/inputs/.($entry5 | path basename).fetching.tmp"
+  let script = $"flock '($lockf)' sh -c 'sleep 1; cp -r ($entry5) ($wc)/inputs/' & sleep 0.3; '($ietsp)' eval --raw --no-cache '($wf)#v'; wait"
+  let w = (with-env ($no_daemon | merge {IETSP_CACHE_DIR: $wc, IETSP_OFFLINE: "1"}) { ^bash -c $script | complete })
+  let w_ok = ($first.exit_code == 0 and $w.exit_code == 0 and $w.stdout == $"hello5 ($work)\n" and ($w.stderr | str contains "waiting for another process to fetch input 'tb'"))
+  $res ++= [(verdict $w_ok "tarball: a second process waits for the first one's download and reads its entry" $"fetch lock \(exit ($first.exit_code)/($w.exit_code)\): ($w.stdout) ($w.stderr | lines | last 2 | str join ' | ')")]
+
   # the lock's narHash is the contract: a tarball whose contents changed is
   # refused, and nothing is registered. The input store entry must go first,
   # or the fetch never happens: the entry is the locked tree, already verified.
