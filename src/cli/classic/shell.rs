@@ -105,8 +105,8 @@ fn parse(argv: &[String]) -> Result<Shell, String> {
         }
         a.i += 1;
     }
-    if s.c.attr_paths.is_empty() {
-        s.c.attr_paths.push(String::new());
+    if s.c.flags.attrs.is_empty() {
+        s.c.flags.attrs.push(String::new());
     }
     Ok(s)
 }
@@ -222,7 +222,7 @@ fn prepare(ev: &mut Evaluator, s: &Shell) -> Run {
     let cwd = cwd();
     let mut roots: Vec<Root> = Vec::new();
     let r = (|| -> Result<Bash, Box<Error>> {
-        let args = auto_args(ev, &s.c.args, &cwd)?;
+        let args = auto_args(ev, &s.c.flags.args, &cwd)?;
         let mut seen = HashSet::new();
         for file in &s.c.files {
             let root = if s.c.from_args {
@@ -239,7 +239,7 @@ fn prepare(ev: &mut Evaluator, s: &Shell) -> Run {
             } else {
                 args
             };
-            for attr in &s.c.attr_paths {
+            for attr in &s.c.flags.attrs {
                 let v = super::select(ev, root, attr, args)?;
                 let v = ev.force(v)?;
                 let args = if takes_in_nix_shell(ev, v) {

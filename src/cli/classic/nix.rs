@@ -9,7 +9,7 @@ use super::{Argv, Common, Root, fallback, is_unsupported};
 use crate::build::render::Style;
 use crate::build::upload::PlanUpload;
 use crate::build::{Dispatcher, Target as BuildTarget};
-use crate::cli::{ArgKind, abs_path, auto_args, cwd, parse_include, report};
+use crate::cli::{abs_path, auto_args, cwd, report};
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::remote::plan::Plan;
 use crate::remote::worker::{Options, Transport};
@@ -93,39 +93,21 @@ fn find_sub(argv: &[String]) -> Result<usize, String> {
     Err("no subcommand".into())
 }
 
-fn number(flag: &str, v: &str) -> Result<String, String> {
-    v.parse::<u64>()
-        .map(|n| n.to_string())
-        .map_err(|_| format!("'{flag}' wants a number, got '{v}'"))
-}
-
 /// `Ok(true)`: consumed. `Ok(false)`: not one of ours. `Err`: fall back.
 pub(super) fn global_flag(c: &mut Common, a: &mut Argv, s: &str) -> Result<bool, String> {
-    let Some((_, arity)) = GLOBALS.iter().find(|(f, _)| *f == s) else {
+    if !GLOBALS.iter().any(|(f, _)| *f == s) {
         return Ok(false);
-    };
-    let mut v = Vec::new();
-    for _ in 0..*arity {
-        v.push(a.value(s)?);
     }
     match s {
         "--accept-flake-config" => {}
-        _ if crate::cli::pure_flag(s).is_some() => c.pure = crate::cli::pure_flag(s),
-        "--experimental-features" | "--extra-experimental-features" => {}
-        "--show-trace" => c.show_trace = true,
-        "--option" => super::option(c, v[0].clone(), v[1].clone())?,
-        "-I" | "--include" => c.includes.push(parse_include(&v[0])),
-        "--arg" => c.args.push((v[0].clone(), ArgKind::Expr(v[1].clone()))),
-        "--argstr" => c.args.push((v[0].clone(), ArgKind::Str(v[1].clone()))),
-        "--store" => c.overrides.push(("store".into(), v[0].clone())),
-        "--eval-store" if v[0] == "auto" || v[0] == "daemon" || v[0].is_empty() => {}
-        "--eval-store" => {
-            return Err(format!("'--eval-store {}' is not implemented", v[0]));
+        "--experimental-features" | "--extra-experimental-features" => {
+            a.value(s)?;
         }
-        "-j" | "--max-jobs" => c.overrides.push(("max-jobs".into(), number(s, &v[0])?)),
-        "--cores" => c.overrides.push(("cores".into(), number(s, &v[0])?)),
-        "-k" | "--keep-going" => c.overrides.push(("keep-going".into(), "true".into())),
-        _ => return Ok(false),
+        "--eval-store" => match a.value(s)?.as_str() {
+            "auto" | "daemon" | "" => {}
+            v => return Err(format!("'--eval-store {v}' is not implemented")),
+        },
+        _ => return super::common_flag(c, a, s),
     }
     Ok(true)
 }
@@ -203,7 +185,7 @@ fn parse_build(argv: &[String]) -> Result<Nix, String> {
 /// installable-flake.cc: a flake installable refuses `--arg`/`--argstr`, so
 /// the real nix reports that better than we would.
 fn check_args_with_flake(n: &Nix) -> Result<(), String> {
-    if !n.c.args.is_empty() && n.expr.is_none() && n.file.is_none() {
+    if !n.c.flags.args.is_empty() && n.expr.is_none() && n.file.is_none() {
         return Err("'--arg' and '--argstr' are incompatible with flakes".into());
     }
     Ok(())
@@ -232,12 +214,12 @@ pub(super) fn nix_settings(
     } else {
         super::shell_settings(c)
     }?;
-    let set = c.pure.is_some() || s.0.bool("pure-eval").ok().flatten().is_some();
-    let pure = c.pure.unwrap_or(true);
+    let set = c.flags.pure.is_some() || s.0.bool("pure-eval").ok().flatten().is_some();
+    let pure = c.flags.pure.unwrap_or(true);
     if file && pure && set {
         return Err("'--file' is not compatible with '--pure-eval'".into());
     }
-    c.pure = Some(pure && !file);
+    c.flags.pure = Some(pure && !file);
     Ok(s)
 }
 
@@ -402,7 +384,7 @@ fn attr_paths(fragment: &str, system: &str) -> Vec<String> {
 /// The value one installable names: an attribute of the `--expr`/`--file`
 /// value, or a flake output attribute.
 fn resolve(ev: &mut Evaluator, n: &Nix, what: &str, cwd: &[u8]) -> EvalResult<Word> {
-    let args = auto_args(ev, &n.c.args, cwd)?;
+    let args = auto_args(ev, &n.c.flags.args, cwd)?;
     // installable-attr-path.cc:parse: `.` is the whole value.
     let attr = if what == "." { "" } else { what };
     if let Some(e) = &n.expr {

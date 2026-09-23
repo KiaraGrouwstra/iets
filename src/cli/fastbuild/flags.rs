@@ -5,7 +5,7 @@
 //! knows: `nix-fast-build` falls back to the real one, the way classic
 //! mode falls back; `ietsp fast-build` is an error (docs/fast-build.md).
 
-use crate::cli::ArgKind;
+use crate::cli::{EvalFlags, eval_flag};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
@@ -25,12 +25,10 @@ pub struct Args {
     pub flake: String,
     /// `--file [FILE]`, default `default.nix`.
     pub file: String,
-    pub attr: Option<String>,
-    pub args: Vec<(String, ArgKind)>,
-    pub includes: Vec<(Vec<u8>, Vec<u8>)>,
+    /// `-A`, `--arg`, `-I`; `overrides` is every `--option`, `pure-eval`
+    /// included, for `Config::load`.
+    pub flags: EvalFlags,
     pub impure: bool,
-    /// `--option name value`, for `Config::load`.
-    pub overrides: Vec<(String, String)>,
     /// `-j`; `None` means "take `max-jobs` from the settings".
     pub max_jobs: Option<u64>,
     /// `--store`; `None` means "take `builder` from the ietsp settings".
@@ -58,11 +56,8 @@ impl Default for Args {
             mode: EvalMode::Flake,
             flake: ".#checks".into(),
             file: "default.nix".into(),
-            attr: None,
-            args: Vec::new(),
-            includes: Vec::new(),
+            flags: EvalFlags::default(),
             impure: false,
-            overrides: Vec::new(),
             max_jobs: None,
             store: None,
             eval_workers: None,
@@ -92,6 +87,12 @@ pub enum Reject {
     Unknown(String),
     /// A flag ietsp does not know, handled the same way.
     Flag(String),
+}
+
+impl From<String> for Reject {
+    fn from(m: String) -> Reject {
+        Reject::Unknown(m)
+    }
 }
 
 /// The uploaders nix-fast-build has and ietsp does not: pushing to a binary
@@ -131,11 +132,11 @@ pub fn parse(argv: &[String]) -> Result<Args, Reject> {
     let mut flake_given = false;
     let mut pure_given = false;
     let mut i = 0;
-    let value = |i: &mut usize, flag: &str| -> Result<String, Reject> {
+    let value = |i: &mut usize, flag: &str| -> Result<String, String> {
         *i += 1;
         argv.get(*i)
             .cloned()
-            .ok_or_else(|| Reject::Unknown(format!("'{flag}' requires an argument")))
+            .ok_or_else(|| format!("'{flag}' requires an argument"))
     };
     while i < argv.len() {
         let s = argv[i].clone();
@@ -173,29 +174,14 @@ pub fn parse(argv: &[String]) -> Result<Args, Reject> {
                     i += 1;
                 }
             }
-            "-A" | "--attr" => a.attr = Some(value(&mut i, &s)?),
-            "--arg" | "--argstr" => {
-                let name = value(&mut i, &s)?;
-                let val = value(&mut i, &s)?;
-                a.args.push((
-                    name,
-                    if s == "--arg" {
-                        ArgKind::Expr(val)
-                    } else {
-                        ArgKind::Str(val)
-                    },
-                ));
-            }
-            "-I" | "--include" => {
-                let v = value(&mut i, &s)?;
-                a.includes.push(crate::cli::parse_include(&v));
+            "-A" | "--attr" | "--arg" | "--argstr" | "-I" | "--include" => {
+                eval_flag(&mut a.flags, &s, || value(&mut i, &s))?;
             }
             "--impure" => a.impure = true,
             "--pure" => pure_given = true,
             "--option" => {
-                let name = value(&mut i, &s)?;
-                let val = value(&mut i, &s)?;
-                a.overrides.push((name, val));
+                let pair = (value(&mut i, &s)?, value(&mut i, &s)?);
+                a.flags.overrides.push(pair);
             }
             "-j" | "--max-jobs" => {
                 let v = value(&mut i, &s)?;
@@ -276,7 +262,7 @@ impl Args {
     pub fn display_name(&self) -> String {
         match self.mode {
             EvalMode::Flake => self.flake.clone(),
-            EvalMode::File => match &self.attr {
+            EvalMode::File => match self.flags.attrs.last() {
                 Some(a) => format!("{}.{a}", self.file),
                 None => self.file.clone(),
             },
@@ -320,7 +306,7 @@ mod tests {
         assert!(a.impure);
         let a = args(&["--file", "release.nix", "--pure", "-A", "x"]);
         assert_eq!(a.file, "release.nix");
-        assert_eq!(a.attr.as_deref(), Some("x"));
+        assert_eq!(a.flags.attrs, ["x"]);
         assert!(!a.impure);
     }
 

@@ -76,8 +76,8 @@ fn parse(argv: &[String]) -> Result<Inst, String> {
     if i.c.files.is_empty() && !i.c.from_args {
         i.c.files.push("./default.nix".into());
     }
-    if i.c.attr_paths.is_empty() {
-        i.c.attr_paths.push(String::new());
+    if i.c.flags.attrs.is_empty() {
+        i.c.flags.attrs.push(String::new());
     }
     if i.add_root.is_some() && i.readonly {
         return Err("'--add-root' with a read-only store is not implemented".into());
@@ -135,11 +135,11 @@ fn run(ev: &mut Evaluator, i: &Inst) -> Run {
     let mut roots: Vec<Root> = Vec::new();
     let mut seen = HashSet::new();
     let r = (|| -> Result<(), Box<Error>> {
-        let args = auto_args(ev, &i.c.args, &cwd)?;
-        let has_args = !i.c.args.is_empty();
+        let args = auto_args(ev, &i.c.flags.args, &cwd)?;
+        let has_args = !i.c.flags.args.is_empty();
         for file in &i.c.files {
             let root = super::eval_input(ev, &i.c, file, &cwd)?;
-            for attr in &i.c.attr_paths {
+            for attr in &i.c.flags.attrs {
                 let v = super::select(ev, root, attr, args)?;
                 if i.eval_only {
                     let v = if has_args { ev.auto_call(v, args)? } else { v };

@@ -23,17 +23,53 @@ pub use crate::api::{
     full_includes, parse_include, report, setup_cache,
 };
 
-/// The `pure-eval` a flag sets (common-eval-args.cc), `None` for any other.
-pub fn pure_flag(s: &str) -> Option<bool> {
+/// The evaluation input flags every command line shares (common-eval-args.cc).
+#[derive(Default)]
+pub struct EvalFlags {
+    pub includes: Vec<(Vec<u8>, Vec<u8>)>,
+    pub args: Vec<(String, ArgKind)>,
+    /// `-A` in order: classic commands select each one, the others the last.
+    pub attrs: Vec<String>,
+    /// `--option NAME VALUE` but `pure-eval`, and the settings a command's
+    /// flags alias, in flag order.
+    pub overrides: Vec<(String, String)>,
+    /// The last of `--pure-eval`, `--no-pure-eval`, `--impure` and `--option
+    /// pure-eval`; `None` when none was given (docs/pure-eval.md).
+    pub pure: Option<bool>,
+}
+
+/// `Ok(true)`: `s` is one of the `EvalFlags` flags, and `next` gave its values.
+/// `Err`: a value is missing or wrong; each family reports that its own way.
+pub fn eval_flag(
+    f: &mut EvalFlags,
+    s: &str,
+    mut next: impl FnMut() -> Result<String, String>,
+) -> Result<bool, String> {
     match s {
-        "--pure-eval" => Some(true),
-        "--no-pure-eval" | "--impure" => Some(false),
-        _ => None,
+        "-I" | "--include" => f.includes.push(parse_include(&next()?)),
+        _ if s.starts_with("-I") && s.len() > 2 => f.includes.push(parse_include(&s[2..])),
+        "-A" | "--attr" => f.attrs.push(next()?),
+        "--arg" => f.args.push((next()?, ArgKind::Expr(next()?))),
+        "--argstr" => f.args.push((next()?, ArgKind::Str(next()?))),
+        "--option" => {
+            let (name, v) = (next()?, next()?);
+            if name == "pure-eval" {
+                let b = crate::config::parse_bool(&name, &v).map_err(|e| e.to_string())?;
+                f.pure = Some(b);
+            } else {
+                f.overrides.push((name, v));
+            }
+        }
+        "--pure-eval" => f.pure = Some(true),
+        "--no-pure-eval" | "--impure" => f.pure = Some(false),
+        _ => return Ok(false),
     }
+    Ok(true)
 }
 
 pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
     let mut a = EvalArgs::new();
+    let mut f = EvalFlags::default();
     let mut i = 0;
     while i < argv.len() {
         let s = argv[i].as_str();
@@ -42,6 +78,7 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
             value(argv, i, s).clone()
         };
         match s {
+            _ if eval_flag(&mut f, s, || Ok(next())).unwrap_or_else(|e| arg_error(e)) => {}
             "--strict" => a.strict = true,
             "--json" => a.json = true,
             "--raw" => a.raw = true,
@@ -49,38 +86,16 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
             "--no-cache" => a.no_cache = true,
             "--no-ir-cache" => a.no_ir_cache = true,
             "--cache-dir" => a.cache_dir = Some(next()),
-            "-I" | "--include" => a.includes.push(parse_include(&next())),
             "-E" | "--expr" => {
                 let e = next();
                 set_input(&mut a, Input::Expr(e));
             }
-            "--arg" | "--argstr" => {
-                let (name, val) = (next(), next());
-                a.args.push((
-                    name,
-                    if s == "--arg" {
-                        ArgKind::Expr(val)
-                    } else {
-                        ArgKind::Str(val)
-                    },
-                ));
-            }
-            "-A" | "--attr" => a.attr = Some(next()),
             "--dump-drvs" => a.dump_drvs = Some(next()),
             "--workers" => {
                 let v = next();
                 a.workers = v.parse().ok().filter(|n| *n >= 1).unwrap_or_else(|| {
                     arg_error(format!("--workers wants a number >= 1, got '{v}'"))
                 });
-            }
-            "--option" => {
-                let (name, v) = (next(), next());
-                if name == "pure-eval" {
-                    a.pure = Some(
-                        crate::config::parse_bool(&name, &v)
-                            .unwrap_or_else(|e| arg_error(e.to_string())),
-                    );
-                }
             }
             "--lint" => a.lints.push(parse_lint_flag(&next())),
             "--lint-root" => a.lint_roots.push(next()),
@@ -94,20 +109,20 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
                 };
                 a.lints.push((s[2..].to_string(), level));
             }
-            _ if pure_flag(s).is_some() => a.pure = pure_flag(s),
             "--readonly-mode" => {}
             "--extra-experimental-features" | "--experimental-features" => {
                 let v = next();
                 a.xp_features
                     .extend(v.split_whitespace().map(str::to_owned));
             }
-            _ if s.starts_with("-I") && s.len() > 2 => a.includes.push(parse_include(&s[2..])),
             _ if s.starts_with('-') && s != "-" => help::unknown_flag(s),
             _ if crate::flake::is_flake_ref(s) => set_input(&mut a, Input::Flake(s.to_string())),
             _ => set_input(&mut a, Input::File(s.to_string())),
         }
         i += 1;
     }
+    (a.includes, a.args, a.pure) = (f.includes, f.args, f.pure);
+    a.attr = f.attrs.pop();
     a
 }
 

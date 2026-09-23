@@ -13,7 +13,7 @@ use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, exit};
 
-use crate::cli::{ArgKind, abs_path, full_includes};
+use crate::cli::{EvalFlags, abs_path, eval_flag, full_includes};
 use crate::config::Config;
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::remote::worker::{DEFAULT_SOCKET, Options, Transport};
@@ -71,17 +71,10 @@ pub fn is_unsupported(e: &Error) -> bool {
 /// settings aliases of `LegacyArgs`).
 #[derive(Default)]
 pub struct Common {
+    pub flags: EvalFlags,
     pub files: Vec<String>,
     /// `-E`: the positional arguments are expressions, not paths.
     pub from_args: bool,
-    pub attr_paths: Vec<String>,
-    pub args: Vec<(String, ArgKind)>,
-    pub includes: Vec<(Vec<u8>, Vec<u8>)>,
-    /// `--option name value` and the settings the flags alias, in flag order.
-    pub overrides: Vec<(String, String)>,
-    /// `--pure-eval`, `--no-pure-eval`, `--impure` or `--option pure-eval`,
-    /// the last one given; nix.conf's `pure-eval` when `None`.
-    pub pure: Option<bool>,
     pub show_trace: bool,
     pub quiet: bool,
 }
@@ -112,67 +105,23 @@ impl Argv<'_> {
 
 /// `Ok(true)`: consumed. `Ok(false)`: not one of ours. `Err`: fall back.
 pub fn common_flag(c: &mut Common, a: &mut Argv, s: &str) -> Result<bool, String> {
+    if eval_flag(&mut c.flags, s, || a.value(s))? {
+        return Ok(true);
+    }
+    let set = &mut c.flags.overrides;
     match s {
         "-E" | "--expr" => c.from_args = true,
-        "-A" | "--attr" => {
-            let v = a.value(s)?;
-            c.attr_paths.push(v);
-        }
-        "--arg" | "--argstr" => {
-            let name = a.value(s)?;
-            let val = a.value(s)?;
-            c.args.push((
-                name,
-                if s == "--arg" {
-                    ArgKind::Expr(val)
-                } else {
-                    ArgKind::Str(val)
-                },
-            ));
-        }
-        "-I" | "--include" => {
-            let v = a.value(s)?;
-            c.includes.push(crate::cli::parse_include(&v));
-        }
-        "--option" => {
-            let name = a.value(s)?;
-            let val = a.value(s)?;
-            option(c, name, val)?;
-        }
-        _ if crate::cli::pure_flag(s).is_some() => c.pure = crate::cli::pure_flag(s),
-        "--store" => {
-            let v = a.value(s)?;
-            c.overrides.push(("store".into(), v));
-        }
-        "-j" | "--max-jobs" => {
-            let v = a.number(s)?;
-            c.overrides.push(("max-jobs".into(), v));
-        }
-        "--cores" => {
-            let v = a.number(s)?;
-            c.overrides.push(("cores".into(), v));
-        }
-        "-k" | "--keep-going" => c.overrides.push(("keep-going".into(), "true".into())),
-        "-K" | "--keep-failed" => c.overrides.push(("keep-failed".into(), "true".into())),
+        "--store" => set.push(("store".into(), a.value(s)?)),
+        "-j" | "--max-jobs" => set.push(("max-jobs".into(), a.number(s)?)),
+        "--cores" => set.push(("cores".into(), a.number(s)?)),
+        "-k" | "--keep-going" => set.push(("keep-going".into(), "true".into())),
+        "-K" | "--keep-failed" => set.push(("keep-failed".into(), "true".into())),
         "--show-trace" => c.show_trace = true,
         "--quiet" => c.quiet = true,
         "-v" | "--verbose" | "--no-gc-warning" | "--indirect" => {}
-        _ if s.starts_with("-I") && s.len() > 2 => {
-            c.includes.push(crate::cli::parse_include(&s[2..]));
-        }
         _ => return Ok(false),
     }
     Ok(true)
-}
-
-/// `--option NAME VALUE`: `pure-eval` is the evaluator's, the rest nix.conf's.
-pub fn option(c: &mut Common, name: String, val: String) -> Result<(), String> {
-    if name == "pure-eval" {
-        c.pure = Some(crate::config::parse_bool(&name, &val).map_err(|e| e.to_string())?);
-    } else {
-        c.overrides.push((name, val));
-    }
-    Ok(())
 }
 
 /// Where the builds go, from the `store` setting. `system` is the `system=`
@@ -205,7 +154,7 @@ pub fn shell_settings(c: &Common) -> Result<(Config, Transport, Options), String
 }
 
 fn settings_with(c: &Common, use_builder: bool) -> Result<(Config, Transport, Options), String> {
-    let cfg = Config::load(&c.overrides).map_err(|e| e.to_string())?;
+    let cfg = Config::load(&c.flags.overrides).map_err(|e| e.to_string())?;
     let url = if use_builder {
         let flag = store_given(c).then(|| cfg.store());
         crate::settings::builder(flag.as_deref(), &cfg)
@@ -221,7 +170,7 @@ fn settings_with(c: &Common, use_builder: bool) -> Result<(Config, Transport, Op
 /// stands in for the local store, as a build hook does, so outputs come back
 /// even under `--no-link`.
 pub fn store_given(c: &Common) -> bool {
-    c.overrides.iter().any(|(k, _)| k == "store")
+    c.flags.overrides.iter().any(|(k, _)| k == "store")
 }
 
 /// The local daemon, where GC roots, out-links and `--add-root` registrations
@@ -234,10 +183,11 @@ pub fn local() -> Transport {
 /// applied.
 pub fn evaluator(c: &Common, cfg: &Config) -> Evaluator {
     let pure = c
+        .flags
         .pure
         .unwrap_or_else(|| cfg.bool("pure-eval").ok().flatten().unwrap_or(false));
     let mut ev = Evaluator::with(&cfg.system(), pure);
-    crate::builtins::set_search_path(&mut ev, full_includes(&c.includes));
+    crate::builtins::set_search_path(&mut ev, full_includes(&c.flags.includes));
     // lints stay off, as in nix; the root alone feeds the provenance fallback.
     let cwd = crate::api::cwd();
     let entry = match (c.from_args, c.files.first()) {

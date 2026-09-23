@@ -82,7 +82,7 @@ pub fn main(argv: &[String], rest: &[String]) -> i32 {
     };
     let ev = super::evaluator(&d.c, &cfg);
     let mut a = parse_eval_args(&[]);
-    a.includes = d.c.includes.clone();
+    a.includes = d.c.flags.includes.clone();
     a.input = Some(Input::Flake(
         d.installable.clone().unwrap_or_else(|| ".".into()),
     ));

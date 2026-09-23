@@ -56,8 +56,8 @@ fn parse(argv: &[String]) -> Result<Build, String> {
     if b.c.files.is_empty() && !b.c.from_args {
         b.c.files.push(".".into());
     }
-    if b.c.attr_paths.is_empty() {
-        b.c.attr_paths.push(String::new());
+    if b.c.flags.attrs.is_empty() {
+        b.c.flags.attrs.push(String::new());
     }
     Ok(b)
 }
@@ -96,10 +96,10 @@ fn run(ev: &mut Evaluator, b: &Build) -> Run {
     let mut roots: Vec<Root> = Vec::new();
     let mut seen = HashSet::new();
     let r = (|| -> Result<(), Box<Error>> {
-        let args = auto_args(ev, &b.c.args, &cwd)?;
+        let args = auto_args(ev, &b.c.flags.args, &cwd)?;
         for file in &b.c.files {
             let root = super::eval_input(ev, &b.c, file, &cwd)?;
-            for attr in &b.c.attr_paths {
+            for attr in &b.c.flags.attrs {
                 let v = super::select(ev, root, attr, args)?;
                 super::derivations_at(ev, v, args, &mut roots, &mut seen, attr)?;
             }

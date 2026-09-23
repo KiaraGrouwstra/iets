@@ -90,7 +90,7 @@ pub fn cmd_fast_build(argv: &[String]) -> i32 {
 }
 
 fn run(a: Args) -> Result<i32> {
-    let cfg = Config::load(&a.overrides)?;
+    let cfg = Config::load(&a.flags.overrides)?;
     let store = crate::settings::builder(a.store.as_deref(), &cfg);
     let mut transport = Transport::parse_checked(&store, &cfg.system())?.ok_or_else(|| {
         CrateError::Usage(format!(
@@ -129,7 +129,7 @@ fn run(a: Args) -> Result<i32> {
     let mut ev = Evaluator::with(&cfg.system(), pure);
     // The uploader ships each job's closure from memory, so the ATerms stay.
     ev.drv.keep_aterm = true;
-    crate::builtins::set_search_path(&mut ev, crate::cli::full_includes(&a.includes));
+    crate::builtins::set_search_path(&mut ev, crate::cli::full_includes(&a.flags.includes));
 
     let d = Dispatch {
         transport,
@@ -199,7 +199,7 @@ fn walk(ev: &mut Evaluator, a: Args, stream: Stream) -> bool {
         provenance: crate::provenance::enabled(),
     };
     let root = (|| -> std::result::Result<crate::runtime::Word, Box<crate::eval::Error>> {
-        let args = crate::cli::auto_args(ev, &a.args, &cwd)?;
+        let args = crate::cli::auto_args(ev, &a.flags.args, &cwd)?;
         crate::jobs::configure(ev, opts, args, None);
         let input = match a.mode {
             EvalMode::Flake => crate::cli::Input::Flake(a.flake.clone()),
@@ -217,7 +217,7 @@ fn walk(ev: &mut Evaluator, a: Args, stream: Stream) -> bool {
         let root = ev.auto_call(root, args)?;
         // `-A attr` is the walk root, selected after the auto-call, the way
         // nix-fast-build's `--select 'root: root.attr'` is (processes.py:128).
-        let root = match &a.attr {
+        let root = match a.flags.attrs.last() {
             Some(attr) => {
                 let path: Vec<String> = attr
                     .split('.')
