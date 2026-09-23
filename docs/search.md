@@ -97,8 +97,9 @@ the walk produced. It is the `result` of a tracing-cache entry
 (`docs/tracing-cache.md`), keyed on the installable, the `--arg`s, the
 search path, `pure-eval` and the build id — not on the regexes, so any
 search over an unchanged package set is a hit. A hit validates the read
-set (for nixpkgs: one `Input` observation, two `stat` calls) and answers
-from the index.
+set and answers from the index: for the pinned nixpkgs that is 56,170
+observations in 0.08 s against 6.5 s of evaluation, and an index of
+4 MB.
 
 `IETSP_CACHE=0` evaluates again, `IETSP_CACHE_DIR` moves the store
 (`docs/settings.md`), and `ietsp search --timings` reports the hit or
@@ -114,12 +115,13 @@ The pinned nixpkgs (`/nix/store/ah3pxz4xa52hd6vhbx17vcsci0b8bmbr-source`,
 
 | run | `^hello$` | all packages (`^`) |
 |---|---|---|
-| ietsp, no index yet | 6.7 s | 6.8 s |
-| ietsp, index cached | 0.17 s | 0.28 s |
-| real `nix search`, same installable | 21 s | 21 s |
-| real `nix search`, the same tree as a flake | 37 s cold, 1.8 s warm | — |
+| ietsp, no index yet | 6.5 s | 6.8 s |
+| ietsp, index cached | 0.15 s | 0.47 s |
+| real `nix search`, the same installable | 21 s | 21 s |
+| real `nix search`, the same tree as a flake, its cache warm | 1.8 s | 2.6 s |
+| real `nix search`, the same tree as a flake, its cache cold | 37 s | — |
 
-Real nix keeps its own eval cache for a flake installable only, which is
-the 1.8 s; with `--expr` or `--file` it evaluates every time. ietsp caches
-both alike. The `--json` output of every row above is byte for byte the
-same.
+Real nix keeps its own eval cache for a flake installable only; with
+`--expr` or `--file` it evaluates every time. ietsp caches both alike.
+The whole `^ --json` output, 18.8 MB, is byte for byte the same on both
+sides.
