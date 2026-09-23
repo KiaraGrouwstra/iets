@@ -46,6 +46,38 @@ impl Error {
             source,
         }
     }
+
+    /// The stable code of docs/cli.md.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Error::Io { .. } => "io",
+            Error::Protocol(_) => "protocol",
+            Error::Plan(_) => "plan",
+            Error::Store(_) => "store",
+            Error::Flake(_) => "flake",
+            Error::Cache(_) => "cache",
+            Error::Unsupported(_) => "unsupported",
+            Error::Eval(e) => e.kind.code(),
+            Error::Usage(_) => "usage",
+            Error::Config(_) => "config",
+        }
+    }
+
+    pub fn to_report(&self) -> crate::log::Report {
+        let hint = match self {
+            Error::Eval(e) => e.hint.clone(),
+            _ => None,
+        };
+        crate::log::Report {
+            hint,
+            ..crate::log::Report::new(self.code(), self.to_string())
+        }
+    }
+
+    /// `error: MSG` on stderr, or its record; returns the exit code.
+    pub fn report(&self) -> i32 {
+        self.to_report().emit()
+    }
 }
 
 impl fmt::Display for Error {

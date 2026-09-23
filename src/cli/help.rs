@@ -245,21 +245,24 @@ pub fn suggest<'a>(word: &str, candidates: impl IntoIterator<Item = &'a str>) ->
         .map(|(_, c)| c)
 }
 
-/// What a bad command line prints under `cmd` ("ietsp" before the command
-/// word, `None` under a classic name), without the exit.
-pub fn error_text(cmd: Option<&str>, msg: &str, maybe: Option<&str>) -> String {
-    let maybe = maybe.map(|m| format!("did you mean '{m}'?\n"));
-    let hint = match cmd {
-        Some("ietsp") => "run 'ietsp --help' for the commands\n".to_string(),
-        Some(c) => format!("run 'ietsp {c} --help' for the flags\n"),
-        None => String::new(),
+/// The report of a bad command line under `cmd` ("ietsp" before the command
+/// word, `None` under a classic name).
+pub fn usage(cmd: Option<&str>, msg: &str, maybe: Option<&str>) -> crate::log::Report {
+    let maybe = maybe.map(|m| format!("did you mean '{m}'?"));
+    let help = match cmd {
+        Some("ietsp") => Some("run 'ietsp --help' for the commands".to_string()),
+        Some(c) => Some(format!("run 'ietsp {c} --help' for the flags")),
+        None => None,
     };
-    format!("error: {msg}\n{}{hint}", maybe.unwrap_or_default())
+    let hint: Vec<String> = maybe.into_iter().chain(help).collect();
+    crate::log::Report {
+        hint: (!hint.is_empty()).then(|| hint.join("\n")),
+        ..crate::log::Report::new("usage", msg)
+    }
 }
 
 fn fail(msg: &str, maybe: Option<&str>) -> ! {
-    eprint!("{}", error_text(command(), msg, maybe));
-    exit(2)
+    exit(usage(command(), msg, maybe).emit())
 }
 
 pub fn arg_error(msg: impl AsRef<str>) -> ! {
@@ -327,9 +330,9 @@ mod tests {
 
     #[test]
     fn messages() {
-        let t = error_text(Some("eval"), "unknown flag '--stirct'", Some("--strict"));
-        let want = "did you mean '--strict'?\nrun 'ietsp eval --help' for the flags\n";
+        let t = usage(Some("eval"), "unknown flag '--stirct'", Some("--strict")).text();
+        let want = "did you mean '--strict'?\nrun 'ietsp eval --help' for the flags";
         assert_eq!(t, format!("error: unknown flag '--stirct'\n{want}"));
-        assert_eq!(error_text(None, "x", None), "error: x\n");
+        assert_eq!(usage(None, "x", None).text(), "error: x");
     }
 }

@@ -37,6 +37,31 @@ pub enum ErrorKind {
     Unsupported,
     /// A lint at level `error`. Never caught by `tryEval`.
     Lint,
+    /// A fetched tree whose hash is not the one the lock or the call named.
+    HashMismatch,
+}
+
+impl ErrorKind {
+    /// The stable code of docs/cli.md.
+    pub fn code(self) -> &'static str {
+        match self {
+            ErrorKind::Eval => "eval",
+            ErrorKind::Type => "type",
+            ErrorKind::Throw => "throw",
+            ErrorKind::Assert => "assert",
+            ErrorKind::Abort => "abort",
+            ErrorKind::UndefinedVar => "undefined-var",
+            ErrorKind::InfiniteRecursion => "infinite-recursion",
+            ErrorKind::StackOverflow => "stack-overflow",
+            ErrorKind::Parse => "parse",
+            ErrorKind::MissingAttr => "missing-attr",
+            ErrorKind::Io => "io",
+            ErrorKind::Cancelled => "cancelled",
+            ErrorKind::Unsupported => "unsupported",
+            ErrorKind::Lint => "lint",
+            ErrorKind::HashMismatch => "hash-mismatch",
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -45,6 +70,8 @@ pub struct Error {
     pub msg: String,
     pub pos: Pos,
     pub trace: Vec<(Pos, String)>,
+    /// The fix, when it is certain; only a record shows it (docs/cli.md).
+    pub hint: Option<String>,
 }
 
 impl Error {
@@ -54,6 +81,7 @@ impl Error {
             msg,
             pos,
             trace: Vec::new(),
+            hint: None,
         }
     }
 

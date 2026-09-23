@@ -196,12 +196,12 @@ fn walk(
 
 /// The error line for `path`, also printed to stderr as nix-eval-jobs does.
 pub fn error_line(ev: &Evaluator, path: &[String], e: &Error) -> ErrorLine {
-    let text = error_text(ev, e);
-    eprintln!("{text}");
+    let r = error_report(ev, e);
+    r.emit();
     ErrorLine {
         attr: attr_join(path),
         attr_path: path.to_vec(),
-        error: text,
+        error: r.text(),
         fatal: e.kind == ErrorKind::StackOverflow,
     }
 }
@@ -224,20 +224,9 @@ pub fn attr_join(path: &[String]) -> String {
     s
 }
 
-/// `error: msg` plus the trace, one line each, like `main::report`.
-pub fn error_text(ev: &Evaluator, e: &Error) -> String {
-    let mut s = format!("error: {}", e.msg);
-    if !e.pos.is_none() {
-        s.push_str(&format!("\n       at {}", ev.describe_pos(e.pos)));
-    }
-    for (pos, msg) in e.trace.iter() {
-        if pos.is_none() {
-            s.push_str(&format!("\n       … {msg}"));
-        } else {
-            s.push_str(&format!("\n       … {msg} at {}", ev.describe_pos(*pos)));
-        }
-    }
-    s
+/// `api::report`'s report without the provenance rewrite.
+pub fn error_report(ev: &Evaluator, e: &Error) -> crate::log::Report {
+    crate::log::Report::eval(e, &e.msg, &|p| ev.describe_pos(p), &|m| m.to_string())
 }
 
 pub const FNV_BASIS: u64 = 0xcbf29ce484222325;

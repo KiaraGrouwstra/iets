@@ -465,21 +465,21 @@ fn jobs_worker(
     use std::sync::{Arc, Mutex};
 
     let out: Out = Arc::new(Mutex::new(Box::new(std::io::stdout())));
-    let fail = |out: &Out, msg: &str| -> i32 {
-        eprintln!("{msg}");
+    let fail = |out: &Out, r: crate::log::Report| -> i32 {
+        let (msg, code) = (r.text(), r.emit());
         write_out(
             out,
             &format!(
                 "{{\"error\":{}}}",
-                String::from_utf8_lossy(&crate::jobs::line::json_str(msg))
+                String::from_utf8_lossy(&crate::jobs::line::json_str(&msg))
             )
             .into_bytes(),
         );
-        1
+        code
     };
     let root = match jobs_root(ev, a, j) {
         Ok(r) => r,
-        Err(e) => return fail(&out, &crate::jobs::error_text(ev, &e)),
+        Err(e) => return fail(&out, crate::jobs::error_report(ev, &e)),
     };
     let inst = if j.opts.no_instantiate {
         None
@@ -502,12 +502,12 @@ fn jobs_worker(
                     }),
                 ))
             }
-            Err(e) => return fail(&out, &format!("error: {e}")),
+            Err(e) => return fail(&out, e.to_report()),
         }
     };
     match run_worker(ev, root, inst, j.max_memory, &out) {
         Ok(()) => 0,
-        Err(e) => fail(&out, &format!("error: {e}")),
+        Err(e) => fail(&out, e.to_report()),
     }
 }
 
