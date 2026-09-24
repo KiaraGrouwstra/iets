@@ -198,6 +198,11 @@ derived paths, not the plan.
 
 The names are the fields of Nix's `MissingPaths`.
 
+`ietsp plumbing missing` prints the same object, and
+`ietsp plumbing build` the outcomes of the same dispatch, from derivation
+paths instead of an installable (docs/plumbing.md). Both, and
+`ietsp build`, go through one call, `api::build::Dispatch`.
+
 ### `sid`: the session
 
 Every record carries `sid`, activity records included, on stderr and in the

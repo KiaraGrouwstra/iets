@@ -1,12 +1,19 @@
 //! `ietsp plumbing OP`: the machine-first commands. One operation each,
 //! JSON on stdout, a stable contract (docs/plumbing.md).
 
+use std::collections::HashMap;
+
+use crate::api::build::{self as apibuild, Dispatch};
 use crate::api::installable::{self, Prefixes, Want};
+use crate::build::Target;
+use crate::build::render::Style;
 use crate::cli::help::{self, arg_error, value};
 use crate::cli::{EvalArgs, Input, evaluate, parse_eval_args, report, run_for};
+use crate::error::Error as CrateError;
 use crate::eval::{Error, Evaluator};
 use crate::runtime::Word;
 use crate::store::locate::drv_roots;
+use crate::store::path::StorePath;
 
 pub const HELP: &str = "\
 usage: ietsp plumbing OP [FLAGS] ...
@@ -16,6 +23,12 @@ Each one writes JSON on stdout (docs/plumbing.md).
 
 operations:
   resolve   an installable becomes derivation roots
+  plan      derivation roots become an upload plan
+  missing   a plan and a builder become what will be built and fetched
+  build     derivation roots are built; outcomes come back
+
+Every op that takes roots names them as DRV or DRV!OUT[,OUT], or reads a
+previous op's stdout with --roots -.
 
 usage: ietsp plumbing resolve [FLAGS] (-E EXPR | FILE | FLAKEREF[#FRAGMENT])
 
@@ -27,12 +40,42 @@ one object per derivation root with \"drv\", \"output\" and \"attr\".
                         none for the fragment itself
   --want first|all      stop at the first path that is there, or take all
   --no-drvs             report the attribute paths only
+
+usage: ietsp plumbing plan [--roots -] DRV...
+
+Print {\"drvs\", \"sources\", \"storeDrvs\"}: the closure to upload, in
+dependency order, references first.
+
+usage: ietsp plumbing missing [FLAGS] [--roots -] DRV...
+
+Print {\"willBuild\", \"willSubstitute\", \"unknown\", \"downloadSize\",
+\"narSize\"}: what building the roots on the builder would take.
+
+  --builder URL         where the builds go; the builder setting by default
+  --check-cache-status  add \"roots\": one {\"drv\", \"cacheStatus\",
+                        \"neededBuilds\", \"neededSubstitutes\"} per root
+
+usage: ietsp plumbing build [FLAGS] [--roots -] DRV...
+
+Build the roots and print {\"outcomes\"}: one {\"drv\", \"success\",
+\"outputs\", \"reason\", \"logTail\"} each. The exit code is docs/cli.md's.
+
+  --builder URL         where the builds go; the builder setting by default
+  --out NAME            an output to build besides the roots' own
+  --source STOREPATH=LOCAL   upload STOREPATH from a local tree
+  --fetch-to DIR        restore every output into DIR
+  --gc-root DIR         register each output under DIR on the local daemon,
+                        and report the links as \"gcRoots\"
+  --no-build            register the closure and stop
 ";
 
 pub fn main(argv: &[String]) -> i32 {
     match argv.first().map(String::as_str) {
         Some("resolve") => resolve(&argv[1..]),
-        w => help::unknown_subcommand(w, &["resolve"]),
+        Some("plan") => op_plan(&argv[1..]),
+        Some("missing") => op_missing(&argv[1..]),
+        Some("build") => op_build(&argv[1..]),
+        w => help::unknown_subcommand(w, &["resolve", "plan", "missing", "build"]),
     }
 }
 
@@ -140,4 +183,345 @@ fn run(ev: &mut Evaluator, a: EvalArgs, o: Opts) -> Result<(), Box<Error>> {
         serde_json::json!({ "attrPaths": paths, "roots": roots })
     );
     Ok(())
+}
+
+// ---- roots -------------------------------------------------------------------
+
+/// The roots an op works on, one target per derivation. An argument is `DRV`
+/// or `DRV!OUT[,OUT]`; `--roots -` reads a previous op's stdout instead, the
+/// `roots` of a `resolve` or the `drvs` of a `plan`. No output name means
+/// every output, as `!*` does in the worker protocol.
+fn targets(args: &[String], stdin: bool) -> Vec<Target> {
+    let mut out: Vec<Target> = Vec::new();
+    let mut add = |drv: &str, output: Option<&str>| {
+        let drv = StorePath::parse(drv)
+            .unwrap_or_else(|e| arg_error(format!("'{drv}' is not a store path: {}", e.0)));
+        let wanted: Vec<String> = (output.into_iter())
+            .flat_map(|o| o.split(',').filter(|o| !o.is_empty()).map(String::from))
+            .collect();
+        match out.iter_mut().find(|t| t.drv == drv) {
+            Some(t) => {
+                for o in wanted {
+                    if !t.outputs.contains(&o) {
+                        t.outputs.push(o);
+                    }
+                }
+            }
+            None => {
+                let name = drv.name().to_string();
+                out.push(Target::new(&name, drv, wanted));
+            }
+        }
+    };
+    if stdin {
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)
+            .unwrap_or_else(|e| arg_error(format!("--roots -: cannot read stdin: {e}")));
+        let v: serde_json::Value = serde_json::from_str(&text)
+            .unwrap_or_else(|e| arg_error(format!("--roots -: not JSON: {e}")));
+        let bad = || arg_error("--roots -: no \"roots\" and no \"drvs\" on stdin");
+        if let Some(rs) = v.get("roots").and_then(|r| r.as_array()) {
+            for r in rs {
+                let Some(drv) = r.get("drv").and_then(serde_json::Value::as_str) else {
+                    bad()
+                };
+                add(drv, r.get("output").and_then(serde_json::Value::as_str));
+            }
+        } else if let Some(ds) = v.get("drvs").and_then(|d| d.as_array()) {
+            for d in ds {
+                match d.as_str() {
+                    Some(drv) => add(drv, None),
+                    None => bad(),
+                }
+            }
+        } else {
+            bad()
+        }
+    }
+    for a in args {
+        let (drv, output) = match a.split_once('!') {
+            Some((d, o)) => (d, Some(o)),
+            None => (a.as_str(), None),
+        };
+        add(drv, output);
+    }
+    if out.is_empty() {
+        arg_error("nothing to do: give DRV... or --roots -")
+    }
+    out
+}
+
+fn paths_of(targets: &[Target]) -> Vec<StorePath> {
+    targets.iter().map(|t| t.drv.clone()).collect()
+}
+
+/// The plan of roots that are in `/nix/store`: this run evaluated nothing, so
+/// every derivation and source is read from there.
+fn plan_of(targets: &[Target]) -> crate::error::Result<crate::remote::plan::Plan> {
+    apibuild::plan_with(&paths_of(targets), &HashMap::new(), &HashMap::new())
+}
+
+/// `--roots -` plus the flags `f` accepts; what is left are the root words.
+fn split_flags(
+    argv: &[String],
+    mut f: impl FnMut(&str, &mut dyn FnMut() -> String) -> bool,
+) -> (Vec<String>, bool) {
+    let mut rest: Vec<String> = Vec::new();
+    let mut stdin = false;
+    let mut i = 0;
+    while i < argv.len() {
+        let s = argv[i].clone();
+        let mut next = || {
+            i += 1;
+            value(argv, i, &s).clone()
+        };
+        if s == "--roots" {
+            if next() != "-" {
+                arg_error("--roots takes '-': the roots come from stdin")
+            }
+            stdin = true;
+        } else if !f(&s, &mut next) {
+            if s.starts_with('-') {
+                help::unknown_flag(&s)
+            }
+            rest.push(s);
+        }
+        i += 1;
+    }
+    (rest, stdin)
+}
+
+// ---- the ops -----------------------------------------------------------------
+
+fn op_plan(argv: &[String]) -> i32 {
+    let (args, stdin) = split_flags(argv, |_, _| false);
+    let targets = targets(&args, stdin);
+    let plan = match plan_of(&targets) {
+        Ok(p) => p,
+        Err(e) => return e.report(),
+    };
+    let drvs: Vec<String> = (plan.drvs.iter())
+        .map(|o| o.store_path().to_string())
+        .collect();
+    let sources: Vec<String> = plan.sources.iter().map(ToString::to_string).collect();
+    println!(
+        "{}",
+        serde_json::json!({
+            "drvs": drvs, "sources": sources, "storeDrvs": plan.store_drvs,
+        })
+    );
+    0
+}
+
+fn op_missing(argv: &[String]) -> i32 {
+    let mut url: Option<String> = None;
+    let mut status = false;
+    let (args, stdin) = split_flags(argv, |s, next| match s {
+        "--builder" => {
+            url = Some(next());
+            true
+        }
+        "--check-cache-status" => {
+            status = true;
+            true
+        }
+        _ => false,
+    });
+    let targets = targets(&args, stdin);
+    match missing(&targets, url.as_deref(), status) {
+        Ok(v) => {
+            println!("{v}");
+            0
+        }
+        Err(e) => e.report(),
+    }
+}
+
+fn missing(
+    targets: &[Target],
+    url: Option<&str>,
+    status: bool,
+) -> crate::error::Result<serde_json::Value> {
+    let cfg = apibuild::config();
+    let transport = apibuild::transport(url, &cfg)?;
+    let opts = crate::remote::worker::Options::default();
+    let plan = plan_of(targets)?;
+    let prov = crate::provenance::Provenance::off();
+    let mut d = Dispatch::open(&transport, &opts, plan, prov, Style::detect())?;
+    let m = d.missing(targets)?;
+    let mut v = serde_json::json!({
+        "willBuild": m.will_build,
+        "willSubstitute": m.will_substitute,
+        "unknown": m.unknown,
+        "downloadSize": m.download_size,
+        "narSize": m.nar_size,
+    });
+    if status {
+        v["roots"] = serde_json::Value::Array(cache_status(&transport, targets)?);
+    }
+    Ok(v)
+}
+
+/// `--check-cache-status`, per root: the verdict `eval-jobs` reports, from the
+/// derivations in `/nix/store`.
+fn cache_status(
+    transport: &crate::remote::worker::Transport,
+    targets: &[Target],
+) -> crate::error::Result<Vec<serde_json::Value>> {
+    use crate::jobs::line::{Job, Line};
+    let mut lines: Vec<Line> = Vec::new();
+    for t in targets {
+        let drv = crate::store::drv::load_derivation_from_store(&t.drv)
+            .map_err(|e| CrateError::Store(e.0))?;
+        let mut outputs = std::collections::BTreeMap::new();
+        for (name, o) in &drv.outputs {
+            let p = o
+                .path(&drv.name, name)
+                .map_err(|e| CrateError::Store(e.0))?;
+            outputs.insert(name.clone(), p);
+        }
+        lines.push(Line::Job(Job {
+            attr: t.attr.clone(),
+            attr_path: Vec::new(),
+            drv_path: t.drv.clone(),
+            outputs,
+            constituents: Vec::new(),
+            named_constituents: None,
+            glob_constituents: false,
+            extra: std::collections::BTreeMap::new(),
+        }));
+    }
+    crate::jobs::cache::Resolver::open(transport)?.resolve(&mut lines)?;
+    let raw = |j: &Job, k: &str| {
+        (j.extra.get(k))
+            .and_then(|b| serde_json::from_slice(b).ok())
+            .unwrap_or(serde_json::Value::Null)
+    };
+    Ok(lines
+        .iter()
+        .filter_map(|l| match l {
+            Line::Job(j) => Some(serde_json::json!({
+                "drv": j.drv_path.to_string(),
+                "cacheStatus": raw(j, "cacheStatus"),
+                "neededBuilds": raw(j, "neededBuilds"),
+                "neededSubstitutes": raw(j, "neededSubstitutes"),
+            })),
+            Line::Error(_) => None,
+        })
+        .collect())
+}
+
+struct BuildOpts {
+    url: Option<String>,
+    outputs: Vec<String>,
+    sources: HashMap<String, std::path::PathBuf>,
+    fetch_to: Option<std::path::PathBuf>,
+    gc_root: Option<std::path::PathBuf>,
+    no_build: bool,
+}
+
+fn op_build(argv: &[String]) -> i32 {
+    let mut o = BuildOpts {
+        url: None,
+        outputs: Vec::new(),
+        sources: HashMap::new(),
+        fetch_to: None,
+        gc_root: None,
+        no_build: false,
+    };
+    let (args, stdin) = split_flags(argv, |s, next| match s {
+        "--builder" => {
+            o.url = Some(next());
+            true
+        }
+        "--out" => {
+            o.outputs.push(next());
+            true
+        }
+        "--fetch-to" => {
+            o.fetch_to = Some(next().into());
+            true
+        }
+        "--gc-root" => {
+            o.gc_root = Some(next().into());
+            true
+        }
+        "--no-build" => {
+            o.no_build = true;
+            true
+        }
+        "--source" => {
+            let spec = next();
+            let Some((store, local)) = spec.split_once('=') else {
+                arg_error(format!("--source wants STOREPATH=LOCAL, got '{spec}'"))
+            };
+            o.sources.insert(store.to_string(), local.into());
+            true
+        }
+        _ => false,
+    });
+    let mut targets = targets(&args, stdin);
+    for t in &mut targets {
+        for name in &o.outputs {
+            if !t.outputs.contains(name) {
+                t.outputs.push(name.clone());
+            }
+        }
+    }
+    match build(&o, targets) {
+        Ok(code) => code,
+        Err(e) => e.report(),
+    }
+}
+
+fn build(o: &BuildOpts, targets: Vec<Target>) -> crate::error::Result<i32> {
+    let cfg = apibuild::config();
+    let transport = apibuild::transport(o.url.as_deref(), &cfg)?;
+    let opts = crate::remote::worker::Options::default();
+    let plan = plan_of(&targets)?;
+    let prov = crate::provenance::Provenance::off();
+    let mut d = Dispatch::open(&transport, &opts, plan, prov, Style::detect())?
+        .overrides(o.sources.clone());
+    if o.no_build {
+        d.upload_only(&paths_of(&targets))?;
+        println!("{}", serde_json::json!({ "outcomes": [] }));
+        return Ok(0);
+    }
+    let outcomes = d.submit(targets)?;
+    if let Some(dir) = &o.fetch_to {
+        for path in outcomes.iter().flat_map(|c| c.outputs.values()) {
+            d.d.fetch(path, dir)?;
+        }
+    }
+    let mut roots: Vec<String> = Vec::new();
+    if let Some(dir) = &o.gc_root {
+        // the links go on the local daemon whatever the builder is, which is
+        // what brings the outputs back here (docs/classic.md)
+        let links: Vec<(String, Option<String>)> = (outcomes.iter())
+            .flat_map(|c| c.outputs.values())
+            .map(|p| {
+                let link = dir.join(
+                    StorePath::parse(p).map_or_else(|_| p.clone(), |sp| sp.base_name().to_string()),
+                );
+                let link = link.to_string_lossy().into_owned();
+                roots.push(link.clone());
+                (p.clone(), Some(link))
+            })
+            .collect();
+        d.d.out_links(&links)?;
+    }
+    let mut v = serde_json::json!({
+        "outcomes": outcomes.iter().map(|c| serde_json::json!({
+            "drv": c.drv.to_string(),
+            "success": c.success,
+            "outputs": c.outputs,
+            "reason": c.reason,
+            "logTail": c.log_tail,
+        })).collect::<Vec<_>>(),
+    });
+    if o.gc_root.is_some() {
+        v["gcRoots"] = serde_json::json!(roots);
+    }
+    println!("{v}");
+    Ok(d.d.exit)
 }

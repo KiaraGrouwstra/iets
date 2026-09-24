@@ -197,6 +197,20 @@ ietsp plumbing drv-show [--roots -] DRV...
 Nix's `nix derivation show` shape. A derivation this run evaluated is
 answered from memory; anything else is read from the store.
 
+### Naming roots
+
+`plan`, `missing` and `build` take derivation paths. An argument is `DRV`
+or `DRV!OUT[,OUT]`; naming no output means every output, as `!*` does in
+the worker protocol. `--roots -` reads a previous op's stdout instead: the
+`roots` of a `resolve`, or the `drvs` of a `plan`.
+
+These three read the closure from `/nix/store`, so a root must be there.
+`resolve` alone does not put it there — it evaluates and keeps the
+derivations in memory, which is what lets `ietsp build` ship a closure
+that was never written to disk. Across processes, instantiate first
+(`nix-instantiate`, or `ietsp build --no-build`). This is the same gap as
+(a)3 below and `resolve --dump-drvs` closes both.
+
 ### `plan`
 
 ```
@@ -213,7 +227,7 @@ ietsp plumbing plan [--roots -] DRV...
 ### `missing`
 
 ```
-ietsp plumbing missing [--builder URL] [--roots -] DRV...
+ietsp plumbing missing [--builder URL] [--check-cache-status] [--roots -] DRV...
 ```
 
 ```json
@@ -222,11 +236,19 @@ ietsp plumbing missing [--builder URL] [--roots -] DRV...
 ```
 
 This is byte-for-byte what `ietsp build --dry-run --json` prints today.
+`--check-cache-status` adds `roots`, one object per root, with the keys
+`eval-jobs` reports (gap (a)8):
+
+```json
+{"roots": [{"drv": "/nix/store/…​.drv", "cacheStatus": "notBuilt",
+  "neededBuilds": ["/nix/store/…​.drv"], "neededSubstitutes": []}]}
+```
 
 ### `build`
 
 ```
 ietsp plumbing build [--builder URL] [--out NAME]... [--fetch-to DIR]
+                     [--source STOREPATH=LOCAL]... [--gc-root DIR]
                      [--no-build] [--roots -] DRV...
 ```
 
@@ -238,6 +260,13 @@ ietsp plumbing build [--builder URL] [--out NAME]... [--fetch-to DIR]
 
 The exit code follows docs/cli.md. Build progress goes to stderr through
 the existing reporter; the renderer is porcelain.
+
+`--out NAME` adds an output to every root. `--source STOREPATH=LOCAL`
+uploads that path from a local tree (gap (a)4). `--gc-root DIR` links each
+output at `DIR/<base name>` on the **local** daemon whatever the builder
+is, which brings the closure back first, and adds `gcRoots` to the object
+(gap (a)6). `--no-build` registers the closure and prints
+`{"outcomes": []}`.
 
 ### `drv-diff` and `closure-diff`
 
@@ -347,23 +376,28 @@ as porcelain aliases.
    store has none on disk. `resolve` must be able to emit
    `--dump-drvs DIR`, and `drv-show` must read that directory, or
    `drv-diff` must accept the installable itself.
-4. **Uploading with a local source override.** `ietsp build --source
-   STOREPATH=LOCAL` reaches `locate_in_store` with a map. `plan` and
-   `build` must take `--source`.
+4. ~~**Uploading with a local source override.**~~ **Closed by stage 4.**
+   The map lives in `api::build::Dispatch::overrides`, and `build` takes
+   `--source STOREPATH=LOCAL`. `plan` does not need it: a plan names the
+   paths, and only the upload reads them.
 5. **Hash mismatch capture.** `ietsp prefetch` drives a build that is
    meant to fail, and reads the mismatch out of the log
    (`log::want_mismatch`, `log::take_mismatches`). `build` must report a
    mismatch as structured output, not as a log line the caller greps.
    `ietsp build`'s `fix-hashes` reads the same channel.
-6. **GC roots and out-links.** `nix-build`, `nix-instantiate --add-root`
-   and `print-dev-env` register roots with the *local* daemon while the
-   build may run elsewhere. `build` must take `--gc-root DIR` and report
-   the registered paths.
+6. ~~**GC roots and out-links.**~~ **Closed by stage 4.** `build` takes
+   `--gc-root DIR` and reports `gcRoots`, over `Backend::out_links`, which
+   already copied the closure back to the local daemon before linking.
+   `nix-instantiate --add-root` goes through `Dispatch` too. What the
+   porcelain keeps is the *naming* of the links (`result-2-dev`,
+   `--add-root` numbering), which is a user interface, per (b)2.
 7. **The flake source resolver.** See below. `flake-tree` does not exist;
    every caller goes through `flake::eval_flake`, which fetches as a side
    effect of evaluation.
-8. **`--check-cache-status`.** `eval-jobs` asks the store whether each
-   output is already there. That belongs in `missing`, per root.
+8. ~~**`--check-cache-status`.**~~ **Closed by stage 4.**
+   `missing --check-cache-status` answers `cacheStatus`, `neededBuilds`
+   and `neededSubstitutes` per root, from `jobs::cache::Resolver`. It
+   reads the roots' derivations from `/nix/store`, as `missing` does.
 9. **The eval-store split.** `eval-jobs --eval-store` instantiates on one
    store while building on another. `plan` and `build` take one builder
    today.

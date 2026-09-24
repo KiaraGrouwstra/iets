@@ -36,9 +36,10 @@ module it belongs to) and let `cli` call it there.
 | Sources this run copied in | `Evaluator::known.origins()` |
 | Derivation roots of a value | `store::locate::drv_roots` |
 | Outputs to build | `api::build_targets(wanted, roots)` |
-| Upload plan | `remote::plan::plan(roots, Inputs { drvs, sources })`; `Plan::resolve(missing, &locate)` with `store::locate::locate_in_store` |
-| Worker connection | `remote::worker::Transport::parse("daemon" \| "unix:///…" \| "ssh-ng://…")` |
-| Build | `build::Dispatcher::open(&transport, &options, prov, style)`, then `submit(&mut build::upload::PlanUpload::new(&plan, &locate), targets)` |
+| Upload plan | `api::build::plan(ev, roots)`, or `plan_with(roots, drvs, sources)` over a table you hold; empty tables read every drv from `/nix/store` |
+| Where the builds go | `api::build::transport(flag, &api::build::config())` |
+| Build | `api::build::Dispatch::open(&transport, &options, plan, prov, style)`, then `submit`, `upload_only`, `missing` or `realise`; `overrides(map)` for `--source STOREPATH=LOCAL` |
+| One output path per root | `Dispatch::realise(roots, &name)` then `Built::paths(roots)`; `api::build::Root { drv, output }` |
 | Build targets and results | `build::Target::new(attr, drv, outputs)`; `build::Outcome` per target |
 | Daemon events | `remote::event::Event::{Started, Log, Phase, Stopped, Failed}` |
 | Nix configuration | `config::Config::load(&[])` |
