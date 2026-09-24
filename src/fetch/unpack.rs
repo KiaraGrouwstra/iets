@@ -296,7 +296,7 @@ mod tests {
             ("repo-abc/flake.nix", REG, 0o644, b"{}\n"),
             ("repo-abc/sub/", DIR, 0o755, b""),
         ]);
-        let root = unpack(crate::flake::http::decompress(bytes).unwrap(), &w.join("x")).unwrap();
+        let root = unpack(crate::fetch::http::decompress(bytes).unwrap(), &w.join("x")).unwrap();
         assert_eq!(root.file_name().unwrap(), "repo-abc");
         assert_eq!(
             tree(&root),
@@ -313,7 +313,7 @@ mod tests {
     fn keeps_the_root_when_it_is_not_a_single_directory() {
         let w = work("nostrip");
         let two = tar_gz(&[("a/", DIR, 0o755, b""), ("b", REG, 0o644, b"x")]);
-        let root = unpack(crate::flake::http::decompress(two).unwrap(), &w.join("two")).unwrap();
+        let root = unpack(crate::fetch::http::decompress(two).unwrap(), &w.join("two")).unwrap();
         assert_eq!(root, w.join("two"));
         assert_eq!(
             tree(&root),
@@ -324,7 +324,7 @@ mod tests {
         );
 
         let one = tar_gz(&[("only", REG, 0o644, b"x")]);
-        let root = unpack(crate::flake::http::decompress(one).unwrap(), &w.join("one")).unwrap();
+        let root = unpack(crate::fetch::http::decompress(one).unwrap(), &w.join("one")).unwrap();
         assert_eq!(root, w.join("one"));
         std::fs::remove_dir_all(&w).unwrap();
     }
@@ -340,7 +340,7 @@ mod tests {
             ("t/link", tar::EntryType::Symlink, 0o777, b"plain"),
             ("t/same", tar::EntryType::Link, 0o644, b"t/plain"),
         ]);
-        let root = unpack(crate::flake::http::decompress(bytes).unwrap(), &w.join("x")).unwrap();
+        let root = unpack(crate::fetch::http::decompress(bytes).unwrap(), &w.join("x")).unwrap();
         assert_eq!(
             tree(&root),
             BTreeMap::from([
@@ -363,7 +363,7 @@ mod tests {
             ("t/f", REG, 0o644, b"first"),
             ("t/f", REG, 0o755, b"second"),
         ]);
-        let root = unpack(crate::flake::http::decompress(bytes).unwrap(), &w.join("x")).unwrap();
+        let root = unpack(crate::fetch::http::decompress(bytes).unwrap(), &w.join("x")).unwrap();
         assert_eq!(
             tree(&root),
             BTreeMap::from([("f".to_string(), "xsecond".to_string())])
@@ -376,7 +376,7 @@ mod tests {
     fn an_unsupported_member_type_is_an_error() {
         let w = work("kinds");
         let bytes = tar_gz(&[("dev", tar::EntryType::Fifo, 0o644, b"")]);
-        let e = unpack(crate::flake::http::decompress(bytes).unwrap(), &w.join("y"));
+        let e = unpack(crate::fetch::http::decompress(bytes).unwrap(), &w.join("y"));
         assert!(e.unwrap_err().to_string().contains("unsupported file type"));
         std::fs::remove_dir_all(&w).unwrap();
     }
@@ -404,7 +404,7 @@ mod tests {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/tarball/tree.tar.gz"),
         )
         .unwrap();
-        let root = unpack(crate::flake::http::decompress(bytes).unwrap(), &w.join("x")).unwrap();
+        let root = unpack(crate::fetch::http::decompress(bytes).unwrap(), &w.join("x")).unwrap();
         let want = std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/tarball/narHash"),
         )

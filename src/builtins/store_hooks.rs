@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
-use crate::flake::spool::Node;
+use crate::fetch::spool::Node;
 use crate::store::hash::{HashAlgo, Hasher};
 use crate::store::nar::{FileType, PathFilter};
 use crate::store::path::{IngestionMethod, STORE_DIR, StorePath, make_fixed_output_path};

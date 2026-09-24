@@ -1,14 +1,14 @@
 //! The NAR of a downloaded archive, without unpacking it.
 //!
 //! A tar is in archive order; a NAR needs every directory's entries sorted by
-//! name and nested inside it. `flake::unpack` gets there by writing a tree and
+//! name and nested inside it. `fetch::unpack` gets there by writing a tree and
 //! walking it, which costs a second copy of every byte on disk. This module
 //! spools the decompressed archive into one file as it arrives, reads it once to
 //! record where each member's bytes are, and then writes the NAR out of that
 //! index, reading the bytes back by offset. Peak memory is the index plus one
 //! copy buffer; nothing holds a member whole.
 //!
-//! The rules are `flake::unpack`'s, which are tarfile.cc's and
+//! The rules are `fetch::unpack`'s, which are tarfile.cc's and
 //! git-utils.cc:GitFileSystemObjectSinkImpl's. `spool_matches_the_tree` in the
 //! tests holds both paths to the same NAR bytes.
 //!
@@ -742,7 +742,7 @@ mod tests {
     /// The NAR the spool writes for `bytes`, and the NAR the tree path writes
     /// for the same archive.
     fn both(tag: &str, bytes: Vec<u8>) -> (Result<Vec<u8>>, Result<Vec<u8>>) {
-        let plain = super::super::http::decompress(bytes.clone()).unwrap();
+        let plain = super::http::decompress(bytes.clone()).unwrap();
         let mut spool = scratch(tag).unwrap();
         spool.write_all(&plain).unwrap();
         let streamed = Tree::index(spool).and_then(|t| {
@@ -755,7 +755,7 @@ mod tests {
         let dest =
             std::env::temp_dir().join(format!("ietsp-spool-tree-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dest);
-        let tree = super::super::unpack::unpack(plain, &dest).and_then(|root| {
+        let tree = super::unpack::unpack(plain, &dest).and_then(|root| {
             let mut nar = Vec::new();
             crate::store::nar::dump_path(&root, &mut nar, &mut |_, _| true)
                 .map_err(|e| Error::io("cannot dump the tree", e))?;

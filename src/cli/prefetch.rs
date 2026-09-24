@@ -13,7 +13,7 @@ use crate::cli::help::{arg_error, value};
 use crate::cli::{EvalArgs, Run, evaluate, parse_eval_args, report};
 use crate::error::{Error, Result};
 use crate::eval::Evaluator;
-use crate::flake::http::{self, Limits};
+use crate::fetch::http::{self, Limits};
 use crate::store::drv::{Derivation, DerivationOutput};
 use crate::store::hash::{Hash, HashAlgo, Hasher};
 use crate::store::locate::drv_roots;
@@ -103,9 +103,9 @@ fn fetch(url: &str, unpack: bool, algo: HashAlgo) -> Result<Hash> {
         http::get(url, &[], limits, false, &mut h)?;
         return Ok(h.finish());
     }
-    let mut spool = crate::flake::spool::scratch("prefetch")?;
+    let mut spool = crate::fetch::spool::scratch("prefetch")?;
     http::get(url, &[], limits, true, &mut spool)?;
-    crate::flake::spool::Tree::index(spool)?
+    crate::fetch::spool::Tree::index(spool)?
         .dump(&mut h)
         .map_err(|e| Error::io("cannot hash the unpacked tree", e))?;
     Ok(h.finish())

@@ -179,7 +179,7 @@ for the connection.
 
 ### The archive fetch (step 2)
 
-`src/flake/http.rs` is the GET: hyper over tokio-rustls, the stack tonic
+`src/fetch/http.rs` is the GET: hyper over tokio-rustls, the stack tonic
 already brings, no libcurl. It follows redirects as `filetransfer.cc` does
 (`CURLOPT_FOLLOWLOCATION`, `CURLOPT_MAXREDIRS` 10), reads a `file://` URL
 from disk, and undoes the four compressions libarchive autodetects for us:
@@ -207,7 +207,7 @@ split on the first colon as a header of its own.
 The download is streamed. hyper runs on a thread of its own and hands its
 body frames to a queue of 16, the fetching thread reads that queue through the
 decompressor, and the decompressed tar goes into `spool` inside a staged
-directory of the input store. `src/flake/spool.rs` then reads that file once
+directory of the input store. `src/fetch/spool.rs` then reads that file once
 to record where every member's bytes are, and writes the NAR straight out of
 the index, reading each file's bytes back by offset: no tree is ever unpacked.
 It writes the NAR once, into the hasher, and the staged directory only becomes
@@ -217,7 +217,7 @@ hundred bytes per member and nothing per byte: a full nixpkgs revision costs
 19 MB of index over the evaluator's own 75 MB, where unpacking a tree cost
 307 MB (13.5 s and 382 MB peak RSS before, 7.7 s and 94 MB after).
 
-`src/flake/spool.rs` applies the rules of `src/flake/unpack.rs`, which walks
+`src/fetch/spool.rs` applies the rules of `src/fetch/unpack.rs`, which walks
 the tar as `tarfile.cc:unpackTarfileToSink`
 does and keeps exactly what the git tree behind a locked input keeps
 (`git-utils.cc:GitFileSystemObjectSinkImpl`), because that tree is what the

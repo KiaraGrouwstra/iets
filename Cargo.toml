@@ -23,7 +23,7 @@ prost = "0.14"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 tokio-stream = "0.1"
 zstd = "0.13"
-# The flake-input fetcher (src/flake/http.rs, src/flake/unpack.rs): the HTTP and
+# The flake-input fetcher (src/fetch/http.rs, src/fetch/unpack.rs): the HTTP and
 # TLS halves are the ones tonic already brings; only the archive formats are new.
 hyper = { version = "1", default-features = false, features = ["client", "http1"] }
 hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }

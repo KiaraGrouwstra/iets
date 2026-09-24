@@ -18,6 +18,7 @@ pub mod config;
 pub mod devenv;
 pub mod error;
 pub mod eval;
+pub mod fetch;
 pub mod flake;
 pub mod inputs;
 pub mod jobs;

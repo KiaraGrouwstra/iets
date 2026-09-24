@@ -1,7 +1,7 @@
 //! The input store: where a fetched flake input lives instead of `/nix/store`.
 //!
 //! `flake::fetch` downloads a `github`/`gitlab`/`sourcehut`/`tarball` input as
-//! one decompressed tar and indexes it (`flake::spool`). That spool used to be
+//! one decompressed tar and indexes it (`fetch::spool`). That spool used to be
 //! an unlinked temporary file, thrown away once the tree had been registered on
 //! the local daemon. It is kept here instead, under
 //! `$XDG_CACHE_HOME/ietsp/inputs/<store path base name>/`, with its index
@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::cachefs;
 use crate::eval::Evaluator;
-use crate::flake::spool::{self, Tree};
+use crate::fetch::spool::{self, Tree};
 use crate::store::hash::Hash;
 
 /// One opened entry: the spooled archive with its index, and the NAR hash and
