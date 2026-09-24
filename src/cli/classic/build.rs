@@ -6,9 +6,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use super::{Argv, Common, Root, common_flag, fallback};
+use crate::api::build::{self as apibuild, Dispatch};
 use crate::build::render::Style;
-use crate::build::upload::PlanUpload;
-use crate::build::{Dispatcher, Target};
 use crate::cli::{Outcome, abs_path, auto_args, cwd};
 use crate::eval::Evaluator;
 use crate::provenance::Provenance;
@@ -84,7 +83,7 @@ pub fn main(argv: &[String]) -> i32 {
         Outcome::Unsupported(reason) => fallback(NAME, argv, &reason),
         Outcome::Ok(Built::Empty) => 0,
         Outcome::Ok(Built::Ready(roots, plan, prov)) => {
-            realise(&b, &transport, &options, &roots, &plan, &prov)
+            realise(&b, &transport, &options, &roots, *plan, &prov)
         }
     }
 }
@@ -105,7 +104,7 @@ fn run(ev: &mut Evaluator, b: &Build) -> crate::error::Result<Built> {
         return Ok(Built::Empty);
     }
     let prov = Provenance::snapshot(ev);
-    let plan = super::plan_roots(ev, &roots)?;
+    let plan = apibuild::plan(ev, &Root::paths(&roots))?;
     Ok(Built::Ready(roots, Box::new(plan), Box::new(prov)))
 }
 
@@ -115,57 +114,35 @@ fn realise(
     transport: &Transport,
     options: &Options,
     roots: &[Root],
-    plan: &Plan,
+    plan: Plan,
     prov: &Provenance,
 ) -> i32 {
     let style = Style {
         quiet: b.c.quiet,
         ..Style::detect()
     };
-    let mut d = match Dispatcher::open(transport, options, prov.clone(), style) {
+    let mut d = match Dispatch::open(transport, options, plan, prov.clone(), style) {
         Ok(d) => d,
         Err(e) => return e.report(),
     };
-    // nix-build asks for every root in one op, one output per root; roots
-    // that share a derivation become one target with both outputs.
-    let mut targets: Vec<Target> = Vec::new();
-    for r in roots {
-        match targets.iter_mut().find(|t| t.drv == r.drv) {
-            Some(t) => {
-                if !t.outputs.contains(&r.output) {
-                    t.outputs.push(r.output.clone());
-                }
-            }
-            None => {
-                // The bare attribute: the dispatcher adds the position, once.
-                let name = prov
-                    .attr_of(&r.drv.to_string())
-                    .unwrap_or_else(|| crate::provenance::drv_name(&r.drv.to_string()));
-                targets.push(Target::new(&name, r.drv.clone(), vec![r.output.clone()]));
-            }
-        }
-    }
-    let mut up = PlanUpload::new(plan, &super::locate_store);
-    let outcomes = match d.submit(&mut up, targets) {
-        Ok(o) => o,
+    // nix-build asks for every root in one op, one output per root. The bare
+    // attribute names each one: the dispatcher adds the position, once.
+    let name = |p: &crate::store::path::StorePath| {
+        prov.attr_of(&p.to_string())
+            .unwrap_or_else(|| crate::provenance::drv_name(&p.to_string()))
+    };
+    let built = match d.realise(roots, &name) {
+        Ok(b) => b,
         Err(e) => return e.report(),
     };
     // a daemon client nix exits 1 on a failed build, whatever the status
-    if d.exit != 0 {
+    if d.d.exit != 0 {
         return 1;
     }
-    let maps: HashMap<String, std::collections::BTreeMap<String, Option<String>>> = outcomes
-        .iter()
-        .map(|o| {
-            (
-                o.drv.to_string(),
-                o.outputs
-                    .iter()
-                    .map(|(n, p)| (n.clone(), Some(p.clone())))
-                    .collect(),
-            )
-        })
-        .collect();
+    let paths = match built.paths(roots) {
+        Ok(p) => p,
+        Err(e) => return e.report(),
+    };
 
     // nix-build.cc: the n-th distinct drv gets the suffix `-n` from 2 on; an
     // output other than `out` adds `-<output>`.
@@ -177,19 +154,8 @@ fn realise(
     let cwd = cwd();
     let mut out = String::new();
     let mut links: Vec<(String, Option<String>)> = Vec::new();
-    for r in roots {
+    for (r, path) in roots.iter().zip(&paths) {
         let drv = r.drv.to_string();
-        let path = maps
-            .get(&drv)
-            .and_then(|m| m.get(&r.output).cloned())
-            .flatten();
-        let Some(path) = path else {
-            return crate::error::Error::Store(format!(
-                "derivation '{drv}' has no output '{}'",
-                r.output
-            ))
-            .report();
-        };
         if b.no_out_link {
             if !super::store_given(&b.c) {
                 links.push((path.clone(), None));
@@ -207,10 +173,10 @@ fn realise(
             let link = String::from_utf8_lossy(&abs_path(&link, &cwd)).into_owned();
             links.push((path.clone(), Some(link)));
         }
-        out.push_str(&path);
+        out.push_str(path);
         out.push('\n');
     }
-    if let Err(e) = d.out_links(&links) {
+    if let Err(e) = d.d.out_links(&links) {
         return e.report();
     }
     use std::io::Write;

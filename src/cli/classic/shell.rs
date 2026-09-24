@@ -13,6 +13,7 @@ use std::process::Command;
 use std::sync::Arc;
 
 use super::{Argv, Common, Root, common_flag, fallback};
+use crate::api::build as apibuild;
 use crate::build::backend::Worker;
 use crate::build::upload::{PlanUpload, Uploader};
 use crate::cli::{Outcome, auto_args, cwd, report};
@@ -261,7 +262,7 @@ fn prepare(ev: &mut Evaluator, s: &Shell) -> crate::error::Result<Box<Ready>> {
             output: "out".into(),
         });
     }
-    let plan = super::plan_roots(ev, &targets)?;
+    let plan = apibuild::plan(ev, &Root::paths(&targets))?;
     Ok(Box::new(Ready {
         drv_path: roots[0].drv.clone(),
         drv,
@@ -367,7 +368,7 @@ fn realise(s: &Shell, transport: &Transport, options: &Options, r: Ready, cores:
     if let Bash::Drv(p) = &r.bash {
         wanted.push(format!("{p}!out"));
     }
-    let upload = PlanUpload::new(&r.plan, &super::locate_store).upload(
+    let upload = PlanUpload::new(&r.plan, &apibuild::locate_store).upload(
         &mut w,
         std::slice::from_ref(&r.drv_path),
         &mut on_event,

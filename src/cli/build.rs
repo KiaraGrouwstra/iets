@@ -9,7 +9,7 @@ use crate::cli::help::{arg_error, value};
 use crate::cli::{EvalArgs, Input, Run, build_targets, evaluate, parse_eval_args, report, run_for};
 use crate::error::Error as CrateError;
 use crate::eval::Evaluator;
-use crate::store::locate::{drv_roots, locate_in_store};
+use crate::store::locate::drv_roots;
 use crate::trace::run::Cache;
 
 struct BuildArgs {
@@ -179,13 +179,6 @@ fn build_once(argv: &[String]) -> i32 {
     crate::cli::run_parallel(run, move |ev, cache| build_eval(ev, &b, a, t0, cache))
 }
 
-/// The Nix settings, for `system` and the `store` that `--builder` defaults to;
-/// `ietsp build` takes no `--option`. An unreadable nix.conf leaves the
-/// defaults, as it did when nothing here read one.
-fn config() -> crate::config::Config {
-    crate::config::Config::load(&[]).unwrap_or_else(|_| crate::config::Config::empty())
-}
-
 fn build_eval(
     ev: &mut Evaluator,
     b: &BuildArgs,
@@ -294,25 +287,17 @@ fn build_roots(
     inputs: crate::remote::plan::Inputs<'_>,
     prov: &crate::provenance::Provenance,
 ) -> i32 {
+    use crate::api::build as apibuild;
+    use crate::build::Target;
     use crate::build::render::Style;
-    use crate::build::upload::PlanUpload;
-    use crate::build::{Dispatcher, Target};
-    use crate::store::path::StorePath;
 
-    let cfg = config();
-    let url = crate::settings::builder(b.url.as_deref(), &cfg);
-    let transport = match crate::remote::worker::Transport::parse_checked(&url, &cfg.system()) {
-        Ok(Some(t)) => t,
-        Ok(None) => {
-            return CrateError::Usage(format!(
-                "unsupported builder '{url}': expected daemon, unix:///path, ssh-ng://[user@]host or grpc://host:port"
-            ))
-            .report();
-        }
-        Err(e) => return CrateError::Usage(e.to_string()).report(),
+    let cfg = apibuild::config();
+    let transport = match apibuild::transport(b.url.as_deref(), &cfg) {
+        Ok(t) => t,
+        Err(e) => return e.report(),
     };
     let t0 = std::time::Instant::now();
-    let plan = match crate::remote::plan::plan(roots, inputs) {
+    let plan = match apibuild::plan_with(roots, inputs.drvs, inputs.sources) {
         Ok(p) => p,
         Err(e) => return e.report(),
     };
@@ -323,24 +308,18 @@ fn build_roots(
             plan.store_drvs
         );
     }
-    let locate = |paths: &[StorePath]| locate_in_store(paths, &b.sources);
-
-    let mut up = PlanUpload::new(&plan, &locate);
-    let mut d = match Dispatcher::open(
-        &transport,
-        &crate::remote::worker::Options::default(),
-        prov.clone(),
-        Style::detect(),
-    ) {
-        Ok(d) => d,
-        Err(e) => return e.report(),
-    };
+    let opts = crate::remote::worker::Options::default();
+    let mut d =
+        match apibuild::Dispatch::open(&transport, &opts, plan, prov.clone(), Style::detect()) {
+            Ok(d) => d.overrides(b.sources.clone()),
+            Err(e) => return e.report(),
+        };
 
     if b.no_build {
-        if let Err(e) = d.upload_only(&mut up, &roots[..1]) {
+        if let Err(e) = d.upload_only(&roots[..1]) {
             return e.report();
         }
-        timings(b, &d, &plan, plan_time);
+        timings(b, &d, plan_time);
         return 0;
     }
 
@@ -355,31 +334,31 @@ fn build_roots(
         })
         .collect();
     if b.dry_run {
-        return match d.missing(&mut up, &targets) {
-            Ok(m) => print_missing(&m, &plan, b.json),
+        return match d.missing(&targets) {
+            Ok(m) => print_missing(&m, d.plan(), b.json),
             Err(e) => e.report(),
         };
     }
-    let outcomes = match d.submit(&mut up, targets) {
+    let outcomes = match d.submit(targets) {
         Ok(o) => o,
         Err(e) => return e.report(),
     };
     if let Some(dir) = &b.fetch_to {
         for o in &outcomes {
             for path in o.outputs.values() {
-                if let Err(e) = d.fetch(path, dir) {
+                if let Err(e) = d.d.fetch(path, dir) {
                     return e.report();
                 }
             }
         }
     }
-    timings(b, &d, &plan, plan_time);
+    timings(b, &d, plan_time);
     for o in &outcomes {
         for path in o.outputs.values() {
             println!("{path}");
         }
     }
-    d.exit
+    d.d.exit
 }
 
 /// shared.cc:printMissing at lvlError, as `nix build --dry-run` prints it;
@@ -449,14 +428,9 @@ fn render_size(bytes: u64) -> String {
 }
 
 /// `--timings`: one line per phase of the flow, as the backend measured it.
-fn timings(
-    b: &BuildArgs,
-    d: &crate::build::Dispatcher,
-    plan: &crate::remote::plan::Plan,
-    plan_time: std::time::Duration,
-) {
+fn timings(b: &BuildArgs, d: &crate::api::build::Dispatch, plan_time: std::time::Duration) {
     if b.timings {
-        eprintln!("{}", d.report(plan, plan_time));
+        eprintln!("{}", d.d.report(d.plan(), plan_time));
     }
 }
 

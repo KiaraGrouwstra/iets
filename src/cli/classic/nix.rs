@@ -3,14 +3,13 @@
 //! fallback as the other classic names for everything else. See
 //! `docs/classic.md`.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::{Argv, Common, Root, fallback};
+use crate::api::build::Dispatch;
 use crate::api::installable;
 use crate::build::render::Style;
-use crate::build::upload::PlanUpload;
-use crate::build::{Dispatcher, Target as BuildTarget};
 use crate::cli::{Outcome, abs_path, auto_args, cwd, report};
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::remote::plan::Plan;
@@ -306,7 +305,7 @@ fn build_main(argv: &[String], rest: &[String]) -> i32 {
         Outcome::Unsupported(reason) => fallback(NAME, argv, &reason),
         Outcome::Ok(Done::Out(_)) => unreachable!("build prints its own output"),
         Outcome::Ok(Done::Ready(targets, plan)) => {
-            realise(&n, &transport, &options, &targets, &plan)
+            realise(&n, &transport, &options, &targets, *plan)
         }
     }
 }
@@ -319,7 +318,7 @@ fn build_run(ev: &mut Evaluator, n: &Nix) -> crate::error::Result<Done> {
         targets.push(target(ev, v, what, n.expr.is_none() && n.file.is_none())?);
     }
     let roots = flat_roots(&targets);
-    let plan = super::plan_roots(ev, &roots)?;
+    let plan = crate::api::build::plan(ev, &Root::paths(&roots))?;
     Ok(Done::Ready(targets, Box::new(plan)))
 }
 
@@ -467,19 +466,14 @@ struct Target {
 
 /// The `Root`s the plan and `BuildPathsWithResults` need, in target order.
 fn flat_roots(targets: &[Target]) -> Vec<Root> {
-    let mut roots = Vec::new();
-    let mut seen = HashSet::new();
-    for t in targets {
-        for o in &t.outputs {
-            if seen.insert((t.drv.to_string(), o.clone())) {
-                roots.push(Root {
-                    drv: t.drv.clone(),
-                    output: o.clone(),
-                });
-            }
-        }
-    }
-    roots
+    (targets.iter())
+        .flat_map(|t| {
+            (t.outputs.iter()).map(|o| Root {
+                drv: t.drv.clone(),
+                output: o.clone(),
+            })
+        })
+        .collect()
 }
 
 /// The derivation an installable names and its outputs to install
@@ -612,75 +606,44 @@ fn realise(
     transport: &Transport,
     options: &Options,
     targets: &[Target],
-    plan: &Plan,
+    plan: Plan,
 ) -> i32 {
     let roots = flat_roots(targets);
     let style = Style {
         quiet: !n.print_build_logs,
         ..Style::detect()
     };
-    let mut d = match Dispatcher::open(
+    let mut d = match Dispatch::open(
         transport,
         options,
+        plan,
         crate::provenance::Provenance::off(),
         style,
     ) {
         Ok(d) => d,
         Err(e) => return e.report(),
     };
-    let mut batch: Vec<BuildTarget> = Vec::new();
-    for r in &roots {
-        match batch.iter_mut().find(|t| t.drv == r.drv) {
-            Some(t) => {
-                if !t.outputs.contains(&r.output) {
-                    t.outputs.push(r.output.clone());
-                }
-            }
-            None => batch.push(BuildTarget::new(
-                r.drv.name(),
-                r.drv.clone(),
-                vec![r.output.clone()],
-            )),
-        }
-    }
-    let mut up = PlanUpload::new(plan, &super::locate_store);
-    let outcomes = match d.submit(&mut up, batch) {
-        Ok(o) => o,
+    let built = match d.realise(&roots, &|p: &StorePath| p.name().to_string()) {
+        Ok(b) => b,
         Err(e) => return e.report(),
     };
     // a daemon client nix exits 1 on a failed build, whatever the status
-    if d.exit != 0 {
+    if d.d.exit != 0 {
         return 1;
     }
-    let maps: HashMap<String, BTreeMap<String, Option<String>>> = outcomes
-        .iter()
-        .map(|o| {
-            (
-                o.drv.to_string(),
-                o.outputs
-                    .iter()
-                    .map(|(k, v)| (k.clone(), Some(v.clone())))
-                    .collect(),
-            )
-        })
-        .collect();
+    let paths = match built.paths(&roots) {
+        Ok(p) => p,
+        Err(e) => return e.report(),
+    };
 
     let cwd = cwd();
     let mut out = String::new();
     let mut links: Vec<(String, Option<String>)> = Vec::new();
+    let mut at = 0;
     for (i, t) in targets.iter().enumerate() {
-        let drv = t.drv.to_string();
         for output in &t.outputs {
-            let path = maps
-                .get(&drv)
-                .and_then(|m| m.get(output).cloned())
-                .flatten();
-            let Some(path) = path else {
-                return crate::error::Error::Store(format!(
-                    "derivation '{drv}' has no output '{output}'"
-                ))
-                .report();
-            };
+            let path = &paths[at];
+            at += 1;
             if n.no_link {
                 if !super::store_given(&n.c) {
                     links.push((path.clone(), None));
@@ -700,12 +663,12 @@ fn realise(
                 links.push((path.clone(), Some(link)));
             }
             if n.print_out_paths {
-                out.push_str(&path);
+                out.push_str(path);
                 out.push('\n');
             }
         }
     }
-    if let Err(e) = d.out_links(&links) {
+    if let Err(e) = d.d.out_links(&links) {
         return e.report();
     }
     print_bytes(out.as_bytes());

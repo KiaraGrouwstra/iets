@@ -85,12 +85,7 @@ pub fn cmd_fast_build(argv: &[String]) -> i32 {
 
 fn run(a: Args) -> Result<i32> {
     let cfg = Config::load(&a.flags.overrides)?;
-    let store = crate::settings::builder(a.store.as_deref(), &cfg);
-    let mut transport = Transport::parse_checked(&store, &cfg.system())?.ok_or_else(|| {
-        CrateError::Usage(format!(
-            "--store '{store}': ietsp fast-build speaks the Nix worker protocol and grpc://: daemon, unix:///path, ssh-ng://[user@]host or grpc://host:port"
-        ))
-    })?;
+    let mut transport = crate::api::build::transport(a.store.as_deref(), &cfg)?;
     let mut options = Options::try_from(&cfg)?;
     let max_jobs = jobs(a.max_jobs, &mut transport, &mut options);
     // Every attribute gets a verdict unless --fail-fast says to stop.

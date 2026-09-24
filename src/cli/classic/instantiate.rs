@@ -6,10 +6,11 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::{Argv, Common, Root, common_flag, fallback};
-use crate::build::backend::Worker;
-use crate::build::upload::{PlanUpload, Uploader};
+use crate::api::build::{self as apibuild, Dispatch};
+use crate::build::render::Style;
 use crate::cli::{Outcome, abs_path, auto_args, cwd};
 use crate::eval::{Error, Evaluator, Pos};
+use crate::provenance::Provenance;
 use crate::remote::plan::Plan;
 use crate::remote::worker::{Options, Transport};
 use crate::runtime::Word;
@@ -115,7 +116,7 @@ pub fn main(argv: &[String]) -> i32 {
             0
         }
         Outcome::Ok(Made::Drvs(roots, plan)) => {
-            finish(&i, &transport, &options, &roots, plan.as_deref())
+            finish(&i, &transport, &options, &roots, plan.map(|p| *p))
         }
     }
 }
@@ -152,7 +153,7 @@ fn run(ev: &mut Evaluator, i: &Inst) -> crate::error::Result<Made> {
     if i.readonly || roots.is_empty() {
         return Ok(Made::Drvs(roots, None));
     }
-    let plan = super::plan_roots(ev, &roots)?;
+    let plan = apibuild::plan(ev, &Root::paths(&roots))?;
     Ok(Made::Drvs(roots, Some(Box::new(plan))))
 }
 
@@ -196,25 +197,28 @@ fn finish(
     transport: &Transport,
     options: &Options,
     roots: &[Root],
-    plan: Option<&Plan>,
+    plan: Option<Plan>,
 ) -> i32 {
     if i.add_root.is_none() && i.gc_warning && !roots.is_empty() {
         crate::log::line(
             "warning: you did not specify '--add-root'; the result might be removed by the garbage collector",
         );
     }
-    let mut worker = None;
+    let mut up = None;
     if let Some(plan) = plan {
-        let r = Worker::open(transport, options, &mut log_event).and_then(|mut w| {
-            PlanUpload::new(plan, &super::locate_store).upload(
-                &mut w,
-                std::slice::from_ref(&roots[0].drv),
-                &mut log_event,
-            )?;
-            Ok(w)
-        });
+        // no build, so nothing to render: the daemon's log lines go out as they
+        // are, as they did before a dispatcher carried the upload.
+        let style = Style {
+            quiet: true,
+            ..Style::detect()
+        };
+        let r =
+            Dispatch::open(transport, options, plan, Provenance::off(), style).and_then(|mut d| {
+                d.upload_only(std::slice::from_ref(&roots[0].drv))?;
+                Ok(d)
+            });
         match r {
-            Ok(w) => worker = Some(w),
+            Ok(d) => up = Some(d),
             Err(e) => return e.report(),
         }
     }
@@ -222,16 +226,15 @@ fn finish(
     let mut out = String::new();
     let mut root_nr = 0;
     for r in roots {
-        let shown = match (&i.add_root, worker.as_mut()) {
-            (Some(g), Some(w)) => {
+        let shown = match (&i.add_root, up.as_mut()) {
+            (Some(g), Some(d)) => {
                 root_nr += 1;
                 let mut name = String::from_utf8_lossy(&abs_path(g, &cwd)).into_owned();
                 if root_nr > 1 {
                     name.push_str(&format!("-{root_nr}"));
                 }
-                if let Err(e) = w
-                    .conn
-                    .add_perm_root(&r.drv.to_string(), std::path::Path::new(&name))
+                if let Err(e) =
+                    d.d.out_link(&r.drv.to_string(), std::path::Path::new(&name))
                 {
                     return e.report();
                 }
@@ -248,10 +251,4 @@ fn finish(
     }
     print_bytes(out.as_bytes());
     0
-}
-
-fn log_event(e: crate::remote::event::Event) {
-    if let crate::remote::event::Event::Log(l) = e {
-        crate::log::line(&String::from_utf8_lossy(&l.line));
-    }
 }

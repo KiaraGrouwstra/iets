@@ -1,6 +1,5 @@
 //! `ietsp print-dev-env`: the shell environment of a flake's devShell.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::api::installable;
@@ -8,7 +7,7 @@ use crate::cli::help::{arg_error, value};
 use crate::cli::{EvalArgs, Input, Run, abs_path, cwd, evaluate, parse_eval_args, report, run_for};
 use crate::error::Error as CrateError;
 use crate::eval::{Error, Evaluator, Pos};
-use crate::store::locate::{drv_roots, locate_in_store};
+use crate::store::locate::drv_roots;
 use crate::trace::run::Cache;
 
 struct DevEnvArgs {
@@ -428,19 +427,9 @@ fn dev_env_build(ev: &mut Evaluator, a: EvalArgs, d: &DevEnvArgs) -> Result<DevE
             .query_valid_paths(&out_paths, &mut |e| sink.event(e))?;
         if valid.len() != out_paths.len() {
             let t2 = std::time::Instant::now();
-            let no_overrides = HashMap::new();
-            let locate = |paths: &[StorePath]| locate_in_store(paths, &no_overrides);
-            let plan = {
-                let drvs = ev.drv.drvs.lock();
-                let sources = ev.known.origins();
-                let inputs = crate::remote::plan::Inputs {
-                    drvs: &drvs,
-                    sources: &sources,
-                };
-                crate::remote::plan::plan(std::slice::from_ref(&env_path), inputs)?
-            };
+            let plan = crate::api::build::plan(ev, std::slice::from_ref(&env_path))?;
             let plan_time = t2.elapsed();
-            PlanUpload::new(&plan, &locate).upload(
+            PlanUpload::new(&plan, &crate::api::build::locate_store).upload(
                 &mut w,
                 std::slice::from_ref(&env_path),
                 &mut |e| sink.event(e),

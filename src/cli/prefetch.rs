@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::build::upload::PlanUpload;
+use crate::api::build as apibuild;
 use crate::build::{Dispatcher, Reporter, Target, render::Style};
 use crate::builtins::derivation::DrvInfo;
 use crate::cli::help::{arg_error, value};
@@ -16,7 +16,7 @@ use crate::eval::Evaluator;
 use crate::flake::http::{self, Limits};
 use crate::store::drv::{Derivation, DerivationOutput};
 use crate::store::hash::{Hash, HashAlgo, Hasher};
-use crate::store::locate::{drv_roots, locate_in_store};
+use crate::store::locate::drv_roots;
 use crate::store::path::StorePath;
 
 pub const HELP: &str = "\
@@ -174,30 +174,21 @@ fn build(
     name: &str,
     drvs: &HashMap<StorePath, DrvInfo>,
 ) -> Result<String> {
-    let cfg = crate::config::Config::load(&[]).unwrap_or_else(|_| crate::config::Config::empty());
-    let url = crate::settings::builder(None, &cfg);
-    let transport = crate::remote::worker::Transport::parse_checked(&url, &cfg.system())
-        .map_err(|e| Error::Usage(e.to_string()))?
-        .ok_or_else(|| Error::Usage(format!("unsupported builder '{url}'")))?;
+    let cfg = apibuild::config();
+    let transport = apibuild::transport(None, &cfg)?;
     let sources = ev.known.origins();
-    let plan = crate::remote::plan::plan(
-        std::slice::from_ref(root),
-        crate::remote::plan::Inputs {
-            drvs,
-            sources: &sources,
-        },
-    )?;
-    let locate = |paths: &[StorePath]| locate_in_store(paths, &HashMap::new());
-    let mut up = PlanUpload::new(&plan, &locate);
+    let plan = apibuild::plan_with(std::slice::from_ref(root), drvs, &sources)?;
     let opts = crate::remote::worker::Options::default();
     let backend = crate::build::backend::open(&transport, &opts, &mut |_| {})?;
     // nothing to watch: the build is meant to fail, and this command's only
     // output is the hash it fails on.
     let quiet = Reporter::with_output(Style::detect(), Box::new(std::io::sink()));
-    let mut d =
-        Dispatcher::with_backend(backend, crate::provenance::Provenance::snapshot(ev), quiet);
+    let mut d = apibuild::Dispatch::with(
+        Dispatcher::with_backend(backend, crate::provenance::Provenance::snapshot(ev), quiet),
+        plan,
+    );
     crate::log::want_mismatch(name);
-    let outcomes = d.submit(&mut up, vec![Target::new(name, root.clone(), Vec::new())])?;
+    let outcomes = d.submit(vec![Target::new(name, root.clone(), Vec::new())])?;
     let why = match outcomes.first() {
         Some(o) if o.success => "the fake hash is the hash it produced".to_string(),
         Some(o) => (o.reason.iter().cloned())

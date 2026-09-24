@@ -3,6 +3,7 @@
 //! `ietsp` command line is one frontend on top of this; docs/library.md
 //! lists the whole surface.
 
+pub mod build;
 pub mod installable;
 pub mod run;
 pub mod value;

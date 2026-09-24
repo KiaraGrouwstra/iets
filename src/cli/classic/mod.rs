@@ -13,6 +13,7 @@ use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, exit};
 
+use crate::api::build::Root;
 use crate::cli::{EvalFlags, abs_path, eval_flag, full_includes};
 use crate::config::Config;
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
@@ -302,14 +303,6 @@ pub fn select(ev: &mut Evaluator, root: Word, attr_path: &str, args: Word) -> Ev
     Ok(v)
 }
 
-/// One derivation `nix-instantiate` or `nix-build` was asked for: the drv and
-/// the single output `outputName` names.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Root {
-    pub drv: StorePath,
-    pub output: String,
-}
-
 /// get-drvs.cc:getDerivations. A derivation is one root; an attrset is walked
 /// in lexicographic name order and recursed into only with
 /// `recurseForDerivations = true`; a list is always walked.
@@ -457,28 +450,4 @@ fn is_attr_path_component(name: &[u8]) -> bool {
     }
     rest.iter()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'+'))
-}
-
-/// The plan for every root, sources and drvs read from this evaluation.
-pub fn plan_roots(
-    ev: &Evaluator,
-    roots: &[Root],
-) -> crate::error::Result<crate::remote::plan::Plan> {
-    let drvs = ev.drv.drvs.lock();
-    let sources = ev.known.origins();
-    let paths: Vec<StorePath> = roots.iter().map(|r| r.drv.clone()).collect();
-    crate::remote::plan::plan(
-        &paths,
-        crate::remote::plan::Inputs {
-            drvs: &drvs,
-            sources: &sources,
-        },
-    )
-}
-
-/// The plan's locator: the local store, no `--source` overrides.
-pub fn locate_store(
-    paths: &[StorePath],
-) -> crate::error::Result<Vec<Option<crate::store::source::SourceOrigin>>> {
-    crate::store::locate::locate_in_store(paths, &std::collections::HashMap::new())
 }
