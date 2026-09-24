@@ -242,6 +242,15 @@ int main(void)
     CHECK(nix_get_attr_byname(ctx, version, state, "x") == NULL);
     CHECK(nix_err_code(ctx) == NIX_ERR_NIX_ERROR);
 
+    // an uninitialized value, and a null one
+    nix_clear_err(ctx);
+    nix_value * unset = nix_alloc_value(ctx, state);
+    CHECK(nix_get_type(ctx, unset) == NIX_TYPE_NULL);
+    CHECK(nix_err_code(ctx) == NIX_ERR_UNKNOWN);
+    nix_clear_err(ctx);
+    CHECK(nix_get_type(ctx, NULL) == NIX_TYPE_NULL);
+    CHECK(nix_err_code(ctx) == NIX_ERR_UNKNOWN);
+
     // a cleared context reports nothing
     nix_clear_err(ctx);
     CHECK(nix_err_code(ctx) == NIX_OK);
