@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::api::{EvalArgs, Input, cwd, report, setup_cache};
+use crate::api::{EvalArgs, Input, cwd, installable, report, setup_cache};
 use crate::builtins::text::regex::{self, Prog};
 use crate::cli::classic::nix::{global_flag, nix_settings};
 use crate::cli::classic::{Argv, Common, evaluator, fallback, is_unsupported, lookup_file_arg};
@@ -240,38 +240,17 @@ fn cursors(ev: &mut Evaluator, s: &Search, cwd: &[u8]) -> EvalResult<Vec<(Word, 
     let fr = crate::api::flake_ref(loc, cwd)
         .map_err(|e| Error::boxed(ErrorKind::Unsupported, e.to_string(), Pos::NONE))?;
     let outputs = crate::flake::eval_flake(ev, &fr)?;
-    let system = ev.current_system;
-    let candidates: Vec<String> = match fragment.strip_prefix('.') {
-        Some(rest) => vec![rest.to_string()],
-        None if fragment.is_empty() => vec![
-            format!("packages.{system}"),
-            format!("legacyPackages.{system}"),
-        ],
-        None => vec![
-            format!("packages.{system}.{fragment}"),
-            format!("legacyPackages.{system}.{fragment}"),
-            fragment.to_string(),
-        ],
-    };
-    let mut found = Vec::new();
-    for c in &candidates {
-        let path = crate::flake::parse_attr_path(c)
-            .map_err(|m| Error::boxed(ErrorKind::Eval, m.to_string(), Pos::NONE))?;
-        if let Some(v) = crate::flake::select(ev, outputs, &path)? {
-            found.push((v, path.iter().map(|p| p.as_bytes().to_vec()).collect()));
-        }
-    }
-    if found.is_empty() {
-        return Err(Error::boxed(
-            ErrorKind::MissingAttr,
-            format!(
-                "flake '{loc}' does not provide attribute {}",
-                crate::devenv::show_attr_paths(&candidates)
-            ),
-            Pos::NONE,
-        ));
-    }
-    Ok(found)
+    let found = installable::from_outputs(
+        ev,
+        outputs,
+        loc,
+        installable::Prefixes::PackageSet,
+        fragment,
+        installable::Want::All,
+    )?;
+    Ok((found.into_iter())
+        .map(|f| (f.value, f.path.iter().map(|p| p.as_bytes().to_vec()).collect()))
+        .collect())
 }
 
 /// search.cc:visit for one attribute path. `initial` marks a value the

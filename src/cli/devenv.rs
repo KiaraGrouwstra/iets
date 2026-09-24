@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::api::installable;
 use crate::cli::help::{arg_error, value};
 use crate::cli::{EvalArgs, Input, abs_path, cwd, evaluate, parse_eval_args, report};
 use crate::error::Error as CrateError;
@@ -338,7 +339,6 @@ fn dev_env_build(ev: &mut Evaluator, a: EvalArgs, d: &DevEnvArgs) -> Result<DevE
         _ => arg_error("print-dev-env needs a FLAKEREF"),
     };
     let (loc, frag) = f.split_once('#').unwrap_or((f.as_str(), ""));
-    let candidates = devenv::attr_paths(frag, ev.current_system);
     let mut roots = Vec::new();
     let r = (|| {
         let outputs = evaluate(
@@ -348,21 +348,15 @@ fn dev_env_build(ev: &mut Evaluator, a: EvalArgs, d: &DevEnvArgs) -> Result<DevE
                 ..a
             },
         )?;
-        for c in &candidates {
-            let path = crate::flake::parse_attr_path(c)
-                .map_err(|m| Error::boxed(ErrorKind::Eval, m.to_string(), Pos::NONE))?;
-            if let Some(v) = crate::flake::select(ev, outputs, &path)? {
-                return drv_roots(ev, v, &mut roots);
-            }
-        }
-        Err(Error::boxed(
-            ErrorKind::MissingAttr,
-            format!(
-                "flake '{loc}' does not provide attribute {}",
-                devenv::show_attr_paths(&candidates)
-            ),
-            Pos::NONE,
-        ))
+        let mut found = installable::from_outputs(
+            ev,
+            outputs,
+            loc,
+            installable::Prefixes::DevShell,
+            frag,
+            installable::Want::First,
+        )?;
+        drv_roots(ev, found.remove(0).value, &mut roots)
     })();
     if let Err(e) = r {
         return Err(report(ev, &e));

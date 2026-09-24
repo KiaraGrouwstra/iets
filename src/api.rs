@@ -3,6 +3,7 @@
 //! `ietsp` command line is one frontend on top of this; docs/library.md
 //! lists the whole surface.
 
+pub mod installable;
 pub mod value;
 
 use crate::eval::{Error, Evaluator, Pos};

@@ -457,42 +457,6 @@ fn write_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     })
 }
 
-/// The attribute paths `nix print-dev-env FLAKE#fragment` tries, in order
-/// (installable-flake.cc:getActualAttrPaths with develop.cc's defaults and prefixes).
-pub fn attr_paths(fragment: &str, system: &str) -> Vec<String> {
-    if fragment.is_empty() {
-        return vec![
-            format!("devShells.{system}.default"),
-            format!("devShell.{system}"),
-            format!("packages.{system}.default"),
-            format!("defaultPackage.{system}"),
-        ];
-    }
-    if let Some(rest) = fragment.strip_prefix('.') {
-        return vec![rest.to_string()];
-    }
-    vec![
-        format!("devShells.{system}.{fragment}"),
-        format!("packages.{system}.{fragment}"),
-        format!("legacyPackages.{system}.{fragment}"),
-        fragment.to_string(),
-    ]
-}
-
-/// installable-flake.cc:showAttrPaths.
-pub fn show_attr_paths(paths: &[String]) -> String {
-    let mut s = String::new();
-    for (n, p) in paths.iter().enumerate() {
-        if n > 0 {
-            s.push_str(if n + 1 == paths.len() { " or " } else { ", " });
-        }
-        s.push('\'');
-        s.push_str(p);
-        s.push('\'');
-    }
-    s
-}
-
 /// What a `print-dev-env` cache entry stores: the env output, the files the printed bytes
 /// refer to, and the bytes themselves.
 pub struct CachedResult {
@@ -687,33 +651,6 @@ mod tests {
                 .contains(&format!("NIX_ATTRS_SH_FILE='{}'\n", sh.display()))
         );
         assert_eq!(rc.files.len(), 2);
-    }
-
-    #[test]
-    fn default_and_fragment_attr_paths() {
-        assert_eq!(
-            attr_paths("", "x86_64-linux"),
-            [
-                "devShells.x86_64-linux.default",
-                "devShell.x86_64-linux",
-                "packages.x86_64-linux.default",
-                "defaultPackage.x86_64-linux"
-            ]
-        );
-        assert_eq!(
-            attr_paths("ci", "x86_64-linux"),
-            [
-                "devShells.x86_64-linux.ci",
-                "packages.x86_64-linux.ci",
-                "legacyPackages.x86_64-linux.ci",
-                "ci"
-            ]
-        );
-        assert_eq!(attr_paths(".a.b", "s"), ["a.b"]);
-        assert_eq!(
-            show_attr_paths(&["a".into(), "b".into(), "c".into()]),
-            "'a', 'b' or 'c'"
-        );
     }
 
     #[test]

@@ -10,6 +10,7 @@ use super::{Argv, Common, Root, fallback, is_unsupported};
 use crate::build::render::Style;
 use crate::build::upload::PlanUpload;
 use crate::build::{Dispatcher, Target as BuildTarget};
+use crate::api::installable;
 use crate::cli::{abs_path, auto_args, cwd, report};
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::remote::plan::Plan;
@@ -443,26 +444,6 @@ fn dev_env_main(argv: &[String], rest: &[String]) -> i32 {
 
 // ---- installables ------------------------------------------------------------
 
-/// installable-flake.cc:getActualAttrPaths with installables.cc's defaults:
-/// the `packages.<system>.` and `legacyPackages.<system>.` prefixes on the
-/// fragment, then the fragment itself; no fragment means the default package.
-fn attr_paths(fragment: &str, system: &str) -> Vec<String> {
-    if fragment.is_empty() {
-        return vec![
-            format!("packages.{system}.default"),
-            format!("defaultPackage.{system}"),
-        ];
-    }
-    if let Some(rest) = fragment.strip_prefix('.') {
-        return vec![rest.to_string()];
-    }
-    vec![
-        format!("packages.{system}.{fragment}"),
-        format!("legacyPackages.{system}.{fragment}"),
-        fragment.to_string(),
-    ]
-}
-
 /// The value one installable names: an attribute of the `--expr`/`--file`
 /// value, or a flake output attribute.
 fn resolve(ev: &mut Evaluator, n: &Nix, what: &str, cwd: &[u8]) -> EvalResult<Word> {
@@ -489,22 +470,15 @@ fn resolve(ev: &mut Evaluator, n: &Nix, what: &str, cwd: &[u8]) -> EvalResult<Wo
     let fr = crate::cli::flake_ref(loc, cwd)
         .map_err(|e| Error::boxed(ErrorKind::Unsupported, e.to_string(), Pos::NONE))?;
     let outputs = crate::flake::eval_flake(ev, &fr)?;
-    let candidates = attr_paths(fragment, ev.current_system);
-    for c in &candidates {
-        let path = crate::flake::parse_attr_path(c)
-            .map_err(|m| Error::boxed(ErrorKind::Eval, m.to_string(), Pos::NONE))?;
-        if let Some(v) = crate::flake::select(ev, outputs, &path)? {
-            return Ok(v);
-        }
-    }
-    Err(Error::boxed(
-        ErrorKind::MissingAttr,
-        format!(
-            "flake '{loc}' does not provide attribute {}",
-            crate::devenv::show_attr_paths(&candidates)
-        ),
-        Pos::NONE,
-    ))
+    let mut found = installable::from_outputs(
+        ev,
+        outputs,
+        loc,
+        installable::Prefixes::Package,
+        fragment,
+        installable::Want::First,
+    )?;
+    Ok(found.remove(0).value)
 }
 
 /// One installable's derivation and the outputs `nix build` installs.
