@@ -142,9 +142,14 @@ takes roots accepts `--roots -` and reads `resolve`'s output on stdin.
 ### `resolve`
 
 ```
-ietsp plumbing resolve [EVAL FLAGS] [--prefixes package|dev-shell|package-set]
-                       [--want first|all] [--drvs|--no-drvs]
+ietsp plumbing resolve [EVAL FLAGS]
+       [--prefixes none|package|dev-shell|package-set]
+       [--want first|all] [--no-drvs]
 ```
+
+`--prefixes none` is the default: the fragment after `#` names the
+attribute path itself, which is what the native commands do. The other
+three are the `getActualAttrPaths` tables the classic commands use.
 
 ```json
 {
@@ -392,9 +397,14 @@ commands.
    keyed by file. The allow-list starts as today's set and may only
    shrink; the test asserts its length against a constant, so an entry
    that is removed cannot come back unnoticed.
-2. **Types.** Once `api::installable` exists, `Word` (an evaluator value)
-   must not appear in a `src/cli` signature. The same test greps for it.
-   A porcelain command that cannot name a value cannot evaluate one.
+2. **Types.** The end state is that `Word` (an evaluator value) does not
+   appear in a `src/cli` signature: a porcelain command that cannot name
+   a value cannot evaluate one. The same test greps for it, against the
+   same shrinking allow-list, so the rule can be adopted file by file.
+   Note what this does *not* ban: a porcelain-side library that renders,
+   parses Nix argv or prompts. Those may be as large as they need to be.
+   The test asks one question only — is this a second implementation of
+   something the operation layer owns?
 3. **A review checklist**, in this file:
    * Does the change add a call from `src/cli` into a layer below
      `crate::api`? Then the plumbing is missing an operation. Add it
@@ -471,18 +481,122 @@ and the flake evaluation all call the resolver. `prefetch` calls
 those two move out of `src/flake` into `src/fetch`, where they belong:
 neither knows anything about flakes.
 
+### The input store is a store, and it should say so once
+
+Two different things are called a store here.
+
+* **Content we own, on local disk.** `src/cachefs.rs` (581 lines) is
+  already the shared discipline: a version file, stage and rename, one
+  writer under `flock`, a TTL sweep, poison and wipe on doubt. The IR
+  cache, the tracing store and the input store all follow it.
+* **A Nix store reached over a protocol.** `src/remote/` — the daemon,
+  `ssh-ng`, `grpc`. A different trust model. Not ours.
+
+The input store straddles the two: it is (a) by storage and (b) by
+content, because it holds NAR-shaped trees under Nix store path names.
+That is why `src/flake/spool.rs` (892 lines) carries NAR and store-path
+logic that partly mirrors `src/store/nar.rs` (956) and `src/store/path.rs`
+(473). Three modules know how a store path is built; two know how a tree
+becomes a NAR, which is why `spool_matches_the_tree` exists as a parity
+test between them. A third naming site, `flake::fetch::source_store_path`,
+sits beside `store::path::make_store_path` and
+`store::drv::fixed_output_path`.
+
+Propose one named abstraction: a **local content-addressed tree store**,
+on top of `cachefs`. Put a tree in, get a store path. Read bytes back for
+evaluation. Stream a NAR out for an upload. Nothing else.
+
+```rust
+/// Anything that can be walked as a tree: a spooled archive, a directory
+/// on disk, a single file. One NAR writer serves all of them.
+pub trait TreeSource {
+    fn stat(&self, rel: &[u8]) -> Option<FileType>;
+    fn list(&self, rel: &[u8]) -> Option<Vec<(Vec<u8>, FileType)>>;
+    fn read(&self, rel: &[u8]) -> io::Result<Vec<u8>>;
+}
+
+pub trait TreeStore {
+    /// Put a tree in. `expect` is the hash the caller already knows: a
+    /// lock entry's `narHash`, or a derivation's `outputHash`. There is
+    /// no `put` without it.
+    fn put(&self, name: &str, expect: &Hash, src: &dyn TreeSource)
+        -> Result<StoredTree>;
+    fn get(&self, path: &StorePath) -> Option<StoredTree>;
+    fn has(&self, path: &StorePath) -> bool;
+}
+
+impl StoredTree {
+    pub fn path(&self) -> &StorePath;
+    pub fn nar_hash(&self) -> &Hash;
+    pub fn nar_size(&self) -> u64;
+    /// Evaluation reads through this. Nothing is materialised.
+    pub fn read(&self, rel: &[u8]) -> io::Result<Vec<u8>>;
+    pub fn stat(&self, rel: &[u8]) -> Option<FileType>;
+    pub fn list(&self, rel: &[u8]) -> Option<Vec<(Vec<u8>, FileType)>>;
+    /// An upload streams this.
+    pub fn dump(&self, filter: &PathFilter, sink: &mut dyn Write)
+        -> io::Result<()>;
+}
+```
+
+`src/inputs.rs` becomes its only current user, and shrinks to the lookup
+by lock entry. `src/flake/spool.rs` keeps the part that is really its own
+— indexing a decompressed tar so members can be read back by offset — and
+implements `TreeSource`. Its NAR writer, its index codec and its
+`persist`/`reopen` pair move into the tree store, where one copy serves
+every source. `store::nar`'s writer becomes the writer, over the trait.
+`source_store_path` becomes the store's naming function.
+
+The flake layer then depends on `TreeStore` and `SourceResolver`, not on
+`flake::fetch`, `flake::spool` or `crate::inputs` internals.
+
+Expected reduction:
+
+| Module | Now | After | Delta |
+|:---|---:|---:|---:|
+| `src/flake/spool.rs` | 892 | ~520 | -372 |
+| `src/inputs.rs` | 280 | ~90 | -190 |
+| `src/store/nar.rs` | 956 | ~870 | -86 |
+| `src/flake/fetch.rs` (naming) | — | — | -30 |
+| `src/treestore/` (new) | 0 | ~380 | +380 |
+| | | | **-298** |
+
+`src/cachefs.rs` does not change: the tree store is a user of it, like the
+IR cache and the tracing store.
+
+#### Consequence, recorded and not designed here
+
+The store is fixed-output only, and that is exactly what makes it safe in
+user space. A fixed-output hash is known **before** the fetch, so the
+content verifies itself: no signature, no trusted builder, no daemon. The
+interface above makes that a property of the type, not a policy check —
+`put` takes `expect` and has no overload without it. Nothing that lacks a
+prior hash can be admitted.
+
+Today it holds flake inputs only. Every other FOD — `fetchurl`,
+`fetchFromGitHub`, `fetchzip`, any derivation with `outputHash` — has the
+same shape: a name, a hash known in advance, and a byte stream. Covering
+them would be `put` called from `builtins:fetchurl` and from the
+fixed-output build path with the derivation's `outputHash`, plus a policy
+setting for what the store is allowed to hold. It is a change to one
+implementation, not a new store. The proposed interface is already keyed
+on exactly a FOD's identity, so yes: small.
+
 ### Migration order
 
 1. Move `flake::http`, `flake::spool` and `flake::unpack` to `src/fetch`.
    They are an HTTP client, a spooled tree and an archive unpacker. No
    caller changes except the module path. **-0 lines, 3 files move.**
-2. Introduce `SourceRef`, `Tree` and `SourceResolver` in `src/source`,
-   implemented by today's `flake::fetch`. `flake::fetch_tree` becomes a
-   thin call.
-3. Move `is_flake_ref`, `parse_attr_path` and `select` to `api::flake`.
+2. `src/treestore` on `cachefs`: `TreeSource`, `TreeStore`, `StoredTree`.
+   `fetch::spool::Tree` implements `TreeSource`; the NAR writer and the
+   index codec move in; `inputs.rs` becomes a lookup.
+3. Introduce `SourceRef`, `Tree` and `SourceResolver` in `src/source`,
+   implemented by today's `flake::fetch` over the tree store.
+   `flake::fetch_tree` becomes a thin call.
+4. Move `is_flake_ref`, `parse_attr_path` and `select` to `api::flake`.
    The six `src/cli` call sites change to `api::`.
-4. `flake::lock` becomes `source::Lock`, with `flake-info` on top.
-5. `crate::flake` becomes `pub(crate)`; the layering test adds it to the
+5. `flake::lock` becomes `source::Lock`, with `flake-info` on top.
+6. `crate::flake` becomes `pub(crate)`; the layering test adds it to the
    banned list.
 
 Nothing in this section is implemented yet.
@@ -493,21 +607,27 @@ Every stage is one merge, and the checks pass at its commit.
 
 | # | Stage | src delta | Where the reduction comes from |
 |--:|:---|---:|:---|
-| 1 | `api::installable` + `plumbing resolve`; move `search`, `print-dev-env`, `nix build`/`nix eval` onto it | **-60** | three `attr_paths` tables and three candidate loops become one; the new op is ~120 lines against ~180 removed |
+| 1 | `api::installable` + `plumbing resolve`; move `nix build`/`nix eval`, `ietsp search` and `print-dev-env` onto it | **+220 measured** | three `attr_paths` tables and three candidate loops (-84) become one 127-line module; `plumbing resolve` is +156 of new surface |
 | 2 | `api::render` + `src/cli/render`: one JSON writer, one size and table formatter | -120 | nine hand-written renderers, two copies of `print_bytes`, one `render_size` |
 | 3 | `api::session::Run`: the eval scaffold (evaluator, lints, cache, trace, parallel, report) as one call | -260 | 16 `run_parallel` call sites and 5 cache-hit branches become 1 |
 | 4 | `api::build`: one dispatch path; `plumbing plan`, `missing`, `build` | -300 | 8 copies of the builder/transport/plan/upload/dispatcher sequence |
 | 5 | `api::installable` grows the get-drvs walk and `outputsToInstall`; `nix-build`, `nix-shell`, `nix-instantiate`, `ietsp build`, `diff`, `prefetch` move onto it | -180 | gaps (a)1, (a)2, (a)3, (a)4 close; `classic::derivations` and `classic::plan_roots` lose their callers |
 | 6 | `src/fetch` split out of `src/flake`; `plumbing fetch` | -40 | `prefetch`'s private use of `flake::spool`/`flake::http` |
-| 7 | `source::SourceResolver`; `crate::flake` private; `plumbing flake-info`, `flake-tree` | -150 | one lock reader, one tree fetcher; `flake::root` and `flake::fetch` stop overlapping |
-| 8 | `plumbing index`, `jobs`, `dev-env`, `drv-show`, `drv-diff`, `closure-diff`; porcelain becomes flags and rendering | +150 | the ops are new surface; the porcelain shrinks by about as much |
-| 9 | `tests/layering.rs` and the allow-list; `crate::flake` and `crate::store` banned from `src/cli` | +60 | the test is new; it is what keeps stages 1-8 from rotting |
+| 7 | `src/treestore` on `cachefs`; `inputs.rs` and `spool.rs` collapse into it | -300 | two NAR writers, three store-path naming sites, one entry codec |
+| 8 | `source::SourceResolver`; `crate::flake` private; `plumbing flake-info`, `flake-tree` | -150 | one lock reader, one tree fetcher; `flake::root` and `flake::fetch` stop overlapping |
+| 9 | `plumbing index`, `jobs`, `dev-env`, `drv-show`, `drv-diff`, `closure-diff`; porcelain becomes flags and rendering | +150 | the ops are new surface; the porcelain shrinks by about as much |
+| 10 | `tests/layering.rs` and the allow-list; `crate::flake` and `crate::store` banned from `src/cli` | +60 | the test is new; it is what keeps stages 1-9 from rotting |
 
-Net: about **-1100 lines** in `src`, with `docs/plumbing.md` as the
-contract. The reduction is entirely the second copy: three attr-path
-tables, eight build-dispatch sequences, sixteen eval scaffolds, nine
-renderers. The new plumbing surface costs about 400 lines and is charged
+Net: about **-920 lines** in `src`, with `docs/plumbing.md` as the
+contract. The reduction is the second copy: three attr-path tables, eight
+build-dispatch sequences, sixteen eval scaffolds, nine renderers, two NAR
+writers. The new plumbing surface costs about 550 lines and is charged
 above.
+
+Stage 1 is the one stage that is net positive, and it is honest about
+why: the shared resolver pays for itself only at three call sites today,
+while the plumbing command is entirely new surface. Stage 5 is where that
+module earns its cost.
 
 ## Review checklist
 
