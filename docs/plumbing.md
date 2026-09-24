@@ -54,13 +54,26 @@ candidate loop that follows them — select, take the first or all, report
 
 ### 2. Build dispatch
 
-`config` → `settings::builder` → `Transport::parse_checked` → `plan::plan`
-→ `PlanUpload::new` → `Dispatcher::open` → `submit` appears in
-`cli/build.rs:305-400`, `cli/prefetch.rs:176-205`, `cli/classic/build.rs:119-170`,
-`cli/classic/instantiate.rs:166-230`, `cli/classic/nix.rs:341-700`,
-`cli/classic/shell.rs:281-395`, `cli/devenv.rs:451-460` and
-`cli/fastbuild/mod.rs:86-95`. `cli/classic/mod.rs:468-482` (`plan_roots`)
-is a partial extraction that only the classic commands use.
+**Closed by stage 4.** `config` → `settings::builder` →
+`Transport::parse_checked` → `plan::plan` → `PlanUpload::new` →
+`Dispatcher::open` → `submit` was written out in `cli/build.rs`,
+`cli/prefetch.rs`, `cli/classic/build.rs`, `cli/classic/instantiate.rs`,
+`cli/classic/nix.rs`, `cli/classic/shell.rs`, `cli/devenv.rs` and
+`cli/fastbuild/mod.rs`, with `classic::plan_roots` as a partial
+extraction only the classic commands used. It is now `api::build`:
+`transport`, `plan`/`plan_with`, and a `Dispatch` that owns the plan, the
+`--source` overrides and the dispatcher, so no caller builds a
+`PlanUpload`. `Dispatch::realise` plus `Built::paths` is the
+merge-into-targets, submit, look-the-output-up block that `nix-build` and
+`nix build` each wrote out, and `classic::Root` moved to `api::build`.
+
+Two of the eight keep a connection of their own: `nix-shell` and
+`print-dev-env` upload a plan and then speak the worker protocol
+themselves (build the derivation's *inputs*, `execve` a shell; read the
+env output back). They use `api::build::plan` and
+`api::build::locate_store` and drive `PlanUpload` on that connection,
+because routing them through `Dispatch` would open a second one. Stage 9's
+`plumbing dev-env` is where that ends.
 
 ### 3. The evaluate-then-walk-then-report scaffold
 
@@ -338,7 +351,7 @@ as porcelain aliases.
 | Porcelain | Plumbing it calls | Porcelain-only part |
 |:---|:---|:---|
 | `ietsp eval` | `eval` | the human value printer, `--timings` |
-| `ietsp build` | `resolve`, `plan`, `missing`, `build` | `--dry-run` text, `render_size`, `fix-hashes` prompts, `.drv` legacy input |
+| `ietsp build` | `plan`, `missing`, `build` (through `api::build::Dispatch`) | `--dry-run` text, `render_size`, `fix-hashes` prompts, `.drv` legacy input |
 | `ietsp search` | `index` | regex compile and match, `--exclude`, colour, `--pretty`, the no-results hint |
 | `ietsp diff` | `resolve`, `drv-diff`, `closure-diff` | the text rendering, the `diff(1)` exit codes |
 | `ietsp eval-jobs` | `jobs` | the worker/collector process model, `--max-memory-size`, the summary line |
@@ -651,7 +664,7 @@ Every stage is one merge, and the checks pass at its commit.
 | 1 | `api::installable` + `plumbing resolve`; move `nix build`/`nix eval`, `ietsp search` and `print-dev-env` onto it | **+220 measured** | three `attr_paths` tables and three candidate loops (-84) become one 127-line module; `plumbing resolve` is +156 of new surface |
 | 2 | `api::render` + `src/cli/render`: one JSON writer, one size and table formatter | -120 | nine hand-written renderers, two copies of `print_bytes`, one `render_size` |
 | 3 | `api::run::Run`: the eval scaffold (evaluator, lints, cache, trace, parallel, report) as one call | **-7 measured** | the scaffold lines themselves are only -100; the rest is four per-command `Failed`/`Unsupported` enums and their error matches, against a 102-line module |
-| 4 | `api::build`: one dispatch path; `plumbing plan`, `missing`, `build` | -300 | 8 copies of the builder/transport/plan/upload/dispatcher sequence |
+| 4 | `api::build`: one dispatch path; `plumbing plan`, `missing`, `build` | **+417 measured** | the refactor is +33: the eight sites shed 220 lines against a 187-line module. The three ops are +384, of which about 80 is the three gaps they close |
 | 5 | `api::installable` grows the get-drvs walk and `outputsToInstall`; `nix-build`, `nix-shell`, `nix-instantiate`, `ietsp build`, `diff`, `prefetch` move onto it | -180 | gaps (a)1, (a)2, (a)3, (a)4 close; `classic::derivations` and `classic::plan_roots` lose their callers |
 | 6 | `src/fetch` split out of `src/flake`; `plumbing fetch` | -40 | `prefetch`'s private use of `flake::spool`/`flake::http` |
 | 7 | `src/treestore` on `cachefs`; `inputs.rs` and `spool.rs` collapse into it | -300 | two NAR writers, three store-path naming sites, one entry codec |
@@ -659,17 +672,20 @@ Every stage is one merge, and the checks pass at its commit.
 | 9 | `plumbing index`, `jobs`, `dev-env`, `drv-show`, `drv-diff`, `closure-diff`; porcelain becomes flags and rendering | +150 | the ops are new surface; the porcelain shrinks by about as much |
 | 10 | `tests/layering.rs` and the allow-list; `crate::flake` and `crate::store` banned from `src/cli` | +60 | the test is new; it is what keeps stages 1-9 from rotting |
 
-Net: about **-450 lines** in `src` on the estimates below, with
-`docs/plumbing.md` as the contract. The reduction is the second copy:
+The estimates below said about **-450 lines** in `src`. Stages 1, 3 and 4
+measured +220, -7 and +417, so that number is wrong; see the next section
+for what replaces it. The reduction that is real is the second copy:
 three attr-path tables, eight build-dispatch sequences, sixteen eval
 scaffolds, nine renderers, two NAR writers. The new plumbing surface
-costs about 550 lines and is charged above.
+costs far more than the 550 lines charged above.
 
-### What stages 1 and 3 measured, and what it means for the rest
+### What stages 1, 3 and 4 measured, and what it means for the rest
 
 Stage 1 estimated -60 and measured +220. Stage 3 estimated -260 and
-measured -7. Two things were wrong in both estimates, and they are wrong
-in the same direction everywhere else:
+measured -7. Stage 4 estimated -300, was re-estimated at "positive unless
+the collapse works", and measured +417. Two things were wrong in the
+first estimates, and they are wrong in the same direction everywhere
+else:
 
 1. **A shared module costs 100-150 lines before it saves one.**
    `api::installable` is 175, `api::run` is 102. A stage that removes
@@ -682,17 +698,38 @@ in the same direction everywhere else:
    match that fed each one saved as much again, from five sites. Look
    for the type, not for the line.
 
-Stages 2 and 4 are the two that read like stage 3's estimate. Stage 2 is
-nine renderers of about 15 lines against a new writer module; on the
-arithmetic above it is nearer -50 than -120 unless it also deletes the
-per-command output types. Stage 4 is eight copies of a 10-line dispatch
-sequence (-80), a shared module (+130) and three new plumbing ops
-(+150): as written it is positive, and it only goes negative if
-`plan_roots`, `PlanUpload::new` and the `Dispatcher::open`/`submit`
-pair collapse into one call that the classic `realise` functions also
-use. Stages 5 to 8 are backed by per-module counts and stand.
+Stage 2 reads like stage 3's estimate. It is nine renderers of about 15
+lines against a new writer module; on the arithmetic above it is nearer
+-50 than -120 unless it also deletes the per-command output types.
 
-Stage 1 is the one stage that is net positive, and it is honest about
+**Stage 4's collapse worked and was still not enough.** `plan_roots`,
+`PlanUpload::new` and the `Dispatcher::open`/`submit` pair did collapse
+into one call that the classic `realise` functions use, and the per-command
+types around it went with them: `classic::Root` moved into `api::build`,
+`nix.rs:flat_roots` lost its dedup, and the merge-into-targets loop, the
+`HashMap<String, BTreeMap<String, Option<String>>>` and the
+"derivation has no output" match — written out twice, ~45 lines each —
+became `realise` plus `Built::paths`. That is what turned the -80 the plan
+predicted into -220. The module still cost 187, so the refactor is +33.
+
+A third rule follows, and it is the one that decides stages 5 to 9:
+
+3. **The plumbing op costs more than the operation it exposes.** The
+   three ops are 384 lines against a dispatch layer they call in four
+   lines each. Flag parsing, the root vocabulary (`DRV!OUT`, `--roots -`),
+   the help text and the JSON shaping are the op; the capability was
+   already there. A stage that adds ops nets positive unless the porcelain
+   it replaces is deleted in the same stage. Stage 9 is charged +150 for
+   six ops on the same arithmetic that cost 384 for three; read it as
+   +400 unless the porcelain goes with it.
+
+Stages 5 to 8 delete code without adding a command, and their per-module
+counts stand. On the measured numbers the net across all ten stages is
+about **+300**, not -450. The migration is still worth it — one
+implementation per capability, and a contract programs can call — but it
+is not a line-count win, and the plan should stop claiming one.
+
+Stage 1 was the first stage that was net positive, and it was honest about
 why: the shared resolver pays for itself only at three call sites today,
 while the plumbing command is entirely new surface. Stage 5 is where that
 module earns its cost.
