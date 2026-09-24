@@ -64,13 +64,14 @@ is a partial extraction that only the classic commands use.
 
 ### 3. The evaluate-then-walk-then-report scaffold
 
-`a.evaluator()` → `configure_lints` → `setup_cache` → cache hit →
-`ev.trace = enabled` → `run_parallel` → `report(ev, &e)` is written out in
-`cli/eval.rs:9-32`, `cli/build.rs:150-188`, `cli/search.rs:139-167`,
-`cli/devenv.rs:120-158`, `cli/jobs.rs:236-260`, `cli/diff.rs:155-161`,
-`cli/prefetch.rs:70-75` and `cli/fastbuild/mod.rs:150-157`. Sixteen
-`run_parallel` call sites, five `setup_cache` call sites, each with its
-own cache-hit branch.
+**Closed by stage 3.** `a.evaluator()` → `configure_lints` →
+`setup_cache` → cache hit → `ev.trace = enabled` → `run_parallel` →
+`report(ev, &e)` was written out in `cli/eval.rs`, `cli/build.rs`,
+`cli/search.rs`, `cli/devenv.rs`, `cli/jobs.rs`, `cli/diff.rs`,
+`cli/prefetch.rs`, `cli/plumbing.rs`, `cli/fastbuild/mod.rs` and the four
+classic commands: sixteen `run_parallel` call sites and four
+`setup_cache` call sites, each with its own cache-hit branch. It is now
+`api::run::Run`, which every one of them goes through.
 
 ### 4. Text-or-JSON rendering
 
@@ -615,7 +616,7 @@ Every stage is one merge, and the checks pass at its commit.
 |--:|:---|---:|:---|
 | 1 | `api::installable` + `plumbing resolve`; move `nix build`/`nix eval`, `ietsp search` and `print-dev-env` onto it | **+220 measured** | three `attr_paths` tables and three candidate loops (-84) become one 127-line module; `plumbing resolve` is +156 of new surface |
 | 2 | `api::render` + `src/cli/render`: one JSON writer, one size and table formatter | -120 | nine hand-written renderers, two copies of `print_bytes`, one `render_size` |
-| 3 | `api::session::Run`: the eval scaffold (evaluator, lints, cache, trace, parallel, report) as one call | -260 | 16 `run_parallel` call sites and 5 cache-hit branches become 1 |
+| 3 | `api::run::Run`: the eval scaffold (evaluator, lints, cache, trace, parallel, report) as one call | **-7 measured** | the scaffold lines themselves are only -100; the rest is four per-command `Failed`/`Unsupported` enums and their error matches, against a 102-line module |
 | 4 | `api::build`: one dispatch path; `plumbing plan`, `missing`, `build` | -300 | 8 copies of the builder/transport/plan/upload/dispatcher sequence |
 | 5 | `api::installable` grows the get-drvs walk and `outputsToInstall`; `nix-build`, `nix-shell`, `nix-instantiate`, `ietsp build`, `diff`, `prefetch` move onto it | -180 | gaps (a)1, (a)2, (a)3, (a)4 close; `classic::derivations` and `classic::plan_roots` lose their callers |
 | 6 | `src/fetch` split out of `src/flake`; `plumbing fetch` | -40 | `prefetch`'s private use of `flake::spool`/`flake::http` |
@@ -624,11 +625,38 @@ Every stage is one merge, and the checks pass at its commit.
 | 9 | `plumbing index`, `jobs`, `dev-env`, `drv-show`, `drv-diff`, `closure-diff`; porcelain becomes flags and rendering | +150 | the ops are new surface; the porcelain shrinks by about as much |
 | 10 | `tests/layering.rs` and the allow-list; `crate::flake` and `crate::store` banned from `src/cli` | +60 | the test is new; it is what keeps stages 1-9 from rotting |
 
-Net: about **-920 lines** in `src`, with `docs/plumbing.md` as the
-contract. The reduction is the second copy: three attr-path tables, eight
-build-dispatch sequences, sixteen eval scaffolds, nine renderers, two NAR
-writers. The new plumbing surface costs about 550 lines and is charged
-above.
+Net: about **-450 lines** in `src` on the estimates below, with
+`docs/plumbing.md` as the contract. The reduction is the second copy:
+three attr-path tables, eight build-dispatch sequences, sixteen eval
+scaffolds, nine renderers, two NAR writers. The new plumbing surface
+costs about 550 lines and is charged above.
+
+### What stages 1 and 3 measured, and what it means for the rest
+
+Stage 1 estimated -60 and measured +220. Stage 3 estimated -260 and
+measured -7. Two things were wrong in both estimates, and they are wrong
+in the same direction everywhere else:
+
+1. **A shared module costs 100-150 lines before it saves one.**
+   `api::installable` is 175, `api::run` is 102. A stage that removes
+   N copies of a K-line sequence nets `N*K - 150`, not `N*K`.
+2. **Repeated lines are cheap to count and cheap to keep; repeated
+   *types* are what cost.** Folding the cache lookup, the trace switch,
+   the lint call and `run_parallel` into one call saved about 100 lines
+   over sixteen sites — 6 lines each. Deleting four per-command
+   `enum Run { Failed, Unsupported, … }` and the `if is_unsupported(&e)`
+   match that fed each one saved as much again, from five sites. Look
+   for the type, not for the line.
+
+Stages 2 and 4 are the two that read like stage 3's estimate. Stage 2 is
+nine renderers of about 15 lines against a new writer module; on the
+arithmetic above it is nearer -50 than -120 unless it also deletes the
+per-command output types. Stage 4 is eight copies of a 10-line dispatch
+sequence (-80), a shared module (+130) and three new plumbing ops
+(+150): as written it is positive, and it only goes negative if
+`plan_roots`, `PlanUpload::new` and the `Dispatcher::open`/`submit`
+pair collapse into one call that the classic `realise` functions also
+use. Stages 5 to 8 are backed by per-module counts and stand.
 
 Stage 1 is the one stage that is net positive, and it is honest about
 why: the shared resolver pays for itself only at three call sites today,

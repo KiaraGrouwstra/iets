@@ -24,6 +24,7 @@ module it belongs to) and let `cli` call it there.
 | `-I` entries, `NIX_PATH` | `api::parse_include`, `api::full_includes` |
 | Evaluate it | `api::evaluate(&mut Evaluator, EvalArgs) -> Result<Word, Box<Error>>` |
 | Run on worker threads | `parallel::try_run(workers, ev, f)`; `parallel::default_workers()` |
+| All of the above as one call | `api::run::Run`: `Run::new(&args)` or `Run::on(ev)`, then `cached`, `workers`, `hit`, and `go` or `eval` |
 | Force a value | `Evaluator::force`, `force_deep`, `force_attrs` |
 | Print a value | `print::print_json`, `print::print_ambiguous`; `Evaluator::coerce_to_string` for `--raw` |
 | Report an error | `api::report_of(&Evaluator, &Error) -> log::Report` to render yourself; `api::report` sends it to the session log and gives the exit code (docs/cli.md) |
@@ -41,7 +42,7 @@ module it belongs to) and let `cli` call it there.
 | Build targets and results | `build::Target::new(attr, drv, outputs)`; `build::Outcome` per target |
 | Daemon events | `remote::event::Event::{Started, Log, Phase, Stopped, Failed}` |
 | Nix configuration | `config::Config::load(&[])` |
-| Evaluation cache | `api::setup_cache(&args, subcommand, &ev)`, `trace::run::Cache` |
+| Evaluation cache | `Run::cached(&args, subcommand)`, `Run::hit`, `trace::run::Cache` |
 | Flake references | `api::flake_ref`, `flake::{eval_flake, eval_flake_value}` |
 | `eval-jobs` style walks | `jobs::run`, `jobs::Opts` |
 
@@ -80,12 +81,14 @@ session that writes nowhere.
 ## Shape of a frontend
 
 1. Make a `Session`, enter it, and build an `EvalArgs`.
-2. `parallel::try_run(workers, Evaluator::new(), move |ev| …)`: everything
-   inside runs as the main fiber, so `force` may park while helpers work.
+2. `api::run::Run::new(&args)`, then `.go(move |ev, cache| …)`:
+   everything inside runs as the main fiber, so `force` may park while
+   helpers work. `Run` installs the lints and opens the tracing cache;
+   `parallel::try_run` is the same step without them.
 3. `api::evaluate(ev, args)` for the value, then force and print it, or
    `drv_roots` + `plan` + `build` for a build.
 4. Report errors with `api::report`, which rewrites store paths and
-   positions to the local trees they came from.
+   positions to the local trees they came from, or let `Run::eval` do it.
 
 ## The value API
 
