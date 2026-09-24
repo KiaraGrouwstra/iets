@@ -5,6 +5,7 @@
 
 pub mod build;
 pub mod installable;
+pub mod render;
 pub mod run;
 pub mod value;
 

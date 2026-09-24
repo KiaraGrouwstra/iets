@@ -83,12 +83,13 @@ pub fn cmd_prefetch(argv: &[String]) -> i32 {
 }
 
 /// One line on stdout: the hash, or an object with it and where it came from.
-fn print_hash(json: bool, hash: &str, key: &str, value: &str) -> i32 {
-    if json {
-        println!("{}", serde_json::json!({"hash": hash, key: value}));
-    } else {
-        println!("{hash}");
-    }
+fn print_hash(json: bool, hash: &str, key: &'static str, value: &str) -> i32 {
+    let f = crate::api::render::Fetched {
+        hash: hash.to_string(),
+        key,
+        origin: value.to_string(),
+    };
+    crate::cli::render::emit(&f, json);
     0
 }
 

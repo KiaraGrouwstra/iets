@@ -127,15 +127,7 @@ fn run(o: &Opts, load: &mut crate::store::drv::DrvLoader<'_>, roots: &[StorePath
         return closure_diff(o, load, a, b);
     }
     let d = crate::store::drvdiff::diff(load, a, b, o.depth)?;
-    if o.json {
-        let mut v = d.json();
-        v["equal"] = d.is_empty().into();
-        println!("{v}");
-    } else if d.is_empty() {
-        println!("{a} and {b} are the same derivation");
-    } else {
-        print!("{}", d.text());
-    }
+    crate::cli::render::emit(&d, o.json);
     Ok(i32::from(!d.is_empty()))
 }
 
@@ -208,39 +200,9 @@ fn closure_diff(
     };
     let mut conn = Connection::open(&t, &mut |_| {})?;
     let (ca, cb) = (closure(&mut conn, load, a)?, closure(&mut conn, load, b)?);
-    let mut names: BTreeSet<&String> = ca.keys().collect();
-    names.extend(cb.keys());
-    let none = BTreeSet::new();
-    let rows: Vec<(&str, &String, &BTreeSet<String>, &BTreeSet<String>)> = (names.into_iter())
-        .map(|n| (n, ca.get(n).unwrap_or(&none), cb.get(n).unwrap_or(&none)))
-        .filter(|(_, x, y)| x != y)
-        .map(|(n, x, y)| match (x.is_empty(), y.is_empty()) {
-            (true, _) => ("added", n, x, y),
-            (_, true) => ("removed", n, x, y),
-            _ => ("changed", n, x, y),
-        })
-        .collect();
-    let join = |v: &BTreeSet<String>| v.iter().cloned().collect::<Vec<_>>().join(", ");
-    if o.json {
-        let p: Vec<_> = (rows.iter())
-            .map(|(k, n, x, y)| serde_json::json!({"change": k, "name": n, "a": x, "b": y}))
-            .collect();
-        let v = serde_json::json!({
-            "a": a.to_string(), "b": b.to_string(), "equal": rows.is_empty(), "packages": p,
-        });
-        println!("{v}");
-    } else if rows.is_empty() {
-        println!("the two closures hold the same packages");
-    } else {
-        for (k, n, x, y) in &rows {
-            match *k {
-                "added" => println!("added   {n} {}", join(y)),
-                "removed" => println!("removed {n} {}", join(x)),
-                _ => println!("changed {n} {} -> {}", join(x), join(y)),
-            }
-        }
-    }
-    Ok(i32::from(!rows.is_empty()))
+    let c = crate::api::render::Closure::of(&a.to_string(), &b.to_string(), &ca, &cb);
+    crate::cli::render::emit(&c, o.json);
+    Ok(i32::from(!c.is_empty()))
 }
 
 /// The versions of each package name in the closure of every output of the

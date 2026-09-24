@@ -4,8 +4,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use serde_json::{Value, json};
-
 use super::drv::{DerivationOutput, DrvError, DrvLoader};
 use super::path::StorePath;
 
@@ -36,114 +34,6 @@ impl Diff {
     pub fn is_empty(&self) -> bool {
         self.items.is_empty() && self.changed.is_empty()
     }
-
-    pub fn json(&self) -> Value {
-        let items: Vec<Value> = (self.items.iter())
-            .map(|i| json!({"what": i.what, "key": i.key, "a": i.a, "b": i.b}))
-            .collect();
-        let mut o = json!({"a": self.a, "b": self.b, "changes": items});
-        if !self.changed.is_empty() {
-            o["inputDrvs"] = self.changed.iter().map(Diff::json).collect();
-        }
-        if let Some(c) = self.cut {
-            o["cut"] = c.into();
-        }
-        o
-    }
-
-    /// The text a human reads: this node's own differences, then each input
-    /// derivation that differs, indented.
-    pub fn text(&self) -> String {
-        let mut s = String::new();
-        self.render(0, &mut s);
-        s
-    }
-
-    fn render(&self, ind: usize, s: &mut String) {
-        let (pad, body) = (" ".repeat(ind), " ".repeat(ind + 2));
-        s.push_str(&format!("{pad}- {}\n{pad}+ {}\n", self.a, self.b));
-        for i in &self.items {
-            let (what, key) = (i.what, &i.key);
-            let entry = |v: &str| match key.is_empty() {
-                true => one_line(v),
-                false => format!("{key}={}", one_line(v)),
-            };
-            match (&i.a, &i.b) {
-                (Some(x), None) => s.push_str(&format!("{body}{what} removed: {}\n", entry(x))),
-                (None, Some(y)) => s.push_str(&format!("{body}{what} added: {}\n", entry(y))),
-                (Some(x), Some(y)) if key.is_empty() && short(x, y) => {
-                    s.push_str(&format!("{body}{what}: {x} -> {y}\n"));
-                }
-                (Some(x), Some(y)) => {
-                    let head = match key.is_empty() {
-                        true => what.to_string(),
-                        false => format!("{what} {key}"),
-                    };
-                    s.push_str(&format!("{body}{head}:\n"));
-                    for l in line_diff(x, y, 20) {
-                        s.push_str(&format!("{body}  {l}\n"));
-                    }
-                }
-                (None, None) => {}
-            }
-        }
-        for c in &self.changed {
-            s.push_str(&format!("{body}input drv changed: {}\n", drv_name(&c.a)));
-            c.render(ind + 4, s);
-        }
-        if let Some(c) = self.cut {
-            s.push_str(&format!("{body}(stopped: {c}; use --all)\n"));
-        }
-    }
-}
-
-/// Two values that fit on one line together.
-fn short(a: &str, b: &str) -> bool {
-    a.len() + b.len() < 100 && !a.contains('\n') && !b.contains('\n')
-}
-
-/// `NAME` of `/nix/store/<hash>-NAME.drv`.
-fn drv_name(path: &str) -> &str {
-    let base = path.rsplit('/').next().unwrap_or(path);
-    let name = base.get(super::path::HASH_PART_LEN + 1..).unwrap_or(base);
-    name.strip_suffix(".drv").unwrap_or(name)
-}
-
-/// A value on one line of output: newlines shown as `\n`, long values cut.
-fn one_line(v: &str) -> String {
-    let s: String = v.chars().take(200).collect();
-    let cut = if v.chars().count() > 200 { "…" } else { "" };
-    format!("{}{cut}", s.replace('\n', "\\n"))
-}
-
-/// A compact diff of two values: the common head and tail lines are left
-/// out, and at most `cap` lines of each side are shown.
-pub fn line_diff(a: &str, b: &str, cap: usize) -> Vec<String> {
-    let (la, lb): (Vec<&str>, Vec<&str>) = (a.lines().collect(), b.lines().collect());
-    if la.len() < 2 && lb.len() < 2 {
-        return vec![format!("- {}", one_line(a)), format!("+ {}", one_line(b))];
-    }
-    let head = la.iter().zip(&lb).take_while(|(x, y)| x == y).count();
-    let (ra, rb) = (&la[head..], &lb[head..]);
-    let tail = (ra.iter().rev().zip(rb.iter().rev()))
-        .take_while(|(x, y)| x == y)
-        .count();
-    let mut out: Vec<String> = (head > 0)
-        .then(|| format!("@@ line {}", head + 1))
-        .into_iter()
-        .collect();
-    for (mark, lines) in [('-', &ra[..ra.len() - tail]), ('+', &rb[..rb.len() - tail])] {
-        out.extend(
-            lines
-                .iter()
-                .take(cap)
-                .map(|l| format!("{mark} {}", one_line(l))),
-        );
-        if lines.len() > cap {
-            out.push(format!("{mark} … {} more lines", lines.len() - cap));
-        }
-    }
-    out
 }
 
 /// The difference between the derivations `a` and `b`, walking `depth`
@@ -330,6 +220,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::cli::render::Text;
     use crate::store::drv::Derivation;
 
     /// The loader a test uses: the derivations it made, by path.
@@ -381,7 +272,7 @@ mod tests {
         let p = s.add(drv("foo", &["-c", "true"], &[("x", "1")]));
         let d = s.diff(&p, &p, 2);
         assert!(d.is_empty());
-        assert_eq!(d.text(), format!("- {p}\n+ {p}\n"));
+        assert_eq!(d.text(), format!("{p} and {p} are the same derivation\n"));
     }
 
     #[test]
@@ -481,21 +372,15 @@ mod tests {
     }
 
     #[test]
-    fn a_long_value_shows_the_lines_that_differ() {
-        let (a, b) = ("one\ntwo\nthree\nfour", "one\ntwo two\nthree\nfour");
-        assert_eq!(line_diff(a, b, 20), ["@@ line 2", "- two", "+ two two"]);
-        assert_eq!(line_diff("x", "y", 20), ["- x", "+ y"]);
-    }
-
-    #[test]
     fn json_names_what_differs() {
+        use crate::api::render::Report;
         let mut s = Store::default();
         let a = s.add(drv("foo", &[], &[("x", "1")]));
         let b = s.add(drv("foo", &[], &[("x", "2")]));
         let v = s.diff(&a, &b, 2).json();
         assert_eq!(
             v["changes"],
-            json!([{"what": "env", "key": "x", "a": "1", "b": "2"}])
+            serde_json::json!([{"what": "env", "key": "x", "a": "1", "b": "2"}])
         );
         assert!(v.get("inputDrvs").is_none() && v.get("cut").is_none());
     }
