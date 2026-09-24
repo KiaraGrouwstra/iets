@@ -657,29 +657,26 @@ fn fetch_tarball(
     let tree = crate::fetch::spool::Tree::index(spool)
         .map_err(|e| fail(format!("ietsp: cannot unpack input '{name}': {e}")))?;
 
-    let mut hasher = crate::store::hash::Hasher::new(HashAlgo::Sha256);
-    tree.dump(&mut hasher).map_err(|e| {
-        Error::boxed(
+    // the store verifies the tree against the lock's hash and names it by
+    // what it hashes to, so a wrong tree is never named, read or uploaded
+    crate::treestore::put(sp.name(), &expected, staged, tree).map_err(|e| match e {
+        crate::treestore::Rejected::Mismatch(got) => {
+            let msg = format!(
+                "ietsp: NAR hash mismatch in input '{name}' ({url}): expected '{}' \
+                 but the tree ietsp fetched hashes to '{}'",
+                expected.to_sri(),
+                got.to_sri()
+            );
+            Error::hash_mismatch(msg, &got, None, pos)
+        }
+        crate::treestore::Rejected::Io(e) => Error::boxed(
             ErrorKind::Io,
             format!("ietsp: cannot hash the tree of input '{name}': {e}"),
             pos,
-        )
-    })?;
-    let nar_size = hasher.bytes_written();
-    let nar_hash = hasher.finish();
-    if nar_hash != expected {
-        let msg = format!(
-            "ietsp: NAR hash mismatch in input '{name}' ({url}): expected '{}' \
-             but the tree ietsp fetched hashes to '{}'",
-            expected.to_sri(),
-            nar_hash.to_sri()
-        );
-        return Err(Error::hash_mismatch(msg, &nar_hash, None, pos));
-    }
-    crate::treestore::put(sp.base_name(), staged, tree, nar_hash, nar_size).ok_or_else(|| {
-        fail(format!(
+        ),
+        crate::treestore::Rejected::Unstorable => fail(format!(
             "ietsp: cannot keep the fetched input '{name}' in the input store"
-        ))
+        )),
     })
 }
 

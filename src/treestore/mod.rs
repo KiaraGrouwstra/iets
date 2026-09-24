@@ -296,24 +296,52 @@ pub fn reopen(name: &str) -> Option<Arc<StoredTree>> {
     get(name)
 }
 
-/// Moves a staged tree into place and keeps it open. The rename is atomic, so
-/// a reader sees either no entry or a whole one; a sibling that got there
-/// first wins and its files stay. `None` leaves the tree unstored, which costs
-/// a fetch on the next run and nothing else.
+/// Why a tree was not stored. A mismatch carries the hash the content really
+/// has, so the caller can say what it expected instead.
+#[derive(Debug)]
+pub enum Rejected {
+    Mismatch(Hash),
+    Io(io::Error),
+    /// No cache directory, or the rename lost to something that is not a
+    /// sibling's entry: the tree stays unstored, which costs a fetch on the
+    /// next run and nothing else.
+    Unstorable,
+}
+
+/// Puts a tree in, under the store path `name` and `expect` name together.
+///
+/// `expect` is the hash the caller already knows — a lock entry's `narHash`,
+/// a derivation's `outputHash` — and there is no form of this call without
+/// it. The tree is hashed here and refused unless it is the one that was
+/// asked for, so an entry's name is always its content address and nothing
+/// that lacks a prior hash can be admitted. That is the whole of the store's
+/// trust model: no signature, no trusted builder, no daemon.
+///
+/// The rename is atomic, so a reader sees either no entry or a whole one; a
+/// sibling that got there first wins and its files stay.
 pub fn put(
     name: &str,
+    expect: &Hash,
     staged: Staged,
     tree: Tree,
-    nar_hash: Hash,
-    nar_size: u64,
-) -> Option<Arc<StoredTree>> {
-    let dir = dir_of(name)?;
-    tree.persist(staged.dir(), (&nar_hash, nar_size)).ok()?;
-    let root = root()?;
+) -> std::result::Result<Arc<StoredTree>, Rejected> {
+    let mut hasher = crate::store::hash::Hasher::new(expect.algo);
+    tree.dump(&mut hasher).map_err(Rejected::Io)?;
+    let nar_size = hasher.bytes_written();
+    let nar_hash = hasher.finish();
+    if nar_hash != *expect {
+        return Err(Rejected::Mismatch(nar_hash));
+    }
+    let sp = store_path(name, &nar_hash).map_err(|_| Rejected::Unstorable)?;
+    let name = sp.base_name();
+    let dir = dir_of(name).ok_or(Rejected::Unstorable)?;
+    tree.persist(staged.dir(), (&nar_hash, nar_size))
+        .map_err(Rejected::Io)?;
+    let root = root().ok_or(Rejected::Unstorable)?;
     {
-        let _lock = cachefs::write_lock(&root)?;
+        let _lock = cachefs::write_lock(&root).ok_or(Rejected::Unstorable)?;
         if !dir.exists() && std::fs::rename(staged.dir(), &dir).is_err() {
-            return None;
+            return Err(Rejected::Unstorable);
         }
     }
     cachefs::maybe_sweep(&root, cachefs::Shape::StoreEntries, false);
@@ -324,7 +352,7 @@ pub fn put(
         .lock()
         .unwrap()
         .insert(name.to_string(), Some(stored.clone()));
-    Some(stored)
+    Ok(stored)
 }
 
 /// The one observation a read of the tree store leaves in the read set. The
