@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::build::fixhash::{self, Answer};
 use crate::cli::help::{arg_error, value};
-use crate::cli::{EvalArgs, Input, Run, build_targets, evaluate, parse_eval_args, report};
+use crate::cli::{EvalArgs, Input, Run, build_targets, evaluate, parse_eval_args, report, run_for};
 use crate::error::Error as CrateError;
 use crate::eval::Evaluator;
 use crate::store::locate::{drv_roots, locate_in_store};
@@ -151,10 +151,7 @@ fn build_once(argv: &[String]) -> i32 {
         timings: a.timings || b.timings,
         ..a
     };
-    let run = match Run::new(&a) {
-        Ok(r) => r.cached(&a, "build"),
-        Err(code) => return code,
-    };
+    let run = run_for(&a).cached(&a, "build");
     if let Some(code) = run.hit(|c| {
         let (roots, drvs, sources) = c.read_build()?;
         c.replay_warnings();

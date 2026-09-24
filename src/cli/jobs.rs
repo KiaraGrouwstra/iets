@@ -4,7 +4,7 @@ use std::process::exit;
 
 use crate::cli::help::{arg_error, value};
 use crate::cli::{
-    EvalArgs, Input, Run, abs_path, auto_args, cwd, evaluate, parse_eval_args, report,
+    EvalArgs, Input, abs_path, auto_args, cwd, evaluate, parse_eval_args, report, run_for,
 };
 use crate::error::Error as CrateError;
 use crate::eval::{Error, Evaluator, Pos};
@@ -244,10 +244,7 @@ pub fn cmd_eval_jobs(argv: &[String]) -> i32 {
     if !j.worker && j.max_memory > 0 {
         return jobs_collector(&worker_argv(argv, &j), a.workers, &j, &transport, t0);
     }
-    let mut run = match Run::new(&a) {
-        Ok(r) => r,
-        Err(code) => return code,
-    };
+    let mut run = run_for(&a);
     run.ev.drv.keep_aterm = !j.opts.no_instantiate;
     run.ev.drv.keep_site = j.opts.provenance;
     if j.worker {

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::api::installable;
 use crate::cli::help::{arg_error, value};
-use crate::cli::{EvalArgs, Input, Run, abs_path, cwd, evaluate, parse_eval_args, report};
+use crate::cli::{EvalArgs, Input, Run, abs_path, cwd, evaluate, parse_eval_args, report, run_for};
 use crate::error::Error as CrateError;
 use crate::eval::{Error, Evaluator, Pos};
 use crate::store::locate::{drv_roots, locate_in_store};
@@ -123,10 +123,7 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
     let d = DevEnvArgs { transport, gc_root };
 
     let t0 = std::time::Instant::now();
-    let run = match Run::new(&a) {
-        Ok(r) => r.cached(&a, "print-dev-env"),
-        Err(code) => return code,
-    };
+    let run = run_for(&a).cached(&a, "print-dev-env");
     if let Some(code) = run.hit(|c| {
         let bytes = c.store.read(&c.key, crate::trace::store::RESULT)?;
         let hit = crate::devenv::CachedResult::decode(&bytes)?;
@@ -246,9 +243,8 @@ pub fn dev_env(
         transport,
         gc_root: None,
     };
-    crate::cli::run_parallel(Run::on(ev).workers(a.workers), move |ev, _| {
-        dev_env_build(ev, a, &d)
-    })
+    let run = Run::on(ev).workers(a.workers);
+    crate::cli::run_parallel(run, move |ev, _| dev_env_build(ev, a, &d))
 }
 
 /// The cache-miss path: evaluate the shell, derive and build its `-env` derivation through

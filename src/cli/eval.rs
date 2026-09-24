@@ -2,15 +2,12 @@
 
 use std::collections::HashSet;
 
-use crate::cli::{EvalArgs, Run, evaluate, report};
+use crate::cli::{EvalArgs, evaluate, report, run_for};
 use crate::eval::{Evaluator, Pos};
 use crate::trace::run::Cache;
 
 pub fn run_eval(a: EvalArgs) -> i32 {
-    let mut run = match Run::new(&a) {
-        Ok(r) => r.cached(&a, "eval"),
-        Err(code) => return code,
-    };
+    let mut run = run_for(&a).cached(&a, "eval");
     if let Some(out) = run.hit(|c| {
         let out = c.store.read(&c.key, crate::trace::store::RESULT)?;
         c.replay_warnings();

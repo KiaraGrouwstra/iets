@@ -3,7 +3,7 @@
 
 use crate::api::installable::{self, Prefixes, Want};
 use crate::cli::help::{self, arg_error, value};
-use crate::cli::{EvalArgs, Input, Run, evaluate, parse_eval_args, report};
+use crate::cli::{EvalArgs, Input, evaluate, parse_eval_args, report, run_for};
 use crate::eval::{Error, Evaluator};
 use crate::runtime::Word;
 use crate::store::locate::drv_roots;
@@ -86,14 +86,13 @@ fn resolve(argv: &[String]) -> i32 {
     if a.input.is_none() {
         arg_error("nothing to resolve: give -E EXPR, FILE or FLAKEREF[#FRAGMENT]")
     }
-    let r = match Run::new(&a) {
-        Ok(r) => r,
-        Err(code) => return code,
-    };
-    crate::cli::run_parallel(r, move |ev, _| run(ev, a, o))
+    crate::cli::run_parallel(run_for(&a), move |ev, _| match run(ev, a, o) {
+        Ok(()) => 0,
+        Err(e) => report(ev, &e),
+    })
 }
 
-fn run(ev: &mut Evaluator, a: EvalArgs, o: Opts) -> i32 {
+fn run(ev: &mut Evaluator, a: EvalArgs, o: Opts) -> Result<(), Box<Error>> {
     let flake = match (&a.input, o.prefixes) {
         (Some(Input::Flake(f)), Some(p)) => {
             let (loc, frag) = f.split_once('#').unwrap_or((f.as_str(), ""));
@@ -104,27 +103,22 @@ fn run(ev: &mut Evaluator, a: EvalArgs, o: Opts) -> i32 {
     let attr = a.attr.clone();
     let mut paths: Vec<String> = Vec::new();
     let mut found: Vec<(Option<String>, Word)> = Vec::new();
-    let r = (|| -> Result<(), Box<Error>> {
-        let Some((loc, frag, p)) = flake else {
-            found.push((attr, evaluate(ev, a)?));
-            return Ok(());
-        };
-        paths = installable::attr_paths(p, &frag, ev.current_system);
-        let outputs = evaluate(
-            ev,
-            EvalArgs {
-                input: Some(Input::Flake(loc.clone())),
-                attr: None,
-                ..a
-            },
-        )?;
-        for f in installable::from_outputs(ev, outputs, &loc, p, &frag, o.want)? {
-            found.push((Some(f.path.join(".")), f.value));
+    match flake {
+        None => found.push((attr, evaluate(ev, a)?)),
+        Some((loc, frag, p)) => {
+            paths = installable::attr_paths(p, &frag, ev.current_system);
+            let outputs = evaluate(
+                ev,
+                EvalArgs {
+                    input: Some(Input::Flake(loc.clone())),
+                    attr: None,
+                    ..a
+                },
+            )?;
+            for f in installable::from_outputs(ev, outputs, &loc, p, &frag, o.want)? {
+                found.push((Some(f.path.join(".")), f.value));
+            }
         }
-        Ok(())
-    })();
-    if let Err(e) = r {
-        return report(ev, &e);
     }
     let mut roots = Vec::new();
     for (attr, v) in found {
@@ -132,9 +126,7 @@ fn run(ev: &mut Evaluator, a: EvalArgs, o: Opts) -> i32 {
             break;
         }
         let mut rs = Vec::new();
-        if let Err(e) = drv_roots(ev, v, &mut rs) {
-            return report(ev, &e);
-        }
+        drv_roots(ev, v, &mut rs)?;
         for (drv, output) in rs {
             roots.push(serde_json::json!({
                 "drv": drv.to_string(),
@@ -147,5 +139,5 @@ fn run(ev: &mut Evaluator, a: EvalArgs, o: Opts) -> i32 {
         "{}",
         serde_json::json!({ "attrPaths": paths, "roots": roots })
     );
-    0
+    Ok(())
 }

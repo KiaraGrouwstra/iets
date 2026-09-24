@@ -210,6 +210,15 @@ pub fn cmd_lint(argv: &[String]) -> i32 {
     }
 }
 
+/// `api::Run::new` for a command line: a lint configuration that does not
+/// resolve is a startup failure, reported with its own exit code.
+pub fn run_for(a: &EvalArgs) -> Run {
+    match Run::new(a) {
+        Ok(r) => r,
+        Err(code) => std::process::exit(code),
+    }
+}
+
 /// `api::Run::go` for a command line: the fiber stacks are a startup
 /// failure, so it reports them and exits 1. The library returns the error.
 pub fn run_parallel<R: Send + 'static>(
