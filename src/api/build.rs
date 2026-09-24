@@ -71,6 +71,46 @@ pub fn plan_with(
     crate::remote::plan::plan(roots, Inputs { drvs, sources })
 }
 
+/// One derivation read back from its ATerm text, as the table [`plan_with`]
+/// takes: a `.drv` file, or an entry of a `--dump-drvs` directory.
+pub fn drv_info(path: &StorePath, text: String) -> Result<DrvInfo> {
+    use crate::store::drv::Derivation;
+    let drv = Derivation::parse(&text, Derivation::name_from_path(path)?)?;
+    let mut references = drv.input_srcs;
+    references.extend(drv.input_drvs.into_keys());
+    Ok(DrvInfo {
+        outputs: drv.outputs.into_keys().collect(),
+        references,
+        aterm: Some(std::sync::Arc::new(text.into_bytes())),
+        pos: None,
+        attr: None,
+    })
+}
+
+/// The derivations `--dump-drvs DIR` wrote: an evaluation's whole ATerm table,
+/// which is what lets one process plan or build a closure another evaluated and
+/// never wrote to the store (docs/plumbing.md). Sources are not in it, so they
+/// still come from the local store.
+pub fn drvs_in_dir(dir: &std::path::Path) -> Result<HashMap<StorePath, DrvInfo>> {
+    let at = |e: std::io::Error| Error::io(format!("reading '{}'", dir.display()), e);
+    let mut out = HashMap::new();
+    for entry in std::fs::read_dir(dir).map_err(at)? {
+        let entry = entry.map_err(at)?;
+        let base = entry.file_name().to_string_lossy().into_owned();
+        let Ok(path) = StorePath::from_base_name(&base) else {
+            continue;
+        };
+        if !path.is_derivation() {
+            continue;
+        }
+        let text = std::fs::read_to_string(entry.path())
+            .map_err(|e| Error::io(format!("reading '{base}'"), e))?;
+        let info = drv_info(&path, text)?;
+        out.insert(path, info);
+    }
+    Ok(out)
+}
+
 /// The plan's locator with no `--source` overrides: for a command that drives
 /// the upload on a connection of its own because it goes on to speak the
 /// worker protocol itself (`nix-shell`, `print-dev-env`).

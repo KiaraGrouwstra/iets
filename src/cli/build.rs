@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use crate::api::installable::drv_roots;
 use crate::build::fixhash::{self, Answer};
@@ -226,8 +225,6 @@ fn build_eval(
 /// Legacy mode: `DRV` is a `.drv` store path, or a copy of the file named
 /// `<hash>-<name>.drv`; its closure is read from `/nix/store`.
 fn build_drv_file(b: &BuildArgs, root_arg: &str) -> i32 {
-    use crate::builtins::derivation::DrvInfo;
-    use crate::store::drv::Derivation;
     use crate::store::path::StorePath;
     let base = std::path::Path::new(root_arg)
         .file_name()
@@ -243,19 +240,7 @@ fn build_drv_file(b: &BuildArgs, root_arg: &str) -> i32 {
     // The root may be a copy outside the store; its inputs are read from `/nix/store`.
     let info = std::fs::read_to_string(root_arg)
         .map_err(CrateError::from)
-        .and_then(|text| {
-            let name = Derivation::name_from_path(&root)?;
-            let drv = Derivation::parse(&text, name)?;
-            let mut references = drv.input_srcs;
-            references.extend(drv.input_drvs.into_keys());
-            Ok(DrvInfo {
-                outputs: drv.outputs.into_keys().collect(),
-                references,
-                aterm: Some(Arc::new(text.into_bytes())),
-                pos: None,
-                attr: None,
-            })
-        });
+        .and_then(|text| crate::api::build::drv_info(&root, text));
     let info = match info {
         Ok(i) => i,
         Err(e) => {

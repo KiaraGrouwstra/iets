@@ -29,7 +29,9 @@ operations:
   fetch     a URL or a fixed-output derivation becomes a hash
 
 Every op that takes roots names them as DRV or DRV!OUT[,OUT], or reads a
-previous op's stdout with --roots -.
+previous op's stdout with --roots -. They read the closure from /nix/store
+unless --drvs DIR, or a \"drvDir\" on stdin, names a resolve --dump-drvs
+directory; then the derivations come from there.
 
 usage: ietsp plumbing resolve [FLAGS] (-E EXPR | FILE | FLAKEREF[#FRAGMENT])
 
@@ -45,9 +47,13 @@ one object per derivation root with \"drv\", \"output\" and \"attr\".
                         get-drvs (get-drvs.cc, recursing with
                         recurseForDerivations), or to-install
                         (outputSpecified, else meta.outputsToInstall)
+  --dump-drvs DIR       write the ATerm of every derivation this evaluation
+                        made to DIR, and report DIR as \"drvDir\", so an op
+                        downstream can plan or build a closure that is not
+                        in /nix/store
   --no-drvs             report the attribute paths only
 
-usage: ietsp plumbing plan [--roots -] DRV...
+usage: ietsp plumbing plan [--drvs DIR] [--roots -] DRV...
 
 Print {\"drvs\", \"sources\", \"storeDrvs\"}: the closure to upload, in
 dependency order, references first.
@@ -182,6 +188,7 @@ fn root_json(drv: &StorePath, output: Option<String>, attr: Option<String>) -> s
 }
 
 fn run(ev: &mut Evaluator, a: EvalArgs, o: Opts) -> Result<(), Box<Error>> {
+    let dump = a.dump_drvs.clone();
     let what = match &a.input {
         Some(Input::Flake(f) | Input::File(f)) => f.clone(),
         _ => String::new(),
@@ -249,18 +256,33 @@ fn run(ev: &mut Evaluator, a: EvalArgs, o: Opts) -> Result<(), Box<Error>> {
             }
         }
     }
-    let v = serde_json::json!({ "attrPaths": paths, "roots": roots });
+    let mut v = serde_json::json!({ "attrPaths": paths, "roots": roots });
+    if let Some(dir) = dump {
+        // an op downstream reads the closure from there instead of /nix/store
+        v["drvDir"] = dir.into();
+    }
     crate::cli::render::bytes(&crate::cli::render::json(&v, false));
     Ok(())
 }
 
 // ---- roots -------------------------------------------------------------------
 
+/// What an op works on: the roots, and the directory their derivations were
+/// dumped to, if any.
+struct Roots {
+    targets: Vec<Target>,
+    /// `resolve --dump-drvs DIR`: the closure is read from there, not from
+    /// `/nix/store`.
+    drv_dir: Option<std::path::PathBuf>,
+}
+
 /// The roots an op works on, one target per derivation. An argument is `DRV`
 /// or `DRV!OUT[,OUT]`; `--roots -` reads a previous op's stdout instead, the
-/// `roots` of a `resolve` or the `drvs` of a `plan`. No output name means
-/// every output, as `!*` does in the worker protocol.
-fn targets(args: &[String], stdin: bool) -> Vec<Target> {
+/// `roots` of a `resolve` or the `drvs` of a `plan`, and its `drvDir` when it
+/// has one. No output name means every output, as `!*` does in the worker
+/// protocol.
+fn roots(args: &[String], stdin: bool, drvs: Option<std::path::PathBuf>) -> Roots {
+    let mut drv_dir = drvs;
     let mut out: Vec<Target> = Vec::new();
     let mut add = |drv: &str, output: Option<&str>| {
         let drv = StorePath::parse(drv)
@@ -289,6 +311,11 @@ fn targets(args: &[String], stdin: bool) -> Vec<Target> {
         let v: serde_json::Value = serde_json::from_str(&text)
             .unwrap_or_else(|e| arg_error(format!("--roots -: not JSON: {e}")));
         let bad = || arg_error("--roots -: no \"roots\" and no \"drvs\" on stdin");
+        if let Some(d) = v.get("drvDir").and_then(serde_json::Value::as_str)
+            && drv_dir.is_none()
+        {
+            drv_dir = Some(d.into());
+        }
         if let Some(rs) = v.get("roots").and_then(|r| r.as_array()) {
             for r in rs {
                 let Some(drv) = r.get("drv").and_then(serde_json::Value::as_str) else {
@@ -317,26 +344,36 @@ fn targets(args: &[String], stdin: bool) -> Vec<Target> {
     if out.is_empty() {
         arg_error("nothing to do: give DRV... or --roots -")
     }
-    out
+    Roots {
+        targets: out,
+        drv_dir,
+    }
 }
 
 fn paths_of(targets: &[Target]) -> Vec<StorePath> {
     targets.iter().map(|t| t.drv.clone()).collect()
 }
 
-/// The plan of roots that are in `/nix/store`: this run evaluated nothing, so
-/// every derivation and source is read from there.
-fn plan_of(targets: &[Target]) -> crate::error::Result<crate::remote::plan::Plan> {
-    apibuild::plan_with(&paths_of(targets), &HashMap::new(), &HashMap::new())
+/// The plan of the roots: from the derivations `--dump-drvs` wrote when there
+/// are any, else from `/nix/store`. Sources come from the local store either
+/// way; nothing here evaluated.
+fn plan_of(r: &Roots) -> crate::error::Result<crate::remote::plan::Plan> {
+    let drvs = match &r.drv_dir {
+        Some(d) => apibuild::drvs_in_dir(d)?,
+        None => HashMap::new(),
+    };
+    apibuild::plan_with(&paths_of(&r.targets), &drvs, &HashMap::new())
 }
 
-/// `--roots -` plus the flags `f` accepts; what is left are the root words.
+/// `--roots -`, `--drvs DIR` plus the flags `f` accepts; what is left are the
+/// root words.
 fn split_flags(
     argv: &[String],
     mut f: impl FnMut(&str, &mut dyn FnMut() -> String) -> bool,
-) -> (Vec<String>, bool) {
+) -> (Vec<String>, bool, Option<std::path::PathBuf>) {
     let mut rest: Vec<String> = Vec::new();
     let mut stdin = false;
+    let mut drvs: Option<std::path::PathBuf> = None;
     let mut i = 0;
     while i < argv.len() {
         let s = argv[i].clone();
@@ -349,6 +386,8 @@ fn split_flags(
                 arg_error("--roots takes '-': the roots come from stdin")
             }
             stdin = true;
+        } else if s == "--drvs" {
+            drvs = Some(next().into());
         } else if !f(&s, &mut next) {
             if s.starts_with('-') {
                 help::unknown_flag(&s)
@@ -357,15 +396,15 @@ fn split_flags(
         }
         i += 1;
     }
-    (rest, stdin)
+    (rest, stdin, drvs)
 }
 
 // ---- the ops -----------------------------------------------------------------
 
 fn op_plan(argv: &[String]) -> i32 {
-    let (args, stdin) = split_flags(argv, |_, _| false);
-    let targets = targets(&args, stdin);
-    let plan = match plan_of(&targets) {
+    let (args, stdin, drvs) = split_flags(argv, |_, _| false);
+    let r = roots(&args, stdin, drvs);
+    let plan = match plan_of(&r) {
         Ok(p) => p,
         Err(e) => return e.report(),
     };
@@ -385,7 +424,7 @@ fn op_plan(argv: &[String]) -> i32 {
 fn op_missing(argv: &[String]) -> i32 {
     let mut url: Option<String> = None;
     let mut status = false;
-    let (args, stdin) = split_flags(argv, |s, next| match s {
+    let (args, stdin, drvs) = split_flags(argv, |s, next| match s {
         "--builder" => {
             url = Some(next());
             true
@@ -396,8 +435,8 @@ fn op_missing(argv: &[String]) -> i32 {
         }
         _ => false,
     });
-    let targets = targets(&args, stdin);
-    match missing(&targets, url.as_deref(), status) {
+    let r = roots(&args, stdin, drvs);
+    match missing(&r, url.as_deref(), status) {
         Ok(v) => {
             crate::cli::render::bytes(&crate::cli::render::json(&v, false));
             0
@@ -406,21 +445,17 @@ fn op_missing(argv: &[String]) -> i32 {
     }
 }
 
-fn missing(
-    targets: &[Target],
-    url: Option<&str>,
-    status: bool,
-) -> crate::error::Result<serde_json::Value> {
+fn missing(r: &Roots, url: Option<&str>, status: bool) -> crate::error::Result<serde_json::Value> {
     let cfg = apibuild::config();
     let transport = apibuild::transport(url, &cfg)?;
     let opts = crate::remote::worker::Options::default();
-    let plan = plan_of(targets)?;
+    let plan = plan_of(r)?;
     let prov = crate::provenance::Provenance::off();
     let mut d = Dispatch::open(&transport, &opts, plan, prov, Style::detect())?;
-    let m = d.missing(targets)?;
+    let m = d.missing(&r.targets)?;
     let mut v = crate::api::render::Missing::of(&m, d.plan()).json();
     if status {
-        v["roots"] = serde_json::Value::Array(cache_status(&transport, targets)?);
+        v["roots"] = serde_json::Value::Array(cache_status(&transport, &r.targets)?);
     }
     Ok(v)
 }
@@ -492,7 +527,7 @@ fn op_build(argv: &[String]) -> i32 {
         gc_root: None,
         no_build: false,
     };
-    let (args, stdin) = split_flags(argv, |s, next| match s {
+    let (args, stdin, drvs) = split_flags(argv, |s, next| match s {
         "--builder" => {
             o.url = Some(next());
             true
@@ -523,34 +558,34 @@ fn op_build(argv: &[String]) -> i32 {
         }
         _ => false,
     });
-    let mut targets = targets(&args, stdin);
-    for t in &mut targets {
+    let mut r = roots(&args, stdin, drvs);
+    for t in &mut r.targets {
         for name in &o.outputs {
             if !t.outputs.contains(name) {
                 t.outputs.push(name.clone());
             }
         }
     }
-    match build(&o, targets) {
+    match build(&o, r) {
         Ok(code) => code,
         Err(e) => e.report(),
     }
 }
 
-fn build(o: &BuildOpts, targets: Vec<Target>) -> crate::error::Result<i32> {
+fn build(o: &BuildOpts, r: Roots) -> crate::error::Result<i32> {
     let cfg = apibuild::config();
     let transport = apibuild::transport(o.url.as_deref(), &cfg)?;
     let opts = crate::remote::worker::Options::default();
-    let plan = plan_of(&targets)?;
+    let plan = plan_of(&r)?;
     let prov = crate::provenance::Provenance::off();
     let mut d = Dispatch::open(&transport, &opts, plan, prov, Style::detect())?
         .overrides(o.sources.clone());
     if o.no_build {
-        d.upload_only(&paths_of(&targets))?;
+        d.upload_only(&paths_of(&r.targets))?;
         println!("{}", serde_json::json!({ "outcomes": [] }));
         return Ok(0);
     }
-    let outcomes = d.submit(targets)?;
+    let outcomes = d.submit(r.targets)?;
     if let Some(dir) = &o.fetch_to {
         for path in outcomes.iter().flat_map(|c| c.outputs.values()) {
             d.d.fetch(path, dir)?;

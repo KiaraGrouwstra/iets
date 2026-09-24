@@ -205,7 +205,8 @@ takes roots accepts `--roots -` and reads `resolve`'s output on stdin.
 ```
 ietsp plumbing resolve [EVAL FLAGS]
        [--prefixes package|dev-shell|package-set|none]
-       [--want first|all] [--walk context|get-drvs|to-install] [--no-drvs]
+       [--want first|all] [--walk context|get-drvs|to-install]
+       [--dump-drvs DIR] [--no-drvs]
 ```
 
 `--prefixes package` is the default: `#hello` is tried at
@@ -246,6 +247,18 @@ is always walked. `attr` is the path it reached each derivation by, so a
 caller can name them as `nix-build` does. `to-install` answers one root per
 output the installable installs.
 
+`--dump-drvs DIR` is an evaluation flag, so every op that evaluates takes
+it. It writes the ATerm of every derivation this run created to
+`DIR/<base name>`, and `resolve` then reports the directory:
+
+```json
+{"attrPaths": [], "drvDir": "dump",
+ "roots": [{"drv": "/nix/store/…​.drv", "output": null, "attr": null}]}
+```
+
+That is what makes the roots usable by another process; see
+**Naming roots**.
+
 ### `eval`
 
 ```
@@ -277,12 +290,34 @@ or `DRV!OUT[,OUT]`; naming no output means every output, as `!*` does in
 the worker protocol. `--roots -` reads a previous op's stdout instead: the
 `roots` of a `resolve`, or the `drvs` of a `plan`.
 
-These three read the closure from `/nix/store`, so a root must be there.
-`resolve` alone does not put it there — it evaluates and keeps the
-derivations in memory, which is what lets `ietsp build` ship a closure
-that was never written to disk. Across processes, instantiate first
-(`nix-instantiate`, or `ietsp build --no-build`). This is the same gap as
-(a)3 below and `resolve --dump-drvs` closes both.
+These three read the closure from `/nix/store` by default, so a root must be
+there. `resolve` alone does not put it there — it evaluates and keeps the
+derivations in memory, which is what lets `ietsp build` ship a closure that
+was never written to disk.
+
+`resolve --dump-drvs DIR` is how that closure crosses a process boundary.
+`plan`, `missing` and `build` read the derivations from `DIR` when
+`--drvs DIR` names it, or when `--roots -` reads a `resolve` whose output
+carries `drvDir`. So this works with nothing in any store:
+
+```console
+$ ietsp plumbing resolve --dump-drvs d ./chain.nix | ietsp plumbing plan --roots -
+{"drvs":["/nix/store/…-dep.drv","/nix/store/…-top.drv"],"sources":[],"storeDrvs":0}
+```
+
+`storeDrvs` is 0: no derivation was read from `/nix/store`. Without the
+dump the same pipe fails, because the root is in no store:
+
+```console
+$ ietsp plumbing resolve ./chain.nix | ietsp plumbing plan --roots -
+error: cannot read derivation '/nix/store/…-top.drv': No such file or directory
+```
+
+The dump carries derivations only. An input **source** that evaluation
+produced and never wrote to the store is still read from the local store,
+so a closure with such sources needs `ietsp build --no-build` first. That
+is the remaining half of (a)3, and it is recorded, not designed, here: the
+shape it wants is the batch form of `build --source STOREPATH=LOCAL`.
 
 ### `plan`
 
@@ -450,11 +485,18 @@ as porcelain aliases.
    `resolve --walk to-install` answers one root per output the installable
    installs. `classic/nix.rs:Target` went with it, as
    `installable::Install`.
-3. **The ATerm table of a run.** `ietsp diff` needs the ATerms the
-   evaluation produced, because a derivation that was never written to the
-   store has none on disk. `resolve` must be able to emit
-   `--dump-drvs DIR`, and `drv-show` must read that directory, or
-   `drv-diff` must accept the installable itself.
+3. **The ATerm table of a run.** **Mostly closed by stage 5.** A derivation
+   that was never written to the store has no ATerm on disk.
+   `resolve --dump-drvs DIR` writes the run's whole table and reports
+   `drvDir`; `plan`, `missing` and `build` read it, through `--drvs DIR`
+   or through the `drvDir` on stdin, so `resolve | plan` composes across
+   processes. `api::build::drvs_in_dir` is the reader, and
+   `api::build::drv_info` is the one ATerm-to-`DrvInfo` conversion, which
+   `ietsp build`'s `.drv` argument shares. What is left is the **sources**:
+   the dump has none, so a closure whose sources are not in the local store
+   still needs an instantiation first. `ietsp diff` keeps its in-memory
+   table, because it evaluates and compares in one process; `drv-show`
+   (stage 9) reads the directory.
 4. ~~**Uploading with a local source override.**~~ **Closed by stage 4.**
    The map lives in `api::build::Dispatch::overrides`, and `build` takes
    `--source STOREPATH=LOCAL`. `plan` does not need it: a plan names the

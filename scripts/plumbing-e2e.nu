@@ -36,7 +36,7 @@ in derivation {
   name = "plumb-top";
   system = "@SYSTEM@";
   builder = "/bin/sh";
-  args = [ "-c" "cat ${dep} > $out" ];
+  args = [ "-c" "echo ${dep} > $out" ];
 }
 '#
 
@@ -161,6 +161,15 @@ run-in $work {
   $ok = (verdict ($piped.outcomes.0.outputs.out == $out) "plan | build --roots -" $"($piped)") and $ok
   let via = (^$ietsp plumbing resolve hello.nix | ^$ietsp plumbing missing --roots - | from json)
   $ok = (verdict ($via.willBuild == []) "resolve | missing --roots - (already built)" $"($via)") and $ok
+  # a closure that is in no store: only --dump-drvs carries it across the pipe.
+  $CHAIN | str replace -a "@SYSTEM@" $system | str replace -a "@NONCE@" (random uuid) | save -f $"($work)/fresh.nix"
+  let bare = (^$ietsp plumbing resolve fresh.nix | ^$ietsp plumbing plan --roots - | complete)
+  $ok = (verdict ($bare.exit_code != 0) "resolve | plan without a dump: the drv is in no store" $"($bare)") and $ok
+  let c = (^$ietsp plumbing resolve --dump-drvs dump fresh.nix | ^$ietsp plumbing plan --roots - | from json)
+  $ok = (verdict ($c.storeDrvs == 0) "resolve --dump-drvs | plan: nothing read from /nix/store" $"($c)") and $ok
+  $ok = (verdict (($c.drvs | length) == 2) "resolve --dump-drvs | plan: the whole closure" $"($c)") and $ok
+  let cb = (^$ietsp plumbing resolve --dump-drvs dump fresh.nix | ^$ietsp plumbing build --roots - | from json)
+  $ok = (verdict ($cb.outcomes.0.success) "resolve --dump-drvs | build" $"($cb)") and $ok
 
   print "== 6. fetch"
   "fetch me\n" | save -f $"($work)/bytes.txt"
