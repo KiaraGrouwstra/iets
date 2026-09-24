@@ -26,7 +26,7 @@ fn classic_name() -> Option<String> {
 fn on_big_stack(f: impl FnOnce() -> i32 + Send + 'static) -> i32 {
     std::thread::Builder::new()
         .stack_size(STACK_SIZE)
-        .spawn(f)
+        .spawn(ietsp::session::bind(f))
         .expect("spawn evaluator thread")
         .join()
         .unwrap_or(1)
@@ -34,6 +34,8 @@ fn on_big_stack(f: impl FnOnce() -> i32 + Send + 'static) -> i32 {
 
 fn main() {
     restore_sigpipe();
+    let session = ietsp::session::Session::new();
+    let _entered = session.enter();
     let argv: Vec<String> = std::env::args_os()
         .skip(1)
         .map(ietsp::argv::encode)

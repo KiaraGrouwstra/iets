@@ -220,11 +220,11 @@ impl Runtime {
             std::thread::Builder::new()
                 .name(format!("ietsp-w{i}"))
                 .stack_size(4 << 20)
-                .spawn(move || {
+                .spawn(crate::session::bind(move || {
                     let mut w = Worker::new(i);
                     rt.prewarm(&mut w);
                     rt.drain_loop(&mut w, || rt.shutdown.load(Ordering::Acquire));
-                })
+                }))
                 .expect("spawn worker");
         }
         Ok(rt)
@@ -726,7 +726,7 @@ impl Runtime {
     /// Print, every 20 ms, how many workers are inside fibers, how much
     /// work is queued and whether main is parked.
     fn spawn_timeline(&'static self) {
-        std::thread::spawn(move || {
+        std::thread::spawn(crate::session::bind(move || {
             let t0 = std::time::Instant::now();
             let mut last_busy = 0;
             let mut last_tasks = 0;
@@ -751,7 +751,7 @@ impl Runtime {
                 last_busy = busy;
                 last_tasks = tasks;
             }
-        });
+        }));
     }
 }
 

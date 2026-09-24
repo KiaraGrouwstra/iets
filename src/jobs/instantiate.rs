@@ -98,7 +98,7 @@ impl Instantiator {
         let thread = std::thread::Builder::new()
             .name("instantiate".into())
             .stack_size(64 << 20)
-            .spawn(move || {
+            .spawn(crate::session::bind(move || {
                 let mut pending: Vec<Line> = Vec::new();
                 let mut njobs = 0usize;
                 let mut flush = |store: &mut Store, pending: &mut Vec<Line>| -> Result<()> {
@@ -126,7 +126,7 @@ impl Instantiator {
                 }
                 flush(&mut store, &mut pending)?;
                 Ok(store)
-            })
+            }))
             .expect("spawn instantiate thread");
         Instantiator {
             tx: Some(tx),

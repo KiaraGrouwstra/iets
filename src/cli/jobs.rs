@@ -520,7 +520,7 @@ fn jobs_collector(
             std::thread::Builder::new()
                 .name("cache-status".into())
                 .stack_size(64 << 20)
-                .spawn(move || -> crate::error::Result<()> {
+                .spawn(crate::session::bind(move || -> crate::error::Result<()> {
                     while let Ok(first) = rx.recv() {
                         let mut batch = vec![first];
                         while let Ok(l) = rx.try_recv() {
@@ -533,7 +533,7 @@ fn jobs_collector(
                         }
                     }
                     Ok(())
-                })
+                }))
                 .expect("spawn cache-status thread"),
         )
     } else {

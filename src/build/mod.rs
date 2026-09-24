@@ -127,7 +127,7 @@ impl Heartbeat {
         let flag = stop.clone();
         let handle = std::thread::Builder::new()
             .name("build-heartbeat".into())
-            .spawn(move || {
+            .spawn(crate::session::bind(move || {
                 let tick = Duration::from_millis(250);
                 let mut waited = Duration::ZERO;
                 while !flag.load(Ordering::Relaxed) {
@@ -138,7 +138,7 @@ impl Heartbeat {
                         render.lock().unwrap().heartbeat();
                     }
                 }
-            })
+            }))
             .ok();
         Heartbeat { stop, handle }
     }

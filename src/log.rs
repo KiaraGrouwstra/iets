@@ -3,56 +3,82 @@
 //! the format of logging.cc:JSONLogger, plus `code` and `hint` on an error
 //! (docs/cli.md). The `json-log-path` file gets every record in either
 //! format.
+//!
+//! The state is a [`Log`], which a [`crate::session::Session`] owns: the
+//! functions here act on the one this thread entered.
 
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use serde_json::{Value, json};
 
-static JSON: AtomicBool = AtomicBool::new(false);
-static SHOW_TRACE: AtomicBool = AtomicBool::new(false);
-static JSON_LOG_PATH: OnceLock<String> = OnceLock::new();
+use crate::session::Session;
+
+/// Where one session's messages go and what it saw on the way.
+#[derive(Default)]
+pub struct Log {
+    json: AtomicBool,
+    show_trace: AtomicBool,
+    json_log_path: OnceLock<String>,
+    sink: OnceLock<Option<Mutex<Box<dyn Write + Send>>>>,
+    sid: OnceLock<String>,
+    next_activity: AtomicU64,
+    mismatches: Mutex<Vec<(String, String)>>,
+    want_mismatch: Mutex<Option<String>>,
+}
+
+fn cur() -> Arc<Session> {
+    Session::current()
+}
 
 /// `--log-format F`, loggers.cc:parseLogFormat. Every format but
 /// `internal-json` is plain text here.
 pub fn set_format(f: &str) -> Result<(), String> {
+    let s = cur();
     match f {
-        "raw" | "raw-with-logs" | "bar" | "bar-with-logs" => JSON.store(false, Ordering::Relaxed),
-        "internal-json" => JSON.store(true, Ordering::Relaxed),
+        "raw" | "raw-with-logs" | "bar" | "bar-with-logs" => {
+            s.log.json.store(false, Ordering::Relaxed);
+        }
+        "internal-json" => s.log.json.store(true, Ordering::Relaxed),
         _ => return Err(format!("option 'log-format' has an invalid value '{f}'")),
     }
     Ok(())
 }
 
 pub fn json() -> bool {
-    JSON.load(Ordering::Relaxed)
+    cur().log.json.load(Ordering::Relaxed)
 }
 
 /// `--show-trace`: the text always has the trace; a record carries it only
 /// then, as in Nix.
 pub fn set_show_trace() {
-    SHOW_TRACE.store(true, Ordering::Relaxed);
+    cur().log.show_trace.store(true, Ordering::Relaxed);
 }
 
 /// `json-log-path` from the command line; it wins over nix.conf. Set it
 /// before the first line goes out.
 pub fn set_json_log_path(path: String) {
-    let _ = JSON_LOG_PATH.set(path);
+    let _ = cur().log.json_log_path.set(path);
 }
 
 /// `sid`, the session of every record: `IETSP_SESSION_ID` when a parent
-/// ietsp or the user set it, else a UUIDv7 made for this process. The
+/// ietsp or the user set it, else a UUIDv7 made for this one. The
 /// `eval-jobs` workers get their parent's, so one run's records share one
 /// id (docs/cli.md).
-pub fn session() -> &'static str {
-    static SID: OnceLock<String> = OnceLock::new();
-    SID.get_or_init(|| {
-        std::env::var("IETSP_SESSION_ID")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| uuid_v7(std::time::SystemTime::now()))
-    })
+pub fn session_id() -> String {
+    cur().log.sid().to_string()
+}
+
+impl Log {
+    fn sid(&self) -> &str {
+        self.sid.get_or_init(|| {
+            std::env::var("IETSP_SESSION_ID")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| uuid_v7(std::time::SystemTime::now()))
+        })
+    }
 }
 
 /// RFC 9562 version 7: 48 bits of Unix milliseconds, then random bits.
@@ -76,43 +102,45 @@ fn uuid_v7(now: std::time::SystemTime) -> String {
     )
 }
 
-/// A record as it goes out, with its `sid`.
-fn wire(v: &Value) -> String {
-    let mut v = v.clone();
-    if let Some(o) = v.as_object_mut() {
-        o.insert("sid".into(), session().into());
-    }
-    v.to_string()
-}
-
-/// logging.cc:applyJSONLogger: a copy of `v`, without the `@nix ` prefix,
-/// to the `json-log-path` file or unix socket. A path that does not open is
-/// reported once and ignored, as Nix does.
-fn tee(v: &Value) {
-    if let Some(w) = sink() {
-        let mut w = w.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = writeln!(w, "{}", wire(v));
-    }
-}
-
-fn sink() -> Option<&'static Mutex<Box<dyn Write + Send>>> {
-    static SINK: OnceLock<Option<Mutex<Box<dyn Write + Send>>>> = OnceLock::new();
-    // Config::read, not load: a warning would re-enter this get_or_init
-    let sink = SINK.get_or_init(|| {
-        let path = JSON_LOG_PATH.get().cloned().or_else(|| {
-            let c = crate::config::Config::read(&[]).ok()?;
-            c.str("json-log-path").map(str::to_string)
-        })?;
-        match open_sink(std::path::Path::new(&path)) {
-            Ok(w) => Some(Mutex::new(w)),
-            Err(e) => {
-                let e = crate::error::io_text(&e);
-                eprintln!("error (ignored): opening log file \"{path}\": {e}");
-                None
-            }
+impl Log {
+    /// A record as it goes out, with its `sid`.
+    fn wire(&self, v: &Value) -> String {
+        let mut v = v.clone();
+        if let Some(o) = v.as_object_mut() {
+            o.insert("sid".into(), self.sid().into());
         }
-    });
-    sink.as_ref()
+        v.to_string()
+    }
+
+    /// logging.cc:applyJSONLogger: a copy of `v`, without the `@nix ` prefix,
+    /// to the `json-log-path` file or unix socket. A path that does not open
+    /// is reported once and ignored, as Nix does.
+    fn tee(&self, v: &Value) {
+        if let Some(w) = self.sink() {
+            let mut w = w.lock().unwrap_or_else(|e| e.into_inner());
+            let _ = writeln!(w, "{}", self.wire(v));
+        }
+    }
+
+    fn sink(&self) -> Option<&Mutex<Box<dyn Write + Send>>> {
+        // Config::read, not load: a warning would re-enter this get_or_init
+        self.sink
+            .get_or_init(|| {
+                let path = self.json_log_path.get().cloned().or_else(|| {
+                    let c = crate::config::Config::read(&[]).ok()?;
+                    c.str("json-log-path").map(str::to_string)
+                })?;
+                match open_sink(std::path::Path::new(&path)) {
+                    Ok(w) => Some(Mutex::new(w)),
+                    Err(e) => {
+                        let e = crate::error::io_text(&e);
+                        eprintln!("error (ignored): opening log file \"{path}\": {e}");
+                        None
+                    }
+                }
+            })
+            .as_ref()
+    }
 }
 
 fn open_sink(path: &std::path::Path) -> std::io::Result<Box<dyn Write + Send>> {
@@ -128,14 +156,20 @@ fn open_sink(path: &std::path::Path) -> std::io::Result<Box<dyn Write + Send>> {
     Ok(Box::new(f))
 }
 
-/// One record: `v` under internal-json, else `text` if any.
-fn out(v: &Value, text: Option<&str>) {
-    if json() {
-        eprintln!("@nix {}", wire(v));
-    } else if let Some(t) = text {
-        eprintln!("{t}");
+impl Log {
+    /// One record: `v` under internal-json, else `text` if any.
+    fn out(&self, v: &Value, text: Option<&str>) {
+        if self.json.load(Ordering::Relaxed) {
+            eprintln!("@nix {}", self.wire(v));
+        } else if let Some(t) = text {
+            eprintln!("{t}");
+        }
+        self.tee(v);
     }
-    tee(v);
+}
+
+fn out(v: &Value, text: Option<&str>) {
+    cur().log.out(v, text);
 }
 
 /// error.hh:Verbosity, and logging.hh:ActivityType and ResultType, the ones
@@ -154,13 +188,13 @@ pub const RES_SET_EXPECTED: u64 = 106;
 
 /// Whether activity records go anywhere, so nobody builds one for nothing.
 pub fn activities() -> bool {
-    json() || sink().is_some()
+    let s = cur();
+    s.log.json.load(Ordering::Relaxed) || s.log.sink().is_some()
 }
 
 /// logging.cc:Activity: the pid in the high half, a counter below.
 pub fn activity_id() -> u64 {
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    NEXT.fetch_add(1, Ordering::Relaxed) + (u64::from(std::process::id()) << 32)
+    cur().log.next_activity.fetch_add(1, Ordering::Relaxed) + (u64::from(std::process::id()) << 32)
 }
 
 fn fields(mut v: Value, f: Vec<Value>) -> Value {
@@ -233,11 +267,19 @@ pub fn format(text: &str) -> String {
         3
     };
     let v = json!({"action": "msg", "level": level, "msg": text});
-    tee(&v);
-    if json() {
-        format!("@nix {}", wire(&v))
-    } else {
-        text.to_string()
+    cur().log.render(&v, text)
+}
+
+impl Log {
+    /// `v` as an `@nix` line under internal-json, else `text`; either way
+    /// the `json-log-path` file gets the record.
+    fn render(&self, v: &Value, text: &str) -> String {
+        self.tee(v);
+        if self.json.load(Ordering::Relaxed) {
+            format!("@nix {}", self.wire(v))
+        } else {
+            text.to_string()
+        }
     }
 }
 
@@ -257,13 +299,7 @@ pub fn line(text: &str) {
 /// A lint warning, `warning: [NAME] MSG` and maybe `\n  at POS`, as it goes
 /// to stderr.
 pub fn lint(text: &str) -> String {
-    let v = lint_record(text);
-    tee(&v);
-    if json() {
-        format!("@nix {}", wire(&v))
-    } else {
-        text.to_string()
-    }
+    cur().log.render(&lint_record(text), text)
 }
 
 fn lint_record(text: &str) -> Value {
@@ -293,13 +329,14 @@ pub fn replay_lints(bytes: &[u8]) -> Vec<u8> {
         }
     }
     let records: Vec<Value> = warnings.iter().map(|w| lint_record(w)).collect();
-    records.iter().for_each(tee);
-    if !json() {
+    let s = cur();
+    records.iter().for_each(|v| s.log.tee(v));
+    if !s.log.json.load(Ordering::Relaxed) {
         return bytes.to_vec();
     }
     records
         .iter()
-        .map(|v| format!("@nix {}\n", wire(v)))
+        .map(|v| format!("@nix {}\n", s.log.wire(v)))
         .collect::<String>()
         .into_bytes()
 }
@@ -382,7 +419,7 @@ impl Report {
         if let Some(h) = &self.hint {
             o.insert("hint".into(), h.as_str().into());
         }
-        if SHOW_TRACE.load(Ordering::Relaxed) && !self.trace.is_empty() {
+        if cur().log.show_trace.load(Ordering::Relaxed) && !self.trace.is_empty() {
             let t = self.trace.iter().map(|(m, p)| {
                 let mut f = serde_json::Map::from_iter(pos_fields(p.as_deref()));
                 f.insert("raw_msg".into(), m.as_str().into());
@@ -459,18 +496,19 @@ pub fn mismatch(raw: &str) -> Option<(String, String)> {
     Some((field("specified:")?, field("got:")?))
 }
 
-static MISMATCHES: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
-static WANT_MISMATCH: Mutex<Option<String>> = Mutex::new(None);
-
 /// `ietsp prefetch` builds a derivation whose hash is wrong on purpose: a
 /// mismatch of a derivation called `name` is its answer, not a failure.
 pub fn want_mismatch(name: &str) {
-    *WANT_MISMATCH.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("-{name}.drv"));
+    *cur()
+        .log
+        .want_mismatch
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some(format!("-{name}.drv"));
 }
 
 /// Whether `text` is about the derivation `want_mismatch` named.
-fn wanted(text: &str) -> bool {
-    let want = WANT_MISMATCH.lock().unwrap_or_else(|e| e.into_inner());
+fn wanted(log: &Log, text: &str) -> bool {
+    let want = log.want_mismatch.lock().unwrap_or_else(|e| e.into_inner());
     want.as_ref().is_some_and(|n| text.contains(n.as_str()))
 }
 
@@ -482,14 +520,14 @@ pub fn note_mismatch(text: &str) {
     if text.contains(MISMATCH)
         && let Some(m) = mismatch(&crate::build::results::strip_ansi(text))
     {
-        push_mismatch(m);
+        push_mismatch(&cur().log, m);
     }
 }
 
 /// One `(specified, got)` pair, skipping one that is already there: a
 /// mismatch can reach both paths that note one.
-fn push_mismatch(m: (String, String)) {
-    let mut v = MISMATCHES.lock().unwrap_or_else(|e| e.into_inner());
+fn push_mismatch(log: &Log, m: (String, String)) {
+    let mut v = log.mismatches.lock().unwrap_or_else(|e| e.into_inner());
     if !v.contains(&m) {
         v.push(m);
     }
@@ -498,7 +536,13 @@ fn push_mismatch(m: (String, String)) {
 /// The `(specified, got)` pairs of the hash mismatches reported since the
 /// last call.
 pub fn take_mismatches() -> Vec<(String, String)> {
-    std::mem::take(&mut MISMATCHES.lock().unwrap_or_else(|e| e.into_inner()))
+    std::mem::take(
+        &mut cur()
+            .log
+            .mismatches
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()),
+    )
 }
 
 /// `warning: RAW`, a level-1 record with its own code.
@@ -547,15 +591,16 @@ fn build_report(pos: Option<String>, reason: &str, exit: i32) -> Report {
 /// the renderer prints its own.
 pub fn build_failed(pos: Option<String>, reason: &str, exit: i32, text: Option<&str>) {
     let r = build_report(pos, reason, exit);
+    let s = cur();
     if r.code == "hash-mismatch"
         && let Some(m) = mismatch(&r.raw)
     {
-        push_mismatch(m);
-        if wanted(&r.raw) {
+        push_mismatch(&s.log, m);
+        if wanted(&s.log, &r.raw) {
             return;
         }
     }
-    out(&r.record(&r.text()), text);
+    s.log.out(&r.record(&r.text()), text);
 }
 
 #[cfg(test)]
@@ -577,9 +622,10 @@ mod tests {
         );
         let want = r#"{"action":"msg","code":"missing-attr","column":7,"file":"/a/b.nix:3:7","hint":"did you mean 'abc'?","level":0,"line":3,"msg":"error: attribute 'abd' missing\n       at /a/b.nix:3:7\n       … while calling 'f' at «string»:1:9","raw_msg":"attribute 'abd' missing"}"#;
         assert_eq!(r.record(&text).to_string(), want);
-        SHOW_TRACE.store(true, Ordering::Relaxed);
+        let s = Session::new();
+        let _entered = s.enter();
+        s.log.show_trace.store(true, Ordering::Relaxed);
         let v = r.record(&text);
-        SHOW_TRACE.store(false, Ordering::Relaxed);
         let t = r#"[{"column":9,"file":"«string»:1:9","line":1,"raw_msg":"while calling 'f'"}]"#;
         assert_eq!(v["trace"].to_string(), t);
     }
@@ -595,8 +641,10 @@ mod tests {
             [8, 4, 4, 4, 12]
         );
         assert_ne!(a, b);
-        let v: Value = serde_json::from_str(&wire(&json!({"action": "msg"}))).unwrap();
-        assert_eq!(v["sid"], session());
+        let s = Session::new();
+        let _entered = s.enter();
+        let v: Value = serde_json::from_str(&s.log.wire(&json!({"action": "msg"}))).unwrap();
+        assert_eq!(v["sid"], session_id());
     }
 
     #[test]
@@ -651,21 +699,20 @@ mod tests {
 
     #[test]
     fn a_resolved_copy_reports_its_mismatch_as_a_line() {
+        let s = Session::new();
+        let _entered = s.enter();
         let a = "sha256-AoAoAoAoAo=";
-        let mine = |v: Vec<(String, String)>| -> Vec<(String, String)> {
-            v.into_iter().filter(|(s, _)| s == a).collect()
-        };
         let line = format!(
             "error: hash mismatch in fixed-output derivation '/nix/store/r-x.drv':\n         specified: {a}\n            got:    sha256-BoBoBoBoBo="
         );
         note_mismatch(&line);
         note_mismatch(&line);
         assert_eq!(
-            mine(take_mismatches()),
+            take_mismatches(),
             vec![(a.to_string(), "sha256-BoBoBoBoBo=".to_string())]
         );
         note_mismatch("error: build of resolved derivation '/nix/store/r-x.drv' failed");
-        assert_eq!(mine(take_mismatches()), Vec::new());
+        assert_eq!(take_mismatches(), Vec::new());
     }
 
     #[test]

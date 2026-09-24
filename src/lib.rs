@@ -20,6 +20,7 @@ pub mod print;
 pub mod provenance;
 pub mod remote;
 pub mod runtime;
+pub mod session;
 pub mod settings;
 pub mod store;
 pub mod syntax;

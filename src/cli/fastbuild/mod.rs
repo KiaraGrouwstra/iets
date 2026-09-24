@@ -145,7 +145,7 @@ fn run(a: Args) -> Result<i32> {
     let thread = std::thread::Builder::new()
         .name("fast-build".into())
         .stack_size(64 << 20)
-        .spawn(move || dispatch(d, rx))
+        .spawn(crate::session::bind(move || dispatch(d, rx)))
         .map_err(|e| CrateError::io("cannot spawn the dispatch thread", e))?;
 
     let workers = a
