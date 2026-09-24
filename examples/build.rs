@@ -17,6 +17,10 @@ use ietsp::store::locate::{drv_roots, locate_in_store};
 use ietsp::store::path::StorePath;
 
 fn main() -> std::process::ExitCode {
+    // a frontend owns the run state and says where messages go
+    let session = ietsp::session::Session::new();
+    session.log.write_to_stderr();
+    let _entered = session.enter();
     let mut url = "daemon".to_string();
     let mut a = EvalArgs::new();
     let mut argv = std::env::args().skip(1);

@@ -8,6 +8,10 @@ use ietsp::api::{self, EvalArgs, Input};
 use ietsp::eval::{Evaluator, Pos};
 
 fn main() -> std::process::ExitCode {
+    // a frontend owns the run state and says where messages go
+    let session = ietsp::session::Session::new();
+    session.log.write_to_stderr();
+    let _entered = session.enter();
     let mut a = EvalArgs {
         strict: true,
         json: true,

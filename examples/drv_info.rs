@@ -9,6 +9,10 @@ use ietsp::api::{self, EvalArgs, Input};
 use ietsp::eval::Evaluator;
 
 fn main() -> std::process::ExitCode {
+    // a frontend owns the run state and says where messages go
+    let session = ietsp::session::Session::new();
+    session.log.write_to_stderr();
+    let _entered = session.enter();
     let mut a = EvalArgs::new();
     let mut argv = std::env::args().skip(1);
     while let Some(arg) = argv.next() {

@@ -22,6 +22,10 @@ const DEFAULT: &str = r#"
 "#;
 
 fn main() -> std::process::ExitCode {
+    // a frontend owns the run state and says where messages go
+    let session = ietsp::session::Session::new();
+    session.log.write_to_stderr();
+    let _entered = session.enter();
     let mut argv = std::env::args().skip(1);
     let src = match argv.next().as_deref() {
         None => DEFAULT.to_string(),
