@@ -12,10 +12,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
-use super::{Argv, Common, Root, common_flag, fallback, is_unsupported};
+use super::{Argv, Common, Root, common_flag, fallback};
 use crate::build::backend::Worker;
 use crate::build::upload::{PlanUpload, Uploader};
-use crate::cli::{auto_args, cwd, report};
+use crate::cli::{Outcome, auto_args, cwd, report};
 use crate::devenv::escape_shell_arg_always as esc;
 use crate::error::Error as CrateError;
 use crate::eval::{Error, ErrorKind, Evaluator, Pos};
@@ -147,10 +147,10 @@ pub fn main(argv: &[String]) -> i32 {
         Ok(c) => c,
         Err(e) => return e.report(),
     };
-    match crate::cli::run_parallel(crate::cli::Run::on(ev), move |ev, _| prepare(ev, &run)) {
-        Run::Failed(code) => code,
-        Run::Unsupported(reason) => fallback(NAME, argv, &reason),
-        Run::Ready(r) => realise(&s, &transport, &options, *r, cores),
+    match crate::cli::run_reported(crate::cli::Run::on(ev), move |ev, _| prepare(ev, &run)) {
+        Outcome::Failed(code) => code,
+        Outcome::Unsupported(reason) => fallback(NAME, argv, &reason),
+        Outcome::Ok(r) => realise(&s, &transport, &options, *r, cores),
     }
 }
 
@@ -189,12 +189,6 @@ fn resolve_shell_expr_path(p: &[u8]) -> Result<Vec<u8>, String> {
     ))
 }
 
-enum Run {
-    Failed(i32),
-    Unsupported(String),
-    Ready(Box<Ready>),
-}
-
 /// What the evaluation produced: the shell derivation, the bash to run, and the
 /// closure to upload before building the derivation's inputs.
 struct Ready {
@@ -212,62 +206,53 @@ enum Bash {
     Drv(StorePath),
 }
 
-fn prepare(ev: &mut Evaluator, s: &Shell) -> Run {
+fn prepare(ev: &mut Evaluator, s: &Shell) -> crate::error::Result<Box<Ready>> {
     let cwd = cwd();
     let mut roots: Vec<Root> = Vec::new();
-    let r = (|| -> Result<Bash, Box<Error>> {
-        let args = auto_args(ev, &s.c.flags.args, &cwd)?;
-        let mut seen = HashSet::new();
-        for file in &s.c.files {
-            let root = if s.c.from_args {
-                ev.eval_string(file, &cwd)?
-            } else {
-                let p = super::lookup_file_arg(ev, file, &cwd)?;
-                let p = resolve_shell_expr_path(&p)
-                    .map_err(|m| Error::boxed(ErrorKind::Eval, m, Pos::NONE))?;
-                ev.eval_file(&p, Pos::NONE)?
-            };
-            let root = ev.force(root)?;
-            let args = if takes_in_nix_shell(ev, root) {
+    let args = auto_args(ev, &s.c.flags.args, &cwd)?;
+    let mut seen = HashSet::new();
+    for file in &s.c.files {
+        let root = if s.c.from_args {
+            ev.eval_string(file, &cwd)?
+        } else {
+            let p = super::lookup_file_arg(ev, file, &cwd)?;
+            let p = resolve_shell_expr_path(&p)
+                .map_err(|m| Error::boxed(ErrorKind::Eval, m, Pos::NONE))?;
+            ev.eval_file(&p, Pos::NONE)?
+        };
+        let root = ev.force(root)?;
+        let args = if takes_in_nix_shell(ev, root) {
+            with_in_nix_shell(ev, args)?
+        } else {
+            args
+        };
+        for attr in &s.c.flags.attrs {
+            let v = super::select(ev, root, attr, args)?;
+            let v = ev.force(v)?;
+            let args = if takes_in_nix_shell(ev, v) {
                 with_in_nix_shell(ev, args)?
             } else {
                 args
             };
-            for attr in &s.c.flags.attrs {
-                let v = super::select(ev, root, attr, args)?;
-                let v = ev.force(v)?;
-                let args = if takes_in_nix_shell(ev, v) {
-                    with_in_nix_shell(ev, args)?
-                } else {
-                    args
-                };
-                super::derivations_at(ev, v, args, &mut roots, &mut seen, attr)?;
-            }
+            super::derivations_at(ev, v, args, &mut roots, &mut seen, attr)?;
         }
-        Ok(bash(ev, &cwd))
-    })();
-    let bash = match r {
-        Ok(b) => b,
-        Err(e) if is_unsupported(&e) => return Run::Unsupported(e.msg.clone()),
-        Err(e) => return Run::Failed(report(ev, &e)),
-    };
-    if roots.len() != 1 {
-        let e = CrateError::Usage("nix-shell requires a single derivation".into());
-        return Run::Failed(e.report());
     }
-    let drv = match crate::builtins::derivation::load_drv(ev, &roots[0].drv) {
-        Ok(d) => d,
-        Err(e) => return Run::Failed(CrateError::from(e).report()),
-    };
+    let bash = bash(ev, &cwd);
+    if roots.len() != 1 {
+        return Err(CrateError::Usage(
+            "nix-shell requires a single derivation".into(),
+        ));
+    }
+    let drv = crate::builtins::derivation::load_drv(ev, &roots[0].drv)?;
     if !drv
         .outputs
         .values()
         .all(|o| matches!(o, DerivationOutput::InputAddressed(_)))
     {
-        return Run::Unsupported(format!(
+        return Err(CrateError::Unsupported(format!(
             "the derivation '{}' has to be resolved first",
             roots[0].drv
-        ));
+        )));
     }
     let mut targets = vec![roots[0].clone()];
     if let Bash::Drv(p) = &bash {
@@ -276,15 +261,13 @@ fn prepare(ev: &mut Evaluator, s: &Shell) -> Run {
             output: "out".into(),
         });
     }
-    match super::plan_roots(ev, &targets) {
-        Ok(plan) => Run::Ready(Box::new(Ready {
-            drv_path: roots[0].drv.clone(),
-            drv,
-            bash,
-            plan,
-        })),
-        Err(e) => Run::Failed(e.report()),
-    }
+    let plan = super::plan_roots(ev, &targets)?;
+    Ok(Box::new(Ready {
+        drv_path: roots[0].drv.clone(),
+        drv,
+        bash,
+        plan,
+    }))
 }
 
 /// nix-build.cc: `$NIX_BUILD_SHELL`, else `(import <nixpkgs> {}).bashInteractive`;

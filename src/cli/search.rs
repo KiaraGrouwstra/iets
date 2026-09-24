@@ -5,11 +5,11 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::api::run::Run;
+use crate::api::run::{Outcome, Run};
 use crate::api::{EvalArgs, Input, cwd, installable, report};
 use crate::builtins::text::regex::{self, Prog};
 use crate::cli::classic::nix::{global_flag, nix_settings};
-use crate::cli::classic::{Argv, Common, evaluator, fallback, is_unsupported, lookup_file_arg};
+use crate::cli::classic::{Argv, Common, evaluator, fallback, lookup_file_arg};
 use crate::cli::help;
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::parallel::force::{T_ATTRS_WHNF, fanout};
@@ -156,10 +156,10 @@ fn run(mut s: Search, classic: Option<&[String]>) -> i32 {
         Some(index) => index,
         None => {
             let run = Arc::clone(&s);
-            match crate::cli::run_parallel(r, move |ev, cache| build(ev, &run, cache)) {
-                Built::Index(index) => index,
-                Built::Failed(code) => return code,
-                Built::Unsupported(why) => return bail(why),
+            match crate::cli::run_reported(r, move |ev, cache| build(ev, &run, cache)) {
+                Outcome::Ok(index) => index,
+                Outcome::Failed(code) => return code,
+                Outcome::Unsupported(why) => return bail(why),
             }
         }
     };
@@ -178,31 +178,15 @@ fn run(mut s: Search, classic: Option<&[String]>) -> i32 {
     0
 }
 
-/// What one evaluation of the installable produced.
-enum Built {
-    Index(Vec<Entry>),
-    Failed(i32),
-    Unsupported(String),
-}
-
-fn build(ev: &mut Evaluator, s: &Search, cache: Option<Cache>) -> Built {
-    let r = (|| -> EvalResult<Vec<Entry>> {
-        let mut index = Vec::new();
-        for (v, mut path) in cursors(ev, s, &cwd())? {
-            visit(ev, v, &mut path, true, &mut index, s.native)?;
-        }
-        Ok(index)
-    })();
-    match r {
-        Ok(index) => {
-            if let Some(c) = &cache {
-                c.write(ev, &encode(&index), false);
-            }
-            Built::Index(index)
-        }
-        Err(e) if is_unsupported(&e) => Built::Unsupported(e.msg.clone()),
-        Err(e) => Built::Failed(report(ev, &e)),
+fn build(ev: &mut Evaluator, s: &Search, cache: Option<Cache>) -> crate::error::Result<Vec<Entry>> {
+    let mut index = Vec::new();
+    for (v, mut path) in cursors(ev, s, &cwd())? {
+        visit(ev, v, &mut path, true, &mut index, s.native)?;
     }
+    if let Some(c) = &cache {
+        c.write(ev, &encode(&index), false);
+    }
+    Ok(index)
 }
 
 /// The values the walk starts from, with their attribute paths

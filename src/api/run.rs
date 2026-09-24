@@ -1,11 +1,7 @@
-//! One run of one command: the evaluator it needs, the lint configuration,
-//! the tracing cache, the trace switch and the parallel entry. A frontend
-//! configures what differs and calls one of the finishers, so the lookup,
-//! the switch and the error classification are written once.
-//!
-//! A frontend that owns one of these parts — `eval-jobs` its worker
-//! processes, `fast-build` its evaluator — starts from [`Run::on`] and
-//! keeps only what it needs (docs/plumbing.md).
+//! One run of one command: the evaluator, the lints, the tracing cache, the
+//! trace switch and the parallel entry. A frontend that owns one of those
+//! parts — `eval-jobs` its worker processes, `fast-build` its evaluator —
+//! starts from [`Run::on`] and keeps only what it needs (docs/plumbing.md).
 
 use crate::eval::{ErrorKind, Evaluator};
 use crate::parallel::fiber::StackError;
@@ -15,7 +11,7 @@ use super::EvalArgs;
 
 /// What one run produced: what the caller asked for, an error that was
 /// reported and its exit code, or something this frontend does not serve,
-/// which classic mode turns into an exec of the real Nix.
+/// which classic mode answers by exec'ing the real Nix.
 pub enum Outcome<T> {
     Ok(T),
     Failed(i32),
@@ -24,8 +20,8 @@ pub enum Outcome<T> {
 
 pub struct Run {
     pub ev: Evaluator,
-    /// The tracing cache of this run: `None` when it is off, the arguments
-    /// cannot be keyed, or the command asked for none.
+    /// `None` when the cache is off, the arguments cannot be keyed, or the
+    /// command asked for none.
     pub cache: Option<Cache>,
     pub workers: usize,
 }
@@ -38,15 +34,11 @@ impl Run {
         if let Err(e) = super::configure_lints(&mut ev, a) {
             return Err(super::report(&ev, &e));
         }
-        Ok(Run {
-            ev,
-            cache: None,
-            workers: a.workers,
-        })
+        Ok(Run::on(ev).workers(a.workers))
     }
 
-    /// An evaluator the frontend made itself. Its lints stay as they are:
-    /// the classic commands keep them off, as Nix has none.
+    /// An evaluator the frontend made itself; its lints stay as they are,
+    /// which is how the classic commands keep them off.
     pub fn on(ev: Evaluator) -> Run {
         Run {
             ev,
@@ -96,13 +88,14 @@ impl Run {
         self,
         f: impl FnOnce(&mut Evaluator, Option<Cache>) -> crate::error::Result<T> + Send + 'static,
     ) -> Result<Outcome<T>, StackError> {
+        use crate::error::Error;
         self.go(move |ev, cache| match f(ev, cache) {
             Ok(t) => Outcome::Ok(t),
-            Err(crate::error::Error::Unsupported(m)) => Outcome::Unsupported(m),
-            Err(crate::error::Error::Eval(e)) if e.kind == ErrorKind::Unsupported => {
+            Err(Error::Unsupported(m)) => Outcome::Unsupported(m),
+            Err(Error::Eval(e)) if e.kind == ErrorKind::Unsupported => {
                 Outcome::Unsupported(e.msg.clone())
             }
-            Err(crate::error::Error::Eval(e)) => Outcome::Failed(super::report(ev, &e)),
+            Err(Error::Eval(e)) => Outcome::Failed(super::report(ev, &e)),
             Err(e) => Outcome::Failed(e.report()),
         })
     }

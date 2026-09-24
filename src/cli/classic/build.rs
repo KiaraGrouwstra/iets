@@ -5,12 +5,12 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use super::{Argv, Common, Root, common_flag, fallback, is_unsupported};
+use super::{Argv, Common, Root, common_flag, fallback};
 use crate::build::render::Style;
 use crate::build::upload::PlanUpload;
 use crate::build::{Dispatcher, Target};
-use crate::cli::{abs_path, auto_args, cwd, report};
-use crate::eval::{Error, Evaluator};
+use crate::cli::{Outcome, abs_path, auto_args, cwd};
+use crate::eval::Evaluator;
 use crate::provenance::Provenance;
 use crate::remote::plan::Plan;
 use crate::remote::worker::{Options, Transport};
@@ -62,9 +62,7 @@ fn parse(argv: &[String]) -> Result<Build, String> {
     Ok(b)
 }
 
-enum Run {
-    Failed(i32),
-    Unsupported(String),
+enum Built {
     Ready(Vec<Root>, Box<Plan>, Box<Provenance>),
     Empty,
 }
@@ -81,43 +79,34 @@ pub fn main(argv: &[String]) -> i32 {
     let ev = super::evaluator(&b.c, &cfg);
     let b = Arc::new(b);
     let build = Arc::clone(&b);
-    match crate::cli::run_parallel(crate::cli::Run::on(ev), move |ev, _| run(ev, &build)) {
-        Run::Failed(code) => code,
-        Run::Unsupported(reason) => fallback(NAME, argv, &reason),
-        Run::Empty => 0,
-        Run::Ready(roots, plan, prov) => realise(&b, &transport, &options, &roots, &plan, &prov),
+    match crate::cli::run_reported(crate::cli::Run::on(ev), move |ev, _| run(ev, &build)) {
+        Outcome::Failed(code) => code,
+        Outcome::Unsupported(reason) => fallback(NAME, argv, &reason),
+        Outcome::Ok(Built::Empty) => 0,
+        Outcome::Ok(Built::Ready(roots, plan, prov)) => {
+            realise(&b, &transport, &options, &roots, &plan, &prov)
+        }
     }
 }
 
-fn run(ev: &mut Evaluator, b: &Build) -> Run {
+fn run(ev: &mut Evaluator, b: &Build) -> crate::error::Result<Built> {
     let cwd = cwd();
     let mut roots: Vec<Root> = Vec::new();
     let mut seen = HashSet::new();
-    let r = (|| -> Result<(), Box<Error>> {
-        let args = auto_args(ev, &b.c.flags.args, &cwd)?;
-        for file in &b.c.files {
-            let root = super::eval_input(ev, &b.c, file, &cwd)?;
-            for attr in &b.c.flags.attrs {
-                let v = super::select(ev, root, attr, args)?;
-                super::derivations_at(ev, v, args, &mut roots, &mut seen, attr)?;
-            }
+    let args = auto_args(ev, &b.c.flags.args, &cwd)?;
+    for file in &b.c.files {
+        let root = super::eval_input(ev, &b.c, file, &cwd)?;
+        for attr in &b.c.flags.attrs {
+            let v = super::select(ev, root, attr, args)?;
+            super::derivations_at(ev, v, args, &mut roots, &mut seen, attr)?;
         }
-        Ok(())
-    })();
-    if let Err(e) = r {
-        if is_unsupported(&e) {
-            return Run::Unsupported(e.msg.clone());
-        }
-        return Run::Failed(report(ev, &e));
     }
     if roots.is_empty() {
-        return Run::Empty;
+        return Ok(Built::Empty);
     }
     let prov = Provenance::snapshot(ev);
-    match super::plan_roots(ev, &roots) {
-        Ok(p) => Run::Ready(roots, Box::new(p), Box::new(prov)),
-        Err(e) => Run::Failed(e.report()),
-    }
+    let plan = super::plan_roots(ev, &roots)?;
+    Ok(Built::Ready(roots, Box::new(plan), Box::new(prov)))
 }
 
 /// Uploads the closure, builds every root in one call, links and prints.

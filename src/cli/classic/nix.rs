@@ -6,12 +6,12 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
-use super::{Argv, Common, Root, fallback, is_unsupported};
+use super::{Argv, Common, Root, fallback};
 use crate::api::installable;
 use crate::build::render::Style;
 use crate::build::upload::PlanUpload;
 use crate::build::{Dispatcher, Target as BuildTarget};
-use crate::cli::{abs_path, auto_args, cwd, report};
+use crate::cli::{Outcome, abs_path, auto_args, cwd, report};
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::remote::plan::Plan;
 use crate::remote::worker::{Options, Transport};
@@ -204,9 +204,7 @@ fn check_args_with_flake(n: &Nix) -> Result<(), String> {
     Ok(())
 }
 
-enum Run {
-    Failed(i32),
-    Unsupported(String),
+enum Done {
     /// `nix eval`: the whole stdout, already formatted.
     Out(Vec<u8>),
     /// `nix build`: what to build, and the closure to upload.
@@ -248,54 +246,47 @@ fn eval_main(argv: &[String], rest: &[String]) -> i32 {
     let ev = super::evaluator(&n.c, &cfg);
     let n = Arc::new(n);
     let run = Arc::clone(&n);
-    match crate::cli::run_parallel(crate::cli::Run::on(ev), move |ev, _| eval_run(ev, &run)) {
-        Run::Failed(code) => code,
-        Run::Unsupported(reason) => fallback(NAME, argv, &reason),
-        Run::Out(text) => {
+    match crate::cli::run_reported(crate::cli::Run::on(ev), move |ev, _| eval_run(ev, &run)) {
+        Outcome::Failed(code) => code,
+        Outcome::Unsupported(reason) => fallback(NAME, argv, &reason),
+        Outcome::Ok(Done::Out(text)) => {
             print_bytes(&text);
             0
         }
-        Run::Ready(..) => unreachable!("eval does not build"),
+        Outcome::Ok(Done::Ready(..)) => unreachable!("eval does not build"),
     }
 }
 
-fn eval_run(ev: &mut Evaluator, n: &Nix) -> Run {
+fn eval_run(ev: &mut Evaluator, n: &Nix) -> crate::error::Result<Done> {
     let cwd = cwd();
     let mut out: Vec<u8> = Vec::new();
-    let r = (|| -> Result<(), Box<Error>> {
-        let what = n.installables.first().map_or(".", String::as_str);
-        let v = resolve(ev, n, what, &cwd)?;
-        // installables.cc: the installable's value is forced before printing,
-        // so an error at the top level is reported instead of printed.
-        let v = ev.force(v)?;
-        if n.raw {
-            let mut ctx = Vec::new();
-            let s = ev.coerce_to_string(
-                v,
-                &mut ctx,
-                Pos::NONE,
-                "while generating the eval command output",
-                false,
-                true,
-                true,
-            )?;
-            out.extend_from_slice(&s);
-        } else if n.json {
-            let mut ctx = Vec::new();
-            crate::print::print_json(ev, v, &mut out, &mut ctx, true, Pos::NONE)?;
-            out.push(b'\n');
-        } else {
-            let mut seen = HashSet::new();
-            print_eval(ev, v, &mut out, &mut seen, 0)?;
-            out.push(b'\n');
-        }
-        Ok(())
-    })();
-    match r {
-        Ok(()) => Run::Out(out),
-        Err(e) if is_unsupported(&e) => Run::Unsupported(e.msg.clone()),
-        Err(e) => Run::Failed(report(ev, &e)),
+    let what = n.installables.first().map_or(".", String::as_str);
+    let v = resolve(ev, n, what, &cwd)?;
+    // installables.cc: the installable's value is forced before printing,
+    // so an error at the top level is reported instead of printed.
+    let v = ev.force(v)?;
+    if n.raw {
+        let mut ctx = Vec::new();
+        let s = ev.coerce_to_string(
+            v,
+            &mut ctx,
+            Pos::NONE,
+            "while generating the eval command output",
+            false,
+            true,
+            true,
+        )?;
+        out.extend_from_slice(&s);
+    } else if n.json {
+        let mut ctx = Vec::new();
+        crate::print::print_json(ev, v, &mut out, &mut ctx, true, Pos::NONE)?;
+        out.push(b'\n');
+    } else {
+        let mut seen = HashSet::new();
+        print_eval(ev, v, &mut out, &mut seen, 0)?;
+        out.push(b'\n');
     }
+    Ok(Done::Out(out))
 }
 
 fn build_main(argv: &[String], rest: &[String]) -> i32 {
@@ -310,35 +301,26 @@ fn build_main(argv: &[String], rest: &[String]) -> i32 {
     let ev = super::evaluator(&n.c, &cfg);
     let n = Arc::new(n);
     let run = Arc::clone(&n);
-    match crate::cli::run_parallel(crate::cli::Run::on(ev), move |ev, _| build_run(ev, &run)) {
-        Run::Failed(code) => code,
-        Run::Unsupported(reason) => fallback(NAME, argv, &reason),
-        Run::Out(_) => unreachable!("build prints its own output"),
-        Run::Ready(targets, plan) => realise(&n, &transport, &options, &targets, &plan),
+    match crate::cli::run_reported(crate::cli::Run::on(ev), move |ev, _| build_run(ev, &run)) {
+        Outcome::Failed(code) => code,
+        Outcome::Unsupported(reason) => fallback(NAME, argv, &reason),
+        Outcome::Ok(Done::Out(_)) => unreachable!("build prints its own output"),
+        Outcome::Ok(Done::Ready(targets, plan)) => {
+            realise(&n, &transport, &options, &targets, &plan)
+        }
     }
 }
 
-fn build_run(ev: &mut Evaluator, n: &Nix) -> Run {
+fn build_run(ev: &mut Evaluator, n: &Nix) -> crate::error::Result<Done> {
     let cwd = cwd();
     let mut targets: Vec<Target> = Vec::new();
-    let r = (|| -> Result<(), Box<Error>> {
-        for what in &n.installables {
-            let v = resolve(ev, n, what, &cwd)?;
-            targets.push(target(ev, v, what, n.expr.is_none() && n.file.is_none())?);
-        }
-        Ok(())
-    })();
-    if let Err(e) = r {
-        if is_unsupported(&e) {
-            return Run::Unsupported(e.msg.clone());
-        }
-        return Run::Failed(report(ev, &e));
+    for what in &n.installables {
+        let v = resolve(ev, n, what, &cwd)?;
+        targets.push(target(ev, v, what, n.expr.is_none() && n.file.is_none())?);
     }
     let roots = flat_roots(&targets);
-    match super::plan_roots(ev, &roots) {
-        Ok(p) => Run::Ready(targets, Box::new(p)),
-        Err(e) => Run::Failed(e.report()),
-    }
+    let plan = super::plan_roots(ev, &roots)?;
+    Ok(Done::Ready(targets, Box::new(plan)))
 }
 
 /// flake-prefetch-inputs.cc: every locked input the lock reaches, fetched in

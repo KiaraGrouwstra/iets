@@ -62,11 +62,6 @@ pub fn fallback(name: &str, argv: &[String], reason: &str) -> ! {
     exit(1)
 }
 
-/// An evaluation error that classic mode answers with the real nix.
-pub fn is_unsupported(e: &Error) -> bool {
-    e.kind == ErrorKind::Unsupported
-}
-
 /// The flags `nix-instantiate` and `nix-build` share (`MixEvalArgs` plus the
 /// settings aliases of `LegacyArgs`).
 #[derive(Default)]

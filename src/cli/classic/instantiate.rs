@@ -5,10 +5,10 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use super::{Argv, Common, Root, common_flag, fallback, is_unsupported};
+use super::{Argv, Common, Root, common_flag, fallback};
 use crate::build::backend::Worker;
 use crate::build::upload::{PlanUpload, Uploader};
-use crate::cli::{abs_path, auto_args, cwd, report};
+use crate::cli::{Outcome, abs_path, auto_args, cwd};
 use crate::eval::{Error, Evaluator, Pos};
 use crate::remote::plan::Plan;
 use crate::remote::worker::{Options, Transport};
@@ -85,9 +85,7 @@ fn parse(argv: &[String]) -> Result<Inst, String> {
     Ok(i)
 }
 
-enum Run {
-    Failed(i32),
-    Unsupported(String),
+enum Made {
     /// `--eval`: the whole stdout, already formatted.
     Values(Vec<u8>),
     /// The default mode: the roots to register and print, and their closure.
@@ -109,14 +107,16 @@ pub fn main(argv: &[String]) -> i32 {
     let ev = super::evaluator(&i.c, &cfg);
     let i = Arc::new(i);
     let inst = Arc::clone(&i);
-    match crate::cli::run_parallel(crate::cli::Run::on(ev), move |ev, _| run(ev, &inst)) {
-        Run::Failed(code) => code,
-        Run::Unsupported(reason) => fallback(NAME, argv, &reason),
-        Run::Values(text) => {
+    match crate::cli::run_reported(crate::cli::Run::on(ev), move |ev, _| run(ev, &inst)) {
+        Outcome::Failed(code) => code,
+        Outcome::Unsupported(reason) => fallback(NAME, argv, &reason),
+        Outcome::Ok(Made::Values(text)) => {
             print_bytes(&text);
             0
         }
-        Run::Drvs(roots, plan) => finish(&i, &transport, &options, &roots, plan.as_deref()),
+        Outcome::Ok(Made::Drvs(roots, plan)) => {
+            finish(&i, &transport, &options, &roots, plan.as_deref())
+        }
     }
 }
 
@@ -127,44 +127,33 @@ fn print_bytes(b: &[u8]) {
     let _ = out.flush();
 }
 
-fn run(ev: &mut Evaluator, i: &Inst) -> Run {
+fn run(ev: &mut Evaluator, i: &Inst) -> crate::error::Result<Made> {
     let cwd = cwd();
     let mut text: Vec<u8> = Vec::new();
     let mut roots: Vec<Root> = Vec::new();
     let mut seen = HashSet::new();
-    let r = (|| -> Result<(), Box<Error>> {
-        let args = auto_args(ev, &i.c.flags.args, &cwd)?;
-        let has_args = !i.c.flags.args.is_empty();
-        for file in &i.c.files {
-            let root = super::eval_input(ev, &i.c, file, &cwd)?;
-            for attr in &i.c.flags.attrs {
-                let v = super::select(ev, root, attr, args)?;
-                if i.eval_only {
-                    let v = if has_args { ev.auto_call(v, args)? } else { v };
-                    print_value(ev, v, i, &mut text)?;
-                } else {
-                    super::derivations_at(ev, v, args, &mut roots, &mut seen, attr)?;
-                }
+    let args = auto_args(ev, &i.c.flags.args, &cwd)?;
+    let has_args = !i.c.flags.args.is_empty();
+    for file in &i.c.files {
+        let root = super::eval_input(ev, &i.c, file, &cwd)?;
+        for attr in &i.c.flags.attrs {
+            let v = super::select(ev, root, attr, args)?;
+            if i.eval_only {
+                let v = if has_args { ev.auto_call(v, args)? } else { v };
+                print_value(ev, v, i, &mut text)?;
+            } else {
+                super::derivations_at(ev, v, args, &mut roots, &mut seen, attr)?;
             }
         }
-        Ok(())
-    })();
-    if let Err(e) = r {
-        if is_unsupported(&e) {
-            return Run::Unsupported(e.msg.clone());
-        }
-        return Run::Failed(report(ev, &e));
     }
     if i.eval_only {
-        return Run::Values(text);
+        return Ok(Made::Values(text));
     }
     if i.readonly || roots.is_empty() {
-        return Run::Drvs(roots, None);
+        return Ok(Made::Drvs(roots, None));
     }
-    match super::plan_roots(ev, &roots) {
-        Ok(p) => Run::Drvs(roots, Some(Box::new(p))),
-        Err(e) => Run::Failed(e.report()),
-    }
+    let plan = super::plan_roots(ev, &roots)?;
+    Ok(Made::Drvs(roots, Some(Box::new(plan))))
 }
 
 fn print_value(ev: &mut Evaluator, v: Word, i: &Inst, out: &mut Vec<u8>) -> Result<(), Box<Error>> {
