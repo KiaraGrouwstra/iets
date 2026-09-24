@@ -92,6 +92,9 @@ expression evaluated to has the hash the file still names.
 Exit codes: 0 with a hash, 1 when the download or the build failed, 2 for a
 bad command line (docs/cli.md).
 
+`ietsp plumbing fetch` is the same operation with the object always on
+stdout (docs/plumbing.md). This command is that op plus the `--json` choice.
+
 ## What differs from Nix
 
 `nix store prefetch-file` and `nix-prefetch-url` add the file to the store

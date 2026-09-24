@@ -742,7 +742,7 @@ mod tests {
     /// The NAR the spool writes for `bytes`, and the NAR the tree path writes
     /// for the same archive.
     fn both(tag: &str, bytes: Vec<u8>) -> (Result<Vec<u8>>, Result<Vec<u8>>) {
-        let plain = super::http::decompress(bytes.clone()).unwrap();
+        let plain = crate::fetch::http::decompress(bytes.clone()).unwrap();
         let mut spool = scratch(tag).unwrap();
         spool.write_all(&plain).unwrap();
         let streamed = Tree::index(spool).and_then(|t| {
@@ -755,7 +755,7 @@ mod tests {
         let dest =
             std::env::temp_dir().join(format!("ietsp-spool-tree-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dest);
-        let tree = super::unpack::unpack(plain, &dest).and_then(|root| {
+        let tree = crate::fetch::unpack::unpack(plain, &dest).and_then(|root| {
             let mut nar = Vec::new();
             crate::store::nar::dump_path(&root, &mut nar, &mut |_, _| true)
                 .map_err(|e| Error::io("cannot dump the tree", e))?;

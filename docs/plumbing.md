@@ -365,6 +365,12 @@ ietsp plumbing fetch [EVAL FLAGS]            # a fixed-output derivation
 {"hash": "sha256-…", "drvPath": "/nix/store/…​.drv"}
 ```
 
+The capability is `api::fetch`: `url_hash` for a URL, `drv_hash` for the
+fixed-output derivation an installable names, which builds it with a fake
+hash and reads the mismatch back (gap (a)5 is still open: the mismatch comes
+out of the log, not out of a structured outcome). `ietsp prefetch` is the
+other frontend and is now the flag `--json` plus this op.
+
 ### `flake-info` and `flake-tree`
 
 ```
@@ -528,7 +534,8 @@ between porcelain commands.
 `src/inputs.rs` and `src/api.rs`. Four of those are `is_flake_ref`, three
 are `parse_attr_path`, three are `select`, and `src/cli/prefetch.rs`
 reaches into `flake::spool` and `flake::http` for a job that has nothing
-to do with flakes.
+to do with flakes. **Stage 6 closed the last of those:** the three modules
+are `src/fetch` now, and `prefetch` calls `plumbing fetch`.
 
 ### The interface
 
@@ -683,9 +690,9 @@ on exactly a FOD's identity, so yes: small.
 
 ### Migration order
 
-1. Move `flake::http`, `flake::spool` and `flake::unpack` to `src/fetch`.
-   They are an HTTP client, a spooled tree and an archive unpacker. No
-   caller changes except the module path. **-0 lines, 3 files move.**
+1. ~~Move `flake::http`, `flake::spool` and `flake::unpack` to `src/fetch`.~~
+   **Done in stage 6**, at +5 lines: the three files moved and `src/fetch`
+   got a `mod.rs`. No caller changed except the module path.
 2. `src/treestore` on `cachefs`: `TreeSource`, `TreeStore`, `StoredTree`.
    `fetch::spool::Tree` implements `TreeSource`; the NAR writer and the
    index codec move in; `inputs.rs` becomes a lookup.
@@ -711,7 +718,7 @@ Every stage is one merge, and the checks pass at its commit.
 | 3 | `api::run::Run`: the eval scaffold (evaluator, lints, cache, trace, parallel, report) as one call | **-7 measured** | the scaffold lines themselves are only -100; the rest is four per-command `Failed`/`Unsupported` enums and their error matches, against a 102-line module |
 | 4 | `api::build`: one dispatch path; `plumbing plan`, `missing`, `build` | **+417 measured** | the refactor is +33: the eight sites shed 220 lines against a 187-line module. The three ops are +384, of which about 80 is the three gaps they close |
 | 5 | `api::installable` grows the get-drvs walk and `outputsToInstall`; `nix-build`, `nix-shell`, `nix-instantiate`, `ietsp build`, `diff`, `prefetch` move onto it | -180 | gaps (a)1, (a)2, (a)3, (a)4 close; `classic::derivations` and `classic::plan_roots` lose their callers |
-| 6 | `src/fetch` split out of `src/flake`; `plumbing fetch` | -40 | `prefetch`'s private use of `flake::spool`/`flake::http` |
+| 6 | `src/fetch` split out of `src/flake`; `plumbing fetch` | **+68 measured** (+66 outside tests) | the move is +5; the op is one capability with two frontends, and `prefetch` sheds 177 lines against a 128-line `api::fetch` and a 110-line op |
 | 7 | `src/treestore` on `cachefs`; `inputs.rs` and `spool.rs` collapse into it | -300 | two NAR writers, three store-path naming sites, one entry codec |
 | 8 | `source::SourceResolver`; `crate::flake` private; `plumbing flake-info`, `flake-tree` | -150 | one lock reader, one tree fetcher; `flake::root` and `flake::fetch` stop overlapping |
 | 9 | `plumbing index`, `jobs`, `dev-env`, `drv-show`, `drv-diff`, `closure-diff`; porcelain becomes flags and rendering | +150 | the ops are new surface; the porcelain shrinks by about as much |
@@ -794,6 +801,17 @@ why: a shared value pays for itself at its second caller, and stages 1 and
 2 both built values that have only their first. Stage 5 is where
 `api::installable` earns its cost; stages 6 and 9 are where `api::render`
 earns its.
+
+### What stage 6 measured
+
+Estimated -40, measured **+68** (+66 outside tests). `api::render::Fetched`
+did earn its cost — `plumbing fetch` writes no JSON of its own, and the two
+frontends emit the same value — but that is 8 lines saved, not 40, and rule
+3 held: the op is 110 lines of flag parsing, help text and dispatch over a
+128-line capability that already existed. What the stage really bought is
+that `prefetch` is 34 lines: it parses `--json` and calls the op. The move
+itself was +5, as predicted, because a move is not a deletion. That is the
+warning for stage 7, which is charged -300 for moves.
 
 One correction stage 4 left open: `plumbing missing` assembles its own
 `{"willBuild", …}` object and does not sort, so it is not yet byte-for-byte

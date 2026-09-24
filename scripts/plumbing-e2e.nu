@@ -8,6 +8,8 @@
 # 3. missing: what a build would build and fetch, and --check-cache-status.
 # 4. build: outcomes, the exit code of a failure, --gc-root and --no-build.
 # 5. composition: every op reads a previous op's stdout with --roots -.
+# 6. fetch: a URL becomes a hash. The derivation form is the same call, and
+#    scripts/prefetch-e2e.nu builds one.
 #
 # Needs a live nix-daemon and `nix` on PATH, so it is not a flake check.
 #
@@ -85,6 +87,16 @@ run-in $work {
   $ok = (verdict ($piped.outcomes.0.outputs.out == $out) "plan | build --roots -" $"($piped)") and $ok
   let via = (^$ietsp plumbing resolve hello.nix | ^$ietsp plumbing missing --roots - | from json)
   $ok = (verdict ($via.willBuild == []) "resolve | missing --roots - (already built)" $"($via)") and $ok
+
+  print "== 6. fetch"
+  "fetch me\n" | save -f $"($work)/bytes.txt"
+  let url = $"file://($work)/bytes.txt"
+  let f = (out-of $ietsp plumbing fetch $url | from json)
+  let hashed = (out-of nix hash file --sri $"($work)/bytes.txt" | chomp)
+  $ok = (verdict ($f == {hash: $hashed, url: $url}) "fetch: {hash, url}" $"($f | to json -r), want ($hashed)") and $ok
+  let s = (out-of $ietsp plumbing fetch --hash-type sha512 $url | from json)
+  let want = (out-of nix hash file --sri --type sha512 $"($work)/bytes.txt" | chomp)
+  $ok = (verdict ($s.hash == $want) "fetch: --hash-type" $"($s.hash) != ($want)") and $ok
 
   if $ok { print "PASS"; 0 } else { print "FAIL"; 1 }
 }

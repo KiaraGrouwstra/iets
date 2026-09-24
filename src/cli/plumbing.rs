@@ -26,6 +26,7 @@ operations:
   plan      derivation roots become an upload plan
   missing   a plan and a builder become what will be built and fetched
   build     derivation roots are built; outcomes come back
+  fetch     a URL or a fixed-output derivation becomes a hash
 
 Every op that takes roots names them as DRV or DRV!OUT[,OUT], or reads a
 previous op's stdout with --roots -.
@@ -67,6 +68,15 @@ Build the roots and print {\"outcomes\"}: one {\"drv\", \"success\",
   --gc-root DIR         register each output under DIR on the local daemon,
                         and report the links as \"gcRoots\"
   --no-build            register the closure and stop
+
+usage: ietsp plumbing fetch [FLAGS] URL
+       ietsp plumbing fetch [FLAGS] (-E EXPR | FILE | FLAKEREF[#FRAGMENT])
+
+Print {\"hash\", \"url\"} for what URL serves, or {\"hash\", \"drvPath\"} for
+the hash a fixed-output derivation produces. Nothing is added to a store.
+
+  --unpack              hash the NAR of the unpacked tarball (fetchzip)
+  --hash-type ALGO      md5, sha1, sha256 (default) or sha512
 ";
 
 pub fn main(argv: &[String]) -> i32 {
@@ -75,7 +85,8 @@ pub fn main(argv: &[String]) -> i32 {
         Some("plan") => op_plan(&argv[1..]),
         Some("missing") => op_missing(&argv[1..]),
         Some("build") => op_build(&argv[1..]),
-        w => help::unknown_subcommand(w, &["resolve", "plan", "missing", "build"]),
+        Some("fetch") => op_fetch(&argv[1..]),
+        w => help::unknown_subcommand(w, &["resolve", "plan", "missing", "build", "fetch"]),
     }
 }
 
@@ -522,4 +533,112 @@ fn build(o: &BuildOpts, targets: Vec<Target>) -> crate::error::Result<i32> {
     }
     println!("{v}");
     Ok(d.d.exit)
+}
+
+// ---- fetch -------------------------------------------------------------------
+
+/// A URL is a positional this op fetches itself; anything else is an
+/// installable, which `parse_eval_args` reads.
+pub fn is_url(s: &str) -> bool {
+    ["https://", "http://", "file://"]
+        .iter()
+        .any(|p| s.starts_with(p))
+}
+
+/// One line on stdout: the hash and where it came from, as JSON or as the
+/// hash alone.
+pub fn hash_line(json: bool, hash: &str, key: &'static str, value: &str) -> i32 {
+    let f = crate::api::render::Fetched {
+        hash: hash.to_string(),
+        key,
+        origin: value.to_string(),
+    };
+    crate::cli::render::emit(&f, json);
+    0
+}
+
+/// The hash the one fixed-output derivation an installable names really
+/// produces. `ietsp prefetch` is the other frontend.
+pub fn hash_of_drv(ev: &mut Evaluator, a: EvalArgs, json: bool) -> i32 {
+    let mut roots = Vec::new();
+    if let Err(e) = evaluate(ev, a).and_then(|v| drv_roots(ev, v, &mut roots)) {
+        return report(ev, &e);
+    }
+    let [(root, _)] = roots.as_slice() else {
+        let msg = format!("fetch wants one derivation, got {}", roots.len());
+        return crate::log::Report::new("usage", msg).emit();
+    };
+    match crate::api::fetch::drv_hash(ev, root) {
+        Ok((got, p)) => hash_line(json, &got, "drvPath", &p.to_full_string()),
+        Err(e) => e.report(),
+    }
+}
+
+/// The flags `fetch` and `ietsp prefetch` share, and what is left of the argv.
+pub fn fetch_flags(argv: &[String]) -> (bool, crate::store::hash::HashAlgo, Vec<String>) {
+    let (mut unpack, mut algo) = (false, crate::store::hash::HashAlgo::Sha256);
+    let mut rest: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < argv.len() {
+        let s = argv[i].as_str();
+        let mut next = || {
+            i += 1;
+            value(argv, i, s).clone()
+        };
+        match s {
+            "--unpack" => unpack = true,
+            "--hash-type" => {
+                let v = next();
+                algo = crate::store::hash::HashAlgo::parse(&v)
+                    .unwrap_or_else(|| arg_error(format!("unknown hash algorithm '{v}'")));
+            }
+            s => rest.push(s.to_string()),
+        }
+        i += 1;
+    }
+    (unpack, algo, rest)
+}
+
+/// A URL or an installable becomes a hash: the whole of both frontends past
+/// their own flags.
+pub fn fetch(
+    unpack: bool,
+    algo: crate::store::hash::HashAlgo,
+    rest: Vec<String>,
+    json: bool,
+) -> i32 {
+    let Some(at) = rest.iter().position(|s| is_url(s)) else {
+        if rest.is_empty() {
+            arg_error("nothing to fetch: give a URL, -E EXPR, FILE or FLAKEREF#ATTR")
+        }
+        if unpack {
+            arg_error("--unpack applies to a URL; a derivation says how it is hashed")
+        }
+        let a = parse_eval_args(&rest);
+        return crate::cli::run_parallel(run_for(&a), move |ev, _| hash_of_drv(ev, a, json));
+    };
+    let mut rest = rest;
+    let url = rest.remove(at);
+    // what is left are flags only (--log-format, --show-trace, …)
+    parse_eval_args(&rest);
+    match crate::api::fetch::url_hash(&url, unpack, algo) {
+        Ok(h) => hash_line(json, &h.to_sri(), "url", &url),
+        Err(e) => e.report(),
+    }
+}
+
+fn op_fetch(argv: &[String]) -> i32 {
+    let (unpack, algo, rest) = fetch_flags(argv);
+    fetch(unpack, algo, rest, true)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_url_is_the_positional_fetch_takes_itself() {
+        assert!(super::is_url("file:///tmp/a.tar.gz"));
+        assert!(super::is_url("https://example.org/a.tar.gz"));
+        assert!(!super::is_url("github:numtide/treefmt"));
+        assert!(!super::is_url("./default.nix"));
+    }
 }

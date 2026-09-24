@@ -4,6 +4,7 @@
 //! lists the whole surface.
 
 pub mod build;
+pub mod fetch;
 pub mod installable;
 pub mod render;
 pub mod run;
