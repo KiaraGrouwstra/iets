@@ -119,7 +119,7 @@ Methods on `Eval` may evaluate, intern a name or allocate.
 | Attribute count | `Value::attrs_len` |
 | Attribute by name | `Eval::attr(v, name)` (unforced), `Eval::has_attr(v, name)` |
 | Attribute by index | `Eval::attr_at(v, i) -> Option<(name, value)>` |
-| Call a function | `Eval::call(f, arg)` |
+| Call a function | `Eval::call(f, arg)`; `Eval::apply(f, arg)` for a thunk |
 | Construct | `Eval::int`, `float`, `boolean`, `null`, `string`, `path`, `list`, `attrs` |
 | Errors | `eval::EvalResult<T>`, reported with `api::report` |
 
@@ -159,7 +159,8 @@ names it answers to.
 | `nix_get_attr_byname`, `nix_has_attr_byname` | `Eval::attr`, `Eval::has_attr` |
 | `nix_get_attr_byidx_lazy`, `nix_get_attr_name_byidx` | `Eval::attr_at` |
 | `nix_value_force`, `nix_value_force_deep` (nix_api_expr.h) | `Eval::force`, `Eval::force_deep` |
-| `nix_value_call` (nix_api_expr.h), `nix_init_apply` | `Eval::call` |
+| `nix_value_call` (nix_api_expr.h) | `Eval::call` |
+| `nix_init_apply` | `Eval::apply` |
 | `nix_init_int`, `_float`, `_bool`, `_null`, `_string`, `_path_string` | `Eval::int`, `float`, `boolean`, `null`, `string`, `path` |
 | `nix_make_list_builder` + `nix_make_list` | `Eval::list(&[Value])` |
 | `nix_make_bindings_builder` + `nix_make_attrs` | `Eval::attrs(&[(name, Value)])` |
