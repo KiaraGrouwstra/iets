@@ -7,10 +7,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use super::{Argv, Common, Root, fallback, is_unsupported};
+use crate::api::installable;
 use crate::build::render::Style;
 use crate::build::upload::PlanUpload;
 use crate::build::{Dispatcher, Target as BuildTarget};
-use crate::api::installable;
 use crate::cli::{abs_path, auto_args, cwd, report};
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::remote::plan::Plan;

@@ -109,6 +109,7 @@ fn main() {
             "eval-jobs" => cli::jobs::cmd_eval_jobs(&rest),
             "fast-build" => cli::fastbuild::cmd_fast_build(&rest),
             "print-dev-env" => cli::devenv::cmd_print_dev_env(&rest),
+            "plumbing" => cli::plumbing::main(&rest),
             "prefetch" => cli::prefetch::cmd_prefetch(&rest),
             "search" => cli::search::cmd_search(&rest),
             _ => cli::eval::run_eval(cli::parse_eval_args(&rest)),

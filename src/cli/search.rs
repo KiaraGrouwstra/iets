@@ -249,7 +249,12 @@ fn cursors(ev: &mut Evaluator, s: &Search, cwd: &[u8]) -> EvalResult<Vec<(Word, 
         installable::Want::All,
     )?;
     Ok((found.into_iter())
-        .map(|f| (f.value, f.path.iter().map(|p| p.as_bytes().to_vec()).collect()))
+        .map(|f| {
+            (
+                f.value,
+                f.path.iter().map(|p| p.as_bytes().to_vec()).collect(),
+            )
+        })
         .collect())
 }
 

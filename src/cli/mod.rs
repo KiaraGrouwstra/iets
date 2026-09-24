@@ -13,6 +13,7 @@ pub mod fastbuild;
 pub mod help;
 pub mod jobs;
 pub mod parse;
+pub mod plumbing;
 pub mod prefetch;
 pub mod search;
 

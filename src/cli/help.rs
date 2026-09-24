@@ -18,6 +18,7 @@ commands:
   fast-build     evaluate and build a flake's checks (nix-fast-build)
   print-dev-env  print the environment of a flake's devShell, for direnv
   prefetch       print the hash of a URL or of a fixed-output derivation
+  plumbing       the machine-first operations (docs/plumbing.md)
   lint           list the lints and the levels a run would use
   parse          parse Nix files and print or check the syntax tree
   cache          sweep old cache entries, or dump a cache entry's read set
@@ -219,7 +220,7 @@ read set of a tracing-cache entry (docs/tracing-cache.md).
 ";
 
 pub const COMMANDS: &str =
-    "eval build search diff eval-jobs fast-build print-dev-env prefetch lint parse cache";
+    "eval build search diff eval-jobs fast-build print-dev-env prefetch plumbing lint parse cache";
 
 /// The native command being parsed, "ietsp" before the command word; unset
 /// under a classic name.
@@ -244,6 +245,7 @@ fn parts(cmd: Option<&str>) -> Option<[&'static str; 2]> {
         "fast-build" => [FAST_BUILD, ""],
         "print-dev-env" => [PRINT_DEV_ENV, ""],
         "prefetch" => [crate::cli::prefetch::HELP, INPUT],
+        "plumbing" => [crate::cli::plumbing::HELP, INPUT],
         "lint" => [LINT, ""],
         "parse" => [PARSE, ""],
         "cache" | "cache-dump" => [CACHE, ""],
