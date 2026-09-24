@@ -57,16 +57,22 @@ const DETERMINATE_VALUES: &[&str] = &[
     "session-id",
 ];
 
-static HUSHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// No Determinate warnings from this process: an `eval-jobs` worker, whose
-/// parent already gave them.
-pub fn hush() {
-    HUSHED.store(true, std::sync::atomic::Ordering::Relaxed);
+/// The Determinate settings a run saw, and whether each was warned about,
+/// plus `hushed`. The session owns it (`crate::session`).
+#[derive(Default)]
+pub struct Determinate {
+    hushed: std::sync::atomic::AtomicBool,
+    noted: std::sync::Mutex<Vec<(String, bool)>>,
 }
 
-/// The Determinate settings this process saw, and whether each was warned about.
-static NOTED: std::sync::Mutex<Vec<(String, bool)>> = std::sync::Mutex::new(Vec::new());
+/// No Determinate warnings from this run: an `eval-jobs` worker, whose
+/// parent already gave them.
+pub fn hush() {
+    crate::session::Session::current()
+        .determinate
+        .hushed
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+}
 
 /// Remembers `name` when it is a Determinate Nix setting. The warning waits
 /// for `warn_determinate`, so a later `--log-format` still applies to it, as
@@ -74,7 +80,12 @@ static NOTED: std::sync::Mutex<Vec<(String, bool)>> = std::sync::Mutex::new(Vec:
 pub fn note_determinate(name: &str) {
     let name = name.strip_prefix("extra-").unwrap_or(name);
     if DETERMINATE_BOOLS.contains(&name) || DETERMINATE_VALUES.contains(&name) {
-        let mut noted = NOTED.lock().unwrap_or_else(|e| e.into_inner());
+        let s = crate::session::Session::current();
+        let mut noted = s
+            .determinate
+            .noted
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if !noted.iter().any(|(n, _)| n == name) {
             noted.push((name.to_string(), false));
         }
@@ -84,8 +95,16 @@ pub fn note_determinate(name: &str) {
 /// `warning: 'NAME' is a Determinate Nix setting; ietsp ignores it` for each
 /// noted name not yet warned about, as a `determinate-setting` record.
 pub fn warn_determinate() {
-    let hushed = HUSHED.load(std::sync::atomic::Ordering::Relaxed);
-    let mut noted = NOTED.lock().unwrap_or_else(|e| e.into_inner());
+    let s = crate::session::Session::current();
+    let hushed = s
+        .determinate
+        .hushed
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let mut noted = s
+        .determinate
+        .noted
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     for (name, warned) in noted.iter_mut().filter(|(_, w)| !*w) {
         *warned = true;
         if !hushed {
@@ -486,7 +505,8 @@ mod tests {
         assert_eq!(determinate_flag("lazy-trees", none), Ok(false));
         note_determinate("extra-build-provenance-tags");
         note_determinate("max-jobs");
-        let noted = NOTED.lock().unwrap();
+        let s = crate::session::Session::current();
+        let noted = s.determinate.noted.lock().unwrap();
         assert!(noted.iter().any(|(n, _)| n == "build-provenance-tags"));
         assert!(!noted.iter().any(|(n, _)| n == "max-jobs"));
     }

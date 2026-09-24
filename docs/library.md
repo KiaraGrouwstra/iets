@@ -15,9 +15,10 @@ module it belongs to) and let `cli` call it there.
 
 | What | Where |
 |:---|:---|
-| Create an evaluator | `eval::Evaluator::new()` |
+| Create an evaluator | `eval::Evaluator::new()`, `Evaluator::in_session(session, system, pure)` |
 | The state a run owns | `session::Session::new()`, `Session::enter()` (below) |
 | Environment settings | `Session::settings()`, `Session::load_settings(&opts)` (docs/settings.md) |
+| Where messages go | `Session::log.write_to(Box<dyn Write + Send>)`, `write_to_stderr()` |
 | Arguments of one evaluation | `api::EvalArgs` (`EvalArgs::new()` for the defaults) |
 | What to evaluate | `api::Input::{Expr, File, Flake}`, `api::ArgKind` for `--arg` |
 | `-I` entries, `NIX_PATH` | `api::parse_include`, `api::full_includes` |
@@ -25,7 +26,7 @@ module it belongs to) and let `cli` call it there.
 | Run on worker threads | `parallel::try_run(workers, ev, f)`; `parallel::default_workers()` |
 | Force a value | `Evaluator::force`, `force_deep`, `force_attrs` |
 | Print a value | `print::print_json`, `print::print_ambiguous`; `Evaluator::coerce_to_string` for `--raw` |
-| Report an error | `api::report(&Evaluator, &Error) -> i32`, the exit code; positions rewritten to local trees, text or a `--log-format internal-json` record (docs/cli.md) |
+| Report an error | `api::report_of(&Evaluator, &Error) -> log::Report` to render yourself; `api::report` sends it to the session log and gives the exit code (docs/cli.md) |
 | Error types | `eval::{Error, ErrorKind, EvalResult}`; `error::Error` for store and io |
 | Derivations this run created | `Evaluator::drv.drvs` (`StorePath -> builtins::derivation::DrvInfo`) |
 | A drv's attribute path and position | `DrvInfo::attr`, `DrvInfo::pos`; `DrvState::set_attr` records the walk |
@@ -44,9 +45,41 @@ module it belongs to) and let `cli` call it there.
 | Flake references | `api::flake_ref`, `flake::{eval_flake, eval_flake_value}` |
 | `eval-jobs` style walks | `jobs::run`, `jobs::Opts` |
 
+## What the host owns
+
+A `Session` holds everything a run used to keep in process-wide statics:
+the settings, where messages go, the input store, the nix.conf it read,
+the eval-jobs walk, the hash mismatches a build reported. Two sessions in
+one process are independent — different settings, different log
+destination, different mismatch list — so a host may run two evaluators
+side by side.
+
+The library never writes to stdout or stderr on its own. A session's log
+sink starts as nothing; `Session::log.write_to_stderr()` is what `ietsp`
+itself does. A host that renders its own errors uses `api::report_of` and
+leaves the sink unset. The library never exits either: it returns errors,
+and the frontend decides the exit code.
+
+An `Evaluator` keeps a handle to its session, so the code that has an
+evaluator reads `ev.session` — no lookup. The rest reaches
+`Session::current()`, the session this thread entered:
+
+```rust
+let session = ietsp::session::Session::new();
+session.load_settings(&[])?;            // ietsp.conf, optional
+let _entered = session.enter();         // for this thread
+let mut ev = Evaluator::new();          // adopts the session
+```
+
+`Evaluator::in_session(session, system, pure)` skips the thread-local
+altogether. Threads the library starts inherit the session of the thread
+that started them; a host that starts its own calls `Session::enter` on
+each, or `session::bind(f)`. A thread that entered none uses a fallback
+session that writes nowhere.
+
 ## Shape of a frontend
 
-1. Build an `EvalArgs`.
+1. Make a `Session`, enter it, and build an `EvalArgs`.
 2. `parallel::try_run(workers, Evaluator::new(), move |ev| …)`: everything
    inside runs as the main fiber, so `force` may park while helpers work.
 3. `api::evaluate(ev, args)` for the value, then force and print it, or

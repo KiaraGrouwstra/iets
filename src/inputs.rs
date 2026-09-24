@@ -74,50 +74,63 @@ pub fn locate(override_dir: Option<&str>) -> Option<PathBuf> {
     Some(base.join("inputs"))
 }
 
-/// The store this process uses, prepared on first use.
-pub fn root() -> Option<&'static Path> {
-    static ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
-    ROOT.get_or_init(|| {
-        let root = locate(None)?;
-        cachefs::prepare(&root, false);
-        Some(root)
-    })
-    .as_deref()
+/// The input store of one run: where it lives, the entries it opened, and
+/// what opening them cost. The session owns it (`crate::session`).
+#[derive(Default)]
+pub struct Store {
+    root: OnceLock<Option<PathBuf>>,
+    /// Entries opened, by store path base name. A spool is
+    /// content-addressed, so one open serves every read of that input; a
+    /// stored `None` records a name the store does not hold, so a miss is
+    /// asked once.
+    opened: Mutex<HashMap<String, Option<Arc<Entry>>>>,
+    entries: std::sync::atomic::AtomicUsize,
+    nanos: std::sync::atomic::AtomicU64,
+}
+
+fn session() -> Arc<crate::session::Session> {
+    crate::session::Session::current()
+}
+
+/// The store this run uses, prepared on first use.
+pub fn root() -> Option<PathBuf> {
+    session()
+        .inputs
+        .root
+        .get_or_init(|| {
+            let root = locate(None)?;
+            cachefs::prepare(&root, false);
+            Some(root)
+        })
+        .clone()
 }
 
 fn dir_of(name: &str) -> Option<PathBuf> {
     Some(root()?.join(name))
 }
 
-/// Entries this process opened, by store path base name. A spool is
-/// content-addressed, so one open serves every read of that input; a stored
-/// `None` records a name the store does not hold, so a miss is asked once.
-fn opened() -> &'static Mutex<HashMap<String, Option<Arc<Entry>>>> {
-    static OPEN: OnceLock<Mutex<HashMap<String, Option<Arc<Entry>>>>> = OnceLock::new();
-    OPEN.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
 /// What opening the entries of this run cost, for `--timings`: reading each
 /// index and decoding it is the one fixed cost the input store adds to an
 /// evaluation that `/nix/store` does not pay.
-static OPENED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-static OPEN_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
 pub fn report_timings() {
-    let n = OPENED.load(std::sync::atomic::Ordering::Relaxed);
+    use std::sync::atomic::Ordering::Relaxed;
+    let s = session();
+    let n = s.inputs.entries.load(Relaxed);
     if n > 0 {
         crate::errln!(
             "inputs: {n} entries opened, {:.3}s",
-            OPEN_NANOS.load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e9
+            s.inputs.nanos.load(Relaxed) as f64 / 1e9
         );
     }
 }
 
-/// The entry named `name`, opened once per process. An entry whose index does
+/// The entry named `name`, opened once per run. An entry whose index does
 /// not decode, or whose spool is not the size the index recorded, is wiped: the
 /// next evaluation fetches it again.
 pub fn open(name: &str) -> Option<Arc<Entry>> {
-    if let Some(hit) = opened().lock().unwrap().get(name) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let s = session();
+    if let Some(hit) = s.inputs.opened.lock().unwrap().get(name) {
         return hit.clone();
     }
     let t0 = std::time::Instant::now();
@@ -134,13 +147,13 @@ pub fn open(name: &str) -> Option<Arc<Entry>> {
         }
     });
     if found.is_some() {
-        OPENED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        OPEN_NANOS.fetch_add(
-            t0.elapsed().as_nanos() as u64,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        s.inputs.entries.fetch_add(1, Relaxed);
+        s.inputs
+            .nanos
+            .fetch_add(t0.elapsed().as_nanos() as u64, Relaxed);
     }
-    opened()
+    s.inputs
+        .opened
         .lock()
         .unwrap()
         .entry(name.to_string())
@@ -199,7 +212,7 @@ pub fn fetch_lock(name: &str, on_wait: impl FnOnce()) -> Option<cachefs::WriteLo
 
 /// `open`, past a miss this process recorded earlier.
 pub fn reopen(name: &str) -> Option<Arc<Entry>> {
-    opened().lock().unwrap().remove(name);
+    session().inputs.opened.lock().unwrap().remove(name);
     open(name)
 }
 
@@ -215,14 +228,16 @@ pub fn store(name: &str, staged: Staged, entry: Entry) -> Option<Arc<Entry>> {
         .ok()?;
     let root = root()?;
     {
-        let _lock = cachefs::write_lock(root)?;
+        let _lock = cachefs::write_lock(&root)?;
         if !dir.exists() && std::fs::rename(staged.dir(), &dir).is_err() {
             return None;
         }
     }
-    cachefs::maybe_sweep(root, cachefs::Shape::StoreEntries, false);
+    cachefs::maybe_sweep(&root, cachefs::Shape::StoreEntries, false);
     let entry = Arc::new(entry);
-    opened()
+    session()
+        .inputs
+        .opened
         .lock()
         .unwrap()
         .insert(name.to_string(), Some(entry.clone()));

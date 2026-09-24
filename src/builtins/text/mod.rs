@@ -49,7 +49,8 @@ pub(super) fn current_time(ev: &mut Evaluator, _args: &[Word], _pos: Pos) -> Eva
 // ---- regular expressions ------------------------------------------------------
 
 /// One ERE, or why Nix would reject it; the cache keeps the rejection so a
-/// repeated bad pattern is not re-parsed.
+/// repeated bad pattern is not re-parsed. The cache is per thread and holds
+/// no run state: a pattern compiles the same way in every session.
 type CompiledRegex = Result<regex::Prog, regex::Error>;
 
 thread_local! {

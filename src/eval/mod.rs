@@ -230,6 +230,19 @@ impl Evaluator {
         Evaluator::with(DEFAULT_SYSTEM, false)
     }
 
+    /// The same as `with`, in `session` instead of the one this thread
+    /// entered: a host that keeps one session per evaluator needs no
+    /// thread-local at all (docs/library.md).
+    pub fn in_session(
+        session: std::sync::Arc<crate::session::Session>,
+        system: &str,
+        pure: bool,
+    ) -> Evaluator {
+        let mut ev = Evaluator::with(system, pure);
+        ev.session = session;
+        ev
+    }
+
     /// `system` and `pure-eval` shape the builtins, so they are fixed here,
     /// before `builtins::install` (docs/pure-eval.md).
     pub fn with(system: &str, pure: bool) -> Evaluator {

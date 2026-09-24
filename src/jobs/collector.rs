@@ -13,7 +13,7 @@
 use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Condvar, Mutex};
 
 use super::instantiate::Instantiator;
@@ -31,9 +31,6 @@ pub const MSG_EXIT: &str = "exit";
 pub const MSG_DO: &str = "do ";
 
 pub type Out = Arc<Mutex<Box<dyn Write + Send>>>;
-
-/// Worker processes spawned so far: `--workers` plus one per restart.
-pub static SPAWNED: AtomicUsize = AtomicUsize::new(0);
 
 pub fn write_out(out: &Out, line: &[u8]) {
     let mut o = out.lock().unwrap();
@@ -160,7 +157,10 @@ struct Proc {
 
 impl Proc {
     fn spawn(args: &[String]) -> Result<Proc> {
-        SPAWNED.fetch_add(1, Ordering::Relaxed);
+        crate::session::Session::current()
+            .jobs
+            .spawned
+            .fetch_add(1, Ordering::Relaxed);
         let exe = std::env::current_exe().map_err(|e| Error::io("current_exe", e))?;
         let mut child = Command::new(exe)
             .arg("eval-jobs")

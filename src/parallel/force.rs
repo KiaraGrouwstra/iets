@@ -149,7 +149,10 @@ pub fn bail_requested(ev: &Evaluator) -> bool {
 }
 
 /// Position of the thunk the main fiber forced last (diagnostics: the
-/// `IETSP_PAR_STATS=2` timeline samples it).
+/// `IETSP_PAR_STATS=2` timeline samples it). These three and `EFFECT_BAILS`
+/// stay process-wide: they are sampled on the force path, where a session
+/// lookup would cost more than the diagnostic is worth, and two sessions
+/// would only blur one debug line.
 pub static MAIN_POS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static SAMPLE_POS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 pub static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();

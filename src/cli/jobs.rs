@@ -309,7 +309,10 @@ fn jobs_summary(
         if j.max_memory > 0 {
             format!(
                 "{} worker processes spawned",
-                crate::jobs::collector::SPAWNED.load(std::sync::atomic::Ordering::Relaxed)
+                crate::session::Session::current()
+                    .jobs
+                    .spawned
+                    .load(std::sync::atomic::Ordering::Relaxed)
             )
         } else {
             format!("peak RSS {} MB", crate::jobs::collector::peak_rss_mb())

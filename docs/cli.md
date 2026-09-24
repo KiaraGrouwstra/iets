@@ -2,7 +2,9 @@
 
 Every error goes through one reporter (`src/log.rs`). It prints Nix's
 plain text, or with `--log-format internal-json` one `@nix` JSON record.
-It also sets the exit code. Humans read the text. Programs read the
+It also sets the exit code. The `ietsp` command sends it to stderr; a
+library host sets its own sink, or none, on its `Session`
+(docs/library.md). Humans read the text. Programs read the
 record and the exit code. Agents read the `hint`.
 
 ## Error codes
@@ -204,7 +206,7 @@ the records of one run.
 This is an ietsp extension: Nix 2.34.8 has no such field. The key and the
 default value have the shape Determinate Nix uses (`sid`, a UUIDv7).
 
-- By default each process makes a new UUIDv7, for example
+- By default each session makes a new UUIDv7, for example
   `019e037b-f603-7443-8071-cfd8585ec8c6`. It starts with the time in
   milliseconds, so ids sort by start time.
 - `IETSP_SESSION_ID=ID` sets it. Use this to give several invocations one

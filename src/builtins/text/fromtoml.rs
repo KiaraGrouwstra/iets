@@ -5,17 +5,17 @@
 //! crate implements 1.1 and has no switch for the older spec. [`reject_1_1`]
 //! and the seconds check in [`convert`] take the 1.1-only syntax back out.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 
 use crate::eval::{ErrorKind, EvalResult, Evaluator, Pos, bail};
 use crate::runtime::*;
 use crate::syntax::symbol::Sym;
 
-static PARSE_TOML_TIMESTAMPS: AtomicBool = AtomicBool::new(false);
-
 /// The `parse-toml-timestamps` experimental feature.
 pub fn set_parse_toml_timestamps(on: bool) {
-    PARSE_TOML_TIMESTAMPS.store(on, Ordering::Relaxed);
+    crate::session::Session::current()
+        .toml_timestamps
+        .store(on, Ordering::Relaxed);
 }
 
 pub fn from_toml(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
@@ -182,7 +182,7 @@ fn convert(ev: &mut Evaluator, v: ::toml::Value, pos: Pos) -> EvalResult<Word> {
                     "while parsing TOML: a time without seconds is TOML 1.1"
                 );
             }
-            if !PARSE_TOML_TIMESTAMPS.load(Ordering::Relaxed) {
+            if !ev.session.toml_timestamps.load(Ordering::Relaxed) {
                 bail!(
                     ErrorKind::Eval,
                     pos,

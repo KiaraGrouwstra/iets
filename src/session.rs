@@ -18,6 +18,19 @@ use crate::settings::Settings;
 pub struct Session {
     pub log: Log,
     settings: std::sync::OnceLock<Settings>,
+    /// The Determinate Nix settings this run saw (`crate::config`).
+    pub determinate: crate::config::Determinate,
+    /// The input store this run reads flake inputs from (`crate::inputs`).
+    pub inputs: crate::inputs::Store,
+    /// The `eval-jobs` walk of this run (`crate::jobs`).
+    pub jobs: crate::jobs::Run,
+    /// nix.conf, read once per run: it cannot change under an evaluation.
+    pub nix_conf: std::sync::OnceLock<crate::config::Config>,
+    /// Store path to local tree, for the commands that build the map while
+    /// the evaluation is live (`crate::provenance`).
+    pub source_map: std::sync::OnceLock<crate::provenance::SourceMap>,
+    /// The `parse-toml-timestamps` experimental feature.
+    pub toml_timestamps: std::sync::atomic::AtomicBool,
 }
 
 thread_local! {

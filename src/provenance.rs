@@ -6,7 +6,6 @@
 //! the real nix sees the plain store paths.
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
 
 use crate::eval::{Evaluator, Pos};
 use crate::store::path::STORE_DIR;
@@ -154,9 +153,10 @@ impl SourceMap {
 /// The map for the commands that cannot build one at a known point: the
 /// eval-jobs walk and `report`, which both run while the evaluation is live.
 /// Built on first use, so a tree copied later is not in it.
-fn lazy_map(ev: &Evaluator) -> &'static SourceMap {
-    static MAP: OnceLock<SourceMap> = OnceLock::new();
-    MAP.get_or_init(|| SourceMap::from_eval(ev))
+fn lazy_map(ev: &Evaluator) -> &SourceMap {
+    ev.session
+        .source_map
+        .get_or_init(|| SourceMap::from_eval(ev))
 }
 
 /// `file:line:col` of `pos`, the local path when the file is a copy of one.

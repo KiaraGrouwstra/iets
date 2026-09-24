@@ -48,6 +48,7 @@ pub struct Opts {
     pub provenance: bool,
 }
 
+#[derive(Clone, Copy)]
 struct Syms {
     type_: Sym,
     meta: Sym,
@@ -59,6 +60,7 @@ struct Syms {
     glob_constituents: Sym,
 }
 
+#[derive(Clone, Copy)]
 struct Config {
     opts: Opts,
     syms: Syms,
@@ -69,28 +71,45 @@ struct Config {
     apply: Option<u64>,
 }
 
-static CONFIG: OnceLock<Config> = OnceLock::new();
-
-/// Path hash and depth of every set the walk fanned out, by address, so
-/// a helper handed a range of its cells can apply the chunk rule.
-static SETS: Mutex<Option<HashMap<u64, (u64, u32)>>> = Mutex::new(None);
+/// The `eval-jobs` walk of one run. The session owns it
+/// (`crate::session`), so two walks in one process do not share it.
+#[derive(Default)]
+pub struct Run {
+    config: OnceLock<Config>,
+    /// Path hash and depth of every set the walk fanned out, by address, so
+    /// a helper handed a range of its cells can apply the chunk rule.
+    sets: Mutex<Option<HashMap<u64, (u64, u32)>>>,
+    /// Worker processes spawned so far: `--workers` plus one per restart.
+    pub spawned: std::sync::atomic::AtomicUsize,
+}
 
 fn remember_set(a: &'static AttrsObj, hash: u64, depth: u32) {
-    SETS.lock()
+    crate::session::Session::current()
+        .jobs
+        .sets
+        .lock()
         .unwrap()
         .get_or_insert_with(HashMap::new)
         .insert(a as *const AttrsObj as u64, (hash, depth));
 }
 
 fn recall_set(a: &'static AttrsObj) -> Option<(u64, u32)> {
-    SETS.lock()
+    crate::session::Session::current()
+        .jobs
+        .sets
+        .lock()
         .unwrap()
         .as_ref()
         .and_then(|m| m.get(&(a as *const AttrsObj as u64)).copied())
 }
 
-fn config() -> &'static Config {
-    CONFIG.get().expect("eval-jobs config")
+/// A copy, not a reference: the callers hold it across a `&mut Evaluator`.
+fn config() -> Config {
+    *crate::session::Session::current()
+        .jobs
+        .config
+        .get()
+        .expect("eval-jobs config")
 }
 
 /// Cells per helper task. A leaf costs a whole build graph, so batches
@@ -120,7 +139,7 @@ pub fn configure(ev: &mut Evaluator, opts: Opts, auto_args: Word, apply: Option<
         constituents: ev.sym(b"constituents"),
         glob_constituents: ev.sym(b"_hydraGlobConstituents"),
     };
-    let _ = CONFIG.set(Config {
+    let _ = crate::session::Session::current().jobs.config.set(Config {
         opts,
         syms,
         auto_args: auto_args.0,

@@ -424,7 +424,8 @@ impl LazyStore {
     fn get(&mut self) -> Option<&mut Connection> {
         if !self.tried {
             self.tried = true;
-            match Transport::parse(&nix_conf().store()) {
+            let session = crate::session::Session::current();
+            match Transport::parse(&nix_conf(&session).store()) {
                 Some(Transport::Grpc(_)) | None => {}
                 // A daemon that is not there is not an error any more: the input
                 // store holds the fetched inputs and evaluation writes no store.
@@ -527,9 +528,8 @@ fn adopt(ev: &mut Evaluator, sp: &StorePath, entry: &crate::inputs::Entry) {
 
 /// nix.conf, read once: `store` for the eval store and `access-tokens` for the
 /// forge headers. The file cannot change under a running evaluation.
-fn nix_conf() -> &'static crate::config::Config {
-    static CFG: std::sync::OnceLock<crate::config::Config> = std::sync::OnceLock::new();
-    CFG.get_or_init(|| {
+fn nix_conf(s: &crate::session::Session) -> &crate::config::Config {
+    s.nix_conf.get_or_init(|| {
         crate::config::Config::read(&[]).unwrap_or_else(|_| crate::config::Config::empty())
     })
 }
@@ -640,7 +640,7 @@ fn fetch_tarball(
 ) -> EvalResult<std::sync::Arc<crate::inputs::Entry>> {
     let name = input_name(ev, attrs);
     let fail = |e: String| Error::boxed(ErrorKind::Eval, e, pos);
-    let (url, headers) = tarball_url(nix_conf(), attrs)
+    let (url, headers) = tarball_url(nix_conf(&ev.session), attrs)
         .map_err(|e| fail(format!("ietsp: cannot fetch input '{name}': {e}")))?;
     let expected = str_attr(attrs, "narHash")
         .and_then(|h| parse_nar_hash(h).ok())
@@ -661,7 +661,7 @@ fn fetch_tarball(
     })?;
     let mut spool = crate::flake::spool::spool_file(staged.dir())
         .map_err(|e| fail(format!("ietsp: cannot fetch input '{name}': {e}")))?;
-    crate::flake::http::Limits::new(nix_conf())
+    crate::flake::http::Limits::new(nix_conf(&ev.session))
         .and_then(|l| crate::flake::http::get_decompressed(&url, &headers, l, &mut spool))
         .map_err(|e| fail(format!("ietsp: cannot fetch input '{name}': {e}")))?;
     let tree = crate::flake::spool::Tree::index(spool)

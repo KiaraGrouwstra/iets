@@ -111,6 +111,7 @@ pub fn write_atomic(dir: &Path, name: &str, tag: u64, bytes: &[u8]) -> io::Resul
 }
 
 /// A counter that keeps two writers of one name inside one process apart.
+/// Process-wide by nature: the names it disambiguates are process-wide.
 pub fn tag() -> u64 {
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)

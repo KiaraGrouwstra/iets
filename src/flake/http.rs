@@ -158,7 +158,8 @@ fn resolve(base: &str, location: &str) -> String {
 }
 
 /// One rustls client config for the process: the platform's CA store, which is
-/// what curl uses too.
+/// what curl uses too. Process-wide on purpose: it is immutable, costly to
+/// build, and holds no run state, so two sessions may share it.
 fn tls() -> Result<Arc<rustls::ClientConfig>> {
     static TLS: OnceLock<std::result::Result<Arc<rustls::ClientConfig>, String>> = OnceLock::new();
     TLS.get_or_init(|| {
