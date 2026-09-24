@@ -2,9 +2,9 @@
 
 The crate is a library with a thin `ietsp` binary on top. A frontend —
 another CLI, an editor server, a build service — links the library and
-calls the entry points below. `examples/eval.rs`, `examples/build.rs` and
-`examples/drv_info.rs` are three working frontends; they use `pub` items
-only and never touch `ietsp::cli`.
+calls the entry points below. `examples/eval.rs`, `examples/build.rs`,
+`examples/drv_info.rs` and `examples/value.rs` are working frontends; they
+use `pub` items only and never touch `ietsp::cli`.
 
 **Rule: frontends never reach into evaluator internals.** No `cli`
 module, no private field, no copied helper. When something a frontend
@@ -52,3 +52,90 @@ module it belongs to) and let `cli` call it there.
    `drv_roots` + `plan` + `build` for a build.
 4. Report errors with `api::report`, which rewrites store paths and
    positions to the local trees they came from.
+
+## The value API
+
+`api::value` is the safe way to look at what an evaluation produced.
+`examples/value.rs` is a working frontend on it.
+
+`value::Eval<'e>` wraps a `&'e mut Evaluator`. `value::Value<'e>` is one
+value of that evaluator: a `Copy` machine word with no methods that reach
+into the arena on their own. The shared `'e` is the safety story — a
+`Value<'e>` only exists while the evaluator is borrowed, so it cannot
+outlive the arena it points into. `Value` is invariant in `'e`, so it
+never widens to another borrow. Nothing in the surface exposes
+`runtime::Word`, an arena pointer or a tag.
+
+Methods on `Value` read an already-forced value and need nothing else.
+Methods on `Eval` may evaluate, intern a name or allocate.
+
+| What | Where |
+|:---|:---|
+| Borrow an evaluator | `value::Eval::new(&mut Evaluator)` |
+| The evaluator back, for the rest of the library | `Eval::evaluator()` |
+| Evaluate an expression | `Eval::eval_expr(src, base_dir)` |
+| Evaluate an `EvalArgs` | `Eval::evaluate(args)` |
+| Force to weak head normal form | `Eval::force(v)` |
+| Force through lists and sets | `Eval::force_deep(v)` |
+| The type | `Value::kind() -> ValueKind`, `ValueKind::type_of()` |
+| Integer, float, Boolean, null | `Value::as_int`, `as_float`, `as_bool`, `is_null` |
+| String bytes and its context | `Value::as_bytes`, `Value::context() -> impl ExactSizeIterator<Item = ContextElem>` |
+| Path | `Value::as_path` |
+| List | `Value::list_len`, `Value::list_get(i)` (unforced) |
+| Attribute count | `Value::attrs_len` |
+| Attribute by name | `Eval::attr(v, name)` (unforced), `Eval::has_attr(v, name)` |
+| Attribute by index | `Eval::attr_at(v, i) -> Option<(name, value)>` |
+| Call a function | `Eval::call(f, arg)` |
+| Construct | `Eval::int`, `float`, `boolean`, `null`, `string`, `path`, `list`, `attrs` |
+| Errors | `eval::EvalResult<T>`, reported with `api::report` |
+
+Notes:
+
+- A getter on an unforced value reports `ValueKind::Thunk` and returns
+  `None`; it never panics and never forces. Force first.
+- `as_bytes`, `as_path` and the attribute names borrow the arena: no copy.
+  The constructors do copy — `string` and `path` copy their bytes in, and
+  `list` and `attrs` gather a temporary before the arena copy. Construction
+  is the cold path; nothing on a walk allocates.
+- `attr_at` index order is the evaluator's internal symbol order, not
+  alphabetical, exactly as `nix_get_attr_byidx` warns. Sort the names
+  yourself when the order must be reproducible. On a `//` result the first
+  `attr_at` flattens the union, which copies it once.
+- An evaluator's arena is never freed, so a value of one evaluator passed
+  to a *different* `Eval` does not dangle; it reads names through the wrong
+  symbol table. The lifetime does not rule that out (two borrows can share
+  one region). Keep one `Eval` per evaluator.
+- External values (`NIX_TYPE_EXTERNAL`) do not exist in ietsp, so
+  `ValueKind` has no `External`.
+
+### Mapping to Nix's C API
+
+The later C ABI stage wraps this surface; these are the `nix_api_value.h`
+names it answers to.
+
+| `nix_api_value.h` | `api::value` |
+|:---|:---|
+| `ValueType`, `nix_get_type` | `ValueKind`, `Value::kind` |
+| `nix_get_typename` | `ValueKind::type_of` |
+| `nix_get_int`, `nix_get_float`, `nix_get_bool` | `Value::as_int`, `as_float`, `as_bool` |
+| `nix_get_string` | `Value::as_bytes` (bytes and length, no copy) |
+| `nix_get_path_string` | `Value::as_path` |
+| `nix_get_list_size`, `nix_get_list_byidx` | `Value::list_len`, `Value::list_get` |
+| `nix_get_attrs_size` | `Value::attrs_len` |
+| `nix_get_attr_byname`, `nix_has_attr_byname` | `Eval::attr`, `Eval::has_attr` |
+| `nix_get_attr_byidx_lazy`, `nix_get_attr_name_byidx` | `Eval::attr_at` |
+| `nix_value_force`, `nix_value_force_deep` (nix_api_expr.h) | `Eval::force`, `Eval::force_deep` |
+| `nix_value_call` (nix_api_expr.h), `nix_init_apply` | `Eval::call` |
+| `nix_init_int`, `_float`, `_bool`, `_null`, `_string`, `_path_string` | `Eval::int`, `float`, `boolean`, `null`, `string`, `path` |
+| `nix_make_list_builder` + `nix_make_list` | `Eval::list(&[Value])` |
+| `nix_make_bindings_builder` + `nix_make_attrs` | `Eval::attrs(&[(name, Value)])` |
+| `EvalState *` | `Eval<'e>` |
+| `nix_value *` | `Value<'e>` |
+| `nix_value_incref`/`decref`, `nix_gc_*` | nothing: the arena is never freed |
+| `nix_get_external`, `nix_init_external` | nothing: no external values |
+| `nix_string_realise`, `nix_alloc_primop`, `nix_register_primop` | not yet |
+
+The string context has no C counterpart in that header beyond
+`nix_string_realise`; `ContextElem` carries the four element kinds ietsp
+keeps (`Opaque`, `DrvDeep`, `Built`, and the `Impure` marker a path
+coercion leaves, which `builtins.getContext` does not show).
