@@ -98,7 +98,7 @@ impl Sched {
                 Some(Msg::Cached(_)) => return Ok(Answer::Cached),
                 Some(Msg::Unplaceable(u)) => {
                     if deadline.is_none() {
-                        eprintln!(
+                        crate::errln!(
                             "{drv}: {}, waiting up to {}s for a worker",
                             u.reason,
                             self.grace.as_secs()
@@ -199,7 +199,7 @@ async fn pump(
         if give_up.is_some_and(|g| now + pause > g) {
             return fail(&state, cfg.status_error(&status, "Schedule").to_string());
         }
-        eprintln!(
+        crate::errln!(
             "scheduler at {}: {}, reconnecting",
             cfg.authority,
             first_line(status.message())

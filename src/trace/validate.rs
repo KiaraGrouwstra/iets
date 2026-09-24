@@ -179,7 +179,7 @@ pub fn validate(obs: &mut [Obs], threads: usize) -> Result<Report, Mismatch> {
     let threads = threads.clamp(1, obs.len().max(1));
     std::thread::scope(|s| {
         for _ in 0..threads {
-            s.spawn(|| {
+            s.spawn(crate::session::bind(|| {
                 let mut mine = Vec::new();
                 loop {
                     if failed.load(Ordering::Relaxed) {
@@ -200,7 +200,7 @@ pub fn validate(obs: &mut [Obs], threads: usize) -> Result<Report, Mismatch> {
                     }
                 }
                 refreshes.lock().unwrap().extend(mine);
-            });
+            }));
         }
     });
     if failed.load(Ordering::Relaxed) {

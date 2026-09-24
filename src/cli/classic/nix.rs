@@ -406,7 +406,7 @@ fn prefetch_inputs_main(argv: &[String], rest: &[String]) -> i32 {
     let failed = std::sync::atomic::AtomicBool::new(false);
     std::thread::scope(|s| {
         for _ in 0..threads {
-            s.spawn(|| {
+            s.spawn(crate::session::bind(|| {
                 while let Some((name, hash, sp, attrs)) = queue.lock().unwrap().next() {
                     let mut ev = Evaluator::with(&system, true);
                     ev.input_names.insert(hash, name);
@@ -415,7 +415,7 @@ fn prefetch_inputs_main(argv: &[String], rest: &[String]) -> i32 {
                         failed.store(true, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
-            });
+            }));
         }
     });
     i32::from(failed.into_inner())

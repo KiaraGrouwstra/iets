@@ -738,8 +738,7 @@ fn fetch_with_nix(full: &str, name: &str, attrs: &Attrs, pos: Pos) -> EvalResult
                 pos,
             )
         })?;
-    use std::io::Write;
-    let _ = std::io::stderr().write_all(&out.stderr);
+    crate::session::Session::current().log.err(&out.stderr);
     if !out.status.success() {
         let msg = format!(
             "ietsp: nix could not fetch input '{name}' ({})",
@@ -994,7 +993,7 @@ mod tests {
             .unwrap();
         let subprocess = t.elapsed();
         assert!(!status.success());
-        eprintln!(
+        crate::errln!(
             "connect: {:.3}s, QueryValidPaths(substitute): {:.3}s, nix build --no-link: {:.3}s",
             connect.as_secs_f64(),
             op.as_secs_f64(),

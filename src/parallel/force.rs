@@ -604,7 +604,7 @@ fn import_raw(ev: &mut Evaluator, args: &[Word], _pos: Pos) -> EvalResult<Word> 
         // SAFETY: this fiber owns its slot; the borrow ends with the
         // statement and nothing else borrows the slot here.
         let w = unsafe { slot_mut(ev) }.worker().idx;
-        eprintln!(
+        crate::errln!(
             "import t={}ms {}us main={} w{} {}",
             START.get().map_or(0, |s| s.elapsed().as_millis()),
             t0.elapsed().as_micros(),

@@ -283,7 +283,7 @@ pub fn add_multiple(c: &mut Client, objects: &[&Object], t: &mut Timings) -> Res
                 if !gone_away(&s) || Instant::now() + pause > deadline {
                     return Err(c.status_error(&s, "AddMultipleToStore"));
                 }
-                eprintln!("{}: {}, retrying", c.cfg.authority, first_line(s.message()));
+                crate::errln!("{}: {}, retrying", c.cfg.authority, first_line(s.message()));
                 std::thread::sleep(pause);
                 pause = (pause * 2).min(Duration::from_secs(4));
             }
@@ -308,7 +308,7 @@ fn upload(
         let producer = {
             let tx = tx.clone();
             let sent = Arc::clone(&sent);
-            s.spawn(move || -> io::Result<()> {
+            s.spawn(crate::session::bind(move || -> io::Result<()> {
                 // store.cc sends the flags alone first; the zstd stream
                 // follows in its own messages.
                 tx.blocking_send(proto::AddMultipleChunk {
@@ -328,7 +328,7 @@ fn upload(
                     write_object(&mut enc, o)?;
                 }
                 enc.finish()?.flush()
-            })
+            }))
         };
         drop(tx);
         let reply = rt.block_on(async {
@@ -530,7 +530,7 @@ fn build_derivation(
             | tonic::Code::Unavailable
             | tonic::Code::Unknown
             | tonic::Code::Internal => {
-                eprintln!(
+                crate::errln!(
                     "{}: {}, asking the scheduler again",
                     job.drv_path,
                     first_line(s.message())

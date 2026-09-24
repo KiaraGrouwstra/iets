@@ -77,7 +77,7 @@ pub fn run<R: Send>(
             let tx = tx.clone();
             let run = &run;
             let wake = &wake;
-            s.spawn(move || {
+            s.spawn(crate::session::bind(move || {
                 while let Some(i) = next(run, wake) {
                     let blocked = run.lock().unwrap().blocked[i];
                     let res = match blocked {
@@ -86,7 +86,7 @@ pub fn run<R: Send>(
                     };
                     finish(run, wake, dependants, work.ok, i, res);
                 }
-            });
+            }));
         }
         drop(tx);
         for ev in rx {

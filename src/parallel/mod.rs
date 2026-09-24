@@ -99,7 +99,7 @@ pub fn try_run<R: Send + 'static>(
             ev.lints.flush();
             if ev.session.settings().par_stats >= 2 {
                 for i in 0..ev.files.len() {
-                    eprintln!(
+                    crate::errln!(
                         "file{i} base={} = {}",
                         ev.files[i].base,
                         String::from_utf8_lossy(&ev.files[i].path)
@@ -112,7 +112,7 @@ pub fn try_run<R: Send + 'static>(
                 // over, so nothing else reads it.
                 let slot = unsafe { &*slot };
                 let rt = slot.runtime();
-                eprintln!(
+                crate::errln!(
                     "parallel: fibers={} tasks={} effect-bails={} steals={} parks={} fiber-parks={} main-parks={} main-wait={}ms busy={}ms deadlocks={} main-stack-resident={}K",
                     rt.stats_fibers(),
                     rt.stat_tasks(),

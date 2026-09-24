@@ -26,6 +26,36 @@ pub struct Log {
     next_activity: AtomicU64,
     mismatches: Mutex<Vec<(String, String)>>,
     want_mismatch: Mutex<Option<String>>,
+    /// Where messages go. `None` writes nowhere: a library says nothing
+    /// unless the host asked for it. `ietsp` points it at stderr.
+    err: Mutex<Option<Box<dyn Write + Send>>>,
+}
+
+impl Log {
+    /// Sends every message to `w`.
+    pub fn write_to(&self, w: Box<dyn Write + Send>) {
+        *self.err.lock().unwrap_or_else(|e| e.into_inner()) = Some(w);
+    }
+
+    /// What `ietsp` itself does, and what a host that wants Nix's own
+    /// behaviour does.
+    pub fn write_to_stderr(&self) {
+        self.write_to(Box::new(std::io::stderr()));
+    }
+
+    /// `bytes` as they are, for output a caller already formatted.
+    pub fn err(&self, bytes: &[u8]) {
+        if let Some(w) = self.err.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            let _ = w.write_all(bytes);
+        }
+    }
+
+    /// One line, in place of `eprintln!`.
+    pub fn errln(&self, text: &str) {
+        if let Some(w) = self.err.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            let _ = writeln!(w, "{text}");
+        }
+    }
 }
 
 fn cur() -> Arc<Session> {
@@ -134,7 +164,9 @@ impl Log {
                     Ok(w) => Some(Mutex::new(w)),
                     Err(e) => {
                         let e = crate::error::io_text(&e);
-                        eprintln!("error (ignored): opening log file \"{path}\": {e}");
+                        self.errln(&format!(
+                            "error (ignored): opening log file \"{path}\": {e}"
+                        ));
                         None
                     }
                 }
@@ -160,9 +192,9 @@ impl Log {
     /// One record: `v` under internal-json, else `text` if any.
     fn out(&self, v: &Value, text: Option<&str>) {
         if self.json.load(Ordering::Relaxed) {
-            eprintln!("@nix {}", self.wire(v));
+            self.errln(&format!("@nix {}", self.wire(v)));
         } else if let Some(t) = text {
-            eprintln!("{t}");
+            self.errln(t);
         }
         self.tee(v);
     }
@@ -293,7 +325,7 @@ pub fn msg(level: u8, text: &str) {
 
 /// A line that is not an error record.
 pub fn line(text: &str) {
-    eprintln!("{}", format(text));
+    cur().log.errln(&format(text));
 }
 
 /// A lint warning, `warning: [NAME] MSG` and maybe `\n  at POS`, as it goes

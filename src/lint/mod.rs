@@ -723,9 +723,8 @@ struct Emitted {
 
 impl Emitted {
     fn flush(&mut self) {
-        use std::io::Write;
         if !self.pending.is_empty() {
-            let _ = std::io::stderr().write_all(&self.pending);
+            crate::session::Session::current().log.err(&self.pending);
             self.pending.clear();
         }
     }

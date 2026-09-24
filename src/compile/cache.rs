@@ -114,7 +114,7 @@ impl IrCache {
         if let Some(_lock) = crate::cachefs::write_lock(&self.root) {
             let _ = crate::cachefs::write_atomic(dir, name, crate::cachefs::tag(), bytes);
         } else if self.stats {
-            eprintln!("ir-cache skip {name} (a sibling holds the store lock)");
+            crate::errln!("ir-cache skip {name} (a sibling holds the store lock)");
         }
         if !self.swept.swap(true, Ordering::Relaxed) {
             crate::cachefs::maybe_sweep(
@@ -611,7 +611,7 @@ pub fn deserialize(
         allows.add(start, end, mask);
     }
     if stats {
-        eprintln!(
+        crate::errln!(
             "ir-cache   syms={} {}us nodes {}us",
             n,
             t1.as_micros(),

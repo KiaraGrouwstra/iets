@@ -283,7 +283,7 @@ impl Client {
                     if !gone_away(&s) || std::time::Instant::now() + pause > deadline {
                         return Err(self.status_error(&s, what));
                     }
-                    eprintln!(
+                    crate::errln!(
                         "{}: {}, retrying",
                         self.cfg.authority,
                         first_line(s.message())

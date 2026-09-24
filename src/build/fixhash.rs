@@ -50,11 +50,14 @@ pub fn interactive() -> bool {
 
 /// Asks on stderr whether to make `fix`. End of input is no.
 pub fn prompt(fix: &Fix) -> Answer {
-    eprint!(
-        "fix the hash at {}: '{}' to '{}'? [y/n/a] ",
-        fix.pos(),
-        fix.old,
-        fix.new
+    crate::session::Session::current().log.err(
+        format!(
+            "fix the hash at {}: '{}' to '{}'? [y/n/a] ",
+            fix.pos(),
+            fix.old,
+            fix.new
+        )
+        .as_bytes(),
     );
     let mut line = String::new();
     let _ = std::io::stdin().read_line(&mut line);

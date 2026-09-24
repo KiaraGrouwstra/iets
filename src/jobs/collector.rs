@@ -406,14 +406,14 @@ pub fn run_collector(args: &[String], workers: usize, sink: Sink) -> Result<()> 
         for _ in 0..workers.max(1) {
             let shared = shared.clone();
             let sink = sink.clone();
-            s.spawn(move || {
+            s.spawn(crate::session::bind(move || {
                 if let Err(e) = collector(&shared, args, &sink) {
                     let (lock, cv) = &*shared;
                     let mut st = lock.lock().unwrap();
                     st.failed.get_or_insert(e.to_string());
                     cv.notify_all();
                 }
-            });
+            }));
         }
     });
     let st = shared.0.lock().unwrap();

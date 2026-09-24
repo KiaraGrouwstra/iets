@@ -109,10 +109,10 @@ pub fn flake_ref(f: &str, cwd: &[u8]) -> crate::error::Result<crate::flake::Flak
     crate::flake::parse_flake_ref(f, cwd, home().as_deref())
 }
 
-/// Prints an evaluation error and returns the exit code. Positions and the
-/// store paths inside the messages name the local file the source was
+/// An evaluation error as a value a host can render itself. Positions and
+/// the store paths inside the messages name the local file the source was
 /// copied from, when one is known (docs/provenance.md).
-pub fn report(ev: &Evaluator, e: &Error) -> i32 {
+pub fn report_of(ev: &Evaluator, e: &Error) -> crate::log::Report {
     use crate::provenance::{describe_pos, rewrite_msg};
     let at = |pos: Pos| describe_pos(ev, pos).unwrap_or_else(|| ev.describe_pos(pos));
     ev.lints.flush();
@@ -124,7 +124,12 @@ pub fn report(ev: &Evaluator, e: &Error) -> i32 {
     };
     // "ietsp: " marks what classic mode falls back on; here it only doubles "error: "
     let msg = msg.strip_prefix("ietsp: ").unwrap_or(&msg);
-    crate::log::Report::eval(e, msg, &at, &|m| rewrite_msg(ev, m)).emit()
+    crate::log::Report::eval(e, msg, &at, &|m| rewrite_msg(ev, m))
+}
+
+/// The same report, sent to the session's log, with the exit code.
+pub fn report(ev: &Evaluator, e: &Error) -> i32 {
+    report_of(ev, e).emit()
 }
 
 /// The directory the `ietsp.toml` walk starts from: the entry file's

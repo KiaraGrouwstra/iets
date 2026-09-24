@@ -32,14 +32,14 @@ impl Cache {
         let t0 = std::time::Instant::now();
         let Some(bytes) = self.store.read(&self.key, READSET) else {
             if self.timings {
-                eprintln!("cache: miss (no entry)");
+                crate::errln!("cache: miss (no entry)");
             }
             return false;
         };
         let Some(mut obs) = crate::trace::wire::decode_readset(&bytes) else {
             self.store.discard(&self.key);
             if self.timings {
-                eprintln!("cache: miss (unreadable entry, discarded)");
+                crate::errln!("cache: miss (unreadable entry, discarded)");
             }
             return false;
         };
@@ -57,7 +57,7 @@ impl Cache {
                     self.store.touch(&self.key);
                 }
                 if self.timings {
-                    eprintln!(
+                    crate::errln!(
                         "cache: hit, {} entries validated, {} rehashed, load {:.3}s, validate {:.3}s",
                         r.entries,
                         r.rehashed,
@@ -69,7 +69,7 @@ impl Cache {
             }
             Err(m) => {
                 if self.timings {
-                    eprintln!(
+                    crate::errln!(
                         "cache: miss ({}), {} entries, {:.3}s",
                         m.0,
                         obs.len(),
@@ -89,7 +89,7 @@ impl Cache {
         use crate::trace::wire;
         if !ev.trace.is_cacheable() {
             if self.timings {
-                eprintln!("cache: not written (uncacheable run)");
+                crate::errln!("cache: not written (uncacheable run)");
             }
             return;
         }
@@ -136,13 +136,13 @@ impl Cache {
             Ok(wrote) => {
                 if self.timings {
                     if wrote && !obs.is_empty() {
-                        eprintln!(
+                        crate::errln!(
                             "cache: wrote {} entries, {:.3}s",
                             obs.len(),
                             t0.elapsed().as_secs_f64()
                         );
                     } else if !wrote {
-                        eprintln!("cache: not written (a sibling holds the store lock)");
+                        crate::errln!("cache: not written (a sibling holds the store lock)");
                     }
                 }
             }
@@ -156,9 +156,10 @@ impl Cache {
 
     /// On a hit: the lint warnings the recorded run printed, to stderr.
     pub fn replay_warnings(&self) {
-        use std::io::Write;
         if let Some(bytes) = self.store.read(&self.key, crate::trace::store::WARNINGS) {
-            let _ = std::io::stderr().write_all(&crate::log::replay_lints(&bytes));
+            crate::session::Session::current()
+                .log
+                .err(&crate::log::replay_lints(&bytes));
         }
     }
 
@@ -182,7 +183,7 @@ impl Cache {
         if tables.is_none() {
             self.store.discard(&self.key);
             if self.timings {
-                eprintln!("cache: miss (unreadable tables, discarded)");
+                crate::errln!("cache: miss (unreadable tables, discarded)");
             }
         }
         tables

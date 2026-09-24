@@ -376,7 +376,7 @@ impl Runtime {
     /// run that cannot grow its fiber pool finishes on the fibers it has.
     fn report_no_stack(&self, e: &fiber::StackError) {
         if !self.stack_failed.swap(true, Ordering::Relaxed) {
-            eprintln!("ietsp: {e}; continuing without new fibers");
+            crate::errln!("ietsp: {e}; continuing without new fibers");
         }
     }
 
@@ -680,7 +680,7 @@ impl Runtime {
             if self.has_work() {
                 return;
             }
-            eprintln!("ietsp: internal error: all workers idle with the main fiber parked");
+            crate::errln!("ietsp: internal error: all workers idle with the main fiber parked");
             std::process::abort();
         }
     }
@@ -741,7 +741,7 @@ impl Runtime {
                 let busy = self.stat_busy_ns();
                 let tasks = self.stat_tasks();
                 let pos = super::force::MAIN_POS.load(Ordering::Relaxed);
-                eprintln!(
+                crate::errln!(
                     "t={:4}ms running={:2} busy-workers={:.1} tasks/20ms={:5} queued={:5} sleepers={:2} main-at=pos{}",
                     t0.elapsed().as_millis(),
                     self.stat_running(),

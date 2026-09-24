@@ -123,7 +123,7 @@ pub fn tag() -> u64 {
 pub fn prepare(root: &Path, timings: bool) {
     if let Some(why) = broken(root) {
         if timings {
-            eprintln!("cache: wiping {} ({why})", root.display());
+            crate::errln!("cache: wiping {} ({why})", root.display());
         }
         let _ = fs::remove_dir_all(root);
     }
@@ -371,7 +371,7 @@ pub fn maybe_sweep(root: &Path, shape: Shape, timings: bool) {
     }
     let s = sweep(root, shape, Duration::from_secs(TTL_DAYS * DAY), false);
     if timings && s.scanned > 0 {
-        eprintln!(
+        crate::errln!(
             "cache: swept {} of {} entries ({} KiB) from {}",
             s.removed,
             s.scanned,

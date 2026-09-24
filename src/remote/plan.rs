@@ -82,7 +82,7 @@ pub fn prehash_drvs(objects: &[&Object]) {
     let next = AtomicUsize::new(0);
     std::thread::scope(|s| {
         for _ in 0..threads {
-            s.spawn(|| {
+            s.spawn(crate::session::bind(|| {
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     if i >= todo.len() {
@@ -91,7 +91,7 @@ pub fn prehash_drvs(objects: &[&Object]) {
                     let (cell, aterm) = todo[i];
                     let _ = cell.set(DrvHashes::of(aterm));
                 }
-            });
+            }));
         }
     });
 }
@@ -367,7 +367,7 @@ fn hash_sources(sources: &[&StorePath], infos: &[SourceOrigin]) -> Result<Vec<Ob
         sources.iter().map(|_| Mutex::new(None)).collect();
     std::thread::scope(|s| {
         for _ in 0..threads {
-            s.spawn(|| {
+            s.spawn(crate::session::bind(|| {
                 loop {
                     let i = {
                         let mut n = next.lock().unwrap();
@@ -393,7 +393,7 @@ fn hash_sources(sources: &[&StorePath], infos: &[SourceOrigin]) -> Result<Vec<Ob
                         });
                     *results[i].lock().unwrap() = Some(r);
                 }
-            });
+            }));
         }
     });
     results

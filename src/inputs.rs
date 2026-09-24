@@ -106,7 +106,7 @@ static OPEN_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::
 pub fn report_timings() {
     let n = OPENED.load(std::sync::atomic::Ordering::Relaxed);
     if n > 0 {
-        eprintln!(
+        crate::errln!(
             "inputs: {n} entries opened, {:.3}s",
             OPEN_NANOS.load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e9
         );

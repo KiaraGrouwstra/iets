@@ -35,6 +35,9 @@ fn on_big_stack(f: impl FnOnce() -> i32 + Send + 'static) -> i32 {
 fn main() {
     restore_sigpipe();
     let session = ietsp::session::Session::new();
+    // a command line says what it has to say on stderr; a library says it
+    // to whatever sink its host set, or to none (docs/library.md)
+    session.log.write_to_stderr();
     let _entered = session.enter();
     let argv: Vec<String> = std::env::args_os()
         .skip(1)

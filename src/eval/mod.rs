@@ -427,7 +427,7 @@ impl Evaluator {
                 self.files[file.0 as usize].set_allows(allows);
                 self.report_diags(&diags);
                 if cache.stats {
-                    eprintln!(
+                    crate::errln!(
                         "ir-cache load {} {} {}us",
                         String::from_utf8_lossy(path),
                         src.len(),
@@ -446,7 +446,7 @@ impl Evaluator {
             cache.write(&key, &bytes);
         }
         if cache.stats {
-            eprintln!(
+            crate::errln!(
                 "ir-cache store {} {}us (write {}us)",
                 String::from_utf8_lossy(path),
                 (t1 - t0).as_micros(),
@@ -2182,7 +2182,7 @@ impl Evaluator {
     /// `IETSP_STATS=1`: allocation and phase counters on stderr.
     pub fn print_stats(&self) {
         let st = &self.arena.stats;
-        eprintln!(
+        crate::errln!(
             "files={} thunks={} calls={} drvs={} arena_bytes={} arena_mapped={} rss_kb={} compile={:?} ir_size={}",
             self.files.len(),
             self.nr_thunks,
@@ -2198,7 +2198,7 @@ impl Evaluator {
             size_of::<Ir>()
         );
         for (i, name) in STAT_NAMES.iter().enumerate() {
-            eprintln!(
+            crate::errln!(
                 "{name:>12} count={:>9} bytes={:>11} ({:.1} MiB)",
                 st.counts[i],
                 st.bytes[i],
@@ -2221,7 +2221,7 @@ impl Evaluator {
             drvs += 1;
             aterm_bytes += d.aterm.as_ref().map_or(0, |a| a.len());
         }
-        eprintln!(
+        crate::errln!(
             "non-arena: line_tables={line_table} file_paths={file_paths} symbols={} (name bytes {sym_bytes}, map entries ~{}) import_cache={} drvs={drvs} (aterm bytes {aterm_bytes}) regex_cache={}",
             self.interner.len(),
             self.interner.len() * 32,
@@ -2235,10 +2235,10 @@ impl Evaluator {
             {
                 let mut out = String::new();
                 st.census.report(&mut out);
-                eprint!("{out}");
+                self.session.log.err(out.as_bytes());
             }
             #[cfg(not(feature = "stats2"))]
-            eprintln!("census: build with --features stats2");
+            crate::errln!("census: build with --features stats2");
         }
     }
 }
