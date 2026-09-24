@@ -18,7 +18,6 @@ commands:
   fast-build     evaluate and build a flake's checks (nix-fast-build)
   print-dev-env  print the environment of a flake's devShell, for direnv
   prefetch       print the hash of a URL or of a fixed-output derivation
-  plumbing       the machine-first operations (docs/plumbing.md)
   lint           list the lints and the levels a run would use
   parse          parse Nix files and print or check the syntax tree
   cache          sweep old cache entries, or dump a cache entry's read set

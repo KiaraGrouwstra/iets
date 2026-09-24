@@ -106,8 +106,10 @@ code, per docs/cli.md. Nothing else is printed on stdout.
 * A hidden prefix hides a contract that must be stable. A contract nobody
   can find gets copied instead of called.
 
-`ietsp plumbing` gets one line in the overview and its own `--help`. This
-file is the contract.
+`ietsp plumbing` is not in the top-level overview: that help is for
+people, and the operations are for programs. It stays discoverable
+through `ietsp plumbing --help` (and `ietsp help plumbing`), which lists
+every op, and through this file, which is the contract.
 
 ### Shared input
 
