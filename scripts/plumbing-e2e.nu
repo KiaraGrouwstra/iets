@@ -40,6 +40,24 @@ in derivation {
 }
 '#
 
+# one derivation at the top, one under a recursed set, one under a set that is
+# not recursed, and one whose meta.outputsToInstall picks an output.
+const SET = r#'let
+  mk = n: outs: derivation {
+    name = n;
+    system = "@SYSTEM@";
+    builder = "/bin/sh";
+    args = [ "-c" "echo @NONCE@ > $out" ];
+    outputs = outs;
+  };
+in {
+  a = mk "plumb-wa" [ "out" ];
+  sub = { recurseForDerivations = true; b = mk "plumb-wb" [ "out" ]; };
+  hidden = { c = mk "plumb-wc" [ "out" ]; };
+  multi = (mk "plumb-wm" [ "out" "dev" ]) // { meta.outputsToInstall = [ "dev" ]; };
+}
+'#
+
 const BAD = r#'derivation {
   name = "plumb-bad";
   system = "@SYSTEM@";
@@ -56,6 +74,7 @@ run-in $work {
   $HELLO | str replace -a "@SYSTEM@" $system | str replace -a "@NONCE@" $nonce | save -f $"($work)/hello.nix"
   $BAD | str replace -a "@SYSTEM@" $system | str replace -a "@NONCE@" $nonce | save -f $"($work)/bad.nix"
   $CHAIN | str replace -a "@SYSTEM@" $system | str replace -a "@NONCE@" $nonce | save -f $"($work)/chain.nix"
+  $SET | str replace -a "@SYSTEM@" $system | str replace -a "@NONCE@" $nonce | save -f $"($work)/set.nix"
   cd $work
   # the ops read the closure from /nix/store, so the roots are instantiated
   # there first; nothing here builds them.
@@ -68,6 +87,16 @@ run-in $work {
   let r = (out-of $ietsp plumbing resolve hello.nix | from json)
   $ok = (verdict (($r.roots | length) == 1) "resolve: one root" $"roots ($r.roots)") and $ok
   $ok = (verdict ($r.roots.0.drv == $hello) "resolve: the drv nix-instantiate wrote" $"($r.roots.0.drv) != ($hello)") and $ok
+  # --walk get-drvs is get-drvs.cc, which is what nix-instantiate walks
+  let w = (out-of $ietsp plumbing resolve --walk get-drvs set.nix | from json)
+  let walked = (out-of nix-instantiate set.nix | lines)
+  $ok = (verdict (($w.roots | get drv) == $walked) "resolve --walk get-drvs: nix-instantiate's roots" $"($w.roots)") and $ok
+  $ok = (verdict (($w.roots | get attr) == [a multi sub.b]) "resolve --walk get-drvs: the attribute path of each" $"($w.roots)") and $ok
+  # --walk to-install is get-drvs.cc:queryOutputs, which is what nix build installs
+  let t = (out-of $ietsp plumbing resolve --walk to-install set.nix -A multi | from json)
+  $ok = (verdict (($t.roots | get output) == [dev]) "resolve --walk to-install: meta.outputsToInstall" $"($t.roots)") and $ok
+  let d = (out-of $ietsp plumbing resolve set.nix -A multi | from json)
+  $ok = (verdict ($d.roots.0.output == null) "resolve --walk context: the value named no output" $"($d.roots)") and $ok
 
   print "== 2. plan"
   let p = (out-of $ietsp plumbing plan $hello | from json)

@@ -205,7 +205,7 @@ takes roots accepts `--roots -` and reads `resolve`'s output on stdin.
 ```
 ietsp plumbing resolve [EVAL FLAGS]
        [--prefixes package|dev-shell|package-set|none]
-       [--want first|all] [--no-drvs]
+       [--want first|all] [--walk context|get-drvs|to-install] [--no-drvs]
 ```
 
 `--prefixes package` is the default: `#hello` is tried at
@@ -230,6 +230,21 @@ report `does not provide attribute` itself. `output` is `null` when the
 value named the derivation and not one output. `--no-drvs` stops after the
 value and reports only `attrPaths`. This is the whole of duplication
 cluster 1.
+
+`--walk` says how the value that was found becomes roots. The three modes
+are the three walks the porcelain had:
+
+| `--walk` | Nix | Who wanted it |
+|:---|:---|:---|
+| `context` (default) | `drvPath`, or the derivations in a string's context | `ietsp build`, `diff`, `prefetch` |
+| `get-drvs` | get-drvs.cc:getDerivations, recursing with `recurseForDerivations` | `nix-build`, `nix-shell`, `nix-instantiate` |
+| `to-install` | get-drvs.cc:queryOutputs: `outputSpecified`, else `meta.outputsToInstall`, else every output (`out` for a flake) | `nix build` |
+
+`get-drvs` walks an attrset in lexicographic name order, takes a derivation
+whole, and descends only where `recurseForDerivations = true` is set; a list
+is always walked. `attr` is the path it reached each derivation by, so a
+caller can name them as `nix-build` does. `to-install` answers one root per
+output the installable installs.
 
 ### `eval`
 
@@ -426,15 +441,15 @@ as porcelain aliases.
 
 **(a) Capabilities the plumbing must expose, and does not yet.**
 
-1. **The `get-drvs.cc` walk.** `nix-build` and `nix-shell` use
-   `classic::derivations`, which walks an attrset with
-   `recurseForDerivations` and returns `(drv, outputName)` pairs. `resolve`
-   must grow a `--walk get-drvs` mode, or a fourth `Prefixes` value. Today
-   only the classic commands can do this.
-2. **`outputsToInstall`.** `classic/nix.rs:target` reads
-   `meta.outputsToInstall` and `outputSpecified` to pick outputs.
-   `resolve`'s `roots[].output` must carry that, or `nix build` keeps its
-   own copy.
+1. ~~**The `get-drvs.cc` walk.**~~ **Closed by stage 5.**
+   `classic::derivations` is `api::installable::get_drvs`, and `resolve`
+   reaches it with `--walk get-drvs`. `nix-build`, `nix-shell` and
+   `nix-instantiate` call the same function.
+2. ~~**`outputsToInstall`.**~~ **Closed by stage 5.**
+   `classic/nix.rs:target` is `api::installable::to_install`, and
+   `resolve --walk to-install` answers one root per output the installable
+   installs. `classic/nix.rs:Target` went with it, as
+   `installable::Install`.
 3. **The ATerm table of a run.** `ietsp diff` needs the ATerms the
    evaluation produced, because a derivation that was never written to the
    store has none on disk. `resolve` must be able to emit

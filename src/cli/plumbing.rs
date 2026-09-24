@@ -40,6 +40,11 @@ one object per derivation root with \"drv\", \"output\" and \"attr\".
                         package (the default), dev-shell, package-set, or
                         none for the fragment itself
   --want first|all      stop at the first path that is there, or take all
+  --walk HOW            how a value becomes roots: context (the default, the
+                        derivations its string context and drvPath name),
+                        get-drvs (get-drvs.cc, recursing with
+                        recurseForDerivations), or to-install
+                        (outputSpecified, else meta.outputsToInstall)
   --no-drvs             report the attribute paths only
 
 usage: ietsp plumbing plan [--roots -] DRV...
@@ -90,10 +95,22 @@ pub fn main(argv: &[String]) -> i32 {
     }
 }
 
+/// `--walk`: how a value becomes derivation roots.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Walk {
+    /// The `drvPath` attribute, or the derivations in a string's context.
+    Context,
+    /// get-drvs.cc:getDerivations, what `nix-build` and `nix-shell` do.
+    GetDrvs,
+    /// get-drvs.cc:queryOutputs, what `nix build` installs.
+    ToInstall,
+}
+
 struct Opts {
     /// `None` is `--prefixes none`: the fragment names the path itself.
     prefixes: Option<Prefixes>,
     want: Want,
+    walk: Walk,
     drvs: bool,
 }
 
@@ -101,6 +118,7 @@ fn resolve(argv: &[String]) -> i32 {
     let mut o = Opts {
         prefixes: Some(Prefixes::Package),
         want: Want::First,
+        walk: Walk::Context,
         drvs: true,
     };
     let mut rest: Vec<String> = Vec::new();
@@ -131,6 +149,17 @@ fn resolve(argv: &[String]) -> i32 {
                     _ => arg_error(format!("--want wants first or all, got '{v}'")),
                 };
             }
+            "--walk" => {
+                let v = next();
+                o.walk = match v.as_str() {
+                    "context" => Walk::Context,
+                    "get-drvs" => Walk::GetDrvs,
+                    "to-install" => Walk::ToInstall,
+                    _ => arg_error(format!(
+                        "--walk wants context, get-drvs or to-install, got '{v}'"
+                    )),
+                };
+            }
             "--no-drvs" => o.drvs = false,
             s => rest.push(s.to_string()),
         }
@@ -146,7 +175,19 @@ fn resolve(argv: &[String]) -> i32 {
     })
 }
 
+/// One entry of `resolve`'s `roots`. `output` is null when the value named the
+/// derivation and not one output.
+fn root_json(drv: &StorePath, output: Option<String>, attr: Option<String>) -> serde_json::Value {
+    serde_json::json!({ "drv": drv.to_string(), "output": output, "attr": attr })
+}
+
 fn run(ev: &mut Evaluator, a: EvalArgs, o: Opts) -> Result<(), Box<Error>> {
+    let what = match &a.input {
+        Some(Input::Flake(f) | Input::File(f)) => f.clone(),
+        _ => String::new(),
+    };
+    let is_flake = matches!(a.input, Some(Input::Flake(_)));
+    let args = crate::api::auto_args(ev, &a.args, &crate::api::cwd())?;
     let flake = match (&a.input, o.prefixes) {
         (Some(Input::Flake(f)), Some(p)) => {
             let (loc, frag) = f.split_once('#').unwrap_or((f.as_str(), ""));
@@ -175,18 +216,37 @@ fn run(ev: &mut Evaluator, a: EvalArgs, o: Opts) -> Result<(), Box<Error>> {
         }
     }
     let mut roots = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for (attr, v) in found {
         if !o.drvs {
             break;
         }
-        let mut rs = Vec::new();
-        drv_roots(ev, v, &mut rs)?;
-        for (drv, output) in rs {
-            roots.push(serde_json::json!({
-                "drv": drv.to_string(),
-                "output": output,
-                "attr": attr,
-            }));
+        match o.walk {
+            Walk::Context => {
+                let mut rs = Vec::new();
+                drv_roots(ev, v, &mut rs)?;
+                for (drv, output) in rs {
+                    roots.push(root_json(&drv, output, attr.clone()));
+                }
+            }
+            Walk::GetDrvs => {
+                let mut rs = Vec::new();
+                let start = attr.clone().unwrap_or_default();
+                installable::get_drvs_at(ev, v, args, &mut rs, &mut seen, &start)?;
+                for r in rs {
+                    // the walk records the path it reached each derivation by
+                    let at = (ev.drv.drvs.get(&r.drv))
+                        .and_then(|i| i.attr)
+                        .or_else(|| attr.clone());
+                    roots.push(root_json(&r.drv, Some(r.output), at));
+                }
+            }
+            Walk::ToInstall => {
+                let i = installable::to_install(ev, v, &what, is_flake)?;
+                for out in i.outputs {
+                    roots.push(root_json(&i.drv, Some(out), attr.clone()));
+                }
+            }
         }
     }
     let v = serde_json::json!({ "attrPaths": paths, "roots": roots });
