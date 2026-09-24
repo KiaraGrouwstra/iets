@@ -34,7 +34,8 @@ module it belongs to) and let `cli` call it there.
 | Position to file:line:col | `provenance::describe_pos`, else `Evaluator::describe_pos` |
 | Store paths back to local trees | `provenance::Provenance::snapshot(ev)` |
 | Sources this run copied in | `Evaluator::known.origins()` |
-| Derivation roots of a value | `api::installable::drv_roots` |
+| Derivation roots of a value | `api::installable::drv_roots`; `get_drvs`/`get_drvs_at` for the `recurseForDerivations` walk; `to_install` for `meta.outputsToInstall` |
+| Derivations of another run | `api::build::drvs_in_dir(dir)` over an `EvalArgs::dump_drvs` directory; `api::build::drv_info(path, aterm)` for one |
 | Outputs to build | `api::build_targets(wanted, roots)` |
 | Upload plan | `api::build::plan(ev, roots)`, or `plan_with(roots, drvs, sources)` over a table you hold; empty tables read every drv from `/nix/store` |
 | Where the builds go | `api::build::transport(flag, &api::build::config())` |
