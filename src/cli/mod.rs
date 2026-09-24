@@ -133,7 +133,9 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
                     .extend(v.split_whitespace().map(str::to_owned));
             }
             _ if s.starts_with('-') && s != "-" => help::unknown_flag(s),
-            _ if crate::flake::is_flake_ref(s) => set_input(&mut a, Input::Flake(s.to_string())),
+            _ if crate::api::flake::is_flake_ref(s) => {
+                set_input(&mut a, Input::Flake(s.to_string()))
+            }
             _ => set_input(&mut a, Input::File(s.to_string())),
         }
         i += 1;

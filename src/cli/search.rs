@@ -62,7 +62,7 @@ pub fn cmd_search(argv: &[String]) -> i32 {
     // The default installable is `<nixpkgs>`: ietsp has no flake registry, so
     // `nix search nixpkgs` has nothing to resolve.
     match s.what.take() {
-        Some(w) if crate::flake::is_flake_ref(&w) => s.what = Some(w),
+        Some(w) if crate::api::flake::is_flake_ref(&w) => s.what = Some(w),
         Some(w) => s.file = Some(w),
         None if s.expr.is_none() && s.file.is_none() => s.file = Some("<nixpkgs>".into()),
         None => {}
@@ -112,7 +112,7 @@ fn parse(argv: &[String], native: bool) -> Result<Search, String> {
 /// A first argument that names an installable rather than a regex: a flake
 /// reference, `<name>`, or a path that is there.
 fn looks_installable(w: &str) -> bool {
-    crate::flake::is_flake_ref(w)
+    crate::api::flake::is_flake_ref(w)
         || (w.starts_with('<') && w.ends_with('>'))
         || std::path::Path::new(w).exists()
 }
@@ -219,7 +219,7 @@ fn cursors(ev: &mut Evaluator, s: &Search, cwd: &[u8]) -> EvalResult<Vec<(Word, 
     let (loc, fragment) = attr.split_once('#').unwrap_or((attr, ""));
     let fr = crate::api::flake_ref(loc, cwd)
         .map_err(|e| Error::boxed(ErrorKind::Unsupported, e.to_string(), Pos::NONE))?;
-    let outputs = crate::flake::eval_flake(ev, &fr)?;
+    let outputs = crate::api::flake::outputs(ev, &fr)?;
     let found = installable::from_outputs(
         ev,
         outputs,

@@ -332,7 +332,6 @@ fn build_run(ev: &mut Evaluator, n: &Nix) -> crate::error::Result<Done> {
 /// threads as `http-connections`' default. A lock that is missing or
 /// incomplete needs locking, which the real nix does.
 fn prefetch_inputs_main(argv: &[String], rest: &[String]) -> i32 {
-    use crate::source::{AttrVal, Attrs, SourceRef};
     let mut c = Common::default();
     let mut refs = Vec::new();
     let mut a = Argv { all: rest, i: 0 };
@@ -351,36 +350,9 @@ fn prefetch_inputs_main(argv: &[String], rest: &[String]) -> i32 {
     }
     let fr = crate::api::flake_ref(refs.first().map_or(".", String::as_str), &cwd())
         .unwrap_or_else(|e| fallback(NAME, argv, &e.to_string()));
-    let lock = std::fs::read(fr.dir.join("flake.lock"))
-        .map_err(|e| e.to_string())
-        .and_then(|b| crate::source::lock::check(&b).map_err(|e| e.to_string()))
-        .unwrap_or_else(|why| fallback(NAME, argv, &format!("flake.lock: {why}")));
-    let mut todo = Vec::new();
-    for (name, locked) in lock.reached_inputs() {
-        let mut attrs: Attrs = locked
-            .iter()
-            .filter_map(|(k, v)| {
-                let v = match v {
-                    serde_json::Value::String(s) => AttrVal::Str(s.clone()),
-                    serde_json::Value::Bool(b) => AttrVal::Bool(*b),
-                    v => AttrVal::Int(v.as_u64()?),
-                };
-                Some((k.clone(), v))
-            })
-            .collect();
-        match (locked["type"].as_str(), locked["narHash"].as_str()) {
-            // a path input is read in place, and a relative one is the root's
-            (Some("path"), _) => {}
-            (Some("github" | "gitlab" | "sourcehut" | "tarball" | "git" | "hg"), Some(h)) => {
-                let h = crate::source::parse_nar_hash(h)
-                    .map(|h| h.to_sri())
-                    .unwrap_or_else(|e| fallback(NAME, argv, &format!("input '{name}': {e}")));
-                attrs.insert("narHash".into(), AttrVal::Str(h.clone()));
-                todo.push((name.to_string(), h, SourceRef::Locked(attrs)));
-            }
-            (t, _) => fallback(NAME, argv, &format!("input '{name}' of type {t:?}")),
-        }
-    }
+    let todo = crate::api::flake::info(&fr)
+        .and_then(|i| i.inputs())
+        .unwrap_or_else(|e| fallback(NAME, argv, &e.to_string()));
     let system = crate::config::Config::load(&c.flags.overrides)
         .unwrap_or_else(|e| fallback(NAME, argv, &e.to_string()))
         .system();
@@ -390,10 +362,12 @@ fn prefetch_inputs_main(argv: &[String], rest: &[String]) -> i32 {
     std::thread::scope(|s| {
         for _ in 0..threads {
             s.spawn(crate::session::bind(|| {
-                while let Some((name, hash, r)) = queue.lock().unwrap().next() {
+                while let Some((name, r)) = queue.lock().unwrap().next() {
                     let mut ev = Evaluator::with(&system, true);
-                    ev.input_names.insert(hash, name);
-                    if let Err(e) = crate::source::tree(&mut ev, &r, Pos::NONE) {
+                    if let Some(h) = r.nar_hash() {
+                        ev.input_names.insert(h.to_string(), name);
+                    }
+                    if let Err(e) = crate::api::flake::tree(&mut ev, &r) {
                         report(&ev, &e);
                         failed.store(true, std::sync::atomic::Ordering::Relaxed);
                     }
@@ -451,7 +425,7 @@ fn resolve(ev: &mut Evaluator, n: &Nix, what: &str, cwd: &[u8]) -> EvalResult<Wo
     let (loc, fragment) = what.split_once('#').unwrap_or((what, ""));
     let fr = crate::cli::flake_ref(loc, cwd)
         .map_err(|e| Error::boxed(ErrorKind::Unsupported, e.to_string(), Pos::NONE))?;
-    let outputs = crate::flake::eval_flake(ev, &fr)?;
+    let outputs = crate::api::flake::outputs(ev, &fr)?;
     let mut found = installable::from_outputs(
         ev,
         outputs,

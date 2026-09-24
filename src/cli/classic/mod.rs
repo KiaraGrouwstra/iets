@@ -214,7 +214,7 @@ pub fn eval_input(ev: &mut Evaluator, c: &Common, file: &str, cwd: &[u8]) -> Eva
 /// attribute by name or a list element by index.
 pub fn select(ev: &mut Evaluator, root: Word, attr_path: &str, args: Word) -> EvalResult<Word> {
     let mut v = root;
-    let path = crate::flake::parse_attr_path(attr_path)
+    let path = crate::api::flake::parse_attr_path(attr_path)
         .map_err(|e| Error::boxed(ErrorKind::Parse, e.to_string(), Pos::NONE))?;
     for attr in path {
         v = ev.auto_call(v, args)?;

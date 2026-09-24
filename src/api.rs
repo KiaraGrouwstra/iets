@@ -5,6 +5,7 @@
 
 pub mod build;
 pub mod fetch;
+pub mod flake;
 pub mod installable;
 pub mod render;
 pub mod run;
@@ -96,7 +97,7 @@ pub enum ArgKind {
 pub enum Input {
     Expr(String),
     File(String),
-    /// `DIR#attr.path`, see `crate::flake`.
+    /// `DIR#attr.path`, see `crate::api::flake`.
     Flake(String),
 }
 
@@ -110,7 +111,7 @@ fn home() -> Option<Vec<u8>> {
     std::env::var_os("HOME").map(|h| h.into_encoded_bytes())
 }
 
-pub fn flake_ref(f: &str, cwd: &[u8]) -> crate::error::Result<crate::flake::FlakeRef> {
+pub fn flake_ref(f: &str, cwd: &[u8]) -> crate::error::Result<flake::FlakeRef> {
     crate::flake::parse_flake_ref(f, cwd, home().as_deref())
 }
 

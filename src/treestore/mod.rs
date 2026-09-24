@@ -18,7 +18,7 @@
 //! content address, which is why a reader never re-hashes and why two
 //! processes can share one entry.
 //!
-//! Today the only user is `crate::flake::fetch`, which fetches a
+//! Today the only user is `crate::source`, which fetches a
 //! `github`/`gitlab`/`sourcehut`/`tarball` input as one decompressed tar and
 //! indexes it (`crate::fetch::spool`). The spool is kept under
 //! `$XDG_CACHE_HOME/ietsp/inputs/<store path base name>/` with its index

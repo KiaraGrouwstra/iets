@@ -19,7 +19,7 @@ pub mod devenv;
 pub mod error;
 pub mod eval;
 pub mod fetch;
-pub mod flake;
+pub(crate) mod flake;
 pub mod jobs;
 pub mod lint;
 pub mod log;

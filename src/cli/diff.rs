@@ -92,7 +92,7 @@ fn parse(argv: &[String]) -> (Opts, Vec<Side>) {
         (Some(_), Some(_)) => arg_error("-E and FILE cannot be combined"),
         (p, e) => Side::Eval(Box::new(EvalArgs {
             input: match (p, e) {
-                (Some(p), _) if crate::flake::is_flake_ref(p) => Some(Input::Flake(p.clone())),
+                (Some(p), _) if crate::api::flake::is_flake_ref(p) => Some(Input::Flake(p.clone())),
                 (Some(p), _) => Some(Input::File(p.clone())),
                 (None, Some(e)) => Some(Input::Expr(e.clone())),
                 (None, None) => None,

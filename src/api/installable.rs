@@ -107,9 +107,9 @@ pub fn from_outputs(
     let candidates = attr_paths(prefixes, fragment, ev.current_system);
     let mut found = Vec::new();
     for c in &candidates {
-        let path = crate::flake::parse_attr_path(c)
+        let path = super::flake::parse_attr_path(c)
             .map_err(|m| Error::boxed(ErrorKind::Eval, m.to_string(), Pos::NONE))?;
-        if let Some(value) = crate::flake::select(ev, outputs, &path)? {
+        if let Some(value) = super::flake::select(ev, outputs, &path)? {
             found.push(Found { value, path });
             if want == Want::First {
                 return Ok(found);
