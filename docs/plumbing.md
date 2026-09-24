@@ -143,13 +143,17 @@ takes roots accepts `--roots -` and reads `resolve`'s output on stdin.
 
 ```
 ietsp plumbing resolve [EVAL FLAGS]
-       [--prefixes none|package|dev-shell|package-set]
+       [--prefixes package|dev-shell|package-set|none]
        [--want first|all] [--no-drvs]
 ```
 
-`--prefixes none` is the default: the fragment after `#` names the
-attribute path itself, which is what the native commands do. The other
-three are the `getActualAttrPaths` tables the classic commands use.
+`--prefixes package` is the default: `#hello` is tried at
+`packages.<system>.hello`, then `legacyPackages.<system>.hello`, then
+`hello`, as `nix build` tries it. The plumbing is opinionated, so the
+common case needs no flag. `dev-shell` and `package-set` are the other two
+`getActualAttrPaths` tables, and `none` makes the fragment the attribute
+path itself. The three-table search stays available through the flag, and
+stays the behaviour of the porcelain commands that need it.
 
 ```json
 {

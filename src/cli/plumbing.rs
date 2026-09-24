@@ -23,8 +23,8 @@ Print {\"attrPaths\", \"roots\"}: the attribute paths that were tried, and
 one object per derivation root with \"drv\", \"output\" and \"attr\".
 
   --prefixes WHICH      the attribute paths a flake fragment is tried at:
-                        none (the fragment itself, default), package,
-                        dev-shell or package-set
+                        package (the default), dev-shell, package-set, or
+                        none for the fragment itself
   --want first|all      stop at the first path that is there, or take all
   --no-drvs             report the attribute paths only
 ";
@@ -45,7 +45,7 @@ struct Opts {
 
 fn resolve(argv: &[String]) -> i32 {
     let mut o = Opts {
-        prefixes: None,
+        prefixes: Some(Prefixes::Package),
         want: Want::First,
         drvs: true,
     };
