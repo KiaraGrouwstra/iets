@@ -144,9 +144,9 @@ Notes:
 
 ### Mapping to Nix's C API
 
-The `ietsp-c` crate wraps this surface as Nix's own C ABI; these are the
-`nix_api_value.h` names it answers to. What it implements, what it does
-not, and the memory rules it works under: `docs/c-api.md`.
+This surface is modelled on Nix's own C API, so a binding for another
+language has a shape to follow. These are the `nix_api_value.h` names each
+item corresponds to.
 
 | `nix_api_value.h` | `api::value` |
 |:---|:---|

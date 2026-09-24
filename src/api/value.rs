@@ -72,14 +72,6 @@ pub struct Value<'e> {
     w: Word,
     ev: PhantomData<fn(&'e ()) -> &'e ()>,
 }
-
-/// A value with the borrow dropped, for a host that cannot hold a Rust
-/// lifetime. The C ABI stores one per `nix_value` cell (docs/c-api.md); it
-/// carries the dynamic rule the lifetime used to carry statically, so
-/// [`Eval::attach`] is unsafe. Nothing else should need this.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Detached(Word);
-
 #[inline]
 fn val<'e>(w: Word) -> Value<'e> {
     Value { w, ev: PhantomData }
@@ -207,12 +199,6 @@ impl<'e> Value<'e> {
             _ => None,
         }
     }
-
-    /// The same value without the borrow; see [`Detached`].
-    #[inline]
-    pub fn detach(self) -> Detached {
-        Detached(self.w)
-    }
 }
 
 /// An evaluator, borrowed for the life of the values it hands out. Every
@@ -229,16 +215,6 @@ impl<'e> Eval<'e> {
     /// The evaluator itself, for the parts of the library that take one.
     pub fn evaluator(&mut self) -> &mut Evaluator {
         self.ev
-    }
-
-    /// A [`Detached`] value back in this evaluator's borrow.
-    ///
-    /// # Safety
-    /// `d` must come from a `Value` of the evaluator this `Eval` borrows,
-    /// and that evaluator must not have been dropped since.
-    #[inline]
-    pub unsafe fn attach(&self, d: Detached) -> Value<'e> {
-        val(d.0)
     }
 
     /// Evaluate an expression; relative paths resolve against `base_dir`.
@@ -537,17 +513,6 @@ mod tests {
             let t = e.apply(f, arg);
             assert_eq!(t.kind(), ValueKind::Thunk);
             assert_eq!(e.force(t).unwrap().as_int(), Some(42));
-        });
-    }
-
-    #[test]
-    fn detach_round_trips() {
-        eval("1 + 1", |e, v| {
-            let d = v.detach();
-            // SAFETY: `d` comes from a value of the evaluator `e` borrows,
-            // which is still alive.
-            let back = unsafe { e.attach(d) };
-            assert_eq!(e.force(back).unwrap().as_int(), Some(2));
         });
     }
 

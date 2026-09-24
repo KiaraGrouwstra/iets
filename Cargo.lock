@@ -548,14 +548,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ietsp-c"
-version = "0.1.0"
-dependencies = [
- "ietsp",
- "libc",
-]
-
-[[package]]
 name = "indexmap"
 version = "2.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

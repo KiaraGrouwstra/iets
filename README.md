@@ -57,14 +57,6 @@ first run read and replays the result (nixos-desktop: 40 ms instead of
 1 s). `--no-cache` or `IETSP_CACHE=0` turns it off, `--timings` reports
 hit or miss. Design and limits: `docs/tracing-cache.md`.
 
-## Embedding
-
-`ietsp` is a library with a thin binary on top; `docs/library.md` lists
-the entry points and `api::value` is the safe way to walk a value.
-`nix build .#c-api` also builds Nix's own C API on that surface, so a
-program written against Nix's headers links ietsp instead of Nix without
-a source change: `docs/c-api.md`.
-
 ## Results (2026-09-16)
 
 `bench/run.nu nixos-desktop nixos-minimal`, 16 vCPU EPYC Genoa, nixpkgs
