@@ -52,6 +52,15 @@ Three separate `attr_paths` tables exist for the same
 candidate loop that follows them — select, take the first or all, report
 `does not provide attribute` — is written three times.
 
+**Closed by stages 1 and 5.** Stage 1 made the three tables and the three
+candidate loops one `api::installable`. Stage 5 moved the three walks that
+turn the value found into derivations: `drv_roots` (out of
+`crate::store::locate`, which five `src/cli` files reached past `crate::api`
+to call), the `get-drvs.cc` walk (out of `cli/classic/mod.rs`) and
+`outputsToInstall` (out of `cli/classic/nix.rs:target`, with its `Target`
+type, now `installable::Install`). What is left in `src/cli` is a flake
+reference becoming its outputs, which stage 8 takes.
+
 ### 2. Build dispatch
 
 **Closed by stage 4.** `config` → `settings::builder` →
@@ -818,15 +827,15 @@ Every stage is one merge, and the checks pass at its commit.
 | 2 | `api::render` + `src/cli/render`: one JSON writer, one size and table formatter | **+178 measured** (+171 outside tests) | nine renderers move; the saving is one `print_bytes`, one JSON dump and four `if json` branches (-60), against two new modules (+210) |
 | 3 | `api::run::Run`: the eval scaffold (evaluator, lints, cache, trace, parallel, report) as one call | **-7 measured** | the scaffold lines themselves are only -100; the rest is four per-command `Failed`/`Unsupported` enums and their error matches, against a 102-line module |
 | 4 | `api::build`: one dispatch path; `plumbing plan`, `missing`, `build` | **+417 measured** | the refactor is +33: the eight sites shed 220 lines against a 187-line module. The three ops are +384, of which about 80 is the three gaps they close |
-| 5 | `api::installable` grows the get-drvs walk and `outputsToInstall`; `nix-build`, `nix-shell`, `nix-instantiate`, `ietsp build`, `diff`, `prefetch` move onto it | -180 | gaps (a)1, (a)2, (a)3, (a)4 close; `classic::derivations` and `classic::plan_roots` lose their callers |
+| 5 | `api::installable` grows the get-drvs walk and `outputsToInstall`; `nix-build`, `nix-shell`, `nix-instantiate`, `ietsp build`, `diff`, `prefetch` move onto it | **+113 measured** | the refactor is -4: three capabilities moved below the command line and there was one copy of each. Gaps (a)1, (a)2 and most of (a)3 close, at +120 of new surface |
 | 6 | `src/fetch` split out of `src/flake`; `plumbing fetch` | **+68 measured** (+66 outside tests) | the move is +5; the op is one capability with two frontends, and `prefetch` sheds 177 lines against a 128-line `api::fetch` and a 110-line op |
 | 7 | `src/treestore` on `cachefs`; `inputs.rs` collapses into it | **+117 measured** (+115 outside tests) | the two NAR framings did become one (-84 in the spool, +70 in `nar::TreeWriter`); the rest was a move: `inputs.rs` -280 against a 402-line module |
 | 8 | `source::SourceResolver`; `crate::flake` private; `plumbing flake-info`, `flake-tree` | -150 | one lock reader, one tree fetcher; `flake::root` and `flake::fetch` stop overlapping |
 | 9 | `plumbing index`, `jobs`, `dev-env`, `drv-show`, `drv-diff`, `closure-diff`; porcelain becomes flags and rendering | +150 | the ops are new surface; the porcelain shrinks by about as much |
 | 10 | `tests/layering.rs` and the allow-list; `crate::flake` and `crate::store` banned from `src/cli` | +60 | the test is new; it is what keeps stages 1-9 from rotting |
 
-The estimates below said about **-450 lines** in `src`. Stages 1, 2, 3, 4,
-6 and 7 measured +220, +178, -7, +417, +68 and +117, so that number is
+The estimates below said about **-450 lines** in `src`. Stages 1 to 7
+measured +220, +178, -7, +417, +113, +68 and +117, so that number is
 wrong; see the next sections for what replaces it. The reduction that is
 real is the second copy: three attr-path tables, eight build-dispatch
 sequences, sixteen eval scaffolds, two NAR framings. It was not nine
@@ -838,9 +847,8 @@ plumbing surface costs far more than the 550 lines charged above.
 Stage 1 estimated -60 and measured +220. Stage 3 estimated -260 and
 measured -7. Stage 4 estimated -300, was re-estimated at "positive unless
 the collapse works", and measured +417. Stage 2 estimated -120, was
-re-estimated at -50, and measured +178. Two things were wrong in the
-first estimates, and they are wrong in the same direction everywhere
-else:
+re-estimated at -50, and measured +178. Two things were wrong in the first
+estimates, and they are wrong in the same direction everywhere else:
 
 1. **A shared module costs 100-150 lines before it saves one.**
    `api::installable` is 175, `api::run` is 102. A stage that removes
@@ -892,17 +900,47 @@ Two more rules follow, and they are the ones that decide stages 5 to 9:
    a stage, say what the second copy is. If the answer is "they all do the
    same *kind* of thing", the saving is the kind, not the thing.
 
-Stages 5 to 8 delete code without adding a command, and their per-module
-counts stand. On the measured numbers the net across all ten stages is
-about **+500**, not -450. The migration is still worth it — one
-implementation per capability, and a contract programs can call — but it
-is not a line-count win, and the plan should stop claiming one.
+Stage 8 is the last stage charged a reduction for moving code, and stages
+5, 6 and 7 all say the same thing about that charge: read it as about 0,
+not -150, unless the second copy is named before the work starts. It also
+adds two ops, so rule 3 applies on top.
+
+On the measured numbers the net across all ten stages is about **+700**,
+not -450. The migration is still worth it — one implementation per
+capability, and a contract programs can call — but it is not a line-count
+win, and the plan should stop claiming one.
 
 Stage 1 was the first stage that was net positive, and it was honest about
 why: a shared value pays for itself at its second caller, and stages 1 and
 2 both built values that have only their first. Stage 5 is where
-`api::installable` earns its cost; stages 6 and 9 are where `api::render`
-earns its.
+`api::installable` earned its cost: the module grew from 175 lines to 510,
+and ten `src/cli` files name it — every command that turns an installable
+into derivations. Stages 6 and 9 are where `api::render` earns its.
+
+### What stage 5 measured
+
+Estimated -180, re-estimated at about +100 before the work started,
+measured **+113**. **Stage 5 had no second copy at all, and rule 4 said so
+in advance.** The plan charged -180 to "`classic::derivations` and
+`classic::plan_roots` lose their callers". Losing a caller deletes nothing:
+the walk is still one function, and it had exactly one copy.
+`classic::plan_roots` was already gone, taken by stage 4.
+
+What actually repeated was one level down: reading a derivation's
+attributes — `type`, `drvPath`, `outputName`, a list of strings — written
+three times across `derivations`, `target` and `drv_roots`, and twice more
+inside `target` itself. Folding those into `is_derivation`, `drv_of`,
+`output_name` and `string_list` paid for the module's growth and made the
+refactor -4 instead of +100. The rest is the two new flags and the
+composition, at +120.
+
+The boundary fix is the point, not the ledger. Before stage 5 the
+`recurseForDerivations` walk lived in `src/cli/classic/mod.rs` and
+`outputsToInstall` in `src/cli/classic/nix.rs`, so a capability was
+reachable only by the command that happened to hold it, and five porcelain
+commands reached into `crate::store::locate` for `drv_roots`. That is what
+moved. It is the same shape as stage 2's `store::drvdiff` text renderer: a
+wash on the ledger and the reason for the stage.
 
 ### What stage 6 measured
 
