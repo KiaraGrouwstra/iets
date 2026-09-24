@@ -71,7 +71,7 @@ pub fn cmd_prefetch(argv: &[String]) -> i32 {
         }
         let a = parse_eval_args(&rest);
         let ev = a.evaluator();
-        return crate::parallel::run(a.workers, ev, move |ev| from_drv(ev, a, json));
+        return crate::cli::run_parallel(a.workers, ev, move |ev| from_drv(ev, a, json));
     };
     let url = rest.remove(at);
     // what is left are flags only (--log-format, --show-trace, …)

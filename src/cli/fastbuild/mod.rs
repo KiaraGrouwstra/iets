@@ -154,7 +154,7 @@ fn run(a: Args) -> Result<i32> {
     let result_file = a.result_file.clone();
     let result_format = a.result_format;
     let suite = a.display_name();
-    let eval_ok = crate::parallel::run(workers, ev, move |ev| walk(ev, a, stream));
+    let eval_ok = crate::cli::run_parallel(workers, ev, move |ev| walk(ev, a, stream));
 
     let report = thread
         .join()

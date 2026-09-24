@@ -14,7 +14,7 @@ marked `// parallel:`.
   `Evaluator`. A fiber is the unit of blocking. Fibers migrate between
   worker threads: a fiber that parks on worker A can resume on worker B.
 - **Worker**: an OS thread that runs a drain loop. Worker 0 is the thread
-  that called `parallel::run`. Each worker owns a bump `Arena`, a fiber
+  that called `parallel::try_run`. Each worker owns a bump `Arena`, a fiber
   pool, and work-stealing deques.
 - **Task**: a unit of not-yet-started work: force a range of list cells or
   attr cells (fan-out). A task runs in a pooled fiber.

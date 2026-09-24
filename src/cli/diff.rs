@@ -158,7 +158,7 @@ fn resolve(sides: Vec<Side>) -> std::result::Result<(Aterms, Vec<StorePath>), i3
             .collect();
         return Ok((Aterms::new(), paths));
     };
-    crate::parallel::run(workers, ev, move |ev| {
+    crate::cli::run_parallel(workers, ev, move |ev| {
         let mut roots = Vec::new();
         for s in sides {
             let a = match s {

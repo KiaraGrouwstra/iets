@@ -147,7 +147,7 @@ pub fn main(argv: &[String]) -> i32 {
         Ok(c) => c,
         Err(e) => return e.report(),
     };
-    match crate::parallel::run(crate::parallel::default_workers(), ev, move |ev| {
+    match crate::cli::run_parallel(crate::parallel::default_workers(), ev, move |ev| {
         prepare(ev, &run)
     }) {
         Run::Failed(code) => code,

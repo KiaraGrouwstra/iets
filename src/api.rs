@@ -151,7 +151,7 @@ pub fn lint_config(a: &EvalArgs) -> Result<crate::lint::Config, Box<Error>> {
         .map_err(|m| Error::boxed(crate::eval::ErrorKind::Eval, m, Pos::NONE))
 }
 
-/// Installs the lint configuration. Call before `parallel::run`: helper
+/// Installs the lint configuration. Call before `parallel::try_run`: helper
 /// fibers clone the evaluator then, and every fiber must lint alike.
 /// `evaluate` calls it too, so a frontend that runs sequentially may skip it.
 pub fn configure_lints(ev: &mut Evaluator, a: &EvalArgs) -> Result<(), Box<Error>> {

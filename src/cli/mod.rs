@@ -207,6 +207,22 @@ pub fn cmd_lint(argv: &[String]) -> i32 {
     }
 }
 
+/// `parallel::try_run` for a command line: the fiber stacks are a startup
+/// failure, so it reports them and exits 1. The library returns the error.
+pub fn run_parallel<R: Send + 'static>(
+    workers: usize,
+    ev: Evaluator,
+    f: impl FnOnce(&mut Evaluator) -> R + Send + 'static,
+) -> R {
+    match crate::parallel::try_run(workers, ev, f) {
+        Ok(r) => r,
+        Err(e) => {
+            crate::log::line(&format!("ietsp: {e}"));
+            std::process::exit(1)
+        }
+    }
+}
+
 /// `api::evaluate`, with a missing input reported as a usage error.
 pub fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
     if a.input.is_none() {

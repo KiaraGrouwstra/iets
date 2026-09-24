@@ -155,7 +155,7 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
         ev.trace = crate::trace::Trace::enabled();
     }
     // parallel: eval and the daemon flow run as the main fiber
-    crate::parallel::run(a.workers, ev, move |ev| dev_env_full(ev, a, &d, cache, t0))
+    crate::cli::run_parallel(a.workers, ev, move |ev| dev_env_full(ev, a, &d, cache, t0))
 }
 
 /// A cache hit is usable when the env output (and the files the script names) still exist;
@@ -248,7 +248,7 @@ pub fn dev_env(
         transport,
         gc_root: None,
     };
-    crate::parallel::run(a.workers, ev, move |ev| dev_env_build(ev, a, &d))
+    crate::cli::run_parallel(a.workers, ev, move |ev| dev_env_build(ev, a, &d))
 }
 
 /// The cache-miss path: evaluate the shell, derive and build its `-env` derivation through

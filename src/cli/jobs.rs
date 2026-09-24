@@ -244,7 +244,7 @@ pub fn cmd_eval_jobs(argv: &[String]) -> i32 {
         if let Err(e) = crate::api::configure_lints(&mut ev, &a) {
             return report(&ev, &e);
         }
-        return crate::parallel::run(1, ev, move |ev| jobs_worker(ev, a, &j, &transport));
+        return crate::cli::run_parallel(1, ev, move |ev| jobs_worker(ev, a, &j, &transport));
     }
     if j.max_memory > 0 {
         return jobs_collector(&worker_argv(argv, &j), a.workers, &j, &transport, t0);
@@ -256,7 +256,7 @@ pub fn cmd_eval_jobs(argv: &[String]) -> i32 {
     if let Err(e) = crate::api::configure_lints(&mut ev, &a) {
         return report(&ev, &e);
     }
-    crate::parallel::run(workers, ev, move |ev| {
+    crate::cli::run_parallel(workers, ev, move |ev| {
         jobs_single(ev, a, &j, &transport, t0)
     })
 }
@@ -355,6 +355,10 @@ fn jobs_finish(
         return e.report();
     }
     let em = emitter.lock().unwrap();
+    // `| head`: the reader is gone, so the summary has nowhere to go either
+    if em.closed {
+        return 0;
+    }
     jobs_summary(j, em.stats, inst, t0);
     if em.fatal { 1 } else { 0 }
 }

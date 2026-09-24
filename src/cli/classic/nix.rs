@@ -247,7 +247,7 @@ fn eval_main(argv: &[String], rest: &[String]) -> i32 {
     let ev = super::evaluator(&n.c, &cfg);
     let n = Arc::new(n);
     let run = Arc::clone(&n);
-    match crate::parallel::run(crate::parallel::default_workers(), ev, move |ev| {
+    match crate::cli::run_parallel(crate::parallel::default_workers(), ev, move |ev| {
         eval_run(ev, &run)
     }) {
         Run::Failed(code) => code,
@@ -311,7 +311,7 @@ fn build_main(argv: &[String], rest: &[String]) -> i32 {
     let ev = super::evaluator(&n.c, &cfg);
     let n = Arc::new(n);
     let run = Arc::clone(&n);
-    match crate::parallel::run(crate::parallel::default_workers(), ev, move |ev| {
+    match crate::cli::run_parallel(crate::parallel::default_workers(), ev, move |ev| {
         build_run(ev, &run)
     }) {
         Run::Failed(code) => code,

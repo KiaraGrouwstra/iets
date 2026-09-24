@@ -29,7 +29,7 @@ pub fn run_eval(a: EvalArgs) -> i32 {
     ev.drv.keep_aterm = cache.is_some() || a.dump_drvs.is_some();
     ev.drv.keep_site = false;
     // parallel: the rest runs as the main fiber
-    crate::parallel::run(a.workers, ev, move |ev| eval_and_print(ev, a, cache))
+    crate::cli::run_parallel(a.workers, ev, move |ev| eval_and_print(ev, a, cache))
 }
 
 fn eval_and_print(ev: &mut Evaluator, a: EvalArgs, cache: Option<Cache>) -> i32 {

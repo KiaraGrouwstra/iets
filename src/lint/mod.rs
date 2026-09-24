@@ -786,7 +786,7 @@ impl Lints {
         self.shared.lock().unwrap().lines.clone()
     }
 
-    /// Writes the buffered warnings to stderr. `parallel::run` flushes at
+    /// Writes the buffered warnings to stderr. `parallel::try_run` flushes at
     /// the end of every command, `report` before an error, `trace` and
     /// `warn` before their own line, and the last clone on drop.
     pub fn flush(&self) {

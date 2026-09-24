@@ -132,7 +132,7 @@ fn local_files(argv: &[String]) -> Vec<PathBuf> {
     if super::configure_lints(&mut ev, &a).is_err() {
         return Vec::new();
     }
-    crate::parallel::run(a.workers, ev, move |ev| {
+    crate::cli::run_parallel(a.workers, ev, move |ev| {
         let mut roots = Vec::new();
         let _ = evaluate(ev, a).and_then(|v| drv_roots(ev, v, &mut roots));
         fixhash::local_files(ev)
@@ -185,7 +185,7 @@ fn build_once(argv: &[String]) -> i32 {
         ev.trace = crate::trace::Trace::enabled();
     }
     // parallel: eval and build run as the main fiber
-    crate::parallel::run(a.workers, ev, move |ev| build_eval(ev, &b, a, t0, cache))
+    crate::cli::run_parallel(a.workers, ev, move |ev| build_eval(ev, &b, a, t0, cache))
 }
 
 /// The Nix settings, for `system` and the `store` that `--builder` defaults to;

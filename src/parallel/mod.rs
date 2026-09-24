@@ -67,23 +67,6 @@ fn stack_size() -> usize {
         .map_or(fiber::DEFAULT_STACK, |mb| mb << 20)
 }
 
-/// `try_run` for a command line: the fiber stacks are a startup failure,
-/// so it reports them on stderr and exits 1. A library frontend calls
-/// `try_run` and handles the error itself.
-pub fn run<R: Send + 'static>(
-    workers: usize,
-    ev: Evaluator,
-    f: impl FnOnce(&mut Evaluator) -> R + Send + 'static,
-) -> R {
-    match try_run(workers, ev, f) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("ietsp: {e}");
-            std::process::exit(1)
-        }
-    }
-}
-
 /// Run `f` with `ev` as the main fiber on `workers` threads. With one
 /// worker this is a plain call. The error is the fiber stacks: the
 /// reservation is over the cap, or the kernel refused the mapping.

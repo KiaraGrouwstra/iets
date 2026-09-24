@@ -17,19 +17,18 @@ pub struct Emitter {
     pub stats: Stats,
     /// A fatal error line was seen: nix-eval-jobs stops with exit 1.
     pub fatal: bool,
+    /// The reader closed the pipe (`ietsp eval-jobs | head`). Nothing more
+    /// is written; the frontend stops with exit 0.
+    pub closed: bool,
 }
 
-fn write_line(out: &mut dyn Write, line: &Line) {
+/// `false` once the reader is gone; that ends the run, it is not an error.
+fn write_line(out: &mut dyn Write, line: &Line) -> bool {
     let r = out
         .write_all(&line.render())
         .and_then(|_| out.write_all(b"\n"))
         .and_then(|_| out.flush());
-    // `ietsp eval-jobs | head`: a closed reader ends the run, it is not an error.
-    if let Err(e) = r
-        && e.kind() == std::io::ErrorKind::BrokenPipe
-    {
-        std::process::exit(0);
-    }
+    !matches!(r, Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe)
 }
 
 impl Emitter {
@@ -40,10 +39,14 @@ impl Emitter {
             jobs: Jobs::new(),
             stats: Stats::default(),
             fatal: false,
+            closed: false,
         }
     }
 
     pub fn emit(&mut self, line: Line) {
+        if self.closed {
+            return;
+        }
         match &line {
             Line::Job(_) => self.stats.jobs += 1,
             Line::Error(e) => {
@@ -52,7 +55,7 @@ impl Emitter {
             }
         }
         if !self.constituents {
-            write_line(&mut self.out, &line);
+            self.closed = !write_line(&mut self.out, &line);
             return;
         }
         let entry = match &line {
@@ -79,7 +82,7 @@ impl Emitter {
                 );
             }
             line => {
-                write_line(&mut self.out, &line);
+                self.closed = !write_line(&mut self.out, &line);
                 self.jobs.insert(attr, entry);
             }
         }
@@ -90,9 +93,9 @@ impl Emitter {
         if !self.constituents {
             return Ok(());
         }
-        let out = &mut self.out;
+        let (out, closed) = (&mut self.out, &mut self.closed);
         constituents::rewrite(&mut self.jobs, conn, gc_roots_dir, &mut |l| {
-            write_line(out.as_mut(), &l)
+            *closed |= !write_line(out.as_mut(), &l);
         })
     }
 }

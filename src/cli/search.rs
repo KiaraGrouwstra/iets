@@ -160,7 +160,7 @@ fn run(mut s: Search, classic: Option<&[String]>) -> i32 {
             }
             let workers = crate::parallel::default_workers();
             let run = Arc::clone(&s);
-            match crate::parallel::run(workers, ev, move |ev| build(ev, &run, cache)) {
+            match crate::cli::run_parallel(workers, ev, move |ev| build(ev, &run, cache)) {
                 Built::Index(index) => index,
                 Built::Failed(code) => return code,
                 Built::Unsupported(why) => return bail(why),
