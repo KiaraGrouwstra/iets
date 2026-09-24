@@ -14,6 +14,21 @@
         # checks.test runs the suite; the package build stays a build.
         doCheck = false;
       };
+      # Nix's C ABI, as a shared and a static library. The three library
+      # names are the ones a consumer of Nix's C API links (docs/c-api.md).
+      capi = pkgs: (ietsp pkgs).overrideAttrs {
+        pname = "ietsp-c";
+        buildAndTestSubdir = "ietsp-c";
+        installPhase = ''
+          runHook preInstall
+          mkdir -p $out/lib
+          cp target/*/release/libietspc.so target/*/release/libietspc.a $out/lib/
+          for n in nixexprc nixutilc nixstorec; do
+            ln -s libietspc.so $out/lib/lib$n.so
+          done
+          runHook postInstall
+        '';
+      };
       # `classic`: the same binary under Nix's own command names. Each one
       # handles the subset ietsp implements and execs the real nix for the
       # rest; `share/ietsp/real-nix-bin` names that nix, so the fallback works
@@ -29,12 +44,13 @@
     in {
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
-          packages = [ pkgs.cargo pkgs.rustc pkgs.clippy pkgs.rustfmt pkgs.hyperfine pkgs.nix pkgs.perf pkgs.jq pkgs.nushell ];
+          # nix.dev carries the C API headers the c-api check compiles against
+          packages = [ pkgs.cargo pkgs.rustc pkgs.clippy pkgs.rustfmt pkgs.hyperfine pkgs.nix pkgs.nix.dev pkgs.perf pkgs.jq pkgs.nushell ];
         };
       });
       nixosModules.default = import ./nix/module.nix self;
       lib.mkClassic = classic;
-      packages = forAll (pkgs: { default = ietsp pkgs; classic = classic pkgs (ietsp pkgs) pkgs.nix; });
+      packages = forAll (pkgs: { default = ietsp pkgs; classic = classic pkgs (ietsp pkgs) pkgs.nix; c-api = capi pkgs; });
       checks = forAll (pkgs:
         let
           pkg = ietsp pkgs;
@@ -59,10 +75,18 @@
           # the tests that need a live /nix/store are #[ignore]d; run them
           # with `cargo test -- --ignored` in the dev shell.
           test = pkg.overrideAttrs { pname = "ietsp-test"; doCheck = true; };
-          clippy = lint "clippy" pkgs.clippy "clippy --all-targets -- -D warnings";
+          # the proof the C ABI is real: Nix's own headers, ietsp's library
+          c-api = pkgs.runCommandCC "ietsp-c-api" { } ''
+            cc -std=c11 -Wall -Wextra -Werror \
+              -I${pkgs.nix.dev}/include ${self}/tests/c-api/main.c \
+              -L${capi pkgs}/lib -lnixexprc -lnixutilc -lnixstorec -o c-api-test
+            ./c-api-test
+            touch $out
+          '';
+          clippy = lint "clippy" pkgs.clippy "clippy --workspace --all-targets -- -D warnings";
           # the library facade: every example links the library only (docs/library.md)
           examples = lint "examples" pkgs.cargo "build --examples --release";
-          fmt = lint "fmt" pkgs.rustfmt "fmt --check";
+          fmt = lint "fmt" pkgs.rustfmt "fmt --all --check";
           diff-e2e = nuScript "diff-e2e";
           langtests = nuScript "langtests";
           linttest = nuScript "linttest";
