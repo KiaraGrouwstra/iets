@@ -262,7 +262,11 @@ second-run assertions in `scripts/flaketest.nu` use.
 
 `$XDG_CACHE_HOME/ietsp/inputs/` (`--cache-dir DIR` or `IETSP_CACHE_DIR` moves it
 to `DIR/inputs`) holds one directory per fetched input, named by the store path
-base name the lock implies. Code: `src/treestore`.
+base name the lock implies. Code: `src/treestore`, a local content-addressed
+tree store on `crate::cachefs`. Its `put` takes the hash the tree must have
+and has no other form, so an entry's name is always what its content hashes
+to: that is why no reader re-hashes, why two processes may share an entry,
+and why a user-space store needs no signature and no daemon.
 
 | file | what |
 |---|---|

@@ -525,17 +525,18 @@ between porcelain commands.
 
 ## Flakes behind a source resolver
 
-`src/flake` is 4689 lines in 8 files. It reaches into `crate::inputs`
-(the input store), `crate::builtins::store_hooks`, `crate::eval` and HTTP.
-`crate::flake::` is named 29 times outside `src/flake`, in
-`src/cli/search.rs`, `src/cli/classic/nix.rs`, `src/cli/devenv.rs`,
-`src/cli/diff.rs`, `src/cli/mod.rs`, `src/cli/prefetch.rs`,
-`src/builtins/paths.rs`, `src/builtins/store_hooks.rs`, `src/eval/mod.rs`,
-`src/inputs.rs` and `src/api.rs`. Four of those are `is_flake_ref`, three
-are `parse_attr_path`, three are `select`, and `src/cli/prefetch.rs`
-reaches into `flake::spool` and `flake::http` for a job that has nothing
-to do with flakes. **Stage 6 closed the last of those:** the three modules
-are `src/fetch` now, and `prefetch` calls `plumbing fetch`.
+`src/flake` was 4689 lines in 8 files, and is 2595 in 5 after stages 6 and
+7. It reaches into `crate::treestore` (the tree store),
+`crate::builtins::store_hooks`, `crate::eval` and, through `crate::fetch`,
+HTTP. `crate::flake::` was named 29 times outside `src/flake` and is named
+22, in `src/cli/search.rs`, `src/cli/classic/nix.rs`, `src/cli/diff.rs`,
+`src/cli/mod.rs`, `src/builtins/paths.rs`, `src/eval/mod.rs`,
+`src/api.rs`, `src/api/installable.rs`, `src/fetch/mod.rs` (a doc
+comment) and `src/treestore/mod.rs` (a doc comment). Four of those are
+`is_flake_ref`, three are `parse_attr_path`, three are `select`, and
+`src/cli/prefetch.rs` reached into `flake::spool` and `flake::http` for a
+job that has nothing to do with flakes. **Stage 6 closed that one:** the
+three modules are `src/fetch` now, and `prefetch` calls `plumbing fetch`.
 
 ### The interface
 
@@ -656,19 +657,54 @@ every source. `store::nar`'s writer becomes the writer, over the trait.
 The flake layer then depends on `TreeStore` and `SourceResolver`, not on
 `flake::fetch`, `flake::spool` or `crate::inputs` internals.
 
-Expected reduction:
+**What stage 7 built instead, and why.** `src/inputs.rs` is gone whole:
+`crate::treestore` is the store, and `StoredTree` — not `spool::Node` — is
+what `builtins::store_hooks` reads through. Three things above were not
+built, each for a reason the measurement supports:
 
-| Module | Now | After | Delta |
-|:---|---:|---:|---:|
-| `src/flake/spool.rs` | 892 | ~520 | -372 |
-| `src/inputs.rs` | 280 | ~90 | -190 |
-| `src/store/nar.rs` | 956 | ~870 | -86 |
-| `src/flake/fetch.rs` (naming) | — | — | -30 |
-| `src/treestore/` (new) | 0 | ~380 | +380 |
-| | | | **-298** |
+* **No `trait TreeStore`.** There is one store and there will be one store;
+  a trait with a single implementation is the abstraction the line budget
+  says to inline. What the design wanted from it is in the signature:
+  `put(name, expect, staged, tree)` hashes what it is given, refuses
+  anything else, and names the entry by what it hashed.
+* **No `trait TreeSource` yet.** It would have one implementor today and no
+  second caller, which is stage 1's lesson. `StoredTree`'s one field is the
+  seam: a second source makes it an enum plus a format byte in the index,
+  about 30 lines, and every caller already goes through `StoredTree`.
+* **The index codec and `persist`/`reopen` stayed in `fetch::spool`.** They
+  serialize *that* type's nodes. Moving them would have made the tree store
+  know a tar index, and it would have moved 200 lines without deleting one.
+
+One NAR writer was built, and it is `nar::TreeWriter`: the framing, the
+buffering and the content copy. The directory walk, the archive index and
+`dump_string` drive it and keep their own traversal, because the traversal
+is the part that genuinely differs — `readdir` with `d_type` and a name
+arena on one side, a sorted index in memory on the other. Routing the
+directory walk through an accessor trait would have cost an allocation per
+entry on the hottest copy path in the evaluator. `spool_matches_the_tree`
+stays: it is now a parity test between the two *walks*, not between two
+writers.
+
+Expected reduction, against what stage 7 measured:
+
+| Module | Now | Expected | Measured | Delta |
+|:---|---:|---:|---:|---:|
+| `src/flake/spool.rs` → `src/fetch/spool.rs` | 892 | ~520 | 889 | -3 |
+| `src/inputs.rs` | 280 | ~90 | 0 | -280 |
+| `src/store/nar.rs` | 956 | ~870 | 987 | +31 |
+| `src/flake/fetch.rs` (naming, and `put`) | — | — | — | -23 |
+| `src/builtins/store_hooks.rs` (the spool arms) | — | — | — | -11 |
+| `src/treestore/` (new) | 0 | ~380 | 402 | +402 |
+| other callers | | | | +1 |
+| | | | | **+117** |
 
 `src/cachefs.rs` does not change: the tree store is a user of it, like the
-IR cache and the tracing store.
+IR cache and the tracing store. What the table shows is rule 2 again, from
+the other side: **a move is not a deletion.** -372 for `spool.rs` and -190
+for `inputs.rs` were both the cost of code moving to `src/treestore`, which
+is charged +380 in the same table and came in at 402. The only real
+deletions in the stage are the second NAR framing (-84 in `spool.rs`), one
+of the naming wrappers, and the `Node` matching that left `store_hooks`.
 
 #### Consequence, recorded and not designed here
 
@@ -688,14 +724,22 @@ setting for what the store is allowed to hold. It is a change to one
 implementation, not a new store. The proposed interface is already keyed
 on exactly a FOD's identity, so yes: small.
 
+**Still true against the built interface.** `put(name, expect, staged, tree)`
+is keyed on exactly a FOD's identity, and `fetchurl` has one: a name, an
+`outputHash` known before the fetch, and a byte stream. What is missing is
+not the store but a second `TreeSource`: today a `StoredTree` holds a
+spooled archive, and a flat file or an unpacked directory needs that field
+to become an enum with a format byte in the index — about 30 lines, plus
+the policy setting for what the store may hold. No caller changes: every
+reader already goes through `StoredTree`.
+
 ### Migration order
 
 1. ~~Move `flake::http`, `flake::spool` and `flake::unpack` to `src/fetch`.~~
    **Done in stage 6**, at +5 lines: the three files moved and `src/fetch`
    got a `mod.rs`. No caller changed except the module path.
-2. `src/treestore` on `cachefs`: `TreeSource`, `TreeStore`, `StoredTree`.
-   `fetch::spool::Tree` implements `TreeSource`; the NAR writer and the
-   index codec move in; `inputs.rs` becomes a lookup.
+2. ~~`src/treestore` on `cachefs`.~~ **Done in stage 7**, at +117 lines;
+   what was and was not built is above.
 3. Introduce `SourceRef`, `Tree` and `SourceResolver` in `src/source`,
    implemented by today's `flake::fetch` over the tree store.
    `flake::fetch_tree` becomes a thin call.
@@ -705,7 +749,7 @@ on exactly a FOD's identity, so yes: small.
 6. `crate::flake` becomes `pub(crate)`; the layering test adds it to the
    banned list.
 
-Nothing in this section is implemented yet.
+Steps 1 and 2 are in; steps 3 to 6 are stage 8.
 
 ## Staged migration
 
@@ -719,17 +763,18 @@ Every stage is one merge, and the checks pass at its commit.
 | 4 | `api::build`: one dispatch path; `plumbing plan`, `missing`, `build` | **+417 measured** | the refactor is +33: the eight sites shed 220 lines against a 187-line module. The three ops are +384, of which about 80 is the three gaps they close |
 | 5 | `api::installable` grows the get-drvs walk and `outputsToInstall`; `nix-build`, `nix-shell`, `nix-instantiate`, `ietsp build`, `diff`, `prefetch` move onto it | -180 | gaps (a)1, (a)2, (a)3, (a)4 close; `classic::derivations` and `classic::plan_roots` lose their callers |
 | 6 | `src/fetch` split out of `src/flake`; `plumbing fetch` | **+68 measured** (+66 outside tests) | the move is +5; the op is one capability with two frontends, and `prefetch` sheds 177 lines against a 128-line `api::fetch` and a 110-line op |
-| 7 | `src/treestore` on `cachefs`; `inputs.rs` and `spool.rs` collapse into it | -300 | two NAR writers, three store-path naming sites, one entry codec |
+| 7 | `src/treestore` on `cachefs`; `inputs.rs` collapses into it | **+117 measured** (+115 outside tests) | the two NAR framings did become one (-84 in the spool, +70 in `nar::TreeWriter`); the rest was a move: `inputs.rs` -280 against a 402-line module |
 | 8 | `source::SourceResolver`; `crate::flake` private; `plumbing flake-info`, `flake-tree` | -150 | one lock reader, one tree fetcher; `flake::root` and `flake::fetch` stop overlapping |
 | 9 | `plumbing index`, `jobs`, `dev-env`, `drv-show`, `drv-diff`, `closure-diff`; porcelain becomes flags and rendering | +150 | the ops are new surface; the porcelain shrinks by about as much |
 | 10 | `tests/layering.rs` and the allow-list; `crate::flake` and `crate::store` banned from `src/cli` | +60 | the test is new; it is what keeps stages 1-9 from rotting |
 
-The estimates below said about **-450 lines** in `src`. Stages 1, 2, 3 and
-4 measured +220, +178, -7 and +417, so that number is wrong; see the next
-section for what replaces it. The reduction that is real is the second
-copy: three attr-path tables, eight build-dispatch sequences, sixteen eval
-scaffolds, two NAR writers. It was not nine renderers, and why is below.
-The new plumbing surface costs far more than the 550 lines charged above.
+The estimates below said about **-450 lines** in `src`. Stages 1, 2, 3, 4,
+6 and 7 measured +220, +178, -7, +417, +68 and +117, so that number is
+wrong; see the next sections for what replaces it. The reduction that is
+real is the second copy: three attr-path tables, eight build-dispatch
+sequences, sixteen eval scaffolds, two NAR framings. It was not nine
+renderers, and it was not the modules a stage merely moves. The new
+plumbing surface costs far more than the 550 lines charged above.
 
 ### What stages 1, 2, 3 and 4 measured, and what it means for the rest
 
@@ -812,6 +857,46 @@ frontends emit the same value — but that is 8 lines saved, not 40, and rule
 that `prefetch` is 34 lines: it parses `--json` and calls the op. The move
 itself was +5, as predicted, because a move is not a deletion. That is the
 warning for stage 7, which is charged -300 for moves.
+
+### What stage 7 measured
+
+Estimated -300, measured **+117** (+115 outside tests). This was the stage
+with per-module counts instead of call-site counts, and the counts were
+right about the *modules*; they were wrong about what a module count means.
+A fifth rule follows, and it is the one the estimate needed:
+
+5. **A move is not a deletion.** -372 for `spool.rs` and -190 for
+   `inputs.rs` were the same lines the table charged +380 for under
+   `src/treestore/`. Netting a move against its destination is how -0 turns
+   into -562 on paper. Count only what no longer exists anywhere.
+
+Of the three things the stage called duplicates, one was:
+
+* **Two NAR writers: yes, and they are one.** `fetch::spool` framed its own
+  NARs with `write_str`; `nar::TreeWriter` is now the only place NAR bytes
+  are framed, and `write_str`, `write_u64` and `write_padding` are gone with
+  it. That is -84 in the spool against +70 for the writer, so the deletion
+  is real and it is 14 lines. What it actually bought is elsewhere: the
+  spool's dump gained the buffered sink, and a second tree source will not
+  need a NAR writer.
+* **Three store-path naming sites: they were one and two wrappers.**
+  `make_store_path` is the only implementation; `make_fixed_output_path`
+  is the FOD rule over it, and `source_store_path` was a 9-line wrapper.
+  Three *callers* of the recursive-no-references form became
+  `treestore::store_path`, which is -6 lines, not -30. A wrapper is not a
+  copy.
+* **One entry codec: there was only ever one.** It serializes
+  `spool::Node`, so it stayed with the type it serializes. Moving it would
+  have moved 200 lines and deleted none, and it would have made the tree
+  store know what a tar index is.
+
+What the stage is worth is not on the ledger: `src/inputs.rs` was a
+content-addressed store nobody had named, `builtins::store_hooks` matched
+on the spool's node type through it, and `put` could be handed a name and
+a hash to believe. Now the store has a name, `StoredTree` is the only way
+through it, and `put(name, expect, …)` hashes what it is given and refuses
+anything else. Stage 8 can put a `SourceResolver` over that; it could not
+have gone over `crate::inputs`.
 
 One correction stage 4 left open: `plumbing missing` assembles its own
 `{"willBuild", …}` object and does not sort, so it is not yet byte-for-byte

@@ -51,7 +51,7 @@ module it belongs to) and let `cli` call it there.
 ## What the host owns
 
 A `Session` holds everything a run used to keep in process-wide statics:
-the settings, where messages go, the input store, the nix.conf it read,
+the settings, where messages go, the tree store, the nix.conf it read,
 the eval-jobs walk, the hash mismatches a build reported. Two sessions in
 one process are independent — different settings, different log
 destination, different mismatch list — so a host may run two evaluators
