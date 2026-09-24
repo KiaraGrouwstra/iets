@@ -20,8 +20,9 @@ pub struct Session {
     settings: std::sync::OnceLock<Settings>,
     /// The Determinate Nix settings this run saw (`crate::config`).
     pub determinate: crate::config::Determinate,
-    /// The input store this run reads flake inputs from (`crate::inputs`).
-    pub inputs: crate::inputs::Store,
+    /// The local tree store this run reads fetched trees from
+    /// (`crate::treestore`).
+    pub trees: crate::treestore::Store,
     /// The `eval-jobs` walk of this run (`crate::jobs`).
     pub jobs: crate::jobs::Run,
     /// nix.conf, read once per run: it cannot change under an evaluation.

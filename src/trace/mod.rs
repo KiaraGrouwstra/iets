@@ -119,7 +119,7 @@ pub enum Obs {
         hash: Digest32,
     },
     /// One entry of the input store read during the evaluation
-    /// (`crate::inputs`), whatever was read out of it. The entry's name is the
+    /// (`crate::treestore`), whatever was read out of it. The entry's name is the
     /// NAR hash of its tree, so nothing about the bytes can change under a
     /// name that is still there: the check is that the store still holds the
     /// entry and that its index is a version this binary reads.

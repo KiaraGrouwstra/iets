@@ -499,7 +499,7 @@ fn add_path_inner(
         }
         Some(At::Mem(_)) => return Err(store_hooks::recopy_unsupported(path, pos)),
         Some(At::Spool(entry, base)) => {
-            crate::inputs::record(ev, &entry, base);
+            crate::treestore::record(ev, &entry, base);
             false
         }
         Some(At::Disk(_)) => true,

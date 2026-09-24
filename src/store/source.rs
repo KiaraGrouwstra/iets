@@ -21,7 +21,7 @@ pub enum Src {
     /// files of a git tree): an entry it left out does not exist
     /// (filtering-source-accessor.hh).
     Fs { root: PathBuf, accepted: Accepted },
-    /// An entry of the user-level input store (`crate::inputs`), by store
+    /// An entry of the user-level input store (`crate::treestore`), by store
     /// path base name. Opened on first read, so a tracing-cache hit that only
     /// uploads needs no evaluation. `accepted` is as for `Fs`, with each
     /// member named by its path in the entry under `/`.

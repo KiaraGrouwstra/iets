@@ -137,7 +137,7 @@ and `path:` inputs never reach it.
 
 0. **The input store, ietsp's own.** `$XDG_CACHE_HOME/ietsp/inputs/` holds the
    spooled archive of every input ietsp has fetched, keyed by the store path
-   the lock implies (`src/inputs.rs`, "The input store" below). An entry that
+   the lock implies (`src/treestore`, "The input store" below). An entry that
    is there costs two `open` calls and no network, no daemon and no store.
 1. **Substitution, as one daemon op.** `QueryValidPaths` with the substitute
    flag (`wopQueryValidPaths`, protocol >= 1.27) makes the daemon run
@@ -262,7 +262,7 @@ second-run assertions in `scripts/flaketest.nu` use.
 
 `$XDG_CACHE_HOME/ietsp/inputs/` (`--cache-dir DIR` or `IETSP_CACHE_DIR` moves it
 to `DIR/inputs`) holds one directory per fetched input, named by the store path
-base name the lock implies. Code: `src/inputs.rs`.
+base name the lock implies. Code: `src/treestore`.
 
 | file | what |
 |---|---|

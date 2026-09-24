@@ -48,7 +48,7 @@ pub enum Shape {
     /// directory the key's first two characters make (IR cache).
     ShardedFiles,
     /// One directory per entry, named by a store path's base name (the input
-    /// store, `crate::inputs`).
+    /// store, `crate::treestore`).
     StoreEntries,
 }
 
@@ -392,7 +392,7 @@ pub fn stores(cache_dir: Option<&str>) -> Vec<(PathBuf, Shape)> {
     if let Some(c) = crate::compile::cache::IrCache::locate(cache_dir, false) {
         v.push((c.root().to_path_buf(), Shape::ShardedFiles));
     }
-    if let Some(r) = crate::inputs::locate(cache_dir) {
+    if let Some(r) = crate::treestore::locate(cache_dir) {
         v.push((r, Shape::StoreEntries));
     }
     v

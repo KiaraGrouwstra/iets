@@ -327,7 +327,7 @@ fn build_run(ev: &mut Evaluator, n: &Nix) -> crate::error::Result<Done> {
 /// as many threads as `http-connections`' default. A lock that is missing or
 /// incomplete needs locking, which the real nix does.
 fn prefetch_inputs_main(argv: &[String], rest: &[String]) -> i32 {
-    use crate::flake::fetch::{AttrVal, Attrs, ensure_readable, parse_nar_hash, source_store_path};
+    use crate::flake::fetch::{AttrVal, Attrs, ensure_readable, parse_nar_hash};
     let mut c = Common::default();
     let mut refs = Vec::new();
     let mut a = Argv { all: rest, i: 0 };
@@ -368,7 +368,7 @@ fn prefetch_inputs_main(argv: &[String], rest: &[String]) -> i32 {
             (Some("path"), _) => {}
             (Some("github" | "gitlab" | "sourcehut" | "tarball" | "git" | "hg"), Some(h)) => {
                 let (h, sp) = parse_nar_hash(h)
-                    .and_then(|h| Ok((h.to_sri(), source_store_path(&h)?)))
+                    .and_then(|h| Ok((h.to_sri(), crate::treestore::store_path("source", &h)?)))
                     .unwrap_or_else(|e| fallback(NAME, argv, &format!("input '{name}': {e}")));
                 attrs.insert("narHash".into(), AttrVal::Str(h.clone()));
                 todo.push((name.to_string(), h, sp, attrs));

@@ -12,7 +12,7 @@
 //! git-utils.cc:GitFileSystemObjectSinkImpl's. `spool_matches_the_tree` in the
 //! tests holds both paths to the same NAR bytes.
 //!
-//! The same index also answers evaluation. `crate::inputs` keeps the spool and
+//! The same index also answers evaluation. `crate::treestore` keeps the spool and
 //! a serialized index in the user-level input store, and every read of a
 //! fetched flake input, `import` included, comes back out of the spool by
 //! offset instead of out of `/nix/store` (docs/flakes.md).
@@ -86,7 +86,7 @@ pub struct Tree {
 }
 
 /// Version byte of the serialized index. A file that starts with anything else
-/// is not read; the entry holding it is wiped (`crate::inputs`).
+/// is not read; the entry holding it is wiped (`crate::treestore`).
 pub const INDEX_VERSION: u8 = 1;
 
 fn bad(why: String) -> Error {

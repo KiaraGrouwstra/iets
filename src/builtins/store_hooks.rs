@@ -10,11 +10,10 @@
 //! string coercion, and a read of a file through [`open`], which applies
 //! pure evaluation's allow list first. The answer is a [`SrcPath`]: the real
 //! file system, a local tree a virtual copy stands for, a member of a fetched
-//! flake input served out of its spool by offset (`crate::inputs`), or a
+//! flake input served out of its spool by offset (`crate::treestore`), or a
 //! `toFile` text or `.drv` this evaluation holds in memory. Its readers below
 //! record what they saw in the tracing cache's read set.
 
-use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, Read};
@@ -23,10 +22,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
-use crate::fetch::spool::Node;
 use crate::store::hash::{HashAlgo, Hasher};
 use crate::store::nar::{FileType, PathFilter};
-use crate::store::path::{IngestionMethod, STORE_DIR, StorePath, make_fixed_output_path};
+use crate::store::path::{STORE_DIR, StorePath};
 use crate::store::source::{SourceOrigin, Src, SrcPath};
 use crate::trace::Kind;
 
@@ -57,7 +55,7 @@ pub fn locate(ev: &Evaluator, path: &[u8]) -> Option<SrcPath> {
     };
     // a vanished entry falls back to the store, which a build has usually filled by then
     if let Src::Spool { name, .. } = &at.src
-        && crate::inputs::open(name).is_none()
+        && crate::treestore::get(name).is_none()
     {
         return None;
     }
@@ -155,7 +153,7 @@ pub fn stat(ev: &Evaluator, path: &[u8], follow: bool) -> Kind {
 /// What a [`SrcPath`] opens.
 pub enum At<'a> {
     Disk(Vec<u8>),
-    Spool(Arc<crate::inputs::Entry>, &'a str),
+    Spool(Arc<crate::treestore::StoredTree>, &'a str),
     Mem(&'a [u8]),
 }
 
@@ -187,11 +185,12 @@ fn below(root: &Path, rel: &[u8]) -> PathBuf {
     }
 }
 
-fn kind_of(n: &Node) -> Kind {
-    match n {
-        Node::Dir(_) => Kind::Directory,
-        Node::File { .. } => Kind::Regular,
-        Node::Symlink(_) => Kind::Symlink,
+fn kind_of(t: FileType) -> Kind {
+    match t {
+        FileType::Directory => Kind::Directory,
+        FileType::Regular => Kind::Regular,
+        FileType::Symlink => Kind::Symlink,
+        FileType::Unknown => Kind::Other,
     }
 }
 
@@ -236,7 +235,7 @@ impl SrcPath {
                 if !self.accepts(&self.in_spool()) {
                     return None;
                 }
-                Some(At::Spool(crate::inputs::open(name)?, name))
+                Some(At::Spool(crate::treestore::get(name)?, name))
             }
             Src::Mem(b) => self.rel.is_empty().then_some(At::Mem(b)),
         }
@@ -259,10 +258,9 @@ impl SrcPath {
                 ev.trace.stat(&p, follow, kind);
                 r.map(|_| kind)
             }
-            At::Spool(entry, name) => {
-                crate::inputs::record(ev, &entry, name);
-                let node = entry.tree.resolve(&self.rel, follow).ok_or_else(missing)?;
-                Ok(kind_of(node))
+            At::Spool(tree, name) => {
+                crate::treestore::record(ev, &tree, name);
+                Ok(kind_of(tree.stat(&self.rel, follow).ok_or_else(missing)?))
             }
             At::Mem(_) => Ok(Kind::Regular),
         }
@@ -305,15 +303,16 @@ impl SrcPath {
                 ev.trace.file(&p, &meta, &bytes);
                 Ok(bytes)
             }
-            At::Spool(entry, name) => {
-                let at = match entry.tree.resolve(&self.rel, true) {
-                    Some(Node::File { at, .. }) => at,
-                    Some(_) => return Err((STAT, io::Error::from_raw_os_error(libc::EISDIR))),
-                    None => return Err((STAT, enoent())),
-                };
-                crate::inputs::record(ev, &entry, name);
-                entry.tree.read(at).map_err(|e| (READ, e))
-            }
+            At::Spool(tree, name) => match tree.read(&self.rel) {
+                // the type of the member is what the stat would have said
+                Err(e) if matches!(e.raw_os_error(), Some(libc::ENOENT | libc::EISDIR)) => {
+                    Err((STAT, e))
+                }
+                r => {
+                    crate::treestore::record(ev, &tree, name);
+                    r.map_err(|e| (READ, e))
+                }
+            },
             At::Mem(b) => Ok(b.to_vec()),
         }
     }
@@ -357,19 +356,13 @@ impl SrcPath {
                 }
                 Ok(out)
             }
-            At::Spool(entry, name) => {
-                let node = entry
-                    .tree
-                    .resolve(&self.rel, true)
-                    .ok_or((STAT, enoent()))?;
-                let Node::Dir(d) = node else {
-                    return Err(notdir());
-                };
-                crate::inputs::record(ev, &entry, name);
+            At::Spool(tree, name) => {
+                let entries = tree.list(&self.rel).map_err(|e| (STAT, e))?;
+                crate::treestore::record(ev, &tree, name);
                 let here = self.in_spool();
-                Ok(d.iter()
+                Ok(entries
+                    .into_iter()
                     .filter(|(n, _)| self.accepts(&here.join(OsStr::from_bytes(n))))
-                    .map(|(n, child)| (n.clone(), child.file_type()))
                     .collect())
             }
             At::Mem(_) => Err(notdir()),
@@ -385,17 +378,13 @@ impl SrcPath {
             Src::Fs { root, .. } => {
                 crate::store::nar::dump_path(&below(root, &self.rel), sink, filter)
             }
-            Src::Spool { name, .. } => {
-                let entry = crate::inputs::open(name).ok_or_else(|| {
+            Src::Spool { name, .. } => crate::treestore::get(name)
+                .ok_or_else(|| {
                     io::Error::other(format!(
                         "the input store no longer holds '{name}'; evaluate again to fetch it"
                     ))
-                })?;
-                let node = entry.tree.resolve(&self.rel, true).ok_or_else(enoent)?;
-                entry
-                    .tree
-                    .dump_filtered(node, &self.in_spool(), sink, filter)
-            }
+                })?
+                .dump(&self.rel, &self.in_spool(), sink, filter),
             Src::Mem(b) => crate::store::nar::dump_string(b, sink),
         }
     }
@@ -434,24 +423,24 @@ pub fn copy_path_to_store(
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| "source".into());
     let fixed = |hash| {
-        make_fixed_output_path(IngestionMethod::Recursive, hash, &name, &BTreeSet::new())
-            .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, pos))
+        crate::treestore::store_path(&name, hash)
+            .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))
     };
     let (sp, origin, hash, nar_size) = match at.at() {
         None => return Err(copy_err(enoent())),
         Some(At::Mem(_)) => return Err(recopy_unsupported(path, pos)),
         // the input itself needs no hashing: its store path is the one the
         // lock named and its NAR hash is in the index
-        Some(At::Spool(entry, base))
+        Some(At::Spool(tree, base))
             if at.rel.is_empty() && matches!(at.src, Src::Spool { accepted: None, .. }) =>
         {
-            crate::inputs::record(ev, &entry, base);
+            crate::treestore::record(ev, &tree, base);
             let sp = StorePath::from_base_name(base)
                 .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, pos))?;
-            (sp, at.clone(), entry.nar_hash, entry.nar_size)
+            (sp, at.clone(), tree.nar_hash(), tree.nar_size())
         }
-        Some(At::Spool(entry, base)) => {
-            crate::inputs::record(ev, &entry, base);
+        Some(At::Spool(tree, base)) => {
+            crate::treestore::record(ev, &tree, base);
             let mut h = Hasher::new(HashAlgo::Sha256);
             at.nar(&mut h).map_err(copy_err)?;
             let size = h.bytes_written();

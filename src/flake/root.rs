@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::Source;
-use super::fetch::{AttrVal, Attrs, emit_tree_attrs, source_store_path};
+use super::fetch::{AttrVal, Attrs, emit_tree_attrs};
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
 use crate::runtime::Word;
 use crate::store::hash::{Hash, HashAlgo};
@@ -38,7 +38,7 @@ pub fn source_info(ev: &mut Evaluator, source: &Source, pos: Pos) -> EvalResult<
             );
             attrs.insert("narHash".into(), AttrVal::Str(hash.to_sri()));
             attrs.insert("lastModified".into(), AttrVal::Int(mtime.max(0) as u64));
-            let sp = source_store_path(&hash)
+            let sp = crate::treestore::store_path("source", &hash)
                 .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
             Ok((emit_tree_attrs(ev, &sp, &attrs, pos)?, String::new()))
         }
@@ -60,8 +60,8 @@ pub fn path_tree(ev: &mut Evaluator, dir: &Path, pos: Pos) -> EvalResult<(Hash, 
     let (hash, nar_size, mtime) = dump_and_max_mtime(dir, &mut fp).map_err(io)?;
     ev.trace
         .tree(dir, crate::trace::hash_to_digest(&hash), None, fp);
-    let sp =
-        source_store_path(&hash).map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
+    let sp = crate::treestore::store_path("source", &hash)
+        .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
     ev.known.add(
         sp,
         SourceOrigin::tree(SrcPath::fs(dir, None), hash, nar_size),
@@ -198,8 +198,8 @@ fn git_tree(ev: &mut Evaluator, root: &Path, pos: Pos) -> EvalResult<Word> {
         })?;
     ev.trace
         .tree_external(root, crate::trace::hash_to_digest(&hash), &accepted, fp);
-    let sp =
-        source_store_path(&hash).map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
+    let sp = crate::treestore::store_path("source", &hash)
+        .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
     ev.known.add(
         sp.clone(),
         SourceOrigin::tree(SrcPath::fs(root, Some(Arc::new(accepted))), hash, nar_size),

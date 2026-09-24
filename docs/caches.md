@@ -10,7 +10,7 @@ of in-place repair.
 |---|---|---|---|
 | compiled IR (`src/compile/cache.rs`, docs/memory.md) | `~/.cache/ietsp/ir` | `<2 hex>/<62 hex>`, one file | build id, path, system, store dir, source |
 | tracing runs (`src/trace/`, docs/tracing-cache.md) | `~/.cache/ietsp/trace` | `<64 hex>/`, one directory of files | the whole command (docs/tracing-cache.md, "Key") |
-| fetched flake inputs (`src/inputs.rs`, docs/flakes.md) | `~/.cache/ietsp/inputs` | `<store path base name>/`, one directory of files | the store path the lock implies |
+| fetched flake inputs (`src/treestore`, docs/flakes.md) | `~/.cache/ietsp/inputs` | `<store path base name>/`, one directory of files | the store path the lock implies |
 
 `--cache-dir DIR` or `IETSP_CACHE_DIR` moves all three: the tracing store is
 then `DIR` itself, the IR store `DIR/ir` and the input store `DIR/inputs`.

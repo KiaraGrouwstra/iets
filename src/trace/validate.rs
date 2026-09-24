@@ -159,7 +159,7 @@ fn check(o: &Obs, rehashed: &AtomicUsize) -> Outcome {
         // One `stat` per entry, no bytes: the name is the content address, so an
         // entry that is still there still holds what the run read.
         Obs::Input { entry, version } => {
-            if crate::inputs::holds(entry, *version) {
+            if crate::treestore::has(entry, *version) {
                 Outcome::Same
             } else {
                 Outcome::Changed(format!("input store entry {} is gone", lossy(entry)))

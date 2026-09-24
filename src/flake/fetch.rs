@@ -3,7 +3,7 @@
 //! `emitTreeAttrs`. A `path` input is a virtual copy of the local
 //! directory, like the root tree. A remote input (github, git, tarball,
 //! ...) is read from `/nix/store` when it is there, else from the user-level
-//! input store (`crate::inputs`), else substituted by a daemon if one is
+//! input store (`crate::treestore`), else substituted by a daemon if one is
 //! reachable, else downloaded into the input store by ietsp itself (`github`,
 //! `gitlab`, `sourcehut`, `tarball`), else fetched by running `nix` once
 //! (`git`, `hg`). Only that last step needs a daemon.
@@ -48,16 +48,6 @@ fn bool_attr(a: &Attrs, name: &str) -> Option<bool> {
         Some(AttrVal::Bool(b)) => Some(*b),
         _ => None,
     }
-}
-
-pub fn source_store_path(nar_hash: &Hash) -> crate::error::Result<StorePath> {
-    make_fixed_output_path(
-        IngestionMethod::Recursive,
-        nar_hash,
-        "source",
-        &std::collections::BTreeSet::new(),
-    )
-    .map_err(Into::into)
 }
 
 pub fn parse_nar_hash(s: &str) -> crate::error::Result<Hash> {
@@ -235,7 +225,7 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
             attrs
                 .entry("lastModified".into())
                 .or_insert(AttrVal::Int(mtime.max(0) as u64));
-            source_store_path(&hash)
+            crate::treestore::store_path("source", &hash)
                 .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?
         }
         "github" | "gitlab" | "sourcehut" | "git" | "tarball" | "hg" => {
@@ -255,7 +245,7 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
             let hash = parse_nar_hash(nar_hash)
                 .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
             attrs.insert("narHash".into(), AttrVal::Str(hash.to_sri()));
-            let sp = source_store_path(&hash)
+            let sp = crate::treestore::store_path("source", &hash)
                 .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
             ensure_readable(ev, &sp, &attrs, pos)?;
             sp
@@ -465,7 +455,7 @@ fn substitute(ev: &mut Evaluator, store_path: &str) -> bool {
 /// exactly what Nix reads. `/nix/store` is checked first and used when it has
 /// the tree. Otherwise the user-level input store is, and a tarball-shaped
 /// input that is in neither is downloaded into it, so evaluation needs no
-/// daemon: reads come out of the spool by offset (`crate::inputs`). A daemon
+/// daemon: reads come out of the spool by offset (`crate::treestore`). A daemon
 /// that is reachable is still asked to substitute first, because a local copy
 /// beats a download; when there is none the step is skipped without a word. A
 /// `git` or `hg` input still goes through Nix's own `fetchTree`, which does
@@ -483,7 +473,7 @@ pub fn ensure_readable(
         ev.trace.stat(full.as_bytes(), true, on_disk);
         return Ok(());
     }
-    if let Some(entry) = crate::inputs::open(sp.base_name()) {
+    if let Some(entry) = crate::treestore::get(sp.base_name()) {
         adopt(ev, sp, &entry);
         return Ok(());
     }
@@ -513,17 +503,17 @@ pub fn ensure_readable(
 }
 
 /// Points every read of `sp` at the input store entry, and records the entry in
-/// the read set (`crate::inputs::record`).
-fn adopt(ev: &mut Evaluator, sp: &StorePath, entry: &crate::inputs::Entry) {
+/// the read set (`crate::treestore::record`).
+fn adopt(ev: &mut Evaluator, sp: &StorePath, entry: &crate::treestore::StoredTree) {
     ev.known.add(
         sp.clone(),
         SourceOrigin::tree(
             SrcPath::spool(sp.base_name(), b""),
-            entry.nar_hash,
-            entry.nar_size,
+            entry.nar_hash(),
+            entry.nar_size(),
         ),
     );
-    crate::inputs::record(ev, entry, sp.base_name());
+    crate::treestore::record(ev, entry, sp.base_name());
 }
 
 /// nix.conf, read once: `store` for the eval store and `access-tokens` for the
@@ -637,7 +627,7 @@ fn fetch_tarball(
     sp: &StorePath,
     attrs: &Attrs,
     pos: Pos,
-) -> EvalResult<std::sync::Arc<crate::inputs::Entry>> {
+) -> EvalResult<std::sync::Arc<crate::treestore::StoredTree>> {
     let name = input_name(ev, attrs);
     let fail = |e: String| Error::boxed(ErrorKind::Eval, e, pos);
     let (url, headers) = tarball_url(nix_conf(&ev.session), attrs)
@@ -646,15 +636,15 @@ fn fetch_tarball(
         .and_then(|h| parse_nar_hash(h).ok())
         .ok_or_else(|| fail(format!("ietsp: input '{name}' has no usable 'narHash'")))?;
 
-    let _fetching = crate::inputs::fetch_lock(sp.base_name(), || {
+    let _fetching = crate::treestore::fetch_lock(sp.base_name(), || {
         crate::log::line(&format!(
             "ietsp: waiting for another process to fetch input '{name}'"
         ))
     });
-    if let Some(entry) = crate::inputs::reopen(sp.base_name()) {
+    if let Some(entry) = crate::treestore::reopen(sp.base_name()) {
         return Ok(entry);
     }
-    let staged = crate::inputs::stage(sp.base_name()).ok_or_else(|| {
+    let staged = crate::treestore::stage(sp.base_name()).ok_or_else(|| {
         fail(format!(
             "ietsp: cannot fetch input '{name}': no cache directory to hold it"
         ))
@@ -686,8 +676,7 @@ fn fetch_tarball(
         );
         return Err(Error::hash_mismatch(msg, &nar_hash, None, pos));
     }
-    let entry = crate::inputs::Entry::new(tree, nar_hash, nar_size);
-    crate::inputs::store(sp.base_name(), staged, entry).ok_or_else(|| {
+    crate::treestore::put(sp.base_name(), staged, tree, nar_hash, nar_size).ok_or_else(|| {
         fail(format!(
             "ietsp: cannot keep the fetched input '{name}' in the input store"
         ))
@@ -821,15 +810,6 @@ pub fn emit_tree_attrs(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn store_path_from_nar_hash() {
-        let h = parse_nar_hash("sha256-9i/VTdusq/+NM/tz+J1Re+ojkMB8MBf0QshnYfzHz30=").unwrap();
-        assert_eq!(
-            source_store_path(&h).unwrap().to_full_string(),
-            "/nix/store/z4wkdlk69gck09s64a8ghpn6h7bxhkyy-source"
-        );
-    }
 
     #[test]
     fn nix_literal_escapes() {
