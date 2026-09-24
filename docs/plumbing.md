@@ -88,13 +88,58 @@ classic commands: sixteen `run_parallel` call sites and four
 
 ### 4. Text-or-JSON rendering
 
-Hand-written per command: `cli/build.rs:print_missing` and `render_size`,
-`cli/diff.rs:run` and `closure_diff`, `cli/prefetch.rs:print_hash`,
-`cli/search.rs:show_results`, `cli/jobs.rs:jobs_summary`,
-`cli/fastbuild/mod.rs:summary` and `write_step_summary`,
-`cli/classic/instantiate.rs:print_bytes` (a copy of
-`cli/classic/nix.rs:print_bytes`). No shared writer, no shared size or
-table formatting.
+**Closed by stage 2.** Hand-written per command:
+`cli/build.rs:print_missing` and `render_size`, `cli/diff.rs:run` and
+`closure_diff`, `cli/prefetch.rs:print_hash`, `cli/search.rs:show_results`,
+`cli/jobs.rs:jobs_summary`, `cli/fastbuild/mod.rs:summary` and
+`write_step_summary`, `cli/classic/instantiate.rs:print_bytes` (a copy of
+`cli/classic/nix.rs:print_bytes`). There was no shared writer and no shared
+size formatting. All nine now go through the two modules below.
+
+#### What went below, and what stayed porcelain-side
+
+The split is one question: **would a plumbing op emit this too?** If yes it
+is a value, and it belongs in `api::render`. If it only reaches a terminal,
+it is presentation, and it belongs in `src/cli/render`.
+
+`api::render` (the operation layer) holds the trait `Report`, which gives a
+value its JSON, and the four values whose JSON is already a contract in this
+file:
+
+| Value | The op it is the contract of | Was |
+|:---|:---|:---|
+| `Missing` | `missing` | `cli/build.rs:print_missing`, inline `json!` |
+| `Closure` + `Change` | `closure-diff` | `cli/diff.rs:closure_diff`, an anonymous four-tuple |
+| `Fetched` | `fetch` | `cli/prefetch.rs:print_hash`, inline `json!` |
+| `impl Report for drvdiff::Diff` | `drv-diff` | `store/drvdiff.rs:json` |
+
+`Missing::of` carries the two orderings — `willBuild` in the plan's order,
+`willSubstitute` by store-path name — because they are part of the answer,
+not of the layout. `Closure::of` carries the added/removed/changed verdict
+for the same reason. `Diff` keeps only `equal` at the root: an input
+derivation under it has the shape the recursion gives it.
+
+`src/cli/render` (porcelain) holds everything a terminal needs, and may be
+shared by every command:
+
+* `bytes` — the one stdout writer, from the two `print_bytes` copies.
+* `json` — the `nlohmann::json::dump` shape, from `search`'s `json_out`,
+  `prefetch`'s and `plumbing resolve`'s `println!`.
+* `pretty` — `--pretty`'s default, a terminal on stdout.
+* `size` — `util.cc:renderSize`, from `cli/build.rs`.
+* `status` — the one status line on stderr, for `jobs_summary` and
+  `fast-build`'s two summaries.
+* `Text` and `emit` — the `if json { … } else { … }` that was written four
+  times, and the layout of each value above. `store::drvdiff`'s `text`,
+  `line_diff`, `one_line`, `short` and `drv_name` moved here whole: a module
+  below the command line does not format for a terminal.
+
+`search`'s `--json` object stays in `search`, as this file already said:
+regex matching, exclusion, colour and that object shape are presentation.
+So do `jobs_summary` and `fast-build`'s report, which describe a run of a
+command and not an operation. Note that real Nix writes its ANSI escapes to
+stdout whether or not stdout is a terminal; `nix search` parity depends on
+it, so `bytes` adds nothing and decides nothing.
 
 ### 5. Argument parsing
 
@@ -437,9 +482,9 @@ as porcelain aliases.
     operation.
 
 These are allowed to live in porcelain-side libraries — `src/cli/render/`
-for the shared writer, `src/cli/classic/` for compatibility,
-`src/cli/interactive/` for prompts. They may be shared between porcelain
-commands.
+for the shared writer and the text layouts (stage 2), `src/cli/classic/`
+for compatibility, `src/cli/interactive/` for prompts. They may be shared
+between porcelain commands.
 
 ## How the rule is enforced
 
@@ -662,7 +707,7 @@ Every stage is one merge, and the checks pass at its commit.
 | # | Stage | src delta | Where the reduction comes from |
 |--:|:---|---:|:---|
 | 1 | `api::installable` + `plumbing resolve`; move `nix build`/`nix eval`, `ietsp search` and `print-dev-env` onto it | **+220 measured** | three `attr_paths` tables and three candidate loops (-84) become one 127-line module; `plumbing resolve` is +156 of new surface |
-| 2 | `api::render` + `src/cli/render`: one JSON writer, one size and table formatter | -120 | nine hand-written renderers, two copies of `print_bytes`, one `render_size` |
+| 2 | `api::render` + `src/cli/render`: one JSON writer, one size and table formatter | **+178 measured** (+171 outside tests) | nine renderers move; the saving is one `print_bytes`, one JSON dump and four `if json` branches (-60), against two new modules (+210) |
 | 3 | `api::run::Run`: the eval scaffold (evaluator, lints, cache, trace, parallel, report) as one call | **-7 measured** | the scaffold lines themselves are only -100; the rest is four per-command `Failed`/`Unsupported` enums and their error matches, against a 102-line module |
 | 4 | `api::build`: one dispatch path; `plumbing plan`, `missing`, `build` | **+417 measured** | the refactor is +33: the eight sites shed 220 lines against a 187-line module. The three ops are +384, of which about 80 is the three gaps they close |
 | 5 | `api::installable` grows the get-drvs walk and `outputsToInstall`; `nix-build`, `nix-shell`, `nix-instantiate`, `ietsp build`, `diff`, `prefetch` move onto it | -180 | gaps (a)1, (a)2, (a)3, (a)4 close; `classic::derivations` and `classic::plan_roots` lose their callers |
@@ -672,18 +717,19 @@ Every stage is one merge, and the checks pass at its commit.
 | 9 | `plumbing index`, `jobs`, `dev-env`, `drv-show`, `drv-diff`, `closure-diff`; porcelain becomes flags and rendering | +150 | the ops are new surface; the porcelain shrinks by about as much |
 | 10 | `tests/layering.rs` and the allow-list; `crate::flake` and `crate::store` banned from `src/cli` | +60 | the test is new; it is what keeps stages 1-9 from rotting |
 
-The estimates below said about **-450 lines** in `src`. Stages 1, 3 and 4
-measured +220, -7 and +417, so that number is wrong; see the next section
-for what replaces it. The reduction that is real is the second copy:
-three attr-path tables, eight build-dispatch sequences, sixteen eval
-scaffolds, nine renderers, two NAR writers. The new plumbing surface
-costs far more than the 550 lines charged above.
+The estimates below said about **-450 lines** in `src`. Stages 1, 2, 3 and
+4 measured +220, +178, -7 and +417, so that number is wrong; see the next
+section for what replaces it. The reduction that is real is the second
+copy: three attr-path tables, eight build-dispatch sequences, sixteen eval
+scaffolds, two NAR writers. It was not nine renderers, and why is below.
+The new plumbing surface costs far more than the 550 lines charged above.
 
-### What stages 1, 3 and 4 measured, and what it means for the rest
+### What stages 1, 2, 3 and 4 measured, and what it means for the rest
 
 Stage 1 estimated -60 and measured +220. Stage 3 estimated -260 and
 measured -7. Stage 4 estimated -300, was re-estimated at "positive unless
-the collapse works", and measured +417. Two things were wrong in the
+the collapse works", and measured +417. Stage 2 estimated -120, was
+re-estimated at -50, and measured +178. Two things were wrong in the
 first estimates, and they are wrong in the same direction everywhere
 else:
 
@@ -698,9 +744,18 @@ else:
    match that fed each one saved as much again, from five sites. Look
    for the type, not for the line.
 
-Stage 2 reads like stage 3's estimate. It is nine renderers of about 15
-lines against a new writer module; on the arithmetic above it is nearer
--50 than -120 unless it also deletes the per-command output types.
+**Stage 2's nine renderers were nine different outputs.** They were not
+nine copies of one renderer, which is what -120 and the -50 re-estimate
+both assumed. What actually repeated across them was small: one
+`print_bytes`, one JSON dump and four `if json { … } else { … }` branches,
+about 60 lines in all. Only one per-command output type existed to delete
+— `diff`'s anonymous four-tuple of closure rows — and it became `Closure`,
+which is larger than the tuple was because it is now a contract. About 120
+of the new lines are `store::drvdiff`'s text renderer moving into
+`src/cli/render` unchanged: a boundary fix that is a wash on the ledger
+and the point of the stage. `Missing`, `Closure` and `Fetched` each pay
+for one call site today; stages 4, 6 and 9 are where they earn their cost,
+because those ops then have no JSON of their own to write.
 
 **Stage 4's collapse worked and was still not enough.** `plan_roots`,
 `PlanUpload::new` and the `Dispatcher::open`/`submit` pair did collapse
@@ -712,7 +767,7 @@ types around it went with them: `classic::Root` moved into `api::build`,
 became `realise` plus `Built::paths`. That is what turned the -80 the plan
 predicted into -220. The module still cost 187, so the refactor is +33.
 
-A third rule follows, and it is the one that decides stages 5 to 9:
+Two more rules follow, and they are the ones that decide stages 5 to 9:
 
 3. **The plumbing op costs more than the operation it exposes.** The
    three ops are 384 lines against a dispatch layer they call in four
@@ -722,17 +777,30 @@ A third rule follows, and it is the one that decides stages 5 to 9:
    it replaces is deleted in the same stage. Stage 9 is charged +150 for
    six ops on the same arithmetic that cost 384 for three; read it as
    +400 unless the porcelain goes with it.
+4. **Count the copies, not the call sites.** Nine renderers, sixteen eval
+   scaffolds and eight dispatch sequences are three different numbers of
+   copies: sixteen and eight were copies, nine were not. Before estimating
+   a stage, say what the second copy is. If the answer is "they all do the
+   same *kind* of thing", the saving is the kind, not the thing.
 
 Stages 5 to 8 delete code without adding a command, and their per-module
 counts stand. On the measured numbers the net across all ten stages is
-about **+300**, not -450. The migration is still worth it — one
+about **+500**, not -450. The migration is still worth it — one
 implementation per capability, and a contract programs can call — but it
 is not a line-count win, and the plan should stop claiming one.
 
 Stage 1 was the first stage that was net positive, and it was honest about
-why: the shared resolver pays for itself only at three call sites today,
-while the plumbing command is entirely new surface. Stage 5 is where that
-module earns its cost.
+why: a shared value pays for itself at its second caller, and stages 1 and
+2 both built values that have only their first. Stage 5 is where
+`api::installable` earns its cost; stages 6 and 9 are where `api::render`
+earns its.
+
+One correction stage 4 left open: `plumbing missing` assembles its own
+`{"willBuild", …}` object and does not sort, so it is not yet byte-for-byte
+`ietsp build --dry-run --json`, which this file says it must be.
+`api::render::Missing::of` carries that ordering. Moving the op onto it
+closes both the duplicate and the divergence, but it changes that op's
+output, so it belongs in a change of its own.
 
 ## Review checklist
 
