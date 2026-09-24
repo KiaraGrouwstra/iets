@@ -46,7 +46,8 @@ module it belongs to) and let `cli` call it there.
 | Daemon events | `remote::event::Event::{Started, Log, Phase, Stopped, Failed}` |
 | Nix configuration | `config::Config::load(&[])` |
 | Evaluation cache | `Run::cached(&args, subcommand)`, `Run::hit`, `trace::run::Cache` |
-| Flake references | `api::flake_ref`, `flake::{eval_flake, eval_flake_value}` |
+| Flake references | `api::flake_ref`, `api::flake::{is_flake_ref, parse_attr_path, select, outputs, info, tree}`; `crate::flake` is private |
+| Where a tree comes from | `source::{SourceRef, Tree, Lock}`, `source::tree(ev, &r, pos)`; the fetchers and the input store are behind it |
 | `eval-jobs` style walks | `jobs::run`, `jobs::Opts` |
 
 ## What the host owns

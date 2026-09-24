@@ -2,7 +2,8 @@
 
 `ietsp eval --raw DIR#attr.path` evaluates a locked flake and prints what
 `nix eval --raw --option eval-cache false DIR#attr.path` prints. Code:
-`src/flake/`. Judge: `scripts/flaketest.nu`.
+`src/flake/` (flake evaluation) over `src/source/` (a reference becomes a
+tree), reached through `crate::api::flake`. Judge: `scripts/flaketest.nu`.
 
 ## Scope
 
@@ -111,8 +112,9 @@ what most command lines need.
 2. `call-flake.nix` from Nix 2.34.8 is embedded verbatim and called with
    the lock file text, `{ root = { sourceInfo; dir; }; }` and
    `builtins.fetchTree`.
-3. `builtins.fetchTree` on a locked node (`flake::fetch`) derives the store
-   path from `narHash` and returns `emitTreeAttrs`: `outPath`, `narHash`,
+3. `builtins.fetchTree` on a locked node (`flake::fetch` over `source::tree`)
+   derives the store path from `narHash` and returns `emitTreeAttrs`:
+   `outPath`, `narHash`,
    `rev`/`shortRev` when `rev` is present, `revCount`, `dirtyRev`/
    `dirtyShortRev`, `lastModified`/`lastModifiedDate` (`%Y%m%d%H%M%S`
    UTC), `submodules` for `git`. A `path` input is NAR-hashed, checked
@@ -130,8 +132,8 @@ from the store when the tree is there, else from the local tree.
 ## Getting a missing input readable
 
 A remote input (github, git, tarball, ...) whose locked tree is not in
-`/nix/store` must become readable first. `flake::fetch::ensure_readable` takes
-four steps in order; from the second on it prints
+`/nix/store` must become readable first. `source::tree` takes four steps
+in order; from the second on it prints
 `ietsp: input '<name>' is not in the store (<path>), fetching it`. The root tree
 and `path:` inputs never reach it.
 

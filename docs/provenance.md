@@ -34,7 +34,7 @@ Three sources fill it:
 
 1. **Every tree the evaluation copied.** The evaluator records a
    `SourceOrigin` with a local tree (`Src::Fs`) for `./path`, `filterSource`,
-   `builtins.path`, the root flake's tree (`src/flake/root.rs`) and every
+   `builtins.path`, the root flake's tree (`src/source/local.rs`) and every
    locked flake input of type `path`. This is the case that matters: the repo
    you are working on.
 2. **The `source-map` setting** in `ietsp.conf` or `--ietsp-option`

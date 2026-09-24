@@ -29,6 +29,11 @@ copy is what costs.
 Measured on `67a52a1`. `src/cli` is 7526 lines, `src/flake` is 4689,
 `src/api*` is 904.
 
+After the migration: `src/cli` is 7495, `src/flake` is 1390, `src/source`
+is 1316 and `src/api*` is 2205. The porcelain did not shrink; the library
+grew, and what moved out of `src/flake` is the capability the commands used
+to reach for.
+
 ### 1. Installable resolution
 
 "A flake reference, a FILE with `-A`, or `-E EXPR`" becomes derivations
@@ -81,8 +86,9 @@ Two of the eight keep a connection of their own: `nix-shell` and
 themselves (build the derivation's *inputs*, `execve` a shell; read the
 env output back). They use `api::build::plan` and
 `api::build::locate_store` and drive `PlanUpload` on that connection,
-because routing them through `Dispatch` would open a second one. Stage 9's
-`plumbing dev-env` is where that ends.
+because routing them through `Dispatch` would open a second one. This is
+an open gap: stage 9's `plumbing dev-env` was to close it, and stage 9 is
+cancelled.
 
 ### 3. The evaluate-then-walk-then-report scaffold
 
@@ -387,6 +393,10 @@ is, which brings the closure back first, and adds `gcRoots` to the object
 
 ### `drv-diff` and `closure-diff`
 
+**Not built.** Stage 9 was to add them and is cancelled; the shape below is
+the design, not a contract anything implements. `ietsp diff --json` prints
+it today.
+
 ```
 ietsp plumbing drv-diff [--depth N|--all] A B
 ietsp plumbing closure-diff [--builder URL] A B
@@ -396,6 +406,9 @@ The two JSON shapes `ietsp diff --json` and `ietsp diff --closure --json`
 print today, unchanged. Exit 0 equal, 1 different.
 
 ### `index`
+
+**Not built.** Stage 9 was to add it and is cancelled. `ietsp search --json`
+is the frontend that exists.
 
 ```
 ietsp plumbing index [EVAL FLAGS] [--prefixes package-set]
@@ -432,6 +445,11 @@ other frontend and is now the flag `--json` plus this op.
 
 ### `flake-info` and `flake-tree`
 
+**Not built, on purpose.** Stage 8 built the capability as `api::flake::info`
+and `api::flake::tree`, which is what the layering rule needs; an op would
+have been about +240 lines with no caller that needs the process boundary.
+The shape below stands for the day `nix flake metadata` stops falling back.
+
 ```
 ietsp plumbing flake-info FLAKEREF
 ietsp plumbing flake-tree FLAKEREF[#input.path]
@@ -451,12 +469,18 @@ ietsp plumbing flake-tree FLAKEREF[#input.path]
 
 ### `jobs` and `dev-env`
 
-`jobs` is today's `ietsp eval-jobs` output, which is already a machine
-contract (nix-eval-jobs' JSON lines). `dev-env` is `ietsp print-dev-env
---json`. Both move under the namespace unchanged; the existing names stay
-as porcelain aliases.
+**Not built.** Stage 9 was to add them and is cancelled. `jobs` is today's
+`ietsp eval-jobs` output, which is already a machine contract
+(nix-eval-jobs' JSON lines), and `dev-env` is `ietsp print-dev-env --json`.
+Both contracts exist under those names; moving them under the namespace
+would have renamed them, not added a capability.
 
 ## How the porcelain maps onto it
+
+The table is the design. `index`, `jobs`, `dev-env`, `drv-show`, `drv-diff`,
+`closure-diff`, `flake-info` and `flake-tree` are not built: a row naming
+one of those means the porcelain calls the **capability** — `api::installable`,
+`api::flake`, `crate::jobs` — with no op in between.
 
 | Porcelain | Plumbing it calls | Porcelain-only part |
 |:---|:---|:---|
@@ -504,8 +528,9 @@ as porcelain aliases.
    `ietsp build`'s `.drv` argument shares. What is left is the **sources**:
    the dump has none, so a closure whose sources are not in the local store
    still needs an instantiation first. `ietsp diff` keeps its in-memory
-   table, because it evaluates and compares in one process; `drv-show`
-   (stage 9) reads the directory.
+   table, because it evaluates and compares in one process. `drv-show` was
+   stage 9's reader of that directory; stage 9 is cancelled, and
+   `api::build::drvs_in_dir` is the reader a caller has.
 4. ~~**Uploading with a local source override.**~~ **Closed by stage 4.**
    The map lives in `api::build::Dispatch::overrides`, and `build` takes
    `--source STOREPATH=LOCAL`. `plan` does not need it: a plan names the
@@ -521,9 +546,12 @@ as porcelain aliases.
    `nix-instantiate --add-root` goes through `Dispatch` too. What the
    porcelain keeps is the *naming* of the links (`result-2-dev`,
    `--add-root` numbering), which is a user interface, per (b)2.
-7. **The flake source resolver.** See below. `flake-tree` does not exist;
-   every caller goes through `flake::eval_flake`, which fetches as a side
-   effect of evaluation.
+7. ~~**The flake source resolver.**~~ **Closed by stage 8.** `crate::source`
+   turns a `SourceRef` into a `Tree`, with the fetchers and the input store
+   behind it, and `api::flake` is what a command calls: `is_flake_ref`,
+   `parse_attr_path`, `select`, `outputs`, `info` and `tree`.
+   `crate::flake` is private. There is no `plumbing flake-tree`, on purpose
+   — see "What stage 8 measured".
 8. ~~**`--check-cache-status`.**~~ **Closed by stage 4.**
    `missing --check-cache-status` answers `cacheStatus`, `neededBuilds`
    and `neededSubstitutes` per root, from `jobs::cache::Resolver`. It
@@ -560,18 +588,19 @@ between porcelain commands.
 
 ## How the rule is enforced
 
-1. **A module boundary, checked by a test.** `tests/layering.rs` reads
-   `src/cli/**/*.rs` and fails when a file names
+1. **A module boundary, checked by a test.** **Built in stage 10.**
+   `tests/layering.rs` reads `src/cli/**/*.rs` and fails when a file names
    `crate::eval`, `crate::store`, `crate::build`, `crate::remote`,
    `crate::flake`, `crate::jobs`, `crate::devenv`, `crate::trace`,
    `crate::compile` or `crate::parallel`, outside an explicit allow-list
-   keyed by file. The allow-list starts as today's set and may only
-   shrink; the test asserts its length against a constant, so an entry
-   that is removed cannot come back unnoticed.
-2. **Types.** The end state is that `Word` (an evaluator value) does not
-   appear in a `src/cli` signature: a porcelain command that cannot name
-   a value cannot evaluate one. The same test greps for it, against the
-   same shrinking allow-list, so the rule can be adopted file by file.
+   keyed by file. `REACHES` started at 17 files; its length is asserted
+   against a constant, and an entry wider than the code needs fails too,
+   so a reach that goes cannot come back unnoticed.
+2. **Types.** **Built in stage 10.** The end state is that `Word` (an
+   evaluator value) does not appear in a `src/cli` signature: a porcelain
+   command that cannot name a value cannot evaluate one. The same test
+   checks it, against `WORD_IN_SIGNATURES`, which started at 7 files, so
+   the rule is adopted file by file.
    Note what this does *not* ban: a porcelain-side library that renders,
    parses Nix argv or prompts. Those may be as large as they need to be.
    The test asks one question only — is this a second implementation of
@@ -653,6 +682,31 @@ and the flake evaluation all call the resolver. `prefetch` calls
 `resolver.tree()` instead of `flake::spool` and `flake::http` directly, or
 those two move out of `src/flake` into `src/fetch`, where they belong:
 neither knows anything about flakes.
+
+**What stage 8 built instead, and why.** `src/source` is the module;
+`SourceRef`, `Tree` and `Lock` are there and `crate::flake` is
+`pub(crate)`. Four things above differ, each for a reason the measurement
+supports:
+
+* **No `trait SourceResolver`.** One resolver, one implementor, no second
+  caller — stage 7's rule. `SourceRef` is an enum of the three shapes a
+  tree comes in (a directory, a git working tree, a locked input) and
+  `source::tree(ev, &SourceRef) -> Tree` is the single method that mattered.
+  That call is what `builtins.fetchTree`, the flake root and `nix flake
+  prefetch-inputs` share, and it is where the three of them stopped
+  disagreeing about the entry name.
+* **`parse`, `lock` and `read` are not on it.** Parsing a flake reference
+  is flake syntax and stayed in `crate::flake`; the lock is
+  `api::flake::info`, which reads and checks one `flake.lock`; and reading
+  bytes out of a tree already goes through `treestore::StoredTree`, so a
+  fourth way in would have been a wrapper, not a capability.
+* **`Tree` carries its attrs.** The design's `nar_hash`, `last_modified`
+  and `rev` are accessors over the input attributes the tree resolved to,
+  because `emit_tree_attrs` — the one consumer — renders the attrs, and
+  storing both would have been two copies of the same three values.
+* **No `plumbing flake-info` or `flake-tree`.** See "What stage 8
+  measured": `api::flake` is the surface the layering rule needs, and no
+  porcelain command would have had to reach past `crate::api` without them.
 
 ### The input store is a store, and it should say so once
 
@@ -806,16 +860,20 @@ reader already goes through `StoredTree`.
    got a `mod.rs`. No caller changed except the module path.
 2. ~~`src/treestore` on `cachefs`.~~ **Done in stage 7**, at +117 lines;
    what was and was not built is above.
-3. Introduce `SourceRef`, `Tree` and `SourceResolver` in `src/source`,
-   implemented by today's `flake::fetch` over the tree store.
-   `flake::fetch_tree` becomes a thin call.
-4. Move `is_flake_ref`, `parse_attr_path` and `select` to `api::flake`.
-   The six `src/cli` call sites change to `api::`.
-5. `flake::lock` becomes `source::Lock`, with `flake-info` on top.
-6. `crate::flake` becomes `pub(crate)`; the layering test adds it to the
-   banned list.
+3. ~~Introduce `SourceRef`, `Tree` and `SourceResolver` in `src/source`.~~
+   **Done in stage 8**, without the trait: `SourceRef` is an enum of the
+   three shapes a tree comes in and `source::tree` is the one resolver
+   call. `flake::fetch_tree`'s locked arm is that call.
+4. ~~Move `is_flake_ref`, `parse_attr_path` and `select` to `api::flake`.~~
+   **Done in stage 8**, together with `outputs`, `info` and `tree`.
+5. ~~`flake::lock` becomes `source::Lock`.~~ **Done in stage 8.** Without
+   `flake-info`: `api::flake::info` is the capability and no porcelain
+   command needs an op to reach it.
+6. ~~`crate::flake` becomes `pub(crate)`.~~ **Done in stage 8**, and the
+   layering test (stage 10) has it on the banned list with no allow-list
+   entry.
 
-Steps 1 and 2 are in; steps 3 to 6 are stage 8.
+All six steps are in.
 
 ## Staged migration
 
@@ -830,13 +888,13 @@ Every stage is one merge, and the checks pass at its commit.
 | 5 | `api::installable` grows the get-drvs walk and `outputsToInstall`; `nix-build`, `nix-shell`, `nix-instantiate`, `ietsp build`, `diff`, `prefetch` move onto it | **+113 measured** | the refactor is -4: three capabilities moved below the command line and there was one copy of each. Gaps (a)1, (a)2 and most of (a)3 close, at +120 of new surface |
 | 6 | `src/fetch` split out of `src/flake`; `plumbing fetch` | **+68 measured** (+66 outside tests) | the move is +5; the op is one capability with two frontends, and `prefetch` sheds 177 lines against a 128-line `api::fetch` and a 110-line op |
 | 7 | `src/treestore` on `cachefs`; `inputs.rs` collapses into it | **+117 measured** (+115 outside tests) | the two NAR framings did become one (-84 in the spool, +70 in `nar::TreeWriter`); the rest was a move: `inputs.rs` -280 against a 402-line module |
-| 8 | `source::SourceResolver`; `crate::flake` private; `plumbing flake-info`, `flake-tree` | -150 | one lock reader, one tree fetcher; `flake::root` and `flake::fetch` stop overlapping |
-| 9 | `plumbing index`, `jobs`, `dev-env`, `drv-show`, `drv-diff`, `closure-diff`; porcelain becomes flags and rendering | +150 | the ops are new surface; the porcelain shrinks by about as much |
-| 10 | `tests/layering.rs` and the allow-list; `crate::flake` and `crate::store` banned from `src/cli` | +60 | the test is new; it is what keeps stages 1-9 from rotting |
+| 8 | `src/source`: a reference resolves to a tree; `api::flake`; `crate::flake` private | **+156 measured** (+152 outside tests) | the move is +3, as rule 5 says; the real deletions are one attr-path parser, one locked-input fetch sequence and one store-path naming site. `src/source`'s own interface is +90 and `api::flake` +95 |
+| 9 | ~~`plumbing index`, `jobs`, `dev-env`, `drv-show`, `drv-diff`, `closure-diff`~~ | **cancelled** | six more ops at the measured ~+120 each buys capability that already exists |
+| 10 | `tests/layering.rs` and the two allow-lists | **0 in `src`** (+304 in `tests`) | the test is new; it is what keeps stages 1-8 from rotting |
 
-The estimates below said about **-450 lines** in `src`. Stages 1 to 7
-measured +220, +178, -7, +417, +113, +68 and +117, so that number is
-wrong; see the next sections for what replaces it. The reduction that is
+The estimates below said about **-450 lines** in `src`. The stages that ran
+measured +220, +178, -7, +417, +113, +68, +117, +156 and 0, so that number
+is wrong; see the next sections for what replaces it. The reduction that is
 real is the second copy: three attr-path tables, eight build-dispatch
 sequences, sixteen eval scaffolds, two NAR framings. It was not nine
 renderers, and it was not the modules a stage merely moves. The new
@@ -871,8 +929,10 @@ which is larger than the tuple was because it is now a contract. About 120
 of the new lines are `store::drvdiff`'s text renderer moving into
 `src/cli/render` unchanged: a boundary fix that is a wash on the ledger
 and the point of the stage. `Missing`, `Closure` and `Fetched` each pay
-for one call site today; stages 4, 6 and 9 are where they earn their cost,
-because those ops then have no JSON of their own to write.
+for one call site today; stages 4 and 6 are where two of them earned their
+cost, because those ops then had no JSON of their own to write. `Closure`
+was to earn its in stage 9, which is cancelled, so it still pays for one
+call site.
 
 **Stage 4's collapse worked and was still not enough.** `plan_roots`,
 `PlanUpload::new` and the `Dispatcher::open`/`submit` pair did collapse
@@ -884,38 +944,39 @@ types around it went with them: `classic::Root` moved into `api::build`,
 became `realise` plus `Built::paths`. That is what turned the -80 the plan
 predicted into -220. The module still cost 187, so the refactor is +33.
 
-Two more rules follow, and they are the ones that decide stages 5 to 9:
+Two more rules follow, and they are the ones that decided stages 5 to 9:
 
 3. **The plumbing op costs more than the operation it exposes.** The
    three ops are 384 lines against a dispatch layer they call in four
    lines each. Flag parsing, the root vocabulary (`DRV!OUT`, `--roots -`),
    the help text and the JSON shaping are the op; the capability was
    already there. A stage that adds ops nets positive unless the porcelain
-   it replaces is deleted in the same stage. Stage 9 is charged +150 for
-   six ops on the same arithmetic that cost 384 for three; read it as
-   +400 unless the porcelain goes with it.
+   it replaces is deleted in the same stage. Stage 9 was charged +150 for
+   six ops on the same arithmetic that cost 384 for three; it is cancelled,
+   and this rule is why.
 4. **Count the copies, not the call sites.** Nine renderers, sixteen eval
    scaffolds and eight dispatch sequences are three different numbers of
    copies: sixteen and eight were copies, nine were not. Before estimating
    a stage, say what the second copy is. If the answer is "they all do the
    same *kind* of thing", the saving is the kind, not the thing.
 
-Stage 8 is the last stage charged a reduction for moving code, and stages
-5, 6 and 7 all say the same thing about that charge: read it as about 0,
-not -150, unless the second copy is named before the work starts. It also
-adds two ops, so rule 3 applies on top.
+Stage 8 was the last stage charged a reduction for moving code, and stages
+5, 6 and 7 all said the same thing about that charge: read it as about 0,
+not -150, unless the second copy is named before the work starts. It
+measured +3 for the move.
 
-On the measured numbers the net across all ten stages is about **+700**,
-not -450. The migration is still worth it — one implementation per
-capability, and a contract programs can call — but it is not a line-count
-win, and the plan should stop claiming one.
+On the measured numbers the net across the nine stages that ran is
+**+1262** in `src`, not -450. The migration is still worth it — one
+implementation per capability, and a contract programs can call — but it is
+not a line-count win, and the plan should stop claiming one.
 
 Stage 1 was the first stage that was net positive, and it was honest about
 why: a shared value pays for itself at its second caller, and stages 1 and
 2 both built values that have only their first. Stage 5 is where
 `api::installable` earned its cost: the module grew from 175 lines to 510,
 and ten `src/cli` files name it — every command that turns an installable
-into derivations. Stages 6 and 9 are where `api::render` earns its.
+into derivations. Stage 6 is where `api::render` earned part of its;
+stage 9 was to be the rest, and is cancelled.
 
 ### What stage 5 measured
 
@@ -990,8 +1051,8 @@ content-addressed store nobody had named, `builtins::store_hooks` matched
 on the spool's node type through it, and `put` could be handed a name and
 a hash to believe. Now the store has a name, `StoredTree` is the only way
 through it, and `put(name, expect, …)` hashes what it is given and refuses
-anything else. Stage 8 can put a `SourceResolver` over that; it could not
-have gone over `crate::inputs`.
+anything else. Stage 8 put a resolver over that; it could not have gone over
+`crate::inputs`.
 
 The correction stage 4 left open is closed: `plumbing missing` assembled its
 own `{"willBuild", …}` object and did not sort, so it was not byte-for-byte
@@ -1000,6 +1061,148 @@ answers `QueryMissing` with a lexicographic `StorePathSet`, so the two
 differed whenever a dependency sorted after its dependent. The op now goes
 through `api::render::Missing::of`, which carries the two orderings, and the
 e2e case compares the two commands byte for byte.
+
+### What stage 8 measured
+
+Estimated -150, corrected to about 0 before the work started, measured
+**+156** (+152 outside tests). The correction was right about the move and
+wrong about the size of the interface it needed.
+
+The move itself is +3, exactly as rule 5 predicts: `flake/root.rs` became
+`source/local.rs` and the fetcher half of `flake/fetch.rs` became
+`source/remote.rs`, and 712 lines left one file to arrive in two others.
+What was actually deleted is small and countable:
+
+* **One attr-path parser.** `cli::classic::parse_attr_path` and
+  `flake::parse_attr_path` were the same 26 lines with a different error
+  type. -28, and it is the only place in the stage where two functions did
+  the same thing to the same input.
+* **One locked-input sequence.** Parse the `narHash`, name the entry with
+  `treestore::store_path`, `ensure_readable`. `builtins.fetchTree` and
+  `nix flake prefetch-inputs` each wrote it out, and the two had to agree on
+  the entry name by hand or the input store would miss. It is `source::tree`
+  now, and `prefetch-inputs` lost the lock walk that fed it (-26 in
+  `cli/classic/nix.rs`, +27 in `api::flake::Info::inputs`, so the deletion
+  is the *class* of bug, not the lines).
+* **One store-path naming site.** `builtins.fetchTarball` called
+  `make_fixed_output_path` itself. It calls `treestore::store_path`, which
+  is the same bytes, so the store path is unchanged and there is one
+  function that names an input-store entry.
+
+Against that, the interface is +185: `src/source`'s own `SourceRef`, `Tree`
+and `tree` are about 90 lines, and `api::flake` is 95. That is rule 1 again
+— a shared module costs 100-150 before it saves one — and stage 8 pays it
+twice, because the layering rule needs the surface (`api::flake`) *and* the
+capability behind it (`src/source`) to be different modules.
+
+**What was built, against the design above.** `SourceRef`, `Tree` and `Lock`
+exist; `trait SourceResolver` does not, for stage 7's reason: there is one
+resolver and there will be one resolver, so the trait would have had a
+single implementor and no second caller. `SourceRef` is an enum of the three
+shapes a tree comes in — a directory, a git working tree, a locked input —
+and `source::tree` is the resolver's one method. `parse`, `lock` and `read`
+are not methods of it: `crate::flake` still parses a flake reference, the
+lock is `api::flake::info`, and every read already goes through
+`StoredTree`.
+
+**Two ops were not added, and that was the right call.** `plumbing
+flake-info` and `plumbing flake-tree` would have been about +240 by rule 3,
+and nothing needed them: the layering rule asks that a porcelain command
+reach a capability through `crate::api`, and `api::flake` is that, as a
+library surface. An op is warranted when a *program outside ietsp* needs the
+contract or when a porcelain command would otherwise reach past
+`crate::api`; neither was true. `nix flake metadata` still falls back to the
+real nix, and when it stops doing so, `flake-info` is the op to add.
+
+**What the stage is worth is not on the ledger.** Before it, `src/cli` named
+`crate::flake::eval_flake`, `crate::flake::fetch::ensure_readable` and
+`crate::flake::lock::check`, so "flakes" was a thing four command files each
+knew a different piece of. `crate::flake` is `pub(crate)` now and no
+`src/cli` file names it. That is what the owner asked for by name, and it is
+what made stage 10's allow-list able to start without `flake` on it.
+
+### Stage 9, cancelled
+
+`plumbing index`, `jobs`, `dev-env`, `drv-show`, `drv-diff` and
+`closure-diff` are not built and will not be. Rule 3 measured the price: the
+three ops of stage 4 cost 384 lines over a capability that already existed,
+so six more are about +720, and every one of them exposes something a caller
+can already reach — `ietsp eval-jobs` and `ietsp print-dev-env` are the JSON
+contract already, `ietsp diff` composes `resolve` with its own comparison,
+and `api::installable` and `api::build` own the rest. Six ops at that price
+buys capability that already exists.
+
+The two gaps stage 9 was carrying stay open and are recorded as gaps, not as
+plans: `nix-shell` and `print-dev-env` still open a connection of their own
+(the two exceptions under "Build dispatch"), and `drv-show` was to be the
+reader of a `--dump-drvs` directory, which `api::build::drvs_in_dir`
+already is.
+
+### What stage 10 measured
+
+**0 in `src`**, +304 in `tests`. `tests/layering.rs` reads every
+`src/cli/**/*.rs` and fails when one names `crate::eval`, `crate::store`,
+`crate::build`, `crate::remote`, `crate::flake`, `crate::jobs`,
+`crate::devenv`, `crate::trace`, `crate::compile` or `crate::parallel`
+outside a per-file allow-list, and when a `src/cli` function signature names
+`runtime::Word`. Each list's length is asserted against a constant, and the
+test fails on an entry that is *wider* than the code needs as well as on one
+that is missing, so the lists cannot silently stay ahead of the code.
+
+The lists start at:
+
+| List | Length | What is on it |
+|:---|---:|:---|
+| `REACHES` | **17 files** | `build.rs`, `cache_dump.rs`, `classic/{build,develop,instantiate,mod,nix,shell}.rs`, `devenv.rs`, `diff.rs`, `eval.rs`, `fastbuild/mod.rs`, `jobs.rs`, `mod.rs`, `plumbing.rs`, `render/text.rs`, `search.rs` |
+| `WORD_IN_SIGNATURES` | **7 files** | `classic/{instantiate,mod,nix,shell}.rs`, `jobs.rs`, `mod.rs`, `search.rs` |
+
+`crate::flake` is on neither, because stage 8 took it. The layer named most
+often is `crate::eval` (13 files), which is the `Evaluator` type itself and
+the last one that will go; `crate::remote` (11) is the transport a command
+still names to open a connection.
+
+What the test does **not** ban is the point of it. A porcelain-side library
+may be as large as it needs to be: `src/cli/render` is 264 lines of
+presentation and passes, `src/cli/classic` is 2254 lines of Nix argv
+compatibility and passes. The one question is whether a file holds a second
+implementation of something the operation layer owns. Both failure messages
+say so, and both tell the reader the two ways out: close the gap in
+`crate::api`, or say why the entry belongs on the list and move the
+constant.
+
+## What the migration bought, and what it cost
+
+Nine stages ran. Stage 9 was cancelled. The measured net is **+1262 lines**
+in `src`, against a plan that promised -450.
+
+**What it cost.** 1262 lines, and the nine merges to write them. Rules 1 to 5
+say where they went: a shared module costs 100-150 lines before it saves
+one; a plumbing op costs more than the operation it exposes; a move is not a
+deletion. Three of the nine stages were mostly moves (6, 7, 8) and netted
++341 between them for deletions that add up to about 120 lines. Stage 4's
+three ops alone are +384.
+
+**What it bought.** Every capability has one implementation and one name:
+`api::installable` turns a string into derivations, `api::build` dispatches
+a build, `api::run` runs an evaluation, `api::fetch` fetches, `api::flake`
+resolves a flake, `api::render` says what a value's JSON is. Before stage 1
+there were three attr-path tables, eight build-dispatch sequences, sixteen
+eval scaffolds and two NAR framings; there is one of each. Ten `src/cli`
+files call `api::installable`; five no longer reach into `crate::store`.
+
+And it bought a contract. `ietsp plumbing resolve | ietsp plumbing plan`
+composes across processes, `missing` is byte-for-byte `build --dry-run
+--json`, and every op's JSON shape is in this file with an e2e case that
+checks it. That is the part a program outside ietsp can use, and it did not
+exist before.
+
+**What the line count says about the next one.** Not "do not refactor" —
+say what the second copy is before starting, and expect the number to be
+positive when there is not one. Every stage that named a real second copy
+(1, 3, 4's collapse, 5's attribute readers, 7's NAR framing) got a real
+deletion out of it; every stage that moved a module got +0 for the move and
+paid for the interface. The estimate was negative ten times out of ten, and
+it was wrong ten times out of ten.
 
 ## Review checklist
 

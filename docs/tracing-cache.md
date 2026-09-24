@@ -23,7 +23,7 @@ measurable next to the sha256 of the file bytes.
 | `Tree { root, nar_hash, stat_hash, filtered: Option<{ seen_hash: Option, accepted }> }` | `./path` coerced to a string, `builtins.path`, `filterSource`, a flake's git working tree (`seen_hash` is `None` there: git names the file set, so unlisted entries cannot matter), a `path:` flake or input (unfiltered) | recompute `stat_hash` (a walk with `lstat` only, no contents); on a mismatch re-dump the NAR with the recorded `accepted` set as filter and accept if `nar_hash` (and `seen_hash`, when kept) match |
 | `Canon { path, target }` | `storePath`, `builtins.path` and `filterSource` when `canonicalize(path) != path` | `canonicalize` again |
 | `Env { name, value: Option<bytes> }` | `getEnv`; `HOME` when a `~/` path literal is compiled | `var_os` again |
-| `Cmd { dir, argv, sha256 of exit status and stdout }` | the `git` queries of a flake's working tree (`flake::root`) | run again, rehash |
+| `Cmd { dir, argv, sha256 of exit status and stdout }` | the `git` queries of a flake's working tree (`source::local`) | run again, rehash |
 
 `stat_hash` covers, for every entry the walk saw: relative path, type,
 size, mtime_ns, inode, and symlink target. `seen_hash` covers the (relative
