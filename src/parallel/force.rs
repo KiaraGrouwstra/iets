@@ -16,8 +16,8 @@ pub const BATCH: u32 = 16;
 
 /// `IETSP_FANOUT` bitmask for experiments: 1 deep, 2 coerce, 4 list builtins.
 #[inline]
-fn fanout_mask() -> u32 {
-    crate::settings::get().fanout
+fn fanout_mask(ev: &Evaluator) -> u32 {
+    ev.session.settings().fanout
 }
 
 pub const T_LIST_WHNF: u8 = 1;
@@ -304,7 +304,7 @@ pub fn fanout_range(ev: &Evaluator, kind: u8, obj: Word, lo: usize, hi: usize, b
 /// Fan out a list a strict builtin is about to walk (elements to WHNF).
 #[inline]
 pub fn fanout_list(ev: &Evaluator, l: &'static ListObj) {
-    if ev.par.on && fanout_mask() & 4 != 0 {
+    if ev.par.on && fanout_mask(ev) & 4 != 0 {
         fanout(ev, T_LIST_WHNF, Word::from_ptr(l), l.len as usize);
     }
 }
@@ -312,7 +312,7 @@ pub fn fanout_list(ev: &Evaluator, l: &'static ListObj) {
 /// A list whose elements are about to be coerced to strings.
 #[inline]
 pub fn fanout_list_coerce(ev: &Evaluator, l: &'static ListObj) {
-    if ev.par.on && fanout_mask() & 2 != 0 {
+    if ev.par.on && fanout_mask(ev) & 2 != 0 {
         fanout_batched(
             ev,
             T_LIST_COERCE,
@@ -326,7 +326,7 @@ pub fn fanout_list_coerce(ev: &Evaluator, l: &'static ListObj) {
 /// Attrs whose values are about to be coerced (`derivationStrict`, JSON).
 #[inline]
 pub fn fanout_attrs_coerce(ev: &mut Evaluator, a: &'static AttrsObj) {
-    if ev.par.on && fanout_mask() & 2 != 0 {
+    if ev.par.on && fanout_mask(ev) & 2 != 0 {
         let a = ev.arena.flat(a);
         fanout_batched(ev, T_ATTRS_COERCE, Word::from_ptr(a), a.len(), COERCE_BATCH);
     }
@@ -405,7 +405,7 @@ fn deep_inner(
                 return Ok(());
             }
             let a = ev.arena.flat(a);
-            if fanout_mask() & 1 != 0 {
+            if fanout_mask(ev) & 1 != 0 {
                 fanout(ev, T_ATTRS_DEEP, Word::from_ptr(a), a.len());
             }
             let attrs = a.attrs();
@@ -432,7 +432,7 @@ fn deep_inner(
             if !seen.insert(w.0) {
                 return Ok(());
             }
-            if fanout_mask() & 1 != 0 {
+            if fanout_mask(ev) & 1 != 0 {
                 fanout(ev, T_LIST_DEEP, w, l.len as usize);
             }
             let cells = l.cells();

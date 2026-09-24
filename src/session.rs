@@ -12,10 +12,12 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use crate::log::Log;
+use crate::settings::Settings;
 
 #[derive(Default)]
 pub struct Session {
     pub log: Log,
+    settings: std::sync::OnceLock<Settings>,
 }
 
 thread_local! {
@@ -45,6 +47,20 @@ impl Session {
     pub fn enter(self: &Arc<Session>) -> Entered {
         let prev = CURRENT.with(|c| c.borrow_mut().replace(self.clone()));
         Entered(prev)
+    }
+
+    /// This session's settings: the environment knobs alone until
+    /// [`Session::load_settings`] reads the files (docs/settings.md).
+    pub fn settings(&self) -> &Settings {
+        self.settings.get_or_init(Settings::default)
+    }
+
+    /// Reads the `ietsp.conf` files and applies the `--ietsp-option` pairs.
+    /// Call it once, on an entered session, before anything reads a setting.
+    pub fn load_settings(&self, options: &[(String, String)]) -> crate::error::Result<()> {
+        let s = Settings::load(options)?;
+        let _ = self.settings.set(s);
+        Ok(())
     }
 }
 

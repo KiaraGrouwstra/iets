@@ -52,7 +52,7 @@ impl Limits {
         Ok(Limits {
             connect: secs("connect-timeout", 15)?,
             stall: secs("stalled-download-timeout", 300)?,
-            max_size: crate::settings::get().fetch_max_size,
+            max_size: crate::session::Session::current().settings().fetch_max_size,
         })
     }
 }
@@ -221,7 +221,7 @@ pub fn get(
             Ok(r)
         }
     };
-    if crate::settings::get().offline {
+    if crate::session::Session::current().settings().offline {
         return Err(Error::Usage(format!(
             "cannot fetch '{url}': IETSP_OFFLINE is set"
         )));

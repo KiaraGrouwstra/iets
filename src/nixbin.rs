@@ -72,7 +72,7 @@ fn on_path(name: &str, dirs: impl Iterator<Item = PathBuf>, me: Option<&Path>) -
 /// the bin directory the farm on `PATH` was built for, else the first
 /// `<name>` on `PATH` that is not ietsp.
 pub fn real(name: &str) -> Option<PathBuf> {
-    if let Some(dir) = &crate::settings::get().nix_bin_dir {
+    if let Some(dir) = &crate::session::Session::current().settings().nix_bin_dir {
         let p = dir.join(name);
         if executable(&p) {
             return Some(p);

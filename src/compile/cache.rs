@@ -34,7 +34,8 @@ impl IrCache {
     /// `--cache-dir DIR`, else `IETSP_CACHE_DIR`, else `$XDG_CACHE_HOME/ietsp`,
     /// else `~/.cache/ietsp`; the entries live in its `ir/` subdirectory.
     pub fn locate(override_dir: Option<&str>, timings: bool) -> Option<IrCache> {
-        let set = crate::settings::get();
+        let session = crate::session::Session::current();
+        let set = session.settings();
         let base = if let Some(d) = override_dir {
             PathBuf::from(d)
         } else if let Some(d) = &set.cache_dir {

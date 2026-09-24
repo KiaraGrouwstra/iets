@@ -46,7 +46,7 @@ pub fn dispatch(name: &str, argv: &[String]) -> i32 {
 /// this an error instead, so a test can see which cases fall back.
 pub fn fallback(name: &str, argv: &[String], reason: &str) -> ! {
     crate::log::line(&format!("ietsp: falling back to {name}: {reason}"));
-    if crate::settings::get().no_fallback {
+    if crate::session::Session::current().settings().no_fallback {
         crate::log::line(&format!("ietsp: IETSP_NO_FALLBACK=1, not running {name}"));
         exit(1)
     }

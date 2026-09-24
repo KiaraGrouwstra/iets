@@ -28,7 +28,7 @@ struct BuildArgs {
 /// build that fails on its hash gets it fixed per the `fix-hashes` setting.
 pub fn cmd_build(argv: &[String]) -> i32 {
     use crate::settings::FixHashes;
-    let mut ask = match crate::settings::get().fix_hashes {
+    let mut ask = match crate::session::Session::current().settings().fix_hashes {
         FixHashes::Never => return build_once(argv),
         FixHashes::Ask if !fixhash::interactive() => return build_once(argv),
         FixHashes::Ask => true,

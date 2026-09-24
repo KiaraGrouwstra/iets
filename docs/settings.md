@@ -2,9 +2,12 @@
 
 Every `IETSP_*` variable is read once at startup into one `Settings`
 struct (`src/settings.rs`), together with the `ietsp.conf` files and the
-`--ietsp-option` flag (`docs/config.md`). Read it with
-`crate::settings::get()`. Nothing reads the environment at its point of use, so
-a knob cannot change halfway through a run.
+`--ietsp-option` flag (`docs/config.md`). A `Session` owns it, not a
+static: read it with `ev.session.settings()` where an evaluator is at
+hand, else `session::Session::current().settings()` (`docs/library.md`).
+`Session::load_settings` reads the files; until then a session has the
+environment knobs alone. Nothing reads the environment at its point of
+use, so a knob cannot change halfway through a run.
 
 A variable in the **File** column below is also an `ietsp.conf` key, under the
 kebab-case name given. The variable wins over the file: the file is the

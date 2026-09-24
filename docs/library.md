@@ -16,7 +16,8 @@ module it belongs to) and let `cli` call it there.
 | What | Where |
 |:---|:---|
 | Create an evaluator | `eval::Evaluator::new()` |
-| Environment settings, read once | `settings::get() -> &'static Settings` (docs/settings.md) |
+| The state a run owns | `session::Session::new()`, `Session::enter()` (below) |
+| Environment settings | `Session::settings()`, `Session::load_settings(&opts)` (docs/settings.md) |
 | Arguments of one evaluation | `api::EvalArgs` (`EvalArgs::new()` for the defaults) |
 | What to evaluate | `api::Input::{Expr, File, Flake}`, `api::ArgKind` for `--arg` |
 | `-I` entries, `NIX_PATH` | `api::parse_include`, `api::full_includes` |

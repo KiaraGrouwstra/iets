@@ -45,7 +45,7 @@ pub struct EvalArgs {
 
 impl Default for EvalArgs {
     fn default() -> EvalArgs {
-        let cache = crate::settings::get().cache;
+        let cache = crate::session::Session::current().settings().cache;
         EvalArgs {
             strict: false,
             json: false,

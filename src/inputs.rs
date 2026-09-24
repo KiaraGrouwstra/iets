@@ -60,7 +60,7 @@ impl Entry {
 pub fn locate(override_dir: Option<&str>) -> Option<PathBuf> {
     let base = match override_dir {
         Some(d) => PathBuf::from(d),
-        None => match &crate::settings::get().cache_dir {
+        None => match &crate::session::Session::current().settings().cache_dir {
             Some(d) => d.clone(),
             None => {
                 let base = match std::env::var_os("XDG_CACHE_HOME") {

@@ -28,7 +28,7 @@ impl Store {
                 root: PathBuf::from(d),
             });
         }
-        if let Some(d) = &crate::settings::get().cache_dir {
+        if let Some(d) = &crate::session::Session::current().settings().cache_dir {
             return Some(Store { root: d.clone() });
         }
         let base = match std::env::var_os("XDG_CACHE_HOME") {

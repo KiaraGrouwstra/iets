@@ -13,7 +13,7 @@ use crate::store::path::STORE_DIR;
 use crate::store::source::SourceOrigin;
 
 pub fn enabled() -> bool {
-    crate::settings::get().provenance
+    crate::session::Session::current().settings().provenance
 }
 
 /// How many times a mapping may point at another mapped tree.
@@ -143,7 +143,7 @@ impl SourceMap {
                 );
             }
         }
-        for (store, local) in &crate::settings::get().source_map {
+        for (store, local) in &crate::session::Session::current().settings().source_map {
             m.insert(store.as_bytes(), local.as_bytes());
         }
         m.sort();

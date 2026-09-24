@@ -698,7 +698,7 @@ fn fetch_tarball(
 /// cannot clone yet, so its locked attrs go to Nix's own `fetchTree` and the
 /// store path Nix reports must be the one the lock implies.
 fn fetch_with_nix(full: &str, name: &str, attrs: &Attrs, pos: Pos) -> EvalResult<()> {
-    if crate::settings::get().fetching {
+    if crate::session::Session::current().settings().fetching {
         bail!(
             ErrorKind::Eval,
             pos,

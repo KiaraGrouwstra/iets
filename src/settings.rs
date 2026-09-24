@@ -5,7 +5,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::OnceLock;
 
 use crate::error::{Error, Result};
 
@@ -90,18 +89,17 @@ pub enum FixHashes {
     Never,
 }
 
-/// The `--ietsp-option` pairs of this command line, recorded by
-/// [`take_options`] before anything reads a setting.
-static CLI: OnceLock<Vec<(String, String)>> = OnceLock::new();
-
 /// The flag every ietsp command and every classic name accepts. It is ours, so
 /// it never reaches the real nix: [`take_options`] removes it from the argv a
 /// fallback execs.
 pub const FLAG: &str = "--ietsp-option";
 
-/// `argv` without its `--ietsp-option name value` triples, whose pairs are
-/// recorded for [`get`]. Call it before any other setting is read.
-pub fn take_options(argv: &[String]) -> Result<Vec<String>> {
+/// What [`take_options`] splits a command line into.
+pub type Taken = (Vec<String>, Vec<(String, String)>);
+
+/// `argv` without its `--ietsp-option name value` triples, and the pairs
+/// themselves for [`Settings::load`]. Call it before any setting is read.
+pub fn take_options(argv: &[String]) -> Result<Taken> {
     let mut rest = Vec::with_capacity(argv.len());
     let mut opts = Vec::new();
     let mut i = 0;
@@ -117,25 +115,19 @@ pub fn take_options(argv: &[String]) -> Result<Vec<String>> {
         opts.push((name.clone(), value.clone()));
         i += 3;
     }
-    let _ = CLI.set(opts);
-    Ok(rest)
-}
-
-/// The settings of this process. A broken settings file is fatal here: every
-/// caller is past the point where it could report the error itself.
-pub fn get() -> &'static Settings {
-    static S: OnceLock<Settings> = OnceLock::new();
-    S.get_or_init(|| {
-        Settings::load(CLI.get().map_or(&[], Vec::as_slice))
-            .unwrap_or_else(|e| std::process::exit(e.report()))
-    })
+    Ok((rest, opts))
 }
 
 /// Where a command builds: its own flag, else the `builder` setting, else the
 /// nix.conf `store` setting.
 pub fn builder(flag: Option<&str>, cfg: &crate::config::Config) -> String {
     flag.map(str::to_string)
-        .or_else(|| get().builder.clone())
+        .or_else(|| {
+            crate::session::Session::current()
+                .settings()
+                .builder
+                .clone()
+        })
         .unwrap_or_else(|| cfg.store())
 }
 
@@ -168,6 +160,11 @@ impl Settings {
         for (name, value) in overrides {
             c.set(name, value, FLAG)?;
         }
+        Settings::from_conf(&c)
+    }
+
+    /// The settings `c` asks for, with the environment on top.
+    fn from_conf(c: &Conf) -> Result<Settings> {
         let source_map: Vec<(String, String)> = c
             .list("source-map")
             .iter()
@@ -216,6 +213,13 @@ impl Settings {
                 }
             },
         })
+    }
+}
+
+impl Default for Settings {
+    /// The environment knobs alone: no file is read, so nothing can fail.
+    fn default() -> Settings {
+        Settings::from_conf(&Conf::default()).expect("an empty conf has no bad value")
     }
 }
 
@@ -403,7 +407,9 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        assert_eq!(take_options(&argv).unwrap(), vec!["--parse", "-E", "1"]);
+        let (rest, opts) = take_options(&argv).unwrap();
+        assert_eq!(rest, vec!["--parse", "-E", "1"]);
+        assert_eq!(opts, vec![("workers".to_string(), "2".to_string())]);
         let bad: Vec<String> = [FLAG, "workers"].iter().map(|s| s.to_string()).collect();
         assert!(take_options(&bad).is_err());
     }

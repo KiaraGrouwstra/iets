@@ -153,6 +153,10 @@ pub struct Evaluator {
     pub store: crate::flake::fetch::LazyStore,
     /// `pure-eval` (docs/pure-eval.md), fixed by `Evaluator::with`.
     pub pure: bool,
+    /// The session this evaluator was made in: its settings and its log.
+    /// A field, not a thread-local lookup, because the fan-out checks read
+    /// it on the hot path (docs/library.md).
+    pub session: std::sync::Arc<crate::session::Session>,
 }
 
 /// What an evaluation knows about one store path.
@@ -285,6 +289,7 @@ impl Evaluator {
             ir_cache: None,
             store: Default::default(),
             pure,
+            session: crate::session::Session::current(),
         };
         crate::builtins::install(&mut ev);
         ev
@@ -2225,7 +2230,7 @@ impl Evaluator {
         );
         // SAFETY: prints glibc heap statistics to stderr; no arguments.
         unsafe { libc::malloc_stats() };
-        if crate::settings::get().stats >= 2 {
+        if self.session.settings().stats >= 2 {
             #[cfg(feature = "stats2")]
             {
                 let mut out = String::new();

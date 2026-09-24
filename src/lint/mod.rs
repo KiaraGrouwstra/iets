@@ -952,7 +952,7 @@ impl Evaluator {
             next.extend_from_slice(&p[root..]);
             p = next;
         }
-        for (store, local) in &crate::settings::get().source_map {
+        for (store, local) in &self.session.settings().source_map {
             if let Some(rest) = p.strip_prefix(store.as_bytes())
                 && (rest.is_empty() || rest[0] == b'/')
             {
@@ -1030,7 +1030,7 @@ impl Evaluator {
             next.extend_from_slice(&p[root..]);
             p = next;
         }
-        for (store, local) in &crate::settings::get().source_map {
+        for (store, local) in &self.session.settings().source_map {
             if let Some(rest) = p.strip_prefix(store.as_bytes())
                 && (rest.is_empty() || rest[0] == b'/')
             {

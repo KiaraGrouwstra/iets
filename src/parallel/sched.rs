@@ -20,7 +20,7 @@ const WARM_STACK: usize = 64 << 10;
 /// shorter spin (64 scans) saved no user time once searchers were capped,
 /// and cost 3-5 % wall in futex round trips. `IETSP_SPIN` overrides.
 fn spin_scans() -> u32 {
-    crate::settings::get().spin
+    crate::session::Session::current().settings().spin
 }
 
 /// Queued tasks per awake worker that justify waking one more sleeper.
@@ -28,12 +28,15 @@ fn spin_scans() -> u32 {
 /// already awake than by a futex round trip; a deep queue recruits
 /// sleepers one handoff at a time (`IETSP_HANDOFF` overrides).
 fn handoff_factor() -> usize {
-    crate::settings::get().handoff
+    crate::session::Session::current().settings().handoff
 }
 
 /// Idle workers allowed to search at once (`IETSP_SPINNERS` overrides).
 fn spinner_cap(n: usize) -> usize {
-    crate::settings::get().spinners.unwrap_or((n / 4).max(1))
+    crate::session::Session::current()
+        .settings()
+        .spinners
+        .unwrap_or((n / 4).max(1))
 }
 
 /// Per-worker counters on their own cache line; summed for the stats.
@@ -238,7 +241,7 @@ impl Runtime {
         user: *mut (),
         entry: MainEntry,
     ) -> Result<(), fiber::StackError> {
-        if crate::settings::get().par_stats >= 2 {
+        if crate::session::Session::current().settings().par_stats >= 2 {
             super::force::SAMPLE_POS.store(true, Ordering::Relaxed);
             let _ = super::force::START.set(std::time::Instant::now());
             self.spawn_timeline();

@@ -52,7 +52,7 @@ impl Clone for Arena {
 
 /// Number of workers from `--workers`, `IETSP_WORKERS`, or the machine.
 pub fn default_workers() -> usize {
-    if let Some(n) = crate::settings::get().workers {
+    if let Some(n) = crate::session::Session::current().settings().workers {
         return n;
     }
     // the critical chain, not core count, sets the floor; past 4 workers the
@@ -61,7 +61,8 @@ pub fn default_workers() -> usize {
 }
 
 fn stack_size() -> usize {
-    crate::settings::get()
+    crate::session::Session::current()
+        .settings()
         .fiber_stack_mb
         .map_or(fiber::DEFAULT_STACK, |mb| mb << 20)
 }
@@ -113,7 +114,7 @@ pub fn try_run<R: Send + 'static>(
             unsafe { force::init_ctx(ev, slot) };
             let r = f(ev);
             ev.lints.flush();
-            if crate::settings::get().par_stats >= 2 {
+            if ev.session.settings().par_stats >= 2 {
                 for i in 0..ev.files.len() {
                     eprintln!(
                         "file{i} base={} = {}",
@@ -122,7 +123,7 @@ pub fn try_run<R: Send + 'static>(
                     );
                 }
             }
-            if crate::settings::get().par_stats >= 1 {
+            if ev.session.settings().par_stats >= 1 {
                 use std::sync::atomic::Ordering::Relaxed;
                 // SAFETY: the main fiber still owns the slot; evaluation is
                 // over, so nothing else reads it.

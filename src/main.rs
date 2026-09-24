@@ -42,13 +42,16 @@ fn main() {
         .collect();
     // `--ietsp-option` is ours, so it leaves the argv here: a classic fallback
     // execs the real nix with what is left (docs/settings.md).
-    let argv = match ietsp::settings::take_options(&argv) {
+    let (argv, options) = match ietsp::settings::take_options(&argv) {
         Ok(a) => a,
         Err(e) => {
             e.report();
             exit(2)
         }
     };
+    if let Err(e) = session.load_settings(&options) {
+        exit(e.report())
+    }
     if let Some(name) = classic_name() {
         exit(on_big_stack(move || cli::classic::dispatch(&name, &argv)))
     }
