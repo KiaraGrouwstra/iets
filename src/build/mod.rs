@@ -164,7 +164,7 @@ pub struct Reporter {
 
 impl Reporter {
     pub fn new(style: Style) -> Reporter {
-        Reporter::with_output(style, Box::new(std::io::stderr()))
+        Reporter::with_output(style, Box::new(crate::log::SessionOut::default()))
     }
 
     /// The same, writing the progress somewhere else than stderr.

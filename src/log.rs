@@ -62,6 +62,27 @@ fn cur() -> Arc<Session> {
     Session::current()
 }
 
+/// A `Write` onto this thread's session log, for code that must own its
+/// destination: the build renderer takes a `Box<dyn Write + Send>`.
+pub struct SessionOut(Arc<Session>);
+
+impl Default for SessionOut {
+    fn default() -> SessionOut {
+        SessionOut(cur())
+    }
+}
+
+impl Write for SessionOut {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.log.err(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// `--log-format F`, loggers.cc:parseLogFormat. Every format but
 /// `internal-json` is plain text here.
 pub fn set_format(f: &str) -> Result<(), String> {
