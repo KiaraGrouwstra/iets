@@ -10,7 +10,7 @@ use crate::build::upload::PlanUpload;
 use crate::build::{Dispatcher, Reporter, Target, render::Style};
 use crate::builtins::derivation::DrvInfo;
 use crate::cli::help::{arg_error, value};
-use crate::cli::{EvalArgs, evaluate, parse_eval_args, report};
+use crate::cli::{EvalArgs, Run, evaluate, parse_eval_args, report};
 use crate::error::{Error, Result};
 use crate::eval::Evaluator;
 use crate::flake::http::{self, Limits};
@@ -70,8 +70,8 @@ pub fn cmd_prefetch(argv: &[String]) -> i32 {
             arg_error("--unpack applies to a URL; a derivation says how it is hashed")
         }
         let a = parse_eval_args(&rest);
-        let ev = a.evaluator();
-        return crate::cli::run_parallel(a.workers, ev, move |ev| from_drv(ev, a, json));
+        let run = Run::on(a.evaluator()).workers(a.workers);
+        return crate::cli::run_parallel(run, move |ev, _| from_drv(ev, a, json));
     };
     let url = rest.remove(at);
     // what is left are flags only (--log-format, --show-trace, …)

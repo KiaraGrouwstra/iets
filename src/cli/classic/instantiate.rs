@@ -109,9 +109,7 @@ pub fn main(argv: &[String]) -> i32 {
     let ev = super::evaluator(&i.c, &cfg);
     let i = Arc::new(i);
     let inst = Arc::clone(&i);
-    match crate::cli::run_parallel(crate::parallel::default_workers(), ev, move |ev| {
-        run(ev, &inst)
-    }) {
+    match crate::cli::run_parallel(crate::cli::Run::on(ev), move |ev, _| run(ev, &inst)) {
         Run::Failed(code) => code,
         Run::Unsupported(reason) => fallback(NAME, argv, &reason),
         Run::Values(text) => {

@@ -22,10 +22,12 @@ use help::{arg_error, value};
 use crate::eval::{Error, Evaluator};
 use crate::runtime::Word;
 
+pub use crate::api::run::{Outcome, Run};
 pub use crate::api::{
-    ArgKind, EvalArgs, Input, abs_path, auto_args, build_targets, configure_lints, cwd, flake_ref,
-    full_includes, parse_include, report, setup_cache,
+    ArgKind, EvalArgs, Input, abs_path, auto_args, build_targets, cwd, flake_ref, full_includes,
+    parse_include, report,
 };
+use crate::trace::run::Cache;
 
 /// The evaluation input flags every command line shares (common-eval-args.cc).
 #[derive(Default)]
@@ -208,20 +210,26 @@ pub fn cmd_lint(argv: &[String]) -> i32 {
     }
 }
 
-/// `parallel::try_run` for a command line: the fiber stacks are a startup
+/// `api::Run::go` for a command line: the fiber stacks are a startup
 /// failure, so it reports them and exits 1. The library returns the error.
 pub fn run_parallel<R: Send + 'static>(
-    workers: usize,
-    ev: Evaluator,
-    f: impl FnOnce(&mut Evaluator) -> R + Send + 'static,
+    run: Run,
+    f: impl FnOnce(&mut Evaluator, Option<Cache>) -> R + Send + 'static,
 ) -> R {
-    match crate::parallel::try_run(workers, ev, f) {
-        Ok(r) => r,
-        Err(e) => {
-            crate::log::line(&format!("ietsp: {e}"));
-            std::process::exit(1)
-        }
-    }
+    run.go(f).unwrap_or_else(stacks)
+}
+
+/// The same for `api::Run::eval`.
+pub fn run_reported<T: Send + 'static>(
+    run: Run,
+    f: impl FnOnce(&mut Evaluator, Option<Cache>) -> crate::error::Result<T> + Send + 'static,
+) -> Outcome<T> {
+    run.eval(f).unwrap_or_else(stacks)
+}
+
+fn stacks<R>(e: crate::parallel::fiber::StackError) -> R {
+    crate::log::line(&format!("ietsp: {e}"));
+    std::process::exit(1)
 }
 
 /// `api::evaluate`, with a missing input reported as a usage error.

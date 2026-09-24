@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::api::installable;
 use crate::cli::help::{arg_error, value};
-use crate::cli::{EvalArgs, Input, abs_path, cwd, evaluate, parse_eval_args, report};
+use crate::cli::{EvalArgs, Input, Run, abs_path, cwd, evaluate, parse_eval_args, report};
 use crate::error::Error as CrateError;
 use crate::eval::{Error, Evaluator, Pos};
 use crate::store::locate::{drv_roots, locate_in_store};
@@ -123,16 +123,13 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
     let d = DevEnvArgs { transport, gc_root };
 
     let t0 = std::time::Instant::now();
-    let mut ev = a.evaluator();
-    if let Err(e) = super::configure_lints(&mut ev, &a) {
-        return super::report(&ev, &e);
-    }
-    let cache = super::setup_cache(&a, "print-dev-env", &ev);
-    if let Some(c) = &cache
-        && c.lookup()
-        && let Some(bytes) = c.store.read(&c.key, crate::trace::store::RESULT)
-        && let Some(hit) = crate::devenv::CachedResult::decode(&bytes)
-    {
+    let run = match Run::new(&a) {
+        Ok(r) => r.cached(&a, "print-dev-env"),
+        Err(code) => return code,
+    };
+    if let Some(code) = run.hit(|c| {
+        let bytes = c.store.read(&c.key, crate::trace::store::RESULT)?;
+        let hit = crate::devenv::CachedResult::decode(&bytes)?;
         match dev_env_hit(&d, &hit) {
             Ok(true) => {
                 use std::io::Write;
@@ -142,21 +139,21 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
                 if a.timings {
                     eprintln!("total: {:.3}s", t0.elapsed().as_secs_f64());
                 }
-                return 0;
+                Some(0)
             }
             Ok(false) => {
                 if a.timings {
                     eprintln!("cache: env output '{}' is gone, rebuilding", hit.out_path);
                 }
+                None
             }
-            Err(e) => return e.report(),
+            Err(e) => Some(e.report()),
         }
-    }
-    if cache.is_some() {
-        ev.trace = crate::trace::Trace::enabled();
+    }) {
+        return code;
     }
     // parallel: eval and the daemon flow run as the main fiber
-    crate::cli::run_parallel(a.workers, ev, move |ev| dev_env_full(ev, a, &d, cache, t0))
+    crate::cli::run_parallel(run, move |ev, cache| dev_env_full(ev, a, &d, cache, t0))
 }
 
 /// A cache hit is usable when the env output (and the files the script names) still exist;
@@ -249,7 +246,9 @@ pub fn dev_env(
         transport,
         gc_root: None,
     };
-    crate::cli::run_parallel(a.workers, ev, move |ev| dev_env_build(ev, a, &d))
+    crate::cli::run_parallel(Run::on(ev).workers(a.workers), move |ev, _| {
+        dev_env_build(ev, a, &d)
+    })
 }
 
 /// The cache-miss path: evaluate the shell, derive and build its `-env` derivation through

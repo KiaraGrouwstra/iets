@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::cli::help::{arg_error, unknown_flag, value};
-use crate::cli::{EvalArgs, EvalFlags, Input, eval_flag, evaluate, report};
+use crate::cli::{EvalArgs, EvalFlags, Input, Run, eval_flag, evaluate, report};
 use crate::error::{Error, Result};
 use crate::store::drv::{Derivation, DrvError, load_derivation_from_store};
 use crate::store::locate::drv_roots;
@@ -158,7 +158,7 @@ fn resolve(sides: Vec<Side>) -> std::result::Result<(Aterms, Vec<StorePath>), i3
             .collect();
         return Ok((Aterms::new(), paths));
     };
-    crate::cli::run_parallel(workers, ev, move |ev| {
+    crate::cli::run_parallel(Run::on(ev).workers(workers), move |ev, _| {
         let mut roots = Vec::new();
         for s in sides {
             let a = match s {

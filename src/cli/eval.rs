@@ -2,34 +2,30 @@
 
 use std::collections::HashSet;
 
-use crate::cli::{EvalArgs, evaluate, report};
+use crate::cli::{EvalArgs, Run, evaluate, report};
 use crate::eval::{Evaluator, Pos};
 use crate::trace::run::Cache;
 
 pub fn run_eval(a: EvalArgs) -> i32 {
-    let mut ev = a.evaluator();
-    if let Err(e) = super::configure_lints(&mut ev, &a) {
-        return report(&ev, &e);
-    }
-    let cache = super::setup_cache(&a, "eval", &ev);
-    if let Some(c) = &cache
-        && c.lookup()
-        && let Some(out) = c.store.read(&c.key, crate::trace::store::RESULT)
-    {
-        use std::io::Write;
+    let mut run = match Run::new(&a) {
+        Ok(r) => r.cached(&a, "eval"),
+        Err(code) => return code,
+    };
+    if let Some(out) = run.hit(|c| {
+        let out = c.store.read(&c.key, crate::trace::store::RESULT)?;
         c.replay_warnings();
+        Some(out)
+    }) {
+        use std::io::Write;
         let _ = std::io::stdout().write_all(&out);
         let _ = std::io::stdout().flush();
         return 0;
     }
-    if cache.is_some() {
-        ev.trace = crate::trace::Trace::enabled();
-    }
     // only the cache and --dump-drvs read the ATerm text after evaluation
-    ev.drv.keep_aterm = cache.is_some() || a.dump_drvs.is_some();
-    ev.drv.keep_site = false;
+    run.ev.drv.keep_aterm = run.cache.is_some() || a.dump_drvs.is_some();
+    run.ev.drv.keep_site = false;
     // parallel: the rest runs as the main fiber
-    crate::cli::run_parallel(a.workers, ev, move |ev| eval_and_print(ev, a, cache))
+    crate::cli::run_parallel(run, move |ev, cache| eval_and_print(ev, a, cache))
 }
 
 fn eval_and_print(ev: &mut Evaluator, a: EvalArgs, cache: Option<Cache>) -> i32 {

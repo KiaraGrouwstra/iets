@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::build::fixhash::{self, Answer};
 use crate::cli::help::{arg_error, value};
-use crate::cli::{EvalArgs, Input, build_targets, evaluate, parse_eval_args, report};
+use crate::cli::{EvalArgs, Input, Run, build_targets, evaluate, parse_eval_args, report};
 use crate::error::Error as CrateError;
 use crate::eval::Evaluator;
 use crate::store::locate::{drv_roots, locate_in_store};
@@ -128,11 +128,10 @@ fn local_files(argv: &[String]) -> Vec<PathBuf> {
         no_cache: true,
         ..a
     };
-    let mut ev = a.evaluator();
-    if super::configure_lints(&mut ev, &a).is_err() {
+    let Ok(run) = Run::new(&a) else {
         return Vec::new();
-    }
-    crate::cli::run_parallel(a.workers, ev, move |ev| {
+    };
+    crate::cli::run_parallel(run, move |ev, _| {
         let mut roots = Vec::new();
         let _ = evaluate(ev, a).and_then(|v| drv_roots(ev, v, &mut roots));
         fixhash::local_files(ev)
@@ -152,17 +151,13 @@ fn build_once(argv: &[String]) -> i32 {
         timings: a.timings || b.timings,
         ..a
     };
-    let mut ev = a.evaluator();
-    if let Err(e) = super::configure_lints(&mut ev, &a) {
-        return report(&ev, &e);
-    }
-    let cache = super::setup_cache(&a, "build", &ev);
-    if let Some(c) = &cache
-        && c.lookup()
-        && let Some(hit) = c.read_build()
-    {
+    let run = match Run::new(&a) {
+        Ok(r) => r.cached(&a, "build"),
+        Err(code) => return code,
+    };
+    if let Some(code) = run.hit(|c| {
+        let (roots, drvs, sources) = c.read_build()?;
         c.replay_warnings();
-        let (roots, drvs, sources) = hit;
         if b.timings {
             eprintln!(
                 "eval: skipped, {} derivations and {} sources from the cache, {:.3}s",
@@ -179,13 +174,12 @@ fn build_once(argv: &[String]) -> i32 {
             drvs: &drvs,
             sources: &sources,
         };
-        return build_roots(&b, &root_paths, &outputs, inputs, &prov);
-    }
-    if cache.is_some() {
-        ev.trace = crate::trace::Trace::enabled();
+        Some(build_roots(&b, &root_paths, &outputs, inputs, &prov))
+    }) {
+        return code;
     }
     // parallel: eval and build run as the main fiber
-    crate::cli::run_parallel(a.workers, ev, move |ev| build_eval(ev, &b, a, t0, cache))
+    crate::cli::run_parallel(run, move |ev, cache| build_eval(ev, &b, a, t0, cache))
 }
 
 /// The Nix settings, for `system` and the `store` that `--builder` defaults to;

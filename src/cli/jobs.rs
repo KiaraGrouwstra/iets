@@ -3,7 +3,9 @@
 use std::process::exit;
 
 use crate::cli::help::{arg_error, value};
-use crate::cli::{EvalArgs, Input, abs_path, auto_args, cwd, evaluate, parse_eval_args, report};
+use crate::cli::{
+    EvalArgs, Input, Run, abs_path, auto_args, cwd, evaluate, parse_eval_args, report,
+};
 use crate::error::Error as CrateError;
 use crate::eval::{Error, Evaluator, Pos};
 use crate::runtime::Word;
@@ -237,28 +239,22 @@ pub fn cmd_eval_jobs(argv: &[String]) -> i32 {
         Err(e) => return e.report(),
     };
     let t0 = std::time::Instant::now();
-    if j.worker {
-        let mut ev = a.evaluator();
-        ev.drv.keep_aterm = !j.opts.no_instantiate;
-        ev.drv.keep_site = j.opts.provenance;
-        if let Err(e) = crate::api::configure_lints(&mut ev, &a) {
-            return report(&ev, &e);
-        }
-        return crate::cli::run_parallel(1, ev, move |ev| jobs_worker(ev, a, &j, &transport));
-    }
-    if j.max_memory > 0 {
+    // the process model is this command's own: the collector evaluates
+    // nothing itself, and a worker is one evaluator thread with no cache
+    if !j.worker && j.max_memory > 0 {
         return jobs_collector(&worker_argv(argv, &j), a.workers, &j, &transport, t0);
     }
-    let workers = a.workers;
-    let mut ev = a.evaluator();
-    ev.drv.keep_aterm = !j.opts.no_instantiate;
-    ev.drv.keep_site = j.opts.provenance;
-    if let Err(e) = crate::api::configure_lints(&mut ev, &a) {
-        return report(&ev, &e);
+    let mut run = match Run::new(&a) {
+        Ok(r) => r,
+        Err(code) => return code,
+    };
+    run.ev.drv.keep_aterm = !j.opts.no_instantiate;
+    run.ev.drv.keep_site = j.opts.provenance;
+    if j.worker {
+        let run = run.workers(1);
+        return crate::cli::run_parallel(run, move |ev, _| jobs_worker(ev, a, &j, &transport));
     }
-    crate::cli::run_parallel(workers, ev, move |ev| {
-        jobs_single(ev, a, &j, &transport, t0)
-    })
+    crate::cli::run_parallel(run, move |ev, _| jobs_single(ev, a, &j, &transport, t0))
 }
 
 /// worker.cc:initializeRootValue: the root, auto-called with the

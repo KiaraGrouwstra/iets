@@ -4,6 +4,7 @@
 //! lists the whole surface.
 
 pub mod installable;
+pub mod run;
 pub mod value;
 
 use crate::eval::{Error, Evaluator, Pos};

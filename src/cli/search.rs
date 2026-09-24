@@ -5,7 +5,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::api::{EvalArgs, Input, cwd, installable, report, setup_cache};
+use crate::api::run::Run;
+use crate::api::{EvalArgs, Input, cwd, installable, report};
 use crate::builtins::text::regex::{self, Prog};
 use crate::cli::classic::nix::{global_flag, nix_settings};
 use crate::cli::classic::{Argv, Common, evaluator, fallback, is_unsupported, lookup_file_arg};
@@ -147,20 +148,15 @@ fn run(mut s: Search, classic: Option<&[String]>) -> i32 {
         }
     }
     let s = Arc::new(s);
-    let cache = setup_cache(&key_args(&s), "search", &ev);
-    let hit = cache.as_ref().filter(|c| c.lookup()).and_then(|c| {
+    let r = Run::on(ev).cached(&key_args(&s), "search");
+    let index = match r.hit(|c| {
         c.replay_warnings();
         decode(&c.store.read(&c.key, crate::trace::store::RESULT)?)
-    });
-    let index = match hit {
+    }) {
         Some(index) => index,
         None => {
-            if cache.is_some() {
-                ev.trace = crate::trace::Trace::enabled();
-            }
-            let workers = crate::parallel::default_workers();
             let run = Arc::clone(&s);
-            match crate::cli::run_parallel(workers, ev, move |ev| build(ev, &run, cache)) {
+            match crate::cli::run_parallel(r, move |ev, cache| build(ev, &run, cache)) {
                 Built::Index(index) => index,
                 Built::Failed(code) => return code,
                 Built::Unsupported(why) => return bail(why),

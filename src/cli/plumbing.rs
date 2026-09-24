@@ -3,7 +3,7 @@
 
 use crate::api::installable::{self, Prefixes, Want};
 use crate::cli::help::{self, arg_error, value};
-use crate::cli::{EvalArgs, Input, evaluate, parse_eval_args, report};
+use crate::cli::{EvalArgs, Input, Run, evaluate, parse_eval_args, report};
 use crate::eval::{Error, Evaluator};
 use crate::runtime::Word;
 use crate::store::locate::drv_roots;
@@ -86,11 +86,11 @@ fn resolve(argv: &[String]) -> i32 {
     if a.input.is_none() {
         arg_error("nothing to resolve: give -E EXPR, FILE or FLAKEREF[#FRAGMENT]")
     }
-    let mut ev = a.evaluator();
-    if let Err(e) = crate::api::configure_lints(&mut ev, &a) {
-        return report(&ev, &e);
-    }
-    crate::cli::run_parallel(a.workers, ev, move |ev| run(ev, a, o))
+    let r = match Run::new(&a) {
+        Ok(r) => r,
+        Err(code) => return code,
+    };
+    crate::cli::run_parallel(r, move |ev, _| run(ev, a, o))
 }
 
 fn run(ev: &mut Evaluator, a: EvalArgs, o: Opts) -> i32 {

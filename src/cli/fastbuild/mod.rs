@@ -154,7 +154,9 @@ fn run(a: Args) -> Result<i32> {
     let result_file = a.result_file.clone();
     let result_format = a.result_format;
     let suite = a.display_name();
-    let eval_ok = crate::cli::run_parallel(workers, ev, move |ev| walk(ev, a, stream));
+    // fast-build owns its evaluator: the uploader ships from the same arena
+    let run = crate::cli::Run::on(ev).workers(workers);
+    let eval_ok = crate::cli::run_parallel(run, move |ev, _| walk(ev, a, stream));
 
     let report = thread
         .join()
