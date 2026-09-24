@@ -1,3 +1,6 @@
+[workspace]
+members = [ "ietsp-c" ]
+
 [package]
 name = "ietsp"
 version = "0.1.0"
