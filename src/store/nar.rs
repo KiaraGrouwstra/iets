@@ -52,25 +52,6 @@ const BUF: usize = 1 << 20;
 /// A content read never asks for less than this; the sink flushes first instead.
 const MIN_READ: usize = 1 << 16;
 
-pub(crate) fn write_u64(sink: &mut dyn Write, n: u64) -> io::Result<()> {
-    sink.write_all(&n.to_le_bytes())
-}
-
-pub(crate) fn write_padding(sink: &mut dyn Write, len: u64) -> io::Result<()> {
-    let rem = (len % 8) as usize;
-    if rem != 0 {
-        sink.write_all(&[0u8; 8][..8 - rem])?;
-    }
-    Ok(())
-}
-
-/// Mirrors serialise.hh:operator<<(Sink, std::string_view): length-prefixed, zero-padded to 8.
-pub(crate) fn write_str(sink: &mut dyn Write, s: &[u8]) -> io::Result<()> {
-    write_u64(sink, s.len() as u64)?;
-    sink.write_all(s)?;
-    write_padding(sink, s.len() as u64)
-}
-
 /// The framed form of a run of constant tokens.
 ///
 /// Most of a NAR is fixed keywords, and `write_str` of a literal is a
@@ -271,6 +252,71 @@ impl<'a> NarSink<'a> {
     }
 }
 
+/// The one NAR writer: every NAR byte ietsp produces is framed here.
+///
+/// A tree that is walked — a directory on disk, an indexed archive, a string —
+/// drives it with the nodes it finds, in NAR order, and keeps its own
+/// traversal. The framing, the buffering and the content copy are this type's.
+/// Each call writes one whole thing: `regular` and `symlink` close their node,
+/// `dir` opens one and `end_dir` closes it, and `entry`/`end_entry` wrap the
+/// child between them.
+pub struct TreeWriter<'a> {
+    sink: NarSink<'a>,
+}
+
+impl<'a> TreeWriter<'a> {
+    pub fn new(out: &'a mut dyn Write) -> TreeWriter<'a> {
+        TreeWriter {
+            sink: NarSink::new(out),
+        }
+    }
+
+    /// `nix-archive-1`, and the head of the root node.
+    pub fn header(&mut self) -> io::Result<()> {
+        self.sink.preframed(&TOK_NAR)
+    }
+
+    /// A regular file: exactly `len` bytes read from `src`.
+    pub fn regular(&mut self, executable: bool, len: u64, src: &mut dyn Read) -> io::Result<()> {
+        if executable {
+            self.sink.preframed(&TOK_EXE)?;
+        } else {
+            self.sink.preframed(&TOK_REG)?;
+        }
+        self.sink.contents(src, len)?;
+        self.sink.preframed(&TOK_PAR)
+    }
+
+    pub fn symlink(&mut self, target: &[u8]) -> io::Result<()> {
+        self.sink.preframed(&TOK_SYM)?;
+        self.sink.token(target)?;
+        self.sink.preframed(&TOK_PAR)
+    }
+
+    pub fn dir(&mut self) -> io::Result<()> {
+        self.sink.preframed(&TOK_DIR)
+    }
+
+    /// The head of one directory entry; the child node follows.
+    pub fn entry(&mut self, name: &[u8]) -> io::Result<()> {
+        self.sink.preframed(&TOK_ENT)?;
+        self.sink.token(name)?;
+        self.sink.preframed(&TOK_NOD)
+    }
+
+    pub fn end_entry(&mut self) -> io::Result<()> {
+        self.sink.preframed(&TOK_PAR)
+    }
+
+    pub fn end_dir(&mut self) -> io::Result<()> {
+        self.sink.preframed(&TOK_PAR)
+    }
+
+    pub fn flush(&mut self) -> io::Result<()> {
+        self.sink.flush()
+    }
+}
+
 /// Mirrors archive.cc:SourceAccessor::dumpPath; writes the NAR of `path` into `sink`.
 pub fn dump_path(path: &Path, sink: &mut dyn Write, filter: &mut PathFilter<'_>) -> io::Result<()> {
     let ft = FileType::of(fs::symlink_metadata(path)?.file_type());
@@ -281,21 +327,21 @@ pub fn dump_path(path: &Path, sink: &mut dyn Write, filter: &mut PathFilter<'_>)
         root.pop();
     }
     let mut w = Walk {
-        sink: NarSink::new(sink),
+        w: TreeWriter::new(sink),
         path: root,
         names: Vec::with_capacity(4096),
         index: Vec::with_capacity(256),
     };
-    w.sink.preframed(&TOK_NAR)?;
+    w.w.header()?;
     w.node(ft, filter, 0)?;
-    w.sink.flush()
+    w.w.flush()
 }
 
 /// The scratch a dump reuses at every level: one path buffer, one arena of entry
 /// names and one entry index, all kept to stack discipline, so walking 40k
 /// entries allocates nothing past the first few levels.
 struct Walk<'a> {
-    sink: NarSink<'a>,
+    w: TreeWriter<'a>,
     /// The absolute path of the node being written, as bytes. `PathBuf::pop`
     /// re-parses the whole path to find the last separator; truncation does not.
     path: Vec<u8>,
@@ -319,27 +365,21 @@ impl Walk<'_> {
             )));
         }
         match ft {
-            FileType::Regular => {
-                self.regular()?;
-            }
+            FileType::Regular => self.regular(),
             FileType::Directory => {
-                self.sink.preframed(&TOK_DIR)?;
+                self.w.dir()?;
                 self.directory(filter, depth)?;
+                self.w.end_dir()
             }
             FileType::Symlink => {
-                self.sink.preframed(&TOK_SYM)?;
                 let target = fs::read_link(self.cur())?;
-                let target = target.as_os_str().as_bytes();
-                self.sink.token(target)?;
+                self.w.symlink(target.as_os_str().as_bytes())
             }
-            FileType::Unknown => {
-                return Err(io::Error::other(format!(
-                    "file '{}' has an unsupported type",
-                    self.cur().display()
-                )));
-            }
+            FileType::Unknown => Err(io::Error::other(format!(
+                "file '{}' has an unsupported type",
+                self.cur().display()
+            ))),
         }
-        self.sink.preframed(&TOK_PAR)
     }
 
     /// `open` then `fstat`, not `lstat` then `open`: the same two syscalls, but
@@ -355,12 +395,8 @@ impl Walk<'_> {
             )));
         }
         let executable = st.permissions().mode() & 0o100 != 0;
-        if executable {
-            self.sink.preframed(&TOK_EXE)?;
-        } else {
-            self.sink.preframed(&TOK_REG)?;
-        }
-        self.sink.contents(&mut f, st.len())
+        let len = st.len();
+        self.w.regular(executable, len, &mut f)
     }
 
     fn directory(&mut self, filter: &mut PathFilter<'_>, depth: usize) -> io::Result<()> {
@@ -394,15 +430,13 @@ impl Walk<'_> {
             self.path.extend_from_slice(&self.names[from..to]);
             if filter(self.cur(), ft) {
                 {
-                    let Walk { names, sink, .. } = self;
-                    sink.preframed(&TOK_ENT)?;
-                    sink.token(&names[from..to])?;
-                    sink.preframed(&TOK_NOD)?;
+                    let Walk { names, w, .. } = self;
+                    w.entry(&names[from..to])?;
                 }
                 // A child directory leaves `names` and `index` exactly as it
                 // found them, so the siblings still to come stay addressable.
                 self.node(ft, filter, depth + 1)?;
-                self.sink.preframed(&TOK_PAR)?;
+                self.w.end_entry()?;
             }
             self.path.truncate(path_base);
         }
@@ -414,13 +448,10 @@ impl Walk<'_> {
 
 /// Mirrors archive.cc:dumpString: the NAR of a regular, non-executable file with `contents`.
 pub fn dump_string(contents: &[u8], sink: &mut dyn Write) -> io::Result<()> {
-    write_str(sink, b"nix-archive-1")?;
-    write_str(sink, b"(")?;
-    write_str(sink, b"type")?;
-    write_str(sink, b"regular")?;
-    write_str(sink, b"contents")?;
-    write_str(sink, contents)?;
-    write_str(sink, b")")
+    let mut w = TreeWriter::new(sink);
+    w.header()?;
+    w.regular(false, contents.len() as u64, &mut &contents[..])?;
+    w.flush()
 }
 
 /// Mirrors store-api.cc:hashPath for NixArchive ingestion, with a filter; returns (hash, NAR size).

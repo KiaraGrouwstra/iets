@@ -5,12 +5,15 @@
 //! walking it, which costs a second copy of every byte on disk. This module
 //! spools the decompressed archive into one file as it arrives, reads it once to
 //! record where each member's bytes are, and then writes the NAR out of that
-//! index, reading the bytes back by offset. Peak memory is the index plus one
-//! copy buffer; nothing holds a member whole.
+//! index, driving `nar::TreeWriter` from it and reading the bytes back by
+//! offset. Peak memory is the index plus one copy buffer; nothing holds a
+//! member whole. The framing is not this module's: one writer serves the
+//! archive, a directory on disk and a string.
 //!
 //! The rules are `fetch::unpack`'s, which are tarfile.cc's and
 //! git-utils.cc:GitFileSystemObjectSinkImpl's. `spool_matches_the_tree` in the
-//! tests holds both paths to the same NAR bytes.
+//! tests holds the two *walks* — the index and the unpacked tree — to the same
+//! NAR bytes.
 //!
 //! The same index also answers evaluation. `crate::treestore` keeps the spool and
 //! a serialized index in the user-level input store, and every read of a
@@ -25,7 +28,7 @@ use std::path::Path;
 
 use crate::error::{Error, Result};
 use crate::store::hash::{Hash, HashAlgo};
-use crate::store::nar::{FileType, NAR_MAX_DEPTH, PathFilter, write_padding, write_str, write_u64};
+use crate::store::nar::{FileType, NAR_MAX_DEPTH, PathFilter, TreeWriter};
 
 /// One directory's entries, in the byte order a NAR wants them. A sorted vector,
 /// not a map: a full nixpkgs holds 38 000 directories of two or three entries
@@ -297,47 +300,6 @@ impl Tree {
         })
     }
 
-    fn node(&self, n: &Node, sink: &mut dyn Write, depth: usize) -> io::Result<()> {
-        if depth >= NAR_MAX_DEPTH {
-            return Err(io::Error::other(format!(
-                "the tarball exceeds the maximum NAR directory depth of {NAR_MAX_DEPTH}"
-            )));
-        }
-        write_str(sink, b"(")?;
-        write_str(sink, b"type")?;
-        match n {
-            Node::Dir(d) => {
-                write_str(sink, b"directory")?;
-                for (name, child) in d {
-                    write_str(sink, b"entry")?;
-                    write_str(sink, b"(")?;
-                    write_str(sink, b"name")?;
-                    write_str(sink, name)?;
-                    write_str(sink, b"node")?;
-                    self.node(child, sink, depth + 1)?;
-                    write_str(sink, b")")?;
-                }
-            }
-            Node::File { at, exec } => {
-                write_str(sink, b"regular")?;
-                if *exec {
-                    write_str(sink, b"executable")?;
-                    write_str(sink, b"")?;
-                }
-                write_str(sink, b"contents")?;
-                write_u64(sink, at.size)?;
-                self.copy_blob(at, sink)?;
-                write_padding(sink, at.size)?;
-            }
-            Node::Symlink(target) => {
-                write_str(sink, b"symlink")?;
-                write_str(sink, b"target")?;
-                write_str(sink, target)?;
-            }
-        }
-        write_str(sink, b")")
-    }
-
     /// A member's bytes, by `pread`: no seek, so two threads may read one tree
     /// at once.
     fn source(&self, at: &Blob) -> &File {
@@ -348,20 +310,15 @@ impl Tree {
         }
     }
 
-    fn copy_blob(&self, at: &Blob, sink: &mut dyn Write) -> io::Result<()> {
-        let src = self.source(at);
-        let mut buf = vec![0u8; CHUNK.min(at.size.max(1) as usize)];
-        let mut done = 0u64;
-        while done < at.size {
-            let n = ((at.size - done) as usize).min(buf.len());
-            src.read_exact_at(&mut buf[..n], at.offset + done)
-                .map_err(|_| io::Error::other("the spooled tarball is truncated"))?;
-            sink.write_all(&buf[..n])?;
-            done += n as u64;
+    /// A member's bytes as a reader, for the NAR writer to pull through its
+    /// own buffer: nothing holds a member whole.
+    fn blob(&self, at: &Blob) -> Bytes<'_> {
+        Bytes {
+            src: self.source(at),
+            offset: at.offset,
+            left: at.size,
         }
-        Ok(())
     }
-
     // ---- the accessor evaluation reads through ------------------------------
 
     /// The member at the resolved components `at`, without following a symlink.
@@ -423,6 +380,12 @@ impl Tree {
         Ok(out)
     }
 
+    /// The NAR of the whole tree. `shown` is where a filtered dump names the
+    /// nodes; with no filter nothing builds those paths.
+    pub fn dump(&self, sink: &mut dyn Write) -> io::Result<()> {
+        self.write(&self.root, None, sink, &mut |_, _| true)
+    }
+
     /// The NAR of `node`, with `filter` asked about every entry below it under
     /// the path Nix would show (`shown`), as `nar::dump_path` asks.
     pub fn dump_filtered(
@@ -432,43 +395,60 @@ impl Tree {
         sink: &mut dyn Write,
         filter: &mut PathFilter<'_>,
     ) -> io::Result<()> {
-        write_str(sink, b"nix-archive-1")?;
-        self.filtered(node, shown, sink, filter, 0)
+        self.write(node, Some(shown), sink, filter)
     }
 
-    fn filtered(
+    fn write(
+        &self,
+        node: &Node,
+        shown: Option<&Path>,
+        sink: &mut dyn Write,
+        filter: &mut PathFilter<'_>,
+    ) -> io::Result<()> {
+        let mut w = TreeWriter::new(sink);
+        w.header()?;
+        self.node(node, shown, &mut w, filter, 0)?;
+        w.flush()
+    }
+
+    /// One node into the writer, in NAR order. The index already holds every
+    /// directory's entries sorted by name, so this walk only follows them.
+    fn node(
         &self,
         n: &Node,
-        shown: &Path,
-        sink: &mut dyn Write,
+        shown: Option<&Path>,
+        w: &mut TreeWriter<'_>,
         filter: &mut PathFilter<'_>,
         depth: usize,
     ) -> io::Result<()> {
-        let Node::Dir(d) = n else {
-            return self.node(n, sink, depth);
-        };
         if depth >= NAR_MAX_DEPTH {
             return Err(io::Error::other(format!(
                 "the tarball exceeds the maximum NAR directory depth of {NAR_MAX_DEPTH}"
             )));
         }
-        write_str(sink, b"(")?;
-        write_str(sink, b"type")?;
-        write_str(sink, b"directory")?;
-        for (name, child) in d {
-            let child_path = shown.join(std::ffi::OsStr::from_bytes(name));
-            if !filter(&child_path, child.file_type()) {
-                continue;
+        match n {
+            Node::File { at, exec } => w.regular(*exec, at.size, &mut self.blob(at)),
+            Node::Symlink(target) => w.symlink(target),
+            Node::Dir(d) => {
+                w.dir()?;
+                for (name, child) in d {
+                    let below = match shown {
+                        None => None,
+                        Some(p) => {
+                            let at = p.join(std::ffi::OsStr::from_bytes(name));
+                            if !filter(&at, child.file_type()) {
+                                continue;
+                            }
+                            Some(at)
+                        }
+                    };
+                    w.entry(name)?;
+                    self.node(child, below.as_deref(), w, filter, depth + 1)?;
+                    w.end_entry()?;
+                }
+                w.end_dir()
             }
-            write_str(sink, b"entry")?;
-            write_str(sink, b"(")?;
-            write_str(sink, b"name")?;
-            write_str(sink, name)?;
-            write_str(sink, b"node")?;
-            self.filtered(child, &child_path, sink, filter, depth + 1)?;
-            write_str(sink, b")")?;
         }
-        write_str(sink, b")")
     }
 
     // ---- the persisted index -----------------------------------------------
@@ -704,10 +684,27 @@ fn dereference(mut root: Dir) -> Dir {
     }
 }
 
-impl Tree {
-    pub fn dump(&self, sink: &mut dyn Write) -> io::Result<()> {
-        write_str(sink, b"nix-archive-1")?;
-        self.node(&self.root, sink, 0)
+/// A member's bytes, read by `pread` from where they lie: the spooled archive,
+/// or the side file that holds the expanded sparse members. The NAR writer
+/// pulls through its own buffer, so no chunk of a member is ever held twice.
+struct Bytes<'a> {
+    src: &'a File,
+    offset: u64,
+    left: u64,
+}
+
+impl Read for Bytes<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = (self.left.min(buf.len() as u64) as usize).min(CHUNK);
+        if n == 0 {
+            return Ok(0);
+        }
+        self.src
+            .read_exact_at(&mut buf[..n], self.offset)
+            .map_err(|_| io::Error::other("the spooled tarball is truncated"))?;
+        self.offset += n as u64;
+        self.left -= n as u64;
+        Ok(n)
     }
 }
 
