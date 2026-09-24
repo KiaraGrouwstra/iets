@@ -460,24 +460,18 @@ fn write_result_file(
 }
 
 fn write_step_summary(path: &std::path::Path, records: &[Record], code: i32) {
-    let open = std::fs::OpenOptions::new()
-        .append(true)
-        .create(true)
-        .open(path);
-    match open {
-        Ok(f) => {
-            let mut w = std::io::BufWriter::new(f);
-            if let Err(e) = results::step_summary(&mut w, records, code) {
-                crate::log::line(&format!(
-                    "ietsp fast-build: cannot write '{}': {e}",
-                    path.display()
-                ));
-            }
-        }
-        Err(e) => crate::log::line(&format!(
+    let write = || -> std::io::Result<()> {
+        let f = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(path)?;
+        results::step_summary(&mut std::io::BufWriter::new(f), records, code)
+    };
+    if let Err(e) = write() {
+        crate::cli::render::status(&format!(
             "ietsp fast-build: cannot write '{}': {e}",
             path.display()
-        )),
+        ));
     }
 }
 
@@ -489,10 +483,10 @@ fn summary(r: &Report) {
         .collect();
     let bad: Vec<&&Record> = builds.iter().filter(|b| !b.success && !b.skipped).collect();
     if bad.is_empty() {
-        crate::log::line(&format!("fast-build: {} succeeded, 0 failed", builds.len()));
+        crate::cli::render::status(&format!("fast-build: {} succeeded, 0 failed", builds.len()));
         return;
     }
-    crate::log::line(&format!(
+    crate::cli::render::status(&format!(
         "fast-build: {} succeeded, {} failed: {}",
         builds.iter().filter(|b| b.success).count(),
         bad.len(),

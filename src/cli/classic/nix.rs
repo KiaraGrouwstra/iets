@@ -249,7 +249,7 @@ fn eval_main(argv: &[String], rest: &[String]) -> i32 {
         Outcome::Failed(code) => code,
         Outcome::Unsupported(reason) => fallback(NAME, argv, &reason),
         Outcome::Ok(Done::Out(text)) => {
-            print_bytes(&text);
+            crate::cli::render::bytes(&text);
             0
         }
         Outcome::Ok(Done::Ready(..)) => unreachable!("eval does not build"),
@@ -671,18 +671,11 @@ fn realise(
     if let Err(e) = d.d.out_links(&links) {
         return e.report();
     }
-    print_bytes(out.as_bytes());
+    crate::cli::render::bytes(out.as_bytes());
     0
 }
 
 // ---- printing ----------------------------------------------------------------
-
-pub(crate) fn print_bytes(b: &[u8]) {
-    use std::io::Write;
-    let mut out = std::io::stdout();
-    let _ = out.write_all(b);
-    let _ = out.flush();
-}
 
 /// An error the printer shows in place of the value. `Unsupported` must
 /// escape so the caller can fall back to the real nix instead.

@@ -178,10 +178,8 @@ fn run(ev: &mut Evaluator, a: EvalArgs, o: Opts) -> Result<(), Box<Error>> {
             }));
         }
     }
-    println!(
-        "{}",
-        serde_json::json!({ "attrPaths": paths, "roots": roots })
-    );
+    let v = serde_json::json!({ "attrPaths": paths, "roots": roots });
+    crate::cli::render::bytes(&crate::cli::render::json(&v, false));
     Ok(())
 }
 

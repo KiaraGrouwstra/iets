@@ -112,20 +112,13 @@ pub fn main(argv: &[String]) -> i32 {
         Outcome::Failed(code) => code,
         Outcome::Unsupported(reason) => fallback(NAME, argv, &reason),
         Outcome::Ok(Made::Values(text)) => {
-            print_bytes(&text);
+            crate::cli::render::bytes(&text);
             0
         }
         Outcome::Ok(Made::Drvs(roots, plan)) => {
             finish(&i, &transport, &options, &roots, plan.map(|p| *p))
         }
     }
-}
-
-fn print_bytes(b: &[u8]) {
-    use std::io::Write;
-    let mut out = std::io::stdout();
-    let _ = out.write_all(b);
-    let _ = out.flush();
 }
 
 fn run(ev: &mut Evaluator, i: &Inst) -> crate::error::Result<Made> {
@@ -249,6 +242,6 @@ fn finish(
         }
         out.push('\n');
     }
-    print_bytes(out.as_bytes());
+    crate::cli::render::bytes(out.as_bytes());
     0
 }

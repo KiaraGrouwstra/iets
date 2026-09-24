@@ -167,7 +167,7 @@ fn run(mut s: Search, classic: Option<&[String]>) -> i32 {
         Ok(r) => r,
         Err(e) => return crate::error::Error::Eval(e).report(),
     };
-    crate::cli::classic::nix::print_bytes(&out);
+    crate::cli::render::bytes(&out);
     if results == 0 && !s.json {
         return crate::log::Report {
             hint: Some("use fewer or shorter regexes".into()),
@@ -503,16 +503,16 @@ fn show_results(
         }
     }
     if s.json {
-        let pretty = s.pretty.unwrap_or_else(|| unsafe { libc::isatty(1) } == 1);
-        out = json_out(&json, pretty)?;
+        let pretty = s.pretty.unwrap_or_else(crate::cli::render::pretty);
+        out = crate::cli::render::json(&json_out(&json)?, pretty);
     }
     Ok((out, results))
 }
 
-/// `nlohmann::json::dump`: an object's keys are sorted, `--pretty` indents by
-/// two spaces, and a string that is not UTF-8 is an error, all of which
-/// `serde_json` does the same way.
-fn json_out(m: &BTreeMap<&[u8], &Entry>, pretty: bool) -> Result<Vec<u8>, Box<Error>> {
+/// The object `--json` prints: one entry per package, keyed by attribute
+/// path. A string that is not UTF-8 is an error, as `nlohmann::json` makes
+/// it.
+fn json_out(m: &BTreeMap<&[u8], &Entry>) -> Result<serde_json::Value, Box<Error>> {
     fn text(b: &[u8]) -> Result<&str, Box<Error>> {
         std::str::from_utf8(b).map_err(|_| {
             Error::boxed(
@@ -533,15 +533,7 @@ fn json_out(m: &BTreeMap<&[u8], &Entry>, pretty: bool) -> Result<Vec<u8>, Box<Er
             }),
         );
     }
-    let v = serde_json::Value::Object(obj);
-    let mut out = if pretty {
-        serde_json::to_vec_pretty(&v)
-    } else {
-        serde_json::to_vec(&v)
-    }
-    .unwrap_or_default();
-    out.push(b'\n');
-    Ok(out)
+    Ok(serde_json::Value::Object(obj))
 }
 
 // ---- the cached index --------------------------------------------------------

@@ -15,6 +15,7 @@ pub mod jobs;
 pub mod parse;
 pub mod plumbing;
 pub mod prefetch;
+pub mod render;
 pub mod search;
 
 use help::{arg_error, value};

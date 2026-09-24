@@ -330,7 +330,7 @@ fn jobs_summary(
             i.upload.time.as_secs_f64()
         ));
     }
-    crate::log::line(&s);
+    crate::cli::render::status(&s);
 }
 
 /// The tail every role shares: the emitter's `finish` when a connection is
