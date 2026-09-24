@@ -210,41 +210,13 @@ pub fn eval_input(ev: &mut Evaluator, c: &Common, file: &str, cwd: &[u8]) -> Eva
     }
 }
 
-/// attr-path.cc:parseAttrPath. `"a.b"` quoting keeps a dot inside a component.
-pub fn parse_attr_path(s: &str) -> EvalResult<Vec<String>> {
-    let mut res = Vec::new();
-    let mut cur = String::new();
-    let mut it = s.chars();
-    while let Some(ch) = it.next() {
-        match ch {
-            '.' => res.push(std::mem::take(&mut cur)),
-            '"' => loop {
-                match it.next() {
-                    None => {
-                        return Err(Error::boxed(
-                            ErrorKind::Parse,
-                            format!("missing closing quote in selection path '{s}'"),
-                            Pos::NONE,
-                        ));
-                    }
-                    Some('"') => break,
-                    Some(c) => cur.push(c),
-                }
-            },
-            c => cur.push(c),
-        }
-    }
-    if !cur.is_empty() {
-        res.push(cur);
-    }
-    Ok(res)
-}
-
 /// attr-path.cc:findAlongAttrPath. Auto-calls at every step, selects an
 /// attribute by name or a list element by index.
 pub fn select(ev: &mut Evaluator, root: Word, attr_path: &str, args: Word) -> EvalResult<Word> {
     let mut v = root;
-    for attr in parse_attr_path(attr_path)? {
+    let path = crate::flake::parse_attr_path(attr_path)
+        .map_err(|e| Error::boxed(ErrorKind::Parse, e.to_string(), Pos::NONE))?;
+    for attr in path {
         v = ev.auto_call(v, args)?;
         v = ev.force(v)?;
         match attr.parse::<u32>() {
