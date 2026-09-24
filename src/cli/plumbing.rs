@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use crate::api::build::{self as apibuild, Dispatch};
-use crate::api::installable::{self, Prefixes, Want};
+use crate::api::installable::{self, Prefixes, Want, drv_roots};
 use crate::api::render::Report;
 use crate::build::Target;
 use crate::build::render::Style;
@@ -13,7 +13,6 @@ use crate::cli::{EvalArgs, Input, evaluate, parse_eval_args, report, run_for};
 use crate::error::Error as CrateError;
 use crate::eval::{Error, Evaluator};
 use crate::runtime::Word;
-use crate::store::locate::drv_roots;
 use crate::store::path::StorePath;
 
 pub const HELP: &str = "\

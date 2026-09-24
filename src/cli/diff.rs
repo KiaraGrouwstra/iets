@@ -2,11 +2,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::api::installable::drv_roots;
 use crate::cli::help::{arg_error, unknown_flag, value};
 use crate::cli::{EvalArgs, EvalFlags, Input, Run, eval_flag, evaluate, report};
 use crate::error::{Error, Result};
 use crate::store::drv::{Derivation, DrvError, load_derivation_from_store};
-use crate::store::locate::drv_roots;
 use crate::store::path::StorePath;
 
 struct Opts {

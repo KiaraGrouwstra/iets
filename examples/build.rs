@@ -7,13 +7,14 @@
 
 use std::collections::HashMap;
 
+use ietsp::api::installable::drv_roots;
 use ietsp::api::{self, EvalArgs, Input};
 use ietsp::build::render::Style;
 use ietsp::build::upload::PlanUpload;
 use ietsp::build::{Dispatcher, Target};
 use ietsp::eval::Evaluator;
 use ietsp::remote::{plan, worker};
-use ietsp::store::locate::{drv_roots, locate_in_store};
+use ietsp::store::locate::locate_in_store;
 use ietsp::store::path::StorePath;
 
 fn main() -> std::process::ExitCode {

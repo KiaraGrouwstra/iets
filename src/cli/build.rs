@@ -4,12 +4,12 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::api::installable::drv_roots;
 use crate::build::fixhash::{self, Answer};
 use crate::cli::help::{arg_error, value};
 use crate::cli::{EvalArgs, Input, Run, build_targets, evaluate, parse_eval_args, report, run_for};
 use crate::error::Error as CrateError;
 use crate::eval::Evaluator;
-use crate::store::locate::drv_roots;
 use crate::trace::run::Cache;
 
 struct BuildArgs {

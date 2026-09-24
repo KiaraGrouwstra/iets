@@ -3,11 +3,11 @@
 use std::sync::Arc;
 
 use crate::api::installable;
+use crate::api::installable::drv_roots;
 use crate::cli::help::{arg_error, value};
 use crate::cli::{EvalArgs, Input, Run, abs_path, cwd, evaluate, parse_eval_args, report, run_for};
 use crate::error::Error as CrateError;
 use crate::eval::{Error, Evaluator, Pos};
-use crate::store::locate::drv_roots;
 use crate::trace::run::Cache;
 
 struct DevEnvArgs {

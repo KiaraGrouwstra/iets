@@ -12,8 +12,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
-use super::{Argv, Common, Root, common_flag, fallback};
-use crate::api::build as apibuild;
+use super::{Argv, Common, common_flag, fallback};
+use crate::api::build::{self as apibuild, Root};
+use crate::api::installable;
 use crate::build::backend::Worker;
 use crate::build::upload::{PlanUpload, Uploader};
 use crate::cli::{Outcome, auto_args, cwd, report};
@@ -235,7 +236,7 @@ fn prepare(ev: &mut Evaluator, s: &Shell) -> crate::error::Result<Box<Ready>> {
             } else {
                 args
             };
-            super::derivations_at(ev, v, args, &mut roots, &mut seen, attr)?;
+            installable::get_drvs_at(ev, v, args, &mut roots, &mut seen, attr)?;
         }
     }
     let bash = bash(ev, &cwd);
@@ -281,7 +282,7 @@ fn bash(ev: &mut Evaluator, cwd: &[u8]) -> Bash {
     let r = (|| -> Result<(), Box<Error>> {
         let v = ev.eval_string("(import <nixpkgs> {}).bashInteractive", cwd)?;
         let empty = ev.mk_attrs(&mut Vec::new(), Pos::NONE)?;
-        super::derivations(ev, v, empty, &mut roots, &mut HashSet::new())
+        installable::get_drvs(ev, v, empty, &mut roots, &mut HashSet::new())
     })();
     match r {
         Ok(()) if roots.len() == 1 => Bash::Drv(roots[0].drv.clone()),

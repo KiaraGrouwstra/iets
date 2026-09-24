@@ -1,11 +1,8 @@
-//! Where the local store keeps an input source, and the derivations a build
-//! result names.
+//! Where the local store keeps an input source.
 
 use std::collections::HashMap;
 
 use crate::error::Error as CrateError;
-use crate::eval::{Error, Evaluator, Pos};
-use crate::runtime::Word;
 
 /// Answers the plan's locator from the local Nix store: one `nix path-info --json` call
 /// tells how each input source was content-addressed and what it references. Paths named
@@ -84,68 +81,4 @@ pub fn locate_in_store(
             )))
         })
         .collect()
-}
-
-/// The derivations a build result names: an attrset with `drvPath`, a string with derivation
-/// context, or a list of those. `!out!drv` context also names the wanted output.
-pub fn drv_roots(
-    ev: &mut Evaluator,
-    v: Word,
-    roots: &mut Vec<(crate::store::path::StorePath, Option<String>)>,
-) -> Result<(), Box<Error>> {
-    use crate::runtime::Ctx;
-    use crate::store::path::StorePath;
-    let bad = |msg: String| Error::boxed(crate::eval::ErrorKind::Eval, msg, Pos::NONE);
-    let parse = |p: &[u8]| {
-        StorePath::parse(&String::from_utf8_lossy(p))
-            .map_err(|e| Error::boxed(crate::eval::ErrorKind::Eval, e.0, Pos::NONE))
-    };
-    let v = ev.force(v)?;
-    if let Some(attrs) = v.as_attrs() {
-        let Some(a) = attrs.get(ev.s.drv_path) else {
-            return Err(bad(
-                "expression evaluated to an attrset without 'drvPath'".into()
-            ));
-        };
-        let s = ev.force_string(a.cell.get(), Pos::NONE, "while evaluating 'drvPath'")?;
-        let p = parse(s.bytes)?;
-        if !p.is_derivation() {
-            return Err(bad(format!("'{p}' is not a derivation path")));
-        }
-        roots.push((p, None));
-        return Ok(());
-    }
-    if let Some(s) = v.as_string() {
-        let mut found = false;
-        for c in s.ctx {
-            match c {
-                Ctx::Built { drv, output } => {
-                    let out = String::from_utf8_lossy(output).into_owned();
-                    roots.push((parse(drv)?, Some(out)));
-                    found = true;
-                }
-                Ctx::DrvDeep(drv) => {
-                    roots.push((parse(drv)?, None));
-                    found = true;
-                }
-                Ctx::Opaque(_) | Ctx::Impure(_) => {}
-            }
-        }
-        if !found {
-            return Err(bad(format!(
-                "string '{}' has no derivation in its context",
-                String::from_utf8_lossy(s.bytes)
-            )));
-        }
-        return Ok(());
-    }
-    if let Some(l) = v.as_list() {
-        for c in l.cells() {
-            drv_roots(ev, c.get(), roots)?;
-        }
-        return Ok(());
-    }
-    Err(bad(
-        "expression must evaluate to a derivation, a string with derivation context, or a list of those".into(),
-    ))
 }

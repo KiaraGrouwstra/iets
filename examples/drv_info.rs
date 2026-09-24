@@ -48,7 +48,7 @@ fn main() -> std::process::ExitCode {
         // evaluator cannot know: the walk records it.
         if let Some(t) = &target {
             let mut roots = Vec::new();
-            if ietsp::store::locate::drv_roots(ev, v, &mut roots).is_ok() {
+            if ietsp::api::installable::drv_roots(ev, v, &mut roots).is_ok() {
                 for (p, _) in &roots {
                     ev.drv.set_attr(p, t);
                 }

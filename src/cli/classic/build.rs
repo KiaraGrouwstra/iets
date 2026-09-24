@@ -5,8 +5,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use super::{Argv, Common, Root, common_flag, fallback};
-use crate::api::build::{self as apibuild, Dispatch};
+use super::{Argv, Common, common_flag, fallback};
+use crate::api::build::{self as apibuild, Dispatch, Root};
+use crate::api::installable;
 use crate::build::render::Style;
 use crate::cli::{Outcome, abs_path, auto_args, cwd};
 use crate::eval::Evaluator;
@@ -97,7 +98,7 @@ fn run(ev: &mut Evaluator, b: &Build) -> crate::error::Result<Built> {
         let root = super::eval_input(ev, &b.c, file, &cwd)?;
         for attr in &b.c.flags.attrs {
             let v = super::select(ev, root, attr, args)?;
-            super::derivations_at(ev, v, args, &mut roots, &mut seen, attr)?;
+            installable::get_drvs_at(ev, v, args, &mut roots, &mut seen, attr)?;
         }
     }
     if roots.is_empty() {

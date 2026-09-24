@@ -6,8 +6,8 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use super::{Argv, Common, Root, fallback};
-use crate::api::build::Dispatch;
+use super::{Argv, Common, fallback};
+use crate::api::build::{Dispatch, Root};
 use crate::api::installable;
 use crate::build::render::Style;
 use crate::cli::{Outcome, abs_path, auto_args, cwd, report};
@@ -207,7 +207,7 @@ enum Done {
     /// `nix eval`: the whole stdout, already formatted.
     Out(Vec<u8>),
     /// `nix build`: what to build, and the closure to upload.
-    Ready(Vec<Target>, Box<Plan>),
+    Ready(Vec<installable::Install>, Box<Plan>),
 }
 
 /// `settings` (`shell_settings` without `builder`) plus the `nix` command's
@@ -312,10 +312,15 @@ fn build_main(argv: &[String], rest: &[String]) -> i32 {
 
 fn build_run(ev: &mut Evaluator, n: &Nix) -> crate::error::Result<Done> {
     let cwd = cwd();
-    let mut targets: Vec<Target> = Vec::new();
+    let mut targets: Vec<installable::Install> = Vec::new();
     for what in &n.installables {
         let v = resolve(ev, n, what, &cwd)?;
-        targets.push(target(ev, v, what, n.expr.is_none() && n.file.is_none())?);
+        targets.push(installable::to_install(
+            ev,
+            v,
+            what,
+            n.expr.is_none() && n.file.is_none(),
+        )?);
     }
     let roots = flat_roots(&targets);
     let plan = crate::api::build::plan(ev, &Root::paths(&roots))?;
@@ -458,14 +463,8 @@ fn resolve(ev: &mut Evaluator, n: &Nix, what: &str, cwd: &[u8]) -> EvalResult<Wo
     Ok(found.remove(0).value)
 }
 
-/// One installable's derivation and the outputs `nix build` installs.
-struct Target {
-    drv: StorePath,
-    outputs: Vec<String>,
-}
-
 /// The `Root`s the plan and `BuildPathsWithResults` need, in target order.
-fn flat_roots(targets: &[Target]) -> Vec<Root> {
+fn flat_roots(targets: &[installable::Install]) -> Vec<Root> {
     (targets.iter())
         .flat_map(|t| {
             (t.outputs.iter()).map(|o| Root {
@@ -476,127 +475,6 @@ fn flat_roots(targets: &[Target]) -> Vec<Root> {
         .collect()
 }
 
-/// The derivation an installable names and its outputs to install
-/// (get-drvs.cc:queryOutputs, installable-flake.cc:toDerivedPaths):
-/// `outputSpecified` picks one, else `meta.outputsToInstall`, else every
-/// output for an attr-path installable and `out` for a flake one.
-fn target(ev: &mut Evaluator, v: Word, what: &str, flake: bool) -> EvalResult<Target> {
-    let v = ev.force(v)?;
-    let unsupported = |msg: String| Error::boxed(ErrorKind::Unsupported, msg, Pos::NONE);
-    let Some(attrs) = v.as_attrs() else {
-        return Err(unsupported(format!(
-            "the installable '{what}' is not a derivation"
-        )));
-    };
-    let is_drv = match attrs.get(ev.s.type_) {
-        Some(t) => {
-            ev.force_string(
-                t.cell.get(),
-                Pos::NONE,
-                "while evaluating the 'type' attribute",
-            )?
-            .bytes
-                == b"derivation"
-        }
-        None => false,
-    };
-    if !is_drv {
-        return Err(unsupported(format!(
-            "the installable '{what}' is not a derivation"
-        )));
-    }
-    let Some(dp) = attrs.get(ev.s.drv_path) else {
-        return Err(Error::boxed(
-            ErrorKind::MissingAttr,
-            "derivation without a 'drvPath' attribute",
-            Pos::NONE,
-        ));
-    };
-    let dp = ev.force_string(dp.cell.get(), Pos::NONE, "while evaluating 'drvPath'")?;
-    let drv = StorePath::parse(&String::from_utf8_lossy(dp.bytes))
-        .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, Pos::NONE))?;
-
-    let name_of = |ev: &mut Evaluator, w: Word, ctx: &str| -> EvalResult<String> {
-        Ok(String::from_utf8_lossy(ev.force_string(w, Pos::NONE, ctx)?.bytes).into_owned())
-    };
-    let specified = match attrs.get(ev.sym(b"outputSpecified")) {
-        Some(a) => ev.force_bool(
-            a.cell.get(),
-            a.pos,
-            "while evaluating the 'outputSpecified' attribute of a derivation",
-        )?,
-        None => false,
-    };
-    if specified {
-        let Some(on) = attrs.get(ev.sym(b"outputName")) else {
-            return Err(Error::boxed(
-                ErrorKind::MissingAttr,
-                format!("derivation '{drv}' lacks an 'outputName' attribute"),
-                Pos::NONE,
-            ));
-        };
-        let o = name_of(ev, on.cell.get(), "while evaluating 'outputName'")?;
-        return Ok(Target {
-            drv,
-            outputs: vec![o],
-        });
-    }
-    if let Some(m) = attrs.get(ev.sym(b"meta")) {
-        let meta = ev.force(m.cell.get())?;
-        if let Some(ma) = meta.as_attrs()
-            && let Some(oti) = ma.get(ev.sym(b"outputsToInstall"))
-        {
-            let l = ev.force(oti.cell.get())?;
-            let Some(l) = l.as_list() else {
-                return Err(Error::boxed(
-                    ErrorKind::Type,
-                    "this derivation has bad 'meta.outputsToInstall'",
-                    Pos::NONE,
-                ));
-            };
-            let mut outputs = Vec::new();
-            for c in l.cells() {
-                outputs.push(name_of(
-                    ev,
-                    c.get(),
-                    "while evaluating 'meta.outputsToInstall'",
-                )?);
-            }
-            outputs.sort();
-            return Ok(Target { drv, outputs });
-        }
-    }
-    if flake {
-        return Ok(Target {
-            drv,
-            outputs: vec!["out".into()],
-        });
-    }
-    let mut outputs = Vec::new();
-    if let Some(o) = attrs.get(ev.sym(b"outputs")) {
-        let l = ev.force(o.cell.get())?;
-        let Some(l) = l.as_list() else {
-            return Err(Error::boxed(
-                ErrorKind::Type,
-                "the 'outputs' attribute of a derivation is not a list",
-                Pos::NONE,
-            ));
-        };
-        for c in l.cells() {
-            outputs.push(name_of(
-                ev,
-                c.get(),
-                "while evaluating the name of an output of a derivation",
-            )?);
-        }
-    }
-    if outputs.is_empty() {
-        outputs.push("out".into());
-    }
-    outputs.sort();
-    Ok(Target { drv, outputs })
-}
-
 // ---- building ----------------------------------------------------------------
 
 /// Uploads the closure, builds every target in one call, makes the symlinks
@@ -605,7 +483,7 @@ fn realise(
     n: &Nix,
     transport: &Transport,
     options: &Options,
-    targets: &[Target],
+    targets: &[installable::Install],
     plan: Plan,
 ) -> i32 {
     let roots = flat_roots(targets);

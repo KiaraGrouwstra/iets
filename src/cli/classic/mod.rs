@@ -8,18 +8,15 @@ pub mod instantiate;
 pub mod nix;
 pub mod shell;
 
-use std::collections::HashSet;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, exit};
 
-use crate::api::build::Root;
 use crate::cli::{EvalFlags, abs_path, eval_flag, full_includes};
 use crate::config::Config;
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::remote::worker::{DEFAULT_SOCKET, Options, Transport};
 use crate::runtime::Word;
-use crate::store::path::StorePath;
 
 /// The command names ietsp answers to when it is installed as classic Nix.
 pub const NAMES: &[&str] = &[
@@ -301,153 +298,4 @@ pub fn select(ev: &mut Evaluator, root: Word, attr_path: &str, args: Word) -> Ev
         }
     }
     Ok(v)
-}
-
-/// get-drvs.cc:getDerivations. A derivation is one root; an attrset is walked
-/// in lexicographic name order and recursed into only with
-/// `recurseForDerivations = true`; a list is always walked.
-pub fn derivations(
-    ev: &mut Evaluator,
-    v: Word,
-    args: Word,
-    out: &mut Vec<Root>,
-    seen: &mut HashSet<(String, String)>,
-) -> EvalResult<()> {
-    derivations_at(ev, v, args, out, seen, "")
-}
-
-/// `derivations`, telling every derivation it finds which attribute path it
-/// was reached by (`attr` is the path already walked, from `-A`).
-pub fn derivations_at(
-    ev: &mut Evaluator,
-    v: Word,
-    args: Word,
-    out: &mut Vec<Root>,
-    seen: &mut HashSet<(String, String)>,
-    attr: &str,
-) -> EvalResult<()> {
-    let v = ev.auto_call(v, args)?;
-    let v = ev.force(v)?;
-    if one_derivation(ev, v, out, seen, attr)? {
-        return Ok(());
-    }
-    if let Some(attrs) = v.as_attrs() {
-        let mut names: Vec<(Vec<u8>, Word)> = attrs
-            .iter()
-            .map(|a| (ev.interner.name(a.sym).to_vec(), a.cell.get()))
-            .collect();
-        names.sort_by(|a, b| a.0.cmp(&b.0));
-        let recurse_sym = ev.sym(b"recurseForDerivations");
-        for (name, child) in names {
-            if !is_attr_path_component(&name) {
-                continue;
-            }
-            let sub = join_attr(attr, &name);
-            let child = ev.force(child)?;
-            if one_derivation(ev, child, out, seen, &sub)? {
-                continue;
-            }
-            let Some(ca) = child.as_attrs() else { continue };
-            let Some(r) = ca.get(recurse_sym) else {
-                continue;
-            };
-            if ev.force_bool(
-                r.cell.get(),
-                r.pos,
-                "while evaluating the attribute `recurseForDerivations`",
-            )? {
-                derivations_at(ev, child, args, out, seen, &sub)?;
-            }
-        }
-        return Ok(());
-    }
-    if let Some(l) = v.as_list() {
-        for c in l.cells() {
-            derivations_at(ev, c.get(), args, out, seen, attr)?;
-        }
-        return Ok(());
-    }
-    Err(Error::boxed(
-        ErrorKind::Type,
-        "expression does not evaluate to a derivation (or a set or list of those)",
-        Pos::NONE,
-    ))
-}
-
-/// `a.b` from `a` and `b`; `b` alone when the prefix is empty.
-fn join_attr(prefix: &str, name: &[u8]) -> String {
-    let name = String::from_utf8_lossy(name);
-    if prefix.is_empty() {
-        name.into_owned()
-    } else {
-        format!("{prefix}.{name}")
-    }
-}
-
-/// True when `v` was a derivation and is now in `out`, or was a duplicate.
-fn one_derivation(
-    ev: &mut Evaluator,
-    v: Word,
-    out: &mut Vec<Root>,
-    seen: &mut HashSet<(String, String)>,
-    attr: &str,
-) -> EvalResult<bool> {
-    let Some(attrs) = v.as_attrs() else {
-        return Ok(false);
-    };
-    let Some(t) = attrs.get(ev.s.type_) else {
-        return Ok(false);
-    };
-    let t = ev.force_string(
-        t.cell.get(),
-        Pos::NONE,
-        "while evaluating the 'type' attribute",
-    )?;
-    if t.bytes != b"derivation" {
-        return Ok(false);
-    }
-    let Some(dp) = attrs.get(ev.s.drv_path) else {
-        return Err(Error::boxed(
-            ErrorKind::MissingAttr,
-            "derivation without a 'drvPath' attribute",
-            Pos::NONE,
-        ));
-    };
-    let dp = ev.force_string(dp.cell.get(), Pos::NONE, "while evaluating 'drvPath'")?;
-    let drv = StorePath::parse(&String::from_utf8_lossy(dp.bytes))
-        .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, Pos::NONE))?;
-    let out_sym = ev.sym(b"outputName");
-    let Some(on) = attrs.get(out_sym) else {
-        return Err(Error::boxed(
-            ErrorKind::MissingAttr,
-            format!("derivation '{drv}' lacks an 'outputName' attribute"),
-            Pos::NONE,
-        ));
-    };
-    let on = ev.force_string(on.cell.get(), Pos::NONE, "while evaluating 'outputName'")?;
-    let output = String::from_utf8_lossy(on.bytes).into_owned();
-    if output.is_empty() {
-        return Err(Error::boxed(
-            ErrorKind::Eval,
-            format!("derivation '{drv}' lacks an 'outputName' attribute"),
-            Pos::NONE,
-        ));
-    }
-    ev.drv.set_attr(&drv, attr);
-    if seen.insert((drv.to_string(), output.clone())) {
-        out.push(Root { drv, output });
-    }
-    Ok(true)
-}
-
-/// get-drvs.cc:isAttrPathComponent: `[A-Za-z_][A-Za-z0-9-_+]*`.
-fn is_attr_path_component(name: &[u8]) -> bool {
-    let Some((first, rest)) = name.split_first() else {
-        return false;
-    };
-    if !(first.is_ascii_alphabetic() || *first == b'_') {
-        return false;
-    }
-    rest.iter()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'+'))
 }

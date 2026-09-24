@@ -5,8 +5,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use super::{Argv, Common, Root, common_flag, fallback};
-use crate::api::build::{self as apibuild, Dispatch};
+use super::{Argv, Common, common_flag, fallback};
+use crate::api::build::{self as apibuild, Dispatch, Root};
+use crate::api::installable;
 use crate::build::render::Style;
 use crate::cli::{Outcome, abs_path, auto_args, cwd};
 use crate::eval::{Error, Evaluator, Pos};
@@ -136,7 +137,7 @@ fn run(ev: &mut Evaluator, i: &Inst) -> crate::error::Result<Made> {
                 let v = if has_args { ev.auto_call(v, args)? } else { v };
                 print_value(ev, v, i, &mut text)?;
             } else {
-                super::derivations_at(ev, v, args, &mut roots, &mut seen, attr)?;
+                installable::get_drvs_at(ev, v, args, &mut roots, &mut seen, attr)?;
             }
         }
     }
