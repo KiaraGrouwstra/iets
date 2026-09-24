@@ -94,3 +94,28 @@ pub fn bind<R>(f: impl FnOnce() -> R) -> impl FnOnce() -> R {
         f()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The whole point of the type: one process, two runs, nothing shared.
+    #[test]
+    fn two_sessions_share_no_state() {
+        let line = format!(
+            "{}:\n  specified: sha256-A=\n     got:    sha256-B=",
+            crate::log::MISMATCH
+        );
+        let (a, b) = (Session::new(), Session::new());
+        {
+            let _entered = a.enter();
+            crate::log::note_mismatch(&line);
+        }
+        {
+            let _entered = b.enter();
+            assert!(crate::log::take_mismatches().is_empty());
+        }
+        let _entered = a.enter();
+        assert_eq!(crate::log::take_mismatches().len(), 1);
+    }
+}
