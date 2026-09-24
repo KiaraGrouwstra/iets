@@ -149,8 +149,8 @@ pub struct Evaluator {
     /// Compiled-IR cache for imported files; `None` when disabled.
     pub ir_cache: Option<std::sync::Arc<crate::compile::cache::IrCache>>,
     /// The eval store, opened on the first flake input that is missing from it
-    /// (`flake::fetch`).
-    pub store: crate::flake::fetch::LazyStore,
+    /// (`crate::source`).
+    pub store: crate::source::LazyStore,
     /// `pure-eval` (docs/pure-eval.md), fixed by `Evaluator::with`.
     pub pure: bool,
     /// The session this evaluator was made in: its settings and its log.

@@ -1,4 +1,4 @@
-//! The root flake's `sourceInfo`. A git working tree is copied the way
+//! A local tree. A git working tree is copied the way
 //! git.cc:getAccessorFromWorkdir does it: the files git tracks (index
 //! entries that still exist), with the working tree contents and modes;
 //! nothing untracked, no `.git`, no submodules. A plain directory is copied
@@ -15,35 +15,32 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::Source;
-use super::fetch::{AttrVal, Attrs, emit_tree_attrs};
+use super::{AttrVal, Attrs, Tree};
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
-use crate::runtime::Word;
 use crate::store::hash::{Hash, HashAlgo};
 use crate::store::nar;
 use crate::store::source::{SourceOrigin, SrcPath};
 
 const NULL_REV: &str = "0000000000000000000000000000000000000000";
 
-/// The sourceInfo attrset and the flake's subdirectory inside it.
-pub fn source_info(ev: &mut Evaluator, source: &Source, pos: Pos) -> EvalResult<(Word, String)> {
-    match source {
-        Source::Path(dir) => {
-            let (hash, mtime) = path_tree(ev, dir, pos)?;
-            let mut attrs = Attrs::new();
-            attrs.insert("type".into(), AttrVal::Str("path".into()));
-            attrs.insert(
-                "path".into(),
-                AttrVal::Str(dir.to_string_lossy().into_owned()),
-            );
-            attrs.insert("narHash".into(), AttrVal::Str(hash.to_sri()));
-            attrs.insert("lastModified".into(), AttrVal::Int(mtime.max(0) as u64));
-            let sp = crate::treestore::store_path("source", &hash)
-                .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
-            Ok((emit_tree_attrs(ev, &sp, &attrs, pos)?, String::new()))
-        }
-        Source::Git { root, subdir } => Ok((git_tree(ev, root, pos)?, subdir.clone())),
-    }
+/// A directory copied whole, as a `path:` input.
+pub fn path_source(ev: &mut Evaluator, dir: &Path, pos: Pos) -> EvalResult<Tree> {
+    let (hash, mtime) = path_tree(ev, dir, pos)?;
+    let mut attrs = Attrs::new();
+    attrs.insert("type".into(), AttrVal::Str("path".into()));
+    attrs.insert(
+        "path".into(),
+        AttrVal::Str(dir.to_string_lossy().into_owned()),
+    );
+    attrs.insert("narHash".into(), AttrVal::Str(hash.to_sri()));
+    attrs.insert("lastModified".into(), AttrVal::Int(mtime.max(0) as u64));
+    let path = crate::treestore::store_path("source", &hash)
+        .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
+    Ok(Tree {
+        path,
+        attrs,
+        subdir: String::new(),
+    })
 }
 
 /// NAR hash of a whole directory and the newest `lstat` mtime in it, like
@@ -177,7 +174,8 @@ pub fn accepted_set(root: &Path, files: &HashSet<PathBuf>) -> HashSet<PathBuf> {
     acc
 }
 
-fn git_tree(ev: &mut Evaluator, root: &Path, pos: Pos) -> EvalResult<Word> {
+/// A git working tree, with the flake's `subdir` carried through.
+pub fn git_source(ev: &mut Evaluator, root: &Path, subdir: &str, pos: Pos) -> EvalResult<Tree> {
     let wd = workdir(ev, root, pos)?;
     let accepted = accepted_set(root, &wd.files);
     let mut fp = ev.trace.fp(root);
@@ -198,10 +196,10 @@ fn git_tree(ev: &mut Evaluator, root: &Path, pos: Pos) -> EvalResult<Word> {
         })?;
     ev.trace
         .tree_external(root, crate::trace::hash_to_digest(&hash), &accepted, fp);
-    let sp = crate::treestore::store_path("source", &hash)
+    let path = crate::treestore::store_path("source", &hash)
         .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
     ev.known.add(
-        sp.clone(),
+        path.clone(),
         SourceOrigin::tree(SrcPath::fs(root, Some(Arc::new(accepted))), hash, nar_size),
     );
     let mut attrs = Attrs::new();
@@ -251,7 +249,11 @@ fn git_tree(ev: &mut Evaluator, root: &Path, pos: Pos) -> EvalResult<Word> {
             attrs.insert("revCount".into(), AttrVal::Int(n));
         }
     }
-    emit_tree_attrs(ev, &sp, &attrs, pos)
+    Ok(Tree {
+        path,
+        attrs,
+        subdir: subdir.to_string(),
+    })
 }
 
 #[cfg(test)]

@@ -31,6 +31,7 @@ pub mod remote;
 pub mod runtime;
 pub mod session;
 pub mod settings;
+pub mod source;
 pub mod store;
 pub mod syntax;
 pub mod trace;

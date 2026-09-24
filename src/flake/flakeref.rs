@@ -6,10 +6,10 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use super::fetch::{AttrVal, Attrs, str_attr};
 use crate::error::{Error, Result as R};
 use crate::eval::{ErrorKind, EvalResult, Evaluator, Pos, bail};
 use crate::runtime::*;
+use crate::source::{AttrVal, Attrs, str_attr};
 use crate::store::hash::{Hash, HashAlgo};
 
 fn fail<T>(m: impl Into<String>) -> R<T> {

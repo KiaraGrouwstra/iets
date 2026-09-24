@@ -327,12 +327,12 @@ fn build_run(ev: &mut Evaluator, n: &Nix) -> crate::error::Result<Done> {
     Ok(Done::Ready(targets, Box::new(plan)))
 }
 
-/// flake-prefetch-inputs.cc: every locked input the lock reaches, fetched in
-/// parallel the way an evaluation fetches it (`fetch::ensure_readable`), on
-/// as many threads as `http-connections`' default. A lock that is missing or
+/// flake-prefetch-inputs.cc: every locked input the lock reaches, resolved in
+/// parallel the way an evaluation resolves it (`source::tree`), on as many
+/// threads as `http-connections`' default. A lock that is missing or
 /// incomplete needs locking, which the real nix does.
 fn prefetch_inputs_main(argv: &[String], rest: &[String]) -> i32 {
-    use crate::flake::fetch::{AttrVal, Attrs, ensure_readable, parse_nar_hash};
+    use crate::source::{AttrVal, Attrs, SourceRef};
     let mut c = Common::default();
     let mut refs = Vec::new();
     let mut a = Argv { all: rest, i: 0 };
@@ -353,7 +353,7 @@ fn prefetch_inputs_main(argv: &[String], rest: &[String]) -> i32 {
         .unwrap_or_else(|e| fallback(NAME, argv, &e.to_string()));
     let lock = std::fs::read(fr.dir.join("flake.lock"))
         .map_err(|e| e.to_string())
-        .and_then(|b| crate::flake::lock::check(&b).map_err(|e| e.to_string()))
+        .and_then(|b| crate::source::lock::check(&b).map_err(|e| e.to_string()))
         .unwrap_or_else(|why| fallback(NAME, argv, &format!("flake.lock: {why}")));
     let mut todo = Vec::new();
     for (name, locked) in lock.reached_inputs() {
@@ -372,11 +372,11 @@ fn prefetch_inputs_main(argv: &[String], rest: &[String]) -> i32 {
             // a path input is read in place, and a relative one is the root's
             (Some("path"), _) => {}
             (Some("github" | "gitlab" | "sourcehut" | "tarball" | "git" | "hg"), Some(h)) => {
-                let (h, sp) = parse_nar_hash(h)
-                    .and_then(|h| Ok((h.to_sri(), crate::treestore::store_path("source", &h)?)))
+                let h = crate::source::parse_nar_hash(h)
+                    .map(|h| h.to_sri())
                     .unwrap_or_else(|e| fallback(NAME, argv, &format!("input '{name}': {e}")));
                 attrs.insert("narHash".into(), AttrVal::Str(h.clone()));
-                todo.push((name.to_string(), h, sp, attrs));
+                todo.push((name.to_string(), h, SourceRef::Locked(attrs)));
             }
             (t, _) => fallback(NAME, argv, &format!("input '{name}' of type {t:?}")),
         }
@@ -390,10 +390,10 @@ fn prefetch_inputs_main(argv: &[String], rest: &[String]) -> i32 {
     std::thread::scope(|s| {
         for _ in 0..threads {
             s.spawn(crate::session::bind(|| {
-                while let Some((name, hash, sp, attrs)) = queue.lock().unwrap().next() {
+                while let Some((name, hash, r)) = queue.lock().unwrap().next() {
                     let mut ev = Evaluator::with(&system, true);
                     ev.input_names.insert(hash, name);
-                    if let Err(e) = ensure_readable(&mut ev, &sp, &attrs, Pos::NONE) {
+                    if let Err(e) = crate::source::tree(&mut ev, &r, Pos::NONE) {
                         report(&ev, &e);
                         failed.store(true, std::sync::atomic::Ordering::Relaxed);
                     }

@@ -7,31 +7,24 @@
 
 pub mod fetch;
 pub mod flakeref;
-pub mod lock;
-pub mod root;
 
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 use crate::eval::{Error as EvalError, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::runtime::Word;
+use crate::source::{self, SourceRef, lock};
 
 pub const CALL_FLAKE: &str = include_str!("call-flake.nix");
 pub const LOCK_ERROR: &str = "ietsp: flake.lock missing or incomplete, run nix flake lock";
-
-/// Where the root flake's tree comes from (flakeref.cc: a directory inside
-/// a git repository is `git+file://`, everything else is `path:`).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Source {
-    Path(PathBuf),
-    Git { root: PathBuf, subdir: String },
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FlakeRef {
     /// The directory holding `flake.nix` and `flake.lock`.
     pub dir: PathBuf,
-    pub source: Source,
+    /// Where its tree comes from (flakeref.cc: a directory inside a git
+    /// repository is `git+file://`, everything else is `path:`).
+    pub source: SourceRef,
     /// The attribute path after `#`, selected from the flake's outputs.
     pub attr: Vec<String>,
 }
@@ -71,7 +64,7 @@ fn is_indirect(loc: &str) -> bool {
 pub fn parse_flake_ref(arg: &str, cwd: &[u8], home: Option<&[u8]>) -> Result<FlakeRef> {
     let p = flakeref::parse(arg)?;
     let loc = arg.split('#').next().unwrap_or(arg);
-    let why = match fetch::str_attr(&p.input, "type") {
+    let why = match source::str_attr(&p.input, "type") {
         Some("path") => None,
         Some("indirect") => Some(format!(
             "flake registry references ({loc}#…) are not supported; use a path or a locked input"
@@ -89,7 +82,7 @@ pub fn parse_flake_ref(arg: &str, cwd: &[u8], home: Option<&[u8]>) -> Result<Fla
             "ietsp: query parameters in flake reference '{arg}' are not supported"
         )));
     }
-    let loc = fetch::str_attr(&p.input, "path").unwrap_or("");
+    let loc = source::str_attr(&p.input, "path").unwrap_or("");
     let full = match loc.strip_prefix('~') {
         Some(rest) if p.bare && (rest.is_empty() || rest.starts_with('/')) => {
             let Some(h) = home else {
@@ -121,11 +114,11 @@ fn local_flake(full: &[u8], explicit_path: bool, attr: Vec<String>) -> Result<Fl
         )));
     }
     let source = if explicit_path {
-        Source::Path(dir.clone())
+        SourceRef::Path(dir.clone())
     } else {
         git_root(&dir).map_or_else(
-            || Source::Path(dir.clone()),
-            |root| Source::Git {
+            || SourceRef::Path(dir.clone()),
+            |root| SourceRef::Git {
                 subdir: dir
                     .strip_prefix(&root)
                     .map(|s| s.to_string_lossy().into_owned())
@@ -204,7 +197,9 @@ pub fn eval_flake_value(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
         ev.input_names.insert(hash.to_string(), name.to_string());
     }
 
-    let (source_info, subdir) = root::source_info(ev, &fr.source, pos)?;
+    let root = source::tree(ev, &fr.source, pos)?;
+    let subdir = root.subdir;
+    let source_info = fetch::emit_tree_attrs(ev, &root.path, &root.attrs, pos)?;
     let out_path = {
         let ctx = format!(
             "while evaluating the sourceInfo of flake '{}'",
@@ -292,7 +287,7 @@ pub fn get_flake(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word
         ));
     }
     let local = p.input.len() == 2 && p.dir.is_empty();
-    let Some(path) = fetch::str_attr(&p.input, "path").filter(|_| local) else {
+    let Some(path) = source::str_attr(&p.input, "path").filter(|_| local) else {
         return Err(unsupported("(only a local path)"));
     };
     let full = match locate(ev, path.as_bytes()) {
@@ -431,7 +426,7 @@ mod tests {
         let cwd = d.as_os_str().as_encoded_bytes();
         let r = parse_flake_ref(".#a.b", cwd, None).unwrap();
         assert_eq!(r.dir, d);
-        assert_eq!(r.source, Source::Path(d.clone()));
+        assert_eq!(r.source, SourceRef::Path(d.clone()));
         assert_eq!(r.attr, ["a", "b"]);
         let r = parse_flake_ref("./sub", cwd, None).unwrap();
         assert_eq!(r.dir, d.join("sub"));
@@ -473,13 +468,13 @@ mod tests {
         let r = parse_flake_ref(&format!("{}/sub#x", d.display()), b"/", None).unwrap();
         assert_eq!(
             r.source,
-            Source::Git {
+            SourceRef::Git {
                 root: d.clone(),
                 subdir: "sub".into()
             }
         );
         let r = parse_flake_ref(&format!("path:{}/sub", d.display()), b"/", None).unwrap();
-        assert_eq!(r.source, Source::Path(d.join("sub")));
+        assert_eq!(r.source, SourceRef::Path(d.join("sub")));
         assert!(is_flake_ref(&format!("{}/sub", d.display())));
         assert!(!is_flake_ref("x.nix"));
     }
