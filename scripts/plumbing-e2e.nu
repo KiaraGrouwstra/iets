@@ -58,6 +58,24 @@ in {
 }
 '#
 
+# one derivation whose `args` interpolate 32 others, so the parallel
+# evaluator coerces them on helper fibers: --dump-drvs must write all 33.
+const MANY = r#'let
+  dep = n: derivation {
+    name = "plumb-dep-${toString n}";
+    system = "@SYSTEM@";
+    builder = "/bin/sh";
+    args = [ "-c" "echo @NONCE@ ${toString n} > $out" ];
+  };
+  deps = builtins.genList dep 32;
+in derivation {
+  name = "plumb-root";
+  system = "@SYSTEM@";
+  builder = "/bin/sh";
+  args = [ "-c" "echo @NONCE@ > $out" ] ++ (map (d: "${d}") deps);
+}
+'#
+
 const BAD = r#'derivation {
   name = "plumb-bad";
   system = "@SYSTEM@";
@@ -75,6 +93,7 @@ run-in $work {
   $BAD | str replace -a "@SYSTEM@" $system | str replace -a "@NONCE@" $nonce | save -f $"($work)/bad.nix"
   $CHAIN | str replace -a "@SYSTEM@" $system | str replace -a "@NONCE@" $nonce | save -f $"($work)/chain.nix"
   $SET | str replace -a "@SYSTEM@" $system | str replace -a "@NONCE@" $nonce | save -f $"($work)/set.nix"
+  $MANY | str replace -a "@SYSTEM@" $system | str replace -a "@NONCE@" $nonce | save -f $"($work)/many.nix"
   cd $work
   # the ops read the closure from /nix/store, so the roots are instantiated
   # there first; nothing here builds them.
@@ -97,6 +116,10 @@ run-in $work {
   $ok = (verdict (($t.roots | get output) == [dev]) "resolve --walk to-install: meta.outputsToInstall" $"($t.roots)") and $ok
   let d = (out-of $ietsp plumbing resolve set.nix -A multi | from json)
   $ok = (verdict ($d.roots.0.output == null) "resolve --walk context: the value named no output" $"($d.roots)") and $ok
+  # a derivation a helper fiber created is dumped too, or the closure is partial
+  let many = (out-of $ietsp plumbing resolve --dump-drvs many many.nix | from json)
+  $ok = (verdict (($many.roots | length) == 1) "resolve: the one root" $"($many.roots)") and $ok
+  $ok = (verdict ((ls many | length) == 33) "resolve --dump-drvs: every derivation, whichever fiber made it" $"(ls many | length)") and $ok
 
   print "== 2. plan"
   let p = (out-of $ietsp plumbing plan $hello | from json)

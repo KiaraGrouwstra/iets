@@ -191,7 +191,7 @@ pub fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
                 Pos::NONE,
             )
         })?;
-        ev.drv.dump_dir = Some(std::path::PathBuf::from(dir));
+        let _ = ev.drv.dump_dir.set(std::path::PathBuf::from(dir));
     }
 
     let cwd = cwd();

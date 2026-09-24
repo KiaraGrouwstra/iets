@@ -53,8 +53,10 @@ pub struct DrvState {
     pub hash_cache: Arc<std::sync::Mutex<DrvHashCache>>,
     pub drvs: crate::parallel::shared::SharedMap<StorePath, DrvInfo>,
     /// `ietsp eval --dump-drvs DIR`: every created derivation is written as
-    /// `DIR/<drv basename>` in ATerm form.
-    pub dump_dir: Option<PathBuf>,
+    /// `DIR/<drv basename>` in ATerm form. Shared, because a helper fiber's
+    /// evaluator is cloned before the flag is applied and creates
+    /// derivations of its own.
+    pub dump_dir: Arc<std::sync::OnceLock<PathBuf>>,
     pub nr_derivations: u64,
     /// Keep the ATerm text of every derivation for instantiation, the
     /// cache, `--dump-drvs` and `build`. Off for runs that only print
@@ -89,7 +91,7 @@ impl Default for DrvState {
         DrvState {
             hash_cache: Default::default(),
             drvs: Default::default(),
-            dump_dir: None,
+            dump_dir: Arc::default(),
             nr_derivations: 0,
             keep_aterm: true,
             keep_site: true,
@@ -634,7 +636,7 @@ fn derivation_strict_internal(
         .insert(drv_path.clone(), h);
     ev.drv.nr_derivations += 1;
 
-    if let Some(dir) = &ev.drv.dump_dir {
+    if let Some(dir) = ev.drv.dump_dir.get() {
         let file = dir.join(drv_path.base_name());
         std::fs::write(&file, &text).map_err(|e| {
             Error::boxed(
