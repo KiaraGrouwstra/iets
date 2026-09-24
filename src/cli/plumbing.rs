@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 use crate::api::build::{self as apibuild, Dispatch};
 use crate::api::installable::{self, Prefixes, Want};
+use crate::api::render::Report;
 use crate::build::Target;
 use crate::build::render::Style;
 use crate::cli::help::{self, arg_error, value};
@@ -339,7 +340,7 @@ fn op_missing(argv: &[String]) -> i32 {
     let targets = targets(&args, stdin);
     match missing(&targets, url.as_deref(), status) {
         Ok(v) => {
-            println!("{v}");
+            crate::cli::render::bytes(&crate::cli::render::json(&v, false));
             0
         }
         Err(e) => e.report(),
@@ -358,13 +359,7 @@ fn missing(
     let prov = crate::provenance::Provenance::off();
     let mut d = Dispatch::open(&transport, &opts, plan, prov, Style::detect())?;
     let m = d.missing(targets)?;
-    let mut v = serde_json::json!({
-        "willBuild": m.will_build,
-        "willSubstitute": m.will_substitute,
-        "unknown": m.unknown,
-        "downloadSize": m.download_size,
-        "narSize": m.nar_size,
-    });
+    let mut v = crate::api::render::Missing::of(&m, d.plan()).json();
     if status {
         v["roots"] = serde_json::Value::Array(cache_status(&transport, targets)?);
     }

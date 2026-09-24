@@ -898,12 +898,13 @@ through it, and `put(name, expect, …)` hashes what it is given and refuses
 anything else. Stage 8 can put a `SourceResolver` over that; it could not
 have gone over `crate::inputs`.
 
-One correction stage 4 left open: `plumbing missing` assembles its own
-`{"willBuild", …}` object and does not sort, so it is not yet byte-for-byte
-`ietsp build --dry-run --json`, which this file says it must be.
-`api::render::Missing::of` carries that ordering. Moving the op onto it
-closes both the duplicate and the divergence, but it changes that op's
-output, so it belongs in a change of its own.
+The correction stage 4 left open is closed: `plumbing missing` assembled its
+own `{"willBuild", …}` object and did not sort, so it was not byte-for-byte
+`ietsp build --dry-run --json`, which this file says it must be. The daemon
+answers `QueryMissing` with a lexicographic `StorePathSet`, so the two
+differed whenever a dependency sorted after its dependent. The op now goes
+through `api::render::Missing::of`, which carries the two orderings, and the
+e2e case compares the two commands byte for byte.
 
 ## Review checklist
 

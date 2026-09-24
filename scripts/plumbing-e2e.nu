@@ -25,6 +25,21 @@ const HELLO = r#'derivation {
 }
 '#
 
+const CHAIN = r#'let
+  dep = derivation {
+    name = "plumb-hello";
+    system = "@SYSTEM@";
+    builder = "/bin/sh";
+    args = [ "-c" "echo @NONCE@ > $out" ];
+  };
+in derivation {
+  name = "plumb-top";
+  system = "@SYSTEM@";
+  builder = "/bin/sh";
+  args = [ "-c" "cat ${dep} > $out" ];
+}
+'#
+
 const BAD = r#'derivation {
   name = "plumb-bad";
   system = "@SYSTEM@";
@@ -40,11 +55,13 @@ run-in $work {
   let nonce = (random uuid)
   $HELLO | str replace -a "@SYSTEM@" $system | str replace -a "@NONCE@" $nonce | save -f $"($work)/hello.nix"
   $BAD | str replace -a "@SYSTEM@" $system | str replace -a "@NONCE@" $nonce | save -f $"($work)/bad.nix"
+  $CHAIN | str replace -a "@SYSTEM@" $system | str replace -a "@NONCE@" $nonce | save -f $"($work)/chain.nix"
   cd $work
   # the ops read the closure from /nix/store, so the roots are instantiated
   # there first; nothing here builds them.
   let hello = (out-of nix-instantiate hello.nix | chomp)
   let bad = (out-of nix-instantiate bad.nix | chomp)
+  let top = (out-of nix-instantiate chain.nix | chomp)
   mut ok = true
 
   print "== 1. resolve"
@@ -67,6 +84,11 @@ run-in $work {
   let c = (out-of $ietsp plumbing missing --check-cache-status $hello | from json)
   $ok = (verdict ($c.roots.0.cacheStatus == "notBuilt") "missing: --check-cache-status per root" $"roots ($c.roots)") and $ok
   $ok = (verdict ($c.roots.0.neededBuilds == [$hello]) "missing: neededBuilds" $"($c.roots.0)") and $ok
+  # docs/plumbing.md: byte for byte what `ietsp build --dry-run --json` prints,
+  # willBuild in the plan's order and willSubstitute by store-path name.
+  let op = (^$ietsp plumbing missing $top)
+  let dry = (^$ietsp build --dry-run --json chain.nix)
+  $ok = (verdict ($op == $dry) "missing: byte-identical to build --dry-run --json" $"($op)\n($dry)") and $ok
 
   print "== 4. build"
   let b = (out-of $ietsp plumbing build $hello | from json)
