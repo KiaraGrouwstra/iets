@@ -20,6 +20,7 @@ const KEYS: &[&str] = &[
     "nix-bin-dir",
     "no-fallback",
     "provenance",
+    "shell-gc-root",
     "source-map",
     "workers",
 ];
@@ -67,6 +68,10 @@ pub struct Settings {
     pub nix_bin_dir: Option<PathBuf>,
     /// `no-fallback`, `IETSP_NO_FALLBACK`: fail instead of running the real Nix.
     pub no_fallback: bool,
+    /// `shell-gc-root`: `nix-shell` and `nix develop` keep the closure they
+    /// entered alive with a link in ietsp's roots store
+    /// (docs/explanation/caching.md). `false` keeps none, for a small disk.
+    pub shell_gc_root: bool,
     /// `IETSP_FETCHING`: set on the Nix we call to fetch a flake input, so
     /// a recursive fetch is an error instead of a loop.
     pub fetching: bool,
@@ -199,6 +204,7 @@ impl Settings {
             nix_bin_dir: dir("IETSP_NIX_BIN_DIR")
                 .or_else(|| c.str("nix-bin-dir").map(PathBuf::from)),
             no_fallback: flag("IETSP_NO_FALLBACK", "1", c.bool("no-fallback")?, false),
+            shell_gc_root: c.bool("shell-gc-root")?.unwrap_or(true),
             fetching: set("IETSP_FETCHING"),
             offline: set("IETSP_OFFLINE"),
             fetch_max_size: c.num("fetch-max-size")?.unwrap_or(16 << 30),
@@ -366,6 +372,14 @@ mod tests {
             .to_string();
         assert!(e.contains("unknown ietsp setting 'nope'"), "{e}");
         assert!(e.contains("t.conf:2"), "{e}");
+    }
+
+    #[test]
+    fn the_shells_keep_a_root_unless_the_file_turns_it_off() {
+        assert!(Settings::default().shell_gc_root);
+        let c = load("shell-gc-root = false\n").unwrap();
+        assert_eq!(c.bool("shell-gc-root").unwrap(), Some(false));
+        assert!(!Settings::from_conf(&c).unwrap().shell_gc_root);
     }
 
     #[test]
