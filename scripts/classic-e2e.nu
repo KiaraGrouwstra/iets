@@ -6,7 +6,7 @@
 #
 # usage: nu scripts/classic-e2e.nu
 #        BIN=target/debug nu scripts/classic-e2e.nu
-use lib.nu [chomp isolate ietsp-bin make-farm nixpkgs real-bin-dir scratch-daemon show verdict]
+use lib.nu [chomp current-system isolate ietsp-bin make-farm nixpkgs real-bin-dir scratch-daemon show verdict]
 
 def --wrapped run-both [farm: string, name: string, --cwd: string = ".", ...args: string] {
   let ours = (^$"($farm)/($name)" ...$args | complete)
@@ -32,6 +32,7 @@ def cmp-case [label: string, r: record]: nothing -> bool {
     print $"  ours stdout: ($r.ours.stdout | str substring 0..400)"
     print $"  real stdout: ($r.real.stdout | str substring 0..400)"
     print $"  ours stderr: ($r.ours.stderr | str substring 0..400)"
+    print $"  real stderr: ($r.real.stderr | str substring 0..400)"
     false
   }
 }
@@ -649,8 +650,72 @@ in
   $ok = ($ok | append (cmp-case "nix develop -u HOME"
     (run-both $farm nix develop $repo -u HOME -c sh -c 'echo "[$HOME]"')))
 
+  # --- nix fmt: the flake's formatter.<system>, built once and kept alive by
+  # an out-link that is also a GC root. The formatter needs a `mkdir`, and the
+  # build sandbox holds only the derivation's inputs, so nixpkgs comes in as a
+  # `path:` input the real `nix flake lock` locks offline.
+  let sys = (current-system)
+  let fmtdir = $"($tmp)/fmtflake"
+  let fmtcache = $"($tmp)/fmtcache"
+  mkdir $fmtdir
+  r##'{
+  inputs.nixpkgs.url = "path:@NIXPKGS@";
+  outputs = { self, nixpkgs }:
+    let
+      system = "@SYS@";
+      cu = nixpkgs.legacyPackages.${system}.coreutils;
+    in {
+      formatter.${system} = derivation {
+        name = "fmt-e2e-1.0";
+        inherit system;
+        builder = "/bin/sh";
+        args = [ "-c" "${cu}/bin/mkdir -p $out/bin && echo '#!/bin/sh' > $out/bin/fmt-e2e && echo 'echo \"PRJ_ROOT=$PRJ_ROOT\"' >> $out/bin/fmt-e2e && echo 'echo \"args:$@\"' >> $out/bin/fmt-e2e && ${cu}/bin/chmod +x $out/bin/fmt-e2e" ];
+      };
+    };
+}
+'## | str replace -a "@NIXPKGS@" $np | str replace -a "@SYS@" $sys | save -f $"($fmtdir)/flake.nix"
+  let flock = (do { cd $fmtdir; ^nix flake lock } | complete)
+  if $flock.exit_code != 0 { print $"FAIL nix flake lock: ($flock.stderr)" }
+  $ok = ($ok | append (verdict ($flock.exit_code == 0) "nix flake lock for the fmt fixture" $flock.stderr))
+  # the out-link goes under this cache root, so the test can find it
+  $env.IETSP_CACHE_DIR = $fmtcache
+  cd $fmtdir
+  # `name` has a version and there is no `meta.mainProgram`, so the program is
+  # names.cc:DrvName's `fmt-e2e`
+  $ok = ($ok | append (cmp-case "nix fmt with no arguments" (run-both $farm nix fmt)))
+  $ok = ($ok | append (cmp-case "nix fmt with paths"
+    (run-both $farm nix fmt a.nix sub/b.nix)))
+  let dd_ours = (^$"($farm)/nix" fmt -- --write x.nix | complete)
+  let dd_real = (^nix fmt -- --write x.nix | complete)
+  $ok = ($ok | append (cmp-case "nix fmt -- --write x.nix" {ours: $dd_ours, real: $dd_real}))
+
+  # the link is in the roots store, points into /nix/store, and the daemon
+  # holds it: `nix-store --query --roots` names it
+  let links = (try { ls $"($fmtcache)/roots" | get name } catch { [] })
+  let link = ($links | get -o 0 | default "")
+  let target = (if ($link | is-not-empty) { ^readlink $link | chomp } else { "" })
+  let held = (if ($target | is-not-empty) { (^nix-store --query --roots $target | complete).stdout | str contains $link } else { false })
+  $ok = ($ok | append (verdict (($links | length) == 1 and ($target | str starts-with "/nix/store/") and $held)
+    "nix fmt keeps the formatter under a GC root" $"link '($link)' -> '($target)', held: ($held)"))
+  # `ietsp cache gc` walks the roots store: a zero TTL drops the one link
+  let gc = (^$ietsp cache gc --ttl 0 --cache-dir $fmtcache | complete)
+  $ok = ($ok | append (verdict ($gc.exit_code == 0 and ($gc.stdout | str contains $"($fmtcache)/roots: 1 of 1 entries") and (not ($link | path exists)))
+    "ietsp cache gc sweeps the roots store" $"exit ($gc.exit_code), stdout ($gc.stdout)"))
+  hide-env IETSP_CACHE_DIR
+
+  # a flake with no `formatter` output: nix's own message, and no fallback
+  cd $fdir
+  let nofmt = (run-both $farm nix fmt)
+  let want_msg = $"does not provide attribute 'formatter.($sys)'"
+  $ok = ($ok | append (cmp-case "nix fmt without a formatter output" $nofmt))
+  $ok = ($ok | append (verdict (($nofmt.ours.stderr | str contains $want_msg) and ($nofmt.real.stderr | str contains $want_msg) and (not ($nofmt.ours.stderr | str contains "falling back")))
+    "nix fmt names the missing attribute itself" $"ours stderr '($nofmt.ours.stderr)'"))
+  cd $tmp
+
   # --- fallbacks, priced with IETSP_NO_FALLBACK so the real run never happens
   for case in [
+    {label: "nix fmt --json falls back", want: "'--json' is not implemented"
+     args: [nix fmt --json]}
     {label: "nix-shell -p falls back", want: "'-p' is not implemented"
      args: [nix-shell -p hello --run "true"]}
     {label: "nix develop --phase falls back", want: "'--phase' is not implemented"
