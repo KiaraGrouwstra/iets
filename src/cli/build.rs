@@ -20,6 +20,8 @@ struct BuildArgs {
     fetch_to: Option<std::path::PathBuf>,
     outputs: Vec<String>,
     sources: HashMap<String, std::path::PathBuf>,
+    /// What names this run's roots in the roots store ([`keep_outputs`]).
+    root_key: Vec<Vec<u8>>,
 }
 
 /// `ietsp build`: evaluate to derivations and ship their closure from memory, or (legacy)
@@ -87,6 +89,7 @@ fn parse(argv: &[String]) -> (BuildArgs, EvalArgs) {
         fetch_to: None,
         outputs: Vec::new(),
         sources: HashMap::new(),
+        root_key: Vec::new(),
     };
     let mut rest: Vec<String> = Vec::new();
     let mut i = 0;
@@ -116,7 +119,25 @@ fn parse(argv: &[String]) -> (BuildArgs, EvalArgs) {
         i += 1;
     }
     let a = parse_eval_args(&rest);
+    b.root_key = root_key(&a);
     (b, a)
+}
+
+/// What names this run's roots: the tag, the working directory and the
+/// installable, so two projects keep two sets of roots and the same command
+/// replaces its own in place. A drv path would not: every edit would leave the
+/// previous root behind for the TTL to sweep.
+fn root_key(a: &EvalArgs) -> Vec<Vec<u8>> {
+    let input = match &a.input {
+        Some(Input::Flake(f) | Input::File(f) | Input::Expr(f)) => f.as_bytes().to_vec(),
+        None => Vec::new(),
+    };
+    vec![
+        b"build".to_vec(),
+        crate::cli::cwd(),
+        input,
+        a.attr.clone().unwrap_or_default().into_bytes(),
+    ]
 }
 
 /// The local files the evaluation of `argv` parses, from a fresh
@@ -339,6 +360,19 @@ fn build_roots(
                 }
             }
         }
+    } else {
+        // the caller reads these paths off stdout and uses them afterwards, so a
+        // collection in between must not take them. `--fetch-to` already has
+        // the bytes outside the store and keeps no root here.
+        let outputs: Vec<(String, String)> = outcomes
+            .iter()
+            .flat_map(|o| {
+                o.outputs
+                    .iter()
+                    .map(|(name, path)| (format!("{}!{name}", o.attr), path.clone()))
+            })
+            .collect();
+        crate::cli::devenv::keep_outputs(&transport, &b.root_key, &outputs);
     }
     timings(b, &d, plan_time);
     for o in &outcomes {

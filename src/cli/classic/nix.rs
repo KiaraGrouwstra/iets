@@ -503,6 +503,7 @@ fn realise(
     let cwd = cwd();
     let mut out = String::new();
     let mut links: Vec<(String, Option<String>)> = Vec::new();
+    let mut kept: Vec<(String, String)> = Vec::new();
     let mut at = 0;
     for (i, t) in targets.iter().enumerate() {
         for output in &t.outputs {
@@ -511,6 +512,7 @@ fn realise(
             if n.no_link {
                 if !super::store_given(&n.c) {
                     links.push((path.clone(), None));
+                    kept.push((format!("{i}!{output}"), path.clone()));
                 }
             } else {
                 // build.cc: the n-th installable adds `-n` from 1 on, an
@@ -535,6 +537,17 @@ fn realise(
     if let Err(e) = d.d.out_links(&links) {
         return e.report();
     }
+    // `--no-link` keeps a root instead of nothing, as `nix-build --no-out-link`
+    // does (src/cli/classic/build.rs, docs/reference/divergences.md)
+    let mut key: Vec<Vec<u8>> = vec![b"nix build".to_vec(), cwd];
+    key.extend(n.installables.iter().map(|i| i.as_bytes().to_vec()));
+    key.extend(
+        n.file
+            .iter()
+            .chain(n.expr.iter())
+            .map(|s| s.as_bytes().to_vec()),
+    );
+    crate::cli::devenv::keep_outputs(&super::local(), &key, &kept);
     crate::cli::render::bytes(out.as_bytes());
     0
 }

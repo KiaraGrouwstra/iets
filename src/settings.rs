@@ -11,6 +11,7 @@ use crate::error::{Error, Result};
 /// Keys an `ietsp.conf` may set. Nothing else: the file is ours, so a name
 /// that is not here is a mistake, not a setting for someone else.
 const KEYS: &[&str] = &[
+    "build-gc-root",
     "builder",
     "cache",
     "cache-dir",
@@ -72,6 +73,10 @@ pub struct Settings {
     /// entered alive with a link in ietsp's roots store
     /// (docs/explanation/caching.md). `false` keeps none, for a small disk.
     pub shell_gc_root: bool,
+    /// `build-gc-root`: `ietsp build` keeps the outputs it printed alive, and
+    /// `--no-out-link`/`--no-link` keeps a root instead of nothing
+    /// (docs/reference/divergences.md). `false` is Nix's behaviour back.
+    pub build_gc_root: bool,
     /// `IETSP_FETCHING`: set on the Nix we call to fetch a flake input, so
     /// a recursive fetch is an error instead of a loop.
     pub fetching: bool,
@@ -205,6 +210,7 @@ impl Settings {
                 .or_else(|| c.str("nix-bin-dir").map(PathBuf::from)),
             no_fallback: flag("IETSP_NO_FALLBACK", "1", c.bool("no-fallback")?, false),
             shell_gc_root: c.bool("shell-gc-root")?.unwrap_or(true),
+            build_gc_root: c.bool("build-gc-root")?.unwrap_or(true),
             fetching: set("IETSP_FETCHING"),
             offline: set("IETSP_OFFLINE"),
             fetch_max_size: c.num("fetch-max-size")?.unwrap_or(16 << 30),

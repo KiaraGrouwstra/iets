@@ -141,6 +141,7 @@ there, plus three keys that have no environment variable:
 | `source-map` | list of `STOREPATH=LOCALDIR` | empty |
 | `fetch-max-size` | bytes | 17179869184 (16 GiB) |
 | `shell-gc-root` | bool | `true` |
+| `build-gc-root` | bool | `true` |
 
 `shell-gc-root` is the switch on the roots `nix-shell` and `nix develop`
 keep for themselves: on, a shell entry links what it realised in
@@ -148,9 +149,20 @@ keep for themselves: on, a shell entry links what it realised in
 next entry rebuilds nothing (`docs/explanation/caching.md`). Off, no root is
 made and no link is touched, which is the switch to take on a small disk: a
 dev shell's closure is large, and a root nobody asked for still pins it for
-the 30 days of the roots TTL. It does not touch the five roots a caller
-names: `nix-instantiate --add-root`, `nix-build -o`, `eval-jobs
---gc-roots-dir`, `plumbing build --gc-root` and `print-dev-env --gc-root`.
+the 30 days of the roots TTL.
+
+`build-gc-root` is the same switch for the outputs of a build: `ietsp
+build` roots every path it prints, because the caller reads those paths and
+uses them after the run, and `nix-build --no-out-link` and `nix build
+--no-link` keep a root in place of the symlink they were told not to make.
+The second one is a divergence from Nix, which lets that output go
+(`docs/reference/divergences.md`), so `build-gc-root = false` is how to get
+Nix's behaviour back.
+
+Neither switch touches the roots a caller names: `nix-instantiate
+--add-root`, `nix-build -o`, `eval-jobs --gc-roots-dir`, `plumbing build
+--gc-root`, `print-dev-env --gc-root` and `ietsp build --fetch-to`. One
+root per thing.
 
 `extra-source-map` appends; no other key is a list. `fetch-max-size` caps
 the decompressed bytes of one flake input download; a stream that

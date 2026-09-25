@@ -146,6 +146,32 @@ diverge in a few more places (store `auto`, `-Q`, `--show-trace`,
 `--no-out-link`, `getDerivations` recursion, `--add-root` clobbering).
 They are listed in `docs/reference/classic.md`.
 
+## GC roots the shells and the builds keep
+
+`nix-shell`, `nix develop` and `nix fmt` keep a GC root of the closure they
+entered or built, and `nix-build --no-out-link` (`nix build --no-link`)
+keeps one of every output it was told not to link. Nix keeps none of these:
+after its run the output is collectable, which is why the next entry
+rebuilds it and why nix-direnv and flake-fmt exist. The roots live in
+`~/.cache/ietsp/roots`, with a 30-day TTL and `ietsp cache gc`
+(`docs/explanation/caching.md`); `shell-gc-root` and `build-gc-root` turn
+them off (`docs/reference/settings.md`).
+
+`--no-out-link` is the deliberate one: the flag means "no symlink here",
+and ietsp reads it as "no symlink here", not as "let this output go". That
+is the workflow the flag is for — build something, use the path it printed,
+keep no `result` in the tree — and in Nix the output can be collected while
+you are still using it. The cost is disk: a `--no-out-link` build now pins
+its output until the TTL sweeps the link.
+
+Observe it: `nix-build --no-out-link -E '<drv>'` prints the same path and
+the same exit code as Nix, with no symlink on either side, and then
+`nix-store --query --roots <path>` names a link under
+`~/.cache/ietsp/roots` for ietsp's run and nothing for Nix's. stdout,
+stderr and the exit code are unchanged — a root is a side effect on the
+daemon — which is why `scripts/classic-e2e.nu` can compare both runs byte
+for byte and check the root in the same case.
+
 ## Errors, exit codes and `--log-format internal-json`
 
 `docs/reference/errors.md` has the codes and the record format. Where it differs from

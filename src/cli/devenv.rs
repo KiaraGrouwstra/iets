@@ -90,8 +90,50 @@ pub(crate) fn shell_root(
 /// (`docs/reference/settings.md`), and a local daemon, the only kind that takes
 /// one. Ask before doing the work a root needs.
 pub(crate) fn shell_roots(transport: &crate::remote::worker::Transport) -> bool {
-    crate::session::Session::current().settings().shell_gc_root
-        && matches!(transport, crate::remote::worker::Transport::Unix(_))
+    own_root(
+        crate::session::Session::current().settings().shell_gc_root,
+        transport,
+    )
+}
+
+/// The same question for a build's outputs, under `build-gc-root`.
+fn build_roots(transport: &crate::remote::worker::Transport) -> bool {
+    own_root(
+        crate::session::Session::current().settings().build_gc_root,
+        transport,
+    )
+}
+
+/// `on` is the setting that allows the root; only a local daemon takes one.
+fn own_root(on: bool, transport: &crate::remote::worker::Transport) -> bool {
+    on && matches!(transport, crate::remote::worker::Transport::Unix(_))
+}
+
+/// Keeps the outputs a build printed alive under roots of ietsp's own: one
+/// link in the roots store per output, named by `key` — where the command ran
+/// and what it was asked to build — and by the name that tells two outputs of
+/// one run apart, so a second run of the same command replaces its own roots in
+/// place. A caller that named a path of its own does not come here: one root
+/// per thing (`docs/explanation/caching.md`).
+pub(crate) fn keep_outputs(
+    transport: &crate::remote::worker::Transport,
+    key: &[Vec<u8>],
+    outputs: &[(String, String)],
+) {
+    if outputs.is_empty() || !build_roots(transport) {
+        return;
+    }
+    let mut conn = crate::remote::worker::Connection::open(transport, &mut |_| {}).ok();
+    let mut parts: Vec<&[u8]> = key.iter().map(|p| p.as_slice()).collect();
+    parts.push(b"");
+    for (name, path) in outputs {
+        let last = parts.len() - 1;
+        parts[last] = name.as_bytes();
+        let Some(link) = crate::cachefs::root_link(None, &parts) else {
+            return;
+        };
+        keep_root(transport, &link, path, conn.as_mut());
+    }
 }
 
 /// Links `out_path` at `link` in the roots store, registers the link with the

@@ -536,6 +536,42 @@ in
       "nom --json reads ietsp's activity records" $"nom said '($s | str substring (-600)..)'"))
   }
 
+  # --- the roots a build keeps. `--no-out-link` and `--no-link` ask for no
+  # symlink; nix then lets the output go, and ietsp keeps a root in its roots
+  # store instead (docs/reference/divergences.md) — a side effect on the
+  # daemon, so stdout and the exit code still match nix's byte for byte.
+  # Native `ietsp build` roots every path it prints, for the same reason: the
+  # caller uses those paths after the run.
+  let brdrv = ('derivation { name = "classic-e2e-noout"; system = "@SYS@"; builder = "/bin/sh"; args = [ "-c" "echo x > $out" ]; salt = "SALT"; }' | str replace SALT (random uuid) | str replace -a "@SYS@" (current-system))
+  let brdir = $"($tmp)/noout"
+  mkdir $brdir
+  cd $brdir
+  for case in [
+    {label: "nix-build --no-out-link -E", name: "nix-build", args: [--no-out-link -E]}
+    {label: "nix build --no-link --print-out-paths", name: "nix", args: [build --no-link --print-out-paths --expr]}
+  ] {
+    let cache = $"($tmp)/broots-($case.name)"
+    let r = (with-env {IETSP_CACHE_DIR: $cache} { run-both $farm $case.name ...$case.args $brdrv })
+    $ok = ($ok | append (cmp-case $case.label $r))
+    let links = (try { ls $"($cache)/roots" | get name | sort } catch { [] })
+    let link = ($links | get -o 0 | default "")
+    let target = (if ($link | is-not-empty) { ^readlink $link | chomp } else { "" })
+    let held = (if ($target | is-not-empty) { (^nix-store --query --roots $target | complete).stdout | str contains $link } else { false })
+    $ok = ($ok | append (verdict (($links | length) == 1 and $target == ($r.ours.stdout | chomp) and $held and (not ("result" | path exists)))
+      $"($case.label) keeps a root instead of nothing" $"($links | length) links, '($link)' -> '($target)', held ($held), printed ($r.ours.stdout | chomp)"))
+  }
+  let broff = $"($tmp)/broots-off"
+  let nbo = (with-env {IETSP_CACHE_DIR: $broff} { ^$"($farm)/nix-build" --ietsp-option build-gc-root false --no-out-link -E $brdrv | complete })
+  $ok = ($ok | append (verdict ($nbo.exit_code == 0 and (not ($"($broff)/roots" | path exists)))
+    "build-gc-root = false keeps no root, as in nix" $"exit ($nbo.exit_code), stderr ($nbo.stderr | str substring 0..200)"))
+  let nvcache = $"($tmp)/broots-native"
+  let nv = (with-env {IETSP_CACHE_DIR: $nvcache} { ^$ietsp build -E $brdrv | complete })
+  let nvlinks = (try { ls $"($nvcache)/roots" | get name } catch { [] })
+  let nvtarget = (if (($nvlinks | length) == 1) { ^readlink ($nvlinks | first) | chomp } else { "" })
+  $ok = ($ok | append (verdict ($nv.exit_code == 0 and $nvtarget == ($nv.stdout | chomp))
+    "ietsp build roots the path it printed" $"exit ($nv.exit_code), ($nvlinks | length) links -> '($nvtarget)', printed ($nv.stdout | chomp)"))
+  cd $tmp
+
   # --- ietsp build --dry-run: nix build --dry-run's text, and the same sets as JSON
   let dry = (do $act)
   let dr = (^nix build --dry-run --expr $dry | complete)

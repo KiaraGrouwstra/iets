@@ -109,6 +109,22 @@ fn run(ev: &mut Evaluator, b: &Build) -> crate::error::Result<Built> {
     Ok(Built::Ready(roots, Box::new(plan), Box::new(prov)))
 }
 
+/// `--no-out-link` asks for no symlink, and in nix that means the output is
+/// collectable the moment the run ends: the opt-out protects nothing. Here it
+/// keeps a root in ietsp's roots store instead — the workflow the flag is for,
+/// without a `result` in the tree — keyed on the working directory, the files
+/// and attributes asked for, and the name the symlink would have had, so a
+/// second build replaces its own roots in place. It is a divergence from Nix,
+/// invisible on stdout and stderr (`docs/reference/divergences.md`), and
+/// `build-gc-root = false` turns it off. The links go on the local daemon,
+/// which is where `out_links` brought the outputs.
+fn keep_outputs(b: &Build, kept: &[(String, String)]) {
+    let mut key: Vec<Vec<u8>> = vec![b"nix-build".to_vec(), cwd()];
+    key.extend(b.c.files.iter().map(|f| f.as_bytes().to_vec()));
+    key.extend(b.c.flags.attrs.iter().map(|a| a.as_bytes().to_vec()));
+    crate::cli::devenv::keep_outputs(&super::local(), &key, kept);
+}
+
 /// Uploads the closure, builds every root in one call, links and prints.
 fn realise(
     b: &Build,
@@ -155,11 +171,13 @@ fn realise(
     let cwd = cwd();
     let mut out = String::new();
     let mut links: Vec<(String, Option<String>)> = Vec::new();
+    let mut kept: Vec<(String, String)> = Vec::new();
     for (r, path) in roots.iter().zip(&paths) {
         let drv = r.drv.to_string();
         if b.no_out_link {
             if !super::store_given(&b.c) {
                 links.push((path.clone(), None));
+                kept.push((format!("{}!{}", counter[&drv], r.output), path.clone()));
             }
         } else {
             let mut link = b.out_link.clone();
@@ -180,6 +198,7 @@ fn realise(
     if let Err(e) = d.d.out_links(&links) {
         return e.report();
     }
+    keep_outputs(b, &kept);
     use std::io::Write;
     let mut stdout = std::io::stdout();
     let _ = stdout.write_all(out.as_bytes());
