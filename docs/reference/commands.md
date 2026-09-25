@@ -62,6 +62,7 @@ op that evaluates share one parser (`src/cli/mod.rs:parse_eval_args`).
 |:---|:---|
 | `-E EXPR`, `--expr EXPR` | evaluate `EXPR` instead of a file |
 | `FILE` | evaluate `FILE`; a directory resolves to its `default.nix` |
+| `-f FILE`, `--file FILE` | the same as the positional `FILE`; native commands only |
 | `FLAKEREF[#ATTR]` | evaluate a locked local flake |
 | `-A PATH`, `--attr PATH` | select the attribute `PATH`; the last one wins |
 | `--arg N EXPR`, `--argstr N STR` | call a top-level function with `N` |
@@ -90,7 +91,11 @@ op that evaluates share one parser (`src/cli/mod.rs:parse_eval_args`).
 | `--lazy-trees`, `--eval-cores N`, … | a Determinate Nix setting: one warning, then ignored |
 
 `-E` and a `FILE` together is the usage error `-E and FILE cannot be
-combined`. The last input wins otherwise.
+combined`. The last input wins otherwise. `-f`/`--file` resolves exactly
+as the positional argument does, and it is a native flag only: under a
+classic name the argv stays Nix's, where `nix-eval-jobs -f` is an unknown
+flag. `ietsp fast-build` is the one native command without it — there
+`-f` is nix-fast-build's `--flake`.
 
 `-A PATH` and a flake fragment walk the value with
 `attr-path.cc:findAlongAttrPath`, which auto-calls at every step. A file
@@ -326,6 +331,7 @@ time.
 | `--json` | print one JSON object instead of text |
 | `--closure` | compare the output closures, not the derivations |
 | `--builder URL` | the store `--closure` reads; default `daemon` |
+| `-f FILE`, `--file FILE` | the same as the positional side |
 | `-I P=PATH`, `--arg N E`, `--argstr N S`, `--option N V`, `--impure` | as for `eval`; they apply to both sides |
 | `--log-format F`, `--show-trace` | as for `eval` |
 

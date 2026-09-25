@@ -38,6 +38,7 @@ Run 'ietsp COMMAND --help' for the flags of a command.
 const INPUT: &str = "
 common:
   -E, --expr EXPR       evaluate EXPR instead of FILE
+  -f, --file FILE       the same as the positional FILE
   -A, --attr PATH       select the attribute PATH; a top-level function is
                         called with the --args at every step of it
   --arg N EXPR, --argstr N STR  call a top-level function with N = EXPR/\"STR\"
@@ -124,6 +125,7 @@ Exit: 0 they are equal, 1 they differ, 2 trouble.
   --closure             compare the output closures by package and version,
                         as nvd does; the outputs must be in the store
   --builder URL         the store --closure asks (default: daemon)
+  -f, --file FILE       the same as the positional FILE
   -I P=PATH, --arg N E, --argstr N S, --option N V, --impure  as for eval
   --log-format F, --show-trace  as for 'ietsp eval'
 ";

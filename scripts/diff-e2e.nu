@@ -86,6 +86,13 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let r = (diff-run $ietsp $"($work)/a.nix" $"($work)/b.nix")
   $res ++= [(verdict ($r.rc == 1 and ($r.out | str contains "input drv changed: diffdep")) "two installables, one evaluation each" $"two installables \(rc=($r.rc)\)\n($r.out)")]
 
+  # -f FILE is the positional FILE (docs/diff.md)
+  let want = (diff-run $ietsp -A a -A b $f)
+  for flag in [-f --file] {
+    let r = (diff-run $ietsp -A a -A b $flag $f)
+    $res ++= [(verdict ($r.rc == $want.rc and $r.out == $want.out) $"($flag) FILE is the positional FILE" $"($flag) \(rc=($r.rc)\)\n($r.out)")]
+  }
+
   if ($res | all {|x| $x }) { 0 } else { 1 }
 }
 

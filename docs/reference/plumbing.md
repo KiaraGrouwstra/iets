@@ -32,7 +32,8 @@ close to one of the five.
 
 Every op that evaluates — `resolve`, and `fetch` in its expression form —
 takes the shared evaluation flags of `docs/reference/commands.md`: `-E
-EXPR`, `FILE`, `FLAKEREF[#FRAGMENT]`, `-A PATH`, `--arg`, `--argstr`,
+EXPR`, `FILE` (or `-f FILE`, the same thing), `FLAKEREF[#FRAGMENT]`,
+`-A PATH`, `--arg`, `--argstr`,
 `-I`, `--impure`/`--pure-eval`, `--option`, `--workers`, `--no-cache`,
 `--cache-dir`, `--log-format`, `--show-trace`, `--dump-drvs`. One parser
 serves all of them (`api::EvalArgs`).

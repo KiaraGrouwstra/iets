@@ -144,11 +144,14 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
                 a.xp_features
                     .extend(v.split_whitespace().map(str::to_owned));
             }
-            _ if s.starts_with('-') && s != "-" => help::unknown_flag(s),
-            _ if crate::api::flake::is_flake_ref(s) => {
-                set_input(&mut a, Input::Flake(s.to_string()))
+            // a synonym for the positional FILE, in the native namespace
+            // only: a classic name's argv stays Nix's
+            "-f" | "--file" if help::command().is_some() => {
+                let f = next();
+                set_positional(&mut a, &f)
             }
-            _ => set_input(&mut a, Input::File(s.to_string())),
+            _ if s.starts_with('-') && s != "-" => help::unknown_flag(s),
+            _ => set_positional(&mut a, s),
         }
         i += 1;
     }
@@ -158,6 +161,16 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
     (a.includes, a.args, a.pure) = (f.includes, f.args, f.pure);
     a.attr = f.attrs.pop();
     a
+}
+
+/// The input a positional argument (or `-f`) names: a flake reference when
+/// it looks like one, else a file.
+fn set_positional(a: &mut EvalArgs, s: &str) {
+    if crate::api::flake::is_flake_ref(s) {
+        set_input(a, Input::Flake(s.to_string()))
+    } else {
+        set_input(a, Input::File(s.to_string()))
+    }
 }
 
 /// The last input wins, as it did, but an expression and a file together is

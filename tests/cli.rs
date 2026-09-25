@@ -89,6 +89,26 @@ fn a_bad_command_line_names_the_problem() {
     }
 }
 
+/// `-f FILE` is the positional FILE in the native namespace; under a classic
+/// name the argv stays Nix's, where `nix-eval-jobs` has no `-f`.
+#[test]
+fn dash_f_names_the_file_in_the_native_namespace() {
+    for args in [
+        &["eval", "-f", "/nonexistent/missing.nix"][..],
+        &["eval", "--file", "/nonexistent/missing.nix"],
+        &["build", "-f", "/nonexistent/missing.nix"],
+        &["prefetch", "-f", "/nonexistent/missing.nix"],
+        &["eval-jobs", "-f", "/nonexistent/missing.nix"],
+    ] {
+        let err = text(&ietsp(args).stderr);
+        assert!(err.contains("No such file or directory"), "{args:?}: {err}");
+    }
+    let o = ietsp(&["nix-eval-jobs", "-f", "/nonexistent/missing.nix"]);
+    let err = text(&o.stderr);
+    assert!(err.contains("unknown flag '-f'"), "{err}");
+    assert_eq!(o.status.code(), Some(1), "{err}");
+}
+
 #[test]
 fn io_errors_read_like_strerror() {
     let o = ietsp(&["eval", "/nonexistent/missing.nix"]);

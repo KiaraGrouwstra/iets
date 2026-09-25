@@ -76,6 +76,8 @@ fn parse(argv: &[String]) -> (Opts, Vec<Side>) {
                     .unwrap_or_else(|_| arg_error(format!("--depth wants a number, got '{v}'")));
             }
             "-E" | "--expr" => expr = Some(next()),
+            // a synonym for the positional side, as for 'ietsp eval'
+            "-f" | "--file" => pos.push(next()),
             _ if s.starts_with('-') && s != "-" => unknown_flag(s),
             _ => pos.push(s.to_string()),
         }
