@@ -188,8 +188,8 @@ cache-status-resolver.cc algorithm — the same keys `ietsp eval-jobs
 It reads the roots' derivations from `/nix/store`, as `missing` does.
 
 Exit: 0; 1 when the builder cannot be reached or a derivation cannot be
-read; 2 on a usage error, which includes `--builder grpc://…`, since a
-grpc store has no `QueryMissing`.
+read; 2 on a usage error. A `grpc://` builder has no `QueryMissing`, so
+it is the usage error `--dry-run needs a worker-protocol builder`.
 
 ## `build`
 
