@@ -1,5 +1,8 @@
 # Lints
 
+Every lint: its name, family, hook, default level and trigger, plus the
+level resolution, the scope rules and the `# ietsp: allow` comment.
+
 ietsp has a registry of named lints for language corner cases. Each lint
 is `off`, `warn` or `error`. Code: `src/lint/` (`mod.rs` holds the
 registry and the emission, one file per family holds the triggers);
@@ -394,7 +397,7 @@ the instructions. At a site the check is one branch on an empty table.
 
 - A lint warning is an effect. `Cache::write` stores the printed lines in
   the entry's `warnings` file and a hit prints them again before the
-  result (docs/tracing-cache.md). The lint configuration, scope and
+  result (docs/explanation/caching.md). The lint configuration, scope and
   roots included, is part of the cache key. A lint at `error` fails the
   run, and failed runs are never cached.
 - The IR cache keys an entry on the compile-time lint levels the file

@@ -1,5 +1,8 @@
 # Classic mode
 
+Every classic Nix name ietsp answers to, the flags each one handles, and
+what makes it fall back to the real `nix`.
+
 The same `ietsp` binary installed under Nix's own command names. Each name
 handles the subset ietsp implements and execs the real binary for the rest,
 so it is a drop-in only where the real nix is also on `PATH`.
@@ -18,7 +21,7 @@ None of the classic names has a `--builder` flag, so the build target is the
 `builder` setting in `ietsp.conf`, and nix.conf's `store` when that is unset.
 `--store URL` and `--option store URL` on the command line win over both.
 `--ietsp-option name value` sets any ietsp setting for one run, and is stripped
-from the argv before a fallback execs the real nix (`docs/config.md`).
+from the argv before a fallback execs the real nix (`docs/reference/settings.md`).
 
 Registration stays local whatever `builder` says:
 
@@ -38,7 +41,7 @@ Registration stays local whatever `builder` says:
 
 `nix/module.nix` installs `packages.default` and the direnv hook.
 `ietsp.classic.enable` (default `false`) adds the farm as well, and
-`ietsp.settings` writes `/etc/ietsp/ietsp.conf` (`docs/config.md`):
+`ietsp.settings` writes `/etc/ietsp/ietsp.conf` (`docs/reference/settings.md`):
 
 ```nix
 {
@@ -160,19 +163,19 @@ derivation, any other flag.
 ### `nix-eval-jobs`
 
 The existing `ietsp eval-jobs`, which already matches nix-eval-jobs 2.35
-flag for flag. See `docs/eval-jobs.md`.
+flag for flag. See `docs/reference/commands.md`.
 
 ### `nix-fast-build`
 
 The existing `ietsp fast-build`, with nix-fast-build's flags and result
-files. See `docs/fast-build.md`.
+files. See `docs/reference/commands.md`.
 
 ### `nix`
 
 Six subcommands; every other one execs the real `nix`.
 
 `nix eval [INSTALLABLE]`: `--json`, `--raw`, `--expr E`, `-f`/`--file FILE`,
-`--impure`, `--pure-eval`, `--no-pure-eval` (`docs/pure-eval.md`: `nix`
+`--impure`, `--pure-eval`, `--no-pure-eval` (`docs/explanation/evaluation.md`: `nix`
 evaluates purely unless told otherwise, `-f` is impure), `-I`, `--arg`/`--argstr`,
 `--option`, `--store`, `--show-trace`, `--experimental-features` and
 `--extra-experimental-features` (accepted and ignored),
@@ -190,7 +193,7 @@ top level is reported and exits 1. `--json` is `printValueAsJSON` with
 quoting.
 
 An INSTALLABLE is `FLAKEREF[#ATTR]` on a locked local flake (`.`, `path:`,
-a directory inside a git repository — see `docs/flakes.md`), or the
+a directory inside a git repository — see `docs/explanation/flakes-and-sources.md`), or the
 attribute path of the `-f`/`--expr` value. `.` is the whole value. The
 flake attr-path candidates are `installable-flake.cc:getActualAttrPaths`
 with `installables.cc`'s defaults:
@@ -226,24 +229,24 @@ their signatures over the worker protocol before it makes the symlink. With
 `--store` given, `--no-link` skips all of that. Without it the `builder`
 setting stands in for the local store, as a build hook does, so the outputs
 come back even under `--no-link`: `nix build --no-link` followed by
-`nix copy` works. See `docs/remote-build.md`.
+`nix copy` works. See `docs/how-to/build-remotely.md`.
 
 `nix search INSTALLABLE REGEX...`: `-e`/`--exclude REGEX`, `--json`,
 `--pretty`, `--no-pretty`, `-f`/`--file`, `--expr`, plus the same global
 flags. The output is `search.cc`'s, byte for byte, escape sequences
 included; the index of the walk is cached, so a second search over the
-same package set answers without evaluating (`docs/search.md`). An
+same package set answers without evaluating (`docs/reference/commands.md`). An
 installable ietsp cannot evaluate — a flake registry reference such as
 `nixpkgs`, an unlocked flake — falls back, as does any other flag.
 
 `nix print-dev-env [FLAKEREF[#attr]] [--json]` is `ietsp print-dev-env`
-(`docs/direnv.md`).
+(`docs/reference/commands.md`).
 
 `nix develop [INSTALLABLE]`: `-c`/`--command CMD ARGS...` (like nix, it takes
 every remaining argument), `-i`/`--ignore-env`/`--ignore-environment`,
 `-k`/`--keep`/`--keep-env-var NAME`, `-u`/`--unset`/`--unset-env-var NAME`, plus
 the same global flags. The environment is the one `nix print-dev-env` prints,
-computed by the same code (`docs/direnv.md`), so the shell derivation's `-env`
+computed by the same code (`docs/reference/commands.md`), so the shell derivation's `-env`
 derivation is built through the daemon. On top of `makeRcScript` it appends what
 `CmdDevelop::run` appends: the rc file deletes itself, `--command` becomes
 `exec`, an interactive shell is wrapped in the `~/.bashrc` and
@@ -268,7 +271,7 @@ installable, any other flag.
 is `flake-prefetch-inputs.cc`: it fetches every locked input that the root
 of `flake.lock` reaches, on up to 25 threads (the default of
 `http-connections`). Each input takes the path an evaluation takes
-(`docs/flakes.md`): `/nix/store`, then the input store, then a substitute,
+(`docs/explanation/flakes-and-sources.md`): `/nix/store`, then the input store, then a substitute,
 then ietsp's own download for `github`, `gitlab`, `sourcehut` and `tarball`,
 then the real nix for `git` and `hg`. So a tarball-shaped input lands in the
 input store, not in `/nix/store`. A `path:` input is read in place and has
@@ -280,7 +283,7 @@ flake reference, any other flag.
 `fast-build` and `eval-jobs --flake` do not prefetch. An evaluation often
 uses only some of the inputs, so a prefetch can download trees that nothing
 reads, and parallel workers already share one download per tree
-(`docs/caches.md`).
+(`docs/explanation/caching.md`).
 
 Falls back on: `nix eval --apply`, `--write-to` or more than one
 installable, `nix build --rebuild`, `--dry-run` or `--json`, an installable
@@ -295,7 +298,7 @@ listed above.
 `nix store prefetch-file` and `nix-prefetch-url` keep falling back on
 purpose. Both add the file to the store and print its path, and ietsp has no
 store to add it to. `ietsp prefetch` prints the same hash and nothing else
-(`docs/prefetch.md`).
+(`docs/reference/commands.md`).
 
 ## Fallback rules
 
@@ -341,12 +344,12 @@ that is running. Such a candidate is skipped like ourselves: its marker is
 read, and the walk over `PATH` goes on. Without the file-name rule the other
 build looked like a foreign nix, so a flake-input fetch spawned it and the
 child stopped at the `IETSP_FETCHING` guard
-(`ietsp: recursive fetch ...`, `docs/flakes.md`).
+(`ietsp: recursive fetch ...`, `docs/explanation/flakes-and-sources.md`).
 
 ## Config
 
 The classic names read nix.conf as Nix does, and what reaches the daemon is
-in `docs/config.md`. On the command line, `--option name value` and the flag
+in `docs/reference/settings.md`. On the command line, `--option name value` and the flag
 aliases (`--store`, `-j`/`--max-jobs`, `--cores`, `-k`, `-K`) are overrides
 applied in command-line order. `store = auto`, empty or `daemon` is the
 daemon socket; `unix://PATH`, `ssh-ng://HOST` and `grpc://HOST:PORT[?…]` are
@@ -354,14 +357,14 @@ honoured; any other store falls back.
 
 ## Known divergences
 
-`docs/divergences.md` covers the evaluator. Classic mode adds:
+`docs/reference/divergences.md` covers the evaluator. Classic mode adds:
 
 - `store = auto` is the daemon socket. The real nix would use the local
   store directly when it is writable.
 - `-Q`/`--no-build-output` drops the daemon's log lines. In Nix 2.34 it
   only switches the log format to `raw`.
 - `--show-trace` only puts the trace into the `--log-format internal-json`
-  error records (`docs/cli.md`): ietsp always prints the full
+  error records (`docs/reference/errors.md`): ietsp always prints the full
   trace it has.
 - `--no-out-link` creates no symlink at all. `nix-build` links into a
   temporary directory and lets it be deleted, which roots the output for
@@ -371,7 +374,7 @@ honoured; any other store falls back.
   `ignoreAssertionFailures` are not implemented.
 - `--add-root` does not refuse a link that already exists and points
   outside the store; it replaces it.
-- The tracing cache (`docs/tracing-cache.md`) is off in classic mode.
+- The tracing cache (`docs/explanation/caching.md`) is off in classic mode.
 - `nix eval` does not register the derivations it evaluates. The real one
   writes the `.drv` files while computing `drvPath`.
 - `nix build` prints the log lines only with `-L`. The real one shows the

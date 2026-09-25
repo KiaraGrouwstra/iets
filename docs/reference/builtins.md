@@ -1,5 +1,8 @@
 # Builtins API
 
+The primop signature, the forcing helpers, the constructors, the error
+kinds, and every builtin ietsp implements.
+
 Primops live in `src/builtins/<family>.rs`. Each file has one entry point:
 
 ```rust
@@ -131,7 +134,7 @@ text: match, split (ERE via `text/regex.rs`, per-thread regex cache), replaceStr
 hashString, hashFile, convertHash, floor, ceil, genericClosure, getEnv, break,
 toJSON, fromJSON, toXML, fromTOML (`--extra-experimental-features
 parse-toml-timestamps` for datetimes), currentTime. Divergences:
-`docs/divergences.md`.
+`docs/reference/divergences.md`.
 constants: true, false, null, builtins, currentSystem, nixVersion,
 langVersion, storeDir, nixPath, derivation (from corepkgs/derivation.nix).
 derivation: derivationStrict, placeholder, `import` of a `.drv` store path.

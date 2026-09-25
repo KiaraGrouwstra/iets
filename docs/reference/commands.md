@@ -1,0 +1,813 @@
+# Commands
+
+Every user-facing `ietsp` command: its synopsis, its flags, what it writes
+to stdout and to stderr, and the codes it exits with.
+
+The classic Nix names (`nix-instantiate`, `nix-build`, `nix-shell`,
+`nix-eval-jobs`, `nix-fast-build`, `nix`) are in
+`docs/reference/classic.md`. The machine-first operations
+(`ietsp plumbing OP`) are in `docs/reference/plumbing.md`. The error codes,
+the exit codes and the JSON log records are in `docs/reference/errors.md`.
+
+```
+ietsp COMMAND [ARGS...]
+```
+
+| Command | What it does |
+|:---|:---|
+| `eval` | evaluate an expression, a file or a flake and print the value |
+| `build` | evaluate to derivations and build them |
+| `search` | print the packages that match every regular expression |
+| `diff` | print what differs between two derivations |
+| `prefetch` | print the hash of a URL or of a fixed-output derivation |
+| `eval-jobs` | print a jobset's derivations as JSON lines |
+| `fast-build` | evaluate and build an attribute tree in one process |
+| `print-dev-env` | print the bash of a flake's devShell |
+| `lint` | print the lint registry and the levels a run would use |
+| `parse` | parse Nix files and print or check the syntax tree |
+| `cache` | sweep old cache entries, or dump an entry's read set |
+| `plumbing` | the machine-first operations (`docs/reference/plumbing.md`) |
+| `help`, `version` | the help of a command or a topic; the version |
+
+`ietsp version` and `ietsp --version` print `ietsp VERSION (COMMIT)` on
+stdout and exit 0.
+
+## Conventions
+
+- **stdout carries the answer.** A value, an output path, a hash, a JSON
+  object, a JSON line. Nothing else goes there.
+- **stderr carries everything else.** Errors, warnings, build logs,
+  progress, the `--timings` lines, the `IETSP_STATS` lines, a classic
+  fallback note. With `--log-format internal-json` every stderr line is
+  one `@nix ` JSON record (`docs/reference/errors.md`).
+- **Exit codes** are in `docs/reference/errors.md`. In short: 0 success,
+  1 any error, 2 a usage error of a native command, 100/101/102/104 a
+  failed build under `ietsp build`. `ietsp diff` follows `diff(1)`
+  instead.
+- **Settings.** Every command takes `--ietsp-option NAME VALUE` for an
+  `ietsp.conf` key and `--option NAME VALUE` for a `nix.conf` setting
+  (`docs/reference/settings.md`).
+
+### The shared evaluation flags
+
+`ietsp eval`, `ietsp build`, `ietsp prefetch` and every `ietsp plumbing`
+op that evaluates share one parser (`src/cli/mod.rs:parse_eval_args`).
+`ietsp diff`, `ietsp search`, `ietsp eval-jobs`, `ietsp fast-build` and
+`ietsp print-dev-env` take the subset each one lists below.
+
+| Flag | Effect |
+|:---|:---|
+| `-E EXPR`, `--expr EXPR` | evaluate `EXPR` instead of a file |
+| `FILE` | evaluate `FILE`; a directory resolves to its `default.nix` |
+| `FLAKEREF[#ATTR]` | evaluate a locked local flake |
+| `-A PATH`, `--attr PATH` | select the attribute `PATH`; the last one wins |
+| `--arg N EXPR`, `--argstr N STR` | call a top-level function with `N` |
+| `-I P=PATH`, `--include P=PATH`, `-IP=PATH` | make `<P>` resolve to `PATH` |
+| `--impure`, `--no-pure-eval` | turn pure evaluation off |
+| `--pure-eval` | turn pure evaluation on |
+| `--option NAME VALUE` | set a nix.conf setting; `pure-eval` and `json-log-path` act at once |
+| `--json-log-path PATH` | also write every log record to `PATH` |
+| `--log-format F` | `internal-json`, `raw`, `raw-with-logs`, `bar`, `bar-with-logs` |
+| `--show-trace` | put the trace into the JSON error records too |
+| `--workers N` | evaluator threads; `N >= 1` |
+| `--timings` | report each phase and the cache on stderr |
+| `--no-cache` | do not read or write the tracing cache |
+| `--no-ir-cache` | do not read or write the compiled-file cache |
+| `--cache-dir DIR` | keep the caches in `DIR` |
+| `--strict` | evaluate the whole value, not the top level only |
+| `--json` | print the value as JSON |
+| `--raw` | print a string as it is |
+| `--dump-drvs DIR` | write the ATerm of each derivation this run made to `DIR` |
+| `--lint SELECTOR=LEVEL` | set a lint to `off`, `warn` or `error` |
+| `--lint-root DIR` | report lint sites under `DIR` too |
+| `--lint-scope root\|all` | report sites in the lint roots only, or everywhere |
+| `--lint-absolute-path-literals MODE`, `--lint-short-path-literals MODE`, `--lint-url-literals MODE` | Nix's three lint settings |
+| `--readonly-mode` | accepted, ignored |
+| `--experimental-features F`, `--extra-experimental-features F` | collected; only `parse-toml-timestamps` has an effect |
+| `--lazy-trees`, `--eval-cores N`, … | a Determinate Nix setting: one warning, then ignored |
+
+`-E` and a `FILE` together is the usage error `-E and FILE cannot be
+combined`. The last input wins otherwise.
+
+The lint flags are in `docs/reference/lints.md`. Pure evaluation is in
+`docs/explanation/evaluation.md`.
+
+## `eval`
+
+```
+ietsp eval [FLAGS] (-E EXPR | FILE | FLAKEREF#attr)
+```
+
+Evaluate and print the value. Flags: the shared set above.
+
+- Without `--json` or `--raw` the value is printed with ietsp's own
+  printer, which prints a derivation, a lambda and a thunk unambiguously.
+- `--json` prints `printValueAsJSON`'s shape; `--strict` forces the whole
+  value first.
+- `--raw` coerces the value to a string and prints the bytes with no
+  quotes and no trailing newline.
+
+stdout: the value, one trailing newline except under `--raw`.
+stderr: warnings, lint lines, `--timings`.
+Exit: 0, 1 on an evaluation error, 2 on a usage error.
+
+## `build`
+
+```
+ietsp build [FLAGS] (-E EXPR | FILE)
+ietsp build [FLAGS] [--source STOREPATH=LOCAL]... DRV
+```
+
+Evaluate to derivation roots, send the closure the builder lacks from
+memory, build, and print the output paths.
+
+| Flag | Effect |
+|:---|:---|
+| `--builder URL` | `daemon`, `unix:///path`, `ssh-ng://[user@]host` or `grpc://host:port`; default: the `builder` setting |
+| `--no-build` | upload the closure, build nothing |
+| `--dry-run` | upload the closure, print the plan, build nothing |
+| `--out NAME` | build the output `NAME` only; repeatable |
+| `--fetch-to DIR` | copy the outputs from the builder into `DIR` |
+| `--source SP=LOCAL` | with a `DRV` argument: the local tree of the input source `SP` |
+
+Plus the shared evaluation flags.
+
+stdout: one output path per line, in root order; with `--dry-run --json`
+the plan as one JSON object instead.
+stderr: `building '<drv>'…` per build, the daemon's log lines, the
+`--dry-run` plan text.
+Exit: 0; 1 on an evaluation or daemon error; 100, 101, 102 or 104 on a
+failed build (`docs/reference/errors.md`); 2 on a usage error.
+
+The `--dry-run` text is Nix's `printMissing`. The `--dry-run --json`
+object is `{willBuild, willSubstitute, unknown, downloadSize, narSize}`;
+`ietsp plumbing missing` prints the same object. A `grpc://` builder has
+no `QueryMissing`, so `--dry-run` is a usage error there.
+
+`fix-hashes` rewrites the hash of a fixed-output build that failed on it
+(`docs/reference/settings.md`). Where the builds go and how the closure
+travels: `docs/how-to/build-remotely.md`.
+
+## `search`
+
+```
+ietsp search [INSTALLABLE] [FLAGS] REGEX...
+```
+
+Print the packages of an installable whose attribute path, name or
+description match every `REGEX`. The output is Nix 2.34.8's, byte for
+byte. `^` matches every package.
+
+| Flag | Effect |
+|:---|:---|
+| `-e REGEX`, `--exclude REGEX` | hide a package this matches; repeatable |
+| `--json` | one object per package, keyed by attribute path |
+| `--pretty`, `--no-pretty` | indent the JSON, or do not; default: a terminal on stdout |
+| `-f FILE`, `--file FILE` | search a file instead |
+| `--expr EXPR` | search an expression instead |
+| `--arg N EXPR`, `--argstr N STR`, `-I P=PATH` | as above |
+| `--impure`, `--pure-eval`, `--option N V` | as above |
+| `--timings` | report the index cache on stderr; native name only |
+| `--log-format F`, `--show-trace` | as above |
+
+The regular expressions are POSIX extended and case insensitive, as
+`std::regex::extended | std::regex::icase` in `search.cc`. No regex at
+all is the usage error `Must provide at least one regex! To match all
+packages, use 'nix search <installable> ^'.`
+
+**The installable.** `ietsp search` takes the first argument as the
+installable only when it names one: a flake reference, `<name>`, or a
+path that exists. Everything else is a regex. The default installable is
+`<nixpkgs>` from `-I` or `NIX_PATH`, evaluated impurely as `--file` is.
+Under the classic name `nix search` the installable is Nix's: the first
+argument always.
+
+```
+ietsp search hello                     # <nixpkgs>, impure
+ietsp search ./pkgs.nix '^'            # a file
+ietsp search path:/flake ripgrep       # a locked flake
+ietsp search --expr 'import <nixpkgs> {}' git gui
+```
+
+**The walk** follows `src/nix/search.cc`, attribute by attribute, in name
+order.
+
+- A derivation (an attribute set whose `type` is `"derivation"`) is one
+  result: its attribute path, `name` split into pname and version
+  (`names.cc:DrvName`: the name runs up to the first `-` that is not
+  followed by a letter), and `meta.description` with its newlines turned
+  into spaces. A missing `meta`, a missing `meta.description` or a `meta`
+  that is not an attribute set means no description.
+- The walk descends into the value the installable named, into the two
+  levels under `packages` and `legacyPackages`, and into an attribute set
+  with `recurseForDerivations = true`. `nix search` honours
+  `recurseForDerivations` under `legacyPackages` only; `ietsp search`
+  honours it anywhere. Nothing else is opened: under a `--file` or
+  `--expr` installable `nix search` searches the top level only.
+- An evaluation error skips that attribute, as `catch (EvalError &)` does
+  in `search.cc`. `nix search` skips it under `legacyPackages` only and
+  stops everywhere else; `ietsp search` skips it anywhere. A feature
+  ietsp does not have is not an evaluation error: under the classic name
+  it falls back to the real `nix`.
+- `ietsp search` auto-calls the root value with the `--arg`s, so a
+  package set that is a function — nixpkgs' own `default.nix` — is
+  searched as it stands. `nix search` does not.
+
+Over the pinned nixpkgs the two walks find the same 112,215 packages,
+with the same pnames, versions and descriptions.
+
+A flake installable searches `packages.<system>` and
+`legacyPackages.<system>`; a fragment (`FLAKE#gnome3`) searches
+`packages.<system>.gnome3`, `legacyPackages.<system>.gnome3` and
+`gnome3`, each of them that exists.
+
+**Output.** Text, one block per result, separated by empty lines:
+
+```
+* legacyPackages.x86_64-linux.hello (2.12.3)
+  Program that produces a familiar, friendly greeting
+```
+
+The matched substrings are highlighted. Nix writes the escape sequences
+to stdout whether or not stdout is a terminal (`logger->cout` does not
+filter them, only `log()` does), so ietsp does the same: piping the
+output keeps the colours. `--json` prints one object per result, keyed by
+attribute path, with `pname`, `version` and `description`, as
+`nlohmann::json` dumps it: keys sorted, indented with `--pretty`, on one
+line with `--no-pretty`.
+
+Nix prints each result as it finds it and an `evaluating '<attr>'` line
+on stderr while it walks. ietsp builds the whole index first — the cache
+needs it — and prints after, without the progress lines.
+
+stdout: the blocks, or the JSON object.
+stderr: warnings; the `--timings` line.
+Exit: 0; 1 with no result and no `--json` (error code `no-results`, hint
+`use fewer or shorter regexes`); with `--json` no result is `{}` and
+exit 0; 2 on a usage error.
+
+**The index cache.** The index is the list of `(attribute path, pname,
+version, description)` the walk produced. It is the `result` of a
+tracing-cache entry, keyed on the installable, the `--arg`s, the search
+path, `pure-eval` and the build id — not on the regexes, so any search
+over an unchanged package set is a hit. A hit validates the read set and
+answers from the index: for the pinned nixpkgs that is 56,170
+observations in 0.08 s against 6.5 s of evaluation, and an index of 4 MB.
+`IETSP_CACHE=0` evaluates again, `IETSP_CACHE_DIR` moves the store
+(`docs/reference/settings.md`), and `ietsp search --timings` reports the
+hit or the miss. The classic name takes no `--timings`; the environment
+variables work under both names.
+
+**Measured.** The pinned nixpkgs
+(`/nix/store/ah3pxz4xa52hd6vhbx17vcsci0b8bmbr-source`, 30,000 packages)
+as `{ legacyPackages.${builtins.currentSystem} = import <pin> {}; }`, on
+a 16-core EPYC shared with other work, release build, 2026-09-23. Wall
+time, median of three:
+
+| run | `^hello$` | all packages (`^`) |
+|---|---|---|
+| ietsp, no index yet | 6.5 s | 6.8 s |
+| ietsp, index cached | 0.15 s | 0.47 s |
+| real `nix search`, the same installable | 21 s | 21 s |
+| real `nix search`, the same tree as a flake, its cache warm | 1.8 s | 2.6 s |
+| real `nix search`, the same tree as a flake, its cache cold | 37 s | — |
+
+Real nix keeps its own eval cache for a flake installable only; with
+`--expr` or `--file` it evaluates every time. ietsp caches both alike.
+The whole `^ --json` output, 18.8 MB, is byte for byte the same on both
+sides.
+
+Code: `src/cli/search.rs`.
+
+## `diff`
+
+```
+ietsp diff [FLAGS] A B
+ietsp diff [FLAGS] -A X -A Y (-E EXPR | FILE | FLAKEREF)
+```
+
+Print why two derivations are not the same, in place of `nix-diff`.
+Nothing is built and nothing is written to the store. A derivation that
+an evaluation produced is read from that evaluation's memory; every other
+derivation is read from `/nix/store`.
+
+The first form takes two installables. Each one is a `.drv` store path, a
+flake reference (`.#hello`, `nixpkgs#hello`) or a Nix file, and each must
+evaluate to exactly one derivation. The second form evaluates one
+expression, file or flake twice and selects a different attribute each
+time.
+
+| Flag | Effect |
+|:---|:---|
+| `--depth N` | walk `N` levels of input derivations; default 2 |
+| `--all` | walk every level |
+| `--json` | print one JSON object instead of text |
+| `--closure` | compare the output closures, not the derivations |
+| `--builder URL` | the store `--closure` reads; default `daemon` |
+| `-I P=PATH`, `--arg N E`, `--argstr N S`, `--option N V`, `--impure` | as for `eval`; they apply to both sides |
+| `--log-format F`, `--show-trace` | as for `eval` |
+
+**Exit codes.** 0 the two are equal, 1 they differ, 2 a usage error, a
+failed evaluation, a derivation that cannot be read, or any other
+failure. This follows `diff(1)`. Every error still goes through the
+reporter of `docs/reference/errors.md`, with its code and, under
+`--log-format internal-json`, its record.
+
+**What it compares**, at each pair of derivations:
+
+- the derivation name, the platform (`system`), the builder and its args;
+- the output names one side has and the other has not, and, for a
+  fixed-output or content-addressed output, its hash or method. An
+  input-addressed output path is not compared: it changes whenever
+  anything else does, so it says nothing;
+- the environment: the variables one side has and the other has not, and
+  for a variable both sides set, its value. A value of several lines (a
+  build script) is shown as a compact line diff, with the common head and
+  tail left out;
+- the structured attributes (`__json`), as one value;
+- the input sources added and removed;
+- the input derivations. The ones both sides share are skipped. The rest
+  are paired by derivation name, so `hello` on one side pairs with
+  `hello` on the other, and the pair is compared the same way, one level
+  deeper. What is left over is added or removed. When the same input path
+  is on both sides but the wanted outputs differ, the pair carries a
+  `wanted` field.
+
+The walk stops at `--depth` levels and at a pair it has already shown.
+Each stop prints the input's name and `(stopped: …; use --all)`.
+
+**The text.** `-` is the first side, `+` the second. The lines under a
+pair are its own differences; an indented `- …`/`+ …` pair is an input
+derivation, with its differences under it.
+
+```
+$ ietsp diff -A a -A b ./demo.nix
+- /nix/store/v6h4…-demo.drv
++ /nix/store/2c7p…-demo.drv
+  input source removed: /nix/store/3kji…-one.txt
+  input source added: /nix/store/n3da…-two.txt
+  env GREETING:
+    - hello
+    + goodbye
+  input drv changed: dep
+    - /nix/store/qz5r…-dep.drv
+    + /nix/store/8n1w…-dep.drv
+      args:
+        @@ line 2
+        - "echo one > $out"
+        + "echo two > $out"
+```
+
+Two equal derivations print `A and B are the same derivation`.
+
+**The JSON.** `--json` prints one object. Every difference is one entry
+of `changes`, whatever part it is in, so a program filters on `what` and
+never has to know a shape per part.
+
+| Key | Value |
+| --- | --- |
+| `a`, `b` | the two derivation paths |
+| `equal` | top level only: true when nothing differs |
+| `changes` | every local difference, in order |
+| `inputDrvs` | the input derivations that differ, each the same object again, one level deeper; absent when none differs |
+| `cut` | why the walk stopped here: `depth` or `shown above`; absent when it did not stop |
+
+An entry of `changes` is `{what, key, a, b}`:
+
+| Key | Value |
+| --- | --- |
+| `what` | `name`, `platform`, `builder`, `args`, `structured attrs`, `output`, `env`, `input source`, `input drv` or `wanted` |
+| `key` | the entry inside that part (the variable, the output name), or `""` |
+| `a`, `b` | the value on each side; `null` is a side that has not got it |
+
+`args` is one quoted argument per line, so a long command line diffs line
+by line. The keys of the object are sorted.
+
+```json
+{"a":"/nix/store/v6h4…-demo.drv","b":"/nix/store/2c7p…-demo.drv","equal":false,
+ "changes":[{"what":"env","key":"GREETING","a":"hello","b":"goodbye"}],
+ "inputDrvs":[{"a":"/nix/store/qz5r…-dep.drv","b":"/nix/store/8n1w…-dep.drv",
+   "changes":[{"what":"args","key":"","a":"\"-c\"\n\"echo one > $out\"\n",
+                                    "b":"\"-c\"\n\"echo two > $out\"\n"}]}]}
+```
+
+**`--closure`** compares what the two derivations' outputs refer to, as
+`nvd` does: the closure of every output of each side, grouped by package
+name and version. The name ends at the first dash before a digit, as
+Nix's `parseDrvName` splits it. The outputs must be in the store: the
+daemon answers with `QueryPathInfo`, and a path it has not got is an
+error that names the `ietsp build` which makes it.
+
+```
+$ ietsp diff --closure ./a.drv ./b.drv
+removed libfoo 1.2
+added   libbar 0.9
+changed hello 2.12 -> 2.12.1
+```
+
+`--closure --json` prints `{a, b, equal, packages}`. Each entry of
+`packages` is `{change, name, a, b}`, with `change` one of `added`,
+`removed` or `changed`, and `a` and `b` the versions of that name on each
+side.
+
+Code: `src/cli/diff.rs`, `src/store/drvdiff.rs`.
+
+## `prefetch`
+
+```
+ietsp prefetch [FLAGS] URL
+ietsp prefetch [FLAGS] (-E EXPR | FILE -A ATTR | FLAKEREF#ATTR)
+```
+
+Print the hash of something that is not fetched yet, in one line, and
+write nothing to any store.
+
+| Flag | Effect |
+|:---|:---|
+| `--unpack` | hash the NAR of the unpacked tarball, as `fetchzip` does |
+| `--hash-type ALGO` | `md5`, `sha1`, `sha256` (the default) or `sha512` |
+| `--json` | print one object instead of the bare hash |
+
+Plus the shared evaluation flags, for the expression form.
+
+**The two forms.** A positional that starts with `https://`, `http://` or
+`file://` is a URL; anything else is an installable.
+
+- `ietsp prefetch URL` downloads the URL and hashes it. Without
+  `--unpack` this is the flat hash of the bytes the URL serves, as `nix
+  store prefetch-file` hashes them: nothing is decompressed. With
+  `--unpack` it is the NAR hash of the unpacked tarball, which is what
+  `fetchTarball`, `fetchzip` and `fetchFromGitHub` want. The archive may
+  be compressed with gzip, xz, zstd or bzip2. Zip files are not
+  supported.
+- `ietsp prefetch -E EXPR`, `ietsp prefetch FILE -A ATTR` and
+  `ietsp prefetch FLAKEREF#ATTR` evaluate to one fixed-output derivation
+  and build it. The hash the expression names is ignored, so `hash = ""`,
+  `lib.fakeHash` and last month's hash all work. There is no `-f FILE`:
+  the file is a positional, as it is for `ietsp eval` and `ietsp build`.
+
+```
+$ ietsp prefetch https://github.com/numtide/treefmt/archive/v2.0.0.tar.gz
+sha256-/Sb+qZOLHhmr1D63ANxTxkhA4uTOpn0IcUO2UmQyRuo=
+
+$ ietsp prefetch --unpack https://github.com/numtide/treefmt/archive/v2.0.0.tar.gz
+sha256-Ckvpb2at7lg7AB0XNtIxeo8lWXX+04MVHHKoUs876dg=
+
+$ ietsp prefetch -E '(import <nixpkgs> {}).hello.src'
+sha256-DV9gFUOC/uELEUocNOeF2LH0kgc64tOm97FHaHs2aqA=
+
+$ ietsp prefetch default.nix -A mypkg.cargoDeps   # a cargoHash or vendorHash
+```
+
+**How the expression form works.** ietsp rewrites the derivation, not the
+file that defines it. The evaluated `.drv` gets its fixed output hash
+replaced by the all-zero hash of the same algorithm, its output path
+recomputed from that hash, and its own path recomputed from the ATerm.
+Nothing else moves: the `outputHash` the builder itself may read keeps
+the value the expression gave it, since the daemon checks the output
+against the derivation and not against that variable. The rewritten
+derivation is built on the `builder` setting
+(`docs/reference/settings.md`) like any other, the daemon reports
+
+```
+hash mismatch in fixed-output derivation '…':
+  specified: sha256-AAAA…
+     got:    sha256-GzabkpW8…
+```
+
+and the `got` hash is the answer. The rest of the closure is untouched,
+the fetcher runs exactly as it would have, and the result is the hash the
+real build will check. The mismatch is expected, so it is never reported
+as an error, on stderr or in the `internal-json` stream.
+
+A derivation with input derivations is built as a resolved copy of
+itself, and the daemon then reports the mismatch in the build log instead
+of in the result. ietsp reads it from there when the log names a
+derivation of the same name. `__structuredAttrs` is fine: Nix fills the
+output paths in when it builds, so nothing in the JSON goes stale.
+
+**Output.** Without `--json`, the SRI hash, one line on stdout, and
+nothing else on stdout. With `--json`, one object:
+
+| Form | Object |
+| --- | --- |
+| URL | `{"hash": "sha256-…", "url": "https://…"}` |
+| expression | `{"hash": "sha256-…", "drvPath": "/nix/store/….drv"}` |
+
+`drvPath` is the rewritten derivation, the one that was built; the one
+the expression evaluated to has the hash the file still names.
+
+Exit: 0 with a hash, 1 when the download or the build failed, 2 for a bad
+command line.
+
+**What differs from Nix.** `nix store prefetch-file` and
+`nix-prefetch-url` add the file to the store and print its path. ietsp is
+a client with no store of its own: it prints hashes and writes nothing,
+which is why it also has no `--name`, `--executable` or
+`--expected-hash`, and why the classic names keep falling back to the
+real nix (`docs/reference/classic.md`). The hash itself is the one Nix
+prints: for the URL form it is the `hash` field of `nix store
+prefetch-file --json`, in SRI, and for the expression form it is the
+`got` hash of the build. Two more differences of `--unpack`:
+
+- A tarball whose single member is a file: Nix hashes that file, ietsp
+  hashes the directory that holds it. A single directory is dereferenced
+  by both.
+- The tree is built from the archive with git-tree rules — directories,
+  symlinks, and files with one bit of mode — which is the tree
+  `fetchTarball` hashes (`docs/explanation/flakes-and-sources.md`).
+
+`ietsp plumbing fetch` is the same operation with the object always on
+stdout. This command is that op plus the `--json` choice.
+
+Code: `src/cli/prefetch.rs`.
+
+## `eval-jobs`
+
+```
+ietsp eval-jobs [FLAGS] (-E EXPR | FILE | --flake FLAKEREF[#attr])
+```
+
+Walk a jobset and print one JSON line per derivation, as nix-eval-jobs
+2.35 does: the same walk, the same lines.
+
+| Flag | Status | Notes |
+|---|---|---|
+| `FILE`, `-E EXPR`, `--expr EXPR` | identical | The argument is a file unless `--flake`; the top level is auto-called with the `--arg`s, like `releaseExprTopLevelValue`. |
+| `--arg N E`, `--argstr N S`, `--arg-from-file N F`, `--arg-from-stdin N` | identical | |
+| `-I`, `--include` | identical | |
+| `--flake REF[#attr]` | identical for locked local flakes | `REF` is a directory (`.`, `./x`, `path:/x`); the fragment is looked up in `outputs` verbatim. Without a fragment the root is the `callFlake` result (`_type`, `inputs`, `outputs`, `sourceInfo`), to be `--select`ed. Registries and unlocked inputs are out of scope. Evaluation is pure unless `--impure`. |
+| `--force-recurse`, `--meta`, `--show-input-drvs` | identical | |
+| instantiation (the default) | identical result | nix-eval-jobs writes every `.drv` inside `derivationStrict`; ietsp registers the job drvs and their closures in batches on a thread beside the walk. |
+| `--no-instantiate` | identical | `system` from the `system` attribute (`unknown` without one), no `requiredSystemFeatures`, no `inputDrvs`, no roots; refused together with `--show-input-drvs`, `--check-cache-status` or `--constituents`, with the same message. |
+| `--eval-store URL` | supported | `daemon`, `unix:///path`, `ssh-ng://host`. Cache status and constituents read the `.drv`s back from `/nix/store`, so they need the local daemon, as nix-eval-jobs needs a `LocalFSStore`. |
+| `--gc-roots-dir DIR` | identical | `DIR/<drv basename>` symlink plus `AddIndirectRoot` for every job and every rewritten aggregate, skipped when the link exists; nothing with `--no-instantiate`. ietsp creates `DIR`; nix-eval-jobs errors per job when it is missing. |
+| `--check-cache-status` | identical | `isCached`, `cacheStatus`, `neededBuilds`, `neededSubstitutes`, from the cache-status-resolver.cc algorithm. |
+| `--constituents` | identical | Named, derivation and glob (`_hydraGlobConstituents`) constituents, dependency cycles, missing and failed constituents, rewritten `drvPath`/`outputs`, `namedConstituents` erased, roots. Not across `--chunks`: a name in another chunk is "does not exist". |
+| `--apply EXPR` | identical | `extraValue`; a non-attrset result is the job's error. |
+| `--select EXPR` | identical | Applied to the auto-called root; a non-attrset result is fatal. |
+| `--workers N` | different meaning | Worker processes (default 4; nix-eval-jobs: 1), or fibers of one process with `--max-memory-size 0`. |
+| `--max-memory-size MB` | identical default | Worker processes restarted above `MB`, 4096 like nix-eval-jobs. `0` is ietsp's own: one process with no ceiling. |
+| `--chunks M --chunk N`, `--chunk-depth D` | ietsp only | Evaluate part `N` (0 to M-1) of `M` parts of the tree, split at depth `D` (default 2). |
+| `--impure` | identical | Turns off the pure evaluation `--flake` implies. |
+| `--show-trace` | accepted | The trace is always in the error text; with `--log-format internal-json` it also goes into the error records, as in Nix. |
+| `--option k v` | accepted, ignored | `restrict-eval`, `allow-import-from-derivation` (IFD is unsupported anyway), `eval-cache`, substituters: none takes effect. |
+| `--quiet`, `--verbose`, `--debug` | accepted | `--quiet` drops the stderr summary. |
+| `--log-format F` | accepted | `internal-json`: stderr is Nix's `@nix {...}` records, with a `code` and a `hint` on each error. `raw`, `raw-with-logs`, `bar`, `bar-with-logs`: plain lines. |
+| `--max-jobs N` | accepted, ignored | |
+| `--provenance` | ietsp only | Adds a `pos` key per job: `file:line:col` of the derivation, mapped back to the local tree (`docs/explanation/provenance.md`). nix-eval-jobs 2.35 has no such key, so the flag is off by default. |
+| `--override-input`, `--override-flake`, `--reference-lock-file` | error | ietsp evaluates a flake from its own complete `flake.lock` only. |
+| `--repair` | error | ietsp never repairs store paths. |
+
+stdout: one JSON line per job or error.
+stderr: the summary line, unless `--quiet`.
+Exit: 0 when only jobs fail — their errors are in the job lines; 1 on a
+fatal error such as a stack overflow.
+
+Three differences that stay:
+
+- **Order** is completion order, like nix-eval-jobs, and lexicographic
+  depth-first with `--max-memory-size 0`. Sort by `attrPath` to compare.
+- **Error text** is ietsp's (`error: msg`, `at file:line:col`, `… trace`
+  lines), not Nix's rendering. The set of attributes that error is the
+  same; the text is not.
+- **`system`** comes from the in-memory `.drv`, or from `/nix/store` for
+  an imported `.drv`; nix-eval-jobs reads it back from the store after
+  writing.
+
+`scripts/evaljobs-flags.nu` runs nix-eval-jobs 2.35.2 and ietsp with
+every flag combination above on the jobsets in `tests/evaljobs/` and
+diffs the sorted output: 41 cases, all identical, exit codes included.
+
+## `fast-build`
+
+```
+ietsp fast-build [FLAGS]
+```
+
+Evaluate an attribute tree and build it, with nix-fast-build's flags and
+result formats. It is a drop-in for nix-fast-build a3e9a5a.
+
+| Flag | Effect |
+|---|---|
+| `-f REF`, `--flake REF` | the flake attribute to build; default `.#checks` |
+| `--file [FILE]`, `-A PATH` | build a file (default `default.nix`), or its attribute `PATH` |
+| `--arg N E`, `--argstr N S`, `-I P=PATH` | as for `eval` |
+| `--pure`, `--impure` | turn pure evaluation on or off; `--file` is impure |
+| `--option NAME VALUE` | set a Nix setting |
+| `--select EXPR` | build `EXPR` applied to the tree instead |
+| `--store URL` | where to build; default: the `builder` setting |
+| `-j N`, `--max-jobs N` | builds at the same time |
+| `--eval-workers N` | evaluator threads |
+| `--systems "A B"` | build for these systems; default: this one |
+| `--skip-cached` | do not build what is built or substitutable |
+| `--skip-unsupported` | skip jobs not available on their system |
+| `--out-link PREFIX` | link each output as `PREFIX-ATTR` |
+| `--retries N` | build a failed job again, `N` times |
+| `--fail-fast` | stop at the first failure |
+| `--result-file PATH`, `--result-format json\|junit` | write the results |
+| `--stream-json-lines` | print each result as a JSON line on stdout |
+| `--no-fold` | no GitHub Actions log groups |
+| `--log-format F`, `--show-trace` | as for `eval` |
+
+**Refused**, with an error: `--remote`, `--remote-ssh-option`,
+`--always-upload-source`, `--copy-to`, `--cachix-cache`, `--attic-cache`,
+`--attic-ignore-upstream-cache-filter`, `--attic-push-build-closure`,
+`--push-build-closure`, `--niks3-server`, `--override-input`,
+`--reference-lock-file`.
+
+**Accepted and ignored**: `--no-nom`, `--no-link`, `--no-download`,
+`--eval-max-memory-size`, `--stall-timeout`, `--nix`, `--nix-eval-jobs`,
+`--nix-build`, `--debug`. `--nix`, `--nix-eval-jobs` and `--nix-build`
+print a note on stderr: there is no subprocess to point at. The stall
+timeout is a constant (`build::render::STALL`, 300 s).
+
+An unknown flag is an error for `ietsp fast-build`, with a suggestion
+when it is close to a known one. Under the classic name `nix-fast-build`
+an unknown flag falls back to the real binary instead.
+
+stdout: nothing, except one JSON object per record under
+`--stream-json-lines`.
+stderr: one line per build state change (started, phase with elapsed,
+verdict), the logs, the summary.
+Exit: 1 when any attribute failed to evaluate or to build, 0 otherwise.
+
+**Results.**
+
+- `--result-file` with `--result-format json|junit` is byte-compatible
+  with `report.py:dump_json` and `report.py:dump_junit_xml`: an `EVAL`
+  record per attribute the walk saw and a `BUILD` record per attribute
+  dispatched, the failure's log tail as the JUnit `failure` body, ANSI
+  escapes and XML-illegal control characters stripped.
+- `--stream-json-lines` prints one JSON object per record on stdout as it
+  happens, the schema of `results.py:28-43`. All progress stays on
+  stderr.
+- `GITHUB_STEP_SUMMARY`, `GITEA_STEP_SUMMARY` or `FORGEJO_STEP_SUMMARY`
+  in the environment gets the markdown summary of `report.py:35-101`,
+  failures first with the last 100 log lines in a `<details>`, successes
+  collapsed.
+
+**Rendering.** One buffer per build, flushed as one block when that
+build's activity stops, so the logs of concurrent builds never
+interleave. A terminal gets one line per state change and the log only on
+a failure; without a terminal every build's whole log is emitted in its
+block, folded with `::group::` markers on `GITHUB_ACTIONS`,
+`GITEA_ACTIONS` or `FORGEJO_ACTIONS` unless `--no-fold`. A failure prints
+the last 200 lines and is never folded. A heartbeat thread names the
+running builds every 30 s, and a build silent for 300 s has its last
+lines dumped and switches to live streaming. Under `--log-format
+internal-json` the renderer prints none of this; the activity records
+carry the builds (`docs/reference/errors.md`).
+
+Every state-change line names the attribute and, when the evaluation
+knows it, the source position of the derivation:
+`▶ building checks.x86_64-linux.foo (pkgs/foo.nix:12:5)`.
+
+Over a `grpc://` store `--skip-cached` is ignored: the cache-status
+resolver speaks `QuerySubstitutablePathInfos`, a worker op, and a
+derivation whose outputs the store already has is skipped anyway.
+
+There is no gc-roots directory: ietsp holds the drvs on its own
+connection.
+
+## `print-dev-env`
+
+```
+ietsp print-dev-env [FLAGS] [FLAKEREF[#attr]]
+```
+
+Print the bash that `nix print-dev-env --option eval-cache false
+FLAKEREF` prints, byte for byte.
+
+| Flag | Effect |
+|---|---|
+| `--builder URL` | the Nix daemon: `daemon` (default), `unix:///path`, `ssh-ng://[user@]host` |
+| `--gc-root PATH` | link `PATH` to the environment's store path and register it as an indirect GC root |
+| `--json` | print what `nix print-dev-env --json` prints |
+| `--workers N`, `--timings`, `--no-cache`, `--cache-dir DIR` | as for `eval` |
+| `--log-format F`, `--show-trace` | as for `eval` |
+
+`FLAKEREF` defaults to `.`. Without `#attr` the shell is the first of
+`devShells.<system>.default`, `devShell.<system>`,
+`packages.<system>.default`, `defaultPackage.<system>`; with `#x` the
+first of `devShells.<system>.x`, `packages.<system>.x`,
+`legacyPackages.<system>.x`, `x` (develop.cc, installable-flake.cc).
+
+The daemon substitutes or builds the shell's inputs. `--gc-root` with
+`ssh-ng://` is an error: the root would name a remote path.
+
+stdout: the bash. Variable assignments, `export`s, `declare -a` and
+`declare -A`, function definitions, the `PATH` and `XDG_DATA_DIRS`
+prepend, `NIX_BUILD_TOP` from `mktemp`, and `eval "${shellHook:-}"`. No
+`exit`, no `set -e`, no `exec`.
+stderr: errors, and the build log lines with an `ietsp: ` prefix on a
+failure, or streamed with `--timings`.
+Exit: 0, non-zero on any error, and then stdout is empty, so `eval` of an
+empty string leaves the environment alone.
+
+A `__structuredAttrs` shell gets its `.attrs.sh` and `.attrs.json`
+written next to the GC root (`PATH-attrs/`), or under
+`$TMPDIR/ietsp-dev-env-<pid>/` without one.
+
+Not supported: a shell whose builder is not `bash`, a content-addressed
+shell, and the `--redirect`, `--profile`, `--command` and `--phase` flags
+of `nix develop`. Setting it up for direnv:
+`docs/how-to/use-with-direnv.md`.
+
+## `lint`
+
+```
+ietsp lint list [FLAGS] [PATH]
+```
+
+Print the lint registry with the levels a run from `PATH` (default: the
+current directory) would use, then the scope and its roots.
+
+| Flag | Effect |
+|---|---|
+| `--lint NAME=LEVEL` | set a lint to `off`, `warn` or `error` |
+| `--lint-root DIR` | add a lint root |
+| `--lint-scope root\|all` | report sites in the lint roots only, or everywhere |
+
+stdout: one line per lint — name, level, family, hook, trigger — then one
+`scope: …` line.
+Exit: 0, 2 on a usage error. `list` is the only subcommand.
+
+The registry, the levels and the scope rules are in
+`docs/reference/lints.md`.
+
+## `parse`
+
+```
+ietsp parse [-q] FILE...
+```
+
+Parse each `FILE` and print its syntax tree. `FILE` `-` reads the list of
+files from stdin.
+
+| Flag | Effect |
+|---|---|
+| `-q` | print only the parse errors and the totals |
+
+stdout: the tree of each file, or with `-q` one summary line: `N files, N
+bytes, N errors, T s`.
+Exit: 0, 1 when a file failed to parse, 2 on a usage error.
+
+## `cache`
+
+```
+ietsp cache gc [--ttl DAYS] [--dry-run] [--cache-dir DIR]
+ietsp cache dump READSET
+```
+
+`gc` removes the cache entries nobody read for `DAYS` days. `dump` prints
+the read set of a tracing-cache entry.
+
+| Flag | Effect |
+|---|---|
+| `--ttl DAYS` | the age limit in days |
+| `-n`, `--dry-run` | count what `gc` would remove, remove nothing |
+| `--cache-dir DIR` | sweep `DIR` instead of the default cache |
+
+stdout: one line per swept directory — the tracing cache, `ir` and
+`inputs` — with the entries removed of the entries there and the bytes;
+`(dry run)` with `-n`. `dump` prints the read set.
+Exit: 0, 2 on a usage error. `gc` and `dump` are the only subcommands.
+
+The caches themselves are in `docs/explanation/caching.md`.
+
+## `help` and the topics
+
+```
+ietsp help [COMMAND | TOPIC]
+ietsp COMMAND --help
+```
+
+`ietsp help` alone prints the overview: the commands, and the topics
+below. `ietsp help COMMAND` prints that command's flags.
+`ietsp help TOPIC` prints a documentation page, which the binary carries:
+no `docs/` directory has to be installed or found.
+
+A name that is both a command and a topic prints the command's help and
+says the page is there. Address the page as `reference/NAME` to get it
+instead.
+
+| Topic | Page |
+|---|---|
+| `commands` | this page |
+| `plumbing` | `docs/reference/plumbing.md` |
+| `classic` | `docs/reference/classic.md` |
+| `settings` | `docs/reference/settings.md` |
+| `errors` | `docs/reference/errors.md` |
+| `lints` | `docs/reference/lints.md` |
+| `builtins` | `docs/reference/builtins.md` |
+| `divergences` | `docs/reference/divergences.md` |
+| `library` | `docs/reference/library.md` |
+
+The binary embeds the reference quadrant only. The tutorial, the how-to
+guides and the explanations are in the repository, under `docs/`;
+`ietsp help` names each of them and the path it lives at.
+
+stdout: the overview, the command's help, or the page.
+Exit: 0; 2 for a name that is neither a command nor a topic, with a
+suggestion when it is close to one.

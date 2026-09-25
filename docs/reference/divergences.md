@@ -1,7 +1,10 @@
 # Known divergences from Nix 2.34
 
-Places where ietsp knowingly differs from `nix-instantiate`. Each entry
-says what differs, why, and how to observe it.
+Every place where ietsp knowingly differs from Nix 2.34.8, and how to
+observe it.
+
+Each entry says what differs, why, and how to observe it. The classic
+names add a few more, listed in `docs/reference/classic.md`.
 
 `scripts/parity.nu` runs the differential corpora under `tests/parity/`
 (272 regex pattern/input pairs through both `builtins.match` and
@@ -141,11 +144,11 @@ experimental feature on.
 `nix-instantiate`, `nix-build` and `nix-eval-jobs` under Nix's own names
 diverge in a few more places (store `auto`, `-Q`, `--show-trace`,
 `--no-out-link`, `getDerivations` recursion, `--add-root` clobbering).
-They are listed in `docs/classic.md`.
+They are listed in `docs/reference/classic.md`.
 
 ## Errors, exit codes and `--log-format internal-json`
 
-`docs/cli.md` has the codes and the record format. Where it differs from
+`docs/reference/errors.md` has the codes and the record format. Where it differs from
 Nix 2.34:
 
 - **Build exit codes.** `ietsp build` exits 100, 101, 102 or 104 on a
@@ -164,7 +167,7 @@ Nix 2.34:
   has none.
 - **eval-jobs** puts out a record for each failed job; nix-eval-jobs
   prints those errors as plain text even under `internal-json`.
-- **Activity records** (`start`, `stop`, `result`, docs/cli.md) have
+- **Activity records** (`start`, `stop`, `result`, docs/reference/errors.md) have
   Nix's shape, and nix-output-monitor reads them. The daemon's
   activities during a build are the same as in Nix: realise, builds,
   copy paths, one build activity per derivation, and the same result

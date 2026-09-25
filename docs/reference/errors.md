@@ -1,10 +1,13 @@
 # Errors, exit codes and log records
 
+The stable error codes, the exit codes, the `--log-format internal-json`
+record shape, the activity records and the `json-log-path` setting.
+
 Every error goes through one reporter (`src/log.rs`). It prints Nix's
 plain text, or with `--log-format internal-json` one `@nix` JSON record.
 It also sets the exit code. The `ietsp` command sends it to stderr; a
 library host sets its own sink, or none, on its `Session`
-(docs/library.md). Humans read the text. Programs read the
+(docs/reference/library.md). Humans read the text. Programs read the
 record and the exit code. Agents read the `hint`.
 
 ## Error codes
@@ -28,7 +31,7 @@ in `src/error.rs` for the rest, and the daemon's build status for builds.
 | `lint` | `ErrorKind::Lint` | a lint at level `error`; at `warn`, a level-1 record |
 | `hash-mismatch` | `ErrorKind::HashMismatch`, build status | a fetched tree or a fixed-output build whose hash is not the one given |
 | `hash-fixed` | `fix-hashes` | a level-3 record: the hash `fix-hashes` wrote, at the file, line and column it changed |
-| `determinate-setting` | `src/config.rs` | a level-1 record: a Determinate Nix setting that ietsp ignores (docs/config.md) |
+| `determinate-setting` | `src/config.rs` | a level-1 record: a Determinate Nix setting that ietsp ignores (docs/reference/settings.md) |
 | `io` | `ErrorKind::Io`, `Error::Io` | a file that cannot be read or written |
 | `unsupported` | `ErrorKind::Unsupported`, `Error::Unsupported` | a feature ietsp does not have; classic mode falls back to Nix |
 | `cancelled` | `ErrorKind::Cancelled` | a parallel helper was stopped; never reaches the user |
@@ -39,7 +42,7 @@ in `src/error.rs` for the rest, and the daemon's build status for builds.
 | `protocol` | `Error::Protocol` | bad data from another process (daemon, worker) |
 | `cache` | `Error::Cache` | the tracing cache |
 | `plan` | `Error::Plan` | a derivation closure that cannot be built |
-| `no-results` | `ietsp search` | no package matched every regex (docs/search.md) |
+| `no-results` | `ietsp search` | no package matched every regex (docs/reference/commands.md) |
 | `build-failed` | build status | a build that failed |
 
 ## Exit codes
@@ -49,7 +52,7 @@ in `src/error.rs` for the rest, and the daemon's build status for builds.
 | 0 | Success. |
 | 1 | Any error. Also a build failure that has no code of its own. |
 | 2 | A usage error of a native command (`ietsp eval --bogus`). Under a classic name the code is 1, as in Nix. |
-| 1, 2 | `ietsp diff` alone follows `diff(1)`: 0 the two are equal, 1 they differ, 2 a usage error or any other failure (docs/diff.md). |
+| 1, 2 | `ietsp diff` alone follows `diff(1)`: 0 the two are equal, 1 they differ, 2 a usage error or any other failure (docs/reference/commands.md). |
 | 100 | A build failed (`PermanentFailure`, `InputRejected`). |
 | 101 | A build timed out. |
 | 102 | A fixed-output build had a hash mismatch. |
@@ -200,7 +203,7 @@ The names are the fields of Nix's `MissingPaths`.
 
 `ietsp plumbing missing` prints the same object, and
 `ietsp plumbing build` the outcomes of the same dispatch, from derivation
-paths instead of an installable (docs/plumbing.md). Both, and
+paths instead of an installable (docs/reference/plumbing.md). Both, and
 `ietsp build`, go through one call, `api::build::Dispatch`.
 
 ### `sid`: the session
@@ -219,7 +222,7 @@ default value have the shape Determinate Nix uses (`sid`, a UUIDv7).
 - `eval-jobs` starts its worker processes with `IETSP_SESSION_ID` set to its
   own id, so the workers' records have the id of the run that started them.
 - The `session-id` setting of Determinate Nix does not set it; ietsp warns
-  about it and ignores it (docs/config.md).
+  about it and ignores it (docs/reference/settings.md).
 
 ## `json-log-path`
 

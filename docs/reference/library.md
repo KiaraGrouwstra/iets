@@ -1,5 +1,8 @@
 # Using ietsp as a library
 
+Every public entry point of the crate: what a frontend calls, what a
+`Session` owns, and the value API with its mapping to Nix's C API.
+
 The crate is a library with a thin `ietsp` binary on top. A frontend —
 another CLI, an editor server, a build service — links the library and
 calls the entry points below. `examples/eval.rs`, `examples/build.rs`,
@@ -17,7 +20,7 @@ module it belongs to) and let `cli` call it there.
 |:---|:---|
 | Create an evaluator | `eval::Evaluator::new()`, `Evaluator::in_session(session, system, pure)` |
 | The state a run owns | `session::Session::new()`, `Session::enter()` (below) |
-| Environment settings | `Session::settings()`, `Session::load_settings(&opts)` (docs/settings.md) |
+| Environment settings | `Session::settings()`, `Session::load_settings(&opts)` (docs/reference/settings.md) |
 | Where messages go | `Session::log.write_to(Box<dyn Write + Send>)`, `write_to_stderr()` |
 | Arguments of one evaluation | `api::EvalArgs` (`EvalArgs::new()` for the defaults) |
 | What to evaluate | `api::Input::{Expr, File, Flake}`, `api::ArgKind` for `--arg` |
@@ -27,7 +30,7 @@ module it belongs to) and let `cli` call it there.
 | All of the above as one call | `api::run::Run`: `Run::new(&args)` or `Run::on(ev)`, then `cached`, `workers`, `hit`, and `go` or `eval` |
 | Force a value | `Evaluator::force`, `force_deep`, `force_attrs` |
 | Print a value | `print::print_json`, `print::print_ambiguous`; `Evaluator::coerce_to_string` for `--raw` |
-| Report an error | `api::report_of(&Evaluator, &Error) -> log::Report` to render yourself; `api::report` sends it to the session log and gives the exit code (docs/cli.md) |
+| Report an error | `api::report_of(&Evaluator, &Error) -> log::Report` to render yourself; `api::report` sends it to the session log and gives the exit code (docs/reference/errors.md) |
 | Error types | `eval::{Error, ErrorKind, EvalResult}`; `error::Error` for store and io |
 | Derivations this run created | `Evaluator::drv.drvs` (`StorePath -> builtins::derivation::DrvInfo`) |
 | A drv's attribute path and position | `DrvInfo::attr`, `DrvInfo::pos`; `DrvState::set_attr` records the walk |
