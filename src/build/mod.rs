@@ -365,6 +365,7 @@ impl Dispatcher {
             prov: &self.prov,
             by_drv: &by_drv,
         };
+        let earlier_failed = status.values().any(|s| !s.ok);
         let mut out = Vec::with_capacity(batch.len());
         for t in batch {
             let drv = t.drv.to_string();
@@ -429,10 +430,16 @@ impl Dispatcher {
                         exit: s.exit,
                     });
                 }
-                // The daemon stopped before it reached this target:
-                // `keep-going` is off and something earlier failed.
+                // No verdict for this target. Either the store stopped before
+                // it reached it (`keep-going` off, something earlier failed),
+                // or the op came back without it, which is a broken builder.
+                // Both leave the target unbuilt, so both exit non-zero.
                 None => {
-                    let why = "an earlier build in the batch failed".to_string();
+                    let why = if earlier_failed {
+                        "an earlier build in the batch failed".to_string()
+                    } else {
+                        format!("the builder returned no build result for '{drv}'")
+                    };
                     self.reporter.emit(&names.event(
                         &drv,
                         Kind::Skipped { why: why.clone() },
@@ -448,7 +455,7 @@ impl Dispatcher {
                         outputs: BTreeMap::new(),
                         elapsed,
                         cache_status: t.cache_status.clone(),
-                        exit: 0,
+                        exit: 1,
                     });
                 }
             }
@@ -683,6 +690,9 @@ mod tests {
     struct Fan {
         limit: usize,
         peak: Arc<AtomicBool>,
+        /// `false`: the op comes back without a verdict for any job, the way
+        /// a store that stopped early leaves its targets.
+        verdicts: bool,
     }
 
     impl Backend for Fan {
@@ -746,6 +756,9 @@ mod tests {
             let graph: Vec<fanout::Job> =
                 jobs.iter().map(|_| fanout::Job { deps: vec![] }).collect();
             fanout::run(&graph, self.limit, &work, on_event);
+            if !self.verdicts {
+                return Ok(HashMap::new());
+            }
             Ok(jobs
                 .iter()
                 .map(|j| (j.drv.to_string(), backend::Status::ok()))
@@ -818,6 +831,7 @@ mod tests {
             Box::new(Fan {
                 limit: 2,
                 peak: over.clone(),
+                verdicts: true,
             }),
             Provenance::off(),
             Reporter::with_output(style, Box::new(sink.clone())),
@@ -847,5 +861,38 @@ mod tests {
                 "{n}'s log block is interleaved: {out}"
             );
         }
+    }
+
+    /// A target the build op came back without leaves no output path, so the
+    /// dispatcher must exit non-zero. It used to skip it and exit 0, which
+    /// left `ietsp build` silent and successful.
+    #[test]
+    fn a_target_with_no_verdict_fails() {
+        let style = Style {
+            mode: render::Mode::Ci,
+            color: false,
+            fold: false,
+            quiet: false,
+        };
+        let mut d = Dispatcher::with_backend(
+            Box::new(Fan {
+                limit: 1,
+                peak: Arc::new(AtomicBool::new(false)),
+                verdicts: false,
+            }),
+            Provenance::off(),
+            Reporter::with_output(style, Box::new(Sink::default())),
+        );
+        let outcomes = d
+            .submit(&mut NoUpload, vec![Target::new("a", drv("a"), vec![])])
+            .unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert!(!outcomes[0].success);
+        assert!(outcomes[0].skipped);
+        assert!(outcomes[0].outputs.is_empty());
+        assert_eq!(outcomes[0].exit, 1);
+        assert_eq!(d.exit, 1);
+        let why = outcomes[0].reason.clone().unwrap_or_default();
+        assert!(why.contains("no build result"), "{why}");
     }
 }
