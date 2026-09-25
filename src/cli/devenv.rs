@@ -12,8 +12,101 @@ use crate::trace::run::Cache;
 
 struct DevEnvArgs {
     transport: crate::remote::worker::Transport,
-    /// Absolute; a symlink to the env output, registered as an indirect GC root.
-    gc_root: Option<std::path::PathBuf>,
+    gc_root: GcRoot,
+}
+
+/// Where the root of a shell's environment goes. A caller that named a path
+/// owns it: the path is a contract and a failure is the command's. Where
+/// nothing was named, `nix develop` takes a link in ietsp's roots store, and
+/// that one is best effort — see [`keep_root`].
+pub enum GcRoot {
+    None,
+    /// `print-dev-env --gc-root PATH`, absolute.
+    Given(std::path::PathBuf),
+    /// A link in ietsp's roots store, from [`shell_root`].
+    Store(std::path::PathBuf),
+}
+
+impl GcRoot {
+    /// The path the caller named, which also holds the `-attrs` directory the
+    /// rc script points at. A link in the roots store is not one.
+    fn given(&self) -> Option<&std::path::Path> {
+        match self {
+            GcRoot::Given(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Points this run's root at `out_path`.
+    fn register(
+        &self,
+        transport: &crate::remote::worker::Transport,
+        out_path: &str,
+        conn: Option<&mut crate::remote::worker::Connection>,
+    ) -> crate::error::Result<()> {
+        match self {
+            GcRoot::None => Ok(()),
+            GcRoot::Given(p) => ensure_gc_root(transport, p, out_path, conn),
+            GcRoot::Store(p) => {
+                keep_root(transport, p, out_path, conn);
+                Ok(())
+            }
+        }
+    }
+}
+
+/// The root `nix develop` keeps for the flake installable `f`. It has no flag
+/// for one, so it keeps one of its own: the `-env` output references the whole
+/// shell, so a single link holds it, keyed on the flake directory and the
+/// attribute path — two flakes on one machine keep two roots, two shells of one
+/// flake keep two, and one shell replaces its own in place
+/// (`docs/explanation/caching.md`). `NIX_GCROOT` is not this root: that one
+/// holds the closure only while the shell runs, which is what nix does with it.
+pub fn flake_shell_root(f: &str, transport: &crate::remote::worker::Transport) -> GcRoot {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(fr) = crate::api::flake_ref(f, &cwd()) else {
+        return GcRoot::None;
+    };
+    let attr = fr.attr.join(".");
+    let parts: [&[u8]; 3] = [b"develop", fr.dir.as_os_str().as_bytes(), attr.as_bytes()];
+    shell_root(transport, &parts).map_or(GcRoot::None, GcRoot::Store)
+}
+
+/// The link ietsp keeps for a shell of its own accord, named by `parts` as
+/// `nix fmt`'s is (`src/cli/classic/fmt.rs`). `None` when the `shell-gc-root`
+/// setting is off, when the daemon is not local — only a local daemon takes a
+/// root — or when no cache root is known.
+pub(crate) fn shell_root(
+    transport: &crate::remote::worker::Transport,
+    parts: &[&[u8]],
+) -> Option<std::path::PathBuf> {
+    if !crate::session::Session::current().settings().shell_gc_root
+        || !matches!(transport, crate::remote::worker::Transport::Unix(_))
+    {
+        return None;
+    }
+    crate::cachefs::root_link(None, parts)
+}
+
+/// Links `out_path` at `link` in the roots store, registers the link with the
+/// daemon and marks it used, so the TTL sweep keeps the roots of the shells
+/// somebody still enters. Best effort and silent: the classic names print
+/// what nix prints, byte for byte, so a root a daemon will not take costs the
+/// root and nothing else.
+pub(crate) fn keep_root(
+    transport: &crate::remote::worker::Transport,
+    link: &std::path::Path,
+    out_path: &str,
+    conn: Option<&mut crate::remote::worker::Connection>,
+) {
+    if let Some(dir) = link.parent()
+        && std::fs::create_dir_all(dir).is_err()
+    {
+        return;
+    }
+    if ensure_gc_root(transport, link, out_path, conn).is_ok() {
+        crate::cachefs::touch_link(link);
+    }
 }
 
 /// Build events on the daemon connection: log lines are printed live with `--timings`,
@@ -106,16 +199,18 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
         .report();
     };
     let cwd = cwd();
-    let gc_root = gc_root.map(|r| {
-        std::path::PathBuf::from(
+    let gc_root = match gc_root {
+        Some(r) => GcRoot::Given(std::path::PathBuf::from(
             <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&abs_path(&r, &cwd)),
-        )
-    });
+        )),
+        None => GcRoot::None,
+    };
     if matches!(transport, crate::remote::worker::Transport::Grpc(_)) {
         return CrateError::Usage("print-dev-env needs a Nix daemon; grpc:// only builds".into())
             .report();
     }
-    if gc_root.is_some() && !matches!(transport, crate::remote::worker::Transport::Unix(_)) {
+    if gc_root.given().is_some() && !matches!(transport, crate::remote::worker::Transport::Unix(_))
+    {
         return CrateError::Usage("--gc-root needs a local daemon (daemon or unix://)".into())
             .report();
     }
@@ -168,9 +263,7 @@ fn dev_env_hit(d: &DevEnvArgs, hit: &crate::devenv::CachedResult) -> crate::erro
     if !present || !hit.files.iter().all(|f| f.exists()) {
         return Ok(false);
     }
-    if let Some(root) = &d.gc_root {
-        ensure_gc_root(&d.transport, root, &hit.out_path, None)?;
-    }
+    d.gc_root.register(&d.transport, &hit.out_path, None)?;
     Ok(true)
 }
 
@@ -237,11 +330,9 @@ pub fn dev_env(
     ev: Evaluator,
     a: EvalArgs,
     transport: crate::remote::worker::Transport,
+    gc_root: GcRoot,
 ) -> Result<DevEnv, i32> {
-    let d = DevEnvArgs {
-        transport,
-        gc_root: None,
-    };
+    let d = DevEnvArgs { transport, gc_root };
     let run = Run::on(ev).configured(&a).workers(a.workers);
     crate::cli::run_parallel(run, move |ev, _| dev_env_build(ev, a, &d))
 }
@@ -269,7 +360,7 @@ fn dev_env_full(
                 Vec::new(),
             )
         } else {
-            let attrs_dir = match &d.gc_root {
+            let attrs_dir = match d.gc_root.given() {
                 Some(r) => std::path::PathBuf::from(format!("{}-attrs", r.display())),
                 None => std::env::temp_dir().join(format!("ietsp-dev-env-{}", std::process::id())),
             };
@@ -463,9 +554,8 @@ fn dev_env_build(ev: &mut Evaluator, a: EvalArgs, d: &DevEnvArgs) -> Result<DevE
 
         let (out_path, bytes) = read_env_output(&d.transport, &mut w.conn, &out_paths, &mut sink)?;
         let env = devenv::BuildEnvironment::parse(&bytes)?;
-        if let Some(root) = &d.gc_root {
-            ensure_gc_root(&d.transport, root, &out_path, Some(&mut w.conn))?;
-        }
+        d.gc_root
+            .register(&d.transport, &out_path, Some(&mut w.conn))?;
         drop(w);
         Ok(DevEnv {
             env,

@@ -723,6 +723,25 @@ in {
   $ok = ($ok | append (cmp-case "nix develop -u HOME"
     (run-both $farm nix develop $repo -u HOME -c sh -c 'echo "[$HOME]"')))
 
+  # nix develop keeps the `-env` output under a GC root of its own: one link in
+  # the roots store, keyed on the flake directory and the attribute path, which
+  # a second entry replaces in place. The output references the whole shell, so
+  # one link holds all of it.
+  let devcache = $"($tmp)/devcache"
+  let dev = (with-env {IETSP_CACHE_DIR: $devcache} { ^$"($farm)/nix" develop $repo -c true | complete })
+  let again = (with-env {IETSP_CACHE_DIR: $devcache} { ^$"($farm)/nix" develop $repo -c true | complete })
+  let dlinks = (try { ls $"($devcache)/roots" | get name | sort } catch { [] })
+  let dlink = ($dlinks | get -o 0 | default "")
+  let dtarget = (if ($dlink | is-not-empty) { ^readlink $dlink | chomp } else { "" })
+  let dheld = (if ($dtarget | is-not-empty) { (^nix-store --query --roots $dtarget | complete).stdout | str contains $dlink } else { false })
+  $ok = ($ok | append (verdict ($dev.exit_code == 0 and $again.exit_code == 0 and ($dlinks | length) == 1 and ($dtarget | str ends-with "-env") and $dheld)
+    "nix develop keeps the shell's environment under a GC root" $"($dlinks | length) links, '($dlink)' -> '($dtarget)', held: ($dheld)"))
+  # the switch: no link, and no roots store either
+  let devoff = $"($tmp)/devcache-off"
+  let dv = (with-env {IETSP_CACHE_DIR: $devoff} { ^$"($farm)/nix" develop --ietsp-option shell-gc-root false $repo -c true | complete })
+  $ok = ($ok | append (verdict ($dv.exit_code == 0 and (not ($"($devoff)/roots" | path exists)))
+    "shell-gc-root = false keeps no root for nix develop" $"exit ($dv.exit_code), stderr ($dv.stderr | str substring 0..200)"))
+
   # --- nix fmt: the flake's formatter.<system>, built once and kept alive by
   # an out-link that is also a GC root. The formatter needs a `mkdir`, and the
   # build sandbox holds only the derivation's inputs, so nixpkgs comes in as a

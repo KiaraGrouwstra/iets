@@ -83,10 +83,10 @@ pub fn main(argv: &[String], rest: &[String]) -> i32 {
     let ev = super::evaluator(&d.c, &cfg);
     let mut a = parse_eval_args(&[]);
     a.includes = d.c.flags.includes.clone();
-    a.input = Some(Input::Flake(
-        d.installable.clone().unwrap_or_else(|| ".".into()),
-    ));
-    let env = match crate::cli::devenv::dev_env(ev, a, transport) {
+    let installable = d.installable.clone().unwrap_or_else(|| ".".into());
+    let root = crate::cli::devenv::flake_shell_root(&installable, &transport);
+    a.input = Some(Input::Flake(installable));
+    let env = match crate::cli::devenv::dev_env(ev, a, transport, root) {
         Ok(e) => e,
         Err(code) => return code,
     };
