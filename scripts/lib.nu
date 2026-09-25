@@ -129,9 +129,59 @@ export def show-matching [re: string, file: string] {
 export def bytes-of [f: string]: nothing -> binary { open --raw $f | into binary }
 export def same-file [a: string, b: string]: nothing -> bool { (bytes-of $a) == (bytes-of $b) }
 
+# The Nix release every comparison in this repo is written against
+# (docs/reference/divergences.md).
+const REF_NIX = "2.34.8"
+
+# CMD with every symlink resolved, or "" when there is none. CMD is a name to
+# look up on PATH or a path of its own; `command -v` takes both.
+export def resolved-cmd [cmd: string]: nothing -> string {
+  let p = (^bash -c $"command -v -- '($cmd)' || true" | chomp)
+  if ($p | is-empty) { "" } else { ^readlink -f $p | chomp }
+}
+
+# Aborts when one of CMDS (default `nix` and `nix-instantiate`) is ietsp under
+# a Nix command name, so a script that compares against the real nix cannot
+# silently compare ietsp with itself. The test is the one ietsp's own fallback
+# uses on the same path (`is_ietsp` in src/nixbin.rs): a farm entry is a
+# symlink chain that ends in a file named `ietsp`. Nothing behavioural can
+# tell them apart, because the farm execs the real nix for whatever it does
+# not implement, `--version` included. A missing command is not an error here;
+# the script fails when it runs it. Call it before the first temporary
+# directory: it exits the process.
+export def require-real-nix [...cmds: string] {
+  let want = (if ($cmds | is-empty) { [nix nix-instantiate] } else { $cmds })
+  for c in $want {
+    let real = (resolved-cmd $c)
+    if ($real | path basename) == "ietsp" {
+      print -e $"FAIL: `($c)` is ietsp, not Nix: ($real)"
+      print -e "  This script compares against the real nix, so it would compare ietsp with itself."
+      print -e "  Run it inside the dev shell: nix develop -c nu scripts/NAME.nu"
+      print -e "  IETSP_NIX_BIN_DIR does not help: the reference side runs what PATH has."
+      exit 1
+    }
+  }
+  warn-nix-version ($want | first)
+}
+
+# A warning when the reference nix is not the release the comparisons were
+# written against. Another release gives confusing diffs, not wrong ones, so
+# this never fails.
+def warn-nix-version [cmd: string] {
+  let real = (resolved-cmd $cmd)
+  if ($real | is-empty) { return }
+  let v = (^$real --version | complete | get stdout | parse -r '\(Nix\) (?<v>\S+)' | get -o v.0)
+  if $v != null and $v != $REF_NIX {
+    print -e $"warning: comparing against nix ($v), not ($REF_NIX); some diffs may be version drift"
+  }
+}
+
 # The directory of the real nix-instantiate on PATH.
 export def real-bin-dir []: nothing -> string {
-  (^readlink -f (^bash -c "command -v nix-instantiate" | chomp) | chomp | path dirname)
+  require-real-nix nix-instantiate
+  let real = (resolved-cmd nix-instantiate)
+  if ($real | is-empty) { error make -u {msg: "no nix-instantiate on PATH; run inside `nix develop -c ...`"} }
+  $real | path dirname
 }
 
 # The classic farm in DIR: BIN under Nix's command names, and the real nix it

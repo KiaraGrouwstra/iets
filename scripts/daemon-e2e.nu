@@ -28,7 +28,7 @@
 #
 # usage: scripts/daemon-e2e.nu            # uses target/release
 #        BIN=target/debug scripts/daemon-e2e.nu
-use lib.nu [ROOT bytes-of chomp current-system fail ietsp-bin isolate nixpkgs out-of quiet-ok run-in same-file scratch-daemon show show-matching]
+use lib.nu [ROOT bytes-of chomp current-system fail ietsp-bin isolate nixpkgs out-of quiet-ok require-real-nix run-in same-file scratch-daemon show show-matching]
 
 def path-info [fields: string, p: string, ...store: string]: nothing -> string {
   let r = (^nix path-info ...$store --json $p | complete)
@@ -250,6 +250,7 @@ def run-contract [ietsp: string, work: string, system: string] {
 }
 
 def main [] {
+  require-real-nix
   let ietsp = (ietsp-bin)
   cd $ROOT
   let work = (isolate daemon-e2e)

@@ -20,7 +20,7 @@
 # usage: nu scripts/grpc-e2e.nu            # uses target/release
 #        BIN=target/debug nu scripts/grpc-e2e.nu
 #        DAEMON=/nix/store/…-nix-grpc-store-0.1.0 nu scripts/grpc-e2e.nu
-use lib.nu [ROOT bytes-of chomp current-system fail fastbuild-flake ietsp-bin isolate make-farm nixpkgs out-of quiet-ok run-in same-file scratch-daemon show show-matching]
+use lib.nu [ROOT bytes-of chomp current-system fail fastbuild-flake ietsp-bin isolate make-farm nixpkgs out-of quiet-ok require-real-nix run-in same-file scratch-daemon show show-matching]
 
 const FLAKE = "github:Mic92/nix-grpc-store/4f6d239e834f96bd1544a8b243d46c41a892016e"
 
@@ -216,6 +216,7 @@ def run-tests [ietsp: string, nixpkgs: string, work: string] {
 }
 
 def main [] {
+  require-real-nix
   let ietsp = (ietsp-bin)
   cd $ROOT
   let work = (isolate grpc-e2e)

@@ -7,6 +7,8 @@
 # --cold drops the page cache before each tree run; it needs root, so it is
 # off by default. Fixtures live under $env.TMPDIR and are built once.
 
+use ../scripts/lib.nu [require-real-nix]
+
 const NIXPKGS = "/nix/store/ah3pxz4xa52hd6vhbx17vcsci0b8bmbr-source"
 
 def fixtures [] {
@@ -55,6 +57,7 @@ def run-bench [bin: string, op: string, path: string, runs: int, cold: bool] {
 }
 
 def main [--cold, --nix, --tag: string = "run"] {
+  if $nix { require-real-nix nix }
   cd ($env.FILE_PWD | path join "..")
   let bin = ($env.NAR_BENCH? | default $"($env.CARGO_TARGET_DIR? | default "./target")/release/examples/nar_bench")
   if not ($bin | path exists) {

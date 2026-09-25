@@ -161,6 +161,17 @@ examples, `scripts/langtests.nu`, `scripts/partest.nu`,
 `nix-daemon` or `nix` and run by hand in the dev shell; `scripts/lib.nu`
 holds what they share.
 
+Every script that compares against the real nix calls `require-real-nix`
+first. On a host that installs the classic farm, `nix` and
+`nix-instantiate` on `PATH` are ietsp, so outside the dev shell the
+comparison would be ietsp against itself, and the run would pass while
+testing nothing. The guard resolves the symlink chain of each name and
+aborts when it ends in `ietsp`, the same test the fallback uses
+(`is_ietsp`, `src/nixbin.rs`). Nothing behavioural can tell them apart:
+the farm execs the real nix for whatever it does not implement,
+`--version` included. The same guard warns when the reference nix is not
+2.34.8. The ietsp-only scripts do not call it and still run anywhere.
+
 | script | what it compares |
 |---|---|
 | `langtests.nu` | Nix 2.34.8's functional tests, `tests/lang/` |

@@ -7,7 +7,7 @@
 #
 # It needs a working nix-instantiate, so it is not a flake check; run it by
 # hand in the dev shell. NIX=... picks another nix, IETSP=... another binary.
-use lib.nu [chomp diff-head env-cmd ietsp-bin show verdict]
+use lib.nu [chomp diff-head env-cmd ietsp-bin require-real-nix show verdict]
 
 # Corpora evaluated in one process each and compared as JSON.
 const VALUE_CORPORA = [
@@ -85,6 +85,7 @@ def check-rejects [c: record]: nothing -> bool {
 }
 
 def main [...names: string] {
+  require-real-nix ((nix-cmd) | first)
   cd ($env.FILE_PWD | path join "..")
   let want = {|n| ($names | is-empty) or ($n in $names) }
   mut bad = 0

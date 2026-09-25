@@ -6,7 +6,7 @@
 #
 # usage: nu scripts/classic-e2e.nu
 #        BIN=target/debug nu scripts/classic-e2e.nu
-use lib.nu [chomp current-system isolate ietsp-bin make-farm nixpkgs real-bin-dir scratch-daemon show verdict]
+use lib.nu [chomp current-system isolate ietsp-bin make-farm nixpkgs real-bin-dir require-real-nix scratch-daemon show verdict]
 
 def --wrapped run-both [farm: string, name: string, --cwd: string = ".", ...args: string] {
   let ours = (^$"($farm)/($name)" ...$args | complete)
@@ -108,6 +108,7 @@ def fallback-reason [farm: string, cmd: list<string>]: nothing -> string {
 }
 
 def main [] {
+  require-real-nix nix nix-instantiate nix-build nix-shell
   let ietsp = (ietsp-bin)
   let tmp = (isolate classic-e2e)
   let np = (nixpkgs)

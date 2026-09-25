@@ -1,8 +1,10 @@
 #!/usr/bin/env nu
 # Usage: bench/run.nu [workload...]   (default: nixos-desktop)
 # Compares nix-instantiate, fix, and ietsp with hyperfine.
+use ../scripts/lib.nu [require-real-nix]
 
 def main [...workloads: string] {
+  require-real-nix nix-instantiate
   cd ($env.FILE_PWD | path join "..")
   let np = ($env.NIXPKGS? | default "/nix/store/ah3pxz4xa52hd6vhbx17vcsci0b8bmbr-source")
   let fix = ($env.FIX? | default $"($env.HOME)/tmp/fix-result/bin/fix")

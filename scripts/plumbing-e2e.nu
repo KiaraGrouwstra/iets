@@ -15,7 +15,7 @@
 #
 # usage: scripts/plumbing-e2e.nu
 #        BIN=target/debug scripts/plumbing-e2e.nu
-use lib.nu [chomp current-system exit-code ietsp-bin isolate out-of run-in verdict]
+use lib.nu [chomp current-system exit-code ietsp-bin isolate out-of require-real-nix run-in verdict]
 
 const HELLO = r#'derivation {
   name = "plumb-hello";
@@ -84,6 +84,7 @@ const BAD = r#'derivation {
 }
 '#
 
+require-real-nix
 let work = (isolate plumbing)
 run-in $work {
   let ietsp = (ietsp-bin)

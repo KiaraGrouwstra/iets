@@ -5,6 +5,7 @@
 # GNU time comes from the system, not the dev shell: set TIME_BIN to move it.
 # Then one --force-recurse run of each tool, whose job sets must match
 # (--no-parity skips it; that pair takes a few minutes).
+use ../scripts/lib.nu [require-real-nix]
 
 def timed [cache: path, env_vars: record, cmd: list<string>] {
   let out = (mktemp -t ietsp-bench-XXXXXX)
@@ -54,6 +55,7 @@ def main [rounds: int = 3, --no-parity] {
   let np = ($env.NIXPKGS? | default "/nix/store/ah3pxz4xa52hd6vhbx17vcsci0b8bmbr-source")
   let ietsp = ($env.IETSP? | default $"($env.PWD)/target/release/ietsp")
   let nej = ($env.NIX_EVAL_JOBS? | default (which nix-eval-jobs | get command.0? | default $"($env.HOME)/tmp/nej/bin/nix-eval-jobs"))
+  require-real-nix $nej
   let cache = $"($env.TMPDIR? | default '/tmp')/ietsp-bench-cache"
   let nixpkgs_arg = $"{ outPath = \"($np)\"; revCount = 1; shortRev = \"abcdefg\"; }"
   let args = ["--workers" "4" "-I" $"nixpkgs=($np)" "--arg" "nixpkgs" $nixpkgs_arg $"($np)/nixos/release-small.nix"]

@@ -14,7 +14,7 @@
 #
 # usage: scripts/devenv-test.nu            # uses target/release
 #        IETSP=target/debug/ietsp scripts/devenv-test.nu
-use lib.nu [ROOT chomp diff-head ietsp-bin isolate run-in same-file show]
+use lib.nu [ROOT chomp diff-head ietsp-bin isolate require-real-nix run-in same-file show]
 
 def --wrapped nixf [...args: string] { ^nix --extra-experimental-features "nix-command flakes" ...$args }
 
@@ -221,6 +221,7 @@ def run-tests [ctx: record]: nothing -> int {
 }
 
 def main [] {
+  require-real-nix nix
   let ietsp = (ietsp-bin)
   cd $ROOT
   let ctx = {ietsp: $ietsp, work: (isolate devenv)}

@@ -23,7 +23,7 @@
 #
 # usage: nu scripts/fastbuild-e2e.nu
 #        BIN=target/debug nu scripts/fastbuild-e2e.nu
-use lib.nu [chomp current-system fastbuild-flake ietsp-bin isolate show verdict]
+use lib.nu [chomp current-system fastbuild-flake ietsp-bin isolate resolved-cmd show verdict]
 
 def --wrapped go [...cmd: string]: nothing -> record {
   ^($cmd | first) ...($cmd | skip 1) | complete
@@ -150,9 +150,12 @@ in { ci = o.checks.${system}; }
 
   # --- 10. the same flake through the real nix-fast-build
   print "== 10. against the real nix-fast-build"
-  let nfb = (^bash -c "command -v nix-fast-build || true" | chomp)
+  # a classic farm shadows nix-fast-build, so an ietsp here counts as absent:
+  # comparing against it would compare ietsp with itself.
+  let found = (resolved-cmd nix-fast-build)
+  let nfb = (if ($found | path basename) == "ietsp" { "" } else { $found })
   if ($nfb | is-empty) {
-    print "     skipped: nix-fast-build is not on PATH. Run it with"
+    print $"     skipped: no real nix-fast-build on PATH \(found '($found)'\). Run it with"
     print "       nix run github:Mic92/nix-fast-build/a3e9a5a17fa66f84bec8538ef8f98f0a1a9c6228 -- ..."
     print "     the dev shell does not ship it."
   } else {

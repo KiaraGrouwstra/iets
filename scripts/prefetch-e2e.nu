@@ -17,7 +17,7 @@
 #
 # usage: scripts/prefetch-e2e.nu
 #        BIN=target/debug scripts/prefetch-e2e.nu
-use lib.nu [ROOT chomp current-system exit-code fail ietsp-bin isolate out-of run-in scratch-daemon verdict]
+use lib.nu [ROOT chomp current-system exit-code fail ietsp-bin isolate out-of require-real-nix run-in scratch-daemon verdict]
 
 # The `hash` field of `nix store prefetch-file --json`.
 def --wrapped prefetched [...args: string]: nothing -> string {
@@ -112,6 +112,7 @@ def run-tests [ietsp: string, work: string] {
 }
 
 def main [] {
+  require-real-nix nix
   let ietsp = (ietsp-bin)
   cd $ROOT
   let work = (isolate prefetch-e2e)

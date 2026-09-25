@@ -14,7 +14,7 @@
 # no nix, no daemon and a fresh cache, a second run does it with
 # `IETSP_OFFLINE=1`, and `build --no-build` sends the input's NAR out of the
 # same spool.
-use lib.nu [ROOT chomp ietsp-bin isolate run-in show verdict]
+use lib.nu [ROOT chomp ietsp-bin isolate require-real-nix run-in show verdict]
 
 def --wrapped nixf [...args: string] { ^nix --extra-experimental-features "nix-command flakes" ...$args }
 def --wrapped git-in [repo: string, ...args: string] {
@@ -597,6 +597,7 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
 }
 
 def main [] {
+  require-real-nix nix
   let ietsp = (ietsp-bin)
   cd $ROOT
   let work = (isolate flaketest)

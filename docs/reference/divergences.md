@@ -12,7 +12,9 @@ names add a few more, listed in `docs/reference/classic.md`.
 and 46 rejected ones) against the real `nix-instantiate` and requires
 byte-equal `--strict --json` output. It needs a nix binary, so it is not
 a flake check; run it by hand in the dev shell. `NIX=` and `IETSP=`
-override either side.
+override either side. Like every script here that compares against the
+real nix, it aborts when that nix is the classic farm, and warns when it
+is not 2.34.8.
 
 ## Regular expressions (`builtins.match`, `builtins.split`)
 

@@ -2,7 +2,7 @@
 # Runs tests/corpus/*.nix against ietsp and compares with the .exp files.
 # `--update [NAME...]` regenerates the .exp files from nix-instantiate
 # ($NIX overrides it) instead. Runs from tests/ so paths print as /pwd/....
-use lib.nu [ROOT chomp env-cmd flags-of glob-sorted ietsp-bin show]
+use lib.nu [ROOT chomp env-cmd flags-of glob-sorted ietsp-bin require-real-nix show]
 
 def main [--update, ...names: string] {
   let ietsp = if $update { "" } else { ietsp-bin }
@@ -38,6 +38,7 @@ def main [--update, ...names: string] {
 # for the last file that failed to evaluate (its .exp is removed).
 def update [files: list<string>, pwd: string] {
   let nix = (env-cmd NIX nix-instantiate)
+  require-real-nix ($nix | first)
   mut last = 0
   for f in $files {
     let n = ($f | str replace -r '\.nix$' '')
