@@ -29,6 +29,8 @@ classic: 'ietsp NAME ARGS...' with NAME one of nix-instantiate, nix-build,
   nix-shell, nix-eval-jobs, nix-fast-build or nix acts like that Nix command,
   and falls back to the real one for the rest ('ietsp help classic').
 
+Scripting: JSON, stable exit codes, plumbing ops: 'ietsp help plumbing'.
+
 Every command also takes --ietsp-option NAME VALUE.
 Run 'ietsp COMMAND --help' for the flags of a command.
 ";
