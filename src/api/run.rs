@@ -116,3 +116,88 @@ impl Run {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::{EvalArgs, Input};
+
+    /// `n` files that each cost real parsing and compiling, and the
+    /// expression that imports them all from one list. They are slow on
+    /// purpose: a file the main fiber is still compiling is a file the
+    /// helpers steal, which is what this has to observe.
+    fn workload(dir: &std::path::Path, n: usize) -> String {
+        std::fs::create_dir_all(dir).expect("workload directory");
+        let mut elems = String::new();
+        for i in 0..4000 {
+            elems += &format!("{i} ");
+        }
+        let mut list = String::from("[");
+        for i in 0..n {
+            let f = dir.join(format!("m{i}.nix"));
+            let src = format!("let xs = [ {elems}]; in builtins.length xs + {i}\n");
+            std::fs::write(&f, src).expect("workload file");
+            list += &format!(" (import {}) ", f.display());
+        }
+        list + "]"
+    }
+
+    fn args(expr: &str, cache_dir: &std::path::Path, workers: usize) -> EvalArgs {
+        EvalArgs {
+            input: Some(Input::Expr(expr.to_string())),
+            cache_dir: Some(cache_dir.to_string_lossy().into_owned()),
+            no_tracing_cache: true,
+            no_ir_cache: false,
+            workers,
+            ..EvalArgs::new()
+        }
+    }
+
+    /// The run's IR cache, and the entries it read while it evaluated `a`
+    /// deeply on `a.workers` fibers.
+    fn hits(a: EvalArgs) -> u64 {
+        Run::new(&a)
+            .expect("the arguments configure")
+            .go(move |ev, _| {
+                let v = crate::api::evaluate(ev, a).expect("the workload evaluates");
+                crate::parallel::force_deep(ev, v).expect("the workload forces");
+                ev.ir_cache
+                    .as_ref()
+                    .expect("the run has an IR cache")
+                    .hits()
+            })
+            .expect("the fiber stacks")
+    }
+
+    /// The fiber template is the evaluator as it was when `try_run` cloned
+    /// it, so everything `configure` installs must be on it by then.
+    #[test]
+    fn a_fiber_template_carries_the_configuration() {
+        let d = std::env::temp_dir().join(format!("ietsp-run-cfg-{}", std::process::id()));
+        let a = args("1", &d, 4);
+        let run = Run::new(&a).expect("the arguments configure");
+        let fiber = run.ev.clone();
+        assert!(fiber.ir_cache.is_some(), "a fiber without the IR cache");
+        assert_eq!(fiber.search_path, run.ev.search_path);
+        assert_eq!(fiber.lints.config, run.ev.lints.config);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Every fiber shares one IR cache handle, so a warm run reads one entry
+    /// per imported file whatever the worker count. With the cache on the
+    /// main fiber alone, the helpers compile their imports again and the
+    /// four-worker count collapses.
+    #[test]
+    fn helper_fibers_read_the_ir_cache() {
+        let d = std::env::temp_dir().join(format!("ietsp-run-ircache-{}", std::process::id()));
+        let n = 400;
+        let expr = workload(&d.join("src"), n);
+        let cache = d.join("cache");
+        hits(args(&expr, &cache, 1));
+        let one = hits(args(&expr, &cache, 1));
+        let four = hits(args(&expr, &cache, 4));
+        let _ = std::fs::remove_dir_all(&d);
+        assert_eq!(one, n as u64, "a warm run reads one entry per file");
+        assert_eq!(four, one, "helper fibers read the IR cache too");
+    }
+}

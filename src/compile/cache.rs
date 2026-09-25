@@ -28,6 +28,9 @@ pub struct IrCache {
     pub stats: bool,
     /// The store is swept at most once per process, on the first write.
     swept: std::sync::atomic::AtomicBool,
+    /// Entries read, over every fiber: the cache is one handle shared by all
+    /// of them, so this counts the whole run.
+    hits: std::sync::atomic::AtomicU64,
 }
 
 impl IrCache {
@@ -47,6 +50,7 @@ impl IrCache {
             min_size: set.ir_min,
             stats: set.ir_stats,
             swept: std::sync::atomic::AtomicBool::new(false),
+            hits: std::sync::atomic::AtomicU64::new(0),
         })
     }
 
@@ -93,7 +97,14 @@ impl IrCache {
         let mut r = &f;
         r.read_to_end(&mut bytes).ok()?;
         crate::cachefs::touch_open(&f, md.modified().ok());
+        self.hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Some(bytes)
+    }
+
+    /// How many entries this run read, the `ir-cache load` lines of
+    /// `IETSP_IR_STATS=1` less the ones that failed to decode.
+    pub fn hits(&self) -> u64 {
+        self.hits.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Skips the write when a sibling process holds the store lock: the file
