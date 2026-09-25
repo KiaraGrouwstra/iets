@@ -67,7 +67,7 @@ local tree of an input source. Same planner, empty eval tables.
 
 `--builder daemon | unix:///path | ssh-ng://[user@]host[?remote-program=CMD] |
 grpc://host:port[?…]`. Without the flag the URL is the `builder` setting in
-`ietsp.conf`, and nix.conf's `store` when that is unset (`docs/config.md`).
+`ietsp.conf`, and nix.conf's `store` when that is unset (`docs/reference/settings.md`).
 `grpc://` is its own protocol and has its own section
 below; the rest of this section is the worker protocol.
 `daemon` is `/nix/var/nix/daemon-socket/socket`; `ssh-ng://` runs `ssh host
@@ -142,7 +142,7 @@ type `actBuild` (105) is `Started` and maps the activity id to its drv;
 `readError` (message plus traces). `--timings` counts worker ops and round
 trips (ops plus the three handshake exchanges) and bytes written to the
 socket. Under `internal-json` or with a `json-log-path` every activity
-message is also forwarded to the log (`docs/cli.md`).
+message is also forwarded to the log (`docs/reference/errors.md`).
 
 ## The dispatcher
 

@@ -235,7 +235,7 @@ re-evaluated). The demand path evaluates the thunk itself and prints,
 exactly once. Errors are never cached in either mode, so error values
 from helpers are transient by construction. `scripts/partest.nu` checks
 trace and warn counts at 1 versus N workers. Lint warnings
-(docs/lints.md) are the exception: a helper reports a site itself, since
+(docs/reference/lints.md) are the exception: a helper reports a site itself, since
 the shared site set already keeps each to one line and a bail here cost
 15 % of the wall at 4 workers.
 

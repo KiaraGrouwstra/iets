@@ -20,9 +20,9 @@ tree), reached through `crate::api::flake`. Judge: `scripts/flaketest.nu`.
     root flake" below;
   - `?query` parameters on a path (`?dir=`, `?rev=`, `?narHash=`);
   - what the parser itself leaves out (`hg+…`, `sourcehut:`,
-    docs/divergences.md).
+    docs/reference/divergences.md).
 
-  Some invalid references are accepted (docs/divergences.md); an unknown
+  Some invalid references are accepted (docs/reference/divergences.md); an unknown
   scheme (`foo:bar#x`) is unsupported.
 - `#attr.path` selects from the flake's outputs; elements may be quoted
   like Nix (`"x86_64-linux"`). No `#` or a bare `#` gives the outputs
@@ -57,7 +57,7 @@ flakeref.cc:parseFlakeRefWithFragment (a flake id first, then a URL, then
 a path) and the inputFromURL, inputFromAttrs and toURL of the github,
 gitlab, git, path, tarball, file and indirect schemes (libfetchers). As in
 Nix, `parseFlakeRef` has no base directory, so a relative path is an
-error. The corners it leaves out are in docs/divergences.md.
+error. The corners it leaves out are in docs/reference/divergences.md.
 
 ## A remote root flake
 

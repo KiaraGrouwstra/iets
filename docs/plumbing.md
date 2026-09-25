@@ -169,7 +169,7 @@ Four parsers over the same flags: `cli/mod.rs:parse_eval_args` (native),
 One binary, one namespace: `ietsp plumbing OP`. Each op reads flags and
 optionally JSON on stdin, and writes one JSON object (or JSON lines) on
 stdout. Errors go to stderr as `log::Report` records and set the exit
-code, per docs/cli.md. Nothing else is printed on stdout.
+code, per docs/reference/errors.md. Nothing else is printed on stdout.
 
 ### Why a namespace and not a second binary
 
@@ -381,7 +381,7 @@ ietsp plumbing build [--builder URL] [--out NAME]... [--fetch-to DIR]
   "reason": null, "logTail": []}]}
 ```
 
-The exit code follows docs/cli.md. Build progress goes to stderr through
+The exit code follows docs/reference/errors.md. Build progress goes to stderr through
 the existing reporter; the renderer is porcelain.
 
 `--out NAME` adds an output to every root. `--source STOREPATH=LOCAL`

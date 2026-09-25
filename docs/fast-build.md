@@ -73,7 +73,7 @@ Smaller differences:
   when it is close to a known one. Under the classic name it is not:
   `nix-fast-build` is a real binary on many hosts, so an unknown flag
   falls back to it with `nixbin::real("nix-fast-build")`, exactly as
-  classic mode falls back (`docs/classic.md`). A missing feature degrades
+  classic mode falls back (`docs/reference/classic.md`). A missing feature degrades
   instead of breaking a pipeline.
 
 ## Flag coverage
@@ -190,7 +190,7 @@ thread names the running builds every 30 s, and a build silent for 300 s
 has its last lines dumped and switches to live streaming
 (`ci_renderer.py:34-197`). Under `--log-format internal-json` the
 renderer prints none of this; the activity records carry the builds
-(`docs/cli.md`).
+(`docs/reference/errors.md`).
 
 The worker protocol carries no per-derivation verdict: `STDERR_STOP_ACTIVITY`
 says a build ended, not whether it succeeded, and only the op's own

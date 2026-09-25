@@ -38,7 +38,7 @@ Three sources fill it:
    locked flake input of type `path`. This is the case that matters: the repo
    you are working on.
 2. **The `source-map` setting** in `ietsp.conf` or `--ietsp-option`
-   (`docs/config.md`), for trees this evaluation did not copy:
+   (`docs/reference/settings.md`), for trees this evaluation did not copy:
    whitespace-separated `STOREPATH=LOCALDIR` entries. `extra-source-map`
    appends. This is how a nixpkgs checkout is mapped:
 
@@ -70,7 +70,7 @@ at its own file. One that sets only `name` through a nixpkgs builder
 (`runCommand`, `writeShellApplication`) loses that binding to
 `make-derivation.nix`, so the first attribute the set still holds from a
 lint root stands in (`src`, an attribute of `runCommand`'s env), the same
-fallback the value lints use (`docs/lints.md`). A bare
+fallback the value lints use (`docs/reference/lints.md`). A bare
 `runCommand "x" { } "…"` holds none and points into nixpkgs. The flake
 root and `./.` cases, which build `derivation` directly or set `name` in the
 package file, point where you want.

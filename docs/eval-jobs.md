@@ -240,7 +240,7 @@ identical, exit codes included.
 | `--show-trace` | accepted | The trace is always in the error text; with `--log-format internal-json` it also goes into the error records, as in Nix. |
 | `--option k v` | accepted, ignored | `restrict-eval`, `allow-import-from-derivation` (IFD is unsupported anyway), `eval-cache`, substituters: none takes effect. |
 | `--quiet`, `--verbose`, `--debug` | accepted | `--quiet` drops the stderr summary. |
-| `--log-format F` | accepted | `internal-json`: stderr is Nix's `@nix {...}` records, with a `code` (and a `hint`) on each error (`docs/cli.md`). `raw`, `raw-with-logs`, `bar`, `bar-with-logs`: plain lines. |
+| `--log-format F` | accepted | `internal-json`: stderr is Nix's `@nix {...}` records, with a `code` (and a `hint`) on each error (`docs/reference/errors.md`). `raw`, `raw-with-logs`, `bar`, `bar-with-logs`: plain lines. |
 | `--max-jobs N` | accepted, ignored | |
 | `--provenance` | ietsp only | Adds a `pos` key per job: `file:line:col` of the derivation, mapped back to the local tree (`docs/provenance.md`). nix-eval-jobs 2.35 has no such key, so the flag is off by default and the 41 cases stay identical. |
 | `--override-input`, `--override-flake`, `--reference-lock-file` | error | ietsp evaluates a flake from its own complete `flake.lock` only. |
@@ -609,4 +609,4 @@ is a plain job on both sides (`namedConstituents: []` without
   `LocalFSStore` requirement.
 - **`--log-format internal-json`** gives ietsp's plain text in `msg`
   records. The activity records a daemon sends (`start`, `stop`,
-  `result`) are forwarded (`docs/cli.md`).
+  `result`) are forwarded (`docs/reference/errors.md`).

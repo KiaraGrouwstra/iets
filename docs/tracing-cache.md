@@ -56,7 +56,7 @@ The key is computed before evaluation from the command alone:
   directory and the sha256 of `flake.nix` and `flake.lock` (cwd is then
   always in the key);
 - `--arg`/`--argstr` name and value pairs in order; `-A`; `--strict`;
-  `--json`; `--raw`; the effective lint levels and knobs (docs/lints.md);
+  `--json`; `--raw`; the effective lint levels and knobs (docs/reference/lints.md);
   experimental features;
 - `-I` entries and `NIX_PATH` entries as absolute `(prefix, path)` pairs
   in resolution order;
