@@ -362,7 +362,7 @@ def main [] {
     (run-both $farm nix eval --json -f $"($d)/multi.nix" outputs)))
 
   # --- a file whose top level is a function: the attribute path auto-calls it
-  # at every step, in the native names too (docs/plumbing.md)
+  # at every step, in the native names too (docs/reference/plumbing.md)
   let fun = $"($d)/fun.nix"
   '{ a ? 1, b ? 2 }: { sum = a + b; name = "n-${toString a}"; }' | save -f $fun
   let ell = $"($d)/ellipsis.nix"

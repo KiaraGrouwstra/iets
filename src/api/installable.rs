@@ -135,7 +135,7 @@ pub fn from_outputs(
 /// attribute by name or a list element by index. Every command that takes
 /// `-A` or an attr-path fragment goes through this, so a file whose top
 /// level is a function is called with `--arg`/`--argstr` the same way
-/// everywhere (docs/cli.md).
+/// everywhere (docs/reference/commands.md).
 pub fn find_along_attr_path(
     ev: &mut Evaluator,
     root: Word,

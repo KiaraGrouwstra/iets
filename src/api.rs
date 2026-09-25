@@ -175,7 +175,7 @@ pub fn configure_lints(ev: &mut Evaluator, a: &EvalArgs) -> Result<(), Box<Error
 
 /// Installs the compiled-file cache these arguments ask for (`--no-ir-cache`,
 /// `--cache-dir`). A frontend that evaluates without `evaluate` calls it
-/// itself (docs/caches.md).
+/// itself (docs/explanation/caching.md).
 pub fn install_ir_cache(ev: &mut Evaluator, a: &EvalArgs) {
     if !a.no_ir_cache {
         ev.ir_cache = crate::compile::cache::IrCache::locate(a.cache_dir.as_deref(), a.timings)

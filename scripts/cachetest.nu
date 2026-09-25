@@ -108,7 +108,7 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let hits = ($r2.stderr | lines | where ($it | str contains "cache: hit") | length)
   $res ++= [(verdict ($o1 == ($r2.stdout | chomp) and $hits == 1) "lang test hit prints identical output" "lang test hit")]
 
-  # search takes the same cache and worker flags as eval (docs/search.md)
+  # search takes the same cache and worker flags as eval (docs/reference/commands.md)
   let pkgs = $"($work)/src/pkgs.nix"
   '{ }: { hello = derivation { name = "hello-1"; system = builtins.currentSystem; builder = "/bin/sh"; args = [ ]; } // { meta.description = "greets"; }; }' + "\n" | save -f $pkgs
   let sdir = $"($work)/searchcache"

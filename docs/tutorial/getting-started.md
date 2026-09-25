@@ -111,6 +111,18 @@ ietsp eval --raw -I nixpkgs=$nixpkgs hello.nix -A name
 hello-2.12.3
 ```
 
+`-A` also works straight on the nixpkgs tree. Its `default.nix` is a
+function, and every step of an attribute path calls one with the
+arguments it has, so nothing has to be wrapped:
+
+```sh
+ietsp eval --raw $nixpkgs -A hello.name
+```
+
+```
+hello-2.12.3
+```
+
 ## 5. Build a derivation
 
 Write a derivation that makes one file:

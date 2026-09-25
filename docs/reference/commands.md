@@ -972,18 +972,3 @@ guides and the explanations are in the repository, under `docs/`;
 stdout: the overview, the command's help, or the page.
 Exit: 0; 2 for a name that is neither a command nor a topic, with a
 suggestion when it is close to one.
-
-## In flight
-
-This page records the binary at commit `037e49d`. Six changes were on the
-`ux` branch when it was written; check them against your binary.
-
-- `ietsp eval`, `ietsp build` and the other native commands auto-call a
-  top-level function with the `--arg`s, as `eval-jobs` and `search`
-  already do.
-- `-f FILE`, `--file FILE` on the native commands, beside the positional.
-- `ietsp search` gains `--no-cache`, `--cache-dir DIR` and `--workers N`.
-- A duplicate line in `ietsp diff`'s text output.
-- The order of the build log lines.
-- A did-you-mean suggestion for an unknown command. `ietsp evl` already
-  suggests `eval` at `037e49d`; the change widens where it applies.
