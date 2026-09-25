@@ -2,8 +2,9 @@
 //! the command already printed.
 //!
 //! One buffer per build, flushed as one block when that build stops, so the
-//! logs of concurrent builds never interleave (ci_renderer.py:34-197). A
-//! failure prints the last `FAILURE_TAIL` lines. On Actions-style CI the
+//! logs of concurrent builds never interleave (ci_renderer.py:34-197). The
+//! verdict closes the block, except when the block is folded, where it is
+//! the header. A failure prints the last `FAILURE_TAIL` lines. On Actions-style CI the
 //! successes are folded with `::group::` markers. A heartbeat thread names
 //! the running builds every `HEARTBEAT`, and a build silent for `STALL`
 //! switches to live streaming.
@@ -436,8 +437,11 @@ impl Renderer {
             out.extend(body);
             out.push("::endgroup::".into());
         } else if ok {
-            out.push(verdict);
+            // the verdict closes the block: a build that has printed a ✔ must
+            // not keep talking. Folding needs it first, and so does a failure,
+            // whose head is what a reader scrolls back to.
             out.extend(body);
+            out.push(verdict);
         } else {
             let dropped = if b.dropped {
                 format!(" (oldest lines dropped, buffer={BUFFER_LINES})")
@@ -629,6 +633,23 @@ mod tests {
         assert!(!t.contains("::group::"), "{t}");
         assert!(t.contains("✘  checks.x.a failed after 0s (status 1)"));
         assert!(t.contains("checks.x.a> boom"));
+    }
+
+    /// Unfolded, the ✔ is the last line of the block: a build that reports
+    /// success must not keep printing its log afterwards.
+    #[test]
+    fn an_unfolded_success_ends_with_its_verdict() {
+        let (mut r, s) = ci(false);
+        r.event(&ev(Kind::Started));
+        r.event(&ev(Kind::Log(b"line one".to_vec())));
+        r.stopped("/nix/store/a.drv");
+        let t = text(&s);
+        let log = t.find("checks.x.a> line one").expect("the log line");
+        let done = t.find("✔  checks.x.a").expect("the verdict");
+        assert!(
+            t.find("▶ building").expect("the start") < log && log < done,
+            "{t}"
+        );
     }
 
     #[test]

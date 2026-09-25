@@ -467,6 +467,15 @@ in
     (run-both $farm nix-build ...$json --no-out-link -E $fod)))
   let bf = (^$ietsp build -E $fail | complete)
   $ok = ($ok | append (verdict ($bf.exit_code == 100) "ietsp build: a failed build exits 100" $"exit ($bf.exit_code)"))
+  # a successful build's block ends with its ✔: nothing follows it
+  let okdrv = ('derivation { name = "classic-e2e-order"; system = "x86_64-linux"; builder = "/bin/sh"; args = [ "-c" "echo from-the-builder; echo x > $out" ]; salt = "SALT"; }' | str replace SALT (random uuid))
+  let ob = (^$ietsp build -E $okdrv | complete)
+  let olines = ($ob.stderr | ansi strip | lines)
+  let at = {|pat: string| $olines | enumerate | where {|r| $r.item | str contains $pat } | get -o 0.index }
+  let ilog = (do $at "from-the-builder")
+  let iok = (do $at "✔")
+  $ok = ($ok | append (verdict ($ob.exit_code == 0 and $ilog != null and $iok != null and $ilog < $iok)
+    "ietsp build: the ✔ is the last line of a successful block" $"exit ($ob.exit_code), stderr ($ob.stderr)"))
   let hm = (^$ietsp build ...$json -E $fod | complete)
   $ok = ($ok | append (verdict ($hm.exit_code == 102 and ($hm.stderr | str contains '"hint":"set the expected hash to '))
     "ietsp build: a hash mismatch exits 102 and names the hash" $"exit ($hm.exit_code), stderr '($hm.stderr | str substring 0..400)'"))

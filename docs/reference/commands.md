@@ -807,9 +807,11 @@ Exit: 1 when any attribute failed to evaluate or to build, 0 otherwise.
 build's activity stops, so the logs of concurrent builds never
 interleave. A terminal gets one line per state change and the log only on
 a failure; without a terminal every build's whole log is emitted in its
-block, folded with `::group::` markers on `GITHUB_ACTIONS`,
-`GITEA_ACTIONS` or `FORGEJO_ACTIONS` unless `--no-fold`. A failure prints
-the last 200 lines and is never folded. A heartbeat thread names the
+block, followed by the `✔` that closes it, so a build that says it is
+done says nothing after. Folded with `::group::` markers on
+`GITHUB_ACTIONS`, `GITEA_ACTIONS` or `FORGEJO_ACTIONS` unless
+`--no-fold`, the verdict is the group's header instead. A failure prints
+the last 200 lines under its `✘` head and is never folded. A heartbeat thread names the
 running builds every 30 s, and a build silent for 300 s has its last
 lines dumped and switches to live streaming. Under `--log-format
 internal-json` the renderer prints none of this; the activity records
