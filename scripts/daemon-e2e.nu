@@ -22,6 +22,9 @@
 #    substitutes it from a file:// binary cache made with `nix copy`: first
 #    --no-build (the daemon substitutes, then the drv registers), then the
 #    build itself.
+# 9. the stdout contract (docs/reference/commands.md): a run that exits 0 put a
+#    store path on stdout, and every run that puts none exits non-zero with an
+#    error on stderr.
 #
 # usage: scripts/daemon-e2e.nu            # uses target/release
 #        BIN=target/debug scripts/daemon-e2e.nu
@@ -204,7 +207,46 @@ def run-tests [ietsp: string, nixpkgs: string, work: string] {
   if $out8 != $expected7 { fail $"output '($out8)' != expected '($expected7)'" }
   if (open --raw $"($work)/store2($out8)" | chomp) != "Hello, world!" { fail "output content differs in the scratch store" }
   print $"ok: ($out8)"
+
+  print "== 9. the stdout contract: a path on stdout, or a non-zero exit"
+  run-contract $ietsp $work $system
   print "PASS"
+}
+
+# The stdout contract of `ietsp build` (docs/reference/commands.md). A caller
+# that captures stdout gets a store path or a failure, never silence and
+# success: a deploy script fed the empty capture to `nix-env --set` and got
+# `selector '' matches no derivations` instead of a diagnosis.
+def run-contract [ietsp: string, work: string, system: string] {
+  let dir = $"($work)/c9"
+  make-case $dir ietsp-contract-ok $system
+  let ok = (^$ietsp build --builder daemon --no-tracing-cache $"($dir)/case.nix" | complete)
+  if $ok.exit_code != 0 { print ($ok.stderr | chomp); fail "the successful build exited non-zero" }
+  if ($ok.stdout | chomp) == "" { fail "exit 0 with nothing on stdout" }
+  print $"ok: ($ok.stdout | chomp)"
+
+  r#'derivation {
+  name = "ietsp-contract-fail";
+  system = "@SYSTEM@";
+  builder = "/bin/sh";
+  args = [ "-c" "exit 3" ];
+}
+'# | str replace -a "@SYSTEM@" $system | save -f $"($dir)/fail.nix"
+  let bad = (^$ietsp build --builder daemon --no-tracing-cache $"($dir)/fail.nix" | complete)
+  if $bad.exit_code == 0 { fail "a failed build exited 0" }
+  if ($bad.stdout | chomp) != "" { fail $"a failed build printed '($bad.stdout)' on stdout" }
+  print $"ok: a failed build exits ($bad.exit_code) with no path"
+
+  let empty = (^$ietsp build --builder daemon --no-tracing-cache -E '[]' | complete)
+  if $empty.exit_code == 0 { fail "an expression with no derivation exited 0" }
+  if ($empty.stdout | chomp) != "" { fail "an expression with no derivation printed on stdout" }
+  if not ($empty.stderr | str contains "nothing to build") { fail $"no error names it: ($empty.stderr)" }
+  let none = (^$ietsp build --builder daemon --no-tracing-cache --no-build -E '[]' | complete)
+  if $none.exit_code != 1 { fail $"--no-build over nothing exited ($none.exit_code)" }
+  let wrong = (^$ietsp build --builder daemon --no-tracing-cache --out bogus $"($dir)/case.nix" | complete)
+  if $wrong.exit_code == 0 { fail "--out with an output the derivation lacks exited 0" }
+  if ($wrong.stdout | chomp) != "" { fail "--out with an unknown output printed on stdout" }
+  print "ok: no silent success"
 }
 
 def main [] {
