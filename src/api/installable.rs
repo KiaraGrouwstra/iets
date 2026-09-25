@@ -556,6 +556,27 @@ pub struct Install {
     pub outputs: Vec<String>,
 }
 
+/// The derivation a value names, with no output selection
+/// (installables.cc:Installable::toDerivations, which ignores the outputs).
+/// `what` names the installable in the error a non-derivation gets.
+pub fn to_derivation(ev: &mut Evaluator, v: Word, what: &str) -> EvalResult<StorePath> {
+    let v = ev.force(v)?;
+    let not_a_drv = || {
+        Error::boxed(
+            ErrorKind::Unsupported,
+            format!("the installable '{what}' is not a derivation"),
+            Pos::NONE,
+        )
+    };
+    let Some(attrs) = v.as_attrs() else {
+        return Err(not_a_drv());
+    };
+    if !is_derivation(ev, attrs)? {
+        return Err(not_a_drv());
+    }
+    drv_of(ev, attrs)
+}
+
 /// The derivation a value names and its outputs to install
 /// (get-drvs.cc:queryOutputs, installable-flake.cc:toDerivedPaths):
 /// `outputSpecified` picks one, else `meta.outputsToInstall`, else every

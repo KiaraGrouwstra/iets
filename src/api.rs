@@ -4,6 +4,7 @@
 //! lists the whole surface.
 
 pub mod build;
+pub mod drvshow;
 pub mod fetch;
 pub mod flake;
 pub mod installable;

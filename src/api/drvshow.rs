@@ -1,0 +1,232 @@
+//! `nix derivation show`'s JSON: the derivations a set of roots names, and
+//! with `recursive` their whole input-derivation closure. Each ATerm comes
+//! from this evaluation's derivation table, so the answer needs nothing in
+//! `/nix/store`; a drv the evaluation did not make is read from there
+//! (docs/reference/classic.md, docs/reference/divergences.md).
+
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
+
+use serde_json::{Map, Value};
+
+use crate::builtins::derivation::DrvInfo;
+use crate::error::{Error, Result};
+use crate::eval::Evaluator;
+use crate::remote::plan::{load_drv, walk};
+use crate::store::drv::{Derivation, DerivationOutput};
+use crate::store::path::{IngestionMethod, StorePath};
+
+/// derivations.hh:expectedJsonVersionDerivation.
+const VERSION: u64 = 4;
+
+/// The whole `nix derivation show` document: `{"derivations": {…}, "version":
+/// 4}`, keyed by base name as `StorePath::to_string` renders it.
+pub fn show(ev: &Evaluator, roots: &[StorePath], recursive: bool) -> Result<Value> {
+    let table = ev.drv.drvs.lock();
+    let nodes = if recursive {
+        closure(roots, &table)?
+    } else {
+        tops(roots, &table)?
+    };
+    let mut drvs = Map::new();
+    for (path, aterm) in nodes {
+        let text = std::str::from_utf8(&aterm)
+            .map_err(|_| Error::Store(format!("derivation '{path}' is not utf-8")))?;
+        let drv = Derivation::parse(text, Derivation::name_from_path(&path)?)?;
+        drvs.insert(path.base_name().to_string(), derivation(&drv)?);
+    }
+    let mut out = Map::new();
+    out.insert("derivations".into(), Value::Object(drvs));
+    out.insert("version".into(), Value::from(VERSION));
+    Ok(Value::Object(out))
+}
+
+/// The roots themselves, deduplicated. A root that is not a `.drv` is
+/// dropped, as derivation-show.cc drops it.
+fn tops(
+    roots: &[StorePath],
+    table: &HashMap<StorePath, DrvInfo>,
+) -> Result<Vec<(StorePath, Arc<Vec<u8>>)>> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for p in roots {
+        if !p.is_derivation() || !seen.insert(p.clone()) {
+            continue;
+        }
+        let (aterm, _, _) = load_drv(p, &|q| table.get(q).cloned())?;
+        out.push((p.clone(), aterm));
+    }
+    Ok(out)
+}
+
+/// `-r`: every derivation the roots reach through `inputDrvs`. This is
+/// `computeFSClosure` over the roots with the sources dropped, except that the
+/// closure is read from the derivation table first and `/nix/store` only for
+/// what the table lacks.
+fn closure(
+    roots: &[StorePath],
+    table: &HashMap<StorePath, DrvInfo>,
+) -> Result<Vec<(StorePath, Arc<Vec<u8>>)>> {
+    let roots: Vec<StorePath> = roots
+        .iter()
+        .filter(|p| p.is_derivation())
+        .cloned()
+        .collect();
+    let (nodes, _, _) = walk(&roots, &HashSet::new(), &|q| table.get(q).cloned(), &|_| {
+        None
+    })?;
+    Ok(nodes.into_iter().map(|(p, aterm, _)| (p, aterm)).collect())
+}
+
+/// derivations.cc:adl_serializer<Derivation>::to_json. The keys are sorted,
+/// because nlohmann's object is a sorted map and so is `serde_json`'s.
+fn derivation(drv: &Derivation) -> Result<Value> {
+    let mut o = Map::new();
+    o.insert("args".into(), strings(&drv.args));
+    o.insert("builder".into(), Value::from(drv.builder.as_str()));
+    o.insert(
+        "env".into(),
+        Value::Object(
+            (drv.env.iter())
+                .map(|(k, v)| (k.clone(), Value::from(v.as_str())))
+                .collect(),
+        ),
+    );
+    o.insert("inputs".into(), inputs(drv));
+    o.insert("name".into(), Value::from(drv.name.as_str()));
+    o.insert(
+        "outputs".into(),
+        Value::Object(
+            (drv.outputs.iter())
+                .map(|(name, out)| (name.clone(), output(out)))
+                .collect(),
+        ),
+    );
+    if let Some(json) = &drv.structured_attrs {
+        // nix parses `__json` out of the env and dumps the parsed value, so a
+        // non-canonical text is renormalised rather than passed through.
+        let parsed = serde_json::from_str(json).map_err(|e| {
+            Error::Store(format!(
+                "derivation '{}' has unparsable structured attrs: {e}",
+                drv.name
+            ))
+        })?;
+        o.insert("structuredAttrs".into(), parsed);
+    }
+    o.insert("system".into(), Value::from(drv.platform.as_str()));
+    o.insert("version".into(), Value::from(VERSION));
+    Ok(Value::Object(o))
+}
+
+fn inputs(drv: &Derivation) -> Value {
+    let mut o = Map::new();
+    o.insert(
+        "drvs".into(),
+        Value::Object(
+            (drv.input_drvs.iter())
+                .map(|(p, outs)| (p.base_name().to_string(), input_drv(outs)))
+                .collect(),
+        ),
+    );
+    o.insert("srcs".into(), paths(&drv.input_srcs));
+    Value::Object(o)
+}
+
+/// One `inputDrvs` entry. `dynamicOutputs` is always empty: ietsp refuses a
+/// dynamic-derivation input when it parses the ATerm.
+fn input_drv(outputs: &BTreeSet<String>) -> Value {
+    let mut o = Map::new();
+    o.insert("dynamicOutputs".into(), Value::Object(Map::new()));
+    o.insert(
+        "outputs".into(),
+        Value::Array(outputs.iter().map(|s| Value::from(s.as_str())).collect()),
+    );
+    Value::Object(o)
+}
+
+/// derivations.cc:adl_serializer<DerivationOutput>::to_json. A fixed output
+/// carries its content address, not its path, which nix leaves out because the
+/// serializer does not know the store directory.
+fn output(out: &DerivationOutput) -> Value {
+    let mut o = Map::new();
+    match out {
+        DerivationOutput::InputAddressed(p) => {
+            o.insert("path".into(), Value::from(p.base_name()));
+        }
+        DerivationOutput::Fixed { method, hash } => {
+            o.insert("hash".into(), Value::from(hash.to_sri()));
+            o.insert("method".into(), Value::from(render(*method)));
+        }
+        DerivationOutput::CaFloating { method, algo } => {
+            o.insert("hashAlgo".into(), Value::from(algo.name()));
+            o.insert("method".into(), Value::from(render(*method)));
+        }
+        DerivationOutput::Deferred => {}
+    }
+    Value::Object(o)
+}
+
+/// content-address.cc:ContentAddressMethod::render.
+fn render(m: IngestionMethod) -> &'static str {
+    match m {
+        IngestionMethod::Flat => "flat",
+        IngestionMethod::Recursive => "nar",
+    }
+}
+
+fn strings(v: &[String]) -> Value {
+    Value::Array(v.iter().map(|s| Value::from(s.as_str())).collect())
+}
+
+fn paths(v: &BTreeSet<StorePath>) -> Value {
+    Value::Array(v.iter().map(|p| Value::from(p.base_name())).collect())
+}
+
+/// Each pair is one `.drv` and what `nix derivation show` printed for it,
+/// captured from `nix (Nix) 2.34.8` on a case built for it.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn json_of(aterm: &str, name: &str) -> String {
+        let drv = Derivation::parse(aterm, name).unwrap();
+        derivation(&drv).unwrap().to_string()
+    }
+
+    #[test]
+    fn a_multi_output_derivation() {
+        let aterm = r#"Derive([("dev","/nix/store/y7a2ldlsm4a9b89dy8gjq9w2jxrg9ni7-drvshow-multi-dev","",""),("out","/nix/store/glmm5g4k4ni9sqr84qzq47c7z839qy2v-drvshow-multi","","")],[],[],"x86_64-linux","/bin/sh",["-c","echo a > $out; echo b > $dev"],[("builder","/bin/sh"),("dev","/nix/store/y7a2ldlsm4a9b89dy8gjq9w2jxrg9ni7-drvshow-multi-dev"),("name","drvshow-multi"),("out","/nix/store/glmm5g4k4ni9sqr84qzq47c7z839qy2v-drvshow-multi"),("outputs","out dev"),("system","x86_64-linux")])"#;
+        assert_eq!(
+            json_of(aterm, "drvshow-multi"),
+            r#"{"args":["-c","echo a > $out; echo b > $dev"],"builder":"/bin/sh","env":{"builder":"/bin/sh","dev":"/nix/store/y7a2ldlsm4a9b89dy8gjq9w2jxrg9ni7-drvshow-multi-dev","name":"drvshow-multi","out":"/nix/store/glmm5g4k4ni9sqr84qzq47c7z839qy2v-drvshow-multi","outputs":"out dev","system":"x86_64-linux"},"inputs":{"drvs":{},"srcs":[]},"name":"drvshow-multi","outputs":{"dev":{"path":"y7a2ldlsm4a9b89dy8gjq9w2jxrg9ni7-drvshow-multi-dev"},"out":{"path":"glmm5g4k4ni9sqr84qzq47c7z839qy2v-drvshow-multi"}},"system":"x86_64-linux","version":4}"#
+        );
+    }
+
+    #[test]
+    fn a_fixed_output_shows_its_content_address_and_no_path() {
+        let aterm = r#"Derive([("out","/nix/store/fzwqzgk7sxbw469w1hhbp686hlxgwpkx-drvshow-fod","r:sha1","0000000000000000000000000000000000000000")],[],[],"x86_64-linux","/bin/sh",["-c","echo x > $out"],[("builder","/bin/sh"),("name","drvshow-fod"),("out","/nix/store/fzwqzgk7sxbw469w1hhbp686hlxgwpkx-drvshow-fod"),("outputHash","0000000000000000000000000000000000000000"),("outputHashAlgo","sha1"),("outputHashMode","recursive"),("system","x86_64-linux")])"#;
+        assert_eq!(
+            json_of(aterm, "drvshow-fod"),
+            r#"{"args":["-c","echo x > $out"],"builder":"/bin/sh","env":{"builder":"/bin/sh","name":"drvshow-fod","out":"/nix/store/fzwqzgk7sxbw469w1hhbp686hlxgwpkx-drvshow-fod","outputHash":"0000000000000000000000000000000000000000","outputHashAlgo":"sha1","outputHashMode":"recursive","system":"x86_64-linux"},"inputs":{"drvs":{},"srcs":[]},"name":"drvshow-fod","outputs":{"out":{"hash":"sha1-AAAAAAAAAAAAAAAAAAAAAAAAAAA=","method":"nar"}},"system":"x86_64-linux","version":4}"#
+        );
+    }
+
+    #[test]
+    fn inputs_and_structured_attrs() {
+        let aterm = r#"Derive([("out","/nix/store/5railz2b3ssvqdssggdsnga8dyahvbaj-drvshow-top","","")],[("/nix/store/swp3gmqyvz1k2yjkmncfb29zhdhqfjmn-drvshow-dep.drv",["dev"])],["/nix/store/yb554rm2xvp2vbjgyc3zanbxmdaqnnqh-note"],"x86_64-linux","/bin/sh",["-c","true"],[("__json","{\"builder\":\"/bin/sh\",\"d\":\"/nix/store/p4pq1jgwyjlyc13nk7vv65a99jzw1843-drvshow-dep-dev\",\"n\":2,\"name\":\"drvshow-top\",\"system\":\"x86_64-linux\",\"t\":\"/nix/store/yb554rm2xvp2vbjgyc3zanbxmdaqnnqh-note\"}"),("out","/nix/store/5railz2b3ssvqdssggdsnga8dyahvbaj-drvshow-top")])"#;
+        assert_eq!(
+            json_of(aterm, "drvshow-top"),
+            r#"{"args":["-c","true"],"builder":"/bin/sh","env":{"out":"/nix/store/5railz2b3ssvqdssggdsnga8dyahvbaj-drvshow-top"},"inputs":{"drvs":{"swp3gmqyvz1k2yjkmncfb29zhdhqfjmn-drvshow-dep.drv":{"dynamicOutputs":{},"outputs":["dev"]}},"srcs":["yb554rm2xvp2vbjgyc3zanbxmdaqnnqh-note"]},"name":"drvshow-top","outputs":{"out":{"path":"5railz2b3ssvqdssggdsnga8dyahvbaj-drvshow-top"}},"structuredAttrs":{"builder":"/bin/sh","d":"/nix/store/p4pq1jgwyjlyc13nk7vv65a99jzw1843-drvshow-dep-dev","n":2,"name":"drvshow-top","system":"x86_64-linux","t":"/nix/store/yb554rm2xvp2vbjgyc3zanbxmdaqnnqh-note"},"system":"x86_64-linux","version":4}"#
+        );
+    }
+
+    #[test]
+    fn a_non_canonical_structured_attrs_text_is_renormalised() {
+        let aterm = r#"Derive([("out","/nix/store/5railz2b3ssvqdssggdsnga8dyahvbaj-drvshow-top","","")],[],[],"x86_64-linux","/bin/sh",[],[("__json","{ \"b\" : 2, \"a\": [1] }"),("out","/nix/store/5railz2b3ssvqdssggdsnga8dyahvbaj-drvshow-top")])"#;
+        let got = json_of(aterm, "drvshow-top");
+        assert!(
+            got.contains(r#""structuredAttrs":{"a":[1],"b":2}"#),
+            "{got}"
+        );
+    }
+}
