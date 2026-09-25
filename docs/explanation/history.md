@@ -19,9 +19,9 @@ identical derivation paths:
 | nixos-minimal, instructions | 7.7 G | 19.4 G |
 | nixos-desktop, instructions | 10.0 G | 25.8 G |
 | nixos-desktop, wall, 1 worker | 0.98 s | 2.20 s |
-| nixos-desktop, wall, 4 workers | 0.59 s | 2.20 s |
+| nixos-desktop, wall, 4 workers | 0.47 s | 2.20 s |
 
-About 2.5× fewer instructions, and 2.2× to 3.7× faster in wall time. The
+About 2.5× fewer instructions, and 2.2× to 4.7× faster in wall time. The
 instruction ratio is the durable number; the wall ratio depends on how many
 workers the critical chain can use.
 
@@ -31,6 +31,28 @@ worth 2.25 G instructions on desktop, 18% of the run, so with `--no-ir-cache`
 the ratio falls to 1.96× on minimal and 2.11× on desktop. Nix has no
 equivalent to turn off, so 2.5× is the honest product comparison and 2× is the
 honest evaluator comparison.
+
+## 2026-09-25: the IR cache only the main fiber had
+
+`parallel::try_run` clones the evaluator as the fiber template, and
+`api::evaluate` installed the IR cache after that clone, inside the main
+fiber. Every helper fiber therefore ran without one: on nixos-desktop with a
+warm cache it loaded 2804 entries at one worker and 60 at four, and each
+helper parsed and compiled its own imports again.
+
+| nixos-desktop, warm, instructions | before | after |
+|---|---:|---:|
+| 1 worker | 10.03 G | 10.03 G |
+| 4 workers | 13.05 G | 10.88 G |
+
+−16.6 % at four workers, wall 0.59 s → 0.47 s, drvPaths identical. The
+parallel overhead that was quoted as +30 % is +8 %; the rest was this. A cold
+four-worker run also wrote the cache it was meant to fill: 62 entries before,
+2807 after. The search path had the same shape, so `<nixpkgs>` on a helper
+fiber resolved against an empty `__nixPath`. `api::configure` now installs
+both before `try_run`, and `api/run.rs` holds the regression test: the fiber
+template carries the configuration, and a warm run reads one entry per file
+whatever the worker count.
 
 ## 2026-09-20: `BuildPaths` and the non-farm gRPC path
 

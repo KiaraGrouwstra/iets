@@ -23,7 +23,7 @@ from anywhere, with no `docs/` directory in sight.
 
 ## Why
 
-**It is about 2.5× cheaper and 2 to 4× faster.** Measured on an idle 32-core
+**It is about 2.5× cheaper and 2 to 4.7× faster.** Measured on an idle 32-core
 machine against Nix 2.34.8, same nixpkgs, identical drvPaths:
 
 | workload | ietsp | nix 2.34.8 |
@@ -31,7 +31,7 @@ machine against Nix 2.34.8, same nixpkgs, identical drvPaths:
 | nixos-minimal, instructions | 7.7 G | 19.4 G |
 | nixos-desktop, instructions | 10.0 G | 25.8 G |
 | nixos-desktop, wall, 1 worker | 0.98 s | 2.20 s |
-| nixos-desktop, wall, 4 workers | **0.59 s** | 2.20 s |
+| nixos-desktop, wall, 4 workers | **0.47 s** | 2.20 s |
 
 These are warm compiled-file cache runs, which is what you get after the first
 evaluation of a tree. With `--no-ir-cache`, so every file is parsed and

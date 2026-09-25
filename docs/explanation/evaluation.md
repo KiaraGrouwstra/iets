@@ -234,7 +234,9 @@ imports: on nixos-minimal at four workers one helper spends about 0.17 s
 alone reading and compiling the 16.6 MB `hackage-packages.nix` while
 everyone else waits. Only parse and compile speed move that phase, which is
 what the IR cache does on a warm run (see
-[caching](caching.md)).
+[caching](caching.md)). That table was measured while the helper fibers had
+no IR cache of their own, so a warm run now loads that file instead of
+compiling it ([history](history.md)).
 
 The wake policy is where the scheduler's own cost showed. Waking a sleeper
 on every push cost the critical path a futex call per fan-out task and
