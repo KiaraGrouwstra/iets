@@ -42,6 +42,17 @@ deleted and the run continues as a miss. A store whose version file is of
 another format, or whose garbage-collection stamp cannot be parsed, or
 whose lock is not a file, is emptied and starts again.
 
+That holds for *any* bytes, not only for bytes ietsp wrote: a cache
+directory is writable by whoever runs ietsp, so a truncated, corrupt or
+crafted entry must be a miss and never a crash. The IR decoder therefore
+checks every stored constant against the immediate encodings the writer can
+produce — a word is never a raw bit pattern the evaluator would follow as a
+pointer — checks every index against what it has already decoded (a local
+slot against its frame, a `with` depth against a `with` scope, a symbol
+against the entry's name table, a position against the file's length), and
+bounds both its nesting and the items its counted runs may ask for by the
+entry's own length.
+
 **ietsp removes only what ietsp put there.** A wipe is scoped to the names
 that store's own layout makes — the version file, the lock, the stamp, the
 temporary files, the entries and, for the IR cache, its shard directories.

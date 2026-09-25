@@ -324,3 +324,9 @@ Nix's:
 an entry that names `__currentSystem` finds no such global in a pure run,
 is dropped and recompiled, and the compile reports the undefined
 variable.
+
+An entry that does not decode is dropped and recompiled the same way. That
+holds for every byte sequence, not only for an entry ietsp wrote: the
+decoders validate constants, indices, nesting and counts, so a truncated or
+crafted entry in the cache directory is a miss and never a crash
+(`docs/explanation/caching.md`).

@@ -541,25 +541,52 @@ impl Ser {
 
 // ---- decoding ---------------------------------------------------------------
 
+/// One scope the compiler pushed. The decoder mirrors the compiler's scope
+/// stack so it can check every stored index against the env that will hold
+/// it: a `Local` past the end of its frame would be an out-of-bounds slot
+/// read at evaluation time.
+struct Frame {
+    /// Slots the env at this depth has.
+    slots: usize,
+    /// A `with` scope. Only these carry a `WithVar` depth, and only these
+    /// hold the set in slot 0.
+    with: bool,
+    /// The slot permutation of a re-sorted frame, `None` for an unchanged one.
+    perm: Option<Vec<u32>>,
+}
+
+/// Open `node` calls. Real IR nests far below this; a crafted entry that
+/// nests deeper would exhaust the stack.
+const MAX_NEST: u32 = 10_000;
+
 struct De<'a, 'e> {
     ev: &'e mut Evaluator,
     data: &'a [u8],
     at: usize,
     syms: Vec<Sym>,
     base: u32,
-    /// One entry per scope the compiler pushed, innermost last: the slot
-    /// permutation of a re-sorted frame, or `None` for an unchanged one.
-    frames: Vec<Option<Vec<u32>>>,
+    /// Byte length of the file this entry belongs to: every stored position
+    /// is an offset inside it.
+    span: u32,
+    /// Items the counted runs may still ask for. Every item of a valid
+    /// entry costs at least one byte, so the entry's own length is the
+    /// bound, and a crafted count cannot make the arena grow without one.
+    budget: usize,
+    /// One entry per scope the compiler pushed, innermost last.
+    frames: Vec<Frame>,
+    nest: u32,
     ok: bool,
 }
 
 /// The IR of an entry, allocated in the evaluator's arena with positions
 /// rebased at `base`, plus its lint warnings and the file's allow table;
-/// `None` on a malformed entry.
+/// `None` on a malformed entry, which the caller then discards. `span` is
+/// the length of the source the entry was compiled from.
 pub fn deserialize(
     ev: &mut Evaluator,
     data: &[u8],
     base: u32,
+    span: u32,
     stats: bool,
 ) -> Option<(IrRef, Vec<crate::lint::Diag>, crate::lint::allow::Allows)> {
     let t0 = std::time::Instant::now();
@@ -572,10 +599,13 @@ pub fn deserialize(
         at: MAGIC.len(),
         syms: Vec::new(),
         base,
+        span,
+        budget: data.len(),
         frames: Vec::new(),
+        nest: 0,
         ok: true,
     };
-    let n = d.u32() as usize;
+    let n = d.count();
     d.syms.reserve(n);
     for _ in 0..n {
         let len = d.u32() as usize;
@@ -589,7 +619,7 @@ pub fn deserialize(
     }
     let t1 = t0.elapsed();
     let ir = d.node();
-    let ndiags = d.u32() as usize;
+    let ndiags = d.count();
     let mut diags = Vec::with_capacity(ndiags.min(1024));
     for _ in 0..ndiags {
         if !d.ok {
@@ -603,7 +633,7 @@ pub fn deserialize(
             None => d.ok = false,
         }
     }
-    let nallows = d.u32() as usize;
+    let nallows = d.count();
     let mut allows = crate::lint::allow::Allows::default();
     for _ in 0..nallows {
         if !d.ok {
@@ -629,7 +659,7 @@ pub fn deserialize(
     }
 }
 
-impl De<'_, '_> {
+impl<'a> De<'a, '_> {
     fn u8(&mut self) -> u8 {
         match self.data.get(self.at) {
             Some(b) => {
@@ -687,6 +717,9 @@ impl De<'_, '_> {
         let v = self.u32();
         if v == u32::MAX {
             Pos::NONE
+        } else if v > self.span {
+            self.ok = false;
+            Pos::NONE
         } else {
             Pos(self.base + v)
         }
@@ -708,11 +741,17 @@ impl De<'_, '_> {
         }
     }
 
-    /// A count that a run of items follows; capped by the bytes left so a
-    /// corrupt entry cannot reserve gigabytes.
+    /// A count that a run of items follows, against the entry's own item
+    /// budget, so a corrupt count cannot reserve gigabytes and a chain of
+    /// them cannot do it one level at a time.
     fn count(&mut self) -> usize {
-        let n = self.u32() as usize;
-        n.min(self.data.len() - self.at.min(self.data.len()))
+        let n = (self.u32() as usize).min(self.data.len() - self.at.min(self.data.len()));
+        if n > self.budget {
+            self.ok = false;
+            return 0;
+        }
+        self.budget -= n;
+        n
     }
 
     /// The arena slice is reserved first and filled as the items decode,
@@ -749,6 +788,21 @@ impl De<'_, '_> {
         })
     }
 
+    /// The bytes of a stored string or path, borrowed from the entry rather
+    /// than from `self`, so the arena can be written while they are held.
+    fn stored_bytes(&mut self) -> Option<&'a [u8]> {
+        let data = self.data;
+        let n = self.u32() as usize;
+        let end = self.at.saturating_add(n);
+        if end > data.len() {
+            self.ok = false;
+            return None;
+        }
+        let b = &data[self.at..end];
+        self.at = end;
+        Some(b)
+    }
+
     fn word(&mut self) -> Word {
         match self.u8() {
             0 => match Word::imm_from_bits(self.u64()) {
@@ -758,18 +812,14 @@ impl De<'_, '_> {
                     Word::NULL
                 }
             },
-            1 => {
-                let data = self.data;
-                let b = self.bytes();
-                let b = &data[b.as_ptr() as usize - data.as_ptr() as usize..][..b.len()];
-                self.ev.arena.mk_string(b)
-            }
-            2 => {
-                let data = self.data;
-                let b = self.bytes();
-                let b = &data[b.as_ptr() as usize - data.as_ptr() as usize..][..b.len()];
-                self.ev.arena.mk_path(b)
-            }
+            1 => match self.stored_bytes() {
+                Some(b) => self.ev.arena.mk_string(b),
+                None => Word::NULL,
+            },
+            2 => match self.stored_bytes() {
+                Some(b) => self.ev.arena.mk_path(b),
+                None => Word::NULL,
+            },
             3 => {
                 let mut raw = [0u8; 8];
                 for r in raw.iter_mut() {
@@ -813,6 +863,15 @@ impl De<'_, '_> {
         }
     }
 
+    /// A frame pushed with no permutation and no slots of its own to name.
+    fn plain(slots: usize, with: bool) -> Frame {
+        Frame {
+            slots,
+            with,
+            perm: None,
+        }
+    }
+
     /// The permutation that moves entries from their stored order to
     /// `Sym` order: `perm[old] = new`. `extra` identity slots follow.
     fn perm(syms: &[Sym], extra: usize) -> Option<Vec<u32>> {
@@ -831,10 +890,10 @@ impl De<'_, '_> {
         Some(perm)
     }
 
-    fn frame_of(&self, depth: u32) -> Option<&Vec<u32>> {
+    fn frame_of(&self, depth: u32) -> Option<&Frame> {
         let n = self.frames.len();
         let i = n.checked_sub(depth as usize + 1)?;
-        self.frames[i].as_ref()
+        self.frames.get(i)
     }
 
     /// A binding frame: `(binds, from)` with the binds in `Sym` order.
@@ -858,7 +917,11 @@ impl De<'_, '_> {
         let nfrom = self.count();
         let perm = Self::perm(&syms, if sorted { nfrom } else { 0 });
         if sorted {
-            self.frames.push(perm.clone());
+            self.frames.push(Frame {
+                slots: n + nfrom,
+                with: false,
+                perm: perm.clone(),
+            });
         }
         let out = self.fill(n, |_| BindIr {
             sym: Sym(0),
@@ -881,7 +944,7 @@ impl De<'_, '_> {
                     v
                 }
                 BindScope::From if !sorted => {
-                    self.frames.push(None);
+                    self.frames.push(Self::plain(nfrom, false));
                     let v = self.node();
                     self.frames.pop();
                     v
@@ -901,30 +964,45 @@ impl De<'_, '_> {
     }
 
     fn node(&mut self) -> IrRef {
-        if !self.ok {
+        if !self.ok || self.nest >= MAX_NEST {
+            self.ok &= self.nest < MAX_NEST;
             return &Ir::Const(Word::NULL);
         }
+        self.nest += 1;
         let ir = match self.u8() {
             0 => Ir::Const(self.word()),
             1 => {
                 let depth = self.u32();
                 let idx = self.u32();
-                let idx = match self.frame_of(depth) {
-                    Some(perm) => match perm.get(idx as usize) {
-                        Some(i) => *i,
-                        None => {
-                            self.ok = false;
-                            0
-                        }
-                    },
-                    None => idx,
+                // the slot this names is read without a bounds check at
+                // evaluation time, so the frame it lands in decides it here
+                let slot = match self.frame_of(depth) {
+                    Some(f) => match &f.perm {
+                        Some(p) => p.get(idx as usize).copied(),
+                        None => Some(idx),
+                    }
+                    .filter(|i| (*i as usize) < f.slots),
+                    None => None,
                 };
-                Ir::Local { depth, idx }
+                match slot {
+                    Some(idx) => Ir::Local { depth, idx },
+                    None => {
+                        self.ok = false;
+                        Ir::Const(Word::NULL)
+                    }
+                }
             }
             2 => {
                 let sym = self.sym();
                 let n = self.count();
                 let withs = self.fill(n, |d| d.u32());
+                // each names a `with` env, whose slot 0 the lookup reads
+                if !withs
+                    .iter()
+                    .all(|w| self.frame_of(*w).is_some_and(|f| f.with))
+                {
+                    self.ok = false;
+                }
                 let pos = self.pos();
                 Ir::WithVar { sym, withs, pos }
             }
@@ -1005,7 +1083,7 @@ impl De<'_, '_> {
             10 => Ir::List(self.nodes()),
             11 => {
                 let param = if self.u8() == 0 {
-                    self.frames.push(None);
+                    self.frames.push(Self::plain(1, false));
                     ParamIr::Ident
                 } else {
                     let has_bind = self.u8() != 0;
@@ -1019,14 +1097,18 @@ impl De<'_, '_> {
                     }
                     let fperm = Self::perm(&syms, 0);
                     let off = u32::from(has_bind);
-                    self.frames.push(fperm.as_ref().map(|fp| {
-                        let mut perm = Vec::with_capacity(n + off as usize);
-                        if has_bind {
-                            perm.push(0);
-                        }
-                        perm.extend(fp.iter().map(|p| p + off));
-                        perm
-                    }));
+                    self.frames.push(Frame {
+                        slots: n + off as usize,
+                        with: false,
+                        perm: fperm.as_ref().map(|fp| {
+                            let mut perm = Vec::with_capacity(n + off as usize);
+                            if has_bind {
+                                perm.push(0);
+                            }
+                            perm.extend(fp.iter().map(|p| p + off));
+                            perm
+                        }),
+                    });
                     let formals = self.fill(n, |_| FormalIr {
                         sym: Sym(0),
                         default: None,
@@ -1080,7 +1162,7 @@ impl De<'_, '_> {
             }
             14 => {
                 let scope = self.node();
-                self.frames.push(None);
+                self.frames.push(Self::plain(1, true));
                 let body = self.node();
                 self.frames.pop();
                 let pos = self.pos();
@@ -1138,6 +1220,100 @@ impl De<'_, '_> {
                 Ir::Const(Word::NULL)
             }
         };
+        self.nest -= 1;
         self.ev.arena.alloc(ir)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SRC: &str = "let f = a: with { x = a; }; [ x 1 true null \"s\" ./p 2.5 ]; in f 3\n";
+    const PATH: &[u8] = b"/t/test.nix";
+
+    /// A valid entry for `SRC`, with the evaluator that made it.
+    fn entry() -> (Evaluator, Vec<u8>, u32, u32) {
+        let mut ev = Evaluator::new();
+        let file = ev.add_file(PATH, SRC.as_bytes());
+        let base = ev.files[file.0 as usize].base;
+        let ir = ev
+            .compile_source(PATH, SRC.as_bytes().to_vec(), b"/t", None)
+            .expect("compile");
+        let bytes =
+            serialize(&ev, ir, base, &[], &crate::lint::allow::Allows::default()).expect("entry");
+        (ev, bytes, base, SRC.len() as u32)
+    }
+
+    /// Every case runs against one evaluator: building one and compiling
+    /// `SRC` costs far more than a decode.
+    #[test]
+    fn a_malformed_entry_is_a_miss_and_never_a_crash() {
+        let (mut ev, bytes, base, span) = entry();
+        let mut loads = |b: &[u8]| deserialize(&mut ev, b, base, span, false).is_some();
+        assert!(loads(&bytes), "the entry it made loads");
+
+        for n in 0..bytes.len() {
+            assert!(!loads(&bytes[..n]), "{n} bytes of {} load", bytes.len());
+        }
+
+        // the reviewer's case: a constant word of 8, which tag 0 used to
+        // hand to the evaluator as a pointer
+        assert!(!loads(b"IETSPIR2\x00\x00\x00\x08\x00\x00"));
+        for w in 0u8..64 {
+            // names=0, node tag 0 (a constant), word tag 0, the word, then
+            // no warnings and no allow lines
+            let b = [
+                b'I', b'E', b'T', b'S', b'P', b'I', b'R', b'2', 0, 0, 0, w, 0, 0,
+            ];
+            let ok = loads(&b);
+            let imm = Word::imm_from_bits(u64::from(w)).is_some();
+            assert_eq!(ok, imm, "tag 0 word {w}");
+        }
+
+        let mut corrupted = 0;
+        for i in MAGIC.len()..bytes.len() {
+            for b in [0x7f_u8, 0xff] {
+                let mut bad = bytes.clone();
+                bad[i] = b;
+                if bad != bytes && !loads(&bad) {
+                    corrupted += 1;
+                }
+            }
+        }
+        assert!(corrupted > 0, "a corrupt byte is a miss");
+
+        // a `Local` slot no frame has: the evaluator reads that slot with
+        // no bounds check of its own
+        let mut local = bytes.clone();
+        let at = local
+            .windows(3)
+            .position(|w| w[0] == 1 && w[1] == 0)
+            .expect("a Local node");
+        local[at + 2] = 0x7f;
+        assert!(!loads(&local), "a slot past the frame misses");
+
+        let mut huge = Vec::from(MAGIC.as_slice());
+        huge.push(0); // no names
+        huge.push(10); // a list
+        huge.extend_from_slice(&[0xff, 0xff, 0xff, 0xff, 0x0f]); // of u32::MAX items
+        assert!(!loads(&huge), "a count past the entry misses");
+    }
+
+    /// The nesting cap is sized for the evaluator's stack, not a test
+    /// thread's, so this case gets a stack of its own.
+    #[test]
+    fn nesting_past_the_cap_misses() {
+        let mut deep = Vec::from(MAGIC.as_slice());
+        deep.push(0); // no names
+        deep.extend(std::iter::repeat_n(17u8, MAX_NEST as usize + 16)); // Not(Not(…
+        let t = std::thread::Builder::new()
+            .stack_size(64 << 20)
+            .spawn(move || {
+                let (mut ev, _, base, span) = entry();
+                deserialize(&mut ev, &deep, base, span, false).is_some()
+            })
+            .expect("spawn");
+        assert!(!t.join().expect("decode"));
     }
 }

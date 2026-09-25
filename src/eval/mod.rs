@@ -429,7 +429,8 @@ impl Evaluator {
         let base = self.files[file.0 as usize].base;
         if let Some(bytes) = cache.read(&key) {
             let before = self.arena.bytes_allocated;
-            let loaded = crate::compile::cache::deserialize(self, &bytes, base, cache.stats);
+            let span = u32::try_from(src.len()).unwrap_or(u32::MAX);
+            let loaded = crate::compile::cache::deserialize(self, &bytes, base, span, cache.stats);
             self.arena
                 .stats
                 .note(Stat::Ir, self.arena.bytes_allocated - before);
