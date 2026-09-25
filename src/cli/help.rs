@@ -49,7 +49,7 @@ common:
   --no-tracing-cache    do not use the tracing cache
   --no-ir-cache         do not use the compiled-file cache
   --no-cache            do not use either of them
-  --cache-dir DIR       keep the tracing cache in DIR
+  --cache-dir DIR       keep the three cache stores in DIR
   --log-format F        internal-json: stderr as Nix JSON records
   --show-trace          put the trace in the JSON error records too
 

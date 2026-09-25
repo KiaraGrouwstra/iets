@@ -189,7 +189,7 @@ Against real Nix, on a NixOS flake with 31 locked inputs and a devShell:
 | run | wall |
 |---|---|
 | `nix eval --raw --option eval-cache false` | 4.28 s |
-| `ietsp eval --raw --no-cache` | 0.49 s |
+| `ietsp eval --raw --no-tracing-cache` | 0.49 s |
 | `ietsp eval --raw`, cache miss | 0.56 s |
 | `ietsp eval --raw`, cache hit | 0.02 s |
 

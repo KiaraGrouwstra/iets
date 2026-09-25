@@ -75,8 +75,9 @@ op that evaluates share one parser (`src/cli/mod.rs:parse_eval_args`).
 | `--show-trace` | put the trace into the JSON error records too |
 | `--workers N` | evaluator threads; `N >= 1` |
 | `--timings` | report each phase and the cache on stderr |
-| `--no-cache` | do not read or write the tracing cache |
+| `--no-tracing-cache` | do not read or write the tracing cache |
 | `--no-ir-cache` | do not read or write the compiled-file cache |
+| `--no-cache` | do not read or write either of them, as `IETSP_CACHE=0` |
 | `--cache-dir DIR` | keep the caches in `DIR/trace`, `DIR/ir` and `DIR/inputs` |
 | `--strict` | evaluate the whole value, not the top level only |
 | `--json` | print the value as JSON |
@@ -190,8 +191,10 @@ byte. `^` matches every package.
 | `--impure`, `--pure-eval`, `--option N V` | as above |
 | `--timings` | report the index cache on stderr; native name only |
 | `--workers N` | evaluator threads; native name only |
-| `--no-cache`, `--no-ir-cache` | do not use the index or the compiled-file cache; native name only |
-| `--cache-dir DIR` | keep both caches in `DIR`; native name only |
+| `--no-tracing-cache` | do not use the index, which the tracing cache holds; native name only |
+| `--no-ir-cache` | do not use the compiled-file cache; native name only |
+| `--no-cache` | do not use either of them; native name only |
+| `--cache-dir DIR` | keep the stores in `DIR`; native name only |
 | `--log-format F`, `--show-trace` | as above |
 
 The regular expressions are POSIX extended and case insensitive, as
@@ -278,9 +281,10 @@ over an unchanged package set is a hit. A hit validates the read set and
 answers from the index: for the pinned nixpkgs that is 56,170
 observations in 0.08 s against 6.5 s of evaluation, and an index of 4 MB.
 `ietsp search` takes the same cache and worker flags as `ietsp eval`:
-`--no-cache` evaluates again, `--no-ir-cache` compiles every import from
-source, `--cache-dir DIR` moves both caches, `--workers N` sets the
-evaluator threads, and `--timings` reports the hit or the miss.
+`--no-tracing-cache` evaluates again, `--no-ir-cache` compiles every import
+from source, `--no-cache` does both, `--cache-dir DIR` moves the stores,
+`--workers N` sets the evaluator threads, and `--timings` reports the hit
+or the miss.
 `IETSP_CACHE=0` and `IETSP_CACHE_DIR` (`docs/reference/settings.md`) are
 the same switches as settings. The classic `nix search` takes none of
 these flags — its command line is Nix's — and the environment variables
@@ -843,7 +847,8 @@ FLAKEREF` prints, byte for byte.
 | `--builder URL` | the Nix daemon: `daemon` (default), `unix:///path`, `ssh-ng://[user@]host` |
 | `--gc-root PATH` | link `PATH` to the environment's store path and register it as an indirect GC root |
 | `--json` | print what `nix print-dev-env --json` prints |
-| `--workers N`, `--timings`, `--no-cache`, `--cache-dir DIR` | as for `eval` |
+| `--workers N`, `--timings`, `--cache-dir DIR` | as for `eval` |
+| `--no-tracing-cache`, `--no-ir-cache`, `--no-cache` | as for `eval` |
 | `--log-format F`, `--show-trace` | as for `eval` |
 
 `FLAKEREF` defaults to `.`. Without `#attr` the shell is the first of

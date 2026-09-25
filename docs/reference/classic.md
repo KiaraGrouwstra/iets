@@ -313,7 +313,7 @@ Two triggers:
    `sourcehut:`, an IP-literal host), `outputOf`, import-from-derivation (`import`,
    `scopedImport`, `readFile`, `readDir`, `pathExists`, `readFileType` or
    `hashFile` on a derivation output), a second copy of a `toFile` text or
-   `.drv`, a read of a `.drv` this run made under `--no-cache`, and a flake
+   `.drv`, a read of a `.drv` this run made under `--no-tracing-cache`, and a flake
    whose `flake.lock` is
    missing or incomplete. Every other evaluation error is reported and
    exits 1, because the real nix would fail the same way and re-running it

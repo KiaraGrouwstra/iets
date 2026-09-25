@@ -353,7 +353,7 @@ site; the parser and compiler hooks add one branch per node kind.
 
 `IETSP_LINT=all=warn` against the defaults, same box (16-core EPYC with
 other builds running), `bench/ab.nu --runs 9 --skip-outpaths`, IR and
-tracing caches as the benchmark uses them (`--no-cache` keeps the IR
+tracing caches as the benchmark uses them (`--no-tracing-cache` keeps the IR
 cache), 2026-09-19:
 
 | workload | default | all=warn | change |

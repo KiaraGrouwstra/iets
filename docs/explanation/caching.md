@@ -12,6 +12,12 @@ in a user's home directory with no daemon and no signature.
 | tracing runs | `~/.cache/ietsp/trace` | one file in a directory | the whole command |
 | fetched inputs | `~/.cache/ietsp/inputs` | one directory | the store path the lock implies |
 
+Each cache has a flag that turns it off. `--no-tracing-cache` turns off
+the tracing cache. `--no-ir-cache` turns off the IR cache. `--no-cache`
+turns off both, and `IETSP_CACHE=0` and the `cache` setting are the same
+switch. No flag turns off the input store, because it is not a cache: a
+run needs the input's bytes. `--cache-dir DIR` moves all three stores.
+
 The ideas come from Mic92's nix-tarmac: a writer lock a caller may give up
 on, a touch interval so a hit writes nothing, a TTL sweep that runs at most
 once a day, and poison-and-wipe instead of repair.
@@ -217,7 +223,7 @@ the file and so spreads over the workers. What it buys:
 
 | run | wall (median) | user | sys |
 |---|---|---|---|
-| `--no-cache` | 1.92 s | 1.43 s | 0.47 s |
+| `--no-tracing-cache` | 1.92 s | 1.43 s | 0.47 s |
 | miss (recording and writing) | 1.98 s | 1.47 s | 0.48 s |
 | hit | 0.04 s | 0.02 s | 0.06 s |
 
