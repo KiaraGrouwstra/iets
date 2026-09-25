@@ -15,18 +15,18 @@ const THP_STALL: std::time::Duration = std::time::Duration::from_millis(6);
 pub struct Arena {
     ptr: *mut u8,
     end: *mut u8,
-    pub bytes_allocated: usize,
+    pub(crate) bytes_allocated: usize,
     /// Total chunk bytes mapped (and populated) so far.
-    pub mapped: usize,
-    pub stats: Stats,
+    pub(crate) mapped: usize,
+    pub(crate) stats: Stats,
     /// Advise huge pages until a chunk populate stalls in compaction.
     thp: bool,
     /// String bytes by content, and the context-free string object over
     /// them once one was made (EMPTY until then). nixpkgs builds the same
     /// text millions of times (docs/explanation/evaluation.md).
-    pub strings: FxHashMap<u64, StrEntry>,
+    pub(crate) strings: FxHashMap<u64, StrEntry>,
     /// Context slices by content.
-    pub ctxs: FxHashSet<&'static [super::value::Ctx]>,
+    pub(crate) ctxs: FxHashSet<&'static [super::value::Ctx]>,
 }
 
 /// Position of the bump pointer, to give back the last allocation.
@@ -44,7 +44,7 @@ impl Default for Arena {
 }
 
 impl Arena {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Arena {
             ptr: ptr::null_mut(),
             end: ptr::null_mut(),
@@ -58,7 +58,7 @@ impl Arena {
     }
 
     #[inline]
-    pub fn mark(&self) -> Mark {
+    pub(crate) fn mark(&self) -> Mark {
         Mark {
             ptr: self.ptr,
             end: self.end,
@@ -67,9 +67,16 @@ impl Arena {
     }
 
     /// Give back everything allocated since `m`, when it is still the
-    /// tail of the current chunk. The caller holds no reference to it.
+    /// tail of the current chunk.
+    ///
+    /// # Safety
+    ///
+    /// Every reference and `Word` over memory allocated since `m` must be
+    /// dead. The next allocation hands the same bytes out again, as a
+    /// different type; `alloc` would then return a second `&'static mut`
+    /// to memory a live reference still names.
     #[inline]
-    pub fn release(&mut self, m: Mark) {
+    pub(crate) unsafe fn release(&mut self, m: Mark) {
         if self.end == m.end {
             self.ptr = m.ptr;
             self.bytes_allocated = m.bytes;
@@ -77,7 +84,7 @@ impl Arena {
     }
 
     #[inline]
-    pub fn alloc_raw(&mut self, size: usize, align: usize) -> *mut u8 {
+    pub(crate) fn alloc_raw(&mut self, size: usize, align: usize) -> *mut u8 {
         debug_assert!(align <= 16);
         let start = (self.ptr as usize + align - 1) & !(align - 1);
         let new_end = start + size;
@@ -128,7 +135,7 @@ impl Arena {
     }
 
     #[inline]
-    pub fn alloc<T>(&mut self, v: T) -> &'static mut T {
+    pub(crate) fn alloc<T>(&mut self, v: T) -> &'static mut T {
         let p = self.alloc_raw(size_of::<T>(), align_of::<T>()) as *mut T;
         // SAFETY: p is fresh, aligned, and sized for T.
         unsafe {
@@ -138,7 +145,7 @@ impl Arena {
     }
 
     #[inline]
-    pub fn alloc_slice<T: Copy>(&mut self, items: &[T]) -> &'static mut [T] {
+    pub(crate) fn alloc_slice<T: Copy>(&mut self, items: &[T]) -> &'static mut [T] {
         if items.is_empty() {
             return &mut [];
         }
@@ -151,7 +158,7 @@ impl Arena {
     }
 
     /// Move the elements of `v` into one arena slice.
-    pub fn alloc_vec<T>(&mut self, v: Vec<T>) -> &'static [T] {
+    pub(crate) fn alloc_vec<T>(&mut self, v: Vec<T>) -> &'static [T] {
         let n = v.len();
         if n == 0 {
             return &[];
@@ -167,12 +174,12 @@ impl Arena {
     }
 
     #[inline]
-    pub fn alloc_bytes(&mut self, b: &[u8]) -> &'static [u8] {
+    pub(crate) fn alloc_bytes(&mut self, b: &[u8]) -> &'static [u8] {
         self.alloc_slice(b)
     }
 
     /// Concatenate byte slices into one arena allocation.
-    pub fn alloc_concat(&mut self, parts: &[&[u8]]) -> &'static [u8] {
+    pub(crate) fn alloc_concat(&mut self, parts: &[&[u8]]) -> &'static [u8] {
         let len: usize = parts.iter().map(|p| p.len()).sum();
         if len == 0 {
             return &[];
@@ -222,9 +229,9 @@ pub enum Stat {
     Ir,
 }
 
-pub const NSTATS: usize = 27;
+pub(crate) const NSTATS: usize = 27;
 
-pub const STAT_NAMES: [&str; NSTATS] = [
+pub(crate) const STAT_NAMES: [&str; NSTATS] = [
     "thunk",
     "thunk_app",
     "thunk_app2",
@@ -256,7 +263,7 @@ pub const STAT_NAMES: [&str; NSTATS] = [
 
 impl Stat {
     /// The census origin byte of an attrset producer.
-    pub fn attrs_origin(self) -> u8 {
+    pub(crate) fn attrs_origin(self) -> u8 {
         match self {
             Stat::AttrsLit => 1,
             Stat::AttrsUpd => 2,
@@ -280,7 +287,7 @@ pub struct Stats {
 
 impl Stats {
     #[inline]
-    pub fn note(&mut self, s: Stat, bytes: usize) {
+    pub(crate) fn note(&mut self, s: Stat, bytes: usize) {
         self.counts[s as usize] += 1;
         self.bytes[s as usize] += bytes as u64;
     }

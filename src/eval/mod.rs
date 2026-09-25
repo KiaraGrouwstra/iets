@@ -111,7 +111,7 @@ pub struct WellKnown {
 /// fresh arena, private counters (see docs/explanation/evaluation.md).
 #[derive(Clone)]
 pub struct Evaluator {
-    pub arena: Arena,
+    pub(crate) arena: Arena,
     pub interner: Interner,
     pub files: crate::parallel::shared::Files,
     pub globals: Globals,

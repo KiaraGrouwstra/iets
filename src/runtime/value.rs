@@ -919,7 +919,9 @@ impl Arena {
         if let Some(e) = self.strings.get(&hash).copied()
             && e.bytes == b
         {
-            self.release(m);
+            // SAFETY: the content was already interned, so `b` is dead from
+            // here on and nothing else was allocated since `m`.
+            unsafe { self.release(m) };
             return Interned {
                 bytes: e.bytes,
                 word: e.word,
