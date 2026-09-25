@@ -129,6 +129,78 @@ pub fn from_outputs(
     Ok(found)
 }
 
+// ---- an attribute path inside a value ----------------------------------------
+
+/// attr-path.cc:findAlongAttrPath. Auto-calls at every step, selects an
+/// attribute by name or a list element by index. Every command that takes
+/// `-A` or an attr-path fragment goes through this, so a file whose top
+/// level is a function is called with `--arg`/`--argstr` the same way
+/// everywhere (docs/cli.md).
+pub fn find_along_attr_path(
+    ev: &mut Evaluator,
+    root: Word,
+    attr_path: &str,
+    args: Word,
+) -> EvalResult<Word> {
+    let mut v = root;
+    let path = super::flake::parse_attr_path(attr_path)
+        .map_err(|e| Error::boxed(ErrorKind::Parse, e.to_string(), Pos::NONE))?;
+    for attr in path {
+        v = ev.auto_call(v, args)?;
+        v = ev.force(v)?;
+        match attr.parse::<u32>() {
+            Ok(idx) => {
+                let Some(l) = v.as_list() else {
+                    return Err(Error::boxed(
+                        ErrorKind::Type,
+                        format!(
+                            "the expression selected by the selection path '{attr_path}' should be a list"
+                        ),
+                        Pos::NONE,
+                    ));
+                };
+                let cells = l.cells();
+                let Some(cell) = cells.get(idx as usize) else {
+                    return Err(Error::boxed(
+                        ErrorKind::MissingAttr,
+                        format!("list index {idx} in selection path '{attr_path}' is out of range"),
+                        Pos::NONE,
+                    ));
+                };
+                v = cell.get();
+            }
+            Err(_) => {
+                let Some(attrs) = v.as_attrs() else {
+                    return Err(Error::boxed(
+                        ErrorKind::Type,
+                        format!(
+                            "the expression selected by the selection path '{attr_path}' should be a set"
+                        ),
+                        Pos::NONE,
+                    ));
+                };
+                if attr.is_empty() {
+                    return Err(Error::boxed(
+                        ErrorKind::Eval,
+                        format!("empty attribute name in selection path '{attr_path}'"),
+                        Pos::NONE,
+                    ));
+                }
+                let sym = ev.sym(attr.as_bytes());
+                let Some(a) = attrs.get(sym) else {
+                    return Err(Error::boxed(
+                        ErrorKind::MissingAttr,
+                        format!("attribute '{attr}' in selection path '{attr_path}' not found"),
+                        Pos::NONE,
+                    ));
+                };
+                v = a.cell.get();
+            }
+        }
+    }
+    Ok(v)
+}
+
 // ---- a derivation's attributes -----------------------------------------------
 
 fn parse_drv(p: &[u8]) -> EvalResult<StorePath> {

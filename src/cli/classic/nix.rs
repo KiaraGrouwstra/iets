@@ -408,12 +408,12 @@ fn resolve(ev: &mut Evaluator, n: &Nix, what: &str, cwd: &[u8]) -> EvalResult<Wo
     let attr = if what == "." { "" } else { what };
     if let Some(e) = &n.expr {
         let root = ev.eval_string(e, cwd)?;
-        return super::select(ev, root, attr, args);
+        return crate::api::installable::find_along_attr_path(ev, root, attr, args);
     }
     if let Some(f) = &n.file {
         let p = super::lookup_file_arg(ev, f, cwd)?;
         let root = ev.eval_file(&p, Pos::NONE)?;
-        return super::select(ev, root, attr, args);
+        return crate::api::installable::find_along_attr_path(ev, root, attr, args);
     }
     if what.contains('^') || what.as_bytes().starts_with(&ev.store_dir) {
         return Err(Error::boxed(

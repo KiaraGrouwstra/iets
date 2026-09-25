@@ -14,7 +14,7 @@ use std::process::{Command, exit};
 
 use crate::cli::{EvalFlags, abs_path, eval_flag, full_includes};
 use crate::config::Config;
-use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
+use crate::eval::{EvalResult, Evaluator, Pos};
 use crate::remote::worker::{DEFAULT_SOCKET, Options, Transport};
 use crate::runtime::Word;
 
@@ -208,66 +208,4 @@ pub fn eval_input(ev: &mut Evaluator, c: &Common, file: &str, cwd: &[u8]) -> Eva
         let p = lookup_file_arg(ev, file, cwd)?;
         ev.eval_file(&p, Pos::NONE)
     }
-}
-
-/// attr-path.cc:findAlongAttrPath. Auto-calls at every step, selects an
-/// attribute by name or a list element by index.
-pub fn select(ev: &mut Evaluator, root: Word, attr_path: &str, args: Word) -> EvalResult<Word> {
-    let mut v = root;
-    let path = crate::api::flake::parse_attr_path(attr_path)
-        .map_err(|e| Error::boxed(ErrorKind::Parse, e.to_string(), Pos::NONE))?;
-    for attr in path {
-        v = ev.auto_call(v, args)?;
-        v = ev.force(v)?;
-        match attr.parse::<u32>() {
-            Ok(idx) => {
-                let Some(l) = v.as_list() else {
-                    return Err(Error::boxed(
-                        ErrorKind::Type,
-                        format!(
-                            "the expression selected by the selection path '{attr_path}' should be a list"
-                        ),
-                        Pos::NONE,
-                    ));
-                };
-                let cells = l.cells();
-                let Some(cell) = cells.get(idx as usize) else {
-                    return Err(Error::boxed(
-                        ErrorKind::MissingAttr,
-                        format!("list index {idx} in selection path '{attr_path}' is out of range"),
-                        Pos::NONE,
-                    ));
-                };
-                v = cell.get();
-            }
-            Err(_) => {
-                let Some(attrs) = v.as_attrs() else {
-                    return Err(Error::boxed(
-                        ErrorKind::Type,
-                        format!(
-                            "the expression selected by the selection path '{attr_path}' should be a set"
-                        ),
-                        Pos::NONE,
-                    ));
-                };
-                if attr.is_empty() {
-                    return Err(Error::boxed(
-                        ErrorKind::Eval,
-                        format!("empty attribute name in selection path '{attr_path}'"),
-                        Pos::NONE,
-                    ));
-                }
-                let sym = ev.sym(attr.as_bytes());
-                let Some(a) = attrs.get(sym) else {
-                    return Err(Error::boxed(
-                        ErrorKind::MissingAttr,
-                        format!("attribute '{attr}' in selection path '{attr_path}' not found"),
-                        Pos::NONE,
-                    ));
-                };
-                v = a.cell.get();
-            }
-        }
-    }
-    Ok(v)
 }

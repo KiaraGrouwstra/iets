@@ -222,23 +222,13 @@ pub fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
             ));
         }
     };
-    if !a.args.is_empty() {
-        let args = auto_args(ev, &a.args, &cwd)?;
-        v = ev.auto_call(v, args)?;
-    }
-    if let Some(attr) = &a.attr {
-        for name in attr.split('.').filter(|n| !n.is_empty()) {
-            let attrs = ev.force_attrs(v, Pos::NONE, "while selecting an attribute")?;
-            let sym = ev.sym(name.as_bytes());
-            let Some(a) = attrs.get(sym) else {
-                return Err(Error::boxed(
-                    crate::eval::ErrorKind::MissingAttr,
-                    format!("attribute '{name}' in selection path '{attr}' not found"),
-                    Pos::NONE,
-                ));
-            };
-            v = a.cell.get();
-        }
+    let args = auto_args(ev, &a.args, &cwd)?;
+    match &a.attr {
+        Some(attr) => v = installable::find_along_attr_path(ev, v, attr, args)?,
+        // nix-instantiate.cc: no attribute path, so the top level is called
+        // only when there is something to call it with
+        None if !a.args.is_empty() => v = ev.auto_call(v, args)?,
+        None => {}
     }
     Ok(v)
 }

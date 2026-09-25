@@ -229,7 +229,7 @@ fn prepare(ev: &mut Evaluator, s: &Shell) -> crate::error::Result<Box<Ready>> {
             args
         };
         for attr in &s.c.flags.attrs {
-            let v = super::select(ev, root, attr, args)?;
+            let v = crate::api::installable::find_along_attr_path(ev, root, attr, args)?;
             let v = ev.force(v)?;
             let args = if takes_in_nix_shell(ev, v) {
                 with_in_nix_shell(ev, args)?

@@ -132,7 +132,7 @@ fn run(ev: &mut Evaluator, i: &Inst) -> crate::error::Result<Made> {
     for file in &i.c.files {
         let root = super::eval_input(ev, &i.c, file, &cwd)?;
         for attr in &i.c.flags.attrs {
-            let v = super::select(ev, root, attr, args)?;
+            let v = crate::api::installable::find_along_attr_path(ev, root, attr, args)?;
             if i.eval_only {
                 let v = if has_args { ev.auto_call(v, args)? } else { v };
                 print_value(ev, v, i, &mut text)?;

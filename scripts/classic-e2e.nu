@@ -361,6 +361,35 @@ def main [] {
   $ok = ($ok | append (cmp-case "nix eval --json -f FILE ATTR"
     (run-both $farm nix eval --json -f $"($d)/multi.nix" outputs)))
 
+  # --- a file whose top level is a function: the attribute path auto-calls it
+  # at every step, in the native names too (docs/plumbing.md)
+  let fun = $"($d)/fun.nix"
+  '{ a ? 1, b ? 2 }: { sum = a + b; name = "n-${toString a}"; }' | save -f $fun
+  for case in [
+    {label: "defaults", args: [], attr: sum}
+    {label: "--arg", args: [--arg a 5], attr: sum}
+    {label: "--argstr", args: [--argstr a x], attr: name}
+  ] {
+    $ok = ($ok | append (cmp-case $"auto-call a function file, ($case.label): nix-instantiate"
+      (run-both $farm nix-instantiate --eval ...$case.args $fun -A $case.attr)))
+    $ok = ($ok | append (cmp-case $"auto-call a function file, ($case.label): ietsp eval"
+      {ours: (^$ietsp eval ...$case.args $fun -A $case.attr | complete),
+       real: (^nix eval ...$case.args -f $fun $case.attr | complete)}))
+  }
+  # a required formal nobody supplied: all three fail the same way
+  let na = $"($d)/needs-arg.nix"
+  '{ a, b ? 2 }: { sum = a + b; }' | save -f $na
+  let first = {|s: string| $s | ansi strip | lines | where ($it | str starts-with "error:") | get -o 0 | default "" }
+  let na_real = (^nix eval -f $na sum | complete)
+  let na_eval = (^$ietsp eval $na -A sum | complete)
+  let na_inst = (^$"($farm)/nix-instantiate" --eval $na -A sum | complete)
+  let na_lines = [(do $first $na_real.stderr) (do $first $na_eval.stderr) (do $first $na_inst.stderr)]
+  $ok = ($ok | append (verdict
+    (([$na_real.exit_code $na_eval.exit_code $na_inst.exit_code] | all { $in == 1 })
+      and ($na_lines | uniq | length) == 1 and ($na_lines | first) != "")
+    "a required --arg that is missing: the same first error line everywhere"
+    $"exit real=($na_real.exit_code) eval=($na_eval.exit_code) inst=($na_inst.exit_code), lines ($na_lines | to json -r)"))
+
   # --- nix search: a package set with nested recurseForDerivations sets, an
   # attribute that throws, a bad `type` and a description with a newline.
   r#'let

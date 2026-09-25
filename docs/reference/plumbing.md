@@ -37,6 +37,15 @@ EXPR`, `FILE`, `FLAKEREF[#FRAGMENT]`, `-A PATH`, `--arg`, `--argstr`,
 `--cache-dir`, `--log-format`, `--show-trace`, `--dump-drvs`. One parser
 serves all of them (`api::EvalArgs`).
 
+`-A PATH` and a flake fragment walk the value through
+`api::installable::find_along_attr_path`, the port of
+`attr-path.cc:findAlongAttrPath`: every step auto-calls what it is
+standing on, so a file whose top level is a function (nixpkgs'
+`default.nix`) is called with the `--arg`/`--argstr` set before an
+attribute is taken from it. A formal with a default that is not supplied
+is fine; a required formal that is not supplied is the error. The classic
+names, `search` and every native command share that one walk.
+
 ## Naming roots
 
 `plan`, `missing` and `build` take derivation paths. An argument is `DRV`

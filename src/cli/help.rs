@@ -38,7 +38,8 @@ Run 'ietsp COMMAND --help' for the flags of a command.
 const INPUT: &str = "
 common:
   -E, --expr EXPR       evaluate EXPR instead of FILE
-  -A, --attr PATH       select the attribute PATH of the value
+  -A, --attr PATH       select the attribute PATH; a top-level function is
+                        called with the --args at every step of it
   --arg N EXPR, --argstr N STR  call a top-level function with N = EXPR/\"STR\"
   -I, --include P=PATH  make <P> resolve to PATH
   --impure, --pure-eval  turn pure evaluation off or on

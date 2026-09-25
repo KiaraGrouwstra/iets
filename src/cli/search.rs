@@ -212,7 +212,7 @@ fn cursors(ev: &mut Evaluator, s: &Search, cwd: &[u8]) -> EvalResult<Vec<(Word, 
             root
         };
         return Ok(vec![(
-            crate::cli::classic::select(ev, root, attr, args)?,
+            installable::find_along_attr_path(ev, root, attr, args)?,
             Vec::new(),
         )]);
     }

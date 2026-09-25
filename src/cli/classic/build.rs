@@ -97,7 +97,7 @@ fn run(ev: &mut Evaluator, b: &Build) -> crate::error::Result<Built> {
     for file in &b.c.files {
         let root = super::eval_input(ev, &b.c, file, &cwd)?;
         for attr in &b.c.flags.attrs {
-            let v = super::select(ev, root, attr, args)?;
+            let v = crate::api::installable::find_along_attr_path(ev, root, attr, args)?;
             installable::get_drvs_at(ev, v, args, &mut roots, &mut seen, attr)?;
         }
     }
