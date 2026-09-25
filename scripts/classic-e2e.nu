@@ -711,6 +711,66 @@ in {
   $ok = ($ok | append (cmp-case "nix-shell with no shell.nix or default.nix"
     (run-both $farm nix-shell --run "true")))
 
+  # --- nix-shell keeps what it realised under GC roots of its own. The inputs
+  # are not one store path, so the roots store takes one link each. The
+  # collection is simulated on a scratch chroot daemon; `nix collect-garbage`
+  # never runs on this machine's store. `NIX_BUILD_SHELL` keeps `<nixpkgs>`
+  # out of a fixture that has none.
+  let sdir = $"($tmp)/shellroot"
+  mkdir $sdir
+  r#'let
+  dep = derivation {
+    name = "shellroot-dep";
+    system = "@SYS@";
+    builder = "/bin/sh";
+    args = [ "-c" "echo building the dep >&2; echo @NONCE@ > $out" ];
+  };
+in derivation {
+  name = "shellroot-shell";
+  system = "@SYS@";
+  builder = "/bin/sh";
+  args = [ "-c" "echo hi > $out" ];
+  DEP = dep;
+}
+'# | str replace -a "@SYS@" (current-system) | str replace -a "@NONCE@" $"(random int 0..999999)" | save -f $"($sdir)/shell.nix"
+  # a short name: the daemon socket path has to fit in `sockaddr_un`
+  let sstore = $"($tmp)/sr"
+  mkdir $sstore
+  let ssock = (scratch-daemon $sstore --option substituters "" --option builders "")
+  let sscratch = $"local?root=($sstore)"
+  let scache = $"($tmp)/shellroots"
+  let senv = {IETSP_CACHE_DIR: $scache, NIX_BUILD_SHELL: (^bash -c 'command -v bash' | chomp)}
+  cd $sdir
+  let s1 = (with-env $senv { ^$"($farm)/nix-shell" --option store $"unix://($ssock)" --run 'true' | complete })
+  let slinks = (try { ls $"($scache)/roots" | get name | sort } catch { [] })
+  let slink = ($slinks | get -o 0 | default "")
+  let starget = (if ($slink | is-not-empty) { ^readlink $slink | chomp } else { "" })
+  let sheld = (if ($starget | is-not-empty) { (^nix-store --store $sscratch --query --roots $starget | complete).stdout | str contains $slink } else { false })
+  $ok = ($ok | append (verdict ($s1.exit_code == 0 and ($s1.stderr | str contains "building the dep") and ($slinks | length) == 1 and ($starget | str ends-with "-shellroot-dep") and $sheld)
+    "nix-shell roots the input it realised" $"exit ($s1.exit_code), ($slinks | length) links, '($slink)' -> '($starget)', held: ($sheld)"))
+  # the simulated collection keeps the rooted output, so the second entry
+  # builds nothing
+  let sgc = (^nix-store --store $sscratch --gc | complete)
+  let skept = ($"($sstore)($starget)" | path exists)
+  let s2 = (with-env $senv { ^$"($farm)/nix-shell" --option store $"unix://($ssock)" --run 'true' | complete })
+  $ok = ($ok | append (verdict ($sgc.exit_code == 0 and $skept and $s2.exit_code == 0 and (not ($s2.stderr | str contains "building the dep")))
+    "a collection leaves nix-shell's root, and the next entry builds nothing" $"kept ($skept), stderr ($s2.stderr | str substring 0..200)"))
+  # `ietsp cache gc` walks the roots store and releases the link
+  let scgc = (^$ietsp cache gc --ttl 0 --cache-dir $scache | complete)
+  $ok = ($ok | append (verdict ($scgc.exit_code == 0 and ($scgc.stdout | str contains $"($scache)/roots: 1 of 1 entries") and (not ($slink | path exists)))
+    "ietsp cache gc sweeps nix-shell's roots" $"exit ($scgc.exit_code), stdout ($scgc.stdout)"))
+  # the switch, and the proof that the root is what held the output: with
+  # `shell-gc-root` off, the same collection takes it and the next entry builds
+  let soff = $"($tmp)/shellroots-off"
+  let offenv = {IETSP_CACHE_DIR: $soff, NIX_BUILD_SHELL: ($senv.NIX_BUILD_SHELL)}
+  let s3 = (with-env $offenv { ^$"($farm)/nix-shell" --ietsp-option shell-gc-root false --option store $"unix://($ssock)" --run 'true' | complete })
+  let off_roots = ($"($soff)/roots" | path exists)
+  let sgc2 = (^nix-store --store $sscratch --gc | complete)
+  let s4 = (with-env $offenv { ^$"($farm)/nix-shell" --ietsp-option shell-gc-root false --option store $"unix://($ssock)" --run 'true' | complete })
+  $ok = ($ok | append (verdict ($s3.exit_code == 0 and (not $off_roots) and $sgc2.exit_code == 0 and ($s4.stderr | str contains "building the dep"))
+    "shell-gc-root = false keeps no root, and the collection takes the output" $"roots store ($off_roots), stderr ($s4.stderr | str substring 0..200)"))
+  cd $tmp
+
   # --- nix develop: the print-dev-env environment, then bash. This repository's
   # own flake is the only mkShell-shaped shell around (the fixture has no nixpkgs).
   let repo = ($env.FILE_PWD | path join ".." | path expand)

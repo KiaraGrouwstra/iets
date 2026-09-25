@@ -80,12 +80,18 @@ pub(crate) fn shell_root(
     transport: &crate::remote::worker::Transport,
     parts: &[&[u8]],
 ) -> Option<std::path::PathBuf> {
-    if !crate::session::Session::current().settings().shell_gc_root
-        || !matches!(transport, crate::remote::worker::Transport::Unix(_))
-    {
+    if !shell_roots(transport) {
         return None;
     }
     crate::cachefs::root_link(None, parts)
+}
+
+/// Whether a shell keeps a root of its own: the `shell-gc-root` setting
+/// (`docs/reference/settings.md`), and a local daemon, the only kind that takes
+/// one. Ask before doing the work a root needs.
+pub(crate) fn shell_roots(transport: &crate::remote::worker::Transport) -> bool {
+    crate::session::Session::current().settings().shell_gc_root
+        && matches!(transport, crate::remote::worker::Transport::Unix(_))
 }
 
 /// Links `out_path` at `link` in the roots store, registers the link with the

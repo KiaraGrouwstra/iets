@@ -198,6 +198,9 @@ struct Ready {
     drv: Derivation,
     bash: Bash,
     plan: Plan,
+    /// What the user asked for, resolved: the files (or expressions) and the
+    /// attribute paths. It names this project's roots ([`keep_inputs`]).
+    key: Vec<Vec<u8>>,
 }
 
 enum Bash {
@@ -213,13 +216,16 @@ fn prepare(ev: &mut Evaluator, s: &Shell) -> crate::error::Result<Box<Ready>> {
     let mut roots: Vec<Root> = Vec::new();
     let args = auto_args(ev, &s.c.flags.args, &cwd)?;
     let mut seen = HashSet::new();
+    let mut key: Vec<Vec<u8>> = vec![b"nix-shell".to_vec()];
     for file in &s.c.files {
         let root = if s.c.from_args {
+            key.push(file.as_bytes().to_vec());
             ev.eval_string(file, &cwd)?
         } else {
             let p = super::lookup_file_arg(ev, file, &cwd)?;
             let p = resolve_shell_expr_path(&p)
                 .map_err(|m| Error::boxed(ErrorKind::Eval, m, Pos::NONE))?;
+            key.push(p.clone());
             ev.eval_file(&p, Pos::NONE)?
         };
         let root = ev.force(root)?;
@@ -263,12 +269,14 @@ fn prepare(ev: &mut Evaluator, s: &Shell) -> crate::error::Result<Box<Ready>> {
             output: "out".into(),
         });
     }
+    key.extend(s.c.flags.attrs.iter().map(|a| a.as_bytes().to_vec()));
     let plan = apibuild::plan(ev, &Root::paths(&targets))?;
     Ok(Box::new(Ready {
         drv_path: roots[0].drv.clone(),
         drv,
         bash,
         plan,
+        key,
     }))
 }
 
@@ -410,10 +418,63 @@ fn realise(s: &Shell, transport: &Transport, options: &Options, r: Ready, cores:
             Err(e) => return e.report(),
         },
     };
+    keep_inputs(&mut w, &r, &shell, transport, &mut on_event);
     drop(w);
     match exec(s, &r.drv, &shell, cores) {
         Ok(()) => unreachable!("exec replaces the process"),
         Err(e) => e.report(),
+    }
+}
+
+/// Keeps what this entry realised alive: one link in ietsp's roots store per
+/// path, so the next `nix collect-garbage` leaves them and the next entry
+/// rebuilds nothing. `nix-shell` builds the derivation's inputs and not the
+/// derivation, and no store path holds them all, so there is one link each —
+/// the same idea nix-direnv has to spell out with `nix-store --add-root`.
+///
+/// The links are keyed on what the user asked for and on the path's place in
+/// the sorted list, so two projects keep two sets, and one project replaces
+/// its own set in place; a set that shrank leaves links the TTL sweep takes.
+/// Best effort and silent, as in [`crate::cli::devenv::keep_root`]: a root is
+/// not part of what `nix-shell` prints.
+fn keep_inputs(
+    w: &mut Worker,
+    r: &Ready,
+    shell: &str,
+    transport: &Transport,
+    on_event: &mut dyn FnMut(crate::remote::event::Event),
+) {
+    if !crate::cli::devenv::shell_roots(transport) {
+        return;
+    }
+    let key: Vec<&[u8]> = r.key.iter().map(|p| p.as_slice()).collect();
+    let mut paths: BTreeSet<String> = r.drv.input_srcs.iter().map(StorePath::to_string).collect();
+    for (drv, outputs) in &r.drv.input_drvs {
+        if outputs.is_empty() {
+            continue;
+        }
+        let Ok(map) = w
+            .conn
+            .query_derivation_output_map(&drv.to_string(), on_event)
+        else {
+            return;
+        };
+        paths.extend(outputs.iter().filter_map(|o| map.get(o).cloned().flatten()));
+    }
+    // `shell` is `<output>/bin/bash` when nixpkgs built the bash
+    if matches!(r.bash, Bash::Drv(_))
+        && let Some(out) = Path::new(shell).parent().and_then(Path::parent)
+    {
+        paths.insert(out.to_string_lossy().into_owned());
+    }
+    for (i, p) in paths.iter().enumerate() {
+        let index = i.to_string();
+        let mut parts = key.clone();
+        parts.push(index.as_bytes());
+        let Some(link) = crate::cachefs::root_link(None, &parts) else {
+            return;
+        };
+        crate::cli::devenv::keep_root(transport, &link, p, Some(&mut w.conn));
     }
 }
 
