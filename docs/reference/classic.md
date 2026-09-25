@@ -28,7 +28,7 @@ Registration stays local whatever `builder` says:
 - `nix-instantiate` registers the drvs and their sources on the local daemon,
   and `--add-root` links them there. It builds nothing, so the builder is
   irrelevant to it.
-- `nix-build` and `nix build` build on the builder. When that is not the local
+- `nix-build`, `nix build` and `nix fmt` build on the builder. When that is not the local
   daemon, the outputs' closure is copied back to the local store
   (`QueryPathInfo` and `NarFromPath` there, one `AddMultipleToStore` here)
   before `result` is linked and `AddIndirectRoot`ed, so the link names a path
@@ -172,7 +172,7 @@ files. See `docs/reference/commands.md`.
 
 ### `nix`
 
-Six subcommands; every other one execs the real `nix`.
+Seven subcommands; every other one execs the real `nix`.
 
 `nix eval [INSTALLABLE]`: `--json`, `--raw`, `--expr E`, `-f`/`--file FILE`,
 `--impure`, `--pure-eval`, `--no-pure-eval` (`docs/explanation/evaluation.md`: `nix`
@@ -267,6 +267,43 @@ Falls back on: `--phase`, `--unpack`, `--configure`, `--build`, `--check`,
 `--install`, `--installcheck`, `--profile`, `--redirect`, more than one
 installable, any other flag.
 
+`nix fmt [ARG...]` (nix's alias for `nix formatter run`) is `formatter.cc`.
+It evaluates `formatter.<system>` of the flake in the working directory —
+the installable is always `.`, never an argument — builds it and execs it.
+`app.cc:toApp` turns that derivation into a program: `<output>/bin/<main>`,
+where `main` is `meta.mainProgram`, else `pname`, else `name` without its
+version (`names.cc:DrvName`). Every positional argument is forwarded to the
+formatter. The first `--` is dropped and everything after it is an argument,
+flags included, which is how a flag reaches the formatter. `PRJ_ROOT` is set
+to the flake directory (prj-spec), so a formatter run from a subdirectory
+still sees the whole tree. A flake with no `formatter` output fails with
+nix's own message:
+
+```
+error: flake 'path:/home/you/proj' does not provide attribute 'formatter.x86_64-linux'
+```
+
+The formatter's closure comes to the local store, because the formatter runs
+here whatever `builder` built it, and the output is linked in ietsp's roots
+store at `~/.cache/ietsp/roots/<key>`, keyed on the flake directory and
+`formatter.<system>`. That link is registered as an indirect GC root on the
+local daemon, so the formatter is not swept and rebuilt between runs. The
+idea is Mic92's flake-fmt. A root is a claim on the store and not part of
+the answer, so a daemon that will not take one is a warning and the
+formatter still runs. `ietsp cache gc` drops the roots nothing has used for
+its TTL (`docs/explanation/caching.md`).
+
+The run also goes through the tracing cache, so a second `nix fmt` with
+nothing changed neither evaluates nor builds; a formatter that rewrote a
+file to the same bytes is still a hit, because the read set holds content
+hashes.
+
+There is no native `ietsp fmt`. The classic name is the one users reach
+for, and a second spelling would add nothing.
+
+Falls back on: `--json`, `nix formatter build`, `nix formatter run`, a
+working directory with no `flake.nix`, and any other flag.
+
 `nix flake prefetch-inputs [FLAKEREF]` (default `.`), plus the global flags,
 is `flake-prefetch-inputs.cc`: it fetches every locked input that the root
 of `flake.lock` reaches, on up to 25 threads (the default of
@@ -292,7 +329,7 @@ non-local flake reference such as `nixpkgs#hello`, an installable that is
 not a derivation under `nix build`, `--arg`/`--argstr` with a flake (nix
 refuses that), `nix flake …` but `prefetch-inputs`, `nix run`, `nix shell`,
 `nix profile`, `nix store`, `nix copy`, `nix repl`, `nix log`,
-`nix why-depends`, `nix fmt`, every other subcommand, and any flag not
+`nix why-depends`, every other subcommand, and any flag not
 listed above.
 
 `nix store prefetch-file` and `nix-prefetch-url` keep falling back on

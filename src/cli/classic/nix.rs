@@ -1,7 +1,7 @@
 //! `nix` (src/nix): the subcommands ietsp implements — `eval`, `build`,
-//! `print-dev-env`, `develop` and `flake prefetch-inputs` — with the same exec
-//! fallback as the other classic names for everything else. See
-//! `docs/reference/classic.md`.
+//! `print-dev-env`, `develop`, `search`, `fmt` and `flake prefetch-inputs` —
+//! with the same exec fallback as the other classic names for everything else.
+//! See `docs/reference/classic.md`.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -76,6 +76,7 @@ pub fn main(argv: &[String]) -> i32 {
         "build" => build_main(argv, &rest),
         "print-dev-env" => dev_env_main(argv, &rest),
         "develop" => super::develop::main(argv, &rest),
+        "fmt" => super::fmt::main(argv, &rest),
         "search" => crate::cli::search::classic_main(argv, &rest),
         "flake" if rest.get(k).is_some_and(|s| s == "prefetch-inputs") => {
             rest.remove(k);

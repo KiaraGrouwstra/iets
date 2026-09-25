@@ -176,7 +176,7 @@ fn dev_env_hit(d: &DevEnvArgs, hit: &crate::devenv::CachedResult) -> crate::erro
 
 /// indirect-root-store.cc:addPermRoot: a symlink at `root` to `out_path`, then
 /// `AddIndirectRoot`. Nothing happens when the link already points there.
-fn ensure_gc_root(
+pub(crate) fn ensure_gc_root(
     transport: &crate::remote::worker::Transport,
     root: &std::path::Path,
     out_path: &str,
