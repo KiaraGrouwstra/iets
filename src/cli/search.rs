@@ -30,7 +30,6 @@ struct Entry {
     desc: Vec<u8>,
 }
 
-#[derive(Default)]
 struct Search {
     c: Common,
     json: bool,
@@ -44,6 +43,27 @@ struct Search {
     exclude: Vec<String>,
     native: bool,
     timings: bool,
+    /// `--no-cache`, `--no-ir-cache`, `--cache-dir` and `--workers`, the
+    /// block every evaluating command shares; `key_args` carries them on.
+    cache: EvalArgs,
+}
+
+impl Default for Search {
+    fn default() -> Search {
+        Search {
+            c: Common::default(),
+            json: false,
+            pretty: None,
+            expr: None,
+            file: None,
+            what: None,
+            regexes: Vec::new(),
+            exclude: Vec::new(),
+            native: false,
+            timings: false,
+            cache: EvalArgs::new(),
+        }
+    }
 }
 
 /// `nix search INSTALLABLE REGEX...`; `argv` is the whole command line, for
@@ -87,6 +107,12 @@ fn parse(argv: &[String], native: bool) -> Result<Search, String> {
             "--expr" => s.expr = Some(a.value(&t)?),
             "-f" | "--file" => s.file = Some(a.value(&t)?),
             "--timings" if native => s.timings = true,
+            // the cache flags are ietsp's own, so a classic `nix search`
+            // keeps rejecting them and falls back
+            _ if native
+                && crate::cli::cache_flag(&mut s.cache, &t, || {
+                    a.value(&t).unwrap_or_else(|e| help::arg_error(e))
+                }) => {}
             _ => {
                 if !global_flag(&mut s.c, &mut a, &t)? {
                     if t.starts_with('-') && t != "-" {
@@ -147,8 +173,10 @@ fn run(mut s: Search, classic: Option<&[String]>) -> i32 {
             Err(e) => return report(&ev, &e),
         }
     }
+    let workers = s.cache.workers;
+    crate::api::install_ir_cache(&mut ev, &s.cache);
     let s = Arc::new(s);
-    let r = Run::on(ev).cached(&key_args(&s), "search");
+    let r = Run::on(ev).workers(workers).cached(&key_args(&s), "search");
     let index = match r.hit(|c| {
         c.replay_warnings();
         decode(&c.store.read(&c.key, crate::trace::store::RESULT)?)
@@ -563,6 +591,10 @@ fn key_args(s: &Search) -> EvalArgs {
     a.includes = s.c.flags.includes.clone();
     a.pure = s.c.flags.pure;
     a.timings = s.timings;
+    a.no_cache = s.cache.no_cache;
+    a.no_ir_cache = s.cache.no_ir_cache;
+    a.cache_dir = s.cache.cache_dir.clone();
+    a.workers = s.cache.workers;
     a
 }
 

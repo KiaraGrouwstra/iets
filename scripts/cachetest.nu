@@ -14,6 +14,16 @@ def --wrapped run-eval [ietsp: string, ...args: string]: nothing -> record {
   }
 }
 
+# ietsp search --timings over FILE with EXTRA flags: rc, stdout, the `cache:` lines.
+def search-run [ietsp: string, file: string, dir: string, extra: list<string>]: nothing -> record {
+  let r = (^$ietsp search -f $file --cache-dir $dir --timings ...$extra hello | complete)
+  {
+    rc: $r.exit_code
+    out: ($r.stdout | chomp)
+    status: ($r.stderr | lines | where $it =~ '^cache:' | str join " ")
+  }
+}
+
 # name, mtime and size of every file under DIR
 def fingerprint [dir: string]: nothing -> list {
   glob $"($dir)/**/*" | where ($it | path type) == "file" | sort | each {|f| ls -l $f | select name modified size | first }
@@ -97,6 +107,24 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let r2 = (^$ietsp eval --strict --timings $t | complete)
   let hits = ($r2.stderr | lines | where ($it | str contains "cache: hit") | length)
   $res ++= [(verdict ($o1 == ($r2.stdout | chomp) and $hits == 1) "lang test hit prints identical output" "lang test hit")]
+
+  # search takes the same cache and worker flags as eval (docs/search.md)
+  let pkgs = $"($work)/src/pkgs.nix"
+  '{ }: { hello = derivation { name = "hello-1"; system = builtins.currentSystem; builder = "/bin/sh"; args = [ ]; } // { meta.description = "greets"; }; }' + "\n" | save -f $pkgs
+  let sdir = $"($work)/searchcache"
+  let s1 = (search-run $ietsp $pkgs $sdir [])
+  let s2 = (search-run $ietsp $pkgs $sdir [])
+  $res ++= [(verdict ($s1.rc == 0 and $s2.rc == 0 and ($s1.status =~ 'miss') and ($s2.status | str contains "cache: hit") and $s1.out == $s2.out) "search --cache-dir: the index misses then hits there" $"search cache-dir \(($s1.status) / ($s2.status)\)")]
+  let before = (fingerprint $sdir)
+  let s3 = (search-run $ietsp $pkgs $sdir [--no-cache])
+  $res ++= [(verdict ($s3.rc == 0 and $s3.status == "" and (fingerprint $sdir) == $before and $s3.out == $s1.out) "search --no-cache: no cache line, nothing read or written" $"search --no-cache \(($s3.status)\)")]
+  let idir = $"($work)/searchcache-noir"
+  let s4 = (search-run $ietsp $pkgs $idir [--no-ir-cache])
+  $res ++= [(verdict ($s4.rc == 0 and not ($"($idir)/ir" | path exists)) "search --no-ir-cache: no compiled-file cache" $"search --no-ir-cache, ir dir exists=($"($idir)/ir" | path exists)")]
+  let s5 = (search-run $ietsp $pkgs $sdir [--workers 2])
+  $res ++= [(verdict ($s5.rc == 0 and $s5.out == $s1.out) "search --workers N: the same results" $"search --workers \(rc=($s5.rc)\)")]
+  let s6 = (^$ietsp search -f $pkgs --workers 0 hello | complete)
+  $res ++= [(verdict ($s6.exit_code == 2 and ($s6.stderr | str contains "--workers wants a number >= 1")) "search --workers 0 is a usage error" $"search --workers 0 \(rc=($s6.exit_code): ($s6.stderr)\)")]
 
   let fail = if ($res | all {|r| $r }) { 0 } else { 1 }
   print $"pass=($res | where $it | length) fail=($fail)"

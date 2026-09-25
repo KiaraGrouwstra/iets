@@ -183,6 +183,9 @@ byte. `^` matches every package.
 | `--arg N EXPR`, `--argstr N STR`, `-I P=PATH` | as above |
 | `--impure`, `--pure-eval`, `--option N V` | as above |
 | `--timings` | report the index cache on stderr; native name only |
+| `--workers N` | evaluator threads; native name only |
+| `--no-cache`, `--no-ir-cache` | do not use the index or the compiled-file cache; native name only |
+| `--cache-dir DIR` | keep both caches in `DIR`; native name only |
 | `--log-format F`, `--show-trace` | as above |
 
 The regular expressions are POSIX extended and case insensitive, as
@@ -268,10 +271,14 @@ path, `pure-eval` and the build id — not on the regexes, so any search
 over an unchanged package set is a hit. A hit validates the read set and
 answers from the index: for the pinned nixpkgs that is 56,170
 observations in 0.08 s against 6.5 s of evaluation, and an index of 4 MB.
-`IETSP_CACHE=0` evaluates again, `IETSP_CACHE_DIR` moves the store
-(`docs/reference/settings.md`), and `ietsp search --timings` reports the
-hit or the miss. The classic name takes no `--timings`; the environment
-variables work under both names.
+`ietsp search` takes the same cache and worker flags as `ietsp eval`:
+`--no-cache` evaluates again, `--no-ir-cache` compiles every import from
+source, `--cache-dir DIR` moves both caches, `--workers N` sets the
+evaluator threads, and `--timings` reports the hit or the miss.
+`IETSP_CACHE=0` and `IETSP_CACHE_DIR` (`docs/reference/settings.md`) are
+the same switches as settings. The classic `nix search` takes none of
+these flags — its command line is Nix's — and the environment variables
+work under both names.
 
 **Measured.** The pinned nixpkgs
 (`/nix/store/ah3pxz4xa52hd6vhbx17vcsci0b8bmbr-source`, 30,000 packages)

@@ -101,7 +101,10 @@ REGEX ('ietsp help commands'). INSTALLABLE is a flake reference, a path or
   --arg N EXPR, --argstr N STR  call a top-level function with N = EXPR/\"STR\"
   -I, --include P=PATH  make <P> resolve to PATH
   --impure, --pure-eval  turn pure evaluation off or on
+  --workers N           evaluator threads (default: the cores, at most 4)
   --timings             report the index cache on stderr
+  --no-cache, --no-ir-cache  do not use the index or the compiled-file cache
+  --cache-dir DIR       keep the index in DIR
   --log-format F        internal-json: stderr as Nix JSON records
   --show-trace          put the trace in the JSON error records too
 ";

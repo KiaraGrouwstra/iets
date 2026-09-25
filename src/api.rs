@@ -173,13 +173,20 @@ pub fn configure_lints(ev: &mut Evaluator, a: &EvalArgs) -> Result<(), Box<Error
     Ok(())
 }
 
-/// Applies the shared `eval` settings and evaluates the input, `--arg`s and `-A` included.
-pub fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
-    configure_lints(ev, &a)?;
+/// Installs the compiled-file cache these arguments ask for (`--no-ir-cache`,
+/// `--cache-dir`). A frontend that evaluates without `evaluate` calls it
+/// itself (docs/caches.md).
+pub fn install_ir_cache(ev: &mut Evaluator, a: &EvalArgs) {
     if !a.no_ir_cache {
         ev.ir_cache = crate::compile::cache::IrCache::locate(a.cache_dir.as_deref(), a.timings)
             .map(std::sync::Arc::new);
     }
+}
+
+/// Applies the shared `eval` settings and evaluates the input, `--arg`s and `-A` included.
+pub fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
+    configure_lints(ev, &a)?;
+    install_ir_cache(ev, &a);
     if a.xp_features.iter().any(|f| f == "parse-toml-timestamps") {
         crate::builtins::text::set_parse_toml_timestamps(true);
     }

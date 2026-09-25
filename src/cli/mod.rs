@@ -85,6 +85,25 @@ pub fn eval_flag(
     Ok(true)
 }
 
+/// The cache and worker flags every evaluating command shares. `true`: `s`
+/// was one of them and `next` gave its value.
+pub fn cache_flag(a: &mut EvalArgs, s: &str, mut next: impl FnMut() -> String) -> bool {
+    match s {
+        "--no-cache" => a.no_cache = true,
+        "--no-ir-cache" => a.no_ir_cache = true,
+        "--cache-dir" => a.cache_dir = Some(next()),
+        "--workers" => {
+            let v = next();
+            a.workers =
+                v.parse().ok().filter(|n| *n >= 1).unwrap_or_else(|| {
+                    arg_error(format!("--workers wants a number >= 1, got '{v}'"))
+                });
+        }
+        _ => return false,
+    }
+    true
+}
+
 pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
     let mut a = EvalArgs::new();
     let mut f = EvalFlags::default();
@@ -100,21 +119,13 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
             "--strict" => a.strict = true,
             "--json" => a.json = true,
             "--raw" => a.raw = true,
+            _ if cache_flag(&mut a, s, &mut next) => {}
             "--timings" => a.timings = true,
-            "--no-cache" => a.no_cache = true,
-            "--no-ir-cache" => a.no_ir_cache = true,
-            "--cache-dir" => a.cache_dir = Some(next()),
             "-E" | "--expr" => {
                 let e = next();
                 set_input(&mut a, Input::Expr(e));
             }
             "--dump-drvs" => a.dump_drvs = Some(next()),
-            "--workers" => {
-                let v = next();
-                a.workers = v.parse().ok().filter(|n| *n >= 1).unwrap_or_else(|| {
-                    arg_error(format!("--workers wants a number >= 1, got '{v}'"))
-                });
-            }
             "--lint" => a.lints.push(parse_lint_flag(&next())),
             "--lint-root" => a.lint_roots.push(next()),
             "--lint-scope" => a.lint_scope = Some(parse_lint_scope(&next())),
