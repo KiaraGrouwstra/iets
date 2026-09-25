@@ -1,75 +1,91 @@
 # ietsp
 
-A from-scratch Nix evaluator in Rust, and a client that builds what it
-evaluates on a Nix daemon or a nix-grpc-store service. See ARCHITECTURE.md;
-the test scripts are listed there.
+A Nix evaluator written from scratch in Rust, and a build client that ships
+what it evaluates to a Nix daemon.
+
+It is a drop-in: it answers to the classic command names, computes the same
+store paths as Nix 2.34.8, and hands anything it does not implement to the
+real `nix`. It keeps no store of its own.
 
 ```
 nix develop -c cargo build --release
 ./target/release/ietsp eval --strict -E '1 + 1'
-./target/release/ietsp --help   # the commands; ietsp COMMAND --help for its flags
-nix flake check   # test, clippy, fmt, examples, langtests, partest, module
-scripts/difftest.nu -I nixpkgs=/path -E '(import <nixpkgs> {}).hello.drvPath'
-bench/run.nu nixos-desktop
-
-# remote builds: evaluate in memory, ship only what the daemon lacks, over the Nix worker protocol
-./target/release/ietsp build --timings -I nixpkgs=/path -E '(import <nixpkgs> {}).hello'
-./target/release/ietsp build --builder ssh-ng://host -A hello /path/to/nixpkgs/default.nix
-./target/release/ietsp build --builder unix:///path/to/socket --no-build FILE.nix   # upload only, no realise
-./target/release/ietsp build /nix/store/<hash>-<name>.drv   # legacy: closure from the local store
-./target/release/ietsp build --builder 'grpc://farm.numtide.com:50051?token-file=./jwt' --fetch-to out FILE.nix   # nix-grpc-store, natively
-
-# locked flakes: a missing input is substituted by the daemon or downloaded and
-# unpacked by ietsp; only git and hg inputs still run nix (docs/flakes.md)
-./target/release/ietsp eval --raw .#packages.x86_64-linux.default.drvPath
-
-# nix-fast-build's flags, one process: eval and build overlap, results as json or junit
-./target/release/ietsp fast-build --flake .#checks --skip-cached --result-file r.json
-
-# the hash of a URL or of a fixed-output derivation, for nurl and nix-prefetch
-./target/release/ietsp prefetch --unpack https://example.org/src.tar.gz   # docs/prefetch.md
-./target/release/ietsp prefetch -E '(import <nixpkgs> {}).hello.src'
-
-# package search, `nix search`'s output; the index is cached, so the second run
-# over the same package set does not evaluate (docs/search.md)
-./target/release/ietsp search -I nixpkgs=/path ripgrep
-
-# why two derivations differ, in place of nix-diff (docs/diff.md); exit 1 when they do
-./target/release/ietsp diff -A hello -A figlet /path/to/nixpkgs/default.nix
-./target/release/ietsp diff --json /nix/store/<a>.drv /nix/store/<b>.drv
-
-# .envrc: what `nix print-dev-env` prints, byte-exact, from the in-memory shell drv
-./target/release/ietsp print-dev-env --gc-root .direnv/ietsp-env .   # see docs/direnv.md
-
-# classic mode: the same binary as nix-instantiate, nix-build, nix-eval-jobs and nix,
-# exec'ing the real nix for anything it does not implement (docs/classic.md)
-nix build .#classic && ./result/bin/nix-instantiate -A hello /path/to/nixpkgs
-./target/release/ietsp nix-build -A hello /path/to/nixpkgs   # same, without symlinks
+./target/release/ietsp --help
 ```
 
-See `docs/remote-build.md` and `docs/fast-build.md` (every build path shares
-one dispatcher). NixOS hosts: import
-`nixosModules.default` and keep `use flake` in `.envrc` (`docs/direnv.md`).
+## Why
 
-Runs are cached: a second `ietsp eval` or `ietsp build` of the same
-command validates the files, directories and environment variables the
-first run read and replays the result (nixos-desktop: 40 ms instead of
-1 s). `--no-cache` or `IETSP_CACHE=0` turns it off, `--timings` reports
-hit or miss. Design and limits: `docs/tracing-cache.md`.
+**It is about 2.5× cheaper and 2 to 4× faster.** Measured on an idle 32-core
+machine against Nix 2.34.8, same nixpkgs, identical drvPaths:
 
-## Results (2026-09-16)
+| workload | ietsp | nix 2.34.8 |
+|---|---:|---:|
+| nixos-minimal, instructions | 7.7 G | 19.4 G |
+| nixos-desktop, instructions | 10.0 G | 25.8 G |
+| nixos-desktop, wall, 1 worker | 0.98 s | 2.20 s |
+| nixos-desktop, wall, 4 workers | **0.59 s** | 2.20 s |
 
-`bench/run.nu nixos-desktop nixos-minimal`, 16 vCPU EPYC Genoa, nixpkgs
-26.11pre1059574.a831408e6378, hyperfine 5 runs, all three evaluators produce
-the same drvPath. ietsp runs with its default of 4 workers.
+**Runs are cached.** A second `eval` or `build` of the same command validates
+the files, directories and environment variables the first run read, then
+replays the result — nixos-desktop in 40 ms instead of 1 s. Unlike Nix's eval
+cache this works for `--expr` and `--file`, not only for flakes.
+See `docs/tracing-cache.md`.
 
-| workload | nix 2.35 | fix 0.3 (16 threads) | ietsp |
-|---|---|---|---|
-| nixos-desktop | 3.58 s | 2.13 s (1.55 s best) | 1.04 s |
-| nixos-minimal | 2.86 s | 1.01 s | 0.85 s |
+**It evaluates in parallel** without changing a single result
+(`docs/parallel.md`), and **it builds what it evaluated from memory** —
+derivations never touch the disk on the way to the daemon
+(`docs/remote-build.md`).
 
-Single-threaded ietsp: 1.67 s desktop, 1.32 s minimal. Details in
-`docs/parallel.md`.
+## One binary, many tools
+
+Each of these replaces a separate tool, sharing one evaluator and one cache:
+
+```sh
+ietsp build -A hello nixpkgs/default.nix        # nix-build, plus --builder ssh-ng:// or grpc://
+ietsp fast-build --flake .#checks --skip-cached # nix-fast-build, one process
+ietsp eval-jobs --flake .#hydraJobs             # nix-eval-jobs
+ietsp search -I nixpkgs=/path ripgrep           # nix search, byte-identical, index cached
+ietsp diff -A hello -A figlet nixpkgs/default.nix   # nix-diff; --closure is nvd
+ietsp prefetch --unpack https://example.org/x.tar.gz # nurl, nix-prefetch
+ietsp print-dev-env --gc-root .direnv/env .     # nix-direnv's `use flake`
+```
+
+Under the classic names — `nix-instantiate`, `nix-build`, `nix-shell`,
+`nix-eval-jobs`, `nix-fast-build`, `nix` — the same binary behaves as that
+command and execs the real `nix` for the rest (`docs/classic.md`).
+
+A wrong fixed-output hash can be rewritten in place, with a prompt on a
+terminal and silently in CI (`fix-hashes` in `docs/settings.md`). NixOS hosts
+import `nixosModules.default` and set `ietsp.classic.enable` to put those
+names ahead of `nix` in the system path (`docs/classic.md`).
+
+## For programs and agents
+
+Every command speaks JSON and returns stable exit codes, and errors carry a
+code, a position and often the fix (`docs/cli.md`). `--log-format
+internal-json` emits Nix's own activity records, so `nix-output-monitor` works
+unchanged.
+
+`ietsp plumbing` is the low-level surface underneath the user-facing commands:
+one operation per command, JSON in and out, composable
+(`ietsp plumbing resolve --dump-drvs d x.nix | ietsp plumbing plan --roots -`).
+There is one implementation of each capability; `tests/layering.rs` enforces
+it. See `docs/plumbing.md`.
+
+The crate is also a library. `api::value::{Eval, Value}` is a safe,
+lifetime-checked handle on the evaluator, modelled on Nix's own C API, and
+nothing process-global sits in the way of embedding two of them
+(`docs/library.md`).
+
+## Status
+
+Private and under active development. The hard invariant is drvPath parity
+with Nix 2.34.8 on NixOS systems from nixpkgs; `nix flake check` runs the unit
+tests, clippy, fmt, the `tests/lang` suite and the layering rule, and the
+scripts under `scripts/` compare against a real `nix` byte for byte. Where
+behaviour differs on purpose, `docs/divergences.md` records it.
+
+`ARCHITECTURE.md` is the map. `docs/` holds one file per subsystem.
 
 ## Licence
 
