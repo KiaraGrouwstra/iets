@@ -15,7 +15,7 @@
 //!
 //! `view` and the getters over it dereference a pointer-shaped word. They
 //! are sound only for a word this crate built, so the bit pattern is
-//! private and every constructor is `pub(crate)`. Outside the crate a
+//! private and every operation on it is `pub(crate)`. Outside the crate a
 //! `Word` is an opaque token: a frontend takes one from `api::evaluate`,
 //! passes it back to the library, and reads it through `api::value`
 //! (docs/reference/library.md). Inside the crate a pointer-shaped word
@@ -33,6 +33,14 @@ use super::value::{LambdaObj, MapDesc, ThunkApp2Obj, ThunkAppObj, ThunkObj};
 ///
 /// ```compile_fail,E0423
 /// let w = ietsp::runtime::Word(8);
+/// ```
+///
+/// and the word cannot be dereferenced:
+///
+/// ```compile_fail,E0624
+/// fn f(w: ietsp::runtime::Word) -> ietsp::runtime::Value {
+///     w.view()
+/// }
 /// ```
 ///
 /// A frontend takes a `Word` from `api::evaluate`, passes it back to the

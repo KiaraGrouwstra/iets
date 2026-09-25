@@ -46,7 +46,7 @@ pub enum ValueType {
 }
 
 impl ValueType {
-    pub fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             ValueType::Int => "an integer",
             ValueType::Float => "a float",
@@ -60,7 +60,7 @@ impl ValueType {
         }
     }
 
-    pub fn type_of(self) -> &'static str {
+    pub(crate) fn type_of(self) -> &'static str {
         match self {
             ValueType::Int => "int",
             ValueType::Float => "float",
@@ -110,7 +110,7 @@ pub enum Ctx {
 impl Ctx {
     /// A store reference, as Nix's context holds: not an `Impure` marker.
     #[inline]
-    pub fn is_store(&self) -> bool {
+    pub(crate) fn is_store(&self) -> bool {
         !matches!(self, Ctx::Impure(_))
     }
 }
@@ -175,15 +175,15 @@ pub struct UnionTail {
 
 /// Leaves a union may hold before `//` flattens its left side first:
 /// bounds a lookup miss to this many probes.
-pub const MAX_LEAVES: u8 = 8;
+pub(crate) const MAX_LEAVES: u8 = 8;
 /// Left operands with fewer entries are merged flat: the copy is cheaper
 /// than the union plus an extra probe.
-pub const UNION_MIN: usize = 8;
+pub(crate) const UNION_MIN: usize = 8;
 
 /// Flat leaves a set contributes to a union: itself, its cached flat
 /// copy, or its own leaves.
 #[inline]
-pub fn for_each_leaf(a: &'static AttrsObj, mut f: impl FnMut(&'static AttrsObj)) {
+pub(crate) fn for_each_leaf(a: &'static AttrsObj, mut f: impl FnMut(&'static AttrsObj)) {
     if a.kind == Kind::Attrs {
         f(a)
     } else if let Some(flat) = a.flattened() {
@@ -196,7 +196,7 @@ pub fn for_each_leaf(a: &'static AttrsObj, mut f: impl FnMut(&'static AttrsObj))
 }
 
 #[inline]
-pub fn leaf_count(a: &'static AttrsObj) -> usize {
+pub(crate) fn leaf_count(a: &'static AttrsObj) -> usize {
     if a.kind == Kind::Attrs || a.flattened().is_some() {
         1
     } else {
@@ -302,7 +302,7 @@ pub struct MapDesc {
 
 impl MapDesc {
     #[inline]
-    pub fn state(&self, i: usize) -> &'static Cell {
+    pub(crate) fn state(&self, i: usize) -> &'static Cell {
         debug_assert!(i < self.out.len());
         // SAFETY: `mk_map_attrs` placed one cell per entry after the header.
         unsafe { &*((self as *const MapDesc).add(1) as *const Cell).add(i) }
@@ -322,7 +322,7 @@ const _: () = assert!(size_of::<LambdaObj>() == 16);
 impl ThunkObj {
     /// The IR, valid while `state` is not EMPTY.
     #[inline]
-    pub fn ir(&self) -> &'static Ir {
+    pub(crate) fn ir(&self) -> &'static Ir {
         // SAFETY: `mk_thunk` stored an arena IR pointer in `code`; it is
         // overwritten only when `state` becomes EMPTY.
         unsafe { &*self.code.get().ptr::<Ir>() }
@@ -330,7 +330,7 @@ impl ThunkObj {
 
     /// The env a state word holds while unforced.
     #[inline]
-    pub fn env_of(state: Word) -> &'static EnvObj {
+    pub(crate) fn env_of(state: Word) -> &'static EnvObj {
         // SAFETY: `mk_thunk` stored an arena env pointer as the state.
         unsafe { &*state.ptr::<EnvObj>() }
     }
@@ -350,7 +350,7 @@ fn mark_byte(p: *const u8, f: impl Fn(u8) -> u8) {
 
 impl ListObj {
     #[inline]
-    pub fn cells(&self) -> &'static [Cell] {
+    pub(crate) fn cells(&self) -> &'static [Cell] {
         #[cfg(feature = "stats2")]
         mark_byte(&self.flags, |_| 1);
         // SAFETY: the allocator placed `len` cells directly after the header.
@@ -365,14 +365,14 @@ impl AttrsObj {
     /// The entries as one sorted slice. A union must have been flattened
     /// (`Arena::flat`) by the caller; iteration without a copy is `iter()`.
     #[inline]
-    pub fn attrs(&self) -> &'static [Attr] {
+    pub(crate) fn attrs(&self) -> &'static [Attr] {
         #[cfg(feature = "stats2")]
         mark_byte(&self.flags, |f| f | 0x80);
         self.attrs_raw()
     }
 
     #[inline]
-    pub fn attrs_raw(&self) -> &'static [Attr] {
+    pub(crate) fn attrs_raw(&self) -> &'static [Attr] {
         if self.kind == Kind::AttrsUnion {
             return self
                 .flattened()
@@ -392,13 +392,13 @@ impl AttrsObj {
     }
 
     #[inline]
-    pub fn is_union(&self) -> bool {
+    pub(crate) fn is_union(&self) -> bool {
         self.kind == Kind::AttrsUnion
     }
 
     /// The `UnionTail` of a union.
     #[inline]
-    pub fn union(&self) -> &'static UnionTail {
+    pub(crate) fn union(&self) -> &'static UnionTail {
         debug_assert!(self.is_union());
         // SAFETY: `alloc_union` placed the tail directly after the header.
         unsafe { &*((self as *const AttrsObj).add(1) as *const UnionTail) }
@@ -406,7 +406,7 @@ impl AttrsObj {
 
     /// The flat sets a union merges, lowest priority first.
     #[inline]
-    pub fn leaf_sets(&self) -> &'static [&'static AttrsObj] {
+    pub(crate) fn leaf_sets(&self) -> &'static [&'static AttrsObj] {
         debug_assert!(self.is_union());
         // SAFETY: `alloc_union` placed `leaves` pointers after the tail.
         unsafe {
@@ -417,7 +417,7 @@ impl AttrsObj {
 
     /// The cached flat copy of a union, once made.
     #[inline]
-    pub fn flattened(&self) -> Option<&'static AttrsObj> {
+    pub(crate) fn flattened(&self) -> Option<&'static AttrsObj> {
         let w = self.union().flat.get();
         if w == Word::EMPTY {
             return None;
@@ -427,7 +427,7 @@ impl AttrsObj {
     }
 
     #[inline]
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         let n = self.len_raw();
         if n != u32::MAX {
             return n as usize;
@@ -439,7 +439,7 @@ impl AttrsObj {
     }
 
     #[inline]
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         // a union never holds two empty sides
         self.kind == Kind::Attrs && self.len_raw() == 0
     }
@@ -448,7 +448,7 @@ impl AttrsObj {
     /// the leaves are probed from the last (the right side of the last
     /// `//`) without a copy.
     #[inline]
-    pub fn get(&self, sym: Sym) -> Option<&'static Attr> {
+    pub(crate) fn get(&self, sym: Sym) -> Option<&'static Attr> {
         #[cfg(feature = "stats2")]
         mark_byte(&self.flags, |f| if f & 0x7f < 0x7f { f + 1 } else { f });
         if self.kind == Kind::Attrs {
@@ -480,7 +480,7 @@ impl AttrsObj {
 
     /// The entries in sym order, merging a union's leaves on the fly.
     #[inline]
-    pub fn iter(&self) -> AttrIter {
+    pub(crate) fn iter(&self) -> AttrIter {
         #[cfg(feature = "stats2")]
         mark_byte(&self.flags, |f| f | 0x80);
         let mut it = AttrIter {
@@ -543,7 +543,7 @@ impl EnvObj {
     /// Slot `i`. The compiler resolved `i` against this env's binder, so it
     /// is in range by construction.
     #[inline]
-    pub fn slot(&self, i: usize) -> &'static Cell {
+    pub(crate) fn slot(&self, i: usize) -> &'static Cell {
         // SAFETY: `alloc_env` placed the slots directly after the header and
         // every index the evaluator uses was resolved at compile time.
         unsafe { &*((self as *const EnvObj).add(1) as *const Cell).add(i) }
@@ -551,7 +551,7 @@ impl EnvObj {
 
     /// The first `n` slots, for filling a fresh env of `n` slots.
     #[inline]
-    pub fn slots_n(&self, n: usize) -> &'static [Cell] {
+    pub(crate) fn slots_n(&self, n: usize) -> &'static [Cell] {
         // SAFETY: as for `slot`; the caller passes the `n` it allocated.
         unsafe {
             let p = (self as *const EnvObj).add(1) as *const Cell;
@@ -560,7 +560,7 @@ impl EnvObj {
     }
 
     #[inline]
-    pub fn up(&self) -> Option<&'static EnvObj> {
+    pub(crate) fn up(&self) -> Option<&'static EnvObj> {
         #[cfg(feature = "stats2")]
         let up = ((self.up as usize) & !7) as *const EnvObj;
         #[cfg(not(feature = "stats2"))]
@@ -571,14 +571,14 @@ impl EnvObj {
 
     /// Census (`stats2`): a slot of this env was read.
     #[inline]
-    pub fn mark_read(&self) {
+    pub(crate) fn mark_read(&self) {
         #[cfg(feature = "stats2")]
         self.mark_bit(1);
     }
 
     /// Census (`stats2`): a thunk, closure or child env holds this env.
     #[inline]
-    pub fn mark_captured(&self) {
+    pub(crate) fn mark_captured(&self) {
         #[cfg(feature = "stats2")]
         self.mark_bit(2);
     }
@@ -613,7 +613,7 @@ pub enum Value {
 impl Word {
     /// Classify a forced word. Panics on thunks and EMPTY: callers force first.
     #[inline]
-    pub fn view(self) -> Value {
+    pub(crate) fn view(self) -> Value {
         match self.tag() {
             TAG_INT => Value::Int(self.imm_int_value()),
             TAG_IMM => match self {
@@ -654,7 +654,7 @@ impl Word {
     }
 
     #[inline]
-    pub fn value_type(self) -> ValueType {
+    pub(crate) fn value_type(self) -> ValueType {
         match self.view() {
             Value::Int(_) => ValueType::Int,
             Value::Float(_) => ValueType::Float,
@@ -669,7 +669,7 @@ impl Word {
     }
 
     #[inline]
-    pub fn heap_kind(self) -> Option<Kind> {
+    pub(crate) fn heap_kind(self) -> Option<Kind> {
         if self.tag() == TAG_LAMBDA {
             return Some(Kind::Lambda);
         }
@@ -682,7 +682,7 @@ impl Word {
     }
 
     #[inline]
-    pub fn as_attrs(self) -> Option<&'static AttrsObj> {
+    pub(crate) fn as_attrs(self) -> Option<&'static AttrsObj> {
         match self.view() {
             Value::Attrs(a) => Some(a),
             _ => None,
@@ -690,7 +690,7 @@ impl Word {
     }
 
     #[inline]
-    pub fn as_list(self) -> Option<&'static ListObj> {
+    pub(crate) fn as_list(self) -> Option<&'static ListObj> {
         match self.view() {
             Value::List(l) => Some(l),
             _ => None,
@@ -698,7 +698,7 @@ impl Word {
     }
 
     #[inline]
-    pub fn as_string(self) -> Option<&'static StringObj> {
+    pub(crate) fn as_string(self) -> Option<&'static StringObj> {
         match self.view() {
             Value::String(s) => Some(s),
             _ => None,
@@ -706,7 +706,7 @@ impl Word {
     }
 
     #[inline]
-    pub fn as_int(self) -> Option<i64> {
+    pub(crate) fn as_int(self) -> Option<i64> {
         match self.view() {
             Value::Int(i) => Some(i),
             _ => None,
@@ -715,7 +715,7 @@ impl Word {
 
     /// Which thunk layout a THUNK-tagged word points at.
     #[inline]
-    pub fn thunk_kind(self) -> Kind {
+    pub(crate) fn thunk_kind(self) -> Kind {
         debug_assert!(self.is_thunk());
         match self.tag() {
             TAG_THUNK_APP => Kind::ThunkApp,
@@ -728,7 +728,7 @@ impl Word {
     /// The cell whose word is this thunk's state: the payload while
     /// unforced, a BLACKHOLE while claimed, then EMPTY (value in `code`).
     #[inline]
-    pub fn thunk_state_cell(self) -> &'static Cell {
+    pub(crate) fn thunk_state_cell(self) -> &'static Cell {
         // SAFETY: the tag names the layout; every layout keeps its state
         // cell where the match says, and a map word's cell is entry `i`
         // of the result set it names.
@@ -760,45 +760,45 @@ impl Word {
     /// True when `state` (read from `thunk_state_cell`) still holds the
     /// payload: the thunk was not forced and is not being forced.
     #[inline]
-    pub fn thunk_unforced(self, state: Word) -> bool {
+    pub(crate) fn thunk_unforced(self, state: Word) -> bool {
         state != Word::EMPTY && !state.is_blackhole()
     }
 
     /// The forced value once the state is EMPTY.
     #[inline]
-    pub fn thunk_value(self, _state: Word) -> Word {
+    pub(crate) fn thunk_value(self, _state: Word) -> Word {
         self.thunk_code_cell().get()
     }
 
     /// Store the forced value; returns the state word to publish.
     #[inline]
-    pub fn thunk_finish(self, v: Word) -> Word {
+    pub(crate) fn thunk_finish(self, v: Word) -> Word {
         self.thunk_code_cell().set(v);
         Word::EMPTY
     }
 
     /// Descriptor and entry index of a map word.
     #[inline]
-    pub fn map_desc(self) -> (&'static MapDesc, usize) {
+    pub(crate) fn map_desc(self) -> (&'static MapDesc, usize) {
         let (p, i) = self.map_parts::<MapDesc>();
         // SAFETY: map words are built by `mapAttrs` over an arena `MapDesc`.
         (unsafe { &*p }, i)
     }
 
     #[inline]
-    pub fn as_thunk(self) -> &'static ThunkObj {
+    pub(crate) fn as_thunk(self) -> &'static ThunkObj {
         // SAFETY: caller checked `thunk_kind() == Kind::Thunk`.
         unsafe { &*self.ptr::<ThunkObj>() }
     }
 
     #[inline]
-    pub fn as_thunk_app(self) -> &'static ThunkAppObj {
+    pub(crate) fn as_thunk_app(self) -> &'static ThunkAppObj {
         // SAFETY: caller checked `thunk_kind() == Kind::ThunkApp`.
         unsafe { &*self.ptr::<ThunkAppObj>() }
     }
 
     #[inline]
-    pub fn as_thunk_app2(self) -> &'static ThunkApp2Obj {
+    pub(crate) fn as_thunk_app2(self) -> &'static ThunkApp2Obj {
         // SAFETY: caller checked `thunk_kind() == Kind::ThunkApp2`.
         unsafe { &*self.ptr::<ThunkApp2Obj>() }
     }
@@ -808,7 +808,7 @@ impl Word {
 
 impl Arena {
     #[inline]
-    pub fn mk_int(&mut self, v: i64) -> Word {
+    pub(crate) fn mk_int(&mut self, v: i64) -> Word {
         if Word::fits_imm(v) {
             Word::imm_int(v)
         } else {
@@ -821,7 +821,7 @@ impl Arena {
     }
 
     #[inline]
-    pub fn mk_float(&mut self, v: f64) -> Word {
+    pub(crate) fn mk_float(&mut self, v: f64) -> Word {
         self.stats.note(Stat::Float, size_of::<FloatObj>());
         Word::from_ref(self.alloc(FloatObj {
             kind: Kind::Float,
@@ -829,7 +829,7 @@ impl Arena {
         }))
     }
 
-    pub fn mk_string_static(&mut self, bytes: &'static [u8], ctx: &'static [Ctx]) -> Word {
+    pub(crate) fn mk_string_static(&mut self, bytes: &'static [u8], ctx: &'static [Ctx]) -> Word {
         self.stats.note(Stat::StrObj, size_of::<StringObj>());
         let s = self.alloc(StringObj {
             kind: Kind::String,
@@ -848,12 +848,12 @@ impl Arena {
     }
 
     /// A context-free string, shared by content with every earlier one.
-    pub fn mk_string(&mut self, bytes: &[u8]) -> Word {
+    pub(crate) fn mk_string(&mut self, bytes: &[u8]) -> Word {
         let i = self.intern_bytes(bytes);
         self.mk_string_over(i, &[])
     }
 
-    pub fn mk_string_ctx(&mut self, bytes: &[u8], ctx: &[Ctx]) -> Word {
+    pub(crate) fn mk_string_ctx(&mut self, bytes: &[u8], ctx: &[Ctx]) -> Word {
         let i = self.intern_bytes(bytes);
         let c = self.intern_ctx(ctx);
         self.mk_string_over(i, c)
@@ -895,7 +895,7 @@ impl Arena {
     /// The arena copy of `bytes`, made once per distinct content, and the
     /// context-free string object over it if one exists.
     #[inline]
-    pub fn intern_bytes(&mut self, bytes: &[u8]) -> Interned {
+    pub(crate) fn intern_bytes(&mut self, bytes: &[u8]) -> Interned {
         let hash = Self::str_hash(bytes);
         if let Some(e) = self.strings.get(&hash)
             && e.bytes == bytes
@@ -912,7 +912,7 @@ impl Arena {
 
     /// Like `intern_bytes` for the concatenation of `parts`: the pieces are
     /// joined in the arena and given back when the content is known.
-    pub fn intern_concat(&mut self, parts: &[&[u8]]) -> Interned {
+    pub(crate) fn intern_concat(&mut self, parts: &[&[u8]]) -> Interned {
         let m = self.mark();
         let b = self.alloc_concat(parts);
         let hash = Self::str_hash(b);
@@ -933,7 +933,7 @@ impl Arena {
     /// shared object (made and recorded on first use), else a fresh object
     /// sharing the bytes.
     #[inline]
-    pub fn mk_string_over(&mut self, i: Interned, ctx: &'static [Ctx]) -> Word {
+    pub(crate) fn mk_string_over(&mut self, i: Interned, ctx: &'static [Ctx]) -> Word {
         if !ctx.is_empty() {
             return self.mk_string_static(i.bytes, ctx);
         }
@@ -951,13 +951,13 @@ impl Arena {
 
     /// Bytes for a string object whose bytes were already copied (from
     /// a `Vec` built by a builtin): interned by content.
-    pub fn mk_string_shared(&mut self, bytes: &[u8], ctx: &'static [Ctx]) -> Word {
+    pub(crate) fn mk_string_shared(&mut self, bytes: &[u8], ctx: &'static [Ctx]) -> Word {
         let i = self.intern_bytes(bytes);
         self.mk_string_over(i, ctx)
     }
 
     /// A sorted, deduplicated context slice, shared by content.
-    pub fn intern_ctx(&mut self, ctx: &[Ctx]) -> &'static [Ctx] {
+    pub(crate) fn intern_ctx(&mut self, ctx: &[Ctx]) -> &'static [Ctx] {
         if ctx.is_empty() {
             return &[];
         }
@@ -970,7 +970,7 @@ impl Arena {
         c
     }
 
-    pub fn mk_path(&mut self, path: &[u8]) -> Word {
+    pub(crate) fn mk_path(&mut self, path: &[u8]) -> Word {
         self.stats
             .note(Stat::Path, size_of::<PathObj>() + path.len());
         let p = self.alloc_bytes(path);
@@ -981,12 +981,12 @@ impl Arena {
     }
 
     /// Allocate a list of `n` cells, all EMPTY. Fill through `cells()`.
-    pub fn alloc_list(&mut self, n: usize) -> &'static ListObj {
+    pub(crate) fn alloc_list(&mut self, n: usize) -> &'static ListObj {
         self.alloc_list_as(n, Stat::List)
     }
 
     /// `alloc_list` with a stats bucket naming the producer.
-    pub fn alloc_list_as(&mut self, n: usize, bucket: Stat) -> &'static ListObj {
+    pub(crate) fn alloc_list_as(&mut self, n: usize, bucket: Stat) -> &'static ListObj {
         self.stats
             .note(bucket, size_of::<ListObj>() + n * size_of::<Cell>());
         let p = self.alloc_raw(size_of::<ListObj>() + n * size_of::<Cell>(), 8) as *mut ListObj;
@@ -1005,11 +1005,11 @@ impl Arena {
         }
     }
 
-    pub fn mk_list(&mut self, items: &[Word]) -> Word {
+    pub(crate) fn mk_list(&mut self, items: &[Word]) -> Word {
         self.mk_list_as(items, Stat::List)
     }
 
-    pub fn mk_list_as(&mut self, items: &[Word], bucket: Stat) -> Word {
+    pub(crate) fn mk_list_as(&mut self, items: &[Word], bucket: Stat) -> Word {
         let l = self.alloc_list_as(items.len(), bucket);
         // SAFETY: `alloc_list_as` placed `len` cells after the header; this
         // is the fill, not a read, so the census read mark stays clear.
@@ -1023,7 +1023,7 @@ impl Arena {
     }
 
     /// `alloc_attrs` with a stats bucket naming the producer.
-    pub fn alloc_attrs_as(&mut self, n: usize, bucket: Stat) -> &'static mut AttrsObj {
+    pub(crate) fn alloc_attrs_as(&mut self, n: usize, bucket: Stat) -> &'static mut AttrsObj {
         self.stats
             .note(bucket, size_of::<AttrsObj>() + n * size_of::<Attr>());
         let p = self.alloc_raw(size_of::<AttrsObj>() + n * size_of::<Attr>(), 8) as *mut AttrsObj;
@@ -1044,7 +1044,7 @@ impl Arena {
 
     /// `a // b` as a union over the flat leaves of both sides; the caller
     /// checked the leaf budget (`leaf_count`).
-    pub fn alloc_union(&mut self, a: &'static AttrsObj, b: &'static AttrsObj) -> Word {
+    pub(crate) fn alloc_union(&mut self, a: &'static AttrsObj, b: &'static AttrsObj) -> Word {
         let n = leaf_count(a) + leaf_count(b);
         debug_assert!(n <= MAX_LEAVES as usize);
         let size = size_of::<AttrsObj>() + size_of::<UnionTail>() + n * size_of::<&AttrsObj>();
@@ -1080,7 +1080,7 @@ impl Arena {
 
     /// The set as one flat slice: itself for a flat set, else the cached
     /// or freshly merged copy of the union.
-    pub fn flat(&mut self, a: &'static AttrsObj) -> &'static AttrsObj {
+    pub(crate) fn flat(&mut self, a: &'static AttrsObj) -> &'static AttrsObj {
         if a.kind == Kind::Attrs {
             return a;
         }
@@ -1100,7 +1100,7 @@ impl Arena {
 
     /// Build attrs from `(sym, pos, word)` triples; sorts and rejects duplicates
     /// (returns the duplicate sym).
-    pub fn mk_attrs(&mut self, entries: &mut [(Sym, Pos, Word)]) -> Result<Word, Sym> {
+    pub(crate) fn mk_attrs(&mut self, entries: &mut [(Sym, Pos, Word)]) -> Result<Word, Sym> {
         entries.sort_by_key(|e| e.0);
         for w in entries.windows(2) {
             if w[0].0 == w[1].0 {
@@ -1111,11 +1111,15 @@ impl Arena {
     }
 
     /// Entries must already be sorted by sym and unique.
-    pub fn mk_attrs_sorted(&mut self, entries: &[(Sym, Pos, Word)]) -> Word {
+    pub(crate) fn mk_attrs_sorted(&mut self, entries: &[(Sym, Pos, Word)]) -> Word {
         self.mk_attrs_sorted_as(entries, Stat::Attrs)
     }
 
-    pub fn mk_attrs_sorted_as(&mut self, entries: &[(Sym, Pos, Word)], bucket: Stat) -> Word {
+    pub(crate) fn mk_attrs_sorted_as(
+        &mut self,
+        entries: &[(Sym, Pos, Word)],
+        bucket: Stat,
+    ) -> Word {
         let a = self.alloc_attrs_as(entries.len(), bucket);
         let slots = a.attrs_mut();
         for (slot, (sym, pos, w)) in slots.iter_mut().zip(entries) {
@@ -1134,7 +1138,7 @@ impl Arena {
         Word::from_ref(a)
     }
 
-    pub fn alloc_env(&mut self, up: Option<&'static EnvObj>, n: usize) -> &'static EnvObj {
+    pub(crate) fn alloc_env(&mut self, up: Option<&'static EnvObj>, n: usize) -> &'static EnvObj {
         self.stats
             .note(Stat::Env, size_of::<EnvObj>() + n * size_of::<Cell>());
         #[cfg(feature = "stats2")]
@@ -1156,7 +1160,7 @@ impl Arena {
     }
 
     #[inline]
-    pub fn mk_thunk(&mut self, env: &'static EnvObj, ir: &'static Ir) -> Word {
+    pub(crate) fn mk_thunk(&mut self, env: &'static EnvObj, ir: &'static Ir) -> Word {
         self.stats.note(Stat::Thunk, size_of::<ThunkObj>());
         env.mark_captured();
         let t = self.alloc(ThunkObj {
@@ -1170,7 +1174,7 @@ impl Arena {
     }
 
     #[inline]
-    pub fn mk_thunk_app(&mut self, func: Word, arg: Word) -> Word {
+    pub(crate) fn mk_thunk_app(&mut self, func: Word, arg: Word) -> Word {
         debug_assert!(arg != Word::EMPTY && !arg.is_blackhole());
         self.stats.note(Stat::ThunkApp, size_of::<ThunkAppObj>());
         let t = self.alloc(ThunkAppObj {
@@ -1184,7 +1188,7 @@ impl Arena {
     }
 
     #[inline]
-    pub fn mk_thunk_app2(&mut self, func: Word, arg1: Word, arg2: Word) -> Word {
+    pub(crate) fn mk_thunk_app2(&mut self, func: Word, arg1: Word, arg2: Word) -> Word {
         debug_assert!(arg2 != Word::EMPTY && !arg2.is_blackhole());
         self.stats.note(Stat::ThunkApp2, size_of::<ThunkApp2Obj>());
         let t = self.alloc(ThunkApp2Obj {
@@ -1200,7 +1204,7 @@ impl Arena {
 
     /// `mapAttrs f src` for a flat `src` of at most `MAP_MAX_IDX + 1`
     /// entries: the result's cells are the thunks, no object per entry.
-    pub fn mk_map_attrs(&mut self, f: Word, src: &'static AttrsObj) -> Word {
+    pub(crate) fn mk_map_attrs(&mut self, f: Word, src: &'static AttrsObj) -> Word {
         debug_assert!(!src.is_union() && src.len() <= Word::MAP_MAX_IDX + 1);
         let n = src.len();
         let out: *mut AttrsObj = self.alloc_attrs_as(n, Stat::AttrsMap);
@@ -1229,7 +1233,7 @@ impl Arena {
         Word::from_ref(out_ref)
     }
 
-    pub fn mk_lambda(&mut self, env: &'static EnvObj, lam: &'static LambdaIr) -> Word {
+    pub(crate) fn mk_lambda(&mut self, env: &'static EnvObj, lam: &'static LambdaIr) -> Word {
         self.stats.note(Stat::Lambda, size_of::<LambdaObj>());
         env.mark_captured();
         #[cfg(feature = "stats2")]
@@ -1239,7 +1243,7 @@ impl Arena {
         Word::lambda_from_ref(self.alloc(LambdaObj { env, lam }))
     }
 
-    pub fn mk_primop(&mut self, name: &'static str, arity: u8, f: PrimFn) -> Word {
+    pub(crate) fn mk_primop(&mut self, name: &'static str, arity: u8, f: PrimFn) -> Word {
         Word::from_ref(self.alloc(PrimOpObj {
             kind: Kind::PrimOp,
             arity,
@@ -1248,7 +1252,7 @@ impl Arena {
         }))
     }
 
-    pub fn mk_primop_app(&mut self, op: &'static PrimOpObj, args: &[Word]) -> Word {
+    pub(crate) fn mk_primop_app(&mut self, op: &'static PrimOpObj, args: &[Word]) -> Word {
         self.stats.note(
             Stat::PrimOpApp,
             size_of::<PrimOpAppObj>() + size_of_val(args),
@@ -1264,7 +1268,7 @@ impl Arena {
 
 impl AttrsObj {
     #[inline]
-    pub fn attrs_mut(&mut self) -> &'static mut [Attr] {
+    pub(crate) fn attrs_mut(&mut self) -> &'static mut [Attr] {
         // SAFETY: see `attrs`; exclusive access through `&mut self`.
         unsafe {
             let p = (self as *mut AttrsObj).add(1) as *mut Attr;
@@ -1274,7 +1278,7 @@ impl AttrsObj {
 }
 
 /// Sort and dedup a context vector, then move it to the arena.
-pub fn ctx_to_arena(arena: &mut Arena, mut v: Vec<Ctx>) -> &'static [Ctx] {
+pub(crate) fn ctx_to_arena(arena: &mut Arena, mut v: Vec<Ctx>) -> &'static [Ctx] {
     if v.is_empty() {
         return &[];
     }
@@ -1287,7 +1291,7 @@ impl AttrsObj {
     /// Write entry `i` of a set from `alloc_attrs`. Callers fill every entry
     /// in sorted order before handing the set out.
     #[inline]
-    pub fn init(&mut self, i: usize, sym: Sym, pos: Pos, w: Word) {
+    pub(crate) fn init(&mut self, i: usize, sym: Sym, pos: Pos, w: Word) {
         debug_assert!(i < self.len_raw() as usize);
         // SAFETY: `alloc_attrs` reserved `len` entries after the header;
         // `write` does not read the uninitialised slot.
@@ -1305,7 +1309,7 @@ impl AttrsObj {
     }
 
     #[inline]
-    pub fn init_from(&mut self, i: usize, a: &Attr) {
+    pub(crate) fn init_from(&mut self, i: usize, a: &Attr) {
         self.init(i, a.sym, a.pos, a.cell.get())
     }
 }

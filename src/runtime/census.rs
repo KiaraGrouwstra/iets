@@ -11,7 +11,7 @@ pub const SIZE_BUCKETS: [&str; 11] = [
     "0", "1", "2", "3-4", "5-8", "9-16", "17-32", "33-64", "65-128", "129-256", "257+",
 ];
 
-pub fn size_bucket(n: usize) -> usize {
+pub(crate) fn size_bucket(n: usize) -> usize {
     match n {
         0 => 0,
         1 => 1,
@@ -103,7 +103,7 @@ fn fx(bytes: &[u8]) -> u64 {
 impl Census {
     /// Open an escape-tracking scope at `bytes` allocated; false when one
     /// is already open (nested scopes are not tracked).
-    pub fn scope_enter(&mut self, bytes: usize) -> bool {
+    pub(crate) fn scope_enter(&mut self, bytes: usize) -> bool {
         if self.scope_open {
             return false;
         }
@@ -115,42 +115,42 @@ impl Census {
     }
 
     /// Close the scope: (bytes allocated inside, escapes).
-    pub fn scope_leave(&mut self, bytes: usize) -> (u64, u64) {
+    pub(crate) fn scope_leave(&mut self, bytes: usize) -> (u64, u64) {
         self.scope_open = false;
         ((bytes - self.scope_start) as u64, self.scope_escapes)
     }
 
     #[inline]
-    pub fn note_thunk_created(&mut self, w: u64) {
+    pub(crate) fn note_thunk_created(&mut self, w: u64) {
         if self.scope_open {
             self.scope_thunks.insert(w);
         }
     }
 
     #[inline]
-    pub fn note_thunk_forced(&mut self, w: u64) {
+    pub(crate) fn note_thunk_forced(&mut self, w: u64) {
         if self.scope_open && !self.scope_thunks.contains(&w) {
             self.scope_escapes += 1;
         }
     }
 
-    pub fn note_env(&mut self, e: *const EnvObj, n: usize) {
+    pub(crate) fn note_env(&mut self, e: *const EnvObj, n: usize) {
         let b = size_bucket(n);
         self.env_hist[b].0 += 1;
         self.env_hist[b].1 += (8 + 8 * n) as u64;
         self.envs.push((e, n as u32));
     }
 
-    pub fn note_attrs(&mut self, a: *const AttrsObj, origin: u8, n: usize) {
+    pub(crate) fn note_attrs(&mut self, a: *const AttrsObj, origin: u8, n: usize) {
         self.attrs_hist[origin as usize][size_bucket(n)] += 1;
         self.attrs.push(a);
     }
 
-    pub fn note_list(&mut self, l: *const ListObj) {
+    pub(crate) fn note_list(&mut self, l: *const ListObj) {
         self.lists.push(l);
     }
 
-    pub fn note_string(&mut self, s: *const StringObj, bytes: &[u8], ctx_bytes: usize) {
+    pub(crate) fn note_string(&mut self, s: *const StringObj, bytes: &[u8], ctx_bytes: usize) {
         let b = size_bucket(bytes.len());
         self.str_len_hist[b].0 += 1;
         self.str_len_hist[b].1 += bytes.len() as u64;
@@ -167,7 +167,7 @@ impl Census {
         self.strings.push(s);
     }
 
-    pub fn note_ctx(&mut self, ctx: &[super::value::Ctx]) {
+    pub(crate) fn note_ctx(&mut self, ctx: &[super::value::Ctx]) {
         if ctx.is_empty() {
             return;
         }
@@ -201,7 +201,7 @@ impl Census {
         }
     }
 
-    pub fn note_upd(&mut self, a: &AttrsObj, b: &AttrsObj) {
+    pub(crate) fn note_upd(&mut self, a: &AttrsObj, b: &AttrsObj) {
         let u = &mut self.upd;
         let out = a.len() + b.len();
         u.n += 1;
@@ -221,7 +221,7 @@ impl Census {
         u.shape[size_bucket(a.len())][size_bucket(b.len())] += 1;
     }
 
-    pub fn report(&self, out: &mut String) {
+    pub(crate) fn report(&self, out: &mut String) {
         use std::fmt::Write;
         let _ = writeln!(out, "--- census (IETSP_STATS=2) ---");
         let _ = writeln!(out, "envs by slot count (count, bytes):");
