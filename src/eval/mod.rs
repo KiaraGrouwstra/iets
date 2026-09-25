@@ -2169,10 +2169,19 @@ impl Evaluator {
         let Value::Lambda(l) = fun.view() else {
             return Ok(fun);
         };
-        let ParamIr::Formals { formals, .. } = &l.lam.param else {
+        let ParamIr::Formals {
+            formals, ellipsis, ..
+        } = &l.lam.param
+        else {
             return Ok(fun);
         };
-        let args = self.force_attrs(args, Pos::NONE, "")?;
+        let all = self.force(args)?;
+        let args = self.force_attrs(all, Pos::NONE, "")?;
+        // eval.cc:autoCallFunction: formals that take extra arguments get
+        // every one of them, not only the ones they name
+        if *ellipsis {
+            return self.apply(fun, &[all], Pos::NONE);
+        }
         let mut entries: Vec<(Sym, Pos, Word)> = Vec::new();
         for f in formals.iter() {
             match args.get(f.sym) {

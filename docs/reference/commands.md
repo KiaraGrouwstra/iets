@@ -104,7 +104,8 @@ called with the `--arg`/`--argstr` set before an attribute is taken from
 it, so `ietsp eval $nixpkgs -A hello.name` prints `"hello-2.12.3"`. A
 formal with a default that is not supplied is fine; a required formal
 that is not supplied is `cannot evaluate a function that has an argument
-without a value ('NAME')`. Without an attribute path the top level is
+without a value ('NAME')`; formals that end in `...` are handed every
+`--arg`, named or not. Without an attribute path the top level is
 called only when there is an `--arg` to call it with, which is what `nix
 eval -f FILE` does. The classic names, `search` and every native command
 share the one walk.

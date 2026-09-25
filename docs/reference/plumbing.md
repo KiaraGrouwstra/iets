@@ -44,8 +44,10 @@ serves all of them (`api::EvalArgs`).
 standing on, so a file whose top level is a function (nixpkgs'
 `default.nix`) is called with the `--arg`/`--argstr` set before an
 attribute is taken from it. A formal with a default that is not supplied
-is fine; a required formal that is not supplied is the error. The classic
-names, `search` and every native command share that one walk.
+is fine; a required formal that is not supplied is the error; formals
+that end in `...` are handed every argument, named or not
+(`eval.cc:autoCallFunction`). The classic names, `search` and every
+native command share that one walk.
 
 ## Naming roots
 

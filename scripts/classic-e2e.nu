@@ -365,6 +365,8 @@ def main [] {
   # at every step, in the native names too (docs/plumbing.md)
   let fun = $"($d)/fun.nix"
   '{ a ? 1, b ? 2 }: { sum = a + b; name = "n-${toString a}"; }' | save -f $fun
+  let ell = $"($d)/ellipsis.nix"
+  '{ a ? 1, ... }@args: { sum = a; name = builtins.toJSON (builtins.attrNames args); }' | save -f $ell
   for case in [
     {label: "defaults", args: [], attr: sum}
     {label: "--arg", args: [--arg a 5], attr: sum}
@@ -375,6 +377,12 @@ def main [] {
     $ok = ($ok | append (cmp-case $"auto-call a function file, ($case.label): ietsp eval"
       {ours: (^$ietsp eval ...$case.args $fun -A $case.attr | complete),
        real: (^nix eval ...$case.args -f $fun $case.attr | complete)}))
+    # formals with `...` are handed every argument, named or not
+    $ok = ($ok | append (cmp-case $"auto-call a '...' function file, ($case.label): nix-instantiate"
+      (run-both $farm nix-instantiate --eval ...$case.args --arg extra 9 $ell -A $case.attr)))
+    $ok = ($ok | append (cmp-case $"auto-call a '...' function file, ($case.label): ietsp eval"
+      {ours: (^$ietsp eval ...$case.args --arg extra 9 $ell -A $case.attr | complete),
+       real: (^nix eval ...$case.args --arg extra 9 -f $ell $case.attr | complete)}))
   }
   # a required formal nobody supplied: all three fail the same way
   let na = $"($d)/needs-arg.nix"
