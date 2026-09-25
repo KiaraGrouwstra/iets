@@ -350,6 +350,102 @@ local `nix.conf` must therefore list and trust the cache (`substituters`,
 A worker that crashed stays placeable until the scheduler notices, and
 every bounce off it is instant.
 
+## Measured: the transports
+
+### The worker protocol (`scripts/daemon-e2e.nu`, release build)
+
+"Local daemon" is this machine's `nix-daemon` on its socket; the hello
+closure is GC-rooted there, so every path is valid and a cold run is
+impossible. "Scratch daemon" is `nix-daemon --store local?root=DIR` on its
+own socket: an empty chroot store, so the cold numbers are real uploads
+and a build is not attempted (`--no-build`). `unix://` and `daemon` are
+the same code; `ssh-ng://` is the same code over a child's stdio, tested
+with an `ssh` shim in `PATH` that runs `nix-daemon --stdio` locally (case
+6), not against a real host: no host with a reachable `nix-daemon`
+accepted the key.
+
+| case | eval | plan | connect | QueryValidPaths | AddMultipleToStore | build (realise) | ops / round trips | bytes sent |
+|---|---|---|---|---|---|---|---|---|
+| custom drv + 1 source tree, deleted from the store, local daemon, `--fetch-to` | 0.005 s | 0.001 s | 0.077 s | 2 paths, 2 missing, 0.000 s | 2 paths, 2.4 KB, 0.001 s | 0.87 s | 6 / 9 | 2.9 KB |
+| hello, local daemon (all valid) | 0.138 s | 0.006 s | 0.074 s | 776 paths, 0 missing, 0.008 s | skipped | 0.001 s | 4 / 7 | 62 KB |
+| hello, scratch daemon, cold, `--no-build` | 0.159 s | 0.008 s | 0.020 s | 776 paths, 776 missing, 0.008 s | 776 paths, 2.6 MB, 0.247 s | skipped | 3 / 6 | 2.66 MB |
+| hello, scratch daemon, warm, `--no-build` | 0.146 s | 0.007 s | 0.008 s | 776 paths, 0 missing, 0.011 s | skipped | skipped | 2 / 5 | 62 KB |
+| nixos-desktop, scratch daemon, cold, `--no-build` | 1.48 s | 0.094 s | 0.015 s | 4,184 paths, all missing, 0.022 s | 4,184 paths, 40.4 MB, 1.89 s | skipped | 3 / 6 | 40.8 MB |
+| nixos-desktop, scratch daemon, warm, `--no-build` | 1.65 s | 0.112 s | 0.055 s | 4,184 paths, 0 missing, 0.034 s | skipped | skipped | 2 / 5 | 333 KB |
+| nixos-desktop, local daemon, `--no-build` | 1.21 s | 0.121 s | 0.081 s | 4,184 paths, 413 missing, 0.201 s | 413 paths, 23.2 MB, 1.67 s | skipped | 3 / 6 | 23.5 MB |
+
+The 62 KB of a warm hello run is the `QueryValidPaths` request: 776 full
+store paths as padded strings, and the 776 answers back. The custom drv's
+0.87 s "build" is the sandbox build itself; the 0.87-1.1 s spread across
+runs is the daemon, not the client. The 413 paths the local daemon lacked
+for nixos-desktop are large nixpkgs subtrees that no local evaluation had
+copied yet — the NixOS manual sources, python packages; the run registered
+them, exactly as `nix-instantiate` would have.
+
+The upload is daemon-bound: about 0.5 ms per path for the sequential
+`addToStore` (restore, hash, check, lock, one SQLite transaction). No
+client-side cut of the upload changes that
+(`docs/explanation/history.md`).
+
+### Byte identity
+
+`scripts/daemon-e2e.nu` checks all of this after an upload:
+
+- the `.drv` file in the store is `cmp`-identical to the one
+  `nix-instantiate` wrote before it was deleted;
+- `nix-store -q --hash`, `nix derivation show` and `nix path-info --json`
+  (`ca`, `narHash`, `narSize`, `references`) match for the derivation and
+  for the source;
+- in the scratch store the hello derivation has the same hash as in the
+  local store, and every input source has the same `ca`.
+
+### `grpc://` (`scripts/grpc-e2e.nu`, release build)
+
+`nix-grpc-daemon` in plaintext standalone mode — it schedules onto itself
+— in front of a scratch chroot store on this machine (`--proxy-socket` a
+`nix-daemon` on that store, `--proxy-store local?root=DIR`), so these are
+the transport's own figures, not a farm's.
+
+| case | connect | QueryValidPaths | AddMultipleToStore | build | RPCs |
+|---|---|---|---|---|---|
+| custom drv + 1 source tree, `--fetch-to` | 0.009 s | 2 paths, 2 missing, 0.020 s | 2 paths, 721 B, 0.009 s | 0.63 s | 6 |
+| hello cold, `--no-build` | 0.000 s | 776 paths, 776 missing, 0.006 s | 776 paths, 490 KB, 0.26 s | skipped | 3 |
+| hello warm, `--no-build` | 0.000 s | 776 paths, 0 missing, 0.006 s | skipped | skipped | 2 |
+
+The cold hello upload is 490 KB on the wire against 2.66 MB over the
+worker protocol: the same bytes, zstd level 1 in one stream across all 776
+paths. `connect` is the `StoreInfo` round trip, which the daemon answers
+from a cached backend connection.
+
+What the other cases check:
+
+- **Case 4** runs classic `nix build --store grpc://…?insecure=1
+  --eval-store auto` and compares stdout with the real nix and its
+  nix-grpc-store plugin, which matched here. The script prefers the `nix`
+  on `PATH`, falls back to `/run/current-system/sw/bin/nix` — the dev
+  shell's nix is often a different libnixstore than the installed plugin
+  was built against — and, failing both, compares against the same store
+  over the worker protocol instead and says so.
+- **Case 5** checks the out-link path end to end: no local substituter has
+  the output, so it is fetched back with `FetchNars` and handed to the
+  local daemon, which refuses it for lacking a signature. That is correct,
+  because a scratch daemon builds unsigned outputs; on a real farm the
+  local daemon substitutes the output from the cache instead.
+- **Case 6** runs `ietsp fast-build --store grpc://…` on `scripts/lib.nu`'s
+  `fastbuild-flake` and compares the whole result file — every record's
+  type, attribute, success and skipped flag — with the same flake built
+  over the worker protocol on the same store.
+- **Case 7** checks that a multi-root `ietsp build` over `grpc://` names
+  every attribute on stderr.
+
+Against `farm.numtide.com` with a Keycloak `write` token (2026-09-20): a
+`runCommand` with 572 cached inputs went `Want`, `Assigned`,
+`BuildDerivation` on bld1 in 2.6 s, 5 RPCs; a classic `nix-build` out-link
+then came from cache.numtide.com through the local daemon. The fan-out's
+own scheduling — the cap on builds in flight, the dependency order, a
+failed derivation blocking its dependants, and the drv-tagged merge into
+one event stream — is `build::fanout`, tested without a farm.
+
 ## NAR
 
 `src/store/nar.rs` is the whole NAR implementation: the archive writer
