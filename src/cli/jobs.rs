@@ -74,7 +74,7 @@ fn parse_jobs_args(argv: &[String]) -> (JobsArgs, Vec<String>) {
     let unsupported = |flag: &str, why: &str| -> ! {
         exit(
             CrateError::Unsupported(format!(
-                "{flag} is not supported by ietsp: {why} (docs/reference/commands.md)"
+                "{flag} is not supported by ietsp: {why} ('ietsp help commands')"
             ))
             .report(),
         )

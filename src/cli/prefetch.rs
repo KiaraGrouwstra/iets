@@ -12,7 +12,7 @@ usage: ietsp prefetch [FLAGS] URL
 
 Print the SRI hash of what URL serves, or the hash a fixed-output
 derivation produces, so nothing has to be edited and built to learn it
-(docs/reference/commands.md). Nothing is added to the store.
+('ietsp help commands'). Nothing is added to the store.
 
   --unpack              hash the NAR of the unpacked tarball (fetchzip)
   --hash-type ALGO      md5, sha1, sha256 (default) or sha512

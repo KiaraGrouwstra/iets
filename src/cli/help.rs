@@ -4,6 +4,8 @@
 use std::process::exit;
 use std::sync::RwLock;
 
+use crate::cli::docs;
+
 pub const OVERVIEW: &str = "\
 usage: ietsp COMMAND [ARGS...]
 
@@ -25,14 +27,10 @@ commands:
 
 classic: 'ietsp NAME ARGS...' with NAME one of nix-instantiate, nix-build,
   nix-shell, nix-eval-jobs, nix-fast-build or nix acts like that Nix command,
-  and falls back to the real one for the rest (docs/reference/classic.md).
+  and falls back to the real one for the rest ('ietsp help classic').
 
 Every command also takes --ietsp-option NAME VALUE.
 Run 'ietsp COMMAND --help' for the flags of a command.
-
-docs: every command and flag is in docs/reference/commands.md, the
-  settings in docs/reference/settings.md, the codes in
-  docs/reference/errors.md; docs/ holds the rest.
 ";
 
 const INPUT: &str = "
@@ -49,7 +47,7 @@ common:
   --log-format F        internal-json: stderr as Nix JSON records
   --show-trace          put the trace in the JSON error records too
 
-see: docs/reference/commands.md for every flag, docs/reference/errors.md
+see: 'ietsp help commands' for every flag, 'ietsp help errors'
   for the codes and the records.
 ";
 
@@ -66,7 +64,7 @@ Evaluate an expression, a file or a locked flake and print the value.
   --lint-root DIR       report lint sites under DIR too
   --lint-scope root|all  report sites in the lint roots only, or everywhere
 
-The lint registry is docs/reference/lints.md.
+'ietsp help lints' is the lint registry.
 ";
 
 const BUILD: &str = "\
@@ -74,7 +72,7 @@ usage: ietsp build [FLAGS] (-E EXPR | FILE)
        ietsp build [FLAGS] [--source STOREPATH=LOCAL]... DRV
 
 Evaluate to derivations, send the closure the builder lacks from memory,
-build, and print the output paths (docs/how-to/build-remotely.md).
+build, and print the output paths ('ietsp help build-remotely').
 
   --builder URL         daemon, unix:///path, ssh-ng://[user@]host or
                         grpc://host:port (default: the builder setting)
@@ -90,7 +88,7 @@ const SEARCH: &str = "\
 usage: ietsp search [INSTALLABLE] [FLAGS] REGEX...
 
 Print the packages whose attribute path, name or description match every
-REGEX (docs/reference/commands.md). INSTALLABLE is a flake reference, a path or
+REGEX ('ietsp help commands'). INSTALLABLE is a flake reference, a path or
 <name>; the default is <nixpkgs>. '^' matches every package.
 
   -e, --exclude REGEX   hide the packages this matches
@@ -110,9 +108,9 @@ usage: ietsp diff [FLAGS] A B
        ietsp diff [FLAGS] -A X -A Y (-E EXPR | FILE | FLAKEREF)
 
 Print what differs between two derivations, in place of nix-diff: the local
-differences first, then the input derivations that differ
-(docs/reference/commands.md). A and B are .drv store paths, flake
-references or files. Exit: 0 they are equal, 1 they differ, 2 trouble.
+differences first, then the input derivations that differ. A and B are
+.drv store paths, flake references or files ('ietsp help commands').
+Exit: 0 they are equal, 1 they differ, 2 trouble.
 
   --depth N             levels of input derivations to walk (default 2)
   --all                 walk every level
@@ -128,7 +126,7 @@ const EVAL_JOBS: &str = "\
 usage: ietsp eval-jobs [FLAGS] (-E EXPR | FILE | --flake FLAKEREF[#attr])
 
 Walk a jobset and print one JSON line per derivation, like nix-eval-jobs
-(docs/reference/commands.md).
+('ietsp help commands').
 
   -E, --expr EXPR       evaluate EXPR instead of FILE
   --flake               the argument is a flake reference
@@ -158,7 +156,7 @@ const FAST_BUILD: &str = "\
 usage: ietsp fast-build [FLAGS]
 
 Evaluate and build an attribute tree in one process, with nix-fast-build's
-flags and result files (docs/reference/commands.md).
+flags and result files ('ietsp help commands').
 
   -f, --flake REF       the flake attribute to build (default .#checks)
   --file [FILE], -A PATH  build a file (default.nix), or its attribute PATH
@@ -185,7 +183,7 @@ const PRINT_DEV_ENV: &str = "\
 usage: ietsp print-dev-env [FLAGS] [FLAKEREF[#attr]]
 
 Print the bash that 'nix print-dev-env' prints for a flake's devShell
-(default: .), for direnv (docs/how-to/use-with-direnv.md).
+(default: .), for direnv ('ietsp help use-with-direnv').
 
   --builder URL         the Nix daemon: daemon (default), unix:///path or
                         ssh-ng://[user@]host
@@ -199,7 +197,7 @@ const LINT: &str = "\
 usage: ietsp lint list [FLAGS] [PATH]
 
 Print the lint registry with the levels a run from PATH (default: the
-current directory) uses, then the scope and its roots (docs/reference/lints.md).
+current directory) uses, then the scope and its roots ('ietsp help lints').
 
   --lint NAME=LEVEL     set a lint to off, warn or error
   --lint-root DIR       add a lint root
@@ -219,7 +217,7 @@ usage: ietsp cache gc [--ttl DAYS] [--dry-run] [--cache-dir DIR]
        ietsp cache dump READSET
 
 gc removes the cache entries nobody read for DAYS days; dump prints the
-read set of a tracing-cache entry (docs/explanation/caching.md).
+read set of a tracing-cache entry ('ietsp help caching').
 
   --ttl DAYS            the age limit in days
   -n, --dry-run         count what gc would remove, remove nothing
@@ -260,11 +258,34 @@ fn parts(cmd: Option<&str>) -> Option<[&'static str; 2]> {
     })
 }
 
+/// `ietsp help [COMMAND | TOPIC]`, and `ietsp COMMAND --help`. A name that
+/// is both a command and a topic is the command, and the help says where
+/// the page is.
 pub fn help(cmd: Option<&str>) -> ! {
     match (cmd, parts(cmd)) {
-        (None, _) => print!("{OVERVIEW}"),
-        (Some(_), Some([own, input])) => print!("{own}{input}"),
-        (Some(c), None) => unknown_command(c),
+        (None, _) => {
+            print!("{OVERVIEW}");
+            print!("{}", docs::list());
+        }
+        (Some(c), Some([own, input])) => {
+            print!("{own}{input}");
+            if let Some(p) = docs::find(c) {
+                println!(
+                    "\nThe page of the same name: 'ietsp help {}/{c}'.",
+                    p.quadrant
+                );
+            }
+        }
+        (Some(c), None) => match docs::find(c) {
+            Some(p) => docs::show(p),
+            None => {
+                let names: Vec<&str> = COMMANDS.split(' ').chain(docs::names()).collect();
+                fail(
+                    &format!("unknown command or topic '{c}'"),
+                    suggest(c, names),
+                )
+            }
+        },
     }
     exit(0)
 }

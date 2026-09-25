@@ -92,7 +92,7 @@ fn run(a: Args) -> Result<i32> {
     options.keep_going = !a.fail_fast;
     if !matches!(transport, Transport::Unix(_)) && !a.no_download {
         crate::log::line(
-            "ietsp fast-build: --store is not the local daemon, so the outputs stay there; --out-link points at nothing local (docs/reference/commands.md)",
+            "ietsp fast-build: --store is not the local daemon, so the outputs stay there; --out-link points at nothing local ('ietsp help commands')",
         );
     }
 

@@ -19,7 +19,7 @@ pub const HELP: &str = "\
 usage: ietsp plumbing OP [FLAGS] ...
 
 The machine-first operations the user-facing commands are written against.
-Each one writes JSON on stdout (docs/reference/plumbing.md).
+Each one writes JSON on stdout ('ietsp help reference/plumbing').
 
 operations:
   resolve   an installable becomes derivation roots
@@ -70,8 +70,7 @@ Print {\"willBuild\", \"willSubstitute\", \"unknown\", \"downloadSize\",
 usage: ietsp plumbing build [FLAGS] [--roots -] DRV...
 
 Build the roots and print {\"outcomes\"}: one {\"drv\", \"success\",
-\"outputs\", \"reason\", \"logTail\"} each. The exit code is the one of
-docs/reference/errors.md.
+\"outputs\", \"reason\", \"logTail\"} each. Exit codes: 'ietsp help errors'.
 
   --builder URL         where the builds go; the builder setting by default
   --out NAME            an output to build besides the roots' own

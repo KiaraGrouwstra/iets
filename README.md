@@ -11,7 +11,12 @@ real `nix`. It keeps no store of its own.
 nix develop -c cargo build --release
 ./target/release/ietsp eval --strict -E '1 + 1'
 ./target/release/ietsp --help
+./target/release/ietsp help            # the commands, and the topics below
+./target/release/ietsp help settings   # a documentation page, out of the binary
 ```
+
+The binary carries the reference documentation, so `ietsp help TOPIC` works
+from anywhere, with no `docs/` directory in sight.
 
 ## Why
 
