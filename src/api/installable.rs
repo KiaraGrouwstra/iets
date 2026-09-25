@@ -450,6 +450,104 @@ fn is_attr_path_component(name: &[u8]) -> bool {
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'+'))
 }
 
+// ---- the program an installable runs ------------------------------------------
+
+/// The program a flake output names, and the derivation output that holds it.
+pub struct App {
+    pub drv: StorePath,
+    pub output: String,
+    pub out_path: String,
+    /// `<out_path>/bin/<mainProgram>`.
+    pub program: String,
+}
+
+/// app.cc:InstallableValue::toApp for an output that must be a derivation, as
+/// `nix fmt` requires of `formatter.<system>`: the program is
+/// `outPath/bin/<mainProgram>`, and `mainProgram` is `meta.mainProgram`, else
+/// `pname`, else `name` without its version (names.cc:DrvName).
+pub fn to_app(ev: &mut Evaluator, v: Word, attr_path: &str) -> EvalResult<App> {
+    let v = ev.force(v)?;
+    let missing = |what: &str| {
+        Error::boxed(
+            ErrorKind::MissingAttr,
+            format!("attribute '{attr_path}.{what}' missing"),
+            Pos::NONE,
+        )
+    };
+    let Some(attrs) = v.as_attrs() else {
+        return Err(missing("type"));
+    };
+    if attrs.get(ev.s.type_).is_none() {
+        return Err(missing("type"));
+    }
+    if !is_derivation(ev, attrs)? {
+        return Err(Error::boxed(
+            ErrorKind::Eval,
+            format!("attribute '{attr_path}' should have type 'derivation'"),
+            Pos::NONE,
+        ));
+    }
+    let drv = drv_of(ev, attrs)?;
+    let output = output_name(ev, attrs, &drv)?;
+    let out_path = match attrs.get(ev.s.out_path) {
+        Some(a) => forced_string(ev, a.cell.get(), "while evaluating 'outPath'")?,
+        None => return Err(missing("outPath")),
+    };
+    let name = match attrs.get(ev.s.name) {
+        Some(a) => forced_string(ev, a.cell.get(), "while evaluating 'name'")?,
+        None => return Err(missing("name")),
+    };
+    let main = main_program(ev, attrs)?.unwrap_or_else(|| drv_pname(&name).to_string());
+    Ok(App {
+        drv,
+        output,
+        program: format!("{out_path}/bin/{main}"),
+        out_path,
+    })
+}
+
+/// names.cc:DrvName: the name runs up to the first `-` that is not followed
+/// by a letter.
+fn drv_pname(s: &str) -> &str {
+    let b = s.as_bytes();
+    match (0..b.len())
+        .find(|&i| b[i] == b'-' && b.get(i + 1).is_some_and(|c| !c.is_ascii_alphabetic()))
+    {
+        Some(i) => &s[..i],
+        None => s,
+    }
+}
+
+/// `meta.mainProgram`, else `pname`; `None` when neither is there.
+fn main_program(
+    ev: &mut Evaluator,
+    attrs: &'static crate::runtime::AttrsObj,
+) -> EvalResult<Option<String>> {
+    let meta_sym = ev.sym(b"meta");
+    let main_sym = ev.sym(b"mainProgram");
+    if let Some(m) = attrs.get(meta_sym) {
+        let meta = ev.force(m.cell.get())?;
+        if let Some(ma) = meta.as_attrs()
+            && let Some(mp) = ma.get(main_sym)
+        {
+            return Ok(Some(forced_string(
+                ev,
+                mp.cell.get(),
+                "while evaluating 'meta.mainProgram'",
+            )?));
+        }
+    }
+    let pname_sym = ev.sym(b"pname");
+    match attrs.get(pname_sym) {
+        Some(p) => Ok(Some(forced_string(
+            ev,
+            p.cell.get(),
+            "while evaluating 'pname'",
+        )?)),
+        None => Ok(None),
+    }
+}
+
 // ---- the outputs an installable installs -------------------------------------
 
 /// One installable's derivation and the outputs it installs.
@@ -534,6 +632,17 @@ pub fn to_install(ev: &mut Evaluator, v: Word, what: &str, flake: bool) -> EvalR
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_name_a_program_takes_from_a_derivation_name() {
+        assert_eq!(drv_pname("treefmt-2.0.0"), "treefmt");
+        assert_eq!(drv_pname("nixfmt"), "nixfmt");
+        // a dash before a letter is part of the name
+        assert_eq!(drv_pname("nixfmt-tree"), "nixfmt-tree");
+        assert_eq!(drv_pname("apache-httpd-2.0.48"), "apache-httpd");
+        assert_eq!(drv_pname("fmt-e2e-1.0"), "fmt-e2e");
+        assert_eq!(drv_pname("x-"), "x-");
+    }
 
     #[test]
     fn default_and_fragment_attr_paths() {
