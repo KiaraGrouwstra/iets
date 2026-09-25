@@ -33,6 +33,11 @@ machine against Nix 2.34.8, same nixpkgs, identical drvPaths:
 | nixos-desktop, wall, 1 worker | 0.98 s | 2.20 s |
 | nixos-desktop, wall, 4 workers | **0.59 s** | 2.20 s |
 
+These are warm compiled-file cache runs, which is what you get after the first
+evaluation of a tree. With `--no-ir-cache`, so every file is parsed and
+compiled again, the instruction ratio is 1.96× on minimal and 2.11× on
+desktop. Nix has no equivalent cache to turn off.
+
 **Runs are cached.** A second `eval` or `build` of the same command validates
 the files, directories and environment variables the first run read, then
 replays the result — nixos-desktop in 40 ms instead of 1 s. Unlike Nix's eval

@@ -25,6 +25,13 @@ About 2.5× fewer instructions, and 2.2× to 3.7× faster in wall time. The
 instruction ratio is the durable number; the wall ratio depends on how many
 workers the critical chain can use.
 
+The ietsp column is a warm compiled-file cache, which is how this benchmark
+has always been run and what a second evaluation of a tree gets. That cache is
+worth 2.25 G instructions on desktop, 18% of the run, so with `--no-ir-cache`
+the ratio falls to 1.96× on minimal and 2.11× on desktop. Nix has no
+equivalent to turn off, so 2.5× is the honest product comparison and 2× is the
+honest evaluator comparison.
+
 ## 2026-09-20: `BuildPaths` and the non-farm gRPC path
 
 nix-grpc-store dropped `BuildPaths` and the `farm` flag in its store info
