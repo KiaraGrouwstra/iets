@@ -40,6 +40,25 @@ const VERSION: &str = "version";
 const LOCK: &str = "lock";
 const STAMP: &str = "gc-stamp";
 
+/// The directory every cache store lives under: `--cache-dir DIR`, else
+/// `IETSP_CACHE_DIR`, else `$XDG_CACHE_HOME/ietsp`, else `~/.cache/ietsp`.
+/// Each store takes a subdirectory of it — `trace/`, `ir/`, `inputs/`,
+/// `fmt/` — so the directory the user names is never a removal target.
+/// `None` when no home is known.
+pub fn root(override_dir: Option<&str>) -> Option<PathBuf> {
+    if let Some(d) = override_dir {
+        return Some(PathBuf::from(d));
+    }
+    if let Some(d) = &crate::session::Session::current().settings().cache_dir {
+        return Some(d.clone());
+    }
+    let base = match std::env::var_os("XDG_CACHE_HOME") {
+        Some(x) if !x.is_empty() => PathBuf::from(x),
+        _ => PathBuf::from(std::env::var_os("HOME")?).join(".cache"),
+    };
+    Some(base.join("ietsp"))
+}
+
 /// How a store names its entries under its root.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Shape {

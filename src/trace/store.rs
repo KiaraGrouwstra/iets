@@ -111,19 +111,8 @@ impl Store {
     /// so the directory the user names is never a removal target. `None` when
     /// no home is known.
     pub fn locate(override_dir: Option<&str>) -> Option<Store> {
-        let base = if let Some(d) = override_dir {
-            PathBuf::from(d)
-        } else if let Some(d) = &crate::session::Session::current().settings().cache_dir {
-            d.clone()
-        } else {
-            let base = match std::env::var_os("XDG_CACHE_HOME") {
-                Some(x) if !x.is_empty() => PathBuf::from(x),
-                _ => PathBuf::from(std::env::var_os("HOME")?).join(".cache"),
-            };
-            base.join("ietsp")
-        };
         Some(Store {
-            root: base.join("trace"),
+            root: crate::cachefs::root(override_dir)?.join("trace"),
         })
     }
 

@@ -138,20 +138,7 @@ impl StoredTree {
 /// else `~/.cache/ietsp`; the entries live in its `inputs/` subdirectory.
 /// `None` when no home is known.
 pub fn locate(override_dir: Option<&str>) -> Option<PathBuf> {
-    let base = match override_dir {
-        Some(d) => PathBuf::from(d),
-        None => match &crate::session::Session::current().settings().cache_dir {
-            Some(d) => d.clone(),
-            None => {
-                let base = match std::env::var_os("XDG_CACHE_HOME") {
-                    Some(x) if !x.is_empty() => PathBuf::from(x),
-                    _ => PathBuf::from(std::env::var_os("HOME")?).join(".cache"),
-                };
-                base.join("ietsp")
-            }
-        },
-    };
-    Some(base.join("inputs"))
+    Some(crate::cachefs::root(override_dir)?.join("inputs"))
 }
 
 /// The store of one run: where it lives, the trees it opened, and what

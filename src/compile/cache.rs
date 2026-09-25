@@ -38,18 +38,7 @@ impl IrCache {
     pub fn locate(override_dir: Option<&str>, timings: bool) -> Option<IrCache> {
         let session = crate::session::Session::current();
         let set = session.settings();
-        let base = if let Some(d) = override_dir {
-            PathBuf::from(d)
-        } else if let Some(d) = &set.cache_dir {
-            d.clone()
-        } else {
-            let base = match std::env::var_os("XDG_CACHE_HOME") {
-                Some(x) if !x.is_empty() => PathBuf::from(x),
-                _ => PathBuf::from(std::env::var_os("HOME")?).join(".cache"),
-            };
-            base.join("ietsp")
-        };
-        let root = base.join("ir");
+        let root = crate::cachefs::root(override_dir)?.join("ir");
         if !crate::cachefs::prepare(&root, crate::cachefs::Shape::ShardedFiles, timings) {
             return None;
         }
