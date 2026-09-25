@@ -166,7 +166,7 @@ fn run(mut s: Search, classic: Option<&[String]>) -> i32 {
         Err(why) => return bail(why),
     };
     let mut ev = evaluator(&s.c, &cfg);
-    // The cache key hashes the file, so `<nixpkgs>` and a directory become the
+    // The cache key names the file, so `<nixpkgs>` and a directory become the
     // file an import would read.
     if let Some(f) = &s.file {
         match lookup_file_arg(&mut ev, f, &cwd()) {

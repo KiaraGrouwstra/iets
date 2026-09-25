@@ -173,7 +173,8 @@ re-evaluating: /home/u/repo/flake.nix changed
 
 The line names the one observation that no longer holds and what about it
 changed — a file's contents, a directory's entries, an environment variable,
-a command's output. Under `--log-format internal-json` it is a level-3
+a git working tree. The file the command names is one of those files, so
+editing it reads the same as editing anything it imports. Under `--log-format internal-json` it is a level-3
 record with code `cache-invalidated` (docs/reference/errors.md). Validation
 runs on four threads, so the read set's own order decides which observation
 is named: the lowest-indexed failure wins, and one change therefore always
@@ -181,11 +182,21 @@ names the same thing. A run with no entry prints nothing: a first run
 invalidated nothing.
 
 The key is computed from the command *before* evaluation: the build id, the
-subcommand, the expression or the file plus its hash, the `--arg` pairs,
-`-A`, `--strict`, `--json`, `--raw`, the lint levels, the search path,
-`builtins.currentSystem`, and the working directory only when a relative
-path literal can reach it. `--workers`, `--builder`, `--timings` and
-`--dry-run` are not in the key: they do not change the answer.
+subcommand, the expression, or the path of the file or the flake directory,
+the `--arg` pairs, `-A`, `--strict`, `--json`, `--raw`, the lint levels, the
+search path, `builtins.currentSystem`, and the working directory only when a
+relative path literal can reach it. `--workers`, `--builder`, `--timings`
+and `--dry-run` are not in the key: they do not change the answer.
+
+The key names the file by path and never by content, and the same holds for
+a flake's `flake.nix` and `flake.lock`. The run reads all of them like any
+other file it reads, so the read set holds them, and one command therefore
+keeps one entry however often the file is edited. Content in the key would
+make an edit a *different question* instead of a stale answer: the run would
+miss with no entry, say nothing about why, and leave the entry of every
+earlier version of the file behind until the sweep. One command, one entry,
+and an edit of any file the run read — the one named on the command line
+included — is an invalidation that names it.
 
 Some things make a run uncacheable rather than wrong: `builtins.currentTime`
 and every network fetcher without a hash. `currentTime` is a lazy thunk over

@@ -118,6 +118,48 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let warned = ($r1.stderr | lines | where ($it | str starts-with "warning: [with]") | length)
   $res ++= [(verdict ($w1.status =~ 'miss' and ($w2.status | str contains "cache: hit") and $warned == 1 and ($r1.stderr | str contains "cache: hit")) "a lint warning is replayed on a hit" $"lint warning replay \(($w2.status) warned=($warned)\)")]
 
+  # the file on the command line is in the read set, not in the key: editing it
+  # is an ordinary invalidation that names it, and the command keeps one entry
+  let kd = $"($work)/keycache"
+  let top = $"($work)/key/top.nix"
+  mkdir $"($work)/key"
+  "import ./dep.nix\n" | save -f $top
+  "41 + 1\n" | save -f $"($work)/key/dep.nix"
+  let k = (run-eval $ietsp --cache-dir $kd $top)
+  $res ++= [(verdict (($k.status | str contains "miss (no entry)") and $k.why == "") "a file nothing ran before is a silent cold run" $"new file argument \(($k.status) ($k.why)\)")]
+  let k = (run-eval $ietsp --cache-dir $kd $top)
+  $res ++= [(verdict ($k.status | str contains "cache: hit") "the file argument hits" $"file argument hit \(($k.status)\)")]
+  "import ./dep.nix # edited\n" | save -f $top
+  let k = (run-eval $ietsp --cache-dir $kd $top)
+  $res ++= [(verdict ($k.why == $"re-evaluating: ($top) changed") "editing the file argument names it" $"edited file argument said ($k.why)")]
+  let k = (run-eval $ietsp --cache-dir $kd $top)
+  $res ++= [(verdict ($k.status | str contains "cache: hit") "and the edited file hits next time" $"edited file argument \(($k.status)\)")]
+  let entries = (ls $"($kd)/trace" | where type == dir | length)
+  $res ++= [(verdict ($entries == 1) "one command keeps one entry across edits" $"($entries) entries after editing the file argument")]
+  rm $top
+  let k = (run-eval $ietsp --cache-dir $kd $top)
+  $res ++= [(verdict ($k.rc != 0 and $k.why == $"re-evaluating: ($top) is gone") "a removed file argument says it is gone" $"removed file argument said ($k.why)")]
+
+  # the same for a flake: its directory is the key, and flake.nix and
+  # flake.lock are read like any other file
+  let fd = $"($work)/flakecache"
+  let fl = $"($work)/fl"
+  mkdir $fl
+  '{ outputs = _: { x = 41 + 1; }; }' + "\n" | save -f $"($fl)/flake.nix"
+  '{"nodes":{"root":{}},"root":"root","version":7}' + "\n" | save -f $"($fl)/flake.lock"
+  let f = (run-eval $ietsp --cache-dir $fd $"path:($fl)#x")
+  $res ++= [(verdict ($f.rc == 0 and ($f.status | str contains "miss (no entry)") and $f.why == "") "a flake nothing ran before is a silent cold run" $"new flake \(($f.status) ($f.why)\)")]
+  let f = (run-eval $ietsp --cache-dir $fd $"path:($fl)#x")
+  $res ++= [(verdict ($f.status | str contains "cache: hit") "the flake hits" $"flake hit \(($f.status)\)")]
+  '{ outputs = _: { x = 40 + 2; }; }' + "\n" | save -f $"($fl)/flake.nix"
+  let f = (run-eval $ietsp --cache-dir $fd $"path:($fl)#x")
+  $res ++= [(verdict ($f.why == $"re-evaluating: source tree ($fl) changed" and $f.out == "42") "editing flake.nix names the flake's tree" $"edited flake.nix said ($f.why)")]
+  '{"nodes":{"root":{}},"root":"root","version":7} ' + "\n" | save -f $"($fl)/flake.lock"
+  let f = (run-eval $ietsp --cache-dir $fd $"path:($fl)#x")
+  $res ++= [(verdict ($f.why == $"re-evaluating: ($fl)/flake.lock changed") "editing flake.lock names it" $"edited flake.lock said ($f.why)")]
+  let entries = (ls $"($fd)/trace" | where type == dir | length)
+  $res ++= [(verdict ($entries == 1) "one flake command keeps one entry across edits" $"($entries) entries after editing the flake")]
+
   # --cache-dir points at a directory the user names: ietsp owns only the
   # store subdirectories it makes there, and never removes anything else
   mkdir $"($work)/mine"

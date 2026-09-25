@@ -134,10 +134,14 @@ says what about it changed: `PATH changed` (contents), `PATH is gone`,
 `PATH cannot be read`, `PATH is now a directory, not a regular file`,
 `PATH now exists`, `directory PATH has different entries`, `source tree PATH
 changed`, `PATH resolves to a different path`, `environment variable $NAME
-changed` (or `is now set`, `is no longer set`), ``the output of `CMD` in DIR
-changed``, or `input store entry NAME is gone`. The read set has one order,
-and the lowest-indexed observation that fails is the one reported, so one
-change always names the same thing.
+changed` (or `is now set`, `is no longer set`), `the git working tree in DIR
+changed`, ``the output of `CMD` in DIR changed``, or `input store entry NAME
+is gone`. The read set has one order, and the lowest-indexed observation
+that fails is the one reported, so one change always names the same thing.
+
+The file or flake a command names is in the read set like every other file
+the run reads, and not in the key (docs/explanation/caching.md), so editing
+it is an ordinary invalidation and the line names it.
 
 Any other line is `{"action":"msg","level":N,"msg":TEXT}`: level 0 for
 `error:` and `trace:` lines, 1 for warnings, 3 for the rest (build

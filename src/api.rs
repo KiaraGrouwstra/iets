@@ -328,23 +328,18 @@ pub fn setup_cache(a: &EvalArgs, subcommand: &str, ev: &Evaluator) -> Option<Cac
             k.field("expr", e.as_bytes());
             needs_cwd |= has_relative_path(e);
         }
+        // The file and the flake are named by path, never by content: the run
+        // reads them through the traced reader, so the read set holds them,
+        // and editing one invalidates the entry it belongs to instead of
+        // asking a new key. One command keeps one entry, and an edit says
+        // what changed.
         Input::File(f) => {
-            let p = abs_path(f, &cwd);
-            let bytes = std::fs::read(std::path::Path::new(
-                <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&p),
-            ))
-            .ok()?;
-            k.field("file", &p);
-            k.field("file-hash", &crate::trace::sha256(&bytes));
+            k.field("file", &abs_path(f, &cwd));
         }
         Input::Flake(f) => {
             let fr = flake_ref(f, &cwd).ok()?;
             k.field("flake", f.as_bytes());
             k.field("flake-dir", fr.dir.as_os_str().as_encoded_bytes());
-            for name in ["flake.nix", "flake.lock"] {
-                let bytes = std::fs::read(fr.dir.join(name)).ok()?;
-                k.field(name, &crate::trace::sha256(&bytes));
-            }
             needs_cwd = true;
         }
     }

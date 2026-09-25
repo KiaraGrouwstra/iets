@@ -190,6 +190,11 @@ fn check(o: &Obs, rehashed: &AtomicUsize) -> Outcome {
         }
         Obs::Cmd { dir, argv, hash } => match super::run_cmd(os(dir), argv) {
             Ok((status, out)) if super::cmd_hash(status, &out) == *hash => Outcome::Same,
+            // every such observation is a git query of a flake's working
+            // tree, and the tree is what the user changed
+            _ if argv.first().is_some_and(|a| a.ends_with(b"git")) => {
+                Outcome::Changed(format!("the git working tree in {} changed", lossy(dir)))
+            }
             _ => Outcome::Changed(format!(
                 "the output of `{}` in {} changed",
                 argv.iter().map(|a| lossy(a)).collect::<Vec<_>>().join(" "),
