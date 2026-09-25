@@ -9,7 +9,7 @@ in a user's home directory with no daemon and no signature.
 | store | default root | entry | keyed on |
 |---|---|---|---|
 | compiled IR | `~/.cache/ietsp/ir` | one file | build id, path, system, store directory, source |
-| tracing runs | `~/.cache/ietsp/trace` | one directory | the whole command |
+| tracing runs | `~/.cache/ietsp/trace` | one file in a directory | the whole command |
 | fetched inputs | `~/.cache/ietsp/inputs` | one directory | the store path the lock implies |
 
 The ideas come from Mic92's nix-tarmac: a writer lock a caller may give up
@@ -18,24 +18,38 @@ once a day, and poison-and-wipe instead of repair.
 
 ## One discipline, four rules
 
-**Stage and rename.** Every entry file is written under a temporary name
-and renamed into place. A rename is atomic, so a reader sees either the
-whole old entry or the whole new one, never a torn file.
+**Stage and rename.** An entry is one file. It is written under a temporary
+name with everything the entry holds in it, and renamed into place. A
+rename is atomic, so one rename publishes the whole entry: a reader sees
+either the whole old entry or the whole new one, never a torn file and never
+two generations mixed.
 
 **Readers never lock.** They do not have to. The rename is what makes the
-lock unnecessary on the read path, and the read path is the hot one.
+lock unnecessary on the read path, and the read path is the hot one. A
+reader opens the entry once and reads every part it needs through that one
+descriptor, so the bytes it goes on to use are the generation it validated,
+whatever a sibling publishes meanwhile. The old file stays alive for as long
+as that descriptor does, even after a publish or a sweep unlinked its name.
 
-**A writer holds the store's `flock` for exactly one file, and gives up
+**A writer holds the store's `flock` for exactly one entry, and gives up
 after 50 ms.** A skipped write is a miss on a later run. It is never a
 stall and never an error. The lock exists so that two writers of one key
 cannot cross inside one temporary file; it is not a critical section around
 a run. The temporary name also carries the process id and a per-write
 counter, so two threads writing one key in one process cannot cross either.
 A killed writer leaves a temporary file that no reader looks at and that the
-sweep removes after a day.
+sweep removes after a day; the entry it was replacing stays whole and
+usable.
 
 Measured: four `ietsp eval` processes filling one cold store in parallel
 wrote 97 IR entries and skipped none.
+
+Two things the rename does not promise, and does not have to. Nothing is
+fsynced, so a power loss can leave the name pointing at a file whose bytes
+were never written; those bytes are then read as any other bad bytes are,
+and the entry goes. And atomicity is per entry, not across entries: a run
+that published two keys can be interrupted between them. No reader joins two
+entries, so nothing depends on that.
 
 **Poison and wipe; never repair.** An entry that does not decode is
 deleted and the run continues as a miss. A store whose version file is of
@@ -172,7 +186,9 @@ and every network fetcher without a hash. `currentTime` is a lazy thunk over
 an internal primop, so the mark happens only if the program actually forces
 it.
 
-An entry is a directory of files, and which ones exist depends on the
+An entry is one file, `entry`, in a directory named by the key. The file
+starts with a version byte and a table of the parts it holds — where each
+one is and how long it is — and which parts exist depends on the
 subcommand. `readset` holds the observations. `result` holds the exact
 stdout bytes for `eval`, or the root derivation paths and the wanted output
 for `build`. A `build` entry adds `drvs` (every derivation the evaluation
@@ -181,9 +197,19 @@ whose run printed lint warnings adds `warnings`, which a hit replays.
 
 An `eval` entry omits `drvs` and `sources` deliberately: the subcommand is
 in the key, so nothing would read them back, and writing the 16 MB `drvs` of
-nixos-desktop cost 40 ms — 3 % — on every miss. `readset` is written last,
-so a write the lock cut short leaves an entry with no read set, which the
-next lookup treats as a miss.
+nixos-desktop cost 40 ms — 3 % — on every miss.
+
+One file is what makes the entry atomic. A lookup opens it, reads the table,
+and then reads only the parts it wants out of that open file: the read set
+first, and the result, tables and warnings after validation. A write the
+lock cut short, or a writer that was killed, leaves the previous entry
+untouched, because nothing was renamed. Two writers of one key each publish
+a whole entry, so the loser's bytes are replaced, never woven in. The one
+thing the file costs: a hit that refreshed a stat field has to publish the
+whole entry again, not just the read set. For an `eval` entry that is the
+read set plus a few kilobytes. For a `build` entry of nixos-desktop it is
+17 MB, on a path that runs only when a file's mtime moved and its content
+did not.
 
 The cost of recording is about 3 % at one worker on nixos-desktop, and
 inside the noise at four, because the hashing happens on the fiber that read

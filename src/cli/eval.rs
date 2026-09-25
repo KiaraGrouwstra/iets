@@ -9,7 +9,7 @@ use crate::trace::run::Cache;
 pub fn run_eval(a: EvalArgs) -> i32 {
     let mut run = run_for(&a).cached(&a, "eval");
     if let Some(out) = run.hit(|c| {
-        let out = c.store.read(&c.key, crate::trace::store::RESULT)?;
+        let out = c.part(crate::trace::store::Part::Result)?;
         c.replay_warnings();
         Some(out)
     }) {

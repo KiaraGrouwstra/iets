@@ -2,15 +2,21 @@
 //! make, the lookup, and the entry it writes.
 
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use crate::eval::Evaluator;
 use crate::trace::key::Key;
+use crate::trace::store::{Entry, Opened, Part};
 
 /// The tracing cache for one run: where the entry lives and its key. See docs/explanation/caching.md.
 pub struct Cache {
     pub store: crate::trace::store::Store,
     pub key: String,
     timings: bool,
+    /// The generation of the entry this run reads, opened once. Everything a
+    /// hit replays comes from it, so a sibling that publishes meanwhile
+    /// cannot mix its parts into this run.
+    entry: OnceLock<Opened>,
 }
 
 impl Cache {
@@ -25,39 +31,60 @@ impl Cache {
             store,
             key: key.finish(),
             timings,
+            entry: OnceLock::new(),
         })
     }
 
+    fn opened(&self) -> &Opened {
+        self.entry.get_or_init(|| self.store.open(&self.key))
+    }
+
+    /// One part of the entry this run validated.
+    pub fn part(&self, part: Part) -> Option<Vec<u8>> {
+        match self.opened() {
+            Opened::Entry(e) => e.part(part),
+            _ => None,
+        }
+    }
+
     /// Validates the stored read set; true on a hit. A hit that refreshed
-    /// stat fields rewrites `readset`. An entry that existed and no longer
-    /// holds reports what changed; a run with no entry says nothing, because
-    /// a first run invalidated nothing.
+    /// stat fields publishes the entry again with the new read set. An entry
+    /// that existed and no longer holds reports what changed; a run with no
+    /// entry says nothing, because a first run invalidated nothing.
+    ///
+    /// The entry is opened once per [`Cache`], as one run looks its key up
+    /// once: everything this run replays comes from that one generation.
     pub fn lookup(&self) -> bool {
-        use crate::trace::store::READSET;
         let t0 = std::time::Instant::now();
-        let Some(bytes) = self.store.read(&self.key, READSET) else {
-            if self.timings {
-                crate::errln!("cache: miss (no entry)");
-            }
-            return false;
-        };
-        let Some(mut obs) = crate::trace::wire::decode_readset(&bytes) else {
+        let bad = || {
             self.store.discard(&self.key);
             if self.timings {
                 crate::errln!("cache: miss (unreadable entry, discarded)");
             }
-            return false;
+            false
+        };
+        let entry = match self.opened() {
+            Opened::None => {
+                if self.timings {
+                    crate::errln!("cache: miss (no entry)");
+                }
+                return false;
+            }
+            Opened::Bad => return bad(),
+            Opened::Entry(e) => e,
+        };
+        let Some(bytes) = entry.part(Part::Readset) else {
+            return bad();
+        };
+        let Some(mut obs) = crate::trace::wire::decode_readset(&bytes) else {
+            return bad();
         };
         let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(4));
         let t_load = t0.elapsed();
         match crate::trace::validate::validate(&mut obs, threads) {
             Ok(r) => {
                 if r.refreshed > 0 {
-                    let _ = self.store.write(
-                        &self.key,
-                        READSET,
-                        &crate::trace::wire::encode_readset(&obs),
-                    );
+                    self.republish(entry, &crate::trace::wire::encode_readset(&obs));
                 } else {
                     self.store.touch(&self.key);
                 }
@@ -87,11 +114,23 @@ impl Cache {
         }
     }
 
+    /// A hit that refreshed stat fields publishes the whole entry again, with
+    /// the parts it validated and the new read set. The other parts come from
+    /// the open generation, so a sibling's publish in between is not mixed in.
+    fn republish(&self, entry: &Entry, readset: &[u8]) {
+        let kept: Vec<(Part, Vec<u8>)> = [Part::Warnings, Part::Drvs, Part::Sources, Part::Result]
+            .into_iter()
+            .filter_map(|p| Some((p, entry.part(p)?)))
+            .collect();
+        let mut parts: Vec<(Part, &[u8])> = kept.iter().map(|(p, b)| (*p, b.as_slice())).collect();
+        parts.push((Part::Readset, readset));
+        let _ = self.store.publish(&self.key, &parts);
+    }
+
     /// Writes the entry after a successful run; a run that observed
     /// `currentTime` or called a fetcher writes nothing. `tables` adds the
     /// drv and source tables, which only a `build` hit reads back.
     pub fn write(&self, ev: &Evaluator, result: &[u8], tables: bool) {
-        use crate::trace::store::{DRVS, READSET, RESULT, SOURCES, WARNINGS};
         use crate::trace::wire;
         if !ev.trace.is_cacheable() {
             if self.timings {
@@ -101,44 +140,31 @@ impl Cache {
         }
         let t0 = std::time::Instant::now();
         let obs = ev.trace.take();
-        // `readset` goes last: a write the store lock cut short leaves no
-        // entry to hit rather than a half-written one.
-        let warnings = ev.lints.lines();
-        let r = (|| -> std::io::Result<bool> {
-            if warnings.is_empty() {
-                let _ = std::fs::remove_file(self.store.entry_dir(&self.key).join(WARNINGS));
-            } else {
-                let mut bytes = Vec::new();
-                for w in &warnings {
-                    bytes.extend_from_slice(w.as_bytes());
-                    bytes.push(b'\n');
-                }
-                if !self.store.write(&self.key, WARNINGS, &bytes)? {
-                    return Ok(false);
-                }
-            }
-            if tables {
-                if !self
-                    .store
-                    .write(&self.key, DRVS, &wire::encode_drvs(&ev.drv.drvs.lock()))?
-                {
-                    return Ok(false);
-                }
-                if !self.store.write(
-                    &self.key,
-                    SOURCES,
-                    &wire::encode_sources(&ev.known.origins()),
-                )? {
-                    return Ok(false);
-                }
-            }
-            if !self.store.write(&self.key, RESULT, result)? {
-                return Ok(false);
-            }
-            self.store
-                .write(&self.key, READSET, &wire::encode_readset(&obs))
-        })();
-        match r {
+        let mut warnings = Vec::new();
+        for w in ev.lints.lines() {
+            warnings.extend_from_slice(w.as_bytes());
+            warnings.push(b'\n');
+        }
+        let readset = wire::encode_readset(&obs);
+        let (drvs, sources) = if tables {
+            (
+                wire::encode_drvs(&ev.drv.drvs.lock()),
+                wire::encode_sources(&ev.known.origins()),
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let mut parts: Vec<(Part, &[u8])> = Vec::with_capacity(5);
+        if !warnings.is_empty() {
+            parts.push((Part::Warnings, &warnings));
+        }
+        if tables {
+            parts.push((Part::Drvs, &drvs));
+            parts.push((Part::Sources, &sources));
+        }
+        parts.push((Part::Result, result));
+        parts.push((Part::Readset, &readset));
+        match self.store.publish(&self.key, &parts) {
             Ok(wrote) => {
                 if self.timings {
                     if wrote && !obs.is_empty() {
@@ -162,7 +188,7 @@ impl Cache {
 
     /// On a hit: the lint warnings the recorded run printed, to stderr.
     pub fn replay_warnings(&self) {
-        if let Some(bytes) = self.store.read(&self.key, crate::trace::store::WARNINGS) {
+        if let Some(bytes) = self.part(Part::Warnings) {
             crate::session::Session::current()
                 .log
                 .err(&crate::log::replay_lints(&bytes));
@@ -178,12 +204,11 @@ impl Cache {
         HashMap<crate::store::path::StorePath, crate::builtins::derivation::DrvInfo>,
         HashMap<crate::store::path::StorePath, crate::store::source::SourceOrigin>,
     )> {
-        use crate::trace::store::{DRVS, RESULT, SOURCES};
         use crate::trace::wire;
         let tables = (|| {
-            let roots = wire::decode_roots(&self.store.read(&self.key, RESULT)?)?;
-            let drvs = wire::decode_drvs(&self.store.read(&self.key, DRVS)?)?;
-            let sources = wire::decode_sources(&self.store.read(&self.key, SOURCES)?)?;
+            let roots = wire::decode_roots(&self.part(Part::Result)?)?;
+            let drvs = wire::decode_drvs(&self.part(Part::Drvs)?)?;
+            let sources = wire::decode_sources(&self.part(Part::Sources)?)?;
             Some((roots, drvs, sources))
         })();
         if tables.is_none() {

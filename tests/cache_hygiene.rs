@@ -10,7 +10,7 @@ use std::process::Command;
 use ietsp::cachefs;
 use ietsp::trace::Obs;
 use ietsp::trace::run::Cache;
-use ietsp::trace::store::{READSET, Store};
+use ietsp::trace::store::{ENTRY, Opened, Part, Store};
 use ietsp::trace::{key::Key, wire};
 
 const KEYS: usize = 4;
@@ -27,7 +27,7 @@ fn key_of(i: usize) -> String {
     format!("{i:064x}")
 }
 
-/// One writer's entry for `key`: every value is the writer's own byte, so a
+/// One writer's read set for `key`: every value is the writer's own byte, so a
 /// reader that sees two writers' bytes in one entry has read a torn file.
 fn payload(key: usize, writer: u8) -> Vec<u8> {
     let obs: Vec<Obs> = (0..OBS)
@@ -39,9 +39,45 @@ fn payload(key: usize, writer: u8) -> Vec<u8> {
     wire::encode_readset(&obs)
 }
 
-/// `None` when the entry is absent; panics when it is present but incomplete.
+/// One writer's whole entry. The parts have the writer's byte and a length
+/// only that writer uses, so a reader that mixes generations sees it.
+fn publish(store: &Store, key: usize, writer: u8) -> bool {
+    let readset = payload(key, writer);
+    let result = vec![writer; 700 + usize::from(writer) * 137];
+    let warnings = vec![writer; 64 + usize::from(writer)];
+    store
+        .publish(
+            &key_of(key),
+            &[
+                (Part::Warnings, &warnings),
+                (Part::Result, &result),
+                (Part::Readset, &readset),
+            ],
+        )
+        .unwrap_or(false)
+}
+
+/// The writer of a part whose bytes are all its own.
+fn writer_of(bytes: &[u8], what: &str) -> u8 {
+    assert!(!bytes.is_empty(), "{what} is not empty");
+    assert!(
+        bytes.iter().all(|b| *b == bytes[0]),
+        "one writer per {what}"
+    );
+    bytes[0]
+}
+
+/// `None` when the entry is absent; panics when it is present but incomplete,
+/// or when its parts do not all come from one writer.
 fn check(store: &Store, key: usize) -> Option<usize> {
-    let bytes = store.read(&key_of(key), READSET)?;
+    let e = match store.open(&key_of(key)) {
+        Opened::None => return None,
+        Opened::Bad => panic!("a published entry parses"),
+        Opened::Entry(e) => e,
+    };
+    let bytes = e
+        .part(Part::Readset)
+        .expect("a published entry has a read set");
     let obs = wire::decode_readset(&bytes).expect("a published entry decodes");
     assert_eq!(obs.len(), OBS, "an entry holds every observation");
     let mut writers = std::collections::HashSet::new();
@@ -52,10 +88,22 @@ fn check(store: &Store, key: usize) -> Option<usize> {
         assert_eq!(name, format!("IETSP_TEST_{key}_{i}").as_bytes());
         let v = value.as_ref().expect("a value");
         assert_eq!(v.len(), 300);
-        writers.insert(v[0]);
-        assert!(v.iter().all(|b| *b == v[0]), "one writer per value");
+        writers.insert(writer_of(v, "value"));
     }
+    // the review's case: a new result beside an old read set, or two
+    // generations mixed by a sibling that published in between
+    let result = e
+        .part(Part::Result)
+        .expect("a published entry has a result");
+    writers.insert(writer_of(&result, "result"));
+    let warnings = e
+        .part(Part::Warnings)
+        .expect("a published entry has warnings");
+    writers.insert(writer_of(&warnings, "warnings"));
     assert_eq!(writers.len(), 1, "one writer per entry, never a mix");
+    let w = usize::from(writers.into_iter().next().expect("a writer"));
+    assert_eq!(result.len(), 700 + w * 137, "the result of that writer");
+    assert_eq!(warnings.len(), 64 + w, "the warnings of that writer");
     Some(obs.len())
 }
 
@@ -71,7 +119,7 @@ fn concurrent_readers_and_writers_never_see_a_torn_entry() {
                 let store = Store::locate(Some(base.to_str().expect("utf-8 path"))).expect("store");
                 for round in 0..60 {
                     let key = (round + w as usize) % KEYS;
-                    let _ = store.write(&key_of(key), READSET, &payload(key, w + 1));
+                    publish(&store, key, w + 1);
                     check(&store, (key + 1) % KEYS);
                 }
             });
@@ -92,7 +140,7 @@ fn crash_writer_child() {
     let store = Store::locate(Some(&dir.to_string_lossy())).expect("store");
     for i in 0..usize::MAX {
         let key = i % 64;
-        let _ = store.write(&key_of(key), READSET, &payload(key, 1));
+        publish(&store, key, u8::try_from(i % 8).expect("a writer") + 1);
     }
 }
 
@@ -122,9 +170,7 @@ fn a_killed_writer_leaves_the_store_usable() {
     }
     assert!(published > 0, "the writer published before it died");
     assert!(
-        store
-            .write(&key_of(1000), READSET, &payload(0, 9))
-            .expect("write"),
+        publish(&store, 1000, 9),
         "the next writer takes the lock a killed one held"
     );
 }
@@ -136,36 +182,59 @@ fn hit_entry() -> Vec<u8> {
     }])
 }
 
+/// A cache opened as a new process opens one: a lookup holds the generation
+/// it opened, so a second lookup of changed bytes needs a new [`Cache`].
+fn cached(path: &str) -> Cache {
+    Cache::open(Some(path), Key::new("eval"), false).expect("cache")
+}
+
+fn put_hit(c: &Cache, readset: &[u8]) {
+    assert!(
+        c.store
+            .publish(&c.key, &[(Part::Readset, readset)])
+            .expect("publish")
+    );
+}
+
 #[test]
 fn a_corrupt_entry_is_dropped_and_a_corrupt_store_is_wiped() {
     let dir = tmp("corrupt");
     let path = dir.to_str().expect("utf-8 path");
 
-    let c = Cache::open(Some(path), Key::new("eval"), false).expect("cache");
-    assert!(c.store.write(&c.key, READSET, &hit_entry()).expect("write"));
+    let c = cached(path);
+    put_hit(&c, &hit_entry());
     assert!(c.lookup(), "a read set that validates is a hit");
 
-    let entry = c.store.entry_dir(&c.key).join(READSET);
+    let entry = c.store.entry_dir(&c.key).join(ENTRY);
     let good = std::fs::read(&entry).expect("entry");
     std::fs::write(&entry, &good[..good.len() / 2]).expect("truncate");
+    let c = cached(path);
     assert!(!c.lookup(), "a truncated entry misses");
     assert!(
         !c.store.entry_dir(&c.key).exists(),
         "and the entry is dropped, never repaired"
     );
 
-    assert!(c.store.write(&c.key, READSET, b"garbage").expect("write"));
+    put_hit(&c, b"garbage");
+    let c = cached(path);
     assert!(!c.lookup());
     assert!(!c.store.entry_dir(&c.key).exists());
 
-    assert!(c.store.write(&c.key, READSET, &hit_entry()).expect("write"));
+    std::fs::create_dir_all(c.store.entry_dir(&c.key)).expect("entry dir");
+    std::fs::write(&entry, b"not an entry at all").expect("entry");
+    let c = cached(path);
+    assert!(!c.lookup(), "bytes that are not an entry miss");
+    assert!(!c.store.entry_dir(&c.key).exists());
+
+    put_hit(&c, &hit_entry());
     std::fs::write(c.store.root().join("gc-stamp"), b"\x01not a time").expect("stamp");
-    let c = Cache::open(Some(path), Key::new("eval"), false).expect("cache");
+    let c = cached(path);
     assert!(
         !c.store.entry_dir(&c.key).exists(),
         "an unreadable store-level file wipes the store"
     );
-    assert!(c.store.write(&c.key, READSET, &hit_entry()).expect("write"));
+    put_hit(&c, &hit_entry());
+    let c = cached(path);
     assert!(c.lookup(), "and the store works again");
 }
 
@@ -178,8 +247,8 @@ fn cache_gc_removes_entries_past_the_ttl() {
     for key in 0..3 {
         assert!(
             store
-                .write(&key_of(key), READSET, &hit_entry())
-                .expect("write")
+                .publish(&key_of(key), &[(Part::Readset, &hit_entry())])
+                .expect("publish")
         );
     }
     let ir_key = key_of(0);
@@ -209,7 +278,7 @@ fn cache_gc_removes_entries_past_the_ttl() {
         "{dry}"
     );
     assert!(
-        store.read(&key_of(0), READSET).is_some(),
+        matches!(store.open(&key_of(0)), Opened::Entry(_)),
         "a dry run keeps everything"
     );
 
@@ -220,7 +289,7 @@ fn cache_gc_removes_entries_past_the_ttl() {
     );
     for key in 0..3 {
         assert!(
-            store.read(&key_of(key), READSET).is_none(),
+            matches!(store.open(&key_of(key)), Opened::None),
             "the entry is gone"
         );
     }

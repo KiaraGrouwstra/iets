@@ -4,10 +4,11 @@
 //!
 //! Many `ietsp` processes share one cache directory (eval-jobs workers,
 //! direnv, the classic command names). The invariant they hold together:
-//! **every entry file is written to a temporary name and renamed into place,
-//! so a reader either sees the whole previous entry or the whole new one and
-//! never locks; a writer holds the store's `flock` for exactly one file, and a
-//! writer that cannot take it within `LOCK_TIMEOUT` drops the write.** A
+//! **an entry is one file, written to a temporary name and renamed into
+//! place, so one rename publishes the whole entry, a reader sees either the
+//! whole previous entry or the whole new one and never locks; a writer holds
+//! the store's `flock` for exactly one such file, and a writer that cannot
+//! take it within `LOCK_TIMEOUT` drops the write.** A
 //! dropped write costs one cache miss later, which is why no path here waits
 //! on a sibling worker or fails a run. The one exception is `wait_lock`, for a
 //! download a sibling is already doing.
@@ -94,12 +95,22 @@ fn stamp_age(bytes: &[u8]) -> Option<Duration> {
     Some(Duration::from_secs(now_secs().saturating_sub(secs)))
 }
 
-/// Writes `bytes` to `dir/name` through a temporary file, so a reader sees
-/// either the old contents or the new ones. `tag` separates concurrent
-/// writers of one name inside one process.
-pub fn write_atomic(dir: &Path, name: &str, tag: u64, bytes: &[u8]) -> io::Result<()> {
+/// Writes `chunks`, one after the other, to `dir/name` through a temporary
+/// file, so a reader sees either the old contents or the new ones. Several
+/// chunks make one file, which is how an entry of many parts is published in
+/// one rename without first joining it into one buffer. `tag` separates
+/// concurrent writers of one name inside one process.
+pub fn write_atomic(dir: &Path, name: &str, tag: u64, chunks: &[&[u8]]) -> io::Result<()> {
+    use io::Write;
     let tmp = dir.join(format!(".{name}.{}.{tag}.tmp", std::process::id()));
-    match fs::write(&tmp, bytes) {
+    let write = || -> io::Result<()> {
+        let mut f = fs::File::create(&tmp)?;
+        for c in chunks {
+            f.write_all(c)?;
+        }
+        Ok(())
+    };
+    match write() {
         Ok(()) => fs::rename(&tmp, dir.join(name)).inspect_err(|_| {
             let _ = fs::remove_file(&tmp);
         }),
@@ -237,7 +248,7 @@ pub fn prepare(root: &Path, shape: Shape, timings: bool) -> bool {
         }
     }
     if fs::create_dir_all(root).is_ok() && fs::read(root.join(VERSION)).is_err() {
-        let _ = write_atomic(root, VERSION, tag(), FORMAT);
+        let _ = write_atomic(root, VERSION, tag(), &[FORMAT]);
     }
     true
 }
@@ -456,7 +467,7 @@ pub fn maybe_sweep(root: &Path, shape: Shape, timings: bool) {
         if !due(root) {
             return;
         }
-        if write_atomic(root, STAMP, tag(), now_secs().to_string().as_bytes()).is_err() {
+        if write_atomic(root, STAMP, tag(), &[now_secs().to_string().as_bytes()]).is_err() {
             return;
         }
     }

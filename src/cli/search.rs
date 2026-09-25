@@ -179,7 +179,7 @@ fn run(mut s: Search, classic: Option<&[String]>) -> i32 {
     let r = Run::on(ev).workers(workers).cached(&key_args(&s), "search");
     let index = match r.hit(|c| {
         c.replay_warnings();
-        decode(&c.store.read(&c.key, crate::trace::store::RESULT)?)
+        decode(&c.part(crate::trace::store::Part::Result)?)
     }) {
         Some(index) => index,
         None => {

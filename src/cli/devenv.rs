@@ -124,7 +124,7 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
     let t0 = std::time::Instant::now();
     let run = run_for(&a).cached(&a, "print-dev-env");
     if let Some(code) = run.hit(|c| {
-        let bytes = c.store.read(&c.key, crate::trace::store::RESULT)?;
+        let bytes = c.part(crate::trace::store::Part::Result)?;
         let hit = crate::devenv::CachedResult::decode(&bytes)?;
         match dev_env_hit(&d, &hit) {
             Ok(true) => {

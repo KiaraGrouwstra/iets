@@ -116,7 +116,7 @@ impl IrCache {
         let _ = std::fs::create_dir_all(dir);
         let name = &key[2..];
         if let Some(_lock) = crate::cachefs::write_lock(&self.root) {
-            let _ = crate::cachefs::write_atomic(dir, name, crate::cachefs::tag(), bytes);
+            let _ = crate::cachefs::write_atomic(dir, name, crate::cachefs::tag(), &[bytes]);
         } else if self.stats {
             crate::errln!("ir-cache skip {name} (a sibling holds the store lock)");
         }
