@@ -52,6 +52,15 @@ fn a_bad_command_line_names_the_problem() {
     for (args, want) in [
         (&["bogus"][..], "error: unknown command 'bogus'\n"),
         (
+            &["buidl"],
+            "error: unknown command 'buidl'\ndid you mean 'build'?\n",
+        ),
+        (&["serach", "^"], "did you mean 'search'?"),
+        (
+            &["nix-instantate", "--eval", "-E", "1"],
+            "did you mean 'nix-instantiate'?",
+        ),
+        (
             &["eval", "--stirct", "-E", "1"],
             "error: unknown flag '--stirct'\ndid you mean '--strict'?\nrun 'ietsp eval --help' for the flags\n",
         ),

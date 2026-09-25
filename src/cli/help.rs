@@ -321,13 +321,24 @@ fn distance(a: &str, b: &str) -> usize {
     row[b.len()]
 }
 
-/// The closest candidate, when it is close enough to be a typo.
+/// The closest candidate, when it is close enough to be a typo: a third of
+/// the candidate, or two edits once the candidate is long enough for two to
+/// be a slip rather than another word ('buidl' for 'build').
 pub fn suggest<'a>(word: &str, candidates: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
     let close = candidates.into_iter().map(|c| (distance(word, c), c));
     close
-        .filter(|(d, c)| d * 3 <= c.len())
+        .filter(|(d, c)| d * 3 <= c.len() || (*d <= 2 && c.len() >= 5))
         .min_by_key(|(d, _)| *d)
         .map(|(_, c)| c)
+}
+
+/// Every word `ietsp WORD` takes: the native commands, the classic names it
+/// answers to, and the two that are not commands.
+fn command_words() -> Vec<&'static str> {
+    (COMMANDS.split(' '))
+        .chain(crate::cli::classic::NAMES.iter().copied())
+        .chain(["help", "version"])
+        .collect()
 }
 
 /// The report of a bad command line under `cmd` ("ietsp" before the command
@@ -362,7 +373,7 @@ pub fn unknown_flag(flag: &str) -> ! {
 pub fn unknown_command(word: &str) -> ! {
     fail(
         &format!("unknown command '{word}'"),
-        suggest(word, COMMANDS.split(' ')),
+        suggest(word, command_words()),
     )
 }
 
@@ -411,6 +422,23 @@ mod tests {
         }
         assert_eq!(suggest("evl", COMMANDS.split(' ')), Some("eval"));
         assert_eq!(suggest("bogus", COMMANDS.split(' ')), None);
+    }
+
+    #[test]
+    fn a_mistyped_command_is_suggested() {
+        for (typo, want) in [
+            ("buidl", Some("build")),
+            ("evl", Some("eval")),
+            ("serach", Some("search")),
+            ("verison", Some("version")),
+            ("nix-buidl", Some("nix-build")),
+            ("nix-instantate", Some("nix-instantiate")),
+            ("eval-jbos", Some("eval-jobs")),
+            ("bogus", None),
+            ("x", None),
+        ] {
+            assert_eq!(suggest(typo, command_words()), want, "{typo}");
+        }
     }
 
     #[test]
