@@ -68,6 +68,12 @@ impl Run {
         f(c)
     }
 
+    /// The result bytes of the entry this run validated: what the command
+    /// wrote with `Cache::write` last time, when the read set still holds.
+    pub fn hit_result(&self) -> Option<Vec<u8>> {
+        self.hit(|c| c.part(crate::trace::store::Part::Result))
+    }
+
     /// `f` as the main fiber of `workers` evaluator threads, with the trace
     /// on when there is a cache entry to write. The error is the fiber
     /// stacks: the reservation is over the cap, or the kernel refused it.

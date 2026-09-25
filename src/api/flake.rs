@@ -34,6 +34,18 @@ pub fn outputs(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
     crate::flake::eval_flake(ev, fr)
 }
 
+/// flakeref.cc:FlakeRef::to_string for the references ietsp parses: how a
+/// local flake names itself in a message.
+pub fn url(fr: &FlakeRef) -> String {
+    match &fr.source {
+        SourceRef::Git { root, subdir } if !subdir.is_empty() => {
+            format!("git+file://{}?dir={subdir}", root.display())
+        }
+        SourceRef::Git { root, .. } => format!("git+file://{}", root.display()),
+        _ => format!("path:{}", fr.dir.display()),
+    }
+}
+
 /// The tree a reference names, copied or fetched if it is not here yet.
 pub fn tree(ev: &mut Evaluator, r: &SourceRef) -> EvalResult<Tree> {
     crate::source::tree(ev, r, crate::eval::Pos::NONE)

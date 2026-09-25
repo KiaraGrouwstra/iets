@@ -6,7 +6,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
-use crate::build::render::Style;
 use crate::build::upload::PlanUpload;
 use crate::build::{Dispatcher, Outcome, Target};
 use crate::builtins::derivation::DrvInfo;
@@ -14,11 +13,17 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::eval::Evaluator;
 use crate::provenance::Provenance;
-use crate::remote::plan::{Inputs, Plan};
-use crate::remote::worker::{Missing, Options, Transport};
+use crate::remote::plan::Inputs;
+use crate::remote::worker::Missing;
 use crate::store::locate::locate_in_store;
 use crate::store::path::StorePath;
 use crate::store::source::SourceOrigin;
+
+// What `Dispatch::open` takes, so a caller above this line can name it all
+// without reaching past the api (tests/layering.rs).
+pub use crate::build::render::Style;
+pub use crate::remote::plan::Plan;
+pub use crate::remote::worker::{Options, Transport};
 
 /// One derivation and one of its outputs a command asked for.
 #[derive(Clone, Debug, PartialEq, Eq)]
