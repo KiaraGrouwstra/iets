@@ -17,18 +17,17 @@ pub const WAITERS_BIT: u64 = 0x80;
 
 #[inline]
 pub fn blackhole(id: u32) -> Word {
-    Word(Word::BLACKHOLE.0 | ((id as u64) << 8))
+    Word::blackhole_claimed(id)
 }
 
 #[inline]
 pub fn claimer(w: Word) -> u32 {
-    (w.0 >> 8) as u32
+    w.blackhole_claimer()
 }
 
 #[inline]
 fn atomic(cell: &Cell) -> &AtomicU64 {
-    // SAFETY: `Cell` is `#[repr(transparent)]` over `AtomicU64`.
-    unsafe { &*(cell as *const Cell as *const AtomicU64) }
+    cell.atomic()
 }
 
 pub enum Claim {
@@ -52,7 +51,8 @@ pub fn try_claim(cell: &Cell, me: u32, unforced: impl Fn(Word) -> bool) -> Claim
     // exclusive state on every reader of a hot shared value.
     let mut cur = atomic(cell).load(Ordering::Acquire);
     loop {
-        let w = Word(cur);
+        // SAFETY: `cur` is a word another fiber stored in this cell.
+        let w = unsafe { Word::from_bits(cur) };
         if w.is_blackhole() {
             return if claimer(w) == me {
                 Claim::Mine
@@ -65,7 +65,7 @@ pub fn try_claim(cell: &Cell, me: u32, unforced: impl Fn(Word) -> bool) -> Claim
         }
         match atomic(cell).compare_exchange(
             cur,
-            blackhole(me).0,
+            blackhole(me).bits(),
             Ordering::Acquire,
             Ordering::Acquire,
         ) {
@@ -78,7 +78,7 @@ pub fn try_claim(cell: &Cell, me: u32, unforced: impl Fn(Word) -> bool) -> Claim
 /// Store the new state word (the forced state, or the payload again to
 /// reset) and wake every parked waiter.
 pub fn publish(slot: &mut Slot, cell: &Cell, v: Word) {
-    let old = atomic(cell).swap(v.0, Ordering::AcqRel);
+    let old = atomic(cell).swap(v.bits(), Ordering::AcqRel);
     if old & WAITERS_BIT != 0 {
         let rt = slot.runtime();
         let list = rt.waiters.take(cell);
@@ -96,9 +96,9 @@ pub struct Cancelled;
 
 /// Park until the cell leaves the claimed state `cur`.
 pub fn wait(slot: &mut Slot, cell: &Cell, cur: Word) -> Result<(), Cancelled> {
-    let base = cur.0 & !WAITERS_BIT;
+    let base = cur.bits() & !WAITERS_BIT;
     for _ in 0..SPIN {
-        if cell.get().0 & !WAITERS_BIT != base {
+        if cell.get().bits() & !WAITERS_BIT != base {
             return Ok(());
         }
         std::hint::spin_loop();
@@ -109,7 +109,7 @@ pub fn wait(slot: &mut Slot, cell: &Cell, cur: Word) -> Result<(), Cancelled> {
     {
         let mut g = shard.lock().unwrap();
         let now = cell.get();
-        if now.0 & !WAITERS_BIT != base {
+        if now.bits() & !WAITERS_BIT != base {
             return Ok(());
         }
         // PARKING before the entry is visible, so a waker that finds the
@@ -117,8 +117,8 @@ pub fn wait(slot: &mut Slot, cell: &Cell, cur: Word) -> Result<(), Cancelled> {
         slot.fiber.state.store(fiber::PARKING, Ordering::Release);
         if atomic(cell)
             .compare_exchange(
-                now.0,
-                now.0 | WAITERS_BIT,
+                now.bits(),
+                now.bits() | WAITERS_BIT,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             )
@@ -319,7 +319,7 @@ mod tests {
                 for i in 0..2 {
                     let t = Task {
                         kind: 1,
-                        obj: 0,
+                        obj: Word::EMPTY,
                         start: i,
                         len: 0,
                     };
@@ -427,7 +427,7 @@ mod tests {
                 for start in (0..N as u32).rev().step_by(16) {
                     let t = Task {
                         kind: 1,
-                        obj: 0,
+                        obj: Word::EMPTY,
                         start: start.saturating_sub(15),
                         len: start - start.saturating_sub(15) + 1,
                     };

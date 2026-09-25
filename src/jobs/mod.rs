@@ -66,9 +66,9 @@ struct Config {
     syms: Syms,
     /// The `--arg`/`--argstr` attrset, auto-called on every function met.
     /// A `Word` into the arena, which is never freed.
-    auto_args: u64,
+    auto_args: Word,
     /// The `--apply` function, evaluated once.
-    apply: Option<u64>,
+    apply: Option<Word>,
 }
 
 /// The `eval-jobs` walk of one run. The session owns it
@@ -142,8 +142,8 @@ pub fn configure(ev: &mut Evaluator, opts: Opts, auto_args: Word, apply: Option<
     let _ = crate::session::Session::current().jobs.config.set(Config {
         opts,
         syms,
-        auto_args: auto_args.0,
-        apply: apply.map(|w| w.0),
+        auto_args,
+        apply,
     });
 }
 
@@ -196,7 +196,7 @@ fn walk(
                         .copied()
                         .max()
                         .map_or(0, |i| i + 1);
-                    fanout_range(ev, T_JOB, Word::from_ptr(attrs), lo, hi, JOB_BATCH);
+                    fanout_range(ev, T_JOB, Word::from_ref(attrs), lo, hi, JOB_BATCH);
                 }
                 let name = ev.interner.name_str(attr.sym).to_string();
                 let h = fnv_step(hash, name.as_bytes());
@@ -291,7 +291,7 @@ fn is_derivation(ev: &mut Evaluator, a: &'static AttrsObj) -> EvalResult<bool> {
 /// where to recurse.
 pub fn node(ev: &mut Evaluator, w: Word, path: &[String], hash: u64) -> EvalResult<Node> {
     let cfg = config();
-    let v = ev.auto_call(w, Word(cfg.auto_args))?;
+    let v = ev.auto_call(w, cfg.auto_args)?;
     let v = ev.force(v)?;
     let Some(attrs) = v.as_attrs() else {
         return Ok(Node::Skip);
@@ -326,7 +326,7 @@ pub fn find_along_attr_path(ev: &mut Evaluator, root: Word, path: &[String]) -> 
     let cfg = config();
     let mut v = root;
     for (i, name) in path.iter().enumerate() {
-        v = ev.auto_call(v, Word(cfg.auto_args))?;
+        v = ev.auto_call(v, cfg.auto_args)?;
         v = ev.force(v)?;
         let selection = attr_join(&path[..=i]);
         if is_index(name) && v.as_attrs().is_none() {
@@ -624,7 +624,7 @@ fn extract_constituents(
 
 /// worker.cc:applyExprToValue: `--apply` on the job, printed as strict JSON.
 fn apply_json(ev: &mut Evaluator, f: Word, a: &'static AttrsObj) -> EvalResult<Vec<u8>> {
-    let res = ev.apply(f, &[Word::from_ptr(a)], Pos::NONE)?;
+    let res = ev.apply(f, &[Word::from_ref(a)], Pos::NONE)?;
     ev.force_attrs(res, Pos::NONE, "apply needs to evaluate to an attrset")?;
     let mut out = Vec::new();
     let mut ctx = Vec::new();
@@ -661,7 +661,7 @@ fn job_inner(ev: &mut Evaluator, a: &'static AttrsObj, path: &[String]) -> EvalR
     };
     let mut extra: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     if let Some(f) = cfg.apply {
-        extra.insert("extraValue".into(), apply_json(ev, Word(f), a)?);
+        extra.insert("extraValue".into(), apply_json(ev, f, a)?);
     }
     let name = match a.get(ev.s.name) {
         Some(n) => ev
@@ -830,7 +830,7 @@ fn prefetch_value(ev: &mut Evaluator, v: Word, hash: u64, depth: u32) -> EvalRes
         return Ok(());
     }
     let cfg = config();
-    let v = ev.auto_call(v, Word(cfg.auto_args))?;
+    let v = ev.auto_call(v, cfg.auto_args)?;
     let Some(a) = v.as_attrs() else {
         return Ok(());
     };
@@ -849,7 +849,7 @@ fn prefetch_value(ev: &mut Evaluator, v: Word, hash: u64, depth: u32) -> EvalRes
     }
     let a = ev.arena.flat(a);
     remember_set(a, hash, depth);
-    fanout_range(ev, T_JOB, Word::from_ptr(a), 0, a.len(), JOB_BATCH);
+    fanout_range(ev, T_JOB, Word::from_ref(a), 0, a.len(), JOB_BATCH);
     for attr in a.attrs() {
         if prefetch_child(ev, attr, hash, depth).is_err() {
             return Err(Error::boxed(ErrorKind::Cancelled, "cancelled", Pos::NONE));

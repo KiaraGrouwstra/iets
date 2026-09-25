@@ -325,7 +325,7 @@ fn unsafe_discard_string_context(ev: &mut Evaluator, args: &[Word], pos: Pos) ->
     if ctx.is_empty()
         && let Some(so) = ev.force(args[0])?.as_string()
     {
-        return Ok(Word::from_ptr(so));
+        return Ok(Word::from_ref(so));
     }
     Ok(ev.mk_string(&s))
 }

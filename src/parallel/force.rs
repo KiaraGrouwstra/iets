@@ -292,7 +292,7 @@ pub fn fanout_range(ev: &Evaluator, kind: u8, obj: Word, lo: usize, hi: usize, b
         if worth {
             let t = Task {
                 kind,
-                obj: obj.0,
+                obj,
                 start,
                 len,
             };
@@ -308,7 +308,7 @@ pub fn fanout_range(ev: &Evaluator, kind: u8, obj: Word, lo: usize, hi: usize, b
 #[inline]
 pub fn fanout_list(ev: &Evaluator, l: &'static ListObj) {
     if ev.par.on && fanout_mask(ev) & 4 != 0 {
-        fanout(ev, T_LIST_WHNF, Word::from_ptr(l), l.len as usize);
+        fanout(ev, T_LIST_WHNF, Word::from_ref(l), l.len as usize);
     }
 }
 
@@ -319,7 +319,7 @@ pub fn fanout_list_coerce(ev: &Evaluator, l: &'static ListObj) {
         fanout_batched(
             ev,
             T_LIST_COERCE,
-            Word::from_ptr(l),
+            Word::from_ref(l),
             l.len as usize,
             COERCE_BATCH,
         );
@@ -331,7 +331,7 @@ pub fn fanout_list_coerce(ev: &Evaluator, l: &'static ListObj) {
 pub fn fanout_attrs_coerce(ev: &mut Evaluator, a: &'static AttrsObj) {
     if ev.par.on && fanout_mask(ev) & 2 != 0 {
         let a = ev.arena.flat(a);
-        fanout_batched(ev, T_ATTRS_COERCE, Word::from_ptr(a), a.len(), COERCE_BATCH);
+        fanout_batched(ev, T_ATTRS_COERCE, Word::from_ref(a), a.len(), COERCE_BATCH);
     }
 }
 
@@ -359,7 +359,7 @@ fn coerce_walk(ev: &mut Evaluator, v: Word, depth: u32) -> bool {
                 return coerce_step(ev, &o.cell, depth);
             }
             let a = ev.arena.flat(a);
-            fanout_batched(ev, T_ATTRS_COERCE, Word::from_ptr(a), a.len(), COERCE_BATCH);
+            fanout_batched(ev, T_ATTRS_COERCE, Word::from_ref(a), a.len(), COERCE_BATCH);
             for attr in a.attrs() {
                 if !coerce_step(ev, &attr.cell, depth) {
                     return false;
@@ -404,12 +404,12 @@ fn deep_inner(
 ) -> EvalResult<()> {
     match w.view() {
         Value::Attrs(a) => {
-            if !seen.insert(w.0) {
+            if !seen.insert(w.bits()) {
                 return Ok(());
             }
             let a = ev.arena.flat(a);
             if fanout_mask(ev) & 1 != 0 {
-                fanout(ev, T_ATTRS_DEEP, Word::from_ptr(a), a.len());
+                fanout(ev, T_ATTRS_DEEP, Word::from_ref(a), a.len());
             }
             let attrs = a.attrs();
             walk(
@@ -432,7 +432,7 @@ fn deep_inner(
             )
         }
         Value::List(l) => {
-            if !seen.insert(w.0) {
+            if !seen.insert(w.bits()) {
                 return Ok(());
             }
             if fanout_mask(ev) & 1 != 0 {
@@ -506,7 +506,7 @@ fn walk(
 // ---- tasks ------------------------------------------------------------------
 
 fn run_task(ev: &mut Evaluator, t: Task) {
-    let obj = Word(t.obj);
+    let obj = t.obj;
     let (start, end) = (t.start as usize, (t.start + t.len) as usize);
     match t.kind {
         T_LIST_WHNF | T_LIST_DEEP => {

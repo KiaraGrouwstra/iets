@@ -655,7 +655,7 @@ impl Evaluator {
                 Kind::ThunkApp2 => 2,
                 _ => 3,
             }] += 1;
-            self.arena.stats.census.note_thunk_forced(w.0);
+            self.arena.stats.census.note_thunk_forced(w.bits());
         }
         let v = self.run_thunk(w, st);
         match v {
@@ -856,7 +856,7 @@ impl Evaluator {
     ) -> EvalResult<()> {
         match w.view() {
             Value::Attrs(a) => {
-                if !seen.insert(w.0) {
+                if !seen.insert(w.bits()) {
                     return Ok(());
                 }
                 for attr in a.iter() {
@@ -874,7 +874,7 @@ impl Evaluator {
                 }
             }
             Value::List(l) => {
-                if !seen.insert(w.0) {
+                if !seen.insert(w.bits()) {
                     return Ok(());
                 }
                 for c in l.cells() {
@@ -1334,7 +1334,7 @@ impl Evaluator {
                     let w = self.maybe_thunk(env, item);
                     c.set(w);
                 }
-                Ok(Word::from_ptr(l))
+                Ok(Word::from_ref(l))
             }
             Ir::Lambda(l) => Ok(self.arena.mk_lambda(env, l)),
             Ir::Apply { func, args, pos } => {
@@ -1529,7 +1529,7 @@ impl Evaluator {
                 pos,
                 "while evaluating the first subexpression of a with expression",
             )?;
-            e.slot(0).set(Word::from_ptr(attrs));
+            e.slot(0).set(Word::from_ref(attrs));
             if let Some(a) = attrs.get(sym) {
                 return self.force_cell(&a.cell);
             }
@@ -1798,7 +1798,7 @@ impl Evaluator {
                 out.init(i, b.sym, b.pos, w);
             }
         }
-        Word::from_ptr(out as *const AttrsObj)
+        Word::from_ref(out)
     }
 
     /// Env holding the `inherit (e)` source thunks of a non-rec set.
@@ -1941,10 +1941,10 @@ impl Evaluator {
     /// one to size the result, one to fill it.
     pub fn update_attrs(&mut self, a: &'static AttrsObj, b: &'static AttrsObj) -> Word {
         if a.is_empty() {
-            return Word::from_ptr(b);
+            return Word::from_ref(b);
         }
         if b.is_empty() {
-            return Word::from_ptr(a);
+            return Word::from_ref(a);
         }
         #[cfg(feature = "stats2")]
         self.arena.stats.census.note_upd(a, b);
@@ -2005,13 +2005,13 @@ impl Evaluator {
             out.init_from(k, x);
             k += 1;
         }
-        Word::from_ptr(out as *const AttrsObj)
+        Word::from_ref(out)
     }
 
     pub fn concat_lists(&mut self, lists: &[&'static ListObj]) -> Word {
         let total: usize = lists.iter().map(|l| l.len as usize).sum();
         if let Some(l) = lists.iter().find(|l| l.len as usize == total) {
-            return Word::from_ptr(*l);
+            return Word::from_ref(*l);
         }
         let out = self.arena.alloc_list_as(total, Stat::ListConcat);
         let cells = out.cells();
@@ -2022,7 +2022,7 @@ impl Evaluator {
                 k += 1;
             }
         }
-        Word::from_ptr(out)
+        Word::from_ref(out)
     }
 
     // ---- arithmetic -----------------------------------------------------------

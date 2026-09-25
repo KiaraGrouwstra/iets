@@ -304,7 +304,7 @@ fn visit(
         };
         // parallel: the helpers force the children while the walk reads them
         let a = ev.arena.flat(a);
-        fanout(ev, T_ATTRS_WHNF, Word::from_ptr(a), a.len());
+        fanout(ev, T_ATTRS_WHNF, Word::from_ref(a), a.len());
         for attr in crate::print::lexicographic_order(ev, a) {
             path.push(ev.interner.name(attr.sym).to_vec());
             let r = visit(ev, attr.cell.get(), path, false, out, lenient);

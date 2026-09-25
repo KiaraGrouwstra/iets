@@ -4,7 +4,7 @@
 
 use super::arena::{Arena, Interned, Stat, StrEntry};
 use super::word::{
-    Cell, TAG_IMM, TAG_INT, TAG_LAMBDA, TAG_PTR, TAG_THUNK, TAG_THUNK_APP, TAG_THUNK_APP2,
+    Cell, Obj, TAG_IMM, TAG_INT, TAG_LAMBDA, TAG_THUNK, TAG_THUNK_APP, TAG_THUNK_APP2,
     TAG_THUNK_MAP, Word,
 };
 use crate::compile::ir::{Ir, LambdaIr};
@@ -238,6 +238,18 @@ pub struct PrimOpAppObj {
     pub op: &'static PrimOpObj,
     pub args: &'static [Word],
 }
+
+// SAFETY: each of these is allocated only by the `mk_*`/`alloc_*` methods
+// below, which align it to 8, and each starts with the `Kind` byte `view`
+// reads. `Word::from_ref` is safe because of this list.
+unsafe impl Obj for IntObj {}
+unsafe impl Obj for FloatObj {}
+unsafe impl Obj for StringObj {}
+unsafe impl Obj for PathObj {}
+unsafe impl Obj for ListObj {}
+unsafe impl Obj for AttrsObj {}
+unsafe impl Obj for PrimOpObj {}
+unsafe impl Obj for PrimOpAppObj {}
 
 /// A suspended `ir` in `env`, overwritten in place when forced. Thunk
 /// objects carry no `Kind` byte: the word tag tells the layouts apart.
@@ -616,7 +628,7 @@ impl Word {
             // SAFETY: lambda-tagged words point at an arena LambdaObj.
             TAG_LAMBDA => Value::Lambda(unsafe { &*self.ptr::<LambdaObj>() }),
             _ => {
-                debug_assert!(self.0 != 0, "view: empty word");
+                debug_assert!(self.bits() != 0, "view: empty word");
                 // SAFETY: pointer-tagged words always point at an arena
                 // object that starts with a Kind byte.
                 unsafe {
@@ -661,7 +673,7 @@ impl Word {
         if self.tag() == TAG_LAMBDA {
             return Some(Kind::Lambda);
         }
-        if self.tag() == TAG_PTR && self.0 != 0 {
+        if self.is_ptr() {
             // SAFETY: see `view`.
             Some(unsafe { *(self.ptr::<u8>() as *const Kind) })
         } else {
@@ -765,17 +777,6 @@ impl Word {
         Word::EMPTY
     }
 
-    /// The value of a forced thunk, `None` while unforced or claimed.
-    #[inline]
-    pub fn thunk_forced(self) -> Option<Word> {
-        let st = self.thunk_state_cell().get();
-        if st.is_blackhole() || self.thunk_unforced(st) {
-            None
-        } else {
-            Some(self.thunk_value(st))
-        }
-    }
-
     /// Descriptor and entry index of a map word.
     #[inline]
     pub fn map_desc(self) -> (&'static MapDesc, usize) {
@@ -812,7 +813,7 @@ impl Arena {
             Word::imm_int(v)
         } else {
             self.stats.note(Stat::BigInt, size_of::<IntObj>());
-            Word::from_ptr(self.alloc(IntObj {
+            Word::from_ref(self.alloc(IntObj {
                 kind: Kind::Int,
                 val: v,
             }))
@@ -822,7 +823,7 @@ impl Arena {
     #[inline]
     pub fn mk_float(&mut self, v: f64) -> Word {
         self.stats.note(Stat::Float, size_of::<FloatObj>());
-        Word::from_ptr(self.alloc(FloatObj {
+        Word::from_ref(self.alloc(FloatObj {
             kind: Kind::Float,
             val: v,
         }))
@@ -843,7 +844,7 @@ impl Arena {
                 .note_string(s as *const StringObj, bytes, size_of_val(ctx));
             self.stats.census.note_ctx(ctx);
         }
-        Word::from_ptr(s)
+        Word::from_ref(s)
     }
 
     /// A context-free string, shared by content with every earlier one.
@@ -973,7 +974,7 @@ impl Arena {
         self.stats
             .note(Stat::Path, size_of::<PathObj>() + path.len());
         let p = self.alloc_bytes(path);
-        Word::from_ptr(self.alloc(PathObj {
+        Word::from_ref(self.alloc(PathObj {
             kind: Kind::Path,
             path: p,
         }))
@@ -1018,7 +1019,7 @@ impl Arena {
         for (c, w) in cells.iter().zip(items) {
             c.set(*w);
         }
-        Word::from_ptr(l)
+        Word::from_ref(l)
     }
 
     /// `alloc_attrs` with a stats bucket naming the producer.
@@ -1073,7 +1074,7 @@ impl Arena {
             self.stats
                 .census
                 .note_attrs(p, Stat::AttrsUpd.attrs_origin(), a.len() + b.len());
-            Word::from_ptr(p as *const AttrsObj)
+            Word::from_ref(&*p)
         }
     }
 
@@ -1093,7 +1094,7 @@ impl Arena {
             out.init_from(i, e);
         }
         let out: &'static AttrsObj = out;
-        u.flat.set(Word::from_ptr(out as *const AttrsObj));
+        u.flat.set(Word::from_ref(out));
         out
     }
 
@@ -1130,7 +1131,7 @@ impl Arena {
                 )
             };
         }
-        Word::from_ptr(a as *const AttrsObj)
+        Word::from_ref(a)
     }
 
     pub fn alloc_env(&mut self, up: Option<&'static EnvObj>, n: usize) -> &'static EnvObj {
@@ -1159,12 +1160,12 @@ impl Arena {
         self.stats.note(Stat::Thunk, size_of::<ThunkObj>());
         env.mark_captured();
         let t = self.alloc(ThunkObj {
-            code: Cell::new(Word::from_ptr(ir as *const Ir)),
-            state: Cell::new(Word::from_ptr(env as *const EnvObj)),
+            code: Cell::new(Word::ptr_to(ir)),
+            state: Cell::new(Word::ptr_to(env)),
         });
-        let w = Word::thunk_from_ptr(t as *const ThunkObj);
+        let w = Word::thunk_from_ref(t);
         #[cfg(feature = "stats2")]
-        self.stats.census.note_thunk_created(w.0);
+        self.stats.census.note_thunk_created(w.bits());
         w
     }
 
@@ -1176,9 +1177,9 @@ impl Arena {
             code: Cell::new(func),
             state: Cell::new(arg),
         });
-        let w = Word::thunk_app_from_ptr(t as *const ThunkAppObj);
+        let w = Word::thunk_app_from_ref(t);
         #[cfg(feature = "stats2")]
-        self.stats.census.note_thunk_created(w.0);
+        self.stats.census.note_thunk_created(w.bits());
         w
     }
 
@@ -1191,9 +1192,9 @@ impl Arena {
             arg1,
             state: Cell::new(arg2),
         });
-        let w = Word::thunk_app2_from_ptr(t as *const ThunkApp2Obj);
+        let w = Word::thunk_app2_from_ref(t);
         #[cfg(feature = "stats2")]
-        self.stats.census.note_thunk_created(w.0);
+        self.stats.census.note_thunk_created(w.bits());
         w
     }
 
@@ -1223,9 +1224,9 @@ impl Arena {
         }
         for (i, a) in src.attrs_raw().iter().enumerate() {
             // SAFETY: exclusive access to the fresh set during the fill.
-            unsafe { (*out).init(i, a.sym, a.pos, Word::thunk_map_from_ptr(desc, i)) };
+            unsafe { (*out).init(i, a.sym, a.pos, Word::thunk_map_from_ref(&*desc, i)) };
         }
-        Word::from_ptr(out_ref as *const AttrsObj)
+        Word::from_ref(out_ref)
     }
 
     pub fn mk_lambda(&mut self, env: &'static EnvObj, lam: &'static LambdaIr) -> Word {
@@ -1235,11 +1236,11 @@ impl Arena {
         {
             self.stats.census.lambda_closed += lam.closed as u64;
         }
-        Word::lambda_from_ptr(self.alloc(LambdaObj { env, lam }) as *const LambdaObj)
+        Word::lambda_from_ref(self.alloc(LambdaObj { env, lam }))
     }
 
     pub fn mk_primop(&mut self, name: &'static str, arity: u8, f: PrimFn) -> Word {
-        Word::from_ptr(self.alloc(PrimOpObj {
+        Word::from_ref(self.alloc(PrimOpObj {
             kind: Kind::PrimOp,
             arity,
             name,
@@ -1253,7 +1254,7 @@ impl Arena {
             size_of::<PrimOpAppObj>() + size_of_val(args),
         );
         let args = self.alloc_slice(args);
-        Word::from_ptr(self.alloc(PrimOpAppObj {
+        Word::from_ref(self.alloc(PrimOpAppObj {
             kind: Kind::PrimOpApp,
             op,
             args,

@@ -199,11 +199,12 @@ impl SymWords {
     /// `Word::EMPTY` when no string was stored yet.
     #[inline]
     pub fn get(&self, s: Sym) -> Word {
-        Word(self.slot(s).load(Ordering::Acquire))
+        // SAFETY: the slot holds EMPTY or a word `set` stored.
+        unsafe { Word::from_bits(self.slot(s).load(Ordering::Acquire)) }
     }
 
     #[inline]
     pub fn set(&self, s: Sym, w: Word) {
-        self.slot(s).store(w.0, Ordering::Release);
+        self.slot(s).store(w.bits(), Ordering::Release);
     }
 }

@@ -113,7 +113,7 @@ fn map(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         "while evaluating the second argument passed to builtins.map",
     )?;
     if l.len == 0 {
-        return Ok(Word::from_ptr(l));
+        return Ok(Word::from_ref(l));
     }
     let f = ev.force_function(
         args[0],
@@ -125,7 +125,7 @@ fn map(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         let t = ev.arena.mk_thunk_app(f, c.get());
         o.set(t);
     }
-    Ok(Word::from_ptr(out))
+    Ok(Word::from_ref(out))
 }
 
 fn filter(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
@@ -136,7 +136,7 @@ fn filter(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     )?;
     crate::parallel::fanout_list(ev, l); // parallel
     if l.len == 0 {
-        return Ok(Word::from_ptr(l));
+        return Ok(Word::from_ref(l));
     }
     let f = ev.force_function(
         args[0],
@@ -159,7 +159,7 @@ fn filter(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         }
     }
     if same {
-        return Ok(Word::from_ptr(l));
+        return Ok(Word::from_ref(l));
     }
     Ok(ev.mk_list(&out))
 }
@@ -245,7 +245,7 @@ fn gen_list(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         let t = ev.arena.mk_thunk_app(f, Word::imm_int(i as i64));
         c.set(t);
     }
-    Ok(Word::from_ptr(out))
+    Ok(Word::from_ref(out))
 }
 
 fn any(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
@@ -307,7 +307,7 @@ fn sort(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     )?;
     crate::parallel::fanout_list(ev, l); // parallel
     if l.len == 0 {
-        return Ok(Word::from_ptr(l));
+        return Ok(Word::from_ref(l));
     }
     let f = ev.force_function(
         args[0],

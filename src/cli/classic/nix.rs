@@ -566,7 +566,7 @@ fn print_eval(
         Value::Attrs(a) => {
             // Nix keys the seen set on the `Bindings` and shares one empty
             // `Bindings`, so the second empty attrset is «repeated».
-            let key = if a.is_empty() { 0 } else { w.0 };
+            let key = if a.is_empty() { 0 } else { w.bits() };
             if !seen.insert(key) {
                 out.extend_from_slice("«repeated»".as_bytes());
                 return Ok(());
@@ -590,7 +590,7 @@ fn print_eval(
             out.push(b'}');
         }
         Value::List(l) => {
-            if l.len > 0 && !seen.insert(w.0) {
+            if l.len > 0 && !seen.insert(w.bits()) {
                 out.extend_from_slice("«repeated»".as_bytes());
                 return Ok(());
             }

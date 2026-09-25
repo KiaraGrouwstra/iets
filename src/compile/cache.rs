@@ -176,11 +176,11 @@ pub fn serialize(
     let mut rev = FxHashMap::default();
     if let Some(b) = ev.globals.builtins {
         for a in b.iter() {
-            rev.insert(a.cell.get().0, (false, a.sym));
+            rev.insert(a.cell.get().bits(), (false, a.sym));
         }
     }
     for (sym, w) in &ev.globals.table {
-        rev.insert(w.0, (true, *sym));
+        rev.insert(w.bits(), (true, *sym));
     }
     let mut s = Ser {
         out: Vec::with_capacity(1 << 16),
@@ -322,10 +322,10 @@ impl Ser {
             || w.tag() == crate::runtime::word::TAG_IMM
         {
             self.out.push(0);
-            put_u64(&mut self.out, w.0);
+            put_u64(&mut self.out, w.bits());
             return;
         }
-        match self.rev.get(&w.0) {
+        match self.rev.get(&w.bits()) {
             Some(&(global, sym)) => {
                 self.out.push(if global { 5 } else { 6 });
                 self.sym(sym);
@@ -747,7 +747,13 @@ impl De<'_, '_> {
 
     fn word(&mut self) -> Word {
         match self.u8() {
-            0 => Word(self.u64()),
+            0 => match Word::imm_from_bits(self.u64()) {
+                Some(w) => w,
+                None => {
+                    self.ok = false;
+                    Word::NULL
+                }
+            },
             1 => {
                 let data = self.data;
                 let b = self.bytes();

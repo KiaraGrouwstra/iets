@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering, fence};
 
 use super::deque::Deque;
 use super::fiber::{self, Fiber};
-use crate::runtime::Arena;
+use crate::runtime::{Arena, Word};
 
 pub const READY_CAP: usize = 4096;
 pub const TASK_CAP: usize = 4096;
@@ -54,7 +54,7 @@ pub struct WorkerStat {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Task {
     pub kind: u8,
-    pub obj: u64,
+    pub obj: Word,
     pub start: u32,
     pub len: u32,
 }
@@ -63,7 +63,7 @@ impl Task {
     #[inline]
     fn pack(self) -> (u64, u64) {
         (
-            self.obj,
+            self.obj.bits(),
             self.kind as u64 | ((self.start as u64 & 0xFF_FFFF) << 8) | ((self.len as u64) << 32),
         )
     }
@@ -72,7 +72,8 @@ impl Task {
     fn unpack(a: u64, b: u64) -> Task {
         Task {
             kind: b as u8,
-            obj: a,
+            // SAFETY: `a` is the `bits()` `pack` wrote for this task.
+            obj: unsafe { Word::from_bits(a) },
             start: ((b >> 8) & 0xFF_FFFF) as u32,
             len: (b >> 32) as u32,
         }
@@ -359,7 +360,7 @@ impl Runtime {
             user,
             task: Task {
                 kind: 0,
-                obj: 0,
+                obj: Word::EMPTY,
                 start: 0,
                 len: 0,
             },
@@ -890,7 +891,7 @@ mod tests {
                     for i in 0..t.len {
                         let sub = Task {
                             kind: ADD,
-                            obj: 0,
+                            obj: Word::EMPTY,
                             start: i * 16,
                             len: 16,
                         };
@@ -963,7 +964,7 @@ mod tests {
                 for i in 0..n {
                     let t = Task {
                         kind: SPAWN,
-                        obj: 0,
+                        obj: Word::EMPTY,
                         start: 0,
                         len: 8,
                     };
@@ -990,13 +991,13 @@ mod tests {
                 let rt = slot.runtime();
                 let park = Task {
                     kind: PARK,
-                    obj: 0,
+                    obj: Word::EMPTY,
                     start: 0,
                     len: 0,
                 };
                 let wake = Task {
                     kind: WAKE,
-                    obj: 0,
+                    obj: Word::EMPTY,
                     start: 0,
                     len: 0,
                 };
@@ -1020,7 +1021,7 @@ mod tests {
                 let rt = slot.runtime();
                 let wake = Task {
                     kind: WAKE,
-                    obj: 0,
+                    obj: Word::EMPTY,
                     start: 0,
                     len: 0,
                 };

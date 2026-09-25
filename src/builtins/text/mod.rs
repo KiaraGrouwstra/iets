@@ -124,7 +124,7 @@ fn match_(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let Some(groups) = regex::match_exact(prog, s.bytes) else {
         return Ok(Word::NULL);
     };
-    Ok(Word::from_ptr(group_list(ev, &groups, s.bytes)))
+    Ok(Word::from_ref(group_list(ev, &groups, s.bytes)))
 }
 
 /// `std::cregex_iterator` order: after an empty match the search resumes one
@@ -151,11 +151,11 @@ fn split(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let mut prev_end = 0;
     for m in regex::matches(prog, hay) {
         items.push(ev.arena.mk_string_static(&hay[prev_end..m.start], &[]));
-        items.push(Word::from_ptr(group_list(ev, &m.groups, hay)));
+        items.push(Word::from_ref(group_list(ev, &m.groups, hay)));
         prev_end = m.end;
     }
     if items.is_empty() {
-        return Ok(ev.mk_list(&[Word::from_ptr(s)]));
+        return Ok(ev.mk_list(&[Word::from_ref(s)]));
     }
     items.push(ev.arena.mk_string_static(&hay[prev_end..], &[]));
     Ok(ev.mk_list(&items))
@@ -199,7 +199,7 @@ fn replace_strings(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wo
         "while evaluating the third argument passed to builtins.replaceStrings",
     )?;
     if from.is_empty() {
-        return Ok(Word::from_ptr(s));
+        return Ok(Word::from_ref(s));
     }
     let bytes = s.bytes;
     let mut ctx: Vec<Ctx> = s.ctx.to_vec();
@@ -459,7 +459,7 @@ fn generic_closure(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wo
         "while evaluating the 'startSet' attribute passed as argument to builtins.genericClosure",
     )?;
     if sl.len == 0 {
-        return Ok(Word::from_ptr(sl));
+        return Ok(Word::from_ref(sl));
     }
     let mut work: VecDeque<Word> = sl.cells().iter().map(|c| c.get()).collect();
     let op_sym = ev.sym(b"operator");
@@ -485,7 +485,7 @@ fn generic_closure(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wo
             err.add_trace(Pos::NONE, "in genericClosure element");
             err
         })?;
-        let e = Word::from_ptr(ea);
+        let e = Word::from_ref(ea);
         let Some(key) = ea.get(key_sym) else {
             return Err(missing_attr("key", "in genericClosure element", pos));
         };

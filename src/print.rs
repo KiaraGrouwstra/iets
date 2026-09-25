@@ -146,7 +146,7 @@ pub fn print_ambiguous(
         Value::String(s) => print_literal_string(out, s.bytes),
         Value::Path(p) => out.extend_from_slice(p.path),
         Value::Attrs(a) => {
-            if !a.is_empty() && !seen.insert(w.0) {
+            if !a.is_empty() && !seen.insert(w.bits()) {
                 out.extend_from_slice("«repeated»".as_bytes());
                 return Ok(());
             }
