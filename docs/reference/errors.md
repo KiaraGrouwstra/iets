@@ -44,6 +44,7 @@ in `src/error.rs` for the rest, and the daemon's build status for builds.
 | `cache` | `Error::Cache` | the tracing cache |
 | `plan` | `Error::Plan` | a derivation closure that cannot be built |
 | `no-results` | `ietsp search` | no package matched every regex (docs/reference/commands.md) |
+| `no-output` | `ietsp build` | a root put no store path on stdout: nothing to build, no build result, or no such output (docs/reference/commands.md) |
 | `build-failed` | build status | a build that failed |
 
 ## Exit codes

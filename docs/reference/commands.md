@@ -157,9 +157,20 @@ Plus the shared evaluation flags.
 stdout: one output path per line, in root order; with `--dry-run --json`
 the plan as one JSON object instead.
 stderr: `building '<drv>'…` per build, the daemon's log lines, the
-`--dry-run` plan text.
+`--dry-run` plan text. Nothing the daemon sends reaches stdout.
 Exit: 0; 1 on an evaluation or daemon error; 100, 101, 102 or 104 on a
 failed build (`docs/reference/errors.md`); 2 on a usage error.
+
+**The stdout contract.** A run that exits 0 has printed a store path for
+every root. `--no-build` and `--dry-run` build nothing, and are the only
+exceptions: both exit 0 with nothing on stdout, and `--dry-run --json`
+puts the plan there instead. Everything else that leaves a root without
+a path is the error code `no-output` on stderr and a non-zero exit: an
+expression with no derivation in it, a builder that returns no build
+result for a target, a build the builder calls a success but has no
+output path for, and an `--out NAME` the derivation does not have. A
+caller that captures stdout, as a deploy script does, gets a path or a
+failure, never silence and success.
 
 The `--dry-run` text is Nix's `printMissing`. The `--dry-run --json`
 object is `{willBuild, willSubstitute, unknown, downloadSize, narSize}`;

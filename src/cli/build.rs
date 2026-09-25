@@ -276,6 +276,9 @@ fn build_roots(
     use crate::build::Target;
     use crate::build::render::Style;
 
+    if roots.is_empty() {
+        return no_output("nothing to build: the expression has no derivation in it");
+    }
     let cfg = apibuild::config();
     let transport = match apibuild::transport(b.url.as_deref(), &cfg) {
         Ok(t) => t,
@@ -343,7 +346,50 @@ fn build_roots(
             println!("{path}");
         }
     }
-    d.d.exit
+    match silence(&outcomes, outputs) {
+        Some(why) => crate::log::combine_exit(d.d.exit, no_output(&why)),
+        None => d.d.exit,
+    }
+}
+
+/// A run that printed no store path for a target it was asked to build.
+/// `ietsp build` is read by capturing its stdout, so the caller gets a path
+/// or a non-zero exit, never silence and success (docs/reference/errors.md).
+const NO_OUTPUT: &str = "no-output";
+
+fn no_output(why: &str) -> i32 {
+    crate::log::Report::new(NO_OUTPUT, why).emit()
+}
+
+/// The stdout contract, checked: why a target put no store path on stdout, or
+/// `None` when every target did. A build that failed reported itself already
+/// and its exit code carries it, so it is not named again here.
+fn silence(outcomes: &[crate::build::Outcome], wanted: &[String]) -> Option<String> {
+    if outcomes.is_empty() {
+        return Some("the builder returned no build result".to_string());
+    }
+    for o in outcomes.iter().filter(|o| o.outputs.is_empty()) {
+        if o.skipped {
+            let why = o.reason.as_deref().unwrap_or("the builder gave no reason");
+            return Some(format!("'{}' was not built: {why}", o.attr));
+        }
+        if !o.success {
+            continue;
+        }
+        return Some(match wanted.is_empty() {
+            true => format!(
+                "'{}' built, but the builder has no output path for '{}'",
+                o.attr, o.drv
+            ),
+            false => format!(
+                "'{}' built, but the builder has no output {} of '{}'",
+                o.attr,
+                wanted.join(", "),
+                o.drv
+            ),
+        });
+    }
+    None
 }
 
 /// `--dry-run`: the sets as log records, as shared.cc:printMissing writes
@@ -366,5 +412,65 @@ fn print_missing(
 fn timings(b: &BuildArgs, d: &crate::api::build::Dispatch, plan_time: std::time::Duration) {
     if b.timings {
         eprintln!("{}", d.d.report(d.plan(), plan_time));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::build::Outcome;
+    use crate::store::path::StorePath;
+    use std::collections::BTreeMap;
+
+    fn outcome(success: bool, skipped: bool, outputs: &[&str]) -> Outcome {
+        Outcome {
+            attr: "top".into(),
+            drv: StorePath::parse("/nix/store/2ijv0g6069dsh55z3bdr5ln2iv69mw7r-top.drv").unwrap(),
+            success,
+            skipped,
+            reason: skipped.then(|| "the builder returned no build result".to_string()),
+            log_tail: Vec::new(),
+            outputs: outputs
+                .iter()
+                .map(|n| ((*n).to_string(), format!("/nix/store/aaa-top-{n}")))
+                .collect::<BTreeMap<_, _>>(),
+            elapsed: std::time::Duration::ZERO,
+            cache_status: None,
+            exit: if success { 0 } else { 1 },
+        }
+    }
+
+    #[test]
+    fn a_path_on_stdout_is_silent() {
+        assert_eq!(silence(&[outcome(true, false, &["out"])], &[]), None);
+    }
+
+    #[test]
+    fn a_failed_build_reports_itself() {
+        assert_eq!(silence(&[outcome(false, false, &[])], &[]), None);
+    }
+
+    #[test]
+    fn no_build_result_is_named() {
+        let why = silence(&[outcome(false, true, &[])], &[]).unwrap();
+        assert!(why.contains("was not built"), "{why}");
+        assert!(why.contains("no build result"), "{why}");
+    }
+
+    #[test]
+    fn no_outcome_at_all_is_named() {
+        assert!(silence(&[], &[]).unwrap().contains("no build result"));
+    }
+
+    #[test]
+    fn a_success_with_no_output_path_is_named() {
+        let why = silence(&[outcome(true, false, &[])], &[]).unwrap();
+        assert!(why.contains("no output path"), "{why}");
+    }
+
+    #[test]
+    fn an_out_flag_that_matches_nothing_is_named() {
+        let why = silence(&[outcome(true, false, &[])], &["dev".to_string()]).unwrap();
+        assert!(why.contains("no output dev"), "{why}");
     }
 }
