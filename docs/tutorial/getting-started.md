@@ -32,7 +32,7 @@ Check it:
 ietsp version
 ```
 
-You see a version and the commit it was built from:
+You see a version and the commit it was built from. Your commit differs:
 
 ```
 ietsp 0.1.0 (037e49d)
@@ -139,7 +139,8 @@ ietsp build --builder daemon greeting.nix
 ```
 
 ietsp evaluated the derivation in memory, uploaded it to the daemon, and
-asked the daemon to build it. It wrote nothing to `/nix/store` itself.
+asked the daemon to build it. It wrote nothing to `/nix/store` itself. Run
+it again and only the output path is printed: the daemon already has it.
 
 Note the two progress lines. They name the attribute and the file and line
 that defined the derivation, not only a store path. Read the output:
