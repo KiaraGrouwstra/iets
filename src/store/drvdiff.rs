@@ -82,9 +82,14 @@ fn walk(
         }
     }
     // the env entry named after an output holds that output's path, which
-    // differs whenever anything else does (nix-diff leaves it out too)
-    let keep =
-        |(k, _): &&(String, String)| !a.outputs.contains_key(k) || !b.outputs.contains_key(k);
+    // differs whenever anything else does (nix-diff leaves it out too), and
+    // `env name` is the derivation's own name, which the `name` item said
+    let echoes_name =
+        |d: &super::drv::Derivation| (d.env.iter()).any(|(k, v)| k == "name" && *v == d.name);
+    let hide_name = echoes_name(&a) && echoes_name(&b);
+    let keep = |(k, _): &&(String, String)| {
+        (!a.outputs.contains_key(k) || !b.outputs.contains_key(k)) && !(hide_name && k == "name")
+    };
     let (ea, eb): (BTreeMap<_, _>, BTreeMap<_, _>) = (
         a.env.iter().filter(keep).map(|(k, x)| (k, x)).collect(),
         b.env.iter().filter(keep).map(|(k, x)| (k, x)).collect(),
@@ -297,6 +302,30 @@ mod tests {
         assert!(d.text().contains("env removed: gone=\n"));
         assert!(d.text().contains("env added: new=\n"));
         assert!(d.changed.is_empty());
+    }
+
+    /// Nix sets `name` in the environment as well, so `env name` repeats the
+    /// `name` item; it shows only when it says something else.
+    #[test]
+    fn env_name_shows_only_when_it_is_not_the_derivation_name() {
+        let mut s = Store::default();
+        let a = s.add(drv("ux-one", &[], &[("name", "ux-one")]));
+        let b = s.add(drv("ux-two", &[], &[("name", "ux-two")]));
+        assert_eq!(items(&s.diff(&a, &b, 2)), ["name||ux-one|ux-two"]);
+
+        let a = s.add(drv("ux-one", &[], &[("name", "other")]));
+        let b = s.add(drv("ux-two", &[], &[("name", "ux-two")]));
+        assert_eq!(
+            items(&s.diff(&a, &b, 2)),
+            ["name||ux-one|ux-two", "env|name|other|ux-two"]
+        );
+
+        let a = s.add(drv("ux-one", &[], &[("name", "ux-one")]));
+        let b = s.add(drv("ux-two", &[], &[]));
+        assert_eq!(
+            items(&s.diff(&a, &b, 2)),
+            ["name||ux-one|ux-two", "env|name|ux-one|-"]
+        );
     }
 
     #[test]

@@ -351,7 +351,10 @@ reporter of `docs/reference/errors.md`, with its code and, under
 - the environment: the variables one side has and the other has not, and
   for a variable both sides set, its value. A value of several lines (a
   build script) is shown as a compact line diff, with the common head and
-  tail left out;
+  tail left out. The variables named after an output hold that output's
+  path, and `name` holds the derivation's own name; both repeat something
+  the lines above already said, so they are left out. `name` still shows
+  when either side sets it to something other than the derivation name;
 - the structured attributes (`__json`), as one value;
 - the input sources added and removed;
 - the input derivations. The ones both sides share are skipped. The rest

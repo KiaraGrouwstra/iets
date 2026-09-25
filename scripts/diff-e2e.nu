@@ -86,6 +86,18 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let r = (diff-run $ietsp $"($work)/a.nix" $"($work)/b.nix")
   $res ++= [(verdict ($r.rc == 1 and ($r.out | str contains "input drv changed: diffdep")) "two installables, one evaluation each" $"two installables \(rc=($r.rc)\)\n($r.out)")]
 
+  # `env name` repeats the derivation's name, so it is left out (docs/diff.md)
+  r#'let mk = n: derivation {
+    name = n;
+    system = "x86_64-linux";
+    builder = "/bin/sh";
+    args = [ "-c" "echo hi > $out" ];
+  };
+in { one = mk "ux-one"; two = mk "ux-two"; three = mk "ux-one" // { }; }
+'# | save -f $"($work)/named.nix"
+  let r = (diff-run $ietsp -A one -A two $"($work)/named.nix")
+  $res ++= [(verdict ($r.rc == 1 and ($r.out | str contains "name: ux-one -> ux-two") and not ($r.out | str contains "env name")) "env name that only repeats the derivation name is left out" $"env name \(rc=($r.rc)\)\n($r.out)")]
+
   # -f FILE is the positional FILE (docs/diff.md)
   let want = (diff-run $ietsp -A a -A b $f)
   for flag in [-f --file] {
