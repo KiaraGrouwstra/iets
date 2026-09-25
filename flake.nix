@@ -17,7 +17,7 @@
       # `classic`: the same binary under Nix's own command names. Each one
       # handles the subset ietsp implements and execs the real nix for the
       # rest; `share/ietsp/real-nix-bin` names that nix, so the fallback works
-      # even when the farm shadows it out of PATH (docs/classic.md).
+      # even when the farm shadows it out of PATH (docs/reference/classic.md).
       classic = pkgs: ietspPkg: nix: pkgs.runCommand "ietsp-classic" { } ''
         mkdir -p $out/bin
         mkdir -p $out/share/ietsp
@@ -60,7 +60,7 @@
           # with `cargo test -- --ignored` in the dev shell.
           test = pkg.overrideAttrs { pname = "ietsp-test"; doCheck = true; };
           clippy = lint "clippy" pkgs.clippy "clippy --all-targets -- -D warnings";
-          # the library facade: every example links the library only (docs/library.md)
+          # the library facade: every example links the library only (docs/reference/library.md)
           examples = lint "examples" pkgs.cargo "build --examples --release";
           fmt = lint "fmt" pkgs.rustfmt "fmt --check";
           diff-e2e = nuScript "diff-e2e";

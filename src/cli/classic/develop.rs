@@ -1,6 +1,6 @@
 //! `nix develop` (src/nix/develop.cc): the `print-dev-env` environment, then
 //! bash. The rc script is `makeRcScript` plus the tail `CmdDevelop::run` adds.
-//! See `docs/classic.md`.
+//! See `docs/reference/classic.md`.
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
@@ -135,7 +135,7 @@ fn run(
     }
 
     // develop.cc takes bash from `nixpkgs#bashInteractive`; ietsp cannot fetch,
-    // so the shell derivation's own builder is the bash (docs/classic.md).
+    // so the shell derivation's own builder is the bash (docs/reference/classic.md).
     let store_bash = Path::new(&dev.builder).is_file();
     let shell = if store_bash {
         dev.builder.clone()

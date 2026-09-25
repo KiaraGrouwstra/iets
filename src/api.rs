@@ -1,6 +1,6 @@
 //! The entry points a frontend needs: evaluation arguments, the evaluate
 //! call, error reporting, the build target list and the cache key. The
-//! `ietsp` command line is one frontend on top of this; docs/library.md
+//! `ietsp` command line is one frontend on top of this; docs/reference/library.md
 //! lists the whole surface.
 
 pub mod build;
@@ -28,7 +28,7 @@ pub struct EvalArgs {
     pub dump_drvs: Option<String>,
     pub attr: Option<String>,
     /// `--lint SELECTOR=LEVEL` in order; applied after `ietsp.toml` and
-    /// `IETSP_LINT` (docs/lints.md).
+    /// `IETSP_LINT` (docs/reference/lints.md).
     pub lints: Vec<(String, crate::lint::Level)>,
     /// `--lint-root DIR`: lint roots after the entry directory.
     pub lint_roots: Vec<String>,
@@ -45,7 +45,7 @@ pub struct EvalArgs {
     /// not its `outputs`.
     pub flake_whole: bool,
     /// The last of `--pure-eval`, `--no-pure-eval`, `--impure` and `--option
-    /// pure-eval`; `None` when none was given (docs/pure-eval.md).
+    /// pure-eval`; `None` when none was given (docs/explanation/evaluation.md).
     pub pure: Option<bool>,
 }
 
@@ -117,7 +117,7 @@ pub fn flake_ref(f: &str, cwd: &[u8]) -> crate::error::Result<flake::FlakeRef> {
 
 /// An evaluation error as a value a host can render itself. Positions and
 /// the store paths inside the messages name the local file the source was
-/// copied from, when one is known (docs/provenance.md).
+/// copied from, when one is known (docs/explanation/provenance.md).
 pub fn report_of(ev: &Evaluator, e: &Error) -> crate::log::Report {
     use crate::provenance::{describe_pos, rewrite_msg};
     let at = |pos: Pos| describe_pos(ev, pos).unwrap_or_else(|| ev.describe_pos(pos));
@@ -154,7 +154,7 @@ pub fn entry_dir(a: &EvalArgs) -> std::path::PathBuf {
     std::path::PathBuf::from(std::ffi::OsStr::from_bytes(&bytes))
 }
 
-/// The lint configuration of a run (docs/lints.md).
+/// The lint configuration of a run (docs/reference/lints.md).
 pub fn lint_config(a: &EvalArgs) -> Result<crate::lint::Config, Box<Error>> {
     let cwd = cwd();
     let roots: Vec<Vec<u8>> = a.lint_roots.iter().map(|r| abs_path(r, &cwd)).collect();

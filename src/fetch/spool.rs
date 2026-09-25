@@ -18,7 +18,7 @@
 //! The same index also answers evaluation. `crate::treestore` keeps the spool and
 //! a serialized index in the user-level input store, and every read of a
 //! fetched flake input, `import` included, comes back out of the spool by
-//! offset instead of out of `/nix/store` (docs/flakes.md).
+//! offset instead of out of `/nix/store` (docs/explanation/flakes-and-sources.md).
 
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};

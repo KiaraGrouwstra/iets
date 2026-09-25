@@ -108,7 +108,7 @@ pub struct WellKnown {
 }
 
 /// Clone gives a fiber its own evaluator: shared tables by handle, a
-/// fresh arena, private counters (see docs/parallel.md).
+/// fresh arena, private counters (see docs/explanation/evaluation.md).
 #[derive(Clone)]
 pub struct Evaluator {
     pub arena: Arena,
@@ -140,7 +140,7 @@ pub struct Evaluator {
     /// Locked `narHash` -> flake input name, from the lock file, for messages
     /// about an input that must be fetched.
     pub input_names: crate::parallel::shared::SharedMap<String, String>,
-    /// Lint levels and the warnings emitted so far (docs/lints.md).
+    /// Lint levels and the warnings emitted so far (docs/reference/lints.md).
     pub lints: crate::lint::Lints,
     pub drv: crate::builtins::derivation::DrvState,
     pub par: crate::parallel::Ctx,
@@ -151,11 +151,11 @@ pub struct Evaluator {
     /// The eval store, opened on the first flake input that is missing from it
     /// (`crate::source`).
     pub store: crate::source::LazyStore,
-    /// `pure-eval` (docs/pure-eval.md), fixed by `Evaluator::with`.
+    /// `pure-eval` (docs/explanation/evaluation.md), fixed by `Evaluator::with`.
     pub pure: bool,
     /// The session this evaluator was made in: its settings and its log.
     /// A field, not a thread-local lookup, because the fan-out checks read
-    /// it on the hot path (docs/library.md).
+    /// it on the hot path (docs/reference/library.md).
     pub session: std::sync::Arc<crate::session::Session>,
 }
 
@@ -232,7 +232,7 @@ impl Evaluator {
 
     /// The same as `with`, in `session` instead of the one this thread
     /// entered: a host that keeps one session per evaluator needs no
-    /// thread-local at all (docs/library.md).
+    /// thread-local at all (docs/reference/library.md).
     pub fn in_session(
         session: std::sync::Arc<crate::session::Session>,
         system: &str,
@@ -244,7 +244,7 @@ impl Evaluator {
     }
 
     /// `system` and `pure-eval` shape the builtins, so they are fixed here,
-    /// before `builtins::install` (docs/pure-eval.md).
+    /// before `builtins::install` (docs/explanation/evaluation.md).
     pub fn with(system: &str, pure: bool) -> Evaluator {
         let mut arena = Arena::new();
         let mut interner = Interner::new();
@@ -1936,7 +1936,7 @@ impl Evaluator {
     // ---- attrs and lists ---------------------------------------------------
 
     /// `a // b`. A large left side is not copied: the result is a union
-    /// that probes `b` then `a` (docs/memory.md). Small left sides and
+    /// that probes `b` then `a` (docs/explanation/evaluation.md). Small left sides and
     /// unions past the leaf budget are merged flat in two linear passes:
     /// one to size the result, one to fill it.
     pub fn update_attrs(&mut self, a: &'static AttrsObj, b: &'static AttrsObj) -> Word {

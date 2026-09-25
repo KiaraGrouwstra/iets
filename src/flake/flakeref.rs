@@ -1,7 +1,7 @@
 //! Flake references (flakeref.cc, the github, gitlab, git, path, tarball,
 //! file and indirect schemes' inputFromURL and toURL) for the builtins, the
 //! command line and fetchTree's messages. Valid input gives Nix's output;
-//! checks that only refuse invalid input are left out (docs/divergences.md).
+//! checks that only refuse invalid input are left out (docs/reference/divergences.md).
 
 use std::collections::BTreeMap;
 use std::fmt;

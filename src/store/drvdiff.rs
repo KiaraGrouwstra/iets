@@ -1,6 +1,6 @@
 //! What differs between two derivations, the way nix-diff explains a
 //! rebuild: the local differences of a pair, then the input derivations
-//! that differ, paired by name and recursed into (docs/diff.md).
+//! that differ, paired by name and recursed into (docs/reference/commands.md).
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 

@@ -1,4 +1,4 @@
-//! `ietsp diff A B`: what differs between two derivations (docs/diff.md).
+//! `ietsp diff A B`: what differs between two derivations (docs/reference/commands.md).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -24,7 +24,7 @@ enum Side {
 }
 
 /// 0 when the two are equal, 1 when they differ, 2 for a usage error or any
-/// other failure (docs/cli.md).
+/// other failure (docs/reference/errors.md).
 pub fn cmd_diff(argv: &[String]) -> i32 {
     let (o, sides) = parse(argv);
     let (aterms, roots) = match resolve(sides) {

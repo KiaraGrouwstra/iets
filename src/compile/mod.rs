@@ -1,6 +1,6 @@
 //! AST -> IR: scope resolution, attrpath merging, inherit expansion,
 //! literal allocation, and folding of `builtins.x` to constants. The
-//! compile-time lints (docs/lints.md) hook the same walk.
+//! compile-time lints (docs/reference/lints.md) hook the same walk.
 
 pub mod cache;
 pub mod ir;

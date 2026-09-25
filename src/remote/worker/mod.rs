@@ -153,7 +153,7 @@ impl Transport {
 
     fn parse_worker(url: &str) -> Option<Transport> {
         // `auto` is nix.conf's default `store`, which ietsp answers with the
-        // daemon: it has no local store of its own (docs/config.md).
+        // daemon: it has no local store of its own (docs/reference/settings.md).
         if url == "daemon" || url == "unix://" || url == "auto" || url.is_empty() {
             return Some(Transport::Unix(PathBuf::from(DEFAULT_SOCKET)));
         }

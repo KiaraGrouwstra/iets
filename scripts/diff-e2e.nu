@@ -1,6 +1,6 @@
 #!/usr/bin/env nu
 # `ietsp diff` on two small derivations that differ in an env var, in an
-# input derivation and in an input source (docs/diff.md): the text, the
+# input derivation and in an input source (docs/reference/commands.md): the text, the
 # JSON, the exit codes and the depth limit.
 use lib.nu [chomp fail ietsp-bin isolate run-in verdict]
 

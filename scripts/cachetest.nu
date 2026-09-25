@@ -1,5 +1,5 @@
 #!/usr/bin/env nu
-# Semantics of the tracing evaluation cache (docs/tracing-cache.md): hits
+# Semantics of the tracing evaluation cache (docs/explanation/caching.md): hits
 # print identical output, every kind of change misses, uncacheable runs and
 # failed runs write nothing, --no-cache touches nothing.
 use lib.nu [ROOT chomp ietsp-bin isolate run-in verdict]

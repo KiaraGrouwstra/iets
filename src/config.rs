@@ -33,7 +33,7 @@ const APPENDABLE: &[&str] = &[
 
 /// The settings Determinate Nix has and Nix 2.34.8 does not (the `Setting`s
 /// of DeterminateSystems/nix-src, 2026-09): the Booleans, then the rest. Each
-/// is warned about once and never read (docs/config.md).
+/// is warned about once and never read (docs/reference/settings.md).
 const DETERMINATE_BOOLS: &[&str] = &[
     "filetransfer-retry-jitter",
     "http3",

@@ -1,5 +1,5 @@
 #!/usr/bin/env nu
-# End-to-end test of `ietsp plumbing` (docs/plumbing.md). One case per op,
+# End-to-end test of `ietsp plumbing` (docs/reference/plumbing.md). One case per op,
 # checked against the JSON shape that file specifies: the shape is the
 # contract.
 #
@@ -136,7 +136,7 @@ run-in $work {
   let c = (out-of $ietsp plumbing missing --check-cache-status $hello | from json)
   $ok = (verdict ($c.roots.0.cacheStatus == "notBuilt") "missing: --check-cache-status per root" $"roots ($c.roots)") and $ok
   $ok = (verdict ($c.roots.0.neededBuilds == [$hello]) "missing: neededBuilds" $"($c.roots.0)") and $ok
-  # docs/plumbing.md: byte for byte what `ietsp build --dry-run --json` prints,
+  # docs/reference/plumbing.md: byte for byte what `ietsp build --dry-run --json` prints,
   # willBuild in the plan's order and willSubstitute by store-path name.
   let op = (^$ietsp plumbing missing $top)
   let dry = (^$ietsp build --dry-run --json chain.nix)

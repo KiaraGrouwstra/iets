@@ -2,7 +2,7 @@
 //! derivation's *inputs*, then run bash on a rc file that sources
 //! `$stdenv/setup` with the derivation's environment exported. This is not
 //! `print-dev-env`; nothing here builds the `-env` derivation.
-//! See `docs/classic.md`.
+//! See `docs/reference/classic.md`.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ffi::{OsStr, OsString};

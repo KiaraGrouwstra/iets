@@ -64,7 +64,7 @@ pub fn check_reservation(workers: usize, stack_size: usize) -> Result<(), StackE
     Ok(())
 }
 
-/// Fiber lifecycle. Transitions are documented in docs/parallel.md.
+/// Fiber lifecycle. Transitions are documented in docs/explanation/evaluation.md.
 pub const NEW: u8 = 0;
 pub const RUNNING: u8 = 1;
 pub const PARKING: u8 = 2;

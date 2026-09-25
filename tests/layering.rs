@@ -1,4 +1,4 @@
-//! The plumbing/porcelain boundary, checked (docs/plumbing.md).
+//! The plumbing/porcelain boundary, checked (docs/explanation/plumbing-and-porcelain.md).
 //!
 //! `src/cli` is porcelain. A capability is implemented once, below the command
 //! line, and a command reaches it through `crate::api`. What this test bans is
@@ -85,7 +85,7 @@ const WORD_IN_SIGNATURES: &[&str] = &[
 const WORD_LEN: usize = 7;
 
 const RULE: &str = "\
-docs/plumbing.md: a capability is implemented once, below the command line.
+docs/explanation/plumbing-and-porcelain.md: a capability is implemented once, below the command line.
 Either the operation layer is missing something — add it to `crate::api` and
 call that from here — or this is presentation, compatibility or interaction,
 in which case it belongs in a porcelain-side library that names no layer.";

@@ -1,5 +1,5 @@
 /// One line to this thread's session log, in place of `eprintln!`: a
-/// library writes to no descriptor of its own (docs/library.md).
+/// library writes to no descriptor of its own (docs/reference/library.md).
 #[macro_export]
 macro_rules! errln {
     ($($t:tt)*) => {

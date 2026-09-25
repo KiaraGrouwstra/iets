@@ -5,7 +5,7 @@
 //! finished attribute to a dispatch thread through `jobs::stream`. The
 //! dispatch thread filters, uploads and builds each batch on one connection
 //! through `crate::build::Dispatcher`, so building starts while the rest of
-//! the tree is still evaluating. See docs/fast-build.md.
+//! the tree is still evaluating. See docs/reference/commands.md.
 
 pub mod flags;
 
@@ -92,7 +92,7 @@ fn run(a: Args) -> Result<i32> {
     options.keep_going = !a.fail_fast;
     if !matches!(transport, Transport::Unix(_)) && !a.no_download {
         crate::log::line(
-            "ietsp fast-build: --store is not the local daemon, so the outputs stay there; --out-link points at nothing local (docs/fast-build.md)",
+            "ietsp fast-build: --store is not the local daemon, so the outputs stay there; --out-link points at nothing local (docs/reference/commands.md)",
         );
     }
 

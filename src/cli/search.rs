@@ -1,6 +1,6 @@
 //! `nix search` and `ietsp search`: the package walk of Nix's
 //! `src/nix/search.cc` over an index the tracing cache keeps between runs
-//! (docs/search.md).
+//! (docs/reference/commands.md).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -56,7 +56,7 @@ pub fn classic_main(argv: &[String], rest: &[String]) -> i32 {
     run(s, Some(argv))
 }
 
-/// `ietsp search [INSTALLABLE] REGEX...` (docs/search.md).
+/// `ietsp search [INSTALLABLE] REGEX...` (docs/reference/commands.md).
 pub fn cmd_search(argv: &[String]) -> i32 {
     let mut s = parse(argv, true).unwrap_or_else(|e| help::arg_error(e));
     // The default installable is `<nixpkgs>`: ietsp has no flake registry, so
@@ -205,7 +205,7 @@ fn cursors(ev: &mut Evaluator, s: &Search, cwd: &[u8]) -> EvalResult<Vec<(Word, 
             )?,
         };
         // Natively the root is auto-called, so a function like nixpkgs'
-        // `default.nix` is a package set (docs/search.md).
+        // `default.nix` is a package set (docs/reference/commands.md).
         let root = if s.native {
             ev.auto_call(root, args)?
         } else {
@@ -242,7 +242,7 @@ fn cursors(ev: &mut Evaluator, s: &Search, cwd: &[u8]) -> EvalResult<Vec<(Word, 
 /// installable named. An evaluation error under `legacyPackages` is skipped,
 /// as in Nix; anywhere else it stops the search. `lenient` (the native
 /// command) treats every path as `legacyPackages` does, so that a package set
-/// that is not a flake output is searched whole (docs/search.md).
+/// that is not a flake output is searched whole (docs/reference/commands.md).
 fn visit(
     ev: &mut Evaluator,
     w: Word,

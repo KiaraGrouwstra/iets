@@ -41,7 +41,7 @@ pub struct EvalFlags {
     /// flags alias, in flag order.
     pub overrides: Vec<(String, String)>,
     /// The last of `--pure-eval`, `--no-pure-eval`, `--impure` and `--option
-    /// pure-eval`; `None` when none was given (docs/pure-eval.md).
+    /// pure-eval`; `None` when none was given (docs/explanation/evaluation.md).
     pub pure: Option<bool>,
 }
 

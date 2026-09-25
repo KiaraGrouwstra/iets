@@ -1,6 +1,6 @@
 //! Flakes, as an operation. A reference is parsed, its lock is read, its
 //! tree is resolved and its outputs are evaluated; `crate::flake` is private
-//! and nothing above this line reaches into it (docs/plumbing.md).
+//! and nothing above this line reaches into it (docs/explanation/plumbing-and-porcelain.md).
 
 use std::path::PathBuf;
 

@@ -63,7 +63,7 @@ impl EventSink {
 }
 
 /// `ietsp print-dev-env`: the bash `nix print-dev-env` prints for a flake's shell, from the
-/// in-memory shell derivation through a Nix daemon. See docs/direnv.md.
+/// in-memory shell derivation through a Nix daemon. See docs/reference/commands.md.
 pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
     let mut url: Option<String> = None;
     let mut gc_root: Option<String> = None;

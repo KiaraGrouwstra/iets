@@ -1,6 +1,6 @@
 //! Compiled-IR cache on disk. A file's IR is written after its first
 //! compile and loaded instead of parsing and compiling on later runs
-//! (docs/memory.md, "IR cache").
+//! (docs/explanation/caching.md, "IR cache").
 //!
 //! The IR is process-specific in three ways, and the entry undoes each:
 //! `Sym` ids (a per-entry name table is re-interned on load), `Pos` values

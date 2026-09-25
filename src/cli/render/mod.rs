@@ -1,7 +1,7 @@
 //! What a command puts on a terminal: the stdout writer, the JSON dump,
 //! sizes, and the text layout of the values `crate::api::render` produces.
 //! Presentation is porcelain-side and may be shared freely; the values
-//! themselves, and the JSON that is their contract, are not (docs/plumbing.md).
+//! themselves, and the JSON that is their contract, are not (docs/explanation/plumbing-and-porcelain.md).
 
 pub mod text;
 

@@ -2,7 +2,7 @@
 //! torn entry is ever read, a killed writer leaves the store usable, a
 //! corrupt entry or store goes instead of being repaired, and the sweep
 //! removes only what the TTL says. Shapes follow nix-tarmac's
-//! tests/{crash,concurrent,corrupt,gc}_test.cpp. See docs/caches.md.
+//! tests/{crash,concurrent,corrupt,gc}_test.cpp. See docs/explanation/caching.md.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

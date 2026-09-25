@@ -1,13 +1,13 @@
 //! What an operation produced, and the JSON that is its contract: the same
 //! bytes `ietsp plumbing OP` writes and a porcelain `--json` writes. A value
 //! two frontends can emit belongs here; how a terminal shows it belongs in
-//! `crate::cli::render` (docs/plumbing.md).
+//! `crate::cli::render` (docs/explanation/plumbing-and-porcelain.md).
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Value, json};
 
-/// A value an operation produced. `json` is the contract in docs/plumbing.md.
+/// A value an operation produced. `json` is the contract in docs/reference/plumbing.md.
 pub trait Report {
     fn json(&self) -> Value;
 }

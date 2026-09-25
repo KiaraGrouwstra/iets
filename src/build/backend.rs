@@ -6,7 +6,7 @@
 //! Two of them. The worker backend holds one `Connection` and sends one
 //! `BuildPathsWithResults` per ready set, because the protocol is serial per
 //! connection and a per-derivation op idles the daemon between derivations
-//! (docs/remote-build.md: 7-10x slower). The `grpc://` backend fans the ready
+//! (docs/how-to/build-remotely.md: 7-10x slower). The `grpc://` backend fans the ready
 //! set out instead: one `BuildDerivation` per derivation, placed by the
 //! store's scheduler, with up to `max-builds` in flight, which the gRPC API
 //! tags with its derivation, so the events key correctly.
@@ -164,7 +164,7 @@ pub trait Backend {
 }
 
 /// The local daemon, where out-links and GC roots go whatever the builder is
-/// (docs/classic.md).
+/// (docs/reference/classic.md).
 pub fn local() -> Transport {
     Transport::Unix(PathBuf::from(DEFAULT_SOCKET))
 }

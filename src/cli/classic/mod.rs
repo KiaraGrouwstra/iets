@@ -1,6 +1,6 @@
 //! Classic mode: ietsp installed under Nix's own command names, with an exec
 //! fallback to the real binary for everything it does not implement.
-//! See `docs/classic.md`.
+//! See `docs/reference/classic.md`.
 
 pub mod build;
 pub mod develop;
@@ -133,7 +133,7 @@ pub fn transport_of(store: &str, system: &str) -> Result<Transport, String> {
 
 /// `Config::load` plus the transport and `SetOptions` values it implies. The
 /// build target is `--store` or `--option store` when the command line gave
-/// one, else the `builder` setting, else nix.conf's `store` (docs/config.md).
+/// one, else the `builder` setting, else nix.conf's `store` (docs/reference/settings.md).
 pub fn settings(c: &Common) -> Result<(Config, Transport, Options), String> {
     settings_with(c, true)
 }
@@ -165,7 +165,7 @@ pub fn store_given(c: &Common) -> bool {
 }
 
 /// The local daemon, where GC roots, out-links and `--add-root` registrations
-/// go whatever `builder` says (docs/classic.md).
+/// go whatever `builder` says (docs/reference/classic.md).
 pub fn local() -> Transport {
     Transport::Unix(PathBuf::from(DEFAULT_SOCKET))
 }

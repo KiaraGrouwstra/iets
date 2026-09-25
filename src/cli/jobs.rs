@@ -74,7 +74,7 @@ fn parse_jobs_args(argv: &[String]) -> (JobsArgs, Vec<String>) {
     let unsupported = |flag: &str, why: &str| -> ! {
         exit(
             CrateError::Unsupported(format!(
-                "{flag} is not supported by ietsp: {why} (docs/eval-jobs.md)"
+                "{flag} is not supported by ietsp: {why} (docs/reference/commands.md)"
             ))
             .report(),
         )
@@ -202,7 +202,7 @@ fn check_jobs_args(j: &JobsArgs) -> crate::error::Result<crate::remote::worker::
 /// `ietsp eval-jobs`: nix-eval-jobs's JSON lines. Worker processes
 /// restarted above `--max-memory-size` (4096 MB, like nix-eval-jobs);
 /// `--max-memory-size 0` is one process with no ceiling.
-/// See docs/eval-jobs.md.
+/// See docs/reference/commands.md.
 pub fn cmd_eval_jobs(argv: &[String]) -> i32 {
     let (j, rest) = parse_jobs_args(argv);
     if j.worker {

@@ -17,7 +17,7 @@ const VALUE_CORPORA = [
 
 # Corpora of inputs both sides must reject. builtins.tryEval cannot catch
 # these, so each entry gets its own process and only the exit status is
-# compared; the messages are allowed to differ (docs/divergences.md).
+# compared; the messages are allowed to differ (docs/reference/divergences.md).
 const REJECT_CORPORA = [
   {
     name: regex-invalid, file: "tests/parity/regex-invalid.nix", flags: []

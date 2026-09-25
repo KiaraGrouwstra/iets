@@ -1,5 +1,5 @@
 //! List the derivations an evaluation created, with the attribute path and
-//! the source position each came from (docs/provenance.md).
+//! the source position each came from (docs/explanation/provenance.md).
 //!
 //! `cargo run --example drv_info -- [-I prefix=path]... [-A attr] (-E EXPR | FILE)`
 //!

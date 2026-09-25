@@ -1,7 +1,7 @@
 //! `nix` (src/nix): the subcommands ietsp implements — `eval`, `build`,
 //! `print-dev-env`, `develop` and `flake prefetch-inputs` — with the same exec
 //! fallback as the other classic names for everything else. See
-//! `docs/classic.md`.
+//! `docs/reference/classic.md`.
 
 use std::collections::HashSet;
 use std::sync::Arc;

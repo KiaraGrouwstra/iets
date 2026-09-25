@@ -20,7 +20,7 @@ in
       ietsp's own settings, rendered to /etc/ietsp/ietsp.conf. They are read
       only by ietsp, so `builder` can point the fleet's builds somewhere the
       nix behind the classic fallback never sees. Keys and defaults:
-      docs/config.md.
+      docs/reference/settings.md.
     '';
   };
 

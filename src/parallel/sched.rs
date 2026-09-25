@@ -169,7 +169,7 @@ pub struct Runtime {
 }
 
 // SAFETY: raw slot pointers are only dereferenced under the ownership
-// rules in docs/parallel.md (a fiber is resumed by one thread at a time;
+// rules in docs/explanation/evaluation.md (a fiber is resumed by one thread at a time;
 // slot fields other than atomics are touched only by its current owner).
 unsafe impl Sync for Runtime {}
 unsafe impl Send for Runtime {}
@@ -418,7 +418,7 @@ impl Runtime {
     /// Resume `slot` on this worker. Requires ownership: the slot is NEW,
     /// or this thread took its single ready entry.
     fn run_slot(&self, w: &mut Worker, slot: *mut Slot) {
-        // SAFETY: ownership per the wake handshake (docs/parallel.md).
+        // SAFETY: ownership per the wake handshake (docs/explanation/evaluation.md).
         unsafe {
             let s = &mut *slot;
             s.fiber.state.store(fiber::RUNNING, Ordering::Relaxed);

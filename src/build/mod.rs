@@ -9,9 +9,9 @@
 //!   a fixed set of roots (`upload::PlanUpload`). `ietsp fast-build` hands
 //!   over batches as the eval-jobs walk finishes attributes
 //!   (`upload::StreamUpload`), which is what overlaps evaluation with
-//!   building. See docs/fast-build.md.
+//!   building. See docs/reference/commands.md.
 //! - **How to reach the store.** `backend::Backend`: the worker protocol
-//!   sends one `BuildPathsWithResults` per ready set (docs/remote-build.md: one
+//!   sends one `BuildPathsWithResults` per ready set (docs/how-to/build-remotely.md: one
 //!   op per ready set beats one op per derivation by 7-10x, and the protocol
 //!   is serial per connection); `grpc://` fans the set out instead.
 //! - **What to say about it.** `render` and `results`, from one event stream.

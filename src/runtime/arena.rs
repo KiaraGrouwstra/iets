@@ -23,7 +23,7 @@ pub struct Arena {
     thp: bool,
     /// String bytes by content, and the context-free string object over
     /// them once one was made (EMPTY until then). nixpkgs builds the same
-    /// text millions of times (docs/memory.md).
+    /// text millions of times (docs/explanation/evaluation.md).
     pub strings: FxHashMap<u64, StrEntry>,
     /// Context slices by content.
     pub ctxs: FxHashSet<&'static [super::value::Ctx]>,

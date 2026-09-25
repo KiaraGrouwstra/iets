@@ -6,7 +6,7 @@
 //! paths read a field. Code with no evaluator at hand — the command line,
 //! a fetch, a build — uses [`Session::current`], the session this thread
 //! entered. A thread the library starts inherits it through
-//! [`bind`]. docs/library.md says what a host owns.
+//! [`bind`]. docs/reference/library.md says what a host owns.
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -64,7 +64,7 @@ impl Session {
     }
 
     /// This session's settings: the environment knobs alone until
-    /// [`Session::load_settings`] reads the files (docs/settings.md).
+    /// [`Session::load_settings`] reads the files (docs/reference/settings.md).
     pub fn settings(&self) -> &Settings {
         self.settings.get_or_init(Settings::default)
     }

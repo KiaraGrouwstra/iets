@@ -67,9 +67,9 @@ pub struct Ast {
     /// `inherit` names.
     pub names: Vec<(Sym, Span)>,
     pub formals: Vec<Formal>,
-    /// Constructs the parser accepts but a lint may report (docs/lints.md).
+    /// Constructs the parser accepts but a lint may report (docs/reference/lints.md).
     pub notes: Vec<Note>,
-    /// The lines `# ietsp: allow` comments cover (docs/lints.md).
+    /// The lines `# ietsp: allow` comments cover (docs/reference/lints.md).
     pub allows: crate::lint::allow::Allows,
 }
 

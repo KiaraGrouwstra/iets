@@ -60,7 +60,7 @@ pub struct DrvState {
     pub nr_derivations: u64,
     /// Keep the ATerm text of every derivation for instantiation, the
     /// cache, `--dump-drvs` and `build`. Off for runs that only print
-    /// paths: 331 MB on the outpaths chunk (docs/memory.md).
+    /// paths: 331 MB on the outpaths chunk (docs/explanation/evaluation.md).
     pub keep_aterm: bool,
     /// Find each derivation's source position (`DrvInfo::pos`), which only
     /// build progress lines and `eval-jobs --provenance` show; the search

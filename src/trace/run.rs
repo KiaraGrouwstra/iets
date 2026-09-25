@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use crate::eval::Evaluator;
 use crate::trace::key::Key;
 
-/// The tracing cache for one run: where the entry lives and its key. See docs/tracing-cache.md.
+/// The tracing cache for one run: where the entry lives and its key. See docs/explanation/caching.md.
 pub struct Cache {
     pub store: crate::trace::store::Store,
     pub key: String,

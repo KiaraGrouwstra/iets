@@ -1,5 +1,5 @@
 #!/usr/bin/env nu
-# One fixture per lint in tests/lint/<name>.nix (docs/lints.md). Each runs
+# One fixture per lint in tests/lint/<name>.nix (docs/reference/lints.md). Each runs
 # three times, from tests/ so paths print as /pwd/lint/...:
 #   default levels: no `warning: [` line at all (parity);
 #   --lint NAME=warn: stderr equals <name>.warn.exp;

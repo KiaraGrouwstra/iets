@@ -1,5 +1,5 @@
 //! `ietsp plumbing OP`: the machine-first commands. One operation each,
-//! JSON on stdout, a stable contract (docs/plumbing.md).
+//! JSON on stdout, a stable contract (docs/reference/plumbing.md).
 
 use std::collections::HashMap;
 
@@ -19,7 +19,7 @@ pub const HELP: &str = "\
 usage: ietsp plumbing OP [FLAGS] ...
 
 The machine-first operations the user-facing commands are written against.
-Each one writes JSON on stdout (docs/plumbing.md).
+Each one writes JSON on stdout (docs/reference/plumbing.md).
 
 operations:
   resolve   an installable becomes derivation roots
@@ -70,7 +70,8 @@ Print {\"willBuild\", \"willSubstitute\", \"unknown\", \"downloadSize\",
 usage: ietsp plumbing build [FLAGS] [--roots -] DRV...
 
 Build the roots and print {\"outcomes\"}: one {\"drv\", \"success\",
-\"outputs\", \"reason\", \"logTail\"} each. The exit code is docs/cli.md's.
+\"outputs\", \"reason\", \"logTail\"} each. The exit code is the one of
+docs/reference/errors.md.
 
   --builder URL         where the builds go; the builder setting by default
   --out NAME            an output to build besides the roots' own
@@ -594,7 +595,7 @@ fn build(o: &BuildOpts, r: Roots) -> crate::error::Result<i32> {
     let mut roots: Vec<String> = Vec::new();
     if let Some(dir) = &o.gc_root {
         // the links go on the local daemon whatever the builder is, which is
-        // what brings the outputs back here (docs/classic.md)
+        // what brings the outputs back here (docs/reference/classic.md)
         let links: Vec<(String, Option<String>)> = (outcomes.iter())
             .flat_map(|c| c.outputs.values())
             .map(|p| {

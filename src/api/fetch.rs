@@ -1,6 +1,6 @@
 //! `fetch`: a URL or a fixed-output derivation becomes a hash. The two
 //! frontends are `ietsp plumbing fetch` and `ietsp prefetch`
-//! (docs/plumbing.md, docs/prefetch.md). Nothing is added to a store.
+//! (docs/reference/plumbing.md, docs/reference/commands.md). Nothing is added to a store.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -17,7 +17,7 @@ use crate::store::hash::{Hash, HashAlgo, Hasher};
 use crate::store::path::StorePath;
 
 /// The flat hash of the bytes `url` serves, or with `unpack` the NAR hash of
-/// the tree the archive holds (`docs/flakes.md` builds the same tree).
+/// the tree the archive holds (`docs/explanation/flakes-and-sources.md` builds the same tree).
 pub fn url_hash(url: &str, unpack: bool, algo: HashAlgo) -> Result<Hash> {
     let cfg = crate::config::Config::read(&[]).unwrap_or_else(|_| crate::config::Config::empty());
     let limits = Limits::new(&cfg)?;

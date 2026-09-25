@@ -2,7 +2,7 @@
 //! and its JSON lines. The main fiber walks the tree in lexicographic
 //! depth-first order and hands every job or error to a sink; helpers run
 //! `T_JOB` range tasks that force what a job needs (`type`, `name`,
-//! `drvPath`, output paths, `meta`) ahead of the walk. See docs/eval-jobs.md.
+//! `drvPath`, output paths, `meta`) ahead of the walk. See docs/reference/commands.md.
 
 pub mod cache;
 pub mod collector;
@@ -44,7 +44,7 @@ pub struct Opts {
     pub chunk_depth: u32,
     /// `--provenance`: add a `pos` key, the source position of each job's
     /// derivation. nix-eval-jobs 2.35 has no such key, so this is off by
-    /// default and the output stays flag-identical (docs/provenance.md).
+    /// default and the output stays flag-identical (docs/explanation/provenance.md).
     pub provenance: bool,
 }
 

@@ -1,5 +1,5 @@
 //! `ietsp prefetch`: the hash of what a URL serves, or of what a fixed-output
-//! derivation produces, on stdout (docs/prefetch.md). It replaces nurl,
+//! derivation produces, on stdout (docs/reference/commands.md). It replaces nurl,
 //! nix-prefetch and nix-prefetch-url for the common cases. Nothing is written
 //! to a store and no file is edited: the hash is the whole answer. The
 //! operation is `plumbing fetch`; what is here is the `--json` choice.
@@ -12,7 +12,7 @@ usage: ietsp prefetch [FLAGS] URL
 
 Print the SRI hash of what URL serves, or the hash a fixed-output
 derivation produces, so nothing has to be edited and built to learn it
-(docs/prefetch.md). Nothing is added to the store.
+(docs/reference/commands.md). Nothing is added to the store.
 
   --unpack              hash the NAR of the unpacked tarball (fetchzip)
   --hash-type ALGO      md5, sha1, sha256 (default) or sha512

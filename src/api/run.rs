@@ -1,7 +1,7 @@
 //! One run of one command: the evaluator, the lints, the tracing cache, the
 //! trace switch and the parallel entry. A frontend that owns one of those
 //! parts — `eval-jobs` its worker processes, `fast-build` its evaluator —
-//! starts from [`Run::on`] and keeps only what it needs (docs/plumbing.md).
+//! starts from [`Run::on`] and keeps only what it needs (docs/explanation/plumbing-and-porcelain.md).
 
 use crate::eval::{ErrorKind, Evaluator};
 use crate::parallel::fiber::StackError;

@@ -1,4 +1,4 @@
-//! The `fix-hashes` setting (docs/settings.md): a fixed-output build that
+//! The `fix-hashes` setting (docs/reference/settings.md): a fixed-output build that
 //! failed on its hash gets the hash it produced written over the one it
 //! specified, in the one local file evaluation read that holds it.
 

@@ -1,6 +1,6 @@
 //! One installable: the attribute paths a fragment names in a flake's
 //! outputs, the values they select, and the derivations those values become
-//! (docs/plumbing.md).
+//! (docs/reference/plumbing.md).
 
 use std::collections::HashSet;
 

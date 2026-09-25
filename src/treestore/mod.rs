@@ -5,7 +5,7 @@
 //! store reached over a protocol, with its trust model. This is the other one:
 //! content we own on local disk, under `crate::cachefs`'s rules — a version
 //! file, one writer at a time, an atomic rename into place, a TTL sweep
-//! (docs/caches.md) — like the IR cache and the tracing store. `cachefs` does
+//! (docs/explanation/caching.md) — like the IR cache and the tracing store. `cachefs` does
 //! not know about this module; this module is one of its users.
 //!
 //! Put a tree in, get a store path. Read bytes back for evaluation. Stream a
@@ -358,7 +358,7 @@ pub fn put(
 /// The one observation a read of the tree store leaves in the read set. The
 /// entry's name is the NAR hash of its tree, so its presence, plus the index
 /// version that says the spool can still be read, is the whole check: there is
-/// nothing per file to stat and nothing to rehash (docs/tracing-cache.md).
+/// nothing per file to stat and nothing to rehash (docs/explanation/caching.md).
 pub fn record(ev: &Evaluator, tree: &StoredTree, name: &str) {
     if ev.trace.is_on()
         && !tree

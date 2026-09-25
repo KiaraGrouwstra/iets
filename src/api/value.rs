@@ -7,7 +7,7 @@
 //! pointer or a tag.
 //!
 //! The layer is thin: every getter is the load the evaluator itself does.
-//! Only the constructors allocate (docs/library.md).
+//! Only the constructors allocate (docs/reference/library.md).
 
 use std::marker::PhantomData;
 
@@ -254,7 +254,7 @@ impl<'e> Eval<'e> {
     }
 
     /// Attribute `i` in the set's own order: its name and its unforced
-    /// value. The order is not alphabetical (docs/library.md).
+    /// value. The order is not alphabetical (docs/reference/library.md).
     pub fn attr_at(&mut self, v: Value<'e>, i: usize) -> EvalResult<Option<(&'e [u8], Value<'e>)>> {
         let a = self.ev.force_attrs(v.w, Pos::NONE, WHERE)?;
         // `//` keeps both sides; index order needs the merged copy

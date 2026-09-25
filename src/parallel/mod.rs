@@ -1,5 +1,5 @@
 //! Parallel evaluation: fibers, work-stealing scheduler, thunk claim
-//! protocol. Design: docs/parallel.md.
+//! protocol. Design: docs/explanation/evaluation.md.
 
 pub mod deque;
 pub mod fiber;

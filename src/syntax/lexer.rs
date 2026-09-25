@@ -171,7 +171,7 @@ pub enum PathPart {
 }
 
 /// A `# ietsp:` comment: its text after the marker, and the byte range of
-/// the line it covers (docs/lints.md, "Silencing one site").
+/// the line it covers (docs/reference/lints.md, "Silencing one site").
 #[derive(Clone, Copy, Debug)]
 pub struct Allow {
     pub text: Span,

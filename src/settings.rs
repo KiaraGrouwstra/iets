@@ -1,6 +1,6 @@
 //! ietsp's own settings: the `ietsp.conf` files, `--ietsp-option` and every
 //! `IETSP_*` environment knob, read once into one struct. Each key, its type,
-//! its default and its effect: docs/settings.md.
+//! its default and its effect: docs/reference/settings.md.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -34,7 +34,7 @@ pub struct Settings {
     /// `builder`: where derivations are realised. `None` falls back to the
     /// nix.conf `store` setting; resolve it with [`builder`].
     pub builder: Option<String>,
-    /// `source-map`: `STOREPATH=LOCALDIR` pairs (docs/provenance.md).
+    /// `source-map`: `STOREPATH=LOCALDIR` pairs (docs/explanation/provenance.md).
     pub source_map: Vec<(String, String)>,
     /// `workers`, `IETSP_WORKERS`: worker threads. `None` asks the machine.
     pub workers: Option<usize>,
@@ -77,7 +77,7 @@ pub struct Settings {
     /// `fetch-max-size`: the most bytes one download may decompress to.
     pub fetch_max_size: u64,
     /// `fix-hashes`: what `ietsp build` does with a wrong fixed-output hash
-    /// (docs/settings.md).
+    /// (docs/reference/settings.md).
     pub fix_hashes: FixHashes,
 }
 

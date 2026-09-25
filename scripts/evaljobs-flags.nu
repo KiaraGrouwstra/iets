@@ -89,7 +89,7 @@ def expect-fail [ctx: record, name: string, args: list<string>]: nothing -> bool
 
 # session: every internal-json record of one run, the workers' `trace:`
 # lines and the main process's summary, carries one `sid`; IETSP_SESSION_ID
-# sets it (docs/cli.md). ietsp only: nix-eval-jobs has no such field.
+# sets it (docs/reference/errors.md). ietsp only: nix-eval-jobs has no such field.
 def session [ctx: record]: nothing -> bool {
   let e = '{ a = builtins.trace "a" (derivation { name = "a"; system = "x"; builder = ":"; }); b = builtins.trace "b" (derivation { name = "b"; system = "x"; builder = ":"; }); }'
   let sids = {|| ^($ctx.ietsp) eval-jobs --workers 2 --no-instantiate --log-format internal-json --expr $e | complete | get stderr | lines | where ($it | str starts-with "@nix ") | each { str substring 5.. | from json | get -o sid } }

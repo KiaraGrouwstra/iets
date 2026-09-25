@@ -1,6 +1,6 @@
 //! Tracing evaluation cache: the read set an evaluation records, its
 //! validation against the file system, and the on-disk entry. Design:
-//! docs/tracing-cache.md.
+//! docs/explanation/caching.md.
 
 pub mod key;
 pub mod run;

@@ -1,7 +1,7 @@
 //! One build dispatch. Every command that realises a derivation goes through
 //! [`Dispatch`]: the builder URL, the upload plan, the connection, the upload
 //! and the build are one object, and a root's output path is one lookup
-//! (docs/plumbing.md).
+//! (docs/explanation/plumbing-and-porcelain.md).
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -40,7 +40,7 @@ pub fn config() -> Config {
 }
 
 /// Where the builds go: the flag, else the `builder` setting, else nix.conf's
-/// `store` (docs/config.md).
+/// `store` (docs/reference/settings.md).
 pub fn transport(url: Option<&str>, cfg: &Config) -> Result<Transport> {
     let url = crate::settings::builder(url, cfg);
     Transport::parse_checked(&url, &cfg.system())
@@ -89,7 +89,7 @@ pub fn drv_info(path: &StorePath, text: String) -> Result<DrvInfo> {
 
 /// The derivations `--dump-drvs DIR` wrote: an evaluation's whole ATerm table,
 /// which is what lets one process plan or build a closure another evaluated and
-/// never wrote to the store (docs/plumbing.md). Sources are not in it, so they
+/// never wrote to the store (docs/reference/plumbing.md). Sources are not in it, so they
 /// still come from the local store.
 pub fn drvs_in_dir(dir: &std::path::Path) -> Result<HashMap<StorePath, DrvInfo>> {
     let at = |e: std::io::Error| Error::io(format!("reading '{}'", dir.display()), e);

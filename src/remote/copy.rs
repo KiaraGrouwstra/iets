@@ -1,6 +1,6 @@
 //! Copying a closure from one worker-protocol store into another. A remote
 //! `builder` leaves its outputs on its own store, so an out-link or a GC root
-//! on the local daemon needs them registered locally first (docs/classic.md).
+//! on the local daemon needs them registered locally first (docs/reference/classic.md).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::{self, Read, Write};

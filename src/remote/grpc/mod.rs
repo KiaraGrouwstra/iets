@@ -1,7 +1,7 @@
 //! The `grpc://` transport: nix-grpc-store (github.com/Mic92/nix-grpc-store).
 //!
 //! The evaluator stays synchronous, so one tokio runtime lives inside `Client`
-//! and every call is a `block_on`. See `docs/remote-build.md`.
+//! and every call is a `block_on`. See `docs/how-to/build-remotely.md`.
 
 pub mod backend;
 pub mod build;

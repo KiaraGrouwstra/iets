@@ -1,5 +1,5 @@
 #!/usr/bin/env nu
-# Provenance end to end (docs/provenance.md). Needs a live nix-daemon and
+# Provenance end to end (docs/explanation/provenance.md). Needs a live nix-daemon and
 # `nix` on PATH; it builds, so it is not a flake check.
 #
 # 1. `nix-build` on a failing derivation: stderr names the attribute, the

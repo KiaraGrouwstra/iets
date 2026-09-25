@@ -329,7 +329,7 @@ def main [] {
     (run-both $farm nix eval $fref)))
   $ok = ($ok | append (cmp-case "nix eval --expr"
     (run-both $farm nix eval --expr "{ a = 1; b = [ 1 2 ]; c = \"x\"; d = 123456789.5; }")))
-  # --- pure-eval (docs/pure-eval.md): `nix` is pure unless told otherwise,
+  # --- pure-eval (docs/explanation/evaluation.md): `nix` is pure unless told otherwise,
   # `--file` is impure, and the legacy names are impure.
   let env_expr = 'builtins.getEnv "HOME"'
   $env_expr | save -f $"($tmp)/env.nix"
@@ -429,7 +429,7 @@ in
   $ok = ($ok | append (cmp-record "internal-json: nix eval, missing attribute" missing-attr
     (run-both $farm nix eval ...$json --expr "{ a = 1; }.b")))
   # A daemon client nix exits 1 on any failed build, and so do the classic
-  # names; `ietsp build` exits with the build status (docs/cli.md).
+  # names; `ietsp build` exits with the build status (docs/reference/errors.md).
   let fail = 'derivation { name = "classic-e2e-fail"; system = "x86_64-linux"; builder = "/bin/sh"; args = [ "-c" "echo oops; exit 3" ]; }'
   $ok = ($ok | append (cmp-record "internal-json: a failed build" build-failed
     (run-both $farm nix-build ...$json --no-out-link -E $fail)))

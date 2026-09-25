@@ -5,7 +5,7 @@
 //! `--lint`; inside one source a lint name beats `family:NAME`, which
 //! beats `all`. A site is reported only inside the lint roots unless the
 //! scope is `all` or the site's locked input has its own levels. See
-//! docs/lints.md.
+//! docs/reference/lints.md.
 
 pub mod allow;
 pub mod coerce;
@@ -860,7 +860,7 @@ impl Evaluator {
 
     /// Any fiber reports: the site set keeps a warning to one line, so a
     /// helper reporting a site the demand path reaches again costs
-    /// nothing, and bailing like `trace` does (docs/parallel.md, Effects)
+    /// nothing, and bailing like `trace` does (docs/explanation/evaluation.md, Effects)
     /// cost 15 % of the wall on nixos-desktop at 4 workers. A site the
     /// scope silences enters the set too; an `error` site never does, so
     /// every fiber that reaches it fails.

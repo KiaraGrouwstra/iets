@@ -49,7 +49,7 @@ impl Error {
         }
     }
 
-    /// The stable code of docs/cli.md.
+    /// The stable code of docs/reference/errors.md.
     pub fn code(&self) -> &'static str {
         match self {
             Error::Io { .. } => "io",

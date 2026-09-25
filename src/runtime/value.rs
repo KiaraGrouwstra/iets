@@ -244,7 +244,7 @@ pub struct PrimOpAppObj {
 /// Every layout has one `state` cell that goes from the payload it holds
 /// while unforced (never EMPTY, never a BLACKHOLE) to BLACKHOLE while being
 /// forced to EMPTY once forced, and one `code` word that holds the IR or
-/// function until then and the forced value after (docs/parallel.md).
+/// function until then and the forced value after (docs/explanation/evaluation.md).
 #[repr(C)]
 pub struct ThunkObj {
     /// `&Ir`, then the value.

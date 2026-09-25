@@ -1,5 +1,5 @@
 #!/usr/bin/env nu
-# End-to-end test of `ietsp prefetch` (docs/prefetch.md).
+# End-to-end test of `ietsp prefetch` (docs/reference/commands.md).
 #
 # 1. a file:// URL, flat: the hash `nix store prefetch-file` and `nix hash
 #    file` print for the same bytes.

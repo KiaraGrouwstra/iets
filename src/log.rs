@@ -1,7 +1,7 @@
 //! Everything a command says on stderr goes through here: Nix's plain text,
 //! or with `--log-format internal-json` one `@nix {...}` line per message in
 //! the format of logging.cc:JSONLogger, plus `code` and `hint` on an error
-//! (docs/cli.md). The `json-log-path` file gets every record in either
+//! (docs/reference/errors.md). The `json-log-path` file gets every record in either
 //! format.
 //!
 //! The state is a [`Log`], which a [`crate::session::Session`] owns: the
@@ -116,7 +116,7 @@ pub fn set_json_log_path(path: String) {
 /// `sid`, the session of every record: `IETSP_SESSION_ID` when a parent
 /// ietsp or the user set it, else a UUIDv7 made for this one. The
 /// `eval-jobs` workers get their parent's, so one run's records share one
-/// id (docs/cli.md).
+/// id (docs/reference/errors.md).
 pub fn session_id() -> String {
     cur().log.sid().to_string()
 }
@@ -397,7 +397,7 @@ pub fn replay_lints(bytes: &[u8]) -> Vec<u8> {
 /// One error (or, at level 1, warning) for stderr.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Report {
-    /// The stable code of docs/cli.md.
+    /// The stable code of docs/reference/errors.md.
     pub code: &'static str,
     pub level: u8,
     /// The message, without `error: `.

@@ -36,7 +36,7 @@ fn main() {
     restore_sigpipe();
     let session = ietsp::session::Session::new();
     // a command line says what it has to say on stderr; a library says it
-    // to whatever sink its host set, or to none (docs/library.md)
+    // to whatever sink its host set, or to none (docs/reference/library.md)
     session.log.write_to_stderr();
     let _entered = session.enter();
     let argv: Vec<String> = std::env::args_os()
@@ -44,7 +44,7 @@ fn main() {
         .map(ietsp::argv::encode)
         .collect();
     // `--ietsp-option` is ours, so it leaves the argv here: a classic fallback
-    // execs the real nix with what is left (docs/settings.md).
+    // execs the real nix with what is left (docs/reference/settings.md).
     let (argv, options) = match ietsp::settings::take_options(&argv) {
         Ok(a) => a,
         Err(e) => {

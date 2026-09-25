@@ -1,7 +1,7 @@
 //! Memory census behind the `stats2` cargo feature and `IETSP_STATS=2`:
 //! histograms by object kind, duplicate strings and contexts, `//` shapes,
 //! and which objects were never read. Every hook is `cfg(feature)` so the
-//! default build carries none of it (docs/memory.md).
+//! default build carries none of it (docs/explanation/evaluation.md).
 
 use std::collections::HashSet;
 

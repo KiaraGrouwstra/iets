@@ -10,7 +10,7 @@
 //! keys its per-build buffers on them.
 //!
 //! Outputs land in the farm's binary cache, not in a local store, so an
-//! out-link needs them registered locally first (docs/remote-build.md).
+//! out-link needs them registered locally first (docs/how-to/build-remotely.md).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;

@@ -3,7 +3,7 @@
 //! implements, the ones it accepts and ignores, and the ones it refuses
 //! because the feature is not its job. Anything else is not a flag ietsp
 //! knows: `nix-fast-build` falls back to the real one, the way classic
-//! mode falls back; `ietsp fast-build` is an error (docs/fast-build.md).
+//! mode falls back; `ietsp fast-build` is an error (docs/reference/commands.md).
 
 use crate::cli::{EvalFlags, eval_flag};
 
