@@ -204,6 +204,15 @@ handle identity, not by content — `--dump-drvs` writes its directory into an
 them — and a field whose `Clone` resets it on purpose, the arena and the
 eval-store connection, is not a setting at all.
 
+Carrying every setting in an `Arc<OnceLock>`, the way `--dump-drvs` does,
+was considered and dropped. It makes a late set visible, not correct: a
+fiber that already read the old value does not redo its work, so the answer
+still depends on when the set landed. It also cannot reach the search path,
+whose real carrier is `__nixPath` in the per-fiber globals table the
+compiler folds against, and it puts a load behind fields as small as
+`keep_aterm`. One funnel, `api::configure`, plus a guard that covers every
+field is both cheaper and stricter.
+
 ### The claim protocol
 
 The thunk's *state* cell is the synchronisation word. Its three states are
