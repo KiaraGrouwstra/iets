@@ -440,6 +440,9 @@ honoured; any other store falls back.
   `ignoreAssertionFailures` are not implemented.
 - `--add-root` does not refuse a link that already exists and points
   outside the store; it replaces it.
+- A missing attribute in an installable's path is one line. Nix adds a
+  `Did you mean …?` line from `Suggestions`, which ietsp does not have; the
+  `error:` line itself is the same.
 - The tracing cache (`docs/explanation/caching.md`) is off in classic mode.
 - `nix eval` and `nix derivation show` do not register the derivations they
   evaluate. The real one writes the `.drv` files while computing `drvPath`, so

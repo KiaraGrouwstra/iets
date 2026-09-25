@@ -597,6 +597,79 @@ in
   $ok = ($ok | append (verdict (($pde_nix.stdout == $pde_own.stdout) and ($pde_nix.exit_code == $pde_own.exit_code))
     "nix print-dev-env is ietsp print-dev-env" $"exit ($pde_nix.exit_code) vs ($pde_own.exit_code)"))
 
+  # --- nix derivation show: the derivation JSON of Nix 2.34.8, byte for byte.
+  # Nothing here is built; the fixed-output case carries a hash no build matches.
+  let fodshow = $"($tmp)/show-fod.nix"
+  r#'derivation {
+  name = "classic-e2e-show-fod";
+  system = "x86_64-linux";
+  builder = "/bin/sh";
+  args = [ "-c" "echo x > $out" ];
+  outputHashMode = "recursive";
+  outputHashAlgo = "sha1";
+  outputHash = "0000000000000000000000000000000000000000";
+}
+'# | save -f $fodshow
+  let depshow = $"($tmp)/show-dep.nix"
+  r#'let
+  dep = derivation {
+    name = "classic-e2e-show-dep";
+    system = "x86_64-linux";
+    outputs = [ "out" "dev" ];
+    builder = "/bin/sh";
+    args = [ "-c" "echo a > $out; echo b > $dev" ];
+  };
+in {
+  top = derivation {
+    name = "classic-e2e-show-top";
+    system = "x86_64-linux";
+    builder = "/bin/sh";
+    args = [ "-c" "true" ];
+    d = "${dep.dev}";
+    t = builtins.toFile "note" "hello";
+    __structuredAttrs = true;
+  };
+  inherit dep;
+}
+'# | save -f $depshow
+  for case in [
+    {label: "derivation show a custom drv", args: [-f $"($d)/default.nix"]}
+    {label: "derivation show a multi-output drv", args: [-f $"($d)/multi.nix"]}
+    {label: "derivation show a fixed-output drv", args: [-f $fodshow]}
+    {label: "derivation show structured attrs and an input drv", args: [-f $depshow top]}
+    {label: "derivation show two installables", args: [-f $depshow top dep]}
+    {label: "derivation show --pretty", args: [--pretty -f $"($d)/multi.nix"]}
+    {label: "derivation show --no-pretty", args: [--no-pretty -f $"($d)/multi.nix"]}
+    {label: "derivation show .#pkg", args: [$"($fref)#pkg"]}
+    {label: "derivation show -r over a real closure", args: [-r -f $depshow top]}
+    {label: "derivation show -r over nixpkgs hello.src", args: [-r -I $"nixpkgs=($np)" -f $np hello.src]}
+  ] {
+    $ok = ($ok | append (cmp-case $case.label (run-both $farm nix derivation show ...$case.args)))
+  }
+  let miss = (run-both $farm nix derivation show -f $depshow nope)
+  $ok = ($ok | append (cmp-case "derivation show an installable that does not exist" $miss))
+  # only the first line: nix adds a "Did you mean" line that ietsp has nowhere
+  # (docs/reference/classic.md).
+  $ok = ($ok | append (verdict (($miss.ours.stderr | lines | get -o 0) == ($miss.real.stderr | lines | get -o 0))
+    "derivation show an installable that does not exist: the same error line"
+    $"ours '($miss.ours.stderr)' real '($miss.real.stderr)'"))
+  # ietsp answers from the derivations the evaluation holds, so the store does
+  # not gain the `.drv` the real nix registers (docs/reference/divergences.md).
+  let saltshow = $"($tmp)/show-salt.nix"
+  ('derivation { name = "classic-e2e-show-salt"; system = "x86_64-linux"; builder = "/bin/sh"; args = [ "-c" "true" ]; salt = "SALT"; }' | str replace SALT (random uuid)) | save -f $saltshow
+  let so = (^$"($farm)/nix" derivation show -f $saltshow | complete)
+  let sp = $"/nix/store/(($so.stdout | from json).derivations | columns | get -o 0 | default missing)"
+  let before = ($sp | path exists)
+  let sr = (^nix derivation show -f $saltshow | complete)
+  $ok = ($ok | append (verdict ($so.stdout == $sr.stdout and not $before and ($sp | path exists))
+    "derivation show does not instantiate, where the real nix does"
+    $"($sp): ours left it ($before), real left it ($sp | path exists)"))
+  for f in [[--stdin] [/nix/store/00000000000000000000000000000000-x.drv]] {
+    let why = (fallback-reason $farm ([nix derivation show] | append $f))
+    $ok = ($ok | append (verdict ($why | str contains "ietsp: falling back to nix:")
+      $"derivation show ($f | str join ' ') falls back" $"stderr was '($why)'"))
+  }
+
   # --- nix-shell: the derivation's inputs, then bash on nix-build.cc's rc file.
   # `<nixpkgs>` resolves to nixpkgs/shell.nix, which fetches a pinned tree, so
   # the real code path needs default.nix by name.
