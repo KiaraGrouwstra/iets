@@ -89,8 +89,12 @@ pub fn eval_flag(
 /// was one of them and `next` gave its value.
 pub fn cache_flag(a: &mut EvalArgs, s: &str, mut next: impl FnMut() -> String) -> bool {
     match s {
-        "--no-tracing-cache" | "--no-cache" => a.no_tracing_cache = true,
+        "--no-tracing-cache" => a.no_tracing_cache = true,
         "--no-ir-cache" => a.no_ir_cache = true,
+        "--no-cache" => {
+            a.no_tracing_cache = true;
+            a.no_ir_cache = true;
+        }
         "--cache-dir" => a.cache_dir = Some(next()),
         "--workers" => {
             let v = next();

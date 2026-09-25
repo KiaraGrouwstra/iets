@@ -132,7 +132,7 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
     { flags: [], trace: true, ir: true, what: "no cache flag" }
     { flags: ["--no-tracing-cache"], trace: false, ir: true, what: "--no-tracing-cache" }
     { flags: ["--no-ir-cache"], trace: true, ir: false, what: "--no-ir-cache" }
-    { flags: ["--no-cache"], trace: false, ir: true, what: "--no-cache" }
+    { flags: ["--no-cache"], trace: false, ir: false, what: "--no-cache" }
   ]
   for c in ($cases | enumerate) {
     let dir = $"($work)/stores($c.index)"

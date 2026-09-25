@@ -48,7 +48,7 @@ common:
   --timings             report each phase and the cache on stderr
   --no-tracing-cache    do not use the tracing cache
   --no-ir-cache         do not use the compiled-file cache
-  --no-cache            the same as --no-tracing-cache; kept for scripts
+  --no-cache            do not use either of them
   --cache-dir DIR       keep the tracing cache in DIR
   --log-format F        internal-json: stderr as Nix JSON records
   --show-trace          put the trace in the JSON error records too
@@ -108,7 +108,7 @@ REGEX ('ietsp help commands'). INSTALLABLE is a flake reference, a path or
   --timings             report the index cache on stderr
   --no-tracing-cache    do not use the index, which the tracing cache holds
   --no-ir-cache         do not use the compiled-file cache
-  --no-cache            the same as --no-tracing-cache; kept for scripts
+  --no-cache            do not use either of them
   --cache-dir DIR       keep the index in DIR
   --log-format F        internal-json: stderr as Nix JSON records
   --show-trace          put the trace in the JSON error records too
