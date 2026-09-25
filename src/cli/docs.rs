@@ -56,6 +56,16 @@ pub const PAGES: &[Page] = &[
         include_str!("../../docs/reference/classic.md"),
     ),
     embedded(
+        "builders",
+        "builder URLs, the worker protocol, grpc and NAR",
+        include_str!("../../docs/reference/builders.md"),
+    ),
+    embedded(
+        "flakes",
+        "flake references, getFlake and the fetchers",
+        include_str!("../../docs/reference/flakes.md"),
+    ),
+    embedded(
         "settings",
         "ietsp.conf, the IETSP_* variables and nix.conf",
         include_str!("../../docs/reference/settings.md"),

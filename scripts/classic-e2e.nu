@@ -329,7 +329,7 @@ def main [] {
     (run-both $farm nix eval $fref)))
   $ok = ($ok | append (cmp-case "nix eval --expr"
     (run-both $farm nix eval --expr "{ a = 1; b = [ 1 2 ]; c = \"x\"; d = 123456789.5; }")))
-  # --- pure-eval (docs/explanation/evaluation.md): `nix` is pure unless told otherwise,
+  # --- pure-eval (docs/reference/settings.md): `nix` is pure unless told otherwise,
   # `--file` is impure, and the legacy names are impure.
   let env_expr = 'builtins.getEnv "HOME"'
   $env_expr | save -f $"($tmp)/env.nix"

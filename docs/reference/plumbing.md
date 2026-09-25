@@ -311,8 +311,99 @@ $ ietsp plumbing plan --drvs d /nix/store/…-ok.drv
 {"drvs":["/nix/store/…-ok.drv"],"sources":[],"storeDrvs":0}
 ```
 
+## What each command is written against
+
+The operation layer is `crate::api`. A row naming an op that has no
+command — `index`, `jobs`, `dev-env`, `drv-show`, `drv-diff`,
+`closure-diff`, `flake-info`, `flake-tree` — means the command calls the
+**capability** (`api::installable`, `api::flake`, `crate::jobs`) with no
+op in between.
+
+| Command | The operations it uses | What is the command's own |
+|:---|:---|:---|
+| `ietsp eval` | `eval` | the human value printer, `--timings` |
+| `ietsp build` | `plan`, `missing`, `build`, through `api::build::Dispatch` | the `--dry-run` text, `render_size`, the `fix-hashes` prompts, the `.drv` legacy input |
+| `ietsp search` | `index` | regex compile and match, `--exclude`, colour, `--pretty`, the no-results hint |
+| `ietsp diff` | `resolve`, `drv-diff`, `closure-diff` | the text rendering, the `diff(1)` exit codes |
+| `ietsp eval-jobs` | `jobs` | the worker/collector process model, `--max-memory-size`, the summary line |
+| `ietsp fast-build` | `jobs`, `build` | the terminal report, `--result-file`, the step summary |
+| `ietsp print-dev-env` | `resolve`, `dev-env` | the bash rendering, the direnv cache, the GC root |
+| `ietsp prefetch` | `fetch` | the `--json` shape choice |
+| `ietsp lint`, `ietsp parse`, `ietsp cache` | none | they are already thin over the library |
+| `nix-instantiate` | `resolve` (get-drvs walk), `plan` | Nix argv parsing, `--add-root`, out-links, the exec fallback |
+| `nix-build` | `resolve`, `plan`, `build` | `result` symlinks, `--add-root`, Nix's exit codes, the fallback |
+| `nix-shell` | `resolve`, `plan`, `build` | the env, `execve` of the shell, `--run`, `--pure` |
+| `nix-eval-jobs` | `jobs` | argv compatibility |
+| `nix-fast-build` | `jobs`, `build` | argv compatibility, the report |
+| `nix eval` | `eval` | Nix's printer and argv |
+| `nix build` | `resolve`, `plan`, `build` | `result` symlinks, the `--json` Nix shape, the fallback |
+| `nix search` | `index` | Nix's output format and argv |
+| `nix develop` | `resolve`, `dev-env` | the shell it execs |
+| `nix print-dev-env` | `dev-env` | the bash rendering |
+| `nix flake metadata` | `flake-info` | Nix's output format |
+
+## What the operation layer does not expose
+
+Five capabilities a command still reaches for itself. Each is a gap, not
+a design.
+
+1. **The sources of an ATerm dump.** `resolve --dump-drvs DIR` writes the
+   run's derivations, not its sources, so a closure whose sources are not
+   in the local store still needs an instantiation first. The shape it
+   wants is the batch form of `build --source STOREPATH=LOCAL`.
+   `ietsp diff` keeps its in-memory table, because it evaluates and
+   compares in one process.
+2. **Hash mismatch capture.** `ietsp prefetch` drives a build that is
+   meant to fail and reads the mismatch out of the log
+   (`log::want_mismatch`, `log::take_mismatches`); `ietsp build`'s
+   `fix-hashes` reads the same channel. `build` should report a mismatch
+   as structured output, not as a log line the caller greps.
+3. **The eval-store split.** `eval-jobs --eval-store` instantiates on one
+   store while building on another. `plan` and `build` take one builder.
+4. **A second connection for a shell.** `nix-shell` and `print-dev-env`
+   upload a plan and then speak the worker protocol themselves — build the
+   derivation's *inputs*, `execve` a shell, read the env output back. They
+   use `api::build::plan` and `api::build::locate_store` and drive
+   `PlanUpload` on that connection, because routing them through
+   `Dispatch` would open a second one.
+5. **Flake metadata as an op.** `api::flake::info` and `api::flake::tree`
+   are the capability; there is no `flake-info` or `flake-tree` op,
+   because no caller needs the process boundary.
+
+## The source resolver
+
+`crate::source` is what turns a reference into a tree; the fetchers and
+the input store are behind it, and `crate::flake` is `pub(crate)`.
+
+```rust
+/// Where a tree comes from: a directory, a git working tree, or a locked input.
+pub enum SourceRef { … }
+
+/// A tree that is there: a readable path, and the input attributes it
+/// resolved to (`nar_hash`, `last_modified`, `rev` are accessors over them).
+pub struct Tree { pub path: PathBuf, … }
+
+/// What a flake locked, as data. No evaluator, no fetching.
+pub struct Lock { pub root: NodeId, pub nodes: BTreeMap<NodeId, LockedInput> }
+
+pub fn tree(ev: &mut Evaluator, r: &SourceRef) -> Result<Tree>;
+```
+
+`source::tree` is the one call `builtins.fetchTree`, the flake root and
+`nix flake prefetch-inputs` share. Three neighbouring jobs are **not** on
+it: parsing a flake reference is flake syntax and stays in
+`crate::flake`; reading one `flake.lock` is `api::flake::info`; and
+reading bytes out of a tree goes through `treestore::StoredTree`.
+
+`api::flake` is what a command calls: `is_flake_ref`, `parse_attr_path`,
+`select`, `outputs`, `info` and `tree`.
+
 ## Tests
 
 `scripts/plumbing-e2e.nu` has one case per op, checked against the JSON
 shapes on this page. The shape is the contract; a change to it is a
 change to this page.
+
+`tests/layering.rs` checks that no file under `src/cli` reaches past
+`crate::api` into a layer below it, outside an explicit allow-list
+(`docs/explanation/plumbing-and-porcelain.md`).

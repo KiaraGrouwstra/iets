@@ -45,7 +45,7 @@ pub struct EvalArgs {
     /// not its `outputs`.
     pub flake_whole: bool,
     /// The last of `--pure-eval`, `--no-pure-eval`, `--impure` and `--option
-    /// pure-eval`; `None` when none was given (docs/explanation/evaluation.md).
+    /// pure-eval`; `None` when none was given (docs/reference/settings.md).
     pub pure: Option<bool>,
 }
 

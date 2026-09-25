@@ -17,7 +17,7 @@ use crate::store::hash::{Hash, HashAlgo, Hasher};
 use crate::store::path::StorePath;
 
 /// The flat hash of the bytes `url` serves, or with `unpack` the NAR hash of
-/// the tree the archive holds (`docs/explanation/flakes-and-sources.md` builds the same tree).
+/// the tree the archive holds (`docs/reference/flakes.md` builds the same tree).
 pub fn url_hash(url: &str, unpack: bool, algo: HashAlgo) -> Result<Hash> {
     let cfg = crate::config::Config::read(&[]).unwrap_or_else(|_| crate::config::Config::empty());
     let limits = Limits::new(&cfg)?;

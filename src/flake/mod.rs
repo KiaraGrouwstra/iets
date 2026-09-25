@@ -3,7 +3,7 @@
 //! Nix 2.34.8's `call-flake.nix` (embedded verbatim) with `fetchTree` for
 //! the locked inputs and the root tree copied like Nix copies it. Only a
 //! complete `flake.lock` is accepted; nothing is locked or looked up in a
-//! registry. See docs/explanation/flakes-and-sources.md.
+//! registry. See docs/reference/flakes.md.
 
 pub mod fetch;
 pub mod flakeref;

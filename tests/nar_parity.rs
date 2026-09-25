@@ -1,5 +1,5 @@
 //! What the NAR code promises against real Nix: byte-identical archives and the
-//! same hashes, on every shape the format has. See docs/explanation/evaluation.md.
+//! same hashes, on every shape the format has. See docs/reference/builders.md.
 //!
 //! Every test skips itself when `nix` is not on `PATH`; `nix develop` has it.
 

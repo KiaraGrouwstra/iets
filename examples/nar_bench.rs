@@ -1,4 +1,4 @@
-//! Timing harness for the NAR code (docs/explanation/evaluation.md).
+//! Timing harness for the NAR code (docs/reference/builders.md).
 //!
 //! `cargo run --release --example nar_bench -- <op> <path> [runs]`
 //!

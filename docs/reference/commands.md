@@ -8,6 +8,9 @@ The classic Nix names (`nix-instantiate`, `nix-build`, `nix-shell`,
 `docs/reference/classic.md`. The machine-first operations
 (`ietsp plumbing OP`) are in `docs/reference/plumbing.md`. The error codes,
 the exit codes and the JSON log records are in `docs/reference/errors.md`.
+Where a build goes and what is sent over the wire:
+`docs/reference/builders.md`. Flake references and the fetchers:
+`docs/reference/flakes.md`.
 
 ```
 ietsp COMMAND [ARGS...]
@@ -564,6 +567,131 @@ stderr: the summary line, unless `--quiet`.
 Exit: 0 when only jobs fail — their errors are in the job lines; 1 on a
 fatal error such as a stack overflow.
 
+### The line schema (drv.cc, response.cc)
+
+nlohmann `json` objects are `std::map`s, so the keys are byte-sorted and
+`dump()` is compact. A job:
+
+```json
+{"attr":"e.f","attrPath":["e","f"],"constituents":[],"drvPath":"/nix/store/...-f.drv",
+ "globConstituents":false,"meta":null,"name":"f","namedConstituents":[],
+ "outputs":{"out":"/nix/store/...-f"},"requiredSystemFeatures":["big-parallel","kvm"],
+ "storeDir":"/nix/store","system":"x86_64-linux"}
+```
+
+| Key | Value |
+|:---|:---|
+| `attr` | the path elements joined with `.`, an element containing a dot wrapped in `"` (`attrPathJoin`) |
+| `attrPath` | the same elements as a list |
+| `constituents`, `namedConstituents`, `globConstituents` | always present; filled only with `--constituents` on `_hydraAggregate` jobs |
+| `drvPath` | the derivation |
+| `outputs` | name to path, sorted; `null` for a content-addressed output |
+| `name`, `storeDir` | the derivation name, and the store directory |
+| `system`, `requiredSystemFeatures` | from the `.drv` file, present whenever the store is local and not `--no-instantiate`. The features are sorted, from `requiredSystemFeatures` in the env or the structured attributes, plus `ca-derivations` when an output path is not known statically |
+| `meta` | with `--meta`: every `meta` attribute that passes `checkMeta` (int, bool, string, float, lists and sets of those, no set with an `outPath`; so `null`, functions and paths are dropped), as `printValueAsJSON` strict. `null` when there is no `meta` or nothing passes. A non-attrset `meta` is an error |
+| `inputDrvs` | with `--show-input-drvs`: derivation path to sorted output names |
+| `isCached`, `cacheStatus`, `neededBuilds`, `neededSubstitutes` | with `--check-cache-status`; `cacheStatus` is `local`, `cached` or `notBuilt` |
+| `extraValue` | with `--apply` |
+| `pos` | with `--provenance`: `file:line:col` of the derivation. ietsp only |
+
+An error line:
+
+```json
+{"attr":"d","attrPath":["d"],"error":"error:\n       … while calling the 'throw' builtin\n ...","fatal":false}
+```
+
+The error text is `showErrorInfo` with the ANSI escapes stripped, and is
+also printed to stderr.
+
+### Instantiation
+
+`src/jobs/instantiate.rs`. The walk hands every job or error line to a
+thread that holds one daemon connection. Every 256 jobs, or at the end, it
+computes the closure of the batch's `drvPath`s from the evaluator's
+derivation table (ATerm and references; an imported `.drv` is read from
+`/nix/store`) and the sources they reference (origins in `ev.known`: local
+trees and `toFile` texts, hashed on the way), stops at paths already known
+valid, asks `QueryValidPaths` once, sends what is missing in one
+`AddMultipleToStore` (sources first, derivations in post-order, the same
+`ValidPathInfo` and NAR framing as `ietsp build`), registers the GC roots,
+and only then passes the batch's lines on. So a printed `drvPath` is
+always valid in the store, as after nix-eval-jobs, and the daemon round
+trips overlap the evaluation. The stderr summary gets an `instantiate:`
+line with batches, paths queried and added, bytes, roots and thread time.
+
+### Cache status
+
+`src/jobs/cache.rs` mirrors cache-status-resolver.cc. Nix 2.35 no longer
+calls `queryMissing`: it probes with `queryValidPaths` and
+`querySubstitutablePathInfos` and walks the input derivations itself.
+
+1. Every output of the job is probed for validity. All valid is `local`.
+2. The missing ones all substitutable is `cached`, with them as
+   `neededSubstitutes`.
+3. Otherwise the input graph is walked from the job's `.drv`, read back
+   from `/nix/store` and cached. A derivation whose wanted outputs are
+   missing and not all substitutable is a needed build (post-order,
+   `inputDrvs` in store-path order) and its inputs are visited; one whose
+   missing outputs are substitutable contributes them to
+   `neededSubstitutes` and is not descended.
+
+Probes are batched: one `QueryValidPaths` and one
+`QuerySubstitutablePathInfos` (worker op 30) per pass over the batch of
+jobs that is still unresolved; a failing substituter query counts as a
+miss. `neededSubstitutes` is sorted by name then path, like the C++. In
+one process the resolver runs on the instantiation thread after each
+batch; with `--max-memory-size` it runs on its own thread, fed by the
+collectors.
+
+### Constituents
+
+`src/jobs/constituents.rs` mirrors constituents.cc. At job time, with the
+flag, `_hydraAggregate = true` jobs yield `constituents` (the `.drv`s in
+the string context of `constituents`, sorted) and `namedConstituents` (its
+strings); an aggregate with names is withheld by the emitter. After the
+walk every withheld aggregate is resolved against the job table:
+
+- a missing name is `does not exist`, or, with `_hydraGlobConstituents`,
+  an fnmatch pattern over every other job, and
+  `constituent glob pattern had no matches` when nothing matches;
+- a constituent that errored contributes its error text;
+- aggregates are topologically sorted on the names that are aggregates
+  themselves; a cycle prints the two jobs with `Dependency cycle: a <-> b`
+  and the rest with `Skipping aggregate because of a dependency cycle`.
+
+An aggregate with no broken constituent gets each constituent's `.drv` as
+an `inputDrvs` entry with the child's first output, its input-addressed
+outputs reset to deferred and recomputed
+(`finalize_input_addressed_outputs`, hashes read from `/nix/store`), the
+new `.drv` written through the daemon and rooted, and `drvPath` and
+`outputs` replaced. `namedConstituents` is erased, and a broken one
+becomes `error: "name: why\n..."` on the job line.
+
+### The memory limit
+
+`src/jobs/collector.rs`. ietsp has one arena and no garbage collector, so
+a process cannot shed what it has evaluated; the only ceiling is a process
+boundary. `--max-memory-size MB` is therefore 4096 by default, like
+nix-eval-jobs (`eval-args.hh:18`).
+
+The main process runs `--workers` collector threads, each with a worker
+process (`ietsp eval-jobs --worker` and the same arguments, one fiber
+thread, its own instantiation thread) and the shared `todo` set of
+attribute paths starting at `[]`. A worker gets `do ["a","b"]`, finds the
+value along the path — auto-calling at every step — and answers
+`{"attrs":[...]}` for a set to recurse into, `ok` for a skipped node or a
+job (the job line follows once its instantiation batch is registered, so
+lines arrive at any time), or an error line. After every answer it
+compares `VmHWM` with the limit and, above it, flushes its batch, says
+`restart` and exits, and the collector spawns a new one. A worker that
+dies is reported like nix-eval-jobs's `handleBrokenWorkerPipe`.
+
+Cache status and constituents run in the main process from the lines, as
+the `.drv`s are in the store by then. Output order is completion order.
+The chunk rule still applies inside a worker, so `--chunks` and
+`--max-memory-size` combine. `--max-memory-size 0` is one process with no
+ceiling, which no jobset larger than the box can finish.
+
 Three differences that stay:
 
 - **Order** is completion order, like nix-eval-jobs, and lexicographic
@@ -797,6 +925,8 @@ instead.
 | `commands` | this page |
 | `plumbing` | `docs/reference/plumbing.md` |
 | `classic` | `docs/reference/classic.md` |
+| `builders` | `docs/reference/builders.md` |
+| `flakes` | `docs/reference/flakes.md` |
 | `settings` | `docs/reference/settings.md` |
 | `errors` | `docs/reference/errors.md` |
 | `lints` | `docs/reference/lints.md` |

@@ -151,7 +151,7 @@ pub struct Evaluator {
     /// The eval store, opened on the first flake input that is missing from it
     /// (`crate::source`).
     pub store: crate::source::LazyStore,
-    /// `pure-eval` (docs/explanation/evaluation.md), fixed by `Evaluator::with`.
+    /// `pure-eval` (docs/reference/settings.md), fixed by `Evaluator::with`.
     pub pure: bool,
     /// The session this evaluator was made in: its settings and its log.
     /// A field, not a thread-local lookup, because the fan-out checks read
@@ -244,7 +244,7 @@ impl Evaluator {
     }
 
     /// `system` and `pure-eval` shape the builtins, so they are fixed here,
-    /// before `builtins::install` (docs/explanation/evaluation.md).
+    /// before `builtins::install` (docs/reference/settings.md).
     pub fn with(system: &str, pure: bool) -> Evaluator {
         let mut arena = Arena::new();
         let mut interner = Interner::new();
