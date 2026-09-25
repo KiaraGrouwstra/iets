@@ -103,6 +103,32 @@ ietsp print-dev-env --json .
 
 This is what `nix print-dev-env --json` prints.
 
+## What it does under the hood
+
+Five steps, following Nix's own `develop.cc`, so you can predict when it
+will be slow:
+
+1. Evaluate the shell derivation through the normal flake path, so the
+   tracing cache applies.
+2. Derive the `-env` derivation in memory, as `getDerivationEnvironment`
+   does: same inputs, the arguments replaced by Nix's own `get-env.sh`
+   (embedded verbatim and added to the store as a text path), the same
+   `bash` builder, `-env` appended to the name, the output checks removed,
+   and the output paths recomputed. The result is the same `.drv` Nix
+   writes, which is checked by a unit test, so a shell `nix develop`
+   already built is not built again.
+3. Ask the daemon whether it has the environment's output. If not, plan the
+   closure from the in-memory derivation table, upload what the daemon
+   lacks, and build.
+4. Read the first non-empty output — from disk for a local daemon, over the
+   protocol for `ssh-ng://` — and parse it.
+5. Print the same script Nix prints: the same header, the same ignored
+   variables, the same footer, and the same rewrite of every output path to
+   `<cwd>/outputs/<name>`. A `__structuredAttrs` shell gets its `.attrs.sh`
+   and `.attrs.json` written next to the garbage-collection root, or under
+   a temporary directory when there is none. Nix writes them to a temporary
+   directory it deletes on exit.
+
 ## What is not supported
 
 - A shell whose builder is not `bash`, and a content-addressed shell. Both

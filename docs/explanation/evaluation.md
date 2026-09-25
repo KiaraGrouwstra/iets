@@ -58,15 +58,46 @@ A `Word` is one 8-byte word with a 3-bit tag in the low bits.
 | `BLACKHOLE` | thunk under evaluation |
 | `NULL`, `TRUE`, `FALSE` | immediates |
 
+The heap kinds behind a `PTR` are `Float`, `BigInt`,
+`String { bytes, context }`, `Path`, `List`,
+`Attrs` (sorted by symbol id), `AttrsUnion` (the result of `//`),
+`Lambda { env, ir }`, `PrimOp`, `PrimOpApp`, `Env { up, cells }` and
+`Thunk { code, state }`.
+
 A `Cell` is an `AtomicU64` holding a `Word`. Environment slots, list
 elements and attribute values are all cells. That single decision is what
 lets the sequential path and the parallel path share one shape: there is no
 "parallel value" and no "sequential value", only a cell that happens to be
-read by one thread or by four.
+read by one thread or by four. Cells that a value is read from never hold a
+blackhole; only a thunk's own state cell does.
 
 Attributes are sorted by symbol id, as they are in Nix. Name order — what
 `attrNames`, printing, JSON and a derivation environment need — is computed
 on demand.
+
+### Strings carry context
+
+A string value carries a context: `Opaque(store path)`, `DrvDeep(drv path)`
+or `Built { drv path, output name }`. Context flows through `+`, through
+interpolation and through `concatStringsSep`. `derivationStrict` is where it
+is cashed in: it turns the context of every attribute into the derivation's
+`inputDrvs` and `inputSrcs`. That is how a derivation learns its
+dependencies without anyone declaring them.
+
+## Scopes and errors
+
+`with` is the one construct the compiler cannot resolve statically. The
+evaluator keeps a chain of `with` scopes in the environment, and a
+`WithVar` walks that chain innermost first. A lexical binding always wins,
+which is why `WithVar` is emitted only when no lexical binder exists at
+all.
+
+An evaluation result is `Result<Word, Box<Error>>`. `tryEval` catches
+`Throw` and `Assert` and nothing else: a lint raised at level `error` is a
+different kind and escapes it, and so does the cancellation a bailed helper
+fiber gets. An error carries a message, a span and a trace, and position
+information is kept per IR node — for `unsafeGetAttrPos`, for lambda
+positions and for error messages.
 
 ## `//` builds a union, not a copy
 

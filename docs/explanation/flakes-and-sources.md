@@ -1,0 +1,209 @@
+# Flakes, and how a reference becomes a tree
+
+A flake reference on a command line is text. Evaluation needs bytes. This
+page explains the path between the two, why the root flake is read from
+your working tree and not from the store, and where ietsp still has to hand
+the job to a real `nix`.
+
+Scope and the exact reference syntax are in
+[reference/commands.md](../reference/commands.md); the corners the parser
+leaves out are in
+[reference/divergences.md](../reference/divergences.md).
+
+## What is in scope, and why
+
+`ietsp eval --raw DIR#attr.path` prints what
+`nix eval --raw --option eval-cache false DIR#attr.path` prints. The
+reference goes through the same parser `builtins.parseFlakeRef` uses, which
+follows Nix's `parseFlakeRefWithFragment`: a flake id first, then a URL,
+then a path.
+
+Only a local path is taken: `.`, `./x`, `/abs`, `~/x`, or a `path:` URL.
+Everything else is reported as unsupported, which is what makes the classic
+names fall back cleanly to the real `nix` on it:
+
+- a registry reference (`nixpkgs#hello`, and `x#y` even where `./x` exists,
+  because that is what Nix's parser does);
+- a remote reference (`github:`, `gitlab:`, `git+https:`, `git+file:`, an
+  `https://….tar.gz`);
+- a `?query` parameter on a path (`?dir=`, `?rev=`, `?narHash=`).
+
+**The lock file must exist and be complete.** Every node reachable from the
+root needs a `narHash`, or must be a relative `path:` input, and every
+input the `flake.nix` declares needs a lock entry. Otherwise the run says
+`flake.lock missing or incomplete, run nix flake lock`. There is no
+registry, no in-memory locking and no `nix flake lock` of its own: ietsp
+evaluates what a lock file already decided. Note the consequence — a
+`flake.nix` input whose URL changed without re-locking is not detected. The
+lock wins.
+
+## The root flake is your working tree
+
+Nix's `callFlake` is embedded verbatim and called with the lock file text
+and `builtins.fetchTree`. The interesting part is what it is called *on*.
+
+The root's `sourceInfo` is built exactly as Nix's fetcher would build it
+for the reference the command line implies. A directory inside a git
+repository is a git working tree; anything else is a plain path.
+
+For a git working tree, the tree is the set of index entries that still
+exist in the working tree, with the working tree's contents and modes.
+Untracked files, `.git` and submodules are excluded. Four `git` commands
+supply it: `ls-files --stage` and `status --porcelain -uno` give the file
+set and the dirty flag, and `rev-parse HEAD`, `log -1 --format=%ct` and
+`rev-list --count` give the metadata. A clean tree gets `rev`, `shortRev`
+and `revCount`; a dirty one gets `dirtyRev` and `dirtyShortRev`.
+
+The store path is then computed from the NAR hash of that tree — and
+**nothing is written or fetched**. The copy is virtual. The store path is
+registered with a note saying "the bytes of this path are in that local
+directory, filtered by that file set", and every read under it goes to your
+working tree: `import`, `readFile`, `readDir`, `pathExists`, `hashFile`, a
+path interpolation, `builtins.path`. The store is never consulted for the
+root tree.
+
+Two things follow from that, and both are the point:
+
+- **Your edits are what is evaluated.** No copy step stands between saving
+  a file and evaluating it.
+- **Untracked files behave as git says.** Reading one fails with Nix's own
+  "Path '...' in the repository ... is not tracked by Git" error,
+  `pathExists` says `false`, and `readDir` does not list it. The tracked
+  file set is the filter, so ietsp and Nix disagree about nothing here.
+
+The flake's own `flake.nix` is imported under its store path, so positions,
+`./x` path literals and `readDir` see exactly what Nix sees.
+
+## Getting an input readable
+
+An input is locked, so its store path is known before anything happens. It
+still has to become readable. Four steps run in order, and the first that
+works wins.
+
+**0. The input store.** If ietsp has fetched this tree before, it is
+already in `~/.cache/ietsp/inputs`, keyed by the store path the lock
+implies. Two `open` calls, no network, no daemon, no store. Why this is safe
+without a signature is in [caching.md](caching.md).
+
+**1. Substitution, as one daemon operation.** `QueryValidPaths` with the
+substitute flag makes the daemon run `substitutePaths` and answer with the
+paths it now has. Nothing is evaluated and no derivation is built. Nix does
+the same thing before any fetcher runs, for every input a lock file holds:
+it marks such an input `__final` and substitutes its store path first.
+
+An expression cannot reach that path in Nix, because `builtins.fetchTree`
+rejects a `__final` input and the internal primop that would do it is absent
+from `builtins`. So ietsp substitutes the tree itself. A local copy beats a
+download, which is why this comes before the fetcher. When no daemon
+answers, the step is skipped silently.
+
+This step is also what makes ietsp agree with `nix eval` on a locked `git`
+input that a substituter holds but the fetcher cannot reach. Nix's git
+fetcher raises `Cannot find Git revision '<rev>' in ref '<ref>'` whenever
+the fetch of the rev fails and a stale local ref swallows the failure; the
+flake path never gets there, because the tree came from the substituter. The
+operation costs 0.002 s, against 0.13 s for the warm `nix build --no-link`
+it replaced (0.49 s cold), plus 0.05 s once for the connection.
+
+The connection goes to the *eval* store — `nix.conf`'s `store`, never the
+`builder` setting. A remote builder has no say in what `import` reads.
+
+**2. The archive types, fetched by ietsp.** `github`, `gitlab`, `sourcehut`
+and `tarball` are one download and one index, so ietsp does them itself.
+The URLs and headers are the ones Nix builds, the access token comes from
+`nix.conf`'s `access-tokens` matched the way Nix matches it, and the four
+compressions libarchive would autodetect — gzip, xz, zstd, bzip2 — are
+undone.
+
+The download streams. No tree is ever unpacked: the decompressed tar goes
+into a spool inside a staged directory, a second pass records where every
+member's bytes are, and the NAR is written straight out of that index by
+reading each file back at its offset. Peak memory is therefore the queue
+plus the index — a few hundred bytes per member and nothing per byte. A full
+nixpkgs revision costs 19 MB of index over the evaluator's own 75 MB, where
+unpacking a tree cost 307 MB: 13.5 s and 382 MB peak before, 7.7 s and
+94 MB after.
+
+The unpacking rules are not the tar's rules; they are the rules of the git
+tree behind a locked input, because that tree is what the lock's `narHash`
+hashes. Directories survive, empty ones included. A regular file keeps one
+bit of its mode. A hard link resolves to a second entry with the target's
+blob. A member listed twice keeps its last copy. One leading directory is
+stripped, but only when it is the only entry at the top. Anything else — a
+device node, a `..` in a name, a member under a symlink — is an error.
+
+**3. `git` and `hg`, the last shell-out.** These need a repository, which
+ietsp cannot clone. It runs
+`nix eval --raw --impure --expr '(builtins.fetchTree <locked attrs>).outPath'`
+and then checks that the path `nix` reports is the one the lock implies, so
+a difference in the file set is an error rather than a silent divergence.
+When no `nix` other than ietsp itself is on `PATH`, the error says so and
+names the command to run first.
+
+`file` inputs are not in this set, for a specific reason: a `file` input's
+store path is the *flat* hash of the bytes under the input's name, which
+the lock's `narHash` does not give. ietsp cannot say where the file belongs
+before it has it, so the type stays unsupported.
+
+## What a remote root flake would need
+
+The command line parses `github:NixOS/nixpkgs/<rev>#hello` and refuses it.
+The download itself exists. Four parts do not:
+
+1. **A root has no lock entry**, so no `narHash` names and checks the tree
+   before the download. The fetch would have to stage the archive, hash it,
+   and only then name the entry by the hash it got. That inverts the
+   property the input store is built on.
+2. **`lastModified` of an archive comes from the archive**, and the spool
+   index keeps no modification times.
+3. **A flake reference is assumed to be a local directory** in three
+   places: the lock file is read from disk, the root tree is copied from a
+   local directory, and both the cache key and the `ietsp.toml` walk read
+   the directory. A root in the input store needs a third kind of source.
+4. **An unlocked reference must first resolve to a revision**, which needs
+   the forge API per scheme, `tarball-ttl`, and the flake registries. A
+   `git` reference needs a git fetcher, which ietsp has not got.
+
+Items 1 to 3 would make a *locked* `github:`, `gitlab:` or tarball root
+work. Item 4 is what most command lines actually need.
+
+## What this costs
+
+A flake whose only input is `github:NixOS/nixpkgs/e554fab`, five runs with
+a warm page cache, timing the evaluation alone:
+
+| `#attr` | from the input store | from `/nix/store` |
+|---|---|---|
+| `nixpkgs.lib.version` | 0.271 s | 0.238 s |
+| `(import nixpkgs {}).hello.drvPath` | 0.573 s | 0.619 s |
+
+Reading a member is not the cost: it is one `pread` into the caller's
+buffer, against an `open`, an `fstat` and a growing buffer for a file under
+`/nix/store`. The heavier evaluation is in fact 7 % faster out of the spool.
+What the input store charges is opening the entry — 1.7 MB of index for a
+full nixpkgs, read and decoded in 11 ms. That is 4 % of the trivial
+evaluation and 2 % of the heavy one.
+
+Against real Nix, on a NixOS flake with 31 locked inputs and a devShell:
+
+| run | wall |
+|---|---|
+| `nix eval --raw --option eval-cache false` | 4.28 s |
+| `ietsp eval --raw --no-cache` | 0.49 s |
+| `ietsp eval --raw`, cache miss | 0.56 s |
+| `ietsp eval --raw`, cache hit | 0.02 s |
+
+The same flake's whole NixOS system configuration: `nix` 7.21 s, ietsp
+1.27 s uncached.
+
+## What the cache records
+
+Everything above is recorded in the tracing cache. The `git` queries become
+command observations. The working tree's file set becomes a filtered tree
+observation with no seen-set, because git names the file set and an unlisted
+entry cannot change the result. Every file read under the root is a file
+observation on its *local* path. A remote input that `/nix/store` holds is
+one stat; one the input store serves is one observation for the whole entry.
+
+So a commit, an edit of a tracked file, a `git add`, a garbage-collected
+input or a swept input-store entry all miss. An untracked file does not.
