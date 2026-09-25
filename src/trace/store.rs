@@ -20,23 +20,24 @@ pub struct Store {
 }
 
 impl Store {
-    /// `--cache-dir`, else `IETSP_CACHE_DIR`, else `$XDG_CACHE_HOME/ietsp/trace`,
-    /// else `~/.cache/ietsp/trace`. `None` when no home is known.
+    /// `--cache-dir DIR`, else `IETSP_CACHE_DIR`, else `$XDG_CACHE_HOME/ietsp`,
+    /// else `~/.cache/ietsp`; the entries live in its `trace/` subdirectory,
+    /// so the directory the user names is never a removal target. `None` when
+    /// no home is known.
     pub fn locate(override_dir: Option<&str>) -> Option<Store> {
-        if let Some(d) = override_dir {
-            return Some(Store {
-                root: PathBuf::from(d),
-            });
-        }
-        if let Some(d) = &crate::session::Session::current().settings().cache_dir {
-            return Some(Store { root: d.clone() });
-        }
-        let base = match std::env::var_os("XDG_CACHE_HOME") {
-            Some(x) if !x.is_empty() => PathBuf::from(x),
-            _ => PathBuf::from(std::env::var_os("HOME")?).join(".cache"),
+        let base = if let Some(d) = override_dir {
+            PathBuf::from(d)
+        } else if let Some(d) = &crate::session::Session::current().settings().cache_dir {
+            d.clone()
+        } else {
+            let base = match std::env::var_os("XDG_CACHE_HOME") {
+                Some(x) if !x.is_empty() => PathBuf::from(x),
+                _ => PathBuf::from(std::env::var_os("HOME")?).join(".cache"),
+            };
+            base.join("ietsp")
         };
         Some(Store {
-            root: base.join("ietsp").join("trace"),
+            root: base.join("trace"),
         })
     }
 

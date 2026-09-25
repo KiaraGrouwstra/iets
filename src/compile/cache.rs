@@ -32,7 +32,9 @@ pub struct IrCache {
 
 impl IrCache {
     /// `--cache-dir DIR`, else `IETSP_CACHE_DIR`, else `$XDG_CACHE_HOME/ietsp`,
-    /// else `~/.cache/ietsp`; the entries live in its `ir/` subdirectory.
+    /// else `~/.cache/ietsp`; the entries live in its `ir/` subdirectory, so
+    /// the directory the user names is never a removal target. `None` when
+    /// that subdirectory is not ietsp's to write in.
     pub fn locate(override_dir: Option<&str>, timings: bool) -> Option<IrCache> {
         let session = crate::session::Session::current();
         let set = session.settings();
@@ -48,7 +50,9 @@ impl IrCache {
             base.join("ietsp")
         };
         let root = base.join("ir");
-        crate::cachefs::prepare(&root, timings);
+        if !crate::cachefs::prepare(&root, crate::cachefs::Shape::ShardedFiles, timings) {
+            return None;
+        }
         Some(IrCache {
             root,
             min_size: set.ir_min,

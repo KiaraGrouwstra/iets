@@ -119,41 +119,131 @@ pub fn tag() -> u64 {
 
 // ---- store-level structure --------------------------------------------------
 
-/// Makes `root` usable. A version mismatch or an unreadable store-level file
-/// wipes the store and starts it empty: a cache is never repaired in place.
-pub fn prepare(root: &Path, timings: bool) {
-    if let Some(why) = broken(root) {
-        if timings {
-            crate::errln!("cache: wiping {} ({why})", root.display());
+/// Whose directory a store root is, before ietsp writes to it.
+enum Owner {
+    /// ietsp's, and usable as it stands.
+    Ready,
+    /// ietsp's, but of another format or with a broken store-level file.
+    Stale(&'static str),
+    /// Not ietsp's: it holds a name that no store of this shape can have.
+    Foreign,
+}
+
+/// A name a store of `shape` puts in its own root: a store-level file, a
+/// temporary file, an entry, or an IR shard.
+fn belongs(name: &std::ffi::OsStr, shape: Shape) -> bool {
+    matches!(name.as_bytes(), b"version" | b"lock" | b"gc-stamp")
+        || is_tmp(name)
+        || is_key(name, shape)
+        || (matches!(shape, Shape::ShardedFiles) && is_shard(name))
+}
+
+/// True when every name in `root` is one this store's own layout makes. An
+/// unreadable directory or entry counts as foreign: ietsp removes only what
+/// it can prove it put there.
+fn all_ours(root: &Path, shape: Shape) -> bool {
+    let Ok(rd) = fs::read_dir(root) else {
+        return false;
+    };
+    for e in rd {
+        match e {
+            Ok(e) if belongs(&e.file_name(), shape) => {}
+            _ => return false,
         }
-        let _ = fs::remove_dir_all(root);
+    }
+    true
+}
+
+fn owner(root: &Path, shape: Shape) -> Owner {
+    if !root.exists() {
+        return Owner::Ready;
+    }
+    match fs::read(root.join(VERSION)) {
+        Ok(v) if v.trim_ascii() == FORMAT => {}
+        Ok(_) => return Owner::Stale("format version mismatch"),
+        Err(_) if empty(root) => {}
+        Err(_) if all_ours(root, shape) => return Owner::Stale("no format version"),
+        Err(_) => return Owner::Foreign,
+    }
+    if root.join(LOCK).is_dir() {
+        return Owner::Stale("lock is not a file");
+    }
+    match fs::read(root.join(STAMP)) {
+        Ok(s) if stamp_age(&s).is_none() => Owner::Stale("unreadable gc stamp"),
+        _ => Owner::Ready,
+    }
+}
+
+/// Empties a store ietsp owns, touching only the names its own layout makes:
+/// the store-level files, the temporary files, the entries and the IR
+/// shards. Anything else in the directory stays.
+fn wipe(root: &Path, shape: Shape) {
+    for name in [VERSION, LOCK, STAMP] {
+        let p = root.join(name);
+        let _ = fs::remove_file(&p).or_else(|_| fs::remove_dir_all(&p));
+    }
+    let Ok(rd) = fs::read_dir(root) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let name = e.file_name();
+        let path = e.path();
+        if is_tmp(&name) {
+            let _ = fs::remove_file(&path).or_else(|_| fs::remove_dir_all(&path));
+        } else if is_key(&name, shape) {
+            drop_entry(&path, shape);
+        } else if matches!(shape, Shape::ShardedFiles) && is_shard(&name) {
+            wipe_shard(&path);
+        }
+    }
+}
+
+fn wipe_shard(dir: &Path) {
+    let Ok(rd) = fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let name = e.file_name();
+        if is_tmp(&name) || is_key(&name, Shape::ShardedFiles) {
+            let _ = fs::remove_file(e.path());
+        }
+    }
+    let _ = fs::remove_dir(dir);
+}
+
+/// Makes `root` usable, and says whether it is. A version mismatch or an
+/// unreadable store-level file wipes the store and starts it empty: a cache
+/// is never repaired in place. A directory that is not ietsp's — it exists,
+/// holds something, and carries no store of this shape — is refused instead,
+/// because `--cache-dir` points this at a directory the user names.
+#[must_use]
+pub fn prepare(root: &Path, shape: Shape, timings: bool) -> bool {
+    match owner(root, shape) {
+        Owner::Ready => {}
+        Owner::Stale(why) => {
+            if timings {
+                crate::errln!("cache: wiping {} ({why})", root.display());
+            }
+            wipe(root, shape);
+        }
+        Owner::Foreign => {
+            crate::errln!(
+                "error: {} is not an ietsp cache and is not empty, so ietsp will not \
+                 use it; point --cache-dir (or IETSP_CACHE_DIR) at a new or empty \
+                 directory, or empty this one",
+                root.display()
+            );
+            return false;
+        }
     }
     if fs::create_dir_all(root).is_ok() && fs::read(root.join(VERSION)).is_err() {
         let _ = write_atomic(root, VERSION, tag(), FORMAT);
     }
+    true
 }
 
 fn empty(root: &Path) -> bool {
     fs::read_dir(root).is_ok_and(|mut d| d.next().is_none())
-}
-
-fn broken(root: &Path) -> Option<&'static str> {
-    if !root.exists() {
-        return None;
-    }
-    match fs::read(root.join(VERSION)) {
-        Ok(v) if v.trim_ascii() == FORMAT => {}
-        Ok(_) => return Some("format version mismatch"),
-        Err(_) if empty(root) => {}
-        Err(_) => return Some("no format version"),
-    }
-    if root.join(LOCK).is_dir() {
-        return Some("lock is not a file");
-    }
-    match fs::read(root.join(STAMP)) {
-        Ok(s) if stamp_age(&s).is_none() => Some("unreadable gc stamp"),
-        _ => None,
-    }
 }
 
 /// The store's single-writer lock, released when this value drops.
@@ -428,41 +518,98 @@ mod tests {
         );
     }
 
+    fn ready(d: &Path) {
+        assert!(prepare(d, Shape::Dirs, false), "the store is ietsp's");
+    }
+
     #[test]
     fn version_mismatch_wipes_the_store() {
         let d = tmp("version");
-        prepare(&d, false);
-        fs::create_dir_all(d.join("aa")).expect("entry");
+        ready(&d);
+        fs::create_dir_all(d.join(OLD)).expect("entry");
         fs::write(d.join(VERSION), b"99").expect("version");
-        prepare(&d, false);
-        assert!(!d.join("aa").exists());
+        ready(&d);
+        assert!(!d.join(OLD).exists());
         assert_eq!(fs::read(d.join(VERSION)).expect("version"), FORMAT);
     }
 
     #[test]
     fn garbled_stamp_wipes_the_store() {
         let d = tmp("stamp");
-        prepare(&d, false);
-        fs::create_dir_all(d.join("aa")).expect("entry");
+        ready(&d);
+        fs::create_dir_all(d.join(OLD)).expect("entry");
         fs::write(d.join(STAMP), b"\x00not a time").expect("stamp");
-        prepare(&d, false);
-        assert!(!d.join("aa").exists());
+        ready(&d);
+        assert!(!d.join(OLD).exists());
     }
 
     #[test]
     fn a_store_without_a_version_file_is_wiped_once() {
         let d = tmp("legacy");
-        fs::create_dir_all(d.join("aa")).expect("entry");
-        prepare(&d, false);
-        assert!(!d.join("aa").exists());
-        prepare(&d, false);
+        fs::create_dir_all(d.join(OLD)).expect("entry");
+        ready(&d);
+        assert!(!d.join(OLD).exists());
+        ready(&d);
+        assert_eq!(fs::read(d.join(VERSION)).expect("version"), FORMAT);
+    }
+
+    #[test]
+    fn a_directory_that_is_not_ietsps_is_refused_untouched() {
+        let d = tmp("foreign");
+        fs::write(d.join("unrelated.txt"), b"PRECIOUS").expect("file");
+        fs::create_dir_all(d.join("notes")).expect("dir");
+        assert!(!prepare(&d, Shape::Dirs, false), "a foreign directory");
+        assert_eq!(
+            fs::read(d.join("unrelated.txt")).expect("file"),
+            b"PRECIOUS"
+        );
+        assert!(d.join("notes").exists());
+        assert!(!d.join(VERSION).exists(), "and nothing is written into it");
+    }
+
+    #[test]
+    fn a_wipe_keeps_what_ietsp_did_not_create() {
+        let d = tmp("scoped");
+        ready(&d);
+        fs::create_dir_all(d.join(OLD)).expect("entry");
+        fs::write(d.join("unrelated.txt"), b"PRECIOUS").expect("file");
+        fs::write(d.join(VERSION), b"99").expect("version");
+        ready(&d);
+        assert!(!d.join(OLD).exists(), "the store starts empty");
+        assert_eq!(
+            fs::read(d.join("unrelated.txt")).expect("file"),
+            b"PRECIOUS"
+        );
+    }
+
+    #[test]
+    fn a_wipe_of_the_ir_cache_walks_its_shards() {
+        let d = tmp("wipeshards");
+        assert!(prepare(&d, Shape::ShardedFiles, false));
+        fs::create_dir_all(d.join("ab")).expect("shard");
+        fs::write(d.join("ab").join(&OLD[2..]), b"ir").expect("entry");
+        fs::write(d.join("ab").join("keep.txt"), b"PRECIOUS").expect("file");
+        fs::write(d.join(VERSION), b"99").expect("version");
+        assert!(prepare(&d, Shape::ShardedFiles, false));
+        assert!(!d.join("ab").join(&OLD[2..]).exists(), "the entry goes");
+        assert_eq!(
+            fs::read(d.join("ab").join("keep.txt")).expect("file"),
+            b"PRECIOUS",
+            "and a foreign file in the shard stays"
+        );
+    }
+
+    #[test]
+    fn an_empty_directory_is_ietsps_to_take() {
+        let d = tmp("empty");
+        assert!(prepare(&d, Shape::Dirs, false));
         assert_eq!(fs::read(d.join(VERSION)).expect("version"), FORMAT);
     }
 
     #[test]
     fn the_writer_lock_excludes_one_holder_at_a_time() {
         let d = tmp("lock");
-        prepare(&d, false);
+        ready(&d);
         let held = write_lock(&d).expect("first lock");
         assert!(write_lock(&d).is_none());
         drop(held);
@@ -472,7 +619,7 @@ mod tests {
     #[test]
     fn a_wait_lock_waits_for_its_holder() {
         let d = tmp("waitlock");
-        prepare(&d, false);
+        ready(&d);
         let f = d.join(".x.fetching.tmp");
         let held = wait_lock(&f, || panic!("nobody holds it")).expect("first lock");
         let waited = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -490,7 +637,7 @@ mod tests {
     #[test]
     fn a_touch_inside_the_interval_writes_nothing() {
         let d = tmp("touch");
-        prepare(&d, false);
+        ready(&d);
         let f = d.join("entry");
         fs::write(&f, b"x").expect("entry");
         back_date(&f, 60);
@@ -514,7 +661,7 @@ mod tests {
     #[test]
     fn sweep_drops_old_entries_and_keeps_young_ones() {
         let d = tmp("sweep");
-        prepare(&d, false);
+        ready(&d);
         for (name, secs) in [(OLD, 40 * DAY), (YOUNG, 60)] {
             let e = d.join(name);
             fs::create_dir_all(&e).expect("entry");
@@ -545,7 +692,7 @@ mod tests {
     #[test]
     fn sweep_walks_the_shards_of_the_ir_cache() {
         let d = tmp("shards");
-        prepare(&d, false);
+        ready(&d);
         fs::create_dir_all(d.join("ab")).expect("shard");
         for (name, secs) in [(&OLD[2..], 40 * DAY), (&YOUNG[2..], 60)] {
             let f = d.join("ab").join(name);
@@ -565,7 +712,7 @@ mod tests {
     #[test]
     fn a_sweep_runs_once_per_interval() {
         let d = tmp("interval");
-        prepare(&d, false);
+        ready(&d);
         maybe_sweep(&d, Shape::Dirs, false);
         let stamp = fs::read(d.join(STAMP)).expect("stamp");
         let old = d.join(OLD);

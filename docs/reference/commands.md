@@ -77,7 +77,7 @@ op that evaluates share one parser (`src/cli/mod.rs:parse_eval_args`).
 | `--timings` | report each phase and the cache on stderr |
 | `--no-cache` | do not read or write the tracing cache |
 | `--no-ir-cache` | do not read or write the compiled-file cache |
-| `--cache-dir DIR` | keep the caches in `DIR` |
+| `--cache-dir DIR` | keep the caches in `DIR/trace`, `DIR/ir` and `DIR/inputs` |
 | `--strict` | evaluate the whole value, not the top level only |
 | `--json` | print the value as JSON |
 | `--raw` | print a string as it is |

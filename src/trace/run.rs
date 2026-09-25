@@ -14,10 +14,13 @@ pub struct Cache {
 }
 
 impl Cache {
-    /// `None` when no cache store can be located.
+    /// `None` when no cache store can be located, or when its directory is
+    /// not ietsp's to write in.
     pub fn open(cache_dir: Option<&str>, key: Key, timings: bool) -> Option<Cache> {
         let store = crate::trace::store::Store::locate(cache_dir)?;
-        crate::cachefs::prepare(store.root(), timings);
+        if !crate::cachefs::prepare(store.root(), crate::cachefs::Shape::Dirs, timings) {
+            return None;
+        }
         Some(Cache {
             store,
             key: key.finish(),

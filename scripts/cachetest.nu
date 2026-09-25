@@ -101,6 +101,20 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let warned = ($r1.stderr | lines | where ($it | str starts-with "warning: [with]") | length)
   $res ++= [(verdict ($w1.status =~ 'miss' and ($w2.status | str contains "cache: hit") and $warned == 1 and ($r1.stderr | str contains "cache: hit")) "a lint warning is replayed on a hit" $"lint warning replay \(($w2.status) warned=($warned)\)")]
 
+  # --cache-dir points at a directory the user names: ietsp owns only the
+  # store subdirectories it makes there, and never removes anything else
+  mkdir $"($work)/mine"
+  "PRECIOUS\n" | save -f $"($work)/mine/unrelated.txt"
+  let r = (run-eval $ietsp --cache-dir $"($work)/mine" -E '2')
+  $res ++= [(verdict ($r.rc == 0 and (open $"($work)/mine/unrelated.txt" | str contains "PRECIOUS")) "--cache-dir keeps a file it did not create" "--cache-dir deleted an unrelated file")]
+  $res ++= [(verdict (($"($work)/mine/trace" | path exists) and ($"($work)/mine/ir" | path exists)) "--cache-dir holds the stores in subdirectories" "--cache-dir made no store subdirectory")]
+
+  # a directory that is not ietsp's is refused, not wiped
+  mkdir $"($work)/theirs/trace"
+  "PRECIOUS\n" | save -f $"($work)/theirs/trace/notes.txt"
+  let r = (^$ietsp eval --strict --timings --cache-dir $"($work)/theirs" -E '2' | complete)
+  $res ++= [(verdict ($r.exit_code == 0 and ($r.stderr | str contains "is not an ietsp cache") and (open $"($work)/theirs/trace/notes.txt" | str contains "PRECIOUS")) "a foreign store directory is refused, not wiped" $"foreign directory \(($r.stderr | lines | last)\)")]
+
   # identical output on a hit for a lang test with paths and positions
   let t = "tests/lang/eval-okay-getattrpos.nix"
   let o1 = (^$ietsp eval --strict $t | complete | get stdout | chomp)

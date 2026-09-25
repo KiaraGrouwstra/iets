@@ -179,8 +179,7 @@ pub fn root() -> Option<PathBuf> {
         .root
         .get_or_init(|| {
             let root = locate(None)?;
-            cachefs::prepare(&root, false);
-            Some(root)
+            cachefs::prepare(&root, cachefs::Shape::StoreEntries, false).then_some(root)
         })
         .clone()
 }

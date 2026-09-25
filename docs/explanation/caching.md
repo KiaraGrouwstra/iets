@@ -38,10 +38,20 @@ Measured: four `ietsp eval` processes filling one cold store in parallel
 wrote 97 IR entries and skipped none.
 
 **Poison and wipe; never repair.** An entry that does not decode is
-deleted and the run continues as a miss. A store whose version file is
-missing, unreadable or of another format, or whose garbage-collection stamp
-cannot be parsed, or whose lock is not a file, is removed whole and starts
-empty.
+deleted and the run continues as a miss. A store whose version file is of
+another format, or whose garbage-collection stamp cannot be parsed, or
+whose lock is not a file, is emptied and starts again.
+
+**ietsp removes only what ietsp put there.** A wipe is scoped to the names
+that store's own layout makes — the version file, the lock, the stamp, the
+temporary files, the entries and, for the IR cache, its shard directories.
+Anything else in the directory survives, and the directory itself is never
+removed. The three stores are subdirectories (`trace/`, `ir/`, `inputs/`)
+of the cache root, so `--cache-dir DIR` and `IETSP_CACHE_DIR` never make
+`DIR` itself a removal target. A store subdirectory that exists, holds
+something, and carries no name from that layout is not ietsp's: ietsp
+refuses it with an error naming it and runs without that cache, rather than
+writing into it or removing anything from it.
 
 The sweep removes entries not read for 30 days. It runs on a write path, at
 most once a day per store, and never on the read path. The stamp is claimed

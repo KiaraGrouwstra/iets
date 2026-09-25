@@ -63,13 +63,12 @@ fn check(store: &Store, key: usize) -> Option<usize> {
 fn concurrent_readers_and_writers_never_see_a_torn_entry() {
     let dir = tmp("concurrent");
     let store = Store::locate(Some(dir.to_str().expect("utf-8 path"))).expect("store");
-    cachefs::prepare(store.root(), false);
-    let root = store.root().to_path_buf();
+    assert!(cachefs::prepare(store.root(), cachefs::Shape::Dirs, false));
     std::thread::scope(|s| {
         for w in 0..8u8 {
-            let root = root.clone();
+            let base = dir.clone();
             s.spawn(move || {
-                let store = Store::locate(Some(root.to_str().expect("utf-8 path"))).expect("store");
+                let store = Store::locate(Some(base.to_str().expect("utf-8 path"))).expect("store");
                 for round in 0..60 {
                     let key = (round + w as usize) % KEYS;
                     let _ = store.write(&key_of(key), READSET, &payload(key, w + 1));
@@ -113,7 +112,7 @@ fn spawn_and_kill(dir: &Path, ms: u64) {
 fn a_killed_writer_leaves_the_store_usable() {
     let dir = tmp("crash");
     let store = Store::locate(Some(dir.to_str().expect("utf-8 path"))).expect("store");
-    cachefs::prepare(store.root(), false);
+    assert!(cachefs::prepare(store.root(), cachefs::Shape::Dirs, false));
     for round in 0..6 {
         spawn_and_kill(&dir, 20 + round * 10);
     }
@@ -160,7 +159,7 @@ fn a_corrupt_entry_is_dropped_and_a_corrupt_store_is_wiped() {
     assert!(!c.store.entry_dir(&c.key).exists());
 
     assert!(c.store.write(&c.key, READSET, &hit_entry()).expect("write"));
-    std::fs::write(dir.join("gc-stamp"), b"\x01not a time").expect("stamp");
+    std::fs::write(c.store.root().join("gc-stamp"), b"\x01not a time").expect("stamp");
     let c = Cache::open(Some(path), Key::new("eval"), false).expect("cache");
     assert!(
         !c.store.entry_dir(&c.key).exists(),
@@ -175,7 +174,7 @@ fn cache_gc_removes_entries_past_the_ttl() {
     let dir = tmp("gc");
     let path = dir.to_str().expect("utf-8 path");
     let store = Store::locate(Some(path)).expect("store");
-    cachefs::prepare(store.root(), false);
+    assert!(cachefs::prepare(store.root(), cachefs::Shape::Dirs, false));
     for key in 0..3 {
         assert!(
             store
@@ -226,5 +225,8 @@ fn cache_gc_removes_entries_past_the_ttl() {
         );
     }
     assert!(!ir.join(&ir_key[2..]).exists(), "the IR store is swept too");
-    assert!(dir.join("version").exists(), "the store stays usable");
+    assert!(
+        store.root().join("version").exists(),
+        "the store stays usable"
+    );
 }
