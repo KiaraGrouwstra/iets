@@ -183,6 +183,48 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// The guard `try_run` puts on that template, in a debug build. Each
+    /// test leaves one field of `api::configure` for the main fiber to
+    /// install, which is the shape of a bug that shipped: `evaluate` called
+    /// `configure` inside the main fiber, so the IR cache and the search
+    /// path reached no helper (docs/explanation/evaluation.md).
+    #[cfg(debug_assertions)]
+    mod guard {
+        use super::*;
+
+        /// `evaluate` on four fibers with `ev` as it is: whatever it still
+        /// misses, the main fiber installs after the template was cloned.
+        fn late(ev: Evaluator, a: EvalArgs) {
+            let w = a.workers;
+            let _ = Run::on(ev).workers(w).go(move |ev, _| {
+                let _ = crate::api::evaluate(ev, a);
+            });
+        }
+
+        #[test]
+        #[should_panic(expected = "`ir_cache` was set after parallel::try_run")]
+        fn a_late_ir_cache_trips_the_guard() {
+            let d = std::env::temp_dir().join("ietsp-run-late-cache");
+            let a = args("1", &d, 4);
+            let mut ev = a.evaluator();
+            crate::api::configure_lints(&mut ev, &a).expect("the lints resolve");
+            crate::builtins::set_search_path(&mut ev, crate::api::full_includes(&a.includes));
+            late(ev, a);
+        }
+
+        #[test]
+        #[should_panic(expected = "`search_path` was set after parallel::try_run")]
+        fn a_late_search_path_trips_the_guard() {
+            let d = std::env::temp_dir().join("ietsp-run-late-path");
+            let mut a = args("1", &d, 4);
+            a.includes = vec![(b"nixpkgs".to_vec(), b"/nonexistent".to_vec())];
+            let mut ev = a.evaluator();
+            crate::api::configure_lints(&mut ev, &a).expect("the lints resolve");
+            crate::api::install_ir_cache(&mut ev, &a);
+            late(ev, a);
+        }
+    }
+
     /// Every fiber shares one IR cache handle, so a warm run reads one entry
     /// per imported file whatever the worker count. With the cache on the
     /// main fiber alone, the helpers compile their imports again and the

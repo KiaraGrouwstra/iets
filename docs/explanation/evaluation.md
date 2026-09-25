@@ -190,6 +190,20 @@ back on every yield, so N workers own N arenas and no fiber ever allocates
 from an arena another thread is using. Pointers are global, and cross-arena
 references are fine, because no arena is ever freed.
 
+The clone is a deadline. `parallel::try_run` clones the evaluator as the
+template before it starts the workers, so a setting installed after that
+call is the main fiber's alone, and every symptom is silent: output that is
+partial, a cache no worker reads, a search path that resolves to nothing.
+Every setting therefore goes through `api::configure`, ahead of `try_run`.
+A debug build checks that: the template's configurable fields are
+fingerprinted, and the main fiber's evaluator is read against that
+fingerprint once it returns, so a late set fails a test instead of shipping
+(`parallel::guard`). A field behind a shared handle is fingerprinted by
+handle identity, not by content — `--dump-drvs` writes its directory into an
+`Arc<OnceLock>` every fiber already holds, so a late set reaches all of
+them — and a field whose `Clone` resets it on purpose, the arena and the
+eval-store connection, is not a setting at all.
+
 ### The claim protocol
 
 The thunk's *state* cell is the synchronisation word. Its three states are
