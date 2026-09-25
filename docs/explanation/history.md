@@ -32,6 +32,41 @@ the ratio falls to 1.96× on minimal and 2.11× on desktop. Nix has no
 equivalent to turn off, so 2.5× is the honest product comparison and 2× is the
 honest evaluator comparison.
 
+## 2026-09-25: the union merge became a loser tree
+
+The first profile of a warm-cache run put `AttrIter::next` at 7.1 %, second
+only to `eval` itself and 2.3× the cost of a lookup. The multi-leaf merge
+scanned every leaf head twice per attribute — once to pick the minimum, once
+to advance it — so eight leaves cost 16 head checks. A census of one
+nixos-desktop run found where that landed: 8.4 million merge steps, of which
+5.1 million came from iterations over six, seven or eight leaves, a few
+hundred iterations of 5,000 to 12,000 attributes each.
+
+A loser tree over the heads replaced the scan: one root path per attribute,
+three comparisons at eight leaves. Equal syms are ordered by leaf so that
+the winner surfaces first and the duplicates behind it are dropped as they
+come. `Arena::flat` also merged twice, once through `len()` to size the copy
+and once to fill it — 1.6 million of those 8.4 million steps; it now sizes
+the copy at the sum of the leaf lengths, fills it in one pass and gives the
+tail back to the bump pointer.
+
+| warm, instructions | before | after | |
+|---|---:|---:|---:|
+| nixos-desktop, 1 worker | 10.03 G | 9.74 G | −2.9 % |
+| nixos-desktop, 4 workers | 10.86 G | 10.54 G | −3.0 % |
+| nixos-minimal, 1 worker | 7.75 G | 7.51 G | −3.0 % |
+| nixos-minimal, 4 workers | 8.40 G | 8.12 G | −3.2 % |
+
+drvPaths identical on both workloads and still equal to nix 2.34.8. A fresh
+profile confirms the bucket shrank rather than moved: `AttrIter::next` 7.05 %
+→ 4.49 % of a total that is itself 2.9 % smaller, 707 M instructions → 437 M,
+and `Arena::flat` fell out of the 0.4 % list.
+
+Two things the key encoding has to respect, both found by a randomised test
+over every leaf count: a real head must never tie with the sentinel that
+fills the tree while it is built (so keys start at 1, not 0), and the
+tie-break has to prefer the *last* leaf or `//` returns the wrong side.
+
 ## 2026-09-25: the IR cache only the main fiber had
 
 `parallel::try_run` clones the evaluator as the fiber template, and

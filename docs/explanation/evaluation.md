@@ -107,6 +107,20 @@ most eight, lowest priority first. A lookup probes the leaves from the
 last. An iteration merges them as it goes. A consumer that needs one
 contiguous slice asks for a flat copy, which is made once and cached.
 
+The merge runs a loser tree over the leaf heads, so emitting one attribute
+costs one root path — three comparisons at eight leaves — instead of a scan
+of every head to pick the minimum and a second scan to advance it. Equal
+syms are ordered by leaf, last leaf first, so the winner is the entry the
+`//` gives and the duplicates behind it are dropped as they surface. The
+flat copy is sized at the sum of the leaf lengths, filled in one merge pass
+and then handed the tail the duplicates left back at the bump pointer;
+sizing it exactly would mean merging twice.
+
+This is measurement again. On nixos-desktop the merge ran 8.4 million
+times, 4.9 million of them over six to eight leaves, where a rescan cost 16
+head checks per attribute. The tree took the run from 10.03 G to 9.74 G
+instructions, and the merge itself from 7.1 % to 4.5 % of it.
+
 The reason is measurement, not taste. On outpaths, `//` copied 5.12 GB, of
 which 3.94 GB was left sides, and 80 % of the results were never iterated
 at all. The union took the arena from 13,253 MB to 8,936 MB. An earlier

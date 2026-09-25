@@ -484,7 +484,9 @@ impl AttrsObj {
         #[cfg(feature = "stats2")]
         mark_byte(&self.flags, |f| f | 0x80);
         let mut it = AttrIter {
-            leaves: [&[]; MAX_LEAVES as usize],
+            leaves: [&[]; SENTINEL + 1],
+            keys: [u64::MAX; SENTINEL + 1],
+            tree: [0; MAX_LEAVES as usize],
             n: 1,
         };
         if self.kind == Kind::Attrs {
@@ -497,16 +499,75 @@ impl AttrsObj {
                 it.leaves[i] = s.attrs_raw();
             }
             it.n = sets.len();
+            it.build();
         }
         it
     }
 }
 
+/// The leaf slot that stands for an exhausted stream while the tree is built.
+const SENTINEL: usize = MAX_LEAVES as usize;
+
 /// Merging iterator over the flat leaves of a set, lowest priority first;
 /// on equal syms the last leaf wins (`b` over `a`).
+///
+/// More than one leaf runs a loser tree over the leaf heads: `tree[0]` is
+/// the current winner and `tree[i]`, for `i` in `1..n`, is the loser of the
+/// match between the two subtrees under node `i`, the parent of leaf `s`
+/// being `(s + n) / 2`. That invariant is what makes an advance cost one
+/// root path, `ceil(log2 n)` comparisons, instead of a rescan of every
+/// head. The key of leaf `i` is `(sym + 1) << 3 | (7 - i)`, so equal syms
+/// put the last leaf first: the winner is the entry that wins the `//` and
+/// the duplicates that follow it are dropped. Key 0 is left free for the
+/// sentinel and an exhausted leaf keys as `u64::MAX`, so neither can tie
+/// with a real head.
 pub struct AttrIter {
-    leaves: [&'static [Attr]; MAX_LEAVES as usize],
+    leaves: [&'static [Attr]; SENTINEL + 1],
+    keys: [u64; SENTINEL + 1],
+    tree: [u8; MAX_LEAVES as usize],
     n: usize,
+}
+
+impl AttrIter {
+    #[inline]
+    fn set_key(&mut self, i: usize) {
+        self.keys[i] = match self.leaves[i].first() {
+            Some(a) => ((a.sym.0 as u64 + 1) << 3) | (MAX_LEAVES as u64 - 1 - i as u64),
+            None => u64::MAX,
+        };
+    }
+
+    /// Replays leaf `s` from its parent to the root, restoring the loser at
+    /// every node on the way and leaving the winner in `tree[0]`.
+    #[inline]
+    fn adjust(&mut self, s: usize) {
+        let mut s = s;
+        let mut t = (s + self.n) / 2;
+        while t > 0 {
+            let o = self.tree[t] as usize;
+            if self.keys[s] > self.keys[o] {
+                self.tree[t] = s as u8;
+                s = o;
+            }
+            t /= 2;
+        }
+        self.tree[0] = s as u8;
+    }
+
+    /// Every match starts against the sentinel, which is the smallest key
+    /// while the tree fills so that each real leaf is pushed into the tree
+    /// and the sentinel is displaced out of `tree[0]` by the last replay.
+    fn build(&mut self) {
+        self.tree = [SENTINEL as u8; MAX_LEAVES as usize];
+        self.keys[SENTINEL] = 0;
+        for i in 0..self.n {
+            self.set_key(i);
+        }
+        for s in (0..self.n).rev() {
+            self.adjust(s);
+        }
+        self.keys[SENTINEL] = u64::MAX;
+    }
 }
 
 impl Iterator for AttrIter {
@@ -519,21 +580,20 @@ impl Iterator for AttrIter {
             self.leaves[0] = rest;
             return Some(first);
         }
-        let mut best: Option<(Sym, usize)> = None;
-        for (i, l) in self.leaves[..self.n].iter().enumerate() {
-            if let Some(a) = l.first() {
-                best = match best {
-                    Some((s, _)) if s < a.sym => best,
-                    _ => Some((a.sym, i)),
-                };
+        let w = self.tree[0] as usize;
+        let (item, rest) = self.leaves[w].split_first()?;
+        self.leaves[w] = rest;
+        self.set_key(w);
+        self.adjust(w);
+        let sym = (item.sym.0 as u64 + 1) << 3;
+        loop {
+            let v = self.tree[0] as usize;
+            if self.keys[v] & !7 != sym {
+                break;
             }
-        }
-        let (sym, win) = best?;
-        let item = &self.leaves[win][0];
-        for l in self.leaves[..self.n].iter_mut() {
-            if l.first().is_some_and(|a| a.sym == sym) {
-                *l = &l[1..];
-            }
+            self.leaves[v] = &self.leaves[v][1..];
+            self.set_key(v);
+            self.adjust(v);
         }
         Some(item)
     }
@@ -1090,12 +1150,24 @@ impl Arena {
         if let Some(f) = a.flattened() {
             return f;
         }
-        let n = a.len();
-        let out = self.alloc_attrs_as(n, Stat::AttrsUpd);
-        for (i, e) in a.iter().enumerate() {
-            out.init_from(i, e);
+        // one merge pass, not two: the entry count is only known after the
+        // merge, so the copy is sized at the upper bound (no leaf entry is
+        // dropped unless a later leaf repeats its sym) and the tail the
+        // duplicates left over is handed back to the bump pointer.
+        let cap = a.leaf_sets().iter().map(|l| l.len_raw() as usize).sum();
+        let out = self.alloc_attrs_as(cap, Stat::AttrsUpd);
+        let mut n = 0;
+        for e in a.iter() {
+            out.init_from(n, e);
+            n += 1;
         }
+        out.len
+            .store(n as u32, std::sync::atomic::Ordering::Relaxed);
+        // SAFETY: nothing was allocated since `out`, and `out` never had
+        // more than `n` of its `cap` entries written.
+        unsafe { self.shrink_last((cap - n) * size_of::<Attr>(), Stat::AttrsUpd) };
         let out: &'static AttrsObj = out;
+        a.len.store(n as u32, std::sync::atomic::Ordering::Relaxed);
         u.flat.set(Word::from_ref(out));
         out
     }
@@ -1313,5 +1385,104 @@ impl AttrsObj {
     #[inline]
     pub(crate) fn init_from(&mut self, i: usize, a: &Attr) {
         self.init(i, a.sym, a.pos, a.cell.get())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The leaves of `sets`, folded left to right: the last set holding a sym
+    /// wins, as `//` does.
+    fn reference(sets: &[Vec<(u32, i64)>]) -> Vec<(u32, i64)> {
+        let mut m: std::collections::BTreeMap<u32, i64> = std::collections::BTreeMap::new();
+        for s in sets {
+            for (sym, v) in s {
+                m.insert(*sym, *v);
+            }
+        }
+        m.into_iter().collect()
+    }
+
+    fn build(arena: &mut Arena, sets: &[Vec<(u32, i64)>]) -> &'static AttrsObj {
+        let mut acc: Option<&'static AttrsObj> = None;
+        for s in sets {
+            let entries: Vec<(Sym, Pos, Word)> = s
+                .iter()
+                .map(|(sym, v)| (Sym(*sym), Pos::NONE, arena.mk_int(*v)))
+                .collect();
+            let w = arena.mk_attrs_sorted(&entries);
+            // SAFETY: `mk_attrs_sorted` returns a pointer to an arena set.
+            let set = unsafe { &*w.ptr::<AttrsObj>() };
+            acc = Some(match acc {
+                None => set,
+                // SAFETY: as above, for the union `alloc_union` returns.
+                Some(a) => unsafe { &*arena.alloc_union(a, set).ptr::<AttrsObj>() },
+            });
+        }
+        acc.unwrap()
+    }
+
+    fn observed(a: &'static AttrsObj) -> Vec<(u32, i64)> {
+        a.iter()
+            .map(|e| (e.sym.0, e.cell.get().imm_int_value()))
+            .collect()
+    }
+
+    /// Every leaf count the budget allows, over syms that overlap between
+    /// leaves, against a fold of the same sets.
+    #[test]
+    fn union_iteration_merges_like_a_fold() {
+        let mut seed = 0x2545f4914f6cdd1du64;
+        let mut rng = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for n in 1..=MAX_LEAVES as usize {
+            for round in 0..40 {
+                let mut arena = Arena::new();
+                let mut sets: Vec<Vec<(u32, i64)>> = Vec::new();
+                for leaf in 0..n {
+                    let len = 1 + (rng() % 12) as usize;
+                    let mut syms: Vec<u32> = (0..len).map(|_| (rng() % 20) as u32).collect();
+                    syms.sort_unstable();
+                    syms.dedup();
+                    sets.push(
+                        syms.into_iter()
+                            .map(|s| (s, (leaf * 1000 + s as usize) as i64))
+                            .collect(),
+                    );
+                }
+                let a = build(&mut arena, &sets);
+                let want = reference(&sets);
+                assert_eq!(observed(a), want, "n={n} round={round} sets={sets:?}");
+                assert_eq!(a.len(), want.len(), "len n={n} round={round}");
+                let flat = arena.flat(a);
+                assert_eq!(observed(flat), want, "flat n={n} round={round}");
+                assert_eq!(flat.len_raw() as usize, want.len());
+            }
+        }
+    }
+
+    /// A lookup must see the same winner an iteration emits.
+    #[test]
+    fn union_lookup_agrees_with_iteration() {
+        let mut arena = Arena::new();
+        let sets: Vec<Vec<(u32, i64)>> = (0..MAX_LEAVES as usize)
+            .map(|leaf| {
+                (0u32..10)
+                    .filter(|s| !(s + leaf as u32).is_multiple_of(3))
+                    .map(|s| (s, (leaf * 100 + s as usize) as i64))
+                    .collect()
+            })
+            .collect();
+        let a = build(&mut arena, &sets);
+        for (sym, want) in reference(&sets) {
+            let got = a.get(Sym(sym)).expect("present");
+            assert_eq!(got.cell.get().imm_int_value(), want);
+        }
+        assert!(a.get(Sym(999)).is_none());
     }
 }

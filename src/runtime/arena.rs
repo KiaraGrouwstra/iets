@@ -83,6 +83,20 @@ impl Arena {
         }
     }
 
+    /// Gives the unused tail of the allocation that is still at the bump
+    /// pointer back, so a copy sized at an upper bound costs what it used.
+    ///
+    /// # Safety
+    ///
+    /// The caller's allocation must be the last one and its last `tail`
+    /// bytes must never be read or written.
+    #[inline]
+    pub(crate) unsafe fn shrink_last(&mut self, tail: usize, bucket: Stat) {
+        self.ptr = unsafe { self.ptr.sub(tail) };
+        self.bytes_allocated -= tail;
+        self.stats.unnote(bucket, tail);
+    }
+
     #[inline]
     pub(crate) fn alloc_raw(&mut self, size: usize, align: usize) -> *mut u8 {
         debug_assert!(align <= 16);
@@ -290,6 +304,11 @@ impl Stats {
     pub(crate) fn note(&mut self, s: Stat, bytes: usize) {
         self.counts[s as usize] += 1;
         self.bytes[s as usize] += bytes as u64;
+    }
+
+    /// Bytes an allocation asked for and gave back; the count stands.
+    pub(crate) fn unnote(&mut self, s: Stat, bytes: usize) {
+        self.bytes[s as usize] -= bytes as u64;
     }
 }
 
