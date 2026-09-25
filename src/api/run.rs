@@ -27,11 +27,11 @@ pub struct Run {
 }
 
 impl Run {
-    /// The evaluator `a` asks for, with its lints installed. `Err` is the
-    /// exit code of a lint configuration that does not resolve.
+    /// The evaluator `a` asks for, configured. `Err` is the exit code of a
+    /// setting that does not resolve, a lint selector or `--dump-drvs`.
     pub fn new(a: &EvalArgs) -> Result<Run, i32> {
         let mut ev = a.evaluator();
-        if let Err(e) = super::configure_lints(&mut ev, a) {
+        if let Err(e) = super::configure(&mut ev, a) {
             return Err(super::report(&ev, &e));
         }
         Ok(Run::on(ev).workers(a.workers))
@@ -50,6 +50,16 @@ impl Run {
     /// Opens the tracing cache of `subcommand`, keyed on `a`.
     pub fn cached(mut self, a: &EvalArgs, subcommand: &str) -> Run {
         self.cache = super::setup_cache(a, subcommand, &self.ev);
+        self
+    }
+
+    /// [`Run::on`] plus the evaluator state `a` asks for, installed before
+    /// the fiber template is cloned (`api::configure`). A frontend with its
+    /// own evaluator uses this when it evaluates through `api::evaluate`.
+    /// The error is dropped: `evaluate` applies the same settings and
+    /// reports it in the run's own error path.
+    pub fn configured(mut self, a: &EvalArgs) -> Run {
+        let _ = super::configure(&mut self.ev, a);
         self
     }
 

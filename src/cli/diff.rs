@@ -138,11 +138,13 @@ type Aterms = std::collections::HashMap<StorePath, std::sync::Arc<Vec<u8>>>;
 /// The two root derivations, and the ATerms an evaluation produced for the
 /// derivations under them; the rest are read from `/nix/store`.
 fn resolve(sides: Vec<Side>) -> std::result::Result<(Aterms, Vec<StorePath>), i32> {
+    // the sides share their flags in practice, so the first side's settings
+    // are the ones the helper fibers are cloned with
     let first = sides.iter().find_map(|s| match s {
-        Side::Eval(a) => Some((a.workers, a.evaluator())),
+        Side::Eval(a) => Some((a.workers, Run::on(a.evaluator()).configured(a))),
         Side::Drv(_) => None,
     });
-    let Some((workers, ev)) = first else {
+    let Some((workers, run)) = first else {
         let paths = sides
             .into_iter()
             .map(|s| match s {
@@ -152,7 +154,7 @@ fn resolve(sides: Vec<Side>) -> std::result::Result<(Aterms, Vec<StorePath>), i3
             .collect();
         return Ok((Aterms::new(), paths));
     };
-    crate::cli::run_parallel(Run::on(ev).workers(workers), move |ev, _| {
+    crate::cli::run_parallel(run.workers(workers), move |ev, _| {
         let mut roots = Vec::new();
         for s in sides {
             let a = match s {

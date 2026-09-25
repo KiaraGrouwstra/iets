@@ -242,7 +242,7 @@ pub fn dev_env(
         transport,
         gc_root: None,
     };
-    let run = Run::on(ev).workers(a.workers);
+    let run = Run::on(ev).configured(&a).workers(a.workers);
     crate::cli::run_parallel(run, move |ev, _| dev_env_build(ev, a, &d))
 }
 

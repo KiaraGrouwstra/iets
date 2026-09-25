@@ -176,18 +176,24 @@ pub fn configure_lints(ev: &mut Evaluator, a: &EvalArgs) -> Result<(), Box<Error
 
 /// Installs the compiled-file cache these arguments ask for (`--no-ir-cache`,
 /// `--cache-dir`). A frontend that evaluates without `evaluate` calls it
-/// itself (docs/explanation/caching.md).
+/// itself (docs/explanation/caching.md). Keeps a cache that is already
+/// installed, so `configure` and `evaluate` may both run.
 pub fn install_ir_cache(ev: &mut Evaluator, a: &EvalArgs) {
-    if !a.no_ir_cache {
+    if !a.no_ir_cache && ev.ir_cache.is_none() {
         ev.ir_cache = crate::compile::cache::IrCache::locate(a.cache_dir.as_deref(), a.timings)
             .map(std::sync::Arc::new);
     }
 }
 
-/// Applies the shared `eval` settings and evaluates the input, `--arg`s and `-A` included.
-pub fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
-    configure_lints(ev, &a)?;
-    install_ir_cache(ev, &a);
+/// Every evaluator field these arguments set: the lints, the IR cache, the
+/// experimental features, the search path and `--dump-drvs`. **Call before
+/// `parallel::try_run`**, which clones the evaluator as the fiber template:
+/// what a helper fiber has is what the template had, so a field set after
+/// the clone is the main fiber's alone. `Run::new` and `Run::configured`
+/// call it; `evaluate` calls it again, which changes nothing.
+pub fn configure(ev: &mut Evaluator, a: &EvalArgs) -> Result<(), Box<Error>> {
+    configure_lints(ev, a)?;
+    install_ir_cache(ev, a);
     if a.xp_features.iter().any(|f| f == "parse-toml-timestamps") {
         crate::builtins::text::set_parse_toml_timestamps(true);
     }
@@ -202,6 +208,12 @@ pub fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
         })?;
         let _ = ev.drv.dump_dir.set(std::path::PathBuf::from(dir));
     }
+    Ok(())
+}
+
+/// Applies the shared `eval` settings and evaluates the input, `--arg`s and `-A` included.
+pub fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
+    configure(ev, &a)?;
 
     let cwd = cwd();
 
