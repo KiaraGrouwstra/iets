@@ -153,6 +153,17 @@ bash is `$NIX_BUILD_SHELL`, else `(import <nixpkgs> {}).bashInteractive` built
 through the daemon, else — when that expression does not evaluate — `bash` from
 the environment, with nix's `uses bash from your environment` notice.
 
+Before it execs bash it keeps what it realised alive: one link per path in
+ietsp's roots store, keyed on the working directory, the files and attributes
+you named, and the path's place in the sorted list. Nix keeps no root here, so
+a `nix collect-garbage` between two entries makes the second one rebuild the
+whole closure; this is the hole nix-direnv fills by hand. There is one link
+per path because `nix-shell` realises the derivation's inputs and no single
+store path holds them all. The root is a side effect on the daemon: stdout,
+stderr and the exit code stay nix's, and a root the daemon will not take is
+not reported. `shell-gc-root = false` keeps none
+(`docs/reference/settings.md`, `docs/explanation/caching.md`).
+
 Falls back on: `-p`/`--packages`, a `#!` script (the first argument is a file
 starting with `#!`, which is `-i INTERPRETER` mode), `--exclude`, `--dry-run`,
 `--check`, `--repair`, `-o`/`--out-link`, `--no-out-link`/`--no-link`, `-`
@@ -280,7 +291,13 @@ derivation is built through the daemon. On top of `makeRcScript` it appends what
 `shopt -u expand_aliases` pair, the `bash-prompt`, `bash-prompt-prefix` and
 `bash-prompt-suffix` settings become `PS1` lines, and `SHELL` plus the `PATH`
 prefix of the bash directory close the script. `NIX_GCROOT` holds the `-env`
-output so the shell keeps it alive. `--ignore-env` clears the environment except
+output so the shell keeps it alive — nix's runtime root, which the collector
+finds in the process environment and which lasts exactly as long as the shell.
+On top of that ietsp links the `-env` output in its roots store, keyed on the
+flake directory and the attribute path, so the closure also survives a
+collection between two entries; the output references the whole shell, so one
+link holds all of it. `shell-gc-root = false` keeps none
+(`docs/explanation/caching.md`). `--ignore-env` clears the environment except
 the `--keep` names; `--unset` removes names; both are
 `command.cc:MixEnvironment::setEnviron`, so `NIX_GCROOT` and `SHELL` are set
 afterwards and always survive.
@@ -432,9 +449,12 @@ honoured; any other store falls back.
 - `--show-trace` only puts the trace into the `--log-format internal-json`
   error records (`docs/reference/errors.md`): ietsp always prints the full
   trace it has.
-- `--no-out-link` creates no symlink at all. `nix-build` links into a
-  temporary directory and lets it be deleted, which roots the output for
-  the length of the run.
+- `--no-out-link` (`nix build --no-link`) creates no symlink and keeps a
+  GC root in ietsp's roots store instead, so the output survives the next
+  `nix collect-garbage`. `nix-build` links into a temporary directory and
+  lets it be deleted, which roots the output for the length of the run and
+  no longer. `build-gc-root = false` gives Nix's behaviour back
+  (`docs/reference/divergences.md`, `docs/explanation/caching.md`).
 - `getDerivations` recursion covers derivations, attrsets (lexicographic
   order, `recurseForDerivations`) and lists. `_combineChannels` and
   `ignoreAssertionFailures` are not implemented.

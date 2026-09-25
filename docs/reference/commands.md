@@ -177,6 +177,16 @@ object is `{willBuild, willSubstitute, unknown, downloadSize, narSize}`;
 `ietsp plumbing missing` prints the same object. A `grpc://` builder has
 no `QueryMissing`, so `--dry-run` is a usage error there.
 
+**The paths outlive the run.** A caller reads those paths and uses them
+afterwards, so a `nix collect-garbage` in between must not take them:
+every printed output gets a link in ietsp's roots store, keyed on the
+working directory, the installable and the output, so the same command
+replaces its own roots in place (`docs/explanation/caching.md`).
+`build-gc-root = false` keeps none. Two cases keep none anyway:
+`--fetch-to DIR` already has the bytes outside the store, and a remote
+builder's outputs are not in the local store, which is the only store
+that takes a root.
+
 `fix-hashes` rewrites the hash of a fixed-output build that failed on it
 (`docs/reference/settings.md`). Where the builds go and how the closure
 travels: `docs/how-to/build-remotely.md`.
@@ -869,7 +879,10 @@ first of `devShells.<system>.x`, `packages.<system>.x`,
 `legacyPackages.<system>.x`, `x` (develop.cc, installable-flake.cc).
 
 The daemon substitutes or builds the shell's inputs. `--gc-root` with
-`ssh-ng://` is an error: the root would name a remote path.
+`ssh-ng://` is an error: the root would name a remote path. Without
+`--gc-root` this command keeps no root: the path is the caller's to choose
+here, unlike in `nix develop`, which has no flag and takes a link in
+ietsp's roots store instead (`docs/explanation/caching.md`).
 
 stdout: the bash. Variable assignments, `export`s, `declare -a` and
 `declare -A`, function definitions, the `PATH` and `XDG_DATA_DIRS`

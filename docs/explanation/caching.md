@@ -339,15 +339,45 @@ is per tree, so different inputs still download in parallel.
 `~/.cache/ietsp/roots` is where ietsp keeps the GC roots it owns. Every
 other root mechanism takes a path from the caller — `print-dev-env
 --gc-root PATH`, `eval-jobs --gc-roots-dir DIR`, `plumbing build --gc-root
-DIR`, `nix-instantiate --add-root PATH` — and this is the one ietsp decides
-for itself. Today `nix fmt` is its only user.
+DIR`, `nix-instantiate --add-root PATH`, `nix-build -o` — and this is the
+one ietsp decides for itself. Its users:
+
+| Who | What the root holds | Key | Switch |
+|:---|:---|:---|:---|
+| `nix fmt` | the formatter's output | flake directory, `formatter.<system>` | none |
+| `nix develop` | the `-env` output, which references the whole shell | flake directory, attribute path | `shell-gc-root` |
+| `nix-shell` | every input the entry realised, one link each | working directory, the files and attributes asked for, the path's place in the sorted list | `shell-gc-root` |
+| `ietsp build` | every output it printed | working directory, installable, attribute, output | `build-gc-root` |
+| `nix-build --no-out-link`, `nix build --no-link` | every output that got no symlink | working directory, the files, attributes or installables asked for, the name the symlink would have had | `build-gc-root` |
 
 An entry is a symlink into `/nix/store`, named by a 64-hex key of what the
-root is for: for a formatter, the flake directory and
-`formatter.<system>`, so two flakes on one machine keep two roots and one
-flake replaces its own in place. The daemon's `gcroots/auto/<hash>` entry
-points at our link, not at the store path, so removing our link is the whole
-release: the daemon's entry goes stale and is ignored.
+root is for, so two projects keep two roots and one project replaces its own
+in place. A key never holds a `.drv` path or an output path: an edit would
+then leave the previous root behind for the TTL to sweep, where a key made
+of what the user asked for is replaced in place. The daemon's
+`gcroots/auto/<hash>` entry points at our link, not at the store path, so
+removing our link is the whole release: the daemon's entry goes stale and is
+ignored.
+
+One root per thing. Where a caller named a path, that path is the root and
+the roots store stays out of it: `print-dev-env --gc-root PATH` keeps its
+own link (and owns the failure, where a root ietsp chose is best effort),
+`nix-build -o result` keeps `result`, and `ietsp build --fetch-to DIR`
+already has the bytes outside the store.
+
+A shell with no single store path to hold — `nix-shell` realises the
+derivation's inputs and not the derivation — takes one link per path. It is
+what nix-direnv has to spell out with `nix-instantiate --add-root` and
+`nix-store --add-root` for the same reason. The links are numbered by the
+sorted path list, so re-entering the same project replaces them in place; a
+set that shrank leaves links behind, and the TTL takes them.
+
+`shell-gc-root` and `build-gc-root` (`docs/reference/settings.md`) both
+default on and are separate switches, because the lifetimes differ. A shell
+root pins a large closure for as long as somebody keeps entering that
+project. A build root pins an output the caller just asked for and is about
+to use, and on the classic names it is a deliberate divergence from Nix
+(`docs/reference/divergences.md`), which is its own reason to turn off.
 
 Three of the four rules above do not apply. A root holds nothing that can be
 recomputed, so there is no format version, nothing to stage and rename, and
