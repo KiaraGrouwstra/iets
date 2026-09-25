@@ -90,6 +90,11 @@ evaluator is borrowed, so it cannot outlive the arena it points into.
 `Value` is invariant in `'e`, so it never widens to another borrow. Nothing
 in the surface exposes an arena pointer or a tag.
 
+It is also the only way in. `runtime::Word` — the word `api::evaluate`
+returns — is opaque outside the crate: its bits, its constructors and every
+getter that dereferences it are `pub(crate)`, so no safe call can invent
+one. Pass a `Word` back to the library, or read it through `api::value`.
+
 ```rust
 use ietsp::api::value::Eval;
 use ietsp::eval::Evaluator;

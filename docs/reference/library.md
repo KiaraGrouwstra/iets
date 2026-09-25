@@ -14,6 +14,14 @@ module, no private field, no copied helper. When something a frontend
 needs lives only in `cli`, move it into the library (`crate::api`, or the
 module it belongs to) and let `cli` call it there.
 
+**Rule: the value representation is closed.** `crate::runtime` names the
+evaluator's types — `Word`, `Arena`, the heap objects — but every operation
+on them is `pub(crate)`. A frontend takes a `Word` from `api::evaluate`,
+hands it back to the library, and reads it through `api::value`; it cannot
+build one, dereference one or allocate in the arena. This is a soundness
+rule, not a taste one: a word invented from bits makes a safe call
+dereference an address of the caller's choosing.
+
 ## Entry points
 
 | What | Where |
