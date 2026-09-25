@@ -208,3 +208,43 @@ impl SymWords {
         self.slot(s).store(w.bits(), Ordering::Release);
     }
 }
+
+/// Run-wide evaluation counters. Every fiber counts into plain fields on
+/// its own evaluator, which keeps the hot path free of atomics, and adds
+/// them here when it finishes a task. A stats line reads the sum, so what
+/// a helper fiber did is reported too (docs/reference/settings.md).
+#[derive(Default)]
+pub struct Totals {
+    thunks: AtomicU64,
+    calls: AtomicU64,
+    derivations: AtomicU64,
+    compile_ns: AtomicU64,
+}
+
+/// Counters of one fiber, or of a whole run.
+#[derive(Default, Clone, Copy)]
+pub struct Counts {
+    pub thunks: u64,
+    pub calls: u64,
+    pub derivations: u64,
+    pub compile: std::time::Duration,
+}
+
+impl Totals {
+    pub fn add(&self, c: Counts) {
+        self.thunks.fetch_add(c.thunks, Ordering::Relaxed);
+        self.calls.fetch_add(c.calls, Ordering::Relaxed);
+        self.derivations.fetch_add(c.derivations, Ordering::Relaxed);
+        self.compile_ns
+            .fetch_add(c.compile.as_nanos() as u64, Ordering::Relaxed);
+    }
+
+    pub fn get(&self) -> Counts {
+        Counts {
+            thunks: self.thunks.load(Ordering::Relaxed),
+            calls: self.calls.load(Ordering::Relaxed),
+            derivations: self.derivations.load(Ordering::Relaxed),
+            compile: std::time::Duration::from_nanos(self.compile_ns.load(Ordering::Relaxed)),
+        }
+    }
+}

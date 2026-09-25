@@ -27,6 +27,14 @@ statistics knobs stay environment-only.
 A level knob (`IETSP_STATS`, `IETSP_PAR_STATS`) is off when unset, `2`
 selects level 2, and any other value selects level 1.
 
+The evaluation counters — thunks, calls, derivations, compile time, in an
+`IETSP_STATS` line and in the `--timings` derivation count — are per fiber.
+A fiber adds its own to one run total whenever it parks or finishes its
+task, so the printed numbers cover the helper fibers, and the derivation
+count of a workload is the same at one worker and at four. Only a fiber
+running at that instant is not in the sum yet. Arena bytes and RSS stay
+the main fiber's own: each worker owns an arena.
+
 | Variable | File | Type | Default | Effect |
 |:---|:---|:---|:---|:---|
 | `IETSP_WORKERS` | `workers` | usize ≥ 1 | cores, capped at 4 | Worker threads. `--workers N` overrides it. |

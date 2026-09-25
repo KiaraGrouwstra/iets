@@ -57,6 +57,7 @@ fn fields(ev: &Evaluator) -> Vec<(&'static str, u64)> {
         ("store_dir", digest(&ev.store_dir)),
         ("current_system", digest(ev.current_system)),
         ("session", Arc::as_ptr(&ev.session) as u64),
+        ("totals", ev.totals_ptr()),
     ]
 }
 

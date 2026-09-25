@@ -58,6 +58,7 @@ impl Driver for SyncEv {
             init_ctx(ev, slot);
             let t = (*slot).task;
             run_task(ev, t);
+            ev.fold_counters();
         }
     }
 
@@ -66,6 +67,9 @@ impl Driver for SyncEv {
         // so nothing else references its evaluator.
         let ev = unsafe { ev_of(slot) };
         std::mem::swap(&mut ev.arena, &mut w.arena);
+        // a fiber parked in the middle of a task keeps its counters until it
+        // is resumed, which a stats line printed meanwhile would not see
+        ev.fold_counters();
     }
 }
 

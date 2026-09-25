@@ -130,6 +130,9 @@ pub struct Evaluator {
     pub nr_thunks: u64,
     pub nr_function_calls: u64,
     pub t_compile: std::time::Duration,
+    /// Where those counters and `drv.nr_derivations` go when this fiber
+    /// finishes a task. Shared, so a stats line covers every fiber.
+    totals: std::sync::Arc<crate::parallel::shared::Totals>,
     /// One shared context-free string per symbol, made on first use.
     sym_strings: crate::parallel::shared::SymWords,
     /// Source path -> virtual store path, like Nix's `srcToStore`.
@@ -291,6 +294,7 @@ impl Evaluator {
             nr_thunks: 0,
             nr_function_calls: 0,
             t_compile: std::time::Duration::ZERO,
+            totals: Default::default(),
             sym_strings: crate::parallel::shared::SymWords::new(),
             src_to_store: Default::default(),
             known: Default::default(),
@@ -2202,22 +2206,58 @@ impl Evaluator {
 }
 
 impl Evaluator {
+    /// Thunks, calls, derivations and compile time of the whole run: this
+    /// fiber's own counters plus every fiber that folded into the totals.
+    /// Read it, not the fields, to report a number.
+    pub fn counts(&self) -> crate::parallel::shared::Counts {
+        let t = self.totals.get();
+        crate::parallel::shared::Counts {
+            thunks: t.thunks + self.nr_thunks,
+            calls: t.calls + self.nr_function_calls,
+            derivations: t.derivations + self.drv.nr_derivations,
+            compile: t.compile + self.t_compile,
+        }
+    }
+
+    /// Identity of the shared counter sink, for `parallel::guard`.
+    #[cfg(debug_assertions)]
+    pub(crate) fn totals_ptr(&self) -> u64 {
+        std::sync::Arc::as_ptr(&self.totals) as u64
+    }
+
+    /// Move this fiber's counters into the run's totals. The scheduler
+    /// calls it when a fiber finishes a task, which is why the counters
+    /// themselves need no atomics.
+    pub fn fold_counters(&mut self) {
+        self.totals.add(crate::parallel::shared::Counts {
+            thunks: self.nr_thunks,
+            calls: self.nr_function_calls,
+            derivations: self.drv.nr_derivations,
+            compile: self.t_compile,
+        });
+        self.nr_thunks = 0;
+        self.nr_function_calls = 0;
+        self.drv.nr_derivations = 0;
+        self.t_compile = std::time::Duration::ZERO;
+    }
+
     /// `IETSP_STATS=1`: allocation and phase counters on stderr.
     pub fn print_stats(&self) {
         let st = &self.arena.stats;
+        let c = self.counts();
         crate::errln!(
             "files={} thunks={} calls={} drvs={} arena_bytes={} arena_mapped={} rss_kb={} compile={:?} ir_size={}",
             self.files.len(),
-            self.nr_thunks,
-            self.nr_function_calls,
-            self.drv.nr_derivations,
+            c.thunks,
+            c.calls,
+            c.derivations,
             self.arena.bytes_allocated,
             self.arena.mapped,
             std::fs::read_to_string("/proc/self/statm")
                 .ok()
                 .and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok())
                 .map_or(0, |pages| pages * 4),
-            self.t_compile,
+            c.compile,
             size_of::<Ir>()
         );
         for (i, name) in STAT_NAMES.iter().enumerate() {

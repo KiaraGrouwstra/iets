@@ -409,7 +409,7 @@ fn dev_env_build(ev: &mut Evaluator, a: EvalArgs, d: &DevEnvArgs) -> Result<DevE
         if timings {
             eprintln!(
                 "eval: {} derivations, {:.3}s\nenv drv: {env_path}",
-                ev.drv.nr_derivations,
+                ev.counts().derivations,
                 eval_time.as_secs_f64()
             );
         }

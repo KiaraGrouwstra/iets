@@ -203,7 +203,7 @@ fn build_eval(
     if b.timings {
         eprintln!(
             "eval: {} derivations, {} sources, {:.3}s",
-            ev.drv.nr_derivations,
+            ev.counts().derivations,
             ev.known.origins().len(),
             eval_time.as_secs_f64()
         );

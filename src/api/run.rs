@@ -242,4 +242,46 @@ mod tests {
         assert_eq!(one, n as u64, "a warm run reads one entry per file");
         assert_eq!(four, one, "helper fibers read the IR cache too");
     }
+
+    /// The derivations this run made, counted after a deep force of the
+    /// workload on `a.workers` fibers. A fiber folds its counters when it
+    /// parks or finishes its task, so a helper still inside one when the
+    /// walk returns is a few counts behind: the read waits for `want`,
+    /// yielding, and reports what it has when the deadline passes.
+    fn derivations(a: EvalArgs, want: u64) -> u64 {
+        Run::new(&a)
+            .expect("the arguments configure")
+            .go(move |ev, _| {
+                let v = crate::api::evaluate(ev, a).expect("the workload evaluates");
+                crate::parallel::force_deep(ev, v).expect("the workload forces");
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                loop {
+                    let n = ev.counts().derivations;
+                    if n >= want || std::time::Instant::now() > deadline {
+                        return n;
+                    }
+                    std::thread::yield_now();
+                }
+            })
+            .expect("the fiber stacks")
+    }
+
+    /// Each fiber counts into its own evaluator and folds those counters
+    /// into the run's totals, so a stats line does not depend on the worker
+    /// count. The derivation count is deterministic; with the main fiber's
+    /// counters alone the four-worker number is a fraction of it.
+    #[test]
+    fn the_counters_cover_the_helper_fibers() {
+        let d = std::env::temp_dir().join(format!("ietsp-run-counts-{}", std::process::id()));
+        let n = 400;
+        let expr = format!(
+            "builtins.genList (i: derivation {{ name = \"c${{toString i}}\"; \
+             system = \"x86_64-linux\"; builder = \"/bin/sh\"; }}) {n}"
+        );
+        let one = derivations(args(&expr, &d, 1), n as u64);
+        let four = derivations(args(&expr, &d, 4), one);
+        let _ = std::fs::remove_dir_all(&d);
+        assert_eq!(one, n as u64, "one derivation per list element");
+        assert_eq!(four, one, "the helper fibers' derivations are counted too");
+    }
 }
