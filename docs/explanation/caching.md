@@ -16,7 +16,11 @@ Each cache has a flag that turns it off. `--no-tracing-cache` turns off
 the tracing cache. `--no-ir-cache` turns off the IR cache. `--no-cache`
 turns off both, and `IETSP_CACHE=0` and the `cache` setting are the same
 switch. No flag turns off the input store, because it is not a cache: a
-run needs the input's bytes. `--cache-dir DIR` moves all three stores.
+run needs the input's bytes. `--cache-dir DIR` moves all four stores.
+
+A fourth directory, `~/.cache/ietsp/roots`, is neither a cache nor a
+store of content: it holds the GC roots ietsp owns. See the section on it
+below.
 
 The ideas come from Mic92's nix-tarmac: a writer lock a caller may give up
 on, a touch interval so a hit writes nothing, a TTL sweep that runs at most
@@ -329,6 +333,60 @@ a process takes a lock on that tree's name. A second process that needs the
 same tree prints one line, blocks, and then reads the entry the first one
 stored. If the first fetch failed, the second downloads it itself. The lock
 is per tree, so different inputs still download in parallel.
+
+## The roots store: what ietsp keeps alive
+
+`~/.cache/ietsp/roots` is where ietsp keeps the GC roots it owns. Every
+other root mechanism takes a path from the caller — `print-dev-env
+--gc-root PATH`, `eval-jobs --gc-roots-dir DIR`, `plumbing build --gc-root
+DIR`, `nix-instantiate --add-root PATH` — and this is the one ietsp decides
+for itself. Today `nix fmt` is its only user.
+
+An entry is a symlink into `/nix/store`, named by a 64-hex key of what the
+root is for: for a formatter, the flake directory and
+`formatter.<system>`, so two flakes on one machine keep two roots and one
+flake replaces its own in place. The daemon's `gcroots/auto/<hash>` entry
+points at our link, not at the store path, so removing our link is the whole
+release: the daemon's entry goes stale and is ignored.
+
+Three of the four rules above do not apply. A root holds nothing that can be
+recomputed, so there is no format version, nothing to stage and rename, and
+nothing to poison and wipe: a symlink is either right or absent. Its only
+writer is `replaceSymlink`, which is already atomic. The TTL sweep is the
+rule that does apply, and it fits better here than anywhere else — "keep
+alive what somebody used recently" is exactly what a root should mean — so
+every run touches its link (`utimensat` on the link, not on the store path
+it names, whose mtime is the store's epoch) and `ietsp cache gc` walks this
+store with the other three. A swept root frees nothing by itself; it lets
+the next `nix collect-garbage` decide.
+
+The store is not ietsp's to claim by itself. A sweep removes only names of
+its own shape, so anything else in the directory survives, and a root ietsp
+cannot register — no local daemon, a store that refuses — is a warning, not
+a failure: the command it belongs to still answers.
+
+### Why `nix fmt` wanted one
+
+`nix fmt` has two things it must not redo. The first is the evaluation of
+`formatter.<system>`. The second is the build of what that names — and a
+formatter nothing points at is garbage, so the next `nix collect-garbage`
+takes it and the run after that builds it again.
+
+Mic92's flake-fmt exists because stock `nix fmt` does both every time. It
+answers the first with an `LD_PRELOAD` shim that records the mtime of every
+file the evaluation opened, and the second with an out-link under
+`~/.cache/flake-fmt` that doubles as a GC root.
+
+ietsp already answers the first, natively and better. `nix fmt` goes through
+the tracing cache, keyed on the flake and the system, so a second run with
+nothing changed revalidates its read set and evaluates nothing. The read set
+holds content hashes, not mtimes, and that is exactly the difference a
+formatter creates: a formatter rewrites files, and a file rewritten to the
+same bytes is still a hit. An mtime says it changed. So the steady state of
+`nix fmt` — run it, it reformats nothing, run it again — is a hit, and only
+a run that really changed a file the evaluation read costs an evaluation.
+
+The second idea is the roots store above.
 
 ## What this does not cover
 

@@ -935,8 +935,9 @@ ietsp cache gc [--ttl DAYS] [--dry-run] [--cache-dir DIR]
 ietsp cache dump READSET
 ```
 
-`gc` removes the cache entries nobody read for `DAYS` days. `dump` prints
-the read set of a tracing-cache entry.
+`gc` removes the cache entries nobody read for `DAYS` days, and the GC roots
+ietsp owns that nobody has used for as long. `dump` prints the read set of a
+tracing-cache entry.
 
 | Flag | Effect |
 |---|---|
@@ -944,9 +945,11 @@ the read set of a tracing-cache entry.
 | `-n`, `--dry-run` | count what `gc` would remove, remove nothing |
 | `--cache-dir DIR` | sweep `DIR` instead of the default cache |
 
-stdout: one line per swept directory — the tracing cache, `ir` and
-`inputs` — with the entries removed of the entries there and the bytes;
-`(dry run)` with `-n`. `dump` prints the read set.
+stdout: one line per swept directory — the tracing cache, `ir`, `inputs` and
+`roots` — with the entries removed of the entries there and the bytes;
+`(dry run)` with `-n`. A swept root frees no bytes of its own, so `roots`
+always reports 0.0 MiB; what it frees is what the next `nix collect-garbage`
+can then take. `dump` prints the read set.
 Exit: 0, 2 on a usage error. `gc` and `dump` are the only subcommands.
 
 The caches themselves are in `docs/explanation/caching.md`.

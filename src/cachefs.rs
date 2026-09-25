@@ -1,6 +1,9 @@
 //! On-disk hygiene shared by the two caches, the compiled-IR cache
 //! (`src/compile/cache.rs`) and the tracing run cache (`src/trace/`): a format
-//! version file, a single-writer lock, mtime touches, and TTL sweeps.
+//! version file, a single-writer lock, mtime touches, and TTL sweeps. The
+//! roots store (`roots/`, `docs/explanation/caching.md`) takes the TTL sweep
+//! and nothing else: a symlink has no format to version and no torn state to
+//! wipe.
 //!
 //! Many `ietsp` processes share one cache directory (eval-jobs workers,
 //! direnv, the classic command names). The invariant they hold together:
@@ -43,7 +46,7 @@ const STAMP: &str = "gc-stamp";
 /// The directory every cache store lives under: `--cache-dir DIR`, else
 /// `IETSP_CACHE_DIR`, else `$XDG_CACHE_HOME/ietsp`, else `~/.cache/ietsp`.
 /// Each store takes a subdirectory of it — `trace/`, `ir/`, `inputs/`,
-/// `fmt/` — so the directory the user names is never a removal target.
+/// `roots/` — so the directory the user names is never a removal target.
 /// `None` when no home is known.
 pub fn root(override_dir: Option<&str>) -> Option<PathBuf> {
     if let Some(d) = override_dir {
@@ -59,6 +62,32 @@ pub fn root(override_dir: Option<&str>) -> Option<PathBuf> {
     Some(base.join("ietsp"))
 }
 
+/// The GC roots ietsp owns, under `<cache root>/roots`. A root is not a cache
+/// entry: it holds nothing that can be recomputed, it is a claim on the
+/// daemon's store. The TTL sweep still fits — a root nobody has used in
+/// `TTL_DAYS` days is one nobody wants kept — so `ietsp cache gc` walks it,
+/// but the version file, the writer lock and poison-and-wipe do not, which is
+/// why it is not `prepare`d.
+pub fn roots(override_dir: Option<&str>) -> Option<PathBuf> {
+    Some(root(override_dir)?.join("roots"))
+}
+
+/// The link in the roots store that `parts` name — what the root is for, then
+/// whatever tells two of them apart. They are length-prefixed into one 64-hex
+/// key, so no part can spell another one's boundary.
+pub fn root_link(override_dir: Option<&str>, parts: &[&[u8]]) -> Option<PathBuf> {
+    let mut bytes = Vec::new();
+    for p in parts {
+        bytes.extend_from_slice(&(p.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(p);
+    }
+    let name: String = crate::trace::sha256(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    Some(roots(override_dir)?.join(name))
+}
+
 /// How a store names its entries under its root.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Shape {
@@ -70,6 +99,10 @@ pub enum Shape {
     /// One directory per entry, named by a store path's base name (the input
     /// store, `crate::treestore`).
     StoreEntries,
+    /// One symlink per entry, named by a 64-hex key (the roots store). The
+    /// link points into `/nix/store` and is what the daemon's
+    /// `gcroots/auto/<hash>` entry names, so removing it releases the root.
+    Links,
 }
 
 /// A sweep only ever removes something named like a key, so the store-level
@@ -80,7 +113,7 @@ fn is_key(name: &std::ffi::OsStr, shape: Shape) -> bool {
     match shape {
         Shape::StoreEntries => std::str::from_utf8(b)
             .is_ok_and(|n| crate::store::path::StorePath::from_base_name(n).is_ok()),
-        Shape::Dirs => b.len() == 64 && b.iter().all(u8::is_ascii_hexdigit),
+        Shape::Dirs | Shape::Links => b.len() == 64 && b.iter().all(u8::is_ascii_hexdigit),
         Shape::ShardedFiles => b.len() == 62 && b.iter().all(u8::is_ascii_hexdigit),
     }
 }
@@ -107,6 +140,37 @@ fn age(path: &Path) -> Option<Duration> {
         .ok()?
         .elapsed()
         .ok()
+}
+
+/// The age of an entry of `shape`: a symlink entry is aged by the link, not by
+/// what it points at, whose mtime is the store's epoch.
+fn entry_age(path: &Path, shape: Shape) -> Option<Duration> {
+    match shape {
+        Shape::Links => fs::symlink_metadata(path)
+            .and_then(|m| m.modified())
+            .ok()?
+            .elapsed()
+            .ok(),
+        _ => age(path),
+    }
+}
+
+/// Marks a link in the roots store as used now, so the TTL sweep keeps the
+/// roots of the flakes somebody still formats. `utimensat` with a null time
+/// sets both stamps to the current time, and `AT_SYMLINK_NOFOLLOW` sets them
+/// on the link itself.
+pub fn touch_link(path: &Path) {
+    let Ok(c) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return;
+    };
+    unsafe {
+        libc::utimensat(
+            libc::AT_FDCWD,
+            c.as_ptr(),
+            std::ptr::null(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
 }
 
 fn stamp_age(bytes: &[u8]) -> Option<Duration> {
@@ -392,6 +456,8 @@ pub struct Swept {
 fn entry_size(path: &Path, shape: Shape) -> u64 {
     match shape {
         Shape::ShardedFiles => fs::metadata(path).map_or(0, |m| m.len()),
+        // a root holds no bytes of its own; what it frees is the daemon's to say
+        Shape::Links => 0,
         Shape::Dirs | Shape::StoreEntries => fs::read_dir(path).map_or(0, |d| {
             d.flatten()
                 .filter_map(|e| e.metadata().ok())
@@ -403,7 +469,7 @@ fn entry_size(path: &Path, shape: Shape) -> u64 {
 
 fn drop_entry(path: &Path, shape: Shape) -> bool {
     match shape {
-        Shape::ShardedFiles => fs::remove_file(path).is_ok(),
+        Shape::ShardedFiles | Shape::Links => fs::remove_file(path).is_ok(),
         Shape::Dirs | Shape::StoreEntries => fs::remove_dir_all(path).is_ok(),
     }
 }
@@ -427,7 +493,9 @@ fn sweep_dir(dir: &Path, shape: Shape, ttl: Duration, dry_run: bool, out: &mut S
             continue;
         }
         out.scanned += 1;
-        let Some(a) = age(&path) else { continue };
+        let Some(a) = entry_age(&path, shape) else {
+            continue;
+        };
         if a < ttl {
             continue;
         }
@@ -444,7 +512,9 @@ fn sweep_dir(dir: &Path, shape: Shape, ttl: Duration, dry_run: bool, out: &mut S
 pub fn sweep(root: &Path, shape: Shape, ttl: Duration, dry_run: bool) -> Swept {
     let mut out = Swept::default();
     match shape {
-        Shape::Dirs | Shape::StoreEntries => sweep_dir(root, shape, ttl, dry_run, &mut out),
+        Shape::Dirs | Shape::StoreEntries | Shape::Links => {
+            sweep_dir(root, shape, ttl, dry_run, &mut out);
+        }
         Shape::ShardedFiles => {
             let Ok(rd) = fs::read_dir(root) else {
                 return out;
@@ -502,8 +572,8 @@ pub fn maybe_sweep(root: &Path, shape: Shape, timings: bool) {
     }
 }
 
-/// The three stores a `cache gc` run walks: the tracing cache, the IR cache and
-/// the input store.
+/// The four stores a `cache gc` run walks: the tracing cache, the IR cache,
+/// the input store and the roots store.
 pub fn stores(cache_dir: Option<&str>) -> Vec<(PathBuf, Shape)> {
     let mut v = Vec::new();
     if let Some(s) = crate::trace::store::Store::locate(cache_dir) {
@@ -514,6 +584,9 @@ pub fn stores(cache_dir: Option<&str>) -> Vec<(PathBuf, Shape)> {
     }
     if let Some(r) = crate::treestore::locate(cache_dir) {
         v.push((r, Shape::StoreEntries));
+    }
+    if let Some(r) = roots(cache_dir) {
+        v.push((r, Shape::Links));
     }
     v
 }
@@ -544,6 +617,27 @@ mod tests {
         let c = std::ffi::CString::new(path.as_os_str().as_bytes()).expect("path");
         assert_eq!(
             unsafe { libc::utimensat(libc::AT_FDCWD, c.as_ptr(), times.as_ptr(), 0) },
+            0
+        );
+    }
+
+    fn back_date_link(path: &Path, secs: u64) {
+        let t = (now_secs() - secs) as i64;
+        let ts = libc::timespec {
+            tv_sec: t,
+            tv_nsec: 0,
+        };
+        let times = [ts, ts];
+        let c = std::ffi::CString::new(path.as_os_str().as_bytes()).expect("path");
+        assert_eq!(
+            unsafe {
+                libc::utimensat(
+                    libc::AT_FDCWD,
+                    c.as_ptr(),
+                    times.as_ptr(),
+                    libc::AT_SYMLINK_NOFOLLOW,
+                )
+            },
             0
         );
     }
@@ -717,6 +811,37 @@ mod tests {
         assert!(d.join(YOUNG).exists());
         assert!(d.join("ir").exists(), "only key-shaped names are swept");
         assert!(!stale.exists(), "a killed writer's temporary file goes");
+    }
+
+    #[test]
+    fn sweep_ages_a_root_by_its_link_not_by_what_it_names() {
+        let d = tmp("roots");
+        fs::create_dir_all(&d).expect("store");
+        // the target carries the store's epoch, as a store path does
+        let target = d.join("target");
+        fs::create_dir_all(&target).expect("target");
+        back_date(&target, 400 * DAY);
+        for (name, secs) in [(OLD, 40 * DAY), (YOUNG, 60)] {
+            let l = d.join(name);
+            std::os::unix::fs::symlink(&target, &l).expect("link");
+            back_date_link(&l, secs);
+        }
+        let s = sweep(&d, Shape::Links, Duration::from_secs(TTL_DAYS * DAY), false);
+        assert_eq!((s.scanned, s.removed, s.bytes), (2, 1, 0));
+        assert!(!d.join(OLD).exists(), "a root nobody used goes");
+        assert!(d.join(YOUNG).exists(), "a root in use stays");
+        assert!(
+            target.exists(),
+            "what a root named is not ietsp's to remove"
+        );
+
+        back_date_link(&d.join(YOUNG), 40 * DAY);
+        touch_link(&d.join(YOUNG));
+        assert_eq!(
+            sweep(&d, Shape::Links, Duration::from_secs(TTL_DAYS * DAY), false).removed,
+            0,
+            "a touched link is young again"
+        );
     }
 
     #[test]
