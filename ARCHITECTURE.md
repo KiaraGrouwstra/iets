@@ -166,3 +166,28 @@ holds what they share.
 - No comments that restate code. Comments explain why.
 - `cargo clippy` clean, `cargo fmt`.
 - Commit small, descriptive messages.
+
+## Constraints on evaluator changes
+
+Fibers migrate between threads and share every value, so six rules hold
+inside and around `src/eval` and `src/parallel`:
+
+- `Evaluator` derives `Clone`. A new field must be `Clone`, and per-fiber
+  state must be cheap to clone; a shared table goes behind a handle in
+  `parallel::shared`.
+- An inline cache on an IR node or a heap object is read and written by
+  several threads. Use atomics, and expect stale misses.
+- A function that reads thread-local storage must be `#[inline(never)]` and
+  must not force anything. LLVM may cache a TLS base across calls inside one
+  function, and a fiber that migrated between two accesses would touch
+  another thread's slot. No thread-local is read on the context-switch path
+  or inside the scheduler.
+- A new strict list or attribute-set consumer can call
+  `parallel::fanout_list` or `fanout_attrs_coerce` after forcing the
+  container. It is one line, and a no-op with one worker.
+- A new place that writes a forced value into a cell must do so only on
+  `Ok`. Every current site does. Otherwise a cancelled helper could leak a
+  value built from a bailed sub-computation.
+- `Cell::get` is `Acquire` and `Cell::set` is `Release`. An object is fully
+  written before the word that points at it is stored into a cell or pushed
+  onto a deque.

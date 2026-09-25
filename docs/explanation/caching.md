@@ -83,6 +83,26 @@ costs what the compile costs.
 
 The key holds the build id, so a new binary never reads an old entry.
 
+It is also the only cache `eval-jobs` uses, which makes its effect easy to
+see. On `nixos/release-small.nix` with four workers, 16-core EPYC:
+
+| tool | run | wall | max RSS |
+|---|---|---|---|
+| `ietsp eval-jobs` | cold | 0.29 s | 85 MiB |
+| `ietsp eval-jobs` | warm | 0.26 s | 85 MiB |
+| `nix-eval-jobs` | cold | 0.68 s | 113 MiB |
+| `nix-eval-jobs` | warm | 0.66 s | 113 MiB |
+
+nix-eval-jobs keeps no on-disk evaluation cache for a file argument, so its
+two rows differ only in page cache.
+
+How much a second nixpkgs costs is worth knowing before you worry about
+disk. Evaluating the nixos-desktop workload at the pinned nixpkgs and then
+at a nixpkgs two releases older: the second added one tracing entry
+(0.9 MiB) and 56 IR entries (0.5 MiB). Ten of the 66 IR entries carried
+over — 15 % — and the tracing entry shares nothing at all, because its key
+holds the nixpkgs path.
+
 ## The tracing cache: keyed on what a run read
 
 This is the one that is not in Nix. `ietsp eval` and `ietsp build` remember
@@ -114,6 +134,19 @@ Some things make a run uncacheable rather than wrong: `builtins.currentTime`
 and every network fetcher without a hash. `currentTime` is a lazy thunk over
 an internal primop, so the mark happens only if the program actually forces
 it.
+
+An entry is a directory of files, and which ones exist depends on the
+subcommand. `readset` holds the observations. `result` holds the exact
+stdout bytes for `eval`, or the root derivation paths and the wanted output
+for `build`. A `build` entry adds `drvs` (every derivation the evaluation
+produced) and `sources` (where each source's bytes were), and any entry
+whose run printed lint warnings adds `warnings`, which a hit replays.
+
+An `eval` entry omits `drvs` and `sources` deliberately: the subcommand is
+in the key, so nothing would read them back, and writing the 16 MB `drvs` of
+nixos-desktop cost 40 ms — 3 % — on every miss. `readset` is written last,
+so a write the lock cut short leaves an entry with no read set, which the
+next lookup treats as a miss.
 
 The cost of recording is about 3 % at one worker on nixos-desktop, and
 inside the noise at four, because the hashing happens on the fiber that read

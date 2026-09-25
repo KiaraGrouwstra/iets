@@ -126,6 +126,14 @@ already there — 662 MB. Sharing them took the arena from 7,981 MB to
 7,106 MB, for +3 % wall at one worker and −7 % at four. Keying the table by
 the bytes instead of by their hash cost 6 % and 12 %, so the hash stayed.
 
+## ATerm text kept only when something reads it
+
+A derivation's ATerm text is kept only for the runs that read it back:
+instantiation, the tracing cache, `build` and `print-dev-env`. Everything
+else handles a derivation with no ATerm, which is also the state of a
+derivation read from `/nix/store`. It was 331 MB of heap on outpaths, and
+dropping it took peak RSS from 7,680 MB to 7,219 MB.
+
 ## Why there is no garbage collector
 
 There is one bump arena per worker and nothing is ever freed. Every object
