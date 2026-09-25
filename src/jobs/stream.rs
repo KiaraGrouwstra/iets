@@ -115,11 +115,11 @@ mod tests {
         Job {
             attr: attr.into(),
             attr_path: vec![attr.into()],
-            drv_path: StorePath::parse("/nix/store/2ijv0g6069dsh55z3bdr5ln2iv69mw7r-x.drv")
+            drv_path: StorePath::parse("/nix/store/00000000000000000000000000000000-x.drv")
                 .unwrap(),
             outputs: BTreeMap::from([(
                 "out".to_string(),
-                Some(StorePath::parse("/nix/store/2ijv0g6069dsh55z3bdr5ln2iv69mw7r-x").unwrap()),
+                Some(StorePath::parse("/nix/store/00000000000000000000000000000000-x").unwrap()),
             )]),
             constituents: vec![],
             named_constituents: None,

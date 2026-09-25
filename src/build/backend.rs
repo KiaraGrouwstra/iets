@@ -472,7 +472,7 @@ mod tests {
 
     fn drv(name: &str) -> StorePath {
         StorePath::parse(&format!(
-            "/nix/store/2ijv0g6069dsh55z3bdr5ln2iv69mw7r-{name}.drv"
+            "/nix/store/00000000000000000000000000000000-{name}.drv"
         ))
         .unwrap()
     }

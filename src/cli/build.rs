@@ -425,7 +425,7 @@ mod tests {
     fn outcome(success: bool, skipped: bool, outputs: &[&str]) -> Outcome {
         Outcome {
             attr: "top".into(),
-            drv: StorePath::parse("/nix/store/2ijv0g6069dsh55z3bdr5ln2iv69mw7r-top.drv").unwrap(),
+            drv: StorePath::parse("/nix/store/00000000000000000000000000000000-top.drv").unwrap(),
             success,
             skipped,
             reason: skipped.then(|| "the builder returned no build result".to_string()),

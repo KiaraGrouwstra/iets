@@ -310,7 +310,7 @@ mod tests {
 
     #[test]
     fn split_and_round_trip() {
-        let line = br#"{"attr":"a.b","attrPath":["a","b"],"constituents":[],"drvPath":"/nix/store/2ijv0g6069dsh55z3bdr5ln2iv69mw7r-x.drv","globConstituents":false,"meta":{"x":[1,"}"]},"name":"x","namedConstituents":["n"],"outputs":{"out":"/nix/store/2ijv0g6069dsh55z3bdr5ln2iv69mw7r-x"},"storeDir":"/nix/store","system":"x86_64-linux"}"#;
+        let line = br#"{"attr":"a.b","attrPath":["a","b"],"constituents":[],"drvPath":"/nix/store/00000000000000000000000000000000-x.drv","globConstituents":false,"meta":{"x":[1,"}"]},"name":"x","namedConstituents":["n"],"outputs":{"out":"/nix/store/00000000000000000000000000000000-x"},"storeDir":"/nix/store","system":"x86_64-linux"}"#;
         let fields = split_object(line).unwrap();
         assert_eq!(fields.len(), 11);
         assert_eq!(fields[5].0, "meta");
