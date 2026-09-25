@@ -1,0 +1,201 @@
+# How to build on a remote builder
+
+`ietsp build` evaluates in memory and ships the closure the builder lacks
+in one operation. It keeps no local store, so nothing has to be written to
+`/nix/store` first. This page shows how to point it at each kind of
+builder.
+
+The full flag list is in [reference/commands.md](../reference/commands.md).
+Why the upload has the shape it has is in
+[explanation/caching.md](../explanation/caching.md).
+
+## Pick a builder
+
+`--builder URL` takes four forms:
+
+```sh
+ietsp build --builder daemon greeting.nix
+ietsp build --builder unix:///nix/var/nix/daemon-socket/socket greeting.nix
+ietsp build --builder ssh-ng://builder.example.org greeting.nix
+ietsp build --builder grpc://farm.example.org:50051 greeting.nix
+```
+
+- `daemon` is this machine's socket, `/nix/var/nix/daemon-socket/socket`.
+- `unix:///path` is any other socket that speaks the Nix worker protocol.
+- `ssh-ng://[user@]host` runs `ssh host nix-daemon --stdio` and uses its
+  standard input and output. It reads `NIX_SSHOPTS`.
+- `grpc://host:port` is a [nix-grpc-store](https://github.com/Mic92/nix-grpc-store)
+  service. It needs no `nix`, no plugin and no local store.
+
+Without the flag, the URL is the `builder` setting in `ietsp.conf`, and
+`nix.conf`'s `store` when that is unset. Set it once instead of typing the
+flag:
+
+```sh
+ietsp --ietsp-option builder ssh-ng://builder.example.org build greeting.nix
+```
+
+A daemon older than protocol 1.35 is refused.
+
+## Set the parameters of a gRPC builder
+
+A `grpc://` URL takes nix-grpc-store's own query parameters. The ones you
+are most likely to need:
+
+```sh
+ietsp build --builder 'grpc://farm.example.org:50051?token-file=/run/secrets/farm-token' greeting.nix
+```
+
+| parameter | default | what it does |
+|---|---|---|
+| `token-file` | none | a file holding an OIDC bearer token, re-read for every call. Needs TLS |
+| `client-cert`, `client-key` | none | a PEM client identity for mTLS. Both or neither |
+| `system` | the `system` setting | which worker cluster the balancer routes to |
+| `max-builds` | 64 | concurrent builds in flight |
+| `insecure` | `false` | plaintext instead of TLS, for local testing only |
+
+Without credentials the first call fails and says so:
+
+```
+error: gRPC StoreInfo on 'farm.example.org:50051' failed (Unauthenticated):
+       server requires a TLS client certificate or bearer token
+hint: TLS handshake failed and no client certificate was presented.
+      Set 'client-cert'/'client-key' or 'token-file'.
+```
+
+A token with the usual `write` role is enough. Everything ietsp uploads is
+content-addressed — a source tree, a `builtins.toFile` text, a `.drv` — so
+the daemon recomputes the address and accepts it without a signature. You
+never need the `trusted` role, because ietsp never sends an unsigned,
+input-addressed path.
+
+## Know what gets uploaded
+
+Nothing is written to a local store on the way out. The closure comes from
+what the evaluation is still holding:
+
+- **Derivations** come from the evaluator's own table. `derivationStrict`
+  kept the ATerm it hashed, so nothing is serialised twice. An input
+  derivation that was not created by this evaluation — one reached through
+  `builtins.storePath`, string context or `import` — is read from
+  `/nix/store`, and `--timings` counts those as `read from /nix/store`.
+- **Sources** come from where the evaluation found them. A `./path` or a
+  `builtins.path` copy records the original local tree plus the entries a
+  filter accepted, so the client re-dumps exactly the same NAR. A fetched
+  flake input is streamed out of the input store. A `builtins.toFile` text
+  is in memory.
+- **Anything with no recorded origin** goes to one batch lookup, and what
+  is still unaccounted for is left to the daemon to substitute.
+
+After hashing, the client checks that each NAR still yields the store path
+that was planned, and fails if the tree changed since evaluation.
+
+Watch it happen with `--timings`:
+
+```sh
+ietsp build --builder daemon --no-build --timings greeting.nix
+```
+
+```
+plan: 0 sources, 1 drvs, 0.000s
+connect: protocol 1.38, trusted, 0.055s
+query: 1 paths, 0 missing, 0.000s
+resolve: 0 sources, 0.001s
+add: 0 paths, 0 bytes, 0.000s
+build: 0.000s
+outputs: 0.000s
+worker: 2 ops, 5 round trips, 240 bytes sent
+```
+
+`query` is one `QueryValidPaths` over every planned path. `add` is one
+`AddMultipleToStore` of what the answer said was missing. That is the whole
+upload: two operations, not one per path.
+
+## Upload without building
+
+`--no-build` runs the plan, the query and the upload, and stops before the
+build:
+
+```sh
+ietsp build --builder daemon --no-build greeting.nix
+```
+
+It prints nothing on success; add `--timings` to see the phases. Use it to
+warm a builder, or to check that a closure uploads cleanly before you
+commit to the build.
+
+`--dry-run` stops earlier still and reports what *would* happen:
+
+```sh
+ietsp build --builder daemon --dry-run --json greeting.nix
+```
+
+```json
+{"downloadSize":0,"narSize":0,"unknown":[],"willBuild":[],"willSubstitute":[]}
+```
+
+Without `--json` the same information is printed as text on stderr. The
+JSON is byte-for-byte what `ietsp plumbing missing` prints; see
+[reference/plumbing.md](../reference/plumbing.md).
+
+Note that `--dry-run` and `--no-build` still let the daemon substitute a
+source it needs, because the derivations cannot register otherwise.
+
+## Get the outputs back
+
+A remote builder leaves its outputs where they were built. `--fetch-to DIR`
+streams each wanted output back and restores it into `DIR`:
+
+```sh
+ietsp build --builder daemon --fetch-to out greeting.nix
+ls out/
+```
+
+```
+vwp4kv8mzqx77xsf8x4dff531r5bcxkz-greeting
+```
+
+Each output lands under its store path's base name. Nothing is registered
+with a local daemon, so the copy needs no trusted-user status.
+
+Build one output only with `--out NAME`, repeatable for a derivation that
+has several:
+
+```sh
+ietsp build --builder daemon --out out -I nixpkgs=$nixpkgs -E '(import <nixpkgs> {}).hello'
+```
+
+```
+/nix/store/xl1h9i29pgq2q5cszjhm5wpfxfbbqwyi-hello-2.12.3
+```
+
+## Build a derivation that is already in the store
+
+`ietsp build` also takes a `.drv` path directly. Its closure then comes
+from `/nix/store` instead of from an evaluation:
+
+```sh
+ietsp build --builder daemon /nix/store/zr5qd58hj1cxwncj6z0ra1qlp09g8h07-greeting.drv
+```
+
+If an input source of that derivation came from a local tree that the store
+no longer holds, name it:
+
+```sh
+ietsp build --builder daemon --source /nix/store/…-src=./src /nix/store/…-thing.drv
+```
+
+## Known limits
+
+- `ssh-ng://` has been exercised only through a local `ssh` shim, never
+  against a real host. There is no `--ssh-option` passthrough.
+- `ietsp build` sends `max-jobs` equal to the CPU count and has no flag for
+  it, for `keep-going`, or for substituters.
+- Output paths are asked for the roots only. A dependency that built has no
+  line of its own beyond the renderer's verdict.
+- Errors during a large upload surface after the whole stream is sent,
+  because the client does not poll the daemon's stderr while streaming.
+- Over `grpc://`, a build cancelled with ^C is not cancelled on the server,
+  and `nar-connections` is parsed and ignored: fetches run over one channel.
+- Flat fixed-output sources (`builtins.path { recursive = false; }`) have
+  no recorded origin, so the daemon must substitute them.
