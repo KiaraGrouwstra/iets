@@ -4,6 +4,7 @@
 
 pub mod build;
 pub mod develop;
+pub mod drvshow;
 pub mod fmt;
 pub mod instantiate;
 pub mod nix;

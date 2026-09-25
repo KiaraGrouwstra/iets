@@ -1,6 +1,7 @@
 //! `nix` (src/nix): the subcommands ietsp implements — `eval`, `build`,
-//! `print-dev-env`, `develop`, `search`, `fmt` and `flake prefetch-inputs` —
-//! with the same exec fallback as the other classic names for everything else.
+//! `derivation show`, `print-dev-env`, `develop`, `search`, `fmt` and `flake
+//! prefetch-inputs` — with the same exec fallback as the other classic names
+//! for everything else.
 //! See `docs/reference/classic.md`.
 
 use std::collections::HashSet;
@@ -49,18 +50,22 @@ const GLOBALS: &[(&str, usize)] = &[
 ];
 
 #[derive(Default)]
-struct Nix {
-    c: Common,
+pub(super) struct Nix {
+    pub c: Common,
     json: bool,
     raw: bool,
-    expr: Option<String>,
-    file: Option<String>,
-    installables: Vec<String>,
+    pub expr: Option<String>,
+    pub file: Option<String>,
+    pub installables: Vec<String>,
     /// The `-o`/`--out-link` prefix; `--no-link` clears it.
     out_link: String,
     no_link: bool,
     print_out_paths: bool,
     print_build_logs: bool,
+    /// `derivation show -r`.
+    pub recursive: bool,
+    /// `--pretty`/`--no-pretty`; `None` leaves the terminal default.
+    pub pretty: Option<bool>,
 }
 
 /// Runs `nix <subcommand>`. `argv` is everything after `argv[0]`.
@@ -78,6 +83,10 @@ pub fn main(argv: &[String]) -> i32 {
         "develop" => super::develop::main(argv, &rest),
         "fmt" => super::fmt::main(argv, &rest),
         "search" => crate::cli::search::classic_main(argv, &rest),
+        "derivation" if rest.get(k).is_some_and(|s| s == "show") => {
+            rest.remove(k);
+            super::drvshow::main(argv, &rest)
+        }
         "flake" if rest.get(k).is_some_and(|s| s == "prefetch-inputs") => {
             rest.remove(k);
             prefetch_inputs_main(argv, &rest)
@@ -155,7 +164,7 @@ fn parse_eval(argv: &[String]) -> Result<Nix, String> {
     if n.installables.len() > 1 {
         return Err("'nix eval' takes one installable".into());
     }
-    check_args_with_flake(&n)?;
+    n.check_args_with_flake()?;
     Ok(n)
 }
 
@@ -191,17 +200,19 @@ fn parse_build(argv: &[String]) -> Result<Nix, String> {
     if n.installables.is_empty() {
         n.installables.push(".".into());
     }
-    check_args_with_flake(&n)?;
+    n.check_args_with_flake()?;
     Ok(n)
 }
 
-/// installable-flake.cc: a flake installable refuses `--arg`/`--argstr`, so
-/// the real nix reports that better than we would.
-fn check_args_with_flake(n: &Nix) -> Result<(), String> {
-    if !n.c.flags.args.is_empty() && n.expr.is_none() && n.file.is_none() {
-        return Err("'--arg' and '--argstr' are incompatible with flakes".into());
+impl Nix {
+    /// installable-flake.cc: a flake installable refuses `--arg`/`--argstr`, so
+    /// the real nix reports that better than we would.
+    pub(super) fn check_args_with_flake(&self) -> Result<(), String> {
+        if !self.c.flags.args.is_empty() && self.expr.is_none() && self.file.is_none() {
+            return Err("'--arg' and '--argstr' are incompatible with flakes".into());
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 enum Done {
@@ -403,7 +414,7 @@ fn dev_env_main(argv: &[String], rest: &[String]) -> i32 {
 
 /// The value one installable names: an attribute of the `--expr`/`--file`
 /// value, or a flake output attribute.
-fn resolve(ev: &mut Evaluator, n: &Nix, what: &str, cwd: &[u8]) -> EvalResult<Word> {
+pub(super) fn resolve(ev: &mut Evaluator, n: &Nix, what: &str, cwd: &[u8]) -> EvalResult<Word> {
     let args = auto_args(ev, &n.c.flags.args, cwd)?;
     // installable-attr-path.cc:parse: `.` is the whole value.
     let attr = if what == "." { "" } else { what };
