@@ -29,7 +29,7 @@ def records [stderr: string]: nothing -> list<record> {
 # check NAME REF ENV: both evaluators must agree and succeed. Prints the verdict, returns it.
 def check [ietsp: string, name: string, ref: string, extra?: record]: nothing -> bool {
   let n = (nixf eval --raw --option eval-cache "false" $ref | complete)
-  let i = (with-env ($extra | default {}) { ^$ietsp eval --raw --no-cache $ref | complete })
+  let i = (with-env ($extra | default {}) { ^$ietsp eval --raw --no-tracing-cache $ref | complete })
   let exp = ($n.stdout | chomp)
   let got = ($i.stdout | chomp)
   if $exp != "" and $exp == $got {
@@ -70,7 +70,7 @@ def check-fresh [ietsp: string, name: string, ref: string]: nothing -> bool {
 # directory) as the whole PATH and as IETSP_NIX_BIN_DIR, so no nix exists to
 # fall back on. It must say it is fetching the input and print EXPECTED.
 def fetch-only [ietsp: string, name: string, ref: string, expected: string, nobin: string]: nothing -> bool {
-  let i = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp eval --raw --no-cache $ref | complete })
+  let i = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp eval --raw --no-tracing-cache $ref | complete })
   let got = ($i.stdout | chomp)
   if $expected != "" and $got == $expected and ($i.stderr | str contains "fetching it") {
     print $"ok   ($name)"
@@ -98,8 +98,8 @@ def standalone [ietsp: string, name: string, ref: string, expected: string, nobi
     IETSP_CACHE_DIR: $"($cache)/ietsp",
   }
   rm -rf $cache
-  let one = (with-env $vars { ^$ietsp eval --raw --no-cache $ref | complete })
-  let two = (with-env ($vars | merge {IETSP_OFFLINE: "1"}) { ^$ietsp eval --raw --no-cache $ref | complete })
+  let one = (with-env $vars { ^$ietsp eval --raw --no-tracing-cache $ref | complete })
+  let two = (with-env ($vars | merge {IETSP_OFFLINE: "1"}) { ^$ietsp eval --raw --no-tracing-cache $ref | complete })
   let entries = (try { ls $"($cache)/ietsp/inputs" | where type == dir | length } catch { 0 })
   let ok = (
     $expected != "" and ($one.stdout | chomp) == $expected and ($two.stdout | chomp) == $expected
@@ -266,7 +266,7 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   git-in $ut add flake.nix flake.lock
   let ut_line = $"Path 'extra' in the repository \"($ut)\" is not tracked by Git."
   let ut_n = (nixf eval --raw $"($ut)#v" | complete)
-  let ut_i = (^$ietsp eval --raw --no-cache --log-format internal-json $"($ut)#v" | complete)
+  let ut_i = (^$ietsp eval --raw --no-tracing-cache --log-format internal-json $"($ut)#v" | complete)
   let ut_rec = (records $ut_i.stderr | where level? == 0 | get -o 0 | default {})
   let ut_ok = ($ut_n.exit_code == 1 and ($ut_n.stderr | str contains $ut_line) and $ut_i.exit_code == 1
     and ($ut_rec.raw_msg? | default "" | str starts-with $ut_line)
@@ -285,7 +285,7 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   $res ++= [(check $ietsp "scratch: path: ref copies the whole tree" $"path:($repo)#packages.x86_64-linux.default.drvPath")]
 
   let exp = (nixf eval --json --option eval-cache "false" $"($scratch).drvPath" | complete | get stdout | chomp)
-  let got = (^$ietsp eval --json --no-cache $"($scratch).drvPath" | complete | get stdout | chomp)
+  let got = (^$ietsp eval --json --no-tracing-cache $"($scratch).drvPath" | complete | get stdout | chomp)
   $res ++= [(verdict ($exp != "" and $exp == $got) "scratch: --json" $"scratch: --json \(($exp) vs ($got)\)")]
 
   # tracing cache: hit after a miss, miss after the tree changes
@@ -366,7 +366,7 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
     version: 7
   } | to json | save $"($upf)/flake.lock"
   let ub = (^$ietsp build --no-build --timings --ietsp-option builder daemon $"($upf)#packages.x86_64-linux.default" | complete)
-  let tb3_path = (^$ietsp eval --raw --no-cache -E $"\(builtins.fetchTree { type = \"tarball\"; url = \"file://($work)/tb3.tar.gz\"; narHash = \"($tb3_hash)\"; }).outPath" | complete | get stdout | str trim)
+  let tb3_path = (^$ietsp eval --raw --no-tracing-cache -E $"\(builtins.fetchTree { type = \"tarball\"; url = \"file://($work)/tb3.tar.gz\"; narHash = \"($tb3_hash)\"; }).outPath" | complete | get stdout | str trim)
   let tb3_valid = ((nixf path-info $tb3_path | complete).exit_code == 0)
   let resolve = ($ub.stderr | lines | where $it =~ '^resolve:' | get -o 0 | default "")
   let add = ($ub.stderr | lines | where $it =~ '^add:' | get -o 0 | default "")
@@ -434,13 +434,13 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
     version: 7
   } | to json | save $"($wf)/flake.lock"
   let no_daemon = {IETSP_NIX_BIN_DIR: $nobin, NIX_CONFIG: "store = unix:///nonexistent/ietsp-no-daemon"}
-  let first = (with-env ($no_daemon | merge {IETSP_CACHE_DIR: $"($work)/waitsrc"}) { ^$ietsp eval --raw --no-cache $"($wf)#v" | complete })
+  let first = (with-env ($no_daemon | merge {IETSP_CACHE_DIR: $"($work)/waitsrc"}) { ^$ietsp eval --raw --no-tracing-cache $"($wf)#v" | complete })
   let entry5 = (try { ls $"($work)/waitsrc/inputs" | where type == dir | get 0.name } catch { "" })
   let wc = $"($work)/waitcache"
   mkdir $"($wc)/inputs"
   cp $"($work)/waitsrc/inputs/version" $"($wc)/inputs/"
   let lockf = $"($wc)/inputs/.($entry5 | path basename).fetching.tmp"
-  let script = $"flock '($lockf)' sh -c 'sleep 1; cp -r ($entry5) ($wc)/inputs/' & sleep 0.3; '($ietsp)' eval --raw --no-cache '($wf)#v'; wait"
+  let script = $"flock '($lockf)' sh -c 'sleep 1; cp -r ($entry5) ($wc)/inputs/' & sleep 0.3; '($ietsp)' eval --raw --no-tracing-cache '($wf)#v'; wait"
   let w = (with-env ($no_daemon | merge {IETSP_CACHE_DIR: $wc, IETSP_OFFLINE: "1"}) { ^bash -c $script | complete })
   let w_ok = ($first.exit_code == 0 and $w.exit_code == 0 and $w.stdout == $"hello5 ($work)\n" and ($w.stderr | str contains "waiting for another process to fetch input 'tb'"))
   $res ++= [(verdict $w_ok "tarball: a second process waits for the first one's download and reads its entry" $"fetch lock \(exit ($first.exit_code)/($w.exit_code)\): ($w.stdout) ($w.stderr | lines | last 2 | str join ' | ')")]
@@ -461,7 +461,7 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   } | to json | save $"($pf)/flake.lock"
   let pvars = ($no_daemon | merge {IETSP_CACHE_DIR: $"($work)/prefetchcache", PATH: $nobin})
   let p = (with-env $pvars { ^$ietsp nix flake prefetch-inputs $pf | complete })
-  let pe = (with-env ($pvars | merge {IETSP_OFFLINE: "1"}) { ^$ietsp eval --raw --no-cache $"($pf)#v" | complete })
+  let pe = (with-env ($pvars | merge {IETSP_OFFLINE: "1"}) { ^$ietsp eval --raw --no-tracing-cache $"($pf)#v" | complete })
   let p_ok = ($p.exit_code == 0 and $p.stdout == "" and ($p.stderr | lines | where ($it | str contains "fetching it") | length) == 2
     and $pe.exit_code == 0 and $pe.stdout == $"hello5 ($work)\nhello6 ($work)\n" and not ($pe.stderr | str contains "fetching it"))
   $res ++= [(verdict $p_ok "prefetch-inputs: fetches every input, then an offline eval downloads nothing" $"prefetch-inputs \(exit ($p.exit_code)/($pe.exit_code)\): ($p.stderr | lines | last 2 | str join ' | ') / ($pe.stderr | lines | last 2 | str join ' | ')")]
@@ -473,7 +473,7 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   nixf store delete $tb_path | complete | ignore
   "changed\n" | save -f $"($work)/tb2src/a"
   ^tar -C $work -czf $"($work)/tb2.tar.gz" tb2src
-  let mm = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp eval --raw --no-cache $"($tbf)#v" | complete })
+  let mm = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp eval --raw --no-tracing-cache $"($tbf)#v" | complete })
   let mm_ok = ($mm.exit_code != 0 and $mm.stdout == "" and ($mm.stderr | str contains "NAR hash mismatch") and not ($tb_path | path exists))
   $res ++= [(verdict $mm_ok "tarball: a changed tarball is refused, not registered" $"tarball mismatch \(exit ($mm.exit_code)\): ($mm.stderr | lines | first 1 | str join '')")]
 
@@ -523,7 +523,7 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
     root: "root"
     version: 7
   } | to json | save $"($subf)/flake.lock"
-  let sb = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp eval --raw --no-cache $"($subf)#v" | complete })
+  let sb = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp eval --raw --no-tracing-cache $"($subf)#v" | complete })
   let sb_ok = (($sb.stdout | chomp) == $src and not ($sb.stderr | str contains "cannot fetch"))
   $res ++= [(verdict $sb_ok "substitute: the daemon substitutes the input, ietsp downloads nothing" $"substitute \(exit ($sb.exit_code)\): ($sb.stdout | chomp) ($sb.stderr | lines | last 2 | str join ' | ')")]
   nixf store delete $src | complete | ignore
@@ -541,11 +541,11 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let git_exp = (nixf eval --raw --option eval-cache "false" $"($gitf)#v" | complete | get stdout | chomp)
   let git_path = (input-path $gitf "lib")
   nixf store delete $git_path | complete | ignore
-  let gf = (^$ietsp eval --raw --no-cache $"($gitf)#v" | complete)
+  let gf = (^$ietsp eval --raw --no-tracing-cache $"($gitf)#v" | complete)
   let gf_ok = (($gf.stdout | chomp) == $git_exp and $git_exp != "")
   $res ++= [(verdict $gf_ok "git: a missing git input still goes through nix" $"git input \(exit ($gf.exit_code)\): ($gf.stdout | chomp) vs ($git_exp)")]
   nixf store delete $git_path | complete | ignore
-  let gn = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp eval --raw --no-cache $"($gitf)#v" | complete })
+  let gn = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp eval --raw --no-tracing-cache $"($gitf)#v" | complete })
   let gn_ok = ($gn.exit_code != 0 and ($gn.stderr | str contains "nix is not on PATH") and ($gn.stderr | str contains "input 'lib'"))
   $res ++= [(verdict $gn_ok "git: without nix the error names the input" $"git input, no nix \(exit ($gn.exit_code)\): ($gn.stderr | lines | last 2 | str join ' | ')")]
   # a git input whose tree is not the one the lock names: nix reports a NAR
@@ -554,12 +554,12 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   mkdir $gm
   cp $"($gitf)/flake.nix" $gm
   open --raw $"($gitf)/flake.lock" | from json | update nodes.lib.locked.narHash $"sha256-('ietsp-git-mismatch-never-stored!' | encode base64)" | to json | save $"($gm)/flake.lock"
-  let gmr = (^$ietsp eval --raw --no-cache --log-format internal-json $"($gm)#v" | complete)
+  let gmr = (^$ietsp eval --raw --no-tracing-cache --log-format internal-json $"($gm)#v" | complete)
   let gm_rec = (records $gmr.stderr | where code? == "hash-mismatch" | get -o 0 | default {})
   $res ++= [(verdict ($gmr.exit_code == 1 and ($gm_rec.hint? | default "" | str contains "export-subst")) "git: a NAR hash mismatch is hash-mismatch, and the hint names filters, export-subst, submodules" $"git mismatch \(exit ($gmr.exit_code)\): ($gm_rec | to json -r)")]
 
   rm $"($repo)/flake.lock"
-  let err = (^$ietsp eval --raw --no-cache $"($scratch).drvPath" | complete | get stderr)
+  let err = (^$ietsp eval --raw --no-tracing-cache $"($scratch).drvPath" | complete | get stderr)
   $res ++= [(verdict ($err | str contains "flake.lock missing or incomplete, run nix flake lock") "missing flake.lock is an error" $"missing flake.lock is an error \(($err)\)")]
 
   # a locked remote input that no substituter has and no forge serves: the two
@@ -576,7 +576,7 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
     root: "root"
     version: 7
   } | to json | save $"($ghost)/flake.lock"
-  let g = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp eval --raw --no-cache $"($ghost)#v" | complete })
+  let g = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp eval --raw --no-tracing-cache $"($ghost)#v" | complete })
   let named = ($g.stderr | lines | where ($it | str contains "input 'ghost'") | length)
   $res ++= [(verdict ($g.exit_code != 0 and $g.stdout == "" and $named == 2 and ($g.stderr | str contains "cannot fetch input 'ghost'")) "unfetchable input: both messages name it, the failed fetch was ietsp's own" $"unfetchable input \(exit ($g.exit_code)\): ($g.stderr | lines | first 2 | str join ' | ')")]
   # a lock entry without a narHash: the hint names the input and the command
@@ -584,7 +584,7 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   mkdir $unl
   cp $"($ghost)/flake.nix" $unl
   open --raw $"($ghost)/flake.lock" | from json | reject nodes.ghost.locked.narHash | to json | save $"($unl)/flake.lock"
-  let u = (^$ietsp eval --raw --no-cache --log-format internal-json $"($unl)#v" | complete)
+  let u = (^$ietsp eval --raw --no-tracing-cache --log-format internal-json $"($unl)#v" | complete)
   let u_rec = (records $u.stderr | where level? == 0 | get -o 0 | default {})
   $res ++= [(verdict ($u.exit_code == 1 and ($u_rec.hint? | default "" | str contains "run 'nix flake update ghost'")) "lock: an entry without narHash has a hint that names the input" $"unlocked entry \(exit ($u.exit_code)\): ($u_rec | to json -r)")]
 

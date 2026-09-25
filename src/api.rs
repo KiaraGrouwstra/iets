@@ -37,7 +37,8 @@ pub struct EvalArgs {
     pub xp_features: Vec<String>,
     pub workers: usize,
     pub timings: bool,
-    pub no_cache: bool,
+    /// `--no-tracing-cache` or `IETSP_CACHE=0`: evaluate, never replay a run.
+    pub no_tracing_cache: bool,
     /// `--no-ir-cache` or `IETSP_CACHE=0`: compile every import from source.
     pub no_ir_cache: bool,
     pub cache_dir: Option<String>,
@@ -67,7 +68,7 @@ impl Default for EvalArgs {
             xp_features: Vec::new(),
             workers: crate::parallel::default_workers(),
             timings: false,
-            no_cache: !cache,
+            no_tracing_cache: !cache,
             no_ir_cache: !cache,
             cache_dir: None,
             flake_whole: false,
@@ -313,7 +314,7 @@ pub fn build_targets(
 /// cache is off or the command cannot be keyed.
 pub fn setup_cache(a: &EvalArgs, subcommand: &str, ev: &Evaluator) -> Option<Cache> {
     use crate::trace::key::{Key, has_relative_path};
-    if a.no_cache || a.dump_drvs.is_some() {
+    if a.no_tracing_cache || a.dump_drvs.is_some() {
         return None;
     }
     let cwd = cwd();

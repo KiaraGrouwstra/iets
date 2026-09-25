@@ -94,7 +94,7 @@ def main [--cold, --nix, --tag: string = "run"] {
   $"\"${($fx.tree)}\"\n" | save -f $expr
   drop-caches $cold
   let t2 = (date now)
-  ^$ietsp eval --raw --no-cache $expr | ignore
+  ^$ietsp eval --raw --no-tracing-cache $expr | ignore
   let ms2 = ((date now) - $t2 | into int) / 1000000
   $rows = ($rows | append { op: "coerce", path: $expr, best_ms: $ms2, mean_ms: $ms2, mbs: 0, case: "tree-coerce" })
 

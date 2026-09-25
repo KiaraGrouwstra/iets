@@ -214,7 +214,7 @@ pub fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>
                 {
                     kind = ErrorKind::Unsupported;
                     format!(
-                        "ietsp: '{}' is not in the store and this run did not keep its text (--no-cache)",
+                        "ietsp: '{}' is not in the store and this run did not keep its text (--no-tracing-cache)",
                         lossy(sp)
                     )
                 } else {

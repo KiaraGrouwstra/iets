@@ -86,7 +86,7 @@ def run-tests [ietsp: string, nixpkgs: string, work: string] {
   print $"drv: ($drv)"
   cp $drv $"($work)/c1/nix.drv"
   if not (quiet-ok nix-store --delete $drv $src) { fail $"cannot delete ($drv) and ($src)" }
-  let r = (^$ietsp build --builder $url --timings --no-cache --fetch-to $"($work)/c1/fetch" $"($work)/c1/case.nix" | complete)
+  let r = (^$ietsp build --builder $url --timings --no-tracing-cache --fetch-to $"($work)/c1/fetch" $"($work)/c1/case.nix" | complete)
   $r.stderr | save -f $"($work)/client1.log"
   if $r.exit_code != 0 { print ($r.stderr | chomp); print (open --raw $"($work)/grpc.log" | chomp); fail "client exited non-zero" }
   let out = ($r.stdout | chomp)
@@ -99,7 +99,7 @@ def run-tests [ietsp: string, nixpkgs: string, work: string] {
 
   print "== 2. hello cold, --no-build"
   let hello = (^nix-instantiate -I $"nixpkgs=($nixpkgs)" '<nixpkgs>' -A hello err> /dev/null | chomp)
-  let r = (^$ietsp build --builder $url --timings --no-cache --no-build -I $"nixpkgs=($nixpkgs)" -E '(import <nixpkgs> {}).hello' | complete)
+  let r = (^$ietsp build --builder $url --timings --no-tracing-cache --no-build -I $"nixpkgs=($nixpkgs)" -E '(import <nixpkgs> {}).hello' | complete)
   $r.stderr | save -f $"($work)/client2.log"
   if $r.exit_code != 0 { print ($r.stderr | chomp); fail "client exited non-zero" }
   show-matching '^(eval|plan|connect|query|add|grpc):' $"($work)/client2.log"
@@ -111,7 +111,7 @@ def run-tests [ietsp: string, nixpkgs: string, work: string] {
   print $"ok: ($missing)"
 
   print "== 3. hello warm, --no-build"
-  let r = (^$ietsp build --builder $url --timings --no-cache --no-build -I $"nixpkgs=($nixpkgs)" -E '(import <nixpkgs> {}).hello' | complete)
+  let r = (^$ietsp build --builder $url --timings --no-tracing-cache --no-build -I $"nixpkgs=($nixpkgs)" -E '(import <nixpkgs> {}).hello' | complete)
   $r.stderr | save -f $"($work)/client3.log"
   if $r.exit_code != 0 { print ($r.stderr | chomp); fail "client exited non-zero" }
   show-matching '^(query|add|grpc):' $"($work)/client3.log"
@@ -205,7 +205,7 @@ def run-tests [ietsp: string, nixpkgs: string, work: string] {
   make-case $"($work)/c7a" ietsp-grpc-e2e-multi-a $system
   make-case $"($work)/c7b" ietsp-grpc-e2e-multi-b $system
   let expr = $"[ \(import ($work)/c7a/case.nix\) \(import ($work)/c7b/case.nix\) ]"
-  let r = (^$ietsp build --builder $url --no-cache -E $expr | complete)
+  let r = (^$ietsp build --builder $url --no-tracing-cache -E $expr | complete)
   if $r.exit_code != 0 { print ($r.stderr | chomp); print (open --raw $"($work)/grpc.log" | chomp); fail "multi-root build exited non-zero" }
   for n in [ietsp-grpc-e2e-multi-a ietsp-grpc-e2e-multi-b] {
     if not ($r.stderr | str contains $"building ($n)") { print ($r.stderr | chomp); fail $"no progress line for ($n)" }

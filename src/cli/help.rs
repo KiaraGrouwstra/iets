@@ -46,7 +46,9 @@ common:
   --impure, --pure-eval  turn pure evaluation off or on
   --workers N           evaluator threads (default: the cores, at most 4)
   --timings             report each phase and the cache on stderr
-  --no-cache, --no-ir-cache  do not use the tracing or the compiled-file cache
+  --no-tracing-cache    do not use the tracing cache
+  --no-ir-cache         do not use the compiled-file cache
+  --no-cache            the same as --no-tracing-cache; kept for scripts
   --cache-dir DIR       keep the tracing cache in DIR
   --log-format F        internal-json: stderr as Nix JSON records
   --show-trace          put the trace in the JSON error records too
@@ -104,7 +106,9 @@ REGEX ('ietsp help commands'). INSTALLABLE is a flake reference, a path or
   --impure, --pure-eval  turn pure evaluation off or on
   --workers N           evaluator threads (default: the cores, at most 4)
   --timings             report the index cache on stderr
-  --no-cache, --no-ir-cache  do not use the index or the compiled-file cache
+  --no-tracing-cache    do not use the index, which the tracing cache holds
+  --no-ir-cache         do not use the compiled-file cache
+  --no-cache            the same as --no-tracing-cache; kept for scripts
   --cache-dir DIR       keep the index in DIR
   --log-format F        internal-json: stderr as Nix JSON records
   --show-trace          put the trace in the JSON error records too
@@ -197,7 +201,8 @@ Print the bash that 'nix print-dev-env' prints for a flake's devShell
                         ssh-ng://[user@]host
   --gc-root PATH        link PATH to the environment and keep it as a GC root
   --json                print what 'nix print-dev-env --json' prints
-  --workers N, --timings, --no-cache, --cache-dir DIR  as for 'ietsp eval'
+  --workers N, --timings, --cache-dir DIR  as for 'ietsp eval'
+  --no-tracing-cache, --no-ir-cache, --no-cache  as for 'ietsp eval'
   --log-format F, --show-trace  as for 'ietsp eval'
 ";
 

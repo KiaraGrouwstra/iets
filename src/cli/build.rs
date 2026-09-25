@@ -124,7 +124,7 @@ fn parse(argv: &[String]) -> (BuildArgs, EvalArgs) {
 fn local_files(argv: &[String]) -> Vec<PathBuf> {
     let (_, a) = parse(argv);
     let a = EvalArgs {
-        no_cache: true,
+        no_tracing_cache: true,
         ..a
     };
     let Ok(run) = Run::new(&a) else {

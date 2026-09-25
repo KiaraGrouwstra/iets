@@ -38,7 +38,7 @@ def main [
   $"import ($np)/ci/eval/outpaths.nix { path = ($np); systems = [ \"x86_64-linux\" ]; includeBroken = false; }\n" | save -f $outpaths
   mut rows = []
   for w in [1 4] {
-    let r = (median-run $ietsp [eval --strict --no-cache --workers ($w | into string) -I $"nixpkgs=($np)" $desktop] $runs)
+    let r = (median-run $ietsp [eval --strict --no-tracing-cache --workers ($w | into string) -I $"nixpkgs=($np)" $desktop] $runs)
     $rows = ($rows | append ($r | insert workload "nixos-desktop" | insert workers $w))
   }
   if not $skip_outpaths {

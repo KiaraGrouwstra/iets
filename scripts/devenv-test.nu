@@ -81,7 +81,7 @@ def run-tests [ctx: record]: nothing -> int {
   for flake in [$env.PWD $shell] {
     let name = ($flake | path basename)
     if (nix-env $work $flake $"($work)/nix.sh") != 0 { $res ++= [(bad $"nix print-dev-env ($name)" (tail-of $"($work)/nix.err" 3))] }
-    if (ietsp-env $ctx $flake $"($work)/ietsp.sh" --no-cache) != 0 { $res ++= [(bad $"ietsp print-dev-env ($name)" (tail-of $"($work)/ietsp.err" 3))] }
+    if (ietsp-env $ctx $flake $"($work)/ietsp.sh" --no-tracing-cache) != 0 { $res ++= [(bad $"ietsp print-dev-env ($name)" (tail-of $"($work)/ietsp.err" 3))] }
     if (same-file $"($work)/nix.sh" $"($work)/ietsp.sh") {
       $res ++= [(ok $"a. bash identical: ($name) \((open --raw $"($work)/nix.sh" | into binary | bytes length) bytes\)")]
     } else {
@@ -89,7 +89,7 @@ def run-tests [ctx: record]: nothing -> int {
     }
 
     nix-env $work $flake $"($work)/nix.json" --json
-    ietsp-env $ctx $flake $"($work)/ietsp.json" --no-cache --json
+    ietsp-env $ctx $flake $"($work)/ietsp.json" --no-tracing-cache --json
     sorted-json $"($work)/nix.json" | save -f $"($work)/nix.sorted.json"
     sorted-json $"($work)/ietsp.json" | save -f $"($work)/ietsp.sorted.json"
     if (same-file $"($work)/nix.sorted.json" $"($work)/ietsp.sorted.json") {

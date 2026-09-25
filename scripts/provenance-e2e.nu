@@ -76,19 +76,19 @@ def main [] {
     "the store path is left alone with IETSP_PROVENANCE=0" $"stderr:\n($plain.stderr)"))
 
   print "== 3. an evaluation error inside a flake tree"
-  let bad = (^$ietsp eval --no-cache $"($fd)/bad.nix" | complete)
+  let bad = (^$ietsp eval --no-tracing-cache $"($fd)/bad.nix" | complete)
   $ok = ($ok | append (verdict ($bad.stderr | str contains $"($fd)/bad.nix:1:1")
     "a local file keeps its own position" $"stderr:\n($bad.stderr)"))
   # The flake tree is copied to the store, so the position comes back mapped.
-  let fe = (^$ietsp build --no-cache --builder daemon $"($fd)#packages.($system).boom" | complete)
+  let fe = (^$ietsp build --no-tracing-cache --builder daemon $"($fd)#packages.($system).boom" | complete)
   $ok = ($ok | append (verdict ($fe.stderr | str contains $"defined at ($fd)/flake.nix:")
     "a flake derivation names the working copy" $"no 'defined at ($fd)/flake.nix:' in stderr:\n($fe.stderr)"))
   $ok = ($ok | append (verdict ($fe.stderr | str contains $"tree is ($fd)")
     "a flake build log names the working copy" $"no 'tree is ($fd)' in stderr:\n($fe.stderr)"))
 
   print "== 4. eval-jobs --provenance"
-  let with_pos = (^$ietsp eval-jobs --no-cache --provenance --flake $"($fd)#packages.($system)" | complete)
-  let without = (^$ietsp eval-jobs --no-cache --flake $"($fd)#packages.($system)" | complete)
+  let with_pos = (^$ietsp eval-jobs --no-tracing-cache --provenance --flake $"($fd)#packages.($system)" | complete)
+  let without = (^$ietsp eval-jobs --no-tracing-cache --flake $"($fd)#packages.($system)" | complete)
   $ok = ($ok | append (verdict ($with_pos.stdout | str contains $"\"pos\":\"($fd)/flake.nix:")
     "--provenance adds a mapped pos" $"stdout:\n($with_pos.stdout)"))
   $ok = ($ok | append (verdict (not ($without.stdout | str contains "\"pos\""))

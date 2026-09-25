@@ -1,7 +1,7 @@
 #!/usr/bin/env nu
 # Semantics of the tracing evaluation cache (docs/explanation/caching.md): hits
 # print identical output, every kind of change misses, uncacheable runs and
-# failed runs write nothing, --no-cache touches nothing.
+# failed runs write nothing, and each cache flag turns off the store it names.
 use lib.nu [ROOT chomp ietsp-bin isolate run-in verdict]
 
 # ietsp eval --strict --timings ARGS: rc, stdout, the `cache:` lines joined with
@@ -95,11 +95,11 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   $res ++= [(verdict ($r.rc != 0 and not ($r.status | str contains "wrote")) "a fetcher call fails and never caches" $"fetcher never caches \(($r.status)\)")]
 
   let before = (fingerprint $env.IETSP_CACHE_DIR)
-  let r = (run-eval $ietsp --no-cache ...$main)
-  $res ++= [(verdict ($r.status == "") "--no-cache prints no cache line" $"--no-cache prints no cache line \(($r.status)\)")]
-  run-eval $ietsp --no-cache -E 'import /nonexistent/nocache-probe.nix' | ignore
+  let r = (run-eval $ietsp --no-tracing-cache ...$main)
+  $res ++= [(verdict ($r.status == "") "--no-tracing-cache prints no cache line" $"--no-tracing-cache prints no cache line \(($r.status)\)")]
+  run-eval $ietsp --no-tracing-cache -E 'import /nonexistent/nocache-probe.nix' | ignore
   let after = (fingerprint $env.IETSP_CACHE_DIR)
-  $res ++= [(verdict ($before == $after) "--no-cache never reads or writes" "--no-cache changed the cache dir")]
+  $res ++= [(verdict ($before == $after) "--no-tracing-cache never reads or writes the tracing store" "--no-tracing-cache changed the cache dir")]
   let r = (with-env {IETSP_CACHE: "0"} { run-eval $ietsp ...$main })
   $res ++= [(verdict ($r.status == "") "IETSP_CACHE=0 disables the cache" $"IETSP_CACHE=0 \(($r.status)\)")]
 
@@ -126,6 +126,22 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   $res ++= [(verdict ($r.rc == 0 and (open $"($work)/mine/unrelated.txt" | str contains "PRECIOUS")) "--cache-dir keeps a file it did not create" "--cache-dir deleted an unrelated file")]
   $res ++= [(verdict (($"($work)/mine/trace" | path exists) and ($"($work)/mine/ir" | path exists)) "--cache-dir holds the stores in subdirectories" "--cache-dir made no store subdirectory")]
 
+  # every cache flag turns off the store it names, and no other: a store that
+  # runs makes its subdirectory, a store that is off makes nothing
+  let cases = [
+    { flags: [], trace: true, ir: true, what: "no cache flag" }
+    { flags: ["--no-tracing-cache"], trace: false, ir: true, what: "--no-tracing-cache" }
+    { flags: ["--no-ir-cache"], trace: true, ir: false, what: "--no-ir-cache" }
+    { flags: ["--no-cache"], trace: false, ir: true, what: "--no-cache" }
+  ]
+  for c in ($cases | enumerate) {
+    let dir = $"($work)/stores($c.index)"
+    let r = (run-eval $ietsp --cache-dir $dir ...$c.item.flags ...$main)
+    let got = { trace: ($"($dir)/trace" | path exists), ir: ($"($dir)/ir" | path exists) }
+    let ok = ($r.rc == 0 and $got.trace == $c.item.trace and $got.ir == $c.item.ir)
+    $res ++= [(verdict $ok $"($c.item.what): tracing=($c.item.trace) ir=($c.item.ir)" $"($c.item.what): wanted tracing=($c.item.trace) ir=($c.item.ir), got tracing=($got.trace) ir=($got.ir)")]
+  }
+
   # a directory that is not ietsp's is refused, not wiped
   mkdir $"($work)/theirs/trace"
   "PRECIOUS\n" | save -f $"($work)/theirs/trace/notes.txt"
@@ -147,8 +163,8 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let s2 = (search-run $ietsp $pkgs $sdir [])
   $res ++= [(verdict ($s1.rc == 0 and $s2.rc == 0 and ($s1.status =~ 'miss') and ($s2.status | str contains "cache: hit") and $s1.out == $s2.out) "search --cache-dir: the index misses then hits there" $"search cache-dir \(($s1.status) / ($s2.status)\)")]
   let before = (fingerprint $sdir)
-  let s3 = (search-run $ietsp $pkgs $sdir [--no-cache])
-  $res ++= [(verdict ($s3.rc == 0 and $s3.status == "" and (fingerprint $sdir) == $before and $s3.out == $s1.out) "search --no-cache: no cache line, nothing read or written" $"search --no-cache \(($s3.status)\)")]
+  let s3 = (search-run $ietsp $pkgs $sdir [--no-tracing-cache])
+  $res ++= [(verdict ($s3.rc == 0 and $s3.status == "" and (fingerprint $sdir) == $before and $s3.out == $s1.out) "search --no-tracing-cache: no cache line, nothing read or written" $"search --no-tracing-cache \(($s3.status)\)")]
   let idir = $"($work)/searchcache-noir"
   let s4 = (search-run $ietsp $pkgs $idir [--no-ir-cache])
   $res ++= [(verdict ($s4.rc == 0 and not ($"($idir)/ir" | path exists)) "search --no-ir-cache: no compiled-file cache" $"search --no-ir-cache, ir dir exists=($"($idir)/ir" | path exists)")]

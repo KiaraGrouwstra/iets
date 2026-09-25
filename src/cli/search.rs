@@ -43,8 +43,9 @@ struct Search {
     exclude: Vec<String>,
     native: bool,
     timings: bool,
-    /// `--no-cache`, `--no-ir-cache`, `--cache-dir` and `--workers`, the
-    /// block every evaluating command shares; `key_args` carries them on.
+    /// `--no-tracing-cache`, `--no-ir-cache`, `--no-cache`, `--cache-dir` and
+    /// `--workers`, the block every evaluating command shares; `key_args`
+    /// carries them on.
     cache: EvalArgs,
 }
 
@@ -591,7 +592,7 @@ fn key_args(s: &Search) -> EvalArgs {
     a.includes = s.c.flags.includes.clone();
     a.pure = s.c.flags.pure;
     a.timings = s.timings;
-    a.no_cache = s.cache.no_cache;
+    a.no_tracing_cache = s.cache.no_tracing_cache;
     a.no_ir_cache = s.cache.no_ir_cache;
     a.cache_dir = s.cache.cache_dir.clone();
     a.workers = s.cache.workers;

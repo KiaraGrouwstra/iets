@@ -80,7 +80,7 @@ def run-custom [ietsp: string, dir: string, url: string] {
   path-info "{ca, narHash, narSize, references}" $drv | save -f $"($dir)/nix.drv-info"
   if not (quiet-ok nix-store --delete $drv $src) { fail $"cannot delete ($drv) and ($src) from the store" }
   if (quiet-ok nix-store --check-validity $src) { fail "source still valid after delete" }
-  let r = (^$ietsp build --builder $url --timings --no-cache --fetch-to $"($dir)/fetch" $"($dir)/case.nix" | complete)
+  let r = (^$ietsp build --builder $url --timings --no-tracing-cache --fetch-to $"($dir)/fetch" $"($dir)/case.nix" | complete)
   $r.stderr | save -f $"($dir)/client.log"
   if $r.exit_code != 0 { print ($r.stderr | chomp); fail "client exited non-zero" }
   let out = ($r.stdout | chomp)
@@ -110,7 +110,7 @@ def run-tests [ietsp: string, nixpkgs: string, work: string] {
   print "== 2. hello through the local daemon (closure already valid)"
   let hello = (^nix-instantiate -I $"nixpkgs=($nixpkgs)" '<nixpkgs>' -A hello err> /dev/null | chomp)
   let expected = (out-of nix-store -q --outputs $hello | chomp)
-  let r = (^$ietsp build --builder daemon --timings --no-cache -I $"nixpkgs=($nixpkgs)" -E '(import <nixpkgs> {}).hello' | complete)
+  let r = (^$ietsp build --builder daemon --timings --no-tracing-cache -I $"nixpkgs=($nixpkgs)" -E '(import <nixpkgs> {}).hello' | complete)
   $r.stderr | save -f $"($work)/client2.log"
   if $r.exit_code != 0 { print ($r.stderr | chomp); fail "client exited non-zero" }
   let out = ($r.stdout | chomp)
@@ -122,7 +122,7 @@ def run-tests [ietsp: string, nixpkgs: string, work: string] {
   print "== 3. hello cold against a scratch chroot daemon, --no-build"
   let scratch = $"local?root=($work)/store"
   let sock = (scratch-daemon $"($work)/store")
-  let r = (^$ietsp build --builder $"unix://($sock)" --timings --no-cache --no-build -I $"nixpkgs=($nixpkgs)" -E '(import <nixpkgs> {}).hello' | complete)
+  let r = (^$ietsp build --builder $"unix://($sock)" --timings --no-tracing-cache --no-build -I $"nixpkgs=($nixpkgs)" -E '(import <nixpkgs> {}).hello' | complete)
   $r.stderr | save -f $"($work)/client3.log"
   if $r.exit_code != 0 { print ($r.stderr | chomp); fail "client exited non-zero" }
   show-matching $timing_lines $"($work)/client3.log"
@@ -141,7 +141,7 @@ def run-tests [ietsp: string, nixpkgs: string, work: string] {
   print "ok: 776 paths registered, hashes and ca match the local store"
 
   print "== 4. hello warm against the scratch daemon"
-  let r = (^$ietsp build --builder $"unix://($sock)" --timings --no-cache --no-build -I $"nixpkgs=($nixpkgs)" -E '(import <nixpkgs> {}).hello' | complete)
+  let r = (^$ietsp build --builder $"unix://($sock)" --timings --no-tracing-cache --no-build -I $"nixpkgs=($nixpkgs)" -E '(import <nixpkgs> {}).hello' | complete)
   $r.stderr | save -f $"($work)/client4.log"
   if $r.exit_code != 0 { print ($r.stderr | chomp); fail "client exited non-zero" }
   show-matching $timing_lines $"($work)/client4.log"
@@ -167,7 +167,7 @@ def run-tests [ietsp: string, nixpkgs: string, work: string] {
   let expected7 = (out-of nix-store -q --outputs $drv7 | chomp)
   cp $drv7 $"($work)/c7/nix.drv"
   if not (quiet-ok nix-store --delete $drv7) { fail $"cannot delete ($drv7) from the store" }
-  let r = (^$ietsp build --builder daemon --timings --no-cache --option pure-eval false $"($work)/c7/case.nix" | complete)
+  let r = (^$ietsp build --builder daemon --timings --no-tracing-cache --option pure-eval false $"($work)/c7/case.nix" | complete)
   $r.stderr | save -f $"($work)/client7.log"
   if $r.exit_code != 0 { print ($r.stderr | chomp); fail "client exited non-zero" }
   show-matching $timing_lines $"($work)/client7.log"
@@ -185,7 +185,7 @@ def run-tests [ietsp: string, nixpkgs: string, work: string] {
   let scratch2 = $"local?root=($work)/store2"
   let sock2 = (scratch-daemon $"($work)/store2" --option substituters $cache --option require-sigs "false")
   if (quiet-ok nix-store --store $scratch2 --check-validity $hello_out) { fail "the second scratch store should start without the hello output" }
-  let r = (^$ietsp build --builder $"unix://($sock2)" --timings --no-cache --no-build --option pure-eval false $"($work)/c7/case.nix" | complete)
+  let r = (^$ietsp build --builder $"unix://($sock2)" --timings --no-tracing-cache --no-build --option pure-eval false $"($work)/c7/case.nix" | complete)
   $r.stderr | save -f $"($work)/client8a.log"
   if $r.exit_code != 0 { print ($r.stderr | chomp); fail "client exited non-zero" }
   show-matching $timing_lines $"($work)/client8a.log"
@@ -195,7 +195,7 @@ def run-tests [ietsp: string, nixpkgs: string, work: string] {
   if not (quiet-ok nix-store --store $scratch2 --check-validity $hello_out $drv7) { fail "hello output or drv not valid in the scratch store after --no-build" }
   if not (same-file $"($work)/store2($drv7)" $drv7) { fail "drv bytes differ in the scratch store" }
   print "ok: substituted, drv registered"
-  let r = (^$ietsp build --builder $"unix://($sock2)" --timings --no-cache --option pure-eval false $"($work)/c7/case.nix" | complete)
+  let r = (^$ietsp build --builder $"unix://($sock2)" --timings --no-tracing-cache --option pure-eval false $"($work)/c7/case.nix" | complete)
   $r.stderr | save -f $"($work)/client8b.log"
   if $r.exit_code != 0 { print ($r.stderr | chomp); fail "client exited non-zero" }
   show-matching $timing_lines $"($work)/client8b.log"

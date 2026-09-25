@@ -209,7 +209,7 @@ pub fn cmd_eval_jobs(argv: &[String]) -> i32 {
         crate::config::hush();
     }
     let mut a = parse_eval_args(&rest);
-    a.no_cache = true;
+    a.no_tracing_cache = true;
     a.flake_whole = true;
     // nix-eval-jobs takes the argument as a file unless --flake says otherwise.
     a.input = match a.input.take() {

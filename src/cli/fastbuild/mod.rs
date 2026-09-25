@@ -200,7 +200,7 @@ fn walk(ev: &mut Evaluator, a: Args, stream: Stream) -> bool {
             ev,
             crate::cli::EvalArgs {
                 input: Some(input),
-                no_cache: true,
+                no_tracing_cache: true,
                 flake_whole: true,
                 ..crate::cli::parse_eval_args(&[])
             },
