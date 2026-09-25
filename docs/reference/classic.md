@@ -172,7 +172,7 @@ files. See `docs/reference/commands.md`.
 
 ### `nix`
 
-Seven subcommands; every other one execs the real `nix`.
+Eight subcommands; every other one execs the real `nix`.
 
 `nix eval [INSTALLABLE]`: `--json`, `--raw`, `--expr E`, `-f`/`--file FILE`,
 `--impure`, `--pure-eval`, `--no-pure-eval` (`docs/explanation/evaluation.md`: `nix`
@@ -230,6 +230,33 @@ their signatures over the worker protocol before it makes the symlink. With
 setting stands in for the local store, as a build hook does, so the outputs
 come back even under `--no-link`: `nix build --no-link` followed by
 `nix copy` works. See `docs/how-to/build-remotely.md`.
+
+`nix derivation show [INSTALLABLE...]` (default `.`): `-r`/`--recursive`,
+`--pretty`, `--no-pretty`, `-f`/`--file`, `--expr`, plus the same global
+flags. There is no `--json`: the JSON is the output. The document is
+`derivation-show.cc`'s, byte for byte —
+
+```json
+{"derivations":{"<hash>-<name>.drv":{"args":[…],"builder":"…","env":{…},
+"inputs":{"drvs":{"<hash>-<dep>.drv":{"dynamicOutputs":{},"outputs":["out"]}},
+"srcs":["<hash>-<src>"]},"name":"…","outputs":{"out":{"path":"<hash>-<name>"}},
+"structuredAttrs":{…},"system":"…","version":4}},"version":4}
+```
+
+— with every key sorted, every store path as its base name, `structuredAttrs`
+only when the derivation has `__json` (which then leaves `env`), and an output
+shown as `{"path":…}` when it is input-addressed, `{"hash":…,"method":…}` when
+it is fixed (`flat` or `nar`; nix prints no path, because the serializer does
+not know the store directory), `{"method":…,"hashAlgo":…}` when it is floating
+and `{}` when it is deferred. `--pretty` indents by two spaces and is the
+default on a terminal (`common-args.hh:MixPrintJSON`).
+
+`-r` adds the whole input-derivation closure. The real nix reads it from the
+store with `computeFSClosure` after instantiating; ietsp walks `inputDrvs`
+over the derivations the evaluation holds in memory and reads `/nix/store`
+only for a member the evaluation did not make, such as one pinned with
+`builtins.storePath`. So the answer is the same and nothing is written to the
+store — see the divergence below.
 
 `nix search INSTALLABLE REGEX...`: `-e`/`--exclude REGEX`, `--json`,
 `--pretty`, `--no-pretty`, `-f`/`--file`, `--expr`, plus the same global
@@ -323,10 +350,12 @@ reads, and parallel workers already share one download per tree
 (`docs/explanation/caching.md`).
 
 Falls back on: `nix eval --apply`, `--write-to` or more than one
-installable, `nix build --rebuild`, `--dry-run` or `--json`, an installable
+installable, `nix build --rebuild`, `--dry-run` or `--json`,
+`nix derivation show --stdin`, an installable
 that is a store path (`/nix/store/…`, or an `^outputs` suffix), a
 non-local flake reference such as `nixpkgs#hello`, an installable that is
-not a derivation under `nix build`, `--arg`/`--argstr` with a flake (nix
+not a derivation under `nix build` or `nix derivation show`,
+`--arg`/`--argstr` with a flake (nix
 refuses that), `nix flake …` but `prefetch-inputs`, `nix run`, `nix shell`,
 `nix profile`, `nix store`, `nix copy`, `nix repl`, `nix log`,
 `nix why-depends`, every other subcommand, and any flag not
@@ -412,8 +441,14 @@ honoured; any other store falls back.
 - `--add-root` does not refuse a link that already exists and points
   outside the store; it replaces it.
 - The tracing cache (`docs/explanation/caching.md`) is off in classic mode.
-- `nix eval` does not register the derivations it evaluates. The real one
-  writes the `.drv` files while computing `drvPath`.
+- `nix eval` and `nix derivation show` do not register the derivations they
+  evaluate. The real one writes the `.drv` files while computing `drvPath`, so
+  a real `nix derivation show` leaves its whole input closure — every `.drv`
+  and every input source — in the store, and `-r` can then answer from the
+  store alone. ietsp answers from the derivations the evaluation holds, so the
+  store gains nothing and a caller that relied on the side effect (`nix
+  derivation show X` then `nix-store --realise X`) must instantiate first, with
+  `nix-instantiate` or `ietsp build --no-build`.
 - `nix build` prints the log lines only with `-L`. The real one shows the
   last line in the progress bar and the whole log when a build fails.
 - Two installables that name the same derivation print one output path

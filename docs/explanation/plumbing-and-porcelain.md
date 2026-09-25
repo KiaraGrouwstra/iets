@@ -220,7 +220,11 @@ connection. Stage 9's `plumbing dev-env` was to close this, and stage 9 is
 cancelled. It is recorded as a gap, not as a plan.
 
 `drv-show` was to be the reader of a dumped-derivation directory, which
-`api::build::drvs_in_dir` already is.
+`api::build::drvs_in_dir` already is. `nix derivation show` later needed the
+other half — drv paths to the JSON Nix prints — and got it as a capability,
+`api::drvshow::show`, with no op and no `ietsp plumbing drv-show`. The
+porcelain is 80 lines of argv and printing over it, which is what the
+cancelled op would have cost on its own.
 
 ## What the line count says about the next refactor
 

@@ -350,6 +350,7 @@ op in between.
 | `nix-fast-build` | `jobs`, `build` | argv compatibility, the report |
 | `nix eval` | `eval` | Nix's printer and argv |
 | `nix build` | `resolve`, `plan`, `build` | `result` symlinks, the `--json` Nix shape, the fallback |
+| `nix derivation show` | `resolve`, `drv-show` | Nix's argv, `--pretty`, the fallback |
 | `nix search` | `index` | Nix's output format and argv |
 | `nix develop` | `resolve`, `dev-env` | the shell it execs |
 | `nix print-dev-env` | `dev-env` | the bash rendering |
