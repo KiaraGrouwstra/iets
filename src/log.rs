@@ -608,6 +608,18 @@ pub fn warning(code: &'static str, raw: String) {
     out(&r.record(&text), Some(&text));
 }
 
+/// What made a tracing-cache entry stale, as `re-evaluating: RAW`. Level 3:
+/// nothing is wrong, and an edit invalidates an entry on every normal run
+/// (docs/reference/errors.md).
+pub fn invalidated(raw: String) {
+    let text = format!("re-evaluating: {raw}");
+    let r = Report {
+        level: 3,
+        ..Report::new("cache-invalidated", raw)
+    };
+    out(&r.record(&text), Some(&text));
+}
+
 /// A hash that `fix-hashes` rewrote at `pos`, `file:line:col`.
 pub fn fixed(pos: &str, old: &str, new: &str) {
     let raw = format!("'{old}' is now '{new}'");

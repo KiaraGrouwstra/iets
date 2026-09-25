@@ -4,13 +4,15 @@
 # failed runs write nothing, --no-cache touches nothing.
 use lib.nu [ROOT chomp ietsp-bin isolate run-in verdict]
 
-# ietsp eval --strict --timings ARGS: rc, stdout, and the `cache:` lines joined with spaces.
+# ietsp eval --strict --timings ARGS: rc, stdout, the `cache:` lines joined with
+# spaces, and the `re-evaluating:` line the reporter prints on an invalidation.
 def --wrapped run-eval [ietsp: string, ...args: string]: nothing -> record {
   let r = (^$ietsp eval --strict --timings ...$args | complete)
   {
     rc: $r.exit_code
     out: ($r.stdout | chomp)
     status: ($r.stderr | lines | where $it =~ '^cache:' | each {|l| $l + " " } | str join)
+    why: ($r.stderr | lines | where $it =~ '^re-evaluating:' | str join " ")
   }
 }
 
@@ -44,12 +46,25 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let r = (run-eval $ietsp ...$main)
   let first = $r.out
   $res ++= [(verdict ($r.rc == 0 and $r.status =~ 'miss \(no entry\).*wrote') "first run misses and writes" $"first run misses and writes \(($r.status)\)")]
+  # a cold run invalidated nothing, so it says nothing
+  $res ++= [(verdict ($r.why == "") "a cold run reports no invalidation" $"cold run said ($r.why)")]
   let r = (run-eval $ietsp ...$main)
   $res ++= [(verdict ($r.rc == 0 and ($r.status | str contains "cache: hit") and $r.out == $first) "second run hits with identical output" $"second run hits with identical output \(($r.status)\)")]
+  $res ++= [(verdict ($r.why == "") "a hit reports no invalidation" $"hit said ($r.why)")]
 
   "40 + 3\n" | save -f $"($work)/src/lib.nix"
   let r = (run-eval $ietsp ...$main)
   $res ++= [(verdict ($r.status =~ 'miss \(.*lib\.nix changed' and ($r.out | str contains "a = 43")) "editing an imported file misses" $"editing an imported file misses \(($r.status)\)")]
+  $res ++= [(verdict ($r.why == $"re-evaluating: ($work)/src/lib.nix changed") "the invalidation names the changed file" $"changed file said ($r.why)")]
+  # the message is the same whichever thread saw it first
+  let whys = (1..5 | each {|_|
+    "40 + 4\n" | save -f $"($work)/src/lib.nix"
+    let a = (run-eval $ietsp ...$main)
+    "40 + 3\n" | save -f $"($work)/src/lib.nix"
+    let b = (run-eval $ietsp ...$main)
+    [$a.why $b.why]
+  } | flatten | uniq)
+  $res ++= [(verdict ($whys == [$"re-evaluating: ($work)/src/lib.nix changed"]) "the same change always names the same file" $"repeated invalidations said ($whys)")]
 
   ^touch -d 2000-01-01 $"($work)/src/lib.nix"
   let r = (run-eval $ietsp ...$main)
@@ -60,9 +75,11 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   "y\n" | save $"($work)/src/dir/two"
   let r = (run-eval $ietsp ...$main)
   $res ++= [(verdict ($r.status =~ 'miss \(.*directory' and ($r.out | str contains '"two"')) "adding a file to a readDir'd directory misses" $"readDir change misses \(($r.status)\)")]
+  $res ++= [(verdict ($r.why == $"re-evaluating: directory ($work)/src/dir has different entries") "the invalidation names the listed directory" $"readDir change said ($r.why)")]
 
   let r = (with-env {CACHETEST_VAR: "two"} { run-eval $ietsp ...$main })
-  $res ++= [(verdict (($r.status | str contains 'miss ($CACHETEST_VAR changed)') and ($r.out | str contains 'c = "two"')) "changing a getEnv variable misses" $"getEnv change misses \(($r.status)\)")]
+  $res ++= [(verdict (($r.status | str contains 'miss (environment variable $CACHETEST_VAR changed)') and ($r.out | str contains 'c = "two"')) "changing a getEnv variable misses" $"getEnv change misses \(($r.status)\)")]
+  $res ++= [(verdict ($r.why == 're-evaluating: environment variable $CACHETEST_VAR changed') "the invalidation names the environment variable" $"getEnv change said ($r.why)")]
   let r = (run-eval $ietsp ...$main)
   $res ++= [(verdict ($r.status =~ 'miss \(.*CACHETEST_VAR') "changing it back misses again (one entry per key)" $"one entry per key \(($r.status)\)")]
 

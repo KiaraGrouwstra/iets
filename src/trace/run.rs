@@ -29,7 +29,9 @@ impl Cache {
     }
 
     /// Validates the stored read set; true on a hit. A hit that refreshed
-    /// stat fields rewrites `readset`.
+    /// stat fields rewrites `readset`. An entry that existed and no longer
+    /// holds reports what changed; a run with no entry says nothing, because
+    /// a first run invalidated nothing.
     pub fn lookup(&self) -> bool {
         use crate::trace::store::READSET;
         let t0 = std::time::Instant::now();
@@ -71,6 +73,7 @@ impl Cache {
                 true
             }
             Err(m) => {
+                crate::log::invalidated(m.0.clone());
                 if self.timings {
                     crate::errln!(
                         "cache: miss ({}), {} entries, {:.3}s",

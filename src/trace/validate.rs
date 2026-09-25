@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use super::{Obs, dir_listing_hash, mtime_ns, read_dir_kinds, stat_kind};
+use super::{Kind, Obs, dir_listing_hash, mtime_ns, read_dir_kinds, stat_kind};
 
 #[derive(Debug, Default)]
 pub struct Report {
@@ -22,7 +22,9 @@ pub struct Report {
     pub refreshed: usize,
 }
 
-/// The first observation that no longer holds, for `--timings`.
+/// The lowest-indexed observation that no longer holds, and why. The read
+/// set has one order, so one change always names the same observation,
+/// whichever thread saw it (docs/reference/errors.md, `cache-invalidated`).
 #[derive(Debug)]
 pub struct Mismatch(pub String);
 
@@ -39,6 +41,28 @@ fn os(p: &[u8]) -> &Path {
 
 fn lossy(p: &[u8]) -> String {
     String::from_utf8_lossy(p).into_owned()
+}
+
+/// Why a path no longer reads: it is not there, or it is there and the read
+/// failed. The message says which, because the two need different fixes.
+fn unreadable(path: &[u8], e: &std::io::Error) -> Outcome {
+    let what = if e.kind() == std::io::ErrorKind::NotFound {
+        "is gone"
+    } else {
+        "cannot be read"
+    };
+    Outcome::Changed(format!("{} {what}", lossy(path)))
+}
+
+/// A kind as the invalidation message names it.
+fn kind_name(k: Kind) -> &'static str {
+    match k {
+        Kind::Missing => "missing",
+        Kind::Regular => "a regular file",
+        Kind::Directory => "a directory",
+        Kind::Symlink => "a symbolic link",
+        Kind::Other => "another kind of file",
+    }
 }
 
 /// sha256 of a file's bytes without holding them: a rehash pass over a big `nixpkgs` file
@@ -59,18 +83,24 @@ fn check(o: &Obs, rehashed: &AtomicUsize) -> Outcome {
             ino,
             hash,
         } => {
-            let Ok(m) = fs::metadata(os(path)) else {
-                return Outcome::Changed(format!("{} is gone", lossy(path)));
+            let m = match fs::metadata(os(path)) {
+                Ok(m) => m,
+                Err(e) => return unreadable(path, &e),
             };
             if !m.is_file() {
-                return Outcome::Changed(format!("{} is not a regular file", lossy(path)));
+                return Outcome::Changed(format!(
+                    "{} is now {}, not a regular file",
+                    lossy(path),
+                    kind_name(Kind::of(&Ok(m)))
+                ));
             }
             if m.len() == *size && mtime_ns(&m) == *mt && m.ino() == *ino {
                 return Outcome::Same;
             }
             rehashed.fetch_add(1, Ordering::Relaxed);
-            let Ok(now) = file_sha256(os(path)) else {
-                return Outcome::Changed(format!("{} is unreadable", lossy(path)));
+            let now = match file_sha256(os(path)) {
+                Ok(h) => h,
+                Err(e) => return unreadable(path, &e),
             };
             if now != *hash {
                 return Outcome::Changed(format!("{} changed", lossy(path)));
@@ -82,16 +112,23 @@ fn check(o: &Obs, rehashed: &AtomicUsize) -> Outcome {
                 if dir_listing_hash(&mut entries) == *hash {
                     Outcome::Same
                 } else {
-                    Outcome::Changed(format!("directory {} changed", lossy(path)))
+                    Outcome::Changed(format!("directory {} has different entries", lossy(path)))
                 }
             }
-            Err(_) => Outcome::Changed(format!("directory {} is gone", lossy(path))),
+            Err(e) => unreadable(path, &e),
         },
         Obs::Stat { path, follow, kind } => {
-            if stat_kind(os(path), *follow) == *kind {
-                Outcome::Same
-            } else {
-                Outcome::Changed(format!("{} changed type or existence", lossy(path)))
+            let now = stat_kind(os(path), *follow);
+            match (now, *kind) {
+                (now, was) if now == was => Outcome::Same,
+                (Kind::Missing, _) => Outcome::Changed(format!("{} is gone", lossy(path))),
+                (_, Kind::Missing) => Outcome::Changed(format!("{} now exists", lossy(path))),
+                (now, was) => Outcome::Changed(format!(
+                    "{} is now {}, not {}",
+                    lossy(path),
+                    kind_name(now),
+                    kind_name(was)
+                )),
             }
         }
         Obs::Tree {
@@ -110,18 +147,19 @@ fn check(o: &Obs, rehashed: &AtomicUsize) -> Outcome {
             match super::tree_fingerprint(root_p, accepted.as_ref()) {
                 Ok((sh, _)) if sh == *stat_hash => return Outcome::Same,
                 Ok(_) => {}
-                Err(_) => return Outcome::Changed(format!("tree {} is gone", lossy(root))),
+                Err(e) => return unreadable(root, &e),
             }
             rehashed.fetch_add(1, Ordering::Relaxed);
-            let Ok((nar, seen, sh)) = super::tree_rehash(root_p, accepted.as_ref()) else {
-                return Outcome::Changed(format!("tree {} is unreadable", lossy(root)));
+            let (nar, seen, sh) = match super::tree_rehash(root_p, accepted.as_ref()) {
+                Ok(t) => t,
+                Err(e) => return unreadable(root, &e),
             };
             if nar != *nar_hash
                 || filtered
                     .as_ref()
                     .is_some_and(|f| f.seen_hash.is_some_and(|s| s != seen))
             {
-                return Outcome::Changed(format!("tree {} changed", lossy(root)));
+                return Outcome::Changed(format!("source tree {} changed", lossy(root)));
             }
             Outcome::Refresh(Obs::Tree {
                 root: root.clone(),
@@ -137,21 +175,23 @@ fn check(o: &Obs, rehashed: &AtomicUsize) -> Outcome {
             if now == *target {
                 Outcome::Same
             } else {
-                Outcome::Changed(format!("{} resolves elsewhere", lossy(path)))
+                Outcome::Changed(format!("{} resolves to a different path", lossy(path)))
             }
         }
         Obs::Env { name, value } => {
             let now = std::env::var_os(OsStr::from_bytes(name)).map(|v| v.as_bytes().to_vec());
-            if now == *value {
-                Outcome::Same
-            } else {
-                Outcome::Changed(format!("${} changed", lossy(name)))
-            }
+            let what = match (&now, value) {
+                _ if now == *value => return Outcome::Same,
+                (Some(_), None) => "is now set",
+                (None, Some(_)) => "is no longer set",
+                _ => "changed",
+            };
+            Outcome::Changed(format!("environment variable ${} {what}", lossy(name)))
         }
         Obs::Cmd { dir, argv, hash } => match super::run_cmd(os(dir), argv) {
             Ok((status, out)) if super::cmd_hash(status, &out) == *hash => Outcome::Same,
             _ => Outcome::Changed(format!(
-                "output of `{}` in {} changed",
+                "the output of `{}` in {} changed",
                 argv.iter().map(|a| lossy(a)).collect::<Vec<_>>().join(" "),
                 lossy(dir)
             )),
@@ -170,11 +210,17 @@ fn check(o: &Obs, rehashed: &AtomicUsize) -> Outcome {
 
 /// Validates every observation on `threads` threads. On success the
 /// refreshed entries are written back into `obs`.
+///
+/// The [`Mismatch`] names the lowest-indexed observation that failed, not the
+/// first one a thread reported, so one change always names the same thing.
+/// The threads still stop at the first failure: every index below it was
+/// already handed out, and a thread finishes the check it started before it
+/// breaks, so the lowest failing index is always among the ones seen.
 pub fn validate(obs: &mut [Obs], threads: usize) -> Result<Report, Mismatch> {
     let next = AtomicUsize::new(0);
     let failed = AtomicBool::new(false);
     let rehashed = AtomicUsize::new(0);
-    let first: Mutex<Option<String>> = Mutex::new(None);
+    let first: Mutex<Option<(usize, String)>> = Mutex::new(None);
     let refreshes: Mutex<Vec<(usize, Obs)>> = Mutex::new(Vec::new());
     let threads = threads.clamp(1, obs.len().max(1));
     std::thread::scope(|s| {
@@ -194,7 +240,11 @@ pub fn validate(obs: &mut [Obs], threads: usize) -> Result<Report, Mismatch> {
                         Outcome::Refresh(o) => mine.push((i, o)),
                         Outcome::Changed(why) => {
                             failed.store(true, Ordering::Relaxed);
-                            first.lock().unwrap().get_or_insert(why);
+                            let mut lowest = first.lock().unwrap();
+                            if lowest.as_ref().is_none_or(|(j, _)| i < *j) {
+                                *lowest = Some((i, why));
+                            }
+                            drop(lowest);
                             break;
                         }
                     }
@@ -204,7 +254,8 @@ pub fn validate(obs: &mut [Obs], threads: usize) -> Result<Report, Mismatch> {
         }
     });
     if failed.load(Ordering::Relaxed) {
-        return Err(Mismatch(first.into_inner().unwrap().unwrap_or_default()));
+        let why = first.into_inner().unwrap().map(|(_, w)| w);
+        return Err(Mismatch(why.unwrap_or_default()));
     }
     let refreshes = refreshes.into_inner().unwrap();
     let refreshed = refreshes.len();
@@ -220,7 +271,7 @@ pub fn validate(obs: &mut [Obs], threads: usize) -> Result<Report, Mismatch> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{Kind, sha256};
+    use super::super::sha256;
     use super::*;
 
     fn tmp(name: &str) -> PathBuf {
@@ -279,5 +330,25 @@ mod tests {
         fs::write(d.join("y"), b"").unwrap();
         assert!(validate(&mut obs, 3).is_err());
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn the_lowest_failing_observation_is_the_one_reported() {
+        let gone = |n: usize| Obs::Stat {
+            path: format!("/nonexistent/ietsp-validate-{n}").into_bytes(),
+            follow: true,
+            kind: Kind::Regular,
+        };
+        let here = Obs::Env {
+            name: b"IETSP_TRACE_TEST_UNSET".to_vec(),
+            value: None,
+        };
+        let mut obs: Vec<Obs> = (0..64)
+            .map(|n| if n % 7 == 3 { gone(n) } else { here.clone() })
+            .collect();
+        for _ in 0..50 {
+            let e = validate(&mut obs, 4).expect_err("the missing paths fail");
+            assert_eq!(e.0, "/nonexistent/ietsp-validate-3 is gone");
+        }
     }
 }

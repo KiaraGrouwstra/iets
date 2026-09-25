@@ -144,6 +144,22 @@ Every primop that looks at the world records one observation.
 | an environment variable | `getEnv`; `HOME` when a `~/` literal is compiled | read it again |
 | a command's exit status and output | the `git` queries of a flake working tree | run it again, rehash |
 
+A run that had an entry and lost it says why, in one line:
+
+```
+$ ietsp eval --strict ./flake-attrs.nix
+re-evaluating: /home/u/repo/flake.nix changed
+```
+
+The line names the one observation that no longer holds and what about it
+changed — a file's contents, a directory's entries, an environment variable,
+a command's output. Under `--log-format internal-json` it is a level-3
+record with code `cache-invalidated` (docs/reference/errors.md). Validation
+runs on four threads, so the read set's own order decides which observation
+is named: the lowest-indexed failure wins, and one change therefore always
+names the same thing. A run with no entry prints nothing: a first run
+invalidated nothing.
+
 The key is computed from the command *before* evaluation: the build id, the
 subcommand, the expression or the file plus its hash, the `--arg` pairs,
 `-A`, `--strict`, `--json`, `--raw`, the lint levels, the search path,

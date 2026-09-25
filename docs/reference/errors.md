@@ -32,6 +32,7 @@ in `src/error.rs` for the rest, and the daemon's build status for builds.
 | `hash-mismatch` | `ErrorKind::HashMismatch`, build status | a fetched tree or a fixed-output build whose hash is not the one given |
 | `hash-fixed` | `fix-hashes` | a level-3 record: the hash `fix-hashes` wrote, at the file, line and column it changed |
 | `determinate-setting` | `src/config.rs` | a level-1 record: a Determinate Nix setting that ietsp ignores (docs/reference/settings.md) |
+| `cache-invalidated` | `src/trace/run.rs` | a level-3 record: what changed under a tracing cache entry, so the run evaluates again |
 | `io` | `ErrorKind::Io`, `Error::Io` | a file that cannot be read or written |
 | `unsupported` | `ErrorKind::Unsupported`, `Error::Unsupported` | a feature ietsp does not have; classic mode falls back to Nix |
 | `cancelled` | `ErrorKind::Cancelled` | a parallel helper was stopped; never reaches the user |
@@ -110,6 +111,32 @@ A lint warning is a level-1 record with code `lint`; its `raw_msg` starts
 with `[NAME]`. A failed build is a record with code `build-failed` or
 `hash-mismatch`: `raw_msg` is the daemon's message, and the position is
 where the derivation was defined.
+
+A tracing cache entry that no longer holds is a level-3 record with code
+`cache-invalidated`. The text is `re-evaluating: RAW`, and `raw_msg` names
+the one observation that changed:
+
+```json
+{"action":"msg","code":"cache-invalidated","column":null,"file":null,"level":3,
+ "line":null,"msg":"re-evaluating: /home/u/repo/flake.nix changed",
+ "raw_msg":"/home/u/repo/flake.nix changed"}
+```
+
+The level is 3, not 1: nothing went wrong. An edit invalidates the entry of
+every command that read the file, so the line is part of a normal run, as
+`hash-fixed` is. Only a real invalidation prints it — an entry existed, was
+validated, and something had changed. A run with no entry prints nothing,
+because it invalidated nothing.
+
+The `raw_msg` is one observation of docs/explanation/caching.md's table, and
+says what about it changed: `PATH changed` (contents), `PATH is gone`,
+`PATH cannot be read`, `PATH is now a directory, not a regular file`,
+`PATH now exists`, `directory PATH has different entries`, `source tree PATH
+changed`, `PATH resolves to a different path`, `environment variable $NAME
+changed` (or `is now set`, `is no longer set`), ``the output of `CMD` in DIR
+changed``, or `input store entry NAME is gone`. The read set has one order,
+and the lowest-indexed observation that fails is the one reported, so one
+change always names the same thing.
 
 Any other line is `{"action":"msg","level":N,"msg":TEXT}`: level 0 for
 `error:` and `trace:` lines, 1 for warnings, 3 for the rest (build
