@@ -192,7 +192,9 @@ record with code `cache-invalidated` (docs/reference/errors.md). Validation
 runs on four threads, so the read set's own order decides which observation
 is named: the lowest-indexed failure wins, and one change therefore always
 names the same thing. A run with no entry prints nothing: a first run
-invalidated nothing.
+invalidated nothing. Under a classic name the line stays off stderr, because
+Nix prints nothing there, and the record goes to `json-log-path` alone
+(`docs/reference/divergences.md`).
 
 The key is computed from the command *before* evaluation: the build id, the
 subcommand, the expression, or the path of the file or the flake directory,

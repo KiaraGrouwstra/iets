@@ -878,6 +878,13 @@ in derivation {
   let dd_ours = (^$"($farm)/nix" fmt -- --write x.nix | complete)
   let dd_real = (^nix fmt -- --write x.nix | complete)
   $ok = ($ok | append (cmp-case "nix fmt -- --write x.nix" {ours: $dd_ours, real: $dd_real}))
+  # an edit invalidates the entry. Nix says nothing when its evaluation cache
+  # misses, so neither does the classic name; json-log-path gets the record
+  "\n# edited\n" | save --append $"($fmtdir)/flake.nix"
+  let inv = (^$"($farm)/nix" fmt --option json-log-path $"($tmp)/fmt-jlog" | complete)
+  let inv_recs = (try { open --raw $"($tmp)/fmt-jlog" | lines | each { from json } | where code? == "cache-invalidated" | length } catch { 0 })
+  $ok = ($ok | append (verdict ($inv.exit_code == 0 and (not ($inv.stderr | str contains "re-evaluating")) and $inv_recs == 1)
+    "nix fmt: an invalidation is silent on stderr and one record in json-log-path" $"($inv_recs) records, stderr ($inv.stderr | str substring 0..200)"))
 
   # the link is in the roots store, points into /nix/store, and the daemon
   # holds it: `nix-store --query --roots` names it

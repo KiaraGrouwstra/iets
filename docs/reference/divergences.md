@@ -148,6 +148,21 @@ diverge in a few more places (store `auto`, `-Q`, `--show-trace`,
 `--no-out-link`, `getDerivations` recursion, `--add-root` clobbering).
 They are listed in `docs/reference/classic.md`.
 
+## The tracing cache under the classic names
+
+`nix print-dev-env`, `nix search` and `nix fmt` answer from ietsp's tracing
+cache (`docs/explanation/caching.md`, `docs/reference/classic.md`). stdout
+and the exit code of a hit are the bytes and the code of the run that wrote
+the entry. One thing differs on stderr.
+
+- **An invalidation is silent.** The native commands say
+  `re-evaluating: PATH changed` when an entry no longer holds. Nix says
+  nothing when its own evaluation cache misses, and the classic names print
+  what Nix prints, so under them the line does not reach stderr, in text or
+  under `--log-format internal-json`. The record (level 3, code
+  `cache-invalidated`) still goes to the `json-log-path` file, which is where
+  to look when a classic command evaluated and you want to know why.
+
 ## GC roots the shells and the builds keep
 
 `nix-shell`, `nix develop` and `nix fmt` keep a GC root of the closure they

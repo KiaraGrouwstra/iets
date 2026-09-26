@@ -20,6 +20,8 @@ use crate::session::Session;
 pub struct Log {
     json: AtomicBool,
     show_trace: AtomicBool,
+    /// Under one of Nix's names stderr holds what Nix prints and nothing else.
+    classic: AtomicBool,
     json_log_path: OnceLock<String>,
     sink: OnceLock<Option<Mutex<Box<dyn Write + Send>>>>,
     sid: OnceLock<String>,
@@ -105,6 +107,11 @@ pub fn json() -> bool {
 /// then, as in Nix.
 pub fn set_show_trace() {
     cur().log.show_trace.store(true, Ordering::Relaxed);
+}
+
+/// This process answers to one of Nix's names (`cli::classic::dispatch`).
+pub fn set_classic() {
+    cur().log.classic.store(true, Ordering::Relaxed);
 }
 
 /// `json-log-path` from the command line; it wins over nix.conf. Set it
@@ -610,14 +617,21 @@ pub fn warning(code: &'static str, raw: String) {
 
 /// What made a tracing-cache entry stale, as `re-evaluating: RAW`. Level 3:
 /// nothing is wrong, and an edit invalidates an entry on every normal run
-/// (docs/reference/errors.md).
+/// (docs/reference/errors.md). Under a classic name only `json-log-path`
+/// gets it: Nix invalidates its own evaluation cache without a word
+/// (docs/reference/divergences.md).
 pub fn invalidated(raw: String) {
     let text = format!("re-evaluating: {raw}");
     let r = Report {
         level: 3,
         ..Report::new("cache-invalidated", raw)
     };
-    out(&r.record(&text), Some(&text));
+    let s = cur();
+    if s.log.classic.load(Ordering::Relaxed) {
+        s.log.tee(&r.record(&text));
+    } else {
+        out(&r.record(&text), Some(&text));
+    }
 }
 
 /// A hash that `fix-hashes` rewrote at `pos`, `file:line:col`.

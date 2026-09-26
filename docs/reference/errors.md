@@ -125,7 +125,9 @@ the one observation that changed:
 
 The level is 3, not 1: nothing went wrong. An edit invalidates the entry of
 every command that read the file, so the line is part of a normal run, as
-`hash-fixed` is. Only a real invalidation prints it — an entry existed, was
+`hash-fixed` is. Under a classic name the record goes to `json-log-path`
+only and stderr stays as Nix leaves it (`docs/reference/divergences.md`).
+Only a real invalidation prints it — an entry existed, was
 validated, and something had changed. A run with no entry prints nothing,
 because it invalidated nothing.
 

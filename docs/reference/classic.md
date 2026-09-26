@@ -463,7 +463,12 @@ honoured; any other store falls back.
 - A missing attribute in an installable's path is one line. Nix adds a
   `Did you mean …?` line from `Suggestions`, which ietsp does not have; the
   `error:` line itself is the same.
-- The tracing cache (`docs/explanation/caching.md`) is off in classic mode.
+- `nix print-dev-env`, `nix search` and `nix fmt` answer from the tracing
+  cache (`docs/explanation/caching.md`); the other names do not use it.
+- An entry that no longer holds is invalidated without a word, as in Nix.
+  The native commands print `re-evaluating: PATH changed`
+  (`docs/reference/errors.md`); under a classic name that record goes to
+  `json-log-path` only, so stderr holds what Nix prints.
 - `nix eval` and `nix derivation show` do not register the derivations they
   evaluate. The real one writes the `.drv` files while computing `drvPath`, so
   a real `nix derivation show` leaves its whole input closure — every `.drv`

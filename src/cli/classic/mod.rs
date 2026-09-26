@@ -32,6 +32,7 @@ pub const NAMES: &[&str] = &[
 
 /// Runs the classic command `name`. `argv` is everything after argv[0].
 pub fn dispatch(name: &str, argv: &[String]) -> i32 {
+    crate::log::set_classic();
     match name {
         "nix-instantiate" => instantiate::main(argv),
         "nix-build" => build::main(argv),
