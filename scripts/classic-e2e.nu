@@ -108,6 +108,103 @@ def fallback-reason [farm: string, cmd: list<string>]: nothing -> string {
   (with-env {IETSP_NO_FALLBACK: "1"} { ^$"($farm)/($name)" ...$args | complete }).stderr
 }
 
+# The tracing cache under the `nix` name (docs/reference/classic.md). The
+# fixture's value is `val.nix`, a file of a tarball input and, when impure, an
+# environment variable, behind a `builtins.trace`: an evaluation prints the
+# trace line and a hit does not, which is the only way to tell them apart,
+# because a hit prints what the evaluation printed. Each command in COMMANDS
+# goes through the same steps: cold, hit, an edit, another lock, `--impure`
+# with a variable that changes, and `--override-input`, which is not ietsp's.
+def cache-cases [farm: string, tmp: string, np: string, sys: string]: nothing -> list<bool> {
+  let cc = $"($tmp)/cc"
+  mkdir $"($cc)/flake" $"($cc)/tbA" $"($cc)/tbB"
+  "A" | save $"($cc)/tbA/a"
+  "B" | save $"($cc)/tbB/a"
+  ^tar -C $cc -czf $"($cc)/tbA.tar.gz" tbA
+  ^tar -C $cc -czf $"($cc)/tbB.tar.gz" tbB
+  r#'{
+  inputs.nixpkgs.url = "path:@NIXPKGS@";
+  inputs.tb = { url = "file://@CC@/tbA.tar.gz"; flake = false; };
+  outputs = { self, nixpkgs, tb }:
+    let
+      system = "@SYS@";
+      val = builtins.trace "EVALUATED"
+        (import ./val.nix + "-" + builtins.readFile "${tb}/a" + "-" + builtins.getEnv "CC_VAR");
+    in {
+      inherit val;
+      packages.${system}.pkg = derivation {
+        name = "cc-pkg";
+        inherit system val;
+        builder = "/bin/sh";
+        args = [ "-c" "echo $val > $out" ];
+      };
+      devShells.${system}.default = nixpkgs.legacyPackages.${system}.mkShell { inherit val; };
+    };
+}
+'# | str replace -a "@NIXPKGS@" $np | str replace -a "@CC@" $cc | str replace -a "@SYS@" $sys | save $"($cc)/flake/flake.nix"
+  let ref = $"path:($cc)/flake"
+  let lock_a = $"($cc)/flake/flake.lock"
+  mut res = []
+  let locked = (do { cd $"($cc)/flake"; ^nix flake lock } | complete)
+  $res ++= [(verdict ($locked.exit_code == 0) "nix flake lock for the cache fixture" $locked.stderr)]
+  # the lock `nix flake update tb` would write after the tarball moved on
+  let hash_b = (^nix hash path --type sha256 --sri $"($cc)/tbB" | chomp)
+  let lock_b = (open --raw $lock_a | from json
+    | update nodes.tb.locked.url $"file://($cc)/tbB.tar.gz"
+    | update nodes.tb.locked.narHash $hash_b | to json)
+
+  let commands = [
+    {name: "nix eval", args: [eval --raw], attr: "#val", tail: [], value: {|r| $r.stdout }}
+  ]
+  let ran = {|r| $r.stderr | str contains "trace: EVALUATED" }
+  $env.IETSP_CACHE_DIR = $"($cc)/cache"
+  for c in $commands {
+    let one = {|flags: list<string>| ^$"($farm)/nix" ...$c.args ...$flags $"($ref)($c.attr)" ...$c.tail | complete }
+    let entries = {|| try { ls $"($cc)/cache/trace" | where type == dir | length } catch { 0 } }
+    "\"one\"\n" | save -f $"($cc)/flake/val.nix"
+    open --raw $lock_a | save -f $"($cc)/lock-a"
+
+    let cold = (do $one [])
+    let real = (^nix ...$c.args $"($ref)($c.attr)" ...$c.tail | complete)
+    $res ++= [((cmp-case $"($c.name): a cold run prints what nix prints" {ours: $cold, real: $real})
+      and (verdict ((do $ran $cold) and (do $c.value $cold | str contains "one-A-")) $"($c.name): a cold run evaluates" $"stderr ($cold.stderr | str substring 0..300)"))]
+    let hit = (do $one [])
+    $res ++= [((cmp-case $"($c.name): a hit prints what nix prints" {ours: $hit, real: $real})
+      and (verdict ((not (do $ran $hit)) and ($hit.stdout | into binary) == ($cold.stdout | into binary))
+        $"($c.name): the second run is a hit with the same bytes" $"stderr ($hit.stderr | str substring 0..300)"))]
+
+    "\"two\"\n" | save -f $"($cc)/flake/val.nix"
+    let jlog = $"($cc)/jlog"
+    rm -f $jlog
+    let edit = (do $one [--option json-log-path $jlog])
+    let recs = (try { open --raw $jlog | lines | each { from json } | where code? == "cache-invalidated" | length } catch { 0 })
+    $res ++= [(verdict ((do $ran $edit) and (do $c.value $edit | str contains "two-A-") and (not (do $ran (do $one []))))
+      $"($c.name): an edit of a file the flake reads evaluates again, and then hits" $"value ((do $c.value $edit)), stderr ($edit.stderr | str substring 0..300)")]
+    $res ++= [(verdict ((not ($edit.stderr | str contains "re-evaluating")) and $recs == 1)
+      $"($c.name): the invalidation is silent on stderr and one record in json-log-path" $"($recs) records, stderr ($edit.stderr | str substring 0..300)")]
+
+    $lock_b | save -f $lock_a
+    let relock = (do $one [])
+    $res ++= [(verdict ((do $ran $relock) and (do $c.value $relock | str contains "two-B-") and (not (do $ran (do $one []))))
+      $"($c.name): another flake.lock evaluates again, and then hits" $"value ((do $c.value $relock)), stderr ($relock.stderr | str substring 0..300)")]
+    open --raw $"($cc)/lock-a" | save -f $lock_a
+
+    let imp_a = (with-env {CC_VAR: "a"} { do $one [--impure] })
+    let imp_hit = (with-env {CC_VAR: "a"} { do $one [--impure] })
+    let imp_b = (with-env {CC_VAR: "b"} { do $one [--impure] })
+    $res ++= [(verdict ((do $ran $imp_a) and (do $c.value $imp_a | str contains "two-A-a") and (not (do $ran $imp_hit))
+        and (do $ran $imp_b) and (do $c.value $imp_b | str contains "two-A-b"))
+      $"($c.name) --impure: its own entry, and a variable that changed evaluates again" $"a ((do $c.value $imp_a)), b ((do $c.value $imp_b)), hit stderr ($imp_hit.stderr | str substring 0..200)")]
+
+    let before = (do $entries)
+    let over = (fallback-reason $farm [nix ...$c.args --override-input tb $"path:($cc)/tbB" $"($ref)($c.attr)" ...$c.tail])
+    $res ++= [(verdict (($over | str contains "'--override-input' is not implemented") and (do $entries) == $before)
+      $"($c.name) --override-input is nix's: no entry is read or written" $"stderr ($over), ($before) -> ((do $entries)) entries")]
+  }
+  hide-env IETSP_CACHE_DIR
+  $res
+}
+
 def main [] {
   require-real-nix nix nix-instantiate nix-build nix-shell
   let ietsp = (ietsp-bin)
@@ -908,6 +1005,8 @@ in derivation {
   $ok = ($ok | append (verdict (($nofmt.ours.stderr | str contains $want_msg) and ($nofmt.real.stderr | str contains $want_msg) and (not ($nofmt.ours.stderr | str contains "falling back")))
     "nix fmt names the missing attribute itself" $"ours stderr '($nofmt.ours.stderr)'"))
   cd $tmp
+
+  $ok = ($ok | append (cache-cases $farm $tmp $np $sys))
 
   # --- fallbacks, priced with IETSP_NO_FALLBACK so the real run never happens
   for case in [

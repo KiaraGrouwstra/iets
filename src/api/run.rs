@@ -53,6 +53,13 @@ impl Run {
         self
     }
 
+    /// [`Run::cached`] with the installables after the first in the key
+    /// (`api::setup_cache_more`).
+    pub fn cached_more(mut self, a: &EvalArgs, subcommand: &str, more: &[String]) -> Run {
+        self.cache = super::setup_cache_more(a, subcommand, &self.ev, more);
+        self
+    }
+
     /// [`Run::on`] plus the evaluator state `a` asks for, installed before
     /// the fiber template is cloned (`api::configure`). A frontend with its
     /// own evaluator uses this when it evaluates through `api::evaluate`.

@@ -11,7 +11,7 @@ use super::{Argv, Common, fallback};
 use crate::api::build::{Dispatch, Root};
 use crate::api::installable;
 use crate::build::render::Style;
-use crate::cli::{Outcome, abs_path, auto_args, cwd, report};
+use crate::cli::{EvalArgs, Input, Outcome, Run, abs_path, auto_args, cwd, report};
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::remote::plan::Plan;
 use crate::remote::worker::{Options, Transport};
@@ -213,13 +213,35 @@ impl Nix {
         }
         Ok(())
     }
-}
 
-enum Done {
-    /// `nix eval`: the whole stdout, already formatted.
-    Out(Vec<u8>),
-    /// `nix build`: what to build, and the closure to upload.
-    Ready(Vec<installable::Install>, Box<Plan>),
+    /// `ev` as one run of `subcommand` with its tracing cache. The key is
+    /// what changes the answer: the installables, `--expr` or `--file`, the
+    /// `--arg`s, the search path, `pure-eval`, `--json` and `--raw`
+    /// (`api::setup_cache_more` adds the system and the working directory).
+    /// `strict` and `json` are the key fields a command without them is free
+    /// to use. No other flag the parsers accept reaches the evaluator.
+    pub(super) fn run(&self, ev: Evaluator, subcommand: &str, strict: bool, json: bool) -> Run {
+        let mut a = EvalArgs::new();
+        let (first, more) = match self.installables.split_first() {
+            Some((f, m)) => (f.clone(), m),
+            None => (".".to_string(), &[][..]),
+        };
+        a.input = Some(match (&self.expr, &self.file) {
+            (Some(e), _) => Input::Expr(e.clone()),
+            (_, Some(f)) => Input::File(f.clone()),
+            _ => Input::Flake(first.clone()),
+        });
+        if self.expr.is_some() || self.file.is_some() {
+            a.attr = Some(first);
+        }
+        a.args = self.c.flags.args.clone();
+        a.includes = self.c.flags.includes.clone();
+        a.pure = self.c.flags.pure;
+        a.strict = strict;
+        a.json = json;
+        a.raw = self.raw;
+        Run::on(ev).cached_more(&a, subcommand, more)
+    }
 }
 
 /// `settings` (`shell_settings` without `builder`) plus the `nix` command's
@@ -255,20 +277,29 @@ fn eval_main(argv: &[String], rest: &[String]) -> i32 {
         Err(reason) => fallback(NAME, argv, &reason),
     };
     let ev = super::evaluator(&n.c, &cfg);
-    let n = Arc::new(n);
-    let run = Arc::clone(&n);
-    match crate::cli::run_reported(crate::cli::Run::on(ev), move |ev, _| eval_run(ev, &run)) {
+    let run = n.run(ev, "nix eval", false, n.json);
+    if let Some(text) = run.hit_result() {
+        crate::cli::render::bytes(&text);
+        return 0;
+    }
+    match crate::cli::run_reported(run, move |ev, cache| {
+        let text = eval_run(ev, &n)?;
+        if let Some(c) = cache {
+            c.write(ev, &text, false);
+        }
+        Ok(text)
+    }) {
         Outcome::Failed(code) => code,
         Outcome::Unsupported(reason) => fallback(NAME, argv, &reason),
-        Outcome::Ok(Done::Out(text)) => {
+        Outcome::Ok(text) => {
             crate::cli::render::bytes(&text);
             0
         }
-        Outcome::Ok(Done::Ready(..)) => unreachable!("eval does not build"),
     }
 }
 
-fn eval_run(ev: &mut Evaluator, n: &Nix) -> crate::error::Result<Done> {
+/// `nix eval`: the whole stdout, already formatted.
+fn eval_run(ev: &mut Evaluator, n: &Nix) -> crate::error::Result<Vec<u8>> {
     let cwd = cwd();
     let mut out: Vec<u8> = Vec::new();
     let what = n.installables.first().map_or(".", String::as_str);
@@ -297,7 +328,7 @@ fn eval_run(ev: &mut Evaluator, n: &Nix) -> crate::error::Result<Done> {
         print_eval(ev, v, &mut out, &mut seen, 0)?;
         out.push(b'\n');
     }
-    Ok(Done::Out(out))
+    Ok(out)
 }
 
 fn build_main(argv: &[String], rest: &[String]) -> i32 {
@@ -312,17 +343,18 @@ fn build_main(argv: &[String], rest: &[String]) -> i32 {
     let ev = super::evaluator(&n.c, &cfg);
     let n = Arc::new(n);
     let run = Arc::clone(&n);
-    match crate::cli::run_reported(crate::cli::Run::on(ev), move |ev, _| build_run(ev, &run)) {
+    match crate::cli::run_reported(Run::on(ev), move |ev, _| build_run(ev, &run)) {
         Outcome::Failed(code) => code,
         Outcome::Unsupported(reason) => fallback(NAME, argv, &reason),
-        Outcome::Ok(Done::Out(_)) => unreachable!("build prints its own output"),
-        Outcome::Ok(Done::Ready(targets, plan)) => {
-            realise(&n, &transport, &options, &targets, *plan)
-        }
+        Outcome::Ok((targets, plan)) => realise(&n, &transport, &options, &targets, *plan),
     }
 }
 
-fn build_run(ev: &mut Evaluator, n: &Nix) -> crate::error::Result<Done> {
+/// `nix build`: what to build, and the closure to upload.
+fn build_run(
+    ev: &mut Evaluator,
+    n: &Nix,
+) -> crate::error::Result<(Vec<installable::Install>, Box<Plan>)> {
     let cwd = cwd();
     let mut targets: Vec<installable::Install> = Vec::new();
     for what in &n.installables {
@@ -336,7 +368,7 @@ fn build_run(ev: &mut Evaluator, n: &Nix) -> crate::error::Result<Done> {
     }
     let roots = flat_roots(&targets);
     let plan = crate::api::build::plan(ev, &Root::paths(&roots))?;
-    Ok(Done::Ready(targets, Box::new(plan)))
+    Ok((targets, Box::new(plan)))
 }
 
 /// flake-prefetch-inputs.cc: every locked input the lock reaches, resolved in

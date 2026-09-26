@@ -326,6 +326,18 @@ pub fn build_targets(
 /// The tracing cache for this run, keyed on the eval arguments. `None` when the
 /// cache is off or the command cannot be keyed.
 pub fn setup_cache(a: &EvalArgs, subcommand: &str, ev: &Evaluator) -> Option<Cache> {
+    setup_cache_more(a, subcommand, ev, &[])
+}
+
+/// [`setup_cache`] for a command that takes several installables. `more` is
+/// every one after `a.input`: further flake references, or further attribute
+/// paths into the one `--expr` or `--file` value.
+pub fn setup_cache_more(
+    a: &EvalArgs,
+    subcommand: &str,
+    ev: &Evaluator,
+    more: &[String],
+) -> Option<Cache> {
     use crate::trace::key::{Key, has_relative_path};
     if a.no_tracing_cache || a.dump_drvs.is_some() {
         return None;
@@ -354,6 +366,15 @@ pub fn setup_cache(a: &EvalArgs, subcommand: &str, ev: &Evaluator) -> Option<Cac
             k.field("flake", f.as_bytes());
             k.field("flake-dir", fr.dir.as_os_str().as_encoded_bytes());
             needs_cwd = true;
+        }
+    }
+    for m in more {
+        if matches!(a.input, Some(Input::Flake(_))) {
+            let fr = flake_ref(m, &cwd).ok()?;
+            k.field("flake", m.as_bytes());
+            k.field("flake-dir", fr.dir.as_os_str().as_encoded_bytes());
+        } else {
+            k.field("more-attr", m.as_bytes());
         }
     }
     for (name, kind) in &a.args {
