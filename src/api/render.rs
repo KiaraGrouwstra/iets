@@ -56,6 +56,27 @@ impl Report for Missing {
     }
 }
 
+/// What became of every root: `plumbing build`, and `ietsp build --json`.
+pub struct Outcomes<'a>(pub &'a [crate::build::Outcome]);
+
+impl Report for Outcomes<'_> {
+    fn json(&self) -> Value {
+        let o: Vec<Value> = (self.0.iter())
+            .map(|o| {
+                json!({
+                    "attr": o.attr,
+                    "drv": o.drv.to_string(),
+                    "success": o.success,
+                    "outputs": o.outputs,
+                    "reason": o.reason,
+                    "logTail": o.log_tail,
+                })
+            })
+            .collect();
+        json!({ "outcomes": o })
+    }
+}
+
 /// One package name whose versions differ between two closures.
 pub struct Change {
     pub change: &'static str,

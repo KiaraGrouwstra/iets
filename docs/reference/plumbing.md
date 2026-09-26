@@ -224,13 +224,14 @@ ietsp plumbing build [--builder URL] [--out NAME]... [--fetch-to DIR]
 | `--no-build` | register the closure and stop; the object is `{"outcomes":[]}` |
 
 ```json
-{"outcomes":[{"drv":"/nix/store/…-ok.drv","logTail":[],
+{"outcomes":[{"attr":"ok","drv":"/nix/store/…-ok.drv","logTail":[],
   "outputs":{"out":"/nix/store/…-ok"},"reason":null,"success":true}]}
 ```
 
 | Key | Value |
 |:---|:---|
 | `outcomes` | one object per root |
+| `outcomes[].attr` | what the root is called: the derivation name here, the attribute path in `ietsp build --json` |
 | `outcomes[].drv` | the derivation path |
 | `outcomes[].success` | true when the build produced its outputs |
 | `outcomes[].outputs` | output name to store path; `{}` on a failure |

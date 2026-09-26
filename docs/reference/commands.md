@@ -136,30 +136,56 @@ Exit: 0, 1 on an evaluation error, 2 on a usage error.
 ## `build`
 
 ```
-ietsp build [FLAGS] (-E EXPR | FILE)
+ietsp build [FLAGS] (-E EXPR | FILE | FLAKEREF[#ATTR])
 ietsp build [FLAGS] [--source STOREPATH=LOCAL]... DRV
 ```
 
 Evaluate to derivation roots, send the closure the builder lacks from
 memory, build, and print the output paths.
 
+**The roots.** A derivation, a string with derivation context, or a list
+of those, is what it names. Any other attribute set is a tree, and every
+derivation in it is a root: `ietsp build .#checks` builds the checks.
+The walk is `nix-build`'s (get-drvs.cc): names in order, a nested set
+only with `recurseForDerivations = true`, a list always. One rule comes
+before it: a set with a member named after the current system is entered
+there, because that is how a flake lays out `checks`, `packages` and
+`devShells`. Name another system in full to build it:
+`.#checks.aarch64-linux`. Evaluation is strict: an attribute that does
+not evaluate stops the run before anything builds.
+
 | Flag | Effect |
 |:---|:---|
 | `--builder URL` | `daemon`, `unix:///path`, `ssh-ng://[user@]host` or `grpc://host:port`; default: the `builder` setting |
 | `--no-build` | upload the closure, build nothing |
 | `--dry-run` | upload the closure, print the plan, build nothing |
+| `--json` | print the outcomes as one JSON object instead of the paths |
+| `-k`, `--keep-going` | with one root: build everything a failure does not block |
 | `--out NAME` | build the output `NAME` only; repeatable |
 | `--fetch-to DIR` | copy the outputs from the builder into `DIR` |
 | `--source SP=LOCAL` | with a `DRV` argument: the local tree of the input source `SP` |
 
 Plus the shared evaluation flags.
 
-stdout: one output path per line, in root order; with `--dry-run --json`
-the plan as one JSON object instead.
+stdout: one output path per line, in root order; with `--json` the
+outcomes, and with `--dry-run --json` the plan, as one JSON object
+instead.
 stderr: `building '<drv>'…` per build, the daemon's log lines, the
-`--dry-run` plan text. Nothing the daemon sends reaches stdout.
+`--dry-run` plan text, and after several roots one closing line,
+`N built, M failed: ATTR, …`. Nothing the daemon sends reaches stdout.
 Exit: 0; 1 on an evaluation or daemon error; 100, 101, 102 or 104 on a
 failed build (`docs/reference/errors.md`); 2 on a usage error.
+
+**Several roots.** Each root is its own question, so each one gets a
+verdict: the build keeps going past a failure, and the exit code is
+Nix's combination of the failures. One root is one question, and its
+first failure answers it, as in Nix; `-k` asks for the rest. What the
+builder already has is not built again, and what it can substitute is
+substituted: that is the store's own rule, and it needs no flag. The
+`--json` object is `{"outcomes":[{attr, drv, success, outputs, reason,
+logTail}]}`, the object `ietsp plumbing build` prints
+(`docs/reference/plumbing.md`). Under GitHub, Gitea or Forgejo Actions
+the log of a build that succeeds is folded into a `::group::`.
 
 **The stdout contract.** A run that exits 0 has printed a store path for
 every root. `--no-build` and `--dry-run` build nothing, and are the only

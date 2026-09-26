@@ -327,6 +327,33 @@ pub fn drv_roots(
     ))
 }
 
+/// What `ietsp build` builds. A derivation, a string with derivation context
+/// or a list is [`drv_roots`]. Any other attrset is a tree for
+/// [`get_drvs_at`], entered at its member named after the current system when
+/// it has one: that is how a flake lays out `checks` and `packages`.
+pub fn roots_of(
+    ev: &mut Evaluator,
+    v: Word,
+    args: Word,
+    attr: &str,
+    roots: &mut Vec<(StorePath, Option<String>)>,
+) -> EvalResult<()> {
+    let v = ev.force(v)?;
+    let Some(tree) = v.as_attrs().filter(|a| a.get(ev.s.drv_path).is_none()) else {
+        return drv_roots(ev, v, roots);
+    };
+    let system = ev.current_system;
+    let sym = ev.sym(system.as_bytes());
+    let (v, attr) = match tree.get(sym) {
+        Some(a) => (a.cell.get(), join_attr(attr, system.as_bytes())),
+        None => (v, attr.to_string()),
+    };
+    let mut found = Vec::new();
+    get_drvs_at(ev, v, args, &mut found, &mut HashSet::new(), &attr)?;
+    roots.extend(found.into_iter().map(|r| (r.drv, None)));
+    Ok(())
+}
+
 /// get-drvs.cc:getDerivations. A derivation is one root; an attrset is walked
 /// in lexicographic name order and recursed into only with
 /// `recurseForDerivations = true`; a list is always walked.

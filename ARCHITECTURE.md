@@ -188,6 +188,7 @@ the farm execs the real nix for whatever it does not implement,
 | `diff-e2e.nu` | `ietsp diff` on two small derivations | check, sandbox |
 | `classic-e2e.nu` | the classic names against the real nix, stdout byte for byte | check, container |
 | `daemon-e2e.nu` | `ietsp build` over the worker protocol | check, container; not by hand on a host whose store refuses `nix-store --delete` |
+| `build-e2e.nu` | `ietsp build` over an attribute tree: the verdicts, the exit code, `--json` | check, container |
 | `grpc-e2e.nu` | `ietsp build` over `grpc://` | by hand |
 | `fastbuild-e2e.nu` | `ietsp fast-build`, and against `nix-fast-build` | check, container |
 | `flaketest.nu` | flake evaluation and the input store against `nix eval` | check, container, less the 3 cases that need the network (`online` in `lib.nu`); all 39 by hand |

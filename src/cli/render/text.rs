@@ -1,7 +1,7 @@
 //! The text layout of the values `crate::api::render` produces: what a
 //! terminal shows in place of the contract shape.
 
-use crate::api::render::{Closure, Fetched, Missing};
+use crate::api::render::{Closure, Fetched, Missing, Outcomes};
 use crate::store::drvdiff::Diff;
 
 use super::Text;
@@ -40,6 +40,30 @@ pub fn missing(m: &Missing) {
                 .for_each(|p| crate::log::msg(0, &format!("  {p}")));
         }
     }
+}
+
+/// One store path per output: what a caller of `ietsp build` captures.
+impl Text for Outcomes<'_> {
+    fn text(&self) -> String {
+        let paths = self.0.iter().flat_map(|o| o.outputs.values());
+        paths.map(|p| format!("{p}\n")).collect()
+    }
+}
+
+/// The closing line of a build of several roots.
+pub fn built(o: &Outcomes) {
+    let failed: Vec<&str> = (o.0.iter().filter(|o| !o.success))
+        .map(|o| o.attr.as_str())
+        .collect();
+    let mut line = format!(
+        "{} built, {} failed",
+        o.0.len() - failed.len(),
+        failed.len()
+    );
+    if !failed.is_empty() {
+        line = format!("{line}: {}", failed.join(", "));
+    }
+    super::status(&line);
 }
 
 impl Text for Fetched {

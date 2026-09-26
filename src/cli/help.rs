@@ -74,17 +74,21 @@ Evaluate an expression, a file or a locked flake and print the value.
 ";
 
 const BUILD: &str = "\
-usage: ietsp build [FLAGS] (-E EXPR | FILE)
+usage: ietsp build [FLAGS] (-E EXPR | FILE | FLAKEREF[#ATTR])
        ietsp build [FLAGS] [--source STOREPATH=LOCAL]... DRV
 
 Evaluate to derivations, send the closure the builder lacks from memory,
-build, and print the output paths ('ietsp help build-remotely').
+build, and print the output paths ('ietsp help build-remotely'). A set of
+derivations is built whole, each member to its own verdict: 'ietsp build
+.#checks' builds the checks of this system.
 
   --builder URL         daemon, unix:///path, ssh-ng://[user@]host or
                         grpc://host:port (default: the builder setting)
   --no-build            upload the closure, do not build
   --dry-run             upload the closure, print what would be built and
                         fetched, do not build; --json: as JSON on stdout
+  --json                print {\"outcomes\"} on stdout, not the paths
+  -k, --keep-going      one root: build what a failure does not block
   --out NAME            build the output NAME only (repeatable)
   --fetch-to DIR        copy the outputs from the builder to DIR
   --source SP=LOCAL     with DRV: the local tree of the input source SP

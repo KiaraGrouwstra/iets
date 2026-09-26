@@ -608,15 +608,7 @@ fn build(o: &BuildOpts, r: Roots) -> crate::error::Result<i32> {
             .collect();
         d.d.out_links(&links)?;
     }
-    let mut v = serde_json::json!({
-        "outcomes": outcomes.iter().map(|c| serde_json::json!({
-            "drv": c.drv.to_string(),
-            "success": c.success,
-            "outputs": c.outputs,
-            "reason": c.reason,
-            "logTail": c.log_tail,
-        })).collect::<Vec<_>>(),
-    });
+    let mut v = crate::api::render::Outcomes(&outcomes).json();
     if o.gc_root.is_some() {
         v["gcRoots"] = serde_json::json!(roots);
     }

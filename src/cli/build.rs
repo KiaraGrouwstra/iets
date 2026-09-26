@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::api::installable::drv_roots;
+use crate::api::installable::roots_of;
 use crate::build::fixhash::{self, Answer};
 use crate::cli::help::{arg_error, value};
 use crate::cli::{EvalArgs, Input, Run, build_targets, evaluate, parse_eval_args, report, run_for};
@@ -17,6 +17,7 @@ struct BuildArgs {
     no_build: bool,
     dry_run: bool,
     json: bool,
+    keep_going: bool,
     fetch_to: Option<std::path::PathBuf>,
     outputs: Vec<String>,
     sources: HashMap<String, std::path::PathBuf>,
@@ -86,6 +87,7 @@ fn parse(argv: &[String]) -> (BuildArgs, EvalArgs) {
         no_build: false,
         dry_run: false,
         json: false,
+        keep_going: false,
         fetch_to: None,
         outputs: Vec::new(),
         sources: HashMap::new(),
@@ -105,6 +107,7 @@ fn parse(argv: &[String]) -> (BuildArgs, EvalArgs) {
             "--no-build" => b.no_build = true,
             "--dry-run" => b.dry_run = true,
             "--json" => b.json = true,
+            "-k" | "--keep-going" => b.keep_going = true,
             "--fetch-to" => b.fetch_to = Some(next().into()),
             "--out" => b.outputs.push(next()),
             "--source" => {
@@ -152,8 +155,7 @@ fn local_files(argv: &[String]) -> Vec<PathBuf> {
         return Vec::new();
     };
     crate::cli::run_parallel(run, move |ev, _| {
-        let mut roots = Vec::new();
-        let _ = evaluate(ev, a).and_then(|v| drv_roots(ev, v, &mut roots));
+        let _ = resolve(ev, a);
         fixhash::local_files(ev)
     })
 }
@@ -199,6 +201,27 @@ fn build_once(argv: &[String]) -> i32 {
     crate::cli::run_parallel(run, move |ev, cache| build_eval(ev, &b, a, t0, cache))
 }
 
+type Roots = Vec<(crate::store::path::StorePath, Option<String>)>;
+
+/// The roots of the installable, each named by the attribute it was reached
+/// by: the walk names a tree's members, the installable names the rest.
+fn resolve(ev: &mut Evaluator, a: EvalArgs) -> Result<Roots, Box<crate::eval::Error>> {
+    let target = a.attr.clone().or_else(|| match &a.input {
+        Some(Input::Flake(f)) => f.split_once('#').map(|(_, frag)| frag.to_string()),
+        _ => None,
+    });
+    let target = target.unwrap_or_default();
+    let args = a.args.clone();
+    let v = evaluate(ev, a)?;
+    let args = crate::cli::auto_args(ev, &args, &crate::cli::cwd())?;
+    let mut roots = Vec::new();
+    roots_of(ev, v, args, &target, &mut roots)?;
+    for (p, _) in &roots {
+        ev.drv.set_attr(p, &target);
+    }
+    Ok(roots)
+}
+
 fn build_eval(
     ev: &mut Evaluator,
     b: &BuildArgs,
@@ -206,20 +229,10 @@ fn build_eval(
     t0: std::time::Instant,
     cache: Option<Cache>,
 ) -> i32 {
-    let mut roots = Vec::new();
-    let target = a.attr.clone().or_else(|| match &a.input {
-        Some(Input::Flake(f)) => f.split_once('#').map(|(_, frag)| frag.to_string()),
-        _ => None,
-    });
-    let r = evaluate(ev, a).and_then(|v| drv_roots(ev, v, &mut roots));
-    if let Err(e) = r {
-        return report(ev, &e);
-    }
-    if let Some(t) = &target {
-        for (p, _) in &roots {
-            ev.drv.set_attr(p, t);
-        }
-    }
+    let roots = match resolve(ev, a) {
+        Ok(r) => r,
+        Err(e) => return report(ev, &e),
+    };
     let eval_time = t0.elapsed();
     if b.timings {
         eprintln!(
@@ -317,7 +330,12 @@ fn build_roots(
             plan.store_drvs
         );
     }
-    let opts = crate::remote::worker::Options::default();
+    let opts = crate::remote::worker::Options {
+        // one root is one question, and its first failure answers it; several
+        // roots are several questions, and each one gets its verdict
+        keep_going: b.keep_going || roots.len() > 1,
+        ..Default::default()
+    };
     let mut d =
         match apibuild::Dispatch::open(&transport, &opts, plan, prov.clone(), Style::detect()) {
             Ok(d) => d.overrides(b.sources.clone()),
@@ -336,8 +354,8 @@ fn build_roots(
         .iter()
         .map(|r| {
             // The bare attribute: the dispatcher adds the position, once.
-            let name = prov
-                .attr_of(&r.to_string())
+            let name = (inputs.drvs.get(r))
+                .and_then(|i| i.attr.clone())
                 .unwrap_or_else(|| crate::provenance::drv_name(&r.to_string()));
             Target::new(&name, r.clone(), outputs.to_vec())
         })
@@ -375,11 +393,11 @@ fn build_roots(
         crate::cli::devenv::keep_outputs(&transport, &b.root_key, &outputs);
     }
     timings(b, &d, plan_time);
-    for o in &outcomes {
-        for path in o.outputs.values() {
-            println!("{path}");
-        }
+    let report = crate::api::render::Outcomes(&outcomes);
+    if outcomes.len() > 1 {
+        crate::cli::render::text::built(&report);
     }
+    crate::cli::render::emit(&report, b.json);
     match silence(&outcomes, outputs) {
         Some(why) => crate::log::combine_exit(d.d.exit, no_output(&why)),
         None => d.d.exit,

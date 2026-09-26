@@ -110,6 +110,7 @@
             packages = [ pkgs.jq pkgs.nix-eval-jobs ];
             env = "NEJ=${pkgs.nix-eval-jobs}/bin/nix-eval-jobs";
           };
+          build-e2e = e2e "build-e2e" { };
           # with the real nix-fast-build, so the comparison case runs too
           fastbuild-e2e = e2e "fastbuild-e2e" { packages = [ pkgs.nix-fast-build ]; };
           flaketest = e2e "flaketest" { };

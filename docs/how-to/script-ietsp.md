@@ -170,7 +170,8 @@ ietsp plumbing resolve greeting.nix | ietsp plumbing build --builder daemon --ro
 ```
 
 ```json
-{"outcomes":[{"drv":"/nix/store/zr5q…-greeting.drv","logTail":[],
+{"outcomes":[{"attr":"greeting","drv":"/nix/store/zr5q…-greeting.drv",
+              "logTail":[],
               "outputs":{"out":"/nix/store/vwp4…-greeting"},
               "reason":null,"success":true}]}
 ```

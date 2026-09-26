@@ -69,6 +69,25 @@ the daemon recomputes the address and accepts it without a signature. You
 never need the `trusted` role, because ietsp never sends an unsigned,
 input-addressed path.
 
+## Build all the checks of a flake
+
+Name the set, not one member. `ietsp build` builds every derivation in
+it, and enters the set of the current system by itself:
+
+```sh
+ietsp build --builder 'grpc://farm.example.org:50051?max-builds=32' .#checks
+```
+
+Every check gets its verdict: a failure does not stop the others. What
+the builder already has is not built again. stderr ends with one line,
+`12 built, 1 failed: checks.x86_64-linux.clippy`, and the exit code is
+Nix's: 100 for a failed build. For a machine, `--json` puts
+`{"outcomes":[…]}` on stdout, one object per check, with the log tail of
+each failure.
+
+`max-builds` in the URL is how many builds run at once on a gRPC
+builder.
+
 ## Know what gets uploaded
 
 Nothing is written to a local store on the way out. The closure comes from
@@ -190,7 +209,8 @@ ietsp build --builder daemon --source /nix/store/…-src=./src /nix/store/…-th
 - `ssh-ng://` has been exercised only through a local `ssh` shim, never
   against a real host. There is no `--ssh-option` passthrough.
 - `ietsp build` sends `max-jobs` equal to the CPU count and has no flag for
-  it, for `keep-going`, or for substituters.
+  it or for substituters. A `grpc://` builder always keeps going: `-k`
+  changes nothing there.
 - Output paths are asked for the roots only. A dependency that built has no
   line of its own beyond the renderer's verdict.
 - Errors during a large upload surface after the whole stream is sent,

@@ -10,7 +10,7 @@ use crate::builtins::derivation::DrvInfo;
 use crate::store::path::StorePath;
 use crate::store::source::{SourceKind, SourceOrigin, Src, SrcPath};
 
-const VERSION: u8 = 5;
+const VERSION: u8 = 6;
 
 struct Enc(Vec<u8>);
 
@@ -360,6 +360,7 @@ pub fn encode_drvs(drvs: &HashMap<StorePath, DrvInfo>) -> Vec<u8> {
                 .map(|a| a.as_slice())
                 .unwrap_or_default(),
         );
+        e.opt_bytes(info.attr.as_deref().map(str::as_bytes));
     }
     e.0
 }
@@ -387,6 +388,10 @@ pub fn decode_drvs(b: &[u8]) -> Option<HashMap<StorePath, DrvInfo>> {
             .map(|r| store_path(r).ok())
             .collect::<Option<_>>()?;
         let aterm = d.vec().ok()?;
+        let attr = match d.opt_vec().ok()? {
+            Some(a) => Some(String::from_utf8(a).ok()?),
+            None => None,
+        };
         m.insert(
             p,
             DrvInfo {
@@ -394,7 +399,7 @@ pub fn decode_drvs(b: &[u8]) -> Option<HashMap<StorePath, DrvInfo>> {
                 references,
                 aterm: Some(Arc::new(aterm)),
                 pos: None,
-                attr: None,
+                attr,
             },
         );
     }
