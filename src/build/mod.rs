@@ -128,13 +128,13 @@ impl Heartbeat {
         let handle = std::thread::Builder::new()
             .name("build-heartbeat".into())
             .spawn(crate::session::bind(move || {
-                let tick = Duration::from_millis(250);
-                let mut waited = Duration::ZERO;
+                // parked, not asleep: `drop` unparks it, so a build that
+                // took 10 ms does not wait a tick for this thread to exit
+                let mut last = Instant::now();
                 while !flag.load(Ordering::Relaxed) {
-                    std::thread::sleep(tick);
-                    waited += tick;
-                    if waited >= render::HEARTBEAT {
-                        waited = Duration::ZERO;
+                    std::thread::park_timeout(render::HEARTBEAT.saturating_sub(last.elapsed()));
+                    if !flag.load(Ordering::Relaxed) && last.elapsed() >= render::HEARTBEAT {
+                        last = Instant::now();
                         render.lock().unwrap().heartbeat();
                     }
                 }
@@ -148,6 +148,7 @@ impl Drop for Heartbeat {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(h) = self.handle.take() {
+            h.thread().unpark();
             let _ = h.join();
         }
     }
