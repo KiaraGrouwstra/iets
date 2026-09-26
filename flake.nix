@@ -46,8 +46,8 @@
             doCheck = false;
             dontFixup = true;
           });
-          # scripts/<name>.nu against the built binary. Only the scripts that
-          # need no nix-daemon, no network and no live /nix/store; the rest stay manual.
+          # scripts/<name>.nu against the built binary, in the build sandbox: the
+          # scripts that need no nix-daemon and no live /nix/store.
           nuScript = name: pkgs.runCommand "ietsp-${name}" { nativeBuildInputs = [ pkgs.nushell ]; } ''
             cp -r ${self}/scripts ${self}/tests .
             chmod -R u+w scripts tests
@@ -55,6 +55,9 @@
             nu scripts/${name}.nu
             touch $out
           '';
+          # The scripts that need a nix-daemon and a writable store, in a NixOS test
+          # container (nix/e2e-test.nix). Their derivations name x86_64-linux.
+          e2e = name: import ./nix/e2e-test.nix { inherit self nixpkgs pkgs name; ietsp = pkg; };
         in {
           # the tests that need a live /nix/store are #[ignore]d; run them
           # with `cargo test -- --ignored` in the dev shell.
@@ -99,6 +102,8 @@
                 printf %s "$conf" | grep -qx 'source-map = /nix/store/x=/a /nix/store/y=/b'
                 touch $out
               '';
+        } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
+          classic-e2e = e2e "classic-e2e";
         });
     };
 }
