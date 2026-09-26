@@ -5,9 +5,11 @@
 
 use crate::eval::{ErrorKind, Evaluator};
 use crate::parallel::fiber::StackError;
+use crate::store::path::StorePath;
 use crate::trace::run::Cache;
 
 use super::EvalArgs;
+use super::build::Plan;
 
 /// What one run produced: what the caller asked for, an error that was
 /// reported and its exit code, or something this frontend does not serve,
@@ -17,6 +19,9 @@ pub enum Outcome<T> {
     Failed(i32),
     Unsupported(String),
 }
+
+/// A build entry's result: each root derivation and the outputs wanted of it.
+pub type Roots = Vec<(StorePath, Option<String>)>;
 
 pub struct Run {
     pub ev: Evaluator,
@@ -89,6 +94,19 @@ impl Run {
     /// wrote with `Cache::write` last time, when the read set still holds.
     pub fn hit_result(&self) -> Option<Vec<u8>> {
         self.hit(|c| c.part(crate::trace::store::Part::Result))
+    }
+
+    /// A `build` entry this run validated: the roots `Cache::write_build`
+    /// stored and the upload plan its tables make. A plan that cannot be made
+    /// is a miss, so the evaluation reports it.
+    pub fn hit_plan(&self) -> Option<(Roots, Plan)> {
+        self.hit(|c| {
+            let (roots, drvs, sources) = c.read_build()?;
+            let paths: Vec<StorePath> = roots.iter().map(|(p, _)| p.clone()).collect();
+            let plan = super::build::plan_with(&paths, &drvs, &sources).ok()?;
+            c.replay_warnings();
+            Some((roots, plan))
+        })
     }
 
     /// `f` as the main fiber of `workers` evaluator threads, with the trace

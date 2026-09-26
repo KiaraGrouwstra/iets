@@ -341,9 +341,21 @@ fn build_main(argv: &[String], rest: &[String]) -> i32 {
         Err(reason) => fallback(NAME, argv, &reason),
     };
     let ev = super::evaluator(&n.c, &cfg);
+    let run = n.run(ev, "nix build", false, false);
+    // a hit skips the evaluation and nothing else: the upload, the build,
+    // the out-links and the roots all happen in `realise`
+    if let Some((roots, plan)) = run.hit_plan() {
+        return realise(&n, &transport, &options, &remembered(roots), plan);
+    }
     let n = Arc::new(n);
-    let run = Arc::clone(&n);
-    match crate::cli::run_reported(Run::on(ev), move |ev, _| build_run(ev, &run)) {
+    let m = Arc::clone(&n);
+    match crate::cli::run_reported(run, move |ev, cache| {
+        let r = build_run(ev, &m)?;
+        if let Some(c) = cache {
+            c.write_build(ev, &remember(&r.0));
+        }
+        Ok(r)
+    }) {
         Outcome::Failed(code) => code,
         Outcome::Unsupported(reason) => fallback(NAME, argv, &reason),
         Outcome::Ok((targets, plan)) => realise(&n, &transport, &options, &targets, *plan),
@@ -479,6 +491,29 @@ pub(super) fn resolve(ev: &mut Evaluator, n: &Nix, what: &str, cwd: &[u8]) -> Ev
         installable::Want::First,
     )?;
     Ok(found.remove(0).value)
+}
+
+/// The targets as a cache entry's roots, one per installable. The outputs
+/// are joined with a comma, which no output name can hold (store path names
+/// are `[A-Za-z0-9+._?=-]`), so the installables stay apart: the n-th one
+/// names its own out-link.
+fn remember(targets: &[installable::Install]) -> Vec<(StorePath, Option<String>)> {
+    (targets.iter())
+        .map(|t| (t.drv.clone(), Some(t.outputs.join(","))))
+        .collect()
+}
+
+fn remembered(roots: Vec<(StorePath, Option<String>)>) -> Vec<installable::Install> {
+    (roots.into_iter())
+        .map(|(drv, outputs)| installable::Install {
+            drv,
+            outputs: (outputs.iter())
+                .flat_map(|o| o.split(','))
+                .filter(|o| !o.is_empty())
+                .map(str::to_string)
+                .collect(),
+        })
+        .collect()
 }
 
 /// The `Root`s the plan and `BuildPathsWithResults` need, in target order.

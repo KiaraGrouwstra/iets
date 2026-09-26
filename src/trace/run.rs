@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use crate::eval::Evaluator;
+use crate::store::path::StorePath;
 use crate::trace::key::Key;
 use crate::trace::store::{Entry, Opened, Part};
 
@@ -184,6 +185,12 @@ impl Cache {
             )),
         }
         crate::cachefs::maybe_sweep(self.store.root(), crate::cachefs::Shape::Dirs, self.timings);
+    }
+
+    /// [`Cache::write`] for a command that builds: `roots` is the result, and
+    /// the tables go with it, for [`Cache::read_build`].
+    pub fn write_build(&self, ev: &Evaluator, roots: &[(StorePath, Option<String>)]) {
+        self.write(ev, &crate::trace::wire::encode_roots(roots), true);
     }
 
     /// On a hit: the lint warnings the recorded run printed, to stderr.

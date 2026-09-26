@@ -155,6 +155,8 @@ def cache-cases [farm: string, tmp: string, np: string, sys: string]: nothing ->
 
   let commands = [
     {name: "nix eval", args: [eval --raw], attr: "#val", tail: [], value: {|r| $r.stdout }}
+    {name: "nix build", args: [build --no-link --print-out-paths], attr: "#pkg", tail: []
+     value: {|r| try { open --raw ($r.stdout | chomp) } catch { "" } }}
   ]
   let ran = {|r| $r.stderr | str contains "trace: EVALUATED" }
   $env.IETSP_CACHE_DIR = $"($cc)/cache"
@@ -201,6 +203,20 @@ def cache-cases [farm: string, tmp: string, np: string, sys: string]: nothing ->
     $res ++= [(verdict (($over | str contains "'--override-input' is not implemented") and (do $entries) == $before)
       $"($c.name) --override-input is nix's: no entry is read or written" $"stderr ($over), ($before) -> ((do $entries)) entries")]
   }
+
+  # a hit skips the evaluation and nothing else: the out-link and the root of
+  # a `--no-link` build are made again when they are gone. The first run
+  # brings the entry back to the lock the loop restored.
+  let roots = {|| try { ls $"($cc)/cache/roots" | length } catch { 0 } }
+  ^$"($farm)/nix" build --no-link $"($ref)#pkg" | complete | ignore
+  rm -rf $"($cc)/cache/roots"
+  let nolink = (^$"($farm)/nix" build --no-link --print-out-paths $"($ref)#pkg" | complete)
+  $res ++= [(verdict ((not (do $ran $nolink)) and (do $roots) == 1)
+    "nix build --no-link: a hit keeps the root" $"((do $roots)) roots, stderr ($nolink.stderr | str substring 0..200)")]
+  let linked = (^$"($farm)/nix" build -o $"($cc)/res" $"($ref)#pkg" | complete)
+  let target = (try { ^readlink $"($cc)/res" | chomp } catch { "" })
+  $res ++= [(verdict ((not (do $ran $linked)) and $target == ($nolink.stdout | chomp) and ($target | path exists))
+    "nix build -o: a hit makes the out-link" $"link -> ($target), stderr ($linked.stderr | str substring 0..200)")]
   hide-env IETSP_CACHE_DIR
   $res
 }
