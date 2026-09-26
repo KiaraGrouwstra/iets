@@ -177,6 +177,15 @@ def cache-cases [farm: string, tmp: string, np: string, sys: string]: nothing ->
     $res ++= [((cmp-case $"($c.name): a hit prints what nix prints" {ours: $hit, real: $real})
       and (verdict ((not (do $ran $hit)) and ($hit.stdout | into binary) == ($cold.stdout | into binary))
         $"($c.name): the second run is a hit with the same bytes" $"stderr ($hit.stderr | str substring 0..300)"))]
+    # a flag or a setting with no effect has none on a hit either, so the
+    # warnings come from the command line, not from the evaluation
+    let noisy = {|| with-env {NIX_CONFIG: "accept-flake-config = true\nno-such-setting = 1"} { do $one [--accept-flake-config --eval-store auto] } }
+    do $noisy | ignore
+    let warned = (do $noisy)
+    let want = ["'--accept-flake-config' is ignored:" "'--eval-store' is ignored:" "setting 'accept-flake-config' is ignored:" "unknown setting 'no-such-setting'"]
+    let each_once = ($want | all {|w| ($warned.stderr | lines | where ($it | str starts-with $"warning: ($w)") | length) == 1 })
+    $res ++= [(verdict ((not (do $ran $warned)) and $each_once and $warned.exit_code == 0)
+      $"($c.name): a hit gives every warning once" $"stderr ($warned.stderr | str substring 0..600)")]
 
     "\"two\"\n" | save -f $"($cc)/flake/val.nix"
     let jlog = $"($cc)/jlog"

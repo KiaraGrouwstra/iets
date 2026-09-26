@@ -197,7 +197,11 @@ effect falls into one of four classes:
    code do not change. The record is level 1 with the code `ignored-flag`
    or `ignored-setting` (`docs/reference/errors.md`). It appears under
    `--log-format internal-json` and in the `json-log-path` file. An
-   `eval-jobs` worker does not repeat the warning of its parent. A warning
+   `eval-jobs` worker does not repeat the warning of its parent. The warning
+   comes from the command line and the settings, not from the evaluation,
+   so a run that the tracing cache answers gives it too, under the classic
+   names as well: it is not the `re-evaluating:` line that they keep off
+   stderr. A warning
    can come before a fallback: the run had read the flag before it found
    the reason to fall back.
 
