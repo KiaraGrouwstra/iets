@@ -159,6 +159,7 @@ def cache-cases [farm: string, tmp: string, np: string, sys: string]: nothing ->
      value: {|r| try { open --raw ($r.stdout | chomp) } catch { "" } }}
     {name: "nix derivation show", args: [derivation show], attr: "#pkg", tail: []
      value: {|r| try { $r.stdout | from json | get derivations | values | get 0.env.val } catch { "" } }}
+    {name: "nix develop", args: [develop], attr: "", tail: [-c sh -c "echo \"$val\""], value: {|r| $r.stdout }}
   ]
   let ran = {|r| $r.stderr | str contains "trace: EVALUATED" }
   $env.IETSP_CACHE_DIR = $"($cc)/cache"
@@ -206,11 +207,12 @@ def cache-cases [farm: string, tmp: string, np: string, sys: string]: nothing ->
       $"($c.name) --override-input is nix's: no entry is read or written" $"stderr ($over), ($before) -> ((do $entries)) entries")]
   }
 
-  # a hit skips the evaluation and nothing else: the out-link and the root of
-  # a `--no-link` build are made again when they are gone. The first run
-  # brings the entry back to the lock the loop restored.
+  # a hit skips the evaluation and nothing else: the out-link, the root of a
+  # `--no-link` build and the root of a shell are made again when they are
+  # gone. The first runs bring the entries back to the lock the loop restored.
   let roots = {|| try { ls $"($cc)/cache/roots" | length } catch { 0 } }
   ^$"($farm)/nix" build --no-link $"($ref)#pkg" | complete | ignore
+  ^$"($farm)/nix" develop $ref -c true | complete | ignore
   rm -rf $"($cc)/cache/roots"
   let nolink = (^$"($farm)/nix" build --no-link --print-out-paths $"($ref)#pkg" | complete)
   $res ++= [(verdict ((not (do $ran $nolink)) and (do $roots) == 1)
@@ -219,6 +221,10 @@ def cache-cases [farm: string, tmp: string, np: string, sys: string]: nothing ->
   let target = (try { ^readlink $"($cc)/res" | chomp } catch { "" })
   $res ++= [(verdict ((not (do $ran $linked)) and $target == ($nolink.stdout | chomp) and ($target | path exists))
     "nix build -o: a hit makes the out-link" $"link -> ($target), stderr ($linked.stderr | str substring 0..200)")]
+  rm -rf $"($cc)/cache/roots"
+  let shell = (^$"($farm)/nix" develop $ref -c true | complete)
+  $res ++= [(verdict ((not (do $ran $shell)) and $shell.exit_code == 0 and (do $roots) == 1)
+    "nix develop: a hit keeps the root" $"((do $roots)) roots, stderr ($shell.stderr | str substring 0..200)")]
   hide-env IETSP_CACHE_DIR
   $res
 }

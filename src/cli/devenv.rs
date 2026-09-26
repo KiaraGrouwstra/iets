@@ -381,8 +381,48 @@ pub fn dev_env(
     gc_root: GcRoot,
 ) -> Result<DevEnv, i32> {
     let d = DevEnvArgs { transport, gc_root };
-    let run = Run::on(ev).configured(&a).workers(a.workers);
-    crate::cli::run_parallel(run, move |ev, _| dev_env_build(ev, a, &d))
+    let mut run = Run::on(ev).configured(&a).workers(a.workers);
+    // a hit reads the environment out of the local store, so only a local
+    // daemon gets an entry
+    if matches!(d.transport, crate::remote::worker::Transport::Unix(_)) {
+        run = run.cached(&a, "develop");
+    }
+    if let Some(env) = run.hit(|c| {
+        let env = remembered_env(&c.part(crate::trace::store::Part::Result)?)?;
+        c.replay_warnings();
+        Some(env)
+    }) {
+        return match d.gc_root.register(&d.transport, &env.out_path, None) {
+            Ok(()) => Ok(env),
+            Err(e) => Err(e.report()),
+        };
+    }
+    crate::cli::run_parallel(run, move |ev, cache| {
+        let env = dev_env_build(ev, a, &d)?;
+        if let Some(c) = cache {
+            c.write(
+                ev,
+                format!("{}\n{}", env.out_path, env.builder).as_bytes(),
+                false,
+            );
+        }
+        Ok(env)
+    })
+}
+
+/// What a `develop` entry holds is the `-env` output and the shell's builder,
+/// neither of which can hold a newline. The environment itself stays in the
+/// output: an output that is gone is a miss, and the run builds it again.
+fn remembered_env(result: &[u8]) -> Option<DevEnv> {
+    let text = std::str::from_utf8(result).ok()?;
+    let (out_path, builder) = text.split_once('\n')?;
+    let env = crate::devenv::BuildEnvironment::parse(&std::fs::read(out_path).ok()?).ok()?;
+    Some(DevEnv {
+        env,
+        out_path: out_path.to_string(),
+        builder: builder.to_string(),
+        t1: std::time::Instant::now(),
+    })
 }
 
 /// The cache-miss path: evaluate the shell, derive and build its `-env` derivation through

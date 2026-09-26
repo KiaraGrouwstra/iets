@@ -463,8 +463,9 @@ honoured; any other store falls back.
 - A missing attribute in an installable's path is one line. Nix adds a
   `Did you mean …?` line from `Suggestions`, which ietsp does not have; the
   `error:` line itself is the same.
-- `nix eval`, `nix build`, `nix derivation show`, `nix print-dev-env`,
-  `nix search` and `nix fmt` answer from the tracing cache (`docs/explanation/caching.md`); the other names do not use it. A hit
+- `nix eval`, `nix build`, `nix derivation show`, `nix develop`,
+  `nix print-dev-env`, `nix search` and `nix fmt` answer from the tracing
+  cache (`docs/explanation/caching.md`); the other names do not use it. A hit
   does not evaluate, so it prints no `trace:` and no `evaluation warning:`
   line, where Nix's `nix eval` evaluates and prints them every time.
 - An entry that no longer holds is invalidated without a word, as in Nix.
@@ -494,8 +495,7 @@ honoured; any other store falls back.
   picks, so `SHELL` and the `PATH` prefix come out the same. With no such
   file, `bash` from `PATH`, and then the `PATH` prefix line is omitted, as in
   nix when `bashInteractive` fails.
-- `nix develop` does not use the `print-dev-env` tracing cache, so it always
-  evaluates. It sets no profile: `--profile` falls back.
+- `nix develop` sets no profile: `--profile` falls back.
 - `nix-shell --pure` keeps the lower-case proxy variables (`http_proxy` …)
   and not the upper-case ones. `network-proxy.cc:getAllVariables` means to add
   the upper-case names but writes into an empty `std::string`, so nix inserts
