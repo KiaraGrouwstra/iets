@@ -509,11 +509,11 @@ honoured; any other store falls back.
 compares stdout byte for byte, the exit code and the `result*` symlink targets.
 The `nix` cases use `tests/fixtures/flake`, a flake with no inputs and a
 complete `flake.lock`, copied out of the repository so both sides see a `path:`
-flake. It writes to the store and needs a live `nix-daemon`, so it is not part
-of `nix flake check`; run it from the dev shell after `cargo build --release`.
-It refuses to run anywhere else: on a host that installs the farm, the `nix`
-it would compare against is ietsp, so it aborts with the resolved path
-instead of comparing ietsp with itself.
+flake. It writes to the store and needs a live `nix-daemon`, so `nix flake check`
+runs it in a NixOS test container (`nix/e2e-test.nix`). By hand, run it from the
+dev shell after `cargo build --release`. It refuses to run anywhere else: on a
+host that installs the farm, the `nix` it would compare against is ietsp, so it
+aborts with the resolved path instead of comparing ietsp with itself.
 
 The shell cases compare an `env` dump, which is only comparable without the
 variables that legitimately differ: `NIX_BUILD_TOP`, the `TMP*` family,

@@ -155,11 +155,15 @@ divergence and library entry point — is under `docs/reference/`.
 
 ## Testing
 
-`cargo test` for the units; `nix flake check` adds clippy, fmt, the
-examples, `scripts/langtests.nu`, `scripts/partest.nu`,
-`scripts/diff-e2e.nu` and the NixOS module. The other scripts need a live
-`nix-daemon` or `nix` and run by hand in the dev shell; `scripts/lib.nu`
-holds what they share.
+`cargo test` for the units. `nix flake check` adds clippy, fmt, the examples,
+the NixOS module and the scripts, in two ways. The scripts that need no
+`nix-daemon` run in the build sandbox. The scripts that need a daemon and a
+store to write to run in a NixOS test container (`nix/e2e-test.nix`,
+x86_64-linux only): systemd-nspawn, so no KVM; the real Nix 2.34.8 on `PATH`, a
+`nix-daemon` with its build sandbox on, and no network. The nixpkgs tree there
+is the flake input, through `$NIXPKGS`, and the closure of every path a case
+realises is in the container's store, so nothing is substituted. The builder
+needs the `uid-range` system feature (`auto-allocate-uids = true`).
 
 Every script that compares against the real nix calls `require-real-nix`
 first. On a host that installs the classic farm, `nix` and
@@ -172,23 +176,27 @@ the farm execs the real nix for whatever it does not implement,
 `--version` included. The same guard warns when the reference nix is not
 2.34.8. The ietsp-only scripts do not call it and still run anywhere.
 
-| script | what it compares |
-|---|---|
-| `langtests.nu` | Nix 2.34.8's functional tests, `tests/lang/` |
-| `corpus.nu` | `tests/corpus/` against `.exp` from `nix-instantiate` (`--update` rewrites them) |
-| `parity.nu` | `match`, `split`, `fromTOML` against the real `nix-instantiate` |
-| `partest.nu` | 1 against N workers |
-| `cachetest.nu` | the tracing cache's hits and misses |
-| `difftest.nu`, `drvdiff.nu` | one expression against `nix-instantiate`; the first differing derivation |
-| `diff-e2e.nu` | `ietsp diff` on two small derivations |
-| `classic-e2e.nu` | the classic names against the real nix, stdout byte for byte |
-| `daemon-e2e.nu`, `grpc-e2e.nu` | `ietsp build` over the worker protocol and over `grpc://` |
-| `fastbuild-e2e.nu` | `ietsp fast-build`, and against `nix-fast-build` |
-| `flaketest.nu` | flake evaluation and the input store against `nix eval` |
-| `prefetch-e2e.nu` | `ietsp prefetch` against `nix store prefetch-file` and `nix hash` |
-| `devenv-test.nu` | `print-dev-env` against `nix print-dev-env` |
-| `provenance-e2e.nu` | the rewritten paths and positions |
-| `evaljobs-flags.nu`, `evaljobs-cmp.nu` | `ietsp eval-jobs` against `nix-eval-jobs` |
+| script | what it compares | runs |
+|---|---|---|
+| `langtests.nu` | Nix 2.34.8's functional tests, `tests/lang/` | check, sandbox |
+| `corpus.nu` | `tests/corpus/` against `.exp` from `nix-instantiate` (`--update` rewrites them) | by hand |
+| `parity.nu` | `match`, `split`, `fromTOML` against the real `nix-instantiate` | by hand |
+| `partest.nu` | 1 against N workers | check, sandbox |
+| `linttest.nu` | the lints on their fixtures | check, sandbox |
+| `cachetest.nu` | the tracing cache's hits and misses | check, container |
+| `difftest.nu`, `drvdiff.nu` | one expression against `nix-instantiate`; the first differing derivation | by hand |
+| `diff-e2e.nu` | `ietsp diff` on two small derivations | check, sandbox |
+| `classic-e2e.nu` | the classic names against the real nix, stdout byte for byte | check, container |
+| `daemon-e2e.nu` | `ietsp build` over the worker protocol | check, container; not by hand on a host whose store refuses `nix-store --delete` |
+| `grpc-e2e.nu` | `ietsp build` over `grpc://` | by hand |
+| `fastbuild-e2e.nu` | `ietsp fast-build`, and against `nix-fast-build` | check, container |
+| `flaketest.nu` | flake evaluation and the input store against `nix eval` | check, container, less the 3 cases that need the network (`online` in `lib.nu`); all 39 by hand |
+| `plumbing-e2e.nu` | `ietsp plumbing`, one case per op | check, container |
+| `prefetch-e2e.nu` | `ietsp prefetch` against `nix store prefetch-file` and `nix hash` | check, container |
+| `devenv-test.nu` | `print-dev-env` against `nix print-dev-env` | by hand |
+| `provenance-e2e.nu` | the rewritten paths and positions | by hand |
+| `evaljobs-flags.nu` | `ietsp eval-jobs` against `nix-eval-jobs`, flag by flag | check, container |
+| `evaljobs-cmp.nu` | two `eval-jobs` outputs, attribute by attribute | by hand |
 
 `bench/` holds the workloads and the runners (`bench/run.nu`, `ab.nu`,
 `perf.nu`, `eval-jobs.nu`, `nar.nu`, `cache-growth.nu`).

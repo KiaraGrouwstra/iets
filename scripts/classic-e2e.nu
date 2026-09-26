@@ -1,8 +1,9 @@
 #!/usr/bin/env nu
 # Classic mode against the real nix: for every case, run the real
 # nix-instantiate/nix-build and ours and compare stdout byte for byte and the
-# exit code. Needs a live nix-daemon and `nix` on PATH (the dev shell has
-# nix 2.34.8); it writes to the store, so it is not a flake check.
+# exit code. Needs a live nix-daemon and the real `nix` on PATH, and it writes
+# to the store: `nix flake check` runs it in a container (nix/e2e-test.nix),
+# and by hand it runs in the dev shell, which has nix 2.34.8.
 #
 # usage: nu scripts/classic-e2e.nu
 #        BIN=target/debug nu scripts/classic-e2e.nu

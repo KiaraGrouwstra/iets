@@ -13,7 +13,8 @@
 # 6. the command lines that are errors: 2 for usage, 1 for a fetch that fails.
 #
 # Needs a live nix-daemon and `nix` on PATH (the dev shell has nix 2.34.8);
-# `nix store prefetch-file` writes to the store, so it is not a flake check.
+# `nix store prefetch-file` writes to the store, so the flake check runs it in
+# a container (nix/e2e-test.nix).
 #
 # usage: scripts/prefetch-e2e.nu
 #        BIN=target/debug scripts/prefetch-e2e.nu

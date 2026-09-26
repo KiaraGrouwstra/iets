@@ -11,7 +11,8 @@
 # 6. fetch: a URL becomes a hash. The derivation form is the same call, and
 #    scripts/prefetch-e2e.nu builds one.
 #
-# Needs a live nix-daemon and `nix` on PATH, so it is not a flake check.
+# Needs a live nix-daemon and `nix` on PATH: the flake check runs it in a
+# container (nix/e2e-test.nix).
 #
 # usage: scripts/plumbing-e2e.nu
 #        BIN=target/debug scripts/plumbing-e2e.nu
