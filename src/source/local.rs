@@ -19,6 +19,7 @@ use super::{AttrVal, Attrs, Tree};
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
 use crate::store::hash::{Hash, HashAlgo};
 use crate::store::nar;
+use crate::store::path::StorePath;
 use crate::store::source::{SourceOrigin, SrcPath};
 
 const NULL_REV: &str = "0000000000000000000000000000000000000000";
@@ -55,8 +56,16 @@ pub fn path_tree(ev: &mut Evaluator, dir: &Path, pos: Pos) -> EvalResult<(Hash, 
     };
     let mut fp = ev.trace.fp(dir);
     let (hash, nar_size, mtime) = dump_and_max_mtime(dir, &mut fp).map_err(io)?;
-    ev.trace
-        .tree(dir, crate::trace::hash_to_digest(&hash), None, fp);
+    if names_its_content(dir, &hash) {
+        ev.trace.stat(
+            dir.as_os_str().as_bytes(),
+            false,
+            crate::trace::Kind::Directory,
+        );
+    } else {
+        ev.trace
+            .tree(dir, crate::trace::hash_to_digest(&hash), None, fp);
+    }
     let sp = crate::treestore::store_path("source", &hash)
         .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
     ev.known.add(
@@ -64,6 +73,18 @@ pub fn path_tree(ev: &mut Evaluator, dir: &Path, pos: Pos) -> EvalResult<(Hash, 
         SourceOrigin::tree(SrcPath::fs(dir, None), hash, nar_size),
     );
     Ok((hash, mtime))
+}
+
+/// A store path that is the fixed-output path of the tree just hashed: a
+/// locked input that is already in `/nix/store`. Its name is its NAR hash, so
+/// the tracing cache checks that it is still there and walks none of it, as
+/// it does for an input store entry (docs/explanation/caching.md). Any other
+/// directory, in the store or not, keeps its `Tree` observation.
+fn names_its_content(dir: &Path, hash: &Hash) -> bool {
+    let Some(p) = dir.to_str().and_then(|s| StorePath::parse(s).ok()) else {
+        return false;
+    };
+    crate::treestore::store_path(p.name(), hash).is_ok_and(|q| q == p)
 }
 
 /// One walk for both answers, like `dumpPathAndGetMtime`: the dump already reaches every
@@ -259,6 +280,23 @@ pub fn git_source(ev: &mut Evaluator, root: &Path, subdir: &str, pos: Pos) -> Ev
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only the fixed-output path of the hash itself skips the walk: another
+    /// hash under the same name, another name, a path below it and a
+    /// directory outside the store all keep their `Tree` observation.
+    #[test]
+    fn only_a_content_addressed_store_path_names_its_content() {
+        let hash = crate::store::hash::hash_bytes(HashAlgo::Sha256, b"a tree");
+        let other = crate::store::hash::hash_bytes(HashAlgo::Sha256, b"another tree");
+        let p = crate::treestore::store_path("source", &hash)
+            .unwrap()
+            .to_string();
+        assert!(names_its_content(Path::new(&p), &hash));
+        assert!(!names_its_content(Path::new(&p), &other));
+        assert!(!names_its_content(Path::new(&format!("{p}x")), &hash));
+        assert!(!names_its_content(Path::new(&format!("{p}/sub")), &hash));
+        assert!(!names_its_content(Path::new("/home/u/source"), &hash));
+    }
 
     #[test]
     fn accepted_set_adds_parent_directories() {

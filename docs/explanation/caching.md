@@ -163,10 +163,19 @@ Every primop that looks at the world records one observation.
 | a file's size, mtime, inode and sha256 | `import`, `readFile`, `hashFile`, every `.drv` read | `lstat`; on a stat mismatch the file is rehashed and accepted if the hash matches |
 | a directory listing's hash | `readDir` | re-list and rehash |
 | a path's kind | `pathExists`, `readFileType`, the `default.nix` probe, every search-path candidate | re-stat |
-| a copied tree's NAR hash and stat hash | `./path` coerced to a string, `builtins.path`, `filterSource`, a flake's git working tree | recompute the stat hash with `lstat` only; on a mismatch re-dump the NAR with the recorded filter and compare |
+| a copied tree's NAR hash and stat hash | `./path` coerced to a string, `builtins.path`, `filterSource`, a flake's git working tree, a `path:` input | recompute the stat hash with `lstat` only; on a mismatch re-dump the NAR with the recorded filter and compare |
 | a resolved symlink | `storePath`, `builtins.path` and `filterSource` when canonicalising changed the path | canonicalise again |
 | an environment variable | `getEnv`; `HOME` when a `~/` literal is compiled | read it again |
 | a command's exit status and output | the `git` queries of a flake working tree | run it again, rehash |
+
+One tree is not walked. A `path:` input that names a store path, such as
+`path:/nix/store/…-source`, is hashed like any other, and when the
+fixed-output path of that hash is the directory itself, its name is its NAR
+hash. It is then recorded as a path's kind: still a directory, still the
+same bytes, by the argument that makes an input store entry one observation
+(below). A nixpkgs pinned that way cost 0.51 s to validate, one `lstat` per
+file, and costs two system calls now. A store path whose name is not the
+hash of its content — a build output, say — keeps its tree observation.
 
 A run that had an entry and lost it says why, in one line:
 
