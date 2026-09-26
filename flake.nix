@@ -105,6 +105,10 @@
         } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
           cachetest = e2e "cachetest" { };
           classic-e2e = e2e "classic-e2e" { };
+          evaljobs-flags = e2e "evaljobs-flags" {
+            packages = [ pkgs.jq pkgs.nix-eval-jobs ];
+            env = "NEJ=${pkgs.nix-eval-jobs}/bin/nix-eval-jobs";
+          };
           # with the real nix-fast-build, so the comparison case runs too
           fastbuild-e2e = e2e "fastbuild-e2e" { packages = [ pkgs.nix-fast-build ]; };
           plumbing-e2e = e2e "plumbing-e2e" { };

@@ -1,6 +1,6 @@
 # scripts/<name>.nu in a NixOS test container: a real nix-daemon, a writable
 # store, the real nix on PATH and no network.
-{ self, nixpkgs, pkgs, ietsp, name, packages ? [ ] }:
+{ self, nixpkgs, pkgs, ietsp, name, packages ? [ ], env ? "" }:
 let
   system = pkgs.stdenv.hostPlatform.system;
   # nixpkgs/shell.nix imports this tree through a sha256-pinned fetchTarball;
@@ -66,6 +66,6 @@ pkgs.testers.runNixOSTest {
       machine.succeed("${writableStore} ${registration}")
       machine.succeed("systemctl start nix-daemon.socket")
       machine.succeed("cp -r ${self} /home/alice/ietsp && chmod -R u+w /home/alice/ietsp && chown -R alice /home/alice/ietsp")
-      machine.succeed("runuser -l alice -c 'cd ietsp && IETSP=${ietsp}/bin/ietsp NIXPKGS=${nixpkgs} nu scripts/${name}.nu' >&2")
+      machine.succeed("runuser -l alice -c 'cd ietsp && IETSP=${ietsp}/bin/ietsp NIXPKGS=${nixpkgs} ${env} nu scripts/${name}.nu' >&2")
     '';
 }
