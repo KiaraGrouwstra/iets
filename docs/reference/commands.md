@@ -47,7 +47,7 @@ stdout and exit 0.
   failed build under `ietsp build`. `ietsp diff` follows `diff(1)`
   instead.
 - **Settings.** Every command takes `--ietsp-option NAME VALUE` for an
-  `ietsp.conf` key and `--option NAME VALUE` for a `nix.conf` setting
+  `ietsp.toml` setting and `--option NAME VALUE` for a `nix.conf` setting
   (`docs/reference/settings.md`).
 
 ### The shared evaluation flags

@@ -1,11 +1,11 @@
 //! Named lints for language corner cases, each `off`, `warn` or `error`.
 //! The registry lives here, one line per lint; each family file holds
 //! the trigger logic its hooks call. Levels resolve from the built-in
-//! default, then `[lint]` in `ietsp.toml`, then `IETSP_LINT`, then
-//! `--lint`; inside one source a lint name beats `family:NAME`, which
-//! beats `all`. A site is reported only inside the lint roots unless the
-//! scope is `all` or the site's locked input has its own levels. See
-//! docs/reference/lints.md.
+//! default, then `[lint]` in each `ietsp.toml` (machine, user, project), then
+//! `IETSP_LINT`, then `--lint`; inside one source a lint name beats
+//! `family:NAME`, which beats `all`. A site is reported only inside the lint
+//! roots unless the scope is `all` or the site's locked input has its own
+//! levels. See docs/reference/lints.md.
 
 pub mod allow;
 pub mod coerce;
@@ -565,10 +565,10 @@ impl Config {
         Ok(())
     }
 
-    /// Default, then `ietsp.toml` found by walking up from `start`, then
-    /// `IETSP_LINT`, then `flags` as one source. `start` is the first lint
-    /// root; `roots` (`--lint-root`) follow and `scope` (`--lint-scope`)
-    /// wins over the file's.
+    /// Default, then the settings files, then the project `ietsp.toml` found
+    /// by walking up from `start`, then `IETSP_LINT`, then `flags` as one
+    /// source. `start` is the first lint root; `roots` (`--lint-root`) follow and
+    /// `scope` (`--lint-scope`) wins over the file's.
     pub fn resolve(
         start: Option<&Path>,
         flags: &[(String, Level)],
@@ -580,10 +580,19 @@ impl Config {
         if let Some(dir) = start {
             c.add_root(dir.as_os_str().as_bytes());
         }
-        if let Some(file) = start.and_then(find_config_file) {
-            let text =
-                std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
-            c.apply_toml(&text, &file)?;
+        let read =
+            |f: &Path| std::fs::read_to_string(f).map_err(|e| format!("{}: {e}", f.display()));
+        let settings = crate::settings::conf_files();
+        for file in settings.iter().filter(|f| f.is_file()) {
+            c.apply_toml(&read(file)?, file)?;
+        }
+        // a walk that starts below a settings directory ends on a file read above
+        let is_settings = |f: &PathBuf| {
+            let f = f.canonicalize().ok();
+            f.is_some() && settings.iter().any(|s| s.canonicalize().ok() == f)
+        };
+        if let Some(file) = start.and_then(find_config_file).filter(|f| !is_settings(f)) {
+            c.apply_toml(&read(&file)?, &file)?;
         }
         if let Ok(env) = std::env::var("IETSP_LINT") {
             c.apply_env(&env).map_err(|m| format!("IETSP_LINT: {m}"))?;

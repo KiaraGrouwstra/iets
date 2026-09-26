@@ -22,7 +22,7 @@ use_flake() {
   root="$(direnv_layout_dir)/ietsp-env"
   mkdir -p "$(direnv_layout_dir)"
   watch_file "$uri/flake.nix" "$uri/flake.lock"
-  # --gc-root needs the local daemon; a remote `builder` in ietsp.conf refuses it
+  # --gc-root needs the local daemon; a remote `builder` setting refuses it
   script="$(ietsp print-dev-env --builder daemon --gc-root "$root" "$ref")" || true
   # after the evaluation, so the first load already has a read set; before the
   # environment, so a shell hook that fails does not lose the watches

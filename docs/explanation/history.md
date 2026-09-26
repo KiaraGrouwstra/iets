@@ -54,6 +54,15 @@ uploader. On this repository's 18 checks the whole tree evaluates in
 against builds that take minutes; and the tracing cache, which the
 streaming walk could not use, makes the second run 0.03 s.
 
+## 2026-09-26: `ietsp.conf`
+
+ietsp's own settings lived in `ietsp.conf`, in nix.conf's line syntax, while
+the lints lived in a TOML `ietsp.toml`: two formats for one program. The
+settings are TOML now, in an `ietsp.toml` per machine and per user
+(`docs/reference/settings.md`). `ietsp.conf` is not read, and one that is
+still there is an error, so that a host does not lose its `builder` without a
+word. `include` and `extra-<name>` went with the format.
+
 ## 2026-09-25: the ATerm buffer the derivation pipeline kept allocating
 
 The same profile put 9.3 % of a warm run in glibc `malloc` and `free`

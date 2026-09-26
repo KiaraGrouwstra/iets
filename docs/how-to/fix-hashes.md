@@ -28,10 +28,10 @@ remaining one in the run. Anywhere else — a pipe, a CI job, a JSON log —
 ietsp --ietsp-option fix-hashes always build --builder daemon src.nix
 ```
 
-Or put it in `ietsp.conf` once:
+Or put it in `~/.config/ietsp/ietsp.toml` once:
 
 ```
-fix-hashes = always
+fix-hashes = "always"
 ```
 
 Given this file:

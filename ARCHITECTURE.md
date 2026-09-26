@@ -115,7 +115,7 @@ Around it:
 - `devenv/`: `print-dev-env`.
 - `provenance.rs`: store paths and derivations back to local trees and
   source positions.
-- `config.rs`: `nix.conf`. `settings.rs`: `ietsp.conf` and every `IETSP_*`
+- `config.rs`: `nix.conf`. `settings.rs`: `ietsp.toml` and every `IETSP_*`
   variable.
 - `nixbin.rs`: the real Nix binaries behind the classic fallback.
 - `error.rs`: the error type outside the evaluator.

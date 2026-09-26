@@ -70,7 +70,7 @@ export def current-system []: nothing -> string {
 
 # Every e2e script calls this first. It returns DIR, or a fresh temporary
 # directory named after NAME, and points ietsp's config lookup into it: the
-# host's ietsp.conf must not steer the runs (a remote `builder` changes the
+# host's ietsp.toml must not steer the runs (a remote `builder` changes the
 # cores, the out-links and where things build).
 export def --env isolate [name: string, dir?: string]: nothing -> string {
   $env.TMPDIR = ($env.TMPDIR? | default "/tmp")

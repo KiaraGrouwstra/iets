@@ -67,7 +67,7 @@ pub const PAGES: &[Page] = &[
     ),
     embedded(
         "settings",
-        "ietsp.conf, the IETSP_* variables and nix.conf",
+        "ietsp.toml, the IETSP_* variables and nix.conf",
         include_str!("../../docs/reference/settings.md"),
     ),
     embedded(

@@ -22,11 +22,14 @@ The level of a lint comes from these sources, in this order; a later
 source wins over an earlier one:
 
 1. the built-in default (the table below);
-2. the `[lint]` table of the nearest `ietsp.toml`, found by walking up
-   from the entry file's directory, the flake directory, or cwd for `-E`
-   (each `[lint.inputs.<node>]` table is a source of its own, see Scope);
-3. `IETSP_LINT="name=level,name=level"`;
-4. `--lint SELECTOR=LEVEL`, repeatable.
+2. the `[lint]` table of the machine's `ietsp.toml`, then of the user's
+   (`docs/reference/settings.md`);
+3. the `[lint]` table of the project's `ietsp.toml`: the nearest one found
+   by walking up from the entry file's directory, the flake directory, or
+   cwd for `-E` (each `[lint.inputs.<node>]` table is a source of its own,
+   see Scope);
+4. `IETSP_LINT="name=level,name=level"`;
+5. `--lint SELECTOR=LEVEL`, repeatable.
 
 A selector is a lint name, `all`, `family:NAME` (`path`, `scope`,
 `coerce`, `legacy`, `purity`, `style`), or one of Nix's setting names

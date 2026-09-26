@@ -38,7 +38,7 @@ const RATIO_AFTER: u64 = 16 << 20;
 pub struct Limits {
     pub connect: Option<Duration>,
     pub stall: Option<Duration>,
-    /// ietsp.conf `fetch-max-size`: decompressed bytes.
+    /// the `fetch-max-size` setting: decompressed bytes.
     pub max_size: u64,
 }
 

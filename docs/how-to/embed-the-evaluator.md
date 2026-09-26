@@ -26,7 +26,7 @@ mismatches a build reported.
 
 ```rust
 let session = ietsp::session::Session::new();
-session.load_settings(&[])?;            // ietsp.conf, optional
+session.load_settings(&[])?;            // ietsp.toml, optional
 session.log.write_to_stderr();          // or leave the sink unset
 let _entered = session.enter();         // for this thread
 let mut ev = ietsp::eval::Evaluator::new();   // adopts the session

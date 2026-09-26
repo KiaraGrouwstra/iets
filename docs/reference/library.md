@@ -89,7 +89,7 @@ evaluator reads `ev.session` — no lookup. The rest reaches
 
 ```rust
 let session = ietsp::session::Session::new();
-session.load_settings(&[])?;            // ietsp.conf, optional
+session.load_settings(&[])?;            // ietsp.toml, optional
 let _entered = session.enter();         // for this thread
 let mut ev = Evaluator::new();          // adopts the session
 ```

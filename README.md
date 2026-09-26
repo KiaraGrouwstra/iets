@@ -150,7 +150,7 @@ behaviour differs on purpose,
 | [reference/commands.md](docs/reference/commands.md) | every command and flag |
 | [reference/plumbing.md](docs/reference/plumbing.md) | the plumbing operations and their JSON |
 | [reference/classic.md](docs/reference/classic.md) | what each classic name handles |
-| [reference/settings.md](docs/reference/settings.md) | `ietsp.conf`, `nix.conf` and every `IETSP_*` variable |
+| [reference/settings.md](docs/reference/settings.md) | `ietsp.toml`, `nix.conf` and every `IETSP_*` variable |
 | [reference/errors.md](docs/reference/errors.md) | error codes, exit codes, log records |
 | [reference/lints.md](docs/reference/lints.md) | every lint |
 | [reference/builtins.md](docs/reference/builtins.md) | the primop surface |

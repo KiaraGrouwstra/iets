@@ -3,10 +3,6 @@ self:
 let
   packages = self.packages.${pkgs.stdenv.hostPlatform.system};
   settings = config.ietsp.settings;
-  render = v:
-    if lib.isBool v then lib.boolToString v
-    else if lib.isList v then lib.concatMapStringsSep " " toString v
-    else toString v;
 in
 {
   options.ietsp.classic.enable = lib.mkEnableOption
@@ -17,9 +13,10 @@ in
     default = { };
     example = { builder = "ssh-ng://bld1"; workers = 8; };
     description = ''
-      ietsp's own settings, rendered to /etc/ietsp/ietsp.conf. They are read
+      ietsp's own settings, rendered to /etc/ietsp/ietsp.toml. They are read
       only by ietsp, so `builder` can point the fleet's builds somewhere the
-      nix behind the classic fallback never sees. Keys and defaults:
+      nix behind the classic fallback never sees. The Nix type is the TOML
+      type: `workers = 8`, not `"8"`. Keys and defaults:
       docs/reference/settings.md.
     '';
   };
@@ -35,9 +32,10 @@ in
       ++ lib.optional config.ietsp.classic.enable
         (lib.hiPrio (self.lib.mkClassic pkgs packages.default config.nix.package));
 
-    environment.etc."ietsp/ietsp.conf" = lib.mkIf (settings != { }) {
+    # a JSON bool, int, string or list of strings is the same TOML value
+    environment.etc."ietsp/ietsp.toml" = lib.mkIf (settings != { }) {
       text = lib.concatStrings
-        (lib.mapAttrsToList (k: v: "${k} = ${render v}\n") settings);
+        (lib.mapAttrsToList (k: v: "${k} = ${builtins.toJSON v}\n") settings);
     };
 
     programs.direnv = {

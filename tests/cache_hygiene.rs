@@ -262,6 +262,7 @@ fn cache_gc_removes_entries_past_the_ttl() {
             .args(["cache", "gc", "--cache-dir"])
             .arg(&dir)
             .args(args)
+            .env("IETSP_CONF_DIR", "/nonexistent")
             .output()
             .expect("run ietsp cache gc");
         assert!(out.status.success(), "cache gc exits 0");

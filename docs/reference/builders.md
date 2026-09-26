@@ -19,7 +19,7 @@ derivation came from there. Why this shape instead of `nix-build`'s:
 --builder grpc://host:port[?k=v&…]
 ```
 
-Without the flag the URL is the `builder` setting in `ietsp.conf`, and
+Without the flag the URL is the `builder` setting in the machine or user `ietsp.toml`, and
 nix.conf's `store` when that is unset (`docs/reference/settings.md`). A
 classic `--store URL` or `--option store URL` wins over both.
 

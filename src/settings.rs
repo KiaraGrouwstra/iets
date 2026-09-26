@@ -1,14 +1,16 @@
-//! ietsp's own settings: the `ietsp.conf` files, `--ietsp-option` and every
+//! ietsp's own settings: the `ietsp.toml` files, `--ietsp-option` and every
 //! `IETSP_*` environment knob, read once into one struct. Each key, its type,
 //! its default and its effect: docs/reference/settings.md.
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use crate::error::{Error, Result};
 
-/// Keys an `ietsp.conf` may set. Nothing else: the file is ours, so a name
+/// Keys a settings file may set. Nothing else: the file is ours, so a name
 /// that is not here is a mistake, not a setting for someone else.
 const KEYS: &[&str] = &[
     "build-gc-root",
@@ -25,9 +27,6 @@ const KEYS: &[&str] = &[
     "source-map",
     "workers",
 ];
-
-/// Keys whose value is a whitespace-separated list, so `extra-<name>` appends.
-const APPENDABLE: &[&str] = &["source-map"];
 
 /// The settings of this process: the files, then the environment for the knobs
 /// that have one. Defaults match the behaviour each knob had when it was read
@@ -147,10 +146,10 @@ pub fn conf_dir() -> PathBuf {
 }
 
 /// The settings files, lowest precedence first.
-pub fn conf_files() -> Vec<PathBuf> {
-    vec![
-        conf_dir().join("ietsp.conf"),
-        crate::config::config_home().join("ietsp/ietsp.conf"),
+pub fn conf_files() -> [PathBuf; 2] {
+    [
+        conf_dir().join("ietsp.toml"),
+        crate::config::config_home().join("ietsp/ietsp.toml"),
     ]
 }
 
@@ -158,29 +157,39 @@ impl Settings {
     /// The files, then `$IETSP_CONFIG`, then `overrides`, then the environment
     /// for the knobs that have a variable. Later wins.
     pub fn load(overrides: &[(String, String)]) -> Result<Settings> {
+        Settings::load_from(&conf_files(), overrides, &Env(|n| std::env::var_os(n)))
+    }
+
+    fn load_from(files: &[PathBuf], overrides: &[(String, String)], env: &Env) -> Result<Settings> {
         let mut c = Conf::default();
-        for f in conf_files() {
-            if let Ok(text) = std::fs::read_to_string(&f) {
-                c.apply(&text, &f)?;
+        for f in files {
+            leftover(f)?;
+            match std::fs::read_to_string(f) {
+                Ok(text) => c.apply(&text, &f.display().to_string(), true)?,
+                Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {}
+                Err(e) => return Err(Error::Config(format!("{}: {e}", f.display()))),
             }
         }
-        if let Some(text) = env("IETSP_CONFIG") {
-            c.apply(&text, Path::new("IETSP_CONFIG"))?;
+        if let Some(text) = env.str("IETSP_CONFIG") {
+            c.apply(&text, "$IETSP_CONFIG", false)?;
         }
         for (name, value) in overrides {
-            c.set(name, value, FLAG)?;
+            c.set(name, flag_value(name, value), FLAG, false)?;
         }
-        Settings::from_conf(&c)
+        Settings::from_conf(&c, env)
     }
 
     /// The settings `c` asks for, with the environment on top.
-    fn from_conf(c: &Conf) -> Result<Settings> {
+    fn from_conf(c: &Conf, env: &Env) -> Result<Settings> {
         let source_map: Vec<(String, String)> = c
-            .list("source-map")
-            .iter()
-            .filter_map(|e| e.split_once('='))
-            .map(|(s, l)| (s.to_string(), l.to_string()))
-            .collect();
+            .get("source-map", "a list of \"STOREPATH=LOCALDIR\"", |v| {
+                let pair = |e: &toml::Value| {
+                    let (store, local) = e.as_str()?.split_once('=')?;
+                    Some((store.to_string(), local.to_string()))
+                };
+                v.as_array()?.iter().map(pair).collect()
+            })?
+            .unwrap_or_default();
         for (_, local) in &source_map {
             if !Path::new(local).is_dir() {
                 crate::log::line(&format!(
@@ -188,42 +197,41 @@ impl Settings {
                 ));
             }
         }
+        let workers = env.num("IETSP_WORKERS").or(c.int("workers")?);
+        let fix_hashes = c.get(
+            "fix-hashes",
+            "\"ask\", \"always\" or \"never\"",
+            |v| match v.as_str()? {
+                "ask" => Some(FixHashes::Ask),
+                "always" => Some(FixHashes::Always),
+                "never" => Some(FixHashes::Never),
+                _ => None,
+            },
+        )?;
         Ok(Settings {
-            builder: c.str("builder").map(str::to_string),
+            builder: c.str("builder")?,
             source_map,
-            workers: num("IETSP_WORKERS")
-                .or(c.num("workers")?)
-                .filter(|n| *n >= 1),
-            fiber_stack_mb: num("IETSP_FIBER_STACK_MB").or(c.num("fiber-stack-mb")?),
-            spin: num("IETSP_SPIN").unwrap_or(2000),
-            spinners: num("IETSP_SPINNERS"),
-            handoff: num("IETSP_HANDOFF").unwrap_or(8),
-            fanout: num("IETSP_FANOUT").unwrap_or(7),
-            par_stats: level("IETSP_PAR_STATS"),
-            stats: level("IETSP_STATS"),
-            cache: flag("IETSP_CACHE", "0", c.bool("cache")?, true),
-            cache_dir: dir("IETSP_CACHE_DIR").or_else(|| c.str("cache-dir").map(PathBuf::from)),
-            ir_stats: set("IETSP_IR_STATS"),
-            ir_min: num("IETSP_IR_MIN").unwrap_or(1024),
-            provenance: flag("IETSP_PROVENANCE", "0", c.bool("provenance")?, true),
-            nix_bin_dir: dir("IETSP_NIX_BIN_DIR")
-                .or_else(|| c.str("nix-bin-dir").map(PathBuf::from)),
-            no_fallback: flag("IETSP_NO_FALLBACK", "1", c.bool("no-fallback")?, false),
+            workers: workers.filter(|n| *n >= 1),
+            fiber_stack_mb: env.num("IETSP_FIBER_STACK_MB").or(c.int("fiber-stack-mb")?),
+            spin: env.num("IETSP_SPIN").unwrap_or(2000),
+            spinners: env.num("IETSP_SPINNERS"),
+            handoff: env.num("IETSP_HANDOFF").unwrap_or(8),
+            fanout: env.num("IETSP_FANOUT").unwrap_or(7),
+            par_stats: env.level("IETSP_PAR_STATS"),
+            stats: env.level("IETSP_STATS"),
+            cache: env.flag("IETSP_CACHE", "0", c.bool("cache")?, true),
+            cache_dir: env.dir("IETSP_CACHE_DIR").or(c.str("cache-dir")?),
+            ir_stats: env.set("IETSP_IR_STATS"),
+            ir_min: env.num("IETSP_IR_MIN").unwrap_or(1024),
+            provenance: env.flag("IETSP_PROVENANCE", "0", c.bool("provenance")?, true),
+            nix_bin_dir: env.dir("IETSP_NIX_BIN_DIR").or(c.str("nix-bin-dir")?),
+            no_fallback: env.flag("IETSP_NO_FALLBACK", "1", c.bool("no-fallback")?, false),
             shell_gc_root: c.bool("shell-gc-root")?.unwrap_or(true),
             build_gc_root: c.bool("build-gc-root")?.unwrap_or(true),
-            fetching: set("IETSP_FETCHING"),
-            offline: set("IETSP_OFFLINE"),
-            fetch_max_size: c.num("fetch-max-size")?.unwrap_or(16 << 30),
-            fix_hashes: match c.str("fix-hashes").unwrap_or("ask") {
-                "ask" => FixHashes::Ask,
-                "always" => FixHashes::Always,
-                "never" => FixHashes::Never,
-                s => {
-                    return Err(Error::Config(format!(
-                        "ietsp setting 'fix-hashes' wants ask, always or never, got '{s}'"
-                    )));
-                }
-            },
+            fetching: env.set("IETSP_FETCHING"),
+            offline: env.set("IETSP_OFFLINE"),
+            fetch_max_size: c.int("fetch-max-size")?.unwrap_or(16 << 30),
+            fix_hashes: fix_hashes.unwrap_or(FixHashes::Ask),
         })
     }
 }
@@ -231,97 +239,112 @@ impl Settings {
 impl Default for Settings {
     /// The environment knobs alone: no file is read, so nothing can fail.
     fn default() -> Settings {
-        Settings::from_conf(&Conf::default()).expect("an empty conf has no bad value")
+        Settings::from_conf(&Conf::default(), &Env(|n| std::env::var_os(n)))
+            .expect("an empty conf has no bad value")
     }
 }
 
-/// One setting, with the place it was set for an error message.
-#[derive(Debug)]
-struct Value {
-    value: String,
-    at: String,
+/// The VALUE of `--ietsp-option NAME VALUE`: a TOML boolean, integer, string
+/// or array when it reads as one, else the text itself, so `fix-hashes always`
+/// needs no quotes. Bare text for `source-map` is a whitespace-separated list.
+fn flag_value(name: &str, value: &str) -> toml::Value {
+    use toml::Value::{Array, Boolean, Integer, String};
+    let table = format!("v = {value}").parse::<toml::Table>();
+    match table.ok().and_then(|mut t| t.remove("v")) {
+        Some(v @ (Boolean(_) | Integer(_) | String(_) | Array(_))) => v,
+        _ if name == "source-map" => {
+            Array(value.split_whitespace().map(|e| String(e.into())).collect())
+        }
+        _ => String(value.into()),
+    }
 }
 
-/// What the settings files said, with the nix.conf line syntax
-/// (`crate::config::parse`) and `extra-<name>` appending to a list.
+/// An `ietsp.conf` beside `toml` is the format ietsp read until 2026-09. It is
+/// an error and not skipped: a host that lost its `builder` without a word
+/// would build somewhere else.
+fn leftover(toml: &Path) -> Result<()> {
+    let old = toml.with_extension("conf");
+    if old.symlink_metadata().is_err() {
+        return Ok(());
+    }
+    Err(Error::Config(format!(
+        "{} is no longer read: ietsp settings are TOML (docs/reference/settings.md). Move its settings to {}; on NixOS, 'ietsp.settings' does that at the next switch",
+        old.display(),
+        toml.display()
+    )))
+}
+
+/// What the settings sources said: each key's TOML value and where it was
+/// set, for an error message. A later source replaces a key, except
+/// `source-map`, whose entries add up.
 #[derive(Debug, Default)]
 struct Conf {
-    at: BTreeMap<String, Value>,
+    at: BTreeMap<String, (toml::Value, String)>,
 }
 
 impl Conf {
-    fn apply(&mut self, text: &str, origin: &Path) -> Result<()> {
-        for e in crate::config::parse(text, origin)? {
-            self.set(&e.name, &e.value, &e.at())?;
+    fn apply(&mut self, text: &str, at: &str, file: bool) -> Result<()> {
+        let table: toml::Table = text.parse().map_err(|e: toml::de::Error| {
+            Error::Config(format!("{at}: {}", e.to_string().trim_end()))
+        })?;
+        for (name, value) in table {
+            self.set(&name, value, at, file)?;
         }
         Ok(())
     }
 
-    fn set(&mut self, name: &str, value: &str, at: &str) -> Result<()> {
-        let base = name.strip_prefix("extra-").unwrap_or(name);
-        if !KEYS.contains(&base) || (base != name && !APPENDABLE.contains(&base)) {
+    /// `file` is a settings file, where a `[lint]` table is `lint::Config`'s
+    /// to read.
+    fn set(&mut self, name: &str, value: toml::Value, at: &str, file: bool) -> Result<()> {
+        if name == "lint" && file {
+            return Ok(());
+        }
+        if !KEYS.contains(&name) {
             return Err(Error::Config(format!(
                 "unknown ietsp setting '{name}' in {at}"
             )));
         }
-        if base != name {
-            let slot = self.at.entry(base.to_string()).or_insert_with(|| Value {
-                value: String::new(),
-                at: at.to_string(),
-            });
-            if !slot.value.is_empty() && !value.is_empty() {
-                slot.value.push(' ');
+        let mut at = at.to_string();
+        let value = match (self.at.remove(name), value) {
+            (Some((toml::Value::Array(mut old), before)), toml::Value::Array(new))
+                if name == "source-map" =>
+            {
+                old.extend(new);
+                at = format!("{before} and {at}");
+                toml::Value::Array(old)
             }
-            slot.value.push_str(value);
-            slot.at = at.to_string();
-            return Ok(());
-        }
-        self.at.insert(
-            name.to_string(),
-            Value {
-                value: value.to_string(),
-                at: at.to_string(),
-            },
-        );
+            (_, value) => value,
+        };
+        self.at.insert(name.to_string(), (value, at));
         Ok(())
     }
 
-    fn str(&self, name: &str) -> Option<&str> {
-        self.at.get(name).map(|v| v.value.as_str())
-    }
-
-    fn list(&self, name: &str) -> Vec<String> {
-        self.str(name)
-            .into_iter()
-            .flat_map(str::split_whitespace)
-            .map(str::to_string)
-            .collect()
-    }
-
-    fn num<T: FromStr>(&self, name: &str) -> Result<Option<T>> {
-        match self.at.get(name) {
-            None => Ok(None),
-            Some(v) => v.value.trim().parse().map(Some).map_err(|_| {
-                Error::Config(format!(
-                    "ietsp setting '{name}' wants a number, got '{}' in {}",
-                    v.value, v.at
-                ))
-            }),
-        }
+    fn get<T>(
+        &self,
+        name: &str,
+        want: &str,
+        read: impl Fn(&toml::Value) -> Option<T>,
+    ) -> Result<Option<T>> {
+        let Some((v, at)) = self.at.get(name) else {
+            return Ok(None);
+        };
+        read(v).map(Some).ok_or_else(|| {
+            Error::Config(format!(
+                "ietsp setting '{name}' wants {want}, got {v} in {at}"
+            ))
+        })
     }
 
     fn bool(&self, name: &str) -> Result<Option<bool>> {
-        match self.at.get(name) {
-            None => Ok(None),
-            Some(v) => match v.value.as_str() {
-                "true" | "yes" | "1" => Ok(Some(true)),
-                "false" | "no" | "0" => Ok(Some(false)),
-                s => Err(Error::Config(format!(
-                    "ietsp setting '{name}' wants a boolean, got '{s}' in {}",
-                    v.at
-                ))),
-            },
-        }
+        self.get(name, "true or false", toml::Value::as_bool)
+    }
+
+    fn int<T: TryFrom<i64>>(&self, name: &str) -> Result<Option<T>> {
+        self.get(name, "an integer", |v| T::try_from(v.as_integer()?).ok())
+    }
+
+    fn str<T: From<String>>(&self, name: &str) -> Result<Option<T>> {
+        self.get(name, "a string", |v| Some(v.as_str()?.to_string().into()))
     }
 }
 
@@ -329,96 +352,252 @@ fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|s| !s.is_empty())
 }
 
-fn num<T: FromStr>(name: &str) -> Option<T> {
-    std::env::var(name).ok().and_then(|v| v.parse().ok())
-}
+/// The environment a load reads: the process's, or a test's.
+struct Env(fn(&str) -> Option<OsString>);
 
-/// A level knob: unset is 0, `2` is 2, any other value is 1. Two levels
-/// grew out of one `is_some` check, so anything set means at least 1.
-fn level(name: &str) -> u8 {
-    match std::env::var_os(name) {
-        None => 0,
-        Some(v) if v == "2" => 2,
-        Some(_) => 1,
+impl Env {
+    fn str(&self, name: &str) -> Option<String> {
+        let v = (self.0)(name)?.into_string().ok()?;
+        (!v.is_empty()).then_some(v)
     }
-}
 
-fn set(name: &str) -> bool {
-    std::env::var_os(name).is_some()
-}
-
-/// The environment wins over the file, which wins over `default`. `switch` is
-/// the value of `name` that means "the opposite of the default".
-fn flag(name: &str, switch: &str, file: Option<bool>, default: bool) -> bool {
-    match std::env::var_os(name) {
-        Some(v) if v == switch => !default,
-        Some(_) => default,
-        None => file.unwrap_or(default),
+    fn num<T: FromStr>(&self, name: &str) -> Option<T> {
+        (self.0)(name)?.to_str()?.parse().ok()
     }
-}
 
-fn dir(name: &str) -> Option<PathBuf> {
-    std::env::var_os(name).map(PathBuf::from)
+    /// A level knob: unset is 0, `2` is 2, any other value is 1. Two levels
+    /// grew out of one `is_some` check, so anything set means at least 1.
+    fn level(&self, name: &str) -> u8 {
+        match (self.0)(name) {
+            None => 0,
+            Some(v) if v == "2" => 2,
+            Some(_) => 1,
+        }
+    }
+
+    fn set(&self, name: &str) -> bool {
+        (self.0)(name).is_some()
+    }
+
+    /// The environment wins over the file, which wins over `default`. `switch`
+    /// is the value of `name` that means "the opposite of the default".
+    fn flag(&self, name: &str, switch: &str, file: Option<bool>, default: bool) -> bool {
+        match (self.0)(name) {
+            Some(v) if v == switch => !default,
+            Some(_) => default,
+            None => file.unwrap_or(default),
+        }
+    }
+
+    fn dir(&self, name: &str) -> Option<PathBuf> {
+        (self.0)(name).map(PathBuf::from)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn load(text: &str) -> Result<Conf> {
+    const NO_ENV: Env = Env(|_| None);
+
+    /// A scratch `etc/`, `user/` and their two `ietsp.toml` paths.
+    fn scratch(name: &str) -> Vec<PathBuf> {
+        let d = std::env::temp_dir().join(format!("ietsp-settings-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        ["etc", "user"]
+            .iter()
+            .map(|level| {
+                std::fs::create_dir_all(d.join(level)).unwrap();
+                d.join(level).join("ietsp.toml")
+            })
+            .collect()
+    }
+
+    fn opts(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(n, v)| (n.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn load(text: &str) -> Result<Settings> {
         let mut c = Conf::default();
-        c.apply(text, Path::new("t.conf"))?;
-        Ok(c)
+        c.apply(text, "t.toml", true)?;
+        Settings::from_conf(&c, &NO_ENV)
     }
 
     #[test]
-    fn unknown_key_names_the_file_and_line() {
-        let e = load("builder = daemon\nnope = 1\n")
+    fn each_source_wins_over_the_one_before() {
+        let files = scratch("order");
+        std::fs::write(
+            &files[0],
+            "builder = \"etc\"\nworkers = 1\nfiber-stack-mb = 1\ncache = false\nfetch-max-size = 1\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &files[1],
+            "builder = \"user\"\nworkers = 2\nfiber-stack-mb = 2\n",
+        )
+        .unwrap();
+        let env = Env(|n| match n {
+            "IETSP_CONFIG" => Some("builder = \"inline\"\nworkers = 3\n".into()),
+            "IETSP_WORKERS" => Some("5".into()),
+            "IETSP_CACHE" => Some("1".into()),
+            _ => None,
+        });
+        let s = Settings::load_from(&files, &opts(&[("builder", "flag")]), &env).unwrap();
+        assert_eq!(s.builder.as_deref(), Some("flag"));
+        assert_eq!(s.workers, Some(5));
+        assert_eq!(s.fiber_stack_mb, Some(2));
+        assert_eq!(s.fetch_max_size, 1);
+        assert!(s.cache, "IETSP_CACHE=1 wins over cache = false");
+        let s = Settings::load_from(&files, &[], &NO_ENV).unwrap();
+        assert_eq!(s.builder.as_deref(), Some("user"));
+        assert_eq!(s.workers, Some(2));
+        assert!(!s.cache);
+        let inline = Env(|n| (n == "IETSP_CONFIG").then(|| "workers = 3".into()));
+        let s = Settings::load_from(&files, &opts(&[("workers", "4")]), &inline).unwrap();
+        assert_eq!(s.workers, Some(4));
+        let s = Settings::load_from(&files, &[], &inline).unwrap();
+        assert_eq!(s.workers, Some(3));
+    }
+
+    #[test]
+    fn source_map_adds_up_and_every_other_key_replaces() {
+        let files = scratch("lists");
+        std::fs::write(&files[0], "source-map = [\"/nix/store/a=/a\"]\n").unwrap();
+        std::fs::write(&files[1], "source-map = [\"/nix/store/b=/b\"]\n").unwrap();
+        let o = opts(&[("source-map", "/nix/store/c=/c /nix/store/d=/d")]);
+        let s = Settings::load_from(&files, &o, &NO_ENV).unwrap();
+        let stores: Vec<&str> = s.source_map.iter().map(|(s, _)| s.as_str()).collect();
+        assert_eq!(
+            stores,
+            [
+                "/nix/store/a",
+                "/nix/store/b",
+                "/nix/store/c",
+                "/nix/store/d"
+            ]
+        );
+        std::fs::write(&files[1], "source-map = [\"no-equals-sign\"]\n").unwrap();
+        let e = Settings::load_from(&files, &[], &NO_ENV)
+            .map(|_| ())
             .unwrap_err()
             .to_string();
-        assert!(e.contains("unknown ietsp setting 'nope'"), "{e}");
-        assert!(e.contains("t.conf:2"), "{e}");
+        assert!(e.contains("'source-map' wants a list"), "{e}");
+        assert!(e.contains("user/ietsp.toml"), "{e}");
     }
 
     #[test]
-    fn the_shells_keep_a_root_unless_the_file_turns_it_off() {
-        assert!(Settings::default().shell_gc_root);
-        let c = load("shell-gc-root = false\n").unwrap();
-        assert_eq!(c.bool("shell-gc-root").unwrap(), Some(false));
-        assert!(!Settings::from_conf(&c).unwrap().shell_gc_root);
+    fn a_missing_file_is_skipped_and_the_defaults_hold() {
+        let s = Settings::load_from(&scratch("none"), &[], &NO_ENV).unwrap();
+        assert_eq!(s.builder, None);
+        assert_eq!(s.workers, None);
+        assert_eq!(s.fetch_max_size, 16 << 30);
+        assert_eq!(s.fix_hashes, FixHashes::Ask);
+        assert!(s.cache && s.provenance && s.shell_gc_root && s.build_gc_root);
+        assert!(!s.no_fallback);
     }
 
     #[test]
-    fn extra_appends_to_a_list_key_only() {
-        let c = load("source-map = /nix/store/a=/a\nextra-source-map = /nix/store/b=/b\n").unwrap();
-        assert_eq!(
-            c.list("source-map"),
-            vec!["/nix/store/a=/a", "/nix/store/b=/b"]
+    fn a_leftover_ietsp_conf_is_an_error_that_names_the_toml() {
+        for level in 0..2 {
+            let files = scratch(&format!("leftover{level}"));
+            let old = files[level].with_extension("conf");
+            std::fs::write(&old, "builder = ssh-ng://bld1\n").unwrap();
+            std::fs::write(&files[level], "builder = \"daemon\"\n").unwrap();
+            let e = Settings::load_from(&files, &[], &NO_ENV)
+                .map(|_| ())
+                .unwrap_err()
+                .to_string();
+            let start = format!("{} is no longer read", old.display());
+            assert!(e.starts_with(&start), "{e}");
+            let to = format!("Move its settings to {};", files[level].display());
+            assert!(e.contains(&to), "{e}");
+        }
+    }
+
+    #[test]
+    fn a_settings_file_may_hold_lint_and_the_other_sources_may_not() {
+        assert!(load("[lint]\nwith = \"warn\"\n").is_ok());
+        let mut c = Conf::default();
+        let e = c.apply("[lint]\n", "$IETSP_CONFIG", false).unwrap_err();
+        assert!(
+            e.to_string().contains("setting 'lint' in $IETSP_CONFIG"),
+            "{e}"
         );
-        let e = load("extra-workers = 2\n").unwrap_err().to_string();
-        assert!(e.contains("unknown ietsp setting 'extra-workers'"), "{e}");
     }
 
     #[test]
-    fn later_files_win() {
-        let mut c = load("builder = daemon\n").unwrap();
-        c.apply("builder = ssh-ng://bld1\n", Path::new("u.conf"))
-            .unwrap();
-        assert_eq!(c.str("builder"), Some("ssh-ng://bld1"));
+    fn unknown_key_names_the_file() {
+        let e = load("builder = \"daemon\"\nnope = 1\n")
+            .map(|_| ())
+            .unwrap_err()
+            .to_string();
+        assert_eq!(e, "unknown ietsp setting 'nope' in t.toml");
+        let e = load("extra-source-map = []\n").map(|_| ()).unwrap_err();
+        assert!(e.to_string().contains("'extra-source-map'"), "{e}");
     }
 
     #[test]
-    fn typed_values_report_where_they_were_set() {
-        let c = load("workers = many\n").unwrap();
-        let e = c.num::<usize>("workers").unwrap_err().to_string();
-        assert!(e.contains("wants a number"), "{e}");
-        assert!(e.contains("t.conf:1"), "{e}");
-        let c = load("cache = maybe\n").unwrap();
-        let e = c.bool("cache").unwrap_err().to_string();
-        assert!(e.contains("wants a boolean"), "{e}");
-        let c = load("cache = no\nprovenance = 1\n").unwrap();
-        assert_eq!(c.bool("cache").unwrap(), Some(false));
-        assert_eq!(c.bool("provenance").unwrap(), Some(true));
+    fn a_wrong_type_names_the_key_and_the_file() {
+        for (text, want) in [
+            (
+                "workers = \"four\"",
+                "'workers' wants an integer, got \"four\" in t.toml",
+            ),
+            ("workers = -1", "'workers' wants an integer, got -1"),
+            ("cache = \"no\"", "'cache' wants true or false, got \"no\""),
+            (
+                "no-fallback = 1",
+                "'no-fallback' wants true or false, got 1",
+            ),
+            ("builder = 4", "'builder' wants a string, got 4"),
+            (
+                "fix-hashes = \"yes\"",
+                "'fix-hashes' wants \"ask\", \"always\" or \"never\"",
+            ),
+            (
+                "source-map = \"/nix/store/a=/a\"",
+                "'source-map' wants a list",
+            ),
+        ] {
+            let e = load(text).map(|_| ()).unwrap_err().to_string();
+            assert!(e.contains(want), "{text}: {e}");
+            assert!(e.ends_with("in t.toml"), "{text}: {e}");
+        }
+        let e = load("workers = ").map(|_| ()).unwrap_err().to_string();
+        assert!(e.starts_with("t.toml: "), "{e}");
+    }
+
+    #[test]
+    fn the_flag_value_is_toml_when_it_reads_as_toml() {
+        use toml::Value;
+        assert_eq!(flag_value("workers", "4"), Value::Integer(4));
+        assert_eq!(flag_value("cache", "false"), Value::Boolean(false));
+        assert_eq!(
+            flag_value("fix-hashes", "always"),
+            Value::String("always".into())
+        );
+        assert_eq!(
+            flag_value("fix-hashes", "\"always\""),
+            Value::String("always".into())
+        );
+        assert_eq!(
+            flag_value("builder", "ssh-ng://bld1"),
+            Value::String("ssh-ng://bld1".into())
+        );
+        assert_eq!(flag_value("builder", "inf"), Value::String("inf".into()));
+        let list = flag_value("source-map", "[\"/nix/store/a=/a\"]");
+        assert_eq!(list, flag_value("source-map", "/nix/store/a=/a"));
+        let e = Settings::load_from(&[], &opts(&[("workers", "four")]), &NO_ENV)
+            .map(|_| ())
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("'workers' wants an integer"), "{e}");
+        assert!(e.ends_with(&format!("in {FLAG}")), "{e}");
+        let s = Settings::load_from(&[], &opts(&[("shell-gc-root", "false")]), &NO_ENV).unwrap();
+        assert!(!s.shell_gc_root);
     }
 
     #[test]
@@ -436,24 +615,19 @@ mod tests {
 
     #[test]
     fn the_environment_wins_over_the_file() {
-        const UNSET: &str = "IETSP_NOT_SET_ANYWHERE";
-        assert!(flag(UNSET, "0", None, true));
-        assert!(!flag(UNSET, "0", Some(false), true));
-        assert!(flag(UNSET, "1", Some(true), false));
-        // A variable every test process has, so the file value cannot win.
-        assert!(!flag(
-            "PATH",
-            &std::env::var("PATH").unwrap(),
-            Some(true),
-            true
-        ));
+        assert!(NO_ENV.flag("X", "0", None, true));
+        assert!(!NO_ENV.flag("X", "0", Some(false), true));
+        assert!(NO_ENV.flag("X", "1", Some(true), false));
+        let set = Env(|_| Some("0".into()));
+        assert!(!set.flag("X", "0", Some(true), true));
+        assert!(!set.flag("X", "1", Some(true), false));
     }
 
     #[test]
     fn the_file_list_is_etc_then_xdg() {
         let files = conf_files();
         assert_eq!(files.len(), 2);
-        assert!(files[0].ends_with("ietsp.conf"), "{files:?}");
-        assert!(files[1].ends_with("ietsp/ietsp.conf"), "{files:?}");
+        assert!(files[0].ends_with("ietsp.toml"), "{files:?}");
+        assert!(files[1].ends_with("ietsp/ietsp.toml"), "{files:?}");
     }
 }

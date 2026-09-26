@@ -85,7 +85,7 @@ def run-tests [ietsp: string, work: string] {
   "hello prefetch\n" | save -f $"($work)/msg.txt"
   let sock = (scratch-daemon $"($work)/store" --option builders "" --option max-jobs 2)
   make-fod $work flat (current-system) dep
-  let r = (with-env {IETSP_CONFIG: $"builder = unix://($sock)"} { ^$ietsp prefetch $"($work)/fod.nix" | complete })
+  let r = (with-env {IETSP_CONFIG: $'builder = "unix://($sock)"'} { ^$ietsp prefetch $"($work)/fod.nix" | complete })
   let hashed = (out-of nix hash file --sri $"($work)/msg.txt" | chomp)
   let lines = ($r.stdout | lines)
   $ok = ($ok | append (verdict ($r.exit_code == 0 and $lines == [$hashed]) "a faked fixed-output build"
@@ -93,7 +93,7 @@ def run-tests [ietsp: string, work: string] {
 
   print "== 5. the expression form, recursive"
   make-fod $work recursive (current-system)
-  let r = (with-env {IETSP_CONFIG: $"builder = unix://($sock)"} { ^$ietsp prefetch --json $"($work)/fod.nix" | complete })
+  let r = (with-env {IETSP_CONFIG: $'builder = "unix://($sock)"'} { ^$ietsp prefetch --json $"($work)/fod.nix" | complete })
   let hashed = (out-of nix hash path --sri $"($work)/msg.txt" | chomp)
   let j = (try { $r.stdout | from json } catch { {} })
   $ok = ($ok | append (verdict ($r.exit_code == 0 and $j.hash? == $hashed and ($j.drvPath? | default "" | str ends-with ".drv")) "a recursive fixed-output build"

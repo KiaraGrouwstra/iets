@@ -1,14 +1,14 @@
 # Settings
 
-Every `IETSP_*` environment variable, every `ietsp.conf` key, the
+Every `IETSP_*` environment variable, every `ietsp.toml` setting, the
 `--ietsp-option` flag, and how ietsp reads Nix's own `nix.conf`.
 
 ietsp reads two settings files. `nix.conf` is Nix's, shared with the real
-nix behind the classic fallback; `ietsp.conf` is ietsp's own, and no nix
-ever sees it. Both use the same line syntax.
+nix behind the classic fallback; `ietsp.toml` is ietsp's own, in TOML, and
+no nix ever sees it.
 
 Every `IETSP_*` variable is read once at startup into one `Settings`
-struct (`src/settings.rs`), together with the `ietsp.conf` files and the
+struct (`src/settings.rs`), together with the `ietsp.toml` files and the
 `--ietsp-option` flag. A `Session` owns it, not a static: read it with
 `ev.session.settings()` where an evaluator is at hand, else
 `session::Session::current().settings()` (`docs/reference/library.md`).
@@ -18,11 +18,15 @@ use, so a knob cannot change halfway through a run.
 
 ## Environment variables
 
-A variable with a **File** entry is also an `ietsp.conf` key, under the
+A variable with a **File** entry is also an `ietsp.toml` key, under the
 kebab-case name given. The variable wins over the file: the file is the
 configuration, the environment is the override. The perf-tuning knobs
 (`IETSP_SPIN`, `IETSP_SPINNERS`, `IETSP_HANDOFF`, `IETSP_FANOUT`) and the
 statistics knobs stay environment-only.
+
+The **Type** column is the variable's. In the file the same setting has its
+TOML type: `cache = false`, `no-fallback = true`, `workers = 4`,
+`cache-dir = "/var/cache/ietsp"`.
 
 A level knob (`IETSP_STATS`, `IETSP_PAR_STATS`) is off when unset, `2`
 selects level 2, and any other value selects level 1.
@@ -101,16 +105,39 @@ without the tracing cache lists the files. Files read with `readFile` or
 
 ## `--ietsp-option`
 
-`--ietsp-option NAME VALUE` sets any `ietsp.conf` key for one run. Every
+`--ietsp-option NAME VALUE` sets any `ietsp.toml` setting for one run. Every
 ietsp command and every classic name accepts it, and it never reaches the
 real nix: it leaves the argv before a classic fallback execs
 (`src/main.rs`).
 
-# `ietsp.conf`
+VALUE is a TOML value when it reads as a boolean, an integer, a quoted
+string or an array, and the text itself otherwise: `--ietsp-option workers
+4`, `--ietsp-option fix-hashes always` and `--ietsp-option builder
+ssh-ng://bld1` need no quotes. Text for `source-map` is a
+whitespace-separated list.
 
-`src/settings.rs` reads ietsp's own settings. The line syntax is
-nix.conf's, parsed by the same code: `name = value`, `include` and
-`!include`, `#` comments, and `extra-<name>` appending to a list setting.
+# `ietsp.toml`
+
+`src/settings.rs` reads ietsp's own settings. The format is TOML: the
+settings are top-level keys with the names below, and `[lint]` is a table
+(`docs/reference/lints.md`).
+
+```toml
+builder = "ssh-ng://bld1"
+workers = 4
+no-fallback = true
+fix-hashes = "never"
+source-map = ["/nix/store/…-source=/home/me/nixpkgs"]
+
+[lint]
+with = "warn"
+```
+
+The keys are flat because there are thirteen of them and because the names
+stay the ones `--ietsp-option` and the NixOS module take. A value has its
+TOML type: a switch is `true` or `false`, a number is an integer, a path or
+a URL is a string, `source-map` is an array of strings. A wrong type is an
+error naming the key and the file; `workers = "4"` is not read as 4.
 
 Nothing but ietsp reads this file, so a host can send ietsp's builds
 somewhere without touching `nix.conf`, which the real nix behind the
@@ -120,15 +147,41 @@ classic fallback also reads.
 
 Later wins.
 
-1. `$IETSP_CONF_DIR/ietsp.conf`, default `/etc/ietsp/ietsp.conf`.
-2. `$XDG_CONFIG_HOME/ietsp/ietsp.conf`, default
-   `~/.config/ietsp/ietsp.conf`.
-3. `$IETSP_CONFIG`, treated as one more file's text.
-4. The `--ietsp-option name value` pairs from the command line.
+1. `$IETSP_CONF_DIR/ietsp.toml`, default `/etc/ietsp/ietsp.toml`: the
+   machine.
+2. `$XDG_CONFIG_HOME/ietsp/ietsp.toml`, default
+   `~/.config/ietsp/ietsp.toml`: the user.
+3. `$IETSP_CONFIG`, treated as one more file's text, so it is TOML too:
+   `IETSP_CONFIG='builder = "daemon"'`.
+4. The `--ietsp-option NAME VALUE` pairs from the command line.
+5. The `IETSP_*` variable of a setting that has one.
 
-A file that is missing or unreadable is skipped. An **unknown key is an
-error** naming the file and the line: this file is ietsp's, so a name it
-does not know is a mistake, not a setting for somebody else.
+A later source **replaces** a key. `source-map` is the exception: its
+entries **add up** across the sources, lowest first, so a user maps a
+checkout without repeating what the machine maps. There is no way to drop an
+entry set lower down; a stale one costs a warning that its directory is
+gone.
+
+A file that is missing is skipped; one that is there and cannot be read is
+an error. An **unknown key is an error** naming the file: this file is
+ietsp's, so a name it does not know is a mistake, not a setting for
+somebody else.
+
+A `[lint]` table in the machine or the user file sets lint levels for every
+evaluation, below the project's (`docs/reference/lints.md`). `$IETSP_CONFIG`
+and `--ietsp-option` refuse it: `IETSP_LINT` and `--lint` are their
+spelling.
+
+## `ietsp.conf` is gone
+
+Until 2026-09 these files were `ietsp.conf`, in nix.conf's line syntax. That
+file is not read any more, and an `ietsp.conf` still in one of the two
+directories is an **error**, on every command: skipping it would drop a
+`builder` without a word, and the builds would go somewhere else. The error
+names the `ietsp.toml` to write. The values take their TOML types there:
+`builder = "ssh-ng://bld1"`, and `source-map` is an array. On
+NixOS the module below writes the new file and the old one leaves `/etc` at
+the same switch.
 
 ## Keys
 
@@ -138,8 +191,8 @@ there, plus three keys that have no environment variable:
 | Key | Type | Default |
 |:---|:---|:---|
 | `builder` | URL: `daemon`, `unix://PATH`, `ssh-ng://[user@]host`, `grpc://host:port`; not used by the shell commands (`docs/reference/classic.md`) | the nix.conf `store` setting (itself `auto`) |
-| `source-map` | list of `STOREPATH=LOCALDIR` | empty |
-| `fetch-max-size` | bytes | 17179869184 (16 GiB) |
+| `source-map` | array of `"STOREPATH=LOCALDIR"` strings | empty |
+| `fetch-max-size` | integer (bytes) | 17179869184 (16 GiB) |
 | `shell-gc-root` | bool | `true` |
 | `build-gc-root` | bool | `true` |
 
@@ -164,7 +217,7 @@ Neither switch touches the roots a caller names: `nix-instantiate
 --gc-root`, `print-dev-env --gc-root` and `ietsp build --fetch-to`. One
 root per thing.
 
-`extra-source-map` appends; no other key is a list. `fetch-max-size` caps
+`source-map` is the only list. `fetch-max-size` caps
 the decompressed bytes of one flake input download; a stream that
 decompresses over 1000 times its size past its first 16 MiB is refused
 too.
@@ -184,7 +237,8 @@ and a remote `builder`'s outputs are copied back first
 ## The NixOS module
 
 `ietsp.settings` is an attribute set of key to string, bool, int or list
-of strings, rendered to `/etc/ietsp/ietsp.conf`:
+of strings, rendered to `/etc/ietsp/ietsp.toml` with the same types, so
+`workers = 8`, not `"8"`:
 
 ```nix
 {

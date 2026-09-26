@@ -347,7 +347,7 @@ def main [] {
   let wd = $"($tmp)/build-builder"
   mkdir $wd
   cd $wd
-  let r = (with-env {IETSP_CONFIG: $"builder = unix://($sock)"} {
+  let r = (with-env {IETSP_CONFIG: $'builder = "unix://($sock)"'} {
     ^$"($farm)/nix-build" $"($d)/builder.nix" | complete
   })
   let printed = ($r.stdout | chomp)
