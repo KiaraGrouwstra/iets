@@ -1,9 +1,10 @@
 # `use flake [FLAKEREF]` through ietsp, replacing nix-direnv. Warm loads read
 # ietsp's tracing cache and skip nix entirely; a miss evaluates in well
-# under a second and builds through the daemon. Local flake refs only
+# under a second and builds through the daemon. direnv watches every file the
+# evaluation read, not only flake.nix and flake.lock. Local flake refs only
 # (`.`, `./x`, `/abs`, `~/x`, `path:`), with an optional `#attr`.
 use_flake() {
-  local ref="${1:-.}" uri root
+  local ref="${1:-.}" uri root script
   if ! has ietsp; then
     log_error "use flake: ietsp is not installed; import the ietsp NixOS module"
     return 1
@@ -22,5 +23,9 @@ use_flake() {
   mkdir -p "$(direnv_layout_dir)"
   watch_file "$uri/flake.nix" "$uri/flake.lock"
   # --gc-root needs the local daemon; a remote `builder` in ietsp.conf refuses it
-  eval "$(ietsp print-dev-env --builder daemon --gc-root "$root" "$ref")"
+  script="$(ietsp print-dev-env --builder daemon --gc-root "$root" "$ref")" || true
+  # after the evaluation, so the first load already has a read set; before the
+  # environment, so a shell hook that fails does not lose the watches
+  eval "$(ietsp print-dev-env --watch-files "$ref")"
+  eval "$script"
 }

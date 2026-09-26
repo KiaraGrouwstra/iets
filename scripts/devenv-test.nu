@@ -11,7 +11,8 @@
 #     prints the same bash without fetching the root tree;
 #  i. `--watch-files` lists the files the shell read, for a plain directory
 #     and a git work tree, and nothing from the store;
-#  j. it reads the cache entry and evaluates nothing.
+#  j. it reads the cache entry and evaluates nothing;
+#  k. a real direnv with nix/direnvrc reloads when such a file is edited.
 # The scratch flakes sit on the nixpkgs this repo pins (lock written by hand,
 # so nothing is fetched: both evaluators find the tree in the store by narHash).
 #
@@ -218,7 +219,7 @@ def run-tests [ctx: record]: nothing -> int {
     $res ++= [(bad $"h. worktree \(exit ($r.exit_code)\)" (tail-of $"($work)/ietsp.err" 3) (diff-head $"($work)/fresh-nix.sh" $"($work)/fresh.sh" 5 | str join "\n"))]
   }
 
-  # i-j. the watch list. One flake, as a plain directory and as a git work tree.
+  # i-k. the watch list. One flake, as a plain directory and as a git work tree.
   let watched = $"($work)/watched"
   mkdir $watched
   r#'{
@@ -265,6 +266,35 @@ def run-tests [ctx: record]: nothing -> int {
     } else {
       $res ++= [(bad $"j. ($c.name) flake: --watch-files evaluated" $r.stderr)]
     }
+  }
+
+  # k. a real direnv with nix/direnvrc and a cold cache: the first load watches versions.json, a
+  # second prompt reloads nothing, an edit reloads. direnv compares mtimes in
+  # whole seconds, so the edit is dated ahead.
+  let dconf = $"($work)/direnv"
+  mkdir $dconf
+  cp nix/direnvrc $"($dconf)/direnvrc"
+  "use flake\n" | save $"($tracked)/.envrc"
+  let denv = {
+    DIRENV_CONFIG: $dconf, XDG_DATA_HOME: $"($work)/direnv-data", DIRENV_LOG_FORMAT: "",
+    IETSP_CACHE_DIR: $"($work)/direnv-cache",
+    PATH: ([($ietsp | path dirname)] ++ $env.PATH),
+  }
+  hide-env -i DIRENV_DIR DIRENV_FILE DIRENV_DIFF DIRENV_WATCHES
+  let load = {|state: record| with-env ($denv | merge $state) { cd $tracked; ^direnv export json | complete | get stdout } }
+  with-env $denv { cd $tracked; ^direnv allow }
+  let first = (do $load {} | from json)
+  let state = ($first | transpose k v | where k starts-with DIRENV_ | transpose -rd)
+  let watches = (^direnv show_dump $first.DIRENV_WATCHES | from json | get path)
+  let idle = (do $load $state)
+  '{"greeting": "yo"}' | save -f $"($tracked)/versions.json"
+  ^touch -d "5 seconds" $"($tracked)/versions.json"
+  let again = (do $load $state)
+  let reloaded = if ($again | is-empty) { "" } else { $again | from json | get -o GREETING | default "" }
+  if $first.GREETING? == "hi" and $"($tracked)/versions.json" in $watches and ($idle | is-empty) and $reloaded == "yo" {
+    $res ++= [(ok $"k. direnv: ($watches | length) watches on the first load, idle without an edit, reloads on an edit of versions.json")]
+  } else {
+    $res ++= [(bad "k. direnv reload" $"first GREETING: ($first.GREETING?)" $"watches: ($watches)" $"idle: ($idle)" $"after the edit: ($reloaded)")]
   }
 
   let fail = ($res | where not $it | length)

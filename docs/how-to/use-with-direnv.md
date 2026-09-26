@@ -12,16 +12,19 @@ Add this to your `.envrc`:
 
 ```bash
 use_ietsp() {
-  local root; root="$(direnv_layout_dir)/ietsp-env"
+  local root script
+  root="$(direnv_layout_dir)/ietsp-env"
   watch_file flake.nix flake.lock
-  eval "$(ietsp print-dev-env --builder daemon --gc-root "$root" "${1:-.}")"
+  script="$(ietsp print-dev-env --builder daemon --gc-root "$root" "${1:-.}")" || true
+  eval "$(ietsp print-dev-env --watch-files "${1:-.}")"
+  eval "$script"
 }
 use_ietsp
 ```
 
 Then `direnv allow`.
 
-Three parts matter:
+Four parts matter:
 
 - `--builder daemon` builds or substitutes the shell's inputs on the local
   daemon. The shell runs here, so its inputs belong in the local store.
@@ -30,8 +33,14 @@ Three parts matter:
   nix-direnv's `--profile` does with a profile. Without it, the next
   `nix-collect-garbage` deletes the environment and the following `direnv
   reload` rebuilds it.
-- `watch_file flake.nix flake.lock` is direnv's own reload trigger, not
-  ietsp's.
+- `watch_file flake.nix flake.lock` is the floor. It is what nix-direnv
+  watches, and it is all direnv has when there is no cache entry yet.
+- `print-dev-env --watch-files` prints one `watch_file` line with every file
+  the evaluation read. Run it after the first call, so that a first load
+  already has an entry to read. Run it before `eval "$script"`, so that a
+  shell hook that fails does not lose the watches. Give it the same
+  `FLAKEREF` and the same evaluation flags as the first call: the two must
+  name one cache entry.
 
 The printed bash is what `nix develop` sources: variable assignments,
 exports, `declare -a` and `declare -A`, function definitions, the `PATH`
@@ -39,6 +48,46 @@ and `XDG_DATA_DIRS` prepend, `NIX_BUILD_TOP` from `mktemp`, and
 `eval "${shellHook:-}"`. There is no `exit`, no `set -e` and no `exec`. On
 an error nothing goes to stdout and the status is non-zero, so `eval` of an
 empty string leaves your environment alone.
+
+## What direnv reloads on
+
+nix-direnv watches `flake.nix` and `flake.lock` and leaves the rest to
+`direnv reload`. ietsp does not have to guess. The tracing cache records
+every observation the evaluation made
+([explanation/caching.md](../explanation/caching.md)), and `--watch-files`
+turns that read set into direnv watches:
+
+| the evaluation | direnv watches |
+|---|---|
+| read a file: `import ./nix/shell.nix`, `readFile`, `importJSON`, `flake.nix`, `flake.lock`, a file of a `path:` input | the file |
+| listed a directory: `readDir ./conf.d` | the directory, whose mtime changes when an entry comes or goes |
+| asked for the kind of a path: `pathExists ./local.nix`, the nixpkgs `config.nix` probes | the path; direnv also sees a missing path appear |
+| copied a path into the shell: `"${./hook.sh}"`, `./scripts` | the path and everything the copy took below it |
+| asked git about a work tree | the git index, which `git add`, a commit and a checkout rewrite |
+
+In a git flake an untracked file is not part of the flake. `git add` makes
+it one, the index changes, and direnv reloads.
+
+Some things are left out on purpose:
+
+- Everything under `/nix/store` and in ietsp's own stores. Those paths do
+  not change.
+- The flake's source tree as a whole. Every edit of every file changes it,
+  and few shells depend on it, so a watch on it would cost an evaluation for
+  each saved source file. direnv watches the files the evaluation read out
+  of the tree and the paths the shell copied, and no more. A shell that uses
+  `self` or `./.` needs `direnv reload`, or a `watch_file` of your own.
+- Environment variables (`getEnv` under `--impure`). direnv has no watch for
+  a variable, and it does not run `.envrc` again when one changes. The cache
+  still checks them, so the next reload for any other reason evaluates again.
+- More than 500 paths. direnv stats every watched path on every prompt, so
+  the list has a bound: 500 watches add about 3 ms to a prompt. ietsp keeps
+  the first 500 in the order the evaluation read them, and says so on
+  stderr. A usual flake shell has 10 to 20.
+
+`--watch-files` validates nothing and evaluates nothing: it reads one cache
+entry and prints. If the evaluation fails, the entry of the last good run is
+still there, so direnv still watches the file you have to fix.
 
 ## Use the NixOS module instead
 
