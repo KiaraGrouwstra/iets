@@ -176,6 +176,14 @@ def warn-nix-version [cmd: string] {
   }
 }
 
+# False under E2E_OFFLINE=1, which the flake check's container sets: it has no
+# network. The cases that fetch go through this, so a skip is printed, not silent.
+export def online [what: string]: nothing -> bool {
+  if ($env.E2E_OFFLINE? | default "") != "1" { return true }
+  print $"skip ($what): no network"
+  false
+}
+
 # The directory of the real nix-instantiate on PATH.
 export def real-bin-dir []: nothing -> string {
   require-real-nix nix-instantiate

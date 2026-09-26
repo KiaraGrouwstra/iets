@@ -14,7 +14,7 @@
 # no nix, no daemon and a fresh cache, a second run does it with
 # `IETSP_OFFLINE=1`, and `build --no-build` sends the input's NAR out of the
 # same spool.
-use lib.nu [ROOT chomp ietsp-bin isolate require-real-nix run-in show verdict]
+use lib.nu [ROOT chomp ietsp-bin isolate online require-real-nix run-in show verdict]
 
 def --wrapped nixf [...args: string] { ^nix --extra-experimental-features "nix-command flakes" ...$args }
 def --wrapped git-in [repo: string, ...args: string] {
@@ -477,56 +477,59 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let mm_ok = ($mm.exit_code != 0 and $mm.stdout == "" and ($mm.stderr | str contains "NAR hash mismatch") and not ($tb_path | path exists))
   $res ++= [(verdict $mm_ok "tarball: a changed tarball is refused, not registered" $"tarball mismatch \(exit ($mm.exit_code)\): ($mm.stderr | lines | first 1 | str join '')")]
 
-  # a `github` input over https: the public archive URL, one redirect to
-  # codeload, gzip, the same tree nix has.
-  let ghf = $"($work)/ghflake"
-  mkdir $ghf
-  r#'{
+  # ---- the cases that need the network: github.com and cache.nixos.org
+  if (online "a github input, the standalone fetch, a substituted input") {
+    # a `github` input over https: the public archive URL, one redirect to
+    # codeload, gzip, the same tree nix has.
+    let ghf = $"($work)/ghflake"
+    mkdir $ghf
+    r#'{
   inputs.tiny.url = "github:numtide/flake-utils/471aed544aef9c610ea465cddf4a39c358ac5aa8";
   inputs.tiny.flake = false;
   outputs = { self, tiny }: { v = toString (builtins.attrNames (builtins.readDir tiny)); };
 }
 '# | save $"($ghf)/flake.nix"
-  do { cd $ghf; nixf flake lock } | complete | ignore
-  let gh_exp = (nixf eval --raw --option eval-cache "false" $"($ghf)#v" | complete | get stdout | chomp)
-  let gh_path = (input-path $ghf "tiny")
-  nixf store delete $gh_path | complete | ignore
-  $res ++= [(fetch-only $ietsp "github: input fetched over https by ietsp" $"($ghf)#v" $gh_exp $nobin)]
+    do { cd $ghf; nixf flake lock } | complete | ignore
+    let gh_exp = (nixf eval --raw --option eval-cache "false" $"($ghf)#v" | complete | get stdout | chomp)
+    let gh_path = (input-path $ghf "tiny")
+    nixf store delete $gh_path | complete | ignore
+    $res ++= [(fetch-only $ietsp "github: input fetched over https by ietsp" $"($ghf)#v" $gh_exp $nobin)]
 
-  # the standalone case: no nix, no daemon (nix.conf's `store` points at a
-  # socket that is not there), a fresh cache. The first run fetches into the
-  # input store and evaluates; the second evaluates again with IETSP_OFFLINE=1,
-  # so any download would be an error.
-  nixf store delete $gh_path | complete | ignore
-  $res ++= [(standalone $ietsp "standalone: no nix, no daemon, fetch then an offline hit" $"($ghf)#v" $gh_exp $nobin $"($work)/alone")]
+    # the standalone case: no nix, no daemon (nix.conf's `store` points at a
+    # socket that is not there), a fresh cache. The first run fetches into the
+    # input store and evaluates; the second evaluates again with IETSP_OFFLINE=1,
+    # so any download would be an error.
+    nixf store delete $gh_path | complete | ignore
+    $res ++= [(standalone $ietsp "standalone: no nix, no daemon, fetch then an offline hit" $"($ghf)#v" $gh_exp $nobin $"($work)/alone")]
 
-  # a path cache.nixos.org has and this machine has not: the daemon substitutes
-  # it, so there is no download at all. The lock names a `github` input whose
-  # coordinates are never used, because the narHash alone says where the tree
-  # belongs.
-  let src = (nixf eval --raw --impure --expr $"\(import ($nixpkgs) {}).sl.src.outPath" | complete | get stdout | chomp)
-  let src_hash = (nixf path-info --store "https://cache.nixos.org" --json $src | complete | get stdout | from json | values | get 0.narHash)
-  nixf store delete $src | complete | ignore
-  let subf = $"($work)/subflake"
-  mkdir $subf
-  r#'{
+    # a path cache.nixos.org has and this machine has not: the daemon substitutes
+    # it, so there is no download at all. The lock names a `github` input whose
+    # coordinates are never used, because the narHash alone says where the tree
+    # belongs.
+    let src = (nixf eval --raw --impure --expr $"\(import ($nixpkgs) {}).sl.src.outPath" | complete | get stdout | chomp)
+    let src_hash = (nixf path-info --store "https://cache.nixos.org" --json $src | complete | get stdout | from json | values | get 0.narHash)
+    nixf store delete $src | complete | ignore
+    let subf = $"($work)/subflake"
+    mkdir $subf
+    r#'{
   inputs.sub.url = "github:x/y";
   inputs.sub.flake = false;
   outputs = { self, sub }: { v = sub.outPath; };
 }
 '# | save $"($subf)/flake.nix"
-  {
-    nodes: {
-      sub: { flake: false, locked: { type: "github", owner: "x", repo: "y", rev: "0000000000000000000000000000000000000000", narHash: $src_hash }, original: { type: "github", owner: "x", repo: "y" } }
-      root: { inputs: { sub: "sub" } }
-    }
-    root: "root"
-    version: 7
-  } | to json | save $"($subf)/flake.lock"
-  let sb = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp eval --raw --no-tracing-cache $"($subf)#v" | complete })
-  let sb_ok = (($sb.stdout | chomp) == $src and not ($sb.stderr | str contains "cannot fetch"))
-  $res ++= [(verdict $sb_ok "substitute: the daemon substitutes the input, ietsp downloads nothing" $"substitute \(exit ($sb.exit_code)\): ($sb.stdout | chomp) ($sb.stderr | lines | last 2 | str join ' | ')")]
-  nixf store delete $src | complete | ignore
+    {
+      nodes: {
+        sub: { flake: false, locked: { type: "github", owner: "x", repo: "y", rev: "0000000000000000000000000000000000000000", narHash: $src_hash }, original: { type: "github", owner: "x", repo: "y" } }
+        root: { inputs: { sub: "sub" } }
+      }
+      root: "root"
+      version: 7
+    } | to json | save $"($subf)/flake.lock"
+    let sb = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp eval --raw --no-tracing-cache $"($subf)#v" | complete })
+    let sb_ok = (($sb.stdout | chomp) == $src and not ($sb.stderr | str contains "cannot fetch"))
+    $res ++= [(verdict $sb_ok "substitute: the daemon substitutes the input, ietsp downloads nothing" $"substitute \(exit ($sb.exit_code)\): ($sb.stdout | chomp) ($sb.stderr | lines | last 2 | str join ' | ')")]
+    nixf store delete $src | complete | ignore
+  }
 
   # `git` and `hg` are the last shell-out: ietsp has no git fetcher, so a
   # missing git input goes to nix, and without nix it is an error that names it.

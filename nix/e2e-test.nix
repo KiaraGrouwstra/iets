@@ -53,7 +53,7 @@ pkgs.testers.runNixOSTest {
     # the daemon must not open the database before the store is in place
     systemd.sockets.nix-daemon.wantedBy = lib.mkForce [ ];
     users.users.alice.isNormalUser = true;
-    environment.systemPackages = [ pkgs.nushell pkgs.gnutar pkgs.gzip pkgs.diffutils ] ++ packages;
+    environment.systemPackages = [ pkgs.nushell pkgs.git pkgs.gnutar pkgs.gzip pkgs.diffutils ] ++ packages;
   };
   testScript = { containers, ... }:
     let
@@ -65,7 +65,9 @@ pkgs.testers.runNixOSTest {
       machine.wait_for_unit("multi-user.target")
       machine.succeed("${writableStore} ${registration}")
       machine.succeed("systemctl start nix-daemon.socket")
+      # a git checkout, as in the dev shell: the scripts read this flake as git+file
       machine.succeed("cp -r ${self} /home/alice/ietsp && chmod -R u+w /home/alice/ietsp && chown -R alice /home/alice/ietsp")
-      machine.succeed("runuser -l alice -c 'cd ietsp && IETSP=${ietsp}/bin/ietsp NIXPKGS=${nixpkgs} ${env} nu scripts/${name}.nu' >&2")
+      machine.succeed("runuser -l alice -c 'cd ietsp && git init -q && git add -A && git -c user.name=e2e -c user.email=e2e@example.com commit -q -m e2e'")
+      machine.succeed("runuser -l alice -c 'cd ietsp && IETSP=${ietsp}/bin/ietsp NIXPKGS=${nixpkgs} E2E_OFFLINE=1 ${env} nu scripts/${name}.nu' >&2")
     '';
 }

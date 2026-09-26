@@ -111,6 +111,7 @@
           };
           # with the real nix-fast-build, so the comparison case runs too
           fastbuild-e2e = e2e "fastbuild-e2e" { packages = [ pkgs.nix-fast-build ]; };
+          flaketest = e2e "flaketest" { };
           plumbing-e2e = e2e "plumbing-e2e" { };
           prefetch-e2e = e2e "prefetch-e2e" { };
         });
