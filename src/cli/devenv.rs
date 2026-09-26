@@ -12,6 +12,8 @@ use crate::trace::run::Cache;
 
 struct DevEnvArgs {
     transport: crate::remote::worker::Transport,
+    /// `nix develop`'s `-j`, `--cores` and the rest; the defaults natively.
+    options: crate::remote::worker::Options,
     gc_root: GcRoot,
 }
 
@@ -267,7 +269,12 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
         return CrateError::Usage("--gc-root needs a local daemon (daemon or unix://)".into())
             .report();
     }
-    let d = DevEnvArgs { transport, gc_root };
+    let options = crate::remote::worker::Options::default();
+    let d = DevEnvArgs {
+        transport,
+        options,
+        gc_root,
+    };
 
     let t0 = std::time::Instant::now();
     let run = run_for(&a).cached(&a, "print-dev-env");
@@ -424,9 +431,14 @@ pub fn dev_env(
     ev: Evaluator,
     a: EvalArgs,
     transport: crate::remote::worker::Transport,
+    options: crate::remote::worker::Options,
     gc_root: GcRoot,
 ) -> Result<DevEnv, i32> {
-    let d = DevEnvArgs { transport, gc_root };
+    let d = DevEnvArgs {
+        transport,
+        options,
+        gc_root,
+    };
     let mut run = Run::on(ev).configured(&a).workers(a.workers);
     // a hit reads the environment out of the local store, so only a local
     // daemon gets an entry
@@ -545,7 +557,7 @@ fn dev_env_build(ev: &mut Evaluator, a: EvalArgs, d: &DevEnvArgs) -> Result<DevE
     use crate::builtins::derivation::{DrvInfo, load_drv_traced};
     use crate::devenv;
     use crate::eval::ErrorKind;
-    use crate::remote::worker::{Options, failed_event};
+    use crate::remote::worker::failed_event;
     use crate::store::drv::Derivation;
     use crate::store::path::StorePath;
     use crate::store::source::SourceOrigin;
@@ -646,7 +658,7 @@ fn dev_env_build(ev: &mut Evaluator, a: EvalArgs, d: &DevEnvArgs) -> Result<DevE
             failed: None,
             prov: crate::provenance::Provenance::snapshot(ev),
         };
-        let mut w = Worker::open(&d.transport, &Options::default(), &mut |e| sink.event(e))?;
+        let mut w = Worker::open(&d.transport, &d.options, &mut |e| sink.event(e))?;
         let valid = w
             .conn
             .query_valid_paths(&out_paths, &mut |e| sink.event(e))?;

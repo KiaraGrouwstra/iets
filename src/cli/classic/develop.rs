@@ -76,7 +76,7 @@ pub fn main(argv: &[String], rest: &[String]) -> i32 {
         Ok(d) => d,
         Err(reason) => fallback(NAME, argv, &reason),
     };
-    let (cfg, transport, _) = match super::nix::nix_settings(&mut d.c, false, false) {
+    let (cfg, transport, options) = match super::nix::nix_settings(&mut d.c, false, false) {
         Ok(t) => t,
         Err(reason) => fallback(NAME, argv, &reason),
     };
@@ -87,7 +87,7 @@ pub fn main(argv: &[String], rest: &[String]) -> i32 {
     let installable = d.installable.clone().unwrap_or_else(|| ".".into());
     let root = crate::cli::devenv::flake_shell_root(&installable, &transport);
     a.input = Some(Input::Flake(installable));
-    let env = match crate::cli::devenv::dev_env(ev, a, transport, root) {
+    let env = match crate::cli::devenv::dev_env(ev, a, transport, options, root) {
         Ok(e) => e,
         Err(code) => return code,
     };

@@ -223,8 +223,10 @@ The flags of class 1, and why they hold:
 | `--experimental-features`, `--extra-experimental-features` | Every feature is always on (**Experimental-feature builtins** above). `parse-toml-timestamps` is the exception: `ietsp eval` applies it, and a classic `nix` falls back. |
 | `--show-trace`, `--log-format bar` | ietsp always prints the full trace, and renders builds its own way; `docs/reference/classic.md` lists both. |
 
-One flag moved from "ignored" to class 3:
+Two flags moved from "ignored" to class 2 or 3:
 
+- `nix develop -j N`, `--cores N`, `-k`: the values did not reach the
+  daemon that builds the shell. They do now.
 - `nix-instantiate --store URL` wrote to the local store when `URL` named
   another daemon. It falls back now; `--eval` does not need a store and
   stays.

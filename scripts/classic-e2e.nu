@@ -780,6 +780,14 @@ in
   let to = (run-both $farm nix-build $slow --no-out-link --option timeout 2)
   $ok = ($ok | append ((cmp-case "nix-build --option timeout 2" $to) and (verdict ($to.ours.exit_code == 1 and ($to.ours.stderr | str contains "timed out after 2 seconds"))
     "--option timeout reaches the daemon" $"stderr '($to.ours.stderr | str substring 0..400)'")))
+  # nix develop sends them too: the shell's input times out on both sides
+  let sdir = $"($tmp)/slow-shell"
+  mkdir $sdir
+  cp $"($fdir)/flake.lock" $sdir
+  "{\n  outputs = { self }: {\n    devShells.x86_64-linux.default = derivation {\n      name = \"slow-shell\";\n      system = \"x86_64-linux\";\n      builder = \"/bin/bash\";\n      slow = derivation {\n        name = \"slow-input-${toString builtins.currentTime}\";\n        system = \"x86_64-linux\";\n        builder = \"/bin/sh\";\n        args = [ \"-c\" \"while :; do :; done\" ];\n      };\n    };\n  };\n}\n" | save $"($sdir)/flake.nix"
+  let sd = (run-both $farm nix develop --impure $"path:($sdir)" --option timeout 2 -c "true")
+  $ok = ($ok | append ((cmp-case "nix develop --option timeout 2" $sd) and (verdict ($sd.ours.exit_code == 1 and ($sd.ours.stderr | ansi strip | str contains "timed out after 2 seconds"))
+    "nix develop sends its build settings to the daemon" $"stderr '($sd.ours.stderr | str substring 0..400)'")))
 
 
   # --- nix build: the out-link prefix, the printed paths and the link target
