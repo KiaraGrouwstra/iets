@@ -166,7 +166,7 @@ Every primop that looks at the world records one observation.
 | a file's size, mtime, inode and sha256 | `import`, `readFile`, `hashFile`, every `.drv` read | `lstat`; on a stat mismatch the file is rehashed and accepted if the hash matches |
 | a directory listing's hash | `readDir` | re-list and rehash |
 | a path's kind | `pathExists`, `readFileType`, the `default.nix` probe, every search-path candidate | re-stat |
-| a copied tree's NAR hash and stat hash | `./path` coerced to a string, `builtins.path`, `filterSource`, a flake's git working tree, a `path:` input | recompute the stat hash with `lstat` only; on a mismatch re-dump the NAR with the recorded filter and compare |
+| a copied tree's NAR hash and stat hash | `./path` coerced to a string, `builtins.path`, `filterSource`, a flake's git working tree, a `path:` input | recompute the stat hash with `lstat` only; on a mismatch re-dump the NAR with the recorded filter and compare. A `path:` input also records its newest mtime, which the evaluation sees as `lastModified`, and the same bytes with another date are a change |
 | a resolved symlink | `storePath`, `builtins.path` and `filterSource` when canonicalising changed the path | canonicalise again |
 | an environment variable | `getEnv`; `HOME` when a `~/` literal is compiled | read it again |
 | a command's exit status and output | the `git` queries of a flake working tree | run it again, rehash |
@@ -463,6 +463,10 @@ formatter creates: a formatter rewrites files, and a file rewritten to the
 same bytes is still a hit. An mtime says it changed. So the steady state of
 `nix fmt` — run it, it reformats nothing, run it again — is a hit, and only
 a run that really changed a file the evaluation read costs an evaluation.
+The one exception is a `path:` flake, a directory outside any git
+repository: its `lastModified` is the newest mtime in the tree, the
+evaluation can see it, and so a rewrite to the same bytes is a new date and
+an evaluation.
 
 The second idea is the roots store above.
 

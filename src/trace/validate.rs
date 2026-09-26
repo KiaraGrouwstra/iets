@@ -136,6 +136,7 @@ fn check(o: &Obs, rehashed: &AtomicUsize) -> Outcome {
             nar_hash,
             stat_hash,
             filtered,
+            newest,
         } => {
             let accepted: Option<HashSet<PathBuf>> = filtered.as_ref().map(|f| {
                 f.accepted
@@ -150,7 +151,7 @@ fn check(o: &Obs, rehashed: &AtomicUsize) -> Outcome {
                 Err(e) => return unreadable(root, &e),
             }
             rehashed.fetch_add(1, Ordering::Relaxed);
-            let (nar, seen, sh) = match super::tree_rehash(root_p, accepted.as_ref()) {
+            let (nar, seen, sh, now) = match super::tree_rehash(root_p, accepted.as_ref()) {
                 Ok(t) => t,
                 Err(e) => return unreadable(root, &e),
             };
@@ -161,11 +162,18 @@ fn check(o: &Obs, rehashed: &AtomicUsize) -> Outcome {
             {
                 return Outcome::Changed(format!("source tree {} changed", lossy(root)));
             }
+            if newest.is_some_and(|n| n != now) {
+                return Outcome::Changed(format!(
+                    "source tree {} has another modification time",
+                    lossy(root)
+                ));
+            }
             Outcome::Refresh(Obs::Tree {
                 root: root.clone(),
                 nar_hash: *nar_hash,
                 stat_hash: sh,
                 filtered: filtered.clone(),
+                newest: *newest,
             })
         }
         Obs::Canon { path, target } => {

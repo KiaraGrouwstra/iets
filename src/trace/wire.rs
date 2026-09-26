@@ -188,6 +188,7 @@ fn put_obs(e: &mut Enc, o: &Obs) {
             nar_hash,
             stat_hash,
             filtered,
+            newest,
         } => {
             e.u8(3);
             e.bytes(root);
@@ -205,6 +206,13 @@ fn put_obs(e: &mut Enc, o: &Obs) {
                         None => e.u8(0),
                     }
                     e.list(&f.accepted);
+                }
+            }
+            match newest {
+                None => e.u8(0),
+                Some(n) => {
+                    e.u8(1);
+                    e.i64(*n);
                 }
             }
         }
@@ -266,11 +274,17 @@ fn get_obs(d: &mut Dec<'_>) -> R<Obs> {
                 }),
                 _ => return Err(()),
             };
+            let newest = match d.u8()? {
+                0 => None,
+                1 => Some(d.i64()?),
+                _ => return Err(()),
+            };
             Obs::Tree {
                 root,
                 nar_hash,
                 stat_hash,
                 filtered,
+                newest,
             }
         }
         4 => Obs::Canon {
@@ -576,6 +590,7 @@ mod tests {
                     seen_hash: Some([4; 32]),
                     accepted: vec![b"/t/x".to_vec()],
                 }),
+                newest: Some(-7),
             },
             Obs::Canon {
                 path: b"/c".to_vec(),

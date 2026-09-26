@@ -103,6 +103,10 @@ pub enum Obs {
         nar_hash: Digest32,
         stat_hash: Digest32,
         filtered: Option<Filtered>,
+        /// The newest `lstat` mtime in the tree, in seconds, when the
+        /// evaluation saw it: a `path:` input's `lastModified`. A tree with
+        /// the same bytes and another date is then another answer.
+        newest: Option<i64>,
     },
     Canon {
         path: Vec<u8>,
@@ -312,7 +316,12 @@ impl Trace {
         accepted: Option<&HashSet<PathBuf>>,
         fp: Option<TreeFp>,
     ) {
-        self.tree_with(root, nar_hash, accepted, true, fp);
+        self.tree_with(root, nar_hash, accepted, true, None, fp);
+    }
+
+    /// An unfiltered tree whose newest mtime the evaluation can see.
+    pub fn tree_dated(&self, root: &Path, nar_hash: Digest32, newest: i64, fp: Option<TreeFp>) {
+        self.tree_with(root, nar_hash, None, true, Some(newest), fp);
     }
 
     /// A tree whose accepted set comes from outside (a git index): only the
@@ -324,7 +333,7 @@ impl Trace {
         accepted: &HashSet<PathBuf>,
         fp: Option<TreeFp>,
     ) {
-        self.tree_with(root, nar_hash, Some(accepted), false, fp);
+        self.tree_with(root, nar_hash, Some(accepted), false, None, fp);
     }
 
     fn tree_with(
@@ -333,6 +342,7 @@ impl Trace {
         nar_hash: Digest32,
         accepted: Option<&HashSet<PathBuf>>,
         keep_seen: bool,
+        newest: Option<i64>,
         fp: Option<TreeFp>,
     ) {
         if !self.is_on() {
@@ -361,6 +371,7 @@ impl Trace {
             nar_hash,
             stat_hash,
             filtered,
+            newest,
         });
     }
 }
@@ -440,6 +451,8 @@ pub struct TreeFp {
     root_len: usize,
     stat_h: Sha256,
     seen_h: Sha256,
+    /// The newest mtime among the root and the accepted entries, in seconds.
+    newest: i64,
     ok: bool,
 }
 
@@ -451,6 +464,7 @@ impl TreeFp {
             root_len: root.as_os_str().as_bytes().len(),
             stat_h: Sha256::new(),
             seen_h: Sha256::new(),
+            newest: i64::MIN,
             ok: true,
         };
         fp.stat(root, b"");
@@ -476,6 +490,7 @@ impl TreeFp {
             return;
         };
         let kind = Kind::of(&Ok(st.clone()));
+        self.newest = self.newest.max(st.mtime());
         self.stat_h.update((rel.len() as u64).to_le_bytes());
         self.stat_h.update(rel);
         self.stat_h.update([kind.to_u8()]);
@@ -565,7 +580,7 @@ fn walk_fp(
 pub fn tree_rehash(
     root: &Path,
     accepted: Option<&HashSet<PathBuf>>,
-) -> io::Result<(Digest32, Digest32, Digest32)> {
+) -> io::Result<(Digest32, Digest32, Digest32, i64)> {
     use crate::store::hash::HashAlgo;
     let mut fp = TreeFp::new(root).ok_or_else(|| io::Error::other("tree is gone"))?;
     let mut filter = |p: &Path, t: crate::store::nar::FileType| -> bool {
@@ -574,10 +589,11 @@ pub fn tree_rehash(
         keep
     };
     let (h, _) = crate::store::nar::nar_hash_filtered(root, HashAlgo::Sha256, &mut filter)?;
+    let newest = fp.newest;
     let (stat_hash, seen_hash) = fp
         .finish()
         .ok_or_else(|| io::Error::other("tree changed while it was read"))?;
-    Ok((hash_to_digest(&h), seen_hash, stat_hash))
+    Ok((hash_to_digest(&h), seen_hash, stat_hash, newest))
 }
 
 fn nar_kind(t: crate::store::nar::FileType) -> Kind {
@@ -661,7 +677,9 @@ mod tests {
         let (c, sc) = tree_fingerprint(&dir, None).unwrap();
         assert_ne!(a, c);
         assert_ne!(sa, sc);
-        let (nar, seen, stat) = tree_rehash(&dir, None).unwrap();
+        let (nar, seen, stat, newest) = tree_rehash(&dir, None).unwrap();
+        let written = std::fs::symlink_metadata(dir.join("new-file")).unwrap();
+        assert_eq!(newest, written.mtime());
         assert_eq!(stat, c);
         assert_eq!(seen, sc);
         assert_eq!(

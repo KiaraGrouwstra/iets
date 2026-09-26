@@ -135,7 +135,9 @@ The `raw_msg` is one observation of docs/explanation/caching.md's table, and
 says what about it changed: `PATH changed` (contents), `PATH is gone`,
 `PATH cannot be read`, `PATH is now a directory, not a regular file`,
 `PATH now exists`, `directory PATH has different entries`, `source tree PATH
-changed`, `PATH resolves to a different path`, `environment variable $NAME
+changed`, `source tree PATH has another modification time` (a `path:` input
+with the same bytes and another `lastModified`),
+`PATH resolves to a different path`, `environment variable $NAME
 changed` (or `is now set`, `is no longer set`), `the git working tree in DIR
 changed`, ``the output of `CMD` in DIR changed``, or `input store entry NAME
 is gone`. The read set has one order, and the lowest-indexed observation

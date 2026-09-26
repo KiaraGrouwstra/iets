@@ -64,7 +64,7 @@ pub fn path_tree(ev: &mut Evaluator, dir: &Path, pos: Pos) -> EvalResult<(Hash, 
         );
     } else {
         ev.trace
-            .tree(dir, crate::trace::hash_to_digest(&hash), None, fp);
+            .tree_dated(dir, crate::trace::hash_to_digest(&hash), mtime, fp);
     }
     let sp = crate::treestore::store_path("source", &hash)
         .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;

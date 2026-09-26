@@ -160,6 +160,20 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let entries = (ls $"($fd)/trace" | where type == dir | length)
   $res ++= [(verdict ($entries == 1) "one flake command keeps one entry across edits" $"($entries) entries after editing the flake")]
 
+  # a `path:` flake has the newest mtime of its tree as `lastModified`, so the
+  # same bytes with another date are another answer, where any other tree
+  # with the same bytes is a hit
+  let lm = $"($work)/lm"
+  mkdir $lm
+  "{ outputs = { self }: { x = self.lastModified; }; }\n" | save -f $"($lm)/flake.nix"
+  "{\"nodes\":{\"root\":{}},\"root\":\"root\",\"version\":7}\n" | save -f $"($lm)/flake.lock"
+  ^touch -d "2020-01-01T00:00:00Z" $"($lm)/flake.nix" $"($lm)/flake.lock" $lm
+  let f = (run-eval $ietsp --cache-dir $fd $"path:($lm)#x")
+  ^touch -d "2021-01-01T00:00:00Z" $"($lm)/flake.nix"
+  let g = (run-eval $ietsp --cache-dir $fd $"path:($lm)#x")
+  $res ++= [(verdict ($f.out == "1577836800" and $g.out == "1609459200" and $g.why == $"re-evaluating: source tree ($lm) has another modification time")
+    "a path: flake with the same bytes and a newer date evaluates again" $"($f.out) then ($g.out), said ($g.why)")]
+
   # --cache-dir points at a directory the user names: ietsp owns only the
   # store subdirectories it makes there, and never removes anything else
   mkdir $"($work)/mine"
