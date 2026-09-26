@@ -21,7 +21,7 @@ use wire::{Counting, FramedSink};
 /// What `SetOptions` sends (remote-store.cc:setOptions). `Default` is what this
 /// client has always sent; `TryFrom<&Config>` takes the values from the user's
 /// nix.conf instead, and fails the way Nix does on a bad setting value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Options {
     /// `0` would forbid local builds, so the default is the CPU count, what
     /// `max-jobs = auto` gives.
@@ -31,6 +31,12 @@ pub struct Options {
     pub keep_going: bool,
     pub keep_failed: bool,
     pub substitutes: bool,
+    /// `fallback`: build what a substituter fails to give.
+    pub try_fallback: bool,
+    /// `max-silent-time` in seconds; `0` is no limit.
+    pub max_silent_time: u64,
+    /// The override map: `Config::forwarded`.
+    pub overrides: Vec<(String, String)>,
 }
 
 impl Default for Options {
@@ -41,6 +47,9 @@ impl Default for Options {
             keep_going: false,
             keep_failed: false,
             substitutes: true,
+            try_fallback: false,
+            max_silent_time: 0,
+            overrides: Vec::new(),
         }
     }
 }
@@ -55,6 +64,9 @@ impl TryFrom<&Config> for Options {
             keep_going: c.keep_going()?,
             keep_failed: c.keep_failed()?,
             substitutes: c.bool("substitute")?.unwrap_or(true),
+            try_fallback: c.bool("fallback")?.unwrap_or(false),
+            max_silent_time: c.int("max-silent-time")?.unwrap_or(0),
+            overrides: c.forwarded(),
         })
     }
 }
@@ -463,26 +475,30 @@ impl Connection {
         write_u64(self.w(), op as u64)
     }
 
-    /// remote-store.cc:setOptions. Sends the same twelve fields plus an empty override map.
+    /// remote-store.cc:setOptions: the same twelve fields, then the override map.
     fn set_options(&mut self, o: &Options, on_event: &mut dyn FnMut(Event)) -> Result<()> {
         self.op(Op::SetOptions)?;
         for v in [
-            o.keep_failed.into(), // keep-failed
-            o.keep_going.into(),  // keep-going
-            0,                    // try-fallback
-            LVL_INFO,             // verbosity
-            o.max_jobs,           // max-jobs
-            0,                    // max-silent-time
-            1,                    // obsolete use-build-hook
-            LVL_VOMIT,            // build verbosity: lvlVomit means verboseBuild = false
-            0,                    // obsolete log type
-            0,                    // obsolete print build trace
-            o.cores,              // cores
-            o.substitutes.into(), // substitute
+            o.keep_failed.into(),  // keep-failed
+            o.keep_going.into(),   // keep-going
+            o.try_fallback.into(), // try-fallback
+            LVL_INFO,              // verbosity
+            o.max_jobs,            // max-jobs
+            o.max_silent_time,     // max-silent-time
+            1,                     // obsolete use-build-hook
+            LVL_VOMIT,             // build verbosity: lvlVomit means verboseBuild = false
+            0,                     // obsolete log type
+            0,                     // obsolete print build trace
+            o.cores,               // cores
+            o.substitutes.into(),  // substitute
         ] {
             write_u64(self.w(), v)?;
         }
-        write_u64(self.w(), 0)?;
+        write_u64(self.w(), o.overrides.len() as u64)?;
+        for (name, value) in &o.overrides {
+            write_str(self.w(), name.as_bytes())?;
+            write_str(self.w(), value.as_bytes())?;
+        }
         self.process_stderr(on_event)
     }
 

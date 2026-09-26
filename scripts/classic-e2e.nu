@@ -757,6 +757,30 @@ in
   ^$"($farm)/nix" eval --option json-log-path $jlf --eval-store auto --expr "1" | complete | ignore
   $ok = ($ok | append (verdict ((open --raw $jlf | lines | each { from json } | where code? == "ignored-flag" | length) == 1)
     "json-log-path gets the ignored-flag record" (open --raw $jlf)))
+  let uk = (run-both $farm nix-instantiate --eval -E "1" --option no-such-setting 1 --option extra-no-such 2)
+  $ok = ($ok | append ((cmp-case "an unknown setting" $uk) and (verdict ($uk.ours.stderr == $uk.real.stderr and ($uk.real.stderr | str contains "unknown setting 'no-such-setting'"))
+    "an unknown setting gets Nix's own warning" $"ours '($uk.ours.stderr)' real '($uk.real.stderr)'")))
+  let afc = (with-env {NIX_CONFIG: "accept-flake-config = true\nlog-lines = 7\nwarn-dirty = false\nmax-call-depth = 10000"} { run-both $farm nix eval --expr "1" })
+  $ok = ($ok | append ((cmp-case "accept-flake-config = true in NIX_CONFIG" $afc)
+    and (verdict ((do $once $afc.ours.stderr "setting 'accept-flake-config' is ignored:") and (do $once $afc.ours.stderr "setting 'log-lines' is ignored:")
+        and ($afc.ours.stderr | lines | length) == 2)
+      "a client setting ietsp has nothing for is one warning; a default and one that holds are none" $"stderr '($afc.ours.stderr)'")))
+  let re = [nix-instantiate --eval -E "builtins.readFile /etc/hostname" --option restrict-eval "true"]
+  $ok = ($ok | append ((cmp-case "restrict-eval is left to the real nix" (run-both $farm ($re | first) ...($re | skip 1)))
+    and (verdict ((fallback-reason $farm $re) | str contains "the setting 'restrict-eval' is not implemented")
+      "restrict-eval falls back" (fallback-reason $farm $re))))
+  let ns = (^$ietsp eval --log-format internal-json --option build-use-sandbox false --option eval-cache false -E "1" | complete)
+  let nsr = (do $recs $ns.stderr "ignored-setting")
+  $ok = ($ok | append (verdict ($ns.stdout == "1\n" and ($nsr | length) == 1 and ($nsr.0.raw_msg | str starts-with "setting 'sandbox' is ignored: ietsp's own commands send a daemon no settings"))
+    "ietsp eval --option sandbox: one ignored-setting record" $"stderr '($ns.stderr)'"))
+
+  # --- the daemon gets the store settings of the command line, as from Nix
+  let slow = $"($tmp)/slow.nix"
+  "derivation {\n  name = \"slow-${toString builtins.currentTime}\";\n  system = builtins.currentSystem;\n  builder = \"/bin/sh\";\n  args = [ \"-c\" \"while :; do :; done\" ];\n}\n" | save $slow
+  let to = (run-both $farm nix-build $slow --no-out-link --option timeout 2)
+  $ok = ($ok | append ((cmp-case "nix-build --option timeout 2" $to) and (verdict ($to.ours.exit_code == 1 and ($to.ours.stderr | str contains "timed out after 2 seconds"))
+    "--option timeout reaches the daemon" $"stderr '($to.ours.stderr | str substring 0..400)'")))
+
 
   # --- nix build: the out-link prefix, the printed paths and the link target
   mut got = {}

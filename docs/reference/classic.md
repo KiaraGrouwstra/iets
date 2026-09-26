@@ -104,7 +104,7 @@ Falls back on: `--parse`, `--parse-only`, `--xml`, `--find-file`, `-`
 `--cores`, `-k`, `-K`, `-Q`/`--no-build-output`, `--quiet`, `-v`,
 `--show-trace`, `--option`, `--store`, `--add-drv-link` and `--indirect`
 (no-ops in Nix too). `-v` has no effect and gives one warning
-(`docs/reference/divergences.md`, **Flags with no effect**).
+(`docs/reference/divergences.md`, **Flags and settings with no effect**).
 
 Uploads the closure once, builds every root in one
 `BuildPathsWithResults`, then links: `result` for the first drv's `out`,
@@ -430,8 +430,10 @@ fall back.
 Two triggers:
 
 1. A flag or subcommand the parser does not implement, seen before any
-   work starts. `nix-instantiate --store` with another store than the
-   local daemon counts too.
+   work starts. A setting counts too: a Nix client setting ietsp has
+   nothing for, with a value that is not Nix's default
+   (`docs/reference/settings.md`, class 4), and `nix-instantiate --store`
+   with another store than the local daemon.
 2. An evaluation that hits `ErrorKind::Unsupported`: the network fetchers
    (`fetchurl`, `fetchTarball` without a `sha256`, `fetchGit`, `fetchMercurial`,
    `fetchClosure`), `getFlake` on anything but a local path, a flake
@@ -474,8 +476,9 @@ child stopped at the `IETSP_FETCHING` guard
 
 ## Config
 
-The classic names read nix.conf as Nix does, and what reaches the daemon is
-in `docs/reference/settings.md`. On the command line, `--option name value` and the flag
+The classic names read nix.conf as Nix does. `docs/reference/settings.md`
+says what reaches the daemon and which settings give a warning because they
+have no effect. On the command line, `--option name value` and the flag
 aliases (`--store`, `-j`/`--max-jobs`, `--cores`, `-k`, `-K`) are overrides
 applied in command-line order. `store = auto`, empty or `daemon` is the
 daemon socket; `unix://PATH`, `ssh-ng://HOST` and `grpc://HOST:PORT[?…]` are
@@ -490,11 +493,13 @@ honoured; any other store falls back.
 - `-Q`/`--no-build-output` drops the daemon's log lines. In Nix 2.34 it
   only switches the log format to `raw`. `--quiet` does the same here; in
   Nix it lowers the log level by one.
-- A flag that has no effect is one warning on stderr, where Nix prints
-  nothing: `-v`, `--accept-flake-config`, `--eval-store auto`. stdout and
-  the exit code stay Nix's. `docs/reference/divergences.md`, **Flags with
-  no effect**, has the table and says what ietsp does with a flake's
-  `nixConfig`: nothing.
+- A flag or a setting that has no effect is one warning on stderr, where
+  Nix prints nothing: `-v`, `--accept-flake-config`, `--eval-store auto`,
+  `accept-flake-config = true` and `log-lines`. Any other client setting
+  ietsp has nothing for (`restrict-eval`, `eval-system`, …) falls back.
+  stdout and the exit code stay Nix's. `docs/reference/divergences.md`,
+  **Flags and settings with no effect**, has the table and says what ietsp
+  does with a flake's `nixConfig`: nothing.
 - `--show-trace` only puts the trace into the `--log-format internal-json`
   error records (`docs/reference/errors.md`): ietsp always prints the full
   trace it has.

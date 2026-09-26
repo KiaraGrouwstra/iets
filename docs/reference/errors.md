@@ -33,6 +33,8 @@ in `src/error.rs` for the rest, and the daemon's build status for builds.
 | `hash-fixed` | `fix-hashes` | a level-3 record: the hash `fix-hashes` wrote, at the file, line and column it changed |
 | `determinate-setting` | `src/config.rs` | a level-1 record: a Determinate Nix setting that ietsp ignores (docs/reference/settings.md) |
 | `ignored-flag` | `src/ignored.rs` | a level-1 record: a flag that has no effect, and why (docs/reference/divergences.md) |
+| `ignored-setting` | `src/config.rs` | a level-1 record: a Nix setting that has no effect, and why (docs/reference/settings.md) |
+| `unknown-setting` | `src/config.rs` | a level-1 record: a setting Nix 2.34.8 does not know either, with Nix's text |
 | `cache-invalidated` | `src/trace/run.rs` | a level-3 record: what changed under a tracing cache entry, so the run evaluates again |
 | `io` | `ErrorKind::Io`, `Error::Io` | a file that cannot be read or written |
 | `unsupported` | `ErrorKind::Unsupported`, `Error::Unsupported` | a feature ietsp does not have; classic mode falls back to Nix |

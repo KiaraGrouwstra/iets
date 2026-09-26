@@ -139,6 +139,11 @@ pub fn main(argv: &[String]) -> i32 {
         Ok(t) => t,
         Err(reason) => fallback(NAME, argv, &reason),
     };
+    let always = cfg.bool("nix-shell-always-looks-for-shell-nix");
+    if always.ok().flatten() == Some(false) {
+        let why = "'nix-shell-always-looks-for-shell-nix = false' is not implemented";
+        fallback(NAME, argv, why);
+    }
     // nix-build.cc sets this before it evaluates, so `builtins.getEnv` sees it
     // and the child inherits it.
     unsafe {

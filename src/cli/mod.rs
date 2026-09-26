@@ -166,8 +166,8 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
         }
         i += 1;
     }
-    // nix.conf only for its warnings: Nix warns about the settings it lacks
-    let _ = crate::config::Config::load(&f.overrides);
+    // for its warnings, and for the session's copy that the fetcher reads
+    let _ = crate::config::Config::load_native(&f.overrides);
     crate::ignored::flush();
     (a.includes, a.args, a.pure) = (f.includes, f.args, f.pure);
     a.attr = f.attrs.pop();

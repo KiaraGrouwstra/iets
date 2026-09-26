@@ -83,6 +83,7 @@ fn parse(argv: &[String]) -> (Opts, Vec<Side>) {
         }
         i += 1;
     }
+    let _ = crate::config::Config::load_native(&f.overrides);
     // one side: the positional `p` (a .drv in the store, a flake reference
     // or a file), or `-E EXPR`, with the attribute `attr` selected
     let side = |p: Option<&String>, attr: Option<String>| match (p, &expr) {

@@ -308,8 +308,8 @@ A file that is missing or unreadable is skipped, not an error.
   not a list, the pair is kept under its literal name, as Nix keeps it in
   `unknownSettings`.
 - An unknown setting is kept and readable with `Config::str`. Nix warns
-  about it; this reader is silent, except for the Determinate Nix
-  settings below.
+  about it, and so does ietsp, with the same text (**What is applied**,
+  class 5).
 
 ## Values
 
@@ -321,19 +321,122 @@ carry Nix's defaults: `store` (`auto`), `system` (the build target),
 
 `$NIX_PATH` replaces the `nix-path` setting, as `eval-gc.cc:129` does.
 
-## What is honoured
+## What is applied
 
-`worker::Options` carries `max-jobs`, `cores`, `keep-going`,
-`keep-failed` and `substitute` into the daemon's `SetOptions`
-(`remote-store.cc:setOptions`), built with `Options::try_from(&config)`.
-`crate::cli::classic` uses it, and takes `store` as the last fallback for
-`builder` and `system` for `builtins.currentSystem`
-(`docs/reference/classic.md`). The other subcommands read `system` and
-`store` only and send `Options::default()`. The flake input fetcher reads
-`access-tokens`, `connect-timeout` (default 15 s) and
-`stalled-download-timeout` (default 300 s); 0 is no limit, as in
-`filetransfer.hh`. Every other setting is read and kept, and nothing in
-ietsp consults it.
+Nix has about 130 settings. For ietsp each one is in one of five classes.
+`src/config.rs` has the lists: `KNOWN`, `ALIASES`, `CLIENT` and
+`UNIMPLEMENTED`.
+
+**1. ietsp reads it.**
+
+| Setting | Effect |
+|:---|:---|
+| `store` | the last fallback for `builder` |
+| `system` | `builtins.currentSystem` under the classic names; the `system=` default of a `grpc://` URL. ietsp's own commands use the system ietsp was built for |
+| `pure-eval` | see **`pure-eval`** below |
+| `show-trace` | the same as `--show-trace` |
+| `json-log-path` | `docs/reference/errors.md` |
+| `access-tokens`, `connect-timeout`, `stalled-download-timeout` | the flake input fetcher. The timeouts default to 15 s and 300 s; 0 is no limit, as in `filetransfer.hh`. `--option` reaches the fetcher too: the session keeps the settings of the first load |
+| `bash-prompt`, `bash-prompt-prefix`, `bash-prompt-suffix` | `nix develop` |
+| `experimental-features` | every feature is always on (`docs/reference/divergences.md`); `parse-toml-timestamps` needs the flag |
+
+An old name is its setting: `build-cores` is `cores`, `binary-caches` is
+`substituters`, and so on for the 23 aliases of Nix 2.34.8.
+
+**2. It goes to the daemon.** `worker::Options` carries `max-jobs`,
+`cores`, `keep-going`, `keep-failed`, `substitute`, `fallback` and
+`max-silent-time` as the fields of `SetOptions`, built with
+`Options::try_from(&config)`. The daemon takes these fields from its
+client, so the last two must be the client's values: a client that sends 0
+turns the administrator's `max-silent-time` off.
+
+Every other setting that acts in the store goes into the override map of
+`SetOptions`, as `remote-store.cc:setOptions` sends it: `substituters`,
+`trusted-public-keys`, `sandbox`, `timeout`, `builders`, `post-build-hook`
+and the rest. Only a value from a user file, from `$NIX_CONFIG` or from
+`--option` goes there. The system `nix.conf` does not, because the daemon
+reads that file itself (`globals.cc:loadConfFile`, `resetOverridden`). The
+daemon applies an override from a trusted user, and a short list of them
+from any user; for the rest it prints `warning: ignoring the
+client-specified setting 'NAME'`, as it does for a Nix client. `store` is
+not sent: it names the daemon. A list setting that only got `extra-` values
+goes as `extra-NAME`, which the daemon appends to its own value.
+
+The classic names do this. ietsp's own commands (`ietsp
+eval`, `build`, `eval-jobs`, `print-dev-env`, `diff`) send
+`Options::default()` and no overrides. There, a store setting given with
+`--option` is one warning:
+
+```
+warning: setting 'sandbox' is ignored: ietsp's own commands send a daemon no settings; the classic names do
+```
+
+A `grpc://` builder has no `SetOptions`. For it the classic names give the
+same warning, with the reason `a grpc:// builder
+takes no settings; its URL has 'max-builds'`. `store` and `system` still
+apply.
+
+**3. It holds by construction.** The rest of `CLIENT`. No message.
+
+| Setting | Why it holds |
+|:---|:---|
+| `allow-import-from-derivation`, `trace-import-from-derivation` | ietsp never builds during evaluation. An import from derivation is an error in ietsp's own commands, and a fallback under a classic name, where the real nix applies the setting. |
+| `eval-cache` | ietsp has no Nix evaluation cache. Its own caches check every input they read, and `--no-cache` turns them off. |
+| `warn-dirty`, `allow-dirty-locks`, `commit-lock-file-summary` | ietsp prints no dirty-tree warning and writes no lock file. |
+| `flake-registry`, `use-registries` | ietsp has no registry. A reference that needs one falls back, or is an error in ietsp's own commands. |
+| `nix-shell-shebang-arguments-relative-to-script`, `nix-shell-always-looks-for-shell-nix` | a `#!` script falls back, and so does `nix-shell` when the second one is `false`. |
+| `eval-profile-file`, `eval-profiler-frequency` | they only act with `eval-profiler`, which is in class 4. |
+| `eval-attrset-update-layer-rhs-threshold`, `preallocate-contents`, `use-case-hack` | they tune Nix's own data structures and file writes. No result changes. |
+
+**4. ietsp has nothing for it.** `UNIMPLEMENTED`. It counts when the value
+is not Nix's default, from any file or from `--option`. Then
+`nix-instantiate`, `nix-build`, `nix-shell` and the `nix` subcommands fall
+back to the real nix, which applies it (`ietsp: falling back to nix-build:
+the setting 'restrict-eval' is not implemented`). Two settings are no reason
+to fall back and give the warning below instead: `accept-flake-config`,
+because a flake seldom has a `nixConfig`, and `log-lines`, which changes no
+result. The commands that cannot fall back — ietsp's own and
+`nix-eval-jobs` — give one warning per setting and process, with the
+reason:
+
+```
+warning: setting 'restrict-eval' is ignored: ietsp has no restricted mode, so every path and URI stays readable
+```
+
+| Setting | Nix's default | The reason in the warning |
+|:---|:---|:---|
+| `restrict-eval`, `allowed-uris` | `false`, empty | ietsp has no restricted mode, so every path and URI stays readable |
+| `eval-system` | empty | ietsp does not read it; `builtins.currentSystem` is `system`, or the system ietsp was built for |
+| `max-call-depth` | 10000 | the call depth limit is fixed at 10000 |
+| `nix-path` | empty | ietsp takes the search path from `-I` and `NIX_PATH` alone |
+| `accept-flake-config` | `false` | ietsp never applies a flake's `nixConfig` (`docs/reference/divergences.md`) |
+| `allow-dirty` | `true` | ietsp evaluates a dirty Git tree as it is |
+| `impure-env` | empty | `builtins.getEnv` reads the process environment alone |
+| `abort-on-warn` | `false` | `builtins.warn` never stops an evaluation |
+| `trace-verbose` | `false` | `builtins.traceVerbose` never prints |
+| `trace-function-calls` | `false` | ietsp has no function-call trace |
+| `eval-profiler` | `disabled` | ietsp has no evaluation profiler; `IETSP_STATS` gives its counters |
+| `debugger-on-trace`, `debugger-on-warn`, `ignore-try` | `false` | ietsp has no debugger |
+| `allow-unsafe-native-code-during-evaluation` | `false` | ietsp has no `builtins.exec` and no `builtins.importNative` |
+| `plugin-files` | empty | ietsp loads no plugins |
+| `lint-absolute-path-literals`, `lint-short-path-literals`, `lint-url-literals`, `warn-short-path-literals` | `ignore`, `false` | ietsp does not read it; `ietsp eval` has the `--lint` flags |
+| `log-lines` | 25 | ietsp prints the last 200 lines of a failed build |
+| `tarball-ttl`, `trust-tarballs-from-git-forges` | 3600, `true` | ietsp's fetcher has no such switch |
+
+The record has the code `ignored-setting` (`docs/reference/errors.md`).
+Nix prints nothing for these, so the warning is a divergence on stderr
+(`docs/reference/divergences.md`).
+
+**5. Nix does not know it.** `warning: unknown setting 'NAME'`, Nix's own
+text (configuration.cc:`warnUnknownSettings`), once per name, with the code
+`unknown-setting`. The value is kept and readable with `Config::str`. A
+Determinate Nix name gets the warning below instead.
+
+Two limits. A setting of the system `nix.conf` that is both a client and a
+store setting (`netrc-file`, `ssl-cert-file`, `http2`, the `download-*`
+group) acts in the daemon only: ietsp's own fetcher does not read it. And
+`extra-platforms`, `system-features` and the other store settings change
+what the *daemon* builds, not what ietsp evaluates.
 
 ## Determinate Nix settings
 
@@ -358,7 +461,8 @@ warning goes out once every flag is read, so a later `--log-format`
 applies to it. `eval-jobs` workers do not repeat their parent's warnings.
 
 Nothing in ietsp reads these settings, and none of them reaches a daemon:
-`SetOptions` carries the fixed set above. So they cannot change a result.
+the override map of `SetOptions` takes the settings of Nix 2.34.8 only. So
+they cannot change a result.
 `eval-cores` does not set `workers`, and `session-id` does not set the
 `sid` of the log records (`IETSP_SESSION_ID` does).
 
@@ -423,7 +527,8 @@ Nix's:
   (`?shallow=1`) that ietsp does not reproduce;
 - `getFlake` on a reference that may be locked, one with a `rev` or a
   `narHash`;
-- `restrict-eval`, which is a separate setting: ignored.
+- `restrict-eval`, which is a separate setting: it has no effect, and
+  gives one `ignored-setting` warning (**What is applied**, class 4).
 
 ## Caches
 

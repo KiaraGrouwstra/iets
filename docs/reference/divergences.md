@@ -182,10 +182,10 @@ Observe it: run `nix eval .#x` twice on a flake whose `x` is
 no `re-evaluating:` line before it; `--option json-log-path FILE` puts the
 record in `FILE`.
 
-## Flags with no effect
+## Flags and settings with no effect
 
-ietsp does not accept a flag in silence. Each one that has no effect falls
-into one of four classes:
+ietsp does not accept a flag or a setting in silence. Each one that has no
+effect falls into one of four classes:
 
 1. **It holds by construction.** Nix's behaviour is already what the flag
    asks for. No message.
@@ -195,7 +195,7 @@ into one of four classes:
 4. **One warning per key and process**, with the reason. Nix prints nothing
    here, so each warning is a divergence on stderr. stdout and the exit
    code do not change. The record is level 1 with the code `ignored-flag`
-   (`docs/reference/errors.md`). It appears under
+   or `ignored-setting` (`docs/reference/errors.md`). It appears under
    `--log-format internal-json` and in the `json-log-path` file. An
    `eval-jobs` worker does not repeat the warning of its parent. A warning
    can come before a fallback: the run had read the flag before it found
@@ -229,6 +229,30 @@ One flag moved from "ignored" to class 3:
   another daemon. It falls back now; `--eval` does not need a store and
   stays.
 
+### Settings
+
+`docs/reference/settings.md` has the rules. In short:
+
+- A name that Nix 2.34.8 does not know gives Nix's own text, `warning:
+  unknown setting 'NAME'`, with the code `unknown-setting`. This is not a
+  divergence. A Determinate Nix name keeps its own warning.
+- A setting that acts in the store goes to the daemon, as a Nix client
+  sends it: from the user files, `$NIX_CONFIG` and `--option`, not from the
+  system `nix.conf`, which the daemon reads itself.
+- A setting that acts in the Nix client and that ietsp has nothing for
+  counts when its value is not Nix's default: `restrict-eval`,
+  `allowed-uris`, `eval-system`, `max-call-depth`, `allow-dirty`,
+  `trace-verbose`, `abort-on-warn` and the rest of `UNIMPLEMENTED` in
+  `src/config.rs`. `nix-instantiate`, `nix-build`, `nix-shell` and `nix`
+  fall back, so the real nix applies it. ietsp's own commands and
+  `nix-eval-jobs` cannot, and give one `ignored-setting` warning. `accept-flake-config` and `log-lines` give the warning
+  everywhere.
+- ietsp's own commands (`ietsp eval`, `build`, `eval-jobs`,
+  `print-dev-env`, `diff`) send a daemon no settings. A store setting given
+  to them with `--option` is one `ignored-setting` warning. A `grpc://`
+  builder has no settings either, so a classic name gives the same
+  warning for it.
+
 ### A flake's `nixConfig`
 
 Nix applies the `nixConfig` attribute of the top-level flake: always for a
@@ -250,7 +274,8 @@ But a flake that needs its `nixConfig` behaves differently:
 - ietsp does not print Nix's `ignoring untrusted flake configuration
   setting` warning.
 
-`--accept-flake-config` gives one warning that says so. Put the settings in `nix.conf` to get them.
+`--accept-flake-config` and `accept-flake-config = true` each give one
+warning that says so. Put the settings in `nix.conf` to get them.
 
 Observe it: `nix eval --accept-flake-config .#x` on a flake with
 `nixConfig.extra-substituters`. stdout and the exit code are Nix's, and

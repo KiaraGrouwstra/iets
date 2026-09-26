@@ -149,7 +149,11 @@ pub fn shell_settings(c: &Common) -> Result<(Config, Transport, Options), String
 }
 
 fn settings_with(c: &Common, use_builder: bool) -> Result<(Config, Transport, Options), String> {
-    let cfg = Config::load(&c.flags.overrides).map_err(|e| e.to_string())?;
+    let cfg = Config::read(&c.flags.overrides).map_err(|e| e.to_string())?;
+    if let Some(name) = cfg.left_to_nix() {
+        return Err(format!("the setting '{name}' is not implemented"));
+    }
+    cfg.announce();
     let url = if use_builder {
         let flag = store_given(c).then(|| cfg.store());
         crate::settings::builder(flag.as_deref(), &cfg)
@@ -157,6 +161,9 @@ fn settings_with(c: &Common, use_builder: bool) -> Result<(Config, Transport, Op
         cfg.store()
     };
     let transport = transport_of(&url, &cfg.system())?;
+    if matches!(transport, Transport::Grpc(_)) {
+        crate::config::note_grpc(&c.flags.overrides);
+    }
     let options = Options::try_from(&cfg).map_err(|e| e.to_string())?;
     Ok((cfg, transport, options))
 }

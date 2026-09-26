@@ -68,7 +68,7 @@ op that evaluates share one parser (`src/cli/mod.rs:parse_eval_args`).
 | `-I P=PATH`, `--include P=PATH`, `-IP=PATH` | make `<P>` resolve to `PATH` |
 | `--impure`, `--no-pure-eval` | turn pure evaluation off |
 | `--pure-eval` | turn pure evaluation on |
-| `--option NAME VALUE` | set a nix.conf setting; `pure-eval` and `json-log-path` act at once |
+| `--option NAME VALUE` | set a nix.conf setting. The evaluation and fetch settings apply (`docs/reference/settings.md`). A store setting gives one `ignored-setting` warning: these commands send a daemon no settings |
 | `--json-log-path PATH` | also write every log record to `PATH` |
 | `--log-format F` | `internal-json`, `raw`, `raw-with-logs`, `bar`, `bar-with-logs` |
 | `--show-trace` | put the trace into the JSON error records too |
@@ -632,7 +632,7 @@ Walk a jobset and print one JSON line per derivation, as nix-eval-jobs
 | `--chunks M --chunk N`, `--chunk-depth D` | ietsp only | Evaluate part `N` (0 to M-1) of `M` parts of the tree, split at depth `D` (default 2). |
 | `--impure` | identical | Turns off the pure evaluation `--flake` implies. |
 | `--show-trace` | accepted | The trace is always in the error text; with `--log-format internal-json` it also goes into the error records, as in Nix. |
-| `--option k v` | accepted, ignored | `restrict-eval`, `allow-import-from-derivation` (IFD is unsupported anyway), `eval-cache`, substituters: none takes effect. |
+| `--option k v` | as for `eval` | `allow-import-from-derivation` and `eval-cache` hold by construction: ietsp never builds during evaluation and has no Nix evaluation cache. `restrict-eval` and the other client settings ietsp has nothing for, and every store setting (substituters), give one `ignored-setting` warning. |
 | `--quiet`, `--verbose`, `--debug` | `--quiet` only | `--quiet` drops the stderr summary. `--verbose` and `--debug` give one `ignored-flag` warning: ietsp has one log level. |
 | `--log-format F` | accepted | `internal-json`: stderr is Nix's `@nix {...}` records, with a `code` and a `hint` on each error. `raw`, `raw-with-logs`, `bar`, `bar-with-logs`: plain lines. |
 | `--max-jobs N` | holds | It caps the builds of an import from derivation, and ietsp never builds during evaluation. |

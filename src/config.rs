@@ -57,6 +57,195 @@ const DETERMINATE_VALUES: &[&str] = &[
     "session-id",
 ];
 
+/// Every setting of Nix 2.34.8 (`nix config show`); `ALIASES` has the old
+/// names. A name in neither list is `warning: unknown setting 'NAME'`, the
+/// text Nix gives (configuration.cc:warnUnknownSettings).
+const KNOWN: &str = "\
+    abort-on-warn accept-flake-config access-tokens allow-dirty \
+    allow-dirty-locks allow-import-from-derivation allow-new-privileges \
+    allow-symlinked-store allow-unsafe-native-code-during-evaluation \
+    allowed-impure-host-deps allowed-uris allowed-users \
+    always-allow-substitutes auto-allocate-uids auto-optimise-store \
+    bash-prompt bash-prompt-prefix bash-prompt-suffix build-dir build-hook \
+    build-poll-interval build-users-group builders builders-use-substitutes \
+    commit-lock-file-summary compress-build-log connect-timeout cores \
+    debugger-on-trace debugger-on-warn diff-hook download-attempts \
+    download-buffer-size download-speed \
+    eval-attrset-update-layer-rhs-threshold eval-cache eval-profile-file \
+    eval-profiler eval-profiler-frequency eval-system experimental-features \
+    external-builders extra-platforms fallback filter-syscalls \
+    flake-registry fsync-metadata fsync-store-paths gc-reserved-space \
+    hashed-mirrors http-connections http2 id-count ignore-try ignored-acls \
+    impersonate-linux-26 impure-env json-log-path keep-build-log \
+    keep-derivations keep-env-derivations keep-failed keep-going \
+    keep-outputs lint-absolute-path-literals lint-short-path-literals \
+    lint-url-literals log-lines max-build-log-size max-call-depth max-free \
+    max-jobs max-silent-time max-substitution-jobs min-free \
+    min-free-check-interval nar-buffer-size narinfo-cache-meta-ttl \
+    narinfo-cache-negative-ttl narinfo-cache-positive-ttl netrc-file \
+    nix-path nix-shell-always-looks-for-shell-nix \
+    nix-shell-shebang-arguments-relative-to-script plugin-files \
+    post-build-hook pre-build-hook preallocate-contents print-missing \
+    pure-eval require-drop-supplementary-groups require-sigs restrict-eval \
+    run-diff-hook sandbox sandbox-build-dir sandbox-dev-shm-size \
+    sandbox-fallback sandbox-paths secret-key-files show-trace \
+    ssl-cert-file stalled-download-timeout start-id store substitute \
+    substituters sync-before-registering system system-features tarball-ttl \
+    timeout trace-function-calls trace-import-from-derivation trace-verbose \
+    trust-tarballs-from-git-forges trusted-public-keys trusted-substituters \
+    trusted-users upgrade-nix-store-path-url use-case-hack use-cgroups \
+    use-registries use-sqlite-wal use-xdg-base-directories \
+    user-agent-suffix warn-dirty warn-large-path-threshold \
+    warn-short-path-literals";
+
+const ALIASES: &[(&str, &str)] = &[
+    ("binary-cache-public-keys", "trusted-public-keys"),
+    ("binary-caches", "substituters"),
+    ("binary-caches-parallel-connections", "http-connections"),
+    ("build-chroot-dirs", "sandbox-paths"),
+    ("build-compress-log", "compress-build-log"),
+    ("build-cores", "cores"),
+    ("build-fallback", "fallback"),
+    ("build-impersonate-linux-26", "impersonate-linux-26"),
+    ("build-keep-log", "keep-build-log"),
+    ("build-max-jobs", "max-jobs"),
+    ("build-max-log-size", "max-build-log-size"),
+    ("build-max-silent-time", "max-silent-time"),
+    ("build-sandbox-paths", "sandbox-paths"),
+    ("build-timeout", "timeout"),
+    ("build-use-chroot", "sandbox"),
+    ("build-use-sandbox", "sandbox"),
+    ("build-use-substitutes", "substitute"),
+    ("commit-lockfile-summary", "commit-lock-file-summary"),
+    ("env-keep-derivations", "keep-env-derivations"),
+    ("gc-keep-derivations", "keep-derivations"),
+    ("gc-keep-outputs", "keep-outputs"),
+    ("substitution-max-jobs", "max-substitution-jobs"),
+    ("trusted-binary-caches", "trusted-substituters"),
+];
+
+const NO_DEBUGGER: &str = "ietsp has no debugger";
+const NO_RESTRICTED_MODE: &str =
+    "ietsp has no restricted mode, so every path and URI stays readable";
+const NO_LINT_SETTINGS: &str = "ietsp does not read it; 'ietsp eval' has the '--lint' flags";
+
+/// The settings that act in the Nix client and that ietsp has nothing for:
+/// the name, Nix's default, and why. With any other value, whatever set it,
+/// a classic name falls back to the real nix (`Config::left_to_nix`), and the
+/// commands that cannot give one `ignored-setting` warning. The other client
+/// settings are applied or hold by construction (`CLIENT`).
+const UNIMPLEMENTED: &[(&str, &str, &str)] = &[
+    (
+        "abort-on-warn",
+        "false",
+        "builtins.warn never stops an evaluation",
+    ),
+    (
+        "accept-flake-config",
+        "false",
+        crate::ignored::NO_NIX_CONFIG,
+    ),
+    (
+        "allow-dirty",
+        "true",
+        "ietsp evaluates a dirty Git tree as it is",
+    ),
+    (
+        "allow-unsafe-native-code-during-evaluation",
+        "false",
+        "ietsp has no builtins.exec and no builtins.importNative",
+    ),
+    ("allowed-uris", "", NO_RESTRICTED_MODE),
+    ("debugger-on-trace", "false", NO_DEBUGGER),
+    ("debugger-on-warn", "false", NO_DEBUGGER),
+    (
+        "eval-profiler",
+        "disabled",
+        "ietsp has no evaluation profiler; IETSP_STATS gives its counters",
+    ),
+    (
+        "eval-system",
+        "",
+        "ietsp does not read it; builtins.currentSystem is 'system', or the system ietsp was built for",
+    ),
+    ("ignore-try", "false", NO_DEBUGGER),
+    (
+        "impure-env",
+        "",
+        "builtins.getEnv reads the process environment alone",
+    ),
+    ("lint-absolute-path-literals", "ignore", NO_LINT_SETTINGS),
+    ("lint-short-path-literals", "ignore", NO_LINT_SETTINGS),
+    ("lint-url-literals", "ignore", NO_LINT_SETTINGS),
+    (
+        "max-call-depth",
+        "10000",
+        "the call depth limit is fixed at 10000",
+    ),
+    (
+        "log-lines",
+        "25",
+        "ietsp prints the last 200 lines of a failed build",
+    ),
+    (
+        "nix-path",
+        "",
+        "ietsp takes the search path from -I and NIX_PATH alone",
+    ),
+    ("plugin-files", "", "ietsp loads no plugins"),
+    ("restrict-eval", "false", NO_RESTRICTED_MODE),
+    ("tarball-ttl", "3600", "ietsp's fetcher has no such switch"),
+    (
+        "trace-function-calls",
+        "false",
+        "ietsp has no function-call trace",
+    ),
+    (
+        "trace-verbose",
+        "false",
+        "builtins.traceVerbose never prints",
+    ),
+    (
+        "trust-tarballs-from-git-forges",
+        "true",
+        "ietsp's fetcher has no such switch",
+    ),
+    ("warn-short-path-literals", "false", NO_LINT_SETTINGS),
+];
+
+/// The `UNIMPLEMENTED` settings that are no reason to fall back: a flake
+/// seldom has a `nixConfig`, and `log-lines` changes no result.
+const WARN_ONLY: &[&str] = &["accept-flake-config", "log-lines"];
+
+/// The other settings that act in the Nix client. ietsp applies them, or
+/// they hold by construction; docs/reference/settings.md says which and why.
+/// A known setting outside this list and `UNIMPLEMENTED` acts in the store,
+/// and goes to the daemon (`Config::forwarded`).
+const CLIENT: &[&str] = &[
+    "access-tokens",
+    "allow-dirty-locks",
+    "allow-import-from-derivation",
+    "bash-prompt",
+    "bash-prompt-prefix",
+    "bash-prompt-suffix",
+    "commit-lock-file-summary",
+    "eval-attrset-update-layer-rhs-threshold",
+    "eval-cache",
+    "eval-profile-file",
+    "eval-profiler-frequency",
+    "experimental-features",
+    "flake-registry",
+    "json-log-path",
+    "nix-shell-always-looks-for-shell-nix",
+    "nix-shell-shebang-arguments-relative-to-script",
+    "preallocate-contents",
+    "pure-eval",
+    "show-trace",
+    "trace-import-from-derivation",
+    "use-case-hack",
+    "use-registries",
+    "warn-dirty",
+];
 /// Remembers `name` when it is a Determinate Nix setting, for one
 /// `determinate-setting` warning (`crate::ignored`).
 pub fn note_determinate(name: &str) {
@@ -156,6 +345,63 @@ pub fn parse_bool(name: &str, s: &str) -> Result<bool> {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Config {
     settings: BTreeMap<String, String>,
+    /// Set by anything but `$NIX_CONF_DIR/nix.conf`: what a Nix client sends
+    /// to the daemon (globals.cc:loadConfFile, `resetOverridden`).
+    overridden: std::collections::BTreeSet<String>,
+    /// List settings that only ever got `extra-` values.
+    extra_only: std::collections::BTreeSet<String>,
+}
+
+fn is_known(name: &str) -> bool {
+    KNOWN.split_ascii_whitespace().any(|k| k == name)
+}
+
+/// `name` as the setting it sets: no `extra-`, no alias.
+fn canonical(name: &str) -> &str {
+    let alias = |n| ALIASES.iter().find(|(a, _)| *a == n).map(|(_, to)| *to);
+    let bare = name.strip_prefix("extra-").map(|b| alias(b).unwrap_or(b));
+    match bare {
+        Some(b) if APPENDABLE.contains(&b) => b,
+        _ => alias(name).unwrap_or(name),
+    }
+}
+
+/// A setting of Nix that acts in the store, not in the client.
+fn acts_in_store(name: &str) -> bool {
+    is_known(name) && !CLIENT.contains(&name) && unimplemented(name).is_none()
+}
+
+/// One `ignored-setting` warning for each `--option` that acts in the store
+/// and is not in `applied`, for a command line whose store takes none.
+pub fn note_unsent(overrides: &[(String, String)], applied: &[&str], why: &str) {
+    for (name, _) in overrides {
+        let name = canonical(name);
+        if acts_in_store(name) && !applied.contains(&name) {
+            let raw = format!("setting '{name}' is ignored: {why}");
+            crate::ignored::note("ignored-setting", name, raw);
+        }
+    }
+}
+
+/// `note_unsent` for a `grpc://` builder, which has no `SetOptions`.
+pub fn note_grpc(overrides: &[(String, String)]) {
+    let why = "a grpc:// builder takes no settings; its URL has 'max-builds'";
+    note_unsent(overrides, &["store", "system"], why);
+    crate::ignored::flush();
+}
+
+fn unimplemented(name: &str) -> Option<(&'static str, &'static str)> {
+    let mut all = UNIMPLEMENTED.iter();
+    all.find(|(n, _, _)| *n == name)
+        .map(|(_, d, why)| (*d, *why))
+}
+
+/// `a` and `b` are one value: the same Boolean, else the same words.
+fn same_value(a: &str, b: &str) -> bool {
+    match (parse_bool("", a), parse_bool("", b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a.split_whitespace().eq(b.split_whitespace()),
+    }
 }
 
 impl Config {
@@ -165,14 +411,61 @@ impl Config {
 
     /// The whole discovery: `$NIX_CONF_DIR/nix.conf`, then the user files from
     /// lowest to highest precedence, then `$NIX_CONFIG`, then `--option`
-    /// overrides last (globals.cc:loadConfFile, common-args.cc:42). A
-    /// Determinate Nix setting among them is warned about, as Nix warns about
-    /// an unknown one (configuration.cc:warnUnknownSettings).
+    /// overrides last (globals.cc:loadConfFile, common-args.cc:42). It warns
+    /// about each setting that has no effect (`crate::ignored`), and the
+    /// session keeps the result, so the fetcher sees the `--option`s too.
     pub fn load(overrides: &[(String, String)]) -> Result<Config> {
         let c = Config::read(overrides)?;
-        c.settings.keys().for_each(|k| note_determinate(k));
-        crate::ignored::flush();
+        c.announce();
         Ok(c)
+    }
+
+    /// What `load` does once the settings are read.
+    pub fn announce(&self) {
+        self.note_ignored();
+        if self.bool("show-trace").ok().flatten() == Some(true) {
+            crate::log::set_show_trace();
+        }
+        let _ = crate::session::Session::current()
+            .nix_conf
+            .set(self.clone());
+        crate::ignored::flush();
+    }
+
+    /// The first `UNIMPLEMENTED` setting with a value of its own that is a
+    /// reason for a classic name to fall back: the real nix applies it.
+    pub fn left_to_nix(&self) -> Option<&'static str> {
+        let set = |(name, default, _): &&(&'static str, &str, &str)| {
+            let differs = |v: &str| !same_value(v, default);
+            !WARN_ONLY.contains(name) && self.str(name).is_some_and(differs)
+        };
+        UNIMPLEMENTED.iter().find(set).map(|(name, _, _)| *name)
+    }
+
+    /// One note for each setting that has no effect: Nix's own text for a
+    /// name it does not know either, the reason for the rest.
+    fn note_ignored(&self) {
+        for (name, value) in &self.settings {
+            let bare = name.strip_prefix("extra-").unwrap_or(name);
+            if is_determinate(bare) {
+                note_determinate(bare);
+            } else if !is_known(name) {
+                let raw = format!("unknown setting '{name}'");
+                crate::ignored::note("unknown-setting", name, raw);
+            } else if let Some((default, why)) = unimplemented(name)
+                && !same_value(value, default)
+            {
+                let raw = format!("setting '{name}' is ignored: {why}");
+                crate::ignored::note("ignored-setting", name, raw);
+            }
+        }
+    }
+
+    /// `load` for ietsp's own commands, which send a daemon no settings.
+    pub fn load_native(overrides: &[(String, String)]) -> Result<Config> {
+        let why = "ietsp's own commands send a daemon no settings; the classic names do";
+        note_unsent(overrides, &[], why);
+        Config::load(overrides)
     }
 
     /// `load` without the warnings, for a reader inside ietsp: the log sink,
@@ -180,6 +473,7 @@ impl Config {
     pub fn read(overrides: &[(String, String)]) -> Result<Config> {
         let mut c = Config::empty();
         c.apply_file_if_present(&conf_dir().join("nix.conf"))?;
+        c.overridden.clear();
         for f in user_conf_files().iter().rev() {
             c.apply_file_if_present(f)?;
         }
@@ -211,20 +505,52 @@ impl Config {
         Ok(())
     }
 
-    /// configuration.cc:Config::set. `extra-<name>` appends when `<name>` is a
-    /// list setting; otherwise the pair is kept under its literal name.
+    /// configuration.cc:Config::set. An alias is its setting. `extra-<name>`
+    /// appends when `<name>` is a list setting; otherwise the pair is kept
+    /// under its literal name.
     pub fn set(&mut self, name: &str, value: &str) {
-        if let Some(base) = name.strip_prefix("extra-")
-            && APPENDABLE.contains(&base)
-        {
-            let slot = self.settings.entry(base.to_string()).or_default();
+        let to = canonical(name);
+        self.overridden.insert(to.to_string());
+        if name.starts_with("extra-") && APPENDABLE.contains(&to) {
+            if !self.settings.contains_key(to) {
+                self.extra_only.insert(to.to_string());
+            }
+            let slot = self.settings.entry(to.to_string()).or_default();
             if !slot.is_empty() && !value.is_empty() {
                 slot.push(' ');
             }
             slot.push_str(value);
             return;
         }
-        self.settings.insert(name.to_string(), value.to_string());
+        self.extra_only.remove(to);
+        self.settings.insert(to.to_string(), value.to_string());
+    }
+
+    /// The override map of `SetOptions` (remote-store.cc:setOptions): every
+    /// store setting the user set outside the system nix.conf, but the ones
+    /// `worker::Options` sends as fields. A list that only got `extra-`
+    /// values goes as `extra-<name>`, which the daemon appends to its own.
+    pub fn forwarded(&self) -> Vec<(String, String)> {
+        // `store` names the daemon this goes to; it is not a setting for it
+        const FIELDS: &[&str] = &[
+            "store",
+            "keep-failed",
+            "keep-going",
+            "fallback",
+            "max-jobs",
+            "max-silent-time",
+            "cores",
+            "substitute",
+        ];
+        let sent = |n: &&String| acts_in_store(n) && !FIELDS.contains(&n.as_str());
+        let pair = |n: &String| {
+            let name = match self.extra_only.contains(n) {
+                true => format!("extra-{n}"),
+                false => n.clone(),
+            };
+            (name, self.settings[n].clone())
+        };
+        self.overridden.iter().filter(sent).map(pair).collect()
     }
 
     /// Every setting that was set, known or not.
@@ -465,6 +791,96 @@ mod tests {
         let noted = crate::ignored::noted("determinate-setting");
         assert!(noted.iter().any(|n| n == "build-provenance-tags"));
         assert!(!noted.iter().any(|n| n == "max-jobs"));
+    }
+
+    #[test]
+    fn the_setting_tables_name_nix_settings() {
+        let aliased = ALIASES.iter().map(|(_, to)| *to);
+        let ignored = UNIMPLEMENTED.iter().map(|(n, _, _)| *n);
+        let all = aliased.chain(ignored).chain(CLIENT.iter().copied());
+        for name in all.chain(APPENDABLE.iter().copied()) {
+            assert!(is_known(name), "{name}");
+        }
+        assert!(ALIASES.iter().all(|(a, _)| !is_known(a)));
+        assert!(CLIENT.iter().all(|n| unimplemented(n).is_none()));
+    }
+
+    #[test]
+    fn an_alias_is_its_setting() {
+        let c = from_str("build-cores = 3\nextra-binary-caches = https://a\n", "t").unwrap();
+        assert_eq!(c.cores().unwrap(), 3);
+        assert_eq!(c.list("substituters"), ["https://a"]);
+        assert_eq!(canonical("extra-substituters"), "substituters");
+        assert_eq!(canonical("extra-cores"), "extra-cores");
+        assert_eq!(canonical("extra-platforms"), "extra-platforms");
+    }
+
+    #[test]
+    fn the_daemon_gets_the_store_settings_set_outside_the_system_file() {
+        let mut c = from_str("substituters = https://sys\nsandbox = true\n", "t").unwrap();
+        c.overridden.clear();
+        assert!(c.forwarded().is_empty());
+        for (name, value) in [
+            ("extra-substituters", "https://me"),
+            ("extra-trusted-public-keys", "k:1"),
+            ("extra-trusted-public-keys", "k:2"),
+            ("build-timeout", "9"),
+            ("max-jobs", "1"),
+            ("store", "ssh-ng://b"),
+            ("restrict-eval", "true"),
+            ("pure-eval", "true"),
+            ("lazy-trees", "true"),
+            ("bogus", "1"),
+        ] {
+            c.set(name, value);
+        }
+        let pair = |n: &str, v: &str| (n.to_string(), v.to_string());
+        assert_eq!(
+            c.forwarded(),
+            [
+                pair("substituters", "https://sys https://me"),
+                pair("timeout", "9"),
+                pair("extra-trusted-public-keys", "k:1 k:2"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_setting_with_no_effect_is_noted() {
+        let text = "no-such-setting-a = 1\nextra-no-such-b = 1\ntrace-verbose = true\n\
+                    max-call-depth = 10000\nallow-dirty = yes\nsandbox = false\neval-cache = false\n";
+        from_str(text, "t").unwrap().note_ignored();
+        let unknown = crate::ignored::noted("unknown-setting");
+        assert!(unknown.iter().any(|n| n == "no-such-setting-a"));
+        assert!(unknown.iter().any(|n| n == "extra-no-such-b"));
+        let ignored = crate::ignored::noted("ignored-setting");
+        assert!(ignored.iter().any(|n| n == "trace-verbose"));
+        for quiet in ["max-call-depth", "allow-dirty", "sandbox", "eval-cache"] {
+            assert!(!ignored.iter().any(|n| n == quiet), "{quiet}");
+        }
+        let o = |n: &str| (n.to_string(), String::new());
+        note_unsent(
+            &[o("build-use-sandbox"), o("keep-outputs"), o("system")],
+            &["system"],
+            "why",
+        );
+        note_unsent(&[o("nix-path"), o("no-such-setting-c")], &[], "why");
+        let ignored = crate::ignored::noted("ignored-setting");
+        assert!(ignored.iter().any(|n| n == "sandbox"));
+        assert!(ignored.iter().any(|n| n == "keep-outputs"));
+        for quiet in ["system", "nix-path", "no-such-setting-c"] {
+            assert!(!ignored.iter().any(|n| n == quiet), "{quiet}");
+        }
+    }
+
+    #[test]
+    fn a_classic_name_leaves_an_unimplemented_setting_to_nix() {
+        let c = |text: &str| from_str(text, "t").unwrap().left_to_nix();
+        assert_eq!(c("restrict-eval = true\n"), Some("restrict-eval"));
+        assert_eq!(c("max-call-depth = 5\n"), Some("max-call-depth"));
+        assert_eq!(c("restrict-eval = false\nmax-call-depth = 10000\n"), None);
+        assert_eq!(c("accept-flake-config = true\nlog-lines = 5\n"), None);
+        assert_eq!(c("sandbox = false\neval-cache = false\n"), None);
     }
 
     #[test]
