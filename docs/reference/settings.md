@@ -319,7 +319,8 @@ carry Nix's defaults: `store` (`auto`), `system` (the build target),
 `max_jobs` (`auto` = CPU count), `cores` (`0` = all), `keep_going` and
 `keep_failed`.
 
-`$NIX_PATH` replaces the `nix-path` setting, as `eval-gc.cc:129` does.
+`$NIX_PATH`, even an empty one, replaces the `nix-path` setting of every
+file, as `configuration.cc:192` does.
 
 ## What is applied
 
@@ -334,6 +335,7 @@ Nix has about 130 settings. For ietsp each one is in one of five classes.
 | `store` | the last fallback for `builder` |
 | `system` | `builtins.currentSystem` under the classic names; the `system=` default of a `grpc://` URL. ietsp's own commands use the system ietsp was built for |
 | `pure-eval` | see **`pure-eval`** below |
+| `nix-path` | the search path after `-I`, when `NIX_PATH` is not in the environment. `--option nix-path` replaces `NIX_PATH`, and `--option extra-nix-path` adds to it, as in Nix (`configuration.cc:192`). Nix's channel defaults are not applied |
 | `show-trace` | the same as `--show-trace` |
 | `json-log-path` | `docs/reference/errors.md` |
 | `access-tokens`, `connect-timeout`, `stalled-download-timeout` | the flake input fetcher. The timeouts default to 15 s and 300 s; 0 is no limit, as in `filetransfer.hh`. `--option` reaches the fetcher too: the session keeps the settings of the first load |
@@ -408,7 +410,6 @@ warning: setting 'restrict-eval' is ignored: ietsp has no restricted mode, so ev
 | `restrict-eval`, `allowed-uris` | `false`, empty | ietsp has no restricted mode, so every path and URI stays readable |
 | `eval-system` | empty | ietsp does not read it; `builtins.currentSystem` is `system`, or the system ietsp was built for |
 | `max-call-depth` | 10000 | the call depth limit is fixed at 10000 |
-| `nix-path` | empty | ietsp takes the search path from `-I` and `NIX_PATH` alone |
 | `accept-flake-config` | `false` | ietsp never applies a flake's `nixConfig` (`docs/reference/divergences.md`) |
 | `allow-dirty` | `true` | ietsp evaluates a dirty Git tree as it is |
 | `impure-env` | empty | `builtins.getEnv` reads the process environment alone |

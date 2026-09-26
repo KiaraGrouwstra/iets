@@ -789,6 +789,15 @@ in
   $ok = ($ok | append ((cmp-case "nix develop --option timeout 2" $sd) and (verdict ($sd.ours.exit_code == 1 and ($sd.ours.stderr | ansi strip | str contains "timed out after 2 seconds"))
     "nix develop sends its build settings to the daemon" $"stderr '($sd.ours.stderr | str substring 0..400)'")))
 
+  # --- the nix-path setting, which NIX_PATH replaces, even an empty one
+  let npd = $"($tmp)/nixpath"
+  mkdir $npd
+  "\"from nix-path\"\n" | save $"($npd)/x.nix"
+  let np_run = {|who, extra| ^env -u NIX_PATH ...$extra $"NIX_CONFIG=nix-path = np=($npd)" $who --eval -E "import <np/x.nix>" | complete }
+  for c in [[label extra]; ["the nix-path setting" []] ["an empty NIX_PATH replaces the nix-path setting" ["NIX_PATH="]]] {
+    $ok = ($ok | append (cmp-case $c.label {ours: (do $np_run $"($farm)/nix-instantiate" $c.extra), real: (do $np_run nix-instantiate $c.extra)}))
+  }
+
 
   # --- nix build: the out-link prefix, the printed paths and the link target
   mut got = {}

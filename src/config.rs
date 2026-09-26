@@ -187,11 +187,6 @@ const UNIMPLEMENTED: &[(&str, &str, &str)] = &[
         "25",
         "ietsp prints the last 200 lines of a failed build",
     ),
-    (
-        "nix-path",
-        "",
-        "ietsp takes the search path from -I and NIX_PATH alone",
-    ),
     ("plugin-files", "", "ietsp loads no plugins"),
     ("restrict-eval", "false", NO_RESTRICTED_MODE),
     ("tarball-ttl", "3600", "ietsp's fetcher has no such switch"),
@@ -236,6 +231,7 @@ const CLIENT: &[&str] = &[
     "experimental-features",
     "flake-registry",
     "json-log-path",
+    "nix-path",
     "nix-shell-always-looks-for-shell-nix",
     "nix-shell-shebang-arguments-relative-to-script",
     "preallocate-contents",
@@ -496,8 +492,10 @@ impl Config {
 
     pub fn apply(&mut self, text: &str, origin: &Path) -> Result<()> {
         for e in parse(text, origin)? {
-            // NIX_PATH must override the setting (configuration.cc:186).
-            if (e.name == "nix-path" || e.name == "extra-nix-path") && env("NIX_PATH").is_some() {
+            // NIX_PATH, even an empty one, must override the setting
+            // (configuration.cc:192)
+            let set = std::env::var_os("NIX_PATH").is_some();
+            if (e.name == "nix-path" || e.name == "extra-nix-path") && set {
                 continue;
             }
             self.set(&e.name, &e.value);
@@ -582,6 +580,15 @@ impl Config {
             .flat_map(str::split_whitespace)
             .map(str::to_string)
             .collect()
+    }
+
+    /// The `nix-path` entries, and whether they replace `NIX_PATH`: a file
+    /// never sets them beside it, so `--option nix-path` did, and that wins
+    /// in Nix; `--option extra-nix-path` adds to it.
+    pub fn nix_path(&self) -> (bool, Vec<String>) {
+        let replaces =
+            self.settings.contains_key("nix-path") && !self.extra_only.contains("nix-path");
+        (replaces, self.list("nix-path"))
     }
 
     /// `store`, default `auto` (globals.cc:storeUri).
@@ -881,6 +888,16 @@ mod tests {
         assert_eq!(c("restrict-eval = false\nmax-call-depth = 10000\n"), None);
         assert_eq!(c("accept-flake-config = true\nlog-lines = 5\n"), None);
         assert_eq!(c("sandbox = false\neval-cache = false\n"), None);
+    }
+
+    #[test]
+    fn option_nix_path_replaces_nix_path_and_extra_adds() {
+        let mut c = Config::empty();
+        assert_eq!(c.nix_path(), (false, vec![]));
+        c.set("extra-nix-path", "a=/a");
+        assert_eq!(c.nix_path(), (false, vec!["a=/a".to_string()]));
+        c.set("nix-path", "b=/b");
+        assert_eq!(c.nix_path(), (true, vec!["b=/b".to_string()]));
     }
 
     #[test]

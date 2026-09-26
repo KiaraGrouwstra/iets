@@ -295,14 +295,25 @@ pub fn abs_path(f: &str, cwd: &[u8]) -> Vec<u8> {
     crate::compile::canon_path(&full)
 }
 
-/// `-I` entries first, then `NIX_PATH`, as absolute `(prefix, path)` pairs.
+/// `-I` entries first, then `NIX_PATH`, then the `nix-path` setting of the
+/// nix.conf this run loaded, as absolute `(prefix, path)` pairs. Nix's channel
+/// defaults are not here.
 pub fn full_includes(includes: &[(Vec<u8>, Vec<u8>)]) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let session = crate::session::Session::current();
+    let (replaces, setting) = session
+        .nix_conf
+        .get()
+        .map_or((false, Vec::new()), |c| c.nix_path());
+    let env = std::env::var("NIX_PATH").ok().filter(|_| !replaces);
+    let env = env
+        .iter()
+        .flat_map(|np| np.split(':'))
+        .filter(|s| !s.is_empty());
     let mut all = includes.to_vec();
-    if let Ok(np) = std::env::var("NIX_PATH") {
-        for entry in np.split(':').filter(|s| !s.is_empty()) {
-            all.push(parse_include(entry));
-        }
-    }
+    all.extend(
+        env.chain(setting.iter().map(String::as_str))
+            .map(parse_include),
+    );
     all
 }
 
