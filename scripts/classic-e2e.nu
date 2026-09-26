@@ -157,6 +157,8 @@ def cache-cases [farm: string, tmp: string, np: string, sys: string]: nothing ->
     {name: "nix eval", args: [eval --raw], attr: "#val", tail: [], value: {|r| $r.stdout }}
     {name: "nix build", args: [build --no-link --print-out-paths], attr: "#pkg", tail: []
      value: {|r| try { open --raw ($r.stdout | chomp) } catch { "" } }}
+    {name: "nix derivation show", args: [derivation show], attr: "#pkg", tail: []
+     value: {|r| try { $r.stdout | from json | get derivations | values | get 0.env.val } catch { "" } }}
   ]
   let ran = {|r| $r.stderr | str contains "trace: EVALUATED" }
   $env.IETSP_CACHE_DIR = $"($cc)/cache"

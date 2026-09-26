@@ -4,8 +4,6 @@
 //! `crate::api::drvshow`'s; this file is the command line and the printing.
 //! See `docs/reference/classic.md`.
 
-use std::sync::Arc;
-
 use super::nix::{Nix, global_flag, nix_settings, resolve};
 use super::{Argv, fallback};
 use crate::api::drvshow;
@@ -60,21 +58,29 @@ pub fn main(argv: &[String], rest: &[String]) -> i32 {
     };
     let pretty = n.pretty.unwrap_or_else(render::pretty);
     let ev = super::evaluator(&n.c, &cfg);
-    let n = Arc::new(n);
-    let run = Arc::clone(&n);
-    match crate::cli::run_reported(crate::cli::Run::on(ev), move |ev, _| {
+    // `-r` and the indentation make another document, so both are in the key
+    let run = n.run(ev, "nix derivation show", n.recursive, pretty);
+    if let Some(text) = run.hit_result() {
+        render::bytes(&text);
+        return 0;
+    }
+    match crate::cli::run_reported(run, move |ev, cache| {
         let cwd = cwd();
         let mut roots = Vec::new();
-        for what in &run.installables {
-            let v = resolve(ev, &run, what, &cwd)?;
+        for what in &n.installables {
+            let v = resolve(ev, &n, what, &cwd)?;
             roots.push(installable::to_derivation(ev, v, what)?);
         }
-        drvshow::show(ev, &roots, run.recursive)
+        let text = render::json(&drvshow::show(ev, &roots, n.recursive)?, pretty);
+        if let Some(c) = cache {
+            c.write(ev, &text, false);
+        }
+        Ok(text)
     }) {
         Outcome::Failed(code) => code,
         Outcome::Unsupported(reason) => fallback(NAME, argv, &reason),
-        Outcome::Ok(doc) => {
-            render::bytes(&render::json(&doc, pretty));
+        Outcome::Ok(text) => {
+            render::bytes(&text);
             0
         }
     }
