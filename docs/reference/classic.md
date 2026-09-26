@@ -8,7 +8,7 @@ handles the subset ietsp implements and execs the real binary for the rest,
 so it is a drop-in only where the real nix is also on `PATH`.
 
 ```
-nix build .#classic     # bin/{nix-instantiate,nix-build,nix-eval-jobs,nix-shell,nix-fast-build,nix}
+nix build .#classic     # bin/{nix-instantiate,nix-build,nix-eval-jobs,nix-shell,nix}
 ```
 
 Every symlink points at `bin/ietsp`; the basename of `argv[0]` picks the
@@ -175,11 +175,6 @@ derivation, any other flag.
 
 The existing `ietsp eval-jobs`, which already matches nix-eval-jobs 2.35
 flag for flag. See `docs/reference/commands.md`.
-
-### `nix-fast-build`
-
-The existing `ietsp fast-build`, with nix-fast-build's flags and result
-files. See `docs/reference/commands.md`.
 
 ### `nix`
 
@@ -361,7 +356,7 @@ the exit code is 1. Falls back on: a missing or incomplete `flake.lock`
 (the real one locks the flake first), an input of another type, a non-local
 flake reference, any other flag.
 
-`fast-build` and `eval-jobs --flake` do not prefetch. An evaluation often
+`eval-jobs --flake` does not prefetch. An evaluation often
 uses only some of the inputs, so a prefetch can download trees that nothing
 reads, and parallel workers already share one download per tree
 (`docs/explanation/caching.md`).

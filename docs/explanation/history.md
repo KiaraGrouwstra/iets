@@ -32,6 +32,28 @@ the ratio falls to 2.07× on minimal and 2.22× on desktop. Nix has no
 equivalent to turn off, so 2.7× is the honest product comparison and 2.1× is
 the honest evaluator comparison.
 
+## 2026-09-26: `fast-build`, a second build command
+
+`ietsp fast-build` and the classic name `nix-fast-build` were removed. It
+was 920 lines of another tool's command line: twelve flags it existed to
+refuse, its own meaning for `-f`, its own `--option` handling and its own
+reject type, beside 510 lines of `ietsp build`. With them went the result
+records behind it (`build/results.rs`: the JSON and JUnit result files,
+`--stream-json-lines`, the Actions step summary), the stream that fed it
+(`jobs/stream.rs`) and `--retries` in the dispatcher.
+
+What it could do that `build` could not is now `build`'s: a set of
+derivations is built whole, every root to its own verdict, and `--json`
+prints the outcomes. That took about 90 lines. Skipping what is built
+needed none: the store already does it.
+
+The overlap of evaluation and building did not come along. It needed a
+second pipeline: a dispatch thread, a batcher and an incremental
+uploader. On this repository's 18 checks the whole tree evaluates in
+0.8 s with the parallel walk and 1.1 s with `nix-build`'s sequential one,
+against builds that take minutes; and the tracing cache, which the
+streaming walk could not use, makes the second run 0.03 s.
+
 ## 2026-09-25: the ATerm buffer the derivation pipeline kept allocating
 
 The same profile put 9.3 % of a warm run in glibc `malloc` and `free`

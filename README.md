@@ -66,7 +66,7 @@ that ietsp has anyway.
 
 ```sh
 ietsp build -A hello nixpkgs/default.nix        # nix-build, plus --builder ssh-ng:// or grpc://
-ietsp fast-build --flake .#checks --skip-cached # nix-fast-build, one process
+ietsp build .#checks                            # every check of this system, one verdict each
 ietsp eval-jobs --flake .#hydraJobs             # nix-eval-jobs
 ietsp search -I nixpkgs=/path ripgrep           # nix search, byte-identical, index cached
 ietsp diff -A hello -A figlet nixpkgs/default.nix   # nix-diff; --closure is nvd
@@ -78,7 +78,7 @@ One worked example of each swap:
 [docs/how-to/replace-nix-tools.md](docs/how-to/replace-nix-tools.md).
 
 Under the classic names — `nix-instantiate`, `nix-build`, `nix-shell`,
-`nix-eval-jobs`, `nix-fast-build`, `nix` — the same binary behaves as that
+`nix-eval-jobs`, `nix` — the same binary behaves as that
 command and execs the real `nix` for the rest
 ([docs/reference/classic.md](docs/reference/classic.md)).
 
@@ -138,7 +138,7 @@ behaviour differs on purpose,
 |---|---|
 | [how-to/build-remotely.md](docs/how-to/build-remotely.md) | a daemon, `unix://`, `ssh-ng://` or `grpc://` |
 | [how-to/use-with-direnv.md](docs/how-to/use-with-direnv.md) | `print-dev-env` in an `.envrc` |
-| [how-to/replace-nix-tools.md](docs/how-to/replace-nix-tools.md) | `nix search`, nix-diff, nvd, nurl, nix-fast-build, nix-eval-jobs |
+| [how-to/replace-nix-tools.md](docs/how-to/replace-nix-tools.md) | `nix search`, nix-diff, nvd, nurl, nix-eval-jobs, building a flake's checks |
 | [how-to/fix-hashes.md](docs/how-to/fix-hashes.md) | rewrite a wrong fixed-output hash |
 | [how-to/script-ietsp.md](docs/how-to/script-ietsp.md) | JSON, exit codes, log records, the plumbing pipeline |
 | [how-to/embed-the-evaluator.md](docs/how-to/embed-the-evaluator.md) | the crate as a library |

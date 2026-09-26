@@ -196,7 +196,7 @@ export def real-bin-dir []: nothing -> string {
 # falls back to, as `nix build .#classic` lays it out. Returns DIR/bin.
 export def make-farm [bin: string, dir: string]: nothing -> string {
   mkdir $"($dir)/bin"
-  for n in [nix-instantiate nix-build nix-eval-jobs nix-shell nix-fast-build nix] {
+  for n in [nix-instantiate nix-build nix-eval-jobs nix-shell nix] {
     ^ln -sf $bin $"($dir)/bin/($n)"
   }
   mkdir $"($dir)/share/ietsp"
@@ -226,7 +226,7 @@ export def --wrapped scratch-daemon [root: string, ...options: string]: nothing 
 # The shared build-test flake: four checks and a packages set, no nixpkgs. Every builder
 # carries a nonce so each run builds fresh derivations instead of finding the
 # previous run's outputs already in the store.
-export def fastbuild-flake [dir: string] {
+export def checks-flake [dir: string] {
   mkdir $dir
   let nonce = $"(random int 0..999999)-(date now | into int)"
   r#'{

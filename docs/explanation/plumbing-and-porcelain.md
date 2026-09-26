@@ -68,7 +68,7 @@ The lists started at:
 
 | list | length | what is on it |
 |---|---|---|
-| reaches below `api` | 17 files | `build.rs`, `cache_dump.rs`, `classic/{build,develop,instantiate,mod,nix,shell}.rs`, `devenv.rs`, `diff.rs`, `eval.rs`, `fastbuild/mod.rs`, `jobs.rs`, `mod.rs`, `plumbing.rs`, `render/text.rs`, `search.rs` |
+| reaches below `api` | 17 files | `build.rs`, `cache_dump.rs`, `classic/{build,develop,instantiate,mod,nix,shell}.rs`, `devenv.rs`, `diff.rs`, `eval.rs`, `jobs.rs`, `mod.rs`, `plumbing.rs`, `render/text.rs`, `search.rs`, and one command that is gone since |
 | evaluator value in a signature | 7 files | `classic/{instantiate,mod,nix,shell}.rs`, `jobs.rs`, `mod.rs`, `search.rs` |
 
 `crate::flake` is on neither, because the flake migration took it. The

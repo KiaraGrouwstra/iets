@@ -117,7 +117,7 @@ fn build(
     };
     // a remote builder's message comes back as the log of the build, which
     // `log::want_mismatch` does not see
-    let text = crate::build::results::strip_ansi(&why);
+    let text = crate::log::strip_ansi(&why);
     let got = (crate::log::take_mismatches().into_iter().next())
         .or_else(|| crate::log::mismatch(&text).filter(|_| text.contains(&format!("-{name}.drv"))));
     match got {

@@ -52,10 +52,6 @@ const REACHES: &[(&str, &[&str])] = &[
     ),
     ("src/cli/diff.rs", &["remote", "store"]),
     ("src/cli/eval.rs", &["eval", "trace"]),
-    (
-        "src/cli/fastbuild/mod.rs",
-        &["build", "eval", "jobs", "parallel", "remote", "store"],
-    ),
     ("src/cli/jobs.rs", &["eval", "jobs", "remote"]),
     ("src/cli/mod.rs", &["eval", "parallel", "trace"]),
     (
@@ -67,7 +63,7 @@ const REACHES: &[(&str, &[&str])] = &[
 ];
 
 /// Locked, so `REACHES` can only shrink. Lower it when an entry goes.
-const REACHES_LEN: usize = 18;
+const REACHES_LEN: usize = 17;
 
 /// Files under `src/cli` with `runtime::Word` — an evaluator value — in a
 /// function signature. A command that cannot name a value cannot evaluate one.

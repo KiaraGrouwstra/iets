@@ -486,8 +486,6 @@ mod tests {
                 .iter()
                 .map(|n| ((*n).to_string(), format!("/nix/store/aaa-top-{n}")))
                 .collect::<BTreeMap<_, _>>(),
-            elapsed: std::time::Duration::ZERO,
-            cache_status: None,
             exit: if success { 0 } else { 1 },
         }
     }

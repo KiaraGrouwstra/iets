@@ -10,7 +10,6 @@ pub mod devenv;
 pub mod diff;
 pub mod docs;
 pub mod eval;
-pub mod fastbuild;
 pub mod help;
 pub mod jobs;
 pub mod parse;

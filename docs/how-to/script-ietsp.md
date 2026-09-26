@@ -60,8 +60,7 @@ status of each build result, so you get the code.
 `ietsp diff` is the one exception, and it follows `diff(1)`: 0 equal, 1
 different, 2 a usage error or any other failure.
 
-The classic names exit 1 as Nix does. `ietsp fast-build` exits 1 on any
-failure, as `nix-fast-build` does. `ietsp eval-jobs` exits 0 when only jobs
+The classic names exit 1 as Nix does. `ietsp eval-jobs` exits 0 when only jobs
 fail; their errors are in the job lines.
 
 ## Read the log as records

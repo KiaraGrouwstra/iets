@@ -4,7 +4,7 @@ Every user-facing `ietsp` command: its synopsis, its flags, what it writes
 to stdout and to stderr, and the codes it exits with.
 
 The classic Nix names (`nix-instantiate`, `nix-build`, `nix-shell`,
-`nix-eval-jobs`, `nix-fast-build`, `nix`) are in
+`nix-eval-jobs`, `nix`) are in
 `docs/reference/classic.md`. The machine-first operations
 (`ietsp plumbing OP`) are in `docs/reference/plumbing.md`. The error codes,
 the exit codes and the JSON log records are in `docs/reference/errors.md`.
@@ -19,12 +19,11 @@ ietsp COMMAND [ARGS...]
 | Command | What it does |
 |:---|:---|
 | `eval` | evaluate an expression, a file or a flake and print the value |
-| `build` | evaluate to derivations and build them |
+| `build` | evaluate to derivations, one or a set of them, and build them |
 | `search` | print the packages that match every regular expression |
 | `diff` | print what differs between two derivations |
 | `prefetch` | print the hash of a URL or of a fixed-output derivation |
 | `eval-jobs` | print a jobset's derivations as JSON lines |
-| `fast-build` | evaluate and build an attribute tree in one process |
 | `print-dev-env` | print the bash of a flake's devShell |
 | `lint` | print the lint registry and the levels a run would use |
 | `parse` | parse Nix files and print or check the syntax tree |
@@ -55,7 +54,7 @@ stdout and exit 0.
 
 `ietsp eval`, `ietsp build`, `ietsp prefetch` and every `ietsp plumbing`
 op that evaluates share one parser (`src/cli/mod.rs:parse_eval_args`).
-`ietsp diff`, `ietsp search`, `ietsp eval-jobs`, `ietsp fast-build` and
+`ietsp diff`, `ietsp search`, `ietsp eval-jobs` and
 `ietsp print-dev-env` take the subset each one lists below.
 
 | Flag | Effect |
@@ -95,8 +94,7 @@ op that evaluates share one parser (`src/cli/mod.rs:parse_eval_args`).
 combined`. The last input wins otherwise. `-f`/`--file` resolves exactly
 as the positional argument does, and it is a native flag only: under a
 classic name the argv stays Nix's, where `nix-eval-jobs -f` is an unknown
-flag. `ietsp fast-build` is the one native command without it — there
-`-f` is nix-fast-build's `--flake`.
+flag.
 
 `-A PATH` and a flake fragment walk the value with
 `attr-path.cc:findAlongAttrPath`, which auto-calls at every step. A file
@@ -786,99 +784,6 @@ Three differences that stay:
 `scripts/evaljobs-flags.nu` runs nix-eval-jobs 2.35.2 and ietsp with
 every flag combination above on the jobsets in `tests/evaljobs/` and
 diffs the sorted output: 41 cases, all identical, exit codes included.
-
-## `fast-build`
-
-```
-ietsp fast-build [FLAGS]
-```
-
-Evaluate an attribute tree and build it, with nix-fast-build's flags and
-result formats. It is a drop-in for nix-fast-build a3e9a5a.
-
-| Flag | Effect |
-|---|---|
-| `-f REF`, `--flake REF` | the flake attribute to build; default `.#checks` |
-| `--file [FILE]`, `-A PATH` | build a file (default `default.nix`), or its attribute `PATH` |
-| `--arg N E`, `--argstr N S`, `-I P=PATH` | as for `eval` |
-| `--pure`, `--impure` | turn pure evaluation on or off; `--file` is impure |
-| `--option NAME VALUE` | set a Nix setting |
-| `--select EXPR` | build `EXPR` applied to the tree instead |
-| `--store URL` | where to build; default: the `builder` setting |
-| `-j N`, `--max-jobs N` | builds at the same time |
-| `--eval-workers N` | evaluator threads |
-| `--systems "A B"` | build for these systems; default: this one |
-| `--skip-cached` | do not build what is built or substitutable |
-| `--skip-unsupported` | skip jobs not available on their system |
-| `--out-link PREFIX` | link each output as `PREFIX-ATTR` |
-| `--retries N` | build a failed job again, `N` times |
-| `--fail-fast` | stop at the first failure |
-| `--result-file PATH`, `--result-format json\|junit` | write the results |
-| `--stream-json-lines` | print each result as a JSON line on stdout |
-| `--no-fold` | no GitHub Actions log groups |
-| `--log-format F`, `--show-trace` | as for `eval` |
-
-**Refused**, with an error: `--remote`, `--remote-ssh-option`,
-`--always-upload-source`, `--copy-to`, `--cachix-cache`, `--attic-cache`,
-`--attic-ignore-upstream-cache-filter`, `--attic-push-build-closure`,
-`--push-build-closure`, `--niks3-server`, `--override-input`,
-`--reference-lock-file`.
-
-**Accepted and ignored**: `--no-nom`, `--no-link`, `--no-download`,
-`--eval-max-memory-size`, `--stall-timeout`, `--nix`, `--nix-eval-jobs`,
-`--nix-build`, `--debug`. `--nix`, `--nix-eval-jobs` and `--nix-build`
-print a note on stderr: there is no subprocess to point at. The stall
-timeout is a constant (`build::render::STALL`, 300 s).
-
-An unknown flag is an error for `ietsp fast-build`, with a suggestion
-when it is close to a known one. Under the classic name `nix-fast-build`
-an unknown flag falls back to the real binary instead.
-
-stdout: nothing, except one JSON object per record under
-`--stream-json-lines`.
-stderr: one line per build state change (started, phase with elapsed,
-verdict), the logs, the summary.
-Exit: 1 when any attribute failed to evaluate or to build, 0 otherwise.
-
-**Results.**
-
-- `--result-file` with `--result-format json|junit` is byte-compatible
-  with `report.py:dump_json` and `report.py:dump_junit_xml`: an `EVAL`
-  record per attribute the walk saw and a `BUILD` record per attribute
-  dispatched, the failure's log tail as the JUnit `failure` body, ANSI
-  escapes and XML-illegal control characters stripped.
-- `--stream-json-lines` prints one JSON object per record on stdout as it
-  happens, the schema of `results.py:28-43`. All progress stays on
-  stderr.
-- `GITHUB_STEP_SUMMARY`, `GITEA_STEP_SUMMARY` or `FORGEJO_STEP_SUMMARY`
-  in the environment gets the markdown summary of `report.py:35-101`,
-  failures first with the last 100 log lines in a `<details>`, successes
-  collapsed.
-
-**Rendering.** One buffer per build, flushed as one block when that
-build's activity stops, so the logs of concurrent builds never
-interleave. A terminal gets one line per state change and the log only on
-a failure; without a terminal every build's whole log is emitted in its
-block, followed by the `✔` that closes it, so a build that says it is
-done says nothing after. Folded with `::group::` markers on
-`GITHUB_ACTIONS`, `GITEA_ACTIONS` or `FORGEJO_ACTIONS` unless
-`--no-fold`, the verdict is the group's header instead. A failure prints
-the last 200 lines under its `✘` head and is never folded. A heartbeat thread names the
-running builds every 30 s, and a build silent for 300 s has its last
-lines dumped and switches to live streaming. Under `--log-format
-internal-json` the renderer prints none of this; the activity records
-carry the builds (`docs/reference/errors.md`).
-
-Every state-change line names the attribute and, when the evaluation
-knows it, the source position of the derivation:
-`▶ building checks.x86_64-linux.foo (pkgs/foo.nix:12:5)`.
-
-Over a `grpc://` store `--skip-cached` is ignored: the cache-status
-resolver speaks `QuerySubstitutablePathInfos`, a worker op, and a
-derivation whose outputs the store already has is skipped anyway.
-
-There is no gc-roots directory: ietsp holds the drvs on its own
-connection.
 
 ## `print-dev-env`
 

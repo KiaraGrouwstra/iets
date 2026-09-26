@@ -173,9 +173,8 @@ ietsp has no local store of its own, so `auto` and an empty value both
 mean the local daemon.
 
 `builder` is where derivations are realised. Every command takes it:
-`ietsp build --builder`, `ietsp print-dev-env --builder` and `ietsp
-fast-build --store` win over it, and so does a classic `--store` or
-`--option store`. `nix-build`, `nix build`, `nix-shell` and `nix develop`
+`ietsp build --builder` and `ietsp print-dev-env --builder` win over it,
+and so does a classic `--store` or `--option store`. `nix-build`, `nix build`, `nix-shell` and `nix develop`
 have no flag of their own and use it as it stands. Registration is not
 affected: drvs and sources for `nix-instantiate --add-root`, its GC roots
 and the `nix-build`/`nix build` out-links always go to the local daemon,
@@ -303,7 +302,6 @@ The same rules as Nix, per command:
 | `nix-instantiate`, `nix-build`, `nix-shell` | nix.conf `pure-eval`, else off | `--pure-eval`, `--no-pure-eval`, `--impure`, `--option pure-eval`; the last one wins |
 | `nix eval`, `nix build`, `nix develop`, `nix print-dev-env` | on (main.cc); nix.conf does not change it | the same flags. `-f`/`--file` turns it off, and is a usage error when `pure-eval` was set anywhere, nix.conf included (installables.cc); ietsp falls back on that error |
 | `nix-eval-jobs` | `--flake`: on. Otherwise nix.conf, else off | `--impure` beats `--flake`; without `--flake`, `--pure-eval` and `--option pure-eval` |
-| `nix-fast-build` | flake mode: on. `--file` mode: off | `--impure`; `--file --pure` leaves it to nix.conf, as nix-eval-jobs does |
 | `ietsp eval`, `ietsp build`, `ietsp eval-jobs` | off | `--pure-eval`, `--no-pure-eval`, `--impure`, `--option pure-eval`; `eval-jobs --flake` as nix-eval-jobs. nix.conf is read by `eval-jobs` only |
 
 `nix-shell --impure` is the shell's environment flag (nix-build.cc takes

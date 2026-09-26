@@ -109,7 +109,7 @@ Around it:
   (the Nix worker protocol), `grpc/` (nix-grpc-store), `copy.rs`,
   `event.rs`.
 - `build/`: the dispatcher every build goes through, its two backends, the
-  uploaders, the renderer and the result files.
+  uploaders and the renderer.
 - `jobs/`: the eval-jobs walk.
 - `cli/search.rs`: the package search and its index.
 - `devenv/`: `print-dev-env`.
@@ -190,7 +190,6 @@ the farm execs the real nix for whatever it does not implement,
 | `daemon-e2e.nu` | `ietsp build` over the worker protocol | check, container; not by hand on a host whose store refuses `nix-store --delete` |
 | `build-e2e.nu` | `ietsp build` over an attribute tree: the verdicts, the exit code, `--json` | check, container |
 | `grpc-e2e.nu` | `ietsp build` over `grpc://` | by hand |
-| `fastbuild-e2e.nu` | `ietsp fast-build`, and against `nix-fast-build` | check, container |
 | `flaketest.nu` | flake evaluation and the input store against `nix eval` | check, container, less the 3 cases that need the network (`online` in `lib.nu`); all 39 by hand |
 | `plumbing-e2e.nu` | `ietsp plumbing`, one case per op | check, container |
 | `prefetch-e2e.nu` | `ietsp prefetch` against `nix store prefetch-file` and `nix hash` | check, container |

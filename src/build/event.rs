@@ -1,6 +1,4 @@
-//! What the dispatcher reports per attribute. One stream feeds every
-//! consumer: the terminal or CI renderer, `--stream-json-lines`, and the
-//! `--result-file` records.
+//! What the dispatcher reports per attribute, for the terminal or CI renderer.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -28,7 +26,7 @@ pub enum Kind {
 
 /// One event about one attribute.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FastBuildEvent {
+pub struct BuildEvent {
     /// The attribute path plus the source position when it is known, or the
     /// derivation name for a build the dispatcher was not asked for by name
     /// (a dependency).
@@ -42,9 +40,9 @@ pub struct FastBuildEvent {
     pub pos: Option<String>,
 }
 
-impl FastBuildEvent {
-    pub fn new(attr: &str, drv: &str, kind: Kind, elapsed: Duration) -> FastBuildEvent {
-        FastBuildEvent {
+impl BuildEvent {
+    pub fn new(attr: &str, drv: &str, kind: Kind, elapsed: Duration) -> BuildEvent {
+        BuildEvent {
             attr: attr.to_string(),
             drv: drv.to_string(),
             kind,
@@ -54,14 +52,13 @@ impl FastBuildEvent {
     }
 
     /// Where the derivation was defined.
-    pub fn at(mut self, pos: Option<String>) -> FastBuildEvent {
+    pub fn at(mut self, pos: Option<String>) -> BuildEvent {
         self.pos = pos;
         self
     }
 }
 
-/// `2s`, `3m04s`, `1h02m03s`, as nix-fast-build's `fmt_duration` prints it
-/// (renderer.py:18-25).
+/// `2s`, `3m04s`, `1h02m03s`.
 pub fn fmt_duration(d: Duration) -> String {
     let total = d.as_secs();
     let (h, m, s) = (total / 3600, (total / 60) % 60, total % 60);

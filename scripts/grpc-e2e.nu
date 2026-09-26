@@ -10,8 +10,8 @@
 # 4. classic `nix build --store grpc://…?insecure=1 --eval-store auto`
 #    compared with the real nix plus its nix-grpc-store plugin.
 # 5. the out-link: the output is fetched back and registered locally.
-# 6. `ietsp fast-build --store grpc://…`: the same result file as the same
-#    flake built over the worker protocol on the same store.
+# 6. `ietsp build --builder grpc://… DIR#checks`: the same outcomes as the
+#    same flake built over the worker protocol on the same store.
 # 7. a multi-root `ietsp build` over grpc: one progress line per attribute.
 #
 # A real farm (balancer, niks3, several workers) is not covered here; see
@@ -20,7 +20,7 @@
 # usage: nu scripts/grpc-e2e.nu            # uses target/release
 #        BIN=target/debug nu scripts/grpc-e2e.nu
 #        DAEMON=/nix/store/…-nix-grpc-store-0.1.0 nu scripts/grpc-e2e.nu
-use lib.nu [ROOT bytes-of chomp current-system fail fastbuild-flake ietsp-bin isolate make-farm nixpkgs out-of quiet-ok require-real-nix run-in same-file scratch-daemon show show-matching]
+use lib.nu [ROOT bytes-of chomp current-system fail checks-flake ietsp-bin isolate make-farm nixpkgs out-of quiet-ok require-real-nix run-in same-file scratch-daemon show show-matching]
 
 const FLAKE = "github:Mic92/nix-grpc-store/4f6d239e834f96bd1544a8b243d46c41a892016e"
 
@@ -168,22 +168,18 @@ def run-tests [ietsp: string, nixpkgs: string, work: string] {
     print $"ok: ($link) -> ($out), valid locally"
   }
 
-  print "== 6. fast-build over grpc: the same verdicts as over the worker protocol"
+  print "== 6. a set of checks over grpc: the same verdicts as over the worker protocol"
   # Two flakes, so neither run finds the other's outputs already built. The
   # attribute names are the same, the nonces are not.
-  fastbuild-flake $"($work)/fb-grpc"
-  fastbuild-flake $"($work)/fb-worker"
+  checks-flake $"($work)/fb-grpc"
+  checks-flake $"($work)/fb-worker"
   let verdicts = {|store: string, name: string|
-    let f = $"($work)/($name).json"
-    let r = (^$ietsp fast-build --store $store --flake $"path:($work)/($name)#checks"
-      --systems $system --result-file $f | complete)
-    if not ($f | path exists) { print ($r.stderr | chomp); fail $"($name): no result file" }
+    let r = (^$ietsp build --builder $store --no-tracing-cache --json $"path:($work)/($name)#checks" | complete)
+    if ($r.stdout | is-empty) { print ($r.stderr | chomp); fail $"($name): no outcomes" }
     {
       exit: $r.exit_code,
       stderr: $r.stderr,
-      rows: (open --raw $f | from json | get results
-        | each {|x| {type: $x.type, attr: $x.attr, success: $x.success, skipped: ($x.skipped? | default false)} }
-        | sort-by type attr),
+      rows: ($r.stdout | from json | get outcomes | select attr success | sort-by attr),
     }
   }
   let over_grpc = (do $verdicts $url "fb-grpc")
@@ -194,7 +190,7 @@ def run-tests [ietsp: string, nixpkgs: string, work: string] {
   if $over_grpc.rows != $over_worker.rows {
     print $"  grpc:   ($over_grpc.rows | to json -r)"
     print $"  worker: ($over_worker.rows | to json -r)"
-    fail "the result file differs between the transports"
+    fail "the outcomes differ between the transports"
   }
   if not ($over_grpc.stderr | str contains $"($system).bad") { fail "the failing attribute is not named" }
   if not ($over_grpc.stderr | str contains "about to fail") { fail "the failure log tail is missing" }

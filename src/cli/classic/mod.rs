@@ -26,7 +26,6 @@ pub const NAMES: &[&str] = &[
     "nix-build",
     "nix-eval-jobs",
     "nix-shell",
-    "nix-fast-build",
     "nix",
 ];
 
@@ -38,7 +37,6 @@ pub fn dispatch(name: &str, argv: &[String]) -> i32 {
         "nix-build" => build::main(argv),
         "nix-shell" => shell::main(argv),
         "nix-eval-jobs" => crate::cli::jobs::cmd_eval_jobs(argv),
-        "nix-fast-build" => crate::cli::fastbuild::cmd_fast_build(argv),
         _ => nix::main(argv),
     }
 }

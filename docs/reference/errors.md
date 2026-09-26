@@ -69,8 +69,7 @@ when it builds in its own store; as a client of a daemon it exits 1,
 because the worker protocol does not carry the exit status. ietsp is
 always a client, but it reads the status of each `BuildResult`. The
 classic names (`nix-build`, `nix build`, `nix-shell`) exit 1, as Nix
-does through a daemon. `ietsp fast-build` exits 1 on any failure, as
-`nix-fast-build` does. `ietsp eval-jobs` exits 0 when only jobs fail;
+does through a daemon. `ietsp eval-jobs` exits 0 when only jobs fail;
 their errors are in the job lines.
 
 A NAR hash mismatch of a fetched tree has code `hash-mismatch` but exits
@@ -78,7 +77,7 @@ A NAR hash mismatch of a fetched tree has code `hash-mismatch` but exits
 
 ## `--log-format internal-json`
 
-The native commands (`eval`, `build`, `diff`, `eval-jobs`, `fast-build`,
+The native commands (`eval`, `build`, `diff`, `eval-jobs`,
 `print-dev-env`) and the classic names take `--log-format FORMAT` and
 `--show-trace`. `internal-json` is the format; `raw`, `raw-with-logs`,
 `bar` and `bar-with-logs` give the plain text. Any other value is a usage

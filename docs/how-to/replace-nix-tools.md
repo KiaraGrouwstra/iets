@@ -9,7 +9,7 @@ one cache. This page gives a worked example of each replacement.
 | `nix-diff` | `ietsp diff` |
 | `nvd` | `ietsp diff --closure` |
 | `nurl`, `nix-prefetch`, `nix-prefetch-url` | `ietsp prefetch` |
-| `nix-fast-build` | `ietsp fast-build` |
+| `nix-fast-build` | `ietsp build .#checks` |
 | `nix-eval-jobs` | `ietsp eval-jobs` |
 | nix-direnv's `use flake` | `ietsp print-dev-env` |
 
@@ -18,7 +18,7 @@ behaviour differs from the tool being replaced on purpose, it is recorded
 in [reference/divergences.md](../reference/divergences.md).
 
 Under the classic names — `nix`, `nix-build`, `nix-instantiate`,
-`nix-shell`, `nix-eval-jobs`, `nix-fast-build` — the same binary answers
+`nix-shell`, `nix-eval-jobs` — the same binary answers
 as that command and runs the real `nix` for what it does not implement.
 See [reference/classic.md](../reference/classic.md).
 
@@ -199,54 +199,39 @@ also why there is no `--name`, `--executable` or `--expected-hash`.
 
 ## `nix-fast-build`
 
-`ietsp fast-build` takes nix-fast-build's flags and writes its result
-formats, so a wrapper that execs `nix-fast-build --store … <flags>` can
-exec `ietsp fast-build --store … <flags>` instead:
+There is no separate command. `ietsp build` takes a set of derivations,
+so the checks of a flake are one installable:
 
 ```sh
-ietsp fast-build --store daemon --flake .#checks
+ietsp build .#checks
 ```
 
 ```
-▶ building x86_64-linux.one (/home/you/fb/flake.nix:4:7)
-▶ building x86_64-linux.two (/home/you/fb/flake.nix:10:7)
-✔  x86_64-linux.one (/home/you/fb/flake.nix:4:7) (0s)
-✔  x86_64-linux.two (/home/you/fb/flake.nix:10:7) (0s)
-fast-build: 2 built, 0 cached, 0 for another system, 1 build ops, 2 paths uploaded (0 MB), first build at 1.228s, total 1.228s
-fast-build: 2 succeeded, 0 failed
+▶ building checks.x86_64-linux.one (/home/you/fb/flake.nix:4:7)
+▶ building checks.x86_64-linux.two (/home/you/fb/flake.nix:10:7)
+✔  checks.x86_64-linux.one (/home/you/fb/flake.nix:4:7) (0s)
+✔  checks.x86_64-linux.two (/home/you/fb/flake.nix:10:7) (0s)
+2 built, 0 failed
+/nix/store/…-one
+/nix/store/…-two
 ```
 
-Common variants:
+It evaluates in this process and builds on one connection. The checks of
+the current system are selected, every check gets a verdict, and what the
+builder already has is not built again. None of that needs a flag. The
+exit code is Nix's: 100 when a build failed.
 
 ```sh
-ietsp fast-build --flake .#checks.x86_64-linux --skip-cached
-ietsp fast-build --file release.nix -A ci --argstr system x86_64-linux
-ietsp fast-build --store ssh-ng://builder --result-format junit --result-file r.xml
+ietsp build --builder ssh-ng://builder .#checks
+ietsp build release.nix -A ci --argstr system x86_64-linux
+ietsp build --json .#checks > outcomes.json
 ```
 
-nix-fast-build orchestrates processes: `nix-eval-jobs` for evaluation and
-one `nix build` per attribute, with `nix copy` and `nix log` beside them.
-ietsp does all of it in one process against one connection, so there is no
-per-attribute process spawn and no second client re-evaluating the flake.
-
-Three differences you will notice:
-
-- **`--remote` is an error, not a no-op.** `--store ssh-ng://host` already
-  does the job better: the flake is never copied and the evaluation never
-  runs twice.
-- **Uploading to a binary cache is an error.** `--copy-to`,
-  `--cachix-cache`, `--attic-cache`, `--niks3-server` and
-  `--push-build-closure` all refuse. Pushing what a build produced is the
-  farm's job; a client that also pushes doubles the bytes on the slowest
-  link in the system.
-- **Outputs stay where they were built.** `--no-download` is accepted and
-  is the effective behaviour. Copying outputs back registers foreign
-  input-addressed paths locally, which needs trusted-user status that CI
-  rarely has.
-
-Under the classic name, an unknown flag is not an error: it falls back to
-the real `nix-fast-build` if one is installed, so a missing feature
-degrades instead of breaking a pipeline.
+`--json` is the report: `{"outcomes":[{attr, drv, success, outputs,
+reason, logTail}]}`. There is no JUnit file; convert the JSON where a
+consumer needs one. Outputs stay where they were built, and nothing is
+pushed to a binary cache: that is the builder's job.
+[How to build on a remote builder](build-remotely.md) has the details.
 
 ## `nix-eval-jobs`
 

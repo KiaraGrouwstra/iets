@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::time::{Duration, Instant};
 
-use super::event::{FastBuildEvent, Kind, fmt_duration};
+use super::event::{BuildEvent, Kind, fmt_duration};
 
 /// Unfolded tail of a failure log.
 pub const FAILURE_TAIL: usize = 200;
@@ -38,8 +38,7 @@ pub enum Mode {
     Ci,
 }
 
-/// The renderer's settings. `fold` is on when the CI is Actions-shaped and
-/// `--no-fold` was not given.
+/// The renderer's settings. `fold` is on when the CI is Actions-shaped.
 #[derive(Debug, Clone, Copy)]
 pub struct Style {
     pub mode: Mode,
@@ -61,12 +60,12 @@ impl Style {
     }
 }
 
-pub fn is_tty() -> bool {
+fn is_tty() -> bool {
     unsafe { libc::isatty(libc::STDERR_FILENO) == 1 }
 }
 
 /// The CIs whose logs understand `::group::` markers.
-pub fn actions_ci() -> bool {
+fn actions_ci() -> bool {
     ["GITHUB_ACTIONS", "GITEA_ACTIONS", "FORGEJO_ACTIONS"]
         .iter()
         .any(|v| std::env::var_os(v).is_some_and(|s| !s.is_empty()))
@@ -182,7 +181,7 @@ impl Renderer {
         self.write(&[msg.to_string()]);
     }
 
-    pub fn event(&mut self, e: &FastBuildEvent) {
+    pub fn event(&mut self, e: &BuildEvent) {
         match &e.kind {
             Kind::Started => self.started(e),
             Kind::Phase(p) => self.phase(e, p),
@@ -198,7 +197,7 @@ impl Renderer {
         }
     }
 
-    fn started(&mut self, e: &FastBuildEvent) {
+    fn started(&mut self, e: &BuildEvent) {
         // A build hook starts two activities for one derivation: its own
         // "building X on 'ssh-ng://…'" and the build behind it.
         if self.running.contains_key(&e.drv) {
@@ -226,7 +225,7 @@ impl Renderer {
         }
     }
 
-    fn phase(&mut self, e: &FastBuildEvent, phase: &str) {
+    fn phase(&mut self, e: &BuildEvent, phase: &str) {
         let (label, elapsed) = match self.running.get_mut(&e.drv) {
             Some(b) => {
                 b.phase = Some(phase.to_string());
@@ -245,7 +244,7 @@ impl Renderer {
         }
     }
 
-    fn log(&mut self, e: &FastBuildEvent, bytes: &[u8]) {
+    fn log(&mut self, e: &BuildEvent, bytes: &[u8]) {
         let text = String::from_utf8_lossy(bytes).into_owned();
         // A failure message names the derivation that failed, which is the
         // only per-derivation verdict the protocol carries.
@@ -295,7 +294,7 @@ impl Renderer {
         if !text.contains("failed") && !text.contains("error") {
             return;
         }
-        for drv in drv_paths(&super::results::strip_ansi(text)) {
+        for drv in drv_paths(&crate::log::strip_ansi(text)) {
             self.failed.insert(drv);
         }
     }
@@ -353,7 +352,7 @@ impl Renderer {
         self.sgr(RED, &l)
     }
 
-    fn verdict(&mut self, e: &FastBuildEvent, ok: bool, reason: Option<&str>) {
+    fn verdict(&mut self, e: &BuildEvent, ok: bool, reason: Option<&str>) {
         match self.running.remove(&e.drv) {
             Some(b) => {
                 let tail = b.tail(FAILURE_TAIL);
@@ -369,7 +368,7 @@ impl Renderer {
         }
     }
 
-    fn failure(&mut self, e: &FastBuildEvent, reason: &str, tail: &[String]) {
+    fn failure(&mut self, e: &BuildEvent, reason: &str, tail: &[String]) {
         if self.running.contains_key(&e.drv) {
             self.verdict(e, false, Some(reason));
             return;
@@ -607,8 +606,8 @@ mod tests {
         String::from_utf8(s.0.lock().unwrap().clone()).unwrap()
     }
 
-    fn ev(kind: Kind) -> FastBuildEvent {
-        FastBuildEvent::new("checks.x.a", "/nix/store/a.drv", kind, Duration::ZERO)
+    fn ev(kind: Kind) -> BuildEvent {
+        BuildEvent::new("checks.x.a", "/nix/store/a.drv", kind, Duration::ZERO)
     }
 
     #[test]
@@ -655,23 +654,23 @@ mod tests {
     #[test]
     fn logs_of_two_builds_do_not_interleave() {
         let (mut r, s) = ci(false);
-        let a = FastBuildEvent::new("a", "/nix/store/a.drv", Kind::Started, Duration::ZERO);
-        let b = FastBuildEvent::new("b", "/nix/store/b.drv", Kind::Started, Duration::ZERO);
+        let a = BuildEvent::new("a", "/nix/store/a.drv", Kind::Started, Duration::ZERO);
+        let b = BuildEvent::new("b", "/nix/store/b.drv", Kind::Started, Duration::ZERO);
         r.event(&a);
         r.event(&b);
-        r.event(&FastBuildEvent::new(
+        r.event(&BuildEvent::new(
             "a",
             "/nix/store/a.drv",
             Kind::Log(b"a1".to_vec()),
             Duration::ZERO,
         ));
-        r.event(&FastBuildEvent::new(
+        r.event(&BuildEvent::new(
             "b",
             "/nix/store/b.drv",
             Kind::Log(b"b1".to_vec()),
             Duration::ZERO,
         ));
-        r.event(&FastBuildEvent::new(
+        r.event(&BuildEvent::new(
             "a",
             "/nix/store/a.drv",
             Kind::Log(b"a2".to_vec()),
@@ -713,7 +712,7 @@ mod tests {
         r.event(&ev(Kind::Started));
         r.event(&ev(Kind::Log(b"about to fail".to_vec())));
         // Unattributed, as the daemon sends it, with nix's colours.
-        r.event(&FastBuildEvent::new(
+        r.event(&BuildEvent::new(
             "",
             "",
             Kind::Log(
@@ -741,7 +740,7 @@ mod tests {
     fn an_owned_build_is_verdicted_once_by_its_op() {
         let (mut r, s) = ci(false);
         let at = |kind: Kind| {
-            FastBuildEvent::new(
+            BuildEvent::new(
                 "prov-fail (/home/u/repo/default.nix:2:3)",
                 "/nix/store/a.drv",
                 kind,
@@ -758,7 +757,7 @@ mod tests {
         r.stopped("/nix/store/a.drv");
         // The daemon's own error text is unattributed, and still belongs to
         // the one build that is running.
-        r.event(&FastBuildEvent::new(
+        r.event(&BuildEvent::new(
             "",
             "",
             Kind::Log(b"error: build of '/nix/store/a.drv' on 'ssh-ng://b' failed".to_vec()),

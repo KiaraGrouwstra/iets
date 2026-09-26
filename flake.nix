@@ -22,7 +22,7 @@
         mkdir -p $out/bin
         mkdir -p $out/share/ietsp
         echo -n "${nix}/bin" > $out/share/ietsp/real-nix-bin
-        for n in nix-instantiate nix-build nix-eval-jobs nix-shell nix-fast-build nix; do
+        for n in nix-instantiate nix-build nix-eval-jobs nix-shell nix; do
           ln -s ${ietspPkg}/bin/ietsp $out/bin/$n
         done
       '';
@@ -111,8 +111,6 @@
             env = "NEJ=${pkgs.nix-eval-jobs}/bin/nix-eval-jobs";
           };
           build-e2e = e2e "build-e2e" { };
-          # with the real nix-fast-build, so the comparison case runs too
-          fastbuild-e2e = e2e "fastbuild-e2e" { packages = [ pkgs.nix-fast-build ]; };
           flaketest = e2e "flaketest" { };
           plumbing-e2e = e2e "plumbing-e2e" { };
           prefetch-e2e = e2e "prefetch-e2e" { };

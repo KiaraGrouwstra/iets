@@ -21,8 +21,7 @@ derivation came from there. Why this shape instead of `nix-build`'s:
 
 Without the flag the URL is the `builder` setting in `ietsp.conf`, and
 nix.conf's `store` when that is unset (`docs/reference/settings.md`). A
-classic `--store URL` or `--option store URL` wins over both;
-`ietsp fast-build` spells the flag `--store`.
+classic `--store URL` or `--option store URL` wins over both.
 
 - `daemon`, `auto` and an empty value are
   `/nix/var/nix/daemon-socket/socket`.
@@ -88,7 +87,7 @@ tables.
 
 Every command that realises a derivation goes through
 `crate::build::Dispatcher`, over every transport: `ietsp build`, classic
-`nix-build` and `nix build`, and `fast-build`. `nix-instantiate`,
+`nix-build` and `nix build`. `nix-instantiate`,
 `nix-shell` and `print-dev-env` use the same two halves without the
 renderer.
 
@@ -96,16 +95,15 @@ Two ways of feeding it:
 
 - `build::upload::PlanUpload` ships a `remote::plan::Plan` computed once,
   for the commands that know every root before they build anything.
-- `build::upload::StreamUpload` is incremental, for the eval-jobs walk of
-  `ietsp fast-build`. Per batch it walks only the part of the closure it
+- `build::upload::StreamUpload` is incremental, for the instantiation of
+  the `eval-jobs` walk. Per batch it walks only the part of the closure it
   has not registered yet, then one `QueryValidPaths` and one
   `AddMultipleToStore`. It duplicates `remote::plan::plan`'s walk on
   purpose: `plan` cannot prune at a derivation already known valid, and
   re-planning a whole closure per batch is quadratic on a large `checks`
   set.
 
-The dispatcher owns the batching, the provenance, the event stream and
-the records; a `build::backend::Backend` owns the wire. Two
+The dispatcher owns the batching, the provenance and the event stream; a `build::backend::Backend` owns the wire. Two
 implementations:
 
 | | worker protocol (`daemon`, `unix://`, `ssh-ng://`) | `grpc://` |
@@ -257,7 +255,7 @@ defaults (`src/client/store.hh`):
 | `connect-timeout` | 30 | seconds the first call waits for the service |
 | `reschedule-retries` | 8 | how often a build a worker bounced goes back to the scheduler |
 | `restart-grace` | 120 | seconds to wait for a scheduler that went away, or for a worker that can take an `Unplaceable` derivation |
-| `max-builds` | 64 | concurrent `BuildDerivation` calls; nix.conf `max-jobs` does not apply, `fast-build`'s `-j` lowers it |
+| `max-builds` | 64 | concurrent `BuildDerivation` calls; nix.conf `max-jobs` does not apply |
 | `nar-connections` | 4 | accepted for URL compatibility; this client fetches over its one channel |
 
 ### Auth and headers
@@ -431,10 +429,10 @@ What the other cases check:
   local daemon, which refuses it for lacking a signature. That is correct,
   because a scratch daemon builds unsigned outputs; on a real farm the
   local daemon substitutes the output from the cache instead.
-- **Case 6** runs `ietsp fast-build --store grpc://…` on `scripts/lib.nu`'s
-  `fastbuild-flake` and compares the whole result file — every record's
-  type, attribute, success and skipped flag — with the same flake built
-  over the worker protocol on the same store.
+- **Case 6** runs `ietsp build --builder grpc://… --json` on the `checks`
+  of `scripts/lib.nu`'s `checks-flake` and compares every outcome's
+  attribute and success with the same flake built over the worker
+  protocol on the same store.
 - **Case 7** checks that a multi-root `ietsp build` over `grpc://` names
   every attribute on stderr.
 

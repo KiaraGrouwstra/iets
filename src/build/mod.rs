@@ -6,22 +6,20 @@
 //! Three axes, kept apart:
 //!
 //! - **What to feed it.** `ietsp build`, `nix-build` and `nix build` hand over
-//!   a fixed set of roots (`upload::PlanUpload`). `ietsp fast-build` hands
-//!   over batches as the eval-jobs walk finishes attributes
-//!   (`upload::StreamUpload`), which is what overlaps evaluation with
-//!   building. See docs/reference/commands.md.
+//!   a fixed set of roots (`upload::PlanUpload`). `eval-jobs` instantiation
+//!   hands over batches as the walk finishes attributes
+//!   (`upload::StreamUpload`). See docs/reference/commands.md.
 //! - **How to reach the store.** `backend::Backend`: the worker protocol
 //!   sends one `BuildPathsWithResults` per ready set (docs/reference/builders.md: one
 //!   op per ready set beats one op per derivation by 7-10x, and the protocol
 //!   is serial per connection); `grpc://` fans the set out instead.
-//! - **What to say about it.** `render` and `results`, from one event stream.
+//! - **What to say about it.** `render`, from one event stream.
 
 pub mod backend;
 pub mod event;
 pub mod fanout;
 pub mod fixhash;
 pub mod render;
-pub mod results;
 pub mod upload;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -39,9 +37,8 @@ use crate::remote::worker::{Options, Transport};
 use crate::store::path::StorePath;
 
 use backend::Backend;
-use event::{FastBuildEvent, Kind};
+use event::{BuildEvent, Kind};
 use render::{Renderer, Style};
-use results::Record;
 use upload::Uploader;
 
 /// One derivation the caller asked for, under the name it wants to see.
@@ -52,11 +49,6 @@ pub struct Target {
     pub drv: StorePath,
     /// Wanted output names; empty means every output (`!*`).
     pub outputs: Vec<String>,
-    /// From `--check-cache-status`, for the result records.
-    pub cache_status: Option<String>,
-    /// What the renderer shows, when it differs from `attr`: the attribute
-    /// plus the source position, which the records must not carry.
-    pub label: Option<String>,
 }
 
 impl From<&Target> for backend::Job {
@@ -74,8 +66,6 @@ impl Target {
             attr: attr.to_string(),
             drv,
             outputs,
-            cache_status: None,
-            label: None,
         }
     }
 }
@@ -91,27 +81,8 @@ pub struct Outcome {
     pub log_tail: Vec<String>,
     /// Output name to store path, for the targets that built.
     pub outputs: BTreeMap<String, String>,
-    pub elapsed: Duration,
-    pub cache_status: Option<String>,
     /// `log::build_exit` of a failure, 0 otherwise.
     pub exit: i32,
-}
-
-impl Outcome {
-    /// The build record for `--result-file` and `--stream-json-lines`.
-    pub fn record(&self) -> Record {
-        Record {
-            success: self.success,
-            duration: self.elapsed.as_secs_f64(),
-            error: self.reason.clone(),
-            log_output: (!self.log_tail.is_empty()).then(|| self.log_tail.join("\n")),
-            outputs: (!self.outputs.is_empty()).then(|| self.outputs.clone()),
-            drv_path: Some(self.drv.to_string()),
-            cache_status: self.cache_status.clone(),
-            skipped: self.skipped,
-            ..Record::build(&self.attr)
-        }
-    }
 }
 
 /// The heartbeat thread: pokes the renderer so a CI log shows liveness and
@@ -154,11 +125,9 @@ impl Drop for Heartbeat {
     }
 }
 
-/// Where the events go: the renderer, the JSON-lines stream, the records.
+/// Where the events go: the renderer.
 pub struct Reporter {
     render: Arc<Mutex<Renderer>>,
-    pub records: Vec<Record>,
-    jsonl: Option<Box<dyn Write + Send>>,
     /// Per drv: when the build started and how long it ran.
     timing: HashMap<String, (Instant, Option<Duration>)>,
 }
@@ -172,20 +141,8 @@ impl Reporter {
     pub fn with_output(style: Style, out: Box<dyn Write + Send>) -> Reporter {
         Reporter {
             render: Arc::new(Mutex::new(Renderer::new(style, out))),
-            records: Vec::new(),
-            jsonl: None,
             timing: HashMap::new(),
         }
-    }
-
-    /// `--stream-json-lines`: every record also goes to this writer, one
-    /// JSON object per line.
-    pub fn stream_to(&mut self, w: Box<dyn Write + Send>) {
-        self.jsonl = Some(w);
-    }
-
-    pub fn note(&mut self, msg: &str) {
-        self.render.lock().unwrap().note(msg);
     }
 
     /// The derivations the build op now running reports verdicts for.
@@ -197,15 +154,7 @@ impl Reporter {
         self.render.lock().unwrap().release();
     }
 
-    /// Records a result and streams it when `--stream-json-lines` is on.
-    pub fn record(&mut self, r: Record) {
-        if let Some(w) = &mut self.jsonl {
-            let _ = results::write_json_line(w.as_mut(), &r);
-        }
-        self.records.push(r);
-    }
-
-    fn emit(&mut self, e: &FastBuildEvent) {
+    fn emit(&mut self, e: &BuildEvent) {
         self.render.lock().unwrap().event(e);
     }
 
@@ -234,13 +183,9 @@ pub struct Dispatcher {
     pub reporter: Reporter,
     prov: Provenance,
     seen: HashSet<StorePath>,
-    /// `--retries N`: how many more times a failed target is submitted.
-    pub retries: usize,
     /// Nix's failingExitStatus of the failed builds, 0 while none failed.
     pub exit: i32,
     pub upload: upload::Stats,
-    /// Batches and build ops sent, for `--timings`.
-    pub ops: usize,
     /// Stops when the dispatcher drops.
     _heartbeat: Heartbeat,
 }
@@ -282,10 +227,8 @@ impl Dispatcher {
             reporter,
             prov,
             seen: HashSet::new(),
-            retries: 0,
             exit: 0,
             upload: upload::Stats::default(),
-            ops: 0,
             _heartbeat: heartbeat,
         }
     }
@@ -300,43 +243,14 @@ impl Dispatcher {
         if batch.is_empty() {
             return Ok(Vec::new());
         }
-        let mut out = self.submit_once(up, &batch)?;
-        for _ in 0..self.retries {
-            let again: Vec<Target> = batch
-                .iter()
-                .filter(|t| {
-                    out.iter()
-                        .any(|o| o.drv == t.drv && !o.success && !o.skipped)
-                })
-                .cloned()
-                .collect();
-            if again.is_empty() {
-                break;
-            }
-            self.reporter
-                .note(&format!("retrying {} failed builds", again.len()));
-            let retried = self.submit_once(up, &again)?;
-            for r in retried {
-                if let Some(slot) = out.iter_mut().find(|o| o.drv == r.drv) {
-                    *slot = r;
-                }
-            }
-        }
+        let out = self.submit_once(up, &batch)?;
         self.exit = (out.iter()).fold(self.exit, |e, o| crate::log::combine_exit(e, o.exit));
         Ok(out)
     }
 
     fn submit_once(&mut self, up: &mut dyn Uploader, batch: &[Target]) -> Result<Vec<Outcome>> {
-        // The renderer's name for each target, and from it the label the
-        // event sink hands every build in this batch.
-        let by_drv: HashMap<String, String> = batch
-            .iter()
-            .map(|t| {
-                (
-                    t.drv.to_string(),
-                    t.label.clone().unwrap_or_else(|| t.attr.clone()),
-                )
-            })
+        let by_drv: HashMap<String, String> = (batch.iter())
+            .map(|t| (t.drv.to_string(), t.attr.clone()))
             .collect();
         let roots: Vec<StorePath> = batch.iter().map(|t| t.drv.clone()).collect();
         // Until this op reports its verdicts, the end of a build's activity
@@ -351,7 +265,6 @@ impl Dispatcher {
         self.upload.merge(stats);
 
         let jobs: Vec<backend::Job> = batch.iter().map(backend::Job::from).collect();
-        self.ops += 1;
         let status = {
             let drvs = |deep: bool| up.drvs(&roots, deep);
             let b = backend::Batch {
@@ -397,8 +310,6 @@ impl Dispatcher {
                         reason: None,
                         log_tail: Vec::new(),
                         outputs,
-                        elapsed,
-                        cache_status: t.cache_status.clone(),
                         exit: 0,
                     });
                 }
@@ -406,7 +317,7 @@ impl Dispatcher {
                     let tail = self.reporter.tail(&drv);
                     // The daemon's message is several coloured lines; the
                     // records want one plain one, the log tail has the rest.
-                    let reason = results::strip_ansi(&self.prov.rewrite_str(&s.reason));
+                    let reason = crate::log::strip_ansi(&self.prov.rewrite_str(&s.reason));
                     let reason = reason.lines().next().unwrap_or_default().to_string();
                     self.reporter.emit(&names.event(
                         &drv,
@@ -426,8 +337,6 @@ impl Dispatcher {
                         reason: Some(reason),
                         log_tail: tail,
                         outputs: BTreeMap::new(),
-                        elapsed,
-                        cache_status: t.cache_status.clone(),
                         exit: s.exit,
                     });
                 }
@@ -454,8 +363,6 @@ impl Dispatcher {
                         reason: Some(why),
                         log_tail: Vec::new(),
                         outputs: BTreeMap::new(),
-                        elapsed,
-                        cache_status: t.cache_status.clone(),
                         exit: 1,
                     });
                 }
@@ -516,11 +423,6 @@ impl Dispatcher {
         self.backend.fetch(store_path, dir)
     }
 
-    /// Records an attribute that never reached a build.
-    pub fn record(&mut self, r: Record) {
-        self.reporter.record(r);
-    }
-
     /// `--timings`: the backend's own per-phase report.
     pub fn report(&self, plan: &Plan, plan_time: Duration) -> String {
         self.backend.report(plan, plan_time)
@@ -558,12 +460,12 @@ impl Names<'_> {
         }
     }
 
-    fn event(&self, drv: &str, kind: Kind, elapsed: Duration) -> FastBuildEvent {
-        FastBuildEvent::new(&self.label(drv), drv, kind, elapsed).at(self.pos(drv))
+    fn event(&self, drv: &str, kind: Kind, elapsed: Duration) -> BuildEvent {
+        BuildEvent::new(&self.label(drv), drv, kind, elapsed).at(self.pos(drv))
     }
 }
 
-/// The daemon's stream mapped onto `FastBuildEvent`s. A free function so the
+/// The daemon's stream mapped onto `BuildEvent`s. A free function so the
 /// caller keeps the backend borrowed at the same time.
 fn event_sink<'a>(
     reporter: &'a mut Reporter,
@@ -645,28 +547,6 @@ mod tests {
     fn hash_stripping() {
         assert_eq!(strip_hash(&drv("hello").to_string()), "hello");
         assert_eq!(strip_hash("plain"), "plain");
-    }
-
-    #[test]
-    fn outcome_to_record() {
-        let o = Outcome {
-            attr: "checks.x.a".into(),
-            drv: drv("a"),
-            success: false,
-            skipped: false,
-            reason: Some("status 1: boom".into()),
-            log_tail: vec!["l1".into(), "l2".into()],
-            outputs: BTreeMap::new(),
-            elapsed: Duration::from_millis(1500),
-            cache_status: Some("notBuilt".into()),
-            exit: 1,
-        };
-        let r = o.record();
-        assert_eq!(r.kind, results::Kind::Build);
-        assert_eq!(r.duration, 1.5);
-        assert_eq!(r.log_output.as_deref(), Some("l1\nl2"));
-        assert!(r.outputs.is_none());
-        assert_eq!(r.cache_status.as_deref(), Some("notBuilt"));
     }
 
     // ---- a fan-out backend under the dispatcher ----------------------------

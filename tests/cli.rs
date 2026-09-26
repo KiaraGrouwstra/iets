@@ -24,7 +24,6 @@ fn help_and_version_go_to_stdout() {
         &["help", "eval"],
         &["eval", "--help"],
         &["build", "-h"],
-        &["fast-build", "--help"],
         &["cache", "gc", "--help"],
         &["lint", "--help"],
         &["version"],
@@ -74,7 +73,7 @@ fn a_bad_command_line_names_the_problem() {
             "-E and FILE cannot be combined",
         ),
         (&["build"], "nothing to evaluate"),
-        (&["fast-build", "--what"], "unknown flag '--what'"),
+        (&["build", "--what"], "unknown flag '--what'"),
         (&["cache", "dunp"], "did you mean 'dump'?"),
     ] {
         let o = ietsp(args);

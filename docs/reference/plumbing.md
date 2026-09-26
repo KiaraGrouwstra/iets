@@ -336,11 +336,10 @@ op in between.
 | Command | The operations it uses | What is the command's own |
 |:---|:---|:---|
 | `ietsp eval` | `eval` | the human value printer, `--timings` |
-| `ietsp build` | `plan`, `missing`, `build`, through `api::build::Dispatch` | the `--dry-run` text, `render_size`, the `fix-hashes` prompts, the `.drv` legacy input |
+| `ietsp build` | `resolve` (the get-drvs walk for a set), `plan`, `missing`, `build`, through `api::build::Dispatch` | the closing line, the `--dry-run` text, `render_size`, the `fix-hashes` prompts, the `.drv` legacy input |
 | `ietsp search` | `index` | regex compile and match, `--exclude`, colour, `--pretty`, the no-results hint |
 | `ietsp diff` | `resolve`, `drv-diff`, `closure-diff` | the text rendering, the `diff(1)` exit codes |
 | `ietsp eval-jobs` | `jobs` | the worker/collector process model, `--max-memory-size`, the summary line |
-| `ietsp fast-build` | `jobs`, `build` | the terminal report, `--result-file`, the step summary |
 | `ietsp print-dev-env` | `resolve`, `dev-env` | the bash rendering, the direnv cache, the GC root |
 | `ietsp prefetch` | `fetch` | the `--json` shape choice |
 | `ietsp lint`, `ietsp parse`, `ietsp cache` | none | they are already thin over the library |
@@ -348,7 +347,6 @@ op in between.
 | `nix-build` | `resolve`, `plan`, `build` | `result` symlinks, `--add-root`, Nix's exit codes, the fallback |
 | `nix-shell` | `resolve`, `plan`, `build` | the env, `execve` of the shell, `--run`, `--pure` |
 | `nix-eval-jobs` | `jobs` | argv compatibility |
-| `nix-fast-build` | `jobs`, `build` | argv compatibility, the report |
 | `nix eval` | `eval` | Nix's printer and argv |
 | `nix build` | `resolve`, `plan`, `build` | `result` symlinks, the `--json` Nix shape, the fallback |
 | `nix derivation show` | `resolve`, `drv-show` | Nix's argv, `--pretty`, the fallback |

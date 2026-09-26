@@ -13,11 +13,10 @@ A Nix evaluator, and a client that builds what it evaluates.
 
 commands:
   eval           evaluate an expression or a file and print the value
-  build          evaluate to derivations and build them on a daemon
+  build          evaluate to derivations, one or a set of them, and build them
   search         find packages by regex, like 'nix search'
   diff           print what differs between two derivations
   eval-jobs      print a jobset's derivations as JSON lines (nix-eval-jobs)
-  fast-build     evaluate and build a flake's checks (nix-fast-build)
   print-dev-env  print the environment of a flake's devShell, for direnv
   prefetch       print the hash of a URL or of a fixed-output derivation
   lint           list the lints and the levels a run would use
@@ -26,7 +25,7 @@ commands:
   help, version
 
 classic: 'ietsp NAME ARGS...' with NAME one of nix-instantiate, nix-build,
-  nix-shell, nix-eval-jobs, nix-fast-build or nix acts like that Nix command,
+  nix-shell, nix-eval-jobs or nix acts like that Nix command,
   and falls back to the real one for the rest ('ietsp help classic').
 
 Scripting: JSON, stable exit codes, plumbing ops: 'ietsp help plumbing'.
@@ -168,33 +167,6 @@ Walk a jobset and print one JSON line per derivation, like nix-eval-jobs
   --log-format F, --show-trace  as for 'ietsp eval'
 ";
 
-const FAST_BUILD: &str = "\
-usage: ietsp fast-build [FLAGS]
-
-Evaluate and build an attribute tree in one process, with nix-fast-build's
-flags and result files ('ietsp help commands').
-
-  -f, --flake REF       the flake attribute to build (default .#checks)
-  --file [FILE], -A PATH  build a file (default.nix), or its attribute PATH
-  --arg N EXPR, --argstr N STR, -I P=PATH  as for 'ietsp eval'
-  --pure, --impure      turn pure evaluation on or off (--file: impure)
-  --option NAME VALUE   set a Nix setting
-  --select EXPR         build EXPR applied to the tree instead
-  --store URL           where to build (default: the builder setting)
-  -j, --max-jobs N      builds at the same time
-  --eval-workers N      evaluator threads
-  --systems \"A B\"       build for these systems (default: this one)
-  --skip-cached         do not build what is built or substitutable
-  --skip-unsupported    skip jobs not available on their system
-  --out-link PREFIX     link each output as PREFIX-ATTR
-  --retries N           build a failed job again, N times
-  --fail-fast           stop at the first failure
-  --result-file PATH, --result-format json|junit  write the results
-  --stream-json-lines   print each result as a JSON line
-  --no-fold             no GitHub Actions log groups
-  --log-format F, --show-trace  as for 'ietsp eval'
-";
-
 const PRINT_DEV_ENV: &str = "\
 usage: ietsp print-dev-env [FLAGS] [FLAKEREF[#attr]]
 
@@ -242,7 +214,7 @@ read set of a tracing-cache entry ('ietsp help caching').
 ";
 
 pub const COMMANDS: &str =
-    "eval build search diff eval-jobs fast-build print-dev-env prefetch plumbing lint parse cache";
+    "eval build search diff eval-jobs print-dev-env prefetch plumbing lint parse cache";
 
 /// The native command being parsed, "ietsp" before the command word; unset
 /// under a classic name.
@@ -264,7 +236,6 @@ fn parts(cmd: Option<&str>) -> Option<[&'static str; 2]> {
         "search" => [SEARCH, ""],
         "diff" => [DIFF, ""],
         "eval-jobs" => [EVAL_JOBS, ""],
-        "fast-build" => [FAST_BUILD, ""],
         "print-dev-env" => [PRINT_DEV_ENV, ""],
         "prefetch" => [crate::cli::prefetch::HELP, INPUT],
         "plumbing" => [crate::cli::plumbing::HELP, INPUT],
@@ -428,8 +399,8 @@ mod tests {
             ("eval", "--stirct", Some("--strict")),
             ("build", "--no-ir-cach", Some("--no-ir-cache")),
             ("eval-jobs", "--chunk-dept", Some("--chunk-depth")),
-            ("fast-build", "--result-fromat", Some("--result-format")),
-            ("fast-build", "\"A", None),
+            ("build", "--keep-goin", Some("--keep-going")),
+            ("build", "\"A", None),
             ("eval", "-x", None),
         ] {
             assert_eq!(suggest(typo, flags(cmd)), want, "{typo}");

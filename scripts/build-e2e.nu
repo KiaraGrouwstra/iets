@@ -17,7 +17,7 @@
 #
 # usage: nu scripts/build-e2e.nu
 #        BIN=target/debug nu scripts/build-e2e.nu
-use lib.nu [current-system fastbuild-flake ietsp-bin isolate verdict]
+use lib.nu [current-system checks-flake ietsp-bin isolate verdict]
 
 def --wrapped go [...cmd: string]: nothing -> record {
   ^($cmd | first) ...($cmd | skip 1) | complete
@@ -28,7 +28,7 @@ def main [] {
   let tmp = (isolate build-e2e)
   let system = (current-system)
   let flake = $"($tmp)/flake"
-  fastbuild-flake $flake
+  checks-flake $flake
   let checks = $"path:($flake)#checks"
   let names = ([bad chain dep ok] | each {|n| $"checks.($system).($n)" })
   mut ok = []
@@ -82,7 +82,7 @@ in { ci = o.checks.${system}; }
   $ok = ($ok | append (verdict (($r5.stdout | lines) == $paths) "the same paths as the flake gave" $r5.stdout))
 
   print "== 6. --dry-run over a tree"
-  fastbuild-flake $"($tmp)/fresh"
+  checks-flake $"($tmp)/fresh"
   let r6 = (go $ietsp build --builder daemon --dry-run --json $"path:($tmp)/fresh#checks")
   let m = ($r6.stdout | from json)
   $ok = ($ok | append (verdict (($r6.exit_code == 0) and (($m.willBuild | length) == 4)) "the plan has the four checks" $r6.stdout))

@@ -578,7 +578,7 @@ fn wanted(log: &Log, text: &str) -> bool {
 /// is all `fix-hashes` and `prefetch` need.
 pub fn note_mismatch(text: &str) {
     if text.contains(MISMATCH)
-        && let Some(m) = mismatch(&crate::build::results::strip_ansi(text))
+        && let Some(m) = mismatch(&strip_ansi(text))
     {
         push_mismatch(&cur().log, m);
     }
@@ -651,7 +651,7 @@ fn build_report(pos: Option<String>, reason: &str, exit: i32) -> Report {
         Some((s, m)) if s.starts_with("status ") => m,
         _ => reason,
     };
-    let raw = crate::build::results::strip_ansi(msg);
+    let raw = strip_ansi(msg);
     let (code, hint) = match mismatch(&raw) {
         Some((_, got)) if exit == 102 => (
             "hash-mismatch",
@@ -682,9 +682,54 @@ pub fn build_failed(pos: Option<String>, reason: &str, exit: i32, text: Option<&
     s.log.out(&r.record(&r.text()), text);
 }
 
+/// `s` without its ECMA-048 escape sequences.
+pub fn strip_ansi(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] != 0x1b {
+            let start = i;
+            while i < b.len() && b[i] != 0x1b {
+                i += 1;
+            }
+            out.push_str(&String::from_utf8_lossy(&b[start..i]));
+            continue;
+        }
+        i += 1;
+        match b.get(i) {
+            // CSI: parameter bytes, intermediate bytes, one final byte
+            Some(b'[') => {
+                i += 1;
+                while b.get(i).is_some_and(|c| (0x30..=0x3f).contains(c)) {
+                    i += 1;
+                }
+                while b.get(i).is_some_and(|c| (0x20..=0x2f).contains(c)) {
+                    i += 1;
+                }
+                if b.get(i).is_some_and(|c| (0x40..=0x7e).contains(c)) {
+                    i += 1;
+                }
+            }
+            // 7-bit C1 Fe other than CSI
+            Some(c) if (0x40..=0x5a).contains(c) || (0x5c..=0x5f).contains(c) => i += 1,
+            _ => {}
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ansi_stripping() {
+        assert_eq!(strip_ansi("\x1b[1;32mgreen\x1b[0m"), "green");
+        assert_eq!(strip_ansi("plain"), "plain");
+        // `]` is one of the 7-bit C1 Fe bytes, so it goes with the ESC
+        assert_eq!(strip_ansi("a\x1b]0;titl"), "a0;titl");
+    }
 
     #[test]
     fn record_is_nix_log_ei_plus_code_and_hint() {
