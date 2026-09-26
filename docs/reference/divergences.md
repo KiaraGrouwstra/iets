@@ -182,6 +182,81 @@ Observe it: run `nix eval .#x` twice on a flake whose `x` is
 no `re-evaluating:` line before it; `--option json-log-path FILE` puts the
 record in `FILE`.
 
+## Flags with no effect
+
+ietsp does not accept a flag in silence. Each one that has no effect falls
+into one of four classes:
+
+1. **It holds by construction.** Nix's behaviour is already what the flag
+   asks for. No message.
+2. **ietsp implements it**, or sends it to the daemon as a Nix client does.
+3. **A classic name falls back** to the real nix
+   (`docs/reference/classic.md`).
+4. **One warning per key and process**, with the reason. Nix prints nothing
+   here, so each warning is a divergence on stderr. stdout and the exit
+   code do not change. The record is level 1 with the code `ignored-flag`
+   (`docs/reference/errors.md`). It appears under
+   `--log-format internal-json` and in the `json-log-path` file. An
+   `eval-jobs` worker does not repeat the warning of its parent. A warning
+   can come before a fallback: the run had read the flag before it found
+   the reason to fall back.
+
+`src/ignored.rs` holds the reporter. The flags of class 4:
+
+| Flag | Where | The reason in the warning |
+|:---|:---|:---|
+| `-v`, `--verbose` | `nix-instantiate`, `nix-build`, `nix-shell`; `-vv` and more fall back | ietsp has one log level, the one Nix starts at |
+| `--verbose`, `--debug` | `eval-jobs` | the same |
+| `--accept-flake-config` | `nix` | ietsp never applies a flake's `nixConfig` (see below) |
+| `--eval-store auto`, `daemon`, `""` | `nix`; any other value falls back | ietsp evaluates in memory and needs no evaluation store |
+| `--readonly-mode` | `ietsp build`, `eval-jobs`, `print-dev-env` | the command writes to the store; `eval` and `eval-jobs --no-instantiate` do not |
+
+The flags of class 1, and why they hold:
+
+| Flag | Why |
+|:---|:---|
+| `--indirect`, `--add-drv-link` | Nix does nothing with them either (`nix-build.cc`: "obsolete"; `nix-instantiate.cc`: an empty statement). |
+| `--no-gc-warning` on `nix-build`, `nix-shell` | Only `nix-instantiate` prints that warning. `nix-instantiate` implements the flag. |
+| `--no-location` | It changes `--xml` output only, and `--xml` falls back. |
+| `--readonly-mode` on `ietsp eval` | `ietsp eval` writes to no store. |
+| `-j`, `--cores`, `-k`, `-K` on `nix eval`, `nix-instantiate`, `nix derivation show`, `eval-jobs` | These commands build nothing: ietsp never builds during evaluation. The building commands send the four values to the daemon. |
+| `--experimental-features`, `--extra-experimental-features` | Every feature is always on (**Experimental-feature builtins** above). `parse-toml-timestamps` is the exception: `ietsp eval` applies it, and a classic `nix` falls back. |
+| `--show-trace`, `--log-format bar` | ietsp always prints the full trace, and renders builds its own way; `docs/reference/classic.md` lists both. |
+
+One flag moved from "ignored" to class 3:
+
+- `nix-instantiate --store URL` wrote to the local store when `URL` named
+  another daemon. It falls back now; `--eval` does not need a store and
+  stays.
+
+### A flake's `nixConfig`
+
+Nix applies the `nixConfig` attribute of the top-level flake: always for a
+short list of harmless settings (`bash-prompt` and its two relatives,
+`flake-registry`, `commit-lock-file-summary`), for the others after a
+question, a saved answer in `~/.local/share/nix/trusted-settings.json`, or
+`--accept-flake-config`. Without any of these it prints `warning: ignoring
+untrusted flake configuration setting 'NAME'`.
+
+ietsp never reads `nixConfig`. This is the safe side of the security
+decision that `--accept-flake-config` makes: no flake can change a setting.
+But a flake that needs its `nixConfig` behaves differently:
+
+- `extra-substituters` and `extra-trusted-public-keys` are not used, so
+  ietsp builds what Nix would download.
+- `allow-import-from-derivation`, `sandbox` and the other settings keep the
+  value of `nix.conf`.
+- `bash-prompt` does not change the prompt of `nix develop`.
+- ietsp does not print Nix's `ignoring untrusted flake configuration
+  setting` warning.
+
+`--accept-flake-config` gives one warning that says so. Put the settings in `nix.conf` to get them.
+
+Observe it: `nix eval --accept-flake-config .#x` on a flake with
+`nixConfig.extra-substituters`. stdout and the exit code are Nix's, and
+stderr has the `ignored-flag` warning. `scripts/classic-e2e.nu` has the
+case.
+
 ## GC roots the shells and the builds keep
 
 `nix-shell`, `nix develop` and `nix fmt` keep a GC root of the closure they

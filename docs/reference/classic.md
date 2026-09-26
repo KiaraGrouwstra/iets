@@ -102,7 +102,9 @@ Falls back on: `--parse`, `--parse-only`, `--xml`, `--find-file`, `-`
 `[FILE...]` (default `.`), `-E`, `-A`, `--arg`/`--argstr`, `-I`,
 `-o`/`--out-link`, `--no-out-link`/`--no-link`, `-j`/`--max-jobs`,
 `--cores`, `-k`, `-K`, `-Q`/`--no-build-output`, `--quiet`, `-v`,
-`--show-trace`, `--option`, `--store`, `--add-drv-link` (obsolete, ignored).
+`--show-trace`, `--option`, `--store`, `--add-drv-link` and `--indirect`
+(no-ops in Nix too). `-v` has no effect and gives one warning
+(`docs/reference/divergences.md`, **Flags with no effect**).
 
 Uploads the closure once, builds every root in one
 `BuildPathsWithResults`, then links: `result` for the first drv's `out`,
@@ -126,7 +128,8 @@ Falls back on: `--dry-run`, `--drv-link`, `--run-env`, `--command`,
 `--arg`/`--argstr`, `-I`, `--run CMD`, `--command CMD`, `--pure`, `--impure`,
 `--keep NAME`, `--option`, `--store`, `-j`/`--max-jobs`, `--cores`, `-k`, `-K`,
 `-Q`/`--no-build-output`, `--quiet`, `-v`, `--show-trace`, `--add-drv-link`,
-`--indirect`, `--no-gc-warning` (the last three obsolete, ignored).
+`--indirect`, `--no-gc-warning` (the last three are no-ops in Nix's
+nix-shell too). `-v` gives one warning, as for `nix-build`.
 
 This is `nix-build.cc`'s `runEnv` path, not `print-dev-env`: nothing builds the
 `-env` derivation. It
@@ -184,8 +187,10 @@ Eight subcommands; every other one execs the real `nix`.
 `--impure`, `--pure-eval`, `--no-pure-eval` (`docs/explanation/evaluation.md`: `nix`
 evaluates purely unless told otherwise, `-f` is impure), `-I`, `--arg`/`--argstr`,
 `--option`, `--store`, `--show-trace`, `--experimental-features` and
-`--extra-experimental-features` (accepted and ignored),
-`--accept-flake-config` (ignored).
+`--extra-experimental-features` (every feature is always on, so they hold;
+`parse-toml-timestamps` falls back), `--accept-flake-config` (no effect,
+one warning: ietsp never applies a flake's `nixConfig`,
+`docs/reference/divergences.md`).
 
 The output is `nix eval`'s, which is not `nix-instantiate --eval`'s
 (`print.cc:Printer` with `force`, `derivationPaths` and `trackRepeated`):
@@ -224,7 +229,8 @@ error.
 
 `--store grpc://host:port[?…]` builds on a nix-grpc-store service instead,
 natively: no plugin, no `nix` on the other side. `--eval-store auto` (or
-`daemon`, or empty) is accepted and ignored, so the invocation the `nix-farm`
+`daemon`, or empty) has no effect and gives one `ignored-flag` warning, because
+ietsp evaluates in memory and needs no evaluation store. So the invocation the `nix-farm`
 wrapper makes — `nix build --store 'grpc://farm.numtide.com:50051?token-file=…'
 --eval-store auto .#pkg` — works as it stands; any other `--eval-store` value
 falls back, since ietsp always evaluates in its own process. A build farm
@@ -424,7 +430,8 @@ fall back.
 Two triggers:
 
 1. A flag or subcommand the parser does not implement, seen before any
-   work starts.
+   work starts. `nix-instantiate --store` with another store than the
+   local daemon counts too.
 2. An evaluation that hits `ErrorKind::Unsupported`: the network fetchers
    (`fetchurl`, `fetchTarball` without a `sha256`, `fetchGit`, `fetchMercurial`,
    `fetchClosure`), `getFlake` on anything but a local path, a flake
@@ -481,7 +488,13 @@ honoured; any other store falls back.
 - `store = auto` is the daemon socket. The real nix would use the local
   store directly when it is writable.
 - `-Q`/`--no-build-output` drops the daemon's log lines. In Nix 2.34 it
-  only switches the log format to `raw`.
+  only switches the log format to `raw`. `--quiet` does the same here; in
+  Nix it lowers the log level by one.
+- A flag that has no effect is one warning on stderr, where Nix prints
+  nothing: `-v`, `--accept-flake-config`, `--eval-store auto`. stdout and
+  the exit code stay Nix's. `docs/reference/divergences.md`, **Flags with
+  no effect**, has the table and says what ietsp does with a flake's
+  `nixConfig`: nothing.
 - `--show-trace` only puts the trace into the `--log-format internal-json`
   error records (`docs/reference/errors.md`): ietsp always prints the full
   trace it has.

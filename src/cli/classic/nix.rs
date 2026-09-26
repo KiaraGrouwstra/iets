@@ -21,6 +21,7 @@ use crate::store::path::StorePath;
 const NAME: &str = "nix";
 /// filetransfer.hh: the default of `http-connections`.
 const HTTP_CONNECTIONS: usize = 25;
+const TOML_TIMESTAMPS: &str = "parse-toml-timestamps";
 
 /// The flags accepted before the subcommand, and how many values each takes.
 /// `global_flag` applies them; `find_sub` only needs the arity.
@@ -121,12 +122,18 @@ pub fn global_flag(c: &mut Common, a: &mut Argv, s: &str) -> Result<bool, String
         return Ok(false);
     }
     match s {
-        "--accept-flake-config" => {}
+        "--accept-flake-config" => crate::ignored::flag(s, crate::ignored::NO_NIX_CONFIG),
+        // every feature is on in ietsp but this one, which changes what
+        // `fromTOML` returns (docs/reference/divergences.md)
         "--experimental-features" | "--extra-experimental-features" => {
-            a.value(s)?;
+            if a.value(s)?.split_whitespace().any(|f| f == TOML_TIMESTAMPS) {
+                return Err(format!("'{s} {TOML_TIMESTAMPS}' is not implemented"));
+            }
         }
         "--eval-store" => match a.value(s)?.as_str() {
-            "auto" | "daemon" | "" => {}
+            "auto" | "daemon" | "" => {
+                crate::ignored::flag(s, "ietsp evaluates in memory and needs no evaluation store")
+            }
             v => return Err(format!("'--eval-store {v}' is not implemented")),
         },
         _ => return super::common_flag(c, a, s),

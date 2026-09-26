@@ -731,6 +731,33 @@ in
   $ok = ($ok | append (verdict ($dj.exit_code == 0 and $dj.stdout == "1\n" and ($drec | length) == 2 and ($drec | all { $in.level == 1 }))
     "a Determinate flag or --option is a level-1 determinate-setting record, once per key" $"stderr '($dj.stderr)'"))
 
+  # --- a flag or a setting with no effect: one warning that gives the
+  # reason, where Nix prints nothing; stdout and the exit code stay Nix's
+  # (docs/reference/divergences.md)
+  let recs = {|stderr, code| $stderr | lines | where ($it | str starts-with "@nix ") | each { str substring 5.. | from json } | where code? == $code }
+  let once = {|stderr, text| ($stderr | lines | where ($it | str contains $text) | length) == 1 }
+  let vb = (run-both $farm nix-instantiate --eval -v --verbose -E "1 + 1")
+  $ok = ($ok | append ((cmp-case "nix-instantiate -v --verbose" $vb) and (verdict (do $once $vb.ours.stderr "warning: '--verbose' is ignored: ietsp has one log level")
+    "-v is one warning with the reason" $"stderr '($vb.ours.stderr)'")))
+  let ncdir = $"($tmp)/flake-nixconfig"
+  mkdir $ncdir
+  cp $"($fdir)/flake.lock" $ncdir
+  "{\n  nixConfig.extra-substituters = [ \"https://cache.invalid\" ];\n  outputs = { self }: { x = 1; };\n}\n" | save $"($ncdir)/flake.nix"
+  let ac = (run-both $farm nix eval --accept-flake-config --eval-store auto --eval-store auto $"path:($ncdir)#x")
+  $ok = ($ok | append ((cmp-case "nix eval --accept-flake-config --eval-store auto, a flake with a nixConfig" $ac)
+    and (verdict ((do $once $ac.ours.stderr "'--accept-flake-config' is ignored: ietsp never applies a flake's nixConfig")
+        and (do $once $ac.ours.stderr "'--eval-store' is ignored: ietsp evaluates in memory")
+        and not ($ac.ours.stderr | str contains "falling back"))
+      "--accept-flake-config and --eval-store auto are one warning each, with the reason" $"stderr '($ac.ours.stderr)'")))
+  let aj = (^$"($farm)/nix" eval --log-format internal-json --accept-flake-config --expr "1" | complete)
+  let ajr = (do $recs $aj.stderr "ignored-flag")
+  $ok = ($ok | append (verdict ($aj.stdout == "1\n" and ($ajr | length) == 1 and $ajr.0.level == 1 and ($ajr.0.raw_msg | str contains "nixConfig"))
+    "an ignored flag is a level-1 ignored-flag record" $"stderr '($aj.stderr)'"))
+  let jlf = $"($tmp)/ignored.jsonl"
+  ^$"($farm)/nix" eval --option json-log-path $jlf --eval-store auto --expr "1" | complete | ignore
+  $ok = ($ok | append (verdict ((open --raw $jlf | lines | each { from json } | where code? == "ignored-flag" | length) == 1)
+    "json-log-path gets the ignored-flag record" (open --raw $jlf)))
+
   # --- nix build: the out-link prefix, the printed paths and the link target
   mut got = {}
   for who in [real ours] {

@@ -57,61 +57,18 @@ const DETERMINATE_VALUES: &[&str] = &[
     "session-id",
 ];
 
-/// The Determinate settings a run saw, and whether each was warned about,
-/// plus `hushed`. The session owns it (`crate::session`).
-#[derive(Default)]
-pub struct Determinate {
-    hushed: std::sync::atomic::AtomicBool,
-    noted: std::sync::Mutex<Vec<(String, bool)>>,
-}
-
-/// No Determinate warnings from this run: an `eval-jobs` worker, whose
-/// parent already gave them.
-pub fn hush() {
-    crate::session::Session::current()
-        .determinate
-        .hushed
-        .store(true, std::sync::atomic::Ordering::Relaxed);
-}
-
-/// Remembers `name` when it is a Determinate Nix setting. The warning waits
-/// for `warn_determinate`, so a later `--log-format` still applies to it, as
-/// Nix warns only once every flag is read (common-args.cc:initialFlagsProcessed).
+/// Remembers `name` when it is a Determinate Nix setting, for one
+/// `determinate-setting` warning (`crate::ignored`).
 pub fn note_determinate(name: &str) {
     let name = name.strip_prefix("extra-").unwrap_or(name);
-    if DETERMINATE_BOOLS.contains(&name) || DETERMINATE_VALUES.contains(&name) {
-        let s = crate::session::Session::current();
-        let mut noted = s
-            .determinate
-            .noted
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if !noted.iter().any(|(n, _)| n == name) {
-            noted.push((name.to_string(), false));
-        }
+    if is_determinate(name) {
+        let raw = format!("'{name}' is a Determinate Nix setting; ietsp ignores it");
+        crate::ignored::note("determinate-setting", name, raw);
     }
 }
 
-/// `warning: 'NAME' is a Determinate Nix setting; ietsp ignores it` for each
-/// noted name not yet warned about, as a `determinate-setting` record.
-pub fn warn_determinate() {
-    let s = crate::session::Session::current();
-    let hushed = s
-        .determinate
-        .hushed
-        .load(std::sync::atomic::Ordering::Relaxed);
-    let mut noted = s
-        .determinate
-        .noted
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    for (name, warned) in noted.iter_mut().filter(|(_, w)| !*w) {
-        *warned = true;
-        if !hushed {
-            let raw = format!("'{name}' is a Determinate Nix setting; ietsp ignores it");
-            crate::log::warning("determinate-setting", raw);
-        }
-    }
+fn is_determinate(name: &str) -> bool {
+    DETERMINATE_BOOLS.contains(&name) || DETERMINATE_VALUES.contains(&name)
 }
 
 /// A Determinate Nix setting as a flag (configuration.cc, `convertToArg`):
@@ -214,7 +171,7 @@ impl Config {
     pub fn load(overrides: &[(String, String)]) -> Result<Config> {
         let c = Config::read(overrides)?;
         c.settings.keys().for_each(|k| note_determinate(k));
-        warn_determinate();
+        crate::ignored::flush();
         Ok(c)
     }
 
@@ -505,10 +462,9 @@ mod tests {
         assert_eq!(determinate_flag("lazy-trees", none), Ok(false));
         note_determinate("extra-build-provenance-tags");
         note_determinate("max-jobs");
-        let s = crate::session::Session::current();
-        let noted = s.determinate.noted.lock().unwrap();
-        assert!(noted.iter().any(|(n, _)| n == "build-provenance-tags"));
-        assert!(!noted.iter().any(|(n, _)| n == "max-jobs"));
+        let noted = crate::ignored::noted("determinate-setting");
+        assert!(noted.iter().any(|n| n == "build-provenance-tags"));
+        assert!(!noted.iter().any(|n| n == "max-jobs"));
     }
 
     #[test]

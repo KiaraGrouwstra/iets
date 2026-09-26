@@ -100,6 +100,18 @@ def session [ctx: record]: nothing -> bool {
   $ok
 }
 
+# ignored: `--verbose` and `--debug` change nothing, so each is one warning
+# with the reason, from the main process only; `--max-jobs` holds, since
+# nothing is built, and `--quiet` works (docs/reference/divergences.md).
+def ignored [ctx: record]: nothing -> bool {
+  let r = (^($ctx.ietsp) eval-jobs --workers 2 --verbose --debug --verbose --max-jobs 1 --quiet --no-instantiate ci.nix | complete)
+  let warned = ($r.stderr | lines | where ($it | str starts-with "warning: "))
+  let want = ["--verbose" "--debug"] | each {|f| $"warning: '($f)' is ignored: ietsp has one log level, the one Nix starts at" }
+  let ok = $r.exit_code == 0 and $warned == $want
+  if $ok { print "ok   ignored (one warning per flag, with the reason)" } else { print $"FAIL ignored: ($r.stderr)" }
+  $ok
+}
+
 def run-all [ctx: record, np: string]: nothing -> int {
   let cases = [
     [check basic [ci.nix]]
@@ -119,6 +131,7 @@ def run-all [ctx: record, np: string]: nothing -> int {
     [check arg-from-stdin [--arg-from-stdin system ci.nix] system.txt]
     [check include [--include $"nixpkgs=($np)" --expr '{ inherit ((import <nixpkgs> { }).hello) drvPath; }' --no-instantiate]]
     [check option [--option allow-import-from-derivation false --show-trace --quiet --max-jobs 1 --log-format raw ci.nix]]
+    [check verbose [--verbose --debug ci.nix]]
     [check log-format-json [--log-format internal-json --show-trace ci.nix]]
     [check impure [--impure --expr '{ x = derivation { name = "x-${builtins.currentSystem}"; system = builtins.currentSystem; builder = ":"; }; }']]
     [check flake [--flake ./flake#hydraJobs --meta --gc-roots-dir GCROOTS]]
@@ -145,6 +158,7 @@ def run-all [ctx: record, np: string]: nothing -> int {
     [expect-fail select-not-attrs [--select 'x: "str"' ci.nix]]
     [expect-fail no-expr []]
     [session session []]
+    [ignored ignored []]
   ]
   let res = ($cases | each {|c|
     # bare `false` and numbers in a list literal are bool/int values
@@ -157,6 +171,7 @@ def run-all [ctx: record, np: string]: nothing -> int {
         "chunks" => (chunks $ctx $c.1 $args)
         "expect-fail" => (expect-fail $ctx $c.1 $args)
         "session" => (session $ctx)
+        "ignored" => (ignored $ctx)
       }
     }
   })

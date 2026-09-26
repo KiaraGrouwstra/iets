@@ -86,8 +86,8 @@ op that evaluates share one parser (`src/cli/mod.rs:parse_eval_args`).
 | `--lint-root DIR` | report lint sites under `DIR` too |
 | `--lint-scope root\|all` | report sites in the lint roots only, or everywhere |
 | `--lint-absolute-path-literals MODE`, `--lint-short-path-literals MODE`, `--lint-url-literals MODE` | Nix's three lint settings |
-| `--readonly-mode` | accepted, ignored |
-| `--experimental-features F`, `--extra-experimental-features F` | collected; only `parse-toml-timestamps` has an effect |
+| `--readonly-mode` | holds for `eval`, which writes to no store; one `ignored-flag` warning on a command that writes to the store |
+| `--experimental-features F`, `--extra-experimental-features F` | every feature is always on but `parse-toml-timestamps`, which this turns on |
 | `--lazy-trees`, `--eval-cores N`, … | a Determinate Nix setting: one warning, then ignored |
 
 `-E` and a `FILE` together is the usage error `-E and FILE cannot be
@@ -633,9 +633,9 @@ Walk a jobset and print one JSON line per derivation, as nix-eval-jobs
 | `--impure` | identical | Turns off the pure evaluation `--flake` implies. |
 | `--show-trace` | accepted | The trace is always in the error text; with `--log-format internal-json` it also goes into the error records, as in Nix. |
 | `--option k v` | accepted, ignored | `restrict-eval`, `allow-import-from-derivation` (IFD is unsupported anyway), `eval-cache`, substituters: none takes effect. |
-| `--quiet`, `--verbose`, `--debug` | accepted | `--quiet` drops the stderr summary. |
+| `--quiet`, `--verbose`, `--debug` | `--quiet` only | `--quiet` drops the stderr summary. `--verbose` and `--debug` give one `ignored-flag` warning: ietsp has one log level. |
 | `--log-format F` | accepted | `internal-json`: stderr is Nix's `@nix {...}` records, with a `code` and a `hint` on each error. `raw`, `raw-with-logs`, `bar`, `bar-with-logs`: plain lines. |
-| `--max-jobs N` | accepted, ignored | |
+| `--max-jobs N` | holds | It caps the builds of an import from derivation, and ietsp never builds during evaluation. |
 | `--provenance` | ietsp only | Adds a `pos` key per job: `file:line:col` of the derivation, mapped back to the local tree (`docs/explanation/provenance.md`). nix-eval-jobs 2.35 has no such key, so the flag is off by default. |
 | `--override-input`, `--override-flake`, `--reference-lock-file` | error | ietsp evaluates a flake from its own complete `flake.lock` only. |
 | `--repair` | error | ietsp never repairs store paths. |

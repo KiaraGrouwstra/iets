@@ -18,8 +18,8 @@ use crate::settings::Settings;
 pub struct Session {
     pub log: Log,
     settings: std::sync::OnceLock<Settings>,
-    /// The Determinate Nix settings this run saw (`crate::config`).
-    pub determinate: crate::config::Determinate,
+    /// What this run was asked for and does not do (`crate::ignored`).
+    pub ignored: crate::ignored::Ignored,
     /// The local tree store this run reads fetched trees from
     /// (`crate::treestore`).
     pub trees: crate::treestore::Store,

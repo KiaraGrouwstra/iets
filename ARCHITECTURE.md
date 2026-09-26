@@ -116,7 +116,8 @@ Around it:
 - `provenance.rs`: store paths and derivations back to local trees and
   source positions.
 - `config.rs`: `nix.conf`. `settings.rs`: `ietsp.toml` and every `IETSP_*`
-  variable.
+  variable. `ignored.rs`: the warning for a flag or a setting that has no
+  effect.
 - `nixbin.rs`: the real Nix binaries behind the classic fallback.
 - `error.rs`: the error type outside the evaluator.
 - `api.rs`: the library facade. Frontends use this and never reach into

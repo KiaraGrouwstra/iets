@@ -35,6 +35,7 @@ fn parse(argv: &[String]) -> Result<Build, String> {
         match s.as_str() {
             "-o" | "--out-link" => b.out_link = a.value("--out-link")?,
             "--no-out-link" | "--no-link" => b.no_out_link = true,
+            // nix-build.cc: "obsolete", a no-op in Nix too
             "--add-drv-link" => {}
             "-Q" | "--no-build-output" => b.c.quiet = true,
             "-" => return Err("reading the expression from stdin is not implemented".into()),

@@ -110,7 +110,10 @@ pub fn common_flag(c: &mut Common, a: &mut Argv, s: &str) -> Result<bool, String
         "-k" | "--keep-going" => set.push(("keep-going".into(), "true".into())),
         "-K" | "--keep-failed" => set.push(("keep-failed".into(), "true".into())),
         "--quiet" => c.quiet = true,
-        "-v" | "--verbose" | "--no-gc-warning" | "--indirect" => {}
+        "-v" | "--verbose" => crate::ignored::flag("--verbose", crate::ignored::ONE_LOG_LEVEL),
+        // `--indirect` does nothing in Nix either (nix-build.cc: "obsolete").
+        // Only nix-instantiate has the GC warning, and it takes that flag itself.
+        "--no-gc-warning" | "--indirect" => {}
         _ => return Ok(false),
     }
     Ok(true)
@@ -208,5 +211,45 @@ pub fn eval_input(ev: &mut Evaluator, c: &Common, file: &str, cwd: &[u8]) -> Eva
     } else {
         let p = lookup_file_arg(ev, file, cwd)?;
         ev.eval_file(&p, Pos::NONE)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn flag(line: &[&str]) -> Result<bool, String> {
+        let all: Vec<String> = line.iter().map(|s| s.to_string()).collect();
+        let mut a = Argv { all: &all, i: 0 };
+        nix::global_flag(&mut Common::default(), &mut a, &all[0])
+    }
+
+    #[test]
+    fn a_flag_with_no_effect_is_noted_and_one_that_holds_is_not() {
+        assert_eq!(flag(&["--accept-flake-config"]), Ok(true));
+        assert_eq!(flag(&["--eval-store", "auto"]), Ok(true));
+        assert!(flag(&["--eval-store", "ssh-ng://b"]).is_err());
+        assert_eq!(
+            flag(&["--extra-experimental-features", "nix-command flakes"]),
+            Ok(true)
+        );
+        assert!(flag(&["--experimental-features", "flakes parse-toml-timestamps"]).is_err());
+        let all = vec!["-v".to_string()];
+        let mut a = Argv { all: &all, i: 0 };
+        for f in ["-v", "--verbose", "--no-gc-warning", "--indirect"] {
+            assert_eq!(common_flag(&mut Common::default(), &mut a, f), Ok(true));
+        }
+        let noted = crate::ignored::noted("ignored-flag");
+        for f in ["--accept-flake-config", "--eval-store", "--verbose"] {
+            assert_eq!(noted.iter().filter(|n| *n == f).count(), 1, "{f}");
+        }
+        for f in [
+            "-v",
+            "--no-gc-warning",
+            "--indirect",
+            "--extra-experimental-features",
+        ] {
+            assert!(!noted.iter().any(|n| n == f), "{f}");
+        }
     }
 }

@@ -141,7 +141,15 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
                 };
                 a.lints.push((s[2..].to_string(), level));
             }
-            "--readonly-mode" => {}
+            // `eval` and `plumbing` write to no store, so it holds for them
+            "--readonly-mode" => {
+                if !matches!(help::command(), Some("eval" | "plumbing" | "prefetch")) {
+                    crate::ignored::flag(
+                        s,
+                        "this command writes to the store; 'eval' and 'eval-jobs --no-instantiate' do not",
+                    )
+                }
+            }
             "--extra-experimental-features" | "--experimental-features" => {
                 let v = next();
                 a.xp_features
@@ -160,7 +168,7 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
     }
     // nix.conf only for its warnings: Nix warns about the settings it lacks
     let _ = crate::config::Config::load(&f.overrides);
-    crate::config::warn_determinate();
+    crate::ignored::flush();
     (a.includes, a.args, a.pure) = (f.includes, f.args, f.pure);
     a.attr = f.attrs.pop();
     a

@@ -105,6 +105,8 @@ fn parse_jobs_args(argv: &[String]) -> (JobsArgs, Vec<String>) {
                 ));
             }
             "--eval-store" => j.eval_store = arg(&mut i),
+            // holds by construction: it caps the builds of an import from
+            // derivation, and ietsp builds nothing while it evaluates
             "--max-jobs" | "-j" => {
                 let _ = arg(&mut i);
             }
@@ -112,7 +114,7 @@ fn parse_jobs_args(argv: &[String]) -> (JobsArgs, Vec<String>) {
             "--impure" => j.impure = true,
             "--worker" => j.worker = true,
             "--quiet" => j.quiet = true,
-            "--verbose" | "--debug" => {}
+            "--verbose" | "--debug" => crate::ignored::flag(s, crate::ignored::ONE_LOG_LEVEL),
             "--override-input" | "--override-flake" => unsupported(
                 s,
                 "ietsp evaluates locked flakes only; an override makes the lock file incomplete",
@@ -206,7 +208,7 @@ fn check_jobs_args(j: &JobsArgs) -> crate::error::Result<crate::remote::worker::
 pub fn cmd_eval_jobs(argv: &[String]) -> i32 {
     let (j, rest) = parse_jobs_args(argv);
     if j.worker {
-        crate::config::hush();
+        crate::ignored::hush();
     }
     let mut a = parse_eval_args(&rest);
     a.no_tracing_cache = true;

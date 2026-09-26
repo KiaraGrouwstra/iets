@@ -90,6 +90,8 @@ fn parse(argv: &[String]) -> Result<Shell, String> {
                 let v = a.value(&f)?;
                 s.keep.push(v);
             }
+            // no-ops in Nix too: nix-build.cc calls the first two obsolete, and
+            // only nix-instantiate has a GC warning
             "--add-drv-link" | "--indirect" | "--no-gc-warning" => {}
             "-Q" | "--no-build-output" => s.c.quiet = true,
             "-p" | "--packages" | "-i" | "-" | "--exclude" | "--dry-run" | "--check"

@@ -56,6 +56,7 @@ fn parse(argv: &[String]) -> Result<Inst, String> {
             "--add-root" => i.add_root = Some(a.value("--add-root")?),
             "--no-gc-warning" => i.gc_warning = false,
             "-Q" | "--no-build-output" => i.c.quiet = true,
+            // it changes `--xml` output only, and `--xml` falls back
             "--no-location" => {}
             "-" => return Err("reading the expression from stdin is not implemented".into()),
             "--parse" | "--parse-only" | "--xml" | "--find-file" => {
@@ -101,11 +102,14 @@ pub fn main(argv: &[String]) -> i32 {
     };
     // `nix-instantiate` builds nothing: the drvs, their sources and the
     // `--add-root` links belong to the local store whatever `builder` says.
-    let (cfg, _, options) = match super::settings(&i.c) {
+    let (cfg, store, options) = match super::settings(&i.c) {
         Ok(t) => t,
         Err(reason) => fallback(NAME, argv, &reason),
     };
     let transport = super::local();
+    if !i.readonly && super::store_given(&i.c) && store != transport {
+        fallback(NAME, argv, "'--store' is not the local daemon");
+    }
     let ev = super::evaluator(&i.c, &cfg);
     let i = Arc::new(i);
     let inst = Arc::clone(&i);

@@ -20,6 +20,7 @@ pub mod error;
 pub mod eval;
 pub mod fetch;
 pub(crate) mod flake;
+pub mod ignored;
 pub mod jobs;
 pub mod lint;
 pub mod log;
