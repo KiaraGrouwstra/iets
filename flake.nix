@@ -106,6 +106,7 @@
           cachetest = e2e "cachetest";
           classic-e2e = e2e "classic-e2e";
           plumbing-e2e = e2e "plumbing-e2e";
+          prefetch-e2e = e2e "prefetch-e2e";
         });
     };
 }
