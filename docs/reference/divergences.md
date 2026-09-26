@@ -237,7 +237,7 @@ Two flags moved from "ignored" to class 2 or 3:
 
 - A name that Nix 2.34.8 does not know gives Nix's own text, `warning:
   unknown setting 'NAME'`, with the code `unknown-setting`. This is not a
-  divergence. A Determinate Nix name keeps its own warning.
+  divergence.
 - A setting that acts in the store goes to the daemon, as a Nix client
   sends it: from the user files, `$NIX_CONFIG` and `--option`, not from the
   system `nix.conf`, which the daemon reads itself.

@@ -717,20 +717,6 @@ in
   $ok = ($ok | append (verdict ($jb.exit_code == 0 and ($jrecs | where {|r| $r.action == "start" and $r.type? == 105 } | length) == 2 and not ($jb.stderr | str contains "@nix"))
     "json-log-path: the file gets a build's activity records, stderr stays text" $"exit ($jb.exit_code), stderr '($jb.stderr | str substring 0..300)'"))
 
-  # --- a Determinate Nix nix.conf: the same result, and one warning per key
-  # where Nix says "unknown setting"
-  let dconf = $"($d)/determinate.conf"
-  "lazy-trees = true\neval-cores = 0\n" | save -f $dconf
-  let dn = (with-env {NIX_USER_CONF_FILES: $dconf} { run-both $farm nix-instantiate --eval -E "1 + 1" })
-  $ok = ($ok | append (cmp-case "a Determinate nix.conf changes nothing" $dn))
-  let dw = ($dn.ours.stderr | lines | where ($it | str contains "is a Determinate Nix setting; ietsp ignores it") | length)
-  $ok = ($ok | append (verdict ($dw == 2 and ($dn.real.stderr | str contains "unknown setting 'lazy-trees'"))
-    "a Determinate setting is one warning per key" $"ours '($dn.ours.stderr)' real '($dn.real.stderr)'"))
-  let dj = (with-env {NIX_USER_CONF_FILES: $dconf} { ^$ietsp eval --log-format internal-json --no-lazy-trees --option eval-cores 4 -E "1" | complete })
-  let drec = ($dj.stderr | lines | where ($it | str starts-with "@nix ") | each { str substring 5.. | from json } | where code? == "determinate-setting")
-  $ok = ($ok | append (verdict ($dj.exit_code == 0 and $dj.stdout == "1\n" and ($drec | length) == 2 and ($drec | all { $in.level == 1 }))
-    "a Determinate flag or --option is a level-1 determinate-setting record, once per key" $"stderr '($dj.stderr)'"))
-
   # --- a flag or a setting with no effect: one warning that gives the
   # reason, where Nix prints nothing; stdout and the exit code stay Nix's
   # (docs/reference/divergences.md)
@@ -757,6 +743,17 @@ in
   ^$"($farm)/nix" eval --option json-log-path $jlf --eval-store auto --expr "1" | complete | ignore
   $ok = ($ok | append (verdict ((open --raw $jlf | lines | each { from json } | where code? == "ignored-flag" | length) == 1)
     "json-log-path gets the ignored-flag record" (open --raw $jlf)))
+  # a nix.conf written for a fork of Nix is a file of unknown settings
+  let fconf = $"($d)/fork.conf"
+  "lazy-trees = true\neval-cores = 0\n" | save -f $fconf
+  let fk = (with-env {NIX_USER_CONF_FILES: $fconf} { run-both $farm nix-instantiate --eval -E "1 + 1" })
+  $ok = ($ok | append ((cmp-case "a nix.conf with the settings of a fork changes nothing" $fk)
+    and (verdict ($fk.ours.stderr == $fk.real.stderr and (do $once $fk.real.stderr "unknown setting 'lazy-trees'"))
+      "each of them is Nix's own unknown-setting warning, once" $"ours '($fk.ours.stderr)' real '($fk.real.stderr)'")))
+  let fj = (with-env {NIX_USER_CONF_FILES: $fconf} { ^$ietsp eval --log-format internal-json --option eval-cores 4 -E "1" | complete })
+  let fjr = (do $recs $fj.stderr "unknown-setting")
+  $ok = ($ok | append (verdict ($fj.stdout == "1\n" and ($fjr | get raw_msg) == ["unknown setting 'eval-cores'" "unknown setting 'lazy-trees'"] and ($fjr | all { $in.level == 1 }))
+    "an unknown setting is a level-1 unknown-setting record, once per name" $"stderr '($fj.stderr)'"))
   let uk = (run-both $farm nix-instantiate --eval -E "1" --option no-such-setting 1 --option extra-no-such 2)
   $ok = ($ok | append ((cmp-case "an unknown setting" $uk) and (verdict ($uk.ours.stderr == $uk.real.stderr and ($uk.real.stderr | str contains "unknown setting 'no-such-setting'"))
     "an unknown setting gets Nix's own warning" $"ours '($uk.ours.stderr)' real '($uk.real.stderr)'")))

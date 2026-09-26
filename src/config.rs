@@ -31,32 +31,6 @@ const APPENDABLE: &[&str] = &[
     "trusted-users",
 ];
 
-/// The settings Determinate Nix has and Nix 2.34.8 does not (the `Setting`s
-/// of DeterminateSystems/nix-src, 2026-09): the Booleans, then the rest. Each
-/// is warned about once and never read (docs/reference/settings.md).
-const DETERMINATE_BOOLS: &[&str] = &[
-    "filetransfer-retry-jitter",
-    "http3",
-    "lazy-locks",
-    "lazy-trees",
-    "nix-219-compat",
-    "otlp",
-];
-const DETERMINATE_VALUES: &[&str] = &[
-    "build-provenance-tags",
-    "eval-cores",
-    "eval-max-fibers",
-    "filetransfer-retry-attempts",
-    "filetransfer-retry-delay",
-    "filetransfer-retry-delay-rate-limited",
-    "filetransfer-retry-max-delay",
-    "host-name",
-    "otlp-compression",
-    "otlp-endpoint",
-    "otlp-headers",
-    "session-id",
-];
-
 /// Every setting of Nix 2.34.8 (`nix config show`); `ALIASES` has the old
 /// names. A name in neither list is `warning: unknown setting 'NAME'`, the
 /// text Nix gives (configuration.cc:warnUnknownSettings).
@@ -242,42 +216,6 @@ const CLIENT: &[&str] = &[
     "use-registries",
     "warn-dirty",
 ];
-/// Remembers `name` when it is a Determinate Nix setting, for one
-/// `determinate-setting` warning (`crate::ignored`).
-pub fn note_determinate(name: &str) {
-    let name = name.strip_prefix("extra-").unwrap_or(name);
-    if is_determinate(name) {
-        let raw = format!("'{name}' is a Determinate Nix setting; ietsp ignores it");
-        crate::ignored::note("determinate-setting", name, raw);
-    }
-}
-
-fn is_determinate(name: &str) -> bool {
-    DETERMINATE_BOOLS.contains(&name) || DETERMINATE_VALUES.contains(&name)
-}
-
-/// A Determinate Nix setting as a flag (configuration.cc, `convertToArg`):
-/// `--lazy-trees` and `--no-lazy-trees` for a Boolean, `--eval-cores N` for
-/// the rest. It is noted and ignored; `Ok(false)` for any other flag.
-pub fn determinate_flag(
-    flag: &str,
-    mut next: impl FnMut() -> std::result::Result<String, String>,
-) -> std::result::Result<bool, String> {
-    let Some(name) = flag.strip_prefix("--") else {
-        return Ok(false);
-    };
-    let boolean = name.strip_prefix("no-").unwrap_or(name);
-    if DETERMINATE_BOOLS.contains(&boolean) {
-        note_determinate(boolean);
-    } else if DETERMINATE_VALUES.contains(&name) {
-        next()?;
-        note_determinate(name);
-    } else {
-        return Ok(false);
-    }
-    Ok(true)
-}
-
 fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|s| !s.is_empty())
 }
@@ -442,10 +380,7 @@ impl Config {
     /// name it does not know either, the reason for the rest.
     fn note_ignored(&self) {
         for (name, value) in &self.settings {
-            let bare = name.strip_prefix("extra-").unwrap_or(name);
-            if is_determinate(bare) {
-                note_determinate(bare);
-            } else if !is_known(name) {
+            if !is_known(name) {
                 let raw = format!("unknown setting '{name}'");
                 crate::ignored::note("unknown-setting", name, raw);
             } else if let Some((default, why)) = unimplemented(name)
@@ -776,28 +711,6 @@ mod tests {
         let c = load("basic.conf");
         assert_eq!(c.str("not-a-real-setting"), Some("kept"));
         assert!(c.iter().any(|(k, _)| k == "not-a-real-setting"));
-    }
-
-    #[test]
-    fn determinate_settings_as_flags() {
-        let none = || -> std::result::Result<String, String> { panic!("no value") };
-        assert_eq!(determinate_flag("--lazy-trees", none), Ok(true));
-        assert_eq!(determinate_flag("--no-lazy-trees", none), Ok(true));
-        let mut taken = 0;
-        let value = || {
-            taken += 1;
-            Ok("4".to_string())
-        };
-        assert_eq!(determinate_flag("--eval-cores", value), Ok(true));
-        assert_eq!(taken, 1);
-        assert_eq!(determinate_flag("--no-eval-cores", none), Ok(false));
-        assert_eq!(determinate_flag("--max-jobs", none), Ok(false));
-        assert_eq!(determinate_flag("lazy-trees", none), Ok(false));
-        note_determinate("extra-build-provenance-tags");
-        note_determinate("max-jobs");
-        let noted = crate::ignored::noted("determinate-setting");
-        assert!(noted.iter().any(|n| n == "build-provenance-tags"));
-        assert!(!noted.iter().any(|n| n == "max-jobs"));
     }
 
     #[test]

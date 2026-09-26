@@ -88,7 +88,6 @@ op that evaluates share one parser (`src/cli/mod.rs:parse_eval_args`).
 | `--lint-absolute-path-literals MODE`, `--lint-short-path-literals MODE`, `--lint-url-literals MODE` | Nix's three lint settings |
 | `--readonly-mode` | holds for `eval`, which writes to no store; one `ignored-flag` warning on a command that writes to the store |
 | `--experimental-features F`, `--extra-experimental-features F` | every feature is always on but `parse-toml-timestamps`, which this turns on |
-| `--lazy-trees`, `--eval-cores N`, … | a Determinate Nix setting: one warning, then ignored |
 
 `-E` and a `FILE` together is the usage error `-E and FILE cannot be
 combined`. The last input wins otherwise. `-f`/`--file` resolves exactly

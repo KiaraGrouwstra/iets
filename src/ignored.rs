@@ -1,7 +1,7 @@
 //! What a command line or a nix.conf asked for and ietsp does not do. Each
 //! is one level-1 warning per key and process that says why, never silence
-//! (docs/reference/errors.md: `ignored-flag`, `determinate-setting`). A
-//! warning waits for `flush`, so
+//! (docs/reference/errors.md: `ignored-flag`, `ignored-setting`,
+//! `unknown-setting`). A warning waits for `flush`, so
 //! a later `--log-format` still applies to it, as Nix warns only once every
 //! flag is read (common-args.cc:initialFlagsProcessed).
 

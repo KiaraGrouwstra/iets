@@ -31,7 +31,6 @@ in `src/error.rs` for the rest, and the daemon's build status for builds.
 | `lint` | `ErrorKind::Lint` | a lint at level `error`; at `warn`, a level-1 record |
 | `hash-mismatch` | `ErrorKind::HashMismatch`, build status | a fetched tree or a fixed-output build whose hash is not the one given |
 | `hash-fixed` | `fix-hashes` | a level-3 record: the hash `fix-hashes` wrote, at the file, line and column it changed |
-| `determinate-setting` | `src/config.rs` | a level-1 record: a Determinate Nix setting that ietsp ignores (docs/reference/settings.md) |
 | `ignored-flag` | `src/ignored.rs` | a level-1 record: a flag that has no effect, and why (docs/reference/divergences.md) |
 | `ignored-setting` | `src/config.rs` | a level-1 record: a Nix setting that has no effect, and why (docs/reference/settings.md) |
 | `unknown-setting` | `src/config.rs` | a level-1 record: a setting Nix 2.34.8 does not know either, with Nix's text |
@@ -259,8 +258,6 @@ default value have the shape Determinate Nix uses (`sid`, a UUIDv7).
   session.
 - `eval-jobs` starts its worker processes with `IETSP_SESSION_ID` set to its
   own id, so the workers' records have the id of the run that started them.
-- The `session-id` setting of Determinate Nix does not set it; ietsp warns
-  about it and ignores it (docs/reference/settings.md).
 
 ## `json-log-path`
 
