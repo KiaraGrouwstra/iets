@@ -9,6 +9,21 @@ prints results. It writes no store of its own: builds go to a Nix daemon or
 to a nix-grpc-store service, and a flake input it fetches itself lives in
 its own cache.
 
+## Mission
+
+Compress the Nix stack. A Nix user today assembles a working setup from a
+dozen helper tools, and most of them exist because Nix lacks one
+capability or one good default. ietsp supplies the capability or the
+default, so the tool is no longer needed and Nix feels good to use with no
+configuration. Evaluation speed is the first result of this, not the last.
+
+The way to get there is good abstractions and good defaults, not more
+code. ietsp is not a jumbo binary that bundles every tool. A feature
+belongs when it falls out of something the evaluator already owns (the
+derivation graph, the read set of a run, the fetchers, the cache stores)
+and needs little new code. If a feature needs its own large subsystem, the
+abstraction is wrong or the feature belongs elsewhere.
+
 ## Goals, in order
 
 1. Byte-exact parity with `nix-instantiate --eval --strict` on the
@@ -16,8 +31,15 @@ its own cache.
    `scripts/difftest.nu`.
 2. Faster than Nix on `bench/workloads/nixos-desktop.nix` with the pinned
    nixpkgs. Sequential speed first, parallel forcing second.
-3. Small, readable code. One crate, modules by phase.
-4. The fastest client to a remote builder. Evaluate in memory, ask the
+3. A polished experience out of the box. The good behaviour is the default
+   and needs no flag: errors name the fix, nothing is ignored or fails in
+   silence, a build output is not garbage-collected under its user, help
+   works offline. The classic command names stay byte-compatible with Nix,
+   so polish goes into the native commands, stderr, side effects and
+   defaults.
+4. Small, readable code. One crate, modules by phase, one implementation
+   of each capability (`docs/explanation/plumbing-and-porcelain.md`).
+5. The fastest client to a remote builder. Evaluate in memory, ask the
    store what it lacks, send only that in one operation, build.
 
 ## Non-goals

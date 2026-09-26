@@ -7,6 +7,14 @@ It is a drop-in: it answers to the classic command names, computes the same
 store paths as Nix 2.34.8, and hands anything it does not implement to the
 real `nix`. It keeps no store of its own.
 
+The aim is to compress the Nix stack. A working Nix setup today is a dozen
+helper tools, and most of them exist because Nix lacks one capability or
+one good default. ietsp supplies that capability or default, so Nix feels
+good to use with no configuration. Speed is the first result, not the
+last. The means are good abstractions and good defaults, not a jumbo
+binary: a feature belongs when it falls out of what the evaluator already
+owns.
+
 ```
 nix develop -c cargo build --release
 ./target/release/ietsp eval --strict -E '1 + 1'
@@ -50,9 +58,11 @@ See [docs/explanation/caching.md](docs/explanation/caching.md).
 disk on the way to the daemon
 ([docs/how-to/build-remotely.md](docs/how-to/build-remotely.md)).
 
-## One binary, many tools
+## Fewer tools
 
-Each of these replaces a separate tool, sharing one evaluator and one cache:
+Each of these replaces a separate tool. None is a bundled copy of that tool:
+each one is a short path over the evaluator, the cache and the build client
+that ietsp has anyway.
 
 ```sh
 ietsp build -A hello nixpkgs/default.nix        # nix-build, plus --builder ssh-ng:// or grpc://
