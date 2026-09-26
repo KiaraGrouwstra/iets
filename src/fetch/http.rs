@@ -709,19 +709,20 @@ mod tests {
 
     #[test]
     fn a_stalled_download_fails() {
+        // the server holds the connection far past any test run, so only the
+        // stall limit can end the call; a wall-clock bound here fails on a
+        // loaded machine and a short hold lets the server's close win the race
         let (port, _) = serve(1, |_, c| {
             let _ = c.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 100\r\n\r\nhalf");
-            std::thread::sleep(Duration::from_secs(5));
+            std::thread::sleep(Duration::from_secs(3600));
         });
         let l = Limits {
             stall: Some(Duration::from_secs(1)),
             ..limits()
         };
-        let t = std::time::Instant::now();
         let url = format!("http://127.0.0.1:{port}/");
         let e = get_decompressed(&url, &[], l, &mut Vec::new()).unwrap_err();
         assert!(e.to_string().contains("stalled"), "{e}");
-        assert!(t.elapsed() < Duration::from_secs(4));
     }
 
     fn file_url(name: &str, bytes: &[u8]) -> String {

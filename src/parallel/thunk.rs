@@ -303,6 +303,10 @@ mod tests {
         fn on_switch(&self, _slot: &mut Slot, _w: &mut Worker) {}
     }
 
+    /// a hang guard, not a speed bound: it turns a deadlock into a failure
+    /// and must not fire on a loaded machine.
+    const HANG: u64 = 300;
+
     #[test]
     fn deadlocked_fibers_are_cancelled() {
         let p: &'static Pair = Box::leak(Box::new(Pair {
@@ -330,11 +334,11 @@ mod tests {
                 // and main re-claims.
                 let t0 = std::time::Instant::now();
                 while p.cells.iter().any(|c| c.get() == Word::EMPTY) {
-                    assert!(t0.elapsed().as_secs() < 20, "timeout");
+                    assert!(t0.elapsed().as_secs() < HANG, "timeout");
                     std::thread::yield_now();
                 }
                 loop {
-                    assert!(t0.elapsed().as_secs() < 20, "timeout");
+                    assert!(t0.elapsed().as_secs() < HANG, "timeout");
                     match try_claim(&p.cells[0], slot.id, |w| w == Word::EMPTY) {
                         Claim::Won(_) => {
                             publish(slot, &p.cells[0], Word::imm_int(7));
@@ -348,7 +352,7 @@ mod tests {
                     }
                 }
                 while p.done.load(Ordering::Acquire) < 2 {
-                    assert!(t0.elapsed().as_secs() < 20, "timeout");
+                    assert!(t0.elapsed().as_secs() < HANG, "timeout");
                     std::thread::yield_now();
                 }
             }),

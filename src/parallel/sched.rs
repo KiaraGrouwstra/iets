@@ -946,7 +946,8 @@ mod tests {
     fn wait_done(c: &Counter, n: u64) {
         let t0 = std::time::Instant::now();
         while c.done.load(Ordering::Acquire) < n {
-            assert!(t0.elapsed().as_secs() < 20, "timeout");
+            // a hang guard, not a speed bound
+            assert!(t0.elapsed().as_secs() < 300, "timeout");
             std::thread::yield_now();
         }
     }
