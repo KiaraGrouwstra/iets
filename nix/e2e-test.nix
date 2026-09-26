@@ -1,6 +1,6 @@
 # scripts/<name>.nu in a NixOS test container: a real nix-daemon, a writable
 # store, the real nix on PATH and no network.
-{ self, nixpkgs, pkgs, ietsp, name }:
+{ self, nixpkgs, pkgs, ietsp, name, packages ? [ ] }:
 let
   system = pkgs.stdenv.hostPlatform.system;
   # nixpkgs/shell.nix imports this tree through a sha256-pinned fetchTarball;
@@ -53,7 +53,7 @@ pkgs.testers.runNixOSTest {
     # the daemon must not open the database before the store is in place
     systemd.sockets.nix-daemon.wantedBy = lib.mkForce [ ];
     users.users.alice.isNormalUser = true;
-    environment.systemPackages = [ pkgs.nushell pkgs.gnutar pkgs.gzip pkgs.diffutils ];
+    environment.systemPackages = [ pkgs.nushell pkgs.gnutar pkgs.gzip pkgs.diffutils ] ++ packages;
   };
   testScript = { containers, ... }:
     let

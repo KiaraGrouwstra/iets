@@ -57,7 +57,7 @@
           '';
           # The scripts that need a nix-daemon and a writable store, in a NixOS test
           # container (nix/e2e-test.nix). Their derivations name x86_64-linux.
-          e2e = name: import ./nix/e2e-test.nix { inherit self nixpkgs pkgs name; ietsp = pkg; };
+          e2e = name: args: import ./nix/e2e-test.nix ({ inherit self nixpkgs pkgs name; ietsp = pkg; } // args);
         in {
           # the tests that need a live /nix/store are #[ignore]d; run them
           # with `cargo test -- --ignored` in the dev shell.
@@ -103,10 +103,12 @@
                 touch $out
               '';
         } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
-          cachetest = e2e "cachetest";
-          classic-e2e = e2e "classic-e2e";
-          plumbing-e2e = e2e "plumbing-e2e";
-          prefetch-e2e = e2e "prefetch-e2e";
+          cachetest = e2e "cachetest" { };
+          classic-e2e = e2e "classic-e2e" { };
+          # with the real nix-fast-build, so the comparison case runs too
+          fastbuild-e2e = e2e "fastbuild-e2e" { packages = [ pkgs.nix-fast-build ]; };
+          plumbing-e2e = e2e "plumbing-e2e" { };
+          prefetch-e2e = e2e "prefetch-e2e" { };
         });
     };
 }
