@@ -763,6 +763,7 @@ mod tests {
             root: b(p),
             nar_hash: [0; 32],
             stat_hash: [0; 32],
+            newest: None,
             filtered: accepted.map(|accepted| Filtered {
                 seen_hash: None,
                 accepted,
