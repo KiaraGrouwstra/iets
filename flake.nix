@@ -103,6 +103,7 @@
                 touch $out
               '';
         } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
+          cachetest = e2e "cachetest";
           classic-e2e = e2e "classic-e2e";
         });
     };
