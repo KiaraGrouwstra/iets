@@ -154,7 +154,10 @@ This is the one that is not in Nix. `ietsp eval` and `ietsp build` remember
 what a run printed, together with every observation of the outside world
 the run made. A later run with the same command validates those
 observations. If nothing changed, it replays the result and skips
-evaluation entirely.
+evaluation entirely. `print-dev-env` and `search` do the same, and so do the
+subcommands ietsp serves under the classic `nix` name — `nix eval`,
+`nix build`, `nix derivation show`, `nix develop`, `nix fmt` — each with a
+key of its own (`docs/reference/classic.md` says what each entry holds).
 
 Every primop that looks at the world records one observation.
 
@@ -222,10 +225,13 @@ An entry is one file, `entry`, in a directory named by the key. The file
 starts with a version byte and a table of the parts it holds — where each
 one is and how long it is — and which parts exist depends on the
 subcommand. `readset` holds the observations. `result` holds the exact
-stdout bytes for `eval`, or the root derivation paths and the wanted output
-for `build`. A `build` entry adds `drvs` (every derivation the evaluation
-produced) and `sources` (where each source's bytes were), and any entry
-whose run printed lint warnings adds `warnings`, which a hit replays.
+stdout bytes for `eval`, `nix eval` and `nix derivation show`, the root
+derivation paths and the wanted outputs for `build` and `nix build`, and a
+store path or two for the commands that go on to use one (`nix develop`,
+`nix fmt`). A `build` or `nix build` entry adds `drvs` (every derivation the
+evaluation produced) and `sources` (where each source's bytes were), so a
+hit can still upload the closure, and any entry whose run printed lint
+warnings adds `warnings`, which a hit replays.
 
 An `eval` entry omits `drvs` and `sources` deliberately: the subcommand is
 in the key, so nothing would read them back, and writing the 16 MB `drvs` of
@@ -258,6 +264,37 @@ hashed), 781 directory listings, 643 copied trees, 399 stats and four
 environment variables. The read-set file is 1.1 MB. A hit is 4-5 ms to read
 and decode it, 23-40 ms to validate it on four threads, and the rest is
 process start.
+
+The classic `nix` subcommands have the same cache, and there the comparison
+is with Nix's own evaluation cache, which is an sqlite file of attribute
+values keyed on the locked flake's fingerprint. A `path:` flake with a
+`github:` nixpkgs that is already in the store, a local daemon, every output
+already valid, medians on a 16-core EPYC that was busy with other work:
+
+| command | ietsp, evaluating | ietsp, hit | Nix 2.34.8, warm |
+|---|---|---|---|
+| `nix eval .#hello` | 0.16 s | 0.013 s | 0.44 s |
+| `nix build --no-link .#hello` | 0.17 s | 0.039 s | 0.048 s |
+| `nix derivation show -r .#hello` | 0.17 s | 0.019 s | 0.20 s |
+| `nix develop -c true` | 0.17 s | 0.027 s | 0.11 s |
+| `nix eval --raw .#sys.drvPath`, a NixOS system | 2.0 s | 0.028 s | 5.1 s |
+| `nix derivation show .#sys` | 2.1 s | 0.036 s | 0.075 s |
+
+Nix never answers `nix eval` from its cache, so its two `nix eval` rows are
+full evaluations. Where it does answer, the two warm paths are within a few
+tens of milliseconds of each other. The difference is in when each one has
+a warm path at all: Nix's is off for a dirty git tree, for `-f` and for
+`--expr`, which is the state a tree is in while somebody works on it. A git
+tree also costs Nix a copy on every run, clean or dirty. In this repository
+`nix develop -c true` is 0.04 s on an ietsp hit and 0.20 s in Nix either
+way, `nix derivation show .#default` 0.03 s against 0.08 s, and
+`nix eval --raw .#default.drvPath` 0.03 s against 1.1 s.
+
+What a hit costs is the read set: 1,200 to 1,600 observations for the rows
+above, validated in 9 to 18 ms. The one case that was slow is gone — a
+`path:` input that is a store path used to be walked file by file (above).
+`nix build` also waited up to 250 ms for its heartbeat thread to notice the
+build was over, on a hit and on a miss alike.
 
 Two properties are worth naming. Errors are never cached: an entry is
 written only after the result was printed without error. And the read set

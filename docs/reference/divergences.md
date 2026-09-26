@@ -150,18 +150,37 @@ They are listed in `docs/reference/classic.md`.
 
 ## The tracing cache under the classic names
 
+`nix eval`, `nix build`, `nix derivation show`, `nix develop`,
 `nix print-dev-env`, `nix search` and `nix fmt` answer from ietsp's tracing
-cache (`docs/explanation/caching.md`, `docs/reference/classic.md`). stdout
-and the exit code of a hit are the bytes and the code of the run that wrote
-the entry. One thing differs on stderr.
+cache (`docs/explanation/caching.md`, `docs/reference/classic.md`). Nix has
+an evaluation cache of its own for flakes, so both skip evaluations, but
+not the same ones: Nix's is keyed on the locked fingerprint and is off for a
+dirty tree, `-f` and `--expr`; ietsp's is keyed on the command and validated
+by what the run read. stdout and the exit code of a hit are the bytes and
+the code of the run that wrote the entry, which `scripts/classic-e2e.nu`
+compares with Nix 2.34.8.
+
+Two things differ on stderr.
 
 - **An invalidation is silent.** The native commands say
   `re-evaluating: PATH changed` when an entry no longer holds. Nix says
-  nothing when its own evaluation cache misses, and the classic names print
-  what Nix prints, so under them the line does not reach stderr, in text or
-  under `--log-format internal-json`. The record (level 3, code
+  nothing when its cache misses, and the classic names print what Nix prints,
+  so under them the line does not reach stderr, in text or under
+  `--log-format internal-json`. The record (level 3, code
   `cache-invalidated`) still goes to the `json-log-path` file, which is where
   to look when a classic command evaluated and you want to know why.
+- **A hit prints no `trace:` and no `evaluation warning:` line.**
+  `builtins.trace` and `builtins.warn` write while the evaluation runs, and a
+  hit does not run one. Nix behaves the same way when its cache answers
+  (`nix build`, `nix develop`). It differs for `nix eval`, which Nix never
+  answers from its cache, so there every run prints them and only ietsp's
+  first run does.
+
+Observe it: run `nix eval .#x` twice on a flake whose `x` is
+`builtins.trace "evaluated" 1`. The first run prints `trace: evaluated` and
+`1`, the second prints `1`. Edit `flake.nix` and the trace line is back, with
+no `re-evaluating:` line before it; `--option json-log-path FILE` puts the
+record in `FILE`.
 
 ## GC roots the shells and the builds keep
 

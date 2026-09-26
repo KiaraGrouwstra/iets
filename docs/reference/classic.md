@@ -383,6 +383,47 @@ purpose. Both add the file to the store and print its path, and ietsp has no
 store to add it to. `ietsp prefetch` prints the same hash and nothing else
 (`docs/reference/commands.md`).
 
+#### The tracing cache
+
+Every `nix` subcommand that evaluates goes through the tracing cache
+(`docs/explanation/caching.md`): a second run of the same command with
+nothing changed validates what the first one read and evaluates nothing. A
+hit skips the evaluation and nothing else.
+
+| subcommand | the entry holds | a hit still does |
+|---|---|---|
+| `nix eval` | the stdout bytes | nothing: `nix eval` registers no derivation here |
+| `nix build` | each installable's derivation and outputs, every derivation and every source | the upload, the build, the out-links, the `--no-link` roots, `--print-out-paths` |
+| `nix derivation show` | the stdout bytes; `-r` and the indentation are in the key | nothing |
+| `nix develop` | the `-env` output path and the shell's builder | reads the environment out of the output, keeps the root, runs bash; an output that is gone is a miss |
+| `nix print-dev-env` | the script, the `-env` output path and the files the script names | checks that they exist |
+| `nix search` | the index of the package set; the regexes are not in the key | the matching and the printing |
+| `nix fmt` | the formatter's output path and program | keeps the root, runs the formatter; a program that is gone is a miss |
+
+The key is the subcommand, the installables (a flake by the text and the
+directory it resolves to, never by its content), `--expr` or `--file`, the
+`--arg`s, `-I` and `NIX_PATH`, `pure-eval`, `--json` and `--raw`, the `system`
+setting, and the working directory. `flake.nix`, `flake.lock`, every file
+and tree the evaluation read, and under `--impure` every environment
+variable it asked for are in the read set, so an edit, a `nix flake update`
+and a changed variable all evaluate again. No other flag these parsers
+accept reaches the evaluator. `--override-input`, `--override-flake`,
+`--reference-lock-file` and the lock-writing flags are not ietsp's: the
+command line falls back before any entry is looked up. A flake with no
+complete `flake.lock` falls back from the evaluation, which writes no entry.
+
+This is not Nix's evaluation cache. Nix's is keyed on the locked flake's
+fingerprint, holds attribute values, is skipped for a dirty tree and for
+`-f`/`--expr`, and `nix eval` does not answer from it (`src/nix/eval.cc`
+forces the value). ietsp's is keyed on
+the command and validated by what the run read, so it also answers for a
+dirty tree, a `path:` flake, `--expr` and `-f`.
+
+`--ietsp-option cache false`, `IETSP_CACHE=0` or `cache = false` in
+`ietsp.conf` turn it off. The cache flags of the native commands
+(`--no-tracing-cache`, `--cache-dir`) are not Nix's, so under `nix` they
+fall back.
+
 ## Fallback rules
 
 Two triggers:
@@ -463,15 +504,17 @@ honoured; any other store falls back.
 - A missing attribute in an installable's path is one line. Nix adds a
   `Did you mean …?` line from `Suggestions`, which ietsp does not have; the
   `error:` line itself is the same.
-- `nix eval`, `nix build`, `nix derivation show`, `nix develop`,
-  `nix print-dev-env`, `nix search` and `nix fmt` answer from the tracing
-  cache (`docs/explanation/caching.md`); the other names do not use it. A hit
-  does not evaluate, so it prints no `trace:` and no `evaluation warning:`
-  line, where Nix's `nix eval` evaluates and prints them every time.
+- The `nix` subcommands answer from the tracing cache (see above), where
+  Nix answers from its own evaluation cache or evaluates. stdout and the exit
+  code are the same. stderr differs in one way: a hit does not evaluate, so
+  it prints no `trace:` and no `evaluation warning:` line. Nix prints none
+  either when its cache answers (`nix build`, `nix develop`), and prints them
+  every time for `nix eval`, which it never caches.
 - An entry that no longer holds is invalidated without a word, as in Nix.
   The native commands print `re-evaluating: PATH changed`
   (`docs/reference/errors.md`); under a classic name that record goes to
   `json-log-path` only, so stderr holds what Nix prints.
+- `nix-instantiate`, `nix-build` and `nix-shell` do not use the tracing cache.
 - `nix eval` and `nix derivation show` do not register the derivations they
   evaluate. The real one writes the `.drv` files while computing `drvPath`, so
   a real `nix derivation show` leaves its whole input closure — every `.drv`
