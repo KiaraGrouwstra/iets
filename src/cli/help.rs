@@ -203,7 +203,7 @@ Parse each FILE and print its syntax tree; FILE - reads the list from stdin.
 
 const CACHE: &str = "\
 usage: ietsp cache gc [--ttl DAYS] [--dry-run] [--cache-dir DIR]
-       ietsp cache dump READSET
+       ietsp cache dump ENTRY
 
 gc removes the cache entries nobody read for DAYS days; dump prints the
 read set of a tracing-cache entry ('ietsp help caching').

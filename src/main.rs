@@ -98,7 +98,7 @@ fn main() {
             Some("gc") => cli::cache_gc::cmd_cache_gc(&rest[1..]),
             Some("dump") => match &rest[1..] {
                 [file] => cli::cache_dump::cmd_cache_dump(file),
-                [] => help::arg_error("cache dump needs a READSET file"),
+                [] => help::arg_error("cache dump needs an ENTRY file"),
                 [_, extra, ..] => help::arg_error(format!("unexpected argument '{extra}'")),
             },
             w => help::unknown_subcommand(w, &["gc", "dump"]),

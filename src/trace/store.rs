@@ -83,6 +83,11 @@ impl Entry {
         Some(Entry { file, slots })
     }
 
+    /// The entry file at `path`, for `ietsp cache dump`.
+    pub fn open(path: &Path) -> Option<Entry> {
+        Entry::parse(fs::File::open(path).ok()?)
+    }
+
     /// The bytes of one part, read from this generation of the entry.
     pub fn part(&self, part: Part) -> Option<Vec<u8>> {
         let (_, at, n) = *self.slots.iter().find(|(t, ..)| *t == part.tag())?;

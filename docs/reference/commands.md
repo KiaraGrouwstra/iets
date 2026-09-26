@@ -876,7 +876,7 @@ Exit: 0, 1 when a file failed to parse, 2 on a usage error.
 
 ```
 ietsp cache gc [--ttl DAYS] [--dry-run] [--cache-dir DIR]
-ietsp cache dump READSET
+ietsp cache dump ENTRY
 ```
 
 `gc` removes the cache entries nobody read for `DAYS` days, and the GC roots

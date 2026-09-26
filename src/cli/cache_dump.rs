@@ -1,14 +1,14 @@
-//! `ietsp cache dump` (also `cache-dump`): a tracing-cache read set as text.
+//! `ietsp cache dump` (also `cache-dump`): the read set of a tracing-cache entry as text.
 
-/// One line per observation of a `readset` file, for debugging misses.
+/// One line per observation of an `entry` file, for debugging misses.
 pub fn cmd_cache_dump(file: &str) -> i32 {
     use crate::trace::Obs;
-    let bytes = match std::fs::read(file) {
-        Ok(b) => b,
-        Err(e) => return crate::error::Error::io(format!("cannot read {file}"), e).report(),
-    };
-    let Some(obs) = crate::trace::wire::decode_readset(&bytes) else {
-        return crate::error::Error::Cache(format!("{file} is not a readset")).report();
+    use crate::trace::store::{Entry, Part};
+    let obs = Entry::open(std::path::Path::new(file))
+        .and_then(|e| e.part(Part::Readset))
+        .and_then(|b| crate::trace::wire::decode_readset(&b));
+    let Some(obs) = obs else {
+        return crate::error::Error::Cache(format!("{file} is not a cache entry")).report();
     };
     let hex = |d: &[u8]| d.iter().map(|b| format!("{b:02x}")).collect::<String>();
     let s = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
