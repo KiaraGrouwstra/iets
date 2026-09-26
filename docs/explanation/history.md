@@ -59,9 +59,9 @@ streaming walk could not use, makes the second run 0.03 s.
 ietsp's own settings lived in `ietsp.conf`, in nix.conf's line syntax, while
 the lints lived in a TOML `ietsp.toml`: two formats for one program. The
 settings are TOML now, in an `ietsp.toml` per machine and per user
-(`docs/reference/settings.md`). `ietsp.conf` is not read, and one that is
-still there is an error, so that a host does not lose its `builder` without a
-word. `include` and `extra-<name>` went with the format.
+(`docs/reference/settings.md`). `ietsp.conf` is not read. Nothing checks for a
+leftover one: the NixOS module writes the new file and removes the old one at
+the same switch. `include` and `extra-<name>` went with the format.
 
 ## 2026-09-25: the ATerm buffer the derivation pipeline kept allocating
 

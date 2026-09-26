@@ -185,7 +185,6 @@ impl Settings {
     fn load_from(files: &[PathBuf], overrides: &[(String, String)], env: &Env) -> Result<Settings> {
         let mut c = Conf::default();
         for f in files {
-            leftover(f)?;
             match std::fs::read_to_string(f) {
                 Ok(text) => c.apply(&text, &f.display().to_string(), true)?,
                 Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {}
@@ -279,21 +278,6 @@ fn flag_value(name: &str, value: &str) -> toml::Value {
         }
         _ => String(value.into()),
     }
-}
-
-/// An `ietsp.conf` beside `toml` is the format ietsp read until 2026-09. It is
-/// an error and not skipped: a host that lost its `builder` without a word
-/// would build somewhere else.
-fn leftover(toml: &Path) -> Result<()> {
-    let old = toml.with_extension("conf");
-    if old.symlink_metadata().is_err() {
-        return Ok(());
-    }
-    Err(Error::Config(format!(
-        "{} is no longer read: ietsp settings are TOML (docs/reference/settings.md). Move its settings to {}; on NixOS, 'ietsp.settings' does that at the next switch",
-        old.display(),
-        toml.display()
-    )))
 }
 
 /// What the settings sources said: each key's TOML value and where it was
@@ -519,24 +503,6 @@ mod tests {
         assert_eq!(s.fix_hashes, FixHashes::Ask);
         assert!(s.cache && s.provenance && s.shell_gc_root && s.build_gc_root);
         assert!(!s.no_fallback);
-    }
-
-    #[test]
-    fn a_leftover_ietsp_conf_is_an_error_that_names_the_toml() {
-        for level in 0..2 {
-            let files = scratch(&format!("leftover{level}"));
-            let old = files[level].with_extension("conf");
-            std::fs::write(&old, "builder = ssh-ng://bld1\n").unwrap();
-            std::fs::write(&files[level], "builder = \"daemon\"\n").unwrap();
-            let e = Settings::load_from(&files, &[], &NO_ENV)
-                .map(|_| ())
-                .unwrap_err()
-                .to_string();
-            let start = format!("{} is no longer read", old.display());
-            assert!(e.starts_with(&start), "{e}");
-            let to = format!("Move its settings to {};", files[level].display());
-            assert!(e.contains(&to), "{e}");
-        }
     }
 
     #[test]

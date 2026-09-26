@@ -415,7 +415,7 @@ the command and validated by what the run read, so it also answers for a
 dirty tree, a `path:` flake, `--expr` and `-f`.
 
 `--ietsp-option cache false`, `IETSP_CACHE=0` or `cache = false` in
-`ietsp.conf` turn it off. The cache flags of the native commands
+`ietsp.toml` turn it off. The cache flags of the native commands
 (`--no-tracing-cache`, `--cache-dir`) are not Nix's, so under `nix` they
 fall back.
 

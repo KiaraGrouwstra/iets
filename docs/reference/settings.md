@@ -201,16 +201,11 @@ that tries to set `nix-bin-dir` is worth stopping on.
 A project file that is one of the two settings files (an evaluation started
 below `~/.config/ietsp`) is read as the settings file it is.
 
-## `ietsp.conf` is gone
+## Before 2026-09
 
-Until 2026-09 these files were `ietsp.conf`, in nix.conf's line syntax. That
-file is not read any more, and an `ietsp.conf` still in one of the two
-directories is an **error**, on every command: skipping it would drop a
-`builder` without a word, and the builds would go somewhere else. The error
-names the `ietsp.toml` to write. The values take their TOML types there:
-`builder = "ssh-ng://bld1"`, and `source-map` is an array. On
-NixOS the module below writes the new file and the old one leaves `/etc` at
-the same switch.
+These files were `ietsp.conf`, in nix.conf's line syntax. That file is not read
+any more. On NixOS the module below writes `ietsp.toml`, and the old file
+leaves `/etc` at the same switch, so nothing checks for it.
 
 ## Keys
 
