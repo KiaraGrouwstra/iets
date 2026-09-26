@@ -109,16 +109,21 @@ impl Hash {
     /// Mirrors hash.cc:Hash::to_string.
     pub fn to_string_with(&self, format: HashFormat, include_algo: bool) -> String {
         let mut s = String::new();
+        self.write_string_with(&mut s, format, include_algo);
+        s
+    }
+
+    /// `to_string_with` appended to a buffer the caller keeps.
+    pub fn write_string_with(&self, s: &mut String, format: HashFormat, include_algo: bool) {
         if format == HashFormat::Sri || include_algo {
             s.push_str(self.algo.name());
             s.push(if format == HashFormat::Sri { '-' } else { ':' });
         }
         match format {
-            HashFormat::Base16 => s.push_str(&base16_encode(self.bytes())),
-            HashFormat::Nix32 => s.push_str(&nix32_encode(self.bytes())),
+            HashFormat::Base16 => base16_encode_into(s, self.bytes()),
+            HashFormat::Nix32 => nix32_encode_into(s, self.bytes()),
             HashFormat::Base64 | HashFormat::Sri => s.push_str(&base64_encode(self.bytes())),
         }
-        s
     }
 
     pub fn to_base16(&self) -> String {
@@ -313,8 +318,17 @@ pub fn nix32_encode(bytes: &[u8]) -> String {
     if bytes.is_empty() {
         return String::new();
     }
+    let mut s = String::with_capacity(nix32_encoded_len(bytes.len()));
+    nix32_encode_into(&mut s, bytes);
+    s
+}
+
+/// `nix32_encode` appended to a buffer the caller keeps.
+pub fn nix32_encode_into(s: &mut String, bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
     let len = nix32_encoded_len(bytes.len());
-    let mut s = String::with_capacity(len);
     for n in (0..len).rev() {
         let b = n * 5;
         let i = b / 8;
@@ -327,7 +341,6 @@ pub fn nix32_encode(bytes: &[u8]) -> String {
         };
         s.push(NIX32_CHARS[((lo | hi) & 0x1f) as usize] as char);
     }
-    s
 }
 
 /// Mirrors base-nix-32.cc:BaseNix32::decode.
@@ -362,13 +375,18 @@ pub fn nix32_decode(s: &str) -> Result<Vec<u8>, HashError> {
 
 /// Mirrors base-n.cc:base16::encode.
 pub fn base16_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut s = String::with_capacity(bytes.len() * 2);
+    base16_encode_into(&mut s, bytes);
+    s
+}
+
+/// `base16_encode` appended to a buffer the caller keeps.
+pub fn base16_encode_into(s: &mut String, bytes: &[u8]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
     for b in bytes {
         s.push(HEX[(b >> 4) as usize] as char);
         s.push(HEX[(b & 0xf) as usize] as char);
     }
-    s
 }
 
 /// Mirrors base-n.cc:base16::decode.

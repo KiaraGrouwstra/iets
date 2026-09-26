@@ -620,8 +620,22 @@ fn derivation_strict_internal(
         .map_err(|e| drv_err(e, pos))?;
     }
 
-    let text = drv.unparse().map_err(|e| drv_err(e, pos))?;
-    let drv_path = drv.drv_path_for(&text).map_err(|e| drv_err(e, pos))?;
+    // the ATerm is only kept when something asks for it; the path it is
+    // hashed into is all a plain evaluation wants
+    let keep_text = ev.drv.keep_aterm || ev.drv.dump_dir.get().is_some();
+    let (drv_path, text) = drv
+        .with_aterm(|t| {
+            (
+                drv.drv_path_for(t),
+                if keep_text {
+                    t.to_string()
+                } else {
+                    String::new()
+                },
+            )
+        })
+        .map_err(|e| drv_err(e, pos))?;
+    let drv_path = drv_path.map_err(|e| drv_err(e, pos))?;
     let h = hash_derivation_modulo(
         &drv,
         false,

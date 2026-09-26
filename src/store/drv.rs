@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use super::hash::{Hash, HashAlgo, HashFormat, hash_bytes};
+use super::hash::{Hash, HashAlgo, HashFormat, base16_encode_into, hash_bytes};
 use super::path::{
     DRV_EXTENSION, IngestionMethod, STORE_DIR, StorePath, make_fixed_output_path, make_output_path,
     make_text_path, output_path_name,
@@ -110,6 +110,39 @@ fn print_unquoted(out: &mut String, s: &str) {
     out.push('"');
 }
 
+/// `print_unquoted` of `p.to_string()`, without the string.
+fn print_store_path(out: &mut String, p: &StorePath) {
+    out.push('"');
+    out.push_str(STORE_DIR);
+    out.push('/');
+    out.push_str(p.base_name());
+    out.push('"');
+}
+
+/// Mirrors content-address.cc:ContentAddress::printMethodAlgo quoted:
+/// `"r:sha256"` or `"sha256"`.
+fn print_method_algo(out: &mut String, method: IngestionMethod, algo: HashAlgo) {
+    out.push('"');
+    out.push_str(method.prefix());
+    out.push_str(algo.name());
+    out.push('"');
+}
+
+/// One ATerm buffer per thread, so the 20,000 unparses of a nixos closure
+/// keep the capacity the first one grew to. It is taken out of the slot
+/// while in use: `hash_derivation_modulo` recurses, and the inner call must
+/// not see the buffer the outer one is filling.
+fn with_aterm_buf<R>(f: impl FnOnce(&mut String) -> R) -> R {
+    thread_local! {
+        static BUF: std::cell::Cell<String> = const { std::cell::Cell::new(String::new()) };
+    }
+    let mut s = BUF.with(|b| b.take());
+    s.clear();
+    let r = f(&mut s);
+    BUF.with(|b| b.set(s));
+    r
+}
+
 fn print_list<'a>(out: &mut String, items: impl Iterator<Item = &'a str>, quoted: bool) {
     out.push('[');
     for (i, s) in items.enumerate() {
@@ -153,11 +186,6 @@ impl DerivationOutput {
     }
 }
 
-/// Mirrors content-address.cc:ContentAddress::printMethodAlgo: `r:sha256` or `sha256`.
-fn method_algo(method: IngestionMethod, algo: HashAlgo) -> String {
-    format!("{}{}", method.prefix(), algo.name())
-}
-
 impl Derivation {
     /// Mirrors derivations.cc:Derivation::unparse without masking.
     pub fn unparse(&self) -> Result<String, DrvError> {
@@ -171,40 +199,61 @@ impl Derivation {
         actual_inputs: Option<&BTreeMap<String, BTreeSet<String>>>,
     ) -> Result<String, DrvError> {
         let mut s = String::with_capacity(4096);
+        self.unparse_into(&mut s, mask_outputs, actual_inputs)?;
+        Ok(s)
+    }
+
+    /// The ATerm of this derivation, then `f` over it. The buffer is reused
+    /// between calls, so a caller that only hashes or paths the ATerm and
+    /// drops it allocates nothing.
+    pub fn with_aterm<R>(&self, f: impl FnOnce(&str) -> R) -> Result<R, DrvError> {
+        with_aterm_buf(|s| {
+            self.unparse_into(s, false, None)?;
+            Ok(f(s))
+        })
+    }
+
+    /// `unparse_with` appended to a buffer the caller keeps.
+    pub fn unparse_into(
+        &self,
+        s: &mut String,
+        mask_outputs: bool,
+        actual_inputs: Option<&BTreeMap<String, BTreeSet<String>>>,
+    ) -> Result<(), DrvError> {
         s.push_str("Derive([");
         for (i, (name, out)) in self.outputs.iter().enumerate() {
             if i > 0 {
                 s.push(',');
             }
             s.push('(');
-            print_unquoted(&mut s, name);
+            print_unquoted(s, name);
             match out {
                 DerivationOutput::InputAddressed(p) => {
                     s.push(',');
-                    let path = if mask_outputs {
-                        String::new()
+                    if mask_outputs {
+                        s.push_str("\"\"");
                     } else {
-                        p.to_string()
-                    };
-                    print_unquoted(&mut s, &path);
+                        print_store_path(s, p);
+                    }
                     s.push_str(",\"\",\"\"");
                 }
                 DerivationOutput::Fixed { method, hash } => {
                     s.push(',');
-                    let path = if mask_outputs {
-                        String::new()
+                    if mask_outputs {
+                        s.push_str("\"\"");
                     } else {
-                        self.fixed_output_path(name)?.to_string()
-                    };
-                    print_unquoted(&mut s, &path);
+                        print_store_path(s, &self.fixed_output_path(name)?);
+                    }
                     s.push(',');
-                    print_unquoted(&mut s, &method_algo(*method, hash.algo));
+                    print_method_algo(s, *method, hash.algo);
                     s.push(',');
-                    print_unquoted(&mut s, &hash.to_base16());
+                    s.push('"');
+                    base16_encode_into(s, hash.bytes());
+                    s.push('"');
                 }
                 DerivationOutput::CaFloating { method, algo } => {
                     s.push_str(",\"\",");
-                    print_unquoted(&mut s, &method_algo(*method, *algo));
+                    print_method_algo(s, *method, *algo);
                     s.push_str(",\"\"");
                 }
                 DerivationOutput::Deferred => s.push_str(",\"\",\"\",\"\""),
@@ -219,9 +268,9 @@ impl Derivation {
                         s.push(',');
                     }
                     s.push('(');
-                    print_unquoted(&mut s, hash_hex);
+                    print_unquoted(s, hash_hex);
                     s.push(',');
-                    print_list(&mut s, outputs.iter().map(String::as_str), false);
+                    print_list(s, outputs.iter().map(String::as_str), false);
                     s.push(')');
                 }
             }
@@ -231,22 +280,26 @@ impl Derivation {
                         s.push(',');
                     }
                     s.push('(');
-                    print_unquoted(&mut s, &drv_path.to_string());
+                    print_store_path(s, drv_path);
                     s.push(',');
-                    print_list(&mut s, outputs.iter().map(String::as_str), false);
+                    print_list(s, outputs.iter().map(String::as_str), false);
                     s.push(')');
                 }
             }
         }
+        s.push_str("],[");
+        for (i, src) in self.input_srcs.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            print_store_path(s, src);
+        }
         s.push_str("],");
-        let srcs: Vec<String> = self.input_srcs.iter().map(StorePath::to_string).collect();
-        print_list(&mut s, srcs.iter().map(String::as_str), false);
+        print_unquoted(s, &self.platform);
         s.push(',');
-        print_unquoted(&mut s, &self.platform);
+        print_string(s, &self.builder);
         s.push(',');
-        print_string(&mut s, &self.builder);
-        s.push(',');
-        print_list(&mut s, self.args.iter().map(String::as_str), true);
+        print_list(s, self.args.iter().map(String::as_str), true);
         s.push_str(",[");
         let mut first = true;
         let mut emit = |s: &mut String, k: &str, v: &str| {
@@ -267,16 +320,16 @@ impl Derivation {
             if let Some(json) = pending_json
                 && k.as_str() > STRUCTURED_ATTRS_ENV
             {
-                emit(&mut s, STRUCTURED_ATTRS_ENV, json);
+                emit(s, STRUCTURED_ATTRS_ENV, json);
                 pending_json = None;
             }
-            emit(&mut s, k, v);
+            emit(s, k, v);
         }
         if let Some(json) = pending_json {
-            emit(&mut s, STRUCTURED_ATTRS_ENV, json);
+            emit(s, STRUCTURED_ATTRS_ENV, json);
         }
         s.push_str("])");
-        Ok(s)
+        Ok(())
     }
 
     /// Mirrors derivations.cc:DerivationOutput::CAFixed::path for output `name`.
@@ -388,7 +441,7 @@ impl Derivation {
     /// The path of this derivation, for a caller with no ATerm at hand. Mirrors
     /// derivations.cc:computeStorePath. Used by the drv and devenv tests.
     pub fn drv_path(&self) -> Result<StorePath, DrvError> {
-        self.drv_path_for(&self.unparse()?)
+        self.with_aterm(|t| self.drv_path_for(t))?
     }
 
     /// `drv_path` for a caller that already holds `self.unparse()`, so the ATerm is built once.
@@ -396,11 +449,10 @@ impl Derivation {
         let mut references = self.input_srcs.clone();
         references.extend(self.input_drvs.keys().cloned());
         let hash = hash_bytes(HashAlgo::Sha256, aterm.as_bytes());
-        Ok(make_text_path(
-            &format!("{}{DRV_EXTENSION}", self.name),
-            &hash,
-            &references,
-        )?)
+        let mut name = String::with_capacity(self.name.len() + DRV_EXTENSION.len());
+        name.push_str(&self.name);
+        name.push_str(DRV_EXTENSION);
+        Ok(make_text_path(&name, &hash, &references)?)
     }
 
     /// Looks up `key` in the sorted env.
@@ -564,16 +616,21 @@ pub fn hash_derivation_modulo(
 ) -> Result<DrvHash, DrvError> {
     if drv.is_fixed() {
         let mut hashes = BTreeMap::new();
+        let mut payload = String::with_capacity(256);
         for (name, out) in &drv.outputs {
             let DerivationOutput::Fixed { method, hash } = out else {
                 unreachable!()
             };
-            let payload = format!(
-                "fixed:out:{}:{}:{}",
-                method_algo(*method, hash.algo),
-                hash.to_base16(),
-                drv.fixed_output_path(name)?
-            );
+            payload.clear();
+            payload.push_str("fixed:out:");
+            payload.push_str(method.prefix());
+            payload.push_str(hash.algo.name());
+            payload.push(':');
+            base16_encode_into(&mut payload, hash.bytes());
+            payload.push(':');
+            payload.push_str(STORE_DIR);
+            payload.push('/');
+            payload.push_str(drv.fixed_output_path(name)?.base_name());
             hashes.insert(
                 name.clone(),
                 hash_bytes(HashAlgo::Sha256, payload.as_bytes()),
@@ -596,6 +653,7 @@ pub fn hash_derivation_modulo(
     };
 
     let mut inputs2: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut hex = String::with_capacity(128);
     for (drv_path, outputs) in &drv.input_drvs {
         let res = path_derivation_modulo(drv_path, cache, loader)?;
         if res.kind == DrvHashKind::Deferred {
@@ -608,17 +666,23 @@ pub fn hash_derivation_modulo(
                     drv.name
                 ))
             })?;
-            inputs2
-                .entry(h.to_string_with(HashFormat::Base16, false))
-                .or_default()
-                .insert(output.clone());
+            hex.clear();
+            h.write_string_with(&mut hex, HashFormat::Base16, false);
+            // the same modulo hash covers every output of one input
+            match inputs2.get_mut(hex.as_str()) {
+                Some(v) => v.insert(output.clone()),
+                None => inputs2
+                    .entry(hex.clone())
+                    .or_default()
+                    .insert(output.clone()),
+            };
         }
     }
 
-    let hash = hash_bytes(
-        HashAlgo::Sha256,
-        drv.unparse_with(mask_outputs, Some(&inputs2))?.as_bytes(),
-    );
+    let hash = with_aterm_buf(|s| {
+        drv.unparse_into(s, mask_outputs, Some(&inputs2))?;
+        Ok::<_, DrvError>(hash_bytes(HashAlgo::Sha256, s.as_bytes()))
+    })?;
     let hashes = drv.outputs.keys().map(|k| (k.clone(), hash)).collect();
     Ok(DrvHash { hashes, kind })
 }

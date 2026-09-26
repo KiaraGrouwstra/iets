@@ -88,7 +88,8 @@ impl StorePath {
     /// Mirrors path.cc:StorePath::StorePath(const Hash &, std::string_view name).
     pub fn new(hash: &Hash, name: &str) -> Result<StorePath, StorePathError> {
         check_name(name)?;
-        let mut base_name = hash.to_nix32();
+        let mut base_name = String::with_capacity(HASH_PART_LEN + 1 + name.len());
+        super::hash::nix32_encode_into(&mut base_name, hash.bytes());
         debug_assert_eq!(base_name.len(), HASH_PART_LEN);
         base_name.push('-');
         base_name.push_str(name);
@@ -155,18 +156,34 @@ impl StorePath {
 
 /// Mirrors store-dir-config.cc:makeStorePath(type, std::string_view hash, name).
 pub fn make_store_path_str(ty: &str, hash: &str, name: &str) -> Result<StorePath, StorePathError> {
-    let s = format!("{ty}:{hash}:{STORE_DIR}:{name}");
-    let h = compress_hash(&hash_bytes(HashAlgo::Sha256, s.as_bytes()), 20);
-    StorePath::new(&h, name)
+    let mut s = String::with_capacity(ty.len() + hash.len() + STORE_DIR.len() + name.len() + 3);
+    s.push_str(ty);
+    s.push(':');
+    s.push_str(hash);
+    s.push(':');
+    s.push_str(STORE_DIR);
+    s.push(':');
+    s.push_str(name);
+    from_payload(&s, name)
 }
 
-/// Mirrors store-dir-config.cc:makeStorePath(type, const Hash &, name).
+/// Mirrors store-dir-config.cc:makeStorePath(type, const Hash &, name). The
+/// `<algo>:<base16>` of the hash goes straight into the payload.
 pub fn make_store_path(ty: &str, hash: &Hash, name: &str) -> Result<StorePath, StorePathError> {
-    make_store_path_str(
-        ty,
-        &hash.to_string_with(super::hash::HashFormat::Base16, true),
-        name,
-    )
+    let mut s = String::with_capacity(ty.len() + STORE_DIR.len() + name.len() + 80);
+    s.push_str(ty);
+    s.push(':');
+    hash.write_string_with(&mut s, super::hash::HashFormat::Base16, true);
+    s.push(':');
+    s.push_str(STORE_DIR);
+    s.push(':');
+    s.push_str(name);
+    from_payload(&s, name)
+}
+
+fn from_payload(payload: &str, name: &str) -> Result<StorePath, StorePathError> {
+    let h = compress_hash(&hash_bytes(HashAlgo::Sha256, payload.as_bytes()), 20);
+    StorePath::new(&h, name)
 }
 
 /// Mirrors derivations.cc:outputPathName: "out" keeps the name, others get `<name>-<id>`.
@@ -219,9 +236,16 @@ impl IngestionMethod {
 
 /// Mirrors store-dir-config.cc:makeType: references are appended to the type string.
 fn make_type(mut ty: String, references: &BTreeSet<StorePath>, self_ref: bool) -> String {
+    let n: usize = references
+        .iter()
+        .map(|r| r.base_name().len() + STORE_DIR.len() + 2)
+        .sum();
+    ty.reserve(n + 5);
     for r in references {
         ty.push(':');
-        ty.push_str(&r.to_string());
+        ty.push_str(STORE_DIR);
+        ty.push('/');
+        ty.push_str(r.base_name());
     }
     if self_ref {
         ty.push_str(":self");
@@ -244,11 +268,11 @@ pub fn make_fixed_output_path(
             "fixed output derivation '{name}' is not allowed to refer to other store paths"
         )));
     }
-    let payload = format!(
-        "fixed:out:{}{}:",
-        method.prefix(),
-        hash.to_string_with(super::hash::HashFormat::Base16, true)
-    );
+    let mut payload = String::with_capacity(96);
+    payload.push_str("fixed:out:");
+    payload.push_str(method.prefix());
+    hash.write_string_with(&mut payload, super::hash::HashFormat::Base16, true);
+    payload.push(':');
     let digest = hash_bytes(HashAlgo::Sha256, payload.as_bytes());
     make_store_path("output:out", &digest, name)
 }

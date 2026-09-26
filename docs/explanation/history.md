@@ -16,21 +16,51 @@ identical derivation paths:
 
 | workload | ietsp | nix 2.34.8 |
 |---|---:|---:|
-| nixos-minimal, instructions | 7.7 G | 19.4 G |
-| nixos-desktop, instructions | 10.0 G | 25.8 G |
-| nixos-desktop, wall, 1 worker | 0.98 s | 2.20 s |
-| nixos-desktop, wall, 4 workers | 0.47 s | 2.20 s |
+| nixos-minimal, instructions | 7.2 G | 19.4 G |
+| nixos-desktop, instructions | 9.4 G | 25.8 G |
+| nixos-desktop, wall, 1 worker | 0.92 s | 2.20 s |
+| nixos-desktop, wall, 4 workers | 0.45 s | 2.20 s |
 
-About 2.5× fewer instructions, and 2.2× to 4.7× faster in wall time. The
+About 2.7× fewer instructions, and 2.4× to 4.9× faster in wall time. The
 instruction ratio is the durable number; the wall ratio depends on how many
 workers the critical chain can use.
 
 The ietsp column is a warm compiled-file cache, which is how this benchmark
 has always been run and what a second evaluation of a tree gets. That cache is
-worth 2.25 G instructions on desktop, 18% of the run, so with `--no-ir-cache`
-the ratio falls to 1.96× on minimal and 2.11× on desktop. Nix has no
-equivalent to turn off, so 2.5× is the honest product comparison and 2× is the
-honest evaluator comparison.
+worth 2.23 G instructions on desktop, 19% of the run, so with `--no-ir-cache`
+the ratio falls to 2.07× on minimal and 2.22× on desktop. Nix has no
+equivalent to turn off, so 2.7× is the honest product comparison and 2.1× is
+the honest evaluator comparison.
+
+## 2026-09-25: the ATerm buffer the derivation pipeline kept allocating
+
+The same profile put 9.3 % of a warm run in glibc `malloc` and `free`
+although the evaluator allocates from an arena, and 46 % of that arrived
+through `RawVecInner::finish_grow`. It was the derivation pipeline: every
+derivation is unparsed three times, each into a fresh 4 KiB `String` that
+then grows, and inside each unparse every store path, hash and method name
+was built as its own `String` first.
+
+The ATerm now goes into one buffer per thread that keeps its capacity —
+taken out of its slot while in use, because `hash_derivation_modulo`
+recurses — and `print_store_path`, `print_method_algo`, `base16_encode_into`
+and `Hash::write_string_with` append to it directly. `StorePath::new`,
+`make_store_path`, `make_type` and the fixed-output payload size their
+buffer once instead of growing it, and `make_type` stopped printing each
+reference into a string of its own.
+
+| warm, instructions | before | after | |
+|---|---:|---:|---:|
+| nixos-desktop, 1 worker | 9.74 G | 9.39 G | −3.6 % |
+| nixos-desktop, 4 workers | 10.54 G | 10.19 G | −3.4 % |
+| nixos-minimal, 1 worker | 7.51 G | 7.22 G | −3.9 % |
+| nixos-minimal, 4 workers | 8.12 G | 7.84 G | −3.5 % |
+
+drvPaths identical on both workloads and still equal to nix 2.34.8; the
+drv fixtures still round-trip byte for byte. The allocator bucket went from
+780 M instructions to 516 M and `realloc` fell out of the profile, so the
+work went rather than moved. What is left of it is `BTreeSet<StorePath>`
+clones and the `String` per store path the reference sets are made of.
 
 ## 2026-09-25: the union merge became a loser tree
 

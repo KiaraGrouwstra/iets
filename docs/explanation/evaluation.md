@@ -148,6 +148,16 @@ else handles a derivation with no ATerm, which is also the state of a
 derivation read from `/nix/store`. It was 331 MB of heap on outpaths, and
 dropping it took peak RSS from 7,680 MB to 7,219 MB.
 
+Building it is on the other side of the same argument. Each derivation is
+unparsed three times — masked for the output paths, plain for the drvPath,
+and again against the input hashes — so a nixos-desktop run writes about
+20,000 ATerms. They are written into one buffer per thread that keeps the
+capacity it grew to, so only the first few pay for growing it, and the
+store paths, hashes and method names go into that buffer directly instead
+of through a `String` each. The evaluator's own values live in the arena,
+but this pipeline is ordinary `String` and `BTreeMap` work, and it was
+9.3 % of a warm run in glibc `malloc` and `free` alone.
+
 ## Why there is no garbage collector
 
 There is one bump arena per worker and nothing is ever freed. Every object
