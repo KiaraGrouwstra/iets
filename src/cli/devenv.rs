@@ -210,6 +210,7 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
     let mut gc_root: Option<String> = None;
     let mut rest: Vec<String> = Vec::new();
     let mut flake: Option<String> = None;
+    let mut watch = false;
     let mut i = 0;
     while i < argv.len() {
         let s = argv[i].as_str();
@@ -220,6 +221,7 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
         match s {
             "--builder" => url = Some(next()),
             "--gc-root" => gc_root = Some(next()),
+            "--watch-files" => watch = true,
             "--workers" | "--cache-dir" | "-I" | "--include" | "--log-format" => {
                 let v = next();
                 rest.extend([s.to_string(), v]);
@@ -235,6 +237,9 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
     }
     let mut a = parse_eval_args(&rest);
     a.input = Some(Input::Flake(flake.unwrap_or_else(|| ".".into())));
+    if watch {
+        return print_watch_files(&a);
+    }
     let cfg = crate::config::Config::load(&[]).unwrap_or_else(|_| crate::config::Config::empty());
     // the environment runs here, so its inputs belong in the local store:
     // the `builder` setting does not apply
@@ -293,6 +298,47 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
     }
     // parallel: eval and the daemon flow run as the main fiber
     crate::cli::run_parallel(run, move |ev, cache| dev_env_full(ev, a, &d, cache, t0))
+}
+
+/// `print-dev-env --watch-files`: one `watch_file` line for direnv, from the
+/// read set of the entry the same command without the flag wrote. Nothing is
+/// validated and nothing is evaluated: the entry of a run that has failed
+/// since still names the file whose fix direnv has to see. No entry prints
+/// nothing, and the caller keeps its own floor.
+fn print_watch_files(a: &EvalArgs) -> i32 {
+    use crate::trace::store::Part;
+    let obs = run_for(a)
+        .cached(a, "print-dev-env")
+        .cache
+        .and_then(|c| c.part(Part::Readset))
+        .and_then(|b| crate::trace::wire::decode_readset(&b))
+        .unwrap_or_default();
+    let store = std::path::Path::new(crate::store::path::STORE_DIR);
+    let own = crate::cachefs::root(a.cache_dir.as_deref());
+    let skip: Vec<&std::path::Path> = std::iter::once(store).chain(own.as_deref()).collect();
+    let mut paths = crate::devenv::watch_paths(&obs, &skip);
+    if paths.len() > crate::devenv::WATCH_MAX {
+        paths.truncate(crate::devenv::WATCH_MAX);
+        crate::log::line(&format!(
+            "ietsp: the shell depends on more than {0} paths; direnv watches the first {0}",
+            crate::devenv::WATCH_MAX
+        ));
+    }
+    if a.timings {
+        eprintln!(
+            "cache: read set of {} observations, {} watched, nothing evaluated",
+            obs.len(),
+            paths.len()
+        );
+    }
+    if !paths.is_empty() {
+        let args: Vec<String> = paths
+            .iter()
+            .map(|p| crate::devenv::escape_shell_arg_always(p))
+            .collect();
+        println!("watch_file {}", args.join(" "));
+    }
+    0
 }
 
 /// A cache hit is usable when the env output (and the files the script names) still exist;

@@ -177,6 +177,8 @@ Print the bash that 'nix print-dev-env' prints for a flake's devShell
                         ssh-ng://[user@]host
   --gc-root PATH        link PATH to the environment and keep it as a GC root
   --json                print what 'nix print-dev-env --json' prints
+  --watch-files         print a watch_file line for direnv: the files the
+                        evaluation read, from the cache entry
   --workers N, --timings, --cache-dir DIR  as for 'ietsp eval'
   --no-tracing-cache, --no-ir-cache, --no-cache  as for 'ietsp eval'
   --log-format F, --show-trace  as for 'ietsp eval'

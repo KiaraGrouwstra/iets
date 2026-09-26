@@ -8,7 +8,10 @@
 #  f. a shell whose package is absent from /nix/store gets it substituted;
 #  g. `#attr` selects a shell;
 #  h. a `git worktree` of this repo at a path nix has never copied: ietsp
-#     prints the same bash without fetching the root tree.
+#     prints the same bash without fetching the root tree;
+#  i. `--watch-files` lists the files the shell read, for a plain directory
+#     and a git work tree, and nothing from the store;
+#  j. it reads the cache entry and evaluates nothing.
 # The scratch flakes sit on the nixpkgs this repo pins (lock written by hand,
 # so nothing is fetched: both evaluators find the tree in the store by narHash).
 #
@@ -213,6 +216,55 @@ def run-tests [ctx: record]: nothing -> int {
     $res ++= [(ok "h. worktree nix never saw: bash identical, nothing fetched")]
   } else {
     $res ++= [(bad $"h. worktree \(exit ($r.exit_code)\)" (tail-of $"($work)/ietsp.err" 3) (diff-head $"($work)/fresh-nix.sh" $"($work)/fresh.sh" 5 | str join "\n"))]
+  }
+
+  # i-j. the watch list. One flake, as a plain directory and as a git work tree.
+  let watched = $"($work)/watched"
+  mkdir $watched
+  r#'{
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/@REV@";
+  outputs = { self, nixpkgs }: {
+    devShells.x86_64-linux.default = import ./other.nix nixpkgs.legacyPackages.x86_64-linux;
+  };
+}
+'# | str replace -a "@REV@" $rev | save $"($watched)/flake.nix"
+  $lock | to json | save $"($watched)/flake.lock"
+  r#'pkgs: pkgs.mkShell {
+  GREETING = (builtins.fromJSON (builtins.readFile ./versions.json)).greeting;
+  shellHook = "source ${./hook.sh}";
+}
+'# | save $"($watched)/other.nix"
+  '{"greeting": "hi"}' | save $"($watched)/versions.json"
+  "export HOOKED=1\n" | save $"($watched)/hook.sh"
+  "nothing reads this\n" | save $"($watched)/unread.txt"
+  let tracked = $"($work)/tracked"
+  cp -r $watched $tracked
+  ^git -C $tracked init -q
+  ^git -C $tracked add -A
+  ^git -C $tracked -c user.name=t -c user.email=t@example.org commit -q -m init
+
+  let cold = (do { cd $watched; ^$ietsp print-dev-env --watch-files $watched | complete })
+  if $cold.exit_code == 0 and ($cold.stdout | is-empty) {
+    $res ++= [(ok "i. --watch-files with no entry: prints nothing, exit 0")]
+  } else {
+    $res ++= [(bad $"i. --watch-files with no entry \(exit ($cold.exit_code)\)" $cold.stdout)]
+  }
+  for c in [[name dir extra]; [path $watched []] [git $tracked [".git/index"]]] {
+    ietsp-env $ctx $c.dir $"($work)/watched.sh"
+    let r = (do { cd $c.dir; ^$ietsp print-dev-env --watch-files --timings $c.dir | complete })
+    let want = ([flake.nix flake.lock other.nix versions.json hook.sh] ++ $c.extra | each {|f| $"'($c.dir)/($f)'" })
+    let missing = ($want | where {|w| not ($r.stdout | str contains $w) })
+    let unwanted = (["/nix/store" $env.IETSP_CACHE_DIR "unread.txt"] | where {|u| $r.stdout | str contains $u })
+    if $r.exit_code == 0 and ($r.stdout | str starts-with "watch_file '") and ($missing | is-empty) and ($unwanted | is-empty) {
+      $res ++= [(ok $"i. ($c.name) flake: the files the shell read are watched, the store and unread.txt are not")]
+    } else {
+      $res ++= [(bad $"i. ($c.name) flake watch list" $"missing: ($missing)" $"unwanted: ($unwanted)" $r.stdout)]
+    }
+    if ($r.stderr | str contains "nothing evaluated") and not ($r.stderr | str contains "eval:") {
+      $res ++= [(ok $"j. ($c.name) flake: --watch-files reads the entry and evaluates nothing")]
+    } else {
+      $res ++= [(bad $"j. ($c.name) flake: --watch-files evaluated" $r.stderr)]
+    }
   }
 
   let fail = ($res | where not $it | length)

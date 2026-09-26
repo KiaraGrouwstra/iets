@@ -180,6 +180,11 @@ same bytes, by the argument that makes an input store entry one observation
 file, and costs two system calls now. A store path whose name is not the
 hash of its content — a build output, say — keeps its tree observation.
 
+The read set has a second reader. `ietsp print-dev-env --watch-files` prints
+the mutable paths in it as a `watch_file` line for direnv, so direnv reloads
+a shell when a file its evaluation read changes
+(`docs/how-to/use-with-direnv.md`).
+
 A run that had an entry and lost it says why, in one line:
 
 ```

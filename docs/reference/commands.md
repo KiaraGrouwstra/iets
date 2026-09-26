@@ -799,6 +799,7 @@ FLAKEREF` prints, byte for byte.
 | `--builder URL` | the Nix daemon: `daemon` (default), `unix:///path`, `ssh-ng://[user@]host` |
 | `--gc-root PATH` | link `PATH` to the environment's store path and register it as an indirect GC root |
 | `--json` | print what `nix print-dev-env --json` prints |
+| `--watch-files` | print a `watch_file` line for direnv instead of the bash; see below |
 | `--workers N`, `--timings`, `--cache-dir DIR` | as for `eval` |
 | `--no-tracing-cache`, `--no-ir-cache`, `--no-cache` | as for `eval` |
 | `--log-format F`, `--show-trace` | as for `eval` |
@@ -823,6 +824,19 @@ stderr: errors, and the build log lines with an `ietsp: ` prefix on a
 failure, or streamed with `--timings`.
 Exit: 0, non-zero on any error, and then stdout is empty, so `eval` of an
 empty string leaves the environment alone.
+
+`--watch-files` prints what direnv has to watch for this shell, from the read
+set of the cache entry that the same command without the flag wrote. It
+validates nothing, evaluates nothing and needs no daemon. Give it the same
+`FLAKEREF` and evaluation flags.
+stdout: one line, `watch_file 'PATH' 'PATH' ...`, for direnv to `eval`; nothing
+when there is no entry. The paths are the files, directory listings and path
+kinds the evaluation observed outside `/nix/store` and ietsp's stores, the git
+index when it queried git, and the members of each path the expression
+copied. The flake's own source tree is not expanded, and environment
+variables have nothing to watch. The list stops at 500 paths, with a note on
+stderr. `docs/how-to/use-with-direnv.md` has the `.envrc`.
+Exit: 0.
 
 A `__structuredAttrs` shell gets its `.attrs.sh` and `.attrs.json`
 written next to the GC root (`PATH-attrs/`), or under
