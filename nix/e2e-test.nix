@@ -27,6 +27,7 @@ let
   # that knows exactly those paths. The registration is opened first: the new
   # store hides it.
   writableStore = pkgs.writeShellScript "writable-store" ''
+    PATH=${pkgs.lib.makeBinPath [ pkgs.jq pkgs.sqlite ]}:$PATH
     set -eu
     exec 3< "$1/registration"
     mkdir -p /nix/.store
@@ -37,6 +38,19 @@ let
     done < "$1/store-paths"
     mount --rbind /nix/.store /nix/store
     NIX_REMOTE=local nix-store --load-db <&3
+    # closureInfo has no content addresses, and a real store has one for every
+    # source nix added. A path with no references whose name and NAR hash give
+    # its own store path is such a source.
+    NIX_REMOTE=local nix --extra-experimental-features nix-command path-info --all --json \
+      | jq -r 'to_entries[] | select(.value.references == []) | "\(.key) \(.value.narHash)"' \
+      | while read -r p h; do
+          p=/nix/store/''${p##*/}
+          n=''${p#/nix/store/*-}
+          if [ "$(nix-store --print-fixed-path --recursive sha256 "$h" "$n")" = "$p" ]; then
+            h32=$(nix --extra-experimental-features nix-command hash convert --hash-algo sha256 --to nix32 "$h")
+            echo "update ValidPaths set ca = 'fixed:r:sha256:$h32' where path = '$p';"
+          fi
+        done | sqlite3 /nix/var/nix/db/db.sqlite
   '';
 in
 pkgs.testers.runNixOSTest {

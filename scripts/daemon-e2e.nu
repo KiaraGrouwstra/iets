@@ -9,7 +9,7 @@
 # 2. hello through the local daemon: the closure is GC-rooted here, so every
 #    path is valid and only QueryValidPaths and the realise run.
 # 3. hello cold against a scratch chroot daemon (nix-daemon --store
-#    local?root=DIR on its own socket), --no-build: 776 paths uploaded in one
+#    local?root=DIR on its own socket), --no-build: the whole closure uploaded in one
 #    AddMultipleToStore; hashes and ca checked in that store.
 # 4. hello warm against the scratch daemon: 0 missing.
 # 5. custom derivation through unix:///nix/var/nix/daemon-socket/socket.
@@ -129,7 +129,9 @@ def run-tests [ietsp: string, nixpkgs: string, work: string] {
   $r.stderr | save -f $"($work)/client3.log"
   if $r.exit_code != 0 { print ($r.stderr | chomp); fail "client exited non-zero" }
   show-matching $timing_lines $"($work)/client3.log"
-  if not ($r.stderr | str contains "query: 776 paths, 776 missing") { fail "cold scratch store should miss every path" }
+  # the size of hello's closure moves with the nixpkgs pin
+  let q = ($r.stderr | parse -r 'query: (?<paths>\d+) paths, (?<missing>\d+) missing' | get -o 0 | default {paths: "0", missing: ""})
+  if $q.paths != $q.missing or ($q.paths | into int) < 100 { fail "cold scratch store should miss every path" }
   if not ($r.stderr | str contains "worker: 3 ops") { fail "expected SetOptions + QueryValidPaths + AddMultipleToStore" }
   if (out-of nix-store --store $scratch -q --hash $hello) != (out-of nix-store -q --hash $hello) { fail "hello drv hash differs in the scratch store" }
   if not (same-file $"($work)/store($hello)" $hello) { fail "hello drv bytes differ in the scratch store" }
@@ -141,14 +143,14 @@ def run-tests [ietsp: string, nixpkgs: string, work: string] {
     let b = (^nix path-info --json $p err> /dev/null | ^jq -c '.[] | {ca, narHash, references}' | chomp)
     if $a != $b { fail $"path-info differs for ($p): ($a) vs ($b)" }
   }
-  print "ok: 776 paths registered, hashes and ca match the local store"
+  print $"ok: ($q.paths) paths registered, hashes and ca match the local store"
 
   print "== 4. hello warm against the scratch daemon"
   let r = (^$ietsp build --builder $"unix://($sock)" --timings --no-tracing-cache --no-build -I $"nixpkgs=($nixpkgs)" -E '(import <nixpkgs> {}).hello' | complete)
   $r.stderr | save -f $"($work)/client4.log"
   if $r.exit_code != 0 { print ($r.stderr | chomp); fail "client exited non-zero" }
   show-matching $timing_lines $"($work)/client4.log"
-  if not ($r.stderr | str contains "query: 776 paths, 0 missing") { fail "warm run still had missing paths" }
+  if not ($r.stderr | str contains $"query: ($q.paths) paths, 0 missing") { fail "warm run still had missing paths" }
   print "ok"
 
   print "== 5. custom derivation, --builder unix:///nix/var/nix/daemon-socket/socket"
