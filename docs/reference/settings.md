@@ -172,6 +172,35 @@ evaluation, below the project's (`docs/reference/lints.md`). `$IETSP_CONFIG`
 and `--ietsp-option` refuse it: `IETSP_LINT` and `--lint` are their
 spelling.
 
+## The project file, and why it holds only `[lint]`
+
+A third `ietsp.toml` is the project's: the nearest one found by walking up
+from the entry file or the flake directory (`docs/reference/lints.md`). The
+machine and the user file are trusted, because whoever can write them
+already controls the account. The project file is not: it arrives with
+whatever repository was cloned, and running `ietsp` in a clone must not be
+a way to run its author's code or to send data to its author. So the
+project file is an allow-list of one entry, the `[lint]` table, which only
+selects diagnostics. Any other key in it is an **error** that names the key
+and the two files where it may be set. It is not a warning: a repository
+that tries to set `nix-bin-dir` is worth stopping on.
+
+| Key | What a repository could do with it |
+|:---|:---|
+| `nix-bin-dir` | name the binary the classic fallback execs: arbitrary code |
+| `builder` | receive the closure, sources and all, and hand back outputs of its choice |
+| `fix-hashes` | `always` rewrites source files and accepts whatever hash the network served, with no question asked |
+| `cache-dir` | point the caches at a directory it ships, so a planted entry answers for an evaluation; or write the caches anywhere |
+| `source-map` | make errors, provenance and lint roots name local directories outside the clone |
+| `fetch-max-size` | lift the cap that stops a decompression bomb |
+| `no-fallback` | `false` brings back the real nix on a machine whose admin turned it off |
+| `shell-gc-root`, `build-gc-root` | pin closures on the disk, or let them go: the disk is the user's to budget |
+| `workers`, `fiber-stack-mb` | take every core, or reserve address space until the run fails |
+| `cache`, `provenance` | nothing worse than a slow run or plainer output, and nothing a project needs: the default is no |
+
+A project file that is one of the two settings files (an evaluation started
+below `~/.config/ietsp`) is read as the settings file it is.
+
 ## `ietsp.conf` is gone
 
 Until 2026-09 these files were `ietsp.conf`, in nix.conf's line syntax. That

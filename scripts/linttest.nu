@@ -61,6 +61,8 @@ def main [] {
   $res ++= [(verdict (not ($r.stderr | str contains "warning:")) "--lint wins over IETSP_LINT" "--lint did not override IETSP_LINT")]
   let r = (^$ietsp eval --no-tracing-cache lint/cases/toml/main.nix | complete)
   $res ++= [(verdict ($r.stderr | str contains $with_warn) "ietsp.toml sets a level" "ietsp.toml ignored")]
+  let r = (^$ietsp eval --no-tracing-cache lint/cases/untrusted/main.nix | complete)
+  $res ++= [(verdict ($r.exit_code != 0 and ($r.stderr | str contains "'nix-bin-dir' may not be set in a project file")) "ietsp.toml: a project file may not set nix-bin-dir" $"untrusted: rc=($r.exit_code) ($r.stderr)")]
   let r = (^$ietsp eval --no-tracing-cache --lint family:scope=warn lint/with.nix | complete)
   $res ++= [(verdict ($r.stderr | str contains $with_warn) "family:scope selects the family" "family selector ignored")]
   let r = (^$ietsp eval --no-tracing-cache --lint all=warn --lint with=off lint/with.nix | complete)

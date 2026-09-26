@@ -1,0 +1,4 @@
+nix-bin-dir = "/evil"
+
+[lint]
+with = "warn"

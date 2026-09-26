@@ -592,7 +592,9 @@ impl Config {
             f.is_some() && settings.iter().any(|s| s.canonicalize().ok() == f)
         };
         if let Some(file) = start.and_then(find_config_file).filter(|f| !is_settings(f)) {
-            c.apply_toml(&read(&file)?, &file)?;
+            let text = read(&file)?;
+            crate::settings::check_project(&text, &file)?;
+            c.apply_toml(&text, &file)?;
         }
         if let Ok(env) = std::env::var("IETSP_LINT") {
             c.apply_env(&env).map_err(|m| format!("IETSP_LINT: {m}"))?;

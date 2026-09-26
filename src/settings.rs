@@ -145,12 +145,34 @@ pub fn conf_dir() -> PathBuf {
     env("IETSP_CONF_DIR").map_or_else(|| PathBuf::from("/etc/ietsp"), PathBuf::from)
 }
 
-/// The settings files, lowest precedence first.
+/// The settings files, lowest precedence first. Both may set every key; a
+/// project's `ietsp.toml` may not ([`check_project`]).
 pub fn conf_files() -> [PathBuf; 2] {
     [
         conf_dir().join("ietsp.toml"),
         crate::config::config_home().join("ietsp/ietsp.toml"),
     ]
+}
+
+/// Refuses every key of a project's `ietsp.toml` but `lint`. The file comes
+/// with whatever repository was cloned, so it may not decide what runs
+/// (`nix-bin-dir`), where sources go (`builder`) or what gets rewritten
+/// (`fix-hashes`): docs/reference/settings.md has the threat model.
+pub fn check_project(text: &str, origin: &Path) -> std::result::Result<(), String> {
+    // a file that does not parse is `apply_toml`'s to report
+    let table = text.parse::<toml::Table>().unwrap_or_default();
+    let Some(key) = table.keys().find(|k| *k != "lint") else {
+        return Ok(());
+    };
+    let files = conf_files().map(|f| f.display().to_string()).join(" or ");
+    let why = match KEYS.contains(&key.as_str()) {
+        true => format!("a repository controls this file; set it in {files}"),
+        false => "it holds only [lint]".to_string(),
+    };
+    let at = origin.display();
+    Err(format!(
+        "{at}: '{key}' may not be set in a project file: {why}"
+    ))
 }
 
 impl Settings {
@@ -515,6 +537,35 @@ mod tests {
             let to = format!("Move its settings to {};", files[level].display());
             assert!(e.contains(&to), "{e}");
         }
+    }
+
+    #[test]
+    fn a_project_file_holds_lint_and_nothing_else() {
+        let at = Path::new("/repo/ietsp.toml");
+        assert_eq!(check_project("[lint]\nwith = \"warn\"\n", at), Ok(()));
+        assert_eq!(check_project("", at), Ok(()));
+        for key in KEYS {
+            let e = check_project(&format!("{key} = true\n[lint]\n"), at).unwrap_err();
+            assert!(
+                e.starts_with(&format!(
+                    "/repo/ietsp.toml: '{key}' may not be set in a project file"
+                )),
+                "{e}"
+            );
+            for f in conf_files() {
+                assert!(e.contains(&f.display().to_string()), "{e}");
+            }
+        }
+        let e = check_project("nope = 1\n", at).unwrap_err();
+        assert!(
+            e.ends_with("'nope' may not be set in a project file: it holds only [lint]"),
+            "{e}"
+        );
+        assert_eq!(
+            check_project("lint = [\n", at),
+            Ok(()),
+            "apply_toml reports it"
+        );
     }
 
     #[test]

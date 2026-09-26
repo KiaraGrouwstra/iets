@@ -27,7 +27,8 @@ source wins over an earlier one:
 3. the `[lint]` table of the project's `ietsp.toml`: the nearest one found
    by walking up from the entry file's directory, the flake directory, or
    cwd for `-E` (each `[lint.inputs.<node>]` table is a source of its own,
-   see Scope);
+   see Scope); any key but `[lint]` in this file is an error
+   (`docs/reference/settings.md`);
 4. `IETSP_LINT="name=level,name=level"`;
 5. `--lint SELECTOR=LEVEL`, repeatable.
 
