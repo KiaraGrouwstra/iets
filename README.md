@@ -96,11 +96,11 @@ it. The contracts are in
 them in
 [docs/explanation/plumbing-and-porcelain.md](docs/explanation/plumbing-and-porcelain.md).
 
-The crate is also a library. `api::value::{Eval, Value}` is a safe,
-lifetime-checked handle on the evaluator, modelled on Nix's own C API, and
-nothing process-global sits in the way of embedding two of them
-([docs/how-to/embed-the-evaluator.md](docs/how-to/embed-the-evaluator.md),
-[docs/reference/library.md](docs/reference/library.md)).
+The crate also builds as a library, with a safe value handle
+(`api::value::{Eval, Value}`) and no process-global state. It is not ready
+to embed in a long-lived program: the evaluator does not free memory until
+the process exits. See
+[docs/how-to/embed-the-evaluator.md](docs/how-to/embed-the-evaluator.md).
 
 Driving ietsp from a script or an agent:
 [docs/how-to/script-ietsp.md](docs/how-to/script-ietsp.md).

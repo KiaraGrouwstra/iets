@@ -1,7 +1,13 @@
 # How to embed the evaluator in your own program
 
+> **Not ready for long-lived hosts.** The evaluator's arena does not free
+> memory until the process exits (`src/runtime/arena.rs`). A program that
+> evaluates again and again, such as an editor server or a build service,
+> grows without limit. Use the library for a run-once frontend: another
+> command line, a test harness, a one-shot tool. The API can change.
+
 The crate is a library with a thin `ietsp` binary on top. Another command
-line, an editor server or a build service links the library and calls the
+line or a one-shot tool links the library and calls the
 entry points. Nothing is process-global, so two evaluators can run side by
 side in one process.
 

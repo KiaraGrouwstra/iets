@@ -1,10 +1,16 @@
 # Using ietsp as a library
 
+> **Not ready for long-lived hosts.** The evaluator's arena does not free
+> memory until the process exits (`src/runtime/arena.rs`). A program that
+> evaluates again and again, such as an editor server or a build service,
+> grows without limit. Use the library for a run-once frontend: another
+> command line, a test harness, a one-shot tool. The API can change.
+
 Every public entry point of the crate: what a frontend calls, what a
 `Session` owns, and the value API with its mapping to Nix's C API.
 
 The crate is a library with a thin `ietsp` binary on top. A frontend —
-another CLI, an editor server, a build service — links the library and
+another CLI, a test harness, a one-shot tool — links the library and
 calls the entry points below. `examples/eval.rs`, `examples/build.rs`,
 `examples/drv_info.rs` and `examples/value.rs` are working frontends; they
 use `pub` items only and never touch `ietsp::cli`.
