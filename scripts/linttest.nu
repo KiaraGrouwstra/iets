@@ -7,7 +7,9 @@
 # Then the framework cases in tests/lint/cases/: IETSP_LINT, ietsp.toml,
 # `all=` and `family:` selectors, a name beating a family or `all` inside
 # one source (a table, the flags, IETSP_LINT), one warning per site, tryEval not
-# catching a lint error, and a warning replayed on a tracing-cache hit.
+# catching a lint error, an unknown lint name (a warning in ietsp.toml and
+# IETSP_LINT, a usage error in `--lint`), and a warning replayed on a
+# tracing-cache hit.
 # Then the scope cases in tests/lint/scope/: a site outside the entry's
 # directory is silent unless `--lint-scope all`, `--lint-root`, or the
 # `scope`/`roots` keys of ietsp.toml open it; `fod` names the user's
@@ -87,7 +89,13 @@ def main [] {
   let r = (^$ietsp lint list --lint url-literal=error | complete)
   $res ++= [(verdict (($r.stdout | lines | where ($it | str starts-with "url-literal ") | first) =~ 'error') "lint list shows effective levels" "lint list")]
   let r = (^$ietsp eval --no-tracing-cache --lint nope=warn lint/url-literal.nix | complete)
-  $res ++= [(verdict ($r.exit_code == 2 and ($r.stderr | str contains "unknown lint 'nope'")) "unknown lint name is a usage error" "unknown lint name")]
+  $res ++= [(verdict ($r.exit_code == 2 and ($r.stderr | str contains "unknown lint 'nope'")) "--lint: an unknown lint name is a usage error" "unknown lint name")]
+  let r = (^$ietsp eval --no-tracing-cache lint/cases/unknown/main.nix | complete)
+  let ok = ($r.exit_code == 0 and ($r.stderr | str contains "ietsp.toml: ietsp does not know the lint 'with' and ignores it") and ($r.stderr | str contains "does not know the lint 'family:scope'") and ($r.stderr | str contains $url_warn))
+  $res ++= [(verdict $ok "ietsp.toml: an unknown lint name is a warning and the rest counts" $"unknown name in ietsp.toml: rc=($r.exit_code) ($r.stderr)")]
+  let r = (with-env {IETSP_LINT: "nope=warn,url-literal=warn"} { ^$ietsp eval --no-tracing-cache --log-format internal-json lint/url-literal.nix | complete })
+  let ok = ($r.exit_code == 0 and ($r.stderr | str contains '"code":"unknown-lint"') and ($r.stderr | str contains "IETSP_LINT: ietsp does not know the lint 'nope'") and ($r.stderr | str contains "[url-literal]"))
+  $res ++= [(verdict $ok "IETSP_LINT: an unknown lint name is an unknown-lint record" $"unknown name in IETSP_LINT: rc=($r.exit_code) ($r.stderr)")]
 
   let cache = (mktemp -d --tmpdir ietsp-linttest.XXXXXX)
   let r1 = (with-env {IETSP_CACHE_DIR: $cache} { ^$ietsp eval --strict --timings --lint url-literal=warn lint/url-literal.nix | complete })

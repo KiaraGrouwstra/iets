@@ -34,6 +34,7 @@ in `src/error.rs` for the rest, and the daemon's build status for builds.
 | `ignored-flag` | `src/ignored.rs` | a level-1 record: a flag that has no effect, and why (docs/reference/divergences.md) |
 | `ignored-setting` | `src/config.rs` | a level-1 record: a Nix setting that has no effect, and why (docs/reference/settings.md) |
 | `unknown-setting` | `src/config.rs` | a level-1 record: a setting Nix 2.34.8 does not know either, with Nix's text |
+| `unknown-lint` | `src/lint/mod.rs` | a level-1 record: a lint name in an `ietsp.toml` or in `IETSP_LINT` that the registry does not have (docs/reference/lints.md) |
 | `cache-invalidated` | `src/trace/run.rs` | a level-3 record: what changed under a tracing cache entry, so the run evaluates again |
 | `io` | `ErrorKind::Io`, `Error::Io` | a file that cannot be read or written |
 | `unsupported` | `ErrorKind::Unsupported`, `Error::Unsupported` | a feature ietsp does not have; classic mode falls back to Nix |

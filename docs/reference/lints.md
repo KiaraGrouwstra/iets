@@ -59,6 +59,23 @@ given later. `--lint all=error --lint fod=off` and `--lint fod=off
 specificity does not count: `all = "off"` in `IETSP_LINT` turns off a
 lint `ietsp.toml` names.
 
+A selector that the registry does not have is not the same in each source:
+
+| source | effect |
+|---|---|
+| an `ietsp.toml`, `IETSP_LINT` | one warning for each name, with the code `unknown-lint`; ietsp ignores the name and the run continues |
+| `--lint` | a usage error, exit code 2 |
+
+```
+warning: /repo/ietsp.toml: ietsp does not know the lint 'nope' and ignores it; 'ietsp help lints' has the list (docs/reference/lints.md)
+```
+
+An error in a file stops each command in that repository. That includes
+the command that installs the correction. Thus a file gets a warning.
+The command line gets an error, because the user can correct it
+immediately. An incorrect level (`fod = "loud"`) is an error in each
+source.
+
 `ietsp lint list [--lint ...] [--lint-root DIR]... [--lint-scope root|all]
 [PATH]` prints the registry with the levels a run from `PATH` (default
 cwd) gets, then the scope and its roots.

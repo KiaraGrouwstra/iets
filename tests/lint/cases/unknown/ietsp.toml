@@ -1,0 +1,4 @@
+[lint]
+with = "warn"
+"family:scope" = "error"
+url-literal = "warn"

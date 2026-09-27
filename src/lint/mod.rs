@@ -323,17 +323,23 @@ impl Layer {
         Ok(())
     }
 
-    /// `NAME=LEVEL`, as `--lint` and `IETSP_LINT` take it.
+    /// `set` for a file or `IETSP_LINT`: a selector the registry does not
+    /// know is one `unknown-lint` warning, and the run goes on. An error
+    /// there stops every command in the repository, the one that installs
+    /// the fix included.
+    fn set_from(&mut self, selector: &str, level: Level, origin: &str) {
+        if self.set(selector, level).is_err() {
+            let raw = format!(
+                "{origin}: ietsp does not know the lint '{selector}' and ignores it; 'ietsp help lints' has the list (docs/reference/lints.md)"
+            );
+            crate::ignored::note("unknown-lint", &format!("{origin} {selector}"), raw);
+        }
+    }
+
+    /// `NAME=LEVEL`, as `--lint` takes it.
     pub fn set_pair(&mut self, pair: &str) -> Result<(), String> {
-        let Some((name, level)) = pair.split_once('=') else {
-            return Err(format!("lint setting '{pair}' is not NAME=LEVEL"));
-        };
-        let Some(level) = Level::parse(level.trim()) else {
-            return Err(format!(
-                "invalid lint level '{level}' for '{name}': use off, warn or error"
-            ));
-        };
-        self.set(name.trim(), level)
+        let (name, level) = split_pair(pair)?;
+        self.set(name, level)
     }
 
     pub fn get(&self, id: LintId) -> Option<Level> {
@@ -353,6 +359,13 @@ impl Layer {
 fn parse_level(level: &str, name: &str) -> Result<Level, String> {
     Level::parse(level)
         .ok_or_else(|| format!("invalid lint level '{level}' for '{name}': use off, warn or error"))
+}
+
+fn split_pair(pair: &str) -> Result<(&str, Level), String> {
+    let Some((name, level)) = pair.split_once('=') else {
+        return Err(format!("lint setting '{pair}' is not NAME=LEVEL"));
+    };
+    Ok((name.trim(), parse_level(level.trim(), name)?))
 }
 
 fn under(path: &[u8], dir: &[u8]) -> bool {
@@ -428,7 +441,7 @@ impl Config {
         c
     }
 
-    fn apply_inputs(&mut self, t: &toml::Table) -> Result<(), String> {
+    fn apply_inputs(&mut self, t: &toml::Table, origin: &str) -> Result<(), String> {
         for (input, levels) in t {
             let Some(levels) = levels.as_table() else {
                 return Err(format!("'inputs.{input}' is not a table"));
@@ -440,7 +453,7 @@ impl Config {
                         "lint '{selector}' of input '{input}' must be a level string"
                     ));
                 };
-                layer.set(selector, parse_level(level, selector)?)?;
+                layer.set_from(selector, parse_level(level, selector)?, origin);
             }
             let mut arr = [None; N];
             for d in LINTS {
@@ -454,8 +467,7 @@ impl Config {
         Ok(())
     }
 
-    /// `NAME=LEVEL` as a source of its own, as `--lint` and `IETSP_LINT`
-    /// take it.
+    /// `NAME=LEVEL` as a source of its own, as `--lint` takes it.
     pub fn set_pair(&mut self, pair: &str) -> Result<(), String> {
         let mut layer = Layer::default();
         layer.set_pair(pair)?;
@@ -467,7 +479,8 @@ impl Config {
     pub fn apply_env(&mut self, s: &str) -> Result<(), String> {
         let mut layer = Layer::default();
         for pair in s.split(',').map(str::trim).filter(|p| !p.is_empty()) {
-            layer.set_pair(pair)?;
+            let (name, level) = split_pair(pair)?;
+            layer.set_from(name, level, "IETSP_LINT");
         }
         layer.apply(&mut self.levels);
         Ok(())
@@ -478,7 +491,8 @@ impl Config {
     /// plus `scope`, `roots` (relative to the file) and `inputs.<node>`.
     pub fn apply_toml(&mut self, text: &str, origin: &Path) -> Result<(), String> {
         use std::os::unix::ffi::OsStrExt;
-        let at = |m: String| format!("{}: {m}", origin.display());
+        let from = origin.display().to_string();
+        let at = |m: String| format!("{from}: {m}");
         let table: toml::Table = text.parse().map_err(|e| at(format!("{e}")))?;
         let Some(lint) = table.get("lint") else {
             return Ok(());
@@ -506,21 +520,21 @@ impl Config {
                     }
                 }
                 ("roots", _) => return Err(at("'roots' must be a list of strings".into())),
-                ("inputs", toml::Value::Table(t)) => self.apply_inputs(t).map_err(at)?,
+                ("inputs", toml::Value::Table(t)) => self.apply_inputs(t, &from).map_err(at)?,
                 ("inputs", _) => return Err(at("'inputs' must be a table".into())),
                 (_, toml::Value::String(level)) => {
                     let level = parse_level(level, name).map_err(at)?;
-                    layer.set(name, level).map_err(at)?;
+                    layer.set_from(name, level, &from);
+                }
+                (_, toml::Value::Table(_)) if by_name(name).is_none() => {
+                    layer.set_from(name, Level::Off, &from);
                 }
                 (_, toml::Value::Table(t)) => {
-                    if by_name(name).is_none() {
-                        return Err(at(format!("unknown lint '{name}'")));
-                    }
                     for (k, v) in t {
                         match (name.as_str(), k.as_str(), v) {
                             (_, "level", toml::Value::String(level)) => {
                                 let level = parse_level(level, name).map_err(at)?;
-                                layer.set(name, level).map_err(at)?;
+                                layer.set_from(name, level, &from);
                             }
                             ("large-source-copy", "max-bytes", toml::Value::Integer(n)) => {
                                 self.max_bytes = (*n).max(0) as u64;
@@ -587,6 +601,7 @@ impl Config {
         if let Some(s) = scope {
             c.scope = s;
         }
+        crate::ignored::flush();
         Ok(c)
     }
 
@@ -1178,10 +1193,6 @@ mod tests {
         assert_eq!(c.level(LintId::LargeSourceCopy), Level::Error);
         assert_eq!(c.max_bytes, 64);
         assert!(
-            c.apply_toml("[lint]\nnope = \"warn\"\n", Path::new("t"))
-                .is_err()
-        );
-        assert!(
             c.apply_toml("[lint]\nabsolute-path-literal = 3\n", Path::new("t"))
                 .is_err()
         );
@@ -1259,14 +1270,38 @@ mod tests {
             c.apply_toml("[lint]\nroots = \"lib\"\n", Path::new("t"))
                 .is_err()
         );
-        assert!(
-            c.apply_toml("[lint.inputs.x]\nnope = \"warn\"\n", Path::new("t"))
-                .is_err()
-        );
         let mut d = Config::default();
         d.apply_toml("[lint]\nscope = \"all\"\n", Path::new("t"))
             .unwrap();
         assert_eq!(d.scope, Scope::All);
         assert!(!d.scoped());
+    }
+
+    #[test]
+    fn an_unknown_name_is_a_warning_in_a_file_and_an_error_in_a_flag() {
+        let s = crate::session::Session::new();
+        let _entered = s.enter();
+        let mut c = Config::default();
+        c.apply_toml(
+            "[lint]\nnope = \"error\"\n\"family:nope\" = \"warn\"\ngone = { level = \"warn\" }\nfod = \"warn\"\n[lint.inputs.x]\nnope = \"warn\"\n",
+            Path::new("/r/ietsp.toml"),
+        )
+        .unwrap();
+        c.apply_env("nope=warn, ifd=error").unwrap();
+        assert_eq!(c.level(LintId::Fod), Level::Warn);
+        assert_eq!(c.level(LintId::Ifd), Level::Error);
+        let mut noted = crate::ignored::noted("unknown-lint");
+        noted.sort();
+        assert_eq!(
+            noted,
+            [
+                "/r/ietsp.toml family:nope",
+                "/r/ietsp.toml gone",
+                "/r/ietsp.toml nope",
+                "IETSP_LINT nope"
+            ]
+        );
+        assert!(c.apply_env("nope=loud").is_err());
+        assert!(c.set_pair("nope=warn").is_err());
     }
 }
