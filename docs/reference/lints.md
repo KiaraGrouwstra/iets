@@ -18,6 +18,12 @@ fixtures: `tests/lint/<name>.nix`, checked by `scripts/linttest.nu`.
 
 Nix's spellings `ignore` and `fatal` are accepted for `off` and `error`.
 
+With `--log-format internal-json`, or in the `json-log-path` file, a
+finding is a record with the code `lint`. The record has the byte span of
+the site (`start`, `end`). It has the text that corrects the finding
+(`replacement`) when the lint has one. `docs/reference/errors.md` has the
+record ("A finding and its edit").
+
 The level of a lint comes from these sources, in this order; a later
 source wins over an earlier one:
 
@@ -382,8 +388,8 @@ the instructions. At a site the check is one branch on an empty table.
 
 ## Caches and parallelism
 
-- A lint warning is an effect. `Cache::write` stores the printed lines in
-  the entry's `warnings` file and a hit prints them again before the
+- A lint warning is an effect. `Cache::write` stores the record of each
+  warning in the entry, and a hit puts them out again before the
   result (docs/explanation/caching.md). The lint configuration, scope and
   roots included, is part of the cache key. A lint at `error` fails the
   run, and failed runs are never cached.

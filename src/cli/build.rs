@@ -70,7 +70,7 @@ pub fn cmd_build(argv: &[String]) -> i32 {
                 crate::log::line(&format!("warning: fix-hashes: {e}"));
                 continue;
             }
-            crate::log::fixed(&fix.pos(), &fix.old, &fix.new);
+            crate::log::fixed(&fix.pos(), fix.at, &fix.old, &fix.new);
             wrote.push(got);
             fixed = true;
         }

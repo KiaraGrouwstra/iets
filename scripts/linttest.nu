@@ -9,7 +9,7 @@
 # one source (a table, the flags, IETSP_LINT), one warning per site, tryEval not
 # catching a lint error, an unknown lint name (a warning in ietsp.toml and
 # IETSP_LINT, a usage error in `--lint`), and a warning replayed on a
-# tracing-cache hit.
+# tracing-cache hit, and a finding as a record with its byte span and its edit.
 # Then the scope cases in tests/lint/scope/: a site outside the entry's
 # directory is silent unless `--lint-scope all`, `--lint-root`, or the
 # `scope`/`roots` keys of ietsp.toml open it; `fod` names the user's
@@ -104,6 +104,20 @@ def main [] {
   let hit = ($r2.stderr | str contains "cache: hit")
   let same = (($r1.stderr | lines | where ($it | str starts-with "warning:")) == ($r2.stderr | lines | where ($it | str starts-with "warning:")))
   $res ++= [(verdict ($hit and $same and ($r1.stderr | str contains $url_warn)) "a warning is replayed on a cache hit" $"cache replay: hit=($hit) same=($same)")]
+
+  # a finding as a record: the byte span of the site and the edit, also from a
+  # tracing-cache hit, and at `error`
+  let site = '"end":18,'
+  let edit = '"replacement":"\"http://example.com\"","sid":'
+  let cache = (mktemp -d --tmpdir ietsp-linttest.XXXXXX)
+  let json = [--log-format internal-json --lint url-literal=warn lint/url-literal.nix]
+  let r1 = (with-env {IETSP_CACHE_DIR: $cache} { ^$ietsp eval --strict --timings ...$json | complete })
+  let r2 = (with-env {IETSP_CACHE_DIR: $cache} { ^$ietsp eval --strict --timings ...$json | complete })
+  rm -rf $cache
+  let has = {|r| ($r.stderr | str contains $site) and ($r.stderr | str contains $edit) and ($r.stderr | str contains '"start":0}') }
+  $res ++= [(verdict ((do $has $r1) and (do $has $r2) and ($r2.stderr | str contains "cache: hit")) "a finding record has the span and the edit, on a cache hit too" $"finding record: ($r1.stderr) ($r2.stderr)")]
+  let r = (^$ietsp eval --no-tracing-cache --log-format internal-json --lint eq-type-mismatch=error lint/cases/tryeval.nix | complete)
+  $res ++= [(verdict ($r.exit_code == 1 and ($r.stderr | str contains '"end":27,') and ($r.stderr | str contains '"start":19}') and not ($r.stderr | str contains "replacement")) "a finding at error has the span and no edit" $"finding at error: ($r.stderr)")]
 
   # scope: lint/scope/lib is outside the entry directories lint/scope/{root,all,roots}
   let outside = "at /pwd/lint/scope/lib/url.nix:1:1"

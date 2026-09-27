@@ -356,13 +356,9 @@ pub fn line(text: &str) {
     cur().log.errln(&format(text));
 }
 
-/// A lint warning, `warning: [NAME] MSG` and maybe `\n  at POS`, as it goes
-/// to stderr.
-pub fn lint(text: &str) -> String {
-    cur().log.render(&lint_record(text), text)
-}
-
-fn lint_record(text: &str) -> Value {
+/// A lint warning, `warning: [NAME] MSG` and maybe `\n  at POS`: the form
+/// that goes to stderr, and the record that a cache entry keeps.
+pub fn lint(text: &str, site: Option<Site>) -> (String, String) {
     let rest = text.strip_prefix("warning: ").unwrap_or(text);
     let (raw, pos) = match rest.split_once("\n  at ") {
         Some((raw, pos)) => (raw, Some(pos.to_string())),
@@ -371,34 +367,39 @@ fn lint_record(text: &str) -> Value {
     let r = Report {
         level: 1,
         pos,
+        site,
         ..Report::new("lint", raw)
     };
-    r.record(text)
+    let v = r.record(text);
+    (cur().log.render(&v, text), v.to_string())
 }
 
-/// The warnings a cache entry recorded, as `lint` puts them out.
+/// The warnings a cache entry recorded, one record on each line, as `lint`
+/// puts them out.
 pub fn replay_lints(bytes: &[u8]) -> Vec<u8> {
-    let mut warnings: Vec<String> = Vec::new();
-    for l in String::from_utf8_lossy(bytes).lines() {
-        match warnings.last_mut() {
-            Some(w) if l.starts_with("  at ") => {
-                w.push('\n');
-                w.push_str(l);
-            }
-            _ => warnings.push(l.to_string()),
-        }
-    }
-    let records: Vec<Value> = warnings.iter().map(|w| lint_record(w)).collect();
     let s = cur();
-    records.iter().for_each(|v| s.log.tee(v));
-    if !s.log.json.load(Ordering::Relaxed) {
-        return bytes.to_vec();
+    let mut out = String::new();
+    for v in String::from_utf8_lossy(bytes)
+        .lines()
+        .map(serde_json::from_str::<Value>)
+    {
+        let Ok(v) = v else { continue };
+        out.push_str(&s.log.render(&v, v["msg"].as_str().unwrap_or_default()));
+        out.push('\n');
     }
-    records
-        .iter()
-        .map(|v| format!("@nix {}\n", s.log.wire(v)))
-        .collect::<String>()
-        .into_bytes()
+    out.into_bytes()
+}
+
+/// A place in a file as byte offsets, and the text to put there. The site
+/// of a lint finding and the hash that `fix-hashes` wrote have this one
+/// shape (docs/reference/errors.md).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Site {
+    pub start: u64,
+    /// The offset after the last byte.
+    pub end: u64,
+    /// The text that replaces those bytes, when the record has an edit.
+    pub replacement: Option<String>,
 }
 
 /// One error (or, at level 1, warning) for stderr.
@@ -415,6 +416,8 @@ pub struct Report {
     pub trace: Vec<(String, Option<String>)>,
     /// What to do about it. The text shows it for a usage error only.
     pub hint: Option<String>,
+    /// Where it is in the file as bytes, and the edit, when they are known.
+    pub site: Option<Site>,
 }
 
 impl Report {
@@ -426,6 +429,7 @@ impl Report {
             pos: None,
             trace: Vec::new(),
             hint: None,
+            site: None,
         }
     }
 
@@ -478,6 +482,13 @@ impl Report {
         o.extend(pos_fields(self.pos.as_deref()));
         if let Some(h) = &self.hint {
             o.insert("hint".into(), h.as_str().into());
+        }
+        if let Some(s) = &self.site {
+            o.insert("start".into(), s.start.into());
+            o.insert("end".into(), s.end.into());
+            if let Some(r) = &s.replacement {
+                o.insert("replacement".into(), r.as_str().into());
+            }
         }
         if cur().log.show_trace.load(Ordering::Relaxed) && !self.trace.is_empty() {
             let t = self.trace.iter().map(|(m, p)| {
@@ -634,16 +645,24 @@ pub fn invalidated(raw: String) {
     }
 }
 
-/// A hash that `fix-hashes` rewrote at `pos`, `file:line:col`.
-pub fn fixed(pos: &str, old: &str, new: &str) {
-    let raw = format!("'{old}' is now '{new}'");
-    let text = format!("fixed: {pos}: {raw}");
-    let r = Report {
+/// A hash that `fix-hashes` rewrote at `pos`, `file:line:col`, which is
+/// byte `at` of the file before the edit.
+pub fn fixed(pos: &str, at: usize, old: &str, new: &str) {
+    let text = format!("fixed: {pos}: '{old}' is now '{new}'");
+    out(&fixed_report(pos, at, old, new).record(&text), Some(&text));
+}
+
+fn fixed_report(pos: &str, at: usize, old: &str, new: &str) -> Report {
+    Report {
         level: 3,
         pos: Some(pos.to_string()),
-        ..Report::new("hash-fixed", raw)
-    };
-    out(&r.record(&text), Some(&text));
+        site: Some(Site {
+            start: at as u64,
+            end: (at + old.len()) as u64,
+            replacement: Some(new.to_string()),
+        }),
+        ..Report::new("hash-fixed", format!("'{old}' is now '{new}'"))
+    }
 }
 
 fn build_report(pos: Option<String>, reason: &str, exit: i32) -> Report {
@@ -780,9 +799,38 @@ mod tests {
 
     #[test]
     fn lint_warning_is_a_level_1_record() {
+        let s = Session::new();
+        let _entered = s.enter();
         let text = "warning: [url-literal] URL literal\n  at /a.nix:2:5";
-        let want = r#"@nix {"action":"msg","code":"lint","column":5,"file":"/a.nix:2:5","level":1,"line":2,"msg":"warning: [url-literal] URL literal\n  at /a.nix:2:5","raw_msg":"[url-literal] URL literal"}"#;
-        assert_eq!(format!("@nix {}", lint_record(text)), want);
+        let want = r#"{"action":"msg","code":"lint","column":5,"file":"/a.nix:2:5","level":1,"line":2,"msg":"warning: [url-literal] URL literal\n  at /a.nix:2:5","raw_msg":"[url-literal] URL literal"}"#;
+        assert_eq!(lint(text, None), (text.to_string(), want.to_string()));
+        let site = Site {
+            start: 9,
+            end: 19,
+            replacement: Some("\"http://a.b\"".into()),
+        };
+        let (_, record) = lint(text, Some(site));
+        let tail =
+            r#""raw_msg":"[url-literal] URL literal","replacement":"\"http://a.b\"","start":9}"#;
+        assert!(
+            record.contains(r#""end":19,"#) && record.ends_with(tail),
+            "{record}"
+        );
+        // a cache entry gives the text back, or the records under internal-json
+        let kept = format!("{want}\n{record}\n");
+        let twice = format!("{text}\n{text}\n");
+        assert_eq!(replay_lints(kept.as_bytes()), twice.as_bytes());
+        s.log.json.store(true, Ordering::Relaxed);
+        let replayed = String::from_utf8(replay_lints(kept.as_bytes())).unwrap();
+        assert!(replayed.starts_with("@nix {") && replayed.contains(r#""start":9"#));
+        assert_eq!(replayed.lines().count(), 2);
+    }
+
+    #[test]
+    fn a_fixed_hash_has_the_shape_of_a_finding_with_an_edit() {
+        let r = fixed_report("/a.nix:2:11", 12, "sha256-A=", "sha256-BB=");
+        let want = r#"{"action":"msg","code":"hash-fixed","column":11,"end":21,"file":"/a.nix:2:11","level":3,"line":2,"msg":"m","raw_msg":"'sha256-A=' is now 'sha256-BB='","replacement":"sha256-BB=","start":12}"#;
+        assert_eq!(r.record("m").to_string(), want);
     }
 
     #[test]

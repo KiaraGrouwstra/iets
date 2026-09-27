@@ -56,6 +56,7 @@ fixed: /home/you/tour/src.nix:4:13: 'sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 ```
 
 The file now holds the right hash. Each fix is also a `hash-fixed` record
+with the byte span of the old hash and the new text
 in the JSON log; see [reference/errors.md](../reference/errors.md).
 
 ## To turn it off: `never`

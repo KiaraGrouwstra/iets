@@ -36,6 +36,9 @@ pub struct FileInfo {
     /// The `# ietsp: allow` lines, set once the file is parsed or its IR
     /// cache entry loaded, before any of its IR runs.
     allows: std::sync::OnceLock<crate::lint::allow::Allows>,
+    /// The source and its tree, read and parsed again for the first finding
+    /// in the file (`lint::site`).
+    parsed: std::sync::OnceLock<Option<(Vec<u8>, crate::syntax::ast::Ast)>>,
 }
 
 impl FileInfo {
@@ -61,6 +64,7 @@ impl FileInfo {
             base,
             line_starts,
             allows: std::sync::OnceLock::new(),
+            parsed: std::sync::OnceLock::new(),
         }
     }
 
@@ -76,6 +80,21 @@ impl FileInfo {
             .get()
             .unwrap_or(crate::lint::allow::Allows::EMPTY)
     }
+
+    /// The source `read` gives and its tree; `None` when there is no source
+    /// to read or it does not parse.
+    pub fn parsed(
+        &self,
+        read: impl FnOnce() -> Option<Vec<u8>>,
+    ) -> Option<&(Vec<u8>, crate::syntax::ast::Ast)> {
+        let parse = || {
+            let src = read()?;
+            let ast = crate::syntax::parse(&src, FileId(0), &mut Interner::new()).ok()?;
+            Some((src, ast))
+        };
+        self.parsed.get_or_init(parse).as_ref()
+    }
+
     /// 1-based line and column of a byte offset.
     pub fn line_col(&self, offset: u32) -> (u32, u32) {
         let line = match self.line_starts.binary_search(&offset) {

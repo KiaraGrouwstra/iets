@@ -12,6 +12,7 @@ pub mod coerce;
 pub mod legacy;
 pub mod path;
 pub mod purity;
+pub mod site;
 
 use std::collections::HashSet;
 use std::hash::BuildHasherDefault;
@@ -19,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, FileInfo, Pos};
+use crate::log::Site;
 use crate::syntax::symbol::{FxHashMap, FxHasher};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -720,7 +722,8 @@ type SiteSet = HashSet<(LintId, Pos), BuildHasherDefault<FxHasher>>;
 
 struct Emitted {
     seen: SiteSet,
-    lines: Vec<String>,
+    /// One record for each warning, as a cache entry keeps them.
+    records: Vec<String>,
     pending: Vec<u8>,
 }
 
@@ -757,7 +760,7 @@ impl Default for Lints {
         Lints {
             shared: Arc::new(Mutex::new(Emitted {
                 seen: SiteSet::default(),
-                lines: Vec::new(),
+                records: Vec::new(),
                 pending: Vec::new(),
             })),
             local_seen: SiteSet::default(),
@@ -767,9 +770,9 @@ impl Default for Lints {
 }
 
 impl Lints {
-    /// Every warning line emitted so far, in order.
-    pub fn lines(&self) -> Vec<String> {
-        self.shared.lock().unwrap().lines.clone()
+    /// The record of every warning emitted so far, in order.
+    pub fn records(&self) -> Vec<String> {
+        self.shared.lock().unwrap().records.clone()
     }
 
     /// Writes the buffered warnings to stderr. `parallel::try_run` flushes at
@@ -798,16 +801,16 @@ impl Lints {
 
     /// Records the site and queues its line; false when another fiber
     /// recorded it first.
-    fn record(&mut self, id: LintId, pos: Pos, line: String) -> bool {
+    fn record(&mut self, id: LintId, pos: Pos, line: &str, site: Option<Site>) -> bool {
         self.local_seen.insert((id, pos));
         let mut g = self.shared.lock().unwrap();
         if !g.seen.insert((id, pos)) {
             return false;
         }
-        g.pending
-            .extend_from_slice(crate::log::lint(&line).as_bytes());
+        let (shown, record) = crate::log::lint(line, site);
+        g.pending.extend_from_slice(shown.as_bytes());
         g.pending.push(b'\n');
-        g.lines.push(line);
+        g.records.push(record);
         if g.pending.len() >= FLUSH_AT {
             g.flush();
         }
@@ -1038,7 +1041,28 @@ impl Evaluator {
                 self.lint_pos(pos)
             )
         };
-        self.lints.record(id, pos, line);
+        let site = self.lint_site_of(id, pos);
+        self.lints.record(id, pos, &line, site);
+    }
+
+    /// The byte span of the site and its edit (`site::finding`), from a
+    /// second parse of the file: the IR keeps where a node starts, not where
+    /// it ends. `None` for a source that is not a file, such as `-E`.
+    pub fn lint_site_of(&self, id: LintId, pos: Pos) -> Option<Site> {
+        let (f, off) = self.file_of(pos)?;
+        let (src, ast) = f.parsed(|| self.read_source(&f.path, pos).ok())?;
+        let (span, replacement) = site::finding(src, ast, id, off)?;
+        Some(Site {
+            start: span.start.into(),
+            end: span.end.into(),
+            replacement,
+        })
+    }
+
+    /// `lint_site_of` for a lint at `error`: its message starts with `[NAME]`.
+    pub fn lint_site_of_error(&self, e: &Error) -> Option<Site> {
+        let name = e.msg.strip_prefix('[')?.split_once(']')?.0;
+        self.lint_site_of(by_name(name)?, e.pos)
     }
 
     /// Compile-time diagnostics, at the level the compiler saw. A file

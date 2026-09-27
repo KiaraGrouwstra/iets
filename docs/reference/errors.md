@@ -30,7 +30,7 @@ in `src/error.rs` for the rest, and the daemon's build status for builds.
 | `parse` | `ErrorKind::Parse` | a syntax error |
 | `lint` | `ErrorKind::Lint` | a lint at level `error`; at `warn`, a level-1 record |
 | `hash-mismatch` | `ErrorKind::HashMismatch`, build status | a fetched tree or a fixed-output build whose hash is not the one given |
-| `hash-fixed` | `fix-hashes` | a level-3 record: the hash `fix-hashes` wrote, at the file, line and column it changed |
+| `hash-fixed` | `fix-hashes` | a level-3 record: the hash `fix-hashes` wrote, at the file, line and column it changed, with the byte span and the new text |
 | `ignored-flag` | `src/ignored.rs` | a level-1 record: a flag that has no effect, and why (docs/reference/divergences.md) |
 | `ignored-setting` | `src/config.rs` | a level-1 record: a Nix setting that has no effect, and why (docs/reference/settings.md) |
 | `unknown-setting` | `src/config.rs` | a level-1 record: a setting Nix 2.34.8 does not know either, with Nix's text |
@@ -107,6 +107,8 @@ knows the fix, `hint`:
 | `file` | `FILE:LINE:COL`, as Nix fills it, or `null` |
 | `code` | the error code (ietsp only) |
 | `hint` | what to do about it (ietsp only, only when known) |
+| `start`, `end` | the place in the file as byte offsets from 0; `end` is the offset after the last byte (ietsp only, only when known) |
+| `replacement` | the text that replaces the bytes `start` to `end - 1` (ietsp only, only when the record has an edit) |
 | `sid` | the session: one id for every record of one run (ietsp only) |
 | `trace` | with `--show-trace` only: `[{raw_msg, line, column, file}]`, innermost first |
 
@@ -195,6 +197,55 @@ Under `internal-json` the build renderer leaves the builds to these
 records: it puts out no start, phase, log or verdict lines. The failed
 build's error record, notes and daemon messages outside a build still go
 out. The text output does not change.
+
+## A finding and its edit
+
+Two records name a place to edit. They have one shape: the keys of a
+message, plus `start`, `end` and `replacement`.
+
+| Record | `start` and `end` | `replacement` |
+|---|---|---|
+| a lint finding, code `lint`, at level 1 (`warn`) or 0 (`error`) | the site of the finding | the text that corrects the finding; only `url-literal` and `short-path-literal` have one |
+| `hash-fixed`, at level 3 | the hash in the file, before the edit | the hash that `fix-hashes` wrote |
+
+A lint finding is a proposal: ietsp does not change the file. A
+`hash-fixed` record is a report: ietsp made the edit.
+
+```json
+{"action":"msg","code":"lint","column":17,"end":30,
+ "file":"/repo/default.nix:1:17","level":1,"line":1,
+ "msg":"warning: [short-path-literal] relative path literal 'data/hello.txt' should be prefixed with '.' for clarity: './data/hello.txt'\n  at /repo/default.nix:1:17",
+ "raw_msg":"[short-path-literal] relative path literal 'data/hello.txt' should be prefixed with '.' for clarity: './data/hello.txt'",
+ "replacement":"./data/hello.txt","start":16}
+```
+
+The offsets are those of `ietsp parse --json` (`docs/reference/syntax-tree.md`).
+Thus a program finds the node of a finding in the tree of the file.
+
+The evaluator keeps the position where a node starts. It does not keep
+the end. For the first finding in a file, ietsp reads the file again and
+parses it. Then the span is that of the smallest node that starts at the
+site and has a kind that the lint reports:
+
+| Lint | Kind of node |
+|---|---|
+| `absolute-path-literal`, `short-path-literal` | `path` |
+| `url-literal` | `string` |
+| `eq-type-mismatch`, `eq-function` | `binary` with `==` or `!=` |
+| `or-non-attrs` | `select` with a `default` |
+| `impure-builtin` | `apply`; if there is none, `select`; if there is none, `var` |
+| `unhashed-fetch`, `ifd`, `read-through-copy` | `apply` |
+| `unknown-allow` | no node: the word in the comment |
+| all other lints | a `bind` or a `name`; if there is none, a `string` with an interpolation, a `binary` with `+`, or an `apply` |
+
+Limits:
+
+- A finding in an expression that is not in a file (`-E`, `--arg`) has
+  no `start` and no `end`.
+- Two nodes of the same kind can start at the same offset: `(a == b) ==
+  c`, or `"${a}" + b` for a lint that reports a copy. The record then has
+  the span of the smaller node.
+- A site without a node of those kinds has no `start` and no `end`.
 
 ## The build plan: `ietsp build --dry-run`
 

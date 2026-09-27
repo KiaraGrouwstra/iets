@@ -12,7 +12,7 @@ use crate::store::hash::{Hash, HashFormat};
 #[derive(Debug, PartialEq)]
 pub struct Fix {
     pub file: PathBuf,
-    at: usize,
+    pub at: usize,
     pub line: usize,
     pub column: usize,
     pub old: String,

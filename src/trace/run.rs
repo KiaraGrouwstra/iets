@@ -142,7 +142,7 @@ impl Cache {
         let t0 = std::time::Instant::now();
         let obs = ev.trace().take();
         let mut warnings = Vec::new();
-        for w in ev.lints.lines() {
+        for w in ev.lints.records() {
             warnings.extend_from_slice(w.as_bytes());
             warnings.push(b'\n');
         }

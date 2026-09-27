@@ -164,7 +164,11 @@ pub fn report_of(ev: &Evaluator, e: &Error) -> crate::log::Report {
     };
     // "ietsp: " marks what classic mode falls back on; here it only doubles "error: "
     let msg = msg.strip_prefix("ietsp: ").unwrap_or(&msg);
-    crate::log::Report::eval(e, msg, &at, &|m| rewrite_msg(ev, m))
+    let mut r = crate::log::Report::eval(e, msg, &at, &|m| rewrite_msg(ev, m));
+    if e.kind == crate::eval::ErrorKind::Lint {
+        r.site = ev.lint_site_of_error(e);
+    }
+    r
 }
 
 /// The same report, sent to the session's log, with the exit code.
