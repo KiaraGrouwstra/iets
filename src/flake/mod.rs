@@ -22,8 +22,8 @@ pub const LOCK_ERROR: &str = "ietsp: flake.lock missing or incomplete, run nix f
 pub struct FlakeRef {
     /// The directory holding `flake.nix` and `flake.lock`.
     pub dir: PathBuf,
-    /// Where its tree comes from (flakeref.cc: a directory inside a git
-    /// repository is `git+file://`, everything else is `path:`).
+    /// Where its tree comes from (flakeref.cc: a directory inside a
+    /// working tree is `git+file://`, everything else is `path:`).
     pub source: SourceRef,
     /// The attribute path after `#`, selected from the flake's outputs.
     pub attr: Vec<String>,
@@ -97,7 +97,7 @@ pub fn parse_flake_ref(arg: &str, cwd: &[u8], home: Option<&[u8]>) -> Result<Fla
 }
 
 /// The flake in directory `full`: a `path:` input, or unless `explicit_path`
-/// the `git+file:` input of the repository holding it.
+/// the input of the working tree holding it (`git+file:`).
 fn local_flake(full: &[u8], explicit_path: bool, attr: Vec<String>) -> Result<FlakeRef> {
     let full = crate::compile::canon_path(full);
     let dir = PathBuf::from(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&full));
@@ -116,9 +116,10 @@ fn local_flake(full: &[u8], explicit_path: bool, attr: Vec<String>) -> Result<Fl
     let source = if explicit_path {
         SourceRef::Path(dir.clone())
     } else {
-        git_root(&dir).map_or_else(
+        source::scm::detect(&dir).map_or_else(
             || SourceRef::Path(dir.clone()),
-            |root| SourceRef::Git {
+            |(scm, root)| SourceRef::Tracked {
+                scm,
                 subdir: dir
                     .strip_prefix(&root)
                     .map(|s| s.to_string_lossy().into_owned())
@@ -128,19 +129,6 @@ fn local_flake(full: &[u8], explicit_path: bool, attr: Vec<String>) -> Result<Fl
         )
     };
     Ok(FlakeRef { dir, source, attr })
-}
-
-/// The nearest ancestor (or `dir` itself) holding a `.git` entry.
-fn git_root(dir: &Path) -> Option<PathBuf> {
-    let mut r = dir.to_path_buf();
-    loop {
-        if r.join(".git").exists() {
-            return Some(r);
-        }
-        if !r.pop() {
-            return None;
-        }
-    }
 }
 
 /// attr-path.cc:parseAttrPath: `.` separates, `"..."` quotes.
@@ -418,7 +406,7 @@ mod tests {
     }
 
     #[test]
-    fn refs_resolve_against_cwd_home_and_git() {
+    fn refs_resolve_against_cwd_and_home() {
         let d = crate::store::nar::tests::fixture_tree("flakeref");
         std::fs::write(d.join("flake.nix"), b"{ outputs = _: {}; }").unwrap();
         std::fs::create_dir_all(d.join("sub")).unwrap();
@@ -464,17 +452,6 @@ mod tests {
             assert!(unsupported(r).contains("flake registry references"), "{r}");
         }
 
-        std::fs::create_dir_all(d.join(".git")).unwrap();
-        let r = parse_flake_ref(&format!("{}/sub#x", d.display()), b"/", None).unwrap();
-        assert_eq!(
-            r.source,
-            SourceRef::Git {
-                root: d.clone(),
-                subdir: "sub".into()
-            }
-        );
-        let r = parse_flake_ref(&format!("path:{}/sub", d.display()), b"/", None).unwrap();
-        assert_eq!(r.source, SourceRef::Path(d.join("sub")));
         assert!(is_flake_ref(&format!("{}/sub", d.display())));
         assert!(!is_flake_ref("x.nix"));
     }

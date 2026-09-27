@@ -1,13 +1,12 @@
-//! A local tree. A git working tree is copied the way
-//! git.cc:getAccessorFromWorkdir does it: the files git tracks (index
-//! entries that still exist), with the working tree contents and modes;
-//! nothing untracked, no `.git`, no submodules. A plain directory is copied
-//! whole (path.cc). The copy is virtual: the store path is computed from
-//! the NAR hash and registered as a `SourceOrigin`, so reads under it
-//! go to the working tree (`store_hooks::locate`); nothing is fetched and
-//! the store is never consulted. Every git query is a `Cmd` observation and
-//! the copied file set a `Tree` observation, so the tracing cache follows
-//! the tree.
+//! A local tree. The working tree of an SCM is copied the way
+//! git.cc:getAccessorFromWorkdir does it: the files the SCM tracks
+//! (`scm`), with the working tree contents and modes; nothing untracked.
+//! A plain directory is copied whole (path.cc). The copy is virtual: the
+//! store path is computed from the NAR hash and registered as a
+//! `SourceOrigin`, so reads under it go to the working tree
+//! (`store_hooks::locate`); nothing is fetched and the store is never
+//! consulted. The SCM records its own observations and the copied file set
+//! is a `Tree` observation, so the tracing cache follows the tree.
 
 use std::collections::HashSet;
 use std::os::unix::ffi::OsStrExt;
@@ -15,14 +14,13 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use super::scm::Scm;
 use super::{AttrVal, Attrs, Tree};
-use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
+use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::store::hash::{Hash, HashAlgo};
 use crate::store::nar;
 use crate::store::path::StorePath;
 use crate::store::source::{SourceOrigin, SrcPath};
-
-const NULL_REV: &str = "0000000000000000000000000000000000000000";
 
 /// A directory copied whole, as a `path:` input.
 pub fn path_source(ev: &mut Evaluator, dir: &Path, pos: Pos) -> EvalResult<Tree> {
@@ -108,77 +106,6 @@ fn dump_and_max_mtime(
     Ok((hash, nar_size, mtime))
 }
 
-fn git(ev: &mut Evaluator, root: &Path, args: &[&str], pos: Pos) -> EvalResult<Vec<u8>> {
-    let mut argv: Vec<Vec<u8>> = vec![b"git".to_vec()];
-    argv.extend(args.iter().map(|a| a.as_bytes().to_vec()));
-    let (status, out) = ev
-        .trace()
-        .cmd(root, &argv)
-        .map_err(|e| Error::boxed(ErrorKind::Io, format!("ietsp: cannot run git: {e}"), pos))?;
-    if status != 0 {
-        bail!(
-            ErrorKind::Io,
-            pos,
-            "ietsp: `git {}` failed in '{}' (exit {status})",
-            args.join(" "),
-            root.display()
-        );
-    }
-    Ok(out)
-}
-
-/// git-utils.cc:getWorkdirInfo: index entries minus deleted ones; dirty when
-/// any tracked file differs from HEAD or the index.
-pub struct Workdir {
-    pub files: HashSet<PathBuf>,
-    pub dirty: bool,
-    pub head: Option<String>,
-}
-
-pub fn workdir(ev: &mut Evaluator, root: &Path, pos: Pos) -> EvalResult<Workdir> {
-    let ls = git(ev, root, &["ls-files", "-z", "--cached", "--stage"], pos)?;
-    let mut files: HashSet<PathBuf> = HashSet::new();
-    for entry in ls.split(|&b| b == 0).filter(|e| !e.is_empty()) {
-        let Some(tab) = entry.iter().position(|&b| b == b'\t') else {
-            continue;
-        };
-        let mode = entry[..tab].split(|&b| b == b' ').next().unwrap_or(b"");
-        if mode == b"160000" {
-            continue;
-        }
-        files.insert(root.join(std::ffi::OsStr::from_bytes(&entry[tab + 1..])));
-    }
-    let status = git(
-        ev,
-        root,
-        &[
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=no",
-            "--no-renames",
-            "--ignore-submodules=all",
-        ],
-        pos,
-    )?;
-    let mut dirty = false;
-    for entry in status.split(|&b| b == 0).filter(|e| e.len() > 3) {
-        dirty = true;
-        if entry[0] == b'D' || entry[1] == b'D' {
-            files.remove(&root.join(std::ffi::OsStr::from_bytes(&entry[3..])));
-        }
-    }
-    let head = ev
-        .trace()
-        .cmd(
-            root,
-            &["git", "rev-parse", "--verify", "-q", "HEAD"].map(|s| s.as_bytes().to_vec()),
-        )
-        .map_err(|e| Error::boxed(ErrorKind::Io, format!("ietsp: cannot run git: {e}"), pos))?;
-    let head = (head.0 == 0).then(|| String::from_utf8_lossy(&head.1).trim().to_string());
-    Ok(Workdir { files, dirty, head })
-}
-
 /// The filter set for the NAR dump: every tracked file and the directories
 /// above it (CanonPath::isAllowed on the allow-list accessor).
 pub fn accepted_set(root: &Path, files: &HashSet<PathBuf>) -> HashSet<PathBuf> {
@@ -195,10 +122,18 @@ pub fn accepted_set(root: &Path, files: &HashSet<PathBuf>) -> HashSet<PathBuf> {
     acc
 }
 
-/// A git working tree, with the flake's `subdir` carried through.
-pub fn git_source(ev: &mut Evaluator, root: &Path, subdir: &str, pos: Pos) -> EvalResult<Tree> {
-    let wd = workdir(ev, root, pos)?;
-    let accepted = accepted_set(root, &wd.files);
+/// The working tree of an SCM, with the flake's `subdir` carried through.
+pub fn tracked_source(
+    ev: &mut Evaluator,
+    scm: &dyn Scm,
+    root: &Path,
+    subdir: &str,
+    pos: Pos,
+) -> EvalResult<Tree> {
+    let at = scm
+        .snapshot(ev.trace(), root)
+        .map_err(|e| Error::boxed(ErrorKind::Io, e, pos))?;
+    let accepted = accepted_set(root, &at.files);
     let mut fp = ev.trace().fp(root);
     let mut filter = |p: &Path, t: nar::FileType| {
         let keep = accepted.contains(p);
@@ -224,51 +159,28 @@ pub fn git_source(ev: &mut Evaluator, root: &Path, subdir: &str, pos: Pos) -> Ev
         SourceOrigin::tree(SrcPath::fs(root, Some(Arc::new(accepted))), hash, nar_size),
     );
     let mut attrs = Attrs::new();
-    attrs.insert("type".into(), AttrVal::Str("git".into()));
+    attrs.insert("type".into(), AttrVal::Str(scm.name().into()));
     attrs.insert(
         "url".into(),
         AttrVal::Str(format!("file://{}", root.to_string_lossy())),
     );
     attrs.insert("narHash".into(), AttrVal::Str(hash.to_sri()));
-    let last_modified = match &wd.head {
-        Some(_) => {
-            let t = git(ev, root, &["log", "-1", "--format=%ct", "HEAD"], pos)?;
-            String::from_utf8_lossy(&t)
-                .trim()
-                .parse::<u64>()
-                .unwrap_or(0)
-        }
-        None => 0,
-    };
-    attrs.insert("lastModified".into(), AttrVal::Int(last_modified));
-    if wd.dirty {
-        if let Some(h) = &wd.head {
-            attrs.insert("dirtyRev".into(), AttrVal::Str(format!("{h}-dirty")));
+    attrs.insert("lastModified".into(), AttrVal::Int(at.last_modified));
+    match at.rev {
+        Some(h) if at.dirty => {
             attrs.insert(
                 "dirtyShortRev".into(),
                 AttrVal::Str(format!("{}-dirty", &h[..h.len().min(7)])),
             );
+            attrs.insert("dirtyRev".into(), AttrVal::Str(h + "-dirty"));
         }
-    } else {
-        let rev = wd.head.clone().unwrap_or_else(|| NULL_REV.to_string());
-        attrs.insert("rev".into(), AttrVal::Str(rev.clone()));
-        let shallow_marker = root.join(".git/shallow");
-        let shallow = ev
-            .trace()
-            .stat_now(shallow_marker.as_os_str().as_bytes(), true)
-            != crate::trace::Kind::Missing;
-        if !shallow {
-            let n = if rev == NULL_REV {
-                0
-            } else {
-                let c = git(ev, root, &["rev-list", "--count", "HEAD"], pos)?;
-                String::from_utf8_lossy(&c)
-                    .trim()
-                    .parse::<u64>()
-                    .unwrap_or(0)
-            };
-            attrs.insert("revCount".into(), AttrVal::Int(n));
+        Some(h) => {
+            attrs.insert("rev".into(), AttrVal::Str(h));
         }
+        None => {}
+    }
+    if let Some(n) = at.rev_count.filter(|_| !at.dirty) {
+        attrs.insert("revCount".into(), AttrVal::Int(n));
     }
     Ok(Tree {
         path,

@@ -38,10 +38,13 @@ pub fn outputs(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
 /// local flake names itself in a message.
 pub fn url(fr: &FlakeRef) -> String {
     match &fr.source {
-        SourceRef::Git { root, subdir } if !subdir.is_empty() => {
-            format!("git+file://{}?dir={subdir}", root.display())
+        SourceRef::Tracked { scm, root, subdir } => {
+            let dir = match subdir.as_str() {
+                "" => String::new(),
+                d => format!("?dir={d}"),
+            };
+            format!("{}+file://{}{dir}", scm.name(), root.display())
         }
-        SourceRef::Git { root, .. } => format!("git+file://{}", root.display()),
         _ => format!("path:{}", fr.dir.display()),
     }
 }

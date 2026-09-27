@@ -3,9 +3,10 @@
 //! A `SourceRef` names one: a local directory, copied the way Nix copies it,
 //! or a locked input, named by the `narHash` its lock gives. `tree` resolves
 //! a reference into a `Tree` — a store path plus the attributes the tree
-//! hashed to. The directory and git walks (`local`), the fetchers and the
-//! input store (`remote`, `crate::treestore`) are behind that call, and
-//! `Lock` is the `flake.lock` that names the locked references.
+//! hashed to. The directory and working tree walks (`local`, `scm`), the
+//! fetchers and the input store (`remote`, `crate::treestore`) are behind
+//! that call, and `Lock` is the `flake.lock` that names the locked
+//! references.
 //!
 //! Every name here comes from `treestore::store_path`: it is the content
 //! address the input store keys its entries by, so nothing may compute a
@@ -14,6 +15,7 @@
 mod local;
 pub mod lock;
 mod remote;
+pub mod scm;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -102,9 +104,14 @@ pub fn last_modified_date(t: i64) -> String {
 pub enum SourceRef {
     /// A local directory, copied whole (path.cc).
     Path(PathBuf),
-    /// A directory inside a git repository: only what git tracks is copied,
+    /// A directory inside the working tree of an SCM: only what the SCM
+    /// tracks is copied,
     /// with the working tree's contents (git.cc:getAccessorFromWorkdir).
-    Git { root: PathBuf, subdir: String },
+    Tracked {
+        scm: &'static dyn scm::Scm,
+        root: PathBuf,
+        subdir: String,
+    },
     /// A locked input: a `narHash` is known before anything is fetched, so
     /// the tree names itself and verifies itself.
     Locked(Attrs),
@@ -148,7 +155,9 @@ impl Tree {
 pub fn tree(ev: &mut Evaluator, r: &SourceRef, pos: Pos) -> EvalResult<Tree> {
     match r {
         SourceRef::Path(dir) => local::path_source(ev, dir, pos),
-        SourceRef::Git { root, subdir } => local::git_source(ev, root, subdir, pos),
+        SourceRef::Tracked { scm, root, subdir } => {
+            local::tracked_source(ev, *scm, root, subdir, pos)
+        }
         SourceRef::Locked(attrs) => remote::locked(ev, attrs, pos),
     }
 }
