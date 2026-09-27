@@ -389,7 +389,8 @@ a design.
 the input store are behind it, and `crate::flake` is `pub(crate)`.
 
 ```rust
-/// Where a tree comes from: a directory, a git working tree, or a locked input.
+/// Where a tree comes from: a directory, the working tree of an SCM, or a
+/// locked input.
 pub enum SourceRef { … }
 
 /// A tree that is there: a readable path, and the input attributes it

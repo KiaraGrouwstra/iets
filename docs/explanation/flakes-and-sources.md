@@ -43,12 +43,28 @@ Nix's `callFlake` is embedded verbatim and called with the lock file text
 and `builtins.fetchTree`. The interesting part is what it is called *on*.
 
 The root's `sourceInfo` is built exactly as Nix's fetcher would build it
-for the reference the command line implies. A directory inside a git
-repository is a git working tree; anything else is a plain path.
+for the reference the command line implies. A directory inside the working
+tree of a source control system (SCM) is that working tree; anything else
+is a plain path.
+
+One interface, `source::scm::Scm`, supplies what a working tree gives to
+the evaluation:
+
+- the root of the working tree;
+- the tracked files, with the contents and the modes of the working tree;
+- the dirty flag;
+- the revision, its date and its count, and which of them exist;
+- the observations that the tracing cache checks again;
+- the words for messages: the name of the SCM and the command that tracks
+  a file.
+
+ietsp has one list of the SCMs that it knows, and detection reads only
+that list. git is the one entry. A Jujutsu workspace without `.git` and a
+Mercurial working tree are thus plain paths, as they are for Nix.
 
 For a git working tree, the tree is the set of index entries that still
 exist in the working tree, with the working tree's contents and modes.
-Untracked files, `.git` and submodules are excluded. Four `git` commands
+Untracked files, `.git` and submodules are excluded. Five `git` commands
 supply it: `ls-files --stage` and `status --porcelain -uno` give the file
 set and the dirty flag, and `rev-parse HEAD`, `log -1 --format=%ct` and
 `rev-list --count` give the metadata. A clean tree gets `rev`, `shortRev`
@@ -198,10 +214,11 @@ The same flake's whole NixOS system configuration: `nix` 7.21 s, ietsp
 
 ## What the cache records
 
-Everything above is recorded in the tracing cache. The `git` queries become
-command observations. The working tree's file set becomes a filtered tree
-observation with no seen-set, because git names the file set and an unlisted
-entry cannot change the result. Every file read under the root is a file
+Everything above is recorded in the tracing cache. The SCM records its own
+observations: the `git` queries become command observations. The working
+tree's file set becomes a filtered tree observation with no seen-set,
+because the SCM names the file set and an unlisted entry cannot change the
+result. Every file read under the root is a file
 observation on its *local* path. A remote input that `/nix/store` holds is
 one stat; one the input store serves is one observation for the whole entry.
 

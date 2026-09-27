@@ -142,8 +142,9 @@ says what about it changed: `PATH changed` (contents), `PATH is gone`,
 changed`, `source tree PATH has another modification time` (a `path:` input
 with the same bytes and another `lastModified`),
 `PATH resolves to a different path`, `environment variable $NAME
-changed` (or `is now set`, `is no longer set`), `the git working tree in DIR
-changed`, ``the output of `CMD` in DIR changed``, or `input store entry NAME
+changed` (or `is now set`, `is no longer set`), `the SCM working tree in DIR
+changed` (SCM is the name of the source control system, `git`),
+``the output of `CMD` in DIR changed``, or `input store entry NAME
 is gone`. The read set has one order, and the lowest-indexed observation
 that fails is the one reported, so one change always names the same thing.
 

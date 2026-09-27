@@ -63,7 +63,7 @@ turns that read set into direnv watches:
 | listed a directory: `readDir ./conf.d` | the directory, whose mtime changes when an entry comes or goes |
 | asked for the kind of a path: `pathExists ./local.nix`, the nixpkgs `config.nix` probes | the path; direnv also sees a missing path appear |
 | copied a path into the shell: `"${./hook.sh}"`, `./scripts` | the path and everything the copy took below it |
-| asked git about a work tree | the git index, which `git add`, a commit and a checkout rewrite |
+| asked the source control system about a working tree | the file that the system names; for git, the index, which `git add`, a commit and a checkout rewrite |
 
 In a git flake an untracked file is not part of the flake. `git add` makes
 it one, the index changes, and direnv reloads.

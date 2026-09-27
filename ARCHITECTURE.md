@@ -97,8 +97,9 @@ Around it:
 
 - `flake/`: locked flakes. Nix's `call-flake.nix` embedded verbatim,
   `fetchTree` for locked inputs.
-- `source/`: a reference resolves to a tree and a lock. The fetchers and
-  the input store are behind it.
+- `source/`: a reference resolves to a tree and a lock. The fetchers, the
+  input store and the source control system of a local working tree
+  (`scm.rs`, with git as its one implementation) are behind it.
 - `fetch/`: the HTTP client, the tarball spool and the unpack rules.
 - `treestore/`: the input store, where a fetched input lives.
 - `trace/`: the tracing evaluation cache.

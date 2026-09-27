@@ -271,8 +271,10 @@ errors.
 ## The root tree
 
 The root's `sourceInfo` is built like Nix's fetcher for the reference the
-CLI would produce (flakeref.cc): a directory inside a git repository is
-`git+file://<root>?dir=<subdir>`, anything else is `path:`.
+CLI would produce (flakeref.cc): a directory inside a git working tree is
+`git+file://<root>?dir=<subdir>`, anything else is `path:`. The interface
+`source::scm::Scm` supplies the working tree, and git is the one source
+control system in its list (`docs/explanation/flakes-and-sources.md`).
 
 | Source | What the tree is, and its metadata |
 |:---|:---|

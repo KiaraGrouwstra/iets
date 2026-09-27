@@ -66,7 +66,7 @@ dereference an address of the caller's choosing.
 | Nix configuration | `config::Config::load(&[])` |
 | Evaluation cache | `Run::cached(&args, subcommand)`, `Run::hit`, `trace::run::Cache` |
 | Flake references | `api::flake_ref`, `api::flake::{is_flake_ref, parse_attr_path, select, outputs, info, tree}`; `crate::flake` is private |
-| Where a tree comes from | `source::{SourceRef, Tree, Lock}`, `source::tree(ev, &r, pos)`; the fetchers and the input store are behind it |
+| Where a tree comes from | `source::{SourceRef, Tree, Lock}`, `source::tree(ev, &r, pos)`; the fetchers, the input store and the SCM of a working tree (`source::scm::Scm`) are behind it |
 | `eval-jobs` style walks | `jobs::run`, `jobs::Opts` |
 
 ## What the host owns

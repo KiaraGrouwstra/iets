@@ -166,10 +166,10 @@ Every primop that looks at the world records one observation.
 | a file's size, mtime, inode and sha256 | `import`, `readFile`, `hashFile`, every `.drv` read | `lstat`; on a stat mismatch the file is rehashed and accepted if the hash matches |
 | a directory listing's hash | `readDir` | re-list and rehash |
 | a path's kind | `pathExists`, `readFileType`, the `default.nix` probe, every search-path candidate | re-stat |
-| a copied tree's NAR hash and stat hash | `./path` coerced to a string, `builtins.path`, `filterSource`, a flake's git working tree, a `path:` input | recompute the stat hash with `lstat` only; on a mismatch re-dump the NAR with the recorded filter and compare. A `path:` input also records its newest mtime, which the evaluation sees as `lastModified`, and the same bytes with another date are a change |
+| a copied tree's NAR hash and stat hash | `./path` coerced to a string, `builtins.path`, `filterSource`, a flake's working tree, a `path:` input | recompute the stat hash with `lstat` only; on a mismatch re-dump the NAR with the recorded filter and compare. A `path:` input also records its newest mtime, which the evaluation sees as `lastModified`, and the same bytes with another date are a change |
 | a resolved symlink | `storePath`, `builtins.path` and `filterSource` when canonicalising changed the path | canonicalise again |
 | an environment variable | `getEnv`; `HOME` when a `~/` literal is compiled | read it again |
-| a command's exit status and output | the `git` queries of a flake working tree | run it again, rehash |
+| a command's exit status and output | the queries of the SCM of a flake working tree; for git, the `git` commands | run it again, rehash |
 
 One tree is not walked. A `path:` input that names a store path, such as
 `path:/nix/store/…-source`, is hashed like any other, and when the
@@ -194,7 +194,7 @@ re-evaluating: /home/u/repo/flake.nix changed
 
 The line names the one observation that no longer holds and what about it
 changed — a file's contents, a directory's entries, an environment variable,
-a git working tree. The file the command names is one of those files, so
+a working tree. The file the command names is one of those files, so
 editing it reads the same as editing anything it imports. Under `--log-format internal-json` it is a level-3
 record with code `cache-invalidated` (docs/reference/errors.md). Validation
 runs on four threads, so the read set's own order decides which observation
