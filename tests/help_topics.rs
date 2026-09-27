@@ -8,7 +8,7 @@ fn run(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_ietsp"))
         .args(args)
         .current_dir("/")
-        .env("IETSP_CONF_DIR", "/nonexistent")
+        .env("XDG_CONFIG_HOME", "/nonexistent")
         .output()
         .expect("ietsp runs")
 }

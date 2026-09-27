@@ -65,10 +65,10 @@ def main [] {
   $res ++= [(verdict ($r.stderr | str contains $url_warn) "ietsp.toml sets a level" "ietsp.toml ignored")]
   let r = (^$ietsp eval --no-tracing-cache lint/cases/untrusted/main.nix | complete)
   $res ++= [(verdict ($r.exit_code != 0 and ($r.stderr | str contains "'nix-bin-dir' may not be set in a project file")) "ietsp.toml: a project file may not set nix-bin-dir" $"untrusted: rc=($r.exit_code) ($r.stderr)")]
-  let r = (with-env {IETSP_CONF_DIR: $"($pwd)/lint/machine"} { ^$ietsp eval --no-tracing-cache lint/url-literal.nix | complete })
-  $res ++= [(verdict ($r.exit_code == 1 and ($r.stderr | str contains "error: [url-literal]")) "the machine ietsp.toml sets a level" $"machine toml: rc=($r.exit_code) ($r.stderr)")]
-  let r = (with-env {IETSP_CONF_DIR: $"($pwd)/lint/machine"} { ^$ietsp eval --no-tracing-cache lint/cases/toml/main.nix | complete })
-  $res ++= [(verdict ($r.exit_code == 0 and ($r.stderr | str contains $url_warn)) "the project ietsp.toml wins over the machine's" $"machine below project: rc=($r.exit_code) ($r.stderr)")]
+  let r = (with-env {XDG_CONFIG_HOME: $"($pwd)/lint/user"} { ^$ietsp eval --no-tracing-cache lint/url-literal.nix | complete })
+  $res ++= [(verdict ($r.exit_code == 1 and ($r.stderr | str contains "error: [url-literal]")) "the user ietsp.toml sets a level" $"user toml: rc=($r.exit_code) ($r.stderr)")]
+  let r = (with-env {XDG_CONFIG_HOME: $"($pwd)/lint/user"} { ^$ietsp eval --no-tracing-cache lint/cases/toml/main.nix | complete })
+  $res ++= [(verdict ($r.exit_code == 0 and ($r.stderr | str contains $url_warn)) "the project ietsp.toml wins over the user's" $"user below project: rc=($r.exit_code) ($r.stderr)")]
   let r = (^$ietsp eval --no-tracing-cache --lint family:legacy=warn lint/url-literal.nix | complete)
   $res ++= [(verdict ($r.stderr | str contains $url_warn) "family:legacy selects the family" "family selector ignored")]
   let r = (^$ietsp eval --no-tracing-cache --lint all=warn --lint url-literal=off lint/url-literal.nix | complete)

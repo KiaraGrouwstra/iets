@@ -6,7 +6,7 @@ use std::process::{Command, Output};
 fn ietsp(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_ietsp"))
         .args(args)
-        .env("IETSP_CONF_DIR", "/nonexistent")
+        .env("XDG_CONFIG_HOME", "/nonexistent")
         .output()
         .expect("run ietsp")
 }

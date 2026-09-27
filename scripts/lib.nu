@@ -76,7 +76,6 @@ export def --env isolate [name: string, dir?: string]: nothing -> string {
   $env.TMPDIR = ($env.TMPDIR? | default "/tmp")
   $env.NIX_REMOTE = ($env.NIX_REMOTE? | default "daemon")
   let work = ($dir | default (mktemp -d --tmpdir $"ietsp-($name).XXXXXX"))
-  $env.IETSP_CONF_DIR = ($work | path join no-conf)
   $env.XDG_CONFIG_HOME = ($work | path join no-xdg)
   hide-env -i IETSP_CONFIG
   $work

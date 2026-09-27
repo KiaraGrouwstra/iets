@@ -70,44 +70,6 @@
           langtests = nuScript "langtests";
           linttest = nuScript "linttest";
           partest = nuScript "partest";
-          # `ietsp.settings` reaches /etc/ietsp/ietsp.toml as TOML of the types
-          # the reader wants, and the ietsp of this flake reads it.
-          module =
-            let
-              sys = nixpkgs.lib.nixosSystem {
-                system = pkgs.stdenv.hostPlatform.system;
-                modules = [
-                  self.nixosModules.default
-                  {
-                    boot.loader.grub.enable = false;
-                    fileSystems."/" = { device = "none"; fsType = "tmpfs"; };
-                    system.stateVersion = "25.11";
-                    ietsp.settings = {
-                      builder = "ssh-ng://bld1";
-                      workers = 8;
-                      provenance = false;
-                      source-map = [ "/nix/store/x=/a" "/nix/store/y=/b" ];
-                    };
-                  }
-                ];
-              };
-            in
-            pkgs.runCommand "ietsp-module"
-              { conf = sys.config.environment.etc."ietsp/ietsp.toml".text; }
-              ''
-                printf %s "$conf"
-                printf %s "$conf" | grep -qx 'builder = "ssh-ng://bld1"'
-                printf %s "$conf" | grep -qx 'workers = 8'
-                printf %s "$conf" | grep -qx 'provenance = false'
-                printf %s "$conf" | grep -qx 'source-map = \["/nix/store/x=/a","/nix/store/y=/b"\]'
-                export IETSP_CONF_DIR=$PWD/etc HOME=$PWD IETSP_NO_FALLBACK=1
-                mkdir etc
-                printf %s "$conf" > etc/ietsp.toml
-                [ "$(${pkg}/bin/ietsp eval -E '1 + 1')" = 2 ]
-                echo 'workers = "8"' > etc/ietsp.toml
-                if ${pkg}/bin/ietsp eval -E '1 + 1'; then exit 1; fi
-                touch $out
-              '';
         } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
           cachetest = e2e "cachetest" { };
           classic-e2e = e2e "classic-e2e" { };

@@ -32,7 +32,7 @@ The level of a lint comes from these sources, in this order; a later
 source wins over an earlier one:
 
 1. the built-in default (the table below);
-2. the `[lint]` table of the machine's `ietsp.toml`, then of the user's
+2. the `[lint]` table of the user's `ietsp.toml`
    (`docs/reference/settings.md`);
 3. the `[lint]` table of the project's `ietsp.toml`: the nearest one found
    by walking up from the entry file's directory, the flake directory, or

@@ -1,0 +1,5 @@
+# XDG_CONFIG_HOME for scripts/linttest.nu: the user file sets a level too.
+workers = 2
+
+[lint]
+url-literal = "error"

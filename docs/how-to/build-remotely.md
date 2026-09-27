@@ -27,7 +27,7 @@ ietsp build --builder grpc://farm.example.org:50051 greeting.nix
 - `grpc://host:port` is a [nix-grpc-store](https://github.com/Mic92/nix-grpc-store)
   service. It needs no `nix`, no plugin and no local store.
 
-Without the flag, the URL is the `builder` setting in the machine or user `ietsp.toml`, and
+Without the flag, the URL is the `builder` setting in the user `ietsp.toml`, and
 `nix.conf`'s `store` when that is unset. Set it once instead of typing the
 flag:
 

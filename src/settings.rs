@@ -140,18 +140,11 @@ pub fn builder(flag: Option<&str>, cfg: &crate::config::Config) -> String {
         .unwrap_or_else(|| cfg.store())
 }
 
-/// `$IETSP_CONF_DIR` or the compiled-in `/etc/ietsp`.
-pub fn conf_dir() -> PathBuf {
-    env("IETSP_CONF_DIR").map_or_else(|| PathBuf::from("/etc/ietsp"), PathBuf::from)
-}
-
-/// The settings files, lowest precedence first. Both may set every key; a
-/// project's `ietsp.toml` may not ([`check_project`]).
-pub fn conf_files() -> [PathBuf; 2] {
-    [
-        conf_dir().join("ietsp.toml"),
-        crate::config::config_home().join("ietsp/ietsp.toml"),
-    ]
+/// The user's settings file. It may set every key; a project's `ietsp.toml`
+/// may not ([`check_project`]). There is no machine file: ietsp is a client,
+/// and what it builds with is the user's (docs/reference/settings.md).
+pub fn conf_file() -> PathBuf {
+    crate::config::config_home().join("ietsp/ietsp.toml")
 }
 
 /// Refuses every key of a project's `ietsp.toml` but `lint`. The file comes
@@ -164,9 +157,10 @@ pub fn check_project(text: &str, origin: &Path) -> std::result::Result<(), Strin
     let Some(key) = table.keys().find(|k| *k != "lint") else {
         return Ok(());
     };
-    let files = conf_files().map(|f| f.display().to_string()).join(" or ");
+    let file = conf_file();
+    let file = file.display();
     let why = match KEYS.contains(&key.as_str()) {
-        true => format!("a repository controls this file; set it in {files}"),
+        true => format!("a repository controls this file; set it in {file}"),
         false => "it holds only [lint]".to_string(),
     };
     let at = origin.display();
@@ -176,20 +170,18 @@ pub fn check_project(text: &str, origin: &Path) -> std::result::Result<(), Strin
 }
 
 impl Settings {
-    /// The files, then `$IETSP_CONFIG`, then `overrides`, then the environment
+    /// The file, then `$IETSP_CONFIG`, then `overrides`, then the environment
     /// for the knobs that have a variable. Later wins.
     pub fn load(overrides: &[(String, String)]) -> Result<Settings> {
-        Settings::load_from(&conf_files(), overrides, &Env(|n| std::env::var_os(n)))
+        Settings::load_from(&conf_file(), overrides, &Env(|n| std::env::var_os(n)))
     }
 
-    fn load_from(files: &[PathBuf], overrides: &[(String, String)], env: &Env) -> Result<Settings> {
+    fn load_from(file: &Path, overrides: &[(String, String)], env: &Env) -> Result<Settings> {
         let mut c = Conf::default();
-        for f in files {
-            match std::fs::read_to_string(f) {
-                Ok(text) => c.apply(&text, &f.display().to_string(), true)?,
-                Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {}
-                Err(e) => return Err(Error::Config(format!("{}: {e}", f.display()))),
-            }
+        match std::fs::read_to_string(file) {
+            Ok(text) => c.apply(&text, &file.display().to_string(), true)?,
+            Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {}
+            Err(e) => return Err(Error::Config(format!("{}: {e}", file.display()))),
         }
         if let Some(text) = env.str("IETSP_CONFIG") {
             c.apply(&text, "$IETSP_CONFIG", false)?;
@@ -354,10 +346,6 @@ impl Conf {
     }
 }
 
-fn env(name: &str) -> Option<String> {
-    std::env::var(name).ok().filter(|s| !s.is_empty())
-}
-
 /// The environment a load reads: the process's, or a test's.
 struct Env(fn(&str) -> Option<OsString>);
 
@@ -406,17 +394,11 @@ mod tests {
 
     const NO_ENV: Env = Env(|_| None);
 
-    /// A scratch `etc/`, `user/` and their two `ietsp.toml` paths.
-    fn scratch(name: &str) -> Vec<PathBuf> {
+    fn scratch(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("ietsp-settings-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
-        ["etc", "user"]
-            .iter()
-            .map(|level| {
-                std::fs::create_dir_all(d.join(level)).unwrap();
-                d.join(level).join("ietsp.toml")
-            })
-            .collect()
+        std::fs::create_dir_all(d.join("user")).unwrap();
+        d.join("user/ietsp.toml")
     }
 
     fn opts(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -434,15 +416,10 @@ mod tests {
 
     #[test]
     fn each_source_wins_over_the_one_before() {
-        let files = scratch("order");
+        let file = scratch("order");
         std::fs::write(
-            &files[0],
-            "builder = \"etc\"\nworkers = 1\nfiber-stack-mb = 1\ncache = false\nfetch-max-size = 1\n",
-        )
-        .unwrap();
-        std::fs::write(
-            &files[1],
-            "builder = \"user\"\nworkers = 2\nfiber-stack-mb = 2\n",
+            &file,
+            "builder = \"user\"\nworkers = 2\nfiber-stack-mb = 2\ncache = false\nfetch-max-size = 1\n",
         )
         .unwrap();
         let env = Env(|n| match n {
@@ -451,30 +428,31 @@ mod tests {
             "IETSP_CACHE" => Some("1".into()),
             _ => None,
         });
-        let s = Settings::load_from(&files, &opts(&[("builder", "flag")]), &env).unwrap();
+        let s = Settings::load_from(&file, &opts(&[("builder", "flag")]), &env).unwrap();
         assert_eq!(s.builder.as_deref(), Some("flag"));
         assert_eq!(s.workers, Some(5));
         assert_eq!(s.fiber_stack_mb, Some(2));
         assert_eq!(s.fetch_max_size, 1);
         assert!(s.cache, "IETSP_CACHE=1 wins over cache = false");
-        let s = Settings::load_from(&files, &[], &NO_ENV).unwrap();
+        let s = Settings::load_from(&file, &[], &NO_ENV).unwrap();
         assert_eq!(s.builder.as_deref(), Some("user"));
         assert_eq!(s.workers, Some(2));
         assert!(!s.cache);
         let inline = Env(|n| (n == "IETSP_CONFIG").then(|| "workers = 3".into()));
-        let s = Settings::load_from(&files, &opts(&[("workers", "4")]), &inline).unwrap();
+        let s = Settings::load_from(&file, &opts(&[("workers", "4")]), &inline).unwrap();
         assert_eq!(s.workers, Some(4));
-        let s = Settings::load_from(&files, &[], &inline).unwrap();
+        let s = Settings::load_from(&file, &[], &inline).unwrap();
         assert_eq!(s.workers, Some(3));
     }
 
     #[test]
     fn source_map_adds_up_and_every_other_key_replaces() {
-        let files = scratch("lists");
-        std::fs::write(&files[0], "source-map = [\"/nix/store/a=/a\"]\n").unwrap();
-        std::fs::write(&files[1], "source-map = [\"/nix/store/b=/b\"]\n").unwrap();
+        let file = scratch("lists");
+        std::fs::write(&file, "source-map = [\"/nix/store/a=/a\"]\n").unwrap();
+        let inline =
+            Env(|n| (n == "IETSP_CONFIG").then(|| "source-map = [\"/nix/store/b=/b\"]".into()));
         let o = opts(&[("source-map", "/nix/store/c=/c /nix/store/d=/d")]);
-        let s = Settings::load_from(&files, &o, &NO_ENV).unwrap();
+        let s = Settings::load_from(&file, &o, &inline).unwrap();
         let stores: Vec<&str> = s.source_map.iter().map(|(s, _)| s.as_str()).collect();
         assert_eq!(
             stores,
@@ -485,8 +463,8 @@ mod tests {
                 "/nix/store/d"
             ]
         );
-        std::fs::write(&files[1], "source-map = [\"no-equals-sign\"]\n").unwrap();
-        let e = Settings::load_from(&files, &[], &NO_ENV)
+        std::fs::write(&file, "source-map = [\"no-equals-sign\"]\n").unwrap();
+        let e = Settings::load_from(&file, &[], &NO_ENV)
             .map(|_| ())
             .unwrap_err()
             .to_string();
@@ -518,9 +496,7 @@ mod tests {
                 )),
                 "{e}"
             );
-            for f in conf_files() {
-                assert!(e.contains(&f.display().to_string()), "{e}");
-            }
+            assert!(e.contains(&conf_file().display().to_string()), "{e}");
         }
         let e = check_project("nope = 1\n", at).unwrap_err();
         assert!(
@@ -607,13 +583,22 @@ mod tests {
         assert_eq!(flag_value("builder", "inf"), Value::String("inf".into()));
         let list = flag_value("source-map", "[\"/nix/store/a=/a\"]");
         assert_eq!(list, flag_value("source-map", "/nix/store/a=/a"));
-        let e = Settings::load_from(&[], &opts(&[("workers", "four")]), &NO_ENV)
-            .map(|_| ())
-            .unwrap_err()
-            .to_string();
+        let e = Settings::load_from(
+            Path::new("/nonexistent"),
+            &opts(&[("workers", "four")]),
+            &NO_ENV,
+        )
+        .map(|_| ())
+        .unwrap_err()
+        .to_string();
         assert!(e.contains("'workers' wants an integer"), "{e}");
         assert!(e.ends_with(&format!("in {FLAG}")), "{e}");
-        let s = Settings::load_from(&[], &opts(&[("shell-gc-root", "false")]), &NO_ENV).unwrap();
+        let s = Settings::load_from(
+            Path::new("/nonexistent"),
+            &opts(&[("shell-gc-root", "false")]),
+            &NO_ENV,
+        )
+        .unwrap();
         assert!(!s.shell_gc_root);
     }
 
@@ -641,10 +626,7 @@ mod tests {
     }
 
     #[test]
-    fn the_file_list_is_etc_then_xdg() {
-        let files = conf_files();
-        assert_eq!(files.len(), 2);
-        assert!(files[0].ends_with("ietsp.toml"), "{files:?}");
-        assert!(files[1].ends_with("ietsp/ietsp.toml"), "{files:?}");
+    fn the_file_is_the_users() {
+        assert!(conf_file().ends_with("ietsp/ietsp.toml"));
     }
 }

@@ -32,6 +32,22 @@ the ratio falls to 2.07× on minimal and 2.22× on desktop. Nix has no
 equivalent to turn off, so 2.7× is the honest product comparison and 2.1× is
 the honest evaluator comparison.
 
+## 2026-09-27: the machine settings file
+
+ietsp read `/etc/ietsp/ietsp.toml` (or `$IETSP_CONF_DIR/ietsp.toml`) below
+the user file, and the NixOS module had an `ietsp.settings` option that
+wrote it. This copied the shape of `/etc/nix/nix.conf`. The file is
+removed, with the option and the variable.
+
+ietsp is a client. The one setting that the file held in practice was
+`builder`, with a `token-file` in the home directory of one user. Each
+account on the host got that builder, and root read the token of that
+user. The setting is the user's, so it is in the user's file,
+`~/.config/ietsp/ietsp.toml`. The sources are now four: the user file,
+`$IETSP_CONFIG`, `--ietsp-option` and the `IETSP_*` variables.
+
+An existing `/etc/ietsp/ietsp.toml` is not read and is not an error.
+
 ## 2026-09-27: the lints that read only the syntax
 
 The registry had 41 lints. 18 of them were reports of the parser and of

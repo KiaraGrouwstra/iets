@@ -1,5 +1,0 @@
-# IETSP_CONF_DIR for scripts/linttest.nu: the machine file sets a level too.
-workers = 2
-
-[lint]
-url-literal = "error"

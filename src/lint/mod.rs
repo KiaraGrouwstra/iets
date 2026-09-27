@@ -575,14 +575,14 @@ impl Config {
         }
         let read =
             |f: &Path| std::fs::read_to_string(f).map_err(|e| format!("{}: {e}", f.display()));
-        let settings = crate::settings::conf_files();
-        for file in settings.iter().filter(|f| f.is_file()) {
-            c.apply_toml(&read(file)?, file)?;
+        let settings = crate::settings::conf_file();
+        if settings.is_file() {
+            c.apply_toml(&read(&settings)?, &settings)?;
         }
-        // a walk that starts below a settings directory ends on a file read above
+        // a walk that starts below the settings directory ends on the file read above
         let is_settings = |f: &PathBuf| {
             let f = f.canonicalize().ok();
-            f.is_some() && settings.iter().any(|s| s.canonicalize().ok() == f)
+            f.is_some() && settings.canonicalize().ok() == f
         };
         if let Some(file) = start.and_then(find_config_file).filter(|f| !is_settings(f)) {
             let text = read(&file)?;

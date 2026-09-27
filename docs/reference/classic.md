@@ -18,7 +18,7 @@ command. Without symlinks the same commands work as subcommands:
 ## Where the builds go
 
 None of the classic names has a `--builder` flag, so the build target is the
-`builder` setting in the machine or user `ietsp.toml`, and nix.conf's `store` when that is unset.
+`builder` setting in the user `ietsp.toml`, and nix.conf's `store` when that is unset.
 `--store URL` and `--option store URL` on the command line win over both.
 `--ietsp-option name value` sets any ietsp setting for one run, and is stripped
 from the argv before a fallback execs the real nix (`docs/reference/settings.md`).
@@ -40,14 +40,12 @@ Registration stays local whatever `builder` says:
 ## The NixOS module
 
 `nix/module.nix` installs `packages.default` and the direnv hook.
-`ietsp.classic.enable` (default `false`) adds the farm as well, and
-`ietsp.settings` writes `/etc/ietsp/ietsp.toml` (`docs/reference/settings.md`):
+`ietsp.classic.enable` (default `false`) adds the farm as well:
 
 ```nix
 {
   imports = [ ietsp.nixosModules.default ];
   ietsp.classic.enable = true;
-  ietsp.settings.builder = "ssh-ng://bld1";
 }
 ```
 

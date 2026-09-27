@@ -53,7 +53,7 @@ Three things fill it:
    type `path`. This is the case that matters: the repository you are
    working on.
 2. **The `source-map` setting**, for trees this evaluation did not copy.
-   A list of `"STOREPATH=LOCALDIR"` strings, in the machine or user
+   A list of `"STOREPATH=LOCALDIR"` strings, in the user
    `ietsp.toml`. This
    is how a nixpkgs checkout is mapped onto the store path of the nixpkgs
    the lock names. It was a `nix.conf` setting first; Nix warns about a key

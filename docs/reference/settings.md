@@ -134,31 +134,34 @@ path-copy = "warn"
 ```
 
 The keys are flat because there are thirteen of them and because the names
-stay the ones `--ietsp-option` and the NixOS module take. A value has its
+stay the ones `--ietsp-option` takes. A value has its
 TOML type: a switch is `true` or `false`, a number is an integer, a path or
 a URL is a string, `source-map` is an array of strings. A wrong type is an
 error naming the key and the file; `workers = "4"` is not read as 4.
 
-Nothing but ietsp reads this file, so a host can send ietsp's builds
+Nothing but ietsp reads this file, so a user can send ietsp's builds
 somewhere without touching `nix.conf`, which the real nix behind the
 classic fallback also reads.
+
+There is no machine file. ietsp is a client: where it builds and which
+token it uses are the user's. A machine file held a path into one user's
+home directory for every account, root included
+(`docs/explanation/history.md`).
 
 ## Files and order
 
 Later wins.
 
-1. `$IETSP_CONF_DIR/ietsp.toml`, default `/etc/ietsp/ietsp.toml`: the
-   machine.
-2. `$XDG_CONFIG_HOME/ietsp/ietsp.toml`, default
+1. `$XDG_CONFIG_HOME/ietsp/ietsp.toml`, default
    `~/.config/ietsp/ietsp.toml`: the user.
-3. `$IETSP_CONFIG`, treated as one more file's text, so it is TOML too:
+2. `$IETSP_CONFIG`, treated as one more file's text, so it is TOML too:
    `IETSP_CONFIG='builder = "daemon"'`.
-4. The `--ietsp-option NAME VALUE` pairs from the command line.
-5. The `IETSP_*` variable of a setting that has one.
+3. The `--ietsp-option NAME VALUE` pairs from the command line.
+4. The `IETSP_*` variable of a setting that has one.
 
 A later source **replaces** a key. `source-map` is the exception: its
-entries **add up** across the sources, lowest first, so a user maps a
-checkout without repeating what the machine maps. There is no way to drop an
+entries **add up** across the sources, lowest first, so a command maps a
+checkout without repeating what the file maps. There is no way to drop an
 entry set lower down; a stale one costs a warning that its directory is
 gone.
 
@@ -167,17 +170,17 @@ an error. An **unknown key is an error** naming the file: this file is
 ietsp's, so a name it does not know is a mistake, not a setting for
 somebody else.
 
-A `[lint]` table in the machine or the user file sets lint levels for every
+A `[lint]` table in the user file sets lint levels for every
 evaluation, below the project's (`docs/reference/lints.md`). `$IETSP_CONFIG`
 and `--ietsp-option` refuse it: `IETSP_LINT` and `--lint` are their
 spelling.
 
 ## The project file, and why it holds only `[lint]`
 
-A third `ietsp.toml` is the project's: the nearest one found by walking up
+A second `ietsp.toml` is the project's: the nearest one found by walking up
 from the entry file or the flake directory (`docs/reference/lints.md`). The
-machine and the user file are trusted, because whoever can write them
-already controls the account. The project file is not: it arrives with
+user file is trusted, because whoever can write it already controls the
+account. The project file is not: it arrives with
 whatever repository was cloned, and running `ietsp` in a clone must not be
 a way to run its author's code or to send data to its author. So the
 project file is an allow-list of one entry, the `[lint]` table, which only
@@ -257,19 +260,6 @@ affected: drvs and sources for `nix-instantiate --add-root`, its GC roots
 and the `nix-build`/`nix build` out-links always go to the local daemon,
 and a remote `builder`'s outputs are copied back first
 (`docs/reference/classic.md`).
-
-## The NixOS module
-
-`ietsp.settings` is an attribute set of key to string, bool, int or list
-of strings, rendered to `/etc/ietsp/ietsp.toml` with the same types, so
-`workers = 8`, not `"8"`:
-
-```nix
-{
-  imports = [ ietsp.nixosModules.default ];
-  ietsp.settings.builder = "ssh-ng://bld1";
-}
-```
 
 # `nix.conf`
 
