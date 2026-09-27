@@ -98,33 +98,23 @@ pub fn open(ev: &Evaluator, path: &[u8], pos: Pos) -> EvalResult<SrcPath> {
     ))
 }
 
-/// git.cc:makeNotAllowedError, in Nix's words: a path on disk that a git
-/// tree leaves out because git does not track it.
+/// git.cc:makeNotAllowedError, in Nix's words: a path on disk that a
+/// working tree leaves out because its SCM does not track it.
 fn untracked(at: &SrcPath, pos: Pos) -> Option<Box<Error>> {
     let Src::Fs { root, .. } = &at.src else {
         return None;
     };
     let rel = OsStr::from_bytes(&at.rel);
-    if !root.join(".git").exists() || fs::symlink_metadata(root.join(rel)).is_err() {
+    let scm = crate::source::scm::at(root)?;
+    if fs::symlink_metadata(root.join(rel)).is_err() {
         return None;
     }
-    let tracked = std::process::Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["ls-files", "--error-unmatch", "--"])
-        .arg(rel)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .ok()?;
-    if tracked.success() {
-        return None;
-    }
+    let add = scm.untracked(root, rel)?;
     let (rel, root) = (String::from_utf8_lossy(&at.rel), root.display());
-    let add = format!("git -C \"{root}\" add \"{rel}\"");
     let msg = format!(
-        "Path '{rel}' in the repository \"{root}\" is not tracked by Git.\n\n\
-         To make it visible to Nix, run:\n\n{add}"
+        "Path '{rel}' in the repository \"{root}\" is not tracked by {}.\n\n\
+         To make it visible to Nix, run:\n\n{add}",
+        scm.title()
     );
     let mut e = Error::new(ErrorKind::Io, msg, pos);
     e.hint = Some(format!("run '{add}'"));

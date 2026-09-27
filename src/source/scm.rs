@@ -8,6 +8,7 @@
 mod git;
 
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use crate::trace::Trace;
@@ -35,6 +36,9 @@ pub trait Scm: Sync {
     /// in `git+file://`.
     fn name(&self) -> &'static str;
 
+    /// The name as a message spells it: `Git`.
+    fn title(&self) -> &'static str;
+
     /// `dir` is the root of a working tree of this SCM.
     fn is_root(&self, dir: &Path) -> bool;
 
@@ -42,6 +46,11 @@ pub trait Scm: Sync {
     /// from a tracked file is recorded in `trace`, so the tracing cache
     /// asks again.
     fn snapshot(&self, trace: &Trace, root: &Path) -> Result<Snapshot, String>;
+
+    /// For `rel`, a file on disk below `root` that the SCM does not track:
+    /// the command that makes the SCM track it. `None` when the SCM tracks
+    /// `rel` or gives no answer.
+    fn untracked(&self, root: &Path, rel: &OsStr) -> Option<String>;
 }
 
 impl PartialEq for dyn Scm {

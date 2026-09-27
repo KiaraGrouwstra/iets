@@ -3,6 +3,7 @@
 //! `Cmd` observation.
 
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
@@ -42,6 +43,10 @@ impl Scm for Git {
         "git"
     }
 
+    fn title(&self) -> &'static str {
+        "Git"
+    }
+
     fn is_root(&self, dir: &Path) -> bool {
         dir.join(".git").exists()
     }
@@ -59,7 +64,7 @@ impl Scm for Git {
             if mode == b"160000" {
                 continue;
             }
-            files.insert(root.join(std::ffi::OsStr::from_bytes(&entry[tab + 1..])));
+            files.insert(root.join(OsStr::from_bytes(&entry[tab + 1..])));
         }
         let status = git(
             trace,
@@ -77,7 +82,7 @@ impl Scm for Git {
         for entry in status.split(|&b| b == 0).filter(|e| e.len() > 3) {
             dirty = true;
             if entry[0] == b'D' || entry[1] == b'D' {
-                files.remove(&root.join(std::ffi::OsStr::from_bytes(&entry[3..])));
+                files.remove(&root.join(OsStr::from_bytes(&entry[3..])));
             }
         }
         let head = run(trace, root, &["rev-parse", "--verify", "-q", "HEAD"])?;
@@ -102,6 +107,25 @@ impl Scm for Git {
             rev: head.or_else(|| (!dirty).then(|| NULL_REV.to_string())),
             last_modified,
             rev_count,
+        })
+    }
+
+    fn untracked(&self, root: &Path, rel: &OsStr) -> Option<String> {
+        let tracked = std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["ls-files", "--error-unmatch", "--"])
+            .arg(rel)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .ok()?;
+        (!tracked.success()).then(|| {
+            format!(
+                "git -C \"{}\" add \"{}\"",
+                root.display(),
+                rel.to_string_lossy()
+            )
         })
     }
 }
