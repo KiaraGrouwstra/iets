@@ -81,6 +81,11 @@ pub const PAGES: &[Page] = &[
         include_str!("../../docs/reference/lints.md"),
     ),
     embedded(
+        "syntax-tree",
+        "the JSON of 'ietsp parse --json'",
+        include_str!("../../docs/reference/syntax-tree.md"),
+    ),
+    embedded(
         "builtins",
         "the primop API and every builtin",
         include_str!("../../docs/reference/builtins.md"),

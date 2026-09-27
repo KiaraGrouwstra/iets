@@ -538,3 +538,50 @@ fn nul_in_string_literals() {
     dump_src("\"a\\\0b\"");
     dump_src("''a''\\\0b''");
 }
+
+#[test]
+fn json_gives_every_node_its_kind_and_span() {
+    use serde_json::Value;
+    let json_of = |src: &str| {
+        let mut interner = Interner::new();
+        let ast = parse(src.as_bytes(), FileId(0), &mut interner).unwrap();
+        let mut out = String::new();
+        super::dump::json(&super::dump::tree(&ast, &interner), &mut out);
+        out
+    };
+    assert_eq!(
+        json_of("a: a.b or 1"),
+        r#"{"kind":"lambda","start":0,"end":11,"arg":"a","formals":null,"ellipsis":false,"body":{"kind":"select","start":3,"end":11,"subject":{"kind":"var","start":3,"end":4,"name":"a"},"path":["b"],"default":{"kind":"int","start":10,"end":11,"value":1}}}"#
+    );
+    fn walk(v: &Value, src: &str, nodes: &mut usize) {
+        match v {
+            Value::Object(o) => {
+                if let Some(kind) = o.get("kind") {
+                    let at = |k: &str| o[k].as_u64().expect("an offset") as usize;
+                    let (start, end) = (at("start"), at("end"));
+                    assert!(start < end && end <= src.len(), "{kind} {start}..{end}");
+                    if kind == "var" || kind == "name" {
+                        assert_eq!(o["name"], src[start..end]);
+                    }
+                    *nodes += 1;
+                }
+                o.values().for_each(|v| walk(v, src, nodes));
+            }
+            Value::Array(a) => a.iter().for_each(|v| walk(v, src, nodes)),
+            _ => {}
+        }
+    }
+    let src =
+        "{ x ? 1.5, ... }@s: with s; [ ./p \"t${x}\" ] // { inherit (s) y; \"k\".${x} = !x; }";
+    let mut nodes = 0;
+    walk(
+        &serde_json::from_str(&json_of(src)).unwrap(),
+        src,
+        &mut nodes,
+    );
+    assert_eq!(nodes, 18);
+    assert_eq!(
+        json_of("\"\\\"\u{e9}\""),
+        r#"{"kind":"string","start":0,"end":6,"parts":["\"é"]}"#
+    );
+}

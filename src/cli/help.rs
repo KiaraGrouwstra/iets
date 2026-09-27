@@ -196,11 +196,14 @@ current directory) uses, then the scope and its roots ('ietsp help lints').
 ";
 
 const PARSE: &str = "\
-usage: ietsp parse [-q] FILE...
+usage: ietsp parse [-q | --json] FILE...
 
 Parse each FILE and print its syntax tree; FILE - reads the list from stdin.
 
   -q                    print only the parse errors and the totals
+  --json                print each tree as one line of JSON
+
+'ietsp help syntax-tree' is the schema of the JSON.
 ";
 
 const CACHE: &str = "\

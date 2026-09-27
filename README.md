@@ -153,6 +153,7 @@ behaviour differs on purpose,
 | [reference/settings.md](docs/reference/settings.md) | `ietsp.toml`, `nix.conf` and every `IETSP_*` variable |
 | [reference/errors.md](docs/reference/errors.md) | error codes, exit codes, log records |
 | [reference/lints.md](docs/reference/lints.md) | every lint |
+| [reference/syntax-tree.md](docs/reference/syntax-tree.md) | the JSON form of the syntax tree |
 | [reference/builtins.md](docs/reference/builtins.md) | the primop surface |
 | [reference/divergences.md](docs/reference/divergences.md) | where ietsp differs from Nix on purpose |
 | [reference/library.md](docs/reference/library.md) | the library entry points |

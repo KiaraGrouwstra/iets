@@ -4,10 +4,26 @@ use crate::syntax::ast::FileId;
 use crate::syntax::symbol::Interner;
 use crate::syntax::{dump, line_col, parse};
 
-/// `ietsp parse [-q] FILE...`; a lone `-` reads the list of files from stdin.
+/// What `ietsp parse` prints for a file that parses.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Form {
+    /// S-expressions.
+    Text,
+    /// One `{"file", "root"}` line (docs/reference/syntax-tree.md).
+    Json,
+    /// Nothing; the totals follow the last file.
+    Quiet,
+}
+
+/// `ietsp parse [-q | --json] FILE...`; a lone `-` reads the list of files
+/// from stdin.
 pub fn main(argv: &[String]) -> i32 {
-    let quiet = argv.first().is_some_and(|s| s == "-q");
-    let files = &argv[usize::from(quiet)..];
+    let form = match argv.first().map(String::as_str) {
+        Some("-q") => Form::Quiet,
+        Some("--json") => Form::Json,
+        _ => Form::Text,
+    };
+    let files = &argv[usize::from(form != Form::Text)..];
     let files: Vec<String> = match files {
         [] => crate::cli::help::arg_error("parse needs FILE... or - to read them from stdin"),
         [dash] if dash == "-" => std::io::read_to_string(std::io::stdin())
@@ -17,12 +33,12 @@ pub fn main(argv: &[String]) -> i32 {
             .collect(),
         _ => files.to_vec(),
     };
-    cmd_parse(&files, quiet)
+    cmd_parse(&files, form)
 }
 
 /// With `-q`, parse every file, report errors, and print totals. Used to
 /// check and time the parser on whole trees such as nixpkgs.
-pub fn cmd_parse(files: &[String], quiet: bool) -> i32 {
+pub fn cmd_parse(files: &[String], form: Form) -> i32 {
     let mut interner = Interner::new();
     let mut errors = 0usize;
     let mut bytes = 0usize;
@@ -38,11 +54,15 @@ pub fn cmd_parse(files: &[String], quiet: bool) -> i32 {
         };
         bytes += src.len();
         match parse(&src, FileId(i as u32), &mut interner) {
-            Ok(ast) => {
-                if !quiet {
-                    println!("{}", dump::dump(&ast, &interner));
+            Ok(ast) => match form {
+                Form::Text => println!("{}", dump::dump(&ast, &interner)),
+                Form::Json => {
+                    let mut line = format!("{{\"file\":{},\"root\":", serde_json::json!(file));
+                    dump::json(&dump::tree(&ast, &interner), &mut line);
+                    println!("{line}}}");
                 }
-            }
+                Form::Quiet => {}
+            },
             Err(e) => {
                 let (line, col) = line_col(&src, e.span.start);
                 crate::log::Report {
@@ -54,7 +74,7 @@ pub fn cmd_parse(files: &[String], quiet: bool) -> i32 {
             }
         }
     }
-    if quiet {
+    if form == Form::Quiet {
         let dt = start.elapsed();
         eprintln!(
             "{} files, {} bytes, {} errors, {:.3}s",

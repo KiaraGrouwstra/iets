@@ -871,7 +871,7 @@ The registry, the levels and the scope rules are in
 ## `parse`
 
 ```
-ietsp parse [-q] FILE...
+ietsp parse [-q | --json] FILE...
 ```
 
 Parse each `FILE` and print its syntax tree. `FILE` `-` reads the list of
@@ -880,9 +880,12 @@ files from stdin.
 | Flag | Effect |
 |---|---|
 | `-q` | print only the parse errors and the totals |
+| `--json` | print each tree as one line of JSON (`docs/reference/syntax-tree.md`) |
 
-stdout: the tree of each file, or with `-q` one summary line: `N files, N
-bytes, N errors, T s`.
+stdout: the tree of each file as S-expressions. With `--json`: one line
+of JSON for each file, with the kind and the byte span of each node. With
+`-q`: nothing; stderr gets one summary line, `N files, N bytes, N errors,
+T s`.
 Exit: 0, 1 when a file failed to parse, 2 on a usage error.
 
 ## `cache`
@@ -937,6 +940,7 @@ instead.
 | `settings` | `docs/reference/settings.md` |
 | `errors` | `docs/reference/errors.md` |
 | `lints` | `docs/reference/lints.md` |
+| `syntax-tree` | `docs/reference/syntax-tree.md` |
 | `builtins` | `docs/reference/builtins.md` |
 | `divergences` | `docs/reference/divergences.md` |
 | `library` | `docs/reference/library.md` |
