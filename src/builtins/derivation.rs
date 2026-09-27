@@ -206,9 +206,6 @@ struct Builder<'a> {
     /// The structured-attrs JSON object under construction, when
     /// `__structuredAttrs = true`.
     json: Option<Vec<u8>>,
-    /// Where a derivation-attribute lint reports when the attribute's own
-    /// position is out of scope (`lint::coerce::drv_fallback`).
-    lint_fallback: Pos,
     /// The derivation's own site for `drv-bool-null` and `drv-list`
     /// (`lint::coerce::drv_owner`); `None` keeps both silent.
     lint_owner: Option<Pos>,
@@ -423,10 +420,11 @@ fn derivation_strict_internal(
 
     let path_lint = ev.lint_on(crate::lint::LintId::ImpurePathInDrv)
         || ev.lint_on(crate::lint::LintId::AbsolutePathInDrv);
-    let lint_fallback = if path_lint || ev.lint_on(crate::lint::LintId::Fod) {
-        crate::lint::coerce::drv_fallback(ev, attrs, pos, name_pos)
-    } else {
-        Pos::NONE
+    // `lint::coerce::drv_fallback`, found when the first finding needs it
+    let mut lint_fallback: Option<Pos> = None;
+    let mut fallback = |ev: &mut Evaluator| {
+        *lint_fallback
+            .get_or_insert_with(|| crate::lint::coerce::drv_fallback(ev, attrs, pos, name_pos))
     };
     let lint_owner = if ev.lint_on(crate::lint::LintId::DrvBoolNull)
         || ev.lint_on(crate::lint::LintId::DrvList)
@@ -450,7 +448,6 @@ fn derivation_strict_internal(
         ingestion_method: None,
         outputs: ["out".to_string()].into_iter().collect(),
         json: json_mode.then(|| vec![b'{']),
-        lint_fallback,
         lint_owner,
     };
 
@@ -477,7 +474,8 @@ fn derivation_strict_internal(
                     _ => None,
                 })
                 .collect();
-            let site = crate::lint::coerce::drv_attr_pos(ev, attr.pos, b.lint_fallback);
+            let fallback = fallback(ev);
+            let site = crate::lint::coerce::drv_attr_pos(ev, attr.pos, fallback);
             for p in impure {
                 crate::lint::purity::path_in_drv(ev, drv_name, &key, p, site)?;
             }
@@ -578,7 +576,8 @@ fn derivation_strict_internal(
                 IngestionMethod::Flat => "flat",
                 IngestionMethod::Recursive => "recursive",
             };
-            let site = crate::lint::coerce::drv_attr_pos(ev, name_pos, lint_fallback);
+            let fallback = fallback(ev);
+            let site = crate::lint::coerce::drv_attr_pos(ev, name_pos, fallback);
             crate::lint::purity::fod(ev, drv_name, mode, algo, site)?;
         }
         let out = DerivationOutput::Fixed { method, hash };
