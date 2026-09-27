@@ -8,7 +8,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use super::{Scm, Snapshot};
-use crate::trace::{Kind, Trace};
+use crate::trace::{Kind, Obs, Trace};
 
 const NULL_REV: &str = "0000000000000000000000000000000000000000";
 
@@ -127,6 +127,28 @@ impl Scm for Git {
                 rel.to_string_lossy()
             )
         })
+    }
+
+    fn tree_of<'a>(&self, obs: &'a Obs) -> Option<&'a [u8]> {
+        match obs {
+            Obs::Cmd { dir, argv, .. } if argv.first().is_some_and(|a| a == b"git") => Some(dir),
+            _ => None,
+        }
+    }
+
+    /// `git ls-files`, `git status` and the `HEAD` queries all change with
+    /// the index: a commit, a checkout and `git add` rewrite it. A linked
+    /// work tree has a `.git` file that names its git directory.
+    fn watch(&self, root: &Path) -> Option<PathBuf> {
+        let dot = root.join(".git");
+        if dot.is_dir() {
+            return Some(dot.join("index"));
+        }
+        let text = std::fs::read_to_string(&dot).ok()?;
+        Some(
+            root.join(text.strip_prefix("gitdir: ")?.trim_end())
+                .join("index"),
+        )
     }
 }
 

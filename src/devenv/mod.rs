@@ -508,8 +508,8 @@ pub const WATCH_MAX: usize = 500;
 
 /// What direnv can watch of a read set, in the order the run read it: the
 /// files, directory listings and path kinds outside `skip` (the Nix store and
-/// ietsp's own stores, which do not change), and the git index for the git
-/// queries. A tree that lies inside another tree is a path the expression
+/// ietsp's own stores, which do not change), and the file an SCM names for
+/// its queries. A tree that lies inside another tree is a path the expression
 /// copied, so its members follow. An outermost tree is the flake's source,
 /// which every edit changes and few shells depend on: only what the run read
 /// out of it is watched. Environment variables and resolved links have no
@@ -528,13 +528,14 @@ pub fn watch_paths(obs: &[crate::trace::Obs], skip: &[&Path]) -> Vec<String> {
             Obs::File { path: p, .. } | Obs::Dir { path: p, .. } | Obs::Stat { path: p, .. } => {
                 out.extend(kept(p))
             }
-            Obs::Cmd { dir, argv, .. } if argv.first().is_some_and(|a| a == b"git") => {
-                out.extend(kept(dir).and_then(|d| git_index(&d)))
-            }
             Obs::Tree { root, filtered, .. } => {
                 trees.extend(kept(root).map(|r| (r, filtered.as_ref())))
             }
-            _ => {}
+            o => {
+                if let Some((scm, dir)) = crate::source::scm::owner(o) {
+                    out.extend(kept(dir).and_then(|d| scm.watch(&d)))
+                }
+            }
         }
     }
     for (root, filtered) in &trees {
@@ -548,21 +549,6 @@ pub fn watch_paths(obs: &[crate::trace::Obs], skip: &[&Path]) -> Vec<String> {
     out.into_iter()
         .filter_map(|p| p.into_os_string().into_string().ok())
         .collect()
-}
-
-/// `git ls-files`, `git status` and the `HEAD` queries all change with the
-/// index: a commit, a checkout and `git add` rewrite it. A linked work tree
-/// has a `.git` file that names its git directory.
-fn git_index(root: &Path) -> Option<PathBuf> {
-    let dot = root.join(".git");
-    if dot.is_dir() {
-        return Some(dot.join("index"));
-    }
-    let text = std::fs::read_to_string(&dot).ok()?;
-    Some(
-        root.join(text.strip_prefix("gitdir: ")?.trim_end())
-            .join("index"),
-    )
 }
 
 /// `p` and what the copy took below it; the directories too, because an entry

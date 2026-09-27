@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use crate::trace::Trace;
+use crate::trace::{Obs, Trace};
 
 /// A working tree as its SCM reports it.
 pub struct Snapshot {
@@ -51,6 +51,15 @@ pub trait Scm: Sync {
     /// the command that makes the SCM track it. `None` when the SCM tracks
     /// `rel` or gives no answer.
     fn untracked(&self, root: &Path, rel: &OsStr) -> Option<String>;
+
+    /// The root of the working tree that `obs` is about, when `snapshot`
+    /// of this SCM recorded `obs`.
+    fn tree_of<'a>(&self, obs: &'a Obs) -> Option<&'a [u8]>;
+
+    /// The file that changes when an answer of the SCM on the tree at
+    /// `root` changes, for a program that watches files. `None` when the
+    /// observations of the SCM are files and nothing else.
+    fn watch(&self, root: &Path) -> Option<PathBuf>;
 }
 
 impl PartialEq for dyn Scm {
@@ -80,4 +89,18 @@ pub fn at(root: &Path) -> Option<&'static dyn Scm> {
 pub fn detect(dir: &Path) -> Option<(&'static dyn Scm, PathBuf)> {
     dir.ancestors()
         .find_map(|d| Some((at(d)?, d.to_path_buf())))
+}
+
+/// The SCM that recorded `obs`, and the root of the working tree that
+/// `obs` is about.
+pub fn owner(obs: &Obs) -> Option<(&'static dyn Scm, &[u8])> {
+    KNOWN.iter().find_map(|s| Some((*s, s.tree_of(obs)?)))
+}
+
+/// Why a cached result is stale when `obs` no longer holds: the tree is
+/// what the user changed, not the answer of one query.
+pub fn changed(obs: &Obs) -> Option<String> {
+    let (scm, root) = owner(obs)?;
+    let root = String::from_utf8_lossy(root);
+    Some(format!("the {} working tree in {root} changed", scm.name()))
 }

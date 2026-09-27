@@ -198,11 +198,6 @@ fn check(o: &Obs, rehashed: &AtomicUsize) -> Outcome {
         }
         Obs::Cmd { dir, argv, hash } => match super::run_cmd(os(dir), argv) {
             Ok((status, out)) if super::cmd_hash(status, &out) == *hash => Outcome::Same,
-            // every such observation is a git query of a flake's working
-            // tree, and the tree is what the user changed
-            _ if argv.first().is_some_and(|a| a.ends_with(b"git")) => {
-                Outcome::Changed(format!("the git working tree in {} changed", lossy(dir)))
-            }
             _ => Outcome::Changed(format!(
                 "the output of `{}` in {} changed",
                 argv.iter().map(|a| lossy(a)).collect::<Vec<_>>().join(" "),
@@ -252,6 +247,7 @@ pub fn validate(obs: &mut [Obs], threads: usize) -> Result<Report, Mismatch> {
                         Outcome::Same => {}
                         Outcome::Refresh(o) => mine.push((i, o)),
                         Outcome::Changed(why) => {
+                            let why = crate::source::scm::changed(&obs[i]).unwrap_or(why);
                             failed.store(true, Ordering::Relaxed);
                             let mut lowest = first.lock().unwrap();
                             if lowest.as_ref().is_none_or(|(j, _)| i < *j) {
