@@ -190,7 +190,7 @@ impl Census {
                 }
                 super::value::Ctx::Impure(p) => {
                     key.push(4);
-                    key.extend_from_slice(p);
+                    key.extend_from_slice(p.bytes());
                 }
             }
             key.push(0);

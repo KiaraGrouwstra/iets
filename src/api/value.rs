@@ -60,8 +60,9 @@ pub enum ContextElem<'e> {
     DrvDeep(&'e [u8]),
     /// `!out!drv`: one output of a derivation.
     Built { drv: &'e [u8], output: &'e [u8] },
-    /// An absolute path outside the store that a coercion kept as text.
-    /// Invisible to `builtins.getContext`.
+    /// An absolute path outside the store that a coercion kept as text, or
+    /// the name of source tree metadata (`self.rev`). Invisible to
+    /// `builtins.getContext`.
     Impure(&'e [u8]),
 }
 
@@ -163,7 +164,7 @@ impl<'e> Value<'e> {
             Ctx::Opaque(p) => ContextElem::Opaque(p),
             Ctx::DrvDeep(p) => ContextElem::DrvDeep(p),
             Ctx::Built { drv, output } => ContextElem::Built { drv, output },
-            Ctx::Impure(p) => ContextElem::Impure(p),
+            Ctx::Impure(m) => ContextElem::Impure(m.bytes()),
         })
     }
 

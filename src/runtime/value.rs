@@ -100,12 +100,32 @@ pub enum Ctx {
         drv: &'static [u8],
         output: &'static [u8],
     },
-    /// An absolute path outside the store that a coercion kept as text
-    /// (`toString ./x`). Invisible to `getContext` and `hasContext`, never
-    /// in an ATerm; the `impure-path-in-drv` lint reads it. Last so the
-    /// store elements sort first.
-    Impure(&'static [u8]),
+    /// A mark Nix does not have. Invisible to `getContext` and
+    /// `hasContext`, never in an ATerm; the lints on derivation attributes
+    /// read it. Last so the store elements sort first.
+    Impure(Taint),
 }
+
+/// What makes a string impure.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+pub enum Taint {
+    /// An absolute path outside the store that a coercion kept as text
+    /// (`toString ./x`): `impure-path-in-drv`.
+    Path(&'static [u8]),
+    /// Metadata of a source tree, by name (`self.rev`,
+    /// `inputs.nixpkgs.shortRev`): `tree-meta-in-drv`.
+    Meta(&'static [u8]),
+}
+
+impl Taint {
+    pub fn bytes(self) -> &'static [u8] {
+        match self {
+            Taint::Path(b) | Taint::Meta(b) => b,
+        }
+    }
+}
+
+const _: () = assert!(size_of::<Ctx>() == 40);
 
 impl Ctx {
     /// A store reference, as Nix's context holds: not an `Impure` marker.

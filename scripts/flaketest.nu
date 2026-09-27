@@ -191,6 +191,14 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   $res ++= [(check $ietsp "big: devShell" $"($big)#devShells.x86_64-linux.default.drvPath")]
   $res ++= [(check $ietsp "big: devShell, IETSP_WORKERS=8" $"($big)#devShells.x86_64-linux.default.drvPath" {IETSP_WORKERS: "8"})]
   $res ++= [(check $ietsp "big: nixosConfigurations.scratch toplevel" $"($big)#nixosConfigurations.scratch.config.system.build.toplevel.drvPath")]
+  # the metadata of an input is silent until the input has a level of its own;
+  # the site is the binding in the root flake, through nixpkgs's mkDerivation
+  let quiet = (^$ietsp eval --raw --no-tracing-cache $"($big)#devShells.x86_64-linux.default.drvPath" | complete | get stderr)
+  "[lint.inputs.lib]\ntree-meta-in-drv = \"warn\"\n" | save $"($big)/ietsp.toml"
+  let loud = (^$ietsp eval --raw --no-tracing-cache $"($big)#devShells.x86_64-linux.default.drvPath" | complete | get stderr)
+  rm $"($big)/ietsp.toml"
+  let ok = (not ($quiet | str contains "tree-meta-in-drv")) and ($loud | str contains "attribute 'GREETING' holds 'inputs.lib.shortRev', a value that changes with every update of the lock file") and ($loud | str contains $"at ($big)/flake.nix:14:9")
+  $res ++= [(verdict $ok "big: tree-meta-in-drv reports an input's metadata under [lint.inputs.lib]" $"tree-meta, input: ($quiet) | ($loud)")]
 
   # ---- scratch flake ---------------------------------------------------------
   let repo = $"($work)/repo"
@@ -214,6 +222,14 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
       system = "x86_64-linux";
       builder = "/bin/sh";
       args = [ "-c" "echo ${self.narHash} ${self.rev or self.dirtyRev or "norev"} ${self.shortRev or self.dirtyShortRev or "norev"} ${toString self.lastModified} ${self.lastModifiedDate} ${toString (self.revCount or 0)} ${dep.value} ${dep.sub.value} ${dep.outPath} ${sub.outPath} ${rel.value} ${rel.outPath} ${self}/file ${builtins.readFile (self + "/file")} ${toString (builtins.attrNames (builtins.readDir self))} ${toString (builtins.pathExists (self + "/untracked"))} ${import ./nested/lib.nix} ${./nested} > $out" ];
+    };
+    visible = builtins.toJSON {
+      context = builtins.getContext "${self.narHash} ${self.lastModifiedDate}";
+      has = builtins.hasContext (builtins.substring 0 8 self.lastModifiedDate);
+      equal = self.narHash == builtins.unsafeDiscardStringContext self.narHash;
+      json = builtins.toJSON { inherit (self) narHash lastModifiedDate; };
+      name = { ${self.lastModifiedDate} = builtins.replaceStrings [ "-" ] [ "+" ] self.narHash; };
+      file = builtins.toFile "meta" self.narHash;
     };
   };
 }
@@ -253,6 +269,8 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   git-in $env.PWD worktree remove --force $mine
 
   $res ++= [(check $ietsp "scratch: clean tree" $"($scratch).drvPath")]
+  # the marks on the metadata change nothing that Nix sees
+  $res ++= [(check $ietsp "scratch: a string of the tree metadata has no context" $"($repo)#visible")]
   $res ++= [(check $ietsp "scratch: --raw on a derivation prints its outPath" $scratch)]
   "untracked\n" | save $"($repo)/untracked"
   $res ++= [(check $ietsp "scratch: untracked file is ignored" $"($scratch).drvPath")]
@@ -274,6 +292,8 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   $res ++= [(verdict $ut_ok "git: reading an untracked file is Nix's error, the hint is the git add" $"untracked read \(exit ($ut_n.exit_code)/($ut_i.exit_code)\): ($ut_rec | to json -r)")]
   "three\n" | save -f $"($repo)/file"
   $res ++= [(check $ietsp "scratch: dirty tree (modified tracked file)" $"($scratch).drvPath")]
+  let held = (^$ietsp eval --raw --no-tracing-cache $"($scratch).drvPath" | complete | get stderr)
+  $res ++= [(verdict ($held | str contains "holds 'self.dirtyRev', 'self.dirtyShortRev', 'self.lastModifiedDate', 'self.narHash'") "scratch: tree-meta-in-drv names the metadata of a dirty tree" $"tree-meta, dirty: ($held)")]
   rm $"($repo)/nested/tracked"
   $res ++= [(check $ietsp "scratch: dirty tree (deleted tracked file)" $"($scratch).drvPath")]
   "four\n" | save $"($repo)/added"
@@ -281,6 +301,8 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   $res ++= [(check $ietsp "scratch: dirty tree (staged new file)" $"($scratch).drvPath")]
   git-in $repo commit -q -am next
   $res ++= [(check $ietsp "scratch: clean again after commit" $"($scratch).drvPath")]
+  let held = (^$ietsp eval --raw --no-tracing-cache $"($scratch).drvPath" | complete | get stderr)
+  $res ++= [(verdict ($held | str contains "[tree-meta-in-drv] derivation 'scratch': attribute 'args' holds 'self.lastModifiedDate', 'self.narHash', 'self.rev', 'self.shortRev'") "scratch: tree-meta-in-drv names the metadata of a clean tree" $"tree-meta, clean: ($held)")]
   $res ++= [(check $ietsp "scratch: subdirectory flake ref" $"($repo)/.#packages.x86_64-linux.default.drvPath")]
   $res ++= [(check $ietsp "scratch: path: ref copies the whole tree" $"path:($repo)#packages.x86_64-linux.default.drvPath")]
 

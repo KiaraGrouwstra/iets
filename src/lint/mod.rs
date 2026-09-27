@@ -23,7 +23,7 @@ use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, FileInfo, Pos};
 use crate::log::Site;
 use crate::syntax::symbol::{FxHashMap, FxHasher};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub enum Level {
     #[default]
     Off,
@@ -157,6 +157,7 @@ registry! {
     DirCopyUnfiltered: "dir-copy-unfiltered", Purity, Evaluator, Off, "a directory coerced to a string is copied whole, untracked and ignored files included; use `builtins.path` with a filter";
     ImpurePathInDrv: "impure-path-in-drv", Purity, Evaluator, Off, "a derivation attribute holds the text of a path outside the store and outside any flake root (`toString ./x`), so the .drv depends on the checkout location";
     AbsolutePathInDrv: "absolute-path-in-drv", Purity, Evaluator, Off, "a derivation attribute holds the text of a path under a flake root, an absolute path a flake evaluation would have copied";
+    TreeMetaInDrv: "tree-meta-in-drv", Purity, Evaluator, Warn, "a derivation attribute holds metadata of the flake's source tree (`self.rev`, `self.lastModifiedDate`, ...), so each commit gives a new .drv and a rebuild; a locked input is silent without `[lint.inputs.<node>]`";
     UnknownAllow: "unknown-allow", Meta, Parser, Warn, "a `# ietsp: allow` comment that names a lint the registry does not know, so a typo does not silence nothing";
 }
 
@@ -845,7 +846,7 @@ impl Evaluator {
         if self.lint_config().level(id) == Level::Off {
             return Ok(());
         }
-        self.lint_site(id, pos, msg)
+        self.lint_site(id, pos, None, msg)
     }
 
     /// Any fiber reports: the site set keeps a warning to one line, so a
@@ -853,9 +854,16 @@ impl Evaluator {
     /// nothing, and bailing like `trace` does (docs/explanation/evaluation.md, Effects)
     /// cost 15 % of the wall on nixos-desktop at 4 workers. A site the
     /// scope silences enters the set too; an `error` site never does, so
-    /// every fiber that reaches it fails.
+    /// every fiber that reaches it fails. A `level` is that of the tree a
+    /// value comes from, where the location of the site does not decide.
     #[inline(never)]
-    fn lint_site(&mut self, id: LintId, pos: Pos, msg: impl FnOnce() -> String) -> EvalResult<()> {
+    fn lint_site(
+        &mut self,
+        id: LintId,
+        pos: Pos,
+        level: Option<Level>,
+        msg: impl FnOnce() -> String,
+    ) -> EvalResult<()> {
         if self.lints.seen(id, pos) {
             return Ok(());
         }
@@ -866,7 +874,9 @@ impl Evaluator {
             self.lints.silence(id, pos);
             return Ok(());
         }
-        let level = if self.lint_config().scoped() {
+        let level = if let Some(level) = level {
+            level
+        } else if self.lint_config().scoped() {
             let w = self.where_of_file(file);
             self.lint_config().site_level(id, w)
         } else {

@@ -49,6 +49,38 @@ Four lints do not need evaluation. They stay for other reasons.
 The compiler reports a reference to `currentTime`, because the value is
 in the table of the globals and has no position of its own.
 
+## Where a finding is reported
+
+A lint finds a site. The location of the site tells ietsp if the finding
+is yours: a site in your repository is reported, and a site in an input
+is silent. `docs/reference/lints.md` ("Scope") has the rule.
+
+`tree-meta-in-drv` does not obey this rule, and that is a decision. The
+lint reports the metadata of a source tree (`self.rev`,
+`self.lastModifiedDate`) that goes into a derivation. The value changes
+with each commit, so each commit builds the derivation and all that
+depend on it again.
+
+For this lint, the location of the site does not tell ietsp if the
+finding is yours. These two examples show why:
+
+- You set `system.configurationRevision = self.rev`. nixpkgs writes the
+  value into the derivation `nixos-version`. The site is in nixpkgs, but
+  the value is yours, and your commits cause the rebuild.
+- nixpkgs writes its own `lastModifiedDate` and `shortRev` into the
+  version of NixOS. The value changes only when you update the lock
+  file. A rebuild is then correct.
+
+Thus the tree that the value comes from gives the level. The root tree
+has the level of the lint, which is `warn` by default. A locked input is
+silent, unless `[lint.inputs.<node>]` gives it a level.
+
+ietsp knows the tree because each metadata string has a mark. The mark
+is a string context element that Nix does not have. It moves with the
+string through `+`, interpolation, `substring` and `concatStringsSep`, as
+a store path reference does. Nix cannot see it: `getContext`,
+`hasContext`, `==`, `toJSON` and the `.drv` files do not change.
+
 ## Make your own rules
 
 ietsp gives the data. A rule is an external program that reads the data.

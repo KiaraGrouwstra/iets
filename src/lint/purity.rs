@@ -4,9 +4,9 @@
 //! globals hold, with no position of its own, so the compiler reports
 //! the reference.
 
-use super::LintId;
+use super::{Level, LintId, Where};
 use crate::eval::{EvalResult, Evaluator, Pos};
-use crate::runtime::{Ctx, Value, Word};
+use crate::runtime::{Ctx, Taint, Value, Word};
 
 /// The message for a reference to the global `name`, when it is `currentTime`.
 pub fn current_time(name: &[u8]) -> Option<String> {
@@ -122,7 +122,7 @@ fn flake_root_of(ev: &Evaluator, path: &[u8]) -> Option<Vec<u8>> {
 /// Derivation `drv_name` received attribute `key` whose value carries the
 /// text of the non-store path `path`: `absolute-path-in-drv` under a
 /// flake root, `impure-path-in-drv` elsewhere.
-pub fn path_in_drv(
+fn path_in_drv(
     ev: &mut Evaluator,
     drv_name: &str,
     key: &str,
@@ -144,6 +144,66 @@ pub fn path_in_drv(
             )
         }),
     }
+}
+
+/// The level of `tree-meta-in-drv` for the metadata of the tree `source`:
+/// `self`, or `inputs.<node>` by lock node name. The tree a value comes
+/// from decides, not the site: a locked input changes at a lock update
+/// only, so it follows the scope rule like a site outside the roots.
+pub fn tree_meta_level(ev: &Evaluator, source: &str) -> Level {
+    let cfg = ev.lint_config();
+    let w = match source.strip_prefix("inputs.") {
+        None => Where::Root,
+        Some(node) => cfg.input_index(node).map_or(Where::Elsewhere, Where::Input),
+    };
+    cfg.site_level(LintId::TreeMetaInDrv, w)
+}
+
+/// The marks in `ctx`, the context that the value of attribute `key` gave
+/// derivation `drv_name`. The tree metadata (`self.rev`) is one finding
+/// that names them all, at the strictest of their levels. `site` is
+/// `Pos::NONE` when the derivation has no position the scope sees: the
+/// level of this lint comes from the tree, so the finding then goes to
+/// `attr_pos`, out of scope or not.
+// `derivationStrict` tests each attribute of each derivation: the report
+// stays out of that loop
+#[cold]
+pub fn marks_in_drv(
+    ev: &mut Evaluator,
+    drv_name: &str,
+    key: &str,
+    ctx: &[Ctx],
+    site: Pos,
+    attr_pos: Pos,
+) -> EvalResult<()> {
+    let paths = ev.lint_on(LintId::ImpurePathInDrv) || ev.lint_on(LintId::AbsolutePathInDrv);
+    let mut metas = Vec::new();
+    for c in ctx {
+        match *c {
+            Ctx::Impure(Taint::Path(p)) if paths => path_in_drv(ev, drv_name, key, p, site)?,
+            Ctx::Impure(Taint::Meta(m)) => metas.push(String::from_utf8_lossy(m)),
+            _ => {}
+        }
+    }
+    metas.sort();
+    metas.dedup();
+    let source =
+        |m: &std::borrow::Cow<str>| tree_meta_level(ev, m.rsplit_once('.').map_or(m, |(s, _)| s));
+    let levels = metas.iter().map(source);
+    let Some(level) = levels.max() else {
+        return Ok(());
+    };
+    let site = if site.is_none() { attr_pos } else { site };
+    ev.lint_site(LintId::TreeMetaInDrv, site, Some(level), || {
+        let when = match metas.iter().any(|m| m.starts_with("self.")) {
+            true => "commit or edit",
+            false => "update of the lock file",
+        };
+        format!(
+            "derivation '{drv_name}': attribute '{key}' holds '{}', a value that changes with every {when}, so this derivation and all that depend on it are built again each time; keep the value out of the build, or read it at run time",
+            metas.join("', '")
+        )
+    })
 }
 
 /// A recursive copy of `path` whose top level holds a `.git` entry.

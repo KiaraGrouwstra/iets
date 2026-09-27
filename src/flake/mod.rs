@@ -199,7 +199,7 @@ pub fn eval_flake_value(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
 
     let root = source::tree(ev, &fr.source, pos)?;
     let subdir = root.subdir;
-    let source_info = fetch::emit_tree_attrs(ev, &root.path, &root.attrs, pos)?;
+    let source_info = fetch::emit_tree_attrs(ev, &root.path, &root.attrs, Some("self"), pos)?;
     let out_path = {
         let ctx = format!(
             "while evaluating the sourceInfo of flake '{}'",

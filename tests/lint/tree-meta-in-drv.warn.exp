@@ -1,0 +1,2 @@
+warning: [tree-meta-in-drv] derivation 'x': attribute 'version' holds 'self.lastModifiedDate', a value that changes with every commit or edit, so this derivation and all that depend on it are built again each time; keep the value out of the build, or read it at run time
+  at /pwd/lint/tree-meta-in-drv.nix:2:56

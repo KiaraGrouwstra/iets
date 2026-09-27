@@ -747,7 +747,7 @@ fn ctx_internal(c: &Ctx) -> String {
         Ctx::Opaque(p) => base(p),
         Ctx::DrvDeep(d) => format!("={}", base(d)),
         Ctx::Built { drv, output } => format!("!{}!{}", lossy(output), base(drv)),
-        Ctx::Impure(p) => lossy(p).into_owned(),
+        Ctx::Impure(m) => lossy(m.bytes()).into_owned(),
     }
 }
 

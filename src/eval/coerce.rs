@@ -73,7 +73,7 @@ impl Evaluator {
                     // the text of a path outside the store: marked so a
                     // derivation that receives it can be linted
                     if !self.is_store_path_text(p.path) {
-                        ctx.push(Ctx::Impure(p.path));
+                        ctx.push(Ctx::Impure(Taint::Path(p.path)));
                     }
                     Ok(Cow::Borrowed(p.path))
                 }

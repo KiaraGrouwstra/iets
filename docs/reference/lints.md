@@ -129,7 +129,8 @@ For a compile-time lint the site is the node's position; for a runtime
 lint it is the call's position. The derivation-attribute lints are the
 exception: nixpkgs's `mkDerivation` and `fetchurl` bind the attributes
 of every derivation they make, so the attribute's position is in nixpkgs
-even when the value came from the user's file. Two rules:
+even when the value came from the user's file. Two rules, and one
+lint with a rule of its own:
 
 - The value lints (`impure-path-in-drv`, `absolute-path-in-drv`, `fod`)
   report the user's value whatever the wrapper. When the attribute's
@@ -152,6 +153,38 @@ even when the value came from the user's file. Two rules:
   call), else by the position of the `builder` attribute, which every
   wrapper binds itself. The site is the attribute's own position when
   the scope sees it, else the position the call was known by.
+
+### The tree that a value comes from
+
+`tree-meta-in-drv` is the one lint that does not take its level from the
+site. The tree that the value comes from gives the level:
+
+| the value comes from | level |
+|---|---|
+| the root tree (`self.rev`) | the level of the lint: `warn` by default |
+| a locked input (`inputs.nixpkgs.rev`) that has a `[lint.inputs.<node>]` table with this lint | the level in that table |
+| a different locked input | `off` with `scope = "root"`, the level of the lint with `scope = "all"` |
+
+The metadata of the root tree changes with each commit. The metadata of a
+locked input changes only when the lock file changes, and a rebuild is
+then correct. Thus an input is silent by default.
+
+```toml
+[lint.inputs.nixpkgs]
+tree-meta-in-drv = "warn"   # report nixpkgs's shortRev and lastModifiedDate
+```
+
+The site follows the rule of the value lints: the position of the
+attribute when the scope sees it, else the position of the derivation.
+There is one difference. A derivation that has no position in a root is
+not silent, because the value is the user's. The finding then goes to the
+position of the attribute, in the file that binds it:
+
+```
+$ ietsp eval --raw .#wrapped.drvPath     # wrapped = dep.mk self.narHash;
+warning: [tree-meta-in-drv] derivation 'wrapped': attribute 'v' holds 'self.narHash', a value that changes with every commit or edit, so this derivation and all that depend on it are built again each time; keep the value out of the build, or read it at run time
+  at /repo/dep/flake.nix:2:79
+```
 
 ## Silencing one site
 
@@ -251,6 +284,7 @@ are part of the IR cache key and their warnings are stored in the entry;
 | `dir-copy-unfiltered` | purity | evaluator | off | a directory outside the store copied whole by a string coercion: no filter, and not a tree the flake machinery already turned into a tracked file set |
 | `impure-path-in-drv` | purity | evaluator | off | a derivation attribute (env, `args`, structured attrs) holds the text of a path outside the store and not under a `flake.nix` directory (`toString ./x`), so the .drv depends on the checkout location |
 | `absolute-path-in-drv` | purity | evaluator | off | as above, for a path under a `flake.nix` directory: an absolute path a flake evaluation would have copied |
+| `tree-meta-in-drv` | purity | evaluator | **warn** | a derivation attribute (env, `args`, structured attrs) holds metadata of a source tree as a string: `rev`, `shortRev`, `dirtyRev`, `dirtyShortRev`, `lastModifiedDate` or `narHash`, so each commit gives a new .drv and a rebuild. The tree that the value comes from gives the level (Scope): the root tree by default, a locked input only with `[lint.inputs.<node>]`. Not for the integers `lastModified` and `revCount` (Limits) |
 | `unknown-allow` | meta | parser | **warn** | a word of a `# ietsp: allow` comment that is not a lint name, a family or `all`, or a `# ietsp:` directive other than `allow` (Silencing one site) |
 
 `impure-path-in-drv` works like Nix's store references: a coercion that
@@ -262,6 +296,42 @@ invisible to `getContext` and `hasContext`, `unsafeDiscardStringContext`
 strips it, and it never reaches an ATerm. `derivationStrict` reads it per
 attribute. The flake root of a path is the nearest ancestor holding a
 `flake.nix`; the probes are `Stat` observations of the tracing cache.
+
+`tree-meta-in-drv` uses the same context element with a different
+payload. `fetchTree` and the root tree of a flake put it on each metadata
+string of a tree, with the name of the value: `self.rev` for the root
+tree, `inputs.<node>.rev` for a locked input. ietsp makes the mark only
+when the lint is on for that tree, so an input without a level has none.
+The mark changes nothing that Nix sees: the `.drv` files, `getContext`,
+`hasContext`, `==` and `toJSON` give the same result with and without
+it. `scripts/flaketest.nu` compares them with Nix.
+
+```nix
+{
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  outputs = { self, nixpkgs }: {
+    packages.x86_64-linux.default = nixpkgs.legacyPackages.x86_64-linux.hello.overrideAttrs {
+      BUILD_REV = self.shortRev or self.dirtyShortRev;
+    };
+  };
+}
+```
+
+```
+$ ietsp eval --raw .#packages.x86_64-linux.default.drvPath
+warning: [tree-meta-in-drv] derivation 'hello-2.12.3': attribute 'BUILD_REV' holds 'self.shortRev', a value that changes with every commit or edit, so this derivation and all that depend on it are built again each time; keep the value out of the build, or read it at run time
+  at /repo/flake.nix:5:7
+```
+
+If the rebuild is small and you want the value in the build, there are
+two procedures:
+
+- Put `# ietsp: allow tree-meta-in-drv` on the line before the site.
+- Remove the mark where you read the value:
+  `builtins.unsafeDiscardStringContext self.rev`. Use this when the site
+  is in an input, such as `system.configurationRevision` of NixOS, which
+  nixpkgs writes into the derivation `nixos-version`. Nix gives the same
+  string.
 
 ## Defaults and parity
 
@@ -309,6 +379,7 @@ the build with those exemptions (outpaths then had 168 errors);
 | `dir-copy-unfiltered` | 0 | 0 | 3 |
 | `impure-path-in-drv` | 0 | 0 | 0 |
 | `absolute-path-in-drv` | 0 | 0 | 0 |
+| `tree-meta-in-drv` | 0 | 0 | 0 |
 | `absolute-path-literal` | 2 | 9 | 26 |
 | `short-path-literal` | 0 | 1 | 6 |
 | `unknown-allow` | 0 | 0 | 0 |
@@ -329,6 +400,18 @@ with `-I nixpkgs=<copy> --lint-scope all --lint impure-path-in-drv=warn
 |---|---:|---:|
 | `impure-path-in-drv` | 0 | 0 |
 | `absolute-path-in-drv` | 3 | 3 |
+
+`tree-meta-in-drv` is zero above because none of these workloads is a
+flake: no tree has a name, so ietsp makes no mark. The count for the
+outpaths column is not measured; it follows from that. Measured on a
+scratch git flake with the pinned tree as a `path:` input, the `minimal`
+profile of NixOS and `system.configurationRevision = self.rev`,
+2026-09-27:
+
+| configuration | findings | derivations that hold the value |
+|---|---:|---|
+| default | 1 | `nixos-version` (`self.rev`) |
+| `[lint.inputs.nixpkgs] tree-meta-in-drv = "warn"` | 3 | `nixos-version`, `etc-os-release`, `nixos-system-scratch-…` (`inputs.nixpkgs.lastModifiedDate`) |
 
 The copy holds nixpkgs's `flake.nix`, so every path under it is under a
 flake root and the sites are all `absolute-path-in-drv`; the three, on
@@ -391,6 +474,15 @@ The `#` arm of the lexer's trivia loop is a function of its own: inlined,
 it grew `next_token` past what its callers inline, which cost 1.5 % of
 the instructions. At a site the check is one branch on an empty table.
 
+`tree-meta-in-drv` is `warn` by default. Thus `derivationStrict` examines
+the context of each attribute for a mark in each run, and the context
+element has one more level in its type. Measured with `perf stat -e
+instructions:u` on nixos-desktop (one worker, `--no-tracing-cache`, a
+warm compiled-file cache, 7 runs for each binary, 2026-09-27): 9.3915 G
+instructions before and 9.3942 G after, which is +0.03 %. Two runs of
+one binary are up to 0.02 % apart. nixos-desktop is not a flake, so it
+has no mark and the number is the cost of the test alone.
+
 ## Caches and parallelism
 
 - A lint warning is an effect. `Cache::write` stores the record of each
@@ -445,6 +537,21 @@ the instructions. At a site the check is one branch on an empty table.
   a string rebuilt from `substring` or `match` loses it, like store
   context. A structured-attrs value keeps the marker through
   `builtins.toJSON`.
+- `tree-meta-in-drv` does not see the integers `lastModified` and
+  `revCount`. A string context cannot go on an integer, so
+  `toString self.lastModified` is a string without the mark. The pinned
+  nixpkgs reads these integers from a flake tree at one place only
+  (`nixos/modules/config/nix-flakes.nix`), and the same attribute holds
+  `rev` and `narHash`, which have the mark.
+- `tree-meta-in-drv` sees a value only through the mark. The builtins
+  that drop the store context drop the mark too: `match`, `split`,
+  `hashString`, `fromJSON`, an attribute name. `builtins.toFile` writes
+  the value into a store file and gives no finding, although the file
+  changes with each commit.
+- `tree-meta-in-drv` knows where the value goes, not where the code read
+  it. When nixpkgs binds the attribute, the site is in nixpkgs, and a
+  `# ietsp: allow` comment cannot go there. Remove the mark at the place
+  that reads the value (`builtins.unsafeDiscardStringContext`).
 - `unhashed-fetch` treats any of `sha256`, `hash`, `narHash`,
   `outputHash` or `rev` as pinning; it does not check the value.
 - One warning per (lint, position): `fod` and the derivation attribute

@@ -181,10 +181,12 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
             "ietsp: fetchTree input type '{other}' is not supported"
         ),
     };
-    if let Some(name) = str_attr(&attrs, "narHash").and_then(|h| ev.input_names.get(h)) {
-        ev.known.name_flake(&sp, name);
+    let name = str_attr(&attrs, "narHash").and_then(|h| ev.input_names.get(h));
+    if let Some(name) = &name {
+        ev.known.name_flake(&sp, name.clone());
     }
-    emit_tree_attrs(ev, &sp, &attrs, pos)
+    let source = name.map(|n| format!("inputs.{n}"));
+    emit_tree_attrs(ev, &sp, &attrs, source.as_deref(), pos)
 }
 
 /// fetchTree.cc:fetch for `builtins.fetchTarball`: with a `sha256` the store
@@ -260,20 +262,33 @@ pub fn fetch_tarball_builtin(ev: &mut Evaluator, args: &[Word], pos: Pos) -> Eva
 }
 
 /// fetchTree.cc:emitTreeAttrs with `emptyRevFallback = false`; `forceDirty`
-/// is expressed by the caller leaving out `rev`/`revCount`.
+/// is expressed by the caller leaving out `rev`/`revCount`. `source` names
+/// the tree (`self`, `inputs.<node>`): each string that changes with the
+/// tree gets the mark `tree-meta-in-drv` reads, when that lint is on for
+/// the tree.
 pub fn emit_tree_attrs(
     ev: &mut Evaluator,
     sp: &StorePath,
     a: &Attrs,
+    source: Option<&str>,
     pos: Pos,
 ) -> EvalResult<Word> {
+    use crate::lint::{Level, purity::tree_meta_level};
     let mut entries: Vec<(Sym, Pos, Word)> = Vec::with_capacity(10);
     let full = ev.arena.alloc_bytes(sp.to_full_string().as_bytes());
     let ctx = ev.arena.alloc_slice(&[Ctx::Opaque(full)]);
     let out_path = ev.arena.mk_string_static(full, ctx);
     entries.push((ev.s.out_path, pos, out_path));
+    let source = source.filter(|s| tree_meta_level(ev, s) != Level::Off);
     let mut push_str = |ev: &mut Evaluator, name: &[u8], v: &str| {
-        let w = ev.mk_string(v.as_bytes());
+        let w = match source {
+            Some(s) => {
+                let m = ev.arena.alloc_concat(&[s.as_bytes(), b".", name]);
+                ev.arena
+                    .mk_string_ctx(v.as_bytes(), &[Ctx::Impure(Taint::Meta(m))])
+            }
+            None => ev.mk_string(v.as_bytes()),
+        };
         entries.push((ev.sym(name), pos, w));
     };
     if let Some(h) = str_attr(a, "narHash") {
@@ -305,4 +320,120 @@ pub fn emit_tree_attrs(
         entries.push((ev.sym(b"submodules"), pos, w));
     }
     ev.mk_attrs(&mut entries, pos)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::eval::EvalConfig;
+    use crate::lint::Config;
+
+    fn tree(ev: &mut Evaluator, source: &str) -> Word {
+        let sp = StorePath::parse("/nix/store/00000000000000000000000000000000-source").unwrap();
+        let attrs = Attrs::from([
+            ("narHash".into(), AttrVal::Str("sha256-x".into())),
+            ("rev".into(), AttrVal::Str("a".repeat(40))),
+            ("lastModified".into(), AttrVal::Int(86400)),
+            ("revCount".into(), AttrVal::Int(7)),
+        ]);
+        emit_tree_attrs(ev, &sp, &attrs, Some(source), Pos::NONE).unwrap()
+    }
+
+    /// `f tree` as a string: its bytes and the names of its marks.
+    fn marks(ev: &mut Evaluator, tree: Word, f: &str) -> (String, Vec<String>) {
+        let f = ev.eval_string(f, b"/").unwrap();
+        let v = ev.apply(f, &[tree], Pos::NONE).unwrap();
+        let s = ev.force_string(v, Pos::NONE, "").unwrap();
+        let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
+        let names = s.ctx.iter().map(|c| match c {
+            Ctx::Impure(Taint::Meta(m)) => text(m),
+            other => panic!("{f:?}: {other:?}"),
+        });
+        (text(s.bytes), names.collect())
+    }
+
+    #[test]
+    fn the_mark_follows_the_string_like_store_context() {
+        let mut ev = Evaluator::new();
+        let t = tree(&mut ev, "self");
+        for (f, want) in [
+            ("t: t.rev", "self.rev"),
+            ("t: t.narHash", "self.narHash"),
+            (
+                "t: builtins.substring 0 8 t.lastModifiedDate",
+                "self.lastModifiedDate",
+            ),
+            ("t: \"v\" + t.shortRev", "self.shortRev"),
+            ("t: \"1.0-${t.shortRev}\"", "self.shortRev"),
+            (
+                "t: builtins.concatStringsSep \".\" [ \"1\" t.shortRev ]",
+                "self.shortRev",
+            ),
+            ("t: toString t.rev", "self.rev"),
+            ("t: toString [ 1 t.rev ]", "self.rev"),
+            (
+                "t: builtins.replaceStrings [ \"a\" ] [ \"b\" ] t.rev",
+                "self.rev",
+            ),
+            ("t: builtins.toJSON { r = t.rev; }", "self.rev"),
+        ] {
+            assert_eq!(marks(&mut ev, t, f).1, [want], "{f}");
+        }
+        let both = marks(&mut ev, t, "t: t.shortRev + t.narHash").1;
+        assert_eq!(both, ["self.narHash", "self.shortRev"]);
+        let none: [&str; 0] = [];
+        for f in [
+            "t: builtins.unsafeDiscardStringContext t.rev",
+            // an integer holds no context: docs/reference/lints.md, Limits
+            "t: toString t.lastModified",
+            "t: toString t.revCount",
+        ] {
+            assert_eq!(marks(&mut ev, t, f).1, none, "{f}");
+        }
+    }
+
+    #[test]
+    fn nix_sees_no_mark() {
+        let mut ev = Evaluator::new();
+        let t = tree(&mut ev, "self");
+        let f = "t: builtins.toJSON [
+          (builtins.getContext t.rev) (builtins.hasContext t.rev)
+          (t.rev == builtins.unsafeDiscardStringContext t.rev)
+          (builtins.toJSON t.shortRev) { ${t.shortRev} = 1; }
+          (builtins.match \"(a+)\" t.rev != null) (builtins.stringLength t.rev)
+          t.lastModifiedDate
+        ]";
+        assert_eq!(
+            marks(&mut ev, t, f).0,
+            r#"[{},false,true,"\"aaaaaaa\"",{"aaaaaaa":1},true,40,"19700102000000"]"#
+        );
+    }
+
+    #[test]
+    fn the_tree_decides_the_level() {
+        let marked = |cfg: Config, source: &str| {
+            let mut ev = EvalConfig::new().lints(cfg).build();
+            let t = tree(&mut ev, source);
+            !marks(&mut ev, t, "t: t.rev").1.is_empty()
+        };
+        let toml = |text: &str| {
+            let mut c = Config::default();
+            c.apply_toml(text, std::path::Path::new("/r/ietsp.toml"))
+                .unwrap();
+            c
+        };
+        assert!(marked(Config::default(), "self"));
+        assert!(!marked(Config::default(), "inputs.nixpkgs"));
+        assert!(!marked(
+            toml("[lint]\ntree-meta-in-drv = \"off\"\n"),
+            "self"
+        ));
+        let input = "[lint]\ntree-meta-in-drv = \"off\"\n[lint.inputs.nixpkgs]\ntree-meta-in-drv = \"warn\"\n";
+        assert!(marked(toml(input), "inputs.nixpkgs"));
+        assert!(!marked(toml(input), "inputs.other"));
+        assert!(!marked(toml(input), "self"));
+        assert!(marked(toml("[lint]\nscope = \"all\"\n"), "inputs.nixpkgs"));
+        let family = "[lint.inputs.nixpkgs]\n\"family:purity\" = \"error\"\n";
+        assert!(marked(toml(family), "inputs.nixpkgs"));
+    }
 }

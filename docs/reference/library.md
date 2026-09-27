@@ -201,5 +201,6 @@ item corresponds to.
 
 The string context has no C counterpart in that header beyond
 `nix_string_realise`; `ContextElem` carries the four element kinds ietsp
-keeps (`Opaque`, `DrvDeep`, `Built`, and the `Impure` marker a path
-coercion leaves, which `builtins.getContext` does not show).
+keeps (`Opaque`, `DrvDeep`, `Built`, and the `Impure` marker that a path
+coercion or the metadata of a source tree leaves, which
+`builtins.getContext` does not show).

@@ -277,7 +277,7 @@ pub fn ctx_display(c: &Ctx) -> String {
                 String::from_utf8_lossy(drv)
             )
         }
-        Ctx::Impure(p) => String::from_utf8_lossy(p).into_owned(),
+        Ctx::Impure(m) => String::from_utf8_lossy(m.bytes()).into_owned(),
     }
 }
 

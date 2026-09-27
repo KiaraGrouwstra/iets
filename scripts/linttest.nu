@@ -185,6 +185,43 @@ def main [] {
   "[lint.inputs.dep]\nurl-literal = \"warn\"\n" | save -f $"($dir)/ietsp.toml"
   let r = (^$ietsp eval --raw --no-tracing-cache --lint url-literal=warn $"($dir)#value" | complete)
   $res ++= [(verdict (($r.stderr | str contains $root_site) and ($r.stderr | str contains $dep_site)) "flake: [lint.inputs.dep] opens the input" $"flake: inputs table: ($r.stderr)")]
+
+  # tree-meta-in-drv: the tree a value comes from decides the level, not the site
+  rm $"($dir)/ietsp.toml"
+  let meta = "warning: [tree-meta-in-drv] derivation 'meta': attribute"
+  let r = (^$ietsp eval --raw --no-tracing-cache $"($dir)#meta.drvPath" | complete)
+  let ok = (($r.stderr | str contains $"($meta) 'v' holds 'self.lastModifiedDate', a value that changes with every commit or edit") and ($r.stderr | str contains $"($meta) 'args' holds 'self.narHash'") and ($r.stderr | str contains $"at ($dir)/flake.nix:9:69"))
+  $res ++= [(verdict $ok "tree-meta: the root's metadata in a derivation is a warning by default" $"tree-meta: root: ($r.stderr)")]
+  let r = (^$ietsp eval --raw --no-tracing-cache --lint tree-meta-in-drv=error $"($dir)#meta.drvPath" | complete)
+  $res ++= [(verdict ($r.exit_code == 1 and ($r.stderr | str starts-with "error: [tree-meta-in-drv]")) "tree-meta: --lint sets the level" $"tree-meta: error: rc=($r.exit_code) ($r.stderr)")]
+  let r = (with-env {IETSP_LINT: "family:purity=off"} { ^$ietsp eval --raw --no-tracing-cache $"($dir)#meta.drvPath" | complete })
+  $res ++= [(verdict ($r.exit_code == 0 and not ($r.stderr | str contains "warning:")) "tree-meta: IETSP_LINT turns it off" $"tree-meta: IETSP_LINT: ($r.stderr)")]
+  mkdir $"($work)/user/ietsp"
+  "[lint]\ntree-meta-in-drv = \"error\"\n" | save $"($work)/user/ietsp/ietsp.toml"
+  let r = (with-env {XDG_CONFIG_HOME: $"($work)/user"} { ^$ietsp eval --raw --no-tracing-cache $"($dir)#meta.drvPath" | complete })
+  $res ++= [(verdict ($r.exit_code == 1 and ($r.stderr | str starts-with "error: [tree-meta-in-drv]")) "tree-meta: the user ietsp.toml sets the level" $"tree-meta: user toml: rc=($r.exit_code) ($r.stderr)")]
+  let r = (^$ietsp eval --raw --no-tracing-cache $"($dir)#wrapped.drvPath" | complete)
+  let ok = (($r.stderr | str contains "derivation 'wrapped': attribute 'v' holds 'self.narHash'") and ($r.stderr | str contains $"at ($work)/dep/flake.nix:2:79"))
+  $res ++= [(verdict $ok "tree-meta: the root's value through a wrapper of an input is reported" $"tree-meta: wrapper: ($r.stderr)")]
+  let r = (^$ietsp eval --raw --no-tracing-cache $"($dir)#allowed.drvPath" | complete)
+  $res ++= [(verdict ($r.exit_code == 0 and not ($r.stderr | str contains "warning:")) "tree-meta: # ietsp: allow silences the site" $"tree-meta: allow: ($r.stderr)")]
+  let r = (^$ietsp eval --raw --no-tracing-cache $"($dir)#depMeta.drvPath" | complete)
+  $res ++= [(verdict ($r.exit_code == 0 and not ($r.stderr | str contains "warning:")) "tree-meta: the metadata of an input is silent" $"tree-meta: input: ($r.stderr)")]
+  let r = (^$ietsp eval --raw --no-tracing-cache --lint-scope all $"($dir)#depMeta.drvPath" | complete)
+  $res ++= [(verdict ($r.stderr | str contains "holds 'inputs.dep.narHash', a value that changes with every update of the lock file") "tree-meta: --lint-scope all reports the input's metadata" $"tree-meta: scope all: ($r.stderr)")]
+  let cache = (mktemp -d --tmpdir ietsp-linttest.XXXXXX)
+  let json = [--raw --timings --log-format internal-json $"($dir)#meta.drvPath"]
+  let r1 = (with-env {IETSP_CACHE_DIR: $cache} { ^$ietsp eval ...$json | complete })
+  let r2 = (with-env {IETSP_CACHE_DIR: $cache} { ^$ietsp eval ...$json | complete })
+  rm -rf $cache
+  let has = {|r| ($r.stderr | str contains '"code":"lint"') and ($r.stderr | str contains "[tree-meta-in-drv] derivation 'meta': attribute 'v'") and ($r.stderr | str contains '"start":') }
+  $res ++= [(verdict ((do $has $r1) and (do $has $r2) and ($r2.stderr | str contains "cache: hit") and $r1.stdout == $r2.stdout) "tree-meta: a cache hit gives the finding, as a record with the span" $"tree-meta: cache: ($r1.stderr) ($r2.stderr)")]
+  "[lint]\ntree-meta-in-drv = \"off\"\n[lint.inputs.dep]\ntree-meta-in-drv = \"warn\"\n" | save -f $"($dir)/ietsp.toml"
+  let r = (^$ietsp eval --raw --no-tracing-cache $"($dir)#depMeta.drvPath" | complete)
+  let ok = (($r.stderr | str contains "derivation 'dep-meta': attribute 'v' holds 'inputs.dep.narHash'") and ($r.stderr | str contains $"at ($dir)/flake.nix:11:76"))
+  $res ++= [(verdict $ok "tree-meta: [lint.inputs.dep] reports the input's metadata" $"tree-meta: inputs table: ($r.stderr)")]
+  let r = (^$ietsp eval --raw --no-tracing-cache $"($dir)#meta.drvPath" | complete)
+  $res ++= [(verdict ($r.exit_code == 0 and not ($r.stderr | str contains "warning:")) "tree-meta: the project ietsp.toml turns the root off" $"tree-meta: project toml: ($r.stderr)")]
   rm -rf $work
 
   # `# ietsp: allow`: the sites on a covered line are silent

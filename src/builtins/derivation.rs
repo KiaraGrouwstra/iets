@@ -418,8 +418,6 @@ fn derivation_strict_internal(
         None => false,
     };
 
-    let path_lint = ev.lint_on(crate::lint::LintId::ImpurePathInDrv)
-        || ev.lint_on(crate::lint::LintId::AbsolutePathInDrv);
     // `lint::coerce::drv_fallback`, found when the first finding needs it
     let mut lint_fallback: Option<Pos> = None;
     let mut fallback = |ev: &mut Evaluator| {
@@ -466,19 +464,11 @@ fn derivation_strict_internal(
                 e
             },
         )?;
-        if path_lint {
-            let impure: Vec<&'static [u8]> = b.context[before..]
-                .iter()
-                .filter_map(|c| match c {
-                    Ctx::Impure(p) => Some(*p),
-                    _ => None,
-                })
-                .collect();
+        let ctx = &b.context[before..];
+        if ctx.iter().any(|c| !c.is_store()) {
             let fallback = fallback(ev);
             let site = crate::lint::coerce::drv_attr_pos(ev, attr.pos, fallback);
-            for p in impure {
-                crate::lint::purity::path_in_drv(ev, drv_name, &key, p, site)?;
-            }
+            crate::lint::purity::marks_in_drv(ev, drv_name, &key, ctx, site, attr.pos)?;
         }
     }
 
