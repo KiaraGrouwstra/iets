@@ -174,7 +174,7 @@ pub fn parse_attr_path(s: &str) -> Result<Vec<String>> {
 fn read_traced(ev: &Evaluator, p: &Path) -> std::io::Result<Vec<u8>> {
     let meta = std::fs::metadata(p)?;
     let bytes = std::fs::read(p)?;
-    ev.trace.file(
+    ev.trace().file(
         <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::as_bytes(p.as_os_str()),
         &meta,
         &bytes,
@@ -272,7 +272,7 @@ pub fn get_flake(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word
         let msg = format!("ietsp: builtins.getFlake on '{s}' {why} is not supported");
         EvalError::boxed(ErrorKind::Unsupported, msg, pos)
     };
-    if ev.pure {
+    if ev.pure() {
         // a rev or a narHash may lock it; the real nix decides those
         if p.input.contains_key("rev") || p.input.contains_key("narHash") {
             return Err(unsupported("in pure evaluation mode"));

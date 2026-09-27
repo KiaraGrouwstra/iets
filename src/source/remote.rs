@@ -165,7 +165,7 @@ pub fn ensure_readable(
     let full = sp.to_full_string();
     let on_disk = crate::trace::stat_kind(Path::new(&full), true);
     if on_disk != crate::trace::Kind::Missing {
-        ev.trace.stat(full.as_bytes(), true, on_disk);
+        ev.trace().stat(full.as_bytes(), true, on_disk);
         return Ok(());
     }
     if let Some(entry) = crate::treestore::get(sp.base_name()) {
@@ -177,7 +177,7 @@ pub fn ensure_readable(
         "ietsp: input '{name}' is not in the store ({full}), fetching it"
     ));
     if substitute(ev, &full) {
-        ev.trace
+        ev.trace()
             .stat(full.as_bytes(), true, crate::trace::Kind::Directory);
         return Ok(());
     }
@@ -187,7 +187,7 @@ pub fn ensure_readable(
         return Ok(());
     }
     fetch_with_nix(&full, &name, attrs, pos)?;
-    if ev.trace.stat_now(full.as_bytes(), true) == crate::trace::Kind::Missing {
+    if ev.trace().stat_now(full.as_bytes(), true) == crate::trace::Kind::Missing {
         bail!(
             ErrorKind::Io,
             pos,
@@ -325,7 +325,7 @@ fn fetch_tarball(
 ) -> EvalResult<std::sync::Arc<crate::treestore::StoredTree>> {
     let name = input_name(ev, attrs);
     let fail = |e: String| Error::boxed(ErrorKind::Eval, e, pos);
-    let (url, headers) = tarball_url(nix_conf(&ev.session), attrs)
+    let (url, headers) = tarball_url(nix_conf(ev.session()), attrs)
         .map_err(|e| fail(format!("ietsp: cannot fetch input '{name}': {e}")))?;
     let expected = str_attr(attrs, "narHash")
         .and_then(|h| parse_nar_hash(h).ok())
@@ -346,7 +346,7 @@ fn fetch_tarball(
     })?;
     let mut spool = crate::fetch::spool::spool_file(staged.dir())
         .map_err(|e| fail(format!("ietsp: cannot fetch input '{name}': {e}")))?;
-    crate::fetch::http::Limits::new(nix_conf(&ev.session))
+    crate::fetch::http::Limits::new(nix_conf(ev.session()))
         .and_then(|l| crate::fetch::http::get_decompressed(&url, &headers, l, &mut spool))
         .map_err(|e| fail(format!("ietsp: cannot fetch input '{name}': {e}")))?;
     let tree = crate::fetch::spool::Tree::index(spool)

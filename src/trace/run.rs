@@ -133,14 +133,14 @@ impl Cache {
     /// drv and source tables, which only a `build` hit reads back.
     pub fn write(&self, ev: &Evaluator, result: &[u8], tables: bool) {
         use crate::trace::wire;
-        if !ev.trace.is_cacheable() {
+        if !ev.trace().is_cacheable() {
             if self.timings {
                 crate::errln!("cache: not written (uncacheable run)");
             }
             return;
         }
         let t0 = std::time::Instant::now();
-        let obs = ev.trace.take();
+        let obs = ev.trace().take();
         let mut warnings = Vec::new();
         for w in ev.lints.lines() {
             warnings.extend_from_slice(w.as_bytes());

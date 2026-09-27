@@ -63,13 +63,13 @@ pub fn register(r: &mut Registry) {
 macro_rules! unsupported {
     ($fn:ident, $msg:expr) => {
         fn $fn(ev: &mut Evaluator, _args: &[Word], pos: Pos) -> EvalResult<Word> {
-            ev.trace.mark_uncacheable();
+            ev.trace().mark_uncacheable();
             bail!(ErrorKind::Unsupported, pos, "{}", $msg)
         }
     };
     ($fn:ident, $name:literal, $msg:expr) => {
         fn $fn(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
-            ev.trace.mark_uncacheable();
+            ev.trace().mark_uncacheable();
             crate::lint::purity::unhashed_fetch(ev, $name, args[0], pos)?;
             bail!(ErrorKind::Unsupported, pos, "{}", $msg)
         }
@@ -205,7 +205,7 @@ pub fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>
             Ctx::Impure(_) => continue,
             Ctx::Opaque(sp) | Ctx::DrvDeep(sp) => {
                 if store_hooks::locate(ev, sp).is_some()
-                    || ev.trace.stat_now(sp, true) != crate::trace::Kind::Missing
+                    || ev.trace().stat_now(sp, true) != crate::trace::Kind::Missing
                 {
                     continue;
                 }
@@ -364,7 +364,7 @@ fn to_store_path(p: &[u8]) -> Option<(Result<StorePath, ()>, &[u8])> {
 }
 
 fn store_path(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
-    if ev.pure {
+    if ev.pure() {
         bail!(
             ErrorKind::Eval,
             pos,
@@ -381,7 +381,7 @@ fn store_path(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     )?;
     if !is_store_path(&p) && store_hooks::locate(ev, &p).is_none_or(|at| at.hidden()) {
         let resolved = fs::canonicalize(os_path(&p));
-        ev.trace.canon(&p, resolved.as_deref().ok());
+        ev.trace().canon(&p, resolved.as_deref().ok());
         let resolved = resolved.map_err(|e| io_error(e, "getting status of", &p, pos))?;
         p = resolved.into_os_string().into_vec();
     }
@@ -469,7 +469,7 @@ fn add_path_inner(
         .transpose()
         .map_err(store_err)?;
     if let Some(sp) = &expected_sp
-        && ev.trace.stat_now(sp.to_full_string().as_bytes(), true) != crate::trace::Kind::Missing
+        && ev.trace().stat_now(sp.to_full_string().as_bytes(), true) != crate::trace::Kind::Missing
     {
         ev.known.lock().entry(sp.clone()).or_default();
         return Ok(sp.clone());
@@ -482,7 +482,7 @@ fn add_path_inner(
         let resolved =
             fs::canonicalize(os_path(path)).unwrap_or_else(|_| os_path(path).to_path_buf());
         if resolved.as_os_str().as_bytes() != path {
-            ev.trace.canon(path, Some(&resolved));
+            ev.trace().canon(path, Some(&resolved));
         }
         SrcPath::fs(resolved, None)
     } else {
@@ -527,7 +527,7 @@ fn add_path_inner(
             // an enclosing tree's `parent` set is the only thing narrowing them: then the
             // recorded filter is accept-all and only a separate walk matches it.
             let mut fp = (on_disk && (filter.is_some() || parent.is_none()))
-                .then(|| ev.trace.fp(&resolved))
+                .then(|| ev.trace().fp(&resolved))
                 .flatten();
             let mut err: Option<Box<Error>> = None;
             let git_lint = on_disk && ev.lint_on(crate::lint::LintId::GitInSource);
@@ -572,7 +572,7 @@ fn add_path_inner(
             nar_size = h.bytes_written();
             let h = h.finish();
             if on_disk {
-                ev.trace.tree(
+                ev.trace().tree(
                     &resolved,
                     crate::trace::hash_to_digest(&h),
                     accepted.as_ref(),

@@ -38,7 +38,7 @@ pub fn register(r: &mut Registry) {
 /// `builtins.currentTime` is a thunk over this, so the run is marked
 /// uncacheable only when a program forces it.
 pub(super) fn current_time(ev: &mut Evaluator, _args: &[Word], _pos: Pos) -> EvalResult<Word> {
-    ev.trace.mark_uncacheable();
+    ev.trace().mark_uncacheable();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -531,11 +531,11 @@ fn get_env(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         "while evaluating the first argument passed to builtins.getEnv",
     )?;
     crate::lint::purity::get_env(ev, name, pos)?;
-    if ev.pure {
+    if ev.pure() {
         return Ok(ev.mk_string(b""));
     }
     let os = <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(name);
-    ev.trace.env(name);
+    ev.trace().env(name);
     let v = std::env::var_os(os).unwrap_or_default();
     let bytes = <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::as_bytes(&v);
     Ok(ev.mk_string(bytes))

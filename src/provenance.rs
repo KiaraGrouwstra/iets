@@ -154,7 +154,7 @@ impl SourceMap {
 /// eval-jobs walk and `report`, which both run while the evaluation is live.
 /// Built on first use, so a tree copied later is not in it.
 fn lazy_map(ev: &Evaluator) -> &SourceMap {
-    ev.session
+    ev.session()
         .source_map
         .get_or_init(|| SourceMap::from_eval(ev))
 }

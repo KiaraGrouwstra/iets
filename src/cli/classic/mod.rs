@@ -205,7 +205,7 @@ pub fn eval_config(c: &Common, cfg: &Config) -> EvalConfig {
 /// path relative to the working directory.
 pub fn lookup_file_arg(ev: &mut Evaluator, f: &str, cwd: &[u8]) -> EvalResult<Vec<u8>> {
     if f.len() > 2 && f.starts_with('<') && f.ends_with('>') {
-        let entries = ev.search_path.clone();
+        let entries = ev.search_path().to_vec();
         return ev.find_file(&entries, &f.as_bytes()[1..f.len() - 1], Pos::NONE);
     }
     Ok(abs_path(f, cwd))

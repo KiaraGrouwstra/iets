@@ -109,7 +109,7 @@ pub fn drv_fallback(
     pos: Pos,
     name_pos: Pos,
 ) -> Pos {
-    if !ev.lints.config.scoped() {
+    if !ev.lint_config().scoped() {
         return Pos::NONE;
     }
     for p in [pos, name_pos] {
@@ -135,7 +135,7 @@ pub fn drv_fallback(
 /// and a list or Boolean there is the wrapper's contract, not a coercion
 /// the user chose.
 pub fn drv_owner(ev: &mut Evaluator, pos: Pos, builder_pos: Pos) -> Option<Pos> {
-    if !ev.lints.config.scoped() {
+    if !ev.lint_config().scoped() {
         return Some(pos);
     }
     [pos, builder_pos]
@@ -146,7 +146,7 @@ pub fn drv_owner(ev: &mut Evaluator, pos: Pos, builder_pos: Pos) -> Option<Pos> 
 /// The site a derivation-attribute lint reports at: the attribute's own
 /// position when the scope keeps it, else `fallback`.
 pub fn drv_attr_pos(ev: &mut Evaluator, attr_pos: Pos, fallback: Pos) -> Pos {
-    if !ev.lints.config.scoped() || ev.where_of(attr_pos) != Where::Elsewhere {
+    if !ev.lint_config().scoped() || ev.where_of(attr_pos) != Where::Elsewhere {
         attr_pos
     } else {
         fallback

@@ -208,7 +208,7 @@ fn run(ev: &mut Evaluator, a: EvalArgs, o: Opts) -> Result<(), Box<Error>> {
     match flake {
         None => found.push((attr, evaluate(ev, a)?)),
         Some((loc, frag, p)) => {
-            paths = installable::attr_paths(p, &frag, ev.current_system);
+            paths = installable::attr_paths(p, &frag, ev.current_system());
             let outputs = evaluate(
                 ev,
                 EvalArgs {

@@ -608,9 +608,9 @@ fn dev_env_build(ev: &mut Evaluator, a: EvalArgs, d: &DevEnvArgs) -> Result<DevE
                 std::str::from_utf8(&aterm).map_err(|e| CrateError::Store(e.to_string()))?,
                 Derivation::name_from_path(&shell_path)?,
             ),
-            None => load_drv_traced(&ev.trace, &shell_path),
+            None => load_drv_traced(ev.trace(), &shell_path),
         }?;
-        let trace = ev.trace.clone();
+        let trace = ev.trace().clone();
         let mut loader = move |p: &StorePath| load_drv_traced(&trace, p);
         let env_drv =
             devenv::env_derivation(&shell, &mut ev.drv.hash_cache.lock().unwrap(), &mut loader)?;

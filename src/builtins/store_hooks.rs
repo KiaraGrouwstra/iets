@@ -71,7 +71,7 @@ pub fn resolve(ev: &Evaluator, path: &[u8]) -> SrcPath {
 /// behind an allow list): only under a store path this evaluation added or a
 /// fetch found on disk. Always true when impure.
 pub fn allowed(ev: &Evaluator, path: &[u8]) -> bool {
-    !ev.pure || ev.known.under(path).is_some()
+    !ev.pure() || ev.known.under(path).is_some()
 }
 
 /// [`resolve`] behind the pure-eval allow list, with the error Nix's
@@ -255,7 +255,7 @@ impl SrcPath {
                     fs::symlink_metadata(os(&p))
                 };
                 let kind = Kind::of(&r);
-                ev.trace.stat(&p, follow, kind);
+                ev.trace().stat(&p, follow, kind);
                 r.map(|_| kind)
             }
             At::Spool(tree, name) => {
@@ -272,7 +272,7 @@ impl SrcPath {
         if let Some(At::Disk(p)) = self.at() {
             let dir = fs::metadata(os(&p))?.is_dir();
             if dir {
-                ev.trace.stat(&p, true, Kind::Directory);
+                ev.trace().stat(&p, true, Kind::Directory);
             }
             return Ok(dir);
         }
@@ -300,7 +300,7 @@ impl SrcPath {
                 f.take(if sized { meta.len() } else { u64::MAX })
                     .read_to_end(&mut bytes)
                     .map_err(|e| (READ, e))?;
-                ev.trace.file(&p, &meta, &bytes);
+                ev.trace().file(&p, &meta, &bytes);
                 Ok(bytes)
             }
             At::Spool(tree, name) => match tree.read(&self.rel) {
@@ -341,15 +341,15 @@ impl SrcPath {
                         (FileType::Unknown, Kind::Other)
                     };
                     let name = e.file_name().into_vec();
-                    if ev.trace.is_on() {
+                    if ev.trace().is_on() {
                         listing.push((name.clone(), kind));
                     }
                     if self.accepts(&e.path()) {
                         out.push((name, t));
                     }
                 }
-                if ev.trace.is_on() {
-                    ev.trace.record(crate::trace::Obs::Dir {
+                if ev.trace().is_on() {
+                    ev.trace().record(crate::trace::Obs::Dir {
                         path: p,
                         hash: crate::trace::dir_listing_hash(&mut listing),
                     });
@@ -457,13 +457,13 @@ pub fn copy_path_to_store(
             if ev.lint_on(crate::lint::LintId::DirCopyUnfiltered)
                 && accepted.is_none()
                 && !ev.is_store_path_text(path)
-                && ev.trace.stat_now(local.as_os_str().as_bytes(), true) == Kind::Directory
+                && ev.trace().stat_now(local.as_os_str().as_bytes(), true) == Kind::Directory
             {
                 crate::lint::purity::dir_copy_unfiltered(ev, path, pos)?;
             }
             let git_lint = ev.lint_on(crate::lint::LintId::GitInSource);
             let mut saw_git = false;
-            let mut fp = ev.trace.fp(&local);
+            let mut fp = ev.trace().fp(&local);
             let mut filter = |p: &Path, t: FileType| {
                 let keep = at.accepts(p);
                 if let Some(fp) = &mut fp {
@@ -477,7 +477,7 @@ pub fn copy_path_to_store(
             let (hash, nar_size) =
                 crate::store::nar::nar_hash_filtered(&local, HashAlgo::Sha256, &mut filter)
                     .map_err(copy_err)?;
-            ev.trace.tree(
+            ev.trace().tree(
                 &local,
                 crate::trace::hash_to_digest(&hash),
                 accepted.as_deref(),

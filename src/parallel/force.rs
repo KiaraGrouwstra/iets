@@ -17,7 +17,7 @@ pub const BATCH: u32 = 16;
 /// `IETSP_FANOUT` bitmask for experiments: 1 deep, 2 coerce, 4 list builtins.
 #[inline]
 fn fanout_mask(ev: &Evaluator) -> u32 {
-    ev.session.settings().fanout
+    ev.session().settings().fanout
 }
 
 pub const T_LIST_WHNF: u8 = 1;

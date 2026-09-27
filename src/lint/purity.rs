@@ -90,7 +90,7 @@ pub fn fod(ev: &mut Evaluator, name: &str, mode: &str, algo: &str, pos: Pos) -> 
 
 /// A recursive copy of `path` whose NAR has `size` bytes.
 pub fn large_source_copy(ev: &mut Evaluator, path: &[u8], size: u64, pos: Pos) -> EvalResult<()> {
-    let max = ev.lints.config.max_bytes;
+    let max = ev.lint_config().max_bytes;
     if size <= max {
         return Ok(());
     }
@@ -123,7 +123,7 @@ fn flake_root_of(ev: &Evaluator, path: &[u8]) -> Option<Vec<u8>> {
     loop {
         let mut probe = dir.clone();
         probe.extend_from_slice(b"/flake.nix");
-        if ev.trace.stat_now(&probe, true) == crate::trace::Kind::Regular {
+        if ev.trace().stat_now(&probe, true) == crate::trace::Kind::Regular {
             return Some(dir);
         }
         let i = dir.iter().rposition(|&b| b == b'/')?;

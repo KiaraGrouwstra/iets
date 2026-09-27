@@ -97,7 +97,7 @@ pub fn try_run<R: Send + 'static>(
             unsafe { force::init_ctx(ev, slot) };
             let r = f(ev);
             ev.lints.flush();
-            if ev.session.settings().par_stats >= 2 {
+            if ev.session().settings().par_stats >= 2 {
                 for i in 0..ev.files.len() {
                     crate::errln!(
                         "file{i} base={} = {}",
@@ -106,7 +106,7 @@ pub fn try_run<R: Send + 'static>(
                     );
                 }
             }
-            if ev.session.settings().par_stats >= 1 {
+            if ev.session().settings().par_stats >= 1 {
                 use std::sync::atomic::Ordering::Relaxed;
                 // SAFETY: the main fiber still owns the slot; evaluation is
                 // over, so nothing else reads it.

@@ -180,10 +180,7 @@ mod tests {
             .go(move |ev, _| {
                 let v = crate::api::evaluate(ev, a).expect("the workload evaluates");
                 crate::parallel::force_deep(ev, v).expect("the workload forces");
-                ev.ir_cache
-                    .as_ref()
-                    .expect("the run has an IR cache")
-                    .hits()
+                ev.ir_cache().expect("the run has an IR cache").hits()
             })
             .expect("the fiber stacks")
     }
@@ -199,9 +196,9 @@ mod tests {
         let want = crate::api::lint_config(&a).expect("the lints resolve");
         let run = Run::new(&a).expect("the arguments configure");
         let fiber = run.cfg.build().clone();
-        assert!(fiber.ir_cache.is_some(), "a fiber without the IR cache");
-        assert_eq!(fiber.search_path[0], a.includes[0]);
-        assert!(fiber.lints.config == want, "a fiber without the lints");
+        assert!(fiber.ir_cache().is_some(), "a fiber without the IR cache");
+        assert_eq!(fiber.search_path()[0], a.includes[0]);
+        assert_eq!(*fiber.lint_config(), want);
         let _ = std::fs::remove_dir_all(&d);
     }
 

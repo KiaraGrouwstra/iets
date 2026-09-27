@@ -104,7 +104,7 @@ pub fn from_outputs(
     fragment: &str,
     want: Want,
 ) -> EvalResult<Vec<Found>> {
-    let candidates = attr_paths(prefixes, fragment, ev.current_system);
+    let candidates = attr_paths(prefixes, fragment, ev.current_system());
     let mut found = Vec::new();
     for c in &candidates {
         let path = super::flake::parse_attr_path(c)
@@ -342,7 +342,7 @@ pub fn roots_of(
     let Some(tree) = v.as_attrs().filter(|a| a.get(ev.s.drv_path).is_none()) else {
         return drv_roots(ev, v, roots);
     };
-    let system = ev.current_system;
+    let system = ev.current_system();
     let sym = ev.sym(system.as_bytes());
     let (v, attr) = match tree.get(sym) {
         Some(a) => (a.cell.get(), join_attr(attr, system.as_bytes())),

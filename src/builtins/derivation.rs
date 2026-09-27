@@ -52,20 +52,10 @@ pub struct DrvInfo {
 pub struct DrvState {
     pub hash_cache: Arc<std::sync::Mutex<DrvHashCache>>,
     pub drvs: crate::parallel::shared::SharedMap<StorePath, DrvInfo>,
-    /// `ietsp eval --dump-drvs DIR`: every created derivation is written as
-    /// `DIR/<drv basename>` in ATerm form. Shared, because a helper fiber's
-    /// evaluator is cloned before the flag is applied and creates
-    /// derivations of its own.
-    pub dump_dir: Arc<std::sync::OnceLock<PathBuf>>,
+    dump_dir: Option<PathBuf>,
     pub nr_derivations: u64,
-    /// Keep the ATerm text of every derivation for instantiation, the
-    /// cache, `--dump-drvs` and `build`. Off for runs that only print
-    /// paths: 331 MB on the outpaths chunk (docs/explanation/evaluation.md).
-    pub keep_aterm: bool,
-    /// Find each derivation's source position (`DrvInfo::pos`), which only
-    /// build progress lines and `eval-jobs --provenance` show; the search
-    /// walks the attributes of every derivation.
-    pub keep_site: bool,
+    keep_aterm: bool,
+    keep_site: bool,
     syms: Option<DrvSyms>,
     imported_drv_fn: Option<Word>,
 }
@@ -84,14 +74,13 @@ impl DrvState {
             i.attr = Some(attr.to_string());
         }
     }
-}
 
-impl DrvState {
+    /// The three settings of `eval::EvalConfig`.
     pub(crate) fn new(keep_aterm: bool, keep_site: bool, dump_dir: Option<PathBuf>) -> DrvState {
         DrvState {
             hash_cache: Default::default(),
             drvs: Default::default(),
-            dump_dir: Arc::new(dump_dir.map(Into::into).unwrap_or_default()),
+            dump_dir,
             nr_derivations: 0,
             keep_aterm,
             keep_site,
@@ -552,7 +541,7 @@ fn derivation_strict_internal(
         );
     }
 
-    let trace = ev.trace.clone();
+    let trace = ev.trace().clone();
     let mut loader = move |p: &StorePath| load_drv_traced(&trace, p);
     if let Some(h) = output_hash {
         if outputs.len() != 1 || !outputs.contains("out") {
@@ -622,7 +611,7 @@ fn derivation_strict_internal(
 
     // the ATerm is only kept when something asks for it; the path it is
     // hashed into is all a plain evaluation wants
-    let keep_text = ev.drv.keep_aterm || ev.drv.dump_dir.get().is_some();
+    let keep_text = ev.drv.keep_aterm || ev.drv.dump_dir.is_some();
     let (drv_path, text) = drv
         .with_aterm(|t| {
             (
@@ -650,7 +639,7 @@ fn derivation_strict_internal(
         .insert(drv_path.clone(), h);
     ev.drv.nr_derivations += 1;
 
-    if let Some(dir) = ev.drv.dump_dir.get() {
+    if let Some(dir) = &ev.drv.dump_dir {
         let file = dir.join(drv_path.base_name());
         std::fs::write(&file, &text).map_err(|e| {
             Error::boxed(
@@ -776,7 +765,7 @@ pub fn load_drv(ev: &Evaluator, p: &StorePath) -> Result<Derivation, DrvError> {
                 .map_err(|_| DrvError(format!("derivation '{p}' is not valid UTF-8")))?,
             Derivation::name_from_path(p)?,
         ),
-        None => load_drv_traced(&ev.trace, p),
+        None => load_drv_traced(ev.trace(), p),
     }
 }
 
@@ -786,7 +775,7 @@ fn drv_info(ev: &mut Evaluator, p: &StorePath, pos: Pos) -> EvalResult<DrvInfo> 
     if let Some(i) = ev.drv.drvs.get(p) {
         return Ok(i);
     }
-    let drv = load_drv_traced(&ev.trace, p).map_err(|e| drv_err(e, pos))?;
+    let drv = load_drv_traced(ev.trace(), p).map_err(|e| drv_err(e, pos))?;
     let mut references: BTreeSet<StorePath> = drv.input_srcs.clone();
     references.extend(drv.input_drvs.keys().cloned());
     let info = DrvInfo {

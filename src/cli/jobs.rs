@@ -386,7 +386,7 @@ fn jobs_single(
     if j.opts.no_instantiate {
         let em = emitter.clone();
         crate::jobs::run(ev, root, &mut |line| em.lock().unwrap().emit(line));
-        if ev.session.settings().stats >= 1 {
+        if ev.session().settings().stats >= 1 {
             ev.print_stats();
         }
     } else {

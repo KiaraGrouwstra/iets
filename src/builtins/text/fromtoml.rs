@@ -182,7 +182,7 @@ fn convert(ev: &mut Evaluator, v: ::toml::Value, pos: Pos) -> EvalResult<Word> {
                     "while parsing TOML: a time without seconds is TOML 1.1"
                 );
             }
-            if !ev.session.toml_timestamps.load(Ordering::Relaxed) {
+            if !ev.session().toml_timestamps.load(Ordering::Relaxed) {
                 bail!(
                     ErrorKind::Eval,
                     pos,

@@ -54,16 +54,16 @@ pub fn path_tree(ev: &mut Evaluator, dir: &Path, pos: Pos) -> EvalResult<(Hash, 
             pos,
         )
     };
-    let mut fp = ev.trace.fp(dir);
+    let mut fp = ev.trace().fp(dir);
     let (hash, nar_size, mtime) = dump_and_max_mtime(dir, &mut fp).map_err(io)?;
     if names_its_content(dir, &hash) {
-        ev.trace.stat(
+        ev.trace().stat(
             dir.as_os_str().as_bytes(),
             false,
             crate::trace::Kind::Directory,
         );
     } else {
-        ev.trace
+        ev.trace()
             .tree_dated(dir, crate::trace::hash_to_digest(&hash), mtime, fp);
     }
     let sp = crate::treestore::store_path("source", &hash)
@@ -112,7 +112,7 @@ fn git(ev: &mut Evaluator, root: &Path, args: &[&str], pos: Pos) -> EvalResult<V
     let mut argv: Vec<Vec<u8>> = vec![b"git".to_vec()];
     argv.extend(args.iter().map(|a| a.as_bytes().to_vec()));
     let (status, out) = ev
-        .trace
+        .trace()
         .cmd(root, &argv)
         .map_err(|e| Error::boxed(ErrorKind::Io, format!("ietsp: cannot run git: {e}"), pos))?;
     if status != 0 {
@@ -169,7 +169,7 @@ pub fn workdir(ev: &mut Evaluator, root: &Path, pos: Pos) -> EvalResult<Workdir>
         }
     }
     let head = ev
-        .trace
+        .trace()
         .cmd(
             root,
             &["git", "rev-parse", "--verify", "-q", "HEAD"].map(|s| s.as_bytes().to_vec()),
@@ -199,7 +199,7 @@ pub fn accepted_set(root: &Path, files: &HashSet<PathBuf>) -> HashSet<PathBuf> {
 pub fn git_source(ev: &mut Evaluator, root: &Path, subdir: &str, pos: Pos) -> EvalResult<Tree> {
     let wd = workdir(ev, root, pos)?;
     let accepted = accepted_set(root, &wd.files);
-    let mut fp = ev.trace.fp(root);
+    let mut fp = ev.trace().fp(root);
     let mut filter = |p: &Path, t: nar::FileType| {
         let keep = accepted.contains(p);
         if let Some(fp) = &mut fp {
@@ -215,7 +215,7 @@ pub fn git_source(ev: &mut Evaluator, root: &Path, subdir: &str, pos: Pos) -> Ev
                 pos,
             )
         })?;
-    ev.trace
+    ev.trace()
         .tree_external(root, crate::trace::hash_to_digest(&hash), &accepted, fp);
     let path = crate::treestore::store_path("source", &hash)
         .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
@@ -254,7 +254,7 @@ pub fn git_source(ev: &mut Evaluator, root: &Path, subdir: &str, pos: Pos) -> Ev
         attrs.insert("rev".into(), AttrVal::Str(rev.clone()));
         let shallow_marker = root.join(".git/shallow");
         let shallow = ev
-            .trace
+            .trace()
             .stat_now(shallow_marker.as_os_str().as_bytes(), true)
             != crate::trace::Kind::Missing;
         if !shallow {

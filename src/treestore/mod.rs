@@ -346,12 +346,12 @@ pub fn put(
 /// version that says the spool can still be read, is the whole check: there is
 /// nothing per file to stat and nothing to rehash (docs/explanation/caching.md).
 pub fn record(ev: &Evaluator, tree: &StoredTree, name: &str) {
-    if ev.trace.is_on()
+    if ev.trace().is_on()
         && !tree
             .recorded
             .swap(true, std::sync::atomic::Ordering::Relaxed)
     {
-        ev.trace.record(crate::trace::Obs::Input {
+        ev.trace().record(crate::trace::Obs::Input {
             entry: name.as_bytes().to_vec(),
             version: spool::INDEX_VERSION,
         });

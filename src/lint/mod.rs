@@ -747,11 +747,10 @@ impl Drop for Emitted {
     }
 }
 
-/// The lint configuration and the warnings a run emitted. Clones share
-/// the emitted set, so every fiber deduplicates against the same sites.
+/// The warnings a run emitted. Clones share the emitted set, so every fiber
+/// deduplicates against the same sites.
 #[derive(Clone)]
 pub struct Lints {
-    pub config: Config,
     shared: Arc<Mutex<Emitted>>,
     /// Sites this fiber saw reported or silenced: a hit skips the shared
     /// lock, and a firing site is evaluated many times more than it is
@@ -763,14 +762,7 @@ pub struct Lints {
 
 impl Default for Lints {
     fn default() -> Lints {
-        Lints::new(Config::default())
-    }
-}
-
-impl Lints {
-    pub fn new(config: Config) -> Lints {
         Lints {
-            config,
             shared: Arc::new(Mutex::new(Emitted {
                 seen: SiteSet::default(),
                 lines: Vec::new(),
@@ -780,17 +772,9 @@ impl Lints {
             where_cache: FxHashMap::default(),
         }
     }
+}
 
-    #[inline]
-    pub fn level(&self, id: LintId) -> Level {
-        self.config.level(id)
-    }
-
-    #[inline]
-    pub fn on(&self, id: LintId) -> bool {
-        self.config.level(id) != Level::Off
-    }
-
+impl Lints {
     /// Every warning line emitted so far, in order.
     pub fn lines(&self) -> Vec<String> {
         self.shared.lock().unwrap().lines.clone()
@@ -855,7 +839,7 @@ pub fn error(id: LintId, pos: Pos, msg: &str) -> Box<Error> {
 impl Evaluator {
     #[inline]
     pub fn lint_on(&self, id: LintId) -> bool {
-        self.lints.on(id)
+        self.lint_config().level(id) != Level::Off
     }
 
     /// Reports a lint site: nothing at `off`, outside the scope, or on a
@@ -863,7 +847,7 @@ impl Evaluator {
     /// (lint, pos) at `warn`, an error `tryEval` does not catch at `error`.
     #[inline]
     pub fn lint(&mut self, id: LintId, pos: Pos, msg: impl FnOnce() -> String) -> EvalResult<()> {
-        if self.lints.level(id) == Level::Off {
+        if self.lint_config().level(id) == Level::Off {
             return Ok(());
         }
         self.lint_site(id, pos, msg)
@@ -887,11 +871,11 @@ impl Evaluator {
             self.lints.silence(id, pos);
             return Ok(());
         }
-        let level = if self.lints.config.scoped() {
+        let level = if self.lint_config().scoped() {
             let w = self.where_of_file(file);
-            self.lints.config.site_level(id, w)
+            self.lint_config().site_level(id, w)
         } else {
-            self.lints.level(id)
+            self.lint_config().level(id)
         };
         match level {
             Level::Off => {
@@ -908,11 +892,11 @@ impl Evaluator {
 
     /// The level of `id` at the site `pos`, after the scope rule.
     pub fn site_level(&mut self, id: LintId, pos: Pos) -> Level {
-        if !self.lints.config.scoped() {
-            return self.lints.level(id);
+        if !self.lint_config().scoped() {
+            return self.lint_config().level(id);
         }
         let w = self.where_of(pos);
-        self.lints.config.site_level(id, w)
+        self.lint_config().site_level(id, w)
     }
 
     /// Where the file of `pos` lies, classified once per file and fiber.
@@ -953,7 +937,7 @@ impl Evaluator {
             if input.is_none()
                 && let Some(name) = &known.flake
             {
-                input = self.lints.config.input_index(name);
+                input = self.lint_config().input_index(name);
             }
             let Some(local) = known.origin.and_then(|o| o.at.local()) else {
                 break;
@@ -962,7 +946,7 @@ impl Evaluator {
             next.extend_from_slice(&p[root..]);
             p = next;
         }
-        for (store, local) in &self.session.settings().source_map {
+        for (store, local) in &self.session().settings().source_map {
             if let Some(rest) = p.strip_prefix(store.as_bytes())
                 && (rest.is_empty() || rest[0] == b'/')
             {
@@ -972,7 +956,7 @@ impl Evaluator {
                 break;
             }
         }
-        if self.lints.config.in_root(&p) {
+        if self.lint_config().in_root(&p) {
             return Where::Root;
         }
         match input {
@@ -983,11 +967,11 @@ impl Evaluator {
 
     /// The lint configuration the file `path` is compiled under.
     pub fn config_for_file(&self, path: &[u8]) -> Config {
-        if !self.lints.config.scoped() {
-            return self.lints.config.clone();
+        if !self.lint_config().scoped() {
+            return self.lint_config().clone();
         }
         let w = self.where_of_path(path);
-        self.lints.config.for_where(w)
+        self.lint_config().for_where(w)
     }
 
     /// The lock node name of the flake root or locked input whose tree
@@ -1040,7 +1024,7 @@ impl Evaluator {
             next.extend_from_slice(&p[root..]);
             p = next;
         }
-        for (store, local) in &self.session.settings().source_map {
+        for (store, local) in &self.session().settings().source_map {
             if let Some(rest) = p.strip_prefix(store.as_bytes())
                 && (rest.is_empty() || rest[0] == b'/')
             {

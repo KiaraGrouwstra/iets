@@ -64,7 +64,7 @@ fn eval_and_print(ev: &mut Evaluator, a: EvalArgs, cache: Option<Cache>) -> i32 
             crate::print::print_ambiguous(ev, v, 1, &mut out, &mut seen, 0)
         })()
     };
-    if ev.session.settings().stats >= 1 {
+    if ev.session().settings().stats >= 1 {
         ev.print_stats();
     }
     match r {

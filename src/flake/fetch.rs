@@ -102,7 +102,7 @@ fn check_locked(attrs: &Attrs, pos: Pos) -> EvalResult<()> {
 pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     crate::lint::purity::unhashed_fetch(ev, "fetchTree", args[0], pos)?;
     let mut attrs = collect_attrs(ev, args[0], pos)?;
-    if ev.pure {
+    if ev.pure() {
         check_locked(&attrs, pos)?;
     }
     let ty = str_attr(&attrs, "type").unwrap_or("").to_string();
@@ -226,7 +226,7 @@ pub fn fetch_tarball_builtin(ev: &mut Evaluator, args: &[Word], pos: Pos) -> Eva
         Some(c) => format!("https://channels.nixos.org/{c}/nixexprs.tar.xz"),
         None => url,
     };
-    if ev.pure && sha256.is_none() {
+    if ev.pure() && sha256.is_none() {
         bail!(
             ErrorKind::Eval,
             pos,
@@ -237,7 +237,7 @@ pub fn fetch_tarball_builtin(ev: &mut Evaluator, args: &[Word], pos: Pos) -> Eva
         .filter(|h| !h.is_empty())
         .and_then(|h| Hash::parse_any(&h, Some(HashAlgo::Sha256)).ok())
     else {
-        ev.trace.mark_uncacheable();
+        ev.trace().mark_uncacheable();
         bail!(
             ErrorKind::Unsupported,
             pos,

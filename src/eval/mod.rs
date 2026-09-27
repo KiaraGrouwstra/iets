@@ -119,14 +119,14 @@ pub struct Evaluator {
     /// Resolved path -> lazy import thunk (`parallel::import_thunk`).
     import_cache: crate::parallel::shared::SharedMap<Vec<u8>, Word>,
     /// `(prefix, path)` entries, `-I` first then `NIX_PATH`.
-    pub search_path: Vec<(Vec<u8>, Vec<u8>)>,
+    search_path: Vec<(Vec<u8>, Vec<u8>)>,
     pub call_depth: u32,
     pub try_level: u32,
     pub s: WellKnown,
     pub builtins_word: Word,
     /// Store path prefix, for `builtins.storeDir` and store path checks.
     pub store_dir: Vec<u8>,
-    pub current_system: &'static str,
+    current_system: &'static str,
     pub nr_thunks: u64,
     pub nr_function_calls: u64,
     pub t_compile: std::time::Duration,
@@ -143,23 +143,25 @@ pub struct Evaluator {
     /// Locked `narHash` -> flake input name, from the lock file, for messages
     /// about an input that must be fetched.
     pub input_names: crate::parallel::shared::SharedMap<String, String>,
-    /// Lint levels and the warnings emitted so far (docs/reference/lints.md).
+    /// Lint levels (docs/reference/lints.md).
+    lint_config: crate::lint::Config,
+    /// The warnings emitted so far.
     pub lints: crate::lint::Lints,
     pub drv: crate::builtins::derivation::DrvState,
     pub par: crate::parallel::Ctx,
-    /// Read-set recorder for the tracing cache; off unless `main` enables it.
-    pub trace: crate::trace::Trace,
+    /// Read-set recorder for the tracing cache; off unless the run has an entry to write.
+    trace: crate::trace::Trace,
     /// Compiled-IR cache for imported files; `None` when disabled.
-    pub ir_cache: Option<std::sync::Arc<crate::compile::cache::IrCache>>,
+    ir_cache: Option<std::sync::Arc<crate::compile::cache::IrCache>>,
     /// The eval store, opened on the first flake input that is missing from it
     /// (`crate::source`).
     pub store: crate::source::LazyStore,
-    /// `pure-eval` (docs/reference/settings.md), fixed by `Evaluator::with`.
-    pub pure: bool,
+    /// `pure-eval` (docs/reference/settings.md).
+    pure: bool,
     /// The session this evaluator was made in: its settings and its log.
     /// A field, not a thread-local lookup, because the fan-out checks read
     /// it on the hot path (docs/reference/library.md).
-    pub session: std::sync::Arc<crate::session::Session>,
+    session: std::sync::Arc<crate::session::Session>,
 }
 
 /// What an evaluation knows about one store path.
@@ -232,6 +234,11 @@ pub const DEFAULT_SYSTEM: &str = "x86_64-linux";
 /// clones the evaluator for every helper fiber, and a field set after that
 /// clone is the main fiber's alone, so the evaluator has no setter: a
 /// setting goes here (docs/explanation/evaluation.md).
+///
+/// ```compile_fail
+/// let mut ev = ietsp::eval::Evaluator::new();
+/// ev.pure = true;
+/// ```
 #[derive(Clone)]
 pub struct EvalConfig {
     system: &'static str,
@@ -402,7 +409,8 @@ impl EvalConfig {
             src_to_store: Default::default(),
             known: Default::default(),
             input_names: Default::default(),
-            lints: crate::lint::Lints::new(self.lints),
+            lint_config: self.lints,
+            lints: Default::default(),
             drv: crate::builtins::derivation::DrvState::new(
                 self.keep_aterm,
                 self.keep_site,
@@ -427,6 +435,41 @@ impl EvalConfig {
 impl Evaluator {
     pub fn new() -> Evaluator {
         EvalConfig::new().build()
+    }
+
+    #[inline]
+    pub fn pure(&self) -> bool {
+        self.pure
+    }
+
+    #[inline]
+    pub fn current_system(&self) -> &'static str {
+        self.current_system
+    }
+
+    #[inline]
+    pub fn session(&self) -> &std::sync::Arc<crate::session::Session> {
+        &self.session
+    }
+
+    #[inline]
+    pub fn search_path(&self) -> &[(Vec<u8>, Vec<u8>)] {
+        &self.search_path
+    }
+
+    #[inline]
+    pub fn lint_config(&self) -> &crate::lint::Config {
+        &self.lint_config
+    }
+
+    #[inline]
+    pub fn trace(&self) -> &crate::trace::Trace {
+        &self.trace
+    }
+
+    #[inline]
+    pub fn ir_cache(&self) -> Option<&std::sync::Arc<crate::compile::cache::IrCache>> {
+        self.ir_cache.as_ref()
     }
 
     // ---- files ------------------------------------------------------------

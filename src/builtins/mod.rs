@@ -66,8 +66,8 @@ pub fn install(ev: &mut Evaluator) {
     r.constant("false", Word::FALSE);
     r.constant("null", Word::NULL);
     // eval.cc:addConstant: the `impureOnly` ones do not exist when pure
-    if !ev.pure {
-        let sys = ev.mk_string(ev.current_system.as_bytes());
+    if !ev.pure() {
+        let sys = ev.mk_string(ev.current_system().as_bytes());
         r.constant("__currentSystem", sys);
     }
     let ver = ev.mk_string(b"2.34.8");
@@ -77,7 +77,7 @@ pub fn install(ev: &mut Evaluator) {
     let sd = ev.mk_string(&sd);
     r.constant("__storeDir", sd);
     let mut items = Vec::new();
-    for (prefix, path) in ev.search_path.clone() {
+    for (prefix, path) in ev.search_path().to_vec() {
         let p = ev.mk_string(&path);
         let pre = ev.mk_string(&prefix);
         let mut e = vec![(ev.s.path, Pos::NONE, p), (ev.s.prefix, Pos::NONE, pre)];
@@ -85,7 +85,7 @@ pub fn install(ev: &mut Evaluator) {
     }
     let np = ev.mk_list(&items);
     r.constant("__nixPath", np);
-    if !ev.pure {
+    if !ev.pure() {
         let ct_op = ev.arena.mk_primop("currentTimeRaw", 1, text::current_time);
         let ct = ev.arena.mk_thunk_app(ct_op, Word::NULL);
         r.constant("__currentTime", ct);
