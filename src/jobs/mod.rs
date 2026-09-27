@@ -124,9 +124,9 @@ pub struct Stats {
     pub errors: u64,
 }
 
-/// Install the options for every fiber. Call before `parallel::try_run`.
-/// `auto_args` is the `--arg`/`--argstr` set applied to every function
-/// met on the way; `apply` the `--apply` function.
+/// Install the options for every fiber. `auto_args` is the `--arg`/`--argstr`
+/// set applied to every function met on the way; `apply` the `--apply`
+/// function.
 pub fn configure(ev: &mut Evaluator, opts: Opts, auto_args: Word, apply: Option<Word>) {
     let syms = Syms {
         type_: ev.sym(b"type"),
