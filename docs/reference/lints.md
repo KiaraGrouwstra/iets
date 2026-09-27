@@ -32,8 +32,8 @@ source wins over an earlier one:
 4. `IETSP_LINT="name=level,name=level"`;
 5. `--lint SELECTOR=LEVEL`, repeatable.
 
-A selector is a lint name, `all`, `family:NAME` (`path`, `scope`,
-`coerce`, `legacy`, `purity`, `style`), or one of Nix's setting names
+A selector is a lint name, `all`, `family:NAME` (`path`, `coerce`,
+`legacy`, `purity`, `meta`), or one of Nix's setting names
 (`lint-absolute-path-literals`, `lint-short-path-literals`,
 `lint-url-literals`), which count as lint names. The old flags
 `--lint-absolute-path-literals MODE`, `--lint-short-path-literals MODE`
@@ -53,9 +53,9 @@ dir-copy-flake = "warn"     # warn, in either order
 The `--lint` flags of one command line are one source, and so are the
 pairs of one `IETSP_LINT`: among settings of the same specificity the
 later one wins, but a name given earlier still beats a family or `all`
-given later. `--lint all=error --lint with=off` and `--lint with=off
---lint all=error` both give `with=off` with everything else at `error`;
-`--lint with=off --lint with=warn` gives `warn`. Between sources the
+given later. `--lint all=error --lint fod=off` and `--lint fod=off
+--lint all=error` both give `fod=off` with everything else at `error`;
+`--lint fod=off --lint fod=warn` gives `warn`. Between sources the
 specificity does not count: `all = "off"` in `IETSP_LINT` turns off a
 lint `ietsp.toml` names.
 
@@ -134,8 +134,8 @@ are selectors: lint names, Nix's setting names, `family:NAME`, or
 `all`; commas or spaces separate them.
 
 ```nix
-# ietsp: allow with
-with pkgs; [ hello ]
+# ietsp: allow url-literal
+src = http://example.com/src.tar.gz;
 
 x == "a" # ietsp: allow eq-type-mismatch
 ```
@@ -144,11 +144,12 @@ x == "a" # ietsp: allow eq-type-mismatch
   blank nor a comment. After code it covers its own line. Both forms
   on one line add up.
 - The covered line is a set of positions: every site whose position
-  falls on it is silent, a compile-time lint (`with`) and a runtime lint
-  (`eq-type-mismatch`, `fod`) alike. A `with` that opens on the covered
-  line and spans ten more is silent; a `with` on the line after is not.
+  falls on it is silent, a compile-time lint (`url-literal`) and a
+  runtime lint (`eq-type-mismatch`, `fod`) alike. A site is the position
+  where its expression starts: a string that opens on the covered line
+  and spans ten more is silent; one that opens on the line after is not.
 - A name the registry does not know is the `unknown-allow` lint (family
-  `style`, default `warn`), reported at the word's position, so a typo
+  `meta`, default `warn`), reported at the word's position, so a typo
   does not silently silence nothing. The known names of the same
   comment still count. `allow` is the only directive; another word
   after `# ietsp:` is `unknown-allow` too.
@@ -170,8 +171,8 @@ it: a run whose comment changed misses.
 ```toml
 # ietsp.toml, anywhere above the file being evaluated
 [lint]
-with = "warn"
-unused-binding = "error"
+path-copy = "warn"
+unhashed-fetch = "error"
 large-source-copy = { level = "warn", max-bytes = 1048576 }
 scope = "root"          # or "all"
 roots = ["../shared"]   # relative to this file
@@ -188,9 +189,8 @@ A strict repository sets everything to `error` and opens what it needs:
 ```toml
 [lint]
 all = "error"
-# the two lints nixpkgs' own idioms make unavoidable in a NixOS config
-with = "off"
-ellipsis-without-bind = "off"
+# a fixed-output derivation is how a source is fetched
+fod = "off"
 # a tracked directory copied whole is worth a look, not a failed run
 dir-copy-flake = "warn"
 ```
@@ -206,14 +206,6 @@ are part of the IR cache key and their warnings are stored in the entry;
 | `absolute-path-literal` | path | compiler | off | a path literal that starts with `/` or `~/` (Nix's `lint-absolute-path-literals`) |
 | `short-path-literal` | path | compiler | off | a relative path literal without a leading `./` (Nix's `lint-short-path-literals`) |
 | `url-literal` | legacy | parser | off | an unquoted URL (Nix's `lint-url-literals`) |
-| `with` | scope | compiler | off | any `with` |
-| `with-non-literal` | scope | compiler | off | `with e;` where `e` is neither an attrset literal nor a plain variable |
-| `with-nested` | scope | compiler | off | `with` inside the body of another `with` |
-| `shadow-builtin` | scope | compiler | off | a let, rec, formal or argument binding named like a global (`map`, `__add`, `builtins`, `true`, ...) |
-| `shadow-binding` | scope | compiler | off | a binding that hides an outer lexical binding of the same name; `_`-prefixed names are exempt, `x: let x = ...` is not |
-| `unused-binding` | scope | compiler | off | a `let` binding never referenced in its scope (`_`-prefixed exempt; a self-reference counts) |
-| `unused-formal` | scope | compiler | off | a formal never referenced in the body or a default, unless the `@name` binding is referenced; no `_` exemption, a formal is the caller's contract and `{ _pkgs, ... }:` still demands the attribute, so remove it from the pattern |
-| `rec-unused` | scope | compiler | off | `rec { }` where no binding references a sibling (`__overrides` counts as a reference) |
 | `path-copy` | coerce | evaluator | off | a path coerced to a string with a copy to the store: interpolation, `+`, a derivation attribute; not `toString`. Under a flake root or a locked input `"${./file}"` is the normal reference: silent for a regular file, and a directory is `dir-copy-flake` |
 | `dir-copy-flake` | coerce | evaluator | off | a directory under a flake root or a locked input coerced to a string: the copy is the tracked file set the flake machinery already filtered, so the message suggests `lib.fileset` or `builtins.path { filter }` only to narrow it further; its own lint so `family:coerce = "error"` can keep it at `warn` |
 | `store-path-recopy` | coerce | evaluator | off | a path or `builtins.path`/`filterSource` argument already under the store dir copied again (`"${<nixpkgs>}"`, a `builtins.storePath` or pre-existing store path), which doubles the hash in the name; not for the flake root's or a locked input's virtual copy, whose paths already are store paths by construction |
@@ -223,12 +215,7 @@ are part of the IR cache key and their warnings are stored in the entry;
 | `eq-type-mismatch` | coerce | evaluator | off | `==` or `!=` on values of different types, int and float excepted; a `null` on either side is the test for absence and is exempt |
 | `eq-function` | coerce | evaluator | off | `==` or `!=` with a function on either side |
 | `or-non-attrs` | coerce | evaluator | off | `x.a or d` where the subject of some element is not an attrset |
-| `legacy-let` | legacy | parser | off | `let { body = ...; }` |
-| `deprecated-builtin` | legacy | compiler | off | a reference to `isNull`, `toPath`, `unsafeDiscardOutputDependency`, or a `__` alias used directly (`__add`; `__curPos` excepted), bare or as `builtins.x` |
-| `overrides` | legacy | compiler | off | `__overrides` in a rec set |
-| `unsafe-builtin` | legacy | compiler | off | a reference to any `unsafe*` builtin, `unsafeGetAttrPos` included; the message names it |
-| `impure-builtin` | purity | evaluator, compiler | off | a `getEnv` call (evaluator); a reference to `currentTime` (compiler: it is a constant) |
-| `current-system` | purity | compiler | off | a reference to `currentSystem` |
+| `impure-builtin` | purity | evaluator, compiler | off | a `getEnv` call (evaluator); a reference to `currentTime` (compiler: the value is a thunk of the globals, without a position of its own) |
 | `unhashed-fetch` | purity | evaluator | off | `fetchurl`, `fetchTarball`, `fetchGit` or `fetchTree` called with a URL string, or an attrset without `sha256`, `hash`, `narHash`, `outputHash` or `rev`; fires before the call errors |
 | `ifd` | purity | evaluator | off | `import` of a string whose context names a derivation |
 | `fod` | purity | evaluator | off | `derivationStrict` producing a fixed-output derivation; the message names the derivation, the hash mode and algorithm |
@@ -237,12 +224,7 @@ are part of the IR cache key and their warnings are stored in the entry;
 | `dir-copy-unfiltered` | purity | evaluator | off | a directory outside the store copied whole by a string coercion: no filter, and not a tree the flake machinery already turned into a tracked file set |
 | `impure-path-in-drv` | purity | evaluator | off | a derivation attribute (env, `args`, structured attrs) holds the text of a path outside the store and not under a `flake.nix` directory (`toString ./x`), so the .drv depends on the checkout location |
 | `absolute-path-in-drv` | purity | evaluator | off | as above, for a path under a `flake.nix` directory: an absolute path a flake evaluation would have copied |
-| `if-bool-literal` | style | compiler | off | `if c then true else false` or `if c then false else true` |
-| `eq-bool` | style | compiler | off | `x == true`, `x == false`, `x != true`, `x != false` |
-| `manual-inherit` | style | compiler | off | `a = a;` in a non-recursive set, or `a = e.a;` in any binding set |
-| `empty-let` | style | compiler | **warn** | `let in e` |
-| `ellipsis-without-bind` | style | compiler | off | `{ a, ... }:` with `...` and no `@name` |
-| `unknown-allow` | style | parser | **warn** | a word of a `# ietsp: allow` comment that is not a lint name, a family or `all`, or a `# ietsp:` directive other than `allow` (Silencing one site) |
+| `unknown-allow` | meta | parser | **warn** | a word of a `# ietsp: allow` comment that is not a lint name, a family or `all`, or a `# ietsp:` directive other than `allow` (Silencing one site) |
 
 `impure-path-in-drv` works like Nix's store references: a coercion that
 keeps the text of a path outside the store (`toString ./x`, `"/x" +
@@ -281,14 +263,6 @@ the build with those exemptions (outpaths then had 168 errors);
 
 | lint | desktop | outpaths 0/8 | lang + corpus |
 |---|---:|---:|---:|
-| `with` | 7134 | 34067 | 71 |
-| `with-non-literal` | 3746 | 27100 | 17 |
-| `with-nested` | 2611 | 2719 | 3 |
-| `shadow-builtin` | 25 | 64 | 2 |
-| `shadow-binding` | 763 | 2204 | 38 |
-| `unused-binding` | 77 | 204 | 8 |
-| `unused-formal` | 299 | 1422 | 22 |
-| `rec-unused` | 0 | 0 | 2 |
 | `path-copy` | 133 | 381 | 12 |
 | `dir-copy-flake` | 0 | 0 | 0 |
 | `store-path-recopy` | 142 | 395 | 0 |
@@ -299,12 +273,7 @@ the build with those exemptions (outpaths then had 168 errors);
 | `eq-function` | 4 | 5 | 3 |
 | `or-non-attrs` | 25 | 42 | 2 |
 | `url-literal` | 0 | 0 | 3 |
-| `legacy-let` | 0 | 0 | 15 |
-| `deprecated-builtin` | 35 | 53 | 28 |
-| `overrides` | 0 | 0 | 4 |
-| `unsafe-builtin` | 47 | 76 | 20 |
 | `impure-builtin` | 3 | 7 | 5 |
-| `current-system` | 3 | 7 | 4 |
 | `unhashed-fetch` | 0 | 0 | 5 |
 | `ifd` | 0 | 0 | 0 |
 | `fod` | 4 | 4 | 6 |
@@ -313,11 +282,6 @@ the build with those exemptions (outpaths then had 168 errors);
 | `dir-copy-unfiltered` | 0 | 0 | 3 |
 | `impure-path-in-drv` | 0 | 0 | 0 |
 | `absolute-path-in-drv` | 0 | 0 | 0 |
-| `if-bool-literal` | 7 | 9 | 0 |
-| `eq-bool` | 205 | 220 | 2 |
-| `manual-inherit` | 1002 | 1539 | 19 |
-| `empty-let` | 0 | 0 | 0 |
-| `ellipsis-without-bind` | 2661 | 2781 | 2 |
 | `absolute-path-literal` | 2 | 9 | 26 |
 | `short-path-literal` | 0 | 1 | 6 |
 | `unknown-allow` | 0 | 0 | 0 |
@@ -353,12 +317,16 @@ At the defaults the lints cost nothing measurable: `bench/ab.nu` on the
 commit before the registry against this one gave −3.4 % (desktop, 1
 worker), +2.3 % (desktop, 4 workers) and −0.9 % (minimal), inside the
 run-to-run noise of that box. An `off` lint is one byte compare at the
-site; the parser and compiler hooks add one branch per node kind.
+site.
+
+The numbers below are from 2026-09-19. The registry then held 18 more
+lints, which the parser and the compiler reported. The cost of the
+present registry is not higher.
 
 `IETSP_LINT=all=warn` against the defaults, same box (16-core EPYC with
 other builds running), `bench/ab.nu --runs 9 --skip-outpaths`, IR and
 tracing caches as the benchmark uses them (`--no-tracing-cache` keeps the IR
-cache), 2026-09-19:
+cache):
 
 | workload | default | all=warn | change |
 |---|---|---|---|
@@ -377,8 +345,6 @@ was measured:
 - a helper fiber reports a site itself instead of bailing like `trace`
   (bails cost 15 % at 4 workers: every import that compiled in a helper
   was compiled again on the demand path);
-- every global reference is prefiltered on its bytes before the
-  deprecated/unsafe/impure messages are built;
 - each fiber keeps its own set of sites it saw reported, so a site that
   fires a million times takes the shared lock once per fiber;
 - warnings are buffered and written in 16 KiB chunks (one syscall per
@@ -428,15 +394,10 @@ the instructions. At a site the check is one branch on an empty table.
 
 ## Limits
 
-- The compiler lints on references see what the source names:
-  `builtins.isNull`, `isNull`, `__unsafeGetAttrPos`. `lib.isNull`, `with
-  builtins; isNull` (a `with` variable) and `builtins."isNull"` are not
+- The `currentTime` half of `impure-builtin` sees what the source names:
+  `builtins.currentTime`, `currentTime`, `__currentTime`. `with builtins;
+  currentTime` (a `with` variable) and `builtins."currentTime"` are not
   seen.
-- `unused-formal` cannot see `builtins.functionArgs` introspection and
-  does not report the formals of a lambda whose `@name` is referenced.
-- `unused-binding` treats a self-reference (`let x = x + 1;`) as a use
-  and exempts `_`-prefixed names: a let name is the author's, unlike a
-  formal.
 - The scope sees a site's file only. A derivation that nixpkgs builds
   from values the user passed is attributed through the positions of
   its attribute set (see Scope); a nixpkgs fetcher call keeps none from

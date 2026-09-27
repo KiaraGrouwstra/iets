@@ -139,11 +139,11 @@ mod tests {
 
     #[test]
     fn comment_names() {
-        let (m, bad) = parse_comment(b" allow with, eq-bool  family:path");
+        let (m, bad) = parse_comment(b" allow ifd, fod  family:path");
         assert_eq!(
             m,
-            bit(LintId::With)
-                | bit(LintId::EqBool)
+            bit(LintId::Ifd)
+                | bit(LintId::Fod)
                 | bit(LintId::AbsolutePathLiteral)
                 | bit(LintId::ShortPathLiteral)
         );
@@ -151,12 +151,12 @@ mod tests {
         let (m, bad) = parse_comment(b" allow all");
         assert_eq!(m.count_ones() as usize, N);
         assert!(bad.is_empty());
-        let (m, bad) = parse_comment(b" allow wiht, with");
-        assert_eq!(m, bit(LintId::With));
+        let (m, bad) = parse_comment(b" allow fdo, fod");
+        assert_eq!(m, bit(LintId::Fod));
         assert_eq!(bad.len(), 1);
         assert_eq!(bad[0].0, 7);
-        assert!(bad[0].1.contains("unknown lint 'wiht'"));
-        let (m, bad) = parse_comment(b" allo with");
+        assert!(bad[0].1.contains("unknown lint 'fdo'"));
+        let (m, bad) = parse_comment(b" allo fod");
         assert_eq!(m, 0);
         assert!(bad[0].1.contains("unknown directive 'allo'"));
         let (m, bad) = parse_comment(b" allow");
@@ -168,18 +168,18 @@ mod tests {
     #[test]
     fn lines() {
         let mut a = Allows::default();
-        assert!(!a.covers(0, LintId::With));
-        a.add(10, 20, bit(LintId::With));
-        a.add(30, 40, bit(LintId::EqBool));
+        assert!(!a.covers(0, LintId::PathCopy));
+        a.add(10, 20, bit(LintId::PathCopy));
+        a.add(30, 40, bit(LintId::EqFunction));
         a.add(10, 20, bit(LintId::Fod));
         a.add(5, 5, bit(LintId::Ifd));
         assert_eq!(a.lines().len(), 2);
-        assert!(a.covers(10, LintId::With));
+        assert!(a.covers(10, LintId::PathCopy));
         assert!(a.covers(19, LintId::Fod));
-        assert!(!a.covers(20, LintId::With));
-        assert!(!a.covers(9, LintId::With));
-        assert!(!a.covers(15, LintId::EqBool));
-        assert!(a.covers(35, LintId::EqBool));
-        assert!(!a.covers(45, LintId::EqBool));
+        assert!(!a.covers(20, LintId::PathCopy));
+        assert!(!a.covers(9, LintId::PathCopy));
+        assert!(!a.covers(15, LintId::EqFunction));
+        assert!(a.covers(35, LintId::EqFunction));
+        assert!(!a.covers(45, LintId::EqFunction));
     }
 }

@@ -54,66 +54,66 @@ def main [] {
   }
   rm -rf lint/git-in-source.d/.git
 
-  let with_warn = "warning: [with] `with` brings unknown names into scope; prefer `inherit` or `let`"
-  let r = (with-env {IETSP_LINT: "with=warn"} { ^$ietsp eval --no-tracing-cache lint/with.nix | complete })
-  $res ++= [(verdict ($r.stderr | str contains $with_warn) "IETSP_LINT sets a level" "IETSP_LINT ignored")]
-  let r = (with-env {IETSP_LINT: "with=warn"} { ^$ietsp eval --no-tracing-cache --lint with=off lint/with.nix | complete })
+  let url_warn = "warning: [url-literal] URL literals are discouraged. Consider using a string literal \"http://example.com\" instead"
+  let r = (with-env {IETSP_LINT: "url-literal=warn"} { ^$ietsp eval --no-tracing-cache lint/url-literal.nix | complete })
+  $res ++= [(verdict ($r.stderr | str contains $url_warn) "IETSP_LINT sets a level" "IETSP_LINT ignored")]
+  let r = (with-env {IETSP_LINT: "url-literal=warn"} { ^$ietsp eval --no-tracing-cache --lint url-literal=off lint/url-literal.nix | complete })
   $res ++= [(verdict (not ($r.stderr | str contains "warning:")) "--lint wins over IETSP_LINT" "--lint did not override IETSP_LINT")]
   let r = (^$ietsp eval --no-tracing-cache lint/cases/toml/main.nix | complete)
-  $res ++= [(verdict ($r.stderr | str contains $with_warn) "ietsp.toml sets a level" "ietsp.toml ignored")]
+  $res ++= [(verdict ($r.stderr | str contains $url_warn) "ietsp.toml sets a level" "ietsp.toml ignored")]
   let r = (^$ietsp eval --no-tracing-cache lint/cases/untrusted/main.nix | complete)
   $res ++= [(verdict ($r.exit_code != 0 and ($r.stderr | str contains "'nix-bin-dir' may not be set in a project file")) "ietsp.toml: a project file may not set nix-bin-dir" $"untrusted: rc=($r.exit_code) ($r.stderr)")]
-  let r = (with-env {IETSP_CONF_DIR: $"($pwd)/lint/machine"} { ^$ietsp eval --no-tracing-cache lint/with.nix | complete })
-  $res ++= [(verdict ($r.exit_code == 1 and ($r.stderr | str contains "error: [with]")) "the machine ietsp.toml sets a level" $"machine toml: rc=($r.exit_code) ($r.stderr)")]
+  let r = (with-env {IETSP_CONF_DIR: $"($pwd)/lint/machine"} { ^$ietsp eval --no-tracing-cache lint/url-literal.nix | complete })
+  $res ++= [(verdict ($r.exit_code == 1 and ($r.stderr | str contains "error: [url-literal]")) "the machine ietsp.toml sets a level" $"machine toml: rc=($r.exit_code) ($r.stderr)")]
   let r = (with-env {IETSP_CONF_DIR: $"($pwd)/lint/machine"} { ^$ietsp eval --no-tracing-cache lint/cases/toml/main.nix | complete })
-  $res ++= [(verdict ($r.exit_code == 0 and ($r.stderr | str contains $with_warn)) "the project ietsp.toml wins over the machine's" $"machine below project: rc=($r.exit_code) ($r.stderr)")]
-  let r = (^$ietsp eval --no-tracing-cache --lint family:scope=warn lint/with.nix | complete)
-  $res ++= [(verdict ($r.stderr | str contains $with_warn) "family:scope selects the family" "family selector ignored")]
-  let r = (^$ietsp eval --no-tracing-cache --lint all=warn --lint with=off lint/with.nix | complete)
-  $res ++= [(verdict (not ($r.stderr | str contains "[with]")) "later --lint wins over all=" "all= not overridden")]
-  let r = (^$ietsp eval --no-tracing-cache --lint with=off --lint all=warn lint/with.nix | complete)
-  $res ++= [(verdict (not ($r.stderr | str contains "[with]")) "a --lint name beats a later all=" "a name given first lost to a later all=")]
-  let r = (with-env {IETSP_LINT: "with=off,family:scope=warn"} { ^$ietsp eval --no-tracing-cache lint/with.nix | complete })
-  $res ++= [(verdict (not ($r.stderr | str contains "[with]")) "an IETSP_LINT name beats a later family" "an IETSP_LINT name lost to a later family")]
+  $res ++= [(verdict ($r.exit_code == 0 and ($r.stderr | str contains $url_warn)) "the project ietsp.toml wins over the machine's" $"machine below project: rc=($r.exit_code) ($r.stderr)")]
+  let r = (^$ietsp eval --no-tracing-cache --lint family:legacy=warn lint/url-literal.nix | complete)
+  $res ++= [(verdict ($r.stderr | str contains $url_warn) "family:legacy selects the family" "family selector ignored")]
+  let r = (^$ietsp eval --no-tracing-cache --lint all=warn --lint url-literal=off lint/url-literal.nix | complete)
+  $res ++= [(verdict (not ($r.stderr | str contains "[url-literal]")) "later --lint wins over all=" "all= not overridden")]
+  let r = (^$ietsp eval --no-tracing-cache --lint url-literal=off --lint all=warn lint/url-literal.nix | complete)
+  $res ++= [(verdict (not ($r.stderr | str contains "[url-literal]")) "a --lint name beats a later all=" "a name given first lost to a later all=")]
+  let r = (with-env {IETSP_LINT: "url-literal=off,family:legacy=warn"} { ^$ietsp eval --no-tracing-cache lint/url-literal.nix | complete })
+  $res ++= [(verdict (not ($r.stderr | str contains "[url-literal]")) "an IETSP_LINT name beats a later family" "an IETSP_LINT name lost to a later family")]
   let r = (^$ietsp eval --no-tracing-cache lint/cases/family/main.nix | complete)
-  $res ++= [(verdict ($r.exit_code == 0 and ($r.stderr | str contains $with_warn)) "ietsp.toml: a lint name beats its family" $"toml family: rc=($r.exit_code) ($r.stderr)")]
+  $res ++= [(verdict ($r.exit_code == 0 and ($r.stderr | str contains "warning: [absolute-path-literal]")) "ietsp.toml: a lint name beats its family" $"toml family: rc=($r.exit_code) ($r.stderr)")]
   let r = (^$ietsp eval --no-tracing-cache lint/cases/family/member.nix | complete)
-  $res ++= [(verdict ($r.exit_code == 1 and ($r.stderr | str contains "error: [with-non-literal]")) "ietsp.toml: the rest of the family keeps its level" $"toml family member: rc=($r.exit_code) ($r.stderr)")]
+  $res ++= [(verdict ($r.exit_code == 1 and ($r.stderr | str contains "error: [short-path-literal]")) "ietsp.toml: the rest of the family keeps its level" $"toml family member: rc=($r.exit_code) ($r.stderr)")]
   let r = (^$ietsp eval --strict --no-tracing-cache --lint eq-type-mismatch=warn lint/cases/dedup.nix | complete)
   let n = ($r.stderr | lines | where ($it | str starts-with "warning: [eq-type-mismatch]") | length)
   $res ++= [(verdict ($n == 1) "one warning per site" $"one warning per site: got ($n)")]
-  let r = (^$ietsp eval --no-tracing-cache --lint with=error lint/cases/tryeval.nix | complete)
-  $res ++= [(verdict ($r.exit_code == 1 and ($r.stderr | str contains "error: [with]")) "tryEval does not catch a lint error" $"tryEval caught the lint error \(rc=($r.exit_code)\)")]
-  let r = (^$ietsp lint list --lint with=error | complete)
-  $res ++= [(verdict (($r.stdout | lines | where ($it | str starts-with "with ") | first) =~ 'error') "lint list shows effective levels" "lint list")]
-  let r = (^$ietsp eval --no-tracing-cache --lint nope=warn lint/with.nix | complete)
+  let r = (^$ietsp eval --no-tracing-cache --lint eq-type-mismatch=error lint/cases/tryeval.nix | complete)
+  $res ++= [(verdict ($r.exit_code == 1 and ($r.stderr | str contains "error: [eq-type-mismatch]")) "tryEval does not catch a lint error" $"tryEval caught the lint error \(rc=($r.exit_code)\)")]
+  let r = (^$ietsp lint list --lint url-literal=error | complete)
+  $res ++= [(verdict (($r.stdout | lines | where ($it | str starts-with "url-literal ") | first) =~ 'error') "lint list shows effective levels" "lint list")]
+  let r = (^$ietsp eval --no-tracing-cache --lint nope=warn lint/url-literal.nix | complete)
   $res ++= [(verdict ($r.exit_code == 2 and ($r.stderr | str contains "unknown lint 'nope'")) "unknown lint name is a usage error" "unknown lint name")]
 
   let cache = (mktemp -d --tmpdir ietsp-linttest.XXXXXX)
-  let r1 = (with-env {IETSP_CACHE_DIR: $cache} { ^$ietsp eval --strict --timings --lint with=warn lint/with.nix | complete })
-  let r2 = (with-env {IETSP_CACHE_DIR: $cache} { ^$ietsp eval --strict --timings --lint with=warn lint/with.nix | complete })
+  let r1 = (with-env {IETSP_CACHE_DIR: $cache} { ^$ietsp eval --strict --timings --lint url-literal=warn lint/url-literal.nix | complete })
+  let r2 = (with-env {IETSP_CACHE_DIR: $cache} { ^$ietsp eval --strict --timings --lint url-literal=warn lint/url-literal.nix | complete })
   rm -rf $cache
   let hit = ($r2.stderr | str contains "cache: hit")
   let same = (($r1.stderr | lines | where ($it | str starts-with "warning:")) == ($r2.stderr | lines | where ($it | str starts-with "warning:")))
-  $res ++= [(verdict ($hit and $same and ($r1.stderr | str contains $with_warn)) "a warning is replayed on a cache hit" $"cache replay: hit=($hit) same=($same)")]
+  $res ++= [(verdict ($hit and $same and ($r1.stderr | str contains $url_warn)) "a warning is replayed on a cache hit" $"cache replay: hit=($hit) same=($same)")]
 
   # scope: lint/scope/lib is outside the entry directories lint/scope/{root,all,roots}
-  let outside = "at /pwd/lint/scope/lib/with.nix:1:1"
-  let r = (^$ietsp eval --no-tracing-cache --lint with=warn lint/scope/root/main.nix | complete)
+  let outside = "at /pwd/lint/scope/lib/url.nix:1:1"
+  let r = (^$ietsp eval --no-tracing-cache --lint url-literal=warn lint/scope/root/main.nix | complete)
   $res ++= [(verdict (not ($r.stderr | str contains "warning:")) "scope: a site outside the root is silent" "scope: outside site reported")]
-  let r = (^$ietsp eval --no-tracing-cache --lint with=warn --lint-scope all lint/scope/root/main.nix | complete)
+  let r = (^$ietsp eval --no-tracing-cache --lint url-literal=warn --lint-scope all lint/scope/root/main.nix | complete)
   $res ++= [(verdict ($r.stderr | norm $pwd | str contains $outside) "scope: --lint-scope all reports it" "scope: --lint-scope all")]
-  let r = (^$ietsp eval --no-tracing-cache --lint with=warn --lint-root lint/scope/lib lint/scope/root/main.nix | complete)
+  let r = (^$ietsp eval --no-tracing-cache --lint url-literal=warn --lint-root lint/scope/lib lint/scope/root/main.nix | complete)
   $res ++= [(verdict ($r.stderr | norm $pwd | str contains $outside) "scope: --lint-root adds a root" "scope: --lint-root")]
-  let r = (^$ietsp eval --no-tracing-cache --lint with=warn lint/scope/all/main.nix | complete)
+  let r = (^$ietsp eval --no-tracing-cache --lint url-literal=warn lint/scope/all/main.nix | complete)
   $res ++= [(verdict ($r.stderr | norm $pwd | str contains $outside) "scope: ietsp.toml scope = \"all\"" "scope: toml scope")]
-  let r = (^$ietsp eval --no-tracing-cache --lint with=warn lint/scope/roots/main.nix | complete)
+  let r = (^$ietsp eval --no-tracing-cache --lint url-literal=warn lint/scope/roots/main.nix | complete)
   $res ++= [(verdict ($r.stderr | norm $pwd | str contains $outside) "scope: ietsp.toml roots" "scope: toml roots")]
   let r = (^$ietsp lint list --lint-scope all lint/scope/root/main.nix | complete)
   $res ++= [(verdict ($r.stdout | str contains "scope: all") "lint list shows the scope" "lint list scope")]
   let cache = (mktemp -d --tmpdir ietsp-linttest.XXXXXX)
-  let r1 = (with-env {IETSP_CACHE_DIR: $cache} { ^$ietsp eval --timings --lint with=warn lint/scope/root/main.nix | complete })
-  let r2 = (with-env {IETSP_CACHE_DIR: $cache} { ^$ietsp eval --timings --lint with=warn --lint-scope all lint/scope/root/main.nix | complete })
+  let r1 = (with-env {IETSP_CACHE_DIR: $cache} { ^$ietsp eval --timings --lint url-literal=warn lint/scope/root/main.nix | complete })
+  let r2 = (with-env {IETSP_CACHE_DIR: $cache} { ^$ietsp eval --timings --lint url-literal=warn --lint-scope all lint/scope/root/main.nix | complete })
   rm -rf $cache
   let ok = (not ($r1.stderr | str contains "warning:")) and (not ($r2.stderr | str contains "cache: hit")) and ($r2.stderr | norm $pwd | str contains $outside)
   $res ++= [(verdict $ok "scope: the scope is part of the cache key" "scope: a run with another scope hit the cache")]
@@ -140,11 +140,11 @@ def main [] {
     $text | save -f $"($dir)/($f)"
   }
   let copies = [--lint store-path-recopy=warn --lint path-copy=warn --lint dir-copy-flake=warn]
-  let root_site = $"at ($dir)/flake.nix:4:36"
+  let root_site = $"at ($dir)/flake.nix:4:25"
   let dep_site = $"at ($work)/dep/flake.nix:1:33"
-  let r = (^$ietsp eval --raw --no-tracing-cache --lint with=warn $"($dir)#value" | complete)
-  $res ++= [(verdict (($r.stdout == "3") and ($r.stderr | str contains $root_site) and not ($r.stderr | str contains $dep_site)) "flake: the input's site is silent, the root's is reported" $"flake: default scope: ($r.stderr)")]
-  let r = (^$ietsp eval --raw --no-tracing-cache --lint with=warn --lint-scope all $"($dir)#value" | complete)
+  let r = (^$ietsp eval --raw --no-tracing-cache --lint url-literal=warn $"($dir)#value" | complete)
+  $res ++= [(verdict (($r.stdout == "http://dep.examplehttp://root.example") and ($r.stderr | str contains $root_site) and not ($r.stderr | str contains $dep_site)) "flake: the input's site is silent, the root's is reported" $"flake: default scope: ($r.stderr)")]
+  let r = (^$ietsp eval --raw --no-tracing-cache --lint url-literal=warn --lint-scope all $"($dir)#value" | complete)
   $res ++= [(verdict (($r.stderr | str contains $root_site) and ($r.stderr | str contains $dep_site)) "flake: --lint-scope all reports the input's site" $"flake: scope all: ($r.stderr)")]
   let r = (^$ietsp eval --raw --no-tracing-cache ...$copies $"($dir)#file" | complete)
   $res ++= [(verdict (($r.stdout | str starts-with "/nix/store/") and not ($r.stderr | str contains "warning:")) "flake: \"${./file}\" under the root is neither a re-copy nor a path-copy" $"flake: file: ($r.stderr)")]
@@ -160,26 +160,26 @@ def main [] {
   $res ++= [(verdict (($r.stdout | str starts-with "/nix/store/") and not ($r.stderr | str contains "warning:")) "flake: \"${./file}\" inside an input is neither a re-copy nor a path-copy" $"flake: input file: ($r.stderr)")]
   let r = (^$ietsp eval --raw --no-tracing-cache ...$copies $"($dir)#store" | complete)
   $res ++= [(verdict (($r.stderr | str contains "warning: [store-path-recopy]") and ($r.stderr | str contains "warning: [path-copy] path '")) "flake: a pre-existing store path is still a re-copy" $"flake: store: ($r.stderr)")]
-  "[lint.inputs.dep]\nwith = \"warn\"\n" | save -f $"($dir)/ietsp.toml"
-  let r = (^$ietsp eval --raw --no-tracing-cache --lint with=warn $"($dir)#value" | complete)
+  "[lint.inputs.dep]\nurl-literal = \"warn\"\n" | save -f $"($dir)/ietsp.toml"
+  let r = (^$ietsp eval --raw --no-tracing-cache --lint url-literal=warn $"($dir)#value" | complete)
   $res ++= [(verdict (($r.stderr | str contains $root_site) and ($r.stderr | str contains $dep_site)) "flake: [lint.inputs.dep] opens the input" $"flake: inputs table: ($r.stderr)")]
   rm -rf $work
 
-  # `# ietsp: allow`: with.nix-style sites on a covered line are silent
-  let allow = [--lint with=warn --lint eq-type-mismatch=warn]
+  # `# ietsp: allow`: the sites on a covered line are silent
+  let allow = [--lint url-literal=warn --lint eq-type-mismatch=warn]
   for f in [own-line trailing multiple family all blank-lines runtime] {
     let r = (^$ietsp eval --strict --no-tracing-cache ...$allow $"lint/allow/($f).nix" | complete)
     let ok = ($r.exit_code == 0 and not ($r.stderr | str contains "warning:"))
     $res ++= [(verdict $ok $"allow: ($f) is silent" $"allow: ($f): rc=($r.exit_code) ($r.stderr | norm $pwd)")]
   }
-  let r = (^$ietsp eval --strict --no-tracing-cache --lint with=warn lint/allow/next-line-only.nix | complete)
-  let ok = ($r.stderr | norm $pwd | str contains "at /pwd/lint/allow/next-line-only.nix:3:4")
+  let r = (^$ietsp eval --strict --no-tracing-cache --lint url-literal=warn lint/allow/next-line-only.nix | complete)
+  let ok = ($r.stderr | norm $pwd | str contains "at /pwd/lint/allow/next-line-only.nix:3:3")
   $res ++= [(verdict $ok "allow: covers the next line only" $"allow: next line only: ($r.stderr | norm $pwd)")]
-  let r = (^$ietsp eval --no-tracing-cache --lint with=error lint/allow/error-level.nix | complete)
-  let ok = ($r.exit_code == 0 and ($r.stdout | chomp) == "1")
+  let r = (^$ietsp eval --no-tracing-cache --lint url-literal=error lint/allow/error-level.nix | complete)
+  let ok = ($r.exit_code == 0 and ($r.stdout | chomp) == "18")
   $res ++= [(verdict $ok "allow: silences a lint at error" $"allow: error level: rc=($r.exit_code) ($r.stderr)")]
-  let r = (^$ietsp eval --no-tracing-cache --lint with=warn lint/allow/directive.nix | complete)
-  let ok = (($r.stderr | str contains "warning: [unknown-allow] unknown directive 'allo'") and ($r.stderr | str contains "warning: [with]"))
+  let r = (^$ietsp eval --no-tracing-cache --lint url-literal=warn lint/allow/directive.nix | complete)
+  let ok = (($r.stderr | str contains "warning: [unknown-allow] unknown directive 'allo'") and ($r.stderr | str contains "warning: [url-literal]"))
   $res ++= [(verdict $ok "allow: an unknown directive is unknown-allow and silences nothing" $"allow: directive: ($r.stderr)")]
   # the table travels in the IR cache entry: a load stays silent
   let cache = (mktemp -d --tmpdir ietsp-linttest.XXXXXX)
@@ -197,13 +197,13 @@ def main [] {
   let cache = (mktemp -d --tmpdir ietsp-linttest.XXXXXX)
   let work = (mktemp -d --tmpdir ietsp-lintallow.XXXXXX)
   cp lint/allow/own-line.nix $"($work)/main.nix"
-  let r1 = (with-env {IETSP_CACHE_DIR: $cache} { ^$ietsp eval --strict --timings --lint with=warn $"($work)/main.nix" | complete })
-  let r2 = (with-env {IETSP_CACHE_DIR: $cache} { ^$ietsp eval --strict --timings --lint with=warn $"($work)/main.nix" | complete })
-  "with { x = 1; }; x\n" | save -f $"($work)/main.nix"
-  let r3 = (with-env {IETSP_CACHE_DIR: $cache} { ^$ietsp eval --strict --timings --lint with=warn $"($work)/main.nix" | complete })
+  let r1 = (with-env {IETSP_CACHE_DIR: $cache} { ^$ietsp eval --strict --timings --lint url-literal=warn $"($work)/main.nix" | complete })
+  let r2 = (with-env {IETSP_CACHE_DIR: $cache} { ^$ietsp eval --strict --timings --lint url-literal=warn $"($work)/main.nix" | complete })
+  "http://example.com\n" | save -f $"($work)/main.nix"
+  let r3 = (with-env {IETSP_CACHE_DIR: $cache} { ^$ietsp eval --strict --timings --lint url-literal=warn $"($work)/main.nix" | complete })
   rm -rf $cache $work
   let hit = ($r2.stderr | str contains "cache: hit")
-  let ok = ($hit and not ($r1.stderr | str contains "warning:") and not ($r2.stderr | str contains "warning:") and not ($r3.stderr | str contains "cache: hit") and ($r3.stderr | str contains $with_warn))
+  let ok = ($hit and not ($r1.stderr | str contains "warning:") and not ($r2.stderr | str contains "warning:") and not ($r3.stderr | str contains "cache: hit") and ($r3.stderr | str contains $url_warn))
   $res ++= [(verdict $ok "allow: a tracing-cache hit replays nothing; the comment is in the key" $"allow: tracing cache: hit=($hit) r3=($r3.stderr)")]
 
   let fail = ($res | where not $it | length)

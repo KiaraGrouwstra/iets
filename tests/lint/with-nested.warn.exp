@@ -1,2 +1,0 @@
-warning: [with-nested] `with` inside another `with`: names resolve through both scopes
-  at /pwd/lint/with-nested.nix:1:18

@@ -6,12 +6,10 @@ pub mod cache;
 pub mod ir;
 
 use crate::eval::{Error, ErrorKind, Pos};
-use crate::lint::scope::{BindKind, Frame};
 use crate::lint::{self, Level, LintId};
 use crate::runtime::{Arena, AttrsObj, Word};
 use crate::syntax::ast::{
-    Ast, AttrElem, BinOp, Bind, BindKind as AstBindKind, Expr, ExprId, Note, Param, PathKind,
-    StrPart, UnOp,
+    Ast, AttrElem, BinOp, Bind, BindKind, Expr, ExprId, Note, Param, PathKind, StrPart, UnOp,
 };
 use crate::syntax::symbol::{FxHashMap, Interner, Sym};
 use ir::*;
@@ -25,7 +23,7 @@ pub struct Globals {
 }
 
 enum Scope {
-    Lexical(Frame),
+    Lexical(FxHashMap<Sym, u32>),
     With,
 }
 
@@ -49,14 +47,10 @@ pub struct Compiler<'a> {
     lints: Option<&'a lint::Config>,
     /// The warnings the compile produced; the evaluator reports them.
     pub diags: Vec<lint::Diag>,
-    /// A scope lint is on, so frames record their bindings and uses.
-    track_scope: bool,
     sym_builtins: Sym,
     sym_cur_pos: Sym,
     sym_overrides: Sym,
     sym_body: Sym,
-    sym_true: Sym,
-    sym_false: Sym,
 }
 
 type CResult<T> = Result<T, Box<Error>>;
@@ -126,19 +120,6 @@ impl<'a> Compiler<'a> {
         let sym_cur_pos = interner.intern(b"__curPos");
         let sym_overrides = interner.intern(b"__overrides");
         let sym_body = interner.intern(b"body");
-        let sym_true = interner.intern(b"true");
-        let sym_false = interner.intern(b"false");
-        let track_scope = lints.is_some_and(|c| {
-            [
-                LintId::ShadowBuiltin,
-                LintId::ShadowBinding,
-                LintId::UnusedBinding,
-                LintId::UnusedFormal,
-                LintId::RecUnused,
-            ]
-            .iter()
-            .any(|id| c.level(*id) != Level::Off)
-        });
         Compiler {
             ast,
             arena,
@@ -152,13 +133,10 @@ impl<'a> Compiler<'a> {
             used_home: std::cell::Cell::new(false),
             lints,
             diags: Vec::new(),
-            track_scope,
             sym_builtins,
             sym_cur_pos,
             sym_overrides,
             sym_body,
-            sym_true,
-            sym_false,
         }
     }
 
@@ -166,7 +144,11 @@ impl<'a> Compiler<'a> {
     /// (for `scopedImport`) that the runtime supplies as the env above root.
     pub fn compile_root(&mut self, extra_scope: Option<&[Sym]>) -> CResult<IrRef> {
         if let Some(names) = extra_scope {
-            self.scopes.push(Scope::Lexical(Frame::from_names(names)));
+            let mut m = FxHashMap::default();
+            for (i, s) in names.iter().enumerate() {
+                m.insert(*s, i as u32);
+            }
+            self.scopes.push(Scope::Lexical(m));
         }
         self.parser_notes()?;
         let root = self.ast.root;
@@ -212,19 +194,9 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn lint_all(&mut self, pos: Pos, found: Vec<(LintId, String)>) -> CResult<()> {
-        for (id, msg) in found {
-            self.lint(id, pos, || msg)?;
-        }
-        Ok(())
-    }
-
-    /// The URL literals, legacy lets and unknown allow names the parser noted.
+    /// The URL literals and unknown allow names the parser noted.
     fn parser_notes(&mut self) -> CResult<()> {
-        if !self.lint_on(LintId::UrlLiteral)
-            && !self.lint_on(LintId::LegacyLet)
-            && !self.lint_on(LintId::UnknownAllow)
-        {
+        if !self.lint_on(LintId::UrlLiteral) && !self.lint_on(LintId::UnknownAllow) {
             return Ok(());
         }
         let ast: &'a Ast = self.ast;
@@ -240,9 +212,6 @@ impl<'a> Compiler<'a> {
                         lint::legacy::url_literal(text, error)
                     })?;
                 }
-                Note::LegacyLet(id) => {
-                    self.lint(LintId::LegacyLet, self.pos(id), lint::legacy::legacy_let)?;
-                }
                 Note::UnknownAllow { at, msg } => {
                     self.lint(LintId::UnknownAllow, Pos(self.base + at), || {
                         String::from_utf8_lossy(ast.bytes(msg)).into_owned()
@@ -253,67 +222,13 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    /// A reference to the global `sym` (a bare name, or `builtins.x` with
-    /// `x` passed as `name`): the deprecated, unsafe and impure-constant lints.
+    /// A reference to the global `name` (a bare name, or the `x` of
+    /// `builtins.x`): the `currentTime` half of `impure-builtin`.
     fn global_ref(&mut self, name: &[u8], pos: Pos) -> CResult<()> {
-        if !self.lint_on(LintId::DeprecatedBuiltin)
-            && !self.lint_on(LintId::UnsafeBuiltin)
-            && !self.lint_on(LintId::CurrentSystem)
-            && !self.lint_on(LintId::ImpureBuiltin)
+        if self.lint_on(LintId::ImpureBuiltin)
+            && let Some(msg) = lint::purity::current_time(name)
         {
-            return Ok(());
-        }
-        if !lint::legacy::may_lint(name) && !lint::purity::may_lint(name) {
-            return Ok(());
-        }
-        let name = String::from_utf8_lossy(name).into_owned();
-        let mut found = lint::legacy::builtin_reference(&name);
-        found.extend(lint::purity::reference(&name));
-        self.lint_all(pos, found)
-    }
-
-    /// `true`/`false` when `sym` is that global and nothing shadows it.
-    fn bool_global(&self, sym: Sym) -> Option<bool> {
-        if sym == self.sym_true && self.lexical_lookup(sym).is_none() {
-            Some(true)
-        } else if sym == self.sym_false && self.lexical_lookup(sym).is_none() {
-            Some(false)
-        } else {
-            None
-        }
-    }
-
-    fn name_of(&self, sym: Sym) -> String {
-        self.interner.name_str(sym).to_string()
-    }
-
-    /// The shadowing lints for a binding about to enter a new frame; the
-    /// frame is not pushed yet, so the lookup sees the enclosing scopes.
-    fn shadow(&mut self, kind: BindKind, sym: Sym, pos: Pos) -> CResult<()> {
-        if !self.track_scope {
-            return Ok(());
-        }
-        let is_global = self.globals.table.contains_key(&sym);
-        let outer = self.lexical_lookup(sym).is_some();
-        if !is_global && !outer {
-            return Ok(());
-        }
-        let name = self.name_of(sym);
-        let found = lint::scope::shadow(kind, &name, is_global, outer);
-        self.lint_all(pos, found)
-    }
-
-    /// Pops a lexical frame and reports what it left unused.
-    fn pop_frame(&mut self, pos: Pos) -> CResult<()> {
-        let Some(Scope::Lexical(frame)) = self.scopes.pop() else {
-            unreachable!("pop_frame closes the lexical frame just pushed")
-        };
-        if !self.track_scope {
-            return Ok(());
-        }
-        let found = lint::scope::closed(&frame, pos, &|s| self.name_of(s));
-        for (id, pos, msg) in found {
-            self.lint(id, pos, || msg)?;
+            self.lint(LintId::ImpureBuiltin, pos, || msg)?;
         }
         Ok(())
     }
@@ -347,10 +262,9 @@ impl<'a> Compiler<'a> {
         let n = self.scopes.len();
         for (d, scope) in self.scopes.iter().rev().enumerate() {
             match scope {
-                Scope::Lexical(f) => {
-                    if let Some(&idx) = f.slots.get(&sym) {
+                Scope::Lexical(m) => {
+                    if let Some(&idx) = m.get(&sym) {
                         self.note_capture(n - 1 - d);
-                        f.note_use(idx);
                         return Some(Ir::Local {
                             depth: d as u32,
                             idx,
@@ -473,10 +387,6 @@ impl<'a> Compiler<'a> {
                 }
             }
             Expr::Let { binds, body } => {
-                let nbinds = ast.binds(*binds).len();
-                if let Some((id, msg)) = lint::style::empty_let(nbinds) {
-                    self.lint(id, pos, || msg)?;
-                }
                 let merged = self.merge_binds(true, ast.binds(*binds), pos)?;
                 if !merged.dynamics.is_empty() {
                     return err(
@@ -485,40 +395,24 @@ impl<'a> Compiler<'a> {
                         pos,
                     );
                 }
-                let (binds, from) = self.lower_rec_binds(merged, BindKind::Let)?;
+                let (binds, from) = self.lower_rec_binds(merged)?;
                 let body = self.expr(*body)?;
-                self.pop_frame(pos)?;
+                self.scopes.pop();
                 Ir::Let(self.alloc(LetIr { binds, from, body }))
             }
             Expr::With { scope, body } => {
-                if self.lint_on(LintId::With)
-                    || self.lint_on(LintId::WithNonLiteral)
-                    || self.lint_on(LintId::WithNested)
-                {
-                    let nested = self.scopes.iter().any(|s| matches!(s, Scope::With));
-                    let found = lint::scope::with(ast.expr(*scope), nested);
-                    self.lint_all(pos, found)?;
-                }
                 let scope = self.expr(*scope)?;
                 self.scopes.push(Scope::With);
                 let body = self.expr(*body)?;
                 self.scopes.pop();
                 Ir::With { scope, body, pos }
             }
-            Expr::If { cond, then, else_ } => {
-                if self.lint_on(LintId::IfBoolLiteral)
-                    && let Some((id, msg)) =
-                        lint::style::if_bool_literal(ast, *then, *else_, &|s| self.bool_global(s))
-                {
-                    self.lint(id, pos, || msg)?;
-                }
-                Ir::If {
-                    cond: self.expr(*cond)?,
-                    then: self.expr(*then)?,
-                    else_: self.expr(*else_)?,
-                    pos: self.pos(*cond),
-                }
-            }
+            Expr::If { cond, then, else_ } => Ir::If {
+                cond: self.expr(*cond)?,
+                then: self.expr(*then)?,
+                else_: self.expr(*else_)?,
+                pos: self.pos(*cond),
+            },
             Expr::Assert { cond, body } => Ir::Assert {
                 cond: self.expr(*cond)?,
                 body: self.expr(*body)?,
@@ -532,12 +426,6 @@ impl<'a> Compiler<'a> {
                 }
             }
             Expr::Binary { op, lhs, rhs } => {
-                if self.lint_on(LintId::EqBool)
-                    && let Some((id, msg)) =
-                        lint::style::eq_bool(ast, *op, *lhs, *rhs, &|s| self.bool_global(s))
-                {
-                    self.lint(id, pos, || msg)?;
-                }
                 let l = self.expr(*lhs)?;
                 let r = self.expr(*rhs)?;
                 match op {
@@ -567,8 +455,8 @@ impl<'a> Compiler<'a> {
 
     fn lexical_lookup(&self, sym: Sym) -> Option<(u32, u32)> {
         for (d, scope) in self.scopes.iter().rev().enumerate() {
-            if let Scope::Lexical(f) = scope
-                && let Some(&idx) = f.slots.get(&sym)
+            if let Scope::Lexical(m) = scope
+                && let Some(&idx) = m.get(&sym)
             {
                 return Some((d as u32, idx));
             }
@@ -818,24 +706,18 @@ impl<'a> Compiler<'a> {
     fn add_bind(&mut self, m: &mut Merged, b: &Bind) -> CResult<()> {
         let ast: &'a Ast = self.ast;
         let pos = self.bind_pos(b);
-        if self.lint_on(LintId::ManualInherit)
-            && let Some((id, msg)) =
-                lint::style::manual_inherit(ast, b, m.rec, &|s| self.name_of(s))
-        {
-            self.lint(id, pos, || msg)?;
-        }
         match &b.kind {
-            AstBindKind::Value { path, value } => {
+            BindKind::Value { path, value } => {
                 self.add_path(m, ast.elems(*path), Def::Expr(*value), pos)
             }
-            AstBindKind::Inherit { from: None, names } => {
+            BindKind::Inherit { from: None, names } => {
                 for (name, span) in ast.names(*names) {
                     let p = Pos(self.base + span.start);
                     self.add_static(m, *name, Def::Inherit(*name), p)?;
                 }
                 Ok(())
             }
-            AstBindKind::Inherit {
+            BindKind::Inherit {
                 from: Some(e),
                 names,
             } => {
@@ -992,7 +874,7 @@ impl<'a> Compiler<'a> {
             let pos = m.pos;
             let mut m = m;
             let dynamics = std::mem::take(&mut m.dynamics);
-            let (binds, from) = self.lower_rec_binds(m, BindKind::Rec)?;
+            let (binds, from) = self.lower_rec_binds(m)?;
             // dynamics of rec sets are evaluated in the rec env: compile them
             // while its scope is still pushed
             let dynamic = self.lower_dynamics(dynamics)?;
@@ -1000,14 +882,7 @@ impl<'a> Compiler<'a> {
                 .iter()
                 .position(|b| b.sym == self.sym_overrides)
                 .map(|i| i as u32);
-            if overrides.is_some() {
-                self.lint(LintId::Overrides, pos, lint::legacy::overrides)?;
-                // `__overrides` reaches every sibling, so the set is recursive
-                if let Some(Scope::Lexical(f)) = self.scopes.last() {
-                    f.recursive.set(true);
-                }
-            }
-            self.pop_frame(pos)?;
+            self.scopes.pop();
             return Ok(self.alloc(AttrsIr {
                 rec: true,
                 binds,
@@ -1073,7 +948,7 @@ impl<'a> Compiler<'a> {
             from.push(self.expr(*e)?);
         }
         if !deferred_from.is_empty() {
-            self.scopes.push(Scope::Lexical(Frame::new(false)));
+            self.scopes.push(Scope::Lexical(FxHashMap::default()));
             // the from-env has `from.len()` anonymous slots at depth 0
             for (fi, name, bpos, bi) in deferred_from {
                 let subject = self.alloc(Ir::Local {
@@ -1130,11 +1005,7 @@ impl<'a> Compiler<'a> {
     /// Recursive bindings (`rec { }` and `let`). Pushes the new scope and
     /// leaves it on the stack so the caller can compile the body; the caller
     /// pops it.
-    fn lower_rec_binds(
-        &mut self,
-        m: Merged,
-        kind: BindKind,
-    ) -> CResult<(&'static [BindIr], &'static [IrRef])> {
+    fn lower_rec_binds(&mut self, m: Merged) -> CResult<(&'static [BindIr], &'static [IrRef])> {
         let Merged {
             mut statics,
             from_exprs,
@@ -1150,16 +1021,11 @@ impl<'a> Compiler<'a> {
                 _ => None,
             });
         }
-        let mut frame = Frame::new(kind == BindKind::Rec);
-        frame.slots.reserve(statics.len());
-        for (i, (sym, _, bpos)) in statics.iter().enumerate() {
-            frame.slots.insert(*sym, i as u32);
-            if self.track_scope {
-                self.shadow(kind, *sym, *bpos)?;
-                frame.push(*sym, *bpos, kind);
-            }
+        let mut names = FxHashMap::with_capacity_and_hasher(statics.len(), Default::default());
+        for (i, (sym, _, _)) in statics.iter().enumerate() {
+            names.insert(*sym, i as u32);
         }
-        self.scopes.push(Scope::Lexical(frame));
+        self.scopes.push(Scope::Lexical(names));
         let nbinds = statics.len();
         let mut binds = Vec::with_capacity(nbinds);
         for (i, (sym, def, bpos)) in statics.into_iter().enumerate() {
@@ -1242,17 +1108,13 @@ impl<'a> Compiler<'a> {
         let ast: &'a Ast = self.ast;
         match param {
             Param::Ident(sym) => {
-                let mut frame = Frame::new(false);
-                frame.slots.insert(sym, 0);
-                if self.track_scope {
-                    self.shadow(BindKind::Arg, sym, pos)?;
-                    frame.push(sym, pos, BindKind::Arg);
-                }
+                let mut m = FxHashMap::default();
+                m.insert(sym, 0);
                 self.lambdas
                     .push((self.scopes.len(), std::cell::Cell::new(false)));
-                self.scopes.push(Scope::Lexical(frame));
+                self.scopes.push(Scope::Lexical(m));
                 let body = self.expr(body)?;
-                self.pop_frame(pos)?;
+                self.scopes.pop();
                 let closed = !self.lambdas.pop().unwrap().1.get();
                 Ok(self.alloc(LambdaIr {
                     param: ParamIr::Ident,
@@ -1283,23 +1145,14 @@ impl<'a> Compiler<'a> {
                         );
                     }
                 }
-
-                if let Some((id, msg)) = lint::style::pattern(&param) {
-                    self.lint(id, pos, || msg)?;
-                }
-                let mut frame = Frame::new(false);
+                let mut m = FxHashMap::default();
                 let mut idx = 0u32;
                 if let Some(b) = bind {
-                    frame.slots.insert(b, idx);
-                    frame.bind_sym = Some(b);
-                    if self.track_scope {
-                        self.shadow(BindKind::Arg, b, pos)?;
-                        frame.push(b, pos, BindKind::Arg);
-                    }
+                    m.insert(b, idx);
                     idx += 1;
                 }
                 for f in &sorted {
-                    if frame.slots.insert(f.name, idx).is_some() {
+                    if m.insert(f.name, idx).is_some() {
                         return err(
                             ErrorKind::Eval,
                             format!(
@@ -1309,16 +1162,11 @@ impl<'a> Compiler<'a> {
                             pos,
                         );
                     }
-                    if self.track_scope {
-                        let fpos = Pos(self.base + f.span.start);
-                        self.shadow(BindKind::Formal, f.name, fpos)?;
-                        frame.push(f.name, fpos, BindKind::Formal);
-                    }
                     idx += 1;
                 }
                 self.lambdas
                     .push((self.scopes.len(), std::cell::Cell::new(false)));
-                self.scopes.push(Scope::Lexical(frame));
+                self.scopes.push(Scope::Lexical(m));
                 let mut firs = Vec::with_capacity(sorted.len());
                 for f in &sorted {
                     let default = match f.default {
@@ -1332,7 +1180,7 @@ impl<'a> Compiler<'a> {
                     });
                 }
                 let body = self.expr(body)?;
-                self.pop_frame(pos)?;
+                self.scopes.pop();
                 let closed = !self.lambdas.pop().unwrap().1.get();
                 let formals = self.alloc_formals(firs);
                 Ok(self.alloc(LambdaIr {

@@ -1,2 +1,2 @@
-# ietsp: allo with
-with { x = 1; }; x
+# ietsp: allo url-literal
+http://example.com

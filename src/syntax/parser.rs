@@ -783,7 +783,7 @@ impl<'a> Parser<'a> {
                 let mark = self.sc_elems.len();
                 self.sc_elems.push(AttrElem::Static(self.sym_body));
                 let path = commit(&mut self.ast.elems, &mut self.sc_elems, mark);
-                let id = self.add(
+                Ok(self.add(
                     Expr::Select {
                         subject: attrs,
                         path,
@@ -791,9 +791,7 @@ impl<'a> Parser<'a> {
                     },
                     t.start,
                     self.last_end,
-                );
-                self.ast.notes.push(Note::LegacyLet(id));
-                Ok(id)
+                ))
             }
             Tok::Rec => {
                 self.bump();

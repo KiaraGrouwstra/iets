@@ -508,7 +508,7 @@ mod tests {
     #[test]
     fn a_project_file_holds_lint_and_nothing_else() {
         let at = Path::new("/repo/ietsp.toml");
-        assert_eq!(check_project("[lint]\nwith = \"warn\"\n", at), Ok(()));
+        assert_eq!(check_project("[lint]\npath-copy = \"warn\"\n", at), Ok(()));
         assert_eq!(check_project("", at), Ok(()));
         for key in KEYS {
             let e = check_project(&format!("{key} = true\n[lint]\n"), at).unwrap_err();
@@ -536,7 +536,7 @@ mod tests {
 
     #[test]
     fn a_settings_file_may_hold_lint_and_the_other_sources_may_not() {
-        assert!(load("[lint]\nwith = \"warn\"\n").is_ok());
+        assert!(load("[lint]\npath-copy = \"warn\"\n").is_ok());
         let mut c = Conf::default();
         let e = c.apply("[lint]\n", "$IETSP_CONFIG", false).unwrap_err();
         assert!(

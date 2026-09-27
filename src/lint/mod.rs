@@ -1,19 +1,17 @@
 //! Named lints for language corner cases, each `off`, `warn` or `error`.
 //! The registry lives here, one line per lint; each family file holds
-//! the trigger logic its hooks call. Levels resolve from the built-in
-//! default, then `[lint]` in each `ietsp.toml` (machine, user, project), then
-//! `IETSP_LINT`, then `--lint`; inside one source a lint name beats
-//! `family:NAME`, which beats `all`. A site is reported only inside the lint
-//! roots unless the scope is `all` or the site's locked input has its own
-//! levels. See docs/reference/lints.md.
+//! the trigger logic its hooks call (`allow.rs` for `meta`). Levels
+//! resolve from the built-in default, then `[lint]` in each `ietsp.toml`
+//! (machine, user, project), then `IETSP_LINT`, then `--lint`; inside one
+//! source a lint name beats `family:NAME`, which beats `all`. A site is
+//! reported only inside the lint roots unless the scope is `all` or the
+//! site's locked input has its own levels. See docs/reference/lints.md.
 
 pub mod allow;
 pub mod coerce;
 pub mod legacy;
 pub mod path;
 pub mod purity;
-pub mod scope;
-pub mod style;
 
 use std::collections::HashSet;
 use std::hash::BuildHasherDefault;
@@ -54,33 +52,30 @@ impl Level {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Family {
     Path,
-    Scope,
     Coerce,
     Legacy,
     Purity,
-    Style,
+    Meta,
 }
 
 impl Family {
     pub fn name(self) -> &'static str {
         match self {
             Family::Path => "path",
-            Family::Scope => "scope",
             Family::Coerce => "coerce",
             Family::Legacy => "legacy",
             Family::Purity => "purity",
-            Family::Style => "style",
+            Family::Meta => "meta",
         }
     }
 
     pub fn parse(s: &str) -> Option<Family> {
         [
             Family::Path,
-            Family::Scope,
             Family::Coerce,
             Family::Legacy,
             Family::Purity,
-            Family::Style,
+            Family::Meta,
         ]
         .into_iter()
         .find(|f| f.name() == s)
@@ -142,14 +137,6 @@ registry! {
     AbsolutePathLiteral: "absolute-path-literal", Path, Compiler, Off, "a path literal that starts with `/` or `~/` (Nix: lint-absolute-path-literals)";
     ShortPathLiteral: "short-path-literal", Path, Compiler, Off, "a relative path literal without a leading `./` (Nix: lint-short-path-literals)";
     UrlLiteral: "url-literal", Legacy, Parser, Off, "an unquoted URL (Nix: lint-url-literals)";
-    With: "with", Scope, Compiler, Off, "any `with` expression";
-    WithNonLiteral: "with-non-literal", Scope, Compiler, Off, "`with` whose scope is not an attrset literal or a plain variable";
-    WithNested: "with-nested", Scope, Compiler, Off, "`with` inside the body of another `with`";
-    ShadowBuiltin: "shadow-builtin", Scope, Compiler, Off, "a let, rec, or formal binding named like a global (`map`, `__add`, `builtins`, ...)";
-    ShadowBinding: "shadow-binding", Scope, Compiler, Off, "a binding that hides an outer lexical binding of the same name (`_`-prefixed names excepted)";
-    UnusedBinding: "unused-binding", Scope, Compiler, Off, "a `let` binding its scope never references (`_`-prefixed names excepted)";
-    UnusedFormal: "unused-formal", Scope, Compiler, Off, "a formal the lambda never references, when no `@` binding is used either; remove it from the pattern";
-    RecUnused: "rec-unused", Scope, Compiler, Off, "`rec` on a set where no binding references a sibling";
     PathCopy: "path-copy", Coerce, Evaluator, Off, "a path coerced to a string with a copy to the store (interpolation, `+`, derivation attrs); not under a flake tree";
     DirCopyFlake: "dir-copy-flake", Coerce, Evaluator, Off, "a directory of the flake tree (its tracked files) coerced to a string is copied to the store whole; narrow it with `lib.fileset` or `builtins.path` with a filter only when needed";
     StorePathRecopy: "store-path-recopy", Coerce, Evaluator, Off, "a path already under the store copied again, which doubles the hash in its name";
@@ -159,12 +146,7 @@ registry! {
     EqTypeMismatch: "eq-type-mismatch", Coerce, Evaluator, Off, "`==` or `!=` on values of different types (int and float excepted, and null on either side)";
     EqFunction: "eq-function", Coerce, Evaluator, Off, "`==` or `!=` where a side is a function, which is never equal";
     OrNonAttrs: "or-non-attrs", Coerce, Evaluator, Off, "`x.a or d` where the subject of some element is not an attrset";
-    LegacyLet: "legacy-let", Legacy, Parser, Off, "`let { body = ...; }`";
-    DeprecatedBuiltin: "deprecated-builtin", Legacy, Compiler, Off, "a reference to isNull, toPath, unsafeDiscardOutputDependency, or a `__` alias such as `__add`";
-    Overrides: "overrides", Legacy, Compiler, Off, "`__overrides` in a rec set";
-    UnsafeBuiltin: "unsafe-builtin", Legacy, Compiler, Off, "a reference to any `unsafe*` builtin";
     ImpureBuiltin: "impure-builtin", Purity, Evaluator, Off, "a `getEnv` call, or a reference to `currentTime`";
-    CurrentSystem: "current-system", Purity, Compiler, Off, "a reference to `currentSystem`";
     UnhashedFetch: "unhashed-fetch", Purity, Evaluator, Off, "fetchurl, fetchTarball, fetchGit or fetchTree called without a hash, narHash or rev";
     Ifd: "ifd", Purity, Evaluator, Off, "import of a string that carries derivation context";
     Fod: "fod", Purity, Evaluator, Off, "a fixed-output derivation; the message names the derivation and its hash mode";
@@ -173,12 +155,7 @@ registry! {
     DirCopyUnfiltered: "dir-copy-unfiltered", Purity, Evaluator, Off, "a directory coerced to a string is copied whole, untracked and ignored files included; use `builtins.path` with a filter";
     ImpurePathInDrv: "impure-path-in-drv", Purity, Evaluator, Off, "a derivation attribute holds the text of a path outside the store and outside any flake root (`toString ./x`), so the .drv depends on the checkout location";
     AbsolutePathInDrv: "absolute-path-in-drv", Purity, Evaluator, Off, "a derivation attribute holds the text of a path under a flake root, an absolute path a flake evaluation would have copied";
-    IfBoolLiteral: "if-bool-literal", Style, Compiler, Off, "`if c then true else false` or its negation";
-    EqBool: "eq-bool", Style, Compiler, Off, "`x == true`, `x == false`, or the same with `!=`";
-    ManualInherit: "manual-inherit", Style, Compiler, Off, "`a = a;` or `a = b.a;` where `inherit` would do";
-    EmptyLet: "empty-let", Style, Compiler, Warn, "`let in e`";
-    EllipsisWithoutBind: "ellipsis-without-bind", Style, Compiler, Off, "`{ a, ... }:` with `...` and no `@name`";
-    UnknownAllow: "unknown-allow", Style, Parser, Warn, "a `# ietsp: allow` comment that names a lint the registry does not know, so a typo does not silence nothing";
+    UnknownAllow: "unknown-allow", Meta, Parser, Warn, "a `# ietsp: allow` comment that names a lint the registry does not know, so a typo does not silence nothing";
 }
 
 pub const N: usize = LINTS.len();
@@ -1087,18 +1064,19 @@ mod tests {
         let mut c = Config::default();
         c.set("all", Level::Warn).unwrap();
         assert!(c.levels.iter().all(|l| *l == Level::Warn));
-        c.set("family:scope", Level::Error).unwrap();
-        assert_eq!(c.level(LintId::With), Level::Error);
+        c.set("family:path", Level::Error).unwrap();
+        assert_eq!(c.level(LintId::AbsolutePathLiteral), Level::Error);
         assert_eq!(c.level(LintId::PathCopy), Level::Warn);
-        c.set_pair("with=off").unwrap();
-        assert_eq!(c.level(LintId::With), Level::Off);
+        c.set_pair("absolute-path-literal=off").unwrap();
+        assert_eq!(c.level(LintId::AbsolutePathLiteral), Level::Off);
         c.set_pair("lint-url-literals=fatal").unwrap();
         assert_eq!(c.level(LintId::UrlLiteral), Level::Error);
         assert!(c.set("nope", Level::Warn).is_err());
         assert!(c.set("family:nope", Level::Warn).is_err());
-        assert!(c.set_pair("with=loud").is_err());
-        c.apply_env("with=warn, ifd=error").unwrap();
-        assert_eq!(c.level(LintId::With), Level::Warn);
+        assert!(c.set_pair("absolute-path-literal=loud").is_err());
+        c.apply_env("absolute-path-literal=warn, ifd=error")
+            .unwrap();
+        assert_eq!(c.level(LintId::AbsolutePathLiteral), Level::Warn);
         assert_eq!(c.level(LintId::Ifd), Level::Error);
     }
 
@@ -1108,24 +1086,24 @@ mod tests {
         // the order TOML hands the keys in
         let mut c = Config::default();
         c.apply_toml(
-            "[lint]\nwith = \"warn\"\n\"family:scope\" = \"error\"\nall = \"off\"\ndir-copy-flake = \"warn\"\n\"family:coerce\" = \"error\"\n",
+            "[lint]\nabsolute-path-literal = \"warn\"\n\"family:path\" = \"error\"\nall = \"off\"\ndir-copy-flake = \"warn\"\n\"family:coerce\" = \"error\"\n",
             Path::new("t"),
         )
         .unwrap();
-        assert_eq!(c.level(LintId::With), Level::Warn);
-        assert_eq!(c.level(LintId::WithNested), Level::Error);
+        assert_eq!(c.level(LintId::AbsolutePathLiteral), Level::Warn);
+        assert_eq!(c.level(LintId::ShortPathLiteral), Level::Error);
         assert_eq!(c.level(LintId::DirCopyFlake), Level::Warn);
         assert_eq!(c.level(LintId::PathCopy), Level::Error);
         assert_eq!(c.level(LintId::Ifd), Level::Off);
         // a Nix alias is a name
         let mut c = Config::default();
         c.apply_toml(
-            "[lint]\n\"family:legacy\" = \"error\"\nlint-url-literals = \"warn\"\n",
+            "[lint]\n\"family:path\" = \"error\"\nlint-short-path-literals = \"warn\"\n",
             Path::new("t"),
         )
         .unwrap();
-        assert_eq!(c.level(LintId::UrlLiteral), Level::Warn);
-        assert_eq!(c.level(LintId::LegacyLet), Level::Error);
+        assert_eq!(c.level(LintId::ShortPathLiteral), Level::Warn);
+        assert_eq!(c.level(LintId::AbsolutePathLiteral), Level::Error);
         // an input table follows the same rule
         let mut c = Config::default();
         c.apply_toml(
@@ -1138,12 +1116,12 @@ mod tests {
         assert_eq!(c.site_level(LintId::Ifd, Where::Input(i)), Level::Error);
         // between sources the later one wins, whatever its specificity
         let mut c = Config::default();
-        c.apply_toml("[lint]\nwith = \"warn\"\n", Path::new("t"))
+        c.apply_toml("[lint]\nabsolute-path-literal = \"warn\"\n", Path::new("t"))
             .unwrap();
-        c.apply_env("family:scope=error").unwrap();
-        assert_eq!(c.level(LintId::With), Level::Error);
+        c.apply_env("family:path=error").unwrap();
+        assert_eq!(c.level(LintId::AbsolutePathLiteral), Level::Error);
         c.set("all", Level::Off).unwrap();
-        assert_eq!(c.level(LintId::With), Level::Off);
+        assert_eq!(c.level(LintId::AbsolutePathLiteral), Level::Off);
         // the flags are one source: a name given first still beats a
         // family or `all` given later; equals keep the later one
         let flags = |s: &[&str]| {
@@ -1156,54 +1134,63 @@ mod tests {
             c
         };
         assert_eq!(
-            flags(&["with=off", "all=error"]).level(LintId::With),
+            flags(&["absolute-path-literal=off", "all=error"]).level(LintId::AbsolutePathLiteral),
             Level::Off
         );
         assert_eq!(
-            flags(&["all=error", "with=off"]).level(LintId::With),
+            flags(&["all=error", "absolute-path-literal=off"]).level(LintId::AbsolutePathLiteral),
             Level::Off
         );
         assert_eq!(
-            flags(&["all=error", "with=off"]).level(LintId::Ifd),
+            flags(&["all=error", "absolute-path-literal=off"]).level(LintId::Ifd),
             Level::Error
         );
         assert_eq!(
-            flags(&["with=off", "family:scope=error"]).level(LintId::With),
+            flags(&["absolute-path-literal=off", "family:path=error"])
+                .level(LintId::AbsolutePathLiteral),
             Level::Off
         );
         assert_eq!(
-            flags(&["with=off", "with=warn"]).level(LintId::With),
+            flags(&["absolute-path-literal=off", "absolute-path-literal=warn"])
+                .level(LintId::AbsolutePathLiteral),
             Level::Warn
         );
         assert_eq!(
-            flags(&["all=off", "all=warn"]).level(LintId::With),
+            flags(&["all=off", "all=warn"]).level(LintId::AbsolutePathLiteral),
             Level::Warn
         );
         let mut c = Config::default();
-        c.apply_env("family:scope=error, with=off").unwrap();
-        assert_eq!(c.level(LintId::With), Level::Off);
-        assert_eq!(c.level(LintId::WithNested), Level::Error);
+        c.apply_env("family:path=error, absolute-path-literal=off")
+            .unwrap();
+        assert_eq!(c.level(LintId::AbsolutePathLiteral), Level::Off);
+        assert_eq!(c.level(LintId::ShortPathLiteral), Level::Error);
     }
 
     #[test]
     fn toml_table() {
         let mut c = Config::default();
         c.apply_toml(
-            "[other]\nx = 1\n[lint]\nwith = \"warn\"\nlarge-source-copy = { level = \"error\", max-bytes = 64 }\n",
+            "[other]\nx = 1\n[lint]\nabsolute-path-literal = \"warn\"\nlarge-source-copy = { level = \"error\", max-bytes = 64 }\n",
             Path::new("t"),
         )
         .unwrap();
-        assert_eq!(c.level(LintId::With), Level::Warn);
+        assert_eq!(c.level(LintId::AbsolutePathLiteral), Level::Warn);
         assert_eq!(c.level(LintId::LargeSourceCopy), Level::Error);
         assert_eq!(c.max_bytes, 64);
         assert!(
             c.apply_toml("[lint]\nnope = \"warn\"\n", Path::new("t"))
                 .is_err()
         );
-        assert!(c.apply_toml("[lint]\nwith = 3\n", Path::new("t")).is_err());
         assert!(
-            c.apply_toml("[lint]\nwith = { max-bytes = 3 }\n", Path::new("t"))
+            c.apply_toml("[lint]\nabsolute-path-literal = 3\n", Path::new("t"))
                 .is_err()
+        );
+        assert!(
+            c.apply_toml(
+                "[lint]\nabsolute-path-literal = { max-bytes = 3 }\n",
+                Path::new("t")
+            )
+            .is_err()
         );
     }
 
@@ -1215,7 +1202,7 @@ mod tests {
         c.set("path-copy", Level::Warn).unwrap();
         assert_eq!(c.compile_key(), "");
         let off = c.clone();
-        c.set("with", Level::Warn).unwrap();
+        c.set("absolute-path-literal", Level::Warn).unwrap();
         assert!(c.compile_key().contains('w'));
         assert_ne!(c.key(), off.key());
         assert_eq!(off.key(), off.key());
@@ -1231,7 +1218,7 @@ mod tests {
     fn scope_and_inputs() {
         let mut c = Config::default();
         c.apply_toml(
-            "[lint]\nwith = \"warn\"\nroots = [\"lib\", \"/abs/../x\"]\n[lint.inputs.nixpkgs]\nfod = \"warn\"\n\"family:scope\" = \"off\"\n",
+            "[lint]\nabsolute-path-literal = \"warn\"\nroots = [\"lib\", \"/abs/../x\"]\n[lint.inputs.nixpkgs]\nfod = \"warn\"\n\"family:path\" = \"off\"\n",
             Path::new("/repo/ietsp.toml"),
         )
         .unwrap();
@@ -1240,15 +1227,30 @@ mod tests {
         assert!(c.in_root(b"/repo/lib/a.nix"));
         assert!(!c.in_root(b"/repo/library/a.nix"));
         let i = c.input_index("nixpkgs").unwrap();
-        assert_eq!(c.site_level(LintId::With, Where::Root), Level::Warn);
-        assert_eq!(c.site_level(LintId::With, Where::Elsewhere), Level::Off);
-        assert_eq!(c.site_level(LintId::With, Where::Input(i)), Level::Off);
+        assert_eq!(
+            c.site_level(LintId::AbsolutePathLiteral, Where::Root),
+            Level::Warn
+        );
+        assert_eq!(
+            c.site_level(LintId::AbsolutePathLiteral, Where::Elsewhere),
+            Level::Off
+        );
+        assert_eq!(
+            c.site_level(LintId::AbsolutePathLiteral, Where::Input(i)),
+            Level::Off
+        );
         assert_eq!(c.site_level(LintId::Fod, Where::Input(i)), Level::Warn);
         assert_eq!(c.for_where(Where::Input(i)).level(LintId::Fod), Level::Warn);
         assert_eq!(c.for_where(Where::Elsewhere).compile_key(), "");
         c.scope = Scope::All;
-        assert_eq!(c.site_level(LintId::With, Where::Elsewhere), Level::Warn);
-        assert_eq!(c.site_level(LintId::With, Where::Input(i)), Level::Off);
+        assert_eq!(
+            c.site_level(LintId::AbsolutePathLiteral, Where::Elsewhere),
+            Level::Warn
+        );
+        assert_eq!(
+            c.site_level(LintId::AbsolutePathLiteral, Where::Input(i)),
+            Level::Off
+        );
         assert!(
             c.apply_toml("[lint]\nscope = \"some\"\n", Path::new("t"))
                 .is_err()

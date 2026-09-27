@@ -1,1 +1,1 @@
-(builtins.tryEval (with { x = 1; }; x)).success
+(builtins.tryEval (1 == "a")).success

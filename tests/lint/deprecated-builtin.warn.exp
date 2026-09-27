@@ -1,6 +1,0 @@
-warning: [deprecated-builtin] `isNull` is deprecated: use `x == null`
-  at /pwd/lint/deprecated-builtin.nix:1:4
-warning: [deprecated-builtin] `__add` is an internal alias: use `builtins.add`
-  at /pwd/lint/deprecated-builtin.nix:1:18
-warning: [deprecated-builtin] `toPath` is deprecated: use a path literal or `/. + x`
-  at /pwd/lint/deprecated-builtin.nix:1:30

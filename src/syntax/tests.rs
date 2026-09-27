@@ -327,37 +327,38 @@ fn allow_comments() {
         (ast.allows.clone(), ast.notes.clone())
     };
     // own line: the next non-blank, non-comment line; trailing: its own line
-    let src = "# ietsp: allow with\n\n# plain\n  with a; [\n  (with b; x) # ietsp: allow with, eq-bool\n]\n";
+    let src =
+        "# ietsp: allow fod\n\n# plain\n  with a; [\n  (with b; x) # ietsp: allow fod, ifd\n]\n";
     let (a, notes) = parse_allows(src);
     assert!(notes.is_empty());
     let l = a.lines();
     assert_eq!(l.len(), 2);
     assert_eq!(
         (l[0].start, l[0].end, l[0].mask),
-        (29, 40, bit(LintId::With))
+        (28, 39, bit(LintId::Fod))
     );
-    assert_eq!((l[1].start, l[1].end), (41, 83));
-    assert_eq!(l[1].mask, bit(LintId::With) | bit(LintId::EqBool));
-    assert!(a.covers(31, LintId::With));
-    assert!(!a.covers(40, LintId::With));
-    assert!(!a.covers(31, LintId::EqBool));
-    assert!(a.covers(45, LintId::EqBool));
+    assert_eq!((l[1].start, l[1].end), (40, 77));
+    assert_eq!(l[1].mask, bit(LintId::Fod) | bit(LintId::Ifd));
+    assert!(a.covers(30, LintId::Fod));
+    assert!(!a.covers(39, LintId::Fod));
+    assert!(!a.covers(30, LintId::Ifd));
+    assert!(a.covers(45, LintId::Ifd));
     // a comment before the third token of lookahead is noted once
-    let (a, _) = parse_allows("{\n# ietsp: allow with\nb = with x; y; }");
+    let (a, _) = parse_allows("{\n# ietsp: allow fod\nb = with x; y; }");
     assert_eq!(a.lines().len(), 1);
-    assert_eq!((a.lines()[0].start, a.lines()[0].end), (22, 38));
+    assert_eq!((a.lines()[0].start, a.lines()[0].end), (21, 37));
     // an own-line comment at the end of the file covers nothing
-    let (a, _) = parse_allows("1\n# ietsp: allow with\n");
+    let (a, _) = parse_allows("1\n# ietsp: allow fod\n");
     assert!(a.is_empty());
     // unknown names are notes; the known ones still count
-    let (a, notes) = parse_allows("# ietsp: allow wiht, with\n1");
-    assert_eq!(a.lines()[0].mask, bit(LintId::With));
+    let (a, notes) = parse_allows("# ietsp: allow fdo, fod\n1");
+    assert_eq!(a.lines()[0].mask, bit(LintId::Fod));
     assert!(matches!(notes[..], [Note::UnknownAllow { at: 15, .. }]));
-    let (a, notes) = parse_allows("1 # ietsp: allo with");
+    let (a, notes) = parse_allows("1 # ietsp: allo fod");
     assert!(a.is_empty());
     assert!(matches!(notes[..], [Note::UnknownAllow { at: 11, .. }]));
     // other comments are not parsed
-    let (a, notes) = parse_allows("# ietsp allow with\n#ietsp: allow with\n1");
+    let (a, notes) = parse_allows("# ietsp allow fod\n#ietsp: allow fod\n1");
     assert!(a.is_empty() && notes.is_empty());
 }
 

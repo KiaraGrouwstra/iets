@@ -1,1 +1,1 @@
-with builtins.foo; x
+builtins.typeOf a/b

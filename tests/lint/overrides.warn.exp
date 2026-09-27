@@ -1,2 +1,0 @@
-warning: [overrides] `__overrides` in a rec set is a legacy feature; use `//` or a fixed point
-  at /pwd/lint/overrides.nix:1:1

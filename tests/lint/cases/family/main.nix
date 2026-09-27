@@ -1,1 +1,1 @@
-with { x = 1; }; x
+builtins.typeOf /etc

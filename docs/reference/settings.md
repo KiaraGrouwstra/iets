@@ -130,7 +130,7 @@ fix-hashes = "never"
 source-map = ["/nix/store/…-source=/home/me/nixpkgs"]
 
 [lint]
-with = "warn"
+path-copy = "warn"
 ```
 
 The keys are flat because there are thirteen of them and because the names

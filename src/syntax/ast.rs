@@ -73,14 +73,13 @@ pub struct Ast {
     pub allows: crate::lint::allow::Allows,
 }
 
-/// A construct the parser saw and a lint may report: the `url-literal`
-/// and `legacy-let` nodes, and a `# ietsp: allow` word the registry does
+/// A construct the parser saw and a lint may report: a `url-literal`
+/// node, and a `# ietsp: allow` word the registry does
 /// not know (`unknown-allow`), with its byte offset and its message in
 /// `bytes`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Note {
     Url(ExprId),
-    LegacyLet(ExprId),
     UnknownAllow { at: u32, msg: Range },
 }
 

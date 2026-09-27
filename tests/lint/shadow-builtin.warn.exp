@@ -1,4 +1,0 @@
-warning: [shadow-builtin] let binding `map` shadows the builtin `map`
-  at /pwd/lint/shadow-builtin.nix:1:5
-warning: [shadow-builtin] formal `toString` shadows the builtin `toString`
-  at /pwd/lint/shadow-builtin.nix:1:35

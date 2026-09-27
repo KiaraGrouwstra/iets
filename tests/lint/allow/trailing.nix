@@ -1,1 +1,1 @@
-with { x = 1; }; x # ietsp: allow with
+http://example.com # ietsp: allow url-literal

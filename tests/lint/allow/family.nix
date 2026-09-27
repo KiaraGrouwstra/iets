@@ -1,2 +1,2 @@
-# ietsp: allow family:scope
-with { x = 1; }; x
+# ietsp: allow family:legacy
+http://example.com

@@ -1,2 +1,2 @@
-# ietsp: allow with, empty-let
-with { x = 1; }; let in x
+# ietsp: allow url-literal, eq-type-mismatch
+[ http://example.com (1 == "a") ]

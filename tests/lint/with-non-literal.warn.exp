@@ -1,2 +1,0 @@
-warning: [with-non-literal] the scope of this `with` is neither an attrset literal nor a plain variable
-  at /pwd/lint/with-non-literal.nix:1:33

@@ -1,4 +1,4 @@
 nix-bin-dir = "/evil"
 
 [lint]
-with = "warn"
+url-literal = "warn"

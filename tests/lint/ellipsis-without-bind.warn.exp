@@ -1,2 +1,0 @@
-warning: [ellipsis-without-bind] `...` without an `@name` binding drops the extra attributes silently
-  at /pwd/lint/ellipsis-without-bind.nix:1:2

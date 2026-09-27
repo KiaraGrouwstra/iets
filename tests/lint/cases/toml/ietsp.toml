@@ -1,2 +1,2 @@
 [lint]
-with = "warn"
+url-literal = "warn"

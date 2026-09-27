@@ -1,2 +1,0 @@
-warning: [legacy-let] `let { body = ...; }` is a legacy form; use `let ... in` or `rec { }`
-  at /pwd/lint/legacy-let.nix:1:1

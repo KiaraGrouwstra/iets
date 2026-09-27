@@ -1,4 +1,0 @@
-warning: [unsafe-builtin] `unsafeGetAttrPos` is an unsafe builtin: its result is not tracked by the evaluator
-  at /pwd/lint/unsafe-builtin.nix:1:4
-warning: [unsafe-builtin] `__unsafeDiscardStringContext` is an unsafe builtin: its result is not tracked by the evaluator
-  at /pwd/lint/unsafe-builtin.nix:1:47

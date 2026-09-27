@@ -1,2 +1,2 @@
 # ietsp: allow all
-with { x = 1; }; let in x
+[ http://example.com (1 == "a") ]

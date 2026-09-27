@@ -1,4 +1,0 @@
-warning: [eq-bool] `x == true` compares with a Boolean literal: use `x`
-  at /pwd/lint/eq-bool.nix:1:5
-warning: [eq-bool] `x != false` compares with a Boolean literal: use `x`
-  at /pwd/lint/eq-bool.nix:1:23

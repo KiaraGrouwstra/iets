@@ -1,2 +1,0 @@
-warning: [current-system] `currentSystem` makes the result depend on the evaluating machine; take the system as an argument
-  at /pwd/lint/current-system.nix:1:1

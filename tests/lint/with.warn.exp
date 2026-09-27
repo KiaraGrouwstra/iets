@@ -1,2 +1,0 @@
-warning: [with] `with` brings unknown names into scope; prefer `inherit` or `let`
-  at /pwd/lint/with.nix:1:1

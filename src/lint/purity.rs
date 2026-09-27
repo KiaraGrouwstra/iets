@@ -1,32 +1,17 @@
 //! Purity and reproducibility: impure builtins, unhashed fetches, import
 //! from derivation, fixed-output derivations, large or git-bearing source
-//! copies. Hook: the evaluator at the call; `currentSystem` and
-//! `currentTime` are constants, so the compiler reports their references.
+//! copies. Hook: the evaluator at the call; `currentTime` is a thunk the
+//! globals hold, with no position of its own, so the compiler reports
+//! the reference.
 
 use super::LintId;
 use crate::eval::{EvalResult, Evaluator, Pos};
 use crate::runtime::{Ctx, Value, Word};
 
-/// Cheap prefilter for `reference`.
-#[inline]
-pub fn may_lint(name: &[u8]) -> bool {
-    let bare = name.strip_prefix(b"__").unwrap_or(name);
-    matches!(bare, b"currentSystem" | b"currentTime")
-}
-
-/// The lint a reference to the constant builtin `name` triggers.
-pub fn reference(name: &str) -> Option<(LintId, String)> {
-    match name.strip_prefix("__").unwrap_or(name) {
-        "currentSystem" => Some((
-            LintId::CurrentSystem,
-            "`currentSystem` makes the result depend on the evaluating machine; take the system as an argument".into(),
-        )),
-        "currentTime" => Some((
-            LintId::ImpureBuiltin,
-            "`currentTime` is impure: the result changes with every run".into(),
-        )),
-        _ => None,
-    }
+/// The message for a reference to the global `name`, when it is `currentTime`.
+pub fn current_time(name: &[u8]) -> Option<String> {
+    (name.strip_prefix(b"__").unwrap_or(name) == b"currentTime")
+        .then(|| "`currentTime` is impure: the result changes with every run".into())
 }
 
 pub fn get_env(ev: &mut Evaluator, name: &[u8], pos: Pos) -> EvalResult<()> {

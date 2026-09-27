@@ -1,4 +1,0 @@
-warning: [if-bool-literal] `if c then true else false` is the condition itself: use `c`
-  at /pwd/lint/if-bool-literal.nix:1:4
-warning: [if-bool-literal] `if c then false else true` is the condition itself: use `!c`
-  at /pwd/lint/if-bool-literal.nix:1:37
