@@ -6,6 +6,8 @@
 //! is a fetcher and is not here.
 
 mod git;
+#[cfg(test)]
+mod ledger;
 
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -77,7 +79,11 @@ impl std::fmt::Debug for dyn Scm {
 }
 
 /// Every SCM that ietsp knows, in the order detection asks them.
-static KNOWN: &[&dyn Scm] = &[&git::Git];
+static KNOWN: &[&dyn Scm] = &[
+    &git::Git,
+    #[cfg(test)]
+    &ledger::Ledger,
+];
 
 /// The SCM that has a working tree with its root at `root`.
 pub fn at(root: &Path) -> Option<&'static dyn Scm> {
