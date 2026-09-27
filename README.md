@@ -167,6 +167,7 @@ behaviour differs on purpose,
 | [explanation/flakes-and-sources.md](docs/explanation/flakes-and-sources.md) | a reference becomes a tree |
 | [explanation/plumbing-and-porcelain.md](docs/explanation/plumbing-and-porcelain.md) | the layer rule, and what it cost |
 | [explanation/provenance.md](docs/explanation/provenance.md) | a store path back to the file that made it |
+| [explanation/lint-scope.md](docs/explanation/lint-scope.md) | what ietsp lints, and how a project makes its own rules |
 | [explanation/history.md](docs/explanation/history.md) | what was tried and removed |
 
 ## Licence

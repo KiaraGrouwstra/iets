@@ -32,6 +32,32 @@ the ratio falls to 2.07× on minimal and 2.22× on desktop. Nix has no
 equivalent to turn off, so 2.7× is the honest product comparison and 2.1× is
 the honest evaluator comparison.
 
+## 2026-09-27: the lints that read only the syntax
+
+The registry had 41 lints. 18 of them were reports of the parser and of
+the compiler about how code looks: `with`, `with-non-literal`,
+`with-nested`, `shadow-builtin`, `shadow-binding`, `unused-binding`,
+`unused-formal`, `rec-unused`, `legacy-let`, `deprecated-builtin`,
+`overrides`, `unsafe-builtin`, `current-system`, `if-bool-literal`,
+`eq-bool`, `manual-inherit`, `empty-let` and `ellipsis-without-bind`. They
+are removed, with the families `scope` and `style`.
+
+The reason is the scope rule: ietsp reports what only an evaluator can
+know, and it has no opinion about how code looks
+(`docs/explanation/lint-scope.md`). Style is a decision of the project.
+nixpkgs has its own style for each type of file. statix and deadnix read
+the syntax already, so a copy of their rules in ietsp gave no new data.
+
+The removal took 523 lines out of `src/`. The compiler does not record
+the bindings and the uses of a frame any more. On nixos-desktop with one
+worker, a run that compiles each file went from 12.201 G to 12.183 G
+instructions. A run with a warm compiled-file cache did not change
+(9.393 G).
+
+In place of the lints, ietsp gives the data. `ietsp parse --json` gives
+the syntax tree with the byte span of each node, and a finding is a
+record with a span and an edit. A rule is an external program.
+
 ## 2026-09-27: the fiber template guard
 
 `parallel::guard` was a debug-only check. It made a fingerprint of the

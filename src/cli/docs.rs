@@ -136,6 +136,7 @@ pub const PAGES: &[Page] = &[
         "provenance",
         "store paths back to local trees",
     ),
+    in_repo("explanation", "lint-scope", "what ietsp lints, and why"),
     in_repo("explanation", "history", "how it got here"),
 ];
 

@@ -1,0 +1,111 @@
+# What ietsp lints, and what it does not
+
+The rule that decides if a lint is in ietsp, the reason for the rule, and
+how a project makes its own rules with the data that ietsp gives.
+
+## The rule
+
+> ietsp reports what only an evaluator can know. It has no opinion about
+> how code looks.
+
+A lint is in the registry only if these two conditions are true:
+
+1. The lint needs evaluation to decide. Its stage in `ietsp lint list` is
+   `evaluator`.
+2. The lint tells you something about what the code does: correctness,
+   performance or purity. It does not tell you how the code reads.
+
+`eq-type-mismatch` is an example. `x == "a"` is correct syntax. The
+comparison is always false only if `x` is a number, and only the
+evaluator has the value of `x`. `git-in-source` is a second example: only
+the evaluator knows which directory a coercion copies to the store.
+
+`docs/reference/lints.md` has the list of the lints.
+
+## Why
+
+Style is a decision of the project, not of the tool. nixpkgs has its own
+style, and that style is not the same for each type of file or for each
+path. A lint about `with`, about a binding that is not used, or about
+`a = a;` makes a person change code that is correct. ietsp must not do
+that.
+
+Tools that read only the syntax are available: statix and deadnix. A
+second copy of their rules in ietsp makes the binary larger and gives no
+new data. The mission of ietsp is to make the Nix stack smaller with good
+abstractions and good defaults. One large binary that does all things is
+the opposite.
+
+## The lints that the rule does not explain
+
+Four lints do not need evaluation. They stay for other reasons.
+
+| Lint | Reason |
+|---|---|
+| `absolute-path-literal`, `short-path-literal`, `url-literal` | Nix 2.34 has a setting for each of them (`lint-absolute-path-literals`, `lint-short-path-literals`, `lint-url-literals`). They are the behaviour of Nix, not an opinion of ietsp. |
+| `unknown-allow` | It makes sure that a `# ietsp: allow` comment names a lint that is in the registry. Without it, an incorrect name silences nothing and tells nobody. |
+
+`impure-builtin` has two parts. The evaluator reports a `getEnv` call.
+The compiler reports a reference to `currentTime`, because the value is
+in the table of the globals and has no position of its own.
+
+## Make your own rules
+
+ietsp gives the data. A rule is an external program that reads the data.
+
+`ietsp parse --json FILE...` prints the syntax tree of each file as one
+line of JSON. Each node has its kind and its byte span in the file
+(`docs/reference/syntax-tree.md`). This command finds each `with` in a
+file:
+
+```
+$ ietsp parse --json rule.nix |
+    jq -r '.file as $f | .root | .. | objects | select(.kind == "with")
+           | "\($f): with at bytes \(.start) to \(.end)"'
+rule.nix: with at bytes 10 to 37
+```
+
+This command finds each `let` that has no binding:
+
+```
+$ ietsp parse --json rule.nix |
+    jq -c '.file as $f | .root | .. | objects
+           | select(.kind == "let" and (.binds | length) == 0)
+           | {file: $f, start, end}'
+{"file":"rule.nix","start":21,"end":37}
+```
+
+A project can have one set of rules for `pkgs/by-name` and a different
+set for `nixos/modules`. The program selects the files, and ietsp does
+not know the difference.
+
+The spans are byte offsets, so a program can change the file. It replaces
+the bytes `start` to `end - 1` with new text. If a program changes more
+than one span of a file, it must start with the span that has the largest
+`start`. Then the offsets of the other spans stay correct.
+
+## Findings as data
+
+A finding of ietsp has the same form. With `--log-format internal-json`,
+each finding is a record with the byte span of its site (`start`, `end`).
+A record has the text that corrects the finding (`replacement`) when the
+lint has one (`docs/reference/errors.md`, "A finding and its edit"). The
+`hash-fixed` record of `fix-hashes` has the same keys.
+
+ietsp does not apply the edit of a finding. The program that reads the
+record decides.
+
+## What ietsp does not have
+
+- A language for rules.
+- A loader for plug-ins.
+- A syntax tree that keeps each byte of the file. Comments and
+  parentheses are not in the tree.
+- A command that applies the edits of the findings.
+
+## A name that is not in the registry
+
+An `ietsp.toml` can name a lint that ietsp does not have, for example
+after an update of ietsp. ietsp gives one warning for each name, with the
+code `unknown-lint`, and continues. `--lint` on the command line gives an
+error. `docs/reference/lints.md` has the reason.

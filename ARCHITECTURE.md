@@ -71,8 +71,9 @@ Why each stage is shaped as it is: `docs/explanation/evaluation.md`.
 The evaluator:
 
 - `syntax/`: `symbol.rs` (interner), `ast.rs`, `lexer.rs`, `parser.rs`,
-  `dump.rs` (`ietsp parse`). The parser keeps raw bindings; attribute-path
-  merging and scope resolution happen in `compile`.
+  `dump.rs` (`ietsp parse`, as text and as JSON). The parser keeps raw
+  bindings; attribute-path merging and scope resolution happen in
+  `compile`.
 - `compile/`: AST to IR (`ir.rs`). Every variable becomes a local slot or a
   `with` lookup. `cache.rs` is the on-disk IR cache.
 - `runtime/`: `arena.rs` (bump allocator per worker, no GC), `word.rs`
@@ -105,6 +106,9 @@ Around it:
   `builtins::store_hooks`.
 - `cachefs.rs`: the on-disk hygiene all three stores share.
 - `lint/`: the lint registry, level resolution, and one file per family.
+  A lint is here only if it needs evaluation to decide
+  (`docs/explanation/lint-scope.md`). `site.rs` finds the byte span of a
+  finding.
 - `remote/`: the store transports. `plan.rs` (the upload plan), `worker/`
   (the Nix worker protocol), `grpc/` (nix-grpc-store), `copy.rs`,
   `event.rs`.

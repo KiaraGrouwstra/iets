@@ -3,6 +3,10 @@
 Every lint: its name, family, hook, default level and trigger, plus the
 level resolution, the scope rules and the `# ietsp: allow` comment.
 
+ietsp reports what only an evaluator can know. It has no opinion about
+how code looks. `docs/explanation/lint-scope.md` has the rule, and it
+tells you how to make rules of your own with `ietsp parse --json`.
+
 ietsp has a registry of named lints for language corner cases. Each lint
 is `off`, `warn` or `error`. Code: `src/lint/` (`mod.rs` holds the
 registry and the emission, one file per family holds the triggers);
@@ -343,8 +347,9 @@ run-to-run noise of that box. An `off` lint is one byte compare at the
 site.
 
 The numbers below are from 2026-09-19. The registry then held 18 more
-lints, which the parser and the compiler reported. The cost of the
-present registry is not higher.
+lints, which the parser and the compiler reported
+(docs/explanation/lint-scope.md). The cost of the present registry is
+not higher.
 
 `IETSP_LINT=all=warn` against the defaults, same box (16-core EPYC with
 other builds running), `bench/ab.nu --runs 9 --skip-outpaths`, IR and
