@@ -32,7 +32,8 @@ dereference an address of the caller's choosing.
 
 | What | Where |
 |:---|:---|
-| Create an evaluator | `eval::Evaluator::new()`, `Evaluator::in_session(session, system, pure)` |
+| Create an evaluator | `eval::Evaluator::new()` for the defaults; `eval::EvalConfig::new()`, its setters, then `build()` |
+| Settings of the arguments | `EvalArgs::config(base)` puts the lints, the IR cache, the search path and `--dump-drvs` on an `EvalConfig` |
 | The state a run owns | `session::Session::new()`, `Session::enter()` (below) |
 | Environment settings | `Session::settings()`, `Session::load_settings(&opts)` (docs/reference/settings.md) |
 | Where messages go | `Session::log.write_to(Box<dyn Write + Send>)`, `write_to_stderr()` |
@@ -41,7 +42,7 @@ dereference an address of the caller's choosing.
 | `-I` entries, `NIX_PATH` | `api::parse_include`, `api::full_includes` |
 | Evaluate it | `api::evaluate(&mut Evaluator, EvalArgs) -> Result<Word, Box<Error>>` |
 | Run on worker threads | `parallel::try_run(workers, ev, f)`; `parallel::default_workers()` |
-| All of the above as one call | `api::run::Run`: `Run::new(&args)` or `Run::on(ev)`, then `cached`, `workers`, `hit`, and `go` or `eval` |
+| All of the above as one call | `api::run::Run`: `Run::new(&args)`, `Run::over(config, &args)` or `Run::on(config)`, then `cached`, `workers`, `hit`, and `go` or `eval` |
 | Force a value | `Evaluator::force`, `force_deep`, `force_attrs` |
 | Print a value | `print::print_json`, `print::print_ambiguous`; `Evaluator::coerce_to_string` for `--raw` |
 | Report an error | `api::report_of(&Evaluator, &Error) -> log::Report` to render yourself; `api::report` sends it to the session log and gives the exit code (docs/reference/errors.md) |
@@ -84,7 +85,7 @@ leaves the sink unset. The library never exits either: it returns errors,
 and the frontend decides the exit code.
 
 An `Evaluator` keeps a handle to its session, so the code that has an
-evaluator reads `ev.session` — no lookup. The rest reaches
+evaluator reads `ev.session()` — no lookup. The rest reaches
 `Session::current()`, the session this thread entered:
 
 ```rust
@@ -94,8 +95,9 @@ let _entered = session.enter();         // for this thread
 let mut ev = Evaluator::new();          // adopts the session
 ```
 
-`Evaluator::in_session(session, system, pure)` skips the thread-local
-altogether. Threads the library starts inherit the session of the thread
+`EvalConfig::new().session(session)` skips the thread-local altogether.
+An evaluator has no setter: each setting goes to the `EvalConfig` before
+`build()`. Threads the library starts inherit the session of the thread
 that started them; a host that starts its own calls `Session::enter` on
 each, or `session::bind(f)`. A thread that entered none uses a fallback
 session that writes nowhere.
@@ -105,8 +107,9 @@ session that writes nowhere.
 1. Make a `Session`, enter it, and build an `EvalArgs`.
 2. `api::run::Run::new(&args)`, then `.go(move |ev, cache| …)`:
    everything inside runs as the main fiber, so `force` may park while
-   helpers work. `Run` installs the lints and opens the tracing cache;
-   `parallel::try_run` is the same step without them.
+   helpers work. `Run` puts the settings of the arguments on the evaluator
+   and opens the tracing cache. `parallel::try_run` takes an evaluator that
+   you built, and does neither.
 3. `api::evaluate(ev, args)` for the value, then force and print it, or
    `drv_roots` + `plan` + `build` for a build.
 4. Report errors with `api::report`, which rewrites store paths and

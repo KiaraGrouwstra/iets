@@ -32,6 +32,23 @@ the ratio falls to 2.07× on minimal and 2.22× on desktop. Nix has no
 equivalent to turn off, so 2.7× is the honest product comparison and 2.1× is
 the honest evaluator comparison.
 
+## 2026-09-27: the fiber template guard
+
+`parallel::guard` was a debug-only check. It made a fingerprint of the
+settings of the fiber template. After the run, it compared the fingerprint
+with the settings of the main fiber. A setting that was written after the
+clone made a test fail.
+
+The guard found a late write only when a test did that write. It did nothing
+in a release build. The three failures that it came from (`--dump-drvs`, the
+IR cache, the search path) had the same cause: the evaluator had public
+setting fields, and `api::configure` wrote them after construction.
+
+`eval::EvalConfig` replaces the guard, `api::configure` and
+`Run::configured`. The settings go to a builder, and the setting fields of
+the evaluator are private. A late write does not compile
+(docs/explanation/evaluation.md).
+
 ## 2026-09-26: `fast-build`, a second build command
 
 `ietsp fast-build` and the classic name `nix-fast-build` were removed. It
@@ -145,8 +162,8 @@ helper parsed and compiled its own imports again.
 parallel overhead that was quoted as +30 % is +8 %; the rest was this. A cold
 four-worker run also wrote the cache it was meant to fill: 62 entries before,
 2807 after. The search path had the same shape, so `<nixpkgs>` on a helper
-fiber resolved against an empty `__nixPath`. `api::configure` now installs
-both before `try_run`, and `api/run.rs` holds the regression test: the fiber
+fiber resolved against an empty `__nixPath`. The fix installed both before
+`try_run`, and `api/run.rs` holds the regression test: the fiber
 template carries the configuration, and a warm run reads one entry per file
 whatever the worker count.
 

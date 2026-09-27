@@ -39,7 +39,7 @@ program decides the exit code.
 
 Threads the library starts inherit the session of the thread that started
 them. For a thread you start yourself, call `Session::enter` on it, or use
-`session::bind(f)`. `Evaluator::in_session(session, system, pure)` skips the
+`session::bind(f)`. `EvalConfig::new().session(session)` skips the
 thread-local altogether.
 
 ## Evaluate and print
@@ -48,14 +48,14 @@ thread-local altogether.
 
 ```rust
 use ietsp::api::{self, EvalArgs, Input};
-use ietsp::eval::Evaluator;
 
 let mut a = EvalArgs { strict: true, json: true, ..EvalArgs::new() };
 a.input = Some(Input::Expr("{ a = 1; b = [1 2]; }".into()));
 
-let workers = a.workers;
 // the closure runs as the main fiber, so `force` may park while helpers work
-let code = ietsp::parallel::try_run(workers, Evaluator::new(), move |ev| {
+// `Err` is the exit code; the error is in the session log
+let run = api::run::Run::new(&a)?;
+let code = run.go(move |ev, _cache| {
     match api::evaluate(ev, a) {
         Ok(v) => { /* force and print */ 0 }
         Err(e) => { api::report(ev, &e); 1 }
@@ -73,17 +73,20 @@ cargo run --release --example eval -- -E '{ a = 1; b = [1 2]; }'
 {"a":1,"b":[1,2]}
 ```
 
-`parallel::try_run` is the plain version. `api::run::Run` is the same step
-plus the lints and the tracing cache:
+`Run::new` puts the settings of the arguments on an `eval::EvalConfig`: the
+lints, the IR cache, the search path. `Run::go` builds the evaluator from
+it and starts the worker threads. `api::evaluate` applies no setting. An
+evaluator has no setter, so a setting that you want goes to the
+`EvalConfig`:
 
 ```rust
-let run = api::run::Run::new(&args);
-run.go(|ev, cache| { /* everything here is the main fiber */ });
+let config = ietsp::eval::EvalConfig::new().system("aarch64-linux").pure(true);
+let run = api::run::Run::over(config, &a)?;
 ```
 
-Use `Run` unless you have a reason not to: it is the one scaffold every
-command in the binary goes through, so you get the cache and the lint
-configuration for free.
+`Run` is the one scaffold that each command in the binary goes through.
+`parallel::try_run(workers, config.build(), f)` is the same step without
+the tracing cache.
 
 ## Walk a value safely
 

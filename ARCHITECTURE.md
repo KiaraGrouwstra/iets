@@ -101,7 +101,7 @@ Around it:
 - `fetch/`: the HTTP client, the tarball spool and the unpack rules.
 - `treestore/`: the input store, where a fetched input lives.
 - `trace/`: the tracing evaluation cache.
-- `pure-eval`: `Evaluator::pure`, fixed by `Evaluator::with`, checked in
+- `pure-eval`: `EvalConfig::pure`, read with `Evaluator::pure()`, checked in
   `builtins::store_hooks`.
 - `cachefs.rs`: the on-disk hygiene all three stores share.
 - `lint/`: the lint registry, level resolution, and one file per family.

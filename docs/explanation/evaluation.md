@@ -215,27 +215,29 @@ from an arena another thread is using. Pointers are global, and cross-arena
 references are fine, because no arena is ever freed.
 
 The clone is a deadline. `parallel::try_run` clones the evaluator as the
-template before it starts the workers, so a setting installed after that
-call is the main fiber's alone, and every symptom is silent: output that is
-partial, a cache no worker reads, a search path that resolves to nothing.
-Every setting therefore goes through `api::configure`, ahead of `try_run`.
-A debug build checks that: the template's configurable fields are
-fingerprinted, and the main fiber's evaluator is read against that
-fingerprint once it returns, so a late set fails a test instead of shipping
-(`parallel::guard`). A field behind a shared handle is fingerprinted by
-handle identity, not by content — `--dump-drvs` writes its directory into an
-`Arc<OnceLock>` every fiber already holds, so a late set reaches all of
-them — and a field whose `Clone` resets it on purpose, the arena and the
-eval-store connection, is not a setting at all.
+template before it starts the workers. A setting that is written after that
+clone is on the main fiber only. Each symptom is silent: partial output, a
+cache that no worker reads, a search path that resolves to nothing.
 
-Carrying every setting in an `Arc<OnceLock>`, the way `--dump-drvs` does,
-was considered and dropped. It makes a late set visible, not correct: a
-fiber that already read the old value does not redo its work, so the answer
-still depends on when the set landed. It also cannot reach the search path,
-whose real carrier is `__nixPath` in the per-fiber globals table the
-compiler folds against, and it puts a load behind fields as small as
-`keep_aterm`. One funnel, `api::configure`, plus a guard that covers every
-field is both cheaper and stricter.
+The evaluator therefore has no setter. `eval::EvalConfig` is a builder. It
+holds each setting that is fixed before evaluation: the system, `pure-eval`,
+the session, the search path, the lints, the IR cache, `keep_aterm`,
+`keep_site`, the `--dump-drvs` directory and the trace switch. `build()`
+makes the evaluator. `api::run::Run` holds the builder, not an evaluator.
+`Run::go` sets the trace switch, calls `build()`, then calls `try_run`. This
+is the one construction site of each command that goes through `Run`.
+
+The setting fields of the evaluator are private to `eval`. Other modules
+read them through `#[inline]` accessors. A write from another module does
+not compile. State that a fiber changes during evaluation is not a setting:
+the arena, the counters, the eval-store connection and the shared tables.
+
+An `Arc<OnceLock>` for each setting was considered and dropped. It makes a
+late write visible, not correct. A fiber that read the old value does not do
+its work again, so the answer depends on the time of the write. It also
+cannot hold the search path, because the compiler reads `__nixPath` from the
+globals table of each fiber. And it puts a load behind fields as small as
+`keep_aterm`.
 
 ### The claim protocol
 
