@@ -10,6 +10,8 @@
         src = self;
         cargoLock.lockFile = ./Cargo.lock;
         meta.license = pkgs.lib.licenses.lgpl21Plus;
+        # `src` is the tree, so each commit is a new build without this value
+        # ietsp: allow tree-meta-in-drv
         env.IETSP_GIT_REV = self.shortRev or self.dirtyShortRev or "unknown";
         # checks.test runs the suite; the package build stays a build.
         doCheck = false;
