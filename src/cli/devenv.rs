@@ -426,9 +426,9 @@ pub struct DevEnv {
 }
 
 /// `print-dev-env` without the printing: the build environment of the flake installable
-/// `a.input` names, on `ev`. `nix develop` (src/cli/classic/develop.rs) uses this.
+/// `a.input` names, on `base`. `nix develop` (src/cli/classic/develop.rs) uses this.
 pub fn dev_env(
-    ev: Evaluator,
+    base: crate::eval::EvalConfig,
     a: EvalArgs,
     transport: crate::remote::worker::Transport,
     options: crate::remote::worker::Options,
@@ -439,7 +439,7 @@ pub fn dev_env(
         options,
         gc_root,
     };
-    let mut run = Run::on(ev).configured(&a).workers(a.workers);
+    let mut run = Run::over(base, &a)?;
     // a hit reads the environment out of the local store, so only a local
     // daemon gets an entry
     if matches!(d.transport, crate::remote::worker::Transport::Unix(_)) {

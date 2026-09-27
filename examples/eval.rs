@@ -5,7 +5,7 @@
 //! Uses the library only (`ietsp::api`), never `ietsp::cli`.
 
 use ietsp::api::{self, EvalArgs, Input};
-use ietsp::eval::{Evaluator, Pos};
+use ietsp::eval::Pos;
 
 fn main() -> std::process::ExitCode {
     // a frontend owns the run state and says where messages go
@@ -36,10 +36,13 @@ fn main() -> std::process::ExitCode {
         die("give -E EXPR or a FILE");
     }
 
-    let workers = a.workers;
+    // a setting that does not resolve is reported already
+    let Ok(run) = ietsp::api::run::Run::new(&a) else {
+        return std::process::ExitCode::from(1);
+    };
     // The evaluator runs as the main fiber of the parallel runtime; with
-    // one worker `try_run` is a plain call.
-    let code = ietsp::parallel::try_run(workers, Evaluator::new(), move |ev| {
+    // one worker `go` is a plain call.
+    let code = run.go(move |ev, _| {
         let v = match api::evaluate(ev, a) {
             Ok(v) => v,
             Err(e) => {

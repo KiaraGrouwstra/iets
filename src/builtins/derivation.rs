@@ -86,15 +86,15 @@ impl DrvState {
     }
 }
 
-impl Default for DrvState {
-    fn default() -> Self {
+impl DrvState {
+    pub(crate) fn new(keep_aterm: bool, keep_site: bool, dump_dir: Option<PathBuf>) -> DrvState {
         DrvState {
             hash_cache: Default::default(),
             drvs: Default::default(),
-            dump_dir: Arc::default(),
+            dump_dir: Arc::new(dump_dir.map(Into::into).unwrap_or_default()),
             nr_derivations: 0,
-            keep_aterm: true,
-            keep_site: true,
+            keep_aterm,
+            keep_site,
             syms: None,
             imported_drv_fn: None,
         }

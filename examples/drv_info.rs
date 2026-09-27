@@ -6,7 +6,6 @@
 //! Uses the library only (`ietsp::api`), never `ietsp::cli`.
 
 use ietsp::api::{self, EvalArgs, Input};
-use ietsp::eval::Evaluator;
 
 fn main() -> std::process::ExitCode {
     // a frontend owns the run state and says where messages go
@@ -32,8 +31,11 @@ fn main() -> std::process::ExitCode {
         die("give -E EXPR or a FILE");
     }
 
-    let workers = a.workers;
-    let r = ietsp::parallel::try_run(workers, Evaluator::new(), move |ev| {
+    // a setting that does not resolve is reported already
+    let Ok(run) = ietsp::api::run::Run::new(&a) else {
+        return std::process::ExitCode::from(1);
+    };
+    let r = run.go(move |ev, _| {
         let target = a.attr.clone();
         // A derivation exists once its attrset is forced, so walk deeply.
         let forced = api::evaluate(ev, a).and_then(|v| ev.force_deep(v));

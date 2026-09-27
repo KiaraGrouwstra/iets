@@ -228,27 +228,129 @@ pub(crate) use bail;
 
 pub const DEFAULT_SYSTEM: &str = "x86_64-linux";
 
-impl Evaluator {
-    pub fn new() -> Evaluator {
-        Evaluator::with(DEFAULT_SYSTEM, false)
+/// Everything that is fixed before evaluation starts. `parallel::try_run`
+/// clones the evaluator for every helper fiber, and a field set after that
+/// clone is the main fiber's alone, so the evaluator has no setter: a
+/// setting goes here (docs/explanation/evaluation.md).
+#[derive(Clone)]
+pub struct EvalConfig {
+    system: &'static str,
+    pure: bool,
+    session: std::sync::Arc<crate::session::Session>,
+    search_path: Vec<(Vec<u8>, Vec<u8>)>,
+    lints: crate::lint::Config,
+    ir_cache: Option<std::sync::Arc<crate::compile::cache::IrCache>>,
+    keep_aterm: bool,
+    keep_site: bool,
+    dump_dir: Option<std::path::PathBuf>,
+    trace: bool,
+}
+
+impl Default for EvalConfig {
+    /// In the session this thread entered (docs/reference/library.md).
+    fn default() -> EvalConfig {
+        EvalConfig {
+            system: DEFAULT_SYSTEM,
+            pure: false,
+            session: crate::session::Session::current(),
+            search_path: Vec::new(),
+            lints: Default::default(),
+            ir_cache: None,
+            keep_aterm: true,
+            keep_site: true,
+            dump_dir: None,
+            trace: false,
+        }
+    }
+}
+
+impl EvalConfig {
+    pub fn new() -> EvalConfig {
+        EvalConfig::default()
     }
 
-    /// The same as `with`, in `session` instead of the one this thread
-    /// entered: a host that keeps one session per evaluator needs no
-    /// thread-local at all (docs/reference/library.md).
-    pub fn in_session(
-        session: std::sync::Arc<crate::session::Session>,
-        system: &str,
-        pure: bool,
-    ) -> Evaluator {
-        let mut ev = Evaluator::with(system, pure);
-        ev.session = session;
-        ev
+    pub fn system(mut self, system: &str) -> EvalConfig {
+        if system != self.system {
+            self.system = Box::leak(system.into());
+        }
+        self
     }
 
-    /// `system` and `pure-eval` shape the builtins, so they are fixed here,
+    /// `pure-eval` (docs/reference/settings.md).
+    pub fn pure(mut self, pure: bool) -> EvalConfig {
+        self.pure = pure;
+        self
+    }
+
+    /// A host that keeps one session per evaluator needs no thread-local
+    /// at all (docs/reference/library.md).
+    pub fn session(mut self, session: std::sync::Arc<crate::session::Session>) -> EvalConfig {
+        self.session = session;
+        self
+    }
+
+    /// `(prefix, path)` entries, `-I` first then `NIX_PATH`.
+    pub fn search_path(mut self, entries: Vec<(Vec<u8>, Vec<u8>)>) -> EvalConfig {
+        self.search_path = entries;
+        self
+    }
+
+    pub fn lints(mut self, config: crate::lint::Config) -> EvalConfig {
+        self.lints = config;
+        self
+    }
+
+    pub fn lint_root(mut self, dir: &[u8]) -> EvalConfig {
+        self.lints.add_root(dir);
+        self
+    }
+
+    /// Compiled-IR cache for imported files; `None` when disabled.
+    pub fn ir_cache(
+        mut self,
+        cache: Option<std::sync::Arc<crate::compile::cache::IrCache>>,
+    ) -> EvalConfig {
+        self.ir_cache = cache;
+        self
+    }
+
+    /// Keep the ATerm text of every derivation for instantiation, the
+    /// cache, `--dump-drvs` and `build`. Off for runs that only print
+    /// paths: 331 MB on the outpaths chunk (docs/explanation/evaluation.md).
+    pub fn keep_aterm(mut self, keep: bool) -> EvalConfig {
+        self.keep_aterm = keep;
+        self
+    }
+
+    /// Find each derivation's source position (`DrvInfo::pos`), which only
+    /// build progress lines and `eval-jobs --provenance` show; the search
+    /// walks the attributes of every derivation.
+    pub fn keep_site(mut self, keep: bool) -> EvalConfig {
+        self.keep_site = keep;
+        self
+    }
+
+    /// `ietsp eval --dump-drvs DIR`: every created derivation is written as
+    /// `DIR/<drv basename>` in ATerm form.
+    pub fn dump_dir(mut self, dir: std::path::PathBuf) -> EvalConfig {
+        self.dump_dir = Some(dir);
+        self
+    }
+
+    /// Record the read set, for the tracing cache.
+    pub fn trace(mut self, on: bool) -> EvalConfig {
+        self.trace = on;
+        self
+    }
+
+    #[inline]
+    pub fn current_system(&self) -> &'static str {
+        self.system
+    }
+
+    /// `system` and `pure-eval` shape the builtins, so they are fixed
     /// before `builtins::install` (docs/reference/settings.md).
-    pub fn with(system: &str, pure: bool) -> Evaluator {
+    pub fn build(self) -> Evaluator {
         let mut arena = Arena::new();
         let mut interner = Interner::new();
         let root_env = arena.alloc_env(None, 0);
@@ -280,17 +382,18 @@ impl Evaluator {
             },
             root_env,
             import_cache: Default::default(),
-            search_path: Vec::new(),
+            // a pure evaluation keeps the empty one (eval.cc:EvalState)
+            search_path: if self.pure {
+                Vec::new()
+            } else {
+                self.search_path
+            },
             call_depth: 0,
             try_level: 0,
             s,
             builtins_word: Word::NULL,
             store_dir: b"/nix/store".to_vec(),
-            current_system: if system == DEFAULT_SYSTEM {
-                DEFAULT_SYSTEM
-            } else {
-                Box::leak(system.into())
-            },
+            current_system: self.system,
             nr_thunks: 0,
             nr_function_calls: 0,
             t_compile: std::time::Duration::ZERO,
@@ -299,17 +402,31 @@ impl Evaluator {
             src_to_store: Default::default(),
             known: Default::default(),
             input_names: Default::default(),
-            lints: Default::default(),
-            drv: Default::default(),
+            lints: crate::lint::Lints::new(self.lints),
+            drv: crate::builtins::derivation::DrvState::new(
+                self.keep_aterm,
+                self.keep_site,
+                self.dump_dir,
+            ),
             par: Default::default(),
-            trace: Default::default(),
-            ir_cache: None,
+            trace: if self.trace {
+                crate::trace::Trace::enabled()
+            } else {
+                Default::default()
+            },
+            ir_cache: self.ir_cache,
             store: Default::default(),
-            pure,
-            session: crate::session::Session::current(),
+            pure: self.pure,
+            session: self.session,
         };
         crate::builtins::install(&mut ev);
         ev
+    }
+}
+
+impl Evaluator {
+    pub fn new() -> Evaluator {
+        EvalConfig::new().build()
     }
 
     // ---- files ------------------------------------------------------------

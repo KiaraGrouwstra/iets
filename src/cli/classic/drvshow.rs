@@ -57,9 +57,9 @@ pub fn main(argv: &[String], rest: &[String]) -> i32 {
         Err(reason) => fallback(NAME, argv, &reason),
     };
     let pretty = n.pretty.unwrap_or_else(render::pretty);
-    let ev = super::evaluator(&n.c, &cfg);
+    let ec = super::eval_config(&n.c, &cfg);
     // `-r` and the indentation make another document, so both are in the key
-    let run = n.run(ev, "nix derivation show", n.recursive, pretty);
+    let run = n.run(ec, "nix derivation show", n.recursive, pretty);
     if let Some(text) = run.hit_result() {
         render::bytes(&text);
         return 0;

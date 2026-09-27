@@ -12,7 +12,7 @@ pub mod render;
 pub mod run;
 pub mod value;
 
-use crate::eval::{Error, Evaluator, Pos};
+use crate::eval::{Error, EvalConfig, Evaluator, Pos};
 use crate::runtime::Word;
 use crate::store::path::StorePath;
 use crate::trace::run::Cache;
@@ -83,9 +83,41 @@ impl EvalArgs {
         EvalArgs::default()
     }
 
-    /// The evaluator these arguments ask for: `pure-eval` fixes its builtins.
-    pub fn evaluator(&self) -> Evaluator {
-        Evaluator::with(crate::eval::DEFAULT_SYSTEM, self.pure == Some(true))
+    /// `base` plus what these arguments set: the lints, the IR cache, the
+    /// search path and `--dump-drvs`. `base` holds the system and `pure-eval`.
+    pub fn config(&self, base: EvalConfig) -> Result<EvalConfig, Box<Error>> {
+        if self
+            .xp_features
+            .iter()
+            .any(|f| f == "parse-toml-timestamps")
+        {
+            crate::builtins::text::set_parse_toml_timestamps(true);
+        }
+        let c = base
+            .lints(lint_config(self)?)
+            .ir_cache(self.ir_cache())
+            .search_path(full_includes(&self.includes));
+        let Some(dir) = &self.dump_drvs else {
+            return Ok(c);
+        };
+        std::fs::create_dir_all(dir).map_err(|e| {
+            Error::boxed(
+                crate::eval::ErrorKind::Io,
+                format!("cannot create '{dir}': {e}"),
+                Pos::NONE,
+            )
+        })?;
+        Ok(c.dump_dir(dir.into()))
+    }
+
+    /// The compiled-file cache of `--no-ir-cache` and `--cache-dir`
+    /// (docs/explanation/caching.md).
+    pub fn ir_cache(&self) -> Option<std::sync::Arc<crate::compile::cache::IrCache>> {
+        if self.no_ir_cache {
+            return None;
+        }
+        crate::compile::cache::IrCache::locate(self.cache_dir.as_deref(), self.timings)
+            .map(std::sync::Arc::new)
     }
 }
 
@@ -164,58 +196,9 @@ pub fn lint_config(a: &EvalArgs) -> Result<crate::lint::Config, Box<Error>> {
         .map_err(|m| Error::boxed(crate::eval::ErrorKind::Eval, m, Pos::NONE))
 }
 
-/// Installs the lint configuration. Call before `parallel::try_run`: helper
-/// fibers clone the evaluator then, and every fiber must lint alike.
-/// `evaluate` calls it too, so a frontend that runs sequentially may skip it.
-pub fn configure_lints(ev: &mut Evaluator, a: &EvalArgs) -> Result<(), Box<Error>> {
-    let c = lint_config(a)?;
-    if ev.lints.config != c {
-        ev.lints = crate::lint::Lints::new(c);
-    }
-    Ok(())
-}
-
-/// Installs the compiled-file cache these arguments ask for (`--no-ir-cache`,
-/// `--cache-dir`). A frontend that evaluates without `evaluate` calls it
-/// itself (docs/explanation/caching.md). Keeps a cache that is already
-/// installed, so `configure` and `evaluate` may both run.
-pub fn install_ir_cache(ev: &mut Evaluator, a: &EvalArgs) {
-    if !a.no_ir_cache && ev.ir_cache.is_none() {
-        ev.ir_cache = crate::compile::cache::IrCache::locate(a.cache_dir.as_deref(), a.timings)
-            .map(std::sync::Arc::new);
-    }
-}
-
-/// Every evaluator field these arguments set: the lints, the IR cache, the
-/// experimental features, the search path and `--dump-drvs`. **Call before
-/// `parallel::try_run`**, which clones the evaluator as the fiber template:
-/// what a helper fiber has is what the template had, so a field set after
-/// the clone is the main fiber's alone. `Run::new` and `Run::configured`
-/// call it; `evaluate` calls it again, which changes nothing.
-pub fn configure(ev: &mut Evaluator, a: &EvalArgs) -> Result<(), Box<Error>> {
-    configure_lints(ev, a)?;
-    install_ir_cache(ev, a);
-    if a.xp_features.iter().any(|f| f == "parse-toml-timestamps") {
-        crate::builtins::text::set_parse_toml_timestamps(true);
-    }
-    crate::builtins::set_search_path(ev, full_includes(&a.includes));
-    if let Some(dir) = &a.dump_drvs {
-        std::fs::create_dir_all(dir).map_err(|e| {
-            Error::boxed(
-                crate::eval::ErrorKind::Io,
-                format!("cannot create '{dir}': {e}"),
-                Pos::NONE,
-            )
-        })?;
-        let _ = ev.drv.dump_dir.set(std::path::PathBuf::from(dir));
-    }
-    Ok(())
-}
-
-/// Applies the shared `eval` settings and evaluates the input, `--arg`s and `-A` included.
+/// Evaluates the input, `--arg`s and `-A` included. The settings of `a` are
+/// on `ev` already (`EvalArgs::config`).
 pub fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
-    configure(ev, &a)?;
-
     let cwd = cwd();
 
     let mut v = match a.input {
@@ -336,8 +319,8 @@ pub fn build_targets(
 
 /// The tracing cache for this run, keyed on the eval arguments. `None` when the
 /// cache is off or the command cannot be keyed.
-pub fn setup_cache(a: &EvalArgs, subcommand: &str, ev: &Evaluator) -> Option<Cache> {
-    setup_cache_more(a, subcommand, ev, &[])
+pub fn setup_cache(a: &EvalArgs, subcommand: &str, cfg: &EvalConfig) -> Option<Cache> {
+    setup_cache_more(a, subcommand, cfg, &[])
 }
 
 /// [`setup_cache`] for a command that takes several installables. `more` is
@@ -346,7 +329,7 @@ pub fn setup_cache(a: &EvalArgs, subcommand: &str, ev: &Evaluator) -> Option<Cac
 pub fn setup_cache_more(
     a: &EvalArgs,
     subcommand: &str,
-    ev: &Evaluator,
+    cfg: &EvalConfig,
     more: &[String],
 ) -> Option<Cache> {
     use crate::trace::key::{Key, has_relative_path};
@@ -413,7 +396,7 @@ pub fn setup_cache_more(
     for f in &a.xp_features {
         k.field("xp", f.as_bytes());
     }
-    k.field("system", ev.current_system.as_bytes());
+    k.field("system", cfg.current_system().as_bytes());
     if needs_cwd {
         k.field("cwd", &cwd);
     }

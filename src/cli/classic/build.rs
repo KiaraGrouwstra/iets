@@ -77,10 +77,10 @@ pub fn main(argv: &[String]) -> i32 {
         Ok(t) => t,
         Err(reason) => fallback(NAME, argv, &reason),
     };
-    let ev = super::evaluator(&b.c, &cfg);
+    let ec = super::eval_config(&b.c, &cfg);
     let b = Arc::new(b);
     let build = Arc::clone(&b);
-    match crate::cli::run_reported(crate::cli::Run::on(ev), move |ev, _| run(ev, &build)) {
+    match crate::cli::run_reported(crate::cli::Run::on(ec), move |ev, _| run(ev, &build)) {
         Outcome::Failed(code) => code,
         Outcome::Unsupported(reason) => fallback(NAME, argv, &reason),
         Outcome::Ok(Built::Empty) => 0,

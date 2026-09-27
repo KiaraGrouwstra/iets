@@ -12,7 +12,7 @@ use crate::api::build::{Dispatch, Root};
 use crate::api::installable;
 use crate::build::render::Style;
 use crate::cli::{EvalArgs, Input, Outcome, Run, abs_path, auto_args, cwd, report};
-use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
+use crate::eval::{Error, ErrorKind, EvalConfig, EvalResult, Evaluator, Pos};
 use crate::remote::plan::Plan;
 use crate::remote::worker::{Options, Transport};
 use crate::runtime::{Value, Word};
@@ -218,13 +218,13 @@ impl Nix {
         Ok(())
     }
 
-    /// `ev` as one run of `subcommand` with its tracing cache. The key is
+    /// `ec` as one run of `subcommand` with its tracing cache. The key is
     /// what changes the answer: the installables, `--expr` or `--file`, the
     /// `--arg`s, the search path, `pure-eval`, `--json` and `--raw`
     /// (`api::setup_cache_more` adds the system and the working directory).
     /// `strict` and `json` are the key fields a command without them is free
     /// to use. No other flag the parsers accept reaches the evaluator.
-    pub(super) fn run(&self, ev: Evaluator, subcommand: &str, strict: bool, json: bool) -> Run {
+    pub(super) fn run(&self, ec: EvalConfig, subcommand: &str, strict: bool, json: bool) -> Run {
         let mut a = EvalArgs::new();
         let (first, more) = match self.installables.split_first() {
             Some((f, m)) => (f.clone(), m),
@@ -244,7 +244,7 @@ impl Nix {
         a.strict = strict;
         a.json = json;
         a.raw = self.raw;
-        Run::on(ev).cached_more(&a, subcommand, more)
+        Run::on(ec).cached_more(&a, subcommand, more)
     }
 }
 
@@ -280,8 +280,8 @@ fn eval_main(argv: &[String], rest: &[String]) -> i32 {
         Ok(t) => t,
         Err(reason) => fallback(NAME, argv, &reason),
     };
-    let ev = super::evaluator(&n.c, &cfg);
-    let run = n.run(ev, "nix eval", false, n.json);
+    let ec = super::eval_config(&n.c, &cfg);
+    let run = n.run(ec, "nix eval", false, n.json);
     if let Some(text) = run.hit_result() {
         crate::cli::render::bytes(&text);
         return 0;
@@ -344,8 +344,8 @@ fn build_main(argv: &[String], rest: &[String]) -> i32 {
         Ok(t) => t,
         Err(reason) => fallback(NAME, argv, &reason),
     };
-    let ev = super::evaluator(&n.c, &cfg);
-    let run = n.run(ev, "nix build", false, false);
+    let ec = super::eval_config(&n.c, &cfg);
+    let run = n.run(ec, "nix build", false, false);
     // a hit skips the evaluation and nothing else: the upload, the build,
     // the out-links and the roots all happen in `realise`
     if let Some((roots, plan)) = run.hit_plan() {
@@ -423,7 +423,7 @@ fn prefetch_inputs_main(argv: &[String], rest: &[String]) -> i32 {
         for _ in 0..threads {
             s.spawn(crate::session::bind(|| {
                 while let Some((name, r)) = queue.lock().unwrap().next() {
-                    let mut ev = Evaluator::with(&system, true);
+                    let mut ev = EvalConfig::new().system(&system).pure(true).build();
                     if let Some(h) = r.nar_hash() {
                         ev.input_names.insert(h.to_string(), name);
                     }

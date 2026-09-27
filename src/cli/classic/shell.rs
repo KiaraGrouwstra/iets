@@ -149,14 +149,14 @@ pub fn main(argv: &[String]) -> i32 {
     unsafe {
         std::env::set_var("IN_NIX_SHELL", if s.pure { "pure" } else { "impure" });
     }
-    let ev = super::evaluator(&s.c, &cfg);
+    let ec = super::eval_config(&s.c, &cfg);
     let s = Arc::new(s);
     let run = Arc::clone(&s);
     let cores = match cfg.cores() {
         Ok(c) => c,
         Err(e) => return e.report(),
     };
-    match crate::cli::run_reported(crate::cli::Run::on(ev), move |ev, _| prepare(ev, &run)) {
+    match crate::cli::run_reported(crate::cli::Run::on(ec), move |ev, _| prepare(ev, &run)) {
         Outcome::Failed(code) => code,
         Outcome::Unsupported(reason) => fallback(NAME, argv, &reason),
         Outcome::Ok(r) => realise(&s, &transport, &options, *r, cores),

@@ -9,7 +9,7 @@ use crate::api::run::{Outcome, Run};
 use crate::api::{EvalArgs, Input, cwd, installable, report};
 use crate::builtins::text::regex::{self, Prog};
 use crate::cli::classic::nix::{global_flag, nix_settings};
-use crate::cli::classic::{Argv, Common, evaluator, fallback, lookup_file_arg};
+use crate::cli::classic::{Argv, Common, eval_config, fallback, lookup_file_arg};
 use crate::cli::help;
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::parallel::force::{T_ATTRS_WHNF, fanout};
@@ -165,19 +165,20 @@ fn run(mut s: Search, classic: Option<&[String]>) -> i32 {
         Ok(t) => t,
         Err(why) => return bail(why),
     };
-    let mut ev = evaluator(&s.c, &cfg);
+    let ec = eval_config(&s.c, &cfg).ir_cache(s.cache.ir_cache());
     // The cache key names the file, so `<nixpkgs>` and a directory become the
-    // file an import would read.
+    // file an import would read. The lookup has an evaluator of its own: the
+    // run builds its evaluator in `go`.
     if let Some(f) = &s.file {
+        let mut ev = ec.clone().build();
         match lookup_file_arg(&mut ev, f, &cwd()) {
             Ok(p) => s.file = Some(entry_file(p)),
             Err(e) => return report(&ev, &e),
         }
     }
     let workers = s.cache.workers;
-    crate::api::install_ir_cache(&mut ev, &s.cache);
     let s = Arc::new(s);
-    let r = Run::on(ev).workers(workers).cached(&key_args(&s), "search");
+    let r = Run::on(ec).workers(workers).cached(&key_args(&s), "search");
     let index = match r.hit(|c| {
         c.replay_warnings();
         decode(&c.part(crate::trace::store::Part::Result)?)

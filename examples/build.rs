@@ -43,10 +43,11 @@ fn main() -> std::process::ExitCode {
         die("give -E EXPR or a FILE");
     }
 
-    let workers = a.workers;
-    let r = ietsp::parallel::try_run(workers, Evaluator::new(), move |ev| {
-        eval_and_build(ev, a, url)
-    });
+    // a setting that does not resolve is reported already
+    let Ok(run) = ietsp::api::run::Run::new(&a) else {
+        return std::process::ExitCode::from(1);
+    };
+    let r = run.go(move |ev, _| eval_and_build(ev, a, url));
     match r {
         Ok(c) => std::process::ExitCode::from(c),
         Err(e) => {

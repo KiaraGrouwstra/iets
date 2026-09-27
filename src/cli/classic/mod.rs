@@ -16,7 +16,7 @@ use std::process::{Command, exit};
 
 use crate::cli::{EvalFlags, abs_path, eval_flag, full_includes};
 use crate::config::Config;
-use crate::eval::{EvalResult, Evaluator, Pos};
+use crate::eval::{EvalConfig, EvalResult, Evaluator, Pos};
 use crate::remote::worker::{DEFAULT_SOCKET, Options, Transport};
 use crate::runtime::Word;
 
@@ -181,23 +181,24 @@ pub fn local() -> Transport {
     Transport::Unix(PathBuf::from(DEFAULT_SOCKET))
 }
 
-/// An evaluator with the search path, the `system` setting and `pure-eval`
-/// applied.
-pub fn evaluator(c: &Common, cfg: &Config) -> Evaluator {
+/// The evaluator configuration: the search path, the `system` setting and
+/// `pure-eval`.
+pub fn eval_config(c: &Common, cfg: &Config) -> EvalConfig {
     let pure = c
         .flags
         .pure
         .unwrap_or_else(|| cfg.bool("pure-eval").ok().flatten().unwrap_or(false));
-    let mut ev = Evaluator::with(&cfg.system(), pure);
-    crate::builtins::set_search_path(&mut ev, full_includes(&c.flags.includes));
-    // lints stay off, as in nix; the root alone feeds the provenance fallback.
     let cwd = crate::api::cwd();
     let entry = match (c.from_args, c.files.first()) {
         (false, Some(f)) => crate::eval::dir_of(&abs_path(f, &cwd)).to_vec(),
         _ => cwd,
     };
-    ev.lints.config.add_root(&entry);
-    ev
+    // lints stay off, as in nix; the root alone feeds the provenance fallback.
+    EvalConfig::new()
+        .system(&cfg.system())
+        .pure(pure)
+        .search_path(full_includes(&c.flags.includes))
+        .lint_root(&entry)
 }
 
 /// `lookupFileArg`: `<name>` goes through the search path, anything else is a

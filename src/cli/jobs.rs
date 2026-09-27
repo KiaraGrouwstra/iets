@@ -247,8 +247,8 @@ pub fn cmd_eval_jobs(argv: &[String]) -> i32 {
         return jobs_collector(&worker_argv(argv, &j), a.workers, &j, &transport, t0);
     }
     let mut run = run_for(&a);
-    run.ev.drv.keep_aterm = !j.opts.no_instantiate;
-    run.ev.drv.keep_site = j.opts.provenance;
+    run.cfg = run.cfg.keep_aterm(!j.opts.no_instantiate);
+    run.cfg = run.cfg.keep_site(j.opts.provenance);
     if j.worker {
         let run = run.workers(1);
         return crate::cli::run_parallel(run, move |ev, _| jobs_worker(ev, a, &j, &transport));

@@ -94,8 +94,8 @@ pub fn main(argv: &[String], rest: &[String]) -> i32 {
     a.attr = Some(attr.clone());
     a.includes = f.c.flags.includes.clone();
     a.pure = f.c.flags.pure;
-    let ev = super::evaluator(&f.c, &cfg);
-    let run = Run::on(ev).cached(&a, "fmt");
+    let ec = super::eval_config(&f.c, &cfg);
+    let run = Run::on(ec).cached(&a, "fmt");
 
     if let Some(hit) = run.hit_result().as_deref().and_then(Built::decode)
         && usable(&hit)

@@ -110,10 +110,10 @@ pub fn main(argv: &[String]) -> i32 {
     if !i.readonly && super::store_given(&i.c) && store != transport {
         fallback(NAME, argv, "'--store' is not the local daemon");
     }
-    let ev = super::evaluator(&i.c, &cfg);
+    let ec = super::eval_config(&i.c, &cfg);
     let i = Arc::new(i);
     let inst = Arc::clone(&i);
-    match crate::cli::run_reported(crate::cli::Run::on(ev), move |ev, _| run(ev, &inst)) {
+    match crate::cli::run_reported(crate::cli::Run::on(ec), move |ev, _| run(ev, &inst)) {
         Outcome::Failed(code) => code,
         Outcome::Unsupported(reason) => fallback(NAME, argv, &reason),
         Outcome::Ok(Made::Values(text)) => {

@@ -1,9 +1,9 @@
-//! One run of one command: the evaluator, the lints, the tracing cache, the
-//! trace switch and the parallel entry. A frontend that owns one of those
-//! parts — `eval-jobs` its worker processes, a classic command its evaluator —
-//! starts from [`Run::on`] and keeps only what it needs (docs/explanation/plumbing-and-porcelain.md).
+//! One run of one command: the evaluator configuration, the tracing cache and
+//! the parallel entry. A frontend that owns one of those parts — `eval-jobs`
+//! its worker processes, a classic command its settings — starts from
+//! [`Run::on`] and keeps only what it needs (docs/explanation/plumbing-and-porcelain.md).
 
-use crate::eval::{ErrorKind, Evaluator};
+use crate::eval::{ErrorKind, EvalConfig, Evaluator};
 use crate::parallel::fiber::StackError;
 use crate::store::path::StorePath;
 use crate::trace::run::Cache;
@@ -24,7 +24,8 @@ pub enum Outcome<T> {
 pub type Roots = Vec<(StorePath, Option<String>)>;
 
 pub struct Run {
-    pub ev: Evaluator,
+    /// The evaluator is built from it once, in `go`.
+    pub cfg: EvalConfig,
     /// `None` when the cache is off, the arguments cannot be keyed, or the
     /// command asked for none.
     pub cache: Option<Cache>,
@@ -32,21 +33,26 @@ pub struct Run {
 }
 
 impl Run {
-    /// The evaluator `a` asks for, configured. `Err` is the exit code of a
-    /// setting that does not resolve, a lint selector or `--dump-drvs`.
+    /// The configuration `a` asks for. `Err` is the exit code of a setting
+    /// that does not resolve, a lint selector or `--dump-drvs`.
     pub fn new(a: &EvalArgs) -> Result<Run, i32> {
-        let mut ev = a.evaluator();
-        if let Err(e) = super::configure(&mut ev, a) {
-            return Err(super::report(&ev, &e));
-        }
-        Ok(Run::on(ev).workers(a.workers))
+        Run::over(EvalConfig::new().pure(a.pure == Some(true)), a)
     }
 
-    /// An evaluator the frontend made itself; its lints stay as they are,
+    /// [`Run::new`] on a configuration that has the system and `pure-eval`
+    /// of the frontend.
+    pub fn over(base: EvalConfig, a: &EvalArgs) -> Result<Run, i32> {
+        match a.config(base) {
+            Ok(cfg) => Ok(Run::on(cfg).workers(a.workers)),
+            Err(e) => Err(crate::error::Error::Eval(e).report()),
+        }
+    }
+
+    /// A configuration the frontend made itself; its lints stay as they are,
     /// which is how the classic commands keep them off.
-    pub fn on(ev: Evaluator) -> Run {
+    pub fn on(cfg: EvalConfig) -> Run {
         Run {
-            ev,
+            cfg,
             cache: None,
             workers: crate::parallel::default_workers(),
         }
@@ -54,24 +60,14 @@ impl Run {
 
     /// Opens the tracing cache of `subcommand`, keyed on `a`.
     pub fn cached(mut self, a: &EvalArgs, subcommand: &str) -> Run {
-        self.cache = super::setup_cache(a, subcommand, &self.ev);
+        self.cache = super::setup_cache(a, subcommand, &self.cfg);
         self
     }
 
     /// [`Run::cached`] with the installables after the first in the key
     /// (`api::setup_cache_more`).
     pub fn cached_more(mut self, a: &EvalArgs, subcommand: &str, more: &[String]) -> Run {
-        self.cache = super::setup_cache_more(a, subcommand, &self.ev, more);
-        self
-    }
-
-    /// [`Run::on`] plus the evaluator state `a` asks for, installed before
-    /// the fiber template is cloned (`api::configure`). A frontend with its
-    /// own evaluator uses this when it evaluates through `api::evaluate`.
-    /// The error is dropped: `evaluate` applies the same settings and
-    /// reports it in the run's own error path.
-    pub fn configured(mut self, a: &EvalArgs) -> Run {
-        let _ = super::configure(&mut self.ev, a);
+        self.cache = super::setup_cache_more(a, subcommand, &self.cfg, more);
         self
     }
 
@@ -113,14 +109,12 @@ impl Run {
     /// on when there is a cache entry to write. The error is the fiber
     /// stacks: the reservation is over the cap, or the kernel refused it.
     pub fn go<R: Send + 'static>(
-        mut self,
+        self,
         f: impl FnOnce(&mut Evaluator, Option<Cache>) -> R + Send + 'static,
     ) -> Result<R, StackError> {
-        if self.cache.is_some() {
-            self.ev.trace = crate::trace::Trace::enabled();
-        }
+        let ev = self.cfg.trace(self.cache.is_some()).build();
         let cache = self.cache;
-        crate::parallel::try_run(self.workers, self.ev, move |ev| f(ev, cache))
+        crate::parallel::try_run(self.workers, ev, move |ev| f(ev, cache))
     }
 
     /// [`Run::go`] with the error classified: what this frontend does not
@@ -194,60 +188,21 @@ mod tests {
             .expect("the fiber stacks")
     }
 
-    /// The fiber template is the evaluator as it was when `try_run` cloned
-    /// it, so everything `configure` installs must be on it by then.
+    /// The fiber template is a clone of the evaluator `go` builds, so a
+    /// helper fiber has every setting of the arguments.
     #[test]
     fn a_fiber_template_carries_the_configuration() {
         let d = std::env::temp_dir().join(format!("ietsp-run-cfg-{}", std::process::id()));
-        let a = args("1", &d, 4);
+        let mut a = args("1", &d, 4);
+        a.includes = vec![(b"nixpkgs".to_vec(), b"/nonexistent".to_vec())];
+        a.lint_roots = vec!["/nonexistent".into()];
+        let want = crate::api::lint_config(&a).expect("the lints resolve");
         let run = Run::new(&a).expect("the arguments configure");
-        let fiber = run.ev.clone();
+        let fiber = run.cfg.build().clone();
         assert!(fiber.ir_cache.is_some(), "a fiber without the IR cache");
-        assert_eq!(fiber.search_path, run.ev.search_path);
-        assert_eq!(fiber.lints.config, run.ev.lints.config);
+        assert_eq!(fiber.search_path[0], a.includes[0]);
+        assert!(fiber.lints.config == want, "a fiber without the lints");
         let _ = std::fs::remove_dir_all(&d);
-    }
-
-    /// The guard `try_run` puts on that template, in a debug build. Each
-    /// test leaves one field of `api::configure` for the main fiber to
-    /// install, which is the shape of a bug that shipped: `evaluate` called
-    /// `configure` inside the main fiber, so the IR cache and the search
-    /// path reached no helper (docs/explanation/evaluation.md).
-    #[cfg(debug_assertions)]
-    mod guard {
-        use super::*;
-
-        /// `evaluate` on four fibers with `ev` as it is: whatever it still
-        /// misses, the main fiber installs after the template was cloned.
-        fn late(ev: Evaluator, a: EvalArgs) {
-            let w = a.workers;
-            let _ = Run::on(ev).workers(w).go(move |ev, _| {
-                let _ = crate::api::evaluate(ev, a);
-            });
-        }
-
-        #[test]
-        #[should_panic(expected = "`ir_cache` was set after parallel::try_run")]
-        fn a_late_ir_cache_trips_the_guard() {
-            let d = std::env::temp_dir().join("ietsp-run-late-cache");
-            let a = args("1", &d, 4);
-            let mut ev = a.evaluator();
-            crate::api::configure_lints(&mut ev, &a).expect("the lints resolve");
-            crate::builtins::set_search_path(&mut ev, crate::api::full_includes(&a.includes));
-            late(ev, a);
-        }
-
-        #[test]
-        #[should_panic(expected = "`search_path` was set after parallel::try_run")]
-        fn a_late_search_path_trips_the_guard() {
-            let d = std::env::temp_dir().join("ietsp-run-late-path");
-            let mut a = args("1", &d, 4);
-            a.includes = vec![(b"nixpkgs".to_vec(), b"/nonexistent".to_vec())];
-            let mut ev = a.evaluator();
-            crate::api::configure_lints(&mut ev, &a).expect("the lints resolve");
-            crate::api::install_ir_cache(&mut ev, &a);
-            late(ev, a);
-        }
     }
 
     /// Every fiber shares one IR cache handle, so a warm run reads one entry

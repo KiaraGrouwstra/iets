@@ -76,7 +76,14 @@ pub fn install(ev: &mut Evaluator) {
     let sd = ev.store_dir.clone();
     let sd = ev.mk_string(&sd);
     r.constant("__storeDir", sd);
-    let np = ev.mk_list(&[]);
+    let mut items = Vec::new();
+    for (prefix, path) in ev.search_path.clone() {
+        let p = ev.mk_string(&path);
+        let pre = ev.mk_string(&prefix);
+        let mut e = vec![(ev.s.path, Pos::NONE, p), (ev.s.prefix, Pos::NONE, pre)];
+        items.push(ev.arena.mk_attrs(&mut e).unwrap());
+    }
+    let np = ev.mk_list(&items);
     r.constant("__nixPath", np);
     if !ev.pure {
         let ct_op = ev.arena.mk_primop("currentTimeRaw", 1, text::current_time);
@@ -120,29 +127,4 @@ pub fn install(ev: &mut Evaluator) {
     let d = ev.eval(root, ir).expect("derivation.nix evaluates");
     battrs.get(derivation_sym).unwrap().cell.set(d);
     ev.globals.table.insert(derivation_sym, d);
-}
-
-/// Install `-I`/`NIX_PATH` entries and refresh `builtins.nixPath`. A pure
-/// evaluation keeps the empty one (eval.cc:EvalState).
-pub fn set_search_path(ev: &mut Evaluator, entries: Vec<(Vec<u8>, Vec<u8>)>) {
-    if ev.pure {
-        return;
-    }
-    let mut items = Vec::with_capacity(entries.len());
-    for (prefix, path) in &entries {
-        let p = ev.mk_string(path);
-        let pre = ev.mk_string(prefix);
-        let mut e = vec![(ev.s.path, Pos::NONE, p), (ev.s.prefix, Pos::NONE, pre)];
-        items.push(ev.arena.mk_attrs(&mut e).unwrap());
-    }
-    let list = ev.mk_list(&items);
-    let sym = ev.sym(b"nixPath");
-    if let Some(b) = ev.globals.builtins
-        && let Some(a) = b.get(sym)
-    {
-        a.cell.set(list);
-    }
-    let gsym = ev.sym(b"__nixPath");
-    ev.globals.table.insert(gsym, list);
-    ev.search_path = entries;
 }
