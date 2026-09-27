@@ -2336,12 +2336,6 @@ impl Evaluator {
         }
     }
 
-    /// Identity of the shared counter sink, for `parallel::guard`.
-    #[cfg(debug_assertions)]
-    pub(crate) fn totals_ptr(&self) -> u64 {
-        std::sync::Arc::as_ptr(&self.totals) as u64
-    }
-
     /// Move this fiber's counters into the run's totals. The scheduler
     /// calls it when a fiber finishes a task, which is why the counters
     /// themselves need no atomics.

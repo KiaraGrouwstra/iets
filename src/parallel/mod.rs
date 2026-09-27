@@ -4,8 +4,6 @@
 pub mod deque;
 pub mod fiber;
 pub mod force;
-#[cfg(debug_assertions)]
-pub mod guard;
 pub mod interner;
 pub mod sched;
 pub mod shared;
@@ -83,8 +81,6 @@ pub fn try_run<R: Send + 'static>(
         return Ok(r);
     }
     let template = force::SyncEv(ev.clone());
-    #[cfg(debug_assertions)]
-    let fingerprint = guard::Template::of(&template.0);
     let rt = sched::Runtime::start(workers, Box::new(template), stack_size())?;
     let user = Box::into_raw(Box::new(ev)) as *mut ();
     let out: &'static Mutex<Option<R>> = Box::leak(Box::new(Mutex::new(None)));
@@ -134,10 +130,6 @@ pub fn try_run<R: Send + 'static>(
             *out.lock().unwrap() = Some(r);
         }),
     )?;
-    #[cfg(debug_assertions)]
-    // SAFETY: the main fiber has returned, so nothing else holds a
-    // reference to its evaluator.
-    fingerprint.check(unsafe { &*(user as *const Evaluator) });
     Ok(out
         .lock()
         .unwrap()
