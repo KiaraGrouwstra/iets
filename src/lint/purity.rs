@@ -5,7 +5,7 @@
 //! the reference.
 
 use super::{Level, LintId, Where};
-use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
+use crate::eval::{EvalResult, Evaluator, Pos};
 use crate::runtime::{Ctx, Taint, Value, Word};
 
 /// The message for a reference to the global `name`, when it is `currentTime`.
@@ -164,15 +164,13 @@ pub fn tree_level(ev: &Evaluator, id: LintId, source: &str) -> Level {
 /// selection. So the finding has no site, and no `# ietsp: allow` comment
 /// covers it: the message names the tree.
 pub fn rev_count(ev: &mut Evaluator, source: &str) -> EvalResult<()> {
-    let msg = format!(
-        "[rev-count] '{source}.revCount' is deprecated: the count of all revisions is expensive to compute and absent on a shallow clone, and ietsp plans to remove it; use 'lastModifiedDate' and 'shortRev' for a version"
-    );
-    match tree_level(ev, LintId::RevCount, source) {
-        Level::Off => {}
-        Level::Warn => ev.lints.record_text(&format!("warning: {msg}")),
-        Level::Error => return Err(Error::boxed(ErrorKind::Lint, msg, Pos::NONE)),
-    }
-    Ok(())
+    let id = LintId::RevCount;
+    let level = tree_level(ev, id, source);
+    ev.lint_site(id, Pos::NONE, Some(level), Some(source), || {
+        format!(
+            "'{source}.revCount' is deprecated: the count of all revisions is expensive to compute and absent on a shallow clone, and ietsp plans to remove it; use 'lastModifiedDate' and 'shortRev' for a version"
+        )
+    })
 }
 
 /// The marks in `ctx`, the context that the value of attribute `key` gave
@@ -211,7 +209,7 @@ pub fn marks_in_drv(
         return Ok(());
     };
     let site = if site.is_none() { attr_pos } else { site };
-    ev.lint_site(id, site, Some(level), || {
+    ev.lint_site(id, site, Some(level), None, || {
         let when = match metas.iter().any(|m| m.starts_with("self.")) {
             true => "commit or edit",
             false => "update of the lock file",

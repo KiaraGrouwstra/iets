@@ -734,6 +734,8 @@ struct Emitted {
     seen: SiteSet,
     /// One record for each warning, as a cache entry keeps them.
     records: Vec<String>,
+    /// The trees that have their finding of `rev-count`.
+    counted: Vec<String>,
     pending: Vec<u8>,
 }
 
@@ -771,6 +773,7 @@ impl Default for Lints {
             shared: Arc::new(Mutex::new(Emitted {
                 seen: SiteSet::default(),
                 records: Vec::new(),
+                counted: Vec::new(),
                 pending: Vec::new(),
             })),
             local_seen: SiteSet::default(),
@@ -809,26 +812,30 @@ impl Lints {
         self.shared.lock().unwrap().seen.insert((id, pos));
     }
 
-    /// Queues the line of a finding that has no site. The text keeps it to
-    /// one line: the site set has one place for all of them.
-    fn record_text(&mut self, line: &str) {
-        let (shown, record) = crate::log::lint(line, None);
+    /// Records the finding and queues its line; false when another fiber
+    /// recorded it first. A finding of `tree` is the one of that tree in the
+    /// run, with a site or without; every other finding is the one of its
+    /// site.
+    fn record(
+        &mut self,
+        id: LintId,
+        pos: Pos,
+        line: &str,
+        site: Option<Site>,
+        tree: Option<&str>,
+    ) -> bool {
         let mut g = self.shared.lock().unwrap();
-        if !g.records.contains(&record) {
-            g.pending.extend_from_slice(shown.as_bytes());
-            g.pending.push(b'\n');
-            g.records.push(record);
-        }
-    }
-
-    /// Records the site and queues its line; false when another fiber
-    /// recorded it first.
-    fn record(&mut self, id: LintId, pos: Pos, line: &str, site: Option<Site>) -> bool {
-        self.local_seen.insert((id, pos));
-        let mut g = self.shared.lock().unwrap();
-        if !g.seen.insert((id, pos)) {
+        let first = match tree {
+            Some(t) => !g.counted.iter().any(|c| c == t),
+            None => {
+                self.local_seen.insert((id, pos));
+                g.seen.insert((id, pos))
+            }
+        };
+        if !first {
             return false;
         }
+        g.counted.extend(tree.map(String::from));
         let (shown, record) = crate::log::lint(line, site);
         g.pending.extend_from_slice(shown.as_bytes());
         g.pending.push(b'\n');
@@ -867,7 +874,7 @@ impl Evaluator {
         if self.lint_config().level(id) == Level::Off {
             return Ok(());
         }
-        self.lint_site(id, pos, None, msg)
+        self.lint_site(id, pos, None, None, msg)
     }
 
     /// Any fiber reports: the site set keeps a warning to one line, so a
@@ -876,16 +883,18 @@ impl Evaluator {
     /// cost 15 % of the wall on nixos-desktop at 4 workers. A site the
     /// scope silences enters the set too; an `error` site never does, so
     /// every fiber that reaches it fails. A `level` is that of the tree a
-    /// value comes from, where the location of the site does not decide.
+    /// value comes from, where the location of the site does not decide. A
+    /// finding of `tree` is one for the tree, so the site set does not see it.
     #[inline(never)]
     fn lint_site(
         &mut self,
         id: LintId,
         pos: Pos,
         level: Option<Level>,
+        tree: Option<&str>,
         msg: impl FnOnce() -> String,
     ) -> EvalResult<()> {
-        if self.lints.seen(id, pos) {
+        if tree.is_none() && self.lints.seen(id, pos) {
             return Ok(());
         }
         let file = self.file_of(pos);
@@ -909,7 +918,7 @@ impl Evaluator {
                 Ok(())
             }
             Level::Warn => {
-                self.lint_print(id, pos, msg());
+                self.lint_print(id, pos, msg(), tree);
                 Ok(())
             }
             Level::Error => Err(error(id, pos, &msg())),
@@ -1062,7 +1071,7 @@ impl Evaluator {
         p
     }
 
-    fn lint_print(&mut self, id: LintId, pos: Pos, msg: String) {
+    fn lint_print(&mut self, id: LintId, pos: Pos, msg: String, tree: Option<&str>) {
         let line = if pos.is_none() {
             format!("warning: [{}] {msg}", id.name())
         } else {
@@ -1073,7 +1082,7 @@ impl Evaluator {
             )
         };
         let site = self.lint_site_of(id, pos);
-        self.lints.record(id, pos, &line, site);
+        self.lints.record(id, pos, &line, site, tree);
     }
 
     /// The byte span of the site and its edit (`site::finding`), from a
@@ -1102,7 +1111,7 @@ impl Evaluator {
     pub fn report_diags(&mut self, diags: &[Diag]) {
         for d in diags {
             if !self.lints.seen(d.id, d.pos) {
-                self.lint_print(d.id, d.pos, d.msg.clone());
+                self.lint_print(d.id, d.pos, d.msg.clone(), None);
             }
         }
     }
