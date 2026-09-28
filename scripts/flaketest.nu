@@ -314,6 +314,10 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   ^$ietsp eval --raw $"($scratch).drvPath" | complete | ignore
   let st = (cache-lines $ietsp $"($scratch).drvPath" | str join "\n")
   $res ++= [(verdict ($st | str contains "cache: hit") "cache: second run hits" $"cache: second run hits \(($st)\)")]
+  # the date and the count follow from the revision, so they are no
+  # observations: a validation starts no `git log` and no `git rev-list`
+  let cmds = (glob $"($work)/cache/trace/*/entry" | each {|e| ^$ietsp cache dump $e | complete | get stdout | lines } | flatten | where ($it | str starts-with $"cmd ($repo) ") | each {|l| $l | split row " " | get 3 } | uniq | sort)
+  $res ++= [(verdict ($cmds == [ls-files rev-parse status]) "cache: the git observations are ls-files, status and rev-parse" $"cache: git observations: ($cmds | str join ' ')")]
   "five\n" | save -f $"($repo)/file"
   let st = (cache-lines $ietsp $"($scratch).drvPath" | get -o 0 | default "")
   $res ++= [(verdict ($st | str contains "miss (") "cache: editing a tracked file misses" $"cache: editing a tracked file misses \(($st)\)")]

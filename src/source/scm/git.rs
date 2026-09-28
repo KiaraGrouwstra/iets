@@ -1,6 +1,8 @@
 //! git. The tree is what git.cc:getAccessorFromWorkdir copies: the index
-//! entries that still exist, no `.git`, no submodules. Every command is a
-//! `Cmd` observation.
+//! entries that still exist, no `.git`, no submodules. Each command that reads
+//! the working tree is a `Cmd` observation. The date and the count follow from
+//! the revision, which is one, so they are none (git.cc:getLastModified and
+//! getRevCount keep them by revision).
 
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -87,8 +89,9 @@ impl Scm for Git {
         }
         let head = run(trace, root, &["rev-parse", "--verify", "-q", "HEAD"])?;
         let head = (head.0 == 0).then(|| String::from_utf8_lossy(&head.1).trim().to_string());
+        let of_rev = Trace::default();
         let last_modified = match &head {
-            Some(_) => number(&git(trace, root, &["log", "-1", "--format=%ct", "HEAD"])?),
+            Some(h) => number(&git(&of_rev, root, &["log", "-1", "--format=%ct", h])?),
             None => 0,
         };
         let shallow = || {
@@ -97,7 +100,7 @@ impl Scm for Git {
         };
         let rev_count = match &head {
             _ if dirty || shallow() => None,
-            Some(_) => Some(number(&git(trace, root, &["rev-list", "--count", "HEAD"])?)),
+            Some(h) => Some(number(&git(&of_rev, root, &["rev-list", "--count", h])?)),
             None => Some(0),
         };
         Ok(Snapshot {
