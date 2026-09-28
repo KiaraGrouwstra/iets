@@ -260,6 +260,9 @@ optimisation and is skipped when no daemon answers.
 `dirtyShortRev`, `lastModified` and `lastModifiedDate` (`%Y%m%d%H%M%S`,
 UTC), and `submodules` for `git`.
 
+`revCount` is deprecated (`docs/reference/lints.md`, `rev-count`). Its
+value is that of Nix.
+
 A `path` input is NAR-hashed, checked against `narHash` when the lock has
 one, and is a virtual copy like the root. A relative `path:` input
 (`path:./sub`) never reaches `fetchTree`: `nix flake lock` writes it as
@@ -278,7 +281,7 @@ control system in its list (`docs/explanation/flakes-and-sources.md`).
 
 | Source | What the tree is, and its metadata |
 |:---|:---|
-| git (git.cc:getAccessorFromWorkdir, git-utils.cc:getWorkdirInfo) | the set of index entries that still exist in the working tree, with the working-tree contents and modes; untracked files, `.git` and submodules excluded. `git ls-files --stage` and `git status --porcelain -uno` give the set and the dirty flag, `rev-parse HEAD`, `log -1 --format=%ct` and `rev-list --count` the metadata. Clean: `rev`, `shortRev`, `revCount` (not when `.git/shallow` exists). Dirty: `dirtyRev`, `dirtyShortRev`. `submodules = false` always; `lastModified` is the HEAD commit time |
+| git (git.cc:getAccessorFromWorkdir, git-utils.cc:getWorkdirInfo) | the set of index entries that still exist in the working tree, with the working-tree contents and modes; untracked files, `.git` and submodules excluded. `git ls-files --stage` and `git status --porcelain -uno` give the set and the dirty flag, `rev-parse HEAD` and `log -1 --format=%ct` the revision and its date. `rev-list --count` runs when the evaluation reads `revCount`, and the tracing store keeps the count by revision. Clean: `rev`, `shortRev`, `revCount` (not when `.git/shallow` exists; deprecated, lint `rev-count`). Dirty: `dirtyRev`, `dirtyShortRev`. `submodules = false` always; `lastModified` is the HEAD commit time |
 | path (path.cc) | the whole directory; `lastModified` is the newest `lstat` mtime in it |
 
 The store path is `make_fixed_output_path(recursive, narHash, "source")`.

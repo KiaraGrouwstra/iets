@@ -141,6 +141,32 @@ Where ietsp still errors, the wording is its own. These are
 `publicKeys`, which Nix renders only with the `verified-fetches`
 experimental feature on.
 
+## `revCount` of a source tree
+
+The value of `revCount` is that of Nix, and the attribute is there when
+Nix gives one: a clean tree with its full history. Two things differ.
+
+- **A read gives a warning.** `revCount` is deprecated in ietsp. The lint
+  `rev-count` (`docs/reference/lints.md`) reports a read of
+  `self.revCount` on stderr, at the level `warn` by default. The
+  `revCount` of a locked input is silent unless `[lint.inputs.<node>]`
+  gives the lint a level. Nix gives no warning. stdout, the `.drv` paths
+  and the exit code do not change.
+- **The count is computed when the evaluation reads it.** Nix 2.34.8
+  counts the revisions of a git working tree before the evaluation
+  (git.cc:getAccessorFromWorkdir). ietsp counts when the evaluation reads
+  the attribute, as Nix 2.35 does (fetchTree.cc:emitLazyAttrThunk). So an
+  error of the count (a repository that lacks a commit) comes at the read,
+  not at the start. An evaluation that does not read the attribute has no
+  such error.
+
+Observe it: in a git repository, evaluate `toString self.revCount` from a
+flake with `ietsp eval` and with `nix eval`. stdout is the same, and only
+ietsp prints `warning: [rev-count] 'self.revCount' is deprecated: ...`.
+`--lint rev-count=off` removes the line. `scripts/flaketest.nu` compares
+the value, `self ? revCount` and the attribute names with Nix on a clean
+tree, a dirty tree and a shallow clone.
+
 ## Classic mode
 
 `nix-instantiate`, `nix-build` and `nix-eval-jobs` under Nix's own names

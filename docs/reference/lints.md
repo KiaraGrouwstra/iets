@@ -22,11 +22,15 @@ fixtures: `tests/lint/<name>.nix`, checked by `scripts/linttest.nu`.
 
 Nix's spellings `ignore` and `fatal` are accepted for `off` and `error`.
 
+A finding of `rev-count` has no site. It has no `at` line, and its text
+keeps it to one line for each tree ("The tree that a value comes from").
+
 With `--log-format internal-json`, or in the `json-log-path` file, a
 finding is a record with the code `lint`. The record has the byte span of
 the site (`start`, `end`). It has the text that corrects the finding
-(`replacement`) when the lint has one. `docs/reference/errors.md` has the
-record ("A finding and its edit").
+(`replacement`) when the lint has one. A finding without a site has no
+span, and `file`, `line` and `column` are null. `docs/reference/errors.md`
+has the record ("A finding and its edit").
 
 The level of a lint comes from these sources, in this order; a later
 source wins over an earlier one:
@@ -156,12 +160,12 @@ lint with a rule of its own:
 
 ### The tree that a value comes from
 
-`tree-meta-in-drv` is the one lint that does not take its level from the
-site. The tree that the value comes from gives the level:
+Two lints do not take their level from the site: `tree-meta-in-drv` and
+`rev-count`. The tree that the value comes from gives the level:
 
 | the value comes from | level |
 |---|---|
-| the root tree (`self.rev`) | the level of the lint: `warn` by default |
+| the root tree (`self.rev`, `self.revCount`) | the level of the lint: `warn` by default |
 | a locked input (`inputs.nixpkgs.rev`) that has a `[lint.inputs.<node>]` table with this lint | the level in that table |
 | a different locked input | `off` with `scope = "root"`, the level of the lint with `scope = "all"` |
 
@@ -172,10 +176,17 @@ then correct. Thus an input is silent by default.
 ```toml
 [lint.inputs.nixpkgs]
 tree-meta-in-drv = "warn"   # report nixpkgs's shortRev and lastModifiedDate
+rev-count = "warn"          # report a read of nixpkgs's revCount
 ```
 
-The site follows the rule of the value lints: the position of the
-attribute when the scope sees it, else the position of the derivation.
+A tree has a name only in a flake evaluation: `self` for the root tree,
+`inputs.<node>` for an input that the lock file names. A tree from a
+direct `builtins.fetchTree` call has no name, and the two lints are silent
+for it.
+
+The site of `tree-meta-in-drv` follows the rule of the value lints: the
+position of the attribute when the scope sees it, else the position of the
+derivation.
 There is one difference. A derivation that has no position in a root is
 not silent, because the value is the user's. The finding then goes to the
 position of the attribute, in the file that binds it:
@@ -185,6 +196,20 @@ $ ietsp eval --raw .#wrapped.drvPath     # wrapped = dep.mk self.narHash;
 warning: [tree-meta-in-drv] derivation 'wrapped': attribute 'v' holds 'self.narHash', a value that changes with every commit or edit, so this derivation and all that depend on it are built again each time; keep the value out of the build, or read it at run time
   at /repo/dep/flake.nix:2:79
 ```
+
+`rev-count` has no site. `fetchTree` and the root tree of a flake make
+`revCount` as a lazy value, and the evaluator computes a lazy value of
+native code without the position of the expression that reads it. The
+evaluator keeps no call trace. Thus the message names the tree, and the
+finding has no position:
+
+```
+$ ietsp eval --raw .#version             # version = "1.${toString self.revCount}";
+warning: [rev-count] 'self.revCount' is deprecated: the count of all revisions is expensive to compute and absent on a shallow clone, and ietsp plans to remove it; use 'lastModifiedDate' and 'shortRev' for a version
+```
+
+At the level `error`, the trace of the error has the position of the
+nearest call that has one.
 
 ## Silencing one site
 
@@ -284,7 +309,8 @@ are part of the IR cache key and their warnings are stored in the entry;
 | `dir-copy-unfiltered` | purity | evaluator | off | a directory outside the store copied whole by a string coercion: no filter, and not a tree the flake machinery already turned into a tracked file set |
 | `impure-path-in-drv` | purity | evaluator | off | a derivation attribute (env, `args`, structured attrs) holds the text of a path outside the store and not under a `flake.nix` directory (`toString ./x`), so the .drv depends on the checkout location |
 | `absolute-path-in-drv` | purity | evaluator | off | as above, for a path under a `flake.nix` directory: an absolute path a flake evaluation would have copied |
-| `tree-meta-in-drv` | purity | evaluator | **warn** | a derivation attribute (env, `args`, structured attrs) holds metadata of a source tree as a string: `rev`, `shortRev`, `dirtyRev`, `dirtyShortRev`, `lastModifiedDate` or `narHash`, so each commit gives a new .drv and a rebuild. The tree that the value comes from gives the level (Scope): the root tree by default, a locked input only with `[lint.inputs.<node>]`. Not for the integers `lastModified` and `revCount` (Limits) |
+| `tree-meta-in-drv` | purity | evaluator | **warn** | a derivation attribute (env, `args`, structured attrs) holds metadata of a source tree as a string: `rev`, `shortRev`, `dirtyRev`, `dirtyShortRev`, `lastModifiedDate` or `narHash`, so each commit gives a new .drv and a rebuild. The tree that the value comes from gives the level (Scope): the root tree by default, a locked input only with `[lint.inputs.<node>]`. Not for the integers `lastModified` and `revCount` (Limits); `rev-count` reports a read of `revCount` |
+| `rev-count` | purity | evaluator | **warn** | the evaluation reads `revCount` of a source tree that has a name (`self.revCount`, `inputs.<node>.revCount`). The attribute is deprecated: the count of all revisions is expensive to compute, a shallow clone has none, and each commit changes it. `self ? revCount` and `builtins.attrNames self` are not a read. The tree gives the level (Scope): the root tree by default, a locked input only with `[lint.inputs.<node>]`. The finding has no site |
 | `unknown-allow` | meta | parser | **warn** | a word of a `# ietsp: allow` comment that is not a lint name, a family or `all`, or a `# ietsp:` directive other than `allow` (Silencing one site) |
 
 `impure-path-in-drv` works like Nix's store references: a coercion that
@@ -333,6 +359,37 @@ two procedures:
   nixpkgs writes into the derivation `nixos-version`. Nix gives the same
   string.
 
+### `rev-count`: the deprecation of `revCount`
+
+`revCount` is deprecated. This lint is the first step: the attribute
+stays, its value is that of Nix, and a read of it gives a warning.
+There are three reasons:
+
+- The count is expensive. `git rev-list --count` takes 1 s on a nixpkgs
+  checkout with 1,066,245 commits.
+- The count needs the full history. A shallow clone has no `revCount`, so
+  an expression that reads it fails there.
+- The count changes with each commit, as `rev` does.
+
+Use `lastModifiedDate` and `shortRev` for a version string, as nixpkgs
+does for the version of NixOS:
+
+```nix
+version = "1.0.${builtins.substring 0 8 self.lastModifiedDate}.${self.shortRev or "dirty"}";
+```
+
+To turn the lint off, set its level. A `# ietsp: allow` comment needs a
+site, and this finding has none:
+
+```toml
+[lint]
+rev-count = "off"
+```
+
+ietsp computes the count only when the evaluation reads it, and keeps it
+by revision (`docs/explanation/flakes-and-sources.md`). Thus the lint
+adds no cost to a flake that does not read the attribute.
+
 ## Defaults and parity
 
 The byte-exact gates (`scripts/difftest.nu` on nixos-desktop,
@@ -380,6 +437,7 @@ the build with those exemptions (outpaths then had 168 errors);
 | `impure-path-in-drv` | 0 | 0 | 0 |
 | `absolute-path-in-drv` | 0 | 0 | 0 |
 | `tree-meta-in-drv` | 0 | 0 | 0 |
+| `rev-count` | 0 | 0 | 0 |
 | `absolute-path-literal` | 2 | 9 | 26 |
 | `short-path-literal` | 0 | 1 | 6 |
 | `unknown-allow` | 0 | 0 | 0 |
@@ -401,8 +459,10 @@ with `-I nixpkgs=<copy> --lint-scope all --lint impure-path-in-drv=warn
 | `impure-path-in-drv` | 0 | 0 |
 | `absolute-path-in-drv` | 3 | 3 |
 
-`tree-meta-in-drv` is zero above because none of these workloads is a
-flake: no tree has a name, so ietsp makes no mark. The count for the
+`tree-meta-in-drv` and `rev-count` are zero above because none of these
+workloads is a flake: no tree has a name, so ietsp makes no mark and no
+lazy count. The row of `rev-count` is not measured; it follows from that.
+The pinned nixpkgs reads `revCount` of no flake tree. The count for the
 outpaths column is not measured; it follows from that. Measured on a
 scratch git flake with the pinned tree as a `path:` input, the `minimal`
 profile of NixOS and `system.configurationRevision = self.rev`,
@@ -483,6 +543,11 @@ instructions before and 9.3942 G after, which is +0.03 %. Two runs of
 one binary are up to 0.02 % apart. nixos-desktop is not a flake, so it
 has no mark and the number is the cost of the test alone.
 
+`rev-count` adds nothing to an evaluation that has no source tree.
+Measured in the same way (5 runs for each binary, 2026-09-28): 9.3940 G
+instructions before and 9.3941 G after, which is +0.001 %. Two runs of
+one binary were up to 0.03 % apart.
+
 ## Caches and parallelism
 
 - A lint warning is an effect. `Cache::write` stores the record of each
@@ -539,10 +604,21 @@ has no mark and the number is the cost of the test alone.
   `builtins.toJSON`.
 - `tree-meta-in-drv` does not see the integers `lastModified` and
   `revCount`. A string context cannot go on an integer, so
-  `toString self.lastModified` is a string without the mark. The pinned
-  nixpkgs reads these integers from a flake tree at one place only
+  `toString self.lastModified` is a string without the mark. For
+  `revCount`, `rev-count` reports the read itself, so
+  `toString self.revCount` in a derivation gives a finding of that lint.
+  For `lastModified` there is no finding. The pinned nixpkgs reads
+  `lastModified` from a flake tree at one place only
   (`nixos/modules/config/nix-flakes.nix`), and the same attribute holds
   `rev` and `narHash`, which have the mark.
+- `rev-count` has no site, because the evaluator does not know the
+  position of the read when it computes the value. Thus a
+  `# ietsp: allow` comment cannot silence it, the record has no byte
+  span, and one run gives one finding for each tree, not one for each
+  read.
+- `rev-count` needs a tree that has a count. Its cases are in
+  `scripts/flaketest.nu` (a git working tree, a locked git input) and in
+  the unit tests, not in a `tests/lint/*.nix` file.
 - `tree-meta-in-drv` sees a value only through the mark. The builtins
   that drop the store context drop the mark too: `match`, `split`,
   `hashString`, `fromJSON`, an attribute name. `builtins.toFile` writes

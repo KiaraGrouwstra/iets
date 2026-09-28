@@ -55,6 +55,8 @@ A lint finds a site. The location of the site tells ietsp if the finding
 is yours: a site in your repository is reported, and a site in an input
 is silent. `docs/reference/lints.md` ("Scope") has the rule.
 
+Two lints do not obey this rule: `tree-meta-in-drv` and `rev-count`.
+
 `tree-meta-in-drv` does not obey this rule, and that is a decision. The
 lint reports the metadata of a source tree (`self.rev`,
 `self.lastModifiedDate`) that goes into a derivation. The value changes
@@ -74,6 +76,12 @@ finding is yours. These two examples show why:
 Thus the tree that the value comes from gives the level. The root tree
 has the level of the lint, which is `warn` by default. A locked input is
 silent, unless `[lint.inputs.<node>]` gives it a level.
+
+`rev-count` has the same partition for the same reason. It reports a read
+of `revCount`, which is deprecated. The count of the root tree changes
+with each commit and ietsp must compute it. The count of a locked input
+is a number in the lock file. ietsp knows the tree because `revCount` is
+a lazy value that has the name of its tree.
 
 ietsp knows the tree because each metadata string has a mark. The mark
 is a string context element that Nix does not have. It moves with the

@@ -53,7 +53,8 @@ the evaluation:
 - the root of the working tree;
 - the tracked files, with the contents and the modes of the working tree;
 - the dirty flag;
-- the revision, its date and its count, and which of them exist;
+- the revision and its date, and if the revision has a count;
+- the count of the revisions, on request;
 - the observations that the tracing cache checks again;
 - the words for messages: the name of the SCM and the command that tracks
   a file.
@@ -64,11 +65,26 @@ Mercurial working tree are thus plain paths, as they are for Nix.
 
 For a git working tree, the tree is the set of index entries that still
 exist in the working tree, with the working tree's contents and modes.
-Untracked files, `.git` and submodules are excluded. Five `git` commands
-supply it: `ls-files --stage` and `status --porcelain -uno` give the file
-set and the dirty flag, and `rev-parse HEAD`, `log -1 --format=%ct` and
-`rev-list --count` give the metadata. A clean tree gets `rev`, `shortRev`
-and `revCount`; a dirty one gets `dirtyRev` and `dirtyShortRev`.
+Untracked files, `.git` and submodules are excluded. Four `git` commands
+supply it before the evaluation starts: `ls-files --stage` and
+`status --porcelain -uno` give the file set and the dirty flag, and
+`rev-parse HEAD` and `log -1 --format=%ct` give the revision and its date.
+A clean tree gets `rev`, `shortRev` and `revCount`; a dirty one gets
+`dirtyRev` and `dirtyShortRev`.
+
+`revCount` is a lazy value. The attribute is in the set when Nix gives
+one, so `self ? revCount` and `builtins.attrNames self` are those of Nix.
+The fifth command, `rev-list --count`, runs only when the evaluation reads
+the value: it takes 1 s on a nixpkgs checkout, and almost no flake reads
+it. ietsp then keeps the count in the tracing store, with the name of the
+SCM and the revision as the key, and the next run at that revision starts
+no count (`docs/explanation/caching.md`). Nix keeps the count by revision
+too (git.cc:getRevCount).
+
+**Deprecated:** `revCount`. The count is expensive, a shallow clone has
+none, and each commit changes it. ietsp plans to remove the attribute. A
+read gives the warning `rev-count` (`docs/reference/lints.md`). Use
+`lastModifiedDate` and `shortRev` for a version string.
 
 The store path is then computed from the NAR hash of that tree — and
 **nothing is written or fetched**. The copy is virtual. The store path is
@@ -215,7 +231,13 @@ The same flake's whole NixOS system configuration: `nix` 7.21 s, ietsp
 ## What the cache records
 
 Everything above is recorded in the tracing cache. The SCM records its own
-observations: the `git` queries become command observations. The working
+observations: the `git` queries that read the working tree (`ls-files`,
+`status`, `rev-parse HEAD`) become command observations. The date and the
+count of the revision are no observations. They follow from the revision,
+and a commit cannot change while its name stays: the name is the hash of
+its date and of its parents. Thus a validation starts three `git`
+processes, not five. The marker `.git/shallow` is an observation, because
+it decides if the tree has a count. The working
 tree's file set becomes a filtered tree observation with no seen-set,
 because the SCM names the file set and an unlisted entry cannot change the
 result. Every file read under the root is a file

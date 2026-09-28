@@ -247,6 +247,10 @@ Limits:
   c`, or `"${a}" + b` for a lint that reports a copy. The record then has
   the span of the smaller node.
 - A site without a node of those kinds has no `start` and no `end`.
+- A finding of `rev-count` has no site (`docs/reference/lints.md`,
+  "The tree that a value comes from"). The record has no `start` and no
+  `end`, and `file`, `line` and `column` are null. `raw_msg` names the
+  tree.
 
 ## The build plan: `ietsp build --dry-run`
 

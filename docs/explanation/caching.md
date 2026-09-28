@@ -9,7 +9,7 @@ in a user's home directory with no daemon and no signature.
 | store | default root | entry | keyed on |
 |---|---|---|---|
 | compiled IR | `~/.cache/ietsp/ir` | one file | build id, path, system, store directory, source |
-| tracing runs | `~/.cache/ietsp/trace` | one file in a directory | the whole command |
+| tracing runs | `~/.cache/ietsp/trace` | one file in a directory | the whole command; for the count of a revision, the SCM and the revision |
 | fetched inputs | `~/.cache/ietsp/inputs` | one directory | the store path the lock implies |
 
 Each cache has a flag that turns it off. `--no-tracing-cache` turns off
@@ -169,7 +169,44 @@ Every primop that looks at the world records one observation.
 | a copied tree's NAR hash and stat hash | `./path` coerced to a string, `builtins.path`, `filterSource`, a flake's working tree, a `path:` input | recompute the stat hash with `lstat` only; on a mismatch re-dump the NAR with the recorded filter and compare. A `path:` input also records its newest mtime, which the evaluation sees as `lastModified`, and the same bytes with another date are a change |
 | a resolved symlink | `storePath`, `builtins.path` and `filterSource` when canonicalising changed the path | canonicalise again |
 | an environment variable | `getEnv`; `HOME` when a `~/` literal is compiled | read it again |
-| a command's exit status and output | the queries of the SCM of a flake working tree; for git, the `git` commands | run it again, rehash |
+| a command's exit status and output | the queries of the SCM that read a flake working tree; for git, `ls-files`, `status` and `rev-parse HEAD` | run it again, rehash |
+
+What follows from an observation is no observation. The date and the
+count of a revision follow from the revision: a commit is named by the
+hash of its content, its date and its parents, so they cannot change while
+the name stays. `rev-parse HEAD` is the observation, and a validation
+starts no `git log` and no `git rev-list`. That took 1 s from each hit on
+a nixpkgs checkout. A tree has a count only when it is clean and has its
+full history, and those two facts stay observations: `git status` gives
+the dirty flag, and the marker `.git/shallow` is a path observation.
+
+One limit: a replace ref (`git replace`) or a graft changes the history
+that `git` shows, and the revision stays. ietsp does not observe them, so
+a count that the store kept does not follow such a change.
+
+The count is kept in this store by revision. The key holds the build id,
+the name of the SCM and the revision, and no command. The entry holds the
+count and an empty read set, because nothing can make it stale. It is an
+entry like the others: `--cache-dir` moves it, the sweep removes it 30
+days after the last read, and the flags that turn the tracing cache off
+turn it off, so the count is then computed at each read. Nix keeps the
+same two values by revision in its fetcher cache (git.cc:getRevCount,
+getLastModified).
+
+Measured on a clean nixpkgs checkout with 1,066,246 commits (release
+build, a warm IR cache, `hyperfine`, 10 runs, 2026-09-28). "Before" is the
+commit that made both values observations and counted before the
+evaluation:
+
+| run of `ietsp eval --raw .#ATTR` | before | after | `git` processes |
+|---|---:|---:|---|
+| a miss, the attribute does not read `revCount` | 2.23 s | 1.18 s | 5, then 4 |
+| a hit | 1.09 s | 0.63 s | 5, then 3 |
+| a miss that reads `revCount`, first run at the revision | 2.23 s | 2.23 s | 5 |
+| a miss that reads `revCount`, the store has the count | 2.23 s | 1.20 s | 5, then 4 |
+
+A hit still reads the state of each of the 54,000 files of the tree
+(`lstat`) and starts `git ls-files`, `git status` and `git rev-parse`.
 
 One tree is not walked. A `path:` input that names a store path, such as
 `path:/nix/store/…-source`, is hashed like any other, and when the
