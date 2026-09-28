@@ -193,11 +193,12 @@ pub fn eval_config(c: &Common, cfg: &Config) -> EvalConfig {
         (false, Some(f)) => crate::eval::dir_of(&abs_path(f, &cwd)).to_vec(),
         _ => cwd,
     };
-    // lints stay off, as in nix; the root alone feeds the provenance fallback.
+    // the root alone feeds the provenance fallback
     EvalConfig::new()
         .system(&cfg.system())
         .pure(pure)
         .search_path(full_includes(&c.flags.includes))
+        .lints(crate::lint::Config::off())
         .lint_root(&entry)
 }
 

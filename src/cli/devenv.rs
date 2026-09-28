@@ -439,7 +439,7 @@ pub fn dev_env(
         options,
         gc_root,
     };
-    let mut run = Run::over(base, &a)?;
+    let mut run = Run::on(base).workers(a.workers);
     // a hit reads the environment out of the local store, so only a local
     // daemon gets an entry
     if matches!(d.transport, crate::remote::worker::Transport::Unix(_)) {

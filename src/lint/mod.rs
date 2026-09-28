@@ -395,6 +395,14 @@ impl Config {
         Ok(())
     }
 
+    /// Every lint off: a classic name prints what Nix prints.
+    pub fn off() -> Config {
+        Config {
+            levels: [Level::Off; N],
+            ..Config::default()
+        }
+    }
+
     /// Adds a lint root; `dir` is made canonical.
     pub fn add_root(&mut self, dir: &[u8]) {
         let dir = crate::compile::canon_path(dir);

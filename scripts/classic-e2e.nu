@@ -135,10 +135,11 @@ def cache-cases [farm: string, tmp: string, np: string, sys: string]: nothing ->
       packages.${system}.pkg = derivation {
         name = "cc-pkg";
         inherit system val;
+        stamp = self.narHash;
         builder = "/bin/sh";
         args = [ "-c" "echo $val > $out" ];
       };
-      devShells.${system}.default = nixpkgs.legacyPackages.${system}.mkShell { inherit val; };
+      devShells.${system}.default = nixpkgs.legacyPackages.${system}.mkShell { inherit val; stamp = self.narHash; };
     };
 }
 '# | str replace -a "@NIXPKGS@" $np | str replace -a "@CC@" $cc | str replace -a "@SYS@" $sys | save $"($cc)/flake/flake.nix"
@@ -177,6 +178,9 @@ def cache-cases [farm: string, tmp: string, np: string, sys: string]: nothing ->
     $res ++= [((cmp-case $"($c.name): a hit prints what nix prints" {ours: $hit, real: $real})
       and (verdict ((not (do $ran $hit)) and ($hit.stdout | into binary) == ($cold.stdout | into binary))
         $"($c.name): the second run is a hit with the same bytes" $"stderr ($hit.stderr | str substring 0..300)"))]
+    # `stamp` is what `tree-meta-in-drv` reports under the ietsp names
+    $res ++= [(verdict (not (($cold.stderr + $hit.stderr) | str contains "warning: ["))
+      $"($c.name): no lint under a classic name" $"stderr ($cold.stderr | str substring 0..300)")]
     # a flag or a setting with no effect has none on a hit either, so the
     # warnings come from the command line, not from the evaluation
     let noisy = {|| with-env {NIX_CONFIG: "accept-flake-config = true\nno-such-setting = 1"} { do $one [--accept-flake-config --eval-store auto] } }
