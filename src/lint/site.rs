@@ -50,6 +50,9 @@ pub fn finding(src: &[u8], ast: &Ast, id: LintId, off: u32) -> Option<(Span, Opt
         OrNonAttrs => (false, &[&or]),
         ImpureBuiltin => (false, &[&apply, &select, &var]),
         UnhashedFetch | Ifd | ReadThroughCopy => (false, &[&apply]),
+        // `inherit (self) revCount`, then `getAttr "revCount" self`: the call
+        // starts where its `builtins.getAttr` starts
+        RevCount => (true, &[&apply, &select]),
         UnknownAllow => {
             let word = src.get(off as usize..)?;
             let len = word.iter().take_while(|b| !b" \t,\r\n".contains(b)).count();

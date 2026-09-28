@@ -11,7 +11,9 @@ use std::collections::HashMap;
 
 pub use error::{Error, ErrorKind, EvalResult, Pos};
 
-use crate::compile::ir::{AttrElemIr, AttrsIr, BindIr, BindScope, Ir, IrRef, LambdaIr, ParamIr};
+use crate::compile::ir::{
+    AttrElemIr, AttrsIr, BindIr, BindScope, Ir, IrRef, LambdaIr, ParamIr, SelectIr,
+};
 use crate::compile::{Compiler, Globals};
 use crate::parallel::shared::SharedMap;
 use crate::runtime::arena::{STAT_NAMES, Stat};
@@ -109,6 +111,7 @@ impl FileInfo {
 #[derive(Clone)]
 pub struct WellKnown {
     pub out_path: Sym,
+    pub rev_count: Sym,
     pub drv_path: Sym,
     pub type_: Sym,
     pub functor: Sym,
@@ -392,6 +395,7 @@ impl EvalConfig {
         let root_env = arena.alloc_env(None, 0);
         let s = WellKnown {
             out_path: interner.intern(b"outPath"),
+            rev_count: interner.intern(b"revCount"),
             drv_path: interner.intern(b"drvPath"),
             type_: interner.intern(b"type"),
             functor: interner.intern(b"__functor"),
@@ -1502,9 +1506,8 @@ impl Evaluator {
                 let p = self.find_file(&entries, n, *pos)?;
                 Ok(self.arena.mk_path(&p))
             }
-            Ir::Select(s) | Ir::SelectCount(s) => {
-                self.eval_select(env, s.subject, s.path, s.default, s.pos)
-            }
+            Ir::Select(s) => self.eval_select(env, s.subject, s.path, s.default, s.pos),
+            Ir::SelectCount(s) => self.eval_select_count(env, s),
             Ir::Select1 {
                 subject,
                 sym,
@@ -1815,6 +1818,39 @@ impl Evaluator {
             }
         }
         let _ = pos2;
+        Ok(v)
+    }
+
+    /// `eval_select` for `Ir::SelectCount`. It is a function of its own
+    /// because one body for both, with the test of the name compiled out of
+    /// `eval_select`, cost 0.16 % of the instructions on nixos-desktop.
+    #[cold]
+    #[inline(never)]
+    fn eval_select_count(&mut self, env: &'static EnvObj, s: &SelectIr) -> EvalResult<Word> {
+        let mut v = self.eval(env, s.subject)?;
+        for elem in s.path {
+            let name = self.attr_name(env, elem)?;
+            let Some(a) = v.as_attrs().and_then(|a| a.get(name)) else {
+                let Some(d) = s.default else {
+                    self.force_attrs(v, s.pos, "while selecting an attribute")?;
+                    let name = self.interner.name_str(name);
+                    bail!(ErrorKind::MissingAttr, s.pos, "attribute '{name}' missing");
+                };
+                if v.as_attrs().is_none() {
+                    crate::lint::coerce::or_non_attrs(self, v, s.pos)?;
+                }
+                return self.eval(env, d);
+            };
+            let read = match name == self.s.rev_count {
+                true => crate::lint::purity::count_read(self, &a.cell, s.pos),
+                false => self.force_cell(&a.cell),
+            };
+            v = read.map_err(|mut e| {
+                let path = self.show_attr_path(env, s.path);
+                e.add_trace(a.pos, format!("while evaluating the attribute '{path}'"));
+                e
+            })?;
+        }
         Ok(v)
     }
 

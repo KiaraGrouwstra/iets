@@ -327,22 +327,53 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
 
   # ---- revCount: there when Nix has it, counted when it is read ----------------
   let cnt = $"($work)/count"
-  mkdir $cnt
+  mkdir $cnt $"($work)/reader"
+  '{ outputs = { self }: { count = t: t.revCount; }; }' + "\n" | save $"($work)/reader/flake.nix"
   r#'{
-  outputs = { self }: {
+  inputs.reader.url = "path:@WORK@/reader";
+  outputs = { self, reader }:
+    let
+      s = self;
+      f = { self, ... }: self.revCount;
+      info = removeAttrs self.sourceInfo [ "outPath" "submodules" ];
+      name = "rev" + "Count";
+    in {
     meta = builtins.toJSON {
       count = self.revCount or null;
       has = self ? revCount;
       names = builtins.attrNames self.sourceInfo;
       date = self.lastModified;
     };
-    names = builtins.toJSON [ (self ? revCount) (builtins.attrNames self) ];
+    names = builtins.toJSON [ (self ? revCount) (builtins.attrNames self) (let n = self.revCount; in 1) ];
     again = toString self.revCount;
     twice = toString (self.revCount + self.sourceInfo.revCount);
+    site = {
+      select = toString self.revCount;
+      default = toString (self.revCount or 0);
+      inherited = toString { inherit (self) revCount; }.revCount;
+      info = toString self.sourceInfo.revCount;
+      bound = toString s.revCount;
+      argument = toString (f { inherit self; });
+      builtin = toString (builtins.getAttr "revCount" self);
+      input = toString (reader.count self);
+    };
+    forced = {
+      json = builtins.toJSON info;
+      values = toString (builtins.attrValues info);
+      computed = toString self.${name};
+      mapped = toString (builtins.mapAttrs (n: v: v) info).revCount;
+      scope = with self; toString revCount;
+    };
+    silent = {
+      allowed = toString self.revCount; # ietsp: allow rev-count
+      other = toString { revCount = 2; }.revCount;
+      whole = builtins.toJSON self;
+    };
+    all = builtins.toJSON [ self.site self.forced self.silent ];
   };
 }
-'# | save $"($cnt)/flake.nix"
-  '{"nodes":{"root":{}},"root":"root","version":7}' | save $"($cnt)/flake.lock"
+'# | str replace "@WORK@" $work | save $"($cnt)/flake.nix"
+  do { cd $cnt; nixf flake lock } | complete | ignore
   git-in $cnt init -q
   git-in $cnt add -A
   git-in $cnt commit -q -m one
@@ -364,17 +395,55 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let kept = (with-env $no_list { ^$ietsp eval --raw $"($cnt)#again" | complete })
   let ok = ($lazy.exit_code == 0 and ($lazy.stdout | str starts-with "[true,") and $none.exit_code == 1 and ($none.stderr | str contains "`git rev-list --count") and $kept.exit_code == 0 and $kept.stdout == "2")
   $res ++= [(verdict $ok "revCount: lazy, and kept by revision" $"revCount: lazy \(exit ($lazy.exit_code)\) ($lazy.stdout), no store \(exit ($none.exit_code)\) ($none.stderr | lines | last 2 | str join ' | '), kept \(exit ($kept.exit_code)\) ($kept.stdout) ($kept.stderr | lines | last 2 | str join ' | ')")]
-  # rev-count: a read of the count is one finding for each tree, from a cache
-  # hit too; the attribute names and `?` read nothing
+  # rev-count: a read of the count is one finding for each tree, with its site,
+  # from a cache hit too; the names, `?` and an unused binding read nothing
   let finding = "[rev-count] 'self.revCount' is deprecated: the count of all revisions is expensive to compute"
   let found = {|r| records $r.stderr | where code? == "lint" | where ($it.raw_msg | str starts-with $finding) | length }
+  let sites = {|r| records $r.stderr | where code? == "lint" | get -o start }
   let json = [--raw --timings --log-format internal-json --cache-dir $"($work)/count-cache" $"($cnt)#twice"]
   let r1 = (^$ietsp eval ...$json | complete)
   let r2 = (^$ietsp eval ...$json | complete)
-  let ok = ($r1.stdout == "4" and $r2.stdout == "4" and (do $found $r1) == 1 and (do $found $r2) == 1 and ($r2.stderr | str contains "cache: hit") and not ($lazy.stderr | str contains "rev-count"))
+  let ok = ($r1.stdout == "4" and $r2.stdout == "4" and (do $found $r1) == 1 and (do $found $r2) == 1 and (do $sites $r1 | compact | length) == 1 and (do $sites $r1) == (do $sites $r2) and ($r2.stderr | str contains "cache: hit") and not ($lazy.stderr | str contains "rev-count"))
   $res ++= [(verdict $ok "rev-count: one finding for a tree, on a cache hit too, none for the names" $"rev-count: ($r1.stderr) | ($r2.stderr) | ($lazy.stderr)")]
   let r = (^$ietsp eval --raw --no-tracing-cache --lint rev-count=error $"($cnt)#again" | complete)
   $res ++= [(verdict ($r.exit_code == 1 and ($r.stderr | str starts-with $"error: ($finding)")) "rev-count: --lint sets the level" $"rev-count: error: rc=($r.exit_code) ($r.stderr)")]
+  # a selection of the count is the site, in the code of an input too: the
+  # span covers these bytes. A read without a selection has no site
+  let covered = {|r|
+    let recs = (records $r.stderr | where code? == "lint" | where ($it.raw_msg | str starts-with $finding))
+    let rec = ($recs | get -o 0 | default {})
+    if $r.exit_code != 0 or ($recs | length) != 1 {
+      $"exit ($r.exit_code), ($recs | length) findings"
+    } else if $rec.start? == null or $rec.line? == null {
+      "no site"
+    } else {
+      open --raw ($rec.file | str replace --regex ':\d+:\d+$' '') | into binary | bytes at ($rec.start)..<($rec.end) | decode utf-8
+    }
+  }
+  let want = {
+    "site.select": "self.revCount"
+    "site.default": "self.revCount or 0"
+    "site.inherited": "revCount"
+    "site.info": "self.sourceInfo.revCount"
+    "site.bound": "s.revCount"
+    "site.argument": "self.revCount"
+    "site.builtin": "builtins.getAttr \"revCount\" self"
+    "site.input": "t.revCount"
+    "forced.json": "no site"
+    "forced.values": "no site"
+    "forced.computed": "no site"
+    "forced.mapped": "no site"
+    "forced.scope": "no site"
+    "silent.allowed": "exit 0, 0 findings"
+    "silent.other": "exit 0, 0 findings"
+    "silent.whole": "exit 0, 0 findings"
+  }
+  let bad = ($want | transpose name text | each {|w|
+    let got = (do $covered (^$ietsp eval --raw --no-tracing-cache --log-format internal-json $"($cnt)#($w.name)" | complete))
+    if $got == $w.text { null } else { $"($w.name): ($got)" }
+  } | compact)
+  $res ++= [(verdict ($bad | is-empty) "rev-count: a selection is the site, a read without one has none" $"rev-count: sites: ($bad | str join ' | ')")]
+  $res ++= [(check $ietsp "revCount: each spelling gives the value of Nix" $"($cnt)#all")]
   # the count of a locked input comes from the lock; it is silent until the
   # input has a level of its own
   let cin = $"($work)/count-in"
@@ -386,7 +455,7 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   "[lint.inputs.lib]\nrev-count = \"warn\"\n" | save $"($cin)/ietsp.toml"
   let loud = (^$ietsp eval --raw --no-tracing-cache $"($cin)#n" | complete | get stderr)
   rm $"($cin)/ietsp.toml"
-  let ok = (not ($quiet | str contains "rev-count")) and ($loud | str contains "warning: [rev-count] 'inputs.lib.revCount' is deprecated")
+  let ok = (not ($quiet | str contains "rev-count")) and ($loud | str contains "warning: [rev-count] 'inputs.lib.revCount' is deprecated") and ($loud | str contains $"\n  at ($cin)/flake.nix:1:")
   $res ++= [(verdict $ok "rev-count: an input is silent without [lint.inputs.lib]" $"rev-count, input: ($quiet) | ($loud)")]
   "\n" | save --append $"($cnt)/flake.nix"
   $res ++= [(check $ietsp "revCount: dirty tree" $"($cnt)#meta")]

@@ -60,6 +60,7 @@ fn get_attr(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     )?;
     let sym = ev.sym(name);
     match a.get(sym) {
+        Some(attr) if sym == ev.s.rev_count => crate::lint::purity::count_read(ev, &attr.cell, pos),
         Some(attr) => ev.force_cell(&attr.cell),
         None => bail!(
             ErrorKind::MissingAttr,

@@ -264,6 +264,14 @@ pub fn fetch_tarball_builtin(ev: &mut Evaluator, args: &[Word], pos: Pos) -> Eva
     Ok(ev.arena.mk_string_static(full, ctx))
 }
 
+const COUNT: &str = "revCountRaw";
+
+/// `f` is the function of the thunk that `emit_tree_attrs` makes for
+/// `revCount`. No builtin has the name, so no expression can make one.
+pub fn is_count(f: Word) -> bool {
+    !f.is_thunk() && matches!(f.view(), Value::PrimOp(op) if op.name == COUNT)
+}
+
 /// `revCount` is a thunk over this, so the SCM counts and `rev-count` reports
 /// only when the evaluation reads the value, as in Nix 2.35
 /// (fetchTree.cc:emitLazyAttrThunk).
@@ -272,7 +280,7 @@ pub fn fetch_tarball_builtin(ev: &mut Evaluator, args: &[Word], pos: Pos) -> Eva
 /// the revision.
 fn rev_count(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     if let Some(tree) = args[0].as_string() {
-        crate::lint::purity::rev_count(ev, &String::from_utf8_lossy(tree.bytes))?;
+        crate::lint::purity::rev_count(ev, &String::from_utf8_lossy(tree.bytes), pos)?;
     }
     if args[1].as_int().is_some() {
         return Ok(args[1]);
@@ -353,7 +361,7 @@ pub fn emit_tree_attrs(
     if let Some(mut w) = of {
         if tree.counter.is_some() || counted.is_some() {
             let name = counted.map_or(Word::NULL, |s| ev.mk_string(s.as_bytes()));
-            let op = ev.arena.mk_primop("revCountRaw", 2, rev_count);
+            let op = ev.arena.mk_primop(COUNT, 2, rev_count);
             w = ev.arena.mk_thunk_app2(op, name, w);
         }
         entries.push((ev.sym(b"revCount"), pos, w));
@@ -466,12 +474,6 @@ mod tests {
             let t = tree(&mut ev, source);
             !marks(&mut ev, t, "t: t.rev").1.is_empty()
         };
-        let toml = |text: &str| {
-            let mut c = Config::default();
-            c.apply_toml(text, std::path::Path::new("/r/ietsp.toml"))
-                .unwrap();
-            c
-        };
         assert!(marked(Config::default(), "self"));
         assert!(!marked(Config::default(), "inputs.nixpkgs"));
         assert!(!marked(
@@ -487,7 +489,29 @@ mod tests {
         assert!(marked(toml(family), "inputs.nixpkgs"));
     }
 
-    /// The findings of `rev-count` after `f` read each tree of `sources`.
+    fn toml(text: &str) -> Config {
+        let mut c = Config::default();
+        c.apply_toml(text, std::path::Path::new("/r/ietsp.toml"))
+            .unwrap();
+        c
+    }
+
+    /// The findings of `rev-count`: the tree, then the line and the column
+    /// of the site when the finding has one.
+    fn found(ev: &Evaluator) -> Vec<String> {
+        let text = |r: String| {
+            let r = serde_json::from_str::<serde_json::Value>(&r).unwrap();
+            let tree = r["raw_msg"].as_str()?.split(".revCount' is").next()?;
+            let tree = tree.strip_prefix("[rev-count] '")?;
+            Some(match r["line"].as_u64() {
+                Some(line) => format!("{tree} {line}:{}", r["column"]),
+                None => tree.to_string(),
+            })
+        };
+        ev.lints.records().into_iter().filter_map(text).collect()
+    }
+
+    /// `found` after `f` read each tree of `sources`.
     fn reads(cfg: Config, sources: &[&str], f: &str) -> Vec<String> {
         let session = crate::session::Session::new();
         let _entered = session.enter();
@@ -496,56 +520,141 @@ mod tests {
             let t = tree(&mut ev, s);
             let f = ev.eval_string(f, b"/").unwrap();
             let v = ev.apply(f, &[t], Pos::NONE).unwrap();
-            assert_eq!(ev.force(v).unwrap().as_int(), Some(14), "{s}");
+            assert_eq!(ev.force(v).unwrap().as_int(), Some(14), "{s}: {f:?}");
         }
-        let text = |r: String| {
-            serde_json::from_str::<serde_json::Value>(&r).unwrap()["raw_msg"]
-                .as_str()
-                .map(|m| m.split(" is deprecated").next().unwrap().to_string())
-        };
-        ev.lints.records().into_iter().filter_map(text).collect()
+        found(&ev)
     }
 
     #[test]
     fn a_read_of_the_count_is_one_finding_for_each_tree() {
-        let toml = |text: &str| {
-            let mut c = Config::default();
-            c.apply_toml(text, std::path::Path::new("/r/ietsp.toml"))
-                .unwrap();
-            c
-        };
         let twice = "t: t.revCount + t.revCount";
         let names = "t: if t ? revCount && builtins.elem \"revCount\" (builtins.attrNames t) then 14 else 0";
+        let unused = "t: let n = t.revCount; in { inherit (t) revCount; v = 14; }.v";
         let trees = ["self", "inputs.a", "inputs.b"];
-        let own = "[rev-count] 'self.revCount'";
-        assert_eq!(reads(Config::default(), &trees, twice), [own]);
-        assert_eq!(reads(Config::default(), &["self", "self"], twice), [own]);
+        assert_eq!(reads(Config::default(), &trees, twice), ["self 1:4"]);
+        let again = ["self", "self"];
+        assert_eq!(reads(Config::default(), &again, twice), ["self 1:4"]);
         assert!(reads(Config::default(), &trees, names).is_empty());
+        assert!(reads(Config::default(), &trees, unused).is_empty());
         let off =
             toml("[lint]\nrev-count = \"off\"\n[lint.inputs.b]\n\"family:purity\" = \"warn\"\n");
-        assert_eq!(
-            reads(off, &trees, twice),
-            ["[rev-count] 'inputs.b.revCount'"]
-        );
+        assert_eq!(reads(off, &trees, twice), ["inputs.b 1:4"]);
         let all = toml("[lint]\nscope = \"all\"\n");
-        assert_eq!(reads(all, &trees, twice).len(), 3);
+        assert_eq!(
+            reads(all, &trees, twice),
+            ["self 1:4", "inputs.a 1:4", "inputs.b 1:4"]
+        );
 
         let mut ev = EvalConfig::new()
             .lints(toml("[lint]\nrev-count = \"error\"\n"))
             .build();
         let t = tree(&mut ev, "self");
-        let f = ev
-            .eval_string("t: (builtins.tryEval t.revCount).value", b"/")
+        let f = "t: [ (builtins.tryEval t.revCount).value (builtins.tryEval (with t; revCount)).value ]";
+        let f = ev.eval_string(f, b"/").unwrap();
+        let l = ev.apply(f, &[t], Pos::NONE).unwrap();
+        for c in ev.force_list(l, Pos::NONE, "").unwrap().cells() {
+            let e = ev.force(c.get()).err().unwrap();
+            assert_eq!(e.kind, ErrorKind::Lint);
+            assert!(
+                e.msg
+                    .starts_with("[rev-count] 'self.revCount' is deprecated")
+            );
+        }
+    }
+
+    #[test]
+    fn a_selection_of_the_count_is_the_site() {
+        for (f, site) in [
+            ("t: t.revCount * 2", "1:4"),
+            ("t: (t.revCount or 0) * 2", "1:5"),
+            ("t: { inherit (t) revCount; }.revCount * 2", "1:18"),
+            ("t: (let inherit (t) revCount; in revCount) * 2", "1:21"),
+            (
+                "t: (rec { inherit (t) revCount; n = revCount * 2; }).n",
+                "1:23",
+            ),
+            ("t: { sourceInfo = t; }.sourceInfo.revCount * 2", "1:4"),
+            ("t: t.\"revCount\" * 2", "1:4"),
+            ("t: t.${\"revCount\"} * 2", "1:4"),
+            ("t: (let s = t; in s.revCount) * 2", "1:19"),
+            (
+                "t: ({ self, ... }: self.revCount) { self = t; } * 2",
+                "1:20",
+            ),
+            ("t: ({ a = 1; } // t).revCount * 2", "1:4"),
+            ("t: builtins.getAttr \"revCount\" t * 2", "1:4"),
+            ("t: builtins.getAttr (\"rev\" + \"Count\") t * 2", "1:4"),
+            ("t:\n  let n = t.revCount; in n + n", "2:11"),
+        ] {
+            let found = reads(Config::default(), &["self"], f);
+            assert_eq!(found, [format!("self {site}")], "{f}");
+        }
+    }
+
+    #[test]
+    fn a_read_that_is_not_a_selection_has_no_site() {
+        for f in [
+            "t: t.${\"rev\" + \"Count\"} * 2",
+            "t: (with t; revCount) * 2",
+            "t: ({ revCount, ... }: revCount * 2) t",
+            "t: builtins.elemAt (builtins.attrValues (builtins.intersectAttrs { revCount = 1; } t)) 0 * 2",
+            "t: (builtins.fromJSON (builtins.toJSON (builtins.intersectAttrs { revCount = 1; } t))).revCount * 2",
+            "t: (builtins.mapAttrs (n: v: v) t).revCount * 2",
+        ] {
+            assert_eq!(reads(Config::default(), &["self"], f), ["self"], "{f}");
+        }
+    }
+
+    #[test]
+    fn the_first_read_of_a_tree_gives_its_finding() {
+        let one = |f: &str| reads(Config::default(), &["self"], f);
+        let site_first = "t: t.revCount + (with t; revCount) + t.revCount - 7";
+        assert_eq!(one(site_first), ["self 1:4"]);
+        assert_eq!(one("t: (with t; revCount) + t.revCount"), ["self"]);
+        let allowed = "t: t.revCount + t.revCount # ietsp: allow rev-count";
+        assert!(one(allowed).is_empty());
+        let next = "t: t.revCount # ietsp: allow rev-count\n  + t.revCount";
+        assert_eq!(one(next), ["self 2:5"]);
+        let force = "t: t.revCount # ietsp: allow rev-count\n  + (with t; revCount)";
+        assert_eq!(one(force), ["self"]);
+    }
+
+    #[test]
+    fn an_entry_of_the_compiled_file_cache_keeps_the_site() {
+        use crate::compile::cache::{deserialize, serialize};
+        let session = crate::session::Session::new();
+        let _entered = session.enter();
+        let mut ev = Evaluator::new();
+        let src = "t:\n  { s = t; }.s.revCount + { inherit (t) revCount; }.revCount";
+        let file = ev.add_file(b"/t/f.nix", src.as_bytes());
+        let base = ev.files[file.0 as usize].base;
+        let ir = ev
+            .compile_source(b"/t/f.nix", src.into(), b"/t", None)
             .unwrap();
-        let e = ev
-            .apply(f, &[t], Pos::NONE)
-            .and_then(|v| ev.force(v))
-            .err()
-            .unwrap();
-        assert_eq!(e.kind, ErrorKind::Lint);
-        assert!(
-            e.msg
-                .starts_with("[rev-count] 'self.revCount' is deprecated")
-        );
+        let allows = crate::lint::allow::Allows::default();
+        let entry = serialize(&ev, ir, base, &[], &allows).unwrap();
+        let (ir, _, _) = deserialize(&mut ev, &entry, base, src.len() as u32, false).unwrap();
+        assert_eq!(serialize(&ev, ir, base, &[], &allows), Some(entry));
+        let (f, t) = (ev.eval(ev.root_env, ir).unwrap(), tree(&mut ev, "self"));
+        let v = ev.apply(f, &[t], Pos::NONE).unwrap();
+        assert_eq!(ev.force(v).unwrap().as_int(), Some(14));
+        assert_eq!(found(&ev), ["self 2:3"]);
+    }
+
+    #[test]
+    fn the_name_on_a_value_that_is_not_a_tree_is_silent() {
+        for f in [
+            "t: { revCount = 14; }.revCount",
+            "t: { revCount = t.lastModified / 86400 * 14; }.revCount",
+            "t: (builtins.zipAttrsWith (n: vs: 14) [ { revCount = 1; } ]).revCount",
+            "t: (builtins.mapAttrs (n: v: v * 2) { revCount = 7; }).revCount",
+            "t: builtins.getAttr \"revCount\" { revCount = 14; }",
+            "t: { revCount = 14; }.revCount or 0",
+            "t: { }.revCount or 14",
+            "t: { }.a.revCount or 14",
+        ] {
+            let all = toml("[lint]\nscope = \"all\"\n");
+            assert!(reads(all, &["self", "inputs.a"], f).is_empty(), "{f}");
+        }
     }
 }

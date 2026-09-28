@@ -6,7 +6,7 @@
 
 use super::{Level, LintId, Where};
 use crate::eval::{EvalResult, Evaluator, Pos};
-use crate::runtime::{Ctx, Taint, Value, Word};
+use crate::runtime::{Cell, Ctx, Kind, Taint, Value, Word};
 
 /// The message for a reference to the global `name`, when it is `currentTime`.
 pub fn current_time(name: &[u8]) -> Option<String> {
@@ -159,18 +159,43 @@ pub fn tree_level(ev: &Evaluator, id: LintId, source: &str) -> Level {
     cfg.site_level(id, w)
 }
 
-/// The evaluation reads `revCount` of the tree `source`. Native code made
-/// the value, and the evaluator forces it without the position of the
-/// selection. So the finding has no site, and no `# ietsp: allow` comment
-/// covers it: the message names the tree.
-pub fn rev_count(ev: &mut Evaluator, source: &str) -> EvalResult<()> {
+/// The evaluation reads `revCount` of the tree `source`. `pos` is the
+/// selection, or `Pos::NONE` when the read forced the lazy value (`toJSON`,
+/// `attrValues`, a computed name): native code made that value and the
+/// evaluator keeps no call trace, so that finding has no site and the
+/// message alone names the tree. The tree gives the level, as for
+/// `marks_in_drv`, so a site outside the roots reports too.
+pub fn rev_count(ev: &mut Evaluator, source: &str, pos: Pos) -> EvalResult<()> {
     let id = LintId::RevCount;
     let level = tree_level(ev, id, source);
-    ev.lint_site(id, Pos::NONE, Some(level), Some(source), || {
+    ev.lint_site(id, pos, Some(level), Some(source), || {
         format!(
             "'{source}.revCount' is deprecated: the count of all revisions is expensive to compute and absent on a shallow clone, and ietsp plans to remove it; use 'lastModifiedDate' and 'shortRev' for a version"
         )
     })
+}
+
+/// A selection at `pos` reads `cell` under the name `revCount`. When the
+/// cell holds the lazy count of a tree, the finding goes to `pos` and the
+/// count is computed here. The thunk stays unforced on purpose: it names
+/// its tree for the next selection, which a plain integer cannot, and a
+/// read that is not a selection still reports when it forces the thunk.
+pub fn count_read(ev: &mut Evaluator, cell: &Cell, pos: Pos) -> EvalResult<Word> {
+    let w = cell.get();
+    if w.is_thunk() && w.thunk_kind() == Kind::ThunkApp2 {
+        let t = w.as_thunk_app2();
+        // `code` before `state`: a force takes the state first and puts the
+        // value in `code` after, so an unforced state proves the function
+        let (f, of) = (t.code.get(), t.state.get());
+        if w.thunk_unforced(of)
+            && crate::flake::fetch::is_count(f)
+            && let Some(tree) = t.arg1.as_string()
+        {
+            rev_count(ev, &String::from_utf8_lossy(tree.bytes), pos)?;
+            return ev.apply(f, &[Word::NULL, of], pos);
+        }
+    }
+    ev.force_cell(cell)
 }
 
 /// The marks in `ctx`, the context that the value of attribute `key` gave
