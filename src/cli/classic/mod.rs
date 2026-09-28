@@ -198,6 +198,7 @@ pub fn eval_config(c: &Common, cfg: &Config) -> EvalConfig {
         .system(&cfg.system())
         .pure(pure)
         .search_path(full_includes(&c.flags.includes))
+        .ir_cache(crate::cli::EvalArgs::new().ir_cache())
         .lints(crate::lint::Config::off())
         .lint_root(&entry)
 }
