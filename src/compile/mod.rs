@@ -48,6 +48,7 @@ pub struct Compiler<'a> {
     /// The warnings the compile produced; the evaluator reports them.
     pub diags: Vec<lint::Diag>,
     sym_builtins: Sym,
+    sym_rev_count: Sym,
     sym_cur_pos: Sym,
     sym_overrides: Sym,
     sym_body: Sym,
@@ -117,6 +118,7 @@ impl<'a> Compiler<'a> {
         lints: Option<&'a lint::Config>,
     ) -> Self {
         let sym_builtins = interner.intern(b"builtins");
+        let sym_rev_count = interner.intern(b"revCount");
         let sym_cur_pos = interner.intern(b"__curPos");
         let sym_overrides = interner.intern(b"__overrides");
         let sym_body = interner.intern(b"body");
@@ -134,6 +136,7 @@ impl<'a> Compiler<'a> {
             lints,
             diags: Vec::new(),
             sym_builtins,
+            sym_rev_count,
             sym_cur_pos,
             sym_overrides,
             sym_body,
@@ -502,6 +505,7 @@ impl<'a> Compiler<'a> {
     }
 
     /// One static element stays inline as `Select1`; anything else is boxed.
+    /// A path that names `revCount` is a `SelectCount`.
     fn mk_select(
         &mut self,
         subject: IrRef,
@@ -509,7 +513,11 @@ impl<'a> Compiler<'a> {
         default: Option<IrRef>,
         pos: Pos,
     ) -> Ir {
-        if let [AttrElemIr::Static(sym)] = path {
+        let count = self.sym_rev_count;
+        let counts = |e: &AttrElemIr| matches!(e, AttrElemIr::Static(s) if *s == count);
+        if let [AttrElemIr::Static(sym)] = path
+            && *sym != count
+        {
             return Ir::Select1 {
                 subject,
                 sym: *sym,
@@ -517,12 +525,32 @@ impl<'a> Compiler<'a> {
                 pos,
             };
         }
-        Ir::Select(self.alloc(SelectIr {
+        let select = self.alloc(SelectIr {
             subject,
             path,
             default,
             pos,
-        }))
+        });
+        match path.iter().any(counts) {
+            true => Ir::SelectCount(select),
+            false => Ir::Select(select),
+        }
+    }
+
+    /// `inherit (subject) sym`.
+    fn inherit_from(&mut self, subject: IrRef, sym: Sym, pos: Pos) -> IrRef {
+        let ir = if sym == self.sym_rev_count {
+            let path = self.alloc_elems(vec![AttrElemIr::Static(sym)]);
+            self.mk_select(subject, path, None, pos)
+        } else {
+            Ir::Select1 {
+                subject,
+                sym,
+                default: None,
+                pos,
+            }
+        };
+        self.alloc(ir)
     }
 
     fn attr_path(&mut self, path: &[AttrElem]) -> CResult<&'static [AttrElemIr]> {
@@ -955,12 +983,7 @@ impl<'a> Compiler<'a> {
                     depth: 0,
                     idx: fi as u32,
                 });
-                binds[bi].value = self.alloc(Ir::Select1 {
-                    subject,
-                    sym: name,
-                    default: None,
-                    pos: bpos,
-                });
+                binds[bi].value = self.inherit_from(subject, name, bpos);
             }
             self.scopes.pop();
         }
@@ -1041,15 +1064,7 @@ impl<'a> Compiler<'a> {
                         depth: 0,
                         idx: (nbinds + fi) as u32,
                     });
-                    (
-                        self.alloc(Ir::Select1 {
-                            subject,
-                            sym: name,
-                            default: None,
-                            pos: bpos,
-                        }),
-                        BindScope::Own,
-                    )
+                    (self.inherit_from(subject, name, bpos), BindScope::Own)
                 }
             };
             binds.push(BindIr {

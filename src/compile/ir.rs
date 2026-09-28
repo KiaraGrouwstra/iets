@@ -42,6 +42,10 @@ pub enum Ir {
     /// `e.a.b or d` with a dynamic or multi-element path; boxed so the
     /// node stays 32 bytes.
     Select(&'static SelectIr),
+    /// A `Select` whose path has the static name `revCount`, where `rev-count`
+    /// looks at the attribute before the read. No other name pays for that
+    /// test.
+    SelectCount(&'static SelectIr),
     /// `e.name`, the common case, inline.
     Select1 {
         subject: IrRef,

@@ -1502,7 +1502,9 @@ impl Evaluator {
                 let p = self.find_file(&entries, n, *pos)?;
                 Ok(self.arena.mk_path(&p))
             }
-            Ir::Select(s) => self.eval_select(env, s.subject, s.path, s.default, s.pos),
+            Ir::Select(s) | Ir::SelectCount(s) => {
+                self.eval_select(env, s.subject, s.path, s.default, s.pos)
+            }
             Ir::Select1 {
                 subject,
                 sym,
@@ -2341,7 +2343,7 @@ pub fn ir_pos(ir: &Ir) -> Pos {
         | Ir::Div(_, _, pos) => *pos,
         Ir::Attrs(a) => a.pos,
         Ir::Lambda(l) => l.pos,
-        Ir::Select(s) => s.pos,
+        Ir::Select(s) | Ir::SelectCount(s) => s.pos,
         Ir::Let(l) => ir_pos(l.body),
         Ir::Const(_) | Ir::Local { .. } | Ir::HasAttr { .. } | Ir::List(_) => Pos::NONE,
     }

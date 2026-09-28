@@ -403,8 +403,9 @@ impl Ser {
                 self.node(name);
                 self.pos(*pos);
             }
-            Ir::Select(s) => {
-                self.out.push(6);
+            Ir::Select(s) | Ir::SelectCount(s) => {
+                self.out
+                    .push(if matches!(ir, Ir::Select(_)) { 6 } else { 33 });
                 self.node(s.subject);
                 self.elems(s.path);
                 self.opt_node(s.default);
@@ -1022,17 +1023,21 @@ impl<'a> De<'a, '_> {
                 let pos = self.pos();
                 Ir::SearchPath { name, pos }
             }
-            6 => {
+            t @ (6 | 33) => {
                 let subject = self.node();
                 let path = self.elems();
                 let default = self.opt_node();
                 let pos = self.pos();
-                Ir::Select(self.ev.arena.alloc(SelectIr {
+                let select = self.ev.arena.alloc(SelectIr {
                     subject,
                     path,
                     default,
                     pos,
-                }))
+                });
+                match t {
+                    6 => Ir::Select(select),
+                    _ => Ir::SelectCount(select),
+                }
             }
             7 => {
                 let subject = self.node();
