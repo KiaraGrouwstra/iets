@@ -338,6 +338,7 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
     };
     names = builtins.toJSON [ (self ? revCount) (builtins.attrNames self) ];
     again = toString self.revCount;
+    twice = toString (self.revCount + self.sourceInfo.revCount);
   };
 }
 '# | save $"($cnt)/flake.nix"
@@ -363,6 +364,30 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let kept = (with-env $no_list { ^$ietsp eval --raw $"($cnt)#again" | complete })
   let ok = ($lazy.exit_code == 0 and ($lazy.stdout | str starts-with "[true,") and $none.exit_code == 1 and ($none.stderr | str contains "`git rev-list --count") and $kept.exit_code == 0 and $kept.stdout == "2")
   $res ++= [(verdict $ok "revCount: lazy, and kept by revision" $"revCount: lazy \(exit ($lazy.exit_code)\) ($lazy.stdout), no store \(exit ($none.exit_code)\) ($none.stderr | lines | last 2 | str join ' | '), kept \(exit ($kept.exit_code)\) ($kept.stdout) ($kept.stderr | lines | last 2 | str join ' | ')")]
+  # rev-count: a read of the count is one finding for each tree, from a cache
+  # hit too; the attribute names and `?` read nothing
+  let finding = "[rev-count] 'self.revCount' is deprecated: the count of all revisions is expensive to compute"
+  let found = {|r| records $r.stderr | where code? == "lint" | where ($it.raw_msg | str starts-with $finding) | length }
+  let json = [--raw --timings --log-format internal-json --cache-dir $"($work)/count-cache" $"($cnt)#twice"]
+  let r1 = (^$ietsp eval ...$json | complete)
+  let r2 = (^$ietsp eval ...$json | complete)
+  let ok = ($r1.stdout == "4" and $r2.stdout == "4" and (do $found $r1) == 1 and (do $found $r2) == 1 and ($r2.stderr | str contains "cache: hit") and not ($lazy.stderr | str contains "rev-count"))
+  $res ++= [(verdict $ok "rev-count: one finding for a tree, on a cache hit too, none for the names" $"rev-count: ($r1.stderr) | ($r2.stderr) | ($lazy.stderr)")]
+  let r = (^$ietsp eval --raw --no-tracing-cache --lint rev-count=error $"($cnt)#again" | complete)
+  $res ++= [(verdict ($r.exit_code == 1 and ($r.stderr | str starts-with $"error: ($finding)")) "rev-count: --lint sets the level" $"rev-count: error: rc=($r.exit_code) ($r.stderr)")]
+  # the count of a locked input comes from the lock; it is silent until the
+  # input has a level of its own
+  let cin = $"($work)/count-in"
+  mkdir $cin
+  '{ inputs.lib.url = "git+file://@WORK@/lib"; outputs = { self, lib }: { n = toString lib.revCount; }; }' + "\n" | str replace "@WORK@" $work | save $"($cin)/flake.nix"
+  do { cd $cin; nixf flake lock } | complete | ignore
+  $res ++= [(check $ietsp "revCount: locked input" $"($cin)#n")]
+  let quiet = (^$ietsp eval --raw --no-tracing-cache $"($cin)#n" | complete | get stderr)
+  "[lint.inputs.lib]\nrev-count = \"warn\"\n" | save $"($cin)/ietsp.toml"
+  let loud = (^$ietsp eval --raw --no-tracing-cache $"($cin)#n" | complete | get stderr)
+  rm $"($cin)/ietsp.toml"
+  let ok = (not ($quiet | str contains "rev-count")) and ($loud | str contains "warning: [rev-count] 'inputs.lib.revCount' is deprecated")
+  $res ++= [(verdict $ok "rev-count: an input is silent without [lint.inputs.lib]" $"rev-count, input: ($quiet) | ($loud)")]
   "\n" | save --append $"($cnt)/flake.nix"
   $res ++= [(check $ietsp "revCount: dirty tree" $"($cnt)#meta")]
 

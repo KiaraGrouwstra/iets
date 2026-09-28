@@ -158,6 +158,7 @@ registry! {
     ImpurePathInDrv: "impure-path-in-drv", Purity, Evaluator, Off, "a derivation attribute holds the text of a path outside the store and outside any flake root (`toString ./x`), so the .drv depends on the checkout location";
     AbsolutePathInDrv: "absolute-path-in-drv", Purity, Evaluator, Off, "a derivation attribute holds the text of a path under a flake root, an absolute path a flake evaluation would have copied";
     TreeMetaInDrv: "tree-meta-in-drv", Purity, Evaluator, Warn, "a derivation attribute holds metadata of the flake's source tree (`self.rev`, `self.lastModifiedDate`, ...), so each commit gives a new .drv and a rebuild; a locked input is silent without `[lint.inputs.<node>]`";
+    RevCount: "rev-count", Purity, Evaluator, Warn, "the evaluation reads `revCount` of the flake's source tree, which is deprecated: the count is expensive, a shallow clone has none, and each commit changes it; use `lastModifiedDate` and `shortRev`; a locked input is silent without `[lint.inputs.<node>]`";
     UnknownAllow: "unknown-allow", Meta, Parser, Warn, "a `# ietsp: allow` comment that names a lint the registry does not know, so a typo does not silence nothing";
 }
 
@@ -798,6 +799,18 @@ impl Lints {
     fn silence(&mut self, id: LintId, pos: Pos) {
         self.local_seen.insert((id, pos));
         self.shared.lock().unwrap().seen.insert((id, pos));
+    }
+
+    /// Queues the line of a finding that has no site. The text keeps it to
+    /// one line: the site set has one place for all of them.
+    fn record_text(&mut self, line: &str) {
+        let (shown, record) = crate::log::lint(line, None);
+        let mut g = self.shared.lock().unwrap();
+        if !g.records.contains(&record) {
+            g.pending.extend_from_slice(shown.as_bytes());
+            g.pending.push(b'\n');
+            g.records.push(record);
+        }
     }
 
     /// Records the site and queues its line; false when another fiber

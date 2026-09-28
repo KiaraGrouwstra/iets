@@ -264,13 +264,21 @@ pub fn fetch_tarball_builtin(ev: &mut Evaluator, args: &[Word], pos: Pos) -> Eva
     Ok(ev.arena.mk_string_static(full, ctx))
 }
 
-/// `revCount` of a working tree is a thunk over this, so the SCM counts only
-/// when the evaluation reads the value, as in Nix 2.35
+/// `revCount` is a thunk over this, so the SCM counts and `rev-count` reports
+/// only when the evaluation reads the value, as in Nix 2.35
 /// (fetchTree.cc:emitLazyAttrThunk).
-/// `args[0]` holds the name of the SCM, the root and the revision.
+/// `args[0]` is the name of the tree when the lint is on for it. `args[1]` is
+/// the count when the lock holds it, else the name of the SCM, the root and
+/// the revision.
 fn rev_count(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
+    if let Some(tree) = args[0].as_string() {
+        crate::lint::purity::rev_count(ev, &String::from_utf8_lossy(tree.bytes))?;
+    }
+    if args[1].as_int().is_some() {
+        return Ok(args[1]);
+    }
     let mut of = Vec::with_capacity(3);
-    for c in ev.force_list(args[0], pos, "")?.cells() {
+    for c in ev.force_list(args[1], pos, "")?.cells() {
         let s = ev.force_string(c.get(), pos, "")?;
         of.push(String::from_utf8_lossy(s.bytes).into_owned());
     }
@@ -285,23 +293,24 @@ fn rev_count(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
 
 /// fetchTree.cc:emitTreeAttrs with `emptyRevFallback = false`; `forceDirty`
 /// is expressed by the caller leaving out `rev`/`revCount`. `source` names
-/// the tree (`self`, `inputs.<node>`): each string that changes with the
-/// tree gets the mark `tree-meta-in-drv` reads, when that lint is on for
-/// the tree.
+/// the tree (`self`, `inputs.<node>`). Each string that changes with the
+/// tree gets the mark `tree-meta-in-drv` reads, and `revCount` is a thunk
+/// that reports `rev-count`, when the lint is on for the tree.
 pub fn emit_tree_attrs(
     ev: &mut Evaluator,
     tree: &Tree,
     source: Option<&str>,
     pos: Pos,
 ) -> EvalResult<Word> {
-    use crate::lint::{Level, purity::tree_meta_level};
+    use crate::lint::{Level, LintId, purity::tree_level};
     let (sp, a) = (&tree.path, &tree.attrs);
     let mut entries: Vec<(Sym, Pos, Word)> = Vec::with_capacity(10);
     let full = ev.arena.alloc_bytes(sp.to_full_string().as_bytes());
     let ctx = ev.arena.alloc_slice(&[Ctx::Opaque(full)]);
     let out_path = ev.arena.mk_string_static(full, ctx);
     entries.push((ev.s.out_path, pos, out_path));
-    let source = source.filter(|s| tree_meta_level(ev, s) != Level::Off);
+    let counted = source.filter(|s| tree_level(ev, LintId::RevCount, s) != Level::Off);
+    let source = source.filter(|s| tree_level(ev, LintId::TreeMetaInDrv, s) != Level::Off);
     let mut push_str = |ev: &mut Evaluator, name: &[u8], v: &str| {
         let w = match source {
             Some(s) => {
@@ -333,15 +342,20 @@ pub fn emit_tree_attrs(
         let w = ev.mk_int(t as i64);
         entries.push((ev.sym(b"lastModified"), pos, w));
     }
-    if let (Some((scm, root)), Some(rev)) = (&tree.counter, tree.rev()) {
-        let root = root.to_string_lossy();
-        let of = [scm.name(), &root, rev].map(|s| ev.mk_string(s.as_bytes()));
-        let of = ev.mk_list(&of);
-        let op = ev.arena.mk_primop("revCountRaw", 1, rev_count);
-        let w = ev.arena.mk_thunk_app(op, of);
-        entries.push((ev.sym(b"revCount"), pos, w));
-    } else if let Some(n) = int_attr(a, "revCount") {
-        let w = ev.mk_int(n as i64);
+    let of = match (&tree.counter, tree.rev()) {
+        (Some((scm, root)), Some(rev)) => {
+            let root = root.to_string_lossy();
+            let of = [scm.name(), &root, rev].map(|s| ev.mk_string(s.as_bytes()));
+            Some(ev.mk_list(&of))
+        }
+        _ => int_attr(a, "revCount").map(|n| ev.mk_int(n as i64)),
+    };
+    if let Some(mut w) = of {
+        if tree.counter.is_some() || counted.is_some() {
+            let name = counted.map_or(Word::NULL, |s| ev.mk_string(s.as_bytes()));
+            let op = ev.arena.mk_primop("revCountRaw", 2, rev_count);
+            w = ev.arena.mk_thunk_app2(op, name, w);
+        }
         entries.push((ev.sym(b"revCount"), pos, w));
     }
     if str_attr(a, "type") == Some("git") {
@@ -471,5 +485,67 @@ mod tests {
         assert!(marked(toml("[lint]\nscope = \"all\"\n"), "inputs.nixpkgs"));
         let family = "[lint.inputs.nixpkgs]\n\"family:purity\" = \"error\"\n";
         assert!(marked(toml(family), "inputs.nixpkgs"));
+    }
+
+    /// The findings of `rev-count` after `f` read each tree of `sources`.
+    fn reads(cfg: Config, sources: &[&str], f: &str) -> Vec<String> {
+        let session = crate::session::Session::new();
+        let _entered = session.enter();
+        let mut ev = EvalConfig::new().lints(cfg).build();
+        for s in sources {
+            let t = tree(&mut ev, s);
+            let f = ev.eval_string(f, b"/").unwrap();
+            let v = ev.apply(f, &[t], Pos::NONE).unwrap();
+            assert_eq!(ev.force(v).unwrap().as_int(), Some(14), "{s}");
+        }
+        let text = |r: String| {
+            serde_json::from_str::<serde_json::Value>(&r).unwrap()["raw_msg"]
+                .as_str()
+                .map(|m| m.split(" is deprecated").next().unwrap().to_string())
+        };
+        ev.lints.records().into_iter().filter_map(text).collect()
+    }
+
+    #[test]
+    fn a_read_of_the_count_is_one_finding_for_each_tree() {
+        let toml = |text: &str| {
+            let mut c = Config::default();
+            c.apply_toml(text, std::path::Path::new("/r/ietsp.toml"))
+                .unwrap();
+            c
+        };
+        let twice = "t: t.revCount + t.revCount";
+        let names = "t: if t ? revCount && builtins.elem \"revCount\" (builtins.attrNames t) then 14 else 0";
+        let trees = ["self", "inputs.a", "inputs.b"];
+        let own = "[rev-count] 'self.revCount'";
+        assert_eq!(reads(Config::default(), &trees, twice), [own]);
+        assert_eq!(reads(Config::default(), &["self", "self"], twice), [own]);
+        assert!(reads(Config::default(), &trees, names).is_empty());
+        let off =
+            toml("[lint]\nrev-count = \"off\"\n[lint.inputs.b]\n\"family:purity\" = \"warn\"\n");
+        assert_eq!(
+            reads(off, &trees, twice),
+            ["[rev-count] 'inputs.b.revCount'"]
+        );
+        let all = toml("[lint]\nscope = \"all\"\n");
+        assert_eq!(reads(all, &trees, twice).len(), 3);
+
+        let mut ev = EvalConfig::new()
+            .lints(toml("[lint]\nrev-count = \"error\"\n"))
+            .build();
+        let t = tree(&mut ev, "self");
+        let f = ev
+            .eval_string("t: (builtins.tryEval t.revCount).value", b"/")
+            .unwrap();
+        let e = ev
+            .apply(f, &[t], Pos::NONE)
+            .and_then(|v| ev.force(v))
+            .err()
+            .unwrap();
+        assert_eq!(e.kind, ErrorKind::Lint);
+        assert!(
+            e.msg
+                .starts_with("[rev-count] 'self.revCount' is deprecated")
+        );
     }
 }
