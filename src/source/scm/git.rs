@@ -36,8 +36,11 @@ fn git(trace: &Trace, root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-fn number(out: &[u8]) -> u64 {
-    String::from_utf8_lossy(out).trim().parse().unwrap_or(0)
+/// A number that follows from a revision. The revision is an observation,
+/// so this command is none.
+fn of_rev(root: &Path, args: &[&str]) -> Result<u64, String> {
+    let out = git(&Trace::default(), root, args)?;
+    Ok(String::from_utf8_lossy(&out).trim().parse().unwrap_or(0))
 }
 
 impl Scm for Git {
@@ -89,28 +92,28 @@ impl Scm for Git {
         }
         let head = run(trace, root, &["rev-parse", "--verify", "-q", "HEAD"])?;
         let head = (head.0 == 0).then(|| String::from_utf8_lossy(&head.1).trim().to_string());
-        let of_rev = Trace::default();
         let last_modified = match &head {
-            Some(h) => number(&git(&of_rev, root, &["log", "-1", "--format=%ct", h])?),
+            Some(h) => of_rev(root, &["log", "-1", "--format=%ct", h])?,
             None => 0,
         };
-        let shallow = || {
-            let marker = root.join(".git/shallow");
-            trace.stat_now(marker.as_os_str().as_bytes(), true) != Kind::Missing
-        };
-        let rev_count = match &head {
-            _ if dirty || shallow() => None,
-            Some(h) => Some(number(&git(&of_rev, root, &["rev-list", "--count", h])?)),
-            None => Some(0),
-        };
+        let shallow = root.join(".git/shallow");
+        let shallow = trace.stat_now(shallow.as_os_str().as_bytes(), true) != Kind::Missing;
         Ok(Snapshot {
             files,
             dirty,
             // git.cc gives a clean tree without a commit the null revision
             rev: head.or_else(|| (!dirty).then(|| NULL_REV.to_string())),
             last_modified,
-            rev_count,
+            countable: !shallow,
         })
+    }
+
+    fn rev_count(&self, root: &Path, rev: &str) -> Result<u64, String> {
+        // git.cc gives the null revision the count 0
+        match rev {
+            NULL_REV => Ok(0),
+            _ => of_rev(root, &["rev-list", "--count", rev]),
+        }
     }
 
     fn untracked(&self, root: &Path, rel: &OsStr) -> Option<String> {

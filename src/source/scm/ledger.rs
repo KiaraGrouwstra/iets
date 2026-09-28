@@ -59,8 +59,13 @@ impl Scm for Ledger {
             dirty: there(trace, &dot.join("dirty")),
             rev: rev.map(str::to_string),
             last_modified: date.and_then(|d| d.parse().ok()).unwrap_or(0),
-            rev_count: Some(rev.and_then(|r| r[1..].parse().ok()).unwrap_or(0)),
+            countable: true,
         })
+    }
+
+    fn rev_count(&self, _root: &Path, rev: &str) -> Result<u64, String> {
+        let count = rev.strip_prefix('r').and_then(|n| n.parse().ok());
+        count.ok_or_else(|| format!("ledger: '{rev}' is no revision"))
     }
 
     fn untracked(&self, root: &Path, rel: &OsStr) -> Option<String> {
@@ -178,10 +183,7 @@ mod tests {
         fs::remove_file(root.join(".ledger/dirty")).unwrap();
         fs::remove_file(root.join(".ledger/head")).unwrap();
         let t = read_tree(&mut Evaluator::new(), &root);
-        let new = [
-            ("revCount", AttrVal::Int(0)),
-            ("lastModified", AttrVal::Int(0)),
-        ];
+        let new = [("lastModified", AttrVal::Int(0))];
         assert_eq!(t.attrs, attrs(&new, &root, hash(&plain)));
     }
 

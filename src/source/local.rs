@@ -166,6 +166,13 @@ pub fn tracked_source(
     );
     attrs.insert("narHash".into(), AttrVal::Str(hash.to_sri()));
     attrs.insert("lastModified".into(), AttrVal::Int(at.last_modified));
+    // fetchTree.cc:emitTreeAttrs: a dirty tree shows no count
+    if let Some(rev) = at.rev.as_deref().filter(|_| at.countable && !at.dirty) {
+        let n = scm
+            .rev_count(root, rev)
+            .map_err(|e| Error::boxed(ErrorKind::Io, e, pos))?;
+        attrs.insert("revCount".into(), AttrVal::Int(n));
+    }
     match at.rev {
         Some(h) if at.dirty => {
             attrs.insert(
@@ -178,9 +185,6 @@ pub fn tracked_source(
             attrs.insert("rev".into(), AttrVal::Str(h));
         }
         None => {}
-    }
-    if let Some(n) = at.rev_count.filter(|_| !at.dirty) {
-        attrs.insert("revCount".into(), AttrVal::Int(n));
     }
     Ok(Tree {
         path,

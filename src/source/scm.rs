@@ -28,9 +28,9 @@ pub struct Snapshot {
     pub rev: Option<String>,
     /// The date of the revision in seconds since the epoch, 0 without one.
     pub last_modified: u64,
-    /// The number of revisions up to this one, `None` when the SCM cannot
-    /// count them. A dirty tree shows none (fetchTree.cc:emitTreeAttrs).
-    pub rev_count: Option<u64>,
+    /// The SCM has the whole history of the revision, so `Scm::rev_count`
+    /// has an answer. A shallow clone has not.
+    pub countable: bool,
 }
 
 pub trait Scm: Sync {
@@ -48,6 +48,11 @@ pub trait Scm: Sync {
     /// from a tracked file is recorded in `trace`, so the tracing cache
     /// asks again.
     fn snapshot(&self, trace: &Trace, root: &Path) -> Result<Snapshot, String>;
+
+    /// The number of revisions up to `rev` in the working tree at `root`,
+    /// for a tree that is `countable`. The answer follows from `rev`, so it
+    /// is no observation, and the caller can keep it by `rev`.
+    fn rev_count(&self, root: &Path, rev: &str) -> Result<u64, String>;
 
     /// For `rel`, a file on disk below `root` that the SCM does not track:
     /// the command that makes the SCM track it. `None` when the SCM tracks
