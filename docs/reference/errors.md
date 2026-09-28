@@ -236,6 +236,7 @@ site and has a kind that the lint reports:
 | `or-non-attrs` | `select` with a `default` |
 | `impure-builtin` | `apply`; if there is none, `select`; if there is none, `var` |
 | `unhashed-fetch`, `ifd`, `read-through-copy` | `apply` |
+| `rev-count` | a `name` of an `inherit`; if there is none, `apply` (`builtins.getAttr`); if there is none, `select` |
 | `unknown-allow` | no node: the word in the comment |
 | all other lints | a `bind` or a `name`; if there is none, a `string` with an interpolation, a `binary` with `+`, or an `apply` |
 
@@ -247,10 +248,10 @@ Limits:
   c`, or `"${a}" + b` for a lint that reports a copy. The record then has
   the span of the smaller node.
 - A site without a node of those kinds has no `start` and no `end`.
-- A finding of `rev-count` has no site (`docs/reference/lints.md`,
-  "The tree that a value comes from"). The record has no `start` and no
-  `end`, and `file`, `line` and `column` are null. `raw_msg` names the
-  tree.
+- A finding of `rev-count` has no site when the read is not a selection
+  (`docs/reference/lints.md`, "The tree that a value comes from"). The
+  record then has no `start` and no `end`, and `file`, `line` and `column`
+  are null. `raw_msg` names the tree.
 
 ## The build plan: `ietsp build --dry-run`
 

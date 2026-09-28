@@ -22,8 +22,10 @@ fixtures: `tests/lint/<name>.nix`, checked by `scripts/linttest.nu`.
 
 Nix's spellings `ignore` and `fatal` are accepted for `off` and `error`.
 
-A finding of `rev-count` has no site. It has no `at` line, and its text
-keeps it to one line for each tree ("The tree that a value comes from").
+A finding of `rev-count` is one for each source tree in a run, not one for
+each site. Its site is the selection that reads `revCount`. A read that is
+not a selection gives a finding without a site, which has no `at` line
+("The tree that a value comes from").
 
 With `--log-format internal-json`, or in the `json-log-path` file, a
 finding is a record with the code `lint`. The record has the byte span of
@@ -197,18 +199,55 @@ warning: [tree-meta-in-drv] derivation 'wrapped': attribute 'v' holds 'self.narH
   at /repo/dep/flake.nix:2:79
 ```
 
-`rev-count` has no site. `fetchTree` and the root tree of a flake make
-`revCount` as a lazy value, and the evaluator computes a lazy value of
-native code without the position of the expression that reads it. The
-evaluator keeps no call trace. Thus the message names the tree, and the
-finding has no position:
+The site of `rev-count` is the selection that reads the attribute:
+
+| the code reads the count with | site |
+|---|---|
+| `self.revCount`, `self.revCount or 0`, `self.sourceInfo.revCount`, `inputs.<node>.revCount` | the selection |
+| a selection through a binding or an argument (`let s = self; in s.revCount`, `{ self, ... }: self.revCount`) | the selection |
+| `inherit (self) revCount;` | the name in the `inherit` |
+| `builtins.getAttr "revCount" self`, with a computed name too | the call |
+| `with self; revCount`, a function pattern `{ revCount, ... }:` | none |
+| `self.${name}` with a computed name | none |
+| `builtins.attrValues`, `builtins.toJSON`, `builtins.mapAttrs` on the attribute set of the tree | none |
 
 ```
 $ ietsp eval --raw .#version             # version = "1.${toString self.revCount}";
 warning: [rev-count] 'self.revCount' is deprecated: the count of all revisions is expensive to compute and absent on a shallow clone, and ietsp plans to remove it; use 'lastModifiedDate' and 'shortRev' for a version
+  at /repo/app/flake.nix:4:29
 ```
 
-At the level `error`, the trace of the error has the position of the
+The selection reports when the evaluation needs its value. A binding that
+the evaluation does not use (`let n = self.revCount; in 1`) gives no
+finding and starts no count.
+
+The location of the site does not change the level, as for
+`tree-meta-in-drv`. A selection in the code of an input reports a read of
+the root tree, because the value is the user's:
+
+```
+$ ietsp eval --raw .#wrapped             # wrapped = lib.mkVersion self;
+warning: [rev-count] 'self.revCount' is deprecated: the count of all revisions is expensive to compute and absent on a shallow clone, and ietsp plans to remove it; use 'lastModifiedDate' and 'shortRev' for a version
+  at /repo/lib/flake.nix:1:54
+```
+
+One run gives one finding for each tree: that of the first read. The
+subsequent reads of that tree are silent, with a site or without. A site
+that a `# ietsp: allow` comment covers is not a finding, so the next read
+of that tree reports.
+
+A read that is not a selection has no site. `fetchTree` and the root tree
+of a flake make `revCount` as a lazy value, and the evaluator computes a
+lazy value of native code without the position of the expression that
+reads it. The evaluator keeps no call trace. Thus the message names the
+tree, and the finding has no position:
+
+```
+$ ietsp eval --raw .#scoped              # scoped = with self; "1.${toString revCount}";
+warning: [rev-count] 'self.revCount' is deprecated: the count of all revisions is expensive to compute and absent on a shallow clone, and ietsp plans to remove it; use 'lastModifiedDate' and 'shortRev' for a version
+```
+
+At the level `error`, the trace of that error has the position of the
 nearest call that has one.
 
 ## Silencing one site
@@ -310,7 +349,7 @@ are part of the IR cache key and their warnings are stored in the entry;
 | `impure-path-in-drv` | purity | evaluator | off | a derivation attribute (env, `args`, structured attrs) holds the text of a path outside the store and not under a `flake.nix` directory (`toString ./x`), so the .drv depends on the checkout location |
 | `absolute-path-in-drv` | purity | evaluator | off | as above, for a path under a `flake.nix` directory: an absolute path a flake evaluation would have copied |
 | `tree-meta-in-drv` | purity | evaluator | **warn** | a derivation attribute (env, `args`, structured attrs) holds metadata of a source tree as a string: `rev`, `shortRev`, `dirtyRev`, `dirtyShortRev`, `lastModifiedDate` or `narHash`, so each commit gives a new .drv and a rebuild. The tree that the value comes from gives the level (Scope): the root tree by default, a locked input only with `[lint.inputs.<node>]`. Not for the integers `lastModified` and `revCount` (Limits); `rev-count` reports a read of `revCount` |
-| `rev-count` | purity | evaluator | **warn** | the evaluation reads `revCount` of a source tree that has a name (`self.revCount`, `inputs.<node>.revCount`). The attribute is deprecated: the count of all revisions is expensive to compute, a shallow clone has none, and each commit changes it. `self ? revCount` and `builtins.attrNames self` are not a read. The tree gives the level (Scope): the root tree by default, a locked input only with `[lint.inputs.<node>]`. The finding has no site |
+| `rev-count` | purity | evaluator | **warn** | the evaluation reads `revCount` of a source tree that has a name (`self.revCount`, `inputs.<node>.revCount`). The attribute is deprecated: the count of all revisions is expensive to compute, a shallow clone has none, and each commit changes it. `self ? revCount` and `builtins.attrNames self` are not a read. The tree gives the level (Scope): the root tree by default, a locked input only with `[lint.inputs.<node>]`. The site is the selection that reads the attribute; a read that is not a selection has no site (Scope) |
 | `unknown-allow` | meta | parser | **warn** | a word of a `# ietsp: allow` comment that is not a lint name, a family or `all`, or a `# ietsp:` directive other than `allow` (Silencing one site) |
 
 `impure-path-in-drv` works like Nix's store references: a coercion that
@@ -378,8 +417,14 @@ does for the version of NixOS:
 version = "1.0.${builtins.substring 0 8 self.lastModifiedDate}.${self.shortRev or "dirty"}";
 ```
 
-To turn the lint off, set its level. A `# ietsp: allow` comment needs a
-site, and this finding has none:
+To silence one read, put the comment at the selection:
+
+```nix
+version = "1.${toString self.revCount}"; # ietsp: allow rev-count
+```
+
+A read that is not a selection has no site, so no comment covers it
+("The tree that a value comes from"). To turn the lint off, set its level:
 
 ```toml
 [lint]
@@ -548,6 +593,16 @@ Measured in the same way (5 runs for each binary, 2026-09-28): 9.3940 G
 instructions before and 9.3941 G after, which is +0.001 %. Two runs of
 one binary were up to 0.03 % apart.
 
+The site of `rev-count` costs nothing on that workload. The compiler
+gives a selection that has the name `revCount` an operation of its own,
+so no other selection tests the name. The pinned nixpkgs has 5 such
+selections, and none is in a file that nixos-desktop reads. Measured in
+the same way (7 runs for each binary, 2026-09-28): 9.3944 G instructions
+before and 9.3930 G after, which is -0.015 %. With an empty compiled-file
+cache (3 runs for each binary, each file compiles): 12.1825 G before and
+12.1842 G after, which is +0.014 %. Two runs of one binary were up to
+0.03 % apart.
+
 ## Caches and parallelism
 
 - A lint warning is an effect. `Cache::write` stores the record of each
@@ -611,11 +666,14 @@ one binary were up to 0.03 % apart.
   `lastModified` from a flake tree at one place only
   (`nixos/modules/config/nix-flakes.nix`), and the same attribute holds
   `rev` and `narHash`, which have the mark.
-- `rev-count` has no site, because the evaluator does not know the
-  position of the read when it computes the value. Thus a
-  `# ietsp: allow` comment cannot silence it, the record has no byte
-  span, and one run gives one finding for each tree, not one for each
-  read.
+- `rev-count` has a site only for a selection, `inherit (e) revCount;` and
+  `builtins.getAttr`. The other reads force the lazy value, and the
+  evaluator does not know the position of the read when it computes the
+  value. Thus a `# ietsp: allow` comment cannot silence such a read, and
+  its record has no byte span.
+- `rev-count` gives one finding for each tree in a run, not one for each
+  read. When the first read has no site, a subsequent selection of that
+  tree is silent.
 - `rev-count` needs a tree that has a count. Its cases are in
   `scripts/flaketest.nu` (a git working tree, a locked git input) and in
   the unit tests, not in a `tests/lint/*.nix` file.

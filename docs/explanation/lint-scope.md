@@ -83,6 +83,13 @@ with each commit and ietsp must compute it. The count of a locked input
 is a number in the lock file. ietsp knows the tree because `revCount` is
 a lazy value that has the name of its tree.
 
+The finding of `rev-count` goes to the selection that reads the
+attribute, in your repository or in an input. The compiler marks each
+selection that has the name `revCount`. The evaluator then looks at the
+value that such a selection reads. A read that is not a selection has no
+site, and the finding names only the tree. `docs/reference/lints.md` has
+the list ("The tree that a value comes from").
+
 ietsp knows the tree because each metadata string has a mark. The mark
 is a string context element that Nix does not have. It moves with the
 string through `+`, interpolation, `substring` and `concatStringsSep`, as
