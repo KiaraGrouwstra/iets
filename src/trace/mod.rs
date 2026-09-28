@@ -182,6 +182,8 @@ pub fn cmd_hash(status: i32, stdout: &[u8]) -> Digest32 {
 struct Inner {
     obs: Mutex<Vec<Obs>>,
     uncacheable: AtomicBool,
+    /// Where the run keeps its entry, and what follows from a revision.
+    store: Option<store::Store>,
 }
 
 /// Recorder handle. Clones share; the default is off and records nothing.
@@ -190,10 +192,27 @@ pub struct Trace(Option<Arc<Inner>>);
 
 impl Trace {
     pub fn enabled() -> Trace {
+        Trace::enabled_in(None)
+    }
+
+    pub fn enabled_in(store: Option<store::Store>) -> Trace {
         Trace(Some(Arc::new(Inner {
             obs: Mutex::new(Vec::new()),
             uncacheable: AtomicBool::new(false),
+            store,
         })))
+    }
+
+    /// The answer that the store of the run keeps for `key`. It follows
+    /// from the key alone, so it is no observation.
+    pub fn kept(&self, key: &str) -> Option<Vec<u8>> {
+        self.0.as_ref()?.store.as_ref()?.kept(key)
+    }
+
+    pub fn keep(&self, key: &str, answer: &[u8]) {
+        if let Some(s) = self.0.as_ref().and_then(|i| i.store.as_ref()) {
+            s.keep(key, answer);
+        }
     }
 
     #[inline]

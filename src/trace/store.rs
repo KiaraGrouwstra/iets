@@ -106,6 +106,7 @@ pub enum Opened {
     Entry(Entry),
 }
 
+#[derive(Clone)]
 pub struct Store {
     root: PathBuf,
 }
@@ -164,6 +165,28 @@ impl Store {
             return Ok(false);
         };
         cachefs::write_atomic(&dir, ENTRY, cachefs::tag(), &chunks).map(|()| true)
+    }
+
+    /// An entry that holds an answer and an empty read set: the answer
+    /// follows from the key, so nothing can make it stale.
+    pub fn keep(&self, key: &str, answer: &[u8]) {
+        let none = crate::trace::wire::encode_readset(&[]);
+        let _ = self.publish(key, &[(Part::Result, answer), (Part::Readset, &none)]);
+    }
+
+    /// The answer that `keep` put under `key`.
+    pub fn kept(&self, key: &str) -> Option<Vec<u8>> {
+        match self.open(key) {
+            Opened::None => None,
+            Opened::Bad => {
+                self.discard(key);
+                None
+            }
+            Opened::Entry(e) => {
+                self.touch(key);
+                e.part(Part::Result)
+            }
+        }
     }
 
     /// A hit marks the entry as used; renaming a file into the directory

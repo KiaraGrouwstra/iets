@@ -115,3 +115,29 @@ pub fn changed(obs: &Obs) -> Option<String> {
     let root = String::from_utf8_lossy(root);
     Some(format!("the {} working tree in {root} changed", scm.name()))
 }
+
+/// The SCM with the name `name`.
+pub fn named(name: &str) -> Option<&'static dyn Scm> {
+    KNOWN.iter().copied().find(|s| s.name() == name)
+}
+
+fn count_key(scm: &dyn Scm, rev: &str) -> String {
+    let mut key = crate::trace::key::Key::new("rev-count");
+    key.field("scm", scm.name().as_bytes());
+    key.field("rev", rev.as_bytes());
+    key.finish()
+}
+
+/// `Scm::rev_count`, asked once for each revision: the store of the run
+/// keeps the answer with the name of the SCM and the revision as the key,
+/// as git.cc:getRevCount does in the fetcher cache of Nix.
+pub fn rev_count(trace: &Trace, scm: &dyn Scm, root: &Path, rev: &str) -> Result<u64, String> {
+    let key = count_key(scm, rev);
+    let kept = |b: Vec<u8>| String::from_utf8(b).ok()?.parse().ok();
+    if let Some(n) = trace.kept(&key).and_then(kept) {
+        return Ok(n);
+    }
+    let n = scm.rev_count(root, rev)?;
+    trace.keep(&key, n.to_string().as_bytes());
+    Ok(n)
+}

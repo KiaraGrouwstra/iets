@@ -325,6 +325,47 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let st = (cache-lines $ietsp $"($scratch).drvPath" | get -o 0 | default "")
   $res ++= [(verdict ($st =~ 'miss \(.*git') "cache: a commit misses on a git command" $"cache: a commit misses on a git command \(($st)\)")]
 
+  # ---- revCount: there when Nix has it, counted when it is read ----------------
+  let cnt = $"($work)/count"
+  mkdir $cnt
+  r#'{
+  outputs = { self }: {
+    meta = builtins.toJSON {
+      count = self.revCount or null;
+      has = self ? revCount;
+      names = builtins.attrNames self.sourceInfo;
+      date = self.lastModified;
+    };
+    names = builtins.toJSON [ (self ? revCount) (builtins.attrNames self) ];
+    again = toString self.revCount;
+  };
+}
+'# | save $"($cnt)/flake.nix"
+  '{"nodes":{"root":{}},"root":"root","version":7}' | save $"($cnt)/flake.lock"
+  git-in $cnt init -q
+  git-in $cnt add -A
+  git-in $cnt commit -q -m one
+  git-in $cnt commit -q --allow-empty -m two
+  $res ++= [(check $ietsp "revCount: clean tree" $"($cnt)#meta")]
+  let shallow = $"($work)/count-shallow"
+  git-in $work clone -q --depth 1 $"file://($cnt)" $shallow
+  $res ++= [(check $ietsp "revCount: shallow clone" $"($shallow)#meta")]
+  # `git rev-list` fails here: a run that does not read the count starts
+  # none, and a run that reads it takes the count that the store kept
+  let nolist = $"($work)/nolist"
+  mkdir $nolist
+  $"#!/bin/sh\ncase \"$1\" in rev-list\) exit 9 ;; esac\nexec (which git | get 0.path) \"$@\"\n" | save $"($nolist)/git"
+  chmod 755 $"($nolist)/git"
+  let no_list = {PATH: ($env.PATH | prepend $nolist)}
+  let lazy = (with-env $no_list { ^$ietsp eval --raw --no-tracing-cache $"($cnt)#names" | complete })
+  let none = (with-env $no_list { ^$ietsp eval --raw --no-tracing-cache $"($cnt)#again" | complete })
+  ^$ietsp eval --raw $"($cnt)#meta" | complete | ignore
+  let kept = (with-env $no_list { ^$ietsp eval --raw $"($cnt)#again" | complete })
+  let ok = ($lazy.exit_code == 0 and ($lazy.stdout | str starts-with "[true,") and $none.exit_code == 1 and ($none.stderr | str contains "`git rev-list --count") and $kept.exit_code == 0 and $kept.stdout == "2")
+  $res ++= [(verdict $ok "revCount: lazy, and kept by revision" $"revCount: lazy \(exit ($lazy.exit_code)\) ($lazy.stdout), no store \(exit ($none.exit_code)\) ($none.stderr | lines | last 2 | str join ' | '), kept \(exit ($kept.exit_code)\) ($kept.stdout) ($kept.stderr | lines | last 2 | str join ' | ')")]
+  "\n" | save --append $"($cnt)/flake.nix"
+  $res ++= [(check $ietsp "revCount: dirty tree" $"($cnt)#meta")]
+
   # ---- fetching an input, with no nix to fall back on -------------------------
   # `nobin` is empty, so IETSP_NIX_BIN_DIR and PATH find no nix at all: every
   # case below is ietsp's own substitution or its own fetch.

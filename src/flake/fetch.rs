@@ -9,11 +9,11 @@ use std::path::Path;
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
 use crate::runtime::*;
 use crate::source::{
-    AttrVal, Attrs, SourceRef, bool_attr, int_attr, last_modified_date, parse_nar_hash, str_attr,
-    to_url,
+    AttrVal, Attrs, SourceRef, Tree, bool_attr, int_attr, last_modified_date, parse_nar_hash,
+    str_attr, to_url,
 };
 use crate::store::hash::{Hash, HashAlgo};
-use crate::store::path::{IngestionMethod, StorePath};
+use crate::store::path::IngestionMethod;
 use crate::syntax::symbol::Sym;
 
 /// The attrs `fetchTree` accepts: strings and paths, booleans, non-negative
@@ -106,7 +106,7 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
         check_locked(&attrs, pos)?;
     }
     let ty = str_attr(&attrs, "type").unwrap_or("").to_string();
-    let sp = match ty.as_str() {
+    let tree = match ty.as_str() {
         "path" => {
             let Some(path) = str_attr(&attrs, "path") else {
                 bail!(
@@ -166,14 +166,17 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
             attrs
                 .entry("lastModified".into())
                 .or_insert(AttrVal::Int(mtime.max(0) as u64));
-            crate::treestore::store_path("source", &hash)
-                .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?
+            let path = crate::treestore::store_path("source", &hash)
+                .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
+            Tree {
+                path,
+                attrs,
+                subdir: String::new(),
+                counter: None,
+            }
         }
         "github" | "gitlab" | "sourcehut" | "git" | "tarball" | "hg" => {
-            let r = SourceRef::Locked(attrs);
-            let t = crate::source::tree(ev, &r, pos)?;
-            attrs = t.attrs;
-            t.path
+            crate::source::tree(ev, &SourceRef::Locked(attrs), pos)?
         }
         other => bail!(
             ErrorKind::Unsupported,
@@ -181,12 +184,12 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
             "ietsp: fetchTree input type '{other}' is not supported"
         ),
     };
-    let name = str_attr(&attrs, "narHash").and_then(|h| ev.input_names.get(h));
+    let name = str_attr(&tree.attrs, "narHash").and_then(|h| ev.input_names.get(h));
     if let Some(name) = &name {
-        ev.known.name_flake(&sp, name.clone());
+        ev.known.name_flake(&tree.path, name.clone());
     }
     let source = name.map(|n| format!("inputs.{n}"));
-    emit_tree_attrs(ev, &sp, &attrs, source.as_deref(), pos)
+    emit_tree_attrs(ev, &tree, source.as_deref(), pos)
 }
 
 /// fetchTree.cc:fetch for `builtins.fetchTarball`: with a `sha256` the store
@@ -261,6 +264,25 @@ pub fn fetch_tarball_builtin(ev: &mut Evaluator, args: &[Word], pos: Pos) -> Eva
     Ok(ev.arena.mk_string_static(full, ctx))
 }
 
+/// `revCount` of a working tree is a thunk over this, so the SCM counts only
+/// when the evaluation reads the value, as in Nix 2.35
+/// (fetchTree.cc:emitLazyAttrThunk).
+/// `args[0]` holds the name of the SCM, the root and the revision.
+fn rev_count(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
+    let mut of = Vec::with_capacity(3);
+    for c in ev.force_list(args[0], pos, "")?.cells() {
+        let s = ev.force_string(c.get(), pos, "")?;
+        of.push(String::from_utf8_lossy(s.bytes).into_owned());
+    }
+    let scm = of.first().and_then(|n| crate::source::scm::named(n));
+    let (Some(scm), [_, root, rev]) = (scm, of.as_slice()) else {
+        bail!(ErrorKind::Eval, pos, "ietsp: revCount of an unknown tree");
+    };
+    let n = crate::source::scm::rev_count(ev.trace(), scm, Path::new(root), rev)
+        .map_err(|e| Error::boxed(ErrorKind::Io, e, pos))?;
+    Ok(ev.mk_int(n as i64))
+}
+
 /// fetchTree.cc:emitTreeAttrs with `emptyRevFallback = false`; `forceDirty`
 /// is expressed by the caller leaving out `rev`/`revCount`. `source` names
 /// the tree (`self`, `inputs.<node>`): each string that changes with the
@@ -268,12 +290,12 @@ pub fn fetch_tarball_builtin(ev: &mut Evaluator, args: &[Word], pos: Pos) -> Eva
 /// the tree.
 pub fn emit_tree_attrs(
     ev: &mut Evaluator,
-    sp: &StorePath,
-    a: &Attrs,
+    tree: &Tree,
     source: Option<&str>,
     pos: Pos,
 ) -> EvalResult<Word> {
     use crate::lint::{Level, purity::tree_meta_level};
+    let (sp, a) = (&tree.path, &tree.attrs);
     let mut entries: Vec<(Sym, Pos, Word)> = Vec::with_capacity(10);
     let full = ev.arena.alloc_bytes(sp.to_full_string().as_bytes());
     let ctx = ev.arena.alloc_slice(&[Ctx::Opaque(full)]);
@@ -311,7 +333,14 @@ pub fn emit_tree_attrs(
         let w = ev.mk_int(t as i64);
         entries.push((ev.sym(b"lastModified"), pos, w));
     }
-    if let Some(n) = int_attr(a, "revCount") {
+    if let (Some((scm, root)), Some(rev)) = (&tree.counter, tree.rev()) {
+        let root = root.to_string_lossy();
+        let of = [scm.name(), &root, rev].map(|s| ev.mk_string(s.as_bytes()));
+        let of = ev.mk_list(&of);
+        let op = ev.arena.mk_primop("revCountRaw", 1, rev_count);
+        let w = ev.arena.mk_thunk_app(op, of);
+        entries.push((ev.sym(b"revCount"), pos, w));
+    } else if let Some(n) = int_attr(a, "revCount") {
         let w = ev.mk_int(n as i64);
         entries.push((ev.sym(b"revCount"), pos, w));
     }
@@ -327,16 +356,23 @@ mod tests {
     use super::*;
     use crate::eval::EvalConfig;
     use crate::lint::Config;
+    use crate::store::path::StorePath;
 
     fn tree(ev: &mut Evaluator, source: &str) -> Word {
-        let sp = StorePath::parse("/nix/store/00000000000000000000000000000000-source").unwrap();
+        let path = StorePath::parse("/nix/store/00000000000000000000000000000000-source").unwrap();
         let attrs = Attrs::from([
             ("narHash".into(), AttrVal::Str("sha256-x".into())),
             ("rev".into(), AttrVal::Str("a".repeat(40))),
             ("lastModified".into(), AttrVal::Int(86400)),
             ("revCount".into(), AttrVal::Int(7)),
         ]);
-        emit_tree_attrs(ev, &sp, &attrs, Some(source), Pos::NONE).unwrap()
+        let tree = Tree {
+            path,
+            attrs,
+            subdir: String::new(),
+            counter: None,
+        };
+        emit_tree_attrs(ev, &tree, Some(source), Pos::NONE).unwrap()
     }
 
     /// `f tree` as a string: its bytes and the names of its marks.

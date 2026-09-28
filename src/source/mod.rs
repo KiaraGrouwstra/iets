@@ -134,6 +134,10 @@ pub struct Tree {
     pub path: StorePath,
     pub attrs: Attrs,
     pub subdir: String,
+    /// The SCM and the root of a working tree that has a `revCount`. The
+    /// attribute is not in `attrs`: the SCM counts when the evaluation
+    /// reads it (`scm::rev_count`).
+    pub counter: Option<(&'static dyn scm::Scm, PathBuf)>,
 }
 
 impl Tree {

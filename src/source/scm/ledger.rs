@@ -90,7 +90,7 @@ mod tests {
     use super::*;
     use crate::eval::{EvalConfig, Evaluator, Pos};
     use crate::flake::{fetch::emit_tree_attrs, parse_flake_ref};
-    use crate::runtime::{Ctx, Taint};
+    use crate::runtime::{Ctx, Taint, Word};
     use crate::source::{AttrVal, Attrs, SourceRef, Tree, tree};
 
     const FLAKE: &str = "{ outputs = _: { }; }\n";
@@ -163,10 +163,10 @@ mod tests {
         assert_eq!(t.subdir, "sub");
         let clean = [
             ("rev", AttrVal::Str("r12".into())),
-            ("revCount", AttrVal::Int(12)),
             ("lastModified", AttrVal::Int(1700000000)),
         ];
         assert_eq!(t.attrs, attrs(&clean, &root, hash(&plain)));
+        assert!(t.counter == Some((&Ledger, root.clone())));
 
         fs::write(root.join(".ledger/dirty"), "").unwrap();
         for top in [&root, &plain] {
@@ -179,12 +179,14 @@ mod tests {
             ("lastModified", AttrVal::Int(1700000000)),
         ];
         assert_eq!(t.attrs, attrs(&dirty, &root, hash(&plain)));
+        assert!(t.counter.is_none());
 
         fs::remove_file(root.join(".ledger/dirty")).unwrap();
         fs::remove_file(root.join(".ledger/head")).unwrap();
         let t = read_tree(&mut Evaluator::new(), &root);
         let new = [("lastModified", AttrVal::Int(0))];
         assert_eq!(t.attrs, attrs(&new, &root, hash(&plain)));
+        assert!(t.counter.is_none());
     }
 
     #[test]
@@ -192,7 +194,7 @@ mod tests {
         let (root, _) = fixture("mark");
         let mut ev = Evaluator::new();
         let t = read_tree(&mut ev, &root);
-        let info = emit_tree_attrs(&mut ev, &t.path, &t.attrs, Some("self"), Pos::NONE).unwrap();
+        let info = emit_tree_attrs(&mut ev, &t, Some("self"), Pos::NONE).unwrap();
         for (f, text, mark) in [
             ("t: t.rev", "r12", "self.rev"),
             ("t: t.shortRev", "r12", "self.shortRev"),
@@ -213,6 +215,41 @@ mod tests {
             .unwrap();
         let v = ev.apply(f, &[info], Pos::NONE).unwrap();
         assert_eq!(ev.force(v).unwrap().as_int(), Some(1700000012));
+    }
+
+    /// `x12` is a revision that the ledger cannot count, so a count of it
+    /// shows where the answer comes from.
+    #[test]
+    fn the_count_is_lazy_and_kept_by_revision() {
+        use crate::source::scm::{count_key, rev_count};
+        let (root, _) = fixture("count");
+        fs::write(root.join(".ledger/head"), "x12 1700000000\n").unwrap();
+        let store = crate::trace::store::Store::locate(root.parent().unwrap().to_str()).unwrap();
+        assert!(crate::cachefs::prepare(
+            store.root(),
+            crate::cachefs::Shape::Dirs,
+            false
+        ));
+        let read = |ev: &mut Evaluator, f: &str| {
+            let t = read_tree(ev, &root);
+            let info = emit_tree_attrs(ev, &t, Some("self"), Pos::NONE).unwrap();
+            let f = ev.eval_string(f, b"/").unwrap();
+            let v = ev.apply(f, &[info], Pos::NONE)?;
+            ev.force(v)
+        };
+        let ev = &mut EvalConfig::new().trace_in(Some(&store)).build();
+        let there = "t: t ? revCount && builtins.elem \"revCount\" (builtins.attrNames t)";
+        assert_eq!(read(ev, there).unwrap(), Word::TRUE);
+        let e = read(ev, "t: t.revCount").err().unwrap();
+        assert_eq!(e.msg, "ledger: 'x12' is no revision");
+        assert_eq!(ev.trace().take().len(), 5);
+
+        ev.trace().keep(&count_key(&Ledger, "x12"), b"7");
+        assert_eq!(read(ev, "t: t.revCount").unwrap().as_int(), Some(7));
+        assert_eq!(rev_count(ev.trace(), &Ledger, &root, "r12"), Ok(12));
+        let kept = ev.trace().kept(&count_key(&Ledger, "r12"));
+        assert_eq!(kept.as_deref(), Some(b"12".as_slice()));
+        assert_eq!(rev_count(&Trace::default(), &Ledger, &root, "r13"), Ok(13));
     }
 
     #[test]

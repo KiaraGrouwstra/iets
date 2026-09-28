@@ -270,6 +270,7 @@ pub struct EvalConfig {
     keep_site: bool,
     dump_dir: Option<std::path::PathBuf>,
     trace: bool,
+    trace_store: Option<crate::trace::store::Store>,
 }
 
 impl Default for EvalConfig {
@@ -286,6 +287,7 @@ impl Default for EvalConfig {
             keep_site: true,
             dump_dir: None,
             trace: false,
+            trace_store: None,
         }
     }
 }
@@ -369,6 +371,14 @@ impl EvalConfig {
         self
     }
 
+    /// `trace` for a run that has an entry in `store`. The store also
+    /// keeps what follows from a revision (`source::scm::rev_count`).
+    pub fn trace_in(mut self, store: Option<&crate::trace::store::Store>) -> EvalConfig {
+        self.trace = store.is_some();
+        self.trace_store = store.cloned();
+        self
+    }
+
     #[inline]
     pub fn current_system(&self) -> &'static str {
         self.system
@@ -437,7 +447,7 @@ impl EvalConfig {
             ),
             par: Default::default(),
             trace: if self.trace {
-                crate::trace::Trace::enabled()
+                crate::trace::Trace::enabled_in(self.trace_store)
             } else {
                 Default::default()
             },

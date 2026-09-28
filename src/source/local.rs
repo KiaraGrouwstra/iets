@@ -39,6 +39,7 @@ pub fn path_source(ev: &mut Evaluator, dir: &Path, pos: Pos) -> EvalResult<Tree>
         path,
         attrs,
         subdir: String::new(),
+        counter: None,
     })
 }
 
@@ -125,7 +126,7 @@ pub fn accepted_set(root: &Path, files: &HashSet<PathBuf>) -> HashSet<PathBuf> {
 /// The working tree of an SCM, with the flake's `subdir` carried through.
 pub fn tracked_source(
     ev: &mut Evaluator,
-    scm: &dyn Scm,
+    scm: &'static dyn Scm,
     root: &Path,
     subdir: &str,
     pos: Pos,
@@ -167,12 +168,7 @@ pub fn tracked_source(
     attrs.insert("narHash".into(), AttrVal::Str(hash.to_sri()));
     attrs.insert("lastModified".into(), AttrVal::Int(at.last_modified));
     // fetchTree.cc:emitTreeAttrs: a dirty tree shows no count
-    if let Some(rev) = at.rev.as_deref().filter(|_| at.countable && !at.dirty) {
-        let n = scm
-            .rev_count(root, rev)
-            .map_err(|e| Error::boxed(ErrorKind::Io, e, pos))?;
-        attrs.insert("revCount".into(), AttrVal::Int(n));
-    }
+    let counts = at.countable && !at.dirty && at.rev.is_some();
     match at.rev {
         Some(h) if at.dirty => {
             attrs.insert(
@@ -190,6 +186,7 @@ pub fn tracked_source(
         path,
         attrs,
         subdir: subdir.to_string(),
+        counter: counts.then(|| (scm, root.to_path_buf())),
     })
 }
 

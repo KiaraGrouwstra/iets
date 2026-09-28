@@ -43,6 +43,7 @@ pub fn locked(ev: &mut Evaluator, attrs: &Attrs, pos: Pos) -> EvalResult<Tree> {
         path,
         attrs,
         subdir: String::new(),
+        counter: None,
     })
 }
 
