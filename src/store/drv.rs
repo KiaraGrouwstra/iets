@@ -317,6 +317,12 @@ impl Derivation {
         };
         let mut pending_json = self.structured_attrs.as_deref();
         for (k, v) in &self.env {
+            // parsed-derivations.cc:StructuredAttrs::checkKeyNotInUse
+            if k == STRUCTURED_ATTRS_ENV {
+                return Err(DrvError(format!(
+                    "Cannot have an environment variable named '{STRUCTURED_ATTRS_ENV}'. This key is reserved for encoding structured attrs"
+                )));
+            }
             if let Some(json) = pending_json
                 && k.as_str() > STRUCTURED_ATTRS_ENV
             {
@@ -1078,5 +1084,21 @@ mod tests {
         assert!(masked.contains("(\"dev\",\"\")"));
         assert!(masked.contains("(\"out\",\"\")"));
         assert!(!masked.contains("/nix/store/0rzxv3xkkgply9jd76fdiwfm6k1gyj6p-ia"));
+    }
+
+    #[test]
+    fn an_env_key_named_json_is_refused() {
+        let mut drv = Derivation {
+            name: "o1".into(),
+            platform: "x".into(),
+            builder: "/bin/sh".into(),
+            ..Default::default()
+        };
+        drv.env_set("__json", "/nix/store/x".into());
+        let e = drv.with_aterm(|_| ()).unwrap_err();
+        assert_eq!(
+            e.0,
+            "Cannot have an environment variable named '__json'. This key is reserved for encoding structured attrs"
+        );
     }
 }
