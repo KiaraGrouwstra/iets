@@ -174,7 +174,12 @@ pub fn force_thunk(ev: &mut Evaluator, w: Word) -> EvalResult<Word> {
     let payload = loop {
         match thunk::try_claim(cell, me, |st| w.thunk_unforced(st)) {
             Claim::Won(p) => break p,
-            Claim::Value(st) => return Ok(w.thunk_value(st)),
+            Claim::Value(st) => {
+                if ev.par.is_main && w.thunk_speculated(st) {
+                    cell.set(Word::EMPTY);
+                }
+                return Ok(w.thunk_value(st));
+            }
             Claim::Mine => {
                 return Err(Error::boxed(
                     ErrorKind::InfiniteRecursion,
@@ -207,7 +212,7 @@ pub fn force_thunk(ev: &mut Evaluator, w: Word) -> EvalResult<Word> {
                 thunk::publish(unsafe { slot_mut(ev) }, cell, payload);
                 Err(cancelled())
             } else {
-                let done = w.thunk_finish(v);
+                let done = w.thunk_finish(v, ev.par.is_main);
                 thunk::publish(unsafe { slot_mut(ev) }, cell, done);
                 Ok(v)
             }
@@ -243,6 +248,15 @@ pub enum CellState {
     Ready(Word),
     Unclaimed,
     Busy,
+}
+
+/// Unbox a forced cell. A helper leaves the cell alone: its work must stay
+/// invisible until the demand path asks for the value.
+#[inline]
+fn set_forced(ev: &Evaluator, c: &Cell, v: Word) {
+    if ev.par.is_main {
+        c.set(v);
+    }
 }
 
 #[inline]
@@ -379,7 +393,7 @@ fn coerce_step(ev: &mut Evaluator, c: &Cell, depth: u32) -> bool {
     let v = match cell_state(c) {
         CellState::Busy => return true,
         CellState::Ready(v) => {
-            c.set(v);
+            set_forced(ev, c, v);
             v
         }
         CellState::Unclaimed => match ev.force_cell(c) {
@@ -471,7 +485,7 @@ fn walk(
                 }
                 continue;
             }
-            CellState::Ready(v) => c.set(v),
+            CellState::Ready(v) => set_forced(ev, c, v),
             CellState::Unclaimed => {}
         }
         if !demand && bail_requested(ev) {
@@ -566,7 +580,7 @@ fn range_step(ev: &mut Evaluator, c: &Cell, deep: bool, seen: &mut HashSet<u64>)
     match cell_state(c) {
         CellState::Unclaimed => {}
         CellState::Ready(v) if deep => {
-            c.set(v);
+            set_forced(ev, c, v);
             return deep_inner(ev, v, seen, false).is_ok();
         }
         _ => return true,

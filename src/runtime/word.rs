@@ -83,6 +83,10 @@ const IMM_NULL: u64 = TAG_IMM;
 const IMM_TRUE: u64 = TAG_IMM | (1 << 3);
 const IMM_FALSE: u64 = TAG_IMM | (2 << 3);
 const IMM_BLACKHOLE: u64 = TAG_IMM | (3 << 3);
+/// Forced state written by a helper fiber. Distinct from `EMPTY` so that a
+/// printer can tell a thunk the demand path forced from one only a helper
+/// forced (docs/explanation/evaluation.md, "Why the answer is identical").
+const IMM_SPECULATED: u64 = TAG_IMM | (4 << 3);
 
 pub(crate) const INT_MIN: i64 = -(1 << 60);
 pub(crate) const INT_MAX: i64 = (1 << 60) - 1;
@@ -93,6 +97,7 @@ impl Word {
     pub(crate) const TRUE: Word = Word(IMM_TRUE);
     pub(crate) const FALSE: Word = Word(IMM_FALSE);
     pub(crate) const BLACKHOLE: Word = Word(IMM_BLACKHOLE);
+    pub(crate) const SPECULATED: Word = Word(IMM_SPECULATED);
 
     /// The bit pattern, for a hash key, an atomic slot or the cache.
     #[inline]

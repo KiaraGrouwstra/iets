@@ -306,6 +306,25 @@ Three properties together:
    scheduling.** They are decided by symbol ids and by the ATerm, both of
    which are computed from the program.
 
+### Speculation is invisible
+
+A helper computes ahead of the demand path, so what it computes must leave
+no trace the program can read. Two places would show it, and both are
+closed:
+
+- **The cell.** Only the demand path unboxes a forced cell. A helper
+  forces the thunk and leaves the cell alone (`Evaluator::force_cell`,
+  `parallel::force::set_forced`). A cell that holds a value is therefore a
+  cell the program asked for, which is what `==` reads for the identity of
+  a function and what the printers read for `<CODE>`.
+- **The thunk state.** A helper publishes `SPECULATED` where the demand
+  path publishes `EMPTY` (`Word::thunk_finish`). Both say "forced"; only
+  the demand path's mark makes the value printable. The first demand of a
+  speculated thunk upgrades the mark.
+
+The cost is one branch on the force path and one store per thunk a helper
+forced and the demand path then took.
+
 Two effects would break purity, and both are handled by giving them back to
 the demand path. `builtins.trace` and `builtins.warn` in a helper fiber
 print nothing: the helper sets a sticky cancel flag and abandons the task.

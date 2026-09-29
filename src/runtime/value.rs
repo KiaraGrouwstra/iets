@@ -841,7 +841,14 @@ impl Word {
     /// payload: the thunk was not forced and is not being forced.
     #[inline]
     pub(crate) fn thunk_unforced(self, state: Word) -> bool {
-        state != Word::EMPTY && !state.is_blackhole()
+        state != Word::EMPTY && state != Word::SPECULATED && !state.is_blackhole()
+    }
+
+    /// True when the forced state came from a helper fiber and the demand
+    /// path has not asked for this thunk yet.
+    #[inline]
+    pub(crate) fn thunk_speculated(self, state: Word) -> bool {
+        state == Word::SPECULATED
     }
 
     /// The forced value once the state is EMPTY.
@@ -850,11 +857,16 @@ impl Word {
         self.thunk_code_cell().get()
     }
 
-    /// Store the forced value; returns the state word to publish.
+    /// Store the forced value; returns the state word to publish. A helper
+    /// publishes `SPECULATED` so its work stays invisible until demanded.
     #[inline]
-    pub(crate) fn thunk_finish(self, v: Word) -> Word {
+    pub(crate) fn thunk_finish(self, v: Word, demanded: bool) -> Word {
         self.thunk_code_cell().set(v);
-        Word::EMPTY
+        if demanded {
+            Word::EMPTY
+        } else {
+            Word::SPECULATED
+        }
     }
 
     /// Descriptor and entry index of a map word.

@@ -851,7 +851,9 @@ impl Evaluator {
         }
     }
 
-    /// Force the word in a cell and write the result back.
+    /// Force the word in a cell and write the result back. Only the demand
+    /// path writes: a cell that holds a value is a cell the program asked
+    /// for, which `==` and the printers read.
     #[inline]
     pub fn force_cell(&mut self, cell: &Cell) -> EvalResult<Word> {
         let w = cell.get();
@@ -859,7 +861,9 @@ impl Evaluator {
             return Ok(w);
         }
         let v = self.force_thunk(w)?;
-        cell.set(v);
+        if self.par.is_main {
+            cell.set(v);
+        }
         Ok(v)
     }
 
@@ -894,7 +898,7 @@ impl Evaluator {
         match v {
             Ok(v) => {
                 debug_assert!(!v.is_thunk());
-                let done = w.thunk_finish(v);
+                let done = w.thunk_finish(v, true);
                 state.set(done);
                 Ok(v)
             }

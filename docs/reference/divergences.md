@@ -117,10 +117,24 @@ as in Nix. What stays different: `let x = { a = throw "a"; }; in x == x`
 is true where Nix throws, and a function reached through a shortcut above
 still equals itself (`[ builtins.add ] == [ builtins.add ]`, `{ inherit
 (builtins) import; } == { inherit (builtins) import; }`, `builtins.elem
-builtins.map [ builtins.map ]`). Forcing a cell writes its value over the
-thunk, so two thunks that give the same function and are both forced in
-place look like one slot. Nix's exact rules cost about 1% of the
-instructions of a NixOS evaluation, for no difference in nixpkgs.
+builtins.map [ builtins.map ]`). A cell the demand path forces holds its
+value over the thunk, so two thunks that give the same function and are
+both demanded in place look like one slot; a helper fiber does not write,
+so the answer is the same at every worker count. Nix's exact rules cost
+about 1% of the instructions of a NixOS evaluation, for no difference in
+nixpkgs.
+
+## `«repeated»` for a list
+
+Nix keys a repeated attribute set on the set and a repeated list on the
+`Value` that holds it (`print-ambiguous.cc`), because a small list lives
+inside its `Value`. ietsp has no `Value` between a slot and a list, so the
+slot, which is the cell, stands for it. Two cells that name one list are
+then printed twice where Nix prints `«repeated»`: `let l = [ 1 2 ]; in {
+a = l; b = l; }` gives `{ a = [ 1 2 ]; b = [ 1 2 ]; }`, Nix `{ a = [ 1 2
+]; b = «repeated»; }`. Keying on the list object instead would invert the
+difference, because Nix prints `let x = [ x ]; in x` as `[ [ «repeated» ]
+]` and that needs two slots for one list. Sets match Nix exactly.
 
 ## Experimental-feature builtins
 

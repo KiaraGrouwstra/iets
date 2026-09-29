@@ -130,8 +130,14 @@ pub fn print_ambiguous(
     if w.is_thunk() {
         let st = w.thunk_state_cell().get();
         if st.is_blackhole() {
-            out.extend_from_slice("«potential infinite recursion»".as_bytes());
-        } else if w.thunk_unforced(st) {
+            // only this fiber's own claim is the program's recursion; a
+            // helper's claim is work the program never asked for
+            if crate::parallel::thunk::claimer(st) == ev.par.id {
+                out.extend_from_slice("«potential infinite recursion»".as_bytes());
+            } else {
+                out.extend_from_slice(b"<CODE>");
+            }
+        } else if w.thunk_unforced(st) || w.thunk_speculated(st) {
             out.extend_from_slice(b"<CODE>");
         } else {
             return print_ambiguous(ev, w.thunk_value(st), cell, out, seen, depth);
