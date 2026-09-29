@@ -46,13 +46,22 @@ impl Default for Arena {
 impl Arena {
     pub(crate) fn new() -> Self {
         Arena {
+            strings: FxHashMap::with_capacity_and_hasher(1 << 16, Default::default()),
+            ..Arena::placeholder()
+        }
+    }
+
+    /// An arena that reserves nothing, for a slot that a real arena is
+    /// swapped into before anything allocates from it.
+    pub(crate) fn placeholder() -> Self {
+        Arena {
             ptr: ptr::null_mut(),
             end: ptr::null_mut(),
             bytes_allocated: 0,
             mapped: 0,
             stats: Stats::default(),
             thp: true,
-            strings: FxHashMap::with_capacity_and_hasher(1 << 16, Default::default()),
+            strings: FxHashMap::default(),
             ctxs: FxHashSet::default(),
         }
     }
@@ -128,7 +137,12 @@ impl Arena {
                 -1,
                 0,
             );
-            assert!(p != libc::MAP_FAILED, "arena: mmap failed");
+            if p == libc::MAP_FAILED {
+                // no unwinding from here: other fibers hold arena pointers,
+                // and Nix ends the same way on a heap it cannot grow
+                crate::errln!("error: out of memory");
+                std::process::exit(1);
+            }
             let t0 = std::time::Instant::now();
             if self.thp {
                 libc::madvise(p, chunk, libc::MADV_HUGEPAGE);

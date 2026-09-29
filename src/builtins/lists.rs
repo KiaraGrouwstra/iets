@@ -235,6 +235,9 @@ fn gen_list(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     if n < 0 {
         bail!(ErrorKind::Eval, pos, "cannot create list of size {}", n);
     }
+    if crate::runtime::Arena::list_bytes(n as usize).is_none() {
+        bail!(ErrorKind::Eval, pos, "out of memory");
+    }
     let f = ev.force_function(
         args[0],
         Pos::NONE,

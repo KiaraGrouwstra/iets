@@ -15,6 +15,8 @@ const PREWARM: usize = 4;
 /// Pool fibers beyond this many are trimmed when the worker parks.
 const TRIM_ABOVE: usize = 16;
 const WARM_STACK: usize = 64 << 10;
+/// Cells one range task may cover, from the packed `Task`.
+const LEN_MAX: u32 = u16::MAX as u32;
 
 /// Scans of 64 polls an idle searcher makes before it parks (~2 ms). A
 /// shorter spin (64 scans) saved no user time once searchers were capped,
@@ -60,11 +62,17 @@ pub struct Task {
 }
 
 impl Task {
+    /// 8 bits of kind, the whole 32 of start, 16 of len. A container holds
+    /// at most `u32::MAX` cells and a range is at most one batch, so
+    /// nothing is dropped.
     #[inline]
     fn pack(self) -> (u64, u64) {
+        debug_assert!(self.len <= LEN_MAX);
         (
             self.obj.bits(),
-            self.kind as u64 | ((self.start as u64 & 0xFF_FFFF) << 8) | ((self.len as u64) << 32),
+            self.kind as u64
+                | ((self.start as u64) << 8)
+                | ((self.len as u64 & LEN_MAX as u64) << 40),
         )
     }
 
@@ -74,8 +82,8 @@ impl Task {
             kind: b as u8,
             // SAFETY: `a` is the `bits()` `pack` wrote for this task.
             obj: unsafe { Word::from_bits(a) },
-            start: ((b >> 8) & 0xFF_FFFF) as u32,
-            len: (b >> 32) as u32,
+            start: (b >> 8) as u32,
+            len: ((b >> 40) & LEN_MAX as u64) as u32,
         }
     }
 }
@@ -859,6 +867,33 @@ fn futex_wake(word: &AtomicU32, n: i32) {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicPtr, AtomicU64};
+
+    #[test]
+    fn a_task_survives_packing_past_the_old_24_bit_start() {
+        for t in [
+            Task {
+                kind: 7,
+                obj: Word::EMPTY,
+                start: 0,
+                len: 0,
+            },
+            Task {
+                kind: 1,
+                obj: Word::EMPTY,
+                start: 16_777_216,
+                len: 16,
+            },
+            Task {
+                kind: 8,
+                obj: Word::EMPTY,
+                start: u32::MAX,
+                len: LEN_MAX,
+            },
+        ] {
+            let (a, b) = t.pack();
+            assert_eq!(Task::unpack(a, b), t);
+        }
+    }
 
     struct Counter {
         sum: AtomicU64,

@@ -10,7 +10,10 @@ use std::sync::{Arc, RwLock};
 use crate::syntax::symbol::{FxBuild, FxHasher, Sym};
 
 const SHARDS: usize = 64;
-pub const MAX_SYMS: usize = 1 << 24;
+/// Symbols one run may hold. The id table is one `MAP_NORESERVE` mapping
+/// of `MAX_SYMS` words, so a larger cap costs address space and nothing
+/// else until the names exist. `Sym` is a `u32`, which is the real bound.
+pub const MAX_SYMS: usize = 1 << 30;
 
 #[inline]
 fn hash_bytes(b: &[u8]) -> u64 {
@@ -137,7 +140,12 @@ impl Interner {
         }
         let leaked: &'static [u8] = Box::leak(name.to_vec().into_boxed_slice());
         let id = self.shared.next.fetch_add(1, Ordering::Relaxed);
-        assert!((id as usize) < MAX_SYMS, "too many symbols");
+        if (id as usize) >= MAX_SYMS {
+            // no way back from here: the id is already handed out, and the
+            // caller's signature cannot fail
+            crate::errln!("error: too many symbols (more than {MAX_SYMS})");
+            std::process::exit(1);
+        }
         let entry: *mut &'static [u8] = Box::into_raw(Box::new(leaked));
         // SAFETY: id < MAX_SYMS indexes the mapping.
         unsafe { (*self.shared.names.add(id as usize)).store(entry, Ordering::Release) };

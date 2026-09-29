@@ -1079,11 +1079,22 @@ impl Arena {
         self.alloc_list_as(n, Stat::List)
     }
 
+    /// Bytes a list of `n` cells needs, or `None` when `n` is past what a
+    /// `ListObj` can address or the count overflows. A builtin that takes
+    /// the length from the program checks this and reports out of memory.
+    pub(crate) fn list_bytes(n: usize) -> Option<usize> {
+        if n > u32::MAX as usize {
+            return None;
+        }
+        n.checked_mul(size_of::<Cell>())?
+            .checked_add(size_of::<ListObj>())
+    }
+
     /// `alloc_list` with a stats bucket naming the producer.
     pub(crate) fn alloc_list_as(&mut self, n: usize, bucket: Stat) -> &'static ListObj {
-        self.stats
-            .note(bucket, size_of::<ListObj>() + n * size_of::<Cell>());
-        let p = self.alloc_raw(size_of::<ListObj>() + n * size_of::<Cell>(), 8) as *mut ListObj;
+        let bytes = Self::list_bytes(n).expect("list size checked by the caller");
+        self.stats.note(bucket, bytes);
+        let p = self.alloc_raw(bytes, 8) as *mut ListObj;
         // SAFETY: fresh allocation sized for header plus n cells.
         unsafe {
             p.write(ListObj {
@@ -1516,5 +1527,37 @@ mod tests {
             assert_eq!(got.cell.get().imm_int_value(), want);
         }
         assert!(a.get(Sym(999)).is_none());
+    }
+}
+
+#[cfg(test)]
+mod alloc_tests {
+    use super::*;
+
+    #[test]
+    fn a_list_too_long_to_address_has_no_size() {
+        assert_eq!(Arena::list_bytes(0), Some(size_of::<ListObj>()));
+        assert_eq!(
+            Arena::list_bytes(3),
+            Some(size_of::<ListObj>() + 3 * size_of::<Cell>())
+        );
+        assert_eq!(Arena::list_bytes(u32::MAX as usize + 1), None);
+        assert_eq!(Arena::list_bytes(i64::MAX as usize), None);
+    }
+
+    #[test]
+    fn a_speculated_thunk_is_forced_but_not_demanded() {
+        let mut arena = Arena::new();
+        let t = arena.mk_thunk_app(Word::NULL, Word::imm_int(1));
+        let st = t.thunk_state_cell();
+        assert!(t.thunk_unforced(st.get()));
+        assert!(!t.thunk_speculated(st.get()));
+        let done = t.thunk_finish(Word::imm_int(7), false);
+        assert!(!t.thunk_unforced(done));
+        assert!(t.thunk_speculated(done));
+        assert_eq!(t.thunk_value(done).imm_int_value(), 7);
+        let done = t.thunk_finish(Word::imm_int(7), true);
+        assert!(!t.thunk_unforced(done));
+        assert!(!t.thunk_speculated(done));
     }
 }
