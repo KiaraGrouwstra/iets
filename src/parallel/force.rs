@@ -188,10 +188,39 @@ pub static MAIN_POS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 pub static SAMPLE_POS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 pub static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 
-/// Parallel `Evaluator::force_thunk`: claim, evaluate, publish.
-#[inline(never)]
+/// Parallel `Evaluator::force_thunk`: claim, evaluate, publish. A thunk
+/// another fiber already forced is answered here and not in the claim
+/// protocol, the way the sequential path answers it. A helper leaves the
+/// cell boxed, so this is the whole cost of reading a value a helper
+/// computed, and every later reader of that cell pays it again.
+#[inline]
 pub fn force_thunk(ev: &mut Evaluator, w: Word) -> EvalResult<Word> {
     let cell = w.thunk_state_cell();
+    // Acquire pairs with the publish that released the value cell.
+    // SAFETY: the word a fiber stored in this state cell.
+    let st = unsafe { Word::from_bits(cell.atomic().load(Ordering::Acquire)) };
+    if !st.is_blackhole() && !w.thunk_unforced(st) {
+        if ev.par.is_main && w.thunk_speculated(st) {
+            take_speculated(ev, cell);
+        }
+        return Ok(w.thunk_value(st));
+    }
+    claim_and_run(ev, w, cell)
+}
+
+/// The demand path took a value a helper computed: the mark is upgraded so
+/// the printers show the value, and the effects parked on the thunk become
+/// the program's.
+#[inline]
+fn take_speculated(ev: &mut Evaluator, cell: &Cell) {
+    cell.set(Word::EMPTY);
+    if NPENDING.load(Ordering::Relaxed) != 0 {
+        release(ev, cell as *const Cell as u64);
+    }
+}
+
+#[inline(never)]
+fn claim_and_run(ev: &mut Evaluator, w: Word, cell: &'static Cell) -> EvalResult<Word> {
     let me = ev.par.id;
     let key = cell as *const Cell as u64;
     // SAFETY (every `slot_mut` below): this fiber owns its slot, and each
@@ -212,10 +241,7 @@ pub fn force_thunk(ev: &mut Evaluator, w: Word) -> EvalResult<Word> {
             Claim::Won(p) => break p,
             Claim::Value(st) => {
                 if ev.par.is_main && w.thunk_speculated(st) {
-                    cell.set(Word::EMPTY);
-                    if NPENDING.load(Ordering::Relaxed) != 0 {
-                        release(ev, key);
-                    }
+                    take_speculated(ev, cell);
                 }
                 return Ok(w.thunk_value(st));
             }
