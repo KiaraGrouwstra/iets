@@ -1367,6 +1367,7 @@ impl Evaluator {
     fn apply_inner(&mut self, func: Word, args: &[Word], pos: Pos) -> EvalResult<Word> {
         let mut cur = self.force(func)?;
         let mut args = args;
+        let mut functors = 0u32;
         while !args.is_empty() {
             match cur.view() {
                 Value::Lambda(l) => {
@@ -1412,18 +1413,26 @@ impl Evaluator {
                             crate::print::show_value_short(self, cur)
                         );
                     };
+                    // eval.cc:callFunction recurses through the functor, so
+                    // its call depth bounds the chain; this loop counts the
+                    // chain itself, against the same limit, and a functor
+                    // that gives back a functor ends there
+                    functors += 1;
+                    if functors > MAX_CALL_DEPTH {
+                        bail!(
+                            ErrorKind::StackOverflow,
+                            pos,
+                            "stack overflow; max-call-depth exceeded"
+                        );
+                    }
                     let f = self.force_cell(&functor.cell)?;
-                    // eval.cc:callFunction passes the set and the argument in
-                    // one call, so a functor that gives back a functor
-                    // recurses and reaches max-call-depth
-                    cur = self.apply(f, &[cur, args[0]], pos).map_err(|mut e| {
+                    cur = self.apply(f, &[cur], pos).map_err(|mut e| {
                         e.add_trace(
                             pos,
                             "while calling a functor (an attribute set with a '__functor' attribute)",
                         );
                         e
                     })?;
-                    args = &args[1..];
                 }
                 _ => bail!(
                     ErrorKind::Type,
