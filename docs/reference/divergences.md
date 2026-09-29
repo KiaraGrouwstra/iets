@@ -136,6 +136,27 @@ a = l; b = l; }` gives `{ a = [ 1 2 ]; b = [ 1 2 ]; }`, Nix `{ a = [ 1 2
 difference, because Nix prints `let x = [ x ]; in x` as `[ [ «repeated» ]
 ]` and that needs two slots for one list. Sets match Nix exactly.
 
+## The limits of a run
+
+Both evaluators stop on a program that asks for too much, with the same
+text and exit code but at another point.
+
+`error: stack overflow (possible infinite recursion)`, exit 1. Nix's stack
+is the thread's, so `ulimit -s` sets the depth; ietsp gives the demand
+path 4 GiB and takes a much deeper recursion. A file of 400,000 `1 + 1`
+terms is Nix's error and ietsp's answer.
+
+`error: out of memory`, exit 1. Nix prints one or more
+`GC Warning: Out of Memory!` lines first, and ietsp adds its usual
+`while calling the …` trace.
+
+`error: too many symbols`, exit 1. Above 2^30 attribute names in one run
+ietsp stops; Nix has no limit of its own.
+
+A `--dump-drvs` file that a helper fiber wrote waits for the demand path,
+so a write that fails after the value was demanded is a `warning:` line
+and not the error it is on the demand path.
+
 ## Experimental-feature builtins
 
 Nix leaves `fetchTree` out of `builtins` unless `fetch-tree` or `flakes`
