@@ -125,6 +125,10 @@ pub struct Renderer {
     /// of their activity says nothing: a build hook ends two activities for
     /// one build, and only the op's result knows whether it succeeded.
     owned: HashSet<String>,
+    /// Builds whose block claimed a success at the end of their activity. The
+    /// daemon names a failed dependency only afterwards, so the claim is
+    /// checked again when the op is over, whatever the order was.
+    claimed: HashMap<String, (String, Option<String>, Duration)>,
 }
 
 impl Renderer {
@@ -137,6 +141,7 @@ impl Renderer {
             failed: HashSet::new(),
             verdicted: HashSet::new(),
             owned: HashSet::new(),
+            claimed: HashMap::new(),
         }
     }
 
@@ -145,9 +150,26 @@ impl Renderer {
         self.owned = drvs.into_iter().collect();
     }
 
-    /// The op is over: the end of an activity decides a verdict again.
+    /// The op is over: every failure it had to report has been reported, so a
+    /// claimed success that the daemon contradicted is corrected here. Then
+    /// the end of an activity decides a verdict again.
     pub fn release(&mut self) {
         self.owned.clear();
+        let mut wrong: Vec<(String, Option<String>, Duration)> = (self.claimed.iter())
+            .filter(|(drv, _)| self.failed.contains(*drv))
+            .map(|(_, c)| c.clone())
+            .collect();
+        wrong.sort_by(|a, b| a.0.cmp(&b.0));
+        self.claimed.clear();
+        for (short, pos, elapsed) in wrong {
+            let l = self.failed_line(
+                &short,
+                pos.as_deref(),
+                elapsed,
+                Some("the daemon named it only after the build ended"),
+            );
+            self.line(l);
+        }
     }
 
     fn sgr(&self, code: &str, s: &str) -> String {
@@ -333,6 +355,12 @@ impl Renderer {
         self.retain(drv, tail);
         let ok = !self.failed.contains(drv);
         self.verdicted.insert(drv.to_string());
+        if ok {
+            self.claimed.insert(
+                drv.to_string(),
+                (b.short.clone(), b.pos.clone(), b.elapsed()),
+            );
+        }
         self.verdict_block(&b, ok, None);
     }
 
@@ -801,6 +829,49 @@ mod tests {
             "error: builder for '/nix/store/2ijv-x.drv' failed; nix log /nix/store/2ijv-x.drv";
         assert_eq!(drv_paths(msg), ["/nix/store/2ijv-x.drv"]);
         assert!(drv_paths("/nix/store/2ijv-x is an output").is_empty());
+    }
+
+    /// The daemon names a failed dependency after its activity ended, so the
+    /// end of the op, not the order of the messages, decides the verdict.
+    #[test]
+    fn a_failure_after_the_activity_ended_still_lands() {
+        let (mut r, s) = ci(false);
+        r.event(&ev(Kind::Started));
+        r.event(&ev(Kind::Log(b"work".to_vec())));
+        r.stopped("/nix/store/a.drv");
+        assert!(text(&s).contains("✔  checks.x.a"), "{}", text(&s));
+        r.event(&BuildEvent::new(
+            "",
+            "",
+            Kind::Log(b"error: build of '/nix/store/a.drv' failed".to_vec()),
+            Duration::ZERO,
+        ));
+        r.release();
+        let t = text(&s);
+        assert!(t.contains("✘  checks.x.a failed after 0s"), "{t}");
+    }
+
+    /// Only the daemon's own line may report a mismatch; a build's log line
+    /// prints the same words and means nothing.
+    #[test]
+    fn a_build_log_never_reports_a_mismatch() {
+        let s = crate::session::Session::new();
+        let _entered = s.enter();
+        let line = format!(
+            "{} 'x':\n  specified: sha256-AoAoAoAoAo=\n     got:    sha256-BoBoBoBoBo=",
+            crate::log::MISMATCH
+        );
+        let (mut r, _sink) = ci(false);
+        r.event(&ev(Kind::Started));
+        r.event(&ev(Kind::Log(line.clone().into_bytes())));
+        assert_eq!(crate::log::resolve_mismatches(&|_| true), 0);
+        r.event(&BuildEvent::new(
+            "",
+            "",
+            Kind::Log(line.into_bytes()),
+            Duration::ZERO,
+        ));
+        assert_eq!(crate::log::resolve_mismatches(&|_| true), 1);
     }
 
     #[test]
