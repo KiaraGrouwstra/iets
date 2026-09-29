@@ -779,8 +779,9 @@ fn drv_info(ev: &mut Evaluator, p: &StorePath, pos: Pos) -> EvalResult<DrvInfo> 
 }
 
 /// Mirrors `computeFSClosure` on a `.drv` path as used for `DrvDeep` context:
-/// the drv, its inputs, and their closures. Only `.drv` files have known
-/// references here; other store paths are leaves.
+/// the drv, its inputs, and their closures. A source this evaluation added
+/// with `builtins.toFile` carries its own references; a store path that was
+/// already on disk is a leaf, because eval does not ask the daemon.
 fn drv_closure(
     ev: &mut Evaluator,
     start: &StorePath,
@@ -798,6 +799,11 @@ fn drv_closure(
             todo.extend(info.references);
             out.push((p, Some(info.outputs)));
         } else {
+            if let Some(o) = ev.known.origin(&p)
+                && let Some(refs) = o.text_refs()
+            {
+                todo.extend(refs.iter().cloned());
+            }
             out.push((p, None));
         }
     }

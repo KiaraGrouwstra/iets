@@ -316,8 +316,22 @@ def main [] {
 }
 '# | save $"($d)/multi.nix"
 
+  # a `=drv` context closure over a toFile text that names another toFile
+  r#'let
+  a = builtins.toFile "classic-e2e-tf-a" "x";
+  b = builtins.toFile "classic-e2e-tf-b" "ref ${a}";
+  c = builtins.toFile "classic-e2e-tf-c" "ref ${b}";
+  dep = name: src: derivation { inherit name src; system = "x86_64-linux"; builder = "/bin/sh"; };
+in [
+  (derivation { name = "classic-e2e-tf-1"; system = "x86_64-linux"; builder = "/bin/sh"; x = (dep "classic-e2e-tf-in1" b).drvPath; })
+  (derivation { name = "classic-e2e-tf-2"; system = "x86_64-linux"; builder = "/bin/sh"; x = (dep "classic-e2e-tf-in2" c).drvPath; })
+]
+'# | save $"($d)/textrefs.nix"
+
   $ok = ($ok | append (cmp-case "instantiate a custom drv"
     (run-both $farm nix-instantiate $"($d)/default.nix")))
+  $ok = ($ok | append (cmp-case "drv closure follows the references of a toFile"
+    (run-both $farm nix-instantiate $"($d)/textrefs.nix")))
   $ok = ($ok | append (cmp-case "instantiate --readonly-mode"
     (run-both $farm nix-instantiate --readonly-mode $"($d)/default.nix")))
 
