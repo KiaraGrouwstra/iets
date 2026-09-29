@@ -110,7 +110,15 @@ impl Evaluator {
             }
             Value::Bool(b) if coerce_more => Ok(Cow::Borrowed(if b { b"1" } else { b"" })),
             Value::Int(i) if coerce_more => Ok(Cow::Owned(i.to_string().into_bytes())),
-            Value::Float(f) if coerce_more => Ok(Cow::Owned(format!("{f:.6}").into_bytes())),
+            // std::to_string(double) is glibc's %f, which keeps a NaN's sign bit
+            Value::Float(f) if coerce_more => Ok(Cow::Owned(
+                match (f.is_nan(), f.is_sign_negative()) {
+                    (true, true) => "-nan".to_string(),
+                    (true, false) => "nan".to_string(),
+                    _ => format!("{f:.6}"),
+                }
+                .into_bytes(),
+            )),
             Value::Null if coerce_more => Ok(Cow::Borrowed(b"")),
             Value::List(l) if coerce_more => {
                 let mut out: Vec<u8> = Vec::new();
