@@ -79,10 +79,13 @@ crafted entry must be a miss and never a crash. The IR decoder therefore
 checks every stored constant against the immediate encodings the writer can
 produce — a word is never a raw bit pattern the evaluator would follow as a
 pointer — checks every index against what it has already decoded (a local
-slot against its frame, a `with` depth against a `with` scope, a symbol
-against the entry's name table, a position against the file's length), and
-bounds both its nesting and the items its counted runs may ask for by the
-entry's own length.
+slot against its frame, a `with` depth against a `with` scope and the depth
+before it, a symbol against the entry's name table, a position against the
+file's length), checks every invariant the evaluator reads without one of its
+own (a `with` depth list rises, an `inherit (e)` binding has a `from` list,
+an allow table is in the order the writer wrote it), and bounds both its
+nesting and the items its counted runs may ask for by the entry's own
+length.
 
 **ietsp removes only what ietsp put there.** A wipe is scoped to the names
 that store's own layout makes — the version file, the lock, the stamp, the

@@ -646,7 +646,7 @@ pub fn deserialize(
         }
     }
     let nallows = d.count();
-    let mut allows = crate::lint::allow::Allows::default();
+    let mut lines = Vec::with_capacity(nallows.min(1024));
     for _ in 0..nallows {
         if !d.ok {
             break;
@@ -654,8 +654,15 @@ pub fn deserialize(
         let start = d.u32();
         let end = d.u32();
         let mask = d.u64();
-        allows.add(start, end, mask);
+        lines.push(crate::lint::allow::Line { start, end, mask });
     }
+    let allows = match crate::lint::allow::Allows::from_sorted(lines) {
+        Some(a) => a,
+        None => {
+            d.ok = false;
+            crate::lint::allow::Allows::default()
+        }
+    };
     if stats {
         crate::errln!(
             "ir-cache   syms={} {}us nodes {}us",
@@ -923,10 +930,19 @@ impl<'a> De<'a, '_> {
             scopes.push(match self.u8() {
                 0 => BindScope::Own,
                 1 => BindScope::Outer,
-                _ => BindScope::From,
+                2 => BindScope::From,
+                _ => {
+                    self.ok = false;
+                    BindScope::Own
+                }
             });
         }
         let nfrom = self.count();
+        // a `From` bind is evaluated in the env of the `from` thunks, which
+        // `eval::inherit_env` does not make for an empty `from` list
+        if nfrom == 0 && scopes.contains(&BindScope::From) {
+            self.ok = false;
+        }
         let perm = Self::perm(&syms, if sorted { nfrom } else { 0 });
         if sorted {
             self.frames.push(Frame {
@@ -1008,10 +1024,14 @@ impl<'a> De<'a, '_> {
                 let sym = self.sym();
                 let n = self.count();
                 let withs = self.fill(n, |d| d.u32());
-                // each names a `with` env, whose slot 0 the lookup reads
-                if !withs
-                    .iter()
-                    .all(|w| self.frame_of(*w).is_some_and(|f| f.with))
+                // each names a `with` env, whose slot 0 the lookup reads.
+                // `eval_with_var` walks the list as a rising sequence of
+                // depths, so a list that does not rise would walk past the
+                // outermost env it checked here.
+                if !withs.windows(2).all(|w| w[0] < w[1])
+                    || !withs
+                        .iter()
+                        .all(|w| self.frame_of(*w).is_some_and(|f| f.with))
                 {
                     self.ok = false;
                 }
@@ -1261,6 +1281,28 @@ mod tests {
         (ev, bytes, base, SRC.len() as u32)
     }
 
+    /// What `ir` evaluates to, deeply, or the error it gives.
+    fn strict_print(ev: &mut Evaluator, ir: IrRef) -> String {
+        let root = ev.root_env;
+        let r = ev.eval(root, ir).and_then(|w| {
+            let w = ev.force_deep(w)?;
+            let mut out = Vec::new();
+            crate::print::print_ambiguous(
+                ev,
+                w,
+                1,
+                &mut out,
+                &mut std::collections::HashSet::new(),
+                0,
+            )?;
+            Ok(String::from_utf8_lossy(&out).into_owned())
+        });
+        match r {
+            Ok(s) => s,
+            Err(e) => format!("error: {}", e.msg),
+        }
+    }
+
     /// Every case runs against one evaluator: building one and compiling
     /// `SRC` costs far more than a decode.
     #[test]
@@ -1314,6 +1356,61 @@ mod tests {
         huge.push(10); // a list
         huge.extend_from_slice(&[0xff, 0xff, 0xff, 0xff, 0x0f]); // of u32::MAX items
         assert!(!loads(&huge), "a count past the entry misses");
+    }
+
+    /// Every changed byte of a real entry, over every source shape the
+    /// decoder has an invariant for. What the decoder accepts is evaluated
+    /// deeply: the decoder's job is that no entry can make the evaluator read
+    /// a slot, a `with` env or an inherit env that is not there, and those
+    /// faults are a panic or a SIGSEGV, not a wrong value. A changed byte
+    /// that names another symbol is a well-formed entry for another program,
+    /// and the store's integrity check — not the decoder — is what stops it
+    /// (`a_changed_byte_of_a_stored_entry_is_a_miss`).
+    #[test]
+    fn a_changed_byte_never_makes_the_evaluator_read_past_its_env() {
+        // the `with` depths, an `inherit (e)` frame, nested scopes, formals
+        // with defaults, a rec set and constants of every stored kind
+        const CASES: &[&str] = &[
+            "with { a = 1; }; with { b = 2; }; with { c = 3; }; [ a b c ]\n",
+            "let s = { a = 1; b = 2; }; in (let inherit (s) a b; in a + b)\n",
+            "let f = { x, y ? x + 1, ... }@all: [ x y all ]; in f { x = 4; z = 9; }\n",
+            "rec { a = 1; b = a + 1; c = [ b \"s\" ./p 2.5 true null ]; }\n",
+            "let g = a: with { x = a; }; { inherit x; y = builtins.add x 1; }; in g 7\n",
+        ];
+        for (n, src) in CASES.iter().enumerate() {
+            let path = format!("/t/fuzz{n}.nix").into_bytes();
+            let mut ev = Evaluator::new();
+            let file = ev.add_file(&path, src.as_bytes());
+            let base = ev.files[file.0 as usize].base;
+            let span = src.len() as u32;
+            let ir = ev
+                .compile_source(&path, src.as_bytes().to_vec(), b"/t", None)
+                .expect("compile");
+            let bytes = serialize(&ev, ir, base, &[], &crate::lint::allow::Allows::default())
+                .expect("entry");
+            let want = strict_print(&mut ev, ir);
+            assert!(!want.is_empty(), "case {n} evaluates");
+            let mut loaded = 0;
+            for i in MAGIC.len()..bytes.len() {
+                for b in [0x00_u8, 0x01, 0x02, 0x7f, 0x80, 0xff] {
+                    if bytes[i] == b {
+                        continue;
+                    }
+                    let mut bad = bytes.clone();
+                    bad[i] = b;
+                    let Some((ir, _, _)) = deserialize(&mut ev, &bad, base, span, false) else {
+                        continue;
+                    };
+                    loaded += 1;
+                    // the assertion is that this returns at all
+                    let _ = strict_print(&mut ev, ir);
+                }
+            }
+            // the cases are chosen so that some changed bytes still decode
+            // (a position, a name-table index); if none did, the fuzz proved
+            // nothing about the evaluator
+            assert!(loaded > 0, "case {n} accepted no changed byte");
+        }
     }
 
     /// The nesting cap is sized for the evaluator's stack, not a test

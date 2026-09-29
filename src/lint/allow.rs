@@ -44,6 +44,17 @@ impl Allows {
         &self.lines
     }
 
+    /// The table a stored entry holds, which the writer wrote in `start`
+    /// order (`lines`). Taking it whole is linear where `add` per line is
+    /// quadratic for an order the writer never produces; a table in any other
+    /// order is not one this wrote, so it is no table and the caller drops
+    /// the entry.
+    pub fn from_sorted(lines: Vec<Line>) -> Option<Allows> {
+        let ok = lines.windows(2).all(|w| w[0].start < w[1].start)
+            && lines.iter().all(|l| l.mask != 0 && l.start < l.end);
+        ok.then_some(Allows { lines })
+    }
+
     pub fn clear(&mut self) {
         self.lines.clear();
     }
