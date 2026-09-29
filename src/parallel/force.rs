@@ -94,12 +94,14 @@ pub unsafe fn ev_of(slot: *mut Slot) -> &'static mut Evaluator {
 pub unsafe fn init_ctx(ev: &mut Evaluator, slot: *mut Slot) {
     // SAFETY: per the contract; only the slot's own fields are read, and
     // the pointer is stored for `slot_mut` to derive borrows from.
-    let (id, is_main) = unsafe { ((*slot).id, (*slot).is_main) };
+    let (id, is_main, stack_lo) =
+        unsafe { ((*slot).id, (*slot).is_main, (*slot).fiber.stack.limit()) };
     ev.par = Ctx {
         on: true,
         id,
         is_main,
         cancelled: false,
+        stack_lo,
         root: 0,
         slot,
     };
@@ -139,6 +141,38 @@ fn slot_ref(ev: &Evaluator) -> &'static Slot {
 
 fn cancelled() -> Box<Error> {
     Error::boxed(ErrorKind::Cancelled, "cancelled", Pos::NONE)
+}
+
+/// Address of a frame of the running fiber, as a bound on the stack
+/// pointer. Not inlined away: the local must have a stack slot.
+#[inline(never)]
+fn here() -> usize {
+    let probe = 0u8;
+    std::hint::black_box(&probe) as *const u8 as usize
+}
+
+/// The fiber is about to go below the margin above its guard page. A
+/// helper drops its task, so the demand path — which has the same stack as
+/// the sequential run — decides the result; the demand path reports what
+/// Nix reports.
+#[cold]
+fn stack_exhausted(ev: &mut Evaluator, pos: Pos) -> Box<Error> {
+    if ev.par.is_main {
+        Error::boxed(
+            ErrorKind::StackOverflow,
+            "stack overflow (possible infinite recursion)",
+            pos,
+        )
+    } else {
+        ev.par.cancelled = true;
+        cancelled()
+    }
+}
+
+/// True when this fiber has less than the margin of stack left.
+#[inline]
+pub fn stack_low(ev: &Evaluator) -> bool {
+    ev.par.stack_lo != 0 && here() < ev.par.stack_lo
 }
 
 /// True once this helper fiber must stop: cancelled by deadlock resolution.
@@ -216,6 +250,11 @@ pub fn force_thunk(ev: &mut Evaluator, w: Word) -> EvalResult<Word> {
         ev.par.cancelled = true;
         thunk::publish(unsafe { slot_mut(ev) }, cell, payload);
         return Err(cancelled());
+    }
+    if stack_low(ev) {
+        let e = stack_exhausted(ev, ev.thunk_pos(w));
+        thunk::publish(unsafe { slot_mut(ev) }, cell, payload);
+        return Err(e);
     }
     // effects below this point belong to the first thunk this helper
     // claimed: the demand path that takes its value takes them too
@@ -538,6 +577,9 @@ fn deep_inner(
     seen: &mut HashSet<u64>,
     demand: bool,
 ) -> EvalResult<()> {
+    if stack_low(ev) {
+        return Err(stack_exhausted(ev, Pos::NONE));
+    }
     match w.view() {
         Value::Attrs(a) => {
             if !seen.insert(w.bits()) {

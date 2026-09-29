@@ -2,7 +2,8 @@ use std::process::exit;
 
 use ietsp::cli::{self, help};
 
-const STACK_SIZE: usize = 4 << 30;
+/// The demand path has this stack whether it runs here or on a fiber.
+const STACK_SIZE: usize = ietsp::parallel::fiber::MAIN_STACK;
 
 /// Rust masks SIGPIPE, so a closed stdout (`ietsp eval-jobs | head`) surfaces
 /// as an EPIPE panic. The default disposition makes the process die quietly.

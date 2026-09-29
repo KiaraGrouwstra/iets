@@ -100,6 +100,10 @@ in builtins.foldl' (a: b: a + builtins.foldl' (x: y: x + y) 0 b) 0 rows'#]
     [print-code false true $"let ($slow) l = map \(x: x + slow 20000\) [ 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 ]; in builtins.seq \(builtins.any \(x: x > 0\) l\) l"]
     # A NaN is not equal to itself, and keeps its sign when printed.
     ["nan" true true r#'let inf = 1.0e308 * 10.0; nan = inf - inf; in [ (nan == nan) nan (0.0 - nan) inf (-inf) ]'#]
+    # A chain deeper than a helper stack, and deeper than nix takes: the
+    # demand path has the stack of the sequential run, and a helper that
+    # runs out of stack drops its task.
+    [deep-chain true false r#'let xs = builtins.genList (i: i) 200000; r = builtins.foldl' (acc: x: { v = acc; }) null xs; in builtins.deepSeq r 1'#]
     # A thunk many fan-out cells share and that fails: one failure stops the
     # speculation instead of starting it again from every task.
     [failing-shared true true $"let ($slow) bad = builtins.seq \(slow 100000\) \(throw \"bad\"\); l = builtins.genList \(i: bad + i\) 20000; in builtins.foldl' \(a: b: a + b\) 0 l"]

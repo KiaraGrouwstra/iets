@@ -242,6 +242,7 @@ impl Runtime {
                 .name(format!("ietsp-w{i}"))
                 .stack_size(4 << 20)
                 .spawn(crate::session::bind(move || {
+                    fiber::install_overflow_handler();
                     let mut w = Worker::new(i);
                     rt.prewarm(&mut w);
                     rt.drain_loop(&mut w, || rt.shutdown.load(Ordering::Acquire));
@@ -264,8 +265,10 @@ impl Runtime {
             let _ = super::force::START.set(std::time::Instant::now());
             self.spawn_timeline();
         }
+        fiber::install_overflow_handler();
         let mut w = Worker::new(0);
-        let slot = self.new_slot(&mut w, user)?;
+        // the demand path keeps the stack it has at one worker
+        let slot = self.new_slot_sized(&mut w, user, fiber::MAIN_STACK)?;
         // SAFETY: fresh slot, owned by this thread.
         unsafe {
             (*slot).is_main = true;
@@ -367,10 +370,19 @@ impl Runtime {
     // ---- fibers -----------------------------------------------------------
 
     fn new_slot(&self, w: &mut Worker, user: *mut ()) -> Result<*mut Slot, fiber::StackError> {
+        self.new_slot_sized(w, user, self.stack_size)
+    }
+
+    fn new_slot_sized(
+        &self,
+        w: &mut Worker,
+        user: *mut (),
+        stack: usize,
+    ) -> Result<*mut Slot, fiber::StackError> {
         w.fibers_created += 1;
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let slot = Box::into_raw(Box::new(Slot {
-            fiber: Fiber::new(self.stack_size, slot_entry, std::ptr::null_mut())?,
+            fiber: Fiber::new(stack, slot_entry, std::ptr::null_mut())?,
             id,
             cancel: AtomicBool::new(false),
             is_main: false,

@@ -347,6 +347,20 @@ its task, before the claim and again after a wait, so only the demand path
 evaluates it once more and reports. A publish also wakes the demand fiber
 first, since every fiber behind it only speculates.
 
+### Stack
+
+The demand fiber has the stack of the process main thread
+(`fiber::MAIN_STACK`), so a program that works at one worker is not a
+crash at four. A helper's stack is smaller, and the force path and the
+deep walk stop a fiber that comes within `fiber::MARGIN` of its guard
+page: a helper drops its task in silence and the demand path computes the
+value, the demand fiber reports what Nix reports. A guard page that is hit
+anyway — the compiler recurses over a deeply nested expression without
+forcing — is caught by a handler on an alternate signal stack, which
+prints Nix's `stack overflow (possible infinite recursion)` and exits 1
+instead of dying without a word. `sigaltstack` is per thread and the
+alternate stack is not a fiber stack, so a fiber switch keeps it valid.
+
 Two effects would break purity, and both are handled by giving them back to
 the demand path. `builtins.trace` and `builtins.warn` in a helper fiber
 print nothing: the helper sets a sticky cancel flag and abandons the task.

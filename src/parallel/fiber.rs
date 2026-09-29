@@ -6,10 +6,17 @@
 //! swaps stack pointers. Nothing else is saved: the compiler treats the
 //! switch as an ordinary call, so caller-saved registers are already dead.
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 pub const DEFAULT_STACK: usize = 256 << 20;
+/// Stack of the demand fiber and of the process main thread. The demand
+/// path must have the same room at every worker count, or a program that
+/// works with one worker crashes with four.
+pub const MAIN_STACK: usize = 4 << 30;
 const GUARD: usize = 4096;
+/// Bytes a fiber keeps in hand above its guard page. The force path
+/// refuses to go below it, so an overflow is reported instead of taken.
+pub const MARGIN: usize = 1 << 20;
 
 /// Address space the fiber stacks of one runtime may reserve. The mappings
 /// are `MAP_NORESERVE`, so they cost address space and page tables, not
@@ -52,9 +59,12 @@ impl std::fmt::Display for StackError {
 
 impl std::error::Error for StackError {}
 
-/// Check the reservation `workers` fibers of `stack_size` bytes make.
+/// Check the reservation the demand fiber and `workers - 1` helper fibers
+/// of `stack_size` bytes make.
 pub fn check_reservation(workers: usize, stack_size: usize) -> Result<(), StackError> {
-    let bytes = stack_size.saturating_mul(workers);
+    let bytes = stack_size
+        .saturating_mul(workers.saturating_sub(1))
+        .saturating_add(MAIN_STACK);
     if bytes > MAX_RESERVE {
         return Err(StackError {
             bytes,
@@ -62,6 +72,74 @@ pub fn check_reservation(workers: usize, stack_size: usize) -> Result<(), StackE
         });
     }
     Ok(())
+}
+
+// ---- guard pages ----------------------------------------------------------
+
+/// Base addresses of the fiber stacks, for the SIGSEGV handler. A fixed
+/// table because the handler may not lock; a run with more fibers than
+/// this loses only the message, not the exit code.
+const MAX_GUARDS: usize = 8192;
+static GUARDS: [AtomicUsize; MAX_GUARDS] = [const { AtomicUsize::new(0) }; MAX_GUARDS];
+static NGUARDS: AtomicUsize = AtomicUsize::new(0);
+
+fn register_guard(base: usize) {
+    let i = NGUARDS.fetch_add(1, Ordering::Relaxed);
+    if i < MAX_GUARDS {
+        GUARDS[i].store(base, Ordering::Release);
+    }
+}
+
+fn is_guard(addr: usize) -> bool {
+    let n = NGUARDS.load(Ordering::Acquire).min(MAX_GUARDS);
+    (0..n).any(|i| {
+        let b = GUARDS[i].load(Ordering::Acquire);
+        b != 0 && addr >= b && addr < b + GUARD
+    })
+}
+
+const OVERFLOW_MSG: &[u8] = b"error: stack overflow (possible infinite recursion)\n";
+
+extern "C" fn on_segv(sig: i32, info: *mut libc::siginfo_t, _ctx: *mut libc::c_void) {
+    // SAFETY: the kernel passes a valid siginfo for SIGSEGV/SIGBUS.
+    let addr = unsafe { (*info).si_addr() } as usize;
+    if is_guard(addr) {
+        // SAFETY: write and _exit are async-signal-safe.
+        unsafe {
+            libc::write(2, OVERFLOW_MSG.as_ptr() as *const _, OVERFLOW_MSG.len());
+            libc::_exit(1);
+        }
+    }
+    // not ours: let the default disposition produce the usual crash
+    // SAFETY: restoring the default handler and re-raising is the standard
+    // way to report a fault we do not own.
+    unsafe {
+        libc::signal(sig, libc::SIG_DFL);
+    }
+}
+
+/// Install the guard-page handler on this thread. `sigaltstack` is per
+/// thread, and the alternate stack is separate from every fiber stack, so
+/// it stays valid across a fiber switch.
+pub fn install_overflow_handler() {
+    const ALT: usize = 64 << 10;
+    // SAFETY: a leaked alternate stack, and a handler that only writes to
+    // fd 2 and exits. Both calls are the documented use of the API.
+    unsafe {
+        let mem = Box::leak(vec![0u8; ALT].into_boxed_slice());
+        let ss = libc::stack_t {
+            ss_sp: mem.as_mut_ptr() as *mut _,
+            ss_flags: 0,
+            ss_size: ALT,
+        };
+        libc::sigaltstack(&ss, std::ptr::null_mut());
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = on_segv as *const () as usize;
+        sa.sa_flags = libc::SA_ONSTACK | libc::SA_SIGINFO;
+        libc::sigemptyset(&mut sa.sa_mask);
+        libc::sigaction(libc::SIGSEGV, &sa, std::ptr::null_mut());
+        libc::sigaction(libc::SIGBUS, &sa, std::ptr::null_mut());
+    }
 }
 
 /// Fiber lifecycle. Transitions are documented in docs/explanation/evaluation.md.
@@ -100,7 +178,14 @@ impl Stack {
             libc::mprotect(p, GUARD, libc::PROT_NONE);
             p as *mut u8
         };
+        register_guard(base as usize);
         Ok(Stack { base, size })
+    }
+
+    /// Lowest address the fiber may use before it must stop.
+    #[inline]
+    pub fn limit(&self) -> usize {
+        self.base as usize + GUARD + MARGIN
     }
 
     #[inline]
@@ -406,8 +491,9 @@ mod tests {
         assert_eq!(
             e.to_string(),
             format!(
-                "cannot reserve 262144 MiB of fiber stacks: over the {} MiB limit, \
+                "cannot reserve {} MiB of fiber stacks: over the {} MiB limit, \
                  lower --workers or IETSP_FIBER_STACK_MB",
+                (DEFAULT_STACK * 1023 + MAIN_STACK) >> 20,
                 MAX_RESERVE >> 20
             )
         );

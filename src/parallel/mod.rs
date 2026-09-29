@@ -27,6 +27,9 @@ pub struct Ctx {
     pub id: u32,
     pub is_main: bool,
     pub cancelled: bool,
+    /// Lowest stack address this fiber may use. Zero on the sequential
+    /// path, which runs on the thread stack and never checks.
+    pub stack_lo: usize,
     /// The outermost thunk this helper claimed in its task. Effects it
     /// produces wait on that thunk's demand.
     pub root: u64,
@@ -40,6 +43,7 @@ impl Default for Ctx {
             id: 0,
             is_main: true,
             cancelled: false,
+            stack_lo: 0,
             root: 0,
             slot: std::ptr::null_mut(),
         }
