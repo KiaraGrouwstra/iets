@@ -4,7 +4,7 @@
 
 use super::arena::{Arena, Interned, Stat, StrEntry};
 use super::word::{
-    Cell, Obj, TAG_IMM, TAG_INT, TAG_LAMBDA, TAG_THUNK, TAG_THUNK_APP, TAG_THUNK_APP2,
+    Cell, FORCED_BITS, Obj, TAG_IMM, TAG_INT, TAG_LAMBDA, TAG_THUNK, TAG_THUNK_APP, TAG_THUNK_APP2,
     TAG_THUNK_MAP, Word,
 };
 use crate::compile::ir::{Ir, LambdaIr};
@@ -841,7 +841,7 @@ impl Word {
     /// payload: the thunk was not forced and is not being forced.
     #[inline]
     pub(crate) fn thunk_unforced(self, state: Word) -> bool {
-        state != Word::EMPTY && state != Word::SPECULATED && !state.is_blackhole()
+        state.bits() & !FORCED_BITS != 0 && !state.is_blackhole()
     }
 
     /// True when the forced state came from a helper fiber and the demand

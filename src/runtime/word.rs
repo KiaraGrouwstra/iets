@@ -86,7 +86,12 @@ const IMM_BLACKHOLE: u64 = TAG_IMM | (3 << 3);
 /// Forced state written by a helper fiber. Distinct from `EMPTY` so that a
 /// printer can tell a thunk the demand path forced from one only a helper
 /// forced (docs/explanation/evaluation.md, "Why the answer is identical").
-const IMM_SPECULATED: u64 = TAG_IMM | (4 << 3);
+/// One bit above `EMPTY`, so "forced" is one mask on the force path; it is
+/// no payload, because a payload is a pointer or a tagged immediate.
+const IMM_SPECULATED: u64 = 0x40;
+/// Bits a forced state word may hold. `state & !FORCED_BITS == 0` says
+/// the thunk is forced, by the demand path or by a helper.
+pub(crate) const FORCED_BITS: u64 = IMM_SPECULATED;
 
 pub(crate) const INT_MIN: i64 = -(1 << 60);
 pub(crate) const INT_MAX: i64 = (1 << 60) - 1;
