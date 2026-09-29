@@ -52,18 +52,27 @@ fn import_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>> {
             crate::lint::purity::ifd(ev, s.ctx, pos)?;
             super::paths::realise_path(ev, w, pos)
         }
-        Value::Attrs(a) => match a.get(ev.s.out_path) {
-            Some(o) => {
-                let v = o.cell.get();
-                import_path(ev, v, pos)
-            }
-            None => ev.type_error(
-                "a path",
-                w,
-                pos,
-                "while evaluating the argument passed to import",
-            ),
-        },
+        // eval.cc:coerceToString tries `tryAttrsToString` before `outPath`
+        Value::Attrs(a) => {
+            let next = match a.get(ev.s.to_string) {
+                Some(f) => {
+                    let f = ev.force_cell(&f.cell)?;
+                    ev.call1(f, w, pos)?
+                }
+                None => match a.get(ev.s.out_path) {
+                    Some(o) => o.cell.get(),
+                    None => {
+                        return ev.type_error(
+                            "a path",
+                            w,
+                            pos,
+                            "while evaluating the argument passed to import",
+                        );
+                    }
+                },
+            };
+            import_path(ev, next, pos)
+        }
         _ => ev.type_error(
             "a path",
             w,
