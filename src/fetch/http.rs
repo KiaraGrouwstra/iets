@@ -21,6 +21,10 @@ use crate::error::{Error, Result};
 /// filetransfer.cc:CURLOPT_MAXREDIRS.
 const MAX_REDIRECTS: usize = 10;
 
+/// filetransfer.hh:`download-attempts`. The setting itself is the daemon's
+/// (`docs/reference/settings.md`), so this is its default, fixed.
+const TRIES: u32 = 5;
+
 /// Body frames in flight between hyper and the reader. hyper's frames are tens
 /// of kilobytes, so this is the download's whole memory cost.
 const QUEUE: usize = 16;
@@ -378,7 +382,8 @@ async fn stream(
     let headers = &sent[..];
     let mut current = url.to_string();
     let mut credentials = true;
-    for _ in 0..=MAX_REDIRECTS {
+    let (mut redirects, mut attempt) = (0usize, 0u32);
+    loop {
         let creds = if credentials { headers } else { &[] };
         let (status, location, mut body, driver) = once(&current, creds, limits).await?;
         match status {
@@ -412,6 +417,10 @@ async fn stream(
             }
             301 | 302 | 303 | 307 | 308 => {
                 driver.abort();
+                redirects += 1;
+                if redirects > MAX_REDIRECTS {
+                    return Err(bad(url, &format!("more than {MAX_REDIRECTS} redirects")));
+                }
                 let Some(to) = location else {
                     return Err(bad(&current, &format!("HTTP {status} with no Location")));
                 };
@@ -422,11 +431,33 @@ async fn stream(
             }
             other => {
                 driver.abort();
-                return Err(bad(&current, &format!("HTTP status {other}")));
+                attempt += 1;
+                let Some(base) = transient(other).filter(|_| attempt < TRIES) else {
+                    return Err(bad(&current, &format!("HTTP status {other}")));
+                };
+                let ms = base << (attempt - 1);
+                crate::log::line(&format!(
+                    "warning: unable to download '{}': HTTP error {other}; \
+                     retrying in {ms} ms (attempt {attempt}/{TRIES})",
+                    shown(&current)
+                ));
+                tokio::time::sleep(Duration::from_millis(ms)).await;
             }
         }
     }
-    Err(bad(url, &format!("more than {MAX_REDIRECTS} redirects")))
+}
+
+/// filetransfer.cc:finish: the statuses Nix treats as transient, and the delay
+/// each one starts from (`RETRY_TIME_MS_DEFAULT`, and a minute for 429). 404,
+/// 410 and the authorisation failures are final, as are 501, 505 and 511.
+fn transient(status: u16) -> Option<u64> {
+    match status {
+        429 => Some(60_000),
+        408 => Some(250),
+        501 | 505 | 511 => None,
+        _ if (500..600).contains(&status) => Some(250),
+        _ => None,
+    }
 }
 
 type Started = (
@@ -814,6 +845,29 @@ mod tests {
         assert!(!e.contains("s3cret"), "{e}");
         assert!(e.contains("user:***@"), "{e}");
         assert_eq!(shown("https://x.example/a?u=1"), "https://x.example/a?u=1");
+    }
+
+    /// filetransfer.cc retries a 5xx and gives up on a 404.
+    #[test]
+    fn a_transient_status_is_retried() {
+        let n = std::sync::atomic::AtomicUsize::new(0);
+        let (port, _) = serve(3, move |_, c| {
+            let i = n.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if i < 2 {
+                respond(c, "503 Service Unavailable", "", b"");
+            } else {
+                respond(c, "200 OK", "", b"late");
+            }
+        });
+        let mut out = Vec::new();
+        let url = format!("http://127.0.0.1:{port}/");
+        get_decompressed(&url, &[], limits(), &mut out).unwrap();
+        assert_eq!(out, b"late");
+
+        let (port, _) = serve(1, |_, c| respond(c, "404 Not Found", "", b""));
+        let url = format!("http://127.0.0.1:{port}/");
+        let e = get_decompressed(&url, &[], limits(), &mut Vec::new()).unwrap_err();
+        assert!(e.to_string().contains("HTTP status 404"), "{e}");
     }
 
     /// deflate tops out near 1032:1, so the bomb is zstd.

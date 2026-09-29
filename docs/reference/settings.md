@@ -437,7 +437,11 @@ classic name.
 
 Two limits. A setting of the system `nix.conf` that is both a client and a
 store setting (`netrc-file`, `ssl-cert-file`, `http2`, the `download-*`
-group) acts in the daemon only: ietsp's own fetcher does not read it. And
+group) acts in the daemon only: ietsp's own fetcher does not read it. The
+fetcher still retries a transient HTTP status the way Nix does, with the
+defaults `download-attempts` and `RETRY_TIME_MS_DEFAULT` have: five
+attempts, from 250 ms, doubled each time, and from a minute for a 429. A
+404, a 410 and an authorisation failure are final. And
 `extra-platforms`, `system-features` and the other store settings change
 what the *daemon* builds, not what ietsp evaluates.
 
