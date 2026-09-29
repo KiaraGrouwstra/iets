@@ -770,9 +770,19 @@ impl<'a> Parser<'a> {
             Tok::Float => {
                 self.bump();
                 let text = std::str::from_utf8(self.text(t)).unwrap();
-                let v: f64 = text.parse().map_err(|_| {
-                    self.error_at(t.start, t.end, format!("invalid float '{text}'"))
-                })?;
+                let v: f64 = text.parse().unwrap_or(f64::INFINITY);
+                // lexer.l reports every strtod ERANGE, so an overflow, a
+                // subnormal and an underflow to zero are all invalid
+                let range = !v.is_finite()
+                    || (v != 0.0 && v.abs() < f64::MIN_POSITIVE)
+                    || (v == 0.0
+                        && text
+                            .split(['e', 'E'])
+                            .next()
+                            .is_some_and(|m| m.bytes().any(|b| b.is_ascii_digit() && b != b'0')));
+                if range {
+                    return Err(self.error_at(t.start, t.end, format!("invalid float '{text}'")));
+                }
                 Ok(self.add(Expr::Float(v), t.start, t.end))
             }
             Tok::DQuote => {
@@ -942,8 +952,8 @@ impl<'a> Parser<'a> {
         self.sc_parts.push(p);
         let mut after_slash = *text.last().unwrap() == b'/';
         // parser.y: `string_parts_interpolated` begins with `${` or with one
-        // STR that `${` follows, so text before the first interpolation
-        // cannot end the path
+        // STR that `${` follows, so a piece of text before the first
+        // interpolation cannot end the path
         let mut need_interp = false;
         let mut seen_interp = false;
         loop {
@@ -953,10 +963,10 @@ impl<'a> Parser<'a> {
                     PathPart::End => "end of path",
                     _ => "string",
                 };
-                let at = self.lx.pos() as u32;
+                let t = self.lx.pos() as u32;
                 return Err(self.error_at(
-                    at,
-                    at,
+                    t,
+                    t,
                     format!("syntax error, unexpected {what}, expecting '${{'"),
                 ));
             }
