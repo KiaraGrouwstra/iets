@@ -748,33 +748,32 @@ impl Evaluator {
         name: &[u8],
         pos: Pos,
     ) -> EvalResult<Vec<u8>> {
-        let (head, rest) = match name.iter().position(|&b| b == b'/') {
-            Some(i) => (&name[..i], &name[i..]),
-            None => (name, &b""[..]),
-        };
         for (prefix, path) in entries {
-            crate::builtins::store_hooks::open(self, path, pos)?;
-            let candidate = if prefix.is_empty() {
-                let mut c = path.clone();
-                c.push(b'/');
-                c.extend_from_slice(name);
-                c
-            } else if prefix.as_slice() == head {
-                let mut c = path.clone();
-                c.extend_from_slice(rest);
-                c
-            } else {
+            // search-path.cc:Prefix::suffixIfPotentialMatch: the whole prefix
+            // must match, so a prefix may hold a slash
+            let n = prefix.len();
+            let sep = n > 0 && n < name.len();
+            if (sep && name[n] != b'/') || !name.starts_with(prefix) {
                 continue;
-            };
+            }
+            let suffix = &name[if sep { n + 1 } else { n }..];
+            crate::builtins::store_hooks::open(self, path, pos)?;
+            let mut candidate = path.clone();
+            if !suffix.is_empty() {
+                candidate.push(b'/');
+                candidate.extend_from_slice(suffix);
+            }
             let cp = crate::compile::canon_path(&candidate);
             let kind = crate::builtins::store_hooks::stat(self, &cp, true);
             if kind != crate::trace::Kind::Missing {
                 return Ok(cp);
             }
         }
-        if head == b"nix" && crate::builtins::corepkgs(&rest[1..]).is_some() {
+        if let Some(rest) = name.strip_prefix(b"nix/".as_slice())
+            && crate::builtins::corepkgs(rest).is_some()
+        {
             let mut p = CorePkgs::PREFIX.to_vec();
-            p.extend_from_slice(&rest[1..]);
+            p.extend_from_slice(rest);
             return Ok(p);
         }
         if self.pure {
