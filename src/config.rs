@@ -570,6 +570,13 @@ impl Config {
         self.overridden.iter().filter(sent).map(pair).collect()
     }
 
+    /// `name` was set outside `$NIX_CONF_DIR/nix.conf`: a user file,
+    /// `$NIX_CONFIG` or `--option`. That is Nix's `overridden` bit, which
+    /// `loadConfFile` clears after the system file.
+    pub fn overridden(&self, name: &str) -> bool {
+        self.overridden.contains(name)
+    }
+
     /// Every setting that was set, known or not.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
         self.settings.iter().map(|(k, v)| (k.as_str(), v.as_str()))

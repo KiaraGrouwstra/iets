@@ -483,7 +483,7 @@ The same rules as Nix, per command:
 | Command | Default | Changed by |
 |:---|:---|:---|
 | `nix-instantiate`, `nix-build`, `nix-shell` | nix.conf `pure-eval`, else off | `--pure-eval`, `--no-pure-eval`, `--impure`, `--option pure-eval`; the last one wins |
-| `nix eval`, `nix build`, `nix develop`, `nix print-dev-env` | on (main.cc); nix.conf does not change it | the same flags. `-f`/`--file` turns it off, and is a usage error when `pure-eval` was set anywhere, nix.conf included (installables.cc); ietsp falls back on that error |
+| `nix eval`, `nix build`, `nix develop`, `nix print-dev-env` | on (main.cc); nix.conf does not change it | the same flags. `-f`/`--file` turns it off, and is a usage error when `pure-eval` was **overridden** — set by a flag, a user `nix.conf`, `$NIX_CONFIG` or `--option`, whatever the value; the system `$NIX_CONF_DIR/nix.conf` does not count, because `loadConfFile` clears the bit after it (installables.cc:460). A flag that turns purity off takes `-f` instead of refusing it. ietsp falls back on the error |
 | `nix-eval-jobs` | `--flake`: on. Otherwise nix.conf, else off | `--impure` beats `--flake`; without `--flake`, `--pure-eval` and `--option pure-eval` |
 | `ietsp eval`, `ietsp build`, `ietsp eval-jobs` | off | `--pure-eval`, `--no-pure-eval`, `--impure`, `--option pure-eval`; `eval-jobs --flake` as nix-eval-jobs. nix.conf is read by `eval-jobs` only |
 

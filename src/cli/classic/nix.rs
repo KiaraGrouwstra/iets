@@ -262,7 +262,7 @@ pub fn nix_settings(
     } else {
         super::shell_settings(c)
     }?;
-    let set = c.flags.pure.is_some() || s.0.bool("pure-eval").ok().flatten().is_some();
+    let set = c.flags.pure.is_some() || s.0.overridden("pure-eval");
     let pure = c.flags.pure.unwrap_or(true);
     if file && pure && set {
         return Err("'--file' is not compatible with '--pure-eval'".into());

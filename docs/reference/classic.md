@@ -461,7 +461,7 @@ ietsp: falling back to nix-instantiate: '--parse' is not implemented
 | variable | effect |
 |---|---|
 | `IETSP_NIX_BIN_DIR` | the directory the real binary is taken from |
-| `IETSP_NO_FALLBACK=1` | print the reason and exit 1 instead of exec'ing |
+| `IETSP_NO_FALLBACK=1` (any nix.conf Boolean) | print the reason and exit 1 instead of exec'ing |
 
 Lookup order: `IETSP_NIX_BIN_DIR/<name>` when it exists there; else the
 directory named by `share/ietsp/real-nix-bin` next to the farm entry on

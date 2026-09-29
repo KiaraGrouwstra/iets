@@ -448,8 +448,9 @@ def main [] {
   let loop_dir = $"($tmp)/loop"
   mkdir $"($loop_dir)/bin"
   for n in [nix-instantiate nix-build nix-eval-jobs nix-shell nix] { ^ln -sf $ietsp $"($loop_dir)/bin/($n)" }
+  let timeout_bin = (which timeout | get 0.path)
   let looped = (with-env {IETSP_NIX_BIN_DIR: $"($loop_dir)/bin", PATH: $"($loop_dir)/bin"} {
-    ^timeout 20 $"($farm)/nix-instantiate" --parse -E 1 | complete
+    ^$timeout_bin 20 $"($farm)/nix-instantiate" --parse -E 1 | complete
   })
   $ok = ($ok | append (verdict
     ($looped.exit_code == 1 and ($looped.stderr | str contains "cannot fall back to nix-instantiate: not found on PATH"))
@@ -596,6 +597,19 @@ def main [] {
         run-both $farm nix-instantiate --eval -E "builtins.currentSystem" })))
   }
   rm -f $"($env.XDG_CONFIG_HOME)/nix/nix.conf"
+  # installables.cc:460 refuses `nix eval -f` when `pure-eval` was overridden:
+  # a flag, a user file, $NIX_CONFIG or --option, but not the system nix.conf
+  "pure-eval = true\n" | save -f $"($cdir)/nix.conf"
+  for case in [
+    {label: "the system nix.conf", env: {NIX_CONF_DIR: $cdir, NIX_USER_CONF_FILES: ""}, args: []}
+    {label: "a user nix.conf", env: {NIX_CONF_DIR: $tmp, NIX_USER_CONF_FILES: $"($cdir)/nix.conf"}, args: []}
+    {label: "NIX_CONFIG", env: {NIX_CONFIG: "pure-eval = true"}, args: []}
+    {label: "--option", env: {}, args: [--option pure-eval true]}
+    {label: "--impure", env: {}, args: [--impure]}
+  ] {
+    $ok = ($ok | append (cmp-case $"nix eval -f with pure-eval from ($case.label)"
+      (with-env $case.env { run-both $farm nix eval ...$case.args -f $"($d)/multi.nix" outputs })))
+  }
   # `-j` and `--cores` set a setting, so the value is checked as one; the
   # clustered `-IP=PATH` is ietsp's own spelling and Nix refuses it
   for args in [[-j 4294967296] [--cores 4294967296] [-j auto] [--cores 1K] [-j 2] [-Ifoo=/etc]] {
@@ -614,9 +628,9 @@ def main [] {
             "connect-timeout = abc" "cores = -1" "cores = 4294967296" "max-jobs = abc"
             "cores = 1K" "min-free = 2G" "max-jobs = auto" "sandbox = relaxed"] {
     let r = (with-env {NIX_CONFIG: $v} { run-both $farm nix-instantiate --eval -E "1" })
-    let same = ($r.ours.exit_code == $r.real.exit_code)
+    let same = (($r.ours.exit_code == $r.real.exit_code)
       and (($r.ours.stdout | into binary) == ($r.real.stdout | into binary))
-      and ((do $err1 $r.ours.stderr) == (do $err1 $r.real.stderr))
+      and ((do $err1 $r.ours.stderr) == (do $err1 $r.real.stderr)))
     $ok = ($ok | append (verdict $same $"nix.conf '($v)'"
       $"'($v)': exit ours=($r.ours.exit_code) real=($r.real.exit_code); ours '(do $err1 $r.ours.stderr)' real '(do $err1 $r.real.stderr)'"))
   }
