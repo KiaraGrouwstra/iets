@@ -10,12 +10,28 @@ use serde_json::Value;
 use crate::api::render::Report;
 
 /// Everything a command writes on stdout goes through here. Nothing is
-/// added: `b` is the output.
+/// added: `b` is the output. A write that fails ends the process: exit 0 is
+/// the promise that the output reached stdout, and `logger->writeToStdout`
+/// throws for the same reason.
 pub fn bytes(b: &[u8]) {
+    if let Err(e) = write(b) {
+        std::process::exit(
+            crate::error::Error::io(format!("write of {} bytes", b.len()), e).report(),
+        )
+    }
+}
+
+/// [`bytes`] for the legacy command names, which write through `std::cout`
+/// and never look: `nix-instantiate` and `nix-build` exit 0 on a full disk.
+pub fn bytes_lossy(b: &[u8]) {
+    let _ = write(b);
+}
+
+fn write(b: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     let mut out = std::io::stdout();
-    let _ = out.write_all(b);
-    let _ = out.flush();
+    out.write_all(b)?;
+    out.flush()
 }
 
 /// `nlohmann::json::dump`: an object's keys are sorted, `--pretty` indents

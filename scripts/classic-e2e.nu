@@ -451,6 +451,23 @@ def main [] {
     "nix-bin-dir full of ietsp: the fallback stops, it does not loop"
     $"exit ($looped.exit_code), stderr ($looped.stderr | str substring 0..300)"))
 
+  # a write that fails on stdout: `nix eval` reports it and exits 1, the
+  # legacy names exit 0 as `std::cout` lets them, and nothing aborts
+  let full = {|cmd: list<string>| (^bash -c r#'"$@" > /dev/full 2>/dev/null'# _ ...$cmd | complete).exit_code }
+  for case in [
+    {label: "nix eval > /dev/full", args: [nix eval --expr "1"], want: 1}
+    {label: "nix-instantiate --eval > /dev/full", args: [nix-instantiate --eval -E "1"], want: 0}
+  ] {
+    let ours = (do $full ([$"($farm)/($case.args | first)"] ++ ($case.args | skip 1)))
+    let real = (do $full $case.args)
+    $ok = ($ok | append (verdict ($ours == $case.want and $real == $case.want) $case.label
+      $"($case.label): ours ($ours), real ($real), want ($case.want)"))
+  }
+  for c in [[version], [parse, $"($d)/multi.nix"], [--help], [lint, list]] {
+    let code = (do $full ([$ietsp] ++ $c))
+    $ok = ($ok | append (verdict ($code == 1) $"ietsp ($c | str join ' ') > /dev/full reports, not aborts" $"exit ($code)"))
+  }
+
   mkdir $"($tmp)/tb"
   "hi\n" | save $"($tmp)/tb/f"
   ^tar -czf $"($tmp)/x.tar.gz" -C $tmp tb

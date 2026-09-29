@@ -238,7 +238,7 @@ pub fn cmd_lint(argv: &[String]) -> i32 {
     }
     match crate::api::lint_config(&a) {
         Ok(c) => {
-            print!("{}", crate::lint::list(&c));
+            render::bytes(crate::lint::list(&c).as_bytes());
             0
         }
         Err(e) => crate::error::Error::Eval(e).report(),

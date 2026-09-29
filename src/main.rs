@@ -72,7 +72,7 @@ fn main() {
     let cmd = match cmd.as_str() {
         "--help" | "-h" | "help" => help::help(rest.first().map(String::as_str)),
         "--version" | "version" => {
-            println!(env!("IETSP_VERSION"));
+            cli::render::bytes(concat!(env!("IETSP_VERSION"), "\n").as_bytes());
             exit(0)
         }
         "cache-dump" => {

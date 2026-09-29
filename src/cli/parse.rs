@@ -55,11 +55,13 @@ pub fn cmd_parse(files: &[String], form: Form) -> i32 {
         bytes += src.len();
         match parse(&src, FileId(i as u32), &mut interner) {
             Ok(ast) => match form {
-                Form::Text => println!("{}", dump::dump(&ast, &interner)),
+                Form::Text => crate::cli::render::bytes(
+                    format!("{}\n", dump::dump(&ast, &interner)).as_bytes(),
+                ),
                 Form::Json => {
                     let mut line = format!("{{\"file\":{},\"root\":", serde_json::json!(file));
                     dump::json(&dump::tree(&ast, &interner), &mut line);
-                    println!("{line}}}");
+                    crate::cli::render::bytes(format!("{line}}}\n").as_bytes());
                 }
                 Form::Quiet => {}
             },

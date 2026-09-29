@@ -173,13 +173,13 @@ pub fn list() -> String {
 /// Prints the page, or where it lives when the binary does not carry it.
 pub fn show(p: &Page) -> ! {
     match p.text {
-        Some(t) => print!("{t}"),
-        None => println!(
+        Some(t) => crate::cli::help::out(t),
+        None => crate::cli::help::out(&format!(
             "'{topic}' is docs/{q}/{topic}.md in the ietsp repository.\n\
-             This binary carries the reference pages only; 'ietsp help' lists them.",
+             This binary carries the reference pages only; 'ietsp help' lists them.\n",
             topic = p.topic,
             q = p.quadrant
-        ),
+        )),
     }
     exit(0)
 }

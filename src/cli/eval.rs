@@ -13,9 +13,7 @@ pub fn run_eval(a: EvalArgs) -> i32 {
         c.replay_warnings();
         Some(out)
     }) {
-        use std::io::Write;
-        let _ = std::io::stdout().write_all(&out);
-        let _ = std::io::stdout().flush();
+        crate::cli::render::bytes(&out);
         return 0;
     }
     // only the cache and --dump-drvs read the ATerm text after evaluation
@@ -72,9 +70,7 @@ fn eval_and_print(ev: &mut Evaluator, a: EvalArgs, cache: Option<Cache>) -> i32 
             if !raw {
                 out.push(b'\n');
             }
-            use std::io::Write;
-            let _ = std::io::stdout().write_all(&out);
-            let _ = std::io::stdout().flush();
+            crate::cli::render::bytes(&out);
             if timings {
                 eprintln!("eval: {:.3}s", t0.elapsed().as_secs_f64());
                 crate::treestore::report_timings();

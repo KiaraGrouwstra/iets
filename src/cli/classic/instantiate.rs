@@ -143,7 +143,7 @@ fn run(ev: &mut Evaluator, i: &Inst) -> crate::error::Result<Made> {
                 // ran before a failing expression is on stdout already
                 let mut text: Vec<u8> = Vec::new();
                 print_value(ev, v, i, &mut text)?;
-                crate::cli::render::bytes(&text);
+                crate::cli::render::bytes_lossy(&text);
             } else {
                 // nix-instantiate.cc: one `getDerivations` per attribute path,
                 // so two of them that name one derivation give two roots
@@ -253,6 +253,6 @@ fn finish(
         }
         out.push('\n');
     }
-    crate::cli::render::bytes(out.as_bytes());
+    crate::cli::render::bytes_lossy(out.as_bytes());
     0
 }

@@ -407,3 +407,8 @@ Nix 2.34:
 - **`json-log-path`** applies to every command. Nix applies it to the
   `nix` command only: the classic names return before `applyJSONLogger`
   (`src/nix/main.cc`).
+- **A failed write on stdout** gives `error: write of N bytes: REASON`
+  and exit 1, as it does in Nix, but `N` is the bytes of the one write
+  that failed. ietsp writes a value and its newline together, so its
+  count can be one more than Nix's. `nix-instantiate` and `nix-build`
+  exit 0 on a failed write in both, because `std::cout` never reports.

@@ -251,23 +251,25 @@ fn parts(cmd: Option<&str>) -> Option<[&'static str; 2]> {
     })
 }
 
+/// Help text on stdout, through the one writer that reports a write error.
+pub fn out(text: &str) {
+    crate::cli::render::bytes(text.as_bytes());
+}
+
 /// `ietsp help [COMMAND | TOPIC]`, and `ietsp COMMAND --help`. A name that
 /// is both a command and a topic is the command, and the help says where
 /// the page is.
 pub fn help(cmd: Option<&str>) -> ! {
     match (cmd, parts(cmd)) {
-        (None, _) => {
-            print!("{OVERVIEW}");
-            print!("{}", docs::list());
-        }
+        (None, _) => out(&format!("{OVERVIEW}{}", docs::list())),
         (Some(c), Some([own, input])) => {
-            print!("{own}{input}");
-            if let Some(p) = docs::find(c) {
-                println!(
-                    "\nThe page of the same name: 'ietsp help {}/{c}'.",
+            let page = docs::find(c).map(|p| {
+                format!(
+                    "\nThe page of the same name: 'ietsp help {}/{c}'.\n",
                     p.quadrant
-                );
-            }
+                )
+            });
+            out(&format!("{own}{input}{}", page.unwrap_or_default()));
         }
         (Some(c), None) => match docs::find(c) {
             Some(p) => docs::show(p),
