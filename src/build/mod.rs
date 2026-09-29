@@ -318,7 +318,7 @@ impl Dispatcher {
                     // The daemon's message is several coloured lines; the
                     // records want one plain one, the log tail has the rest.
                     let reason = crate::log::strip_ansi(&self.prov.rewrite_str(&s.reason));
-                    let reason = reason.lines().next().unwrap_or_default().to_string();
+                    let reason = crate::log::reason_line(&reason);
                     self.reporter.emit(&names.event(
                         &drv,
                         Kind::Failed {

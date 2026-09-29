@@ -692,6 +692,9 @@ fn build_report(pos: Option<String>, reason: &str, exit: i32) -> Report {
 pub fn build_failed(pos: Option<String>, reason: &str, exit: i32, text: Option<&str>) {
     let r = build_report(pos, reason, exit);
     let s = cur();
+    // the two hashes and what to do about them do not fit the renderer's
+    // one-line verdict, and nix prints them
+    let mut own = None;
     if r.code == "hash-mismatch"
         && let Some(m) = mismatch(&r.raw)
     {
@@ -699,8 +702,22 @@ pub fn build_failed(pos: Option<String>, reason: &str, exit: i32, text: Option<&
         if wanted(&s.log, &r.raw) {
             return;
         }
+        own = Some(match &r.hint {
+            Some(h) => format!("{}\n       {h}", r.text()),
+            None => r.text(),
+        });
     }
-    s.log.out(&r.record(&r.text()), text);
+    s.log.out(&r.record(&r.text()), text.or(own.as_deref()));
+}
+
+/// A build result's message as one line: its first line, and the two hashes
+/// of a fixed-output mismatch, which say what to fix.
+pub fn reason_line(raw: &str) -> String {
+    let first = raw.lines().next().unwrap_or_default().trim_end();
+    match mismatch(raw) {
+        Some((specified, got)) => format!("{first} specified: {specified}, got: {got}"),
+        None => first.to_string(),
+    }
 }
 
 /// `s` without its ECMA-048 escape sequences.
