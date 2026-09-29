@@ -630,22 +630,30 @@ fn walk(
     let mut first_err: Option<(usize, Box<Error>)> = None;
     for i in 0..n {
         let c = cell(i);
-        match cell_state(c) {
+        // a ready cell already gave up its value: forcing it again would
+        // walk the claim protocol of a thunk a helper left boxed
+        let ready = match cell_state(c) {
             CellState::Busy => {
                 if demand {
                     deferred.push(i);
                 }
                 continue;
             }
-            CellState::Ready(v) => set_forced(ev, c, v),
-            CellState::Unclaimed => {}
-        }
+            CellState::Ready(v) => {
+                set_forced(ev, c, v);
+                Some(v)
+            }
+            CellState::Unclaimed => None,
+        };
         if !demand && bail_requested(ev) {
             return Err(cancelled());
         }
-        let r = ev
-            .force_cell(c)
-            .and_then(|v| deep_inner(ev, v, seen, demand));
+        let r = match ready {
+            Some(v) => deep_inner(ev, v, seen, demand),
+            None => ev
+                .force_cell(c)
+                .and_then(|v| deep_inner(ev, v, seen, demand)),
+        };
         if let Err(e) = r {
             if demand {
                 first_err = Some((i, decorate(ev, i, e)));
