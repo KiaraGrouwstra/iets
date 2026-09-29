@@ -15,33 +15,39 @@ const PREWARM: usize = 4;
 /// Pool fibers beyond this many are trimmed when the worker parks.
 const TRIM_ABOVE: usize = 16;
 const WARM_STACK: usize = 64 << 10;
-/// Cells one range task may cover, from the packed `Task`.
-const LEN_MAX: u32 = u16::MAX as u32;
 /// Direct-mapped table of the thunks that failed last. A miss costs one
 /// load, so a failure that falls out of it only loses the saving.
 const FAILED_SLOTS: usize = 256;
+/// Cells one range task may cover, from the packed `Task`.
+const LEN_MAX: u32 = u16::MAX as u32;
 
-/// Scans of 64 polls an idle searcher makes before it parks (~2 ms). A
-/// shorter spin (64 scans) saved no user time once searchers were capped,
-/// and cost 3-5 % wall in futex round trips. `IETSP_SPIN` overrides.
-fn spin_scans() -> u32 {
-    crate::session::Session::current().settings().spin
+/// The three scheduler tunables, read once on the starting thread. A
+/// fiber migrates between threads, so the scheduler reads no thread-local
+/// (ARCHITECTURE.md, "Constraints on evaluator changes").
+struct Tuning {
+    /// Scans of 64 polls an idle searcher makes before it parks (~2 ms). A
+    /// shorter spin (64 scans) saved no user time once searchers were capped,
+    /// and cost 3-5 % wall in futex round trips. `IETSP_SPIN` overrides.
+    spin: u32,
+    /// Queued tasks per awake worker that justify waking one more sleeper.
+    /// A fan-out burst of a few tiny tasks is cleared faster by the workers
+    /// already awake than by a futex round trip; a deep queue recruits
+    /// sleepers one handoff at a time (`IETSP_HANDOFF` overrides).
+    handoff: usize,
+    /// Idle workers allowed to search at once (`IETSP_SPINNERS` overrides).
+    spinner_cap: usize,
 }
 
-/// Queued tasks per awake worker that justify waking one more sleeper.
-/// A fan-out burst of a few tiny tasks is cleared faster by the workers
-/// already awake than by a futex round trip; a deep queue recruits
-/// sleepers one handoff at a time (`IETSP_HANDOFF` overrides).
-fn handoff_factor() -> usize {
-    crate::session::Session::current().settings().handoff
-}
-
-/// Idle workers allowed to search at once (`IETSP_SPINNERS` overrides).
-fn spinner_cap(n: usize) -> usize {
-    crate::session::Session::current()
-        .settings()
-        .spinners
-        .unwrap_or((n / 4).max(1))
+impl Tuning {
+    fn read(n: usize) -> Tuning {
+        let s = crate::session::Session::current();
+        let s = s.settings();
+        Tuning {
+            spin: s.spin,
+            handoff: s.handoff,
+            spinner_cap: s.spinners.unwrap_or((n / 4).max(1)),
+        }
+    }
 }
 
 /// Per-worker counters on their own cache line; summed for the stats.
@@ -170,6 +176,7 @@ pub struct Runtime {
     all: Mutex<Vec<*mut Slot>>,
     driver: Box<dyn Driver>,
     stack_size: usize,
+    tune: Tuning,
     pub waiters: super::thunk::WaiterTable,
     /// Thunks whose evaluation failed, for helpers to skip. A failure is
     /// not memoised (Nix evaluates a failed thunk again at every force),
@@ -228,6 +235,7 @@ impl Runtime {
             all: Mutex::new(Vec::new()),
             driver,
             stack_size,
+            tune: Tuning::read(n),
             waiters: super::thunk::WaiterTable::new(),
             failed: [const { AtomicU64::new(0) }; FAILED_SLOTS],
             deadlocks: AtomicUsize::new(0),
@@ -282,7 +290,7 @@ impl Runtime {
 
     fn drain_loop(&self, w: &mut Worker, done: impl Fn() -> bool) {
         let mut idle: u32 = 0;
-        let scans = spin_scans();
+        let scans = self.tune.spin;
         loop {
             if done() {
                 return;
@@ -328,7 +336,7 @@ impl Runtime {
             w.spinning = true;
             return true;
         }
-        let cap = spinner_cap(self.n);
+        let cap = self.tune.spinner_cap;
         let cur = self.spinners.0.load(Ordering::Relaxed);
         if cur < cap
             && self
@@ -651,7 +659,7 @@ impl Runtime {
             return true;
         }
         let awake = self.n - self.sleepers.0.load(Ordering::Relaxed);
-        awake <= 1 || tasks > handoff_factor() * awake
+        awake <= 1 || tasks > self.tune.handoff * awake
     }
 
     /// Wakes a sleeper on every push, for tests that need the wake to happen.
