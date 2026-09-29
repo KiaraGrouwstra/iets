@@ -538,7 +538,9 @@ fn pos_fields(pos: Option<&str>) -> [(String, Value); 3] {
 /// OutputRejected, so its message tells it apart.
 pub fn build_exit(status: u8, msg: &str) -> i32 {
     match status {
-        3 | 4 => 100,
+        // 10 is DependencyFailed: a goal of the run failed, which is the same
+        // flag Nix's worker sets for the build that failed itself
+        3 | 4 | 10 => 100,
         8 => 101,
         5 if msg.contains(MISMATCH) => 102,
         12 => 104,
@@ -979,7 +981,7 @@ mod tests {
         );
         assert_eq!(build_exit(5, "output rejected"), 1);
         assert_eq!(build_exit(12, ""), 104);
-        assert_eq!(build_exit(10, ""), 1);
+        assert_eq!(build_exit(10, "Build failed due to failed dependency"), 100);
         assert_eq!(combine_exit(100, 101), 101);
         assert_eq!(combine_exit(100, 104), 108);
         assert_eq!(combine_exit(1, 102), 102);
