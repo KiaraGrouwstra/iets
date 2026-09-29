@@ -941,10 +941,29 @@ impl<'a> Parser<'a> {
         let p = self.lit(first);
         self.sc_parts.push(p);
         let mut after_slash = *text.last().unwrap() == b'/';
+        // parser.y: `string_parts_interpolated` begins with `${` or with one
+        // STR that `${` follows, so text before the first interpolation
+        // cannot end the path
+        let mut need_interp = false;
+        let mut seen_interp = false;
         loop {
-            match self.lx.lex_path_part(after_slash)? {
+            let part = self.lx.lex_path_part(after_slash)?;
+            if need_interp && !matches!(part, PathPart::Interp) {
+                let what = match part {
+                    PathPart::End => "end of path",
+                    _ => "string",
+                };
+                let at = self.lx.pos() as u32;
+                return Err(self.error_at(
+                    at,
+                    at,
+                    format!("syntax error, unexpected {what}, expecting '${{'"),
+                ));
+            }
+            match part {
                 PathPart::End => break,
                 PathPart::Str(s, e) => {
+                    need_interp = !seen_interp;
                     let bytes = &self.src[s as usize..e as usize];
                     after_slash = bytes[bytes.len() - 1] == b'/';
                     // Consecutive literal pieces sit at the end of the
@@ -965,6 +984,8 @@ impl<'a> Parser<'a> {
                     self.last_end = e;
                 }
                 PathPart::Interp => {
+                    need_interp = false;
+                    seen_interp = true;
                     let e = self.parse_expr()?;
                     self.expect(Tok::RBrace, "expecting '}'")?;
                     self.sc_parts.push(StrPart::Interp(e));
