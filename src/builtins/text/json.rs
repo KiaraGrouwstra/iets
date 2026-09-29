@@ -25,8 +25,46 @@ pub fn from_json(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word
         ev,
         depth: 0,
         pos,
+        attr: false,
     };
     p.document()
+}
+
+/// `parsed-derivations.cc:StructuredAttrs::parse` followed by `unparse`:
+/// nlohmann parses the `__json` text and writes `dump()`, so a hand-written
+/// text reaches the `.drv` in the normal form.
+pub fn canonical_structured_attrs(
+    ev: &mut Evaluator,
+    s: &'static [u8],
+    pos: Pos,
+) -> EvalResult<String> {
+    let mut p = Parser {
+        s,
+        i: 0,
+        ev,
+        depth: 0,
+        pos,
+        attr: true,
+    };
+    let v = p.document()?;
+    let kind = match v.view() {
+        Value::Attrs(_) => {
+            let mut out = Vec::new();
+            let mut ctx = Vec::new();
+            crate::print::print_json(ev, v, &mut out, &mut ctx, true, pos)?;
+            return Ok(String::from_utf8(out).expect("print_json writes utf-8"));
+        }
+        Value::Null => "null",
+        Value::List(_) => "array",
+        Value::String(_) => "string",
+        Value::Bool(_) => "boolean",
+        _ => "number",
+    };
+    bail!(
+        ErrorKind::Eval,
+        Pos::NONE,
+        "cannot process __json attribute: [json.exception.type_error.302] type must be object, but is {kind}"
+    )
 }
 
 struct Parser<'a> {
@@ -35,9 +73,27 @@ struct Parser<'a> {
     ev: &'a mut Evaluator,
     depth: u32,
     pos: Pos,
+    /// Parsing a `__json` derivation attribute, whose errors carry
+    /// `StructuredAttrs::parse`'s wrapper instead of `fromJSON`'s trace.
+    attr: bool,
 }
 
 impl Parser<'_> {
+    fn fail<T>(&self, msg: String) -> EvalResult<T> {
+        if self.attr {
+            bail!(
+                ErrorKind::Eval,
+                Pos::NONE,
+                "cannot process __json attribute: {msg}"
+            );
+        }
+        let mut e = Error::boxed(ErrorKind::Eval, msg, Pos::NONE);
+        // primops.cc:prim_fromJSON traces only JSONParseError, not the
+        // integer range or null byte errors
+        e.add_trace(self.pos, "while decoding a JSON string");
+        Err(e)
+    }
+
     fn err<T>(&self, what: &str) -> EvalResult<T> {
         let mut line = 1;
         let mut col = 1;
@@ -49,17 +105,9 @@ impl Parser<'_> {
                 col += 1;
             }
         }
-        let mut e = Error::boxed(
-            ErrorKind::Eval,
-            format!(
-                "[json.exception.parse_error.101] parse error at line {line}, column {col}: {what}"
-            ),
-            Pos::NONE,
-        );
-        // primops.cc:prim_fromJSON traces only JSONParseError, not the
-        // integer range or null byte errors
-        e.add_trace(self.pos, "while decoding a JSON string");
-        Err(e)
+        self.fail(format!(
+            "[json.exception.parse_error.101] parse error at line {line}, column {col}: {what}"
+        ))
     }
 
     fn peek(&self) -> Option<u8> {
@@ -356,8 +404,9 @@ impl Parser<'_> {
         let f: f64 = text.parse().expect("validated float syntax");
         // strtod only fails on overflow; underflow yields zero or a subnormal
         if !f.is_finite() {
-            return self
-                .err("syntax error while parsing value - invalid number; number out of range");
+            return self.fail(format!(
+                "[json.exception.out_of_range.406] number overflow parsing '{text}'"
+            ));
         }
         Ok(self.ev.mk_float(f))
     }

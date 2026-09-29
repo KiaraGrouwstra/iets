@@ -42,6 +42,14 @@ Nix (`T` separator, 3/6/9 fractional digits).
 Errors carry a message shaped like nlohmann's (`parse error at line L,
 column C: ...`) but the `last read` detail is not reproduced.
 
+## The `__json` derivation attribute
+
+ietsp parses the text with the `fromJSON` parser and writes it again, so
+the `.drv` holds the same normal form as Nix. That parser refuses a whole
+number above 9223372036854775807, which Nix keeps as an unsigned value and
+writes back unchanged. Only a hand-written `__json` can hold one:
+`builtins.toJSON` cannot produce it.
+
 ## `builtins.genericClosure`
 
 The key set is a sorted vector with binary search instead of a

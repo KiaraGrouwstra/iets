@@ -361,7 +361,14 @@ fn process_attr(
     let st = ev.coerce_to_string(w, &mut b.context, attr_pos, "", true, true, true)?;
     let st = utf8(&st, pos)?;
     if sym == s.json {
-        b.drv.structured_attrs = Some(st);
+        crate::log::line(&format!(
+            "warning: In derivation '{}': setting structured attributes via '__json' is deprecated, and may be disallowed in future versions of Nix. Set '__structuredAttrs = true' instead.",
+            b.drv.name
+        ));
+        let text = ev.arena.alloc_bytes(st.as_bytes());
+        b.drv.structured_attrs = Some(super::text::json::canonical_structured_attrs(
+            ev, text, pos,
+        )?);
         return Ok(());
     }
     if sym == s.builder {

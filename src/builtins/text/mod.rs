@@ -2,7 +2,7 @@
 //! rounding, `genericClosure`, and environment access.
 
 mod fromtoml;
-mod json;
+pub(crate) mod json;
 pub(crate) mod regex;
 mod xml;
 
