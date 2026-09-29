@@ -1360,7 +1360,17 @@ impl Evaluator {
                         );
                     };
                     let f = self.force_cell(&functor.cell)?;
-                    cur = self.apply(f, &[cur], pos)?;
+                    // eval.cc:callFunction passes the set and the argument in
+                    // one call, so a functor that gives back a functor
+                    // recurses and reaches max-call-depth
+                    cur = self.apply(f, &[cur, args[0]], pos).map_err(|mut e| {
+                        e.add_trace(
+                            pos,
+                            "while calling a functor (an attribute set with a '__functor' attribute)",
+                        );
+                        e
+                    })?;
+                    args = &args[1..];
                 }
                 _ => bail!(
                     ErrorKind::Type,
