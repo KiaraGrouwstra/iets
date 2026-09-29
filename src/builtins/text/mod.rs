@@ -293,7 +293,7 @@ fn hash_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let (path, at) = crate::builtins::store_hooks::located(ev, path, follow, pos)?;
     let at = crate::builtins::store_hooks::check(ev, at, &path, pos)?;
     crate::lint::coerce::read_through_copy(ev, &path, pos)?;
-    let data = match at.read(ev, false) {
+    let data = match at.read(ev, true) {
         Ok(d) => d,
         Err((_, e)) => bail!(
             ErrorKind::Io,
