@@ -53,6 +53,15 @@ fn collect_attrs(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Attrs> {
         };
         out.insert(name, val);
     }
+    // fetchTree.cc:158 (`allowNameArgument` is false for fetchTree), before the
+    // attrs reach `Input::fromAttrs`, which is where the missing `type` is seen
+    if out.contains_key("name") {
+        bail!(
+            ErrorKind::Eval,
+            pos,
+            "argument 'name' isn\u{2019}t supported in call to 'fetchTree'"
+        );
+    }
     if !out.contains_key("type") {
         bail!(
             ErrorKind::Eval,
@@ -77,9 +86,9 @@ fn check_locked(attrs: &Attrs, pos: Pos) -> EvalResult<()> {
     if locked {
         return Ok(());
     }
-    // fetchTree.cc rejects `name` first, and only warns on a `narHash`
+    // fetchTree.cc only warns on a `narHash`
     let shown = match ty {
-        _ if attrs.contains_key("name") || attrs.contains_key("narHash") => None,
+        _ if attrs.contains_key("narHash") => None,
         "path" | "tarball" | "github" | "gitlab" => {
             super::flakeref::attrs_to_string(attrs.clone()).ok()
         }
