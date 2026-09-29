@@ -122,9 +122,15 @@ pub enum Transport {
     Ssh {
         user: Option<String>,
         host: String,
-        /// The command run on the host, `nix-daemon --stdio` unless the URL's
-        /// `remote-program` query parameter says otherwise (as for Nix's ssh-ng store).
+        port: Option<u16>,
+        /// The command run on the host: the URL's `remote-program` query
+        /// parameter, `nix-daemon` by default, and then always `--stdio`
+        /// (ssh-store.cc:openConnection).
         remote_program: Vec<String>,
+        /// `ssh-key`: `-i`.
+        key: Option<String>,
+        /// `compress`: `-C`.
+        compress: bool,
     },
 }
 
@@ -145,7 +151,7 @@ impl Transport {
         if let Some(cfg) = super::grpc::GrpcConfig::parse(url, default_system) {
             return Ok(Some(Transport::Grpc(Box::new(cfg?))));
         }
-        Ok(Transport::parse_worker(url))
+        Transport::parse_worker(url)
     }
 
     /// The store as Nix's getHumanReadableURI names it, for the log.
@@ -163,39 +169,201 @@ impl Transport {
         }
     }
 
-    fn parse_worker(url: &str) -> Option<Transport> {
+    fn parse_worker(url: &str) -> Result<Option<Transport>> {
         // `auto` is nix.conf's default `store`, which ietsp answers with the
         // daemon: it has no local store of its own (docs/reference/settings.md).
         if url == "daemon" || url == "unix://" || url == "auto" || url.is_empty() {
-            return Some(Transport::Unix(PathBuf::from(DEFAULT_SOCKET)));
+            return Ok(Some(Transport::Unix(PathBuf::from(DEFAULT_SOCKET))));
         }
         if let Some(path) = url.strip_prefix("unix://") {
-            return Some(Transport::Unix(PathBuf::from(path)));
+            return Ok(Some(Transport::Unix(PathBuf::from(path))));
         }
-        if let Some(rest) = url.strip_prefix("ssh-ng://") {
-            let (rest, query) = rest.split_once('?').unwrap_or((rest, ""));
-            let rest = rest.trim_end_matches('/');
-            let (user, host) = match rest.split_once('@') {
-                Some((u, h)) => (Some(u.to_string()), h.to_string()),
-                None => (None, rest.to_string()),
+        let Some(rest) = url.strip_prefix("ssh-ng://") else {
+            return Ok(None);
+        };
+        let (rest, query) = rest.split_once('?').unwrap_or((rest, ""));
+        let (user, host, port) = authority(rest.trim_end_matches('/'))?;
+        let mut program = vec!["nix-daemon".to_string()];
+        let mut key = None;
+        let mut compress = false;
+        for kv in query.split('&') {
+            let Some((k, v)) = kv.split_once('=') else {
+                continue;
             };
-            let mut remote_program = vec!["nix-daemon".to_string(), "--stdio".to_string()];
-            for kv in query.split('&') {
-                if let Some(v) = kv.strip_prefix("remote-program=") {
-                    remote_program = percent_decode(v)
-                        .split_whitespace()
-                        .map(str::to_string)
-                        .collect();
+            let v = percent_decode(v);
+            match k {
+                "remote-program" => {
+                    program = v.split_whitespace().map(str::to_string).collect();
+                }
+                "ssh-key" => key = Some(v),
+                "compress" => compress = v != "false" && v != "0",
+                _ => {}
+            }
+        }
+        // ssh-store.cc:openConnection appends it to whatever remote-program
+        // names, so a remote program can never drop the protocol.
+        program.push("--stdio".to_string());
+        Ok(Some(Transport::Ssh {
+            user,
+            host,
+            port,
+            remote_program: program,
+            key,
+            compress,
+        }))
+    }
+}
+
+/// `[user@]host[:port]`, with an IPv6 host in brackets. ssh.cc:checkValidAuthority
+/// refuses a name that ssh would read as an option.
+fn authority(rest: &str) -> Result<(Option<String>, String, Option<u16>)> {
+    let bad = |what: &str| {
+        Err(Error::Usage(format!(
+            "invalid SSH authority: '{rest}': {what}"
+        )))
+    };
+    let (user, hostport) = match rest.rsplit_once('@') {
+        Some((u, h)) => (Some(u.to_string()), h),
+        None => (None, rest),
+    };
+    let (host, port) = match hostport.strip_prefix('[') {
+        Some(r) => match r.split_once(']') {
+            Some((h, tail)) => (h, tail.strip_prefix(':')),
+            None => return bad("unterminated '['"),
+        },
+        None => match hostport.rsplit_once(':') {
+            Some((h, p)) => (h, Some(p)),
+            None => (hostport, None),
+        },
+    };
+    let port = match port {
+        Some(p) => match p.parse::<u16>() {
+            Ok(p) => Some(p),
+            Err(_) => return bad(&format!("'{p}' is not a port")),
+        },
+        None => None,
+    };
+    if let Some(u) = &user {
+        if u.is_empty() {
+            return bad("user name must not be empty");
+        }
+        if u.starts_with('-') {
+            return bad(&format!("user name '{u}' must not start with '-'"));
+        }
+    }
+    if host.is_empty() {
+        return bad("host name must not be empty");
+    }
+    if host.starts_with('-') {
+        return bad(&format!("host name '{host}' must not start with '-'"));
+    }
+    Ok((user, host.to_string(), port))
+}
+
+/// Everything before the remote command, in the order of ssh.cc:startCommand
+/// and addCommonSSHOpts. The host comes first, so no option of `NIX_SSHOPTS`
+/// can turn it into one; the caller adds `--` before the command.
+fn ssh_args(t: &Transport) -> Result<Vec<String>> {
+    let Transport::Ssh {
+        user,
+        host,
+        port,
+        key,
+        compress,
+        ..
+    } = t
+    else {
+        return Err(Error::Usage("not an ssh store".into()));
+    };
+    let mut args = match user {
+        Some(u) => vec![format!("{u}@{host}")],
+        None => vec![host.clone()],
+    };
+    args.push("-x".to_string());
+    // the same knob Nix's ssh.cc reads, so ControlMaster and friends can be
+    // set per run
+    if let Ok(opts) = std::env::var("NIX_SSHOPTS") {
+        args.extend(shell_split(&opts)?);
+    }
+    if let Some(k) = key {
+        args.push("-i".to_string());
+        args.push(k.clone());
+    }
+    if *compress {
+        args.push("-C".to_string());
+    }
+    if let Some(p) = port {
+        args.push(format!("-p{p}"));
+    }
+    Ok(args)
+}
+
+/// strings.cc:shellSplitString, what `NIX_SSHOPTS` is split with.
+pub fn shell_split(s: &str) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut started = false;
+    let mut quote: Option<char> = None;
+    let mut escaping = false;
+    for c in s.chars() {
+        match quote {
+            Some('\'') => {
+                started = true;
+                if c == '\'' {
+                    quote = None;
+                } else {
+                    cur.push(c);
                 }
             }
-            return Some(Transport::Ssh {
-                user,
-                host,
-                remote_program,
-            });
+            Some(_) => {
+                started = true;
+                if escaping {
+                    if !matches!(c, '$' | '`' | '"' | '\\') {
+                        cur.push('\\');
+                    }
+                    cur.push(c);
+                    escaping = false;
+                } else if c == '\\' {
+                    escaping = true;
+                } else if c == '"' {
+                    quote = None;
+                } else {
+                    cur.push(c);
+                }
+            }
+            None if escaping => {
+                cur.push(c);
+                started = true;
+                escaping = false;
+            }
+            None => match c {
+                '\\' => escaping = true,
+                ' ' | '\t' => {
+                    if started {
+                        out.push(std::mem::take(&mut cur));
+                        started = false;
+                    }
+                }
+                '"' | '\'' => {
+                    quote = Some(c);
+                    started = true;
+                }
+                _ => {
+                    cur.push(c);
+                    started = true;
+                }
+            },
         }
-        None
     }
+    match quote {
+        Some('\'') => return Err(Error::Usage("unterminated single quote".into())),
+        Some(_) => return Err(Error::Usage("unterminated double quote".into())),
+        None => {}
+    }
+    if started {
+        out.push(cur);
+    }
+    Ok(out)
 }
 
 /// `%XX` and `+` in a URL query value.
@@ -358,22 +526,10 @@ impl Connection {
                     let r = s.try_clone().map_err(conn)?;
                     (Box::new(s), Box::new(r), None)
                 }
-                Transport::Ssh {
-                    user,
-                    host,
-                    remote_program,
-                } => {
+                ssh @ Transport::Ssh { remote_program, .. } => {
                     let mut cmd = Command::new("ssh");
-                    if let Some(u) = user {
-                        cmd.arg("-l").arg(u);
-                    }
-                    // the same knob Nix's ssh.cc reads, so ControlMaster and friends can
-                    // be set per run
-                    if let Ok(opts) = std::env::var("NIX_SSHOPTS") {
-                        cmd.args(opts.split_whitespace());
-                    }
-                    cmd.arg("-x")
-                        .arg(host)
+                    cmd.args(ssh_args(ssh)?)
+                        .arg("--")
                         .args(remote_program)
                         .stdin(Stdio::piped())
                         .stdout(Stdio::piped())
@@ -918,37 +1074,87 @@ mod tests {
         // nix.conf's default `store`, which `builder` falls back to.
         assert_eq!(Transport::parse("auto"), Transport::parse("daemon"));
         assert_eq!(Transport::parse(""), Transport::parse("daemon"));
-        assert_eq!(
-            Transport::parse("ssh-ng://bob@builder.example"),
+        let ssh = |url: &str| match Transport::parse(url) {
             Some(Transport::Ssh {
-                user: Some("bob".into()),
-                host: "builder.example".into(),
-                remote_program: vec!["nix-daemon".into(), "--stdio".into()],
-            })
-        );
+                user,
+                host,
+                port,
+                remote_program,
+                key,
+                compress,
+            }) => (user, host, port, remote_program, key, compress),
+            other => panic!("{url}: {other:?}"),
+        };
         assert_eq!(
-            Transport::parse("ssh-ng://builder.example/"),
-            Some(Transport::Ssh {
-                user: None,
-                host: "builder.example".into(),
-                remote_program: vec!["nix-daemon".into(), "--stdio".into()],
-            })
+            ssh("ssh-ng://bob@builder.example"),
+            (
+                Some("bob".into()),
+                "builder.example".into(),
+                None,
+                vec!["nix-daemon".into(), "--stdio".into()],
+                None,
+                false
+            )
         );
+        assert_eq!(ssh("ssh-ng://builder.example/").1, "builder.example");
+        // ssh-store.cc appends --stdio to whatever remote-program names
         assert_eq!(
-            Transport::parse(
-                "ssh-ng://builder.example?remote-program=nix-daemon%20--store%20local%3Froot%3D/tmp/s+--stdio"
+            ssh("ssh-ng://builder.example?remote-program=nix-daemon%20--store%20local%3Froot%3D/tmp/s")
+                .3,
+            vec![
+                "nix-daemon".to_string(),
+                "--store".into(),
+                "local?root=/tmp/s".into(),
+                "--stdio".into()
+            ]
+        );
+        assert_eq!(ssh("ssh-ng://builder.example:2222").2, Some(2222));
+        assert_eq!(ssh("ssh-ng://[::1]:2222").1, "::1");
+        assert_eq!(ssh("ssh-ng://[::1]").1, "::1");
+        assert_eq!(
+            (
+                ssh("ssh-ng://h?ssh-key=/k&compress=true").4,
+                ssh("ssh-ng://h?compress=true").5
             ),
-            Some(Transport::Ssh {
-                user: None,
-                host: "builder.example".into(),
-                remote_program: vec![
-                    "nix-daemon".into(),
-                    "--store".into(),
-                    "local?root=/tmp/s".into(),
-                    "--stdio".into()
-                ],
-            })
+            (Some("/k".to_string()), true)
         );
         assert_eq!(Transport::parse("http://127.0.0.1:9455"), None);
+    }
+
+    /// An ssh host that starts with `-` would be an ssh option, so it never
+    /// reaches the command line.
+    #[test]
+    fn an_ssh_host_is_never_an_option() {
+        for url in [
+            "ssh-ng://-oProxyCommand=touch%20/tmp/pwned",
+            "ssh-ng://-l",
+            "ssh-ng://-u@h",
+            "ssh-ng://@h",
+            "ssh-ng://",
+        ] {
+            assert_eq!(Transport::parse(url), None, "{url}");
+        }
+        let e = Transport::parse_checked("ssh-ng://-oProxyCommand=x", "x86_64-linux").unwrap_err();
+        assert!(format!("{e}").contains("must not start with '-'"), "{e}");
+    }
+
+    #[test]
+    fn ssh_argv_puts_the_host_first() {
+        let t = Transport::parse("ssh-ng://bob@h:2222?ssh-key=/k&compress=true").unwrap();
+        assert_eq!(
+            ssh_args(&t).unwrap(),
+            ["bob@h", "-x", "-i", "/k", "-C", "-p2222"]
+        );
+    }
+
+    #[test]
+    fn nix_sshopts_split_like_a_shell() {
+        assert_eq!(
+            shell_split(r#"-o "Proxy Command=a b" -i 'my key'"#).unwrap(),
+            ["-o", "Proxy Command=a b", "-i", "my key"]
+        );
+        assert_eq!(shell_split(r"a\ b  c").unwrap(), ["a b", "c"]);
+        assert_eq!(shell_split("  ").unwrap(), Vec::<String>::new());
+        assert!(shell_split("'a").is_err());
     }
 }
