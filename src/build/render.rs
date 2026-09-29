@@ -125,10 +125,10 @@ pub struct Renderer {
     /// of their activity says nothing: a build hook ends two activities for
     /// one build, and only the op's result knows whether it succeeded.
     owned: HashSet<String>,
-    /// Builds whose block claimed a success at the end of their activity. The
-    /// daemon names a failed dependency only afterwards, so the claim is
-    /// checked again when the op is over, whatever the order was.
-    claimed: HashMap<String, (String, Option<String>, Duration)>,
+    /// Builds whose activity ended with no failure known yet. The daemon names
+    /// a failed dependency only afterwards, so a verdict waits here until the
+    /// op is over or the daemon contradicts it.
+    held: HashMap<String, Build>,
 }
 
 impl Renderer {
@@ -141,7 +141,7 @@ impl Renderer {
             failed: HashSet::new(),
             verdicted: HashSet::new(),
             owned: HashSet::new(),
-            claimed: HashMap::new(),
+            held: HashMap::new(),
         }
     }
 
@@ -150,25 +150,18 @@ impl Renderer {
         self.owned = drvs.into_iter().collect();
     }
 
-    /// The op is over: every failure it had to report has been reported, so a
-    /// claimed success that the daemon contradicted is corrected here. Then
-    /// the end of an activity decides a verdict again.
+    /// The op is over, so every failure it had to report has been reported and
+    /// a held verdict is now known. Then the end of an activity decides a
+    /// verdict again.
     pub fn release(&mut self) {
         self.owned.clear();
-        let mut wrong: Vec<(String, Option<String>, Duration)> = (self.claimed.iter())
-            .filter(|(drv, _)| self.failed.contains(*drv))
-            .map(|(_, c)| c.clone())
-            .collect();
-        wrong.sort_by(|a, b| a.0.cmp(&b.0));
-        self.claimed.clear();
-        for (short, pos, elapsed) in wrong {
-            let l = self.failed_line(
-                &short,
-                pos.as_deref(),
-                elapsed,
-                Some("the daemon named it only after the build ended"),
-            );
-            self.line(l);
+        let mut held: Vec<(String, Build)> = self.held.drain().collect();
+        held.sort_by_key(|(_, b)| b.ended.unwrap_or(b.started));
+        for (drv, b) in held {
+            let ok = !self.failed.contains(&drv);
+            self.verdicted.insert(drv);
+            let why = (!ok).then_some("the daemon named it only after the build ended");
+            self.verdict_block(&b, ok, why);
         }
     }
 
@@ -345,20 +338,20 @@ impl Renderer {
             }
             return;
         }
-        let Some(b) = self.running.remove(drv) else {
+        let Some(mut b) = self.running.remove(drv) else {
             return;
         };
         let tail = b.tail(FAILURE_TAIL);
         self.retain(drv, tail);
-        let ok = !self.failed.contains(drv);
-        self.verdicted.insert(drv.to_string());
-        if ok {
-            self.claimed.insert(
-                drv.to_string(),
-                (b.short.clone(), b.pos.clone(), b.elapsed()),
-            );
+        if self.failed.contains(drv) {
+            self.verdicted.insert(drv.to_string());
+            self.verdict_block(&b, false, None);
+            return;
         }
-        self.verdict_block(&b, ok, None);
+        // the daemon names a failed dependency only after the activity ends,
+        // so a success is not known here: the verdict waits for `release`
+        b.ended = Some(Instant::now());
+        self.held.insert(drv.to_string(), b);
     }
 
     fn retain(&mut self, drv: &str, tail: Vec<String>) {
@@ -405,6 +398,11 @@ impl Renderer {
     }
 
     fn failure(&mut self, e: &BuildEvent, reason: &str, tail: &[String]) {
+        if let Some(b) = self.held.remove(&e.drv) {
+            self.verdicted.insert(e.drv.clone());
+            self.verdict_block(&b, false, Some(reason));
+            return;
+        }
         if self.running.contains_key(&e.drv) {
             self.verdict(e, false, Some(reason));
             return;
@@ -652,6 +650,7 @@ mod tests {
         r.event(&ev(Kind::Started));
         r.event(&ev(Kind::Log(b"line one".to_vec())));
         r.stopped("/nix/store/a.drv");
+        r.release();
         let t = text(&s);
         assert!(t.contains("::group::✔  checks.x.a"), "{t}");
         assert!(t.contains("checks.x.a> line one"));
@@ -678,6 +677,7 @@ mod tests {
         r.event(&ev(Kind::Started));
         r.event(&ev(Kind::Log(b"line one".to_vec())));
         r.stopped("/nix/store/a.drv");
+        r.release();
         let t = text(&s);
         let log = t.find("checks.x.a> line one").expect("the log line");
         let done = t.find("✔  checks.x.a").expect("the verdict");
@@ -713,7 +713,9 @@ mod tests {
             Duration::ZERO,
         ));
         r.stopped("/nix/store/a.drv");
+        r.release();
         r.stopped("/nix/store/b.drv");
+        r.release();
         let t = text(&s);
         let a1 = t.find("a> a1").unwrap();
         let a2 = t.find("a> a2").unwrap();
@@ -735,6 +737,7 @@ mod tests {
         r.event(&ev(Kind::Log(b"noise".to_vec())));
         r.event(&ev(Kind::Phase("build".into())));
         r.stopped("/nix/store/a.drv");
+        r.release();
         let t = text(&s);
         assert!(t.contains("▶ building checks.x.a"));
         assert!(t.contains("checks.x.a: build (0s)"));
@@ -758,6 +761,7 @@ mod tests {
             Duration::ZERO,
         ));
         r.stopped("/nix/store/a.drv");
+        r.release();
         let t = text(&s);
         assert!(t.contains("✘  checks.x.a failed after 0s"), "{t}");
         assert!(!t.contains("✔"), "{t}");
@@ -831,12 +835,12 @@ mod tests {
     /// The daemon names a failed dependency after its activity ended, so the
     /// end of the op, not the order of the messages, decides the verdict.
     #[test]
-    fn a_failure_after_the_activity_ended_still_lands() {
+    fn a_failure_after_the_activity_ended_never_claims_a_success() {
         let (mut r, s) = ci(false);
         r.event(&ev(Kind::Started));
         r.event(&ev(Kind::Log(b"work".to_vec())));
         r.stopped("/nix/store/a.drv");
-        assert!(text(&s).contains("✔  checks.x.a"), "{}", text(&s));
+        assert!(!text(&s).contains("✔"), "a verdict before the op is over");
         r.event(&BuildEvent::new(
             "",
             "",
@@ -846,6 +850,7 @@ mod tests {
         r.release();
         let t = text(&s);
         assert!(t.contains("✘  checks.x.a failed after 0s"), "{t}");
+        assert!(!t.contains("✔"), "{t}");
     }
 
     /// Only the daemon's own line may report a mismatch; a build's log line
