@@ -248,7 +248,13 @@ pub fn auto_args(
     cwd: &[u8],
 ) -> Result<Word, Box<Error>> {
     let mut entries = Vec::new();
-    for (name, kind) in args {
+    // common-eval-args.cc keeps autoArgs in a map and insert_or_assign's into
+    // it, so the last `--arg`/`--argstr` of a name is the one that is used
+    let mut seen = std::collections::HashSet::new();
+    let mut last: Vec<&(String, ArgKind)> =
+        args.iter().rev().filter(|(n, _)| seen.insert(n)).collect();
+    last.reverse();
+    for (name, kind) in last {
         let w = match kind {
             ArgKind::Expr(e) => {
                 let ir =

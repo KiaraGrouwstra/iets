@@ -285,6 +285,11 @@ def main [] {
     (run-both $farm nix-instantiate --eval --raw -E $"($rawp)/p.txt")))
   $ok = ($ok | append (cmp-case "instantiate --eval --raw an outPath"
     (run-both $farm nix-instantiate --eval --raw -E $"\({ outPath = ($rawp)/p.txt; }).outPath")))
+  # autoArgs is a map: one name given twice keeps the last value
+  $ok = ($ok | append (cmp-case "instantiate --eval, one --arg name twice"
+    (run-both $farm nix-instantiate --eval --arg a 1 --arg a 2 -E "{ a }: a")))
+  $ok = ($ok | append (cmp-case "instantiate --eval, --arg then --argstr of one name"
+    (run-both $farm nix-instantiate --eval --arg a 1 --arg b 9 --argstr a x -E "{ a, b }: [ a b ]")))
   # each value is written as it is made, so what ran before a failure is out
   $ok = ($ok | append (cmp-case "instantiate --eval, a later expression throws"
     (run-both $farm nix-instantiate --eval -E "1" "throw \"x\"")))
