@@ -398,7 +398,7 @@ already is the hash.
 
 An entry holds the decompressed tar exactly as downloaded (`spool`), an
 index of every member's offset, size, mode and symlink target, and a
-`sparse` file when the archive had GNU sparse members. No tree is ever
+`sparse` file when the archive had sparse members. No tree is ever
 unpacked. That is not only a disk saving: a full nixpkgs revision costs
 19 MB of index over the evaluator's own 75 MB, where unpacking a tree cost
 307 MB — 13.5 s and 382 MB peak before, 7.7 s and 94 MB after.

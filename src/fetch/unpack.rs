@@ -13,7 +13,7 @@
 //! (tarfile.cc:253). A member listed twice keeps the last copy
 //! (git-utils.cc:1213, "only import the latest version of a path").
 
-use std::io::Read;
+use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 
@@ -107,10 +107,14 @@ pub fn unpack(bytes: Vec<u8>, dest: &Path) -> Result<PathBuf> {
         if kind.is_pax_global_extensions() {
             continue;
         }
-        let name = entry
-            .path()
-            .map_err(|e| Error::io("cannot read a tarball member name", e))?
-            .into_owned();
+        let pax = super::spool::pax_sparse(&mut entry)?;
+        let name = match pax.as_ref().and_then(|s| s.name.clone()) {
+            Some(n) => PathBuf::from(std::ffi::OsString::from_vec(n)),
+            None => entry
+                .path()
+                .map_err(|e| Error::io("cannot read a tarball member name", e))?
+                .into_owned(),
+        };
         let rel = member_path(&name)?;
         if rel.as_os_str().is_empty() {
             continue;
@@ -142,16 +146,16 @@ pub fn unpack(bytes: Vec<u8>, dest: &Path) -> Result<PathBuf> {
             links.push((rel, member_path(&target)?));
         } else if kind.is_file() || kind.is_contiguous() || kind.is_gnu_sparse() {
             let executable = entry.header().mode().unwrap_or(0o644) & 0o100 != 0;
-            let mut contents = Vec::new();
-            entry.read_to_end(&mut contents).map_err(|e| {
+            clear(&at)?;
+            let out = std::fs::File::create(&at)
+                .map_err(|e| Error::io(format!("cannot write {}", at.display()), e))?;
+            let size = pax.as_ref().map_or_else(|| entry.size(), |s| s.size);
+            super::spool::expand(&mut entry, pax.as_ref(), &out, 0, size).map_err(|e| {
                 Error::io(
                     format!("cannot read '{}' from the tarball", rel.display()),
                     e,
                 )
             })?;
-            clear(&at)?;
-            std::fs::write(&at, &contents)
-                .map_err(|e| Error::io(format!("cannot write {}", at.display()), e))?;
             std::fs::set_permissions(
                 &at,
                 std::fs::Permissions::from_mode(if executable { 0o755 } else { 0o644 }),

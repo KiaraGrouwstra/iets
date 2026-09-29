@@ -10,7 +10,9 @@
 #    another derivation made, built on a scratch daemon with the hash faked;
 #    the answer is `nix hash file` of the same bytes, on stdout, alone.
 # 5. the same derivation with outputHashMode recursive: `nix hash path`.
-# 6. the command lines that are errors: 2 for usage, 1 for a fetch that fails.
+# 6. sparse members: the four GNU and PAX forms, and the fetch-max-size cap
+#    on what a sparse member expands to.
+# 7. the command lines that are errors: 2 for usage, 1 for a fetch that fails.
 #
 # Needs a live nix-daemon and `nix` on PATH (the dev shell has nix 2.34.8);
 # `nix store prefetch-file` writes to the store, so the flake check runs it in
@@ -99,7 +101,27 @@ def run-tests [ietsp: string, work: string] {
   $ok = ($ok | append (verdict ($r.exit_code == 0 and $j.hash? == $hashed and ($j.drvPath? | default "" | str ends-with ".drv")) "a recursive fixed-output build"
     $"expr: exit ($r.exit_code), stdout ($r.stdout | to json -r), want ($hashed)"))
 
-  print "== 6. the command lines that are errors"
+  print "== 6. sparse members"
+  for form in [[tag, args]; ["gnu", ["--format=gnu"]], ["pax0.0", ["--format=posix", "--sparse-version=0.0"]],
+               ["pax0.1", ["--format=posix", "--sparse-version=0.1"]], ["pax1.0", ["--format=posix", "--sparse-version=1.0"]]] {
+    rm -rf $"($work)/sp"
+    mkdir $"($work)/sp/top"
+    ^truncate -s 4194304 $"($work)/sp/top/hole"
+    "end\n" | save --append $"($work)/sp/top/hole"
+    ^tar -S ...$form.args -cf $"($work)/sp-($form.tag).tar" -C $"($work)/sp" top
+    let url = $"file://($work)/sp-($form.tag).tar"
+    let ours = (out-of $ietsp prefetch --unpack $url | chomp)
+    let theirs = (prefetched --unpack $url)
+    $ok = ($ok | append (verdict ($ours == $theirs) $"sparse ($form.tag)"
+      $"sparse ($form.tag): ours ($ours), nix ($theirs)"))
+  }
+  # the archive is 10 KiB and the file it names is 4 MiB: the cap counts the
+  # bytes the expansion writes, not the bytes that arrived
+  let capped = (^$ietsp prefetch --unpack --ietsp-option fetch-max-size 1048576 $"file://($work)/sp-gnu.tar" | complete)
+  $ok = ($ok | append (verdict ($capped.exit_code != 0 and ($capped.stderr | str contains "fetch-max-size")) "sparse fetch-max-size"
+    $"cap: exit ($capped.exit_code), stderr ($capped.stderr | chomp)"))
+
+  print "== 7. the command lines that are errors"
   let codes = [
     (exit-code $ietsp prefetch --bogus)
     (exit-code $ietsp prefetch --hash-type sha7 $url)

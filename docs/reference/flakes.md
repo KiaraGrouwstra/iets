@@ -208,7 +208,7 @@ what its content hashes to.
 |---|---|
 | `spool` | the decompressed tar, exactly as it was downloaded |
 | `index` | the `spool::Tree` index: a version byte, the entry's NAR hash and size, the spool's length, then the tree as offsets, sizes, modes and symlink targets |
-| `sparse` | only when the archive had GNU sparse members, whose holes are not in the tar |
+| `sparse` | only when the archive had sparse members (GNU or pax), whose holes are not in the tar |
 
 A reader checks the index's version byte and the spool's size against the
 length the index recorded; anything else wipes the entry, which costs one

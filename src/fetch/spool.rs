@@ -22,7 +22,7 @@
 
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 
@@ -210,12 +210,19 @@ fn lookup<'a>(root: &'a Dir, parts: &[Vec<u8>]) -> Option<&'a Node> {
 
 impl Tree {
     /// Indexes the decompressed tar in `spool`, which is read from the start and
-    /// kept for `dump`.
-    pub fn index(spool: File) -> Result<Tree> {
+    /// kept for `dump`. `max_size` is `fetch-max-size`: the spool and everything
+    /// a sparse member expands to must fit in it together.
+    pub fn index(spool: File, max_size: u64) -> Result<Tree> {
         let mut root = Dir::new();
         let mut links: Vec<(Parts, Parts)> = Vec::new();
         let mut sparse: Option<File> = None;
         let mut sparse_at = 0u64;
+        let mut room = max_size.saturating_sub(
+            spool
+                .metadata()
+                .map_err(|e| Error::io("cannot read the spooled tarball", e))?
+                .len(),
+        );
         {
             let mut src = &spool;
             src.rewind()
@@ -232,10 +239,14 @@ impl Tree {
                 if kind.is_pax_global_extensions() {
                     continue;
                 }
-                let name = entry
-                    .path()
-                    .map_err(|e| Error::io("cannot read a tarball member name", e))?
-                    .into_owned();
+                let pax = pax_sparse(&mut entry)?;
+                let name = match pax.as_ref().and_then(|s| s.name.clone()) {
+                    Some(n) => std::path::PathBuf::from(std::ffi::OsString::from_vec(n)),
+                    None => entry
+                        .path()
+                        .map_err(|e| Error::io("cannot read a tarball member name", e))?
+                        .into_owned(),
+                };
                 let parts = parts_of(&super::unpack::member_path(&name)?);
                 if parts.is_empty() {
                     continue;
@@ -253,35 +264,45 @@ impl Tree {
                     links.push((parts, parts_of(&target)));
                 } else if kind.is_file() || kind.is_contiguous() || kind.is_gnu_sparse() {
                     let exec = entry.header().mode().unwrap_or(0o644) & 0o100 != 0;
-                    let at = if kind.is_gnu_sparse() {
-                        // The holes are not in the archive, so this is the one
-                        // member whose bytes must be written out to be indexed.
-                        let side = match &mut sparse {
-                            Some(f) => f,
-                            None => sparse.insert(scratch("sparse")?),
-                        };
-                        side.seek(SeekFrom::Start(sparse_at))
-                            .and_then(|_| io::copy(&mut entry, side))
-                            .map(|size| {
-                                let at = Blob {
-                                    offset: sparse_at,
-                                    size,
-                                    sparse: true,
-                                };
-                                sparse_at += size;
-                                at
-                            })
-                            .map_err(|e| {
-                                Error::io(
-                                    format!("cannot read '{}' from the tarball", show(&parts)),
-                                    e,
-                                )
-                            })?
-                    } else {
-                        Blob {
+                    // A sparse member's holes are not in the archive, so it is
+                    // the one member whose bytes must be written out to be
+                    // indexed, and the one whose size the spool does not bound.
+                    let expanded = match &pax {
+                        Some(s) => Some(s.size),
+                        None if kind.is_gnu_sparse() => Some(entry.size()),
+                        None => None,
+                    };
+                    let at = match expanded {
+                        None => Blob {
                             offset: entry.raw_file_position(),
                             size: entry.size(),
                             sparse: false,
+                        },
+                        Some(size) => {
+                            room = room.checked_sub(size).ok_or_else(|| {
+                                bad(format!(
+                                    "the tarball expands to over the fetch-max-size of {max_size} bytes"
+                                ))
+                            })?;
+                            let side = match &mut sparse {
+                                Some(f) => f,
+                                None => sparse.insert(scratch("sparse")?),
+                            };
+                            expand(&mut entry, pax.as_ref(), side, sparse_at, size).map_err(
+                                |e| {
+                                    Error::io(
+                                        format!("cannot read '{}' from the tarball", show(&parts)),
+                                        e,
+                                    )
+                                },
+                            )?;
+                            let at = Blob {
+                                offset: sparse_at,
+                                size,
+                                sparse: true,
+                            };
+                            sparse_at += size;
+                            at
                         }
                     };
                     insert(&mut root, &parts, &parts, Node::File { at, exec })?;
@@ -681,6 +702,169 @@ fn get_node(d: &mut Idx<'_>, depth: usize) -> Option<Node> {
     })
 }
 
+/// What the `GNU.sparse.*` pax records of a member say: the name the member
+/// really has, the size it expands to, and its data blocks. `map` is `None` for
+/// format 1.0, which holds the map at the head of the member's data instead.
+pub(super) struct Sparse {
+    pub(super) name: Option<Vec<u8>>,
+    pub(super) size: u64,
+    map: Option<Vec<(u64, u64)>>,
+}
+
+fn number(v: &[u8]) -> Option<u64> {
+    std::str::from_utf8(v).ok()?.parse().ok()
+}
+
+/// The three GNU pax sparse formats (GNU tar, `Sparse Formats`): 0.0 repeats
+/// `offset`/`numbytes`, 0.1 holds one `map`, and 1.0 (`major` 1) puts the map in
+/// the data. Without these records the member is an ordinary file.
+pub(super) fn pax_sparse(entry: &mut tar::Entry<'_, impl Read>) -> Result<Option<Sparse>> {
+    let ext = entry
+        .pax_extensions()
+        .map_err(|e| Error::io("cannot read the pax records of a tarball member", e))?;
+    let Some(ext) = ext else { return Ok(None) };
+    let (mut name, mut size, mut real, mut major) = (None, None, None, 0);
+    let (mut map, mut blocks, mut offset) = (None, Vec::new(), None);
+    for rec in ext {
+        let rec = rec.map_err(|e| Error::io("cannot read a pax record", e))?;
+        let v = rec.value_bytes();
+        match rec.key_bytes() {
+            b"GNU.sparse.name" => name = Some(v.to_vec()),
+            b"GNU.sparse.size" => size = number(v),
+            b"GNU.sparse.realsize" => real = number(v),
+            b"GNU.sparse.major" => major = number(v).unwrap_or(0),
+            b"GNU.sparse.offset" => offset = number(v),
+            b"GNU.sparse.numbytes" => match (offset.take(), number(v)) {
+                (Some(o), Some(n)) => blocks.push((o, n)),
+                _ => return Err(bad("a tarball member has a bad sparse map".into())),
+            },
+            b"GNU.sparse.map" => {
+                let mut it = v.split(|&b| b == b',').map(number);
+                let mut got = Vec::new();
+                while let Some(o) = it.next() {
+                    match (o, it.next().flatten()) {
+                        (Some(o), Some(n)) => got.push((o, n)),
+                        _ => return Err(bad("a tarball member has a bad sparse map".into())),
+                    }
+                }
+                map = Some(got);
+            }
+            _ => {}
+        }
+    }
+    if major >= 1 {
+        let Some(size) = real else {
+            return Err(bad("a sparse tarball member has no 'realsize'".into()));
+        };
+        return Ok(Some(Sparse {
+            name,
+            size,
+            map: None,
+        }));
+    }
+    let map = match map {
+        Some(m) => m,
+        None if !blocks.is_empty() => blocks,
+        None => return Ok(None),
+    };
+    let Some(size) = size else {
+        return Err(bad("a sparse tarball member has no 'size'".into()));
+    };
+    Ok(Some(Sparse {
+        name,
+        size,
+        map: Some(map),
+    }))
+}
+
+/// A sparse member written out whole at `base` in the side file: its data
+/// blocks where they belong, and holes for the rest.
+pub(super) fn expand(
+    entry: &mut tar::Entry<'_, impl Read>,
+    pax: Option<&Sparse>,
+    side: &File,
+    base: u64,
+    size: u64,
+) -> io::Result<()> {
+    let Some(pax) = pax else {
+        // an old-style GNU sparse member: the tar reader expands it itself
+        let mut side = side;
+        side.seek(SeekFrom::Start(base))?;
+        io::copy(entry, &mut side)?;
+        return Ok(());
+    };
+    let map = match &pax.map {
+        Some(m) => m.clone(),
+        None => read_map(entry)?,
+    };
+    let mut buf = vec![0u8; CHUNK];
+    let mut end = 0u64;
+    for (at, len) in map {
+        if at < end || at.checked_add(len).is_none_or(|e| e > size) {
+            return Err(io::Error::other("a sparse map that does not fit the file"));
+        }
+        end = at + len;
+        let mut left = len;
+        let mut to = base + at;
+        while left > 0 {
+            let n = left.min(buf.len() as u64) as usize;
+            entry.read_exact(&mut buf[..n])?;
+            side.write_all_at(&buf[..n], to)?;
+            to += n as u64;
+            left -= n as u64;
+        }
+    }
+    side.set_len(base + size)
+}
+
+/// The map a format 1.0 sparse member holds at the head of its data: decimal
+/// numbers on their own lines, padded out to whole 512-byte blocks.
+fn read_map(entry: &mut impl Read) -> io::Result<Vec<(u64, u64)>> {
+    let mut at = Decimals {
+        src: entry,
+        buf: [0; 512],
+        pos: 512,
+    };
+    let count = at.next()?;
+    let mut map = Vec::new();
+    for _ in 0..count {
+        map.push((at.next()?, at.next()?));
+    }
+    Ok(map)
+}
+
+struct Decimals<'a, R: Read> {
+    src: &'a mut R,
+    buf: [u8; 512],
+    pos: usize,
+}
+
+impl<R: Read> Decimals<'_, R> {
+    fn next(&mut self) -> io::Result<u64> {
+        let (mut n, mut digits) = (0u64, 0);
+        loop {
+            if self.pos == self.buf.len() {
+                self.src.read_exact(&mut self.buf)?;
+                self.pos = 0;
+            }
+            let b = self.buf[self.pos];
+            self.pos += 1;
+            if b == b'\n' && digits > 0 {
+                return Ok(n);
+            }
+            let d = u64::from(b.wrapping_sub(b'0'));
+            n = match (d < 10)
+                .then(|| n.checked_mul(10)?.checked_add(d))
+                .flatten()
+            {
+                Some(n) => n,
+                None => return Err(io::Error::other("a bad sparse map in a tarball member")),
+            };
+            digits += 1;
+        }
+    }
+}
+
 fn link_target(
     entry: &mut tar::Entry<'_, impl Read>,
     parts: &[Vec<u8>],
@@ -763,7 +947,7 @@ mod tests {
         let plain = crate::fetch::http::decompress(bytes.clone()).unwrap();
         let mut spool = scratch(tag).unwrap();
         spool.write_all(&plain).unwrap();
-        let streamed = Tree::index(spool).and_then(|t| {
+        let streamed = Tree::index(spool, u64::MAX).and_then(|t| {
             let mut nar = Vec::new();
             t.dump(&mut nar)
                 .map_err(|e| Error::io("cannot dump the spool", e))?;
@@ -904,6 +1088,125 @@ mod tests {
         assert_eq!(std::fs::read(&victim).unwrap(), b"precious");
         std::fs::remove_file(&bait).unwrap();
         std::fs::remove_file(&victim).unwrap();
+    }
+
+    /// One pax local extended header and the member it belongs to.
+    fn pax_tar(records: &[(&str, String)], name: &str, data: &[u8]) -> Vec<u8> {
+        let one = |key: &str, value: &str| {
+            let body = format!(" {key}={value}\n");
+            let mut len = body.len() + 1;
+            loop {
+                let rec = format!("{len}{body}");
+                if rec.len() == len {
+                    return rec;
+                }
+                len = rec.len();
+            }
+        };
+        let recs: String = records.iter().map(|(k, v)| one(k, v)).collect();
+        let mut b = tar::Builder::new(Vec::new());
+        for (kind, name, body) in [
+            (tar::EntryType::XHeader, "PaxHeaders/x", recs.as_bytes()),
+            (REG, name, data),
+        ] {
+            let mut h = tar::Header::new_ustar();
+            h.set_entry_type(kind);
+            h.set_mode(0o644);
+            h.set_size(body.len() as u64);
+            b.append_data(&mut h, name, body).unwrap();
+        }
+        b.into_inner().unwrap()
+    }
+
+    /// 4096 zeros, `abcd`, 4092 zeros: one hole, one block and one hole.
+    fn holey() -> Vec<u8> {
+        let mut want = vec![0u8; 8192];
+        want[4096..4100].copy_from_slice(b"abcd");
+        want
+    }
+
+    /// GNU tar's three pax sparse formats give the file the archive describes,
+    /// under the name its records name, and not the condensed bytes.
+    #[test]
+    fn pax_sparse_members_are_expanded() {
+        fn n(k: &str, v: u64) -> (&str, String) {
+            (k, v.to_string())
+        }
+        let mut one_zero = b"1\n4096\n4\n".to_vec();
+        one_zero.resize(512, 0);
+        one_zero.extend_from_slice(b"abcd");
+        for (tag, records, name, data) in [
+            (
+                "v0.0",
+                vec![
+                    n("GNU.sparse.size", 8192),
+                    n("GNU.sparse.numblocks", 1),
+                    n("GNU.sparse.offset", 4096),
+                    n("GNU.sparse.numbytes", 4),
+                ],
+                "top/sparse",
+                b"abcd".to_vec(),
+            ),
+            (
+                "v0.1",
+                vec![
+                    n("GNU.sparse.size", 8192),
+                    n("GNU.sparse.numblocks", 1),
+                    ("GNU.sparse.name", "top/sparse".into()),
+                    ("GNU.sparse.map", "4096,4".into()),
+                ],
+                "top/GNUSparseFile.1/sparse",
+                b"abcd".to_vec(),
+            ),
+            (
+                "v1.0",
+                vec![
+                    n("GNU.sparse.major", 1),
+                    n("GNU.sparse.minor", 0),
+                    ("GNU.sparse.name", "top/sparse".into()),
+                    n("GNU.sparse.realsize", 8192),
+                ],
+                "top/GNUSparseFile.1/sparse",
+                one_zero.clone(),
+            ),
+        ] {
+            let (streamed, tree) = both(tag, pax_tar(&records, name, &data));
+            let streamed = streamed.unwrap_or_else(|e| panic!("{tag}: {e}"));
+            assert_eq!(streamed, tree.unwrap(), "{tag}: the two NARs differ");
+            let want = same(
+                &format!("{tag}-plain"),
+                &[
+                    ("top/", DIR, 0o755, b""),
+                    ("top/sparse", REG, 0o644, &holey()),
+                ],
+            );
+            assert_eq!(streamed, want, "{tag}: not the file the records describe");
+        }
+    }
+
+    /// A member that expands past `fetch-max-size` is refused before it is
+    /// written: the archive is small, the file it claims is not.
+    #[test]
+    fn a_sparse_member_counts_against_the_size_limit() {
+        let bomb = pax_tar(
+            &[
+                ("GNU.sparse.major", "1".into()),
+                ("GNU.sparse.minor", "0".into()),
+                ("GNU.sparse.name", "top/hole".into()),
+                ("GNU.sparse.realsize", (1u64 << 40).to_string()),
+            ],
+            "top/GNUSparseFile.1/hole",
+            &{
+                let mut d = b"0\n".to_vec();
+                d.resize(512, 0);
+                d
+            },
+        );
+        assert!(bomb.len() < 4096, "the archive is small: {}", bomb.len());
+        let mut spool = scratch("bomb").unwrap();
+        spool.write_all(&bomb).unwrap();
+        let e = Tree::index(spool, 1 << 20).unwrap_err().to_string();
+        assert!(e.contains("fetch-max-size"), "{e}");
     }
 
     /// The fixture whose `narHash` a lock file records, hashed out of the spool.

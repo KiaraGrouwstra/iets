@@ -28,7 +28,7 @@ pub fn url_hash(url: &str, unpack: bool, algo: HashAlgo) -> Result<Hash> {
     }
     let mut spool = crate::fetch::spool::scratch("prefetch")?;
     http::get(url, &[], limits, true, &mut spool)?;
-    crate::fetch::spool::Tree::index(spool)?
+    crate::fetch::spool::Tree::index(spool, limits.max_size)?
         .dump(&mut h)
         .map_err(|e| Error::io("cannot hash the unpacked tree", e))?;
     Ok(h.finish())

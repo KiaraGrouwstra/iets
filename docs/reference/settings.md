@@ -252,7 +252,8 @@ Neither switch touches the roots a caller names: `nix-instantiate
 root per thing.
 
 `source-map` is the only list. `fetch-max-size` caps
-the decompressed bytes of one flake input download; a stream that
+the decompressed bytes of one flake input download, together with what a
+sparse member of the archive expands to; a stream that
 decompresses over 1000 times its size past its first 16 MiB is refused
 too.
 

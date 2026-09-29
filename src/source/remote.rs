@@ -347,10 +347,11 @@ fn fetch_tarball(
     })?;
     let mut spool = crate::fetch::spool::spool_file(staged.dir())
         .map_err(|e| fail(format!("ietsp: cannot fetch input '{name}': {e}")))?;
-    crate::fetch::http::Limits::new(nix_conf(ev.session()))
-        .and_then(|l| crate::fetch::http::get_decompressed(&url, &headers, l, &mut spool))
+    let limits = crate::fetch::http::Limits::new(nix_conf(ev.session()))
         .map_err(|e| fail(format!("ietsp: cannot fetch input '{name}': {e}")))?;
-    let tree = crate::fetch::spool::Tree::index(spool)
+    crate::fetch::http::get_decompressed(&url, &headers, limits, &mut spool)
+        .map_err(|e| fail(format!("ietsp: cannot fetch input '{name}': {e}")))?;
+    let tree = crate::fetch::spool::Tree::index(spool, limits.max_size)
         .map_err(|e| fail(format!("ietsp: cannot unpack input '{name}': {e}")))?;
 
     // the store verifies the tree against the lock's hash and names it by
