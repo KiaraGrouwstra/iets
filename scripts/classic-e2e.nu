@@ -599,10 +599,12 @@ def main [] {
   rm -f $"($env.XDG_CONFIG_HOME)/nix/nix.conf"
   # installables.cc:460 refuses `nix eval -f` when `pure-eval` was overridden:
   # a flag, a user file, $NIX_CONFIG or --option, but not the system nix.conf
-  "pure-eval = true\n" | save -f $"($cdir)/nix.conf"
+  # NIX_CONF_DIR replaces /etc/nix, where the features the `nix` name needs live
+  "experimental-features = nix-command flakes\npure-eval = true\n" | save -f $"($cdir)/nix.conf"
+  "pure-eval = true\n" | save -f $"($cdir)/user.conf"
   for case in [
     {label: "the system nix.conf", env: {NIX_CONF_DIR: $cdir, NIX_USER_CONF_FILES: ""}, args: []}
-    {label: "a user nix.conf", env: {NIX_CONF_DIR: $tmp, NIX_USER_CONF_FILES: $"($cdir)/nix.conf"}, args: []}
+    {label: "a user nix.conf", env: {NIX_USER_CONF_FILES: $"($cdir)/user.conf"}, args: []}
     {label: "NIX_CONFIG", env: {NIX_CONFIG: "pure-eval = true"}, args: []}
     {label: "--option", env: {}, args: [--option pure-eval true]}
     {label: "--impure", env: {}, args: [--impure]}
