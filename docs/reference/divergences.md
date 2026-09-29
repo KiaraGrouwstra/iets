@@ -42,6 +42,9 @@ Nix (`T` separator, 3/6/9 fractional digits).
 Errors carry a message shaped like nlohmann's (`parse error at line L,
 column C: ...`) but the `last read` detail is not reproduced.
 
+Nesting deeper than 100,000 levels is refused, because the parser
+recurses and a worker stack is 256 MiB. Nix has no limit.
+
 ## The `__json` derivation attribute
 
 ietsp parses the text with the `fromJSON` parser and writes it again, so

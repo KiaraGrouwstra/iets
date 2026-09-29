@@ -5,6 +5,10 @@ use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
 use crate::runtime::*;
 use crate::syntax::symbol::Sym;
 
+/// A recursive-descent limit ietsp needs and nlohmann does not: the parser
+/// recurses, and a fiber stack is 256 MiB.
+const MAX_JSON_DEPTH: u32 = 100_000;
+
 pub fn to_json(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let mut out: Vec<u8> = Vec::new();
     let mut ctx: Vec<Ctx> = Vec::new();
@@ -162,7 +166,7 @@ impl Parser<'_> {
 
     fn nest(&mut self) -> EvalResult<()> {
         self.depth += 1;
-        if self.depth > 10_000 {
+        if self.depth > MAX_JSON_DEPTH {
             return self.err("nesting too deep");
         }
         Ok(())
