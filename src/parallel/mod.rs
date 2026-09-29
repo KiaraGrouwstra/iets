@@ -15,8 +15,8 @@ use crate::eval::Evaluator;
 use crate::runtime::Arena;
 
 pub use force::{
-    fanout_attrs_coerce, fanout_list, fanout_list_coerce, force_deep, force_thunk, import_thunk,
-    journal,
+    defer, defer_io, fanout_attrs_coerce, fanout_list, fanout_list_coerce, force_deep, force_thunk,
+    import_thunk, journal,
 };
 
 /// Per-fiber evaluator state. `on` is false on the sequential path.
@@ -27,6 +27,9 @@ pub struct Ctx {
     pub id: u32,
     pub is_main: bool,
     pub cancelled: bool,
+    /// The outermost thunk this helper claimed in its task. Effects it
+    /// produces wait on that thunk's demand.
+    pub root: u64,
     pub slot: *mut sched::Slot,
 }
 
@@ -37,6 +40,7 @@ impl Default for Ctx {
             id: 0,
             is_main: true,
             cancelled: false,
+            root: 0,
             slot: std::ptr::null_mut(),
         }
     }

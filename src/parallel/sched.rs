@@ -3,7 +3,7 @@
 //! payload and runs tasks.
 
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering, fence};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering, fence};
 
 use super::deque::Deque;
 use super::fiber::{self, Fiber};
@@ -17,6 +17,9 @@ const TRIM_ABOVE: usize = 16;
 const WARM_STACK: usize = 64 << 10;
 /// Cells one range task may cover, from the packed `Task`.
 const LEN_MAX: u32 = u16::MAX as u32;
+/// Direct-mapped table of the thunks that failed last. A miss costs one
+/// load, so a failure that falls out of it only loses the saving.
+const FAILED_SLOTS: usize = 256;
 
 /// Scans of 64 polls an idle searcher makes before it parks (~2 ms). A
 /// shorter spin (64 scans) saved no user time once searchers were capped,
@@ -168,6 +171,11 @@ pub struct Runtime {
     driver: Box<dyn Driver>,
     stack_size: usize,
     pub waiters: super::thunk::WaiterTable,
+    /// Thunks whose evaluation failed, for helpers to skip. A failure is
+    /// not memoised (Nix evaluates a failed thunk again at every force),
+    /// so this table only stops the speculation: every cell of a fan-out
+    /// would otherwise start the same failing computation again.
+    failed: [AtomicU64; FAILED_SLOTS],
     pub deadlocks: AtomicUsize,
     pub stat_steals: AtomicUsize,
     pub stat_parks: AtomicUsize,
@@ -221,6 +229,7 @@ impl Runtime {
             driver,
             stack_size,
             waiters: super::thunk::WaiterTable::new(),
+            failed: [const { AtomicU64::new(0) }; FAILED_SLOTS],
             deadlocks: AtomicUsize::new(0),
             stat_steals: AtomicUsize::new(0),
             stat_parks: AtomicUsize::new(0),
@@ -708,6 +717,18 @@ impl Runtime {
                 slot.trimmed = true;
             }
         }
+    }
+
+    /// Note that forcing the thunk at `key` failed.
+    #[inline]
+    pub fn note_failed(&self, key: u64) {
+        self.failed[(key >> 4) as usize % FAILED_SLOTS].store(key, Ordering::Relaxed);
+    }
+
+    /// True while `key` is one of the thunks that failed last.
+    #[inline]
+    pub fn is_failed(&self, key: u64) -> bool {
+        self.failed[(key >> 4) as usize % FAILED_SLOTS].load(Ordering::Relaxed) == key
     }
 
     pub fn stats_fibers(&self) -> usize {

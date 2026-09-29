@@ -81,10 +81,16 @@ pub fn publish(slot: &mut Slot, cell: &Cell, v: Word) {
     let old = atomic(cell).swap(v.bits(), Ordering::AcqRel);
     if old & WAITERS_BIT != 0 {
         let rt = slot.runtime();
-        let list = rt.waiters.take(cell);
+        let mut list = rt.waiters.take(cell);
+        // the demand fiber first: it decides the result, and every helper
+        // behind it only speculates
+        // SAFETY: entries come from `wait`, whose slots live forever.
+        if let Some(i) = list.iter().position(|f| unsafe { (**f).is_main }) {
+            list.swap(0, i);
+        }
         let w = slot.worker();
         for f in list {
-            // SAFETY: entries come from `wait`, whose slots live forever.
+            // SAFETY: as above.
             unsafe { rt.wake(w, f) };
         }
     }

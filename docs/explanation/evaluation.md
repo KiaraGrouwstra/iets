@@ -325,6 +325,28 @@ closed:
 The cost is one branch on the force path and one store per thunk a helper
 forced and the demand path then took.
 
+Two effects are not values and are held back instead. A lint finding and a
+`--dump-drvs` file that a helper produced are parked on the thunk the
+helper was forcing (`parallel::force::defer`). The demand path runs them
+when it takes that thunk's value and drops them otherwise. Cancelling the
+helper, as `trace` does, was measured at 15 % of the wall for lints, and
+turning the fan-out off in the builtins that stop early (`any`, `all`,
+`elem`, `filter`, `foldl'`, `concatMap`) costs 37 % at four workers, so
+neither is the answer for them. A finding whose value the demand path
+reaches through a different thunk than the helper's first claim is
+dropped, which is a lost warning and never a wrong one.
+
+### A failure stops the speculation
+
+Nix evaluates a failed thunk again at every force, and so does ietsp: a
+failure resets the thunk. Under fan-out that turned one failing thunk into
+one failing evaluation per task, which was measured at 20 s and 11 GB
+against 0.01 s and 38 MB at one worker. The runtime now notes the thunk
+that failed in a small direct-mapped table. A helper that meets it drops
+its task, before the claim and again after a wait, so only the demand path
+evaluates it once more and reports. A publish also wakes the demand fiber
+first, since every fiber behind it only speculates.
+
 Two effects would break purity, and both are handled by giving them back to
 the demand path. `builtins.trace` and `builtins.warn` in a helper fiber
 print nothing: the helper sets a sticky cancel flag and abandons the task.

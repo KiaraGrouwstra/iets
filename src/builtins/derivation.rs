@@ -637,13 +637,10 @@ fn derivation_strict_internal(
 
     if let Some(dir) = &ev.drv.dump_dir {
         let file = dir.join(drv_path.base_name());
-        std::fs::write(&file, &text).map_err(|e| {
-            Error::boxed(
-                ErrorKind::Io,
-                format!("writing '{}': {e}", file.display()),
-                pos,
-            )
-        })?;
+        let what = format!("writing '{}'", file.display());
+        let text = text.clone();
+        crate::parallel::defer_io(ev, what.clone(), move || std::fs::write(&file, &text))
+            .map_err(|e| Error::boxed(ErrorKind::Io, format!("{what}: {e}"), pos))?;
     }
 
     let mut references: BTreeSet<StorePath> = drv.input_srcs.clone();

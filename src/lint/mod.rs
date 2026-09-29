@@ -1082,7 +1082,12 @@ impl Evaluator {
             )
         };
         let site = self.lint_site_of(id, pos);
-        self.lints.record(id, pos, &line, site, tree);
+        let tree = tree.map(String::from);
+        // a helper may reach a site the program never asks for; the
+        // finding then waits for the thunk whose value carries it
+        crate::parallel::defer(self, move |ev| {
+            ev.lints.record(id, pos, &line, site, tree.as_deref());
+        });
     }
 
     /// The byte span of the site and its edit (`site::finding`), from a

@@ -10,7 +10,7 @@ def outcome [res: record]: nothing -> record {
   {
     out: ($res.stdout | chomp),
     rc: $res.exit_code,
-    eff: ($res.stderr | lines | where $it =~ '^(trace|evaluation warning)' | sort | str join "\n"),
+    eff: ($res.stderr | lines | where $it =~ '^(trace|evaluation warning|warning: \[)' | sort | str join "\n"),
   }
 }
 
@@ -25,9 +25,16 @@ def report [name: string, a: record, b: record, what: string]: nothing -> nothin
 
 # One case at every worker count, and against nix when the case asks.
 def run-case [ietsp: string, counts: list<int>, c: record]: nothing -> bool {
-  let flags = (if $c.strict { [--strict] } else { [] })
+  let base_flags = (if $c.strict { [--strict] } else { [] } | append ($c.flags? | default []))
   let runs = ($counts | each {|w|
-    { w: $w, o: (outcome (^$ietsp eval ...$flags --workers $w -E $c.expr | complete)) }
+    # a `.drv` a helper wrote is an effect the program did not ask for, so
+    # the file count is part of the outcome
+    let dir = (if ($c.dump? | default false) { mktemp -d --tmpdir partest.drv.XXXXXX } else { null })
+    let flags = (if $dir == null { $base_flags } else { $base_flags | append [--dump-drvs $dir] })
+    let o = (outcome (^$ietsp eval ...$flags --workers $w -E $c.expr | complete))
+    let o = (if $dir == null { $o } else { $o | insert drvs (ls $dir | length) })
+    if $dir != null { rm -rf $dir }
+    { w: $w, o: $o }
   })
   let base = ($runs | first)
   mut ok = true
@@ -38,7 +45,7 @@ def run-case [ietsp: string, counts: list<int>, c: record]: nothing -> bool {
     }
   }
   if $c.nix {
-    let n = (outcome (^nix-instantiate --eval ...$flags -E $c.expr | complete))
+    let n = (outcome (^nix-instantiate --eval ...$base_flags -E $c.expr | complete))
     if $n.out != $base.o.out or $n.rc != $base.o.rc {
       report $c.name $base.o $n "ietsp vs nix"
       $ok = false
@@ -55,6 +62,8 @@ def main [n: int = 8] {
   $env.IETSP_CACHE = "0"
   # a slow pure computation: it keeps the demand path busy while helpers run
   let slow = "slow = n: builtins.foldl' (a: b: a + b) 0 (builtins.genList (x: x) n);"
+  # `elem` returns at the first element, so nothing below it is demanded
+  let stops = $"let ($slow) d = i: \(derivation { name = \"d${toString i}\"; builder = \"/bin/sh\"; system = \"x86_64-linux\"; }\).drvPath;"
   let cases = [
     # Shared thunk graph forced from many fibers: fib-style DAG with sharing.
     [name strict nix expr];
@@ -91,7 +100,22 @@ in builtins.foldl' (a: b: a + builtins.foldl' (x: y: x + y) 0 b) 0 rows'#]
     [print-code false true $"let ($slow) l = map \(x: x + slow 20000\) [ 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 ]; in builtins.seq \(builtins.any \(x: x > 0\) l\) l"]
     # A NaN is not equal to itself, and keeps its sign when printed.
     ["nan" true true r#'let inf = 1.0e308 * 10.0; nan = inf - inf; in [ (nan == nan) nan (0.0 - nan) inf (-inf) ]'#]
+    # A thunk many fan-out cells share and that fails: one failure stops the
+    # speculation instead of starting it again from every task.
+    [failing-shared true true $"let ($slow) bad = builtins.seq \(slow 100000\) \(throw \"bad\"\); l = builtins.genList \(i: bad + i\) 20000; in builtins.foldl' \(a: b: a + b\) 0 l"]
   ]
+  # Effects of work the program never asks for: a lint finding and a
+  # dumped .drv must follow demand, not the scheduler.
+  let effect_cases = [
+    [name strict nix flags dump expr];
+    [lint-speculated true false [--lint eq-type-mismatch=warn] false
+      $"let ($slow) in builtins.any \(x: x\) [ \(slow 3000000 > 0\) \(1 == \"a\"\) \(2 == \"b\"\) \(3 == \"c\"\) \(4 == \"d\"\) ]"]
+    [lint-demanded true false [--lint eq-type-mismatch=warn] false
+      $"let ($slow) in builtins.all \(x: x == false\) [ \(slow 2000000 > 0 && false\) \(1 == \"a\"\) \(2 == \"b\"\) \(3 == \"c\"\) \(4 == \"d\"\) ]"]
+    [drv-speculated true false [] true $"($stops) in builtins.elem 1 [ \(slow 3000000 * 0 + 1\) \(builtins.stringLength \(d 1\)\) \(builtins.stringLength \(d 2\)\) \(builtins.stringLength \(d 3\)\) ]"]
+    [drv-demanded true false [] true $"($stops) in map \(i: builtins.stringLength \(d i\)\) [ 1 2 3 4 5 6 7 8 ]"]
+  ]
+  let cases = ($cases | each {|c| $c | insert flags [] | insert dump false } | append $effect_cases)
   if ($cases | any {|c| $c.nix }) { require-real-nix nix-instantiate }
   let counts = ([1 2 4 $n] | uniq)
   let ok = ($cases | each {|c| run-case $ietsp $counts $c })

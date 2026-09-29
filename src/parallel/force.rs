@@ -100,6 +100,7 @@ pub unsafe fn init_ctx(ev: &mut Evaluator, slot: *mut Slot) {
         id,
         is_main,
         cancelled: false,
+        root: 0,
         slot,
     };
     ev.call_depth = 0;
@@ -166,17 +167,29 @@ pub static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock:
 pub fn force_thunk(ev: &mut Evaluator, w: Word) -> EvalResult<Word> {
     let cell = w.thunk_state_cell();
     let me = ev.par.id;
+    let key = cell as *const Cell as u64;
     // SAFETY (every `slot_mut` below): this fiber owns its slot, and each
     // borrow goes straight into one call, so no two are ever live at once.
     //
     // `payload` is the state word the cell held (env, arg, or the map
     // word); a reset stores it back.
     let payload = loop {
+        // a thunk that already failed for another helper is not worth
+        // starting again: the demand path evaluates it and reports. The
+        // check is inside the loop so a waiter that the failure woke stops
+        // instead of claiming the reset thunk.
+        if !ev.par.is_main && slot_ref(ev).runtime().is_failed(key) {
+            ev.par.cancelled = true;
+            return Err(cancelled());
+        }
         match thunk::try_claim(cell, me, |st| w.thunk_unforced(st)) {
             Claim::Won(p) => break p,
             Claim::Value(st) => {
                 if ev.par.is_main && w.thunk_speculated(st) {
                     cell.set(Word::EMPTY);
+                    if NPENDING.load(Ordering::Relaxed) != 0 {
+                        release(ev, key);
+                    }
                 }
                 return Ok(w.thunk_value(st));
             }
@@ -204,11 +217,22 @@ pub fn force_thunk(ev: &mut Evaluator, w: Word) -> EvalResult<Word> {
         thunk::publish(unsafe { slot_mut(ev) }, cell, payload);
         return Err(cancelled());
     }
-    match ev.run_thunk(w, payload) {
+    // effects below this point belong to the first thunk this helper
+    // claimed: the demand path that takes its value takes them too
+    let outer = ev.par.root == 0 && !ev.par.is_main;
+    if outer {
+        ev.par.root = key;
+    }
+    let r = ev.run_thunk(w, payload);
+    if outer {
+        ev.par.root = 0;
+    }
+    match r {
         Ok(v) => {
             debug_assert!(!v.is_thunk());
             if ev.par.cancelled {
                 // Bailed (or hit an effect) somewhere below: transient.
+                discard(outer, key);
                 thunk::publish(unsafe { slot_mut(ev) }, cell, payload);
                 Err(cancelled())
             } else {
@@ -218,6 +242,10 @@ pub fn force_thunk(ev: &mut Evaluator, w: Word) -> EvalResult<Word> {
             }
         }
         Err(e) => {
+            if !ev.par.is_main && e.kind != ErrorKind::Cancelled {
+                slot_ref(ev).runtime().note_failed(key);
+            }
+            discard(outer, key);
             thunk::publish(unsafe { slot_mut(ev) }, cell, payload);
             Err(e)
         }
@@ -242,6 +270,83 @@ pub fn journal(ev: &mut Evaluator, _msg: String) -> bool {
 
 pub static EFFECT_BAILS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+// ---- held-back effects ------------------------------------------------------
+
+type Deferred = Box<dyn FnOnce(&mut Evaluator) + Send>;
+
+/// Effects a helper produced, by the thunk whose value carries them. The
+/// demand path runs them when it takes that value and drops them
+/// otherwise, so a warning or a dumped `.drv` from work the program never
+/// asks for is never seen. The counter keeps the demand path off the lock
+/// while the map is empty, which is every run without lints.
+static PENDING: std::sync::Mutex<Option<std::collections::HashMap<u64, Vec<Deferred>>>> =
+    std::sync::Mutex::new(None);
+static NPENDING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Run an effect, or hold it back when a helper produced it. The demand
+/// path runs it at once.
+pub fn defer(ev: &mut Evaluator, f: impl FnOnce(&mut Evaluator) + Send + 'static) {
+    if !ev.par.on || ev.par.is_main || ev.par.root == 0 {
+        f(ev);
+        return;
+    }
+    PENDING
+        .lock()
+        .unwrap()
+        .get_or_insert_with(Default::default)
+        .entry(ev.par.root)
+        .or_default()
+        .push(Box::new(f));
+    NPENDING.fetch_add(1, Ordering::Relaxed);
+}
+
+/// `defer` for an effect that can fail. The demand path runs it and keeps
+/// the error; a helper's is held back, and a failure that only shows up
+/// after the value was demanded is a warning, since the value is already
+/// the program's.
+pub fn defer_io(
+    ev: &mut Evaluator,
+    what: String,
+    f: impl FnOnce() -> std::io::Result<()> + Send + 'static,
+) -> std::io::Result<()> {
+    if !ev.par.on || ev.par.is_main || ev.par.root == 0 {
+        return f();
+    }
+    defer(ev, move |_| {
+        if let Err(e) = f() {
+            crate::errln!("warning: {what}: {e}");
+        }
+    });
+    Ok(())
+}
+
+/// The thunk was reset, so nothing carries its effects.
+#[inline]
+fn discard(outer: bool, key: u64) {
+    if outer && NPENDING.load(Ordering::Relaxed) != 0 {
+        let held = PENDING
+            .lock()
+            .unwrap()
+            .as_mut()
+            .and_then(|m| m.remove(&key));
+        NPENDING.fetch_sub(held.map_or(0, |v| v.len()), Ordering::Relaxed);
+    }
+}
+
+/// The demand path took the value of the thunk at `key`: its effects are
+/// now the program's.
+#[cold]
+fn release(ev: &mut Evaluator, key: u64) {
+    let held = {
+        let mut g = PENDING.lock().unwrap();
+        g.as_mut().and_then(|m| m.remove(&key))
+    };
+    for f in held.into_iter().flatten() {
+        NPENDING.fetch_sub(1, Ordering::Relaxed);
+        f(ev);
+    }
+}
+
 // ---- fan-out --------------------------------------------------------------
 
 pub enum CellState {
@@ -251,12 +356,25 @@ pub enum CellState {
 }
 
 /// Unbox a forced cell. A helper leaves the cell alone: its work must stay
-/// invisible until the demand path asks for the value.
+/// invisible until the demand path asks for the value. This is the one
+/// path that takes a value without `force_thunk`, so the demand path
+/// claims a helper's thunk and its held-back effects here too.
 #[inline]
-fn set_forced(ev: &Evaluator, c: &Cell, v: Word) {
-    if ev.par.is_main {
-        c.set(v);
+fn set_forced(ev: &mut Evaluator, c: &Cell, v: Word) {
+    if !ev.par.is_main {
+        return;
     }
+    let w = c.get();
+    if w.is_thunk() {
+        let st = w.thunk_state_cell();
+        if w.thunk_speculated(st.get()) {
+            st.set(Word::EMPTY);
+            if NPENDING.load(Ordering::Relaxed) != 0 {
+                release(ev, st as *const Cell as u64);
+            }
+        }
+    }
+    c.set(v);
 }
 
 #[inline]

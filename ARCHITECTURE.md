@@ -233,8 +233,13 @@ inside and around `src/eval` and `src/parallel`:
   `parallel::fanout_list` or `fanout_attrs_coerce` after forcing the
   container. It is one line, and a no-op with one worker.
 - A new place that writes a forced value into a cell must do so only on
-  `Ok`. Every current site does. Otherwise a cancelled helper could leak a
-  value built from a bailed sub-computation.
+  `Ok`, and only on the demand path (`ev.par.is_main`). Otherwise a
+  cancelled helper could leak a value built from a bailed sub-computation,
+  and a cell that holds a value would no longer mean the program asked for
+  it, which `==` and the printers read.
+- A new user-visible effect — a warning, a file, a line on stderr — needs a
+  rule for a helper that reaches it before demand: cancel the task
+  (`parallel::journal`) or hold it back (`parallel::defer`).
 - `Cell::get` is `Acquire` and `Cell::set` is `Release`. An object is fully
   written before the word that points at it is stored into a cell or pushed
   onto a deque.
