@@ -309,13 +309,19 @@ impl Trace {
             return Vec::new();
         };
         let all = std::mem::take(&mut *i.obs.lock().unwrap());
-        let mut seen: HashSet<(u8, Cow<'_, [u8]>, u8)> = HashSet::with_capacity(all.len());
-        let mut exact: HashSet<Vec<u8>> = HashSet::new();
-        let mut keep = vec![false; all.len()];
-        for (idx, o) in all.iter().enumerate() {
-            keep[idx] = seen.insert(o.dedupe_key())
-                || (exact.insert(wire::encode_obs(o)) && !all[..idx].iter().any(|p| p == o));
+        // one pass to find the subjects that repeat, and a second that encodes
+        // only those: comparing each repeat with every earlier observation was
+        // quadratic, and 80,000 of one subject took 12 s
+        let mut counts: std::collections::HashMap<(u8, Cow<'_, [u8]>, u8), u32> =
+            std::collections::HashMap::with_capacity(all.len());
+        for o in &all {
+            *counts.entry(o.dedupe_key()).or_default() += 1;
         }
+        let mut exact: HashSet<Vec<u8>> = HashSet::new();
+        let keep: Vec<bool> = all
+            .iter()
+            .map(|o| counts[&o.dedupe_key()] == 1 || exact.insert(wire::encode_obs(o)))
+            .collect();
         all.into_iter()
             .zip(keep)
             .filter_map(|(o, k)| k.then_some(o))
@@ -734,6 +740,29 @@ mod tests {
         t.record(o2.clone());
         let v = t.take();
         assert_eq!(v, vec![o1, o2]);
+    }
+
+    /// `pathExists` on the same path 80,000 times cost 12 s to deduplicate,
+    /// because every repeat was compared with every earlier observation.
+    #[test]
+    fn dedupe_of_many_repeats_is_linear() {
+        const N: usize = 80_000;
+        let t = Trace::enabled();
+        for i in 0..N {
+            t.record(Obs::Stat {
+                path: b"/a".to_vec(),
+                follow: true,
+                kind: if i % 2 == 0 {
+                    Kind::Regular
+                } else {
+                    Kind::Missing
+                },
+            });
+        }
+        let t0 = std::time::Instant::now();
+        let v = t.take();
+        assert_eq!(v.len(), 2, "one per distinct value");
+        assert!(t0.elapsed().as_secs() < 2, "{:?}", t0.elapsed());
     }
 
     /// A command line the table does not hold has no observation the
