@@ -1008,6 +1008,7 @@ impl Connection {
                 root.display()
             )));
         }
+        free_for_a_root(root)?;
         replace_symlink(store_path, root)
             .map_err(|e| Error::io(format!("cannot create {}", root.display()), e))?;
         let root_s = root
@@ -1029,6 +1030,26 @@ impl Connection {
         sink(&mut self.from).map_err(conn)?;
         Ok(())
     }
+}
+
+/// indirect-root-store.cc:addPermRoot: a root replaces nothing but a symlink
+/// that already points into the store. Everything else stays as it is.
+pub fn free_for_a_root(root: &Path) -> Result<()> {
+    let Ok(m) = std::fs::symlink_metadata(root) else {
+        return Ok(());
+    };
+    let into_store = m.file_type().is_symlink()
+        && std::fs::read_link(root).is_ok_and(|t| {
+            t.to_string_lossy()
+                .starts_with(&format!("{}/", super::super::store::path::STORE_DIR))
+        });
+    if into_store {
+        return Ok(());
+    }
+    Err(Error::Store(format!(
+        "cannot create symlink \"{}\"; already exists",
+        root.display()
+    )))
 }
 
 /// file-system.cc:replaceSymlink: a temporary link renamed over `link`.
