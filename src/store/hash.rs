@@ -9,6 +9,7 @@ pub enum HashAlgo {
     Sha1,
     Sha256,
     Sha512,
+    Blake3,
 }
 
 impl HashAlgo {
@@ -19,6 +20,7 @@ impl HashAlgo {
             HashAlgo::Sha1 => 20,
             HashAlgo::Sha256 => 32,
             HashAlgo::Sha512 => 64,
+            HashAlgo::Blake3 => 32,
         }
     }
 
@@ -29,6 +31,7 @@ impl HashAlgo {
             HashAlgo::Sha1 => "sha1",
             HashAlgo::Sha256 => "sha256",
             HashAlgo::Sha512 => "sha512",
+            HashAlgo::Blake3 => "blake3",
         }
     }
 
@@ -39,6 +42,7 @@ impl HashAlgo {
             "sha1" => Some(HashAlgo::Sha1),
             "sha256" => Some(HashAlgo::Sha256),
             "sha512" => Some(HashAlgo::Sha512),
+            "blake3" => Some(HashAlgo::Blake3),
             _ => None,
         }
     }
@@ -252,6 +256,7 @@ enum State {
     Sha1(sha1::Sha1),
     Sha256(sha2::Sha256),
     Sha512(sha2::Sha512),
+    Blake3(Box<blake3::Hasher>),
 }
 
 /// Mirrors hash.cc:HashSink: an incremental hasher that also counts bytes.
@@ -267,6 +272,7 @@ impl Hasher {
             HashAlgo::Sha1 => State::Sha1(sha1::Sha1::new()),
             HashAlgo::Sha256 => State::Sha256(sha2::Sha256::new()),
             HashAlgo::Sha512 => State::Sha512(sha2::Sha512::new()),
+            HashAlgo::Blake3 => State::Blake3(Box::new(blake3::Hasher::new())),
         };
         Hasher { state, bytes: 0 }
     }
@@ -278,6 +284,9 @@ impl Hasher {
             State::Sha1(h) => h.update(data),
             State::Sha256(h) => h.update(data),
             State::Sha512(h) => h.update(data),
+            State::Blake3(h) => {
+                h.update(data);
+            }
         }
     }
 
@@ -291,6 +300,7 @@ impl Hasher {
             State::Sha1(h) => Hash::raw(HashAlgo::Sha1, &h.finalize()),
             State::Sha256(h) => Hash::raw(HashAlgo::Sha256, &h.finalize()),
             State::Sha512(h) => Hash::raw(HashAlgo::Sha512, &h.finalize()),
+            State::Blake3(h) => Hash::raw(HashAlgo::Blake3, h.finalize().as_bytes()),
         }
     }
 }
