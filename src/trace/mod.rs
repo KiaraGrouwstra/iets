@@ -86,6 +86,10 @@ pub enum Obs {
         path: Vec<u8>,
         size: u64,
         mtime_ns: i64,
+        /// Changes on every write, and no user program can set it: without
+        /// it a `cp -p` in place over a file of the same length is a hit.
+        ctime_ns: i64,
+        dev: u64,
         ino: u64,
         hash: Digest32,
     },
@@ -405,11 +409,19 @@ pub fn mtime_ns(m: &fs::Metadata) -> i64 {
         .wrapping_add(m.mtime_nsec())
 }
 
+pub fn ctime_ns(m: &fs::Metadata) -> i64 {
+    m.ctime()
+        .wrapping_mul(1_000_000_000)
+        .wrapping_add(m.ctime_nsec())
+}
+
 pub fn file_obs(path: &[u8], meta: &fs::Metadata, hash: Digest32) -> Obs {
     Obs::File {
         path: path.to_vec(),
         size: meta.len(),
         mtime_ns: mtime_ns(meta),
+        ctime_ns: ctime_ns(meta),
+        dev: meta.dev(),
         ino: meta.ino(),
         hash,
     }
@@ -515,6 +527,8 @@ impl TreeFp {
         self.stat_h.update([kind.to_u8()]);
         self.stat_h.update(st.len().to_le_bytes());
         self.stat_h.update(mtime_ns(&st).to_le_bytes());
+        self.stat_h.update(ctime_ns(&st).to_le_bytes());
+        self.stat_h.update(st.dev().to_le_bytes());
         self.stat_h.update(st.ino().to_le_bytes());
         self.stat_h.update((st.mode() & 0o100).to_le_bytes());
         if kind == Kind::Symlink {
@@ -565,6 +579,8 @@ fn walk_fp(
     stat_h.update([kind.to_u8()]);
     stat_h.update(st.len().to_le_bytes());
     stat_h.update(mtime_ns(&st).to_le_bytes());
+    stat_h.update(ctime_ns(&st).to_le_bytes());
+    stat_h.update(st.dev().to_le_bytes());
     stat_h.update(st.ino().to_le_bytes());
     stat_h.update((st.mode() & 0o100).to_le_bytes());
     match kind {

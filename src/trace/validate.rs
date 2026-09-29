@@ -80,6 +80,8 @@ fn check(o: &Obs, rehashed: &AtomicUsize) -> Outcome {
             path,
             size,
             mtime_ns: mt,
+            ctime_ns: ct,
+            dev,
             ino,
             hash,
         } => {
@@ -94,7 +96,12 @@ fn check(o: &Obs, rehashed: &AtomicUsize) -> Outcome {
                     kind_name(Kind::of(&Ok(m)))
                 ));
             }
-            if m.len() == *size && mtime_ns(&m) == *mt && m.ino() == *ino {
+            if m.len() == *size
+                && mtime_ns(&m) == *mt
+                && super::ctime_ns(&m) == *ct
+                && m.dev() == *dev
+                && m.ino() == *ino
+            {
                 return Outcome::Same;
             }
             rehashed.fetch_add(1, Ordering::Relaxed);
@@ -311,6 +318,38 @@ mod tests {
 
         fs::write(&f, b"2").unwrap();
         assert!(validate(&mut obs, 2).is_err());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// `cp -p` over a file of the same length keeps the size, the mtime and
+    /// the inode, and only `ctime` says the bytes are new.
+    #[test]
+    fn a_copy_in_place_that_keeps_the_stat_still_misses() {
+        let d = tmp("cp-p");
+        let f = d.join("a.nix");
+        let other = d.join("b.nix");
+        fs::write(&f, b"AAAA").unwrap();
+        fs::write(&other, b"BBBB").unwrap();
+        let fixed = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        for p in [&f, &other] {
+            fs::File::open(p).unwrap().set_modified(fixed).unwrap();
+        }
+        let m = fs::metadata(&f).unwrap();
+        let p = f.as_os_str().as_bytes().to_vec();
+        let mut obs = vec![super::super::file_obs(&p, &m, sha256(b"AAAA"))];
+        validate(&mut obs, 1).unwrap();
+
+        let mut bytes = fs::File::create(&f).unwrap();
+        std::io::Write::write_all(&mut bytes, b"BBBB").unwrap();
+        drop(bytes);
+        fs::File::open(&f).unwrap().set_modified(fixed).unwrap();
+        let now = fs::metadata(&f).unwrap();
+        assert_eq!(
+            (now.len(), mtime_ns(&now), now.ino()),
+            (m.len(), mtime_ns(&m), m.ino()),
+            "size, mtime and inode are the ones the entry holds"
+        );
+        assert!(validate(&mut obs, 1).is_err(), "and the content changed");
         let _ = fs::remove_dir_all(&d);
     }
 

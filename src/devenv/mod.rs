@@ -742,6 +742,8 @@ mod tests {
             path,
             size: 0,
             mtime_ns: 0,
+            ctime_ns: 0,
+            dev: 0,
             ino: 0,
             hash: [0; 32],
         };

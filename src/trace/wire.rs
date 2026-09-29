@@ -10,7 +10,7 @@ use crate::builtins::derivation::DrvInfo;
 use crate::store::path::StorePath;
 use crate::store::source::{SourceKind, SourceOrigin, Src, SrcPath};
 
-const VERSION: u8 = 6;
+const VERSION: u8 = 7;
 
 struct Enc(Vec<u8>);
 
@@ -162,6 +162,8 @@ fn put_obs(e: &mut Enc, o: &Obs) {
             path,
             size,
             mtime_ns,
+            ctime_ns,
+            dev,
             ino,
             hash,
         } => {
@@ -169,6 +171,8 @@ fn put_obs(e: &mut Enc, o: &Obs) {
             e.bytes(path);
             e.u64(*size);
             e.i64(*mtime_ns);
+            e.i64(*ctime_ns);
+            e.u64(*dev);
             e.u64(*ino);
             e.digest(hash);
         }
@@ -246,6 +250,8 @@ fn get_obs(d: &mut Dec<'_>) -> R<Obs> {
             path: d.vec()?,
             size: d.u64()?,
             mtime_ns: d.i64()?,
+            ctime_ns: d.i64()?,
+            dev: d.u64()?,
             ino: d.u64()?,
             hash: d.digest()?,
         },
@@ -575,6 +581,8 @@ mod tests {
                 path: b"/a".to_vec(),
                 size: 3,
                 mtime_ns: -5,
+                ctime_ns: -4,
+                dev: 66,
                 ino: 1 << 40,
                 hash: [7; 32],
             },

@@ -72,6 +72,21 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let r = (run-eval $ietsp ...$main)
   $res ++= [(verdict ($r.status =~ 'cache: hit.*0 rehashed') "refreshed stat fields skip the rehash next time" $"refresh persisted \(($r.status)\)")]
 
+  # cp -p in place keeps the size, the mtime and the inode; only ctime says
+  # the bytes are new
+  let cd2 = $"($work)/ctime"
+  mkdir $cd2
+  "import ./lib.nix\n" | save -f $"($cd2)/main.nix"
+  '"AAAA"' + "\n" | save -f $"($cd2)/lib.nix"
+  '"BBBB"' + "\n" | save -f $"($cd2)/other.nix"
+  ^touch -d "2020-01-01T00:00:00Z" $"($cd2)/lib.nix" $"($cd2)/other.nix"
+  let cc = $"($work)/ctimecache"
+  let c1 = (run-eval $ietsp --cache-dir $cc $"($cd2)/main.nix")
+  ^cp -p $"($cd2)/other.nix" $"($cd2)/lib.nix"
+  let c2 = (run-eval $ietsp --cache-dir $cc $"($cd2)/main.nix")
+  $res ++= [(verdict ($c1.out == '"AAAA"' and $c2.out == '"BBBB"' and ($c2.status | str contains "miss ("))
+    "a copy in place that keeps size, mtime and inode still misses" $"first=($c1.out) after cp -p=($c2.out) \(($c2.status)\)")]
+
   "y\n" | save $"($work)/src/dir/two"
   let r = (run-eval $ietsp ...$main)
   $res ++= [(verdict ($r.status =~ 'miss \(.*directory' and ($r.out | str contains '"two"')) "adding a file to a readDir'd directory misses" $"readDir change misses \(($r.status)\)")]
