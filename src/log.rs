@@ -225,7 +225,7 @@ impl Log {
         if self.json.load(Ordering::Relaxed) {
             self.errln(&format!("@nix {}", self.wire(v)));
         } else if let Some(t) = text {
-            self.errln(t);
+            self.errln(&filter_ansi(t, !stderr_is_tty()));
         }
         self.tee(v);
     }
@@ -358,7 +358,20 @@ pub fn msg(level: u8, text: &str) {
 
 /// A line that is not an error record.
 pub fn line(text: &str) {
-    cur().log.errln(&format(text));
+    cur().log.errln(&on_stderr(&format(text)));
+}
+
+fn stderr_is_tty() -> bool {
+    unsafe { libc::isatty(libc::STDERR_FILENO) == 1 }
+}
+
+/// logging.cc:SimpleLogger::log filters every line it writes; an
+/// internal-json record keeps the bytes it was given.
+pub fn on_stderr(text: &str) -> String {
+    match json() {
+        true => text.to_string(),
+        false => filter_ansi(text, !stderr_is_tty()),
+    }
 }
 
 /// A lint warning, `warning: [NAME] MSG` and maybe `\n  at POS`: the form
