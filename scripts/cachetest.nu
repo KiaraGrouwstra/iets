@@ -142,6 +142,18 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let r = (run-eval $ietsp ...$main)
   $res ++= [(verdict ($r.rc == 0 and ($r.status | str contains "miss (")) "after the failure the fixed file misses, not a stale hit" $"after failure \(($r.status)\)")]
 
+  # caching.md: errors are never cached. `nix eval` prints «error: …» for a
+  # read that failed, with exit 0, and that read left no observation
+  let ed = $"($work)/errs"
+  mkdir $ed
+  '{ b = import ./missing.nix; c = builtins.readDir ./missingdir; }' + "\n" | save -f $"($ed)/e.nix"
+  let e1 = (^$ietsp nix eval --file $"($ed)/e.nix" | complete)
+  '"B"' + "\n" | save -f $"($ed)/missing.nix"
+  mkdir $"($ed)/missingdir"
+  let e2 = (^$ietsp nix eval --file $"($ed)/e.nix" | complete)
+  $res ++= [(verdict ($e1.exit_code == 0 and ($e1.stdout | str contains "«error:") and $e2.exit_code == 0 and not ($e2.stdout | str contains "«error:"))
+    "a result that holds an error placeholder is never cached" $"first=($e1.stdout | str substring 0..60) second=($e2.stdout | str substring 0..60)")]
+
   # a lint warning is an effect: the entry records it and a hit prints it again
   "http://z.example\n" | save -f $"($work)/src/url.nix"
   let w1 = (run-eval $ietsp --lint url-literal=warn $"($work)/src/url.nix")

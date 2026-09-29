@@ -651,6 +651,10 @@ fn print_eval(
     let w = match ev.force(w) {
         Ok(w) => w,
         Err(e) if printable(&e) => {
+            // docs/explanation/caching.md: errors are never cached. A read
+            // that failed leaves no observation of the absence, so an entry
+            // holding this text would replay it after the path appeared.
+            ev.trace().mark_uncacheable();
             out.extend_from_slice("«error: ".as_bytes());
             out.extend_from_slice(e.msg.as_bytes());
             out.extend_from_slice("»".as_bytes());

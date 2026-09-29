@@ -374,7 +374,10 @@ above, validated in 9 to 18 ms. The one case that was slow is gone — a
 build was over, on a hit and on a miss alike.
 
 Two properties are worth naming. Errors are never cached: an entry is
-written only after the result was printed without error. And the read set
+written only after the result was printed without error. `nix eval` prints
+`«error: …»` in place of a value it could not force and still exits 0, as
+Nix does, and that too is an error: the read that failed left no observation
+of the absence, so a run that printed one writes nothing. And the read set
 over-approximates rather than under-approximates — a cancelled helper fiber
 still leaves its observations in it, which costs a rare extra miss and never
 a wrong hit. A file that changes mid-run may be recorded twice with two
