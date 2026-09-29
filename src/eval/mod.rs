@@ -725,46 +725,72 @@ impl Evaluator {
         if p.starts_with(CorePkgs::PREFIX) {
             return Ok(p);
         }
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+        let status_error = |p: &[u8], e: &std::io::Error| {
+            Error::boxed(
+                ErrorKind::Io,
+                format!(
+                    "getting status of '{}': {}",
+                    String::from_utf8_lossy(p),
+                    crate::error::io_text(e)
+                ),
+                pos,
+            )
+        };
         let mut at = crate::builtins::store_hooks::open(self, &p, pos)?;
         crate::lint::coerce::read_through_copy(self, &p, pos)?;
-        // eval.cc:resolveExprPath follows a symlink on the last component,
-        // so a relative path in the file resolves against the directory of
-        // the target. A path inside a copied tree keeps the tree's own
-        // resolution (`store_hooks`).
-        if crate::builtins::store_hooks::locate(self, &p).is_none() {
-            use std::os::unix::ffi::{OsStrExt, OsStringExt};
-            let orig = p.clone();
-            for _ in 0..1024 {
-                let os = std::ffi::OsStr::from_bytes(&p);
-                let Ok(target) = std::fs::read_link(os) else {
-                    break;
-                };
-                let t = target.into_os_string().into_vec();
-                p = if t.starts_with(b"/") {
-                    crate::compile::canon_path(&t)
-                } else {
-                    let mut d = dir_of(&p).to_vec();
-                    d.push(b'/');
-                    d.extend_from_slice(&t);
-                    crate::compile::canon_path(&d)
-                };
-            }
-            if p != orig {
-                let full = std::fs::canonicalize(std::ffi::OsStr::from_bytes(&orig));
-                self.trace().canon(&orig, full.ok().as_deref());
-                at = crate::builtins::store_hooks::open(self, &p, pos)?;
+        // One `lstat` answers both questions, so the common import pays no
+        // more than the `stat` of `SrcPath::is_dir` did. A path inside a
+        // copied tree keeps `store_hooks`' own resolution.
+        let mut is_dir = None;
+        if let Some(local) = at
+            .local()
+            .filter(|_| crate::builtins::store_hooks::locate(self, &p).is_none())
+        {
+            match std::fs::symlink_metadata(&local) {
+                Err(e) => return Err(status_error(&p, &e)),
+                Ok(m) if m.is_symlink() => {
+                    // eval.cc:resolveExprPath follows a symlink on the last
+                    // component, so a relative path in the file resolves
+                    // against the directory of the target
+                    for _ in 0..1024 {
+                        let Ok(target) = std::fs::read_link(std::ffi::OsStr::from_bytes(&p)) else {
+                            break;
+                        };
+                        let t = target.into_os_string().into_vec();
+                        let joined = if t.starts_with(b"/") {
+                            t
+                        } else {
+                            let mut d = dir_of(&p).to_vec();
+                            d.push(b'/');
+                            d.extend_from_slice(&t);
+                            d
+                        };
+                        p = crate::compile::canon_path(&joined);
+                    }
+                    let full = std::fs::canonicalize(&local);
+                    self.trace()
+                        .canon(local.as_os_str().as_bytes(), full.ok().as_deref());
+                    at = crate::builtins::store_hooks::open(self, &p, pos)?;
+                }
+                Ok(m) => {
+                    is_dir = Some(m.is_dir());
+                    if m.is_dir() {
+                        self.trace().stat(
+                            local.as_os_str().as_bytes(),
+                            true,
+                            crate::trace::Kind::Directory,
+                        );
+                    }
+                }
             }
         }
-        match at.is_dir(self) {
-            Ok(true) => p.extend_from_slice(b"/default.nix"),
-            Ok(false) => {}
-            Err(e) => bail!(
-                ErrorKind::Io,
-                pos,
-                "getting status of '{}': {}",
-                String::from_utf8_lossy(&p),
-                crate::error::io_text(&e)
-            ),
+        let is_dir = match is_dir {
+            Some(d) => d,
+            None => at.is_dir(self).map_err(|e| status_error(&p, &e))?,
+        };
+        if is_dir {
+            p.extend_from_slice(b"/default.nix");
         }
         Ok(p)
     }
@@ -1971,16 +1997,26 @@ impl Evaluator {
     ) -> &'static EnvObj {
         let env2 = self.arena.alloc_env(Some(env), binds.len() + from.len());
         let slots = env2.slots_n(binds.len() + from.len());
-        for (i, b) in binds.iter().enumerate() {
-            let w = match b.scope {
-                BindScope::Outer => self.maybe_thunk(env, b.value),
-                // eval.cc:ExprAttrs::eval takes a real thunk for every
-                // binding that is not inherited when `__overrides` is
-                // there, so the override reaches the other bindings
-                _ if overrides => self.mk_thunk_counted(env2, b.value),
-                _ => self.maybe_thunk(env2, b.value),
-            };
-            slots[i].set(w);
+        // eval.cc:ExprAttrs::eval takes a real thunk for every binding that
+        // is not inherited when `__overrides` is there, so the override
+        // reaches the other bindings. The test is out of the loop: the
+        // usual set has no `__overrides` and must not pay for one.
+        if overrides {
+            for (i, b) in binds.iter().enumerate() {
+                let w = match b.scope {
+                    BindScope::Outer => self.maybe_thunk(env, b.value),
+                    _ => self.mk_thunk_counted(env2, b.value),
+                };
+                slots[i].set(w);
+            }
+        } else {
+            for (i, b) in binds.iter().enumerate() {
+                let w = match b.scope {
+                    BindScope::Outer => self.maybe_thunk(env, b.value),
+                    _ => self.maybe_thunk(env2, b.value),
+                };
+                slots[i].set(w);
+            }
         }
         for (j, f) in from.iter().enumerate() {
             let w = self.maybe_thunk(env2, f);
