@@ -351,6 +351,17 @@ mod arch {
             t.sub(8) as *mut u8
         }
     }
+
+    #[inline(always)]
+    pub fn sp() -> usize {
+        let sp: usize;
+        // SAFETY: reads a register into a local; touches no memory and
+        // leaves the stack and the flags alone.
+        unsafe {
+            core::arch::asm!("mov {}, rsp", out(reg) sp, options(nomem, nostack, preserves_flags));
+        }
+        sp
+    }
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -415,9 +426,29 @@ mod arch {
             sp
         }
     }
+
+    #[inline(always)]
+    pub fn sp() -> usize {
+        let sp: usize;
+        // SAFETY: reads a register into a local; touches no memory and
+        // leaves the stack and the flags alone.
+        unsafe {
+            core::arch::asm!("mov {}, sp", out(reg) sp, options(nomem, nostack, preserves_flags));
+        }
+        sp
+    }
 }
 
 use arch::{seed_stack, switch};
+
+/// Stack pointer of the caller's frame, the force path's bound on how far
+/// the running fiber has gone. One instruction, inlined: a helper that
+/// returns the address of its own local costs a call and a frame slot on
+/// every force.
+#[inline(always)]
+pub fn sp() -> usize {
+    arch::sp()
+}
 
 #[cfg(test)]
 mod tests {

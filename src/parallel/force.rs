@@ -143,14 +143,6 @@ fn cancelled() -> Box<Error> {
     Error::boxed(ErrorKind::Cancelled, "cancelled", Pos::NONE)
 }
 
-/// Address of a frame of the running fiber, as a bound on the stack
-/// pointer. Not inlined away: the local must have a stack slot.
-#[inline(never)]
-fn here() -> usize {
-    let probe = 0u8;
-    std::hint::black_box(&probe) as *const u8 as usize
-}
-
 /// The fiber is about to go below the margin above its guard page. A
 /// helper drops its task, so the demand path — which has the same stack as
 /// the sequential run — decides the result; the demand path reports what
@@ -172,7 +164,7 @@ fn stack_exhausted(ev: &mut Evaluator, pos: Pos) -> Box<Error> {
 /// True when this fiber has less than the margin of stack left.
 #[inline]
 pub fn stack_low(ev: &Evaluator) -> bool {
-    ev.par.stack_lo != 0 && here() < ev.par.stack_lo
+    ev.par.stack_lo != 0 && super::fiber::sp() < ev.par.stack_lo
 }
 
 /// True once this helper fiber must stop: cancelled by deadlock resolution.
