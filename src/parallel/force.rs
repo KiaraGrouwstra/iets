@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 
 use super::Ctx;
-use super::sched::{Driver, Runtime, Slot, Task, Worker};
+use super::sched::{self, Driver, Runtime, Slot, Task, Worker};
 use super::thunk::{self, Claim};
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::runtime::*;
@@ -204,7 +204,7 @@ pub fn force_thunk(ev: &mut Evaluator, w: Word) -> EvalResult<Word> {
         // starting again: the demand path evaluates it and reports. The
         // check is inside the loop so a waiter that the failure woke stops
         // instead of claiming the reset thunk.
-        if !ev.par.is_main && slot_ref(ev).runtime().is_failed(key) {
+        if !ev.par.is_main && sched::any_failed() && slot_ref(ev).runtime().is_failed(key) {
             ev.par.cancelled = true;
             return Err(cancelled());
         }

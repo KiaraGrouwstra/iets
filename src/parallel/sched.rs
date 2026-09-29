@@ -18,6 +18,17 @@ const WARM_STACK: usize = 64 << 10;
 /// Direct-mapped table of the thunks that failed last. A miss costs one
 /// load, so a failure that falls out of it only loses the saving.
 const FAILED_SLOTS: usize = 256;
+/// True once any thunk failed. A run that fails nothing — nearly every
+/// run — never reads the table, and the force path never chases its slot
+/// to the runtime to reach it.
+static ANY_FAILED: AtomicBool = AtomicBool::new(false);
+
+/// Whether `Runtime::is_failed` can answer anything but false.
+#[inline]
+pub fn any_failed() -> bool {
+    ANY_FAILED.load(Ordering::Relaxed)
+}
+
 /// Cells one range task may cover, from the packed `Task`.
 const LEN_MAX: u32 = u16::MAX as u32;
 
@@ -742,6 +753,7 @@ impl Runtime {
     /// Note that forcing the thunk at `key` failed.
     #[inline]
     pub fn note_failed(&self, key: u64) {
+        ANY_FAILED.store(true, Ordering::Relaxed);
         self.failed[(key >> 4) as usize % FAILED_SLOTS].store(key, Ordering::Relaxed);
     }
 
