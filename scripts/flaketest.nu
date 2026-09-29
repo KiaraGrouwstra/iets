@@ -66,6 +66,26 @@ def check-fresh [ietsp: string, name: string, ref: string]: nothing -> bool {
   }
 }
 
+# check-error NAME REF: both must refuse, with the same `error:` line. ietsp
+# runs with `--pure-eval`, which is what `nix eval` on a flake always has, and
+# with the provenance rewrite off, so the message names the store path.
+def check-error [ietsp: string, name: string, ref: string]: nothing -> bool {
+  let first = {|s: string| $s | lines | each { str trim } | where ($it | str starts-with "error: ") | get -o 0 | default "" }
+  let n = (nixf eval --raw --option eval-cache "false" $ref | complete)
+  let i = (with-env {IETSP_PROVENANCE: "0"} { ^$ietsp eval --raw --no-tracing-cache --pure-eval $ref | complete })
+  let exp = (do $first $n.stderr)
+  let got = (do $first $i.stderr)
+  if $exp != "" and $exp == $got and $n.exit_code == $i.exit_code {
+    print $"ok   ($name)"
+    true
+  } else {
+    print $"FAIL ($name)"
+    print $"  nix:   ($exp) \(exit ($n.exit_code)\)"
+    print $"  ietsp: ($got) \(exit ($i.exit_code)\)"
+    false
+  }
+}
+
 # fetch-only NAME REF EXPECTED NOBIN: ietsp alone, with NOBIN (an empty
 # directory) as the whole PATH and as IETSP_NIX_BIN_DIR, so no nix exists to
 # fall back on. It must say it is fetching the input and print EXPECTED.
@@ -755,6 +775,41 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let gp = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp nix flake prefetch-inputs $ghost | complete })
   $res ++= [(verdict ($gp.exit_code == 1 and ($gp.stderr | str contains "cannot fetch input 'ghost'")) "prefetch-inputs: an unfetchable input is an error that names it, exit 1" $"prefetch-inputs ghost \(exit ($gp.exit_code)\): ($gp.stderr | lines | last 2 | str join ' | ')")]
 
+
+  # ---- symlinks in a working tree, and the tree the flake directory names ----
+  # ietsp reads the root tree from the working tree, so a link must resolve
+  # where the store copy puts it: inside the copy, under the tracked file set.
+  let sym = $"($work)/sym"
+  mkdir $"($sym)/d"
+  "outside\n" | save $"($work)/outside.txt"
+  r#'{
+  outputs = { self }: {
+    esc = builtins.readFile (self + "/esc");
+    abs = builtins.readFile (self + "/abs");
+    unt = builtins.readFile (self + "/unt");
+    ok = builtins.readFile (self + "/okdir/t.txt");
+    okdir = builtins.toJSON (builtins.readDir (self + "/okdir"));
+    okex = builtins.toJSON (builtins.pathExists (self + "/okdir"));
+    nar = self.narHash;
+  };
+}
+'# | save $"($sym)/flake.nix"
+  '{"nodes":{"root":{}},"root":"root","version":7}' | save $"($sym)/flake.lock"
+  "tracked\n" | save $"($sym)/d/t.txt"
+  "untracked\n" | save $"($sym)/untracked.txt"
+  ^ln -s ../outside.txt $"($sym)/esc"
+  ^ln -s /nonexistent/ietsp-symlink-test $"($sym)/abs"
+  ^ln -s untracked.txt $"($sym)/unt"
+  ^ln -s d $"($sym)/okdir"
+  git-in $sym init -q
+  git-in $sym add flake.nix flake.lock d/t.txt esc abs unt okdir
+  git-in $sym commit -q -m sym
+  $res ++= [(check-error $ietsp "sym: a link out of the tree is refused" $"($sym)#esc")]
+  $res ++= [(check-error $ietsp "sym: an absolute link is refused" $"($sym)#abs")]
+  $res ++= [(check-error $ietsp "sym: a link to an untracked file is Nix's git error" $"($sym)#unt")]
+  $res ++= [(check $ietsp "sym: readFile through a tracked link to a tracked directory" $"($sym)#ok")]
+  $res ++= [(check $ietsp "sym: readDir of a tracked link to a tracked directory" $"($sym)#okdir")]
+  $res ++= [(check $ietsp "sym: pathExists of a tracked link to a tracked directory" $"($sym)#okex")]
   let fail = ($res | where not $it | length)
   print $"pass=($res | where $it | length) fail=($fail)"
   if $fail == 0 { 0 } else { 1 }

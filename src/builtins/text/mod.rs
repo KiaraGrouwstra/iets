@@ -289,7 +289,9 @@ fn hash_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         "while evaluating the first argument passed to builtins.hashFile",
     )?;
     let path = crate::builtins::paths::realise_path(ev, args[1], pos)?;
-    let at = crate::builtins::store_hooks::open(ev, &path, pos)?;
+    let follow = crate::builtins::store_hooks::Follow::Full;
+    let (path, at) = crate::builtins::store_hooks::located(ev, path, follow, pos)?;
+    let at = crate::builtins::store_hooks::check(ev, at, &path, pos)?;
     crate::lint::coerce::read_through_copy(ev, &path, pos)?;
     let data = match at.read(ev, false) {
         Ok(d) => d,

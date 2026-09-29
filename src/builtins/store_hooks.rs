@@ -21,7 +21,7 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
+use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
 use crate::store::hash::{HashAlgo, Hasher};
 use crate::store::nar::{FileType, PathFilter};
 use crate::store::path::{STORE_DIR, StorePath};
@@ -74,13 +74,120 @@ pub fn allowed(ev: &Evaluator, path: &[u8]) -> bool {
     !ev.pure() || ev.known.under(path).is_some()
 }
 
-/// [`resolve`] behind the pure-eval allow list, with the error Nix's
+/// Which components a resolution follows (source-accessor.hh:SymlinkResolution).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Follow {
+    /// Every component but the last: `pathExists`.
+    Ancestors,
+    /// Every component: `readFile`, `readDir`, `builtins.path`.
+    Full,
+}
+
+/// Mirrors source-accessor.cc:resolveSymlinks. A store path this evaluation
+/// made holds no bytes, so the kernel resolves a link below it against the
+/// local tree the path stands for: a relative target leaves the store copy
+/// and an absolute one lands wherever it points. Walking the text of the
+/// path instead puts every target where the store copy would put it, and the
+/// tree's filter and [`allowed`] then judge the result. A link the filter
+/// hides, or one a pure evaluation may not read, is left alone, as
+/// `maybeLstat` leaves it (filtering-source-accessor.cc).
+pub fn resolve_links(ev: &Evaluator, path: &[u8], mode: Follow, pos: Pos) -> EvalResult<Vec<u8>> {
+    let split = |p: &[u8], out: &mut Vec<Vec<u8>>| {
+        out.extend(
+            p.split(|&b| b == b'/')
+                .filter(|c| !c.is_empty())
+                .rev()
+                .map(<[u8]>::to_vec),
+        );
+    };
+    let mut todo = Vec::new();
+    split(path, &mut todo);
+    let mut res: Vec<u8> = Vec::with_capacity(path.len());
+    let mut hops = 0u32;
+    while let Some(c) = todo.pop() {
+        if c == b"." {
+            continue;
+        }
+        if c == b".." {
+            res.truncate(res.iter().rposition(|&b| b == b'/').unwrap_or(0));
+            continue;
+        }
+        res.push(b'/');
+        res.extend_from_slice(&c);
+        if mode == Follow::Ancestors && todo.is_empty() {
+            break;
+        }
+        let Some(target) = resolve(ev, &res).read_link() else {
+            continue;
+        };
+        if !allowed(ev, &res) {
+            continue;
+        }
+        hops += 1;
+        if hops > 1024 {
+            bail!(
+                ErrorKind::Eval,
+                pos,
+                "infinite symlink recursion in path '{}'",
+                String::from_utf8_lossy(path)
+            );
+        }
+        if target.starts_with(b"/") {
+            res.clear();
+        } else {
+            res.truncate(res.iter().rposition(|&b| b == b'/').unwrap_or(0));
+        }
+        split(&target, &mut todo);
+    }
+    if res.is_empty() {
+        res.push(b'/');
+    }
+    Ok(res)
+}
+
+/// Where a read of `path` goes once the symlinks `mode` names are resolved:
+/// the path resolution ended at, and its place in the (virtual) store, `None`
+/// for one the real file system answers. [`resolve_links`] runs only under a
+/// store path this evaluation copied from a local tree. A fetched input's
+/// spool resolves a member's links inside the entry itself, and elsewhere the
+/// kernel resolves as the accessor would, so the walk is skipped and this
+/// costs the one lookup the reader needed anyway.
+pub fn located(
+    ev: &Evaluator,
+    path: Vec<u8>,
+    mode: Follow,
+    pos: Pos,
+) -> EvalResult<(Vec<u8>, Option<SrcPath>)> {
+    let at = locate(ev, &path);
+    if !matches!(
+        &at,
+        Some(SrcPath {
+            src: Src::Fs { .. },
+            ..
+        })
+    ) {
+        return Ok((path, at));
+    }
+    let res = resolve_links(ev, &path, mode, pos)?;
+    if res == path {
+        return Ok((path, at));
+    }
+    let at = locate(ev, &res);
+    Ok((res, at))
+}
+
+/// `path` on the real file system, for a path [`locate`] does not answer.
+pub fn fs_path(path: &[u8]) -> SrcPath {
+    SrcPath::fs(PathBuf::from(OsStr::from_bytes(path)), None)
+}
+
+/// A located path behind the pure-eval allow list, with the error Nix's
 /// `AllowListSourceAccessor` throws: what every read of a file goes through.
 /// `pathExists` (false, not an error) and a `.drv` import (read through the
 /// store, as Nix does) are the readers that resolve the path themselves.
-pub fn open(ev: &Evaluator, path: &[u8], pos: Pos) -> EvalResult<SrcPath> {
+pub fn check(ev: &Evaluator, at: Option<SrcPath>, path: &[u8], pos: Pos) -> EvalResult<SrcPath> {
     if allowed(ev, path) {
-        let at = resolve(ev, path);
+        let at = at.unwrap_or_else(|| fs_path(path));
         if at.hidden()
             && let Some(e) = untracked(&at, pos)
         {
@@ -96,6 +203,11 @@ pub fn open(ev: &Evaluator, path: &[u8], pos: Pos) -> EvalResult<SrcPath> {
         ),
         pos,
     ))
+}
+
+/// [`check`] of `path` located afresh.
+pub fn open(ev: &Evaluator, path: &[u8], pos: Pos) -> EvalResult<SrcPath> {
+    check(ev, locate(ev, path), path, pos)
 }
 
 /// git.cc:makeNotAllowedError, in Nix's words: a path on disk that a
@@ -233,6 +345,17 @@ impl SrcPath {
 
     pub fn hidden(&self) -> bool {
         self.at().is_none()
+    }
+
+    /// A symlink's target, `None` for anything else and for an entry the
+    /// tree's filter hides. The tree's own observation covers every target in
+    /// it, so nothing is recorded. A spool member is never one: the entry
+    /// resolves its own links ([`crate::fetch::spool`]).
+    pub fn read_link(&self) -> Option<Vec<u8>> {
+        match self.at()? {
+            At::Disk(p) => Some(fs::read_link(os(&p)).ok()?.into_os_string().into_vec()),
+            At::Spool(..) | At::Mem(_) => None,
+        }
     }
 
     /// `stat`, or `lstat` unless `follow`, recorded in the read set.

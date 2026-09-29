@@ -642,6 +642,37 @@ def main [] {
     (run-both $farm nix eval --expr "let a = { x = 1; }; in [ a a {} {} [] ]")))
   $ok = ($ok | append (cmp-case "nix eval --expr, functions"
     (run-both $farm nix eval --expr "{ f = x: x; p = builtins.add; q = builtins.add 1; }")))
+
+  # --- symlinks below a store path the evaluation copied. Nix reads such a
+  # path out of the store copy, where a link resolves inside the copy; ietsp
+  # reads the local tree the copy stands for, so it must resolve on the text
+  # of the path instead (docs/explanation/flakes-and-sources.md).
+  let sl = $"($tmp)/symlinks"
+  mkdir $"($sl)/sub"
+  "hello\n" | save $"($sl)/a.txt"
+  "inner\n" | save $"($sl)/sub/inner"
+  ^ln -s a.txt $"($sl)/link-file"
+  ^ln -s sub $"($sl)/link-dir"
+  ^ln -s nope $"($sl)/dangling"
+  for case in [
+    [label expr];
+    ["readFile through a copy of the link itself" r#'builtins.readFile "${@SL@/link-file}"'#]
+    ["readFile of a target the filter left out" r#'builtins.readFile "${builtins.filterSource (p: _: baseNameOf p != "a.txt") @SL@}/link-file"'#]
+    ["readDir through a copy of the link itself" r#'builtins.readDir "${@SL@/link-dir}"'#]
+    ["hashFile through a copy of the link itself" r#'builtins.hashFile "sha256" "${@SL@/link-file}"'#]
+    ["readFile below a link in a copied tree" r#'builtins.readFile "${@SL@}/link-dir/inner"'#]
+    ["readDir of a link in a copied tree" r#'builtins.readDir "${@SL@}/link-dir"'#]
+    ["pathExists below a link in a copied tree" r#'builtins.pathExists "${@SL@}/link-dir/inner"'#]
+    ["path of a link in a copied tree" r#'builtins.path { path = "${@SL@}/link-dir"; }'#]
+    ["path of a link, local and copied agree" r#'builtins.path { path = @SL@/link-dir; }'#]
+    ["path of a dangling link" r#'builtins.path { path = @SL@/dangling; }'#]
+    ["path of a dangling link in a copied tree" r#'builtins.path { path = "${@SL@}/dangling"; }'#]
+    ["storePath below a link in a copied tree" r#'builtins.storePath "${@SL@}/link-dir/inner"'#]
+    ["filterSource sees the store path of an unfiltered copy" r#'builtins.filterSource (p: _: builtins.match "/nix/store/.*" p != null) "${@SL@/sub}"'#]
+  ] {
+    let e = ($case.expr | str replace -a "@SL@" $sl)
+    $ok = ($ok | append (cmp-case $"symlink: ($case.label)" (run-both $farm nix eval --impure --expr $e)))
+  }
   $ok = ($ok | append (cmp-case "nix eval -f FILE ATTR"
     (run-both $farm nix eval -f $"($d)/multi.nix" outputs)))
   $ok = ($ok | append (cmp-case "nix eval --json -f FILE ATTR"

@@ -106,6 +106,35 @@ Two things follow from that, and both are the point:
 The flake's own `flake.nix` is imported under its store path, so positions,
 `./x` path literals and `readDir` see exactly what Nix sees.
 
+### A symlink resolves in the store copy
+
+A virtual copy costs one rule. In a real store copy, a relative symlink
+resolves inside the copy and an absolute one points out of it. On your disk
+the same link resolves in the working tree, where a relative target can
+leave the tree and the filter hides nothing from the kernel. A read that
+let the kernel resolve the link would therefore see files the store copy
+does not hold: a file the SCM does not track, `.git/config`, or any file
+the absolute target names.
+
+So a path under a store path this evaluation made is resolved on the text
+of the path, component by component, exactly as Nix's
+`SourceAccessor::resolveSymlinks` resolves it. Each target is read through
+the tree's own filter, and the result is judged by that filter and by pure
+evaluation's allow list:
+
+- a link to a file the filter left out is "not tracked by Git", as it is
+  for Nix;
+- a link out of the copy becomes another absolute path, which a pure
+  evaluation refuses with `access to absolute path '...' is forbidden`;
+- a tracked link to a tracked directory is followed, and `readFile`,
+  `readDir` and `pathExists` see the directory.
+
+`readFile`, `readDir`, `hashFile` and `builtins.path` resolve every
+component, `pathExists` every component but the last, and `readFileType`
+none, which is what each primop asks `realisePath` for. A path under no
+such store path is left to the kernel, which resolves it the same way, so
+the walk costs nothing there.
+
 ## Getting an input readable
 
 An input is locked, so its store path is known before anything happens. It

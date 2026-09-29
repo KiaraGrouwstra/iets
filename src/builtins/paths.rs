@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::Registry;
-use super::store_hooks::{self, At};
+use super::store_hooks::{self, At, Follow};
 use crate::compile::canon_path;
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
 use crate::runtime::*;
@@ -241,10 +241,23 @@ pub fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>
 
 /// What a realised path reads, and the path its messages name: the file on
 /// disk, else the path itself. An entry a copied tree's filter left out is
-/// `path '...' does not exist`.
-fn realise_existing(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<(SrcPath, Vec<u8>)> {
+/// `path '...' does not exist`. `follow` is the resolution primops.cc asks
+/// `realisePath` for; `readFileType` asks for none.
+fn realise_existing(
+    ev: &mut Evaluator,
+    w: Word,
+    follow: Option<Follow>,
+    pos: Pos,
+) -> EvalResult<(SrcPath, Vec<u8>)> {
     let p = realise_path(ev, w, pos)?;
-    let at = store_hooks::open(ev, &p, pos)?;
+    let (p, at) = match follow {
+        Some(m) => store_hooks::located(ev, p, m, pos)?,
+        None => {
+            let at = store_hooks::locate(ev, &p);
+            (p, at)
+        }
+    };
+    let at = store_hooks::check(ev, at, &p, pos)?;
     if at.hidden() {
         return Err(io_error(
             io::Error::from_raw_os_error(libc::ENOENT),
@@ -261,7 +274,7 @@ fn realise_existing(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<(SrcPat
 /// Reads `st_size` bytes like `PosixSourceAccessor::readFile`, so a procfs
 /// file reads as empty.
 fn read_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
-    let (at, p) = realise_existing(ev, args[0], pos)?;
+    let (at, p) = realise_existing(ev, args[0], Some(Follow::Full), pos)?;
     let bytes = at.read(ev, true).map_err(|e| read_error(e, &p, pos))?;
     if bytes.contains(&0) {
         bail!(
@@ -275,7 +288,7 @@ fn read_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
 }
 
 fn read_dir(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
-    let (at, p) = realise_existing(ev, args[0], pos)?;
+    let (at, p) = realise_existing(ev, args[0], Some(Follow::Full), pos)?;
     let listing = at.read_dir(ev).map_err(|(verb, e)| {
         if e.raw_os_error() == Some(libc::ENOTDIR) {
             Error::boxed(
@@ -301,7 +314,7 @@ fn read_dir(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
 }
 
 fn read_file_type(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
-    let (at, p) = realise_existing(ev, args[0], pos)?;
+    let (at, p) = realise_existing(ev, args[0], None, pos)?;
     let kind = at
         .stat(ev, false)
         .map_err(|e| io_error(e, "getting status of", &p, pos))?;
@@ -315,11 +328,17 @@ fn path_exists(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> 
         Value::String(s) if s.bytes.ends_with(b"/") || s.bytes.ends_with(b"/.")
     );
     let p = realise_path(ev, w, pos)?;
+    let follow = if must_be_dir {
+        Follow::Full
+    } else {
+        Follow::Ancestors
+    };
+    let (p, at) = store_hooks::located(ev, p, follow, pos)?;
     if !store_hooks::allowed(ev, &p) {
         return Ok(Word::FALSE);
     }
     crate::lint::coerce::read_through_copy(ev, &p, pos)?;
-    let at = store_hooks::resolve(ev, &p);
+    let at = at.unwrap_or_else(|| store_hooks::fs_path(&p));
     match at.stat(ev, must_be_dir) {
         Ok(k) => Ok(Word::from_bool(k == Kind::Directory || !must_be_dir)),
         Err(e)
@@ -379,11 +398,14 @@ fn store_path(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the first argument passed to 'builtins.storePath'",
     )?;
-    if !is_store_path(&p) && store_hooks::locate(ev, &p).is_none_or(|at| at.hidden()) {
-        let resolved = fs::canonicalize(os_path(&p));
-        ev.trace().canon(&p, resolved.as_deref().ok());
-        let resolved = resolved.map_err(|e| io_error(e, "getting status of", &p, pos))?;
-        p = resolved.into_os_string().into_vec();
+    if !is_store_path(&p) {
+        p = store_hooks::resolve_links(ev, &p, Follow::Full, pos)?;
+        if store_hooks::locate(ev, &p).is_none_or(|at| at.hidden()) {
+            let resolved = fs::canonicalize(os_path(&p));
+            ev.trace().canon(&p, resolved.as_deref().ok());
+            let resolved = resolved.map_err(|e| io_error(e, "getting status of", &p, pos))?;
+            p = resolved.into_os_string().into_vec();
+        }
     }
     let sp = match to_store_path(&p) {
         Some((Ok(sp), _)) => sp,
@@ -474,29 +496,39 @@ fn add_path_inner(
         ev.known.lock().entry(sp.clone()).or_default();
         return Ok(sp.clone());
     }
+    // primops.cc:addPath dumps `path.resolveSymlinks()`, so the copy is of
+    // what the links point at and a dangling one is an error.
+    let (target, located) = store_hooks::located(ev, path.to_vec(), Follow::Full, pos)?;
+    let path = &target[..];
+    let virtual_tree = located.is_some();
     // A path under a tree this evaluation copied reads the local tree, with
     // that tree's filter applied before this call's `filter`, or the input's
     // spool; the filter function still sees the store path Nix would show it.
-    let at = store_hooks::open(ev, path, pos)?;
-    let at = if store_hooks::locate(ev, path).is_none() {
-        let resolved =
-            fs::canonicalize(os_path(path)).unwrap_or_else(|_| os_path(path).to_path_buf());
+    let at = store_hooks::check(ev, located, path, pos)?;
+    let missing = |p: &[u8]| {
+        io_error(
+            io::Error::from_raw_os_error(libc::ENOENT),
+            "getting status of",
+            p,
+            pos,
+        )
+    };
+    let at = if virtual_tree {
+        at
+    } else {
+        let Ok(resolved) = fs::canonicalize(os_path(path)) else {
+            // a link with no target, or a missing component: the walk names
+            // the path that does not exist, as `resolveSymlinks` names it
+            let end = store_hooks::resolve_links(ev, path, Follow::Full, pos)?;
+            return Err(missing(&end));
+        };
         if resolved.as_os_str().as_bytes() != path {
             ev.trace().canon(path, Some(&resolved));
         }
         SrcPath::fs(resolved, None)
-    } else {
-        at
     };
     let on_disk = match at.at() {
-        None => {
-            return Err(io_error(
-                io::Error::from_raw_os_error(libc::ENOENT),
-                "getting status of",
-                path,
-                pos,
-            ));
-        }
+        None => return Err(missing(path)),
         Some(At::Mem(_)) => return Err(store_hooks::recopy_unsupported(path, pos)),
         Some(At::Spool(entry, base)) => {
             crate::treestore::record(ev, &entry, base);
@@ -504,14 +536,19 @@ fn add_path_inner(
         }
         Some(At::Disk(_)) => true,
     };
+    if virtual_tree && at.stat(ev, false).is_err() {
+        return Err(missing(path));
+    }
     let resolved = at.local().unwrap_or_else(|| at.in_spool());
     let parent = match &at.src {
         Src::Fs { accepted, .. } | Src::Spool { accepted, .. } => accepted.clone(),
         Src::Mem(_) => None,
     };
+    // a copy of a virtual store path is a copy of a store path to Nix, whose
+    // filter sees the entry under that path and never the local tree
     let shown = |p: &Path| -> PathBuf {
         match p.strip_prefix(&resolved) {
-            Ok(rest) if parent.is_some() || !on_disk => os_path(path).join(rest),
+            Ok(rest) if virtual_tree => os_path(path).join(rest),
             _ => p.to_path_buf(),
         }
     };
