@@ -184,7 +184,7 @@ impl Store {
         chunks.extend(parts.iter().map(|(_, b)| *b));
         let dir = self.entry_dir(key);
         cachefs::create_dir(&dir)?;
-        let Some(_lock) = cachefs::write_lock(&self.root) else {
+        let Some(_lock) = cachefs::try_write_lock(&self.root)? else {
             return Ok(false);
         };
         cachefs::write_atomic(&dir, ENTRY, cachefs::tag(), &chunks).map(|()| true)

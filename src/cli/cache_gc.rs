@@ -5,6 +5,8 @@ use std::time::Duration;
 use crate::cachefs;
 use crate::cli::help::{arg_error, unknown_flag, value};
 
+const DAY: u64 = 24 * 60 * 60;
+
 /// `ietsp cache gc [--ttl DAYS] [--dry-run] [--cache-dir DIR]`. Entries unread
 /// for longer than the TTL go; a swept tracing entry simply misses next time.
 pub fn cmd_cache_gc(argv: &[String]) -> i32 {
@@ -19,9 +21,15 @@ pub fn cmd_cache_gc(argv: &[String]) -> i32 {
             "--ttl" => {
                 i += 1;
                 let v = value(argv, i, s);
-                ttl_days = v.parse().unwrap_or_else(|_| {
-                    arg_error(format!("--ttl wants a number of days, got '{v}'"))
-                });
+                // a TTL whose seconds do not fit made the window wrap and
+                // selected every fresh entry
+                ttl_days = v
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|d| d.checked_mul(DAY).is_some())
+                    .unwrap_or_else(|| {
+                        arg_error(format!("--ttl wants a number of days, got '{v}'"))
+                    });
             }
             "--cache-dir" => {
                 i += 1;
@@ -39,7 +47,7 @@ pub fn cmd_cache_gc(argv: &[String]) -> i32 {
         )
         .report();
     }
-    let ttl = Duration::from_secs(ttl_days * 24 * 60 * 60);
+    let ttl = Duration::from_secs(ttl_days * DAY);
     for (root, shape) in stores {
         let s = cachefs::sweep(&root, shape, ttl, dry_run);
         println!(

@@ -248,6 +248,10 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let r = (^$ietsp eval --strict --timings --cache-dir $"($work)/theirs" -E '2' | complete)
   $res ++= [(verdict ($r.exit_code == 0 and ($r.stderr | str contains "is not an ietsp cache") and (open $"($work)/theirs/trace/notes.txt" | str contains "PRECIOUS")) "a foreign store directory is refused, not wiped" $"foreign directory \(($r.stderr | lines | last)\)")]
 
+  # --ttl in days must fit in seconds
+  let g = (^$ietsp cache gc --cache-dir $"($work)/ttl" --ttl 213503982334602 | complete)
+  $res ++= [(verdict ($g.exit_code == 2 and ($g.stderr | str contains "--ttl wants a number of days")) "a --ttl whose seconds overflow is refused" $"cache gc --ttl overflow \(rc=($g.exit_code): ($g.stderr | chomp)\)")]
+
   # identical output on a hit for a lang test with paths and positions
   let t = "tests/lang/eval-okay-getattrpos.nix"
   let o1 = (^$ietsp eval --strict $t | complete | get stdout | chomp)

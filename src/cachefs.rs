@@ -220,7 +220,12 @@ pub fn touch_link(path: &Path) {
 
 fn stamp_age(bytes: &[u8]) -> Option<Duration> {
     let secs: u64 = std::str::from_utf8(bytes.trim_ascii()).ok()?.parse().ok()?;
-    Some(Duration::from_secs(now_secs().saturating_sub(secs)))
+    // a stamp in the future is no reason to wipe a store, but a sweep must
+    // not wait for the clock to catch up with it
+    Some(match now_secs().checked_sub(secs) {
+        Some(d) => Duration::from_secs(d),
+        None => Duration::MAX,
+    })
 }
 
 /// Writes `chunks`, one after the other, to `dir/name` through a temporary
@@ -486,19 +491,28 @@ impl Drop for WriteLock {
 /// holds it longer than `LOCK_TIMEOUT`: the caller then skips the write,
 /// which is a later miss and never a stall.
 pub fn write_lock(root: &Path) -> Option<WriteLock> {
+    try_write_lock(root).ok().flatten()
+}
+
+/// [`write_lock`] with the two failures apart: `Err` when the lock file
+/// cannot be opened at all, which is a store this run cannot write, and
+/// `Ok(None)` when a sibling held the lock past `LOCK_TIMEOUT`, which is a
+/// skipped write. The caller says which, and they read differently.
+pub fn try_write_lock(root: &Path) -> io::Result<Option<WriteLock>> {
+    use std::os::unix::fs::OpenOptionsExt;
     let f = fs::OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(false)
-        .open(root.join(LOCK))
-        .ok()?;
+        .mode(FILE_MODE)
+        .open(root.join(LOCK))?;
     let mut waited = Duration::ZERO;
     loop {
         if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-            return Some(WriteLock(f));
+            return Ok(Some(WriteLock(f)));
         }
         if waited >= LOCK_TIMEOUT {
-            return None;
+            return Ok(None);
         }
         std::thread::sleep(LOCK_POLL);
         waited += LOCK_POLL;
@@ -1014,5 +1028,37 @@ mod tests {
         fs::write(d.join(STAMP), (now_secs() - 2 * DAY).to_string()).expect("stamp");
         maybe_sweep(&d, Shape::Dirs, false);
         assert!(!old.exists());
+    }
+
+    /// A stamp ahead of the clock held every sweep off until the clock caught
+    /// up with it, and a stamp is not a reason to wipe a store either.
+    #[test]
+    fn a_stamp_in_the_future_is_due() {
+        let d = tmp("future");
+        ready(&d);
+        let old = d.join(OLD);
+        fs::create_dir_all(&old).expect("entry");
+        back_date(&old, 40 * DAY);
+        fs::write(d.join(STAMP), (now_secs() + 900 * DAY).to_string()).expect("stamp");
+        maybe_sweep(&d, Shape::Dirs, false);
+        assert!(!old.exists(), "the sweep ran");
+        assert!(d.join(VERSION).exists(), "and the store was not wiped");
+    }
+
+    /// A store whose lock cannot be opened at all is not a store whose lock a
+    /// sibling holds, and the two read differently to whoever sees the line.
+    #[test]
+    fn a_lock_that_cannot_be_opened_is_not_a_busy_lock() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tmp("lockerr");
+        ready(&d);
+        let held = try_write_lock(&d).expect("open").expect("first lock");
+        assert!(
+            try_write_lock(&d).expect("open").is_none(),
+            "a sibling holds it"
+        );
+        drop(held);
+        fs::set_permissions(d.join(LOCK), fs::Permissions::from_mode(0o444)).expect("read-only");
+        assert!(try_write_lock(&d).is_err(), "a lock this run cannot write");
     }
 }
