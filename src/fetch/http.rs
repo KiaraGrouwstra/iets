@@ -75,10 +75,31 @@ struct Url {
     host: String,
     port: u16,
     target: String,
+    /// `user:password` before the host, percent-decoded.
+    userinfo: Option<String>,
+}
+
+/// A URL as a message may show it: the password of a `user:password@host`
+/// authority is never printed, here or anywhere else.
+pub fn shown(url: &str) -> String {
+    let Some((head, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    match rest[..end]
+        .rsplit_once('@')
+        .and_then(|(u, _)| u.split_once(':'))
+    {
+        Some((user, pass)) => format!(
+            "{head}://{user}:***@{}",
+            &rest[user.len() + pass.len() + 2..]
+        ),
+        None => url.to_string(),
+    }
 }
 
 fn bad(url: &str, why: &str) -> Error {
-    Error::Usage(format!("cannot fetch '{url}': {why}"))
+    Error::Usage(format!("cannot fetch '{}': {why}", shown(url)))
 }
 
 impl Url {
@@ -93,7 +114,10 @@ impl Url {
             Some(i) => (&rest[..i], &rest[i..]),
             None => (rest, ""),
         };
-        let authority = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+        let (userinfo, authority) = match authority.rsplit_once('@') {
+            Some((u, h)) => (Some(crate::remote::worker::percent_decode(u)), h),
+            None => (None, authority),
+        };
         let (host, port) = match authority.rsplit_once(':') {
             Some((h, p)) if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => {
                 (h, p.parse::<u16>().map_err(|_| bad(url, "bad port"))?)
@@ -112,7 +136,17 @@ impl Url {
             } else {
                 path.to_string()
             },
+            userinfo,
         })
+    }
+
+    /// libcurl sends the URL's `user:password` as Basic credentials on the
+    /// first request, without waiting for a challenge (`CURLAUTH_BASIC` is its
+    /// default `CURLOPT_HTTPAUTH`).
+    fn basic(&self) -> Option<(String, String)> {
+        let u = self.userinfo.as_ref()?;
+        let b64 = crate::store::hash::base64_encode(u.as_bytes());
+        Some(("Authorization".into(), format!("Basic {b64}")))
     }
 
     fn authority(&self) -> String {
@@ -339,6 +373,9 @@ async fn stream(
     use http_body_util::BodyExt;
 
     let first = Url::parse(url)?;
+    let mut sent = headers.to_vec();
+    sent.extend(first.basic());
+    let headers = &sent[..];
     let mut current = url.to_string();
     let mut credentials = true;
     for _ in 0..=MAX_REDIRECTS {
@@ -746,6 +783,37 @@ mod tests {
             get_decompressed(&url, &[], limits(), &mut std::io::sink()).unwrap(),
             4 << 20
         );
+    }
+
+    /// libcurl sends `user:password@host` as Basic credentials, and no message
+    /// ever prints the password.
+    #[test]
+    fn credentials_in_the_url_are_sent_and_never_printed() {
+        // `serve` hands the request head over in lower case
+        let want = format!(
+            "authorization: basic {}",
+            crate::store::hash::base64_encode(b"user:s3cret").to_lowercase()
+        );
+        let sent = want.clone();
+        let (port, seen) = serve(1, move |head, c| {
+            let ok = head.contains(&sent);
+            let status = if ok { "200 OK" } else { "401 Unauthorized" };
+            respond(c, status, "", if ok { b"hello" } else { b"" });
+        });
+        let mut out = Vec::new();
+        let url = format!("http://user:s3cret@127.0.0.1:{port}/x");
+        get_decompressed(&url, &[], limits(), &mut out).unwrap();
+        assert_eq!(out, b"hello");
+        assert!(seen.recv().unwrap().contains(&want));
+
+        let (port, _) = serve(1, |_, c| respond(c, "403 Forbidden", "", b""));
+        let url = format!("http://user:s3cret@127.0.0.1:{port}/x");
+        let e = get_decompressed(&url, &[], limits(), &mut Vec::new())
+            .unwrap_err()
+            .to_string();
+        assert!(!e.contains("s3cret"), "{e}");
+        assert!(e.contains("user:***@"), "{e}");
+        assert_eq!(shown("https://x.example/a?u=1"), "https://x.example/a?u=1");
     }
 
     /// deflate tops out near 1032:1, so the bomb is zstd.

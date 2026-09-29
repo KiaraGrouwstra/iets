@@ -359,8 +359,9 @@ fn fetch_tarball(
     crate::treestore::put(sp.name(), &expected, staged, tree).map_err(|e| match e {
         crate::treestore::Rejected::Mismatch(got) => {
             let msg = format!(
-                "ietsp: NAR hash mismatch in input '{name}' ({url}): expected '{}' \
+                "ietsp: NAR hash mismatch in input '{name}' ({}): expected '{}' \
                  but the tree ietsp fetched hashes to '{}'",
+                crate::fetch::http::shown(&url),
                 expected.to_sri(),
                 got.to_sri()
             );
