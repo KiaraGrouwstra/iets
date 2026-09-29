@@ -23,8 +23,10 @@ def report [name: string, a: record, b: record, what: string]: nothing -> nothin
   rm -rf $tmp
 }
 
-# One case at every worker count, and against nix when the case asks.
-def run-case [ietsp: string, counts: list<int>, c: record]: nothing -> bool {
+# One case at every worker count, and against nix when the case asks for
+# it and a real nix is there. The sandbox has none, so the comparison is
+# what a run by hand adds.
+def run-case [ietsp: string, counts: list<int>, c: record, with_nix: bool]: nothing -> bool {
   let base_flags = (if $c.strict { [--strict] } else { [] } | append ($c.flags? | default []))
   let runs = ($counts | each {|w|
     # a `.drv` a helper wrote is an effect the program did not ask for, so
@@ -44,7 +46,7 @@ def run-case [ietsp: string, counts: list<int>, c: record]: nothing -> bool {
       $ok = false
     }
   }
-  if $c.nix {
+  if $c.nix and $with_nix {
     let n = (outcome (^nix-instantiate --eval ...$base_flags -E $c.expr | complete))
     if $n.out != $base.o.out or $n.rc != $base.o.rc {
       report $c.name $base.o $n "ietsp vs nix"
@@ -120,8 +122,15 @@ in builtins.foldl' (a: b: a + builtins.foldl' (x: y: x + y) 0 b) 0 rows'#]
     [drv-demanded true false [] true $"($stops) in map \(i: builtins.stringLength \(d i\)\) [ 1 2 3 4 5 6 7 8 ]"]
   ]
   let cases = ($cases | each {|c| $c | insert flags [] | insert dump false } | append $effect_cases)
-  if ($cases | any {|c| $c.nix }) { require-real-nix nix-instantiate }
+  # The sandbox this runs in for `nix flake check` has no nix at all, so
+  # the comparison against the reference is what a run by hand adds.
+  let with_nix = ((which nix-instantiate | length) > 0)
+  if $with_nix {
+    require-real-nix nix-instantiate
+  } else {
+    print "note: no nix-instantiate on PATH; comparing worker counts only"
+  }
   let counts = ([1 2 4 $n] | uniq)
-  let ok = ($cases | each {|c| run-case $ietsp $counts $c })
+  let ok = ($cases | each {|c| run-case $ietsp $counts $c $with_nix })
   if ($ok | any {|r| not $r }) { exit 1 }
 }
