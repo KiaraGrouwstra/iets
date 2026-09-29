@@ -179,20 +179,66 @@ fn redirect(first: &Url, from: &Url, to: &Url) -> std::result::Result<bool, &'st
         && first.port == to.port)
 }
 
+/// The local path a `file:` URL names: `file:/p`, `file:///p` and
+/// `file://localhost/p` all name `/p`. libcurl reads an empty host and
+/// `localhost`; any other host is not a local file, so it is not one here.
+fn file_path(url: &str) -> Option<&str> {
+    let rest = url.strip_prefix("file:")?;
+    let Some(after) = rest.strip_prefix("//") else {
+        return Some(rest);
+    };
+    let (host, path) = after.split_at(after.find('/')?);
+    (host.is_empty() || host.eq_ignore_ascii_case("localhost")).then_some(path)
+}
+
+/// Whether `location` starts with a scheme, and so is absolute. What comes
+/// before `://` must be a scheme (RFC 3986): a `://` in a query is not one.
+fn has_scheme(location: &str) -> bool {
+    let Some((s, _)) = location.split_once("://") else {
+        return false;
+    };
+    s.starts_with(|c: char| c.is_ascii_alphabetic())
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
+}
+
+/// `.` and `..` segments removed, as a URL path has them removed
+/// (RFC 3986:5.2.4). A `..` at the top removes nothing.
+fn normalise(path: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    for seg in path.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                out.pop();
+            }
+            s => out.push(s),
+        }
+    }
+    let slash = path.ends_with(['/', '.']) && !out.is_empty();
+    format!("/{}{}", out.join("/"), if slash { "/" } else { "" })
+}
+
 /// `Location` against the URL it came from: absolute, host-relative or
 /// path-relative (libcurl resolves all three).
 fn resolve(base: &str, location: &str) -> String {
-    if location.contains("://") {
+    if has_scheme(location) {
         return location.to_string();
     }
     let (scheme, rest) = base.split_once("://").unwrap_or(("https", base));
     let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
-    if location.starts_with('/') {
-        return format!("{scheme}://{authority}{location}");
-    }
-    let path = &rest[authority.len()..];
-    let dir = path.rsplit_once('/').map_or("/", |(d, _)| d);
-    format!("{scheme}://{authority}{dir}/{location}")
+    let joined = if location.starts_with('/') {
+        location.to_string()
+    } else {
+        let path = &rest[authority.len()..];
+        let path = path.split(['?', '#']).next().unwrap_or(path);
+        format!(
+            "{}/{location}",
+            path.rsplit_once('/').map_or("", |(d, _)| d)
+        )
+    };
+    let (path, tail) = joined.split_at(joined.find(['?', '#']).unwrap_or(joined.len()));
+    format!("{scheme}://{authority}{}{tail}", normalise(path))
 }
 
 /// One rustls client config for the process: the platform's CA store, which is
@@ -266,7 +312,7 @@ pub fn get(
         )));
     }
     let read_in = Rc::new(Cell::new(0));
-    if let Some(path) = url.strip_prefix("file://") {
+    if let Some(path) = file_path(url) {
         let path =
             crate::remote::worker::percent_decode(path.split(['?', '#']).next().unwrap_or(path));
         let file = std::fs::File::open(&path)
@@ -704,6 +750,29 @@ mod tests {
             resolve("https://x.example/a/b", "c"),
             "https://x.example/a/c"
         );
+        // a `://` in a query is not a scheme, and `.` and `..` are applied
+        assert_eq!(
+            resolve("https://x.example/a/b", "/ok.tar?next=http://y.invalid/x"),
+            "https://x.example/ok.tar?next=http://y.invalid/x"
+        );
+        assert_eq!(
+            resolve("https://x.example/a/b", "../ok.tar"),
+            "https://x.example/ok.tar"
+        );
+        assert_eq!(
+            resolve("https://x.example/a/b", "./d/"),
+            "https://x.example/a/d/"
+        );
+    }
+
+    /// libcurl reads `file:/p`, `file:///p` and `file://localhost/p` alike.
+    #[test]
+    fn file_urls_name_a_local_path() {
+        assert_eq!(file_path("file:///abs/p"), Some("/abs/p"));
+        assert_eq!(file_path("file://localhost/abs/p"), Some("/abs/p"));
+        assert_eq!(file_path("file:/abs/p"), Some("/abs/p"));
+        assert_eq!(file_path("file://elsewhere/abs/p"), None);
+        assert_eq!(file_path("https://x.example/p"), None);
     }
 
     /// libarchive ignores what follows the last gzip member and bids its

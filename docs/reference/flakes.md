@@ -129,7 +129,10 @@ whose inputs the input store already holds still evaluates.
 
 `src/fetch/http.rs` is the GET: hyper over tokio-rustls, no libcurl. It
 follows redirects as `filetransfer.cc` does (`CURLOPT_FOLLOWLOCATION`,
-`CURLOPT_MAXREDIRS` 10), reads a `file://` URL from disk, and undoes the
+`CURLOPT_MAXREDIRS` 10), retries a transient status
+(`docs/reference/settings.md`), sends a `user:password` in the URL as
+Basic credentials, reads `file:/p`, `file:///p` and `file://localhost/p`
+from disk, and undoes the
 four compressions libarchive autodetects: gzip, xz, zstd, bzip2
 (`tarfile.cc:TarArchive`). The URL is the one `github.cc:getDownloadUrl`
 and `tarball.cc` build:
