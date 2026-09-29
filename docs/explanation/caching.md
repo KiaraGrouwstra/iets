@@ -391,10 +391,14 @@ So the content verifies itself. Follow what that removes:
   determines the content. That is why the concurrency rules above are
   enough and no protocol is needed on top of them.
 
-What a reader *does* check on open is small: the index's version byte, and
-the spool's length against what the index recorded. Anything else wipes the
-entry, which costs one fetch. It never re-hashes the tree, because the name
-already is the hash.
+What a reader *does* check on open is small: the index's own checksum, its
+version byte, the spool's length against what the index recorded, and that
+every blob the index names lies inside the file it names it in. Anything
+else wipes the entry, which costs one fetch. It never re-hashes the tree,
+because the name already is the hash: a spool whose *bytes* were changed in
+place, under a length and an index that still fit, is therefore read as it
+stands. Rehashing it on every open would read every input of every
+evaluation, which is what the index exists to avoid.
 
 An entry holds the decompressed tar exactly as downloaded (`spool`), an
 index of every member's offset, size, mode and symlink target, and a

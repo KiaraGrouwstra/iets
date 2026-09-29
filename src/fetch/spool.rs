@@ -90,7 +90,30 @@ pub struct Tree {
 
 /// Version byte of the serialized index. A file that starts with anything else
 /// is not read; the entry holding it is wiped (`crate::treestore`).
-pub const INDEX_VERSION: u8 = 1;
+pub const INDEX_VERSION: u8 = 2;
+
+/// Bytes of the checksum the index ends with.
+const SUM: usize = 8;
+
+/// The index's own checksum. It catches a changed byte before anything reads
+/// what the index says, so no reader ever has to trust the file's shape.
+fn checksum(body: &[u8]) -> [u8; SUM] {
+    let h = blake3::hash(body);
+    h.as_bytes()[..SUM].try_into().expect("eight bytes")
+}
+
+/// Whether every blob the index names lies inside the file it names it in.
+/// `sparse` is the length of the side file, and `None` when there is none.
+fn fits(n: &Node, spool: u64, sparse: Option<u64>) -> bool {
+    match n {
+        Node::Symlink(_) => true,
+        Node::Dir(d) => d.iter().all(|(_, c)| fits(c, spool, sparse)),
+        Node::File { at, .. } => {
+            let len = if at.sparse { sparse } else { Some(spool) };
+            len.is_some_and(|len| at.offset.checked_add(at.size).is_some_and(|e| e <= len))
+        }
+    }
+}
 
 fn bad(why: String) -> Error {
     Error::Store(why)
@@ -533,6 +556,7 @@ impl Tree {
             None => e.push(0),
         }
         put_node(&mut e, &self.root);
+        e.extend_from_slice(&checksum(&e));
         e
     }
 
@@ -541,7 +565,14 @@ impl Tree {
     /// unexpected, so the caller wipes the entry rather than repairing it.
     pub fn reopen(dir: &Path) -> Option<(Tree, Hash, u64)> {
         let bytes = std::fs::read(dir.join(INDEX)).ok()?;
-        let mut d = Idx { b: &bytes, i: 0 };
+        let body = bytes.len().checked_sub(SUM)?;
+        if checksum(&bytes[..body]) != bytes[body..] {
+            return None;
+        }
+        let mut d = Idx {
+            b: &bytes[..body],
+            i: 0,
+        };
         if d.u8()? != INDEX_VERSION {
             return None;
         }
@@ -554,7 +585,7 @@ impl Tree {
             _ => return None,
         };
         let root = get_node(&mut d, 0)?;
-        if d.i != bytes.len() {
+        if d.i != body {
             return None;
         }
         let spool = File::open(dir.join(SPOOL)).ok()?;
@@ -571,6 +602,9 @@ impl Tree {
                 Some(f)
             }
         };
+        if !fits(&root, spool_len, sparse_len) {
+            return None;
+        }
         Some((
             Tree {
                 spool,
@@ -1079,6 +1113,38 @@ mod tests {
             assert!(e.contains(why), "{tag}: {e}");
             assert!(tree.is_err(), "{tag}: the tree path accepted it");
         }
+    }
+
+    /// No byte of a stored index is believed on its own: one flipped byte is a
+    /// miss, never a crash and never a tree that is not the one stored.
+    #[test]
+    fn a_changed_index_byte_is_a_miss() {
+        let dir = std::env::temp_dir().join(format!("ietsp-spool-reopen-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let plain = crate::fetch::http::decompress(tar_gz(&[
+            ("t/", DIR, 0o755, b""),
+            ("t/f", REG, 0o644, b"x"),
+            ("t/l", SYM, 0o777, b"f"),
+        ]))
+        .unwrap();
+        let mut spool = spool_file(&dir).unwrap();
+        spool.write_all(&plain).unwrap();
+        let tree = Tree::index(spool, u64::MAX).unwrap();
+        let mut h = crate::store::hash::Hasher::new(HashAlgo::Sha256);
+        tree.dump(&mut h).unwrap();
+        let (size, hash) = (h.bytes_written(), h.finish());
+        tree.persist(&dir, (&hash, size)).unwrap();
+        assert!(Tree::reopen(&dir).is_some());
+
+        let good = std::fs::read(dir.join(INDEX)).unwrap();
+        for i in 0..good.len() {
+            let mut broken = good.clone();
+            broken[i] ^= 0xff;
+            std::fs::write(dir.join(INDEX), &broken).unwrap();
+            assert!(Tree::reopen(&dir).is_none(), "byte {i} was believed");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// A hard link fills a name no member claimed, and it may name a link whose
