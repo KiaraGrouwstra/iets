@@ -1201,19 +1201,18 @@ impl Evaluator {
         }
     }
 
-    pub fn is_derivation(&mut self, w: Word) -> bool {
+    /// Mirrors eval.cc:EvalState::isDerivation, which lets an error of the
+    /// `type` attribute reach the caller.
+    pub fn is_derivation(&mut self, w: Word) -> EvalResult<bool> {
         match w.view() {
             Value::Attrs(a) => match a.get(self.s.type_) {
-                Some(attr) => match self.force_cell(&attr.cell) {
-                    Ok(t) => t
-                        .as_string()
-                        .map(|s| s.bytes == b"derivation")
-                        .unwrap_or(false),
-                    Err(_) => false,
-                },
-                None => false,
+                Some(attr) => {
+                    let t = self.force_cell(&attr.cell)?;
+                    Ok(t.as_string().is_some_and(|s| s.bytes == b"derivation"))
+                }
+                None => Ok(false),
             },
-            _ => false,
+            _ => Ok(false),
         }
     }
 

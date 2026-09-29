@@ -146,7 +146,7 @@ fn print_xml_inner(
             &[("value", crate::print::format_g(f).as_bytes())],
         ),
         Value::Attrs(a) => {
-            if ev.is_derivation(w) {
+            if ev.is_derivation(w)? {
                 let mut xml_attrs: Vec<(&str, &[u8])> = Vec::new();
                 let mut drv_path: &'static [u8] = b"";
                 if let Some(d) = a.get(ev.s.drv_path) {
