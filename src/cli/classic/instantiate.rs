@@ -106,7 +106,7 @@ pub fn main(argv: &[String]) -> i32 {
     };
     // `nix-instantiate` builds nothing: the drvs, their sources and the
     // `--add-root` links belong to the local store whatever `builder` says.
-    let (cfg, store, options) = match super::settings(&i.c) {
+    let (cfg, store, options) = match super::shell_settings(&i.c) {
         Ok(t) => t,
         Err(reason) => fallback(NAME, argv, &reason),
     };

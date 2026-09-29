@@ -473,6 +473,23 @@ def main [] {
     $ok = ($ok | append (verdict ($code == 1) $"ietsp ($c | str join ' ') > /dev/full reports, not aborts" $"exit ($code)"))
   }
 
+  # an ietsp.toml with a mistake in it stops a command that reads a setting,
+  # and not `version` or the help, which read none
+  let badconf = $"($tmp)/badconf"
+  mkdir $"($badconf)/ietsp"
+  "bogus = 1\n" | save -f $"($badconf)/ietsp/ietsp.toml"
+  for case in [{args: [version], want: 0} {args: [--help], want: 0} {args: [eval, -E, "1"], want: 1}] {
+    let r = (with-env {XDG_CONFIG_HOME: $badconf} { ^$ietsp ...$case.args | complete })
+    $ok = ($ok | append (verdict ($r.exit_code == $case.want)
+      $"a bad ietsp.toml and 'ietsp ($case.args | str join ' ')'"
+      $"exit ($r.exit_code), want ($case.want): ($r.stderr)"))
+  }
+  # the log format is read before anything can fail, so an early error is a record
+  let rec = (with-env {XDG_CONFIG_HOME: $badconf} {
+    ^$ietsp eval --log-format internal-json -E "1" | complete })
+  $ok = ($ok | append (verdict ($rec.stderr | str starts-with "@nix ")
+    "an early error is a record under internal-json" $"stderr ($rec.stderr | str substring 0..200)"))
+
   mkdir $"($tmp)/tb"
   "hi\n" | save $"($tmp)/tb/f"
   ^tar -czf $"($tmp)/x.tar.gz" -C $tmp tb
@@ -579,6 +596,17 @@ def main [] {
         run-both $farm nix-instantiate --eval -E "builtins.currentSystem" })))
   }
   rm -f $"($env.XDG_CONFIG_HOME)/nix/nix.conf"
+  # `-j` and `--cores` set a setting, so the value is checked as one; the
+  # clustered `-IP=PATH` is ietsp's own spelling and Nix refuses it
+  for args in [[-j 4294967296] [--cores 4294967296] [-j auto] [--cores 1K] [-j 2] [-Ifoo=/etc]] {
+    $ok = ($ok | append (cmp-case $"instantiate ($args | str join ' ')"
+      (run-both $farm nix-instantiate ...($args | each { into string }) --eval -E "1")))
+  }
+  # the classic name is nix-eval-jobs, which says nothing on stderr
+  let nej = (^$"($farm)/nix-eval-jobs" --no-instantiate -E "{ }" | complete)
+  $ok = ($ok | append (verdict ($nej.stderr | is-empty) "nix-eval-jobs prints no summary" $"stderr '($nej.stderr)'"))
+  let own = (^$ietsp eval-jobs --no-instantiate -E "{ }" | complete)
+  $ok = ($ok | append (verdict ($own.stderr | str contains "eval-jobs: ") "ietsp eval-jobs keeps its summary" $"stderr '($own.stderr)'"))
   # a value Nix refuses stops the run with Nix's own text and exit 1; the
   # unit prefix and the words `auto` and `relaxed` are accepted
   let err1 = {|s: string| $s | ansi strip | lines | where ($it | str starts-with "error:") | get -o 0 | default "" }

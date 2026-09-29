@@ -92,8 +92,13 @@ prints the link instead of the drv path, numbering the second and later
 roots `-2`, `-3`, … `--readonly-mode` (and `--eval` without
 `--read-write-mode`) registers nothing.
 
+`--add-root ""` is "no root", as an empty `gcRoot` is in
+`nix-instantiate.cc`: the drv path is printed and the GC warning with it.
+
 Falls back on: `--parse`, `--parse-only`, `--xml`, `--find-file`, `-`
-(stdin), `--add-root` together with a read-only store, any other flag.
+(stdin), `--add-root` together with a read-only store, a `-j`/`--cores`
+value that is not the setting's, `-IP=PATH` (Nix reads the clustered form
+as several short flags and refuses it), any other flag.
 
 ### `nix-build`
 
@@ -175,7 +180,8 @@ derivation, any other flag.
 ### `nix-eval-jobs`
 
 The existing `ietsp eval-jobs`, which already matches nix-eval-jobs 2.35
-flag for flag. See `docs/reference/commands.md`.
+flag for flag. See `docs/reference/commands.md`. Under this name it prints
+no summary line on stderr, because nix-eval-jobs prints none.
 
 ### `nix`
 

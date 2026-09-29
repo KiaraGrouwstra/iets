@@ -88,11 +88,13 @@ impl Argv<'_> {
             .ok_or_else(|| format!("'{flag}' requires an argument"))
     }
 
-    fn number(&mut self, flag: &str) -> Result<String, String> {
+    /// `-j` and `--cores` set a setting, so the value is the setting's: an
+    /// integer in a 32-bit field, and `auto` for `max-jobs`.
+    fn number(&mut self, flag: &str, setting: &str) -> Result<String, String> {
         let v = self.value(flag)?;
-        v.parse::<u64>()
-            .map(|n| n.to_string())
-            .map_err(|_| format!("'{flag}' wants a number, got '{v}'"))
+        crate::config::check_value(setting, &v)
+            .map(|()| v.clone())
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -105,8 +107,8 @@ pub fn common_flag(c: &mut Common, a: &mut Argv, s: &str) -> Result<bool, String
     match s {
         "-E" | "--expr" => c.from_args = true,
         "--store" => set.push(("store".into(), a.value(s)?)),
-        "-j" | "--max-jobs" => set.push(("max-jobs".into(), a.number(s)?)),
-        "--cores" => set.push(("cores".into(), a.number(s)?)),
+        "-j" | "--max-jobs" => set.push(("max-jobs".into(), a.number(s, "max-jobs")?)),
+        "--cores" => set.push(("cores".into(), a.number(s, "cores")?)),
         "-k" | "--keep-going" => set.push(("keep-going".into(), "true".into())),
         "-K" | "--keep-failed" => set.push(("keep-failed".into(), "true".into())),
         "--quiet" => c.quiet = true,
@@ -142,8 +144,9 @@ pub fn settings(c: &Common) -> Result<(Config, Transport, Options), String> {
     settings_with(c, true)
 }
 
-/// `settings` for a shell, which runs here and so needs its inputs in the
-/// local store: the `builder` setting is skipped; `--store` still wins.
+/// `settings` for a command that builds nothing on a builder: a shell, whose
+/// inputs belong in the local store where it runs, and `nix-instantiate`.
+/// The `builder` setting is skipped; `--store` still wins.
 pub fn shell_settings(c: &Common) -> Result<(Config, Transport, Options), String> {
     settings_with(c, false)
 }

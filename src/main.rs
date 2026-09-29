@@ -52,6 +52,26 @@ fn main() {
             exit(2)
         }
     };
+    // the log format shapes every record, an error's included, so it is read
+    // before the first thing that can fail
+    if let Some(i) = argv.iter().position(|a| a == "--log-format") {
+        let _ = ietsp::log::set_format(argv.get(i + 1).map_or("", String::as_str));
+    }
+    // `version` and `help` read no setting, so a settings file with a
+    // mistake in it does not stop them
+    if classic_name().is_none() {
+        match argv.first().map(String::as_str) {
+            Some("--version" | "version") => {
+                cli::render::bytes(concat!(env!("IETSP_VERSION"), "\n").as_bytes());
+                exit(0)
+            }
+            Some("--help" | "-h" | "help") => {
+                help::set_command("ietsp");
+                help::help(argv.get(1).map(String::as_str))
+            }
+            _ => {}
+        }
+    }
     if let Err(e) = session.load_settings(&options) {
         exit(e.report())
     }
@@ -70,11 +90,6 @@ fn main() {
     let mut rest: Vec<String> = argv[1..].to_vec();
     help::set_command("ietsp");
     let cmd = match cmd.as_str() {
-        "--help" | "-h" | "help" => help::help(rest.first().map(String::as_str)),
-        "--version" | "version" => {
-            cli::render::bytes(concat!(env!("IETSP_VERSION"), "\n").as_bytes());
-            exit(0)
-        }
         "cache-dump" => {
             rest.insert(0, "dump".into());
             "cache"
@@ -88,7 +103,11 @@ fn main() {
         help::unknown_command(cmd)
     };
     help::set_command(name);
-    if rest.iter().any(|a| a == "--help" || a == "-h") {
+    // these read their flags in order, so `--help` reaches `eval_flag` where
+    // it stands and a flag before it may take it as a value
+    if !matches!(name, "eval" | "diff" | "eval-jobs")
+        && rest.iter().any(|a| a == "--help" || a == "-h")
+    {
         help::help(Some(name))
     }
     let code = match name {

@@ -116,8 +116,11 @@ pub fn take_options(argv: &[String]) -> Result<Taken> {
     let mut rest = Vec::with_capacity(argv.len());
     let mut opts = Vec::new();
     let mut i = 0;
+    // `--` ends this command's flags: what follows belongs to whatever the
+    // command runs, and that may be a second ietsp with options of its own
+    let end = argv.iter().position(|a| a == "--").unwrap_or(argv.len());
     while i < argv.len() {
-        if argv[i] != FLAG {
+        if argv[i] != FLAG || i >= end {
             rest.push(argv[i].clone());
             i += 1;
             continue;
@@ -657,16 +660,16 @@ mod tests {
     /// that is not a Boolean is an error that names the variable.
     #[test]
     fn the_environment_wins_over_the_file() {
-        assert_eq!(NO_ENV.flag("X", None, true).unwrap(), true);
-        assert_eq!(NO_ENV.flag("X", Some(false), true).unwrap(), false);
-        assert_eq!(NO_ENV.flag("X", Some(true), false).unwrap(), true);
+        assert!(NO_ENV.flag("X", None, true).unwrap());
+        assert!(!NO_ENV.flag("X", Some(false), true).unwrap());
+        assert!(NO_ENV.flag("X", Some(true), false).unwrap());
         let zero = Env(|_| Some("0".into()));
-        assert_eq!(zero.flag("X", Some(true), true).unwrap(), false);
+        assert!(!zero.flag("X", Some(true), true).unwrap());
         for off in ["0", "no", "false"] {
-            assert_eq!(env_bool("X", off.as_ref()).unwrap(), false, "{off}");
+            assert!(!env_bool("X", off.as_ref()).unwrap(), "{off}");
         }
         for on in ["1", "yes", "true"] {
-            assert_eq!(env_bool("X", on.as_ref()).unwrap(), true, "{on}");
+            assert!(env_bool("X", on.as_ref()).unwrap(), "{on}");
         }
         for bad in ["", "maybe", "2"] {
             let e = env_bool("X", bad.as_ref()).map(|_| ()).unwrap_err();

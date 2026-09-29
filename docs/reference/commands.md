@@ -871,7 +871,7 @@ The registry, the levels and the scope rules are in
 ## `parse`
 
 ```
-ietsp parse [-q | --json] FILE...
+ietsp parse [-q | --json] [--log-format F] FILE...
 ```
 
 Parse each `FILE` and print its syntax tree. `FILE` `-` reads the list of
@@ -881,6 +881,7 @@ files from stdin.
 |---|---|
 | `-q` | print only the parse errors and the totals |
 | `--json` | print each tree as one line of JSON (`docs/reference/syntax-tree.md`) |
+| `--log-format F` | `internal-json`: stderr is Nix's `@nix {...}` records |
 
 stdout: the tree of each file as S-expressions. With `--json`: one line
 of JSON for each file, with the kind and the byte span of each node. With

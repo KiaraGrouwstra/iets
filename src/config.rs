@@ -17,11 +17,13 @@ const APPENDABLE: &[&str] = &[
     "access-tokens",
     "allowed-uris",
     "allowed-users",
+    "build-hook",
     "experimental-features",
     "extra-platforms",
     "hashed-mirrors",
+    "ignored-acls",
+    "impure-env",
     "nix-path",
-    "plugin-files",
     "sandbox-paths",
     "secret-key-files",
     "substituters",
@@ -335,7 +337,7 @@ fn in_list(list: &str, name: &str) -> bool {
 }
 
 /// The value check Nix does when a setting is set. `name` is canonical.
-fn check_value(name: &str, v: &str) -> Result<()> {
+pub fn check_value(name: &str, v: &str) -> Result<()> {
     let bad = |text: String| Err(Error::Config(text));
     if in_list(BOOLS, name) {
         return parse_bool(name, v).map(|_| ());

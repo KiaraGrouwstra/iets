@@ -55,7 +55,12 @@ pub fn eval_flag(
 ) -> Result<bool, String> {
     match s {
         "-I" | "--include" => f.includes.push(parse_include(&next()?)),
-        _ if s.starts_with("-I") && s.len() > 2 => f.includes.push(parse_include(&s[2..])),
+        // `-IP=PATH` is ietsp's own spelling: Nix's short-flag clustering
+        // reads it as `-I -f -o -o …` and refuses it, so a classic name
+        // must too (docs/reference/commands.md)
+        _ if s.starts_with("-I") && s.len() > 2 && help::command().is_some() => {
+            f.includes.push(parse_include(&s[2..]))
+        }
         "-A" | "--attr" => f.attrs.push(next()?),
         "--arg" => f.args.push((next()?, ArgKind::Expr(next()?))),
         "--argstr" => f.args.push((next()?, ArgKind::Str(next()?))),
@@ -75,6 +80,9 @@ pub fn eval_flag(
         "--json-log-path" => crate::log::set_json_log_path(next()?),
         "--pure-eval" => f.pure = Some(true),
         "--no-pure-eval" | "--impure" => f.pure = Some(false),
+        // args.cc reads flags in order, so a `--help` a flag before it asked
+        // for is that flag's value, not a request for the help
+        "-h" | "--help" if help::command().is_some() => help::help(help::command()),
         _ => return Ok(false),
     }
     Ok(true)

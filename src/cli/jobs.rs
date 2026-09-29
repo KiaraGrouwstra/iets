@@ -295,7 +295,8 @@ fn jobs_summary(
     inst: Option<crate::jobs::instantiate::Stats>,
     t0: std::time::Instant,
 ) {
-    if j.quiet {
+    // the real nix-eval-jobs says nothing, so the classic name says nothing
+    if j.quiet || crate::cli::help::command().is_none() {
         return;
     }
     let mut s = format!(

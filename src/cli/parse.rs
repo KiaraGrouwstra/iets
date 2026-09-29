@@ -15,23 +15,37 @@ pub enum Form {
     Quiet,
 }
 
-/// `ietsp parse [-q | --json] FILE...`; a lone `-` reads the list of files
-/// from stdin.
+/// `ietsp parse [-q | --json] [--log-format F] FILE...`; a lone `-` reads
+/// the list of files from stdin.
 pub fn main(argv: &[String]) -> i32 {
-    let form = match argv.first().map(String::as_str) {
-        Some("-q") => Form::Quiet,
-        Some("--json") => Form::Json,
-        _ => Form::Text,
-    };
-    let files = &argv[usize::from(form != Form::Text)..];
-    let files: Vec<String> = match files {
+    let mut form = Form::Text;
+    let mut names: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < argv.len() {
+        let s = argv[i].as_str();
+        match s {
+            "-q" => form = Form::Quiet,
+            "--json" => form = Form::Json,
+            "--log-format" => {
+                i += 1;
+                let f = crate::cli::help::value(argv, i, s);
+                if let Err(m) = crate::log::set_format(f) {
+                    crate::cli::help::arg_error(m)
+                }
+            }
+            _ if s.starts_with('-') && s != "-" => crate::cli::help::unknown_flag(s),
+            _ => names.push(s.to_string()),
+        }
+        i += 1;
+    }
+    let files: Vec<String> = match names.as_slice() {
         [] => crate::cli::help::arg_error("parse needs FILE... or - to read them from stdin"),
         [dash] if dash == "-" => std::io::read_to_string(std::io::stdin())
             .unwrap_or_default()
             .lines()
             .map(str::to_owned)
             .collect(),
-        _ => files.to_vec(),
+        _ => names,
     };
     cmd_parse(&files, form)
 }
