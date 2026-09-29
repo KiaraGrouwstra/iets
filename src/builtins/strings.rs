@@ -130,16 +130,18 @@ fn next_component<'a>(s: &'a [u8], p: &mut usize) -> &'a [u8] {
     &s[start..*p]
 }
 
-fn parse_int(c: &[u8]) -> Option<i64> {
-    if c.is_empty() || c.len() > 18 {
+/// `names.cc:componentsLT` reads a component with `string2Int<int>`, so a
+/// value above 2147483647 is not a number and orders as text.
+fn parse_int(c: &[u8]) -> Option<i32> {
+    if c.is_empty() {
         return None;
     }
-    let mut n: i64 = 0;
+    let mut n: i32 = 0;
     for &b in c {
         if !b.is_ascii_digit() {
             return None;
         }
-        n = n * 10 + (b - b'0') as i64;
+        n = n.checked_mul(10)?.checked_add((b - b'0') as i32)?;
     }
     Some(n)
 }
