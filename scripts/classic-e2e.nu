@@ -270,6 +270,14 @@ def main [] {
     (run-both $farm nix-instantiate --eval -E "{ a = 1; b = [ 1 2 ]; }")))
   $ok = ($ok | append (cmp-case "instantiate --eval --raw"
     (run-both $farm nix-instantiate --eval --raw -E "\"x\" + \"y\"")))
+  # a path value is copied to the store first, as coerceToString's default does
+  let rawp = $"($tmp)/raw"
+  mkdir $rawp
+  "raw-path\n" | save -f $"($rawp)/p.txt"
+  $ok = ($ok | append (cmp-case "instantiate --eval --raw a path"
+    (run-both $farm nix-instantiate --eval --raw -E $"($rawp)/p.txt")))
+  $ok = ($ok | append (cmp-case "instantiate --eval --raw an outPath"
+    (run-both $farm nix-instantiate --eval --raw -E $"\({ outPath = ($rawp)/p.txt; }).outPath")))
   $ok = ($ok | append (cmp-case "instantiate --eval --argstr"
     (run-both $farm nix-instantiate --eval --strict --json --argstr who world -E "{ who }: { inherit who; }")))
 

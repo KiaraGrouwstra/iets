@@ -165,7 +165,7 @@ fn print_value(ev: &mut Evaluator, v: Word, i: &Inst, out: &mut Vec<u8>) -> Resu
                 Pos::NONE,
                 "while generating the nix-instantiate output",
                 false,
-                false,
+                true,
                 true,
             )?;
             out.extend_from_slice(&s);
