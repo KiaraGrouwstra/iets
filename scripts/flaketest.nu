@@ -810,6 +810,24 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   $res ++= [(check $ietsp "sym: readFile through a tracked link to a tracked directory" $"($sym)#ok")]
   $res ++= [(check $ietsp "sym: readDir of a tracked link to a tracked directory" $"($sym)#okdir")]
   $res ++= [(check $ietsp "sym: pathExists of a tracked link to a tracked directory" $"($sym)#okex")]
+
+  # ---- a sparse checkout is a dirty tree ------------------------------------
+  # `git status` never reports a skip-worktree entry, but libgit2's status,
+  # which getWorkdirInfo reads, calls an index entry that is not on disk
+  # deleted, and that makes the tree dirty: no rev and no revCount.
+  let sparse = $"($work)/sparse"
+  mkdir $"($sparse)/d"
+  '{ outputs = { self }: { v = builtins.toJSON [ (self.rev or "none") (self.dirtyRev or "none") self.narHash (self.revCount or (-1)) ]; }; }' + "\n" | save $"($sparse)/flake.nix"
+  '{"nodes":{"root":{}},"root":"root","version":7}' | save $"($sparse)/flake.lock"
+  "x\n" | save $"($sparse)/d/f.txt"
+  "y\n" | save $"($sparse)/top.txt"
+  git-in $sparse init -q
+  git-in $sparse add -A
+  git-in $sparse commit -q -m init
+  $res ++= [(check $ietsp "sparse: the whole tree is clean" $"($sparse)#v")]
+  git-in $sparse sparse-checkout set --no-cone "/*" "!/d/"
+  $res ++= [(check $ietsp "sparse: an index entry that is not on disk makes it dirty" $"($sparse)#v")]
+
   let fail = ($res | where not $it | length)
   print $"pass=($res | where $it | length) fail=($fail)"
   if $fail == 0 { 0 } else { 1 }

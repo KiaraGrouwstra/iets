@@ -59,17 +59,32 @@ impl Scm for Git {
     /// git-utils.cc:getWorkdirInfo: index entries minus deleted ones; dirty
     /// when any tracked file differs from HEAD or the index.
     fn snapshot(&self, trace: &Trace, root: &Path) -> Result<Snapshot, String> {
-        let ls = git(trace, root, &["ls-files", "-z", "--cached", "--stage"])?;
+        // `-v` tags an entry that git checks against the working tree no more
+        // (`S` for skip-worktree, lower case for assume-unchanged): `git
+        // status` never reports such an entry, while libgit2's status, which
+        // getWorkdirInfo reads, still calls it deleted when it is not on disk
+        let ls = git(
+            trace,
+            root,
+            &["ls-files", "-z", "--cached", "--stage", "-v"],
+        )?;
         let mut files: HashSet<PathBuf> = HashSet::new();
+        let mut dirty = false;
         for entry in ls.split(|&b| b == 0).filter(|e| !e.is_empty()) {
             let Some(tab) = entry.iter().position(|&b| b == b'\t') else {
                 continue;
             };
-            let mode = entry[..tab].split(|&b| b == b' ').next().unwrap_or(b"");
-            if mode == b"160000" {
+            let mut fields = entry[..tab].split(|&b| b == b' ');
+            let tag = fields.next().unwrap_or(b"");
+            if fields.next().unwrap_or(b"") == b"160000" {
                 continue;
             }
-            files.insert(root.join(OsStr::from_bytes(&entry[tab + 1..])));
+            let file = root.join(OsStr::from_bytes(&entry[tab + 1..]));
+            if tag != b"H" && trace.stat_now(file.as_os_str().as_bytes(), false) == Kind::Missing {
+                dirty = true;
+                continue;
+            }
+            files.insert(file);
         }
         let status = git(
             trace,
@@ -83,7 +98,6 @@ impl Scm for Git {
                 "--ignore-submodules=all",
             ],
         )?;
-        let mut dirty = false;
         for entry in status.split(|&b| b == 0).filter(|e| e.len() > 3) {
             dirty = true;
             if entry[0] == b'D' || entry[1] == b'D' {

@@ -66,11 +66,17 @@ Mercurial working tree are thus plain paths, as they are for Nix.
 For a git working tree, the tree is the set of index entries that still
 exist in the working tree, with the working tree's contents and modes.
 Untracked files, `.git` and submodules are excluded. Four `git` commands
-supply it before the evaluation starts: `ls-files --stage` and
+supply it before the evaluation starts: `ls-files --stage -v` and
 `status --porcelain -uno` give the file set and the dirty flag, and
 `rev-parse HEAD` and `log -1 --format=%ct` give the revision and its date.
 A clean tree gets `rev`, `shortRev` and `revCount`; a dirty one gets
 `dirtyRev` and `dirtyShortRev`.
+
+An index entry that is not in the working tree makes the tree dirty, and
+`git status` does not report every one of them: it never reports an entry
+that git checks no more, which is what a sparse checkout and
+`update-index --skip-worktree` make. `-v` tags such an entry, and ietsp
+looks for it on disk. Nix reads the same rule out of libgit2's status.
 
 `revCount` is a lazy value. The attribute is in the set when Nix gives
 one, so `self ? revCount` and `builtins.attrNames self` are those of Nix.
