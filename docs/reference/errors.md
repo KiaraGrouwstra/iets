@@ -58,7 +58,7 @@ in `src/error.rs` for the rest, and the daemon's build status for builds.
 | 1 | Any error. Also a build failure that has no code of its own. |
 | 2 | A usage error of a native command (`ietsp eval --bogus`). Under a classic name the code is 1, as in Nix. |
 | 1, 2 | `ietsp diff` alone follows `diff(1)`: 0 the two are equal, 1 they differ, 2 a usage error or any other failure (docs/reference/commands.md). |
-| 100 | A build failed (`PermanentFailure`, `InputRejected`). |
+| 100 | A build failed (`PermanentFailure`, `InputRejected`, `DependencyFailed`). |
 | 101 | A build timed out. |
 | 102 | A fixed-output build had a hash mismatch. |
 | 104 | A build was not deterministic. |
@@ -70,7 +70,10 @@ deterministic. Several failures combine their bits: a timeout and a
 failed build give 101. `ietsp build` uses them. Nix computes them only
 when it builds in its own store; as a client of a daemon it exits 1,
 because the worker protocol does not carry the exit status. ietsp is
-always a client, but it reads the status of each `BuildResult`. The
+always a client, but it reads the status of each `BuildResult`. A root
+whose dependency failed reports `DependencyFailed`, so it exits 100, and
+102 as well when the daemon reported a hash mismatch in the same run,
+because Nix's flags combine over all its goals. The
 classic names (`nix-build`, `nix build`, `nix-shell`) exit 1, as Nix
 does through a daemon. `ietsp eval-jobs` exits 0 when only jobs fail;
 their errors are in the job lines.

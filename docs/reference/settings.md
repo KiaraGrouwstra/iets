@@ -98,7 +98,14 @@ spelling, in the local files evaluation parsed; store paths are never
 edited. A derivation with inputs is built as a resolved copy of itself,
 whose mismatch the daemon reports as a line of its own; that one is fixed
 too. It stops when a hash it wrote mismatches again (a build that is not
-reproducible). Each fix is a `hash-fixed` record
+reproducible).
+
+Only the daemon reports a mismatch, and only about a fixed-output
+derivation of the closure the run is building, whose output hash is the
+hash the message names. A build log, a `builtins.trace` and every other
+text that holds the same words are ignored: a derivation must not be able
+to make ietsp rewrite a hash in a file of the user. Each fix is a
+`hash-fixed` record
 (`docs/reference/errors.md`). After a mismatch, one more evaluation
 without the tracing cache lists the files. Files read with `readFile` or
 `importJSON` are not searched.

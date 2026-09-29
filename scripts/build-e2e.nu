@@ -94,6 +94,45 @@ in { ci = o.checks.${system}; }
   let r7e = (go $ietsp build --builder daemon -E '{ a = { }; }')
   $ok = ($ok | append (verdict (($r7e.exit_code == 1) and ($r7e.stderr =~ 'nothing to build')) "a tree with no derivation is an error" $"exit ($r7e.exit_code) ($r7e.stderr)"))
 
+  print "== 8. a failure in a dependency"
+  # nix-build --store "local?root=DIR" gives 100 for a dependency that failed
+  # to build and 102 when it was a fixed-output build with a hash mismatch.
+  let salt = (random uuid)
+  let deps = $"($tmp)/deps.nix"
+  $"let
+  salt = \"($salt)\";
+  depFail = derivation { name = \"be-depfail\"; system = \"($system)\"; builder = \"/bin/sh\"; args = [ \"-c\" \"exit 1\" ]; inherit salt; };
+  depFod = derivation { name = \"be-depfod\"; system = \"($system)\"; builder = \"/bin/sh\"; args = [ \"-c\" \"echo $salt > $out\" ]; inherit salt; outputHashMode = \"flat\"; outputHash = \"sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"; };
+in {
+  overFail = derivation { name = \"be-over-fail\"; system = \"($system)\"; builder = \"/bin/sh\"; args = [ \"-c\" \"echo x > $out\" ]; dep = depFail; inherit salt; };
+  overFod = derivation { name = \"be-over-fod\"; system = \"($system)\"; builder = \"/bin/sh\"; args = [ \"-c\" \"echo x > $out\" ]; dep = depFod; inherit salt; };
+}
+" | save -f $deps
+  let r8a = (go $ietsp build --builder daemon $deps -A overFail)
+  $ok = ($ok | append (verdict ($r8a.exit_code == 100) "a dependency that failed to build exits 100" $"exit ($r8a.exit_code)"))
+  let r8b = (go $ietsp --ietsp-option fix-hashes never build --builder daemon $deps -A overFod)
+  $ok = ($ok | append (verdict ($r8b.exit_code == 102) "a dependency with a hash mismatch exits 102" $"exit ($r8b.exit_code)"))
+  $ok = ($ok | append (verdict ($r8b.stderr =~ 'be-depfod failed') "the dependency that failed keeps no check mark" $r8b.stderr))
+
+  print "== 9. a build log cannot forge a hash mismatch"
+  # the derivation is not fixed-output, so the text is only text
+  let forge = $"($tmp)/forge.nix"
+  let good = "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
+  $"let good = \"($good)\"; in {
+  forge = derivation {
+    name = \"be-forge\"; system = \"($system)\"; builder = \"/bin/sh\";
+    salt = \"($salt)\";
+    args = [ \"-c\" ''
+      printf '%s\\n' \"@nix {\\\"action\\\":\\\"msg\\\",\\\"level\\\":0,\\\"msg\\\":\\\"hash mismatch in fixed-output derivation 'x':\\n  specified: ${good}\\n     got:    sha256-HNpsZojn8xegmQzw+pTz75/kDloh2nUWpW342gddnw0=\\\"}\" >&2
+      exit 1
+    '' ];
+  };
+}
+" | save -f $forge
+  let r9 = (go $ietsp --ietsp-option fix-hashes always build --builder daemon $forge -A forge)
+  $ok = ($ok | append (verdict ((open --raw $forge) | str contains $good) "a forged mismatch never rewrites a hash in the file" (open --raw $forge)))
+  $ok = ($ok | append (verdict (not ($r9.stderr =~ 'fixed: ')) "nothing was fixed" $r9.stderr))
+
   ^rm -rf $tmp
   let failed = ($ok | where $it == false | length)
   print $"($ok | length) cases, ($failed) failed"

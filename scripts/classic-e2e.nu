@@ -312,6 +312,34 @@ def main [] {
   }
   $ok = ($ok | append (verdict $root_ok "--add-root links and registers a gc root" "see above"))
 
+  # --- an out-link replaces only a symlink that already points into the store
+  # (indirect-root-store.cc:addPermRoot); everything else stays as it is
+  mut keep_ok = true
+  for kind in [regular dir other-link dangling] {
+    mut got = {}
+    for who in [real ours] {
+      let wd = $"($tmp)/keep-($kind)-($who)"
+      mkdir $wd
+      cd $wd
+      match $kind {
+        "regular" => { "PRECIOUS\n" | save -f t }
+        "dir" => { mkdir t }
+        "other-link" => { ^ln -s /etc/hostname t }
+        _ => { ^ln -s /nonexistent-for-e2e t }
+      }
+      let cmd = if $who == "real" { "nix-build" } else { $"($farm)/nix-build" }
+      let r = (^$cmd -o t $"($d)/default.nix" | complete)
+      let link = (^readlink t | complete | get stdout | chomp)
+      let isdir = ((^test -d t | complete | get exit_code) == 0)
+      $got = ($got | insert $who {code: $r.exit_code, link: $link, isdir: $isdir})
+    }
+    if $got.ours != $got.real {
+      print $"FAIL out-link over a ($kind): ours ($got.ours), real ($got.real)"
+      $keep_ok = false
+    }
+  }
+  $ok = ($ok | append (verdict $keep_ok "-o over an existing path acts as Nix does" "see above"))
+
   # --- nix-build: default `result`, -o, multi-output naming
   for case in [
     {label: "build a custom drv, default result", args: [$"($d)/default.nix"], links: [result]}
