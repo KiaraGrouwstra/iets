@@ -810,6 +810,10 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   $res ++= [(check $ietsp "sym: readFile through a tracked link to a tracked directory" $"($sym)#ok")]
   $res ++= [(check $ietsp "sym: readDir of a tracked link to a tracked directory" $"($sym)#okdir")]
   $res ++= [(check $ietsp "sym: pathExists of a tracked link to a tracked directory" $"($sym)#okex")]
+  # a flake directory that is a link to a working tree is that tree, not the
+  # link object: git.cc opens the repository, which resolves the path
+  ^ln -s sym $"($work)/sym-link"
+  $res ++= [(check $ietsp "sym: a flake directory that is a link is the working tree" $"($work)/sym-link#nar")]
 
   # ---- a sparse checkout is a dirty tree ------------------------------------
   # `git status` never reports a skip-worktree entry, but libgit2's status,

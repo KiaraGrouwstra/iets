@@ -116,11 +116,14 @@ fn local_flake(full: &[u8], explicit_path: bool, attr: Vec<String>) -> Result<Fl
     let source = if explicit_path {
         SourceRef::Path(dir.clone())
     } else {
-        source::scm::detect(&dir).map_or_else(
+        // git.cc opens the repository, which resolves the directory: a link to
+        // a working tree is that tree, not a copy of the link object
+        let real = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+        source::scm::detect(&real).map_or_else(
             || SourceRef::Path(dir.clone()),
             |(scm, root)| SourceRef::Tracked {
                 scm,
-                subdir: dir
+                subdir: real
                     .strip_prefix(&root)
                     .map(|s| s.to_string_lossy().into_owned())
                     .unwrap_or_default(),

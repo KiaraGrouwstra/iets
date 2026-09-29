@@ -141,6 +141,11 @@ none, which is what each primop asks `realisePath` for. A path under no
 such store path is left to the kernel, which resolves it the same way, so
 the walk costs nothing there.
 
+A flake directory that is itself a symlink to a working tree is that
+working tree: `git.cc` opens the repository, which resolves the path. An
+explicit `path:` reference keeps the link and copies the link object, as
+Nix does.
+
 ## Getting an input readable
 
 An input is locked, so its store path is known before anything happens. It
