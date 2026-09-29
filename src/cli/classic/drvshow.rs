@@ -71,7 +71,7 @@ pub fn main(argv: &[String], rest: &[String]) -> i32 {
             let v = resolve(ev, &n, what, &cwd)?;
             roots.push(installable::to_derivation(ev, v, what)?);
         }
-        let text = render::json(&drvshow::show(ev, &roots, n.recursive)?, pretty);
+        let text = drvshow::json_text(&drvshow::show(ev, &roots, n.recursive)?, pretty);
         if let Some(c) = cache {
             c.write(ev, &text, false);
         }

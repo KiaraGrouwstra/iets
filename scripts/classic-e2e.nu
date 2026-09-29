@@ -328,6 +328,22 @@ in [
 ]
 '# | save $"($d)/textrefs.nix"
 
+  # nlohmann writes a structuredAttrs float in its own shortest form
+  r#'derivation {
+  name = "classic-e2e-floats";
+  system = "x86_64-linux";
+  builder = "/bin/sh";
+  __structuredAttrs = true;
+  a = 0.00001;
+  b = 1.0e15;
+  c = 1.234e-05;
+  d = 1.0e-7;
+  e = 2.5;
+  f = 1.0;
+  g = [ 0.0001 { h = 1.0e20; } ];
+}
+'# | save $"($d)/floats.nix"
+
   $ok = ($ok | append (cmp-case "instantiate a custom drv"
     (run-both $farm nix-instantiate $"($d)/default.nix")))
   $ok = ($ok | append (cmp-case "drv closure follows the references of a toFile"
@@ -1078,6 +1094,8 @@ in {
     {label: "derivation show .#pkg", args: [$"($fref)#pkg"]}
     {label: "derivation show -r over a real closure", args: [-r -f $depshow top]}
     {label: "derivation show -r over nixpkgs hello.src", args: [-r -I $"nixpkgs=($np)" -f $np hello.src]}
+    {label: "derivation show structuredAttrs floats", args: [-f $"($d)/floats.nix"]}
+    {label: "derivation show structuredAttrs floats --pretty", args: [--pretty -f $"($d)/floats.nix"]}
   ] {
     $ok = ($ok | append (cmp-case $case.label (run-both $farm nix derivation show ...$case.args)))
   }

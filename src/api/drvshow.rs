@@ -41,6 +41,68 @@ pub fn show(ev: &Evaluator, roots: &[StorePath], recursive: bool) -> Result<Valu
     Ok(Value::Object(out))
 }
 
+/// `nlohmann::json::dump`, which `serde_json` matches for everything but a
+/// float: `structuredAttrs` can hold one, and nlohmann writes the shortest
+/// round-trip form with a two-digit exponent (`print::json_float`).
+pub fn json_text(v: &Value, pretty: bool) -> Vec<u8> {
+    let mut out = Vec::new();
+    write_json(&mut out, v, pretty.then_some(0));
+    out.push(b'\n');
+    out
+}
+
+fn write_json(out: &mut Vec<u8>, v: &Value, indent: Option<usize>) {
+    fn newline(out: &mut Vec<u8>, depth: usize) {
+        out.push(b'\n');
+        out.extend(std::iter::repeat_n(b' ', depth * 2));
+    }
+    let inner = indent.map(|d| d + 1);
+    match v {
+        Value::Number(n) if n.as_i64().is_none() && n.as_u64().is_none() => {
+            let f = n.as_f64().unwrap_or(f64::NAN);
+            out.extend_from_slice(crate::print::json_float(f).as_bytes());
+        }
+        Value::Array(a) if !a.is_empty() => {
+            out.push(b'[');
+            for (i, e) in a.iter().enumerate() {
+                if i > 0 {
+                    out.push(b',');
+                }
+                if let Some(d) = inner {
+                    newline(out, d);
+                }
+                write_json(out, e, inner);
+            }
+            if let Some(d) = indent {
+                newline(out, d);
+            }
+            out.push(b']');
+        }
+        Value::Object(o) if !o.is_empty() => {
+            out.push(b'{');
+            for (i, (k, e)) in o.iter().enumerate() {
+                if i > 0 {
+                    out.push(b',');
+                }
+                if let Some(d) = inner {
+                    newline(out, d);
+                }
+                out.extend_from_slice(&serde_json::to_vec(k).unwrap_or_default());
+                out.push(b':');
+                if indent.is_some() {
+                    out.push(b' ');
+                }
+                write_json(out, e, inner);
+            }
+            if let Some(d) = indent {
+                newline(out, d);
+            }
+            out.push(b'}');
+        }
+        _ => out.extend_from_slice(&serde_json::to_vec(v).unwrap_or_default()),
+    }
+}
+
 /// The roots themselves, deduplicated. A root that is not a `.drv` is
 /// dropped, as derivation-show.cc drops it.
 fn tops(
@@ -228,5 +290,29 @@ mod tests {
             got.contains(r#""structuredAttrs":{"a":[1],"b":2}"#),
             "{got}"
         );
+    }
+
+    /// The forms `nix (Nix) 2.34.8` printed for the same values.
+    #[test]
+    fn floats_take_nlohmanns_form() {
+        let v: Value = serde_json::from_str(
+            r#"{"a":1e-5,"b":1e15,"c":1.234e-5,"d":1e-7,"e":2.5,"f":1.0,"g":-0.0,"h":0.0001,"i":1,"j":[1.5,{}],"k":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(json_text(&v, false)).unwrap(),
+            "{\"a\":1e-05,\"b\":1e+15,\"c\":1.234e-05,\"d\":1e-07,\"e\":2.5,\"f\":1.0,\"g\":-0.0,\"h\":0.0001,\"i\":1,\"j\":[1.5,{}],\"k\":[]}\n"
+        );
+    }
+
+    /// `--pretty` must stay byte-equal to what `serde_json` indents.
+    #[test]
+    fn pretty_matches_serde_json() {
+        let v: Value =
+            serde_json::from_str(r#"{"a":{"b":[1,"t",{},[],null,true]},"c":"x","d":{},"e":[]}"#)
+                .unwrap();
+        let mut want = serde_json::to_vec_pretty(&v).unwrap();
+        want.push(b'\n');
+        assert_eq!(json_text(&v, true), want);
     }
 }
