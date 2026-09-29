@@ -298,7 +298,10 @@ fn all(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     Ok(Word::TRUE)
 }
 
-/// Stable merge sort that tolerates inconsistent comparators.
+/// Nix sorts with peeksort (`src/libutil/include/nix/util/sort.hh`), so the
+/// order of the comparator's calls is part of the observable behaviour: a
+/// comparator that is no strict weak order, or that fails on one pair, must
+/// give the same answer here.
 fn sort(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let l = ev.force_list(
         args[1],
@@ -330,52 +333,181 @@ fn sort(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
             "while evaluating the return value of the sorting function passed to builtins.sort",
         )
     };
-    let mut buf = items.clone();
-    merge_sort(ev, &mut items, &mut buf, &mut less)?;
+    let mut buf: Vec<Word> = Vec::new();
+    peeksort(ev, &mut items, &mut buf, &mut less)?;
     Ok(ev.mk_list(&items))
 }
 
-fn merge_sort(
+type Less<'a> = &'a mut dyn FnMut(&mut Evaluator, Word, Word) -> EvalResult<bool>;
+
+/// libstdc++'s cut-off, which Nix's peeksort copies.
+const INSERTION_SORT_MAX: usize = 16;
+
+fn insertion_sort(ev: &mut Evaluator, v: &mut [Word], less: Less<'_>) -> EvalResult<()> {
+    for current in 1..v.len() {
+        let mut k = current;
+        while k > 0 && less(ev, v[k], v[k - 1])? {
+            v.swap(k, k - 1);
+            k -= 1;
+        }
+    }
+    Ok(())
+}
+
+/// `mergeSortedRunsInPlace` on `v[begin..end]`, split at `middle`.
+fn merge_runs(
     ev: &mut Evaluator,
     v: &mut [Word],
-    buf: &mut [Word],
-    less: &mut impl FnMut(&mut Evaluator, Word, Word) -> EvalResult<bool>,
+    buf: &mut Vec<Word>,
+    less: Less<'_>,
+    begin: usize,
+    middle: usize,
+    end: usize,
+) -> EvalResult<()> {
+    buf.clear();
+    buf.extend_from_slice(&v[begin..end]);
+    let (split, n) = (middle - begin, end - begin);
+    let (mut l, mut r, mut o) = (0, split, begin);
+    while l < split && r < n {
+        // not-less keeps the sort stable: a tie takes the left element
+        if less(ev, buf[r], buf[l])? {
+            v[o] = buf[r];
+            r += 1;
+        } else {
+            v[o] = buf[l];
+            l += 1;
+        }
+        o += 1;
+    }
+    v[o..o + (split - l)].copy_from_slice(&buf[l..split]);
+    v[o..o + (n - r)].copy_from_slice(&buf[r..n]);
+    Ok(())
+}
+
+/// Maximal `i` with `v[begin..i]` strictly decreasing; `rev` negates the
+/// comparator, which gives `weaklyIncreasingPrefix`.
+fn run_prefix(
+    ev: &mut Evaluator,
+    v: &[Word],
+    less: Less<'_>,
+    mut begin: usize,
+    end: usize,
+    rev: bool,
+) -> EvalResult<usize> {
+    if begin == end {
+        return Ok(begin);
+    }
+    while begin + 1 != end && less(ev, v[begin + 1], v[begin])? != rev {
+        begin += 1;
+    }
+    Ok(begin + 1)
+}
+
+/// Minimal `i` with `v[i..end]` strictly decreasing; `rev` as in `run_prefix`.
+fn run_suffix(
+    ev: &mut Evaluator,
+    v: &[Word],
+    less: Less<'_>,
+    begin: usize,
+    mut end: usize,
+    rev: bool,
+) -> EvalResult<usize> {
+    if begin == end {
+        return Ok(end);
+    }
+    while end - 1 > begin && less(ev, v[end - 1], v[end - 2])? != rev {
+        end -= 1;
+    }
+    Ok(end - 1)
+}
+
+fn peeksort(
+    ev: &mut Evaluator,
+    v: &mut [Word],
+    buf: &mut Vec<Word>,
+    less: Less<'_>,
 ) -> EvalResult<()> {
     let n = v.len();
-    if n <= 1 {
+    match n {
+        0 | 1 => return Ok(()),
+        2 => {
+            if less(ev, v[1], v[0])? {
+                v.swap(0, 1);
+            }
+            return Ok(());
+        }
+        _ => {}
+    }
+    buf.reserve(n);
+    peeksort_impl(ev, v, buf, less, 0, n, 0, n)
+}
+
+/// Sorts `v[begin..end]`, given that `v[begin..left_run_end]` and
+/// `v[right_run_begin..end]` are sorted.
+#[allow(clippy::too_many_arguments)]
+fn peeksort_impl(
+    ev: &mut Evaluator,
+    v: &mut [Word],
+    buf: &mut Vec<Word>,
+    less: Less<'_>,
+    begin: usize,
+    end: usize,
+    left_run_end: usize,
+    right_run_begin: usize,
+) -> EvalResult<()> {
+    if left_run_end == end || right_run_begin == begin {
         return Ok(());
     }
-    let mid = n / 2;
-    {
-        let (a, b) = v.split_at_mut(mid);
-        let (ba, bb) = buf.split_at_mut(mid);
-        merge_sort(ev, a, ba, less)?;
-        merge_sort(ev, b, bb, less)?;
+    let length = end - begin;
+    if length <= INSERTION_SORT_MAX {
+        return insertion_sort(ev, &mut v[begin..end], less);
     }
-    let (mut i, mut j, mut k) = (0, mid, 0);
-    while i < mid && j < n {
-        // take from the right only when strictly less: keeps the sort stable
-        if less(ev, v[j], v[i])? {
-            buf[k] = v[j];
-            j += 1;
-        } else {
-            buf[k] = v[i];
-            i += 1;
-        }
-        k += 1;
+    let middle = begin + length / 2;
+    if middle <= left_run_end {
+        peeksort_impl(
+            ev,
+            v,
+            buf,
+            less,
+            left_run_end,
+            end,
+            left_run_end + 1,
+            right_run_begin,
+        )?;
+        return merge_runs(ev, v, buf, less, begin, left_run_end, end);
     }
-    while i < mid {
-        buf[k] = v[i];
-        i += 1;
-        k += 1;
+    if middle >= right_run_begin {
+        peeksort_impl(
+            ev,
+            v,
+            buf,
+            less,
+            begin,
+            right_run_begin,
+            left_run_end,
+            right_run_begin - 1,
+        )?;
+        return merge_runs(ev, v, buf, less, begin, right_run_begin, end);
     }
-    while j < n {
-        buf[k] = v[j];
-        j += 1;
-        k += 1;
+    // the run that holds middle - 1
+    let up = !less(ev, v[middle], v[middle - 1])?;
+    let i = run_suffix(ev, v, less, left_run_end, middle, up)?;
+    let j = run_prefix(ev, v, less, middle - 1, right_run_begin, up)?;
+    if !up {
+        v[i..j].reverse();
     }
-    v.copy_from_slice(&buf[..n]);
-    Ok(())
+    if i == begin && j == end {
+        return Ok(());
+    }
+    if middle - i < j - middle {
+        peeksort_impl(ev, v, buf, less, begin, i, left_run_end, i.wrapping_sub(1))?;
+        peeksort_impl(ev, v, buf, less, i, end, j, right_run_begin)?;
+        merge_runs(ev, v, buf, less, begin, i, end)
+    } else {
+        peeksort_impl(ev, v, buf, less, begin, j, left_run_end, i)?;
+        peeksort_impl(ev, v, buf, less, j, end, j + 1, right_run_begin)?;
+        merge_runs(ev, v, buf, less, begin, j, end)
+    }
 }
 
 fn partition(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
