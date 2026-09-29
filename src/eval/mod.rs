@@ -725,8 +725,36 @@ impl Evaluator {
         if p.starts_with(CorePkgs::PREFIX) {
             return Ok(p);
         }
-        let at = crate::builtins::store_hooks::open(self, &p, pos)?;
+        let mut at = crate::builtins::store_hooks::open(self, &p, pos)?;
         crate::lint::coerce::read_through_copy(self, &p, pos)?;
+        // eval.cc:resolveExprPath follows a symlink on the last component,
+        // so a relative path in the file resolves against the directory of
+        // the target. A path inside a copied tree keeps the tree's own
+        // resolution (`store_hooks`).
+        if crate::builtins::store_hooks::locate(self, &p).is_none() {
+            use std::os::unix::ffi::{OsStrExt, OsStringExt};
+            let orig = p.clone();
+            for _ in 0..1024 {
+                let os = std::ffi::OsStr::from_bytes(&p);
+                let Ok(target) = std::fs::read_link(os) else {
+                    break;
+                };
+                let t = target.into_os_string().into_vec();
+                p = if t.starts_with(b"/") {
+                    crate::compile::canon_path(&t)
+                } else {
+                    let mut d = dir_of(&p).to_vec();
+                    d.push(b'/');
+                    d.extend_from_slice(&t);
+                    crate::compile::canon_path(&d)
+                };
+            }
+            if p != orig {
+                let full = std::fs::canonicalize(std::ffi::OsStr::from_bytes(&orig));
+                self.trace().canon(&orig, full.ok().as_deref());
+                at = crate::builtins::store_hooks::open(self, &p, pos)?;
+            }
+        }
         match at.is_dir(self) {
             Ok(true) => p.extend_from_slice(b"/default.nix"),
             Ok(false) => {}
