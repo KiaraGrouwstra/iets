@@ -654,6 +654,8 @@ def main [] {
   ^ln -s a.txt $"($sl)/link-file"
   ^ln -s sub $"($sl)/link-dir"
   ^ln -s nope $"($sl)/dangling"
+  # a store path with a reference, for the copy that must keep it
+  let withref = (^nix eval --impure --raw --expr r#'builtins.toFile "b" "ref ${builtins.toFile "a" "aaa"}"'# | complete | get stdout | chomp)
   for case in [
     [label expr];
     ["readFile through a copy of the link itself" r#'builtins.readFile "${@SL@/link-file}"'#]
@@ -669,8 +671,10 @@ def main [] {
     ["path of a dangling link in a copied tree" r#'builtins.path { path = "${@SL@}/dangling"; }'#]
     ["storePath below a link in a copied tree" r#'builtins.storePath "${@SL@}/link-dir/inner"'#]
     ["filterSource sees the store path of an unfiltered copy" r#'builtins.filterSource (p: _: builtins.match "/nix/store/.*" p != null) "${@SL@/sub}"'#]
+    ["path keeps the references of a store path" r#'builtins.path { path = "${builtins.storePath @REF@}"; }'#]
+    ["path flat refuses a store path with references" r#'builtins.path { path = "${builtins.storePath @REF@}"; recursive = false; }'#]
   ] {
-    let e = ($case.expr | str replace -a "@SL@" $sl)
+    let e = ($case.expr | str replace -a "@SL@" $sl | str replace -a "@REF@" $withref)
     $ok = ($ok | append (cmp-case $"symlink: ($case.label)" (run-both $farm nix eval --impure --expr $e)))
   }
   $ok = ($ok | append (cmp-case "nix eval -f FILE ATTR"

@@ -455,8 +455,9 @@ fn call_filter(
     )
 }
 
-/// Mirrors primops.cc:addPath. References of a store path are unknown here
-/// (no store database), so an in-store source gets none.
+/// Mirrors primops.cc:addPath. `in_store` is a store path the caller was
+/// given with a context, whose references belong to the copy.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn add_path(
     ev: &mut Evaluator,
     pos: Pos,
@@ -465,13 +466,43 @@ pub(crate) fn add_path(
     filter: Option<Word>,
     method: IngestionMethod,
     expected: Option<Hash>,
+    in_store: Option<StorePath>,
 ) -> EvalResult<StorePath> {
-    add_path_inner(ev, pos, name, path, filter, method, expected).map_err(|mut e| {
+    add_path_inner(ev, pos, name, path, filter, method, expected, in_store).map_err(|mut e| {
         e.add_trace(pos, format!("while adding path '{}'", lossy(path)));
         e
     })
 }
 
+/// The store path `path` lies under when the value that named it carried a
+/// context, which is when primops.cc:addPath reads its references.
+fn in_store(ev: &Evaluator, path: &[u8], ctx: &[Ctx]) -> Option<StorePath> {
+    if ctx.is_empty() || !ev.is_store_path_text(path) {
+        return None;
+    }
+    to_store_path(path)?.0.ok()
+}
+
+/// The references the copy inherits: the text's own for a `toFile`, none for
+/// a tree, and what the local store holds for a path this evaluation never
+/// made. A locked flake input and the flake root are trees `fetchToStore`
+/// added, so they need no store query, which costs a `nix` process.
+/// Nix swallows the store's error and copies without references.
+fn references(ev: &Evaluator, sp: Option<StorePath>) -> BTreeSet<StorePath> {
+    let Some(sp) = sp else {
+        return BTreeSet::new();
+    };
+    match ev.known.get(&sp) {
+        Some(k) if k.origin.is_some() => k
+            .origin
+            .and_then(|o| o.text_refs().cloned())
+            .unwrap_or_default(),
+        Some(k) if k.flake.is_some() => BTreeSet::new(),
+        _ => crate::store::locate::references_of(&sp),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn add_path_inner(
     ev: &mut Evaluator,
     pos: Pos,
@@ -480,9 +511,10 @@ fn add_path_inner(
     filter: Option<Word>,
     method: IngestionMethod,
     expected: Option<Hash>,
+    in_store: Option<StorePath>,
 ) -> EvalResult<StorePath> {
     let name = utf8(name, pos)?;
-    let refs = BTreeSet::new();
+    let refs = references(ev, in_store);
     crate::lint::coerce::store_path_recopy(ev, path, pos)?;
     crate::lint::coerce::read_through_copy(ev, path, pos)?;
     let store_err = |e: crate::store::path::StorePathError| Error::boxed(ErrorKind::Eval, e.0, pos);
@@ -677,6 +709,7 @@ fn filter_source(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word
         Some(f),
         IngestionMethod::Recursive,
         None,
+        in_store(ev, &p, &ctx),
     )?;
     Ok(store_path_string(ev, &sp))
 }
@@ -773,7 +806,8 @@ fn path(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     if name.is_empty() {
         name = base_name(&p).to_vec();
     }
-    let sp = add_path(ev, pos, &name, &p, filter, method, expected)?;
+    let in_store = in_store(ev, &p, &ctx);
+    let sp = add_path(ev, pos, &name, &p, filter, method, expected, in_store)?;
     Ok(store_path_string(ev, &sp))
 }
 

@@ -144,6 +144,7 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
                         None,
                         IngestionMethod::Recursive,
                         None,
+                        None,
                     )?;
                     let nar = ev.known.origin(&sp).and_then(|o| o.nar);
                     (nar.expect("add_path records a recursive copy").0, 1)

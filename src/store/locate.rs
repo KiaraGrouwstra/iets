@@ -1,8 +1,52 @@
 //! Where the local store keeps an input source.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
+use std::sync::Mutex;
 
 use crate::error::Error as CrateError;
+use crate::store::path::StorePath;
+
+/// What the store answered for a path, kept for the life of the process: the
+/// references of a valid store path never change.
+static REFERENCES: Mutex<Option<HashMap<String, BTreeSet<StorePath>>>> = Mutex::new(None);
+
+/// The references the local store holds for `path`, empty when it cannot
+/// answer. primops.cc:addPath needs them for a store path it is given with a
+/// context, and swallows `queryPathInfo`'s error the same way.
+pub fn references_of(path: &StorePath) -> BTreeSet<StorePath> {
+    let full = path.to_string();
+    let mut kept = REFERENCES.lock().expect("references cache");
+    let table = kept.get_or_insert_with(HashMap::new);
+    if let Some(r) = table.get(&full) {
+        return r.clone();
+    }
+    let refs = query_references(&full).unwrap_or_default();
+    table.insert(full, refs.clone());
+    refs
+}
+
+fn query_references(full: &str) -> Option<BTreeSet<StorePath>> {
+    let out = std::process::Command::new(crate::nixbin::nix())
+        .args([
+            "--extra-experimental-features",
+            "nix-command",
+            "path-info",
+            "--json",
+            full,
+        ])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let info: HashMap<String, serde_json::Value> = serde_json::from_slice(&out.stdout).ok()?;
+    info.get(full)?["references"]
+        .as_array()?
+        .iter()
+        .map(|r| StorePath::parse(r.as_str()?).ok())
+        .collect()
+}
 
 /// Answers the plan's locator from the local Nix store: one `nix path-info --json` call
 /// tells how each input source was content-addressed and what it references. Paths named
