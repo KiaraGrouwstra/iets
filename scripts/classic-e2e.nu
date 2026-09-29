@@ -568,6 +568,17 @@ def main [] {
   }
   $ok = ($ok | append (cmp-case "nix.conf system reaches builtins.currentSystem"
     (with-env {NIX_CONFIG: "system = aarch64-linux"} { run-both $farm nix-instantiate --eval -E "builtins.currentSystem" })))
+  # NIX_USER_CONF_FILES set and empty means no user file, so the system file wins
+  let cdir = $"($tmp)/confdir"
+  mkdir $cdir $"($env.XDG_CONFIG_HOME)/nix"
+  "system = from-system\n" | save -f $"($cdir)/nix.conf"
+  "system = from-user\n" | save -f $"($env.XDG_CONFIG_HOME)/nix/nix.conf"
+  for case in [{label: "empty", v: ""} {label: "unset", v: null}] {
+    $ok = ($ok | append (cmp-case $"NIX_USER_CONF_FILES ($case.label)"
+      (with-env {NIX_CONF_DIR: $cdir, NIX_USER_CONF_FILES: $case.v} {
+        run-both $farm nix-instantiate --eval -E "builtins.currentSystem" })))
+  }
+  rm -f $"($env.XDG_CONFIG_HOME)/nix/nix.conf"
   $ok = ($ok | append (cmp-case "nix eval --expr, a nested error"
     (run-both $farm nix eval --expr "{ a = throw \"boom\"; b = 1; }")))
   $ok = ($ok | append (cmp-case "nix eval --expr, repeated and empty values"

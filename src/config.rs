@@ -247,12 +247,12 @@ pub fn conf_dir() -> PathBuf {
 /// globals.cc:nixUserConfFiles. `$NIX_USER_CONF_FILES` replaces the XDG list
 /// wholesale. The list is in precedence order: the *first* entry wins, because
 /// loadConfFile applies it last (globals.cc:143 iterates `rbegin()..rend()`).
+/// A set but empty variable is an empty list, so no user file is read at all:
+/// globals.cc:167 tests `has_value()`, not the text.
 pub fn user_conf_files() -> Vec<PathBuf> {
-    if let Some(files) = env("NIX_USER_CONF_FILES") {
-        return files
-            .split(':')
-            .filter(|s| !s.is_empty())
-            .map(PathBuf::from)
+    if let Some(files) = std::env::var_os("NIX_USER_CONF_FILES") {
+        return std::env::split_paths(&files)
+            .filter(|p| !p.as_os_str().is_empty())
             .collect();
     }
     let mut files = vec![
