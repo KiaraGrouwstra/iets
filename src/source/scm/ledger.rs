@@ -37,9 +37,8 @@ impl Scm for Ledger {
     fn title(&self) -> &'static str {
         "Ledger"
     }
-
-    fn is_root(&self, dir: &Path) -> bool {
-        dir.join(".ledger").is_dir()
+    fn root_marker(&self, dir: &Path) -> PathBuf {
+        dir.join(".ledger")
     }
 
     fn snapshot(&self, trace: &Trace, root: &Path) -> Result<Snapshot, String> {

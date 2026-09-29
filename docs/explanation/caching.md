@@ -207,7 +207,7 @@ Every primop that looks at the world records one observation.
 |---|---|---|
 | a file's size, mtime, ctime, device, inode and sha256 | `import`, `readFile`, `hashFile`, every `.drv` read | `lstat`; on a stat mismatch the file is rehashed and accepted if the hash matches |
 | a directory listing's hash | `readDir` | re-list and rehash |
-| a path's kind | `pathExists`, `readFileType`, the `default.nix` probe, every search-path candidate | re-stat |
+| a path's kind | `pathExists`, `readFileType`, the `default.nix` probe, every search-path candidate, every marker the SCM detection probed above a flake directory | re-stat |
 | a copied tree's NAR hash and stat hash | `./path` coerced to a string, `builtins.path`, `filterSource`, a flake's working tree, a `path:` input | recompute the stat hash with `lstat` only; on a mismatch re-dump the NAR with the recorded filter and compare. A `path:` input also records its newest mtime, which the evaluation sees as `lastModified`, and the same bytes with another date are a change |
 | a resolved symlink | `storePath`, `builtins.path` and `filterSource` when canonicalising changed the path | canonicalise again |
 | an environment variable | `getEnv`; `HOME` when a `~/` literal is compiled | read it again |
@@ -222,6 +222,12 @@ starts no `git log` and no `git rev-list`. That took 1 s from each hit on
 a nixpkgs checkout. A tree has a count only when it is clean and has its
 full history, and those two facts stay observations: `git status` gives
 the dirty flag, and the marker `.git/shallow` is a path observation.
+
+Detection is an observation too, and not only the tree it found. A flake
+directory with no working tree above it is a `path:` input *because* every
+ancestor lacked a marker, so each probe is recorded. A `git init` in a
+parent directory then misses, as it must: the flake becomes a git tree
+whose files are the tracked ones.
 
 One limit: a replace ref (`git replace`) or a graft changes the history
 that `git` shows, and the revision stays. ietsp does not observe them, so

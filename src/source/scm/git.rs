@@ -52,8 +52,8 @@ impl Scm for Git {
         "Git"
     }
 
-    fn is_root(&self, dir: &Path) -> bool {
-        dir.join(".git").exists()
+    fn root_marker(&self, dir: &Path) -> PathBuf {
+        dir.join(".git")
     }
 
     /// git-utils.cc:getWorkdirInfo: index entries minus deleted ones; dirty

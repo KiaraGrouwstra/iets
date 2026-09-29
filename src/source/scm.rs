@@ -11,6 +11,7 @@ mod ledger;
 
 use std::collections::HashSet;
 use std::ffi::OsStr;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use crate::trace::{Obs, Trace};
@@ -41,8 +42,10 @@ pub trait Scm: Sync {
     /// The name as a message spells it: `Git`.
     fn title(&self) -> &'static str;
 
-    /// `dir` is the root of a working tree of this SCM.
-    fn is_root(&self, dir: &Path) -> bool;
+    /// The entry whose presence makes `dir` the root of a working tree of
+    /// this SCM. Detection probes it, and records the probe, so a tree that
+    /// appears above a directory invalidates a cached answer.
+    fn root_marker(&self, dir: &Path) -> PathBuf;
 
     /// Reads the working tree at `root`. Each answer that does not come
     /// from a tracked file is recorded in `trace`, so the tracing cache
@@ -92,7 +95,7 @@ static KNOWN: &[&dyn Scm] = &[
 
 /// The SCM that has a working tree with its root at `root`.
 pub fn at(root: &Path) -> Option<&'static dyn Scm> {
-    KNOWN.iter().copied().find(|s| s.is_root(root))
+    KNOWN.iter().copied().find(|s| s.root_marker(root).exists())
 }
 
 /// The working tree that holds `dir`: its SCM and its root, the nearest
@@ -100,6 +103,25 @@ pub fn at(root: &Path) -> Option<&'static dyn Scm> {
 pub fn detect(dir: &Path) -> Option<(&'static dyn Scm, PathBuf)> {
     dir.ancestors()
         .find_map(|d| Some((at(d)?, d.to_path_buf())))
+}
+
+/// Records the probes a [`detect`] of `dir` made, `found` being the root it
+/// stopped at. Without them a cached result stays a path flake after a
+/// working tree appears above `dir`: the answer of the run depends on every
+/// marker that was absent, not only on the tree that was found.
+pub fn record_detect(trace: &Trace, dir: &Path, found: Option<&Path>) {
+    if !trace.is_on() {
+        return;
+    }
+    for d in dir.ancestors() {
+        for s in KNOWN {
+            let marker = s.root_marker(d);
+            trace.stat_now(marker.as_os_str().as_bytes(), true);
+        }
+        if Some(d) == found {
+            return;
+        }
+    }
 }
 
 /// The SCM that recorded `obs`, and the root of the working tree that

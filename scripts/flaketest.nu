@@ -832,6 +832,21 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   git-in $sparse sparse-checkout set --no-cone "/*" "!/d/"
   $res ++= [(check $ietsp "sparse: an index entry that is not on disk makes it dirty" $"($sparse)#v")]
 
+  # ---- a working tree that appears above a path flake -------------------------
+  # the detection probes every ancestor, and those probes are observations:
+  # a cached result must not stay a path flake after `git init` above it.
+  let above = $"($work)/above"
+  mkdir $"($above)/fl"
+  '{ outputs = { self }: { v = builtins.toJSON [ (self ? rev) (builtins.pathExists (self + "/b")) ]; }; }' + "\n" | save $"($above)/fl/flake.nix"
+  '{"nodes":{"root":{}},"root":"root","version":7}' | save $"($above)/fl/flake.lock"
+  "b\n" | save $"($above)/fl/b"
+  let before = (^$ietsp eval --raw $"($above)/fl#v" | complete)
+  git-in $above init -q
+  let after = (^$ietsp eval --raw $"($above)/fl#v" | complete)
+  let real = (nixf eval --raw --option eval-cache "false" $"($above)/fl#v" | complete)
+  let ok = ($before.exit_code == 0 and $before.stdout == "[false,true]" and $after.exit_code == $real.exit_code
+    and $after.exit_code == 1 and ($after.stderr | str contains "is not tracked by Git"))
+  $res ++= [(verdict $ok "above: git init above a cached path flake invalidates the entry" $"above: before ($before.stdout), after \(exit ($after.exit_code)\) ($after.stderr | lines | last 2 | str join ' | '), nix exit ($real.exit_code)")]
   let fail = ($res | where not $it | length)
   print $"pass=($res | where $it | length) fail=($fail)"
   if $fail == 0 { 0 } else { 1 }

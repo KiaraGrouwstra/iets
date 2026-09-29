@@ -277,7 +277,9 @@ count of the revision are no observations. They follow from the revision,
 and a commit cannot change while its name stays: the name is the hash of
 its date and of its parents. Thus a validation starts three `git`
 processes, not five. The marker `.git/shallow` is an observation, because
-it decides if the tree has a count. The working
+it decides if the tree has a count. The marker each ancestor was asked for
+during detection is an observation too, so a working tree that appears
+above a `path:` flake misses. The working
 tree's file set becomes a filtered tree observation with no seen-set,
 because the SCM names the file set and an unlisted entry cannot change the
 result. Every file read under the root is a file

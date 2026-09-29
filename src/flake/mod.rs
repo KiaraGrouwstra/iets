@@ -27,6 +27,9 @@ pub struct FlakeRef {
     pub source: SourceRef,
     /// The attribute path after `#`, selected from the flake's outputs.
     pub attr: Vec<String>,
+    /// `source` came from a probe for a working tree, not from an explicit
+    /// `path:`, so the evaluation records what the probe saw.
+    pub probed: bool,
 }
 
 /// A command-line input that names a flake rather than a `.nix` file: it
@@ -131,7 +134,12 @@ fn local_flake(full: &[u8], explicit_path: bool, attr: Vec<String>) -> Result<Fl
             },
         )
     };
-    Ok(FlakeRef { dir, source, attr })
+    Ok(FlakeRef {
+        dir,
+        source,
+        attr,
+        probed: !explicit_path,
+    })
 }
 
 /// attr-path.cc:parseAttrPath: `.` separates, `"..."` quotes.
@@ -188,6 +196,13 @@ pub fn eval_flake_value(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
         ev.input_names.insert(hash.to_string(), name.to_string());
     }
 
+    if fr.probed {
+        let found = match &fr.source {
+            SourceRef::Tracked { root, .. } => Some(root.as_path()),
+            _ => None,
+        };
+        source::scm::record_detect(ev.trace(), &fr.dir, found);
+    }
     let root = source::tree(ev, &fr.source, pos)?;
     let source_info = fetch::emit_tree_attrs(ev, &root, Some("self"), pos)?;
     let subdir = root.subdir;
