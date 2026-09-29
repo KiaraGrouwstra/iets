@@ -86,6 +86,23 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let r = (run-eval $ietsp -I $"inc=($work)/inc2" $"($work)/src/main.nix")
   $res ++= [(verdict (($r.status | str contains "miss (no entry)") and ($r.out | str contains 'd = "inc2"')) "-I change misses (new key)" $"-I change misses \(($r.status)\)")]
 
+  # the compiled-file cache folds `builtins.currentSystem` into an entry, and
+  # `--pure-eval` removes that name, so the key holds the flag: an impure run
+  # must not answer a pure one
+  let pd = $"($work)/pure"
+  mkdir $pd
+  let pad = (1..30 | each {|i| $"# comment line ($i) padding padding padding padding" } | str join "\n")
+  $pad + "\n" + '{ dflt = builtins.currentSystem or "fallback"; }' + "\n" | save -f $"($pd)/lib.nix"
+  '{ outputs = _: { dflt = (import ./lib.nix).dflt; }; }' + "\n" | save -f $"($pd)/flake.nix"
+  '{"nodes":{"root":{}},"root":"root","version":7}' + "\n" | save -f $"($pd)/flake.lock"
+  let pc = $"($work)/purecache"
+  let p1 = (^$ietsp eval --cache-dir $pc --pure-eval $"path:($pd)#dflt" | complete | get stdout | chomp)
+  rm -rf $pc
+  let p2 = (^$ietsp eval --cache-dir $pc --impure $"path:($pd)#dflt" | complete | get stdout | chomp)
+  let p3 = (^$ietsp eval --cache-dir $pc --pure-eval $"path:($pd)#dflt" | complete | get stdout | chomp)
+  $res ++= [(verdict ($p1 == '"fallback"' and $p2 != '"fallback"' and $p3 == '"fallback"')
+    "a pure run never reads an entry an impure one compiled" $"pure=($p1) impure=($p2) pure again=($p3)")]
+
   let r = (run-eval $ietsp -E 'builtins.currentTime > 0')
   $res ++= [(verdict ($r.status | str contains "not written") "currentTime never caches" $"currentTime never caches \(($r.status)\)")]
   let r = (run-eval $ietsp -E 'builtins.currentTime > 0')

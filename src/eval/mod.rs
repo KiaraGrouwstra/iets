@@ -621,7 +621,14 @@ impl Evaluator {
         }
         let t0 = std::time::Instant::now();
         let lint_key = self.config_for_file(path).compile_key();
-        let key = cache.key(path, &src, self.current_system, &self.store_dir, &lint_key);
+        let key = cache.key(
+            path,
+            &src,
+            self.current_system,
+            &self.store_dir,
+            &lint_key,
+            self.pure(),
+        );
         let file = self.add_file(path, &src);
         let base = self.files[file.0 as usize].base;
         if let Some(bytes) = cache.read(&key) {

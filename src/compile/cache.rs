@@ -58,6 +58,15 @@ impl IrCache {
         &self.root
     }
 
+    /// Everything the compiler folds out of the evaluator's configuration is
+    /// here, or the entry of one configuration answers another one.
+    /// `fold_builtins_select` and the global-variable fold store a string,
+    /// path, float or int constant by content, so `builtins.currentSystem`
+    /// (`system`), `builtins.storeDir` (`store_dir`) and the `impureOnly`
+    /// names that `pure` removes all belong in the key; `builtins.nixVersion`
+    /// and `builtins.langVersion` follow the build id. Every other constant is
+    /// stored by name and looked up in the live tables on load, so the search
+    /// path is not in the key, and a `~/` literal is never cached at all.
     /// `lint_key` is `lint::Config::compile_key`: the compile-time lint
     /// levels, whose warnings the entry carries.
     pub fn key(
@@ -67,6 +76,7 @@ impl IrCache {
         system: &str,
         store_dir: &[u8],
         lint_key: &str,
+        pure: bool,
     ) -> String {
         let mut h = blake3::Hasher::new();
         for part in [
@@ -75,6 +85,7 @@ impl IrCache {
             system.as_bytes(),
             store_dir,
             lint_key.as_bytes(),
+            &[u8::from(pure)][..],
         ] {
             h.update(part);
             h.update(b"\0");

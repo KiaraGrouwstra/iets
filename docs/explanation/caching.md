@@ -8,7 +8,7 @@ in a user's home directory with no daemon and no signature.
 
 | store | default root | entry | keyed on |
 |---|---|---|---|
-| compiled IR | `~/.cache/ietsp/ir` | one file | build id, path, system, store directory, source |
+| compiled IR | `~/.cache/ietsp/ir` | one file | build id, path, system, store directory, `pure-eval`, lint levels, source |
 | tracing runs | `~/.cache/ietsp/trace` | one file in a directory | the whole command; for the count of a revision, the SCM and the revision |
 | fetched inputs | `~/.cache/ietsp/inputs` | one directory | the store path the lock implies |
 
@@ -127,6 +127,16 @@ compile from source. Files under 1 KiB are not cached: below that the load
 costs what the compile costs.
 
 The key holds the build id, so a new binary never reads an old entry.
+
+It also holds everything the compiler folds out of the evaluator's
+configuration, because a folded constant is stored by content and not by
+name. That is the system (`builtins.currentSystem`), the store directory
+(`builtins.storeDir`), the compile-time lint levels whose warnings the entry
+carries, and `pure-eval`, which removes the impure names altogether: without
+the flag in the key an impure run's entry answered a pure one and
+`builtins.currentSystem or "fallback"` gave the system. Every other constant
+is stored by name and looked up in the live tables on load, so the search
+path follows the run, and a file with a `~/` path literal is never cached.
 
 It is also the only cache `eval-jobs` uses, which makes its effect easy to
 see. On `nixos/release-small.nix` with four workers, 16-core EPYC:
