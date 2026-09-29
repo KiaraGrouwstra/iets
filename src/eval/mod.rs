@@ -725,72 +725,47 @@ impl Evaluator {
         if p.starts_with(CorePkgs::PREFIX) {
             return Ok(p);
         }
-        use std::os::unix::ffi::{OsStrExt, OsStringExt};
-        let status_error = |p: &[u8], e: &std::io::Error| {
-            Error::boxed(
-                ErrorKind::Io,
-                format!(
-                    "getting status of '{}': {}",
-                    String::from_utf8_lossy(p),
-                    crate::error::io_text(e)
-                ),
-                pos,
-            )
-        };
         let mut at = crate::builtins::store_hooks::open(self, &p, pos)?;
         crate::lint::coerce::read_through_copy(self, &p, pos)?;
-        // One `lstat` answers both questions, so the common import pays no
-        // more than the `stat` of `SrcPath::is_dir` did. A path inside a
-        // copied tree keeps `store_hooks`' own resolution.
-        let mut is_dir = None;
-        if let Some(local) = at
-            .local()
-            .filter(|_| crate::builtins::store_hooks::locate(self, &p).is_none())
+        // eval.cc:resolveExprPath follows a symlink on the last component,
+        // so a relative path in the file resolves against the directory of
+        // the target. The `lstat` is what it costs; a path inside a copied
+        // tree keeps `store_hooks`' own resolution.
+        if let Some(local) = at.local()
+            && std::fs::symlink_metadata(&local).is_ok_and(|m| m.is_symlink())
+            && crate::builtins::store_hooks::locate(self, &p).is_none()
         {
-            match std::fs::symlink_metadata(&local) {
-                Err(e) => return Err(status_error(&p, &e)),
-                Ok(m) if m.is_symlink() => {
-                    // eval.cc:resolveExprPath follows a symlink on the last
-                    // component, so a relative path in the file resolves
-                    // against the directory of the target
-                    for _ in 0..1024 {
-                        let Ok(target) = std::fs::read_link(std::ffi::OsStr::from_bytes(&p)) else {
-                            break;
-                        };
-                        let t = target.into_os_string().into_vec();
-                        let joined = if t.starts_with(b"/") {
-                            t
-                        } else {
-                            let mut d = dir_of(&p).to_vec();
-                            d.push(b'/');
-                            d.extend_from_slice(&t);
-                            d
-                        };
-                        p = crate::compile::canon_path(&joined);
-                    }
-                    let full = std::fs::canonicalize(&local);
-                    self.trace()
-                        .canon(local.as_os_str().as_bytes(), full.ok().as_deref());
-                    at = crate::builtins::store_hooks::open(self, &p, pos)?;
-                }
-                Ok(m) => {
-                    is_dir = Some(m.is_dir());
-                    if m.is_dir() {
-                        self.trace().stat(
-                            local.as_os_str().as_bytes(),
-                            true,
-                            crate::trace::Kind::Directory,
-                        );
-                    }
-                }
+            use std::os::unix::ffi::{OsStrExt, OsStringExt};
+            for _ in 0..1024 {
+                let Ok(target) = std::fs::read_link(std::ffi::OsStr::from_bytes(&p)) else {
+                    break;
+                };
+                let t = target.into_os_string().into_vec();
+                let joined = if t.starts_with(b"/") {
+                    t
+                } else {
+                    let mut d = dir_of(&p).to_vec();
+                    d.push(b'/');
+                    d.extend_from_slice(&t);
+                    d
+                };
+                p = crate::compile::canon_path(&joined);
             }
+            let full = std::fs::canonicalize(&local);
+            self.trace()
+                .canon(local.as_os_str().as_bytes(), full.ok().as_deref());
+            at = crate::builtins::store_hooks::open(self, &p, pos)?;
         }
-        let is_dir = match is_dir {
-            Some(d) => d,
-            None => at.is_dir(self).map_err(|e| status_error(&p, &e))?,
-        };
-        if is_dir {
-            p.extend_from_slice(b"/default.nix");
+        match at.is_dir(self) {
+            Ok(true) => p.extend_from_slice(b"/default.nix"),
+            Ok(false) => {}
+            Err(e) => bail!(
+                ErrorKind::Io,
+                pos,
+                "getting status of '{}': {}",
+                String::from_utf8_lossy(&p),
+                crate::error::io_text(&e)
+            ),
         }
         Ok(p)
     }
@@ -1426,13 +1401,7 @@ impl Evaluator {
                         );
                     }
                     let f = self.force_cell(&functor.cell)?;
-                    cur = self.apply(f, &[cur], pos).map_err(|mut e| {
-                        e.add_trace(
-                            pos,
-                            "while calling a functor (an attribute set with a '__functor' attribute)",
-                        );
-                        e
-                    })?;
+                    cur = self.apply(f, &[cur], pos)?;
                 }
                 _ => bail!(
                     ErrorKind::Type,
