@@ -46,7 +46,7 @@ pub fn dispatch(name: &str, argv: &[String]) -> i32 {
 pub fn fallback(name: &str, argv: &[String], reason: &str) -> ! {
     crate::log::line(&format!("ietsp: falling back to {name}: {reason}"));
     if crate::session::Session::current().settings().no_fallback {
-        crate::log::line(&format!("ietsp: IETSP_NO_FALLBACK=1, not running {name}"));
+        crate::log::line(&format!("ietsp: no-fallback is set, not running {name}"));
         exit(1)
     }
     let Some(real) = crate::nixbin::real(name) else {

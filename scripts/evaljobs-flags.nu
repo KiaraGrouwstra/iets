@@ -112,6 +112,18 @@ def ignored [ctx: record]: nothing -> bool {
   $ok
 }
 
+# options: `--ietsp-option` leaves the argv before any command sees it, so
+# the collector must put it back on the argv of every worker process.
+# `cache-dir` shows it: only a worker that read the setting makes the
+# directory. ietsp only: nix-eval-jobs has no such flag.
+def options [ctx: record]: nothing -> bool {
+  let dir = $"($ctx.work)/opt-cache"
+  let r = (^($ctx.ietsp) eval-jobs --ietsp-option cache-dir $dir --workers 2 --no-instantiate ci.nix | complete)
+  let ok = $r.exit_code == 0 and ($dir | path exists)
+  if $ok { print "ok   options (--ietsp-option reaches the workers)" } else { print $"FAIL options: exit ($r.exit_code), ($dir) ($dir | path exists): ($r.stderr)" }
+  $ok
+}
+
 def run-all [ctx: record, np: string]: nothing -> int {
   let cases = [
     [check basic [ci.nix]]
@@ -159,6 +171,7 @@ def run-all [ctx: record, np: string]: nothing -> int {
     [expect-fail no-expr []]
     [session session []]
     [ignored ignored []]
+    [options options []]
   ]
   let res = ($cases | each {|c|
     # bare `false` and numbers in a list literal are bool/int values
@@ -172,6 +185,7 @@ def run-all [ctx: record, np: string]: nothing -> int {
         "expect-fail" => (expect-fail $ctx $c.1 $args)
         "session" => (session $ctx)
         "ignored" => (ignored $ctx)
+        "options" => (options $ctx)
       }
     }
   })

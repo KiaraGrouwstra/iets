@@ -153,7 +153,9 @@ fn parse_jobs_args(argv: &[String]) -> (JobsArgs, Vec<String>) {
 /// replaced by the `--argstr` the main process read for it. A worker's
 /// stdin is the collector's pipe, so it cannot read the value itself.
 fn worker_argv(argv: &[String], j: &JobsArgs) -> Vec<String> {
-    let mut out: Vec<String> = Vec::with_capacity(argv.len());
+    // `--ietsp-option` left `argv` before this command saw it, and a worker
+    // reads its own settings, so the triples go back on here
+    let mut out: Vec<String> = crate::session::Session::current().settings().option_argv();
     let mut read = j.stdin_args.iter();
     let mut i = 0;
     while i < argv.len() {

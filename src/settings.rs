@@ -88,6 +88,10 @@ pub struct Settings {
     /// `fix-hashes`: what `ietsp build` does with a wrong fixed-output hash
     /// (docs/reference/settings.md).
     pub fix_hashes: FixHashes,
+    /// The `--ietsp-option` pairs this run was given, in flag order. A
+    /// command that starts a second ietsp passes them on: they left the argv
+    /// in [`take_options`], so they are nowhere else.
+    pub options: Vec<(String, String)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -189,7 +193,17 @@ impl Settings {
         for (name, value) in overrides {
             c.set(name, flag_value(name, value), FLAG, false)?;
         }
-        Settings::from_conf(&c, env)
+        Ok(Settings {
+            options: overrides.to_vec(),
+            ..Settings::from_conf(&c, env)?
+        })
+    }
+
+    /// The `--ietsp-option` triples this run was given, for the argv of an
+    /// ietsp it starts.
+    pub fn option_argv(&self) -> Vec<String> {
+        let triple = |(n, v): &(String, String)| [FLAG.to_string(), n.clone(), v.clone()];
+        self.options.iter().flat_map(triple).collect()
     }
 
     /// The settings `c` asks for, with the environment on top.
@@ -210,7 +224,10 @@ impl Settings {
                 ));
             }
         }
-        let workers = env.num("IETSP_WORKERS").or(c.int("workers")?);
+        let workers: Option<usize> = env.num("IETSP_WORKERS")?.or(c.int("workers")?);
+        if workers == Some(0) {
+            return Err(Error::Config("workers must be 1 or more".into()));
+        }
         let fix_hashes = c.get(
             "fix-hashes",
             "\"ask\", \"always\" or \"never\"",
@@ -224,36 +241,43 @@ impl Settings {
         Ok(Settings {
             builder: c.str("builder")?,
             source_map,
-            workers: workers.filter(|n| *n >= 1),
-            fiber_stack_mb: env.num("IETSP_FIBER_STACK_MB").or(c.int("fiber-stack-mb")?),
-            spin: env.num("IETSP_SPIN").unwrap_or(2000),
-            spinners: env.num("IETSP_SPINNERS"),
-            handoff: env.num("IETSP_HANDOFF").unwrap_or(8),
-            fanout: env.num("IETSP_FANOUT").unwrap_or(7),
+            workers,
+            fiber_stack_mb: env
+                .num("IETSP_FIBER_STACK_MB")?
+                .or(c.int("fiber-stack-mb")?),
+            spin: env.num("IETSP_SPIN")?.unwrap_or(2000),
+            spinners: env.num("IETSP_SPINNERS")?,
+            handoff: env.num("IETSP_HANDOFF")?.unwrap_or(8),
+            fanout: env.num("IETSP_FANOUT")?.unwrap_or(7),
             par_stats: env.level("IETSP_PAR_STATS"),
             stats: env.level("IETSP_STATS"),
-            cache: env.flag("IETSP_CACHE", "0", c.bool("cache")?, true),
+            cache: env.flag("IETSP_CACHE", c.bool("cache")?, true)?,
             cache_dir: env.dir("IETSP_CACHE_DIR").or(c.str("cache-dir")?),
             ir_stats: env.set("IETSP_IR_STATS"),
-            ir_min: env.num("IETSP_IR_MIN").unwrap_or(1024),
-            provenance: env.flag("IETSP_PROVENANCE", "0", c.bool("provenance")?, true),
+            ir_min: env.num("IETSP_IR_MIN")?.unwrap_or(1024),
+            provenance: env.flag("IETSP_PROVENANCE", c.bool("provenance")?, true)?,
             nix_bin_dir: env.dir("IETSP_NIX_BIN_DIR").or(c.str("nix-bin-dir")?),
-            no_fallback: env.flag("IETSP_NO_FALLBACK", "1", c.bool("no-fallback")?, false),
+            no_fallback: env.flag("IETSP_NO_FALLBACK", c.bool("no-fallback")?, false)?,
             shell_gc_root: c.bool("shell-gc-root")?.unwrap_or(true),
             build_gc_root: c.bool("build-gc-root")?.unwrap_or(true),
             fetching: env.set("IETSP_FETCHING"),
             offline: env.set("IETSP_OFFLINE"),
             fetch_max_size: c.int("fetch-max-size")?.unwrap_or(16 << 30),
             fix_hashes: fix_hashes.unwrap_or(FixHashes::Ask),
+            options: Vec::new(),
         })
     }
 }
 
 impl Default for Settings {
-    /// The environment knobs alone: no file is read, so nothing can fail.
+    /// The environment knobs alone, for a session that read no file. A knob
+    /// that does not parse is [`Settings::load`]'s to report, so here the
+    /// whole environment is dropped instead of failing a library's session.
     fn default() -> Settings {
+        let empty = || Settings::from_conf(&Conf::default(), &Env(|_| None));
         Settings::from_conf(&Conf::default(), &Env(|n| std::env::var_os(n)))
-            .expect("an empty conf has no bad value")
+            .or_else(|_| empty())
+            .expect("no file and no environment cannot fail")
     }
 }
 
@@ -346,6 +370,12 @@ impl Conf {
     }
 }
 
+/// A Boolean `IETSP_*` variable, parsed the way nix.conf parses a Boolean.
+fn env_bool(name: &str, v: &std::ffi::OsStr) -> Result<bool> {
+    let bad = || Error::Config(format!("{name}: '{}' is not true or false", v.display()));
+    crate::config::parse_bool(name, v.to_str().ok_or_else(bad)?).map_err(|_| bad())
+}
+
 /// The environment a load reads: the process's, or a test's.
 struct Env(fn(&str) -> Option<OsString>);
 
@@ -355,8 +385,14 @@ impl Env {
         (!v.is_empty()).then_some(v)
     }
 
-    fn num<T: FromStr>(&self, name: &str) -> Option<T> {
-        (self.0)(name)?.to_str()?.parse().ok()
+    fn num<T: FromStr>(&self, name: &str) -> Result<Option<T>> {
+        let Some(v) = (self.0)(name) else {
+            return Ok(None);
+        };
+        v.to_str()
+            .and_then(|s| s.parse().ok())
+            .map(Some)
+            .ok_or_else(|| Error::Config(format!("{name}: '{}' is not a number", v.display())))
     }
 
     /// A level knob: unset is 0, `2` is 2, any other value is 1. Two levels
@@ -373,13 +409,13 @@ impl Env {
         (self.0)(name).is_some()
     }
 
-    /// The environment wins over the file, which wins over `default`. `switch`
-    /// is the value of `name` that means "the opposite of the default".
-    fn flag(&self, name: &str, switch: &str, file: Option<bool>, default: bool) -> bool {
+    /// The environment wins over the file, which wins over `default`. The
+    /// value is a nix.conf Boolean, so `IETSP_CACHE=false` turns the cache
+    /// off and `IETSP_NO_FALLBACK=yes` turns the fallback off.
+    fn flag(&self, name: &str, file: Option<bool>, default: bool) -> Result<bool> {
         match (self.0)(name) {
-            Some(v) if v == switch => !default,
-            Some(_) => default,
-            None => file.unwrap_or(default),
+            Some(v) => env_bool(name, &v),
+            None => Ok(file.unwrap_or(default)),
         }
     }
 
@@ -615,14 +651,49 @@ mod tests {
         assert!(take_options(&bad).is_err());
     }
 
+    /// A knob is a nix.conf Boolean, so every spelling of it acts, and one
+    /// that is not a Boolean is an error that names the variable.
+    /// A knob is a nix.conf Boolean, so every spelling of it acts, and one
+    /// that is not a Boolean is an error that names the variable.
     #[test]
     fn the_environment_wins_over_the_file() {
-        assert!(NO_ENV.flag("X", "0", None, true));
-        assert!(!NO_ENV.flag("X", "0", Some(false), true));
-        assert!(NO_ENV.flag("X", "1", Some(true), false));
-        let set = Env(|_| Some("0".into()));
-        assert!(!set.flag("X", "0", Some(true), true));
-        assert!(!set.flag("X", "1", Some(true), false));
+        assert_eq!(NO_ENV.flag("X", None, true).unwrap(), true);
+        assert_eq!(NO_ENV.flag("X", Some(false), true).unwrap(), false);
+        assert_eq!(NO_ENV.flag("X", Some(true), false).unwrap(), true);
+        let zero = Env(|_| Some("0".into()));
+        assert_eq!(zero.flag("X", Some(true), true).unwrap(), false);
+        for off in ["0", "no", "false"] {
+            assert_eq!(env_bool("X", off.as_ref()).unwrap(), false, "{off}");
+        }
+        for on in ["1", "yes", "true"] {
+            assert_eq!(env_bool("X", on.as_ref()).unwrap(), true, "{on}");
+        }
+        for bad in ["", "maybe", "2"] {
+            let e = env_bool("X", bad.as_ref()).map(|_| ()).unwrap_err();
+            assert_eq!(e.to_string(), format!("X: '{bad}' is not true or false"));
+        }
+        let n = Env(|_| Some("abc".into())).num::<usize>("N");
+        assert_eq!(
+            n.map(|_| ()).unwrap_err().to_string(),
+            "N: 'abc' is not a number"
+        );
+    }
+
+    /// The pairs go on the argv of the worker processes eval-jobs starts.
+    #[test]
+    fn the_flag_pairs_are_kept_for_a_second_ietsp() {
+        let o = opts(&[("workers", "2"), ("cache-dir", "/d")]);
+        let s = Settings::load_from(Path::new("/nonexistent"), &o, &NO_ENV).unwrap();
+        assert_eq!(
+            s.option_argv(),
+            [FLAG, "workers", "2", FLAG, "cache-dir", "/d"]
+        );
+        assert_eq!(
+            Settings::from_conf(&Conf::default(), &NO_ENV)
+                .unwrap()
+                .options,
+            []
+        );
     }
 
     #[test]
