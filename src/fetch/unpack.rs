@@ -94,7 +94,7 @@ fn clear(at: &Path) -> Result<()> {
 pub fn unpack(bytes: Vec<u8>, dest: &Path) -> Result<PathBuf> {
     std::fs::create_dir_all(dest)
         .map_err(|e| Error::io(format!("cannot create {}", dest.display()), e))?;
-    let mut links: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut links: std::collections::BTreeMap<PathBuf, PathBuf> = Default::default();
     let mut archive = tar::Archive::new(std::io::Cursor::new(bytes));
     let entries = archive
         .entries()
@@ -143,7 +143,7 @@ pub fn unpack(bytes: Vec<u8>, dest: &Path) -> Result<PathBuf> {
                 .map_err(|e| Error::io("cannot read a hard link target", e))?
                 .ok_or_else(|| bad(format!("tarball link '{}' has no target", rel.display())))?
                 .into_owned();
-            links.push((rel, member_path(&target)?));
+            links.insert(rel, member_path(&target)?);
         } else if kind.is_file() || kind.is_contiguous() || kind.is_gnu_sparse() {
             let executable = entry.header().mode().unwrap_or(0o644) & 0o100 != 0;
             clear(&at)?;
@@ -178,7 +178,10 @@ pub fn unpack(bytes: Vec<u8>, dest: &Path) -> Result<PathBuf> {
                 target.display()
             )));
         }
-        clear(&at)?;
+        // a link carries no `id`, so it never takes a name a member claimed
+        if std::fs::symlink_metadata(&at).is_ok() {
+            continue;
+        }
         std::fs::copy(&from, &at).map_err(|e| {
             Error::io(
                 format!("cannot link {} to {}", at.display(), from.display()),

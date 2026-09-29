@@ -152,11 +152,12 @@ fn find(d: &Dir, name: &[u8]) -> std::result::Result<usize, usize> {
 }
 
 /// The last copy of a member wins (git-utils.cc:1213), except that a directory
-/// listed again keeps what is already under it.
-fn put(d: &mut Dir, name: &[u8], node: Node) {
+/// listed again keeps what is already under it. `replace` is false for a hard
+/// link, which carries no `id` and so never takes a name a member claimed.
+fn put(d: &mut Dir, name: &[u8], node: Node, replace: bool) {
     match find(d, name) {
         Ok(i) => {
-            if !(matches!(node, Node::Dir(_)) && matches!(d[i].1, Node::Dir(_))) {
+            if replace && !(matches!(node, Node::Dir(_)) && matches!(d[i].1, Node::Dir(_))) {
                 d[i].1 = node;
             }
         }
@@ -167,10 +168,16 @@ fn put(d: &mut Dir, name: &[u8], node: Node) {
 /// Puts `node` at `parts`, with the missing parents created. A parent that is
 /// not a directory is replaced, as `make_parents` replaces it; one that is a
 /// symlink is refused (`ARCHIVE_EXTRACT_SECURE_SYMLINKS`).
-fn insert(at: &mut Dir, parts: &[Vec<u8>], full: &[Vec<u8>], node: Node) -> Result<()> {
+fn insert(
+    at: &mut Dir,
+    parts: &[Vec<u8>],
+    full: &[Vec<u8>],
+    node: Node,
+    replace: bool,
+) -> Result<()> {
     let (name, rest) = parts.split_first().expect("a non-empty member path");
     if rest.is_empty() {
-        put(at, name, node);
+        put(at, name, node, replace);
         return Ok(());
     }
     let i = match find(at, name) {
@@ -193,7 +200,7 @@ fn insert(at: &mut Dir, parts: &[Vec<u8>], full: &[Vec<u8>], node: Node) -> Resu
     let Node::Dir(d) = &mut at[i].1 else {
         unreachable!("a directory")
     };
-    insert(d, rest, full, node)
+    insert(d, rest, full, node, replace)
 }
 
 fn lookup<'a>(root: &'a Dir, parts: &[Vec<u8>]) -> Option<&'a Node> {
@@ -214,7 +221,7 @@ impl Tree {
     /// a sparse member expands to must fit in it together.
     pub fn index(spool: File, max_size: u64) -> Result<Tree> {
         let mut root = Dir::new();
-        let mut links: Vec<(Parts, Parts)> = Vec::new();
+        let mut links: std::collections::BTreeMap<Parts, Parts> = Default::default();
         let mut sparse: Option<File> = None;
         let mut sparse_at = 0u64;
         let mut room = max_size.saturating_sub(
@@ -252,16 +259,16 @@ impl Tree {
                     continue;
                 }
                 if kind.is_dir() {
-                    insert(&mut root, &parts, &parts, Node::Dir(Dir::new()))?;
+                    insert(&mut root, &parts, &parts, Node::Dir(Dir::new()), true)?;
                 } else if kind.is_symlink() {
                     let target = link_target(&mut entry, &parts, "symlink")?;
-                    insert(&mut root, &parts, &parts, Node::Symlink(target))?;
+                    insert(&mut root, &parts, &parts, Node::Symlink(target), true)?;
                 } else if kind.is_hard_link() {
                     let target = link_target(&mut entry, &parts, "link")?;
                     let target = super::unpack::member_path(Path::new(
                         std::ffi::OsStr::from_bytes(&target),
                     ))?;
-                    links.push((parts, parts_of(&target)));
+                    links.insert(parts, parts_of(&target));
                 } else if kind.is_file() || kind.is_contiguous() || kind.is_gnu_sparse() {
                     let exec = entry.header().mode().unwrap_or(0o644) & 0o100 != 0;
                     // A sparse member's holes are not in the archive, so it is
@@ -305,7 +312,7 @@ impl Tree {
                             at
                         }
                     };
-                    insert(&mut root, &parts, &parts, Node::File { at, exec })?;
+                    insert(&mut root, &parts, &parts, Node::File { at, exec }, true)?;
                 } else {
                     return Err(bad(format!(
                         "file '{}' in tarball has unsupported file type {kind:?}",
@@ -314,8 +321,9 @@ impl Tree {
                 }
             }
         }
-        // The tree path resolves the hard links last, so a link wins over a
-        // regular member at the same name wherever the two sit in the archive.
+        // git-utils.cc:1352: the links are resolved last, in the order of their
+        // own names, and each one only takes a name no member claimed. So a
+        // link may name a link whose own name sorts before it.
         for (parts, target) in links {
             let copy = match lookup(&root, &target) {
                 Some(node) => node.copy().ok_or_else(|| {
@@ -333,7 +341,7 @@ impl Tree {
                     )));
                 }
             };
-            insert(&mut root, &parts, &parts, copy)?;
+            insert(&mut root, &parts, &parts, copy, false)?;
         }
         Ok(Tree {
             spool,
@@ -1071,6 +1079,50 @@ mod tests {
             assert!(e.contains(why), "{tag}: {e}");
             assert!(tree.is_err(), "{tag}: the tree path accepted it");
         }
+    }
+
+    /// A hard link fills a name no member claimed, and it may name a link whose
+    /// own name sorts before it (git-utils.cc:1352).
+    #[test]
+    fn a_hard_link_never_replaces_a_member() {
+        let later = same(
+            "link-then-member",
+            &[
+                ("t/", DIR, 0o755, b""),
+                ("t/f", REG, 0o644, b"first"),
+                ("t/h", HARD, 0o644, b"t/f"),
+                ("t/h", REG, 0o644, b"second"),
+            ],
+        );
+        let want = same(
+            "link-then-member-want",
+            &[
+                ("t/", DIR, 0o755, b""),
+                ("t/f", REG, 0o644, b"first"),
+                ("t/h", REG, 0o644, b"second"),
+            ],
+        );
+        assert_eq!(later, want, "the member after the link must win");
+
+        let chain = same(
+            "link-to-a-later-link",
+            &[
+                ("t/", DIR, 0o755, b""),
+                ("t/f", REG, 0o644, b"x"),
+                ("t/h2", HARD, 0o644, b"t/h1"),
+                ("t/h1", HARD, 0o644, b"t/f"),
+            ],
+        );
+        let want = same(
+            "link-to-a-later-link-want",
+            &[
+                ("t/", DIR, 0o755, b""),
+                ("t/f", REG, 0o644, b"x"),
+                ("t/h1", REG, 0o644, b"x"),
+                ("t/h2", REG, 0o644, b"x"),
+            ],
+        );
+        assert_eq!(chain, want, "a link to a link that comes later");
     }
 
     /// `ietsp-spool-<pid>-<tag>`, the name the scratch file had before it was
