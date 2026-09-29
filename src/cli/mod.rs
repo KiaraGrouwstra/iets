@@ -163,7 +163,9 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
         i += 1;
     }
     // for its warnings, and for the session's copy that the fetcher reads
-    let _ = crate::config::Config::load_native(&f.overrides);
+    if let Err(e) = crate::config::Config::load_native(&f.overrides) {
+        std::process::exit(e.report())
+    }
     crate::ignored::flush();
     (a.includes, a.args, a.pure) = (f.includes, f.args, f.pure);
     a.attr = f.attrs.pop();

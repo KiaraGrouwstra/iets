@@ -579,6 +579,19 @@ def main [] {
         run-both $farm nix-instantiate --eval -E "builtins.currentSystem" })))
   }
   rm -f $"($env.XDG_CONFIG_HOME)/nix/nix.conf"
+  # a value Nix refuses stops the run with Nix's own text and exit 1; the
+  # unit prefix and the words `auto` and `relaxed` are accepted
+  let err1 = {|s: string| $s | ansi strip | lines | where ($it | str starts-with "error:") | get -o 0 | default "" }
+  for v in ["pure-eval = maybe" "show-trace = maybe" "sandbox = maybe" "eval-cache = 2"
+            "connect-timeout = abc" "cores = -1" "cores = 4294967296" "max-jobs = abc"
+            "cores = 1K" "min-free = 2G" "max-jobs = auto" "sandbox = relaxed"] {
+    let r = (with-env {NIX_CONFIG: $v} { run-both $farm nix-instantiate --eval -E "1" })
+    let same = ($r.ours.exit_code == $r.real.exit_code)
+      and (($r.ours.stdout | into binary) == ($r.real.stdout | into binary))
+      and ((do $err1 $r.ours.stderr) == (do $err1 $r.real.stderr))
+    $ok = ($ok | append (verdict $same $"nix.conf '($v)'"
+      $"'($v)': exit ours=($r.ours.exit_code) real=($r.real.exit_code); ours '(do $err1 $r.ours.stderr)' real '(do $err1 $r.real.stderr)'"))
+  }
   $ok = ($ok | append (cmp-case "nix eval --expr, a nested error"
     (run-both $farm nix eval --expr "{ a = throw \"boom\"; b = 1; }")))
   $ok = ($ok | append (cmp-case "nix eval --expr, repeated and empty values"

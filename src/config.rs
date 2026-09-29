@@ -72,6 +72,46 @@ const KNOWN: &str = "\
     user-agent-suffix warn-dirty warn-large-path-threshold \
     warn-short-path-literals";
 
+/// The Boolean settings of Nix 2.34.8 (`nix config show`). Nix parses a value
+/// the moment it is set, so a spelling outside `parse_bool` stops the run.
+const BOOLS: &str = "\
+    abort-on-warn accept-flake-config allow-dirty allow-dirty-locks \
+    allow-import-from-derivation allow-new-privileges allow-symlinked-store \
+    allow-unsafe-native-code-during-evaluation always-allow-substitutes \
+    auto-allocate-uids auto-optimise-store builders-use-substitutes \
+    compress-build-log debugger-on-trace debugger-on-warn eval-cache fallback \
+    filter-syscalls fsync-metadata fsync-store-paths http2 ignore-try \
+    impersonate-linux-26 keep-build-log keep-derivations keep-env-derivations \
+    keep-failed keep-going keep-outputs nix-shell-always-looks-for-shell-nix \
+    nix-shell-shebang-arguments-relative-to-script preallocate-contents \
+    print-missing pure-eval require-drop-supplementary-groups require-sigs \
+    restrict-eval run-diff-hook sandbox-fallback show-trace substitute \
+    sync-before-registering trace-function-calls \
+    trace-import-from-derivation trace-verbose trust-tarballs-from-git-forges \
+    use-case-hack use-cgroups use-registries use-sqlite-wal \
+    use-xdg-base-directories warn-dirty warn-short-path-literals";
+
+/// The integer settings. `sandbox` and `max-jobs` take a word beside their
+/// type and are checked on their own.
+const INTS: &str = "\
+    build-poll-interval connect-timeout cores download-attempts \
+    download-buffer-size download-speed \
+    eval-attrset-update-layer-rhs-threshold eval-profiler-frequency \
+    gc-reserved-space http-connections id-count log-lines max-build-log-size \
+    max-call-depth max-free max-silent-time max-substitution-jobs min-free \
+    min-free-check-interval nar-buffer-size narinfo-cache-meta-ttl \
+    narinfo-cache-negative-ttl narinfo-cache-positive-ttl \
+    stalled-download-timeout start-id tarball-ttl timeout \
+    warn-large-path-threshold";
+
+/// The integer settings Nix keeps in a 32-bit field, so a larger value is an
+/// error there. `max-jobs` is one of them.
+const NARROW: &str = "\
+    build-poll-interval cores download-attempts download-speed \
+    eval-attrset-update-layer-rhs-threshold eval-profiler-frequency id-count \
+    max-call-depth max-jobs max-substitution-jobs narinfo-cache-meta-ttl \
+    narinfo-cache-negative-ttl narinfo-cache-positive-ttl start-id tarball-ttl";
+
 const ALIASES: &[(&str, &str)] = &[
     ("binary-cache-public-keys", "trusted-public-keys"),
     ("binary-caches", "substituters"),
@@ -275,6 +315,46 @@ pub fn parse_bool(name: &str, s: &str) -> Result<bool> {
     }
 }
 
+/// util.hh:string2IntWithUnitPrefix. A trailing K, M, G or T, in either case,
+/// multiplies by 2^10, 2^20, 2^30 or 2^40. `narrow` is a 32-bit field.
+fn parse_int(s: &str, narrow: bool) -> Option<u64> {
+    let (digits, mul) = match s.chars().next_back()?.to_ascii_uppercase() {
+        'K' => (&s[..s.len() - 1], 1u64 << 10),
+        'M' => (&s[..s.len() - 1], 1 << 20),
+        'G' => (&s[..s.len() - 1], 1 << 30),
+        'T' => (&s[..s.len() - 1], 1 << 40),
+        c if c.is_ascii_alphabetic() => return None,
+        _ => (s, 1),
+    };
+    let n = digits.trim().parse::<u64>().ok()?.checked_mul(mul)?;
+    (!narrow || n <= u64::from(u32::MAX)).then_some(n)
+}
+
+fn in_list(list: &str, name: &str) -> bool {
+    list.split_ascii_whitespace().any(|k| k == name)
+}
+
+/// The value check Nix does when a setting is set. `name` is canonical.
+fn check_value(name: &str, v: &str) -> Result<()> {
+    let bad = |text: String| Err(Error::Config(text));
+    if in_list(BOOLS, name) {
+        return parse_bool(name, v).map(|_| ());
+    }
+    match name {
+        // globals.cc:319: the Booleans plus `relaxed`
+        "sandbox" if v != "relaxed" && parse_bool("", v).is_err() => {
+            bad(format!("option 'sandbox' has invalid value '{v}'"))
+        }
+        "max-jobs" if v != "auto" && parse_int(v, true).is_none() => {
+            bad("configuration setting 'max-jobs' should be 'auto' or an integer".into())
+        }
+        n if in_list(INTS, n) && parse_int(v, in_list(NARROW, n)).is_none() => {
+            bad(format!("setting '{name}' has invalid value '{v}'"))
+        }
+        _ => Ok(()),
+    }
+}
+
 /// The Nix settings that apply to this process.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Config {
@@ -412,6 +492,7 @@ impl Config {
             c.apply(&text, Path::new("NIX_CONFIG"))?;
         }
         for (name, value) in overrides {
+            check_value(canonical(name), value)?;
             c.set(name, value);
         }
         Ok(c)
@@ -433,6 +514,7 @@ impl Config {
             if (e.name == "nix-path" || e.name == "extra-nix-path") && set {
                 continue;
             }
+            check_value(canonical(&e.name), &e.value)?;
             self.set(&e.name, &e.value);
         }
         Ok(())
@@ -498,9 +580,9 @@ impl Config {
     pub fn int(&self, name: &str) -> Result<Option<u64>> {
         match self.str(name) {
             None => Ok(None),
-            Some(s) => s.trim().parse::<u64>().map(Some).map_err(|_| {
-                Error::Config(format!("Integer setting '{name}' has invalid value '{s}'"))
-            }),
+            Some(s) => parse_int(s, in_list(NARROW, name))
+                .map(Some)
+                .ok_or_else(|| Error::Config(format!("setting '{name}' has invalid value '{s}'"))),
         }
     }
 
@@ -723,6 +805,19 @@ mod tests {
         }
         assert!(ALIASES.iter().all(|(a, _)| !is_known(a)));
         assert!(CLIENT.iter().all(|n| unimplemented(n).is_none()));
+        let typed = BOOLS
+            .split_ascii_whitespace()
+            .chain(INTS.split_ascii_whitespace());
+        for name in typed.chain(NARROW.split_ascii_whitespace()) {
+            assert!(is_known(name), "{name}");
+            assert!(!APPENDABLE.contains(&name), "{name}");
+        }
+        for name in BOOLS.split_ascii_whitespace() {
+            assert!(!in_list(INTS, name), "{name}");
+        }
+        for name in NARROW.split_ascii_whitespace() {
+            assert!(in_list(INTS, name) || name == "max-jobs", "{name}");
+        }
     }
 
     #[test]
@@ -892,13 +987,45 @@ mod tests {
         assert_eq!(c.max_jobs().unwrap(), cpus());
     }
 
+    /// Nix parses a value where it is set, so a bad one stops the run there
+    /// (config-impl.hh:151, configuration.cc:304, globals.cc:319).
     #[test]
-    fn bad_typed_values_error() {
-        let c = from_str("keep-going = maybe\n", "t").unwrap();
-        let e = c.keep_going().unwrap_err().to_string();
-        assert!(e.contains("Boolean setting 'keep-going'"), "{e}");
-        let c = from_str("cores = many\n", "t").unwrap();
-        assert!(c.cores().is_err());
+    fn bad_typed_values_error_where_they_are_set() {
+        let err = |text: &str| from_str(text, "t").map(|_| ()).unwrap_err().to_string();
+        assert_eq!(
+            err("keep-going = maybe\n"),
+            "Boolean setting 'keep-going' has invalid value 'maybe'"
+        );
+        assert_eq!(
+            err("cores = many\n"),
+            "setting 'cores' has invalid value 'many'"
+        );
+        assert_eq!(
+            err("cores = 4294967296\n"),
+            "setting 'cores' has invalid value '4294967296'"
+        );
+        assert_eq!(
+            err("build-cores = -1\n"),
+            "setting 'cores' has invalid value '-1'"
+        );
+        assert_eq!(
+            err("sandbox = maybe\n"),
+            "option 'sandbox' has invalid value 'maybe'"
+        );
+        assert_eq!(
+            err("max-jobs = 1h\n"),
+            "configuration setting 'max-jobs' should be 'auto' or an integer"
+        );
+        // the unit prefix of string2IntWithUnitPrefix, and the words that
+        // sandbox and max-jobs take beside their type
+        let c = from_str(
+            "cores = 1K\nmin-free = 2g\nmax-jobs = auto\nsandbox = relaxed\n",
+            "t",
+        )
+        .unwrap();
+        assert_eq!(c.cores().unwrap(), 1024);
+        assert_eq!(c.int("min-free").unwrap(), Some(2 << 30));
+        assert_eq!(c.max_jobs().unwrap(), cpus());
     }
 
     #[test]

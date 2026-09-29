@@ -149,7 +149,9 @@ pub fn shell_settings(c: &Common) -> Result<(Config, Transport, Options), String
 }
 
 fn settings_with(c: &Common, use_builder: bool) -> Result<(Config, Transport, Options), String> {
-    let cfg = Config::read(&c.flags.overrides).map_err(|e| e.to_string())?;
+    // a nix.conf Nix itself refuses is no reason to hand it to Nix: it stops
+    // at the same value with the same text (config-impl.hh:151)
+    let cfg = Config::read(&c.flags.overrides).unwrap_or_else(|e| exit(e.report()));
     if let Some(name) = cfg.left_to_nix() {
         return Err(format!("the setting '{name}' is not implemented"));
     }

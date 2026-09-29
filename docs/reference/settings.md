@@ -320,6 +320,20 @@ carry Nix's defaults: `store` (`auto`), `system` (the build target),
 `$NIX_PATH`, even an empty one, replaces the `nix-path` setting of every
 file, as `configuration.cc:192` does.
 
+Nix parses a value where it is set, so a value it refuses stops the run
+with exit 1. ietsp gives the same text at the same place:
+
+| setting | values | text |
+| --- | --- | --- |
+| a Boolean | `true`/`yes`/`1`, `false`/`no`/`0` | `Boolean setting 'NAME' has invalid value 'V'` |
+| `sandbox` | those, and `relaxed` | `option 'sandbox' has invalid value 'V'` |
+| `max-jobs` | an integer, and `auto` | `configuration setting 'max-jobs' should be 'auto' or an integer` |
+| an integer | digits, with a `K`, `M`, `G` or `T` suffix for 2^10, 2^20, 2^30 or 2^40 | `setting 'NAME' has invalid value 'V'` |
+
+Some integer settings live in a 32-bit field in Nix, so a value above
+4294967295 is an error for them (`cores`, `max-jobs` and the others in
+`NARROW`). `src/config.rs` has the three lists: `BOOLS`, `INTS`, `NARROW`.
+
 ## What is applied
 
 Nix has about 130 settings. For ietsp each one is in one of five classes.
