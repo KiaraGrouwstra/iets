@@ -66,6 +66,20 @@ deleted and the run continues as a miss. A store whose version file is of
 another format, or whose garbage-collection stamp cannot be parsed, or
 whose lock is not a file, is emptied and starts again.
 
+**An entry carries a checksum over its own key.** Every entry of the IR
+cache and of the tracing cache holds 16 bytes of blake3 over the key it
+answers and the whole of its content, and a reader verifies it before it
+decodes anything. A changed byte, a truncated entry and an entry copied to
+another key are all a mismatch, and a mismatch is a miss that poisons the
+entry. Without it a single changed byte gave a different answer with exit 0.
+
+The check is also the only thing the two stores trust. A reader opens an
+entry with `O_NOFOLLOW` and `O_NONBLOCK`, accepts a regular file alone, and
+refuses a length above 512 MiB — a hundred times the largest entry nixpkgs
+makes — before it allocates anything, so a name replaced by a symbolic link,
+a FIFO or a sparse file of a terabyte is a miss and not a hang or an
+out-of-memory abort.
+
 **Nothing in an entry names a program.** An observation of a working tree
 holds which query of which SCM was asked, and the validator builds the
 command line from its own table, so an entry cannot start a program of its
@@ -284,9 +298,10 @@ an internal primop, so the mark happens only if the program actually forces
 it.
 
 An entry is one file, `entry`, in a directory named by the key. The file
-starts with a version byte and a table of the parts it holds — where each
-one is and how long it is — and which parts exist depends on the
-subcommand. `readset` holds the observations. `result` holds the exact
+starts with a version byte, the number of parts, the checksum over the key
+and the rest of the file, and a table of the parts — where each one is and
+how long it is — and which parts exist depends on the subcommand.
+`readset` holds the observations. `result` holds the exact
 stdout bytes for `eval`, `nix eval` and `nix derivation show`, the root
 derivation paths and the wanted outputs for `build` and `nix build`, and a
 store path or two for the commands that go on to use one (`nix develop`,

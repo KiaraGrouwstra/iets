@@ -99,14 +99,27 @@ impl IrCache {
     }
 
     /// A hit marks the entry as used from the same `fstat` that sizes the
-    /// read, and only when the mark is due (`cachefs::touch_open`).
+    /// read, and only when the mark is due (`cachefs::touch_open`). The
+    /// integrity check is verified before the caller decodes anything, and an
+    /// entry that fails it is poisoned like one that does not decode.
     pub fn read(&self, key: &str) -> Option<Vec<u8>> {
         use std::io::Read;
-        let f = std::fs::File::open(self.entry(key)).ok()?;
-        let md = f.metadata().ok()?;
+        let (f, md) = crate::cachefs::open_entry(&self.entry(key))?;
         let mut bytes = Vec::with_capacity(md.len() as usize + 1);
         let mut r = &f;
-        r.read_to_end(&mut bytes).ok()?;
+        if r.read_to_end(&mut bytes).is_err() {
+            self.discard(key);
+            return None;
+        }
+        let Some(n) = bytes.len().checked_sub(crate::cachefs::SUM) else {
+            self.discard(key);
+            return None;
+        };
+        if bytes[n..] != crate::cachefs::checksum(key, &[&bytes[..n]]) {
+            self.discard(key);
+            return None;
+        }
+        bytes.truncate(n);
         crate::cachefs::touch_open(&f, md.modified().ok());
         self.hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Some(bytes)
@@ -127,7 +140,8 @@ impl IrCache {
         let _ = std::fs::create_dir_all(dir);
         let name = &key[2..];
         if let Some(_lock) = crate::cachefs::write_lock(&self.root) {
-            let _ = crate::cachefs::write_atomic(dir, name, crate::cachefs::tag(), &[bytes]);
+            let sum = crate::cachefs::checksum(key, &[bytes]);
+            let _ = crate::cachefs::write_atomic(dir, name, crate::cachefs::tag(), &[bytes, &sum]);
         } else if self.stats {
             crate::errln!("ir-cache skip {name} (a sibling holds the store lock)");
         }
@@ -1411,6 +1425,43 @@ mod tests {
             // nothing about the evaluator
             assert!(loaded > 0, "case {n} accepted no changed byte");
         }
+    }
+
+    /// The same flips through the store, where the integrity check makes each
+    /// one a miss before anything is decoded, and the entry is poisoned.
+    #[test]
+    fn a_changed_byte_of_a_stored_entry_is_a_miss() {
+        let dir = std::env::temp_dir().join(format!("ietsp-ir-fuzz-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cache = IrCache::locate(Some(dir.to_str().expect("utf-8 path")), false).expect("cache");
+        let key = "ab".to_string() + &"c".repeat(60);
+        let other = "ab".to_string() + &"d".repeat(60);
+        let (_, bytes, _, _) = entry();
+        cache.write(&key, &bytes);
+        let file = dir.join("ir").join("ab").join(&key[2..]);
+        let stored = std::fs::read(&file).expect("stored entry");
+        assert_eq!(cache.read(&key).as_deref(), Some(bytes.as_slice()));
+
+        for i in 0..stored.len() {
+            for b in [0x00_u8, 0x01, 0xff] {
+                if stored[i] == b {
+                    continue;
+                }
+                let mut bad = stored.clone();
+                bad[i] = b;
+                std::fs::write(&file, &bad).expect("entry");
+                assert!(cache.read(&key).is_none(), "byte {i} set to {b:#04x}");
+                assert!(!file.exists(), "and the entry is poisoned");
+                std::fs::write(&file, &stored).expect("entry");
+            }
+        }
+
+        // the check covers the key, so an entry copied to another name is not
+        // an entry there
+        cache.write(&other, &stored);
+        std::fs::copy(&file, dir.join("ir").join("ab").join(&other[2..])).expect("copy");
+        assert!(cache.read(&other).is_none(), "an entry under another key");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The nesting cap is sized for the evaluator's stack, not a test

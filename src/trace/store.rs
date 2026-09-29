@@ -7,7 +7,6 @@
 
 use std::fs;
 use std::io;
-use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 
 use crate::cachefs;
@@ -16,9 +15,10 @@ use crate::cachefs;
 pub const ENTRY: &str = "entry";
 /// Leads the file; the key holds the build id, so an older binary's entries
 /// are never read and this only has to catch bytes ietsp did not write.
-const VERSION: u8 = 1;
-/// The version byte and the number of parts.
-const HEADER: usize = 2;
+const VERSION: u8 = 2;
+/// The version byte, the number of parts, and the integrity check over the
+/// key and the rest of the file.
+const HEADER: usize = 2 + cachefs::SUM;
 /// One part's place in the file: tag, offset, length.
 const SLOT: usize = 17;
 
@@ -49,51 +49,60 @@ impl Part {
     }
 }
 
-/// One generation of one entry: the open file and where its parts are. The
-/// descriptor is what makes the snapshot — a publish renames a new file over
-/// the name, and this keeps reading the bytes it opened.
+/// One generation of one entry: the bytes read from the file that was open
+/// and where its parts are. Reading the whole file through one descriptor is
+/// what makes the snapshot — a publish renames a new file over the name, and
+/// this keeps the bytes it read — and the integrity check needs all of them
+/// before any part is decoded.
 pub struct Entry {
-    file: fs::File,
+    data: Vec<u8>,
     slots: Vec<(u8, u64, u64)>,
 }
 
 impl Entry {
-    /// `None` for any bytes that are not an entry this binary wrote: the
-    /// caller discards it, as it discards a part that does not decode.
-    fn parse(file: fs::File) -> Option<Entry> {
-        let len = file.metadata().ok()?.len();
-        let mut head = [0u8; HEADER];
-        file.read_exact_at(&mut head, 0).ok()?;
-        if head[0] != VERSION {
+    /// `None` for any bytes that are not the entry this binary wrote for
+    /// `key`: the caller discards it, as it discards a part that does not
+    /// decode. The check covers the key, so an entry copied from another one
+    /// is not an entry here either.
+    fn parse(file: fs::File, len: u64, key: &str) -> Option<Entry> {
+        use std::io::Read;
+        let mut data = Vec::with_capacity(len as usize + 1);
+        (&file).read_to_end(&mut data).ok()?;
+        if data.len() < HEADER || data[0] != VERSION {
             return None;
         }
-        let count = usize::from(head[1]);
-        let payload = (HEADER + count * SLOT) as u64;
-        let mut table = vec![0u8; count * SLOT];
-        file.read_exact_at(&mut table, HEADER as u64).ok()?;
+        if data[2..HEADER] != cachefs::checksum(key, &[&data[..2], &data[HEADER..]]) {
+            return None;
+        }
+        let count = usize::from(data[1]);
+        let payload = HEADER.checked_add(count.checked_mul(SLOT)?)?;
+        let table = data.get(HEADER..payload)?;
         let mut slots = Vec::with_capacity(count);
         for s in table.as_chunks::<SLOT>().0 {
             let at = u64::from_le_bytes(s[1..9].try_into().ok()?);
             let n = u64::from_le_bytes(s[9..17].try_into().ok()?);
-            if at < payload || at.checked_add(n)? > len {
+            if at < payload as u64 || at.checked_add(n)? > data.len() as u64 {
                 return None;
             }
             slots.push((s[0], at, n));
         }
-        Some(Entry { file, slots })
+        Some(Entry { data, slots })
     }
 
-    /// The entry file at `path`, for `ietsp cache dump`.
+    /// The entry file at `path`, for `ietsp cache dump`. The key is the name
+    /// of the directory the entry lives in, which is how a store names it.
     pub fn open(path: &Path) -> Option<Entry> {
-        Entry::parse(fs::File::open(path).ok()?)
+        let key = path.parent()?.file_name()?.to_str()?.to_string();
+        let (f, md) = cachefs::open_entry(path)?;
+        Entry::parse(f, md.len(), &key)
     }
 
-    /// The bytes of one part, read from this generation of the entry.
+    /// The bytes of one part, from this generation of the entry.
     pub fn part(&self, part: Part) -> Option<Vec<u8>> {
         let (_, at, n) = *self.slots.iter().find(|(t, ..)| *t == part.tag())?;
-        let mut bytes = vec![0u8; usize::try_from(n).ok()?];
-        self.file.read_exact_at(&mut bytes, at).ok()?;
-        Some(bytes)
+        let at = usize::try_from(at).ok()?;
+        let n = usize::try_from(n).ok()?;
+        Some(self.data.get(at..at.checked_add(n)?)?.to_vec())
     }
 }
 
@@ -134,10 +143,16 @@ impl Store {
     /// [`Entry`], so a sibling that publishes a new generation meanwhile
     /// cannot be read half.
     pub fn open(&self, key: &str) -> Opened {
-        let Ok(f) = fs::File::open(self.entry_dir(key).join(ENTRY)) else {
-            return Opened::None;
+        let path = self.entry_dir(key).join(ENTRY);
+        let Some((f, md)) = cachefs::open_entry(&path) else {
+            // no name is a cold run; a name that is there and is not one this
+            // store can read is poison
+            return match path.symlink_metadata() {
+                Ok(_) => Opened::Bad,
+                Err(_) => Opened::None,
+            };
         };
-        match Entry::parse(f) {
+        match Entry::parse(f, md.len(), key) {
             Some(e) => Opened::Entry(e),
             None => Opened::Bad,
         }
@@ -148,16 +163,24 @@ impl Store {
     /// entry stays the generation it was and the next run misses.
     pub fn publish(&self, key: &str, parts: &[(Part, &[u8])]) -> io::Result<bool> {
         let count = u8::try_from(parts.len()).map_err(|_| io::ErrorKind::InvalidInput)?;
-        let mut head = vec![VERSION, count];
+        let head = [VERSION, count];
+        let mut table = Vec::with_capacity(parts.len() * SLOT);
         let mut at = (HEADER + parts.len() * SLOT) as u64;
         for (p, bytes) in parts {
-            head.push(p.tag());
-            head.extend_from_slice(&at.to_le_bytes());
-            head.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+            table.push(p.tag());
+            table.extend_from_slice(&at.to_le_bytes());
+            table.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
             at += bytes.len() as u64;
         }
-        let mut chunks: Vec<&[u8]> = Vec::with_capacity(parts.len() + 1);
+        let mut covered: Vec<&[u8]> = Vec::with_capacity(parts.len() + 2);
+        covered.push(&head);
+        covered.push(&table);
+        covered.extend(parts.iter().map(|(_, b)| *b));
+        let sum = cachefs::checksum(key, &covered);
+        let mut chunks: Vec<&[u8]> = Vec::with_capacity(parts.len() + 3);
         chunks.push(&head);
+        chunks.push(&sum);
+        chunks.push(&table);
         chunks.extend(parts.iter().map(|(_, b)| *b));
         let dir = self.entry_dir(key);
         fs::create_dir_all(&dir)?;

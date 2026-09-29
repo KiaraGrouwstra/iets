@@ -221,6 +221,48 @@ pub fn write_atomic(dir: &Path, name: &str, tag: u64, chunks: &[&[u8]]) -> io::R
     }
 }
 
+/// Bytes of the integrity check an entry of a hashed store carries.
+pub const SUM: usize = 16;
+
+/// The largest entry a hashed store will read. An entry is the compiled form
+/// of one source file, or the record of one run; the largest of either in
+/// nixpkgs are tens of megabytes, so this leaves two orders of magnitude of
+/// headroom and still refuses a crafted length — a sparse file of a terabyte —
+/// before anything is allocated.
+pub const MAX_ENTRY: u64 = 512 << 20;
+
+/// The integrity check an entry carries: blake3 over the key the entry
+/// answers and the whole of its content. A changed byte, a truncated entry
+/// and an entry copied under another key are all a mismatch, and a mismatch
+/// is a miss. blake3 is the hash the IR key already uses, so this adds no
+/// dependency and runs at about a gigabyte per second per core.
+pub fn checksum(key: &str, parts: &[&[u8]]) -> [u8; SUM] {
+    let mut h = blake3::Hasher::new();
+    h.update(&(key.len() as u64).to_le_bytes());
+    h.update(key.as_bytes());
+    for p in parts {
+        h.update(p);
+    }
+    let mut out = [0u8; SUM];
+    out.copy_from_slice(&h.finalize().as_bytes()[..SUM]);
+    out
+}
+
+/// Opens an entry for reading under the rules a cache directory needs: it is
+/// writable by whoever runs ietsp, so the name must not be a symbolic link,
+/// what it names must be a regular file, and its length must be one an entry
+/// can have. `O_NONBLOCK` keeps the open of a FIFO from waiting for a writer.
+pub fn open_entry(path: &Path) -> Option<(fs::File, fs::Metadata)> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let f = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .ok()?;
+    let md = f.metadata().ok()?;
+    (md.is_file() && md.len() <= MAX_ENTRY).then_some((f, md))
+}
+
 /// A counter that keeps two writers of one name inside one process apart.
 /// Process-wide by nature: the names it disambiguates are process-wide.
 pub fn tag() -> u64 {

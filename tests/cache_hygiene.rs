@@ -238,6 +238,67 @@ fn a_corrupt_entry_is_dropped_and_a_corrupt_store_is_wiped() {
     assert!(c.lookup(), "and the store works again");
 }
 
+/// The entry is checked against its own key before any part is read, so a
+/// changed byte and an entry copied to another key are both a miss.
+#[test]
+fn a_changed_byte_or_a_copied_entry_is_a_miss() {
+    let dir = tmp("integrity");
+    let path = dir.to_str().expect("utf-8 path");
+    let c = cached(path);
+    put_hit(&c, &hit_entry());
+    assert!(c.lookup(), "the entry it wrote is a hit");
+    let entry = c.store.entry_dir(&c.key).join(ENTRY);
+    let good = std::fs::read(&entry).expect("entry");
+
+    for i in 0..good.len() {
+        let mut bad = good.clone();
+        bad[i] ^= 0xff;
+        std::fs::create_dir_all(c.store.entry_dir(&c.key)).expect("entry dir");
+        std::fs::write(&entry, &bad).expect("entry");
+        let c = cached(path);
+        assert!(!c.lookup(), "byte {i} changed");
+        assert!(!c.store.entry_dir(&c.key).exists(), "and it is poisoned");
+    }
+
+    let other = key_of(7);
+    std::fs::create_dir_all(c.store.entry_dir(&other)).expect("entry dir");
+    std::fs::write(c.store.entry_dir(&other).join(ENTRY), &good).expect("entry");
+    assert!(
+        matches!(c.store.open(&other), Opened::Bad),
+        "an entry under another key is not an entry there"
+    );
+}
+
+/// Whoever runs ietsp can write the cache directory, so an entry name that is
+/// a symbolic link, a FIFO or a length no entry can have is refused before
+/// anything is read: `truncate -s 1T` used to abort the run on the allocation.
+#[test]
+fn an_entry_that_is_not_a_plain_file_is_refused() {
+    let dir = tmp("openrules");
+    let good = dir.join("good");
+    std::fs::write(&good, b"x").expect("file");
+    assert!(cachefs::open_entry(&good).is_some());
+
+    let link = dir.join("link");
+    std::os::unix::fs::symlink(&good, &link).expect("link");
+    assert!(cachefs::open_entry(&link).is_none(), "a symbolic link");
+
+    let fifo = dir.join("fifo");
+    let c = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).expect("path");
+    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+    assert!(cachefs::open_entry(&fifo).is_none(), "a FIFO");
+
+    let huge = dir.join("huge");
+    let f = std::fs::File::create(&huge).expect("file");
+    f.set_len(cachefs::MAX_ENTRY + 1).expect("sparse length");
+    drop(f);
+    assert!(
+        cachefs::open_entry(&huge).is_none(),
+        "a length no entry has"
+    );
+    assert!(dir.join("huge").exists(), "and nothing was allocated");
+}
+
 #[test]
 fn cache_gc_removes_entries_past_the_ttl() {
     let dir = tmp("gc");
