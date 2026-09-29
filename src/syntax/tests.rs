@@ -585,3 +585,41 @@ fn json_gives_every_node_its_kind_and_span() {
         r#"{"kind":"string","start":0,"end":6,"parts":["\"é"]}"#
     );
 }
+
+/// A deeply nested file must give an error, never a stack overflow. The
+/// parse runs on a big stack like `main.rs` gives it.
+#[test]
+fn deep_nesting_ends_with_an_error() {
+    std::thread::Builder::new()
+        .stack_size(1 << 30)
+        .spawn(deep_nesting_cases)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+fn deep_nesting_cases() {
+    for (open, mid, close) in [
+        ("(", "1", ")"),
+        ("[", "", "]"),
+        ("{a=", "1", ";}"),
+        ("x: ", "1", ""),
+        ("-", "1", ""),
+        ("!", "true", ""),
+    ] {
+        let n = 60_000;
+        let mut src = String::with_capacity(n * 4);
+        for _ in 0..n {
+            src.push_str(open);
+        }
+        src.push_str(mid);
+        for _ in 0..n {
+            src.push_str(close);
+        }
+        assert_eq!(
+            parse_err(&src),
+            "stack overflow (possible infinite recursion)",
+            "for {open:?}"
+        );
+    }
+}

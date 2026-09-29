@@ -68,6 +68,14 @@ Nix returns a copy of the unforced argument thunk; inside a list,
 argument and prints the value. Selecting from the result behaves the same
 in both.
 
+## Nesting depth of a file
+
+The parser recurses. Nix recurses too and reports
+`stack overflow (possible infinite recursion)` from its SIGSEGV handler
+when the C stack runs out. ietsp counts the nesting instead and gives the
+same message above 50,000 levels, so no input makes it crash. Nix accepts
+more: 400,000 nested lists parse there and stop only in the printer.
+
 ## Unforced values in lazy positions
 
 In a list element, an attribute value, a `let` binding or a function

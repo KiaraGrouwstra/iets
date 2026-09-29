@@ -111,8 +111,6 @@ fn main() {
         help::help(Some(name))
     }
     let code = match name {
-        "lint" => cli::cmd_lint(&rest),
-        "parse" => cli::parse::main(&rest),
         "cache" => match rest.first().map(String::as_str) {
             Some("gc") => cli::cache_gc::cmd_cache_gc(&rest[1..]),
             Some("dump") => match &rest[1..] {
@@ -130,6 +128,8 @@ fn main() {
             "plumbing" => cli::plumbing::main(&rest),
             "prefetch" => cli::prefetch::cmd_prefetch(&rest),
             "search" => cli::search::cmd_search(&rest),
+            "lint" => cli::cmd_lint(&rest),
+            "parse" => cli::parse::main(&rest),
             _ => cli::eval::run_eval(cli::parse_eval_args(&rest)),
         }),
     };

@@ -94,7 +94,15 @@ pub struct Parser<'a> {
     sc_formals: Vec<Formal>,
     sym_or: Sym,
     sym_body: Sym,
+    depth: u32,
 }
+
+/// Nix has no limit and reports a stack overflow from its SIGSEGV handler.
+/// This parser recurses, so a limit takes the place of the crash. The value
+/// is a third of the deepest nesting the 4 GiB evaluator stack survived
+/// (150,000 nested attribute sets), so the parse ends before any stage of
+/// the pipeline runs out of stack.
+const MAX_PARSE_DEPTH: u32 = 50_000;
 
 impl<'a> Parser<'a> {
     pub fn new(src: &'a [u8], interner: &'a mut Interner) -> Self {
@@ -127,7 +135,23 @@ impl<'a> Parser<'a> {
             sc_formals: Vec::new(),
             sym_or,
             sym_body,
+            depth: 0,
         }
+    }
+
+    /// One more level of nesting, or Nix's stack-overflow error.
+    #[inline]
+    fn deeper(&mut self) -> R<()> {
+        self.depth += 1;
+        if self.depth > MAX_PARSE_DEPTH {
+            let t = self.peek();
+            return Err(self.error_at(
+                t.start,
+                t.end,
+                "stack overflow (possible infinite recursion)".into(),
+            ));
+        }
+        Ok(())
     }
 
     pub fn parse_file(mut self, file: FileId) -> R<Ast> {
@@ -274,6 +298,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_function(&mut self) -> R<ExprId> {
+        self.deeper()?;
+        let r = self.parse_function_inner();
+        self.depth -= 1;
+        r
+    }
+
+    fn parse_function_inner(&mut self) -> R<ExprId> {
         let t = self.peek();
         match t.kind {
             Tok::Id => {
@@ -560,7 +591,9 @@ impl<'a> Parser<'a> {
         let mut lhs = match t.kind {
             Tok::Bang => {
                 self.bump();
+                self.deeper()?;
                 let e = self.parse_op(BP_NOT + 1)?;
+                self.depth -= 1;
                 self.add(
                     Expr::Unary {
                         op: UnOp::Not,
@@ -572,7 +605,9 @@ impl<'a> Parser<'a> {
             }
             Tok::Minus => {
                 self.bump();
+                self.deeper()?;
                 let e = self.parse_op(BP_NEG + 1)?;
+                self.depth -= 1;
                 match self.ast.exprs[e.0 as usize] {
                     Expr::Int(i) => {
                         self.ast.exprs[e.0 as usize] = Expr::Int(0i64.wrapping_sub(i));
@@ -706,6 +741,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_simple(&mut self) -> R<ExprId> {
+        self.deeper()?;
+        let r = self.parse_simple_inner();
+        self.depth -= 1;
+        r
+    }
+
+    fn parse_simple_inner(&mut self) -> R<ExprId> {
         let t = self.peek();
         match t.kind {
             Tok::Id => {
