@@ -832,6 +832,21 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   git-in $sparse sparse-checkout set --no-cone "/*" "!/d/"
   $res ++= [(check $ietsp "sparse: an index entry that is not on disk makes it dirty" $"($sparse)#v")]
 
+  # ---- a git working tree still caches ----------------------------------------
+  # every traced git query must be in `trace::Query`, or the run is uncacheable
+  # and a git flake silently loses the tracing cache.
+  let cacheable = $"($work)/cacheable"
+  mkdir $cacheable
+  '{ outputs = { self }: { v = "c"; }; }' + "\n" | save $"($cacheable)/flake.nix"
+  '{"nodes":{"root":{}},"root":"root","version":7}' | save $"($cacheable)/flake.lock"
+  git-in $cacheable init -q
+  git-in $cacheable add -A
+  let cold = (^$ietsp eval --timings --raw $"($cacheable)#v" | complete)
+  let warm = (^$ietsp eval --timings --raw $"($cacheable)#v" | complete)
+  $res ++= [(verdict (($cold.stderr | str contains "cache: wrote") and ($warm.stderr | str contains "cache: hit"))
+    "git: a working tree evaluation is cacheable"
+    $"cold ($cold.stderr | lines | last 2 | str join ' | '), warm ($warm.stderr | lines | last 2 | str join ' | ')")]
+
   # ---- a working tree that appears above a path flake -------------------------
   # the detection probes every ancestor, and those probes are observations:
   # a cached result must not stay a path flake after `git init` above it.

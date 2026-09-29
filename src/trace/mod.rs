@@ -184,7 +184,7 @@ impl Query {
 
     pub fn argv(self) -> &'static [&'static str] {
         match self {
-            Query::GitLsFiles => &["git", "ls-files", "-z", "--cached", "--stage"],
+            Query::GitLsFiles => &["git", "ls-files", "-z", "--cached", "--stage", "-v"],
             Query::GitStatus => &[
                 "git",
                 "status",

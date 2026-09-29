@@ -10,7 +10,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use super::{Scm, Snapshot};
-use crate::trace::{Kind, Obs, Trace};
+use crate::trace::{Kind, Obs, Query, Trace};
 
 const NULL_REV: &str = "0000000000000000000000000000000000000000";
 
@@ -22,6 +22,12 @@ fn run(trace: &Trace, root: &Path, args: &[&str]) -> Result<(i32, Vec<u8>), Stri
     trace
         .cmd(root, &argv)
         .map_err(|e| format!("ietsp: cannot run git: {e}"))
+}
+
+/// A traced query. Its argv comes from `trace::Query`, so the command and the
+/// observation that records it can never drift apart.
+fn query(trace: &Trace, root: &Path, q: Query) -> Result<Vec<u8>, String> {
+    git(trace, root, &q.argv()[1..])
 }
 
 fn git(trace: &Trace, root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
@@ -63,11 +69,7 @@ impl Scm for Git {
         // (`S` for skip-worktree, lower case for assume-unchanged): `git
         // status` never reports such an entry, while libgit2's status, which
         // getWorkdirInfo reads, still calls it deleted when it is not on disk
-        let ls = git(
-            trace,
-            root,
-            &["ls-files", "-z", "--cached", "--stage", "-v"],
-        )?;
+        let ls = query(trace, root, Query::GitLsFiles)?;
         let mut files: HashSet<PathBuf> = HashSet::new();
         let mut dirty = false;
         for entry in ls.split(|&b| b == 0).filter(|e| !e.is_empty()) {
@@ -86,25 +88,14 @@ impl Scm for Git {
             }
             files.insert(file);
         }
-        let status = git(
-            trace,
-            root,
-            &[
-                "status",
-                "--porcelain=v1",
-                "-z",
-                "--untracked-files=no",
-                "--no-renames",
-                "--ignore-submodules=all",
-            ],
-        )?;
+        let status = query(trace, root, Query::GitStatus)?;
         for entry in status.split(|&b| b == 0).filter(|e| e.len() > 3) {
             dirty = true;
             if entry[0] == b'D' || entry[1] == b'D' {
                 files.remove(&root.join(OsStr::from_bytes(&entry[3..])));
             }
         }
-        let head = run(trace, root, &["rev-parse", "--verify", "-q", "HEAD"])?;
+        let head = run(trace, root, &Query::GitHead.argv()[1..])?;
         let head = (head.0 == 0).then(|| String::from_utf8_lossy(&head.1).trim().to_string());
         let last_modified = match &head {
             Some(h) => of_rev(root, &["log", "-1", "--format=%ct", h])?,
