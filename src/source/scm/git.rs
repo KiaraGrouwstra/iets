@@ -137,7 +137,7 @@ impl Scm for Git {
 
     fn tree_of<'a>(&self, obs: &'a Obs) -> Option<&'a [u8]> {
         match obs {
-            Obs::Cmd { dir, argv, .. } if argv.first().is_some_and(|a| a == b"git") => Some(dir),
+            Obs::Cmd { dir, query, .. } if query.scm() == self.name() => Some(dir),
             _ => None,
         }
     }

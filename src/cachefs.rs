@@ -88,6 +88,23 @@ pub fn root_link(override_dir: Option<&str>, parts: &[&[u8]]) -> Option<PathBuf>
     Some(roots(override_dir)?.join(name))
 }
 
+/// Whether a cache entry may send a run to `program`: it has to be a file
+/// inside `out_path`, and `out_path` a path of the store directory. A cache
+/// directory is writable by whoever runs ietsp, so an entry that named a
+/// program freely would be a way to start one; what the store holds under
+/// that name is the daemon's to say. `nix fmt` is the one command that runs
+/// what an entry remembered.
+pub fn program_of_output(out_path: &str, program: &str) -> bool {
+    let Ok(out) = crate::store::path::StorePath::parse(out_path) else {
+        return false;
+    };
+    let program = Path::new(program);
+    program.starts_with(out.to_full_string())
+        && !program
+            .components()
+            .any(|c| c == std::path::Component::ParentDir)
+}
+
 /// How a store names its entries under its root.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Shape {

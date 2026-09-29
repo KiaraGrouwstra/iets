@@ -764,7 +764,7 @@ mod tests {
             file(b("cache/inputs/x")),
             Obs::Cmd {
                 dir: b(""),
-                argv: vec![b"git".to_vec(), b"status".to_vec()],
+                query: crate::trace::Query::GitStatus,
                 hash: [0; 32],
             },
             Obs::Env {

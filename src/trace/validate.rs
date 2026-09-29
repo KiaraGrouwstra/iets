@@ -203,11 +203,11 @@ fn check(o: &Obs, rehashed: &AtomicUsize) -> Outcome {
             };
             Outcome::Changed(format!("environment variable ${} {what}", lossy(name)))
         }
-        Obs::Cmd { dir, argv, hash } => match super::run_cmd(os(dir), argv) {
+        Obs::Cmd { dir, query, hash } => match super::run_query(os(dir), *query) {
             Ok((status, out)) if super::cmd_hash(status, &out) == *hash => Outcome::Same,
             _ => Outcome::Changed(format!(
                 "the output of `{}` in {} changed",
-                argv.iter().map(|a| lossy(a)).collect::<Vec<_>>().join(" "),
+                query.argv().join(" "),
                 lossy(dir)
             )),
         },

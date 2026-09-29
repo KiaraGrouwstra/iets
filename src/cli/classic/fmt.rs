@@ -135,9 +135,14 @@ fn out_link(dir: &Path, attr: &str) -> Option<PathBuf> {
     crate::cachefs::root_link(None, &[b"fmt", dir.as_os_str().as_bytes(), attr.as_bytes()])
 }
 
-/// A cache hit is usable while the program is still there.
+/// A cache hit is usable while the program is still there. A cache directory
+/// is writable by whoever runs ietsp, so the entry may only ever name a
+/// program inside the output it remembered, and that output must be a path of
+/// the store directory: a planted entry can then point `nix fmt` at no file of
+/// its choosing. What the store holds under that name is the daemon's to say.
 fn usable(hit: &Built) -> bool {
-    Path::new(&hit.program).exists()
+    crate::cachefs::program_of_output(&hit.out_path, &hit.program)
+        && Path::new(&hit.program).exists()
 }
 
 /// Links `out_path` in the roots store and registers the link with the local

@@ -38,10 +38,10 @@ pub fn cmd_cache_dump(file: &str) -> i32 {
                 s(name),
                 value.as_deref().map_or("(unset)".to_string(), s)
             ),
-            Obs::Cmd { dir, argv, hash } => println!(
+            Obs::Cmd { dir, query, hash } => println!(
                 "cmd {} `{}` {}",
                 s(dir),
-                argv.iter().map(|a| s(a)).collect::<Vec<_>>().join(" "),
+                query.argv().join(" "),
                 &hex(hash)[..16]
             ),
             Obs::Input { entry, version } => println!("input {} v{version}", s(entry)),

@@ -120,10 +120,11 @@ pub enum Obs {
         name: Vec<u8>,
         value: Option<Vec<u8>>,
     },
-    /// A command run in `dir`; `hash` covers its exit status and stdout.
+    /// A query of an SCM asked in `dir`; `hash` covers its exit status and
+    /// stdout. The entry names the query, never the command line it is.
     Cmd {
         dir: Vec<u8>,
-        argv: Vec<Vec<u8>>,
+        query: Query,
         hash: Digest32,
     },
     /// One entry of the input store read during the evaluation
@@ -149,24 +150,76 @@ impl Obs {
             }
             Obs::Canon { path, .. } => (4, Cow::Borrowed(path), 0),
             Obs::Env { name, .. } => (5, Cow::Borrowed(name), 0),
-            Obs::Cmd { dir, argv, .. } => (6, Cow::Owned(cmd_subject(dir, argv)), 0),
+            Obs::Cmd { dir, query, .. } => (6, Cow::Borrowed(dir), query.to_u8()),
             Obs::Input { entry, .. } => (7, Cow::Borrowed(entry), 0),
         }
     }
 }
 
-fn cmd_subject(dir: &[u8], argv: &[Vec<u8>]) -> Vec<u8> {
-    let mut v = dir.to_vec();
-    for a in argv {
-        v.push(0);
-        v.extend_from_slice(a);
+/// The queries of a working tree that a run may record. An entry holds the
+/// query, and validation builds its command line from this table, so a cache
+/// directory a stranger can write names no program of its own. `Scm`
+/// implementations reach it through [`Trace::cmd`], which refuses a command
+/// the table does not hold.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Query {
+    GitLsFiles,
+    GitStatus,
+    GitHead,
+}
+
+impl Query {
+    /// Every permitted query, in the order that numbers their tags.
+    pub const ALL: [Query; 3] = [Query::GitLsFiles, Query::GitStatus, Query::GitHead];
+
+    /// The `Scm::name` of the system this query belongs to.
+    pub fn scm(self) -> &'static str {
+        match self {
+            Query::GitLsFiles | Query::GitStatus | Query::GitHead => "git",
+        }
     }
-    v
+
+    pub fn argv(self) -> &'static [&'static str] {
+        match self {
+            Query::GitLsFiles => &["git", "ls-files", "-z", "--cached", "--stage"],
+            Query::GitStatus => &[
+                "git",
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=no",
+                "--no-renames",
+                "--ignore-submodules=all",
+            ],
+            Query::GitHead => &["git", "rev-parse", "--verify", "-q", "HEAD"],
+        }
+    }
+
+    pub fn to_u8(self) -> u8 {
+        match self {
+            Query::GitLsFiles => 0,
+            Query::GitStatus => 1,
+            Query::GitHead => 2,
+        }
+    }
+
+    pub fn from_u8(b: u8) -> Option<Query> {
+        Query::ALL.get(usize::from(b)).copied()
+    }
+
+    /// The query `argv` is, or `None` for a command line this table does not
+    /// hold: its answer is then no observation and the run is uncacheable.
+    fn of(argv: &[Vec<u8>]) -> Option<Query> {
+        Query::ALL.into_iter().find(|q| {
+            let want = q.argv();
+            want.len() == argv.len() && want.iter().zip(argv).all(|(a, b)| a.as_bytes() == &b[..])
+        })
+    }
 }
 
 /// Runs `argv` in `dir` and returns its exit status and stdout; stderr is
-/// inherited. `hash` is what a `Cmd` observation records.
-pub fn run_cmd(dir: &Path, argv: &[Vec<u8>]) -> io::Result<(i32, Vec<u8>)> {
+/// inherited.
+fn run_cmd(dir: &Path, argv: &[Vec<u8>]) -> io::Result<(i32, Vec<u8>)> {
     let out = std::process::Command::new(std::ffi::OsStr::from_bytes(&argv[0]))
         .args(argv[1..].iter().map(|a| std::ffi::OsStr::from_bytes(a)))
         .current_dir(dir)
@@ -174,6 +227,13 @@ pub fn run_cmd(dir: &Path, argv: &[Vec<u8>]) -> io::Result<(i32, Vec<u8>)> {
         .stderr(std::process::Stdio::inherit())
         .output()?;
     Ok((out.status.code().unwrap_or(-1), out.stdout))
+}
+
+/// Asks `q` in `dir` again, for validation. The argv comes from the table,
+/// never from the entry.
+pub fn run_query(dir: &Path, q: Query) -> io::Result<(i32, Vec<u8>)> {
+    let argv: Vec<Vec<u8>> = q.argv().iter().map(|a| a.as_bytes().to_vec()).collect();
+    run_cmd(dir, &argv)
 }
 
 pub fn cmd_hash(status: i32, stdout: &[u8]) -> Digest32 {
@@ -299,14 +359,20 @@ impl Trace {
     }
 
     /// Runs `argv` in `dir`, records what it printed, returns (status, stdout).
+    /// A command line that [`Query`] does not hold still runs, but its answer
+    /// is no observation: validation would have to trust the entry for the
+    /// argv, so the run is uncacheable instead.
     pub fn cmd(&self, dir: &Path, argv: &[Vec<u8>]) -> io::Result<(i32, Vec<u8>)> {
         let (status, stdout) = run_cmd(dir, argv)?;
         if self.is_on() {
-            self.record(Obs::Cmd {
-                dir: dir.as_os_str().as_bytes().to_vec(),
-                argv: argv.to_vec(),
-                hash: cmd_hash(status, &stdout),
-            });
+            match Query::of(argv) {
+                Some(query) => self.record(Obs::Cmd {
+                    dir: dir.as_os_str().as_bytes().to_vec(),
+                    query,
+                    hash: cmd_hash(status, &stdout),
+                }),
+                None => self.mark_uncacheable(),
+            }
         }
         Ok((status, stdout))
     }
@@ -668,6 +734,25 @@ mod tests {
         t.record(o2.clone());
         let v = t.take();
         assert_eq!(v, vec![o1, o2]);
+    }
+
+    /// A command line the table does not hold has no observation the
+    /// validator could ask again, so the run is uncacheable instead.
+    #[test]
+    fn only_a_named_query_is_an_observation() {
+        for q in Query::ALL {
+            let argv: Vec<Vec<u8>> = q.argv().iter().map(|a| a.as_bytes().to_vec()).collect();
+            assert_eq!(Query::of(&argv), Some(q));
+            assert_eq!(Query::from_u8(q.to_u8()), Some(q));
+        }
+        assert_eq!(Query::of(&[b"sh".to_vec(), b"-c".to_vec()]), None);
+        assert_eq!(Query::from_u8(Query::ALL.len() as u8), None);
+
+        let t = Trace::enabled();
+        assert!(t.is_cacheable());
+        let _ = t.cmd(Path::new("/"), &[b"true".to_vec()]);
+        assert!(!t.is_cacheable(), "a command outside the table");
+        assert!(t.take().is_empty(), "and it leaves no observation");
     }
 
     /// The fused fingerprint must be byte-identical to the separate walk, or

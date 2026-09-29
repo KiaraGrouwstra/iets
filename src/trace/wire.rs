@@ -230,10 +230,10 @@ fn put_obs(e: &mut Enc, o: &Obs) {
             e.bytes(name);
             e.opt_bytes(value.as_deref());
         }
-        Obs::Cmd { dir, argv, hash } => {
+        Obs::Cmd { dir, query, hash } => {
             e.u8(6);
             e.bytes(dir);
-            e.list(argv);
+            e.u8(query.to_u8());
             e.digest(hash);
         }
         Obs::Input { entry, version } => {
@@ -303,7 +303,7 @@ fn get_obs(d: &mut Dec<'_>) -> R<Obs> {
         },
         6 => Obs::Cmd {
             dir: d.vec()?,
-            argv: d.list()?,
+            query: super::Query::from_u8(d.u8()?).ok_or(())?,
             hash: d.digest()?,
         },
         7 => Obs::Input {

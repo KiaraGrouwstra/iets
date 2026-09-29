@@ -66,6 +66,13 @@ deleted and the run continues as a miss. A store whose version file is of
 another format, or whose garbage-collection stamp cannot be parsed, or
 whose lock is not a file, is emptied and starts again.
 
+**Nothing in an entry names a program.** An observation of a working tree
+holds which query of which SCM was asked, and the validator builds the
+command line from its own table, so an entry cannot start a program of its
+own choosing. `nix fmt` is the one command that runs what an entry
+remembered, and it runs it only when the entry names a file inside a store
+path of the store directory.
+
 That holds for *any* bytes, not only for bytes ietsp wrote: a cache
 directory is writable by whoever runs ietsp, so a truncated, corrupt or
 crafted entry must be a miss and never a crash. The IR decoder therefore
@@ -179,7 +186,7 @@ Every primop that looks at the world records one observation.
 | a copied tree's NAR hash and stat hash | `./path` coerced to a string, `builtins.path`, `filterSource`, a flake's working tree, a `path:` input | recompute the stat hash with `lstat` only; on a mismatch re-dump the NAR with the recorded filter and compare. A `path:` input also records its newest mtime, which the evaluation sees as `lastModified`, and the same bytes with another date are a change |
 | a resolved symlink | `storePath`, `builtins.path` and `filterSource` when canonicalising changed the path | canonicalise again |
 | an environment variable | `getEnv`; `HOME` when a `~/` literal is compiled | read it again |
-| a command's exit status and output | the queries of the SCM that read a flake working tree; for git, `ls-files`, `status` and `rev-parse HEAD` | run it again, rehash |
+| which query of which SCM was asked in which directory, and its exit status and output | the queries of the SCM that read a flake working tree; for git, `ls-files`, `status` and `rev-parse HEAD` | ask the same query again, rehash |
 
 What follows from an observation is no observation. The date and the
 count of a revision follow from the revision: a commit is named by the
