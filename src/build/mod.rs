@@ -368,6 +368,20 @@ impl Dispatcher {
                 }
             }
         }
+        // A mismatch is a fact about a fixed-output derivation of this batch's
+        // closure, from the daemon; anything else that prints the words is
+        // dropped. Nix's worker sets the hash-mismatch flag for the whole run,
+        // so a root whose dependency mismatched exits 102 as well.
+        let planned = std::cell::OnceCell::new();
+        let closure = &*up;
+        let kept = crate::log::resolve_mismatches(&|specified| {
+            (planned.get_or_init(|| closure.drvs(&roots, true).unwrap_or_default()))
+                .iter()
+                .any(|d| has_output_hash(d, specified))
+        });
+        if kept > 0 {
+            self.exit = crate::log::combine_exit(self.exit, 102);
+        }
         self.reporter.release();
         Ok(out)
     }
@@ -511,6 +525,31 @@ fn event_sink<'a>(
             ));
         }
     }
+}
+
+/// Whether `d` is fixed-output with `specified` as its output hash. The ATerm
+/// holds the hash in base 16, so the scan is over bytes and only a derivation
+/// that could match is parsed.
+fn has_output_hash(d: &backend::Drv, specified: &str) -> bool {
+    use crate::store::drv::{Derivation, DerivationOutput};
+    use crate::store::hash::{Hash, HashFormat};
+    let (Ok(want), Ok(text)) = (
+        Hash::parse_any(specified, None),
+        std::str::from_utf8(&d.aterm),
+    ) else {
+        return false;
+    };
+    if !text.contains(&want.to_string_with(HashFormat::Base16, false)) {
+        return false;
+    }
+    let Ok(name) = Derivation::name_from_path(&d.path) else {
+        return false;
+    };
+    let Ok(drv) = Derivation::parse(text, name) else {
+        return false;
+    };
+    (drv.outputs.values())
+        .any(|o| matches!(o, DerivationOutput::Fixed { hash, .. } if *hash == want))
 }
 
 /// `<hash>-<name>.drv` as just `<name>`, the way a build log names a

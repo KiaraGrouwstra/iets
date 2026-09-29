@@ -111,6 +111,7 @@ mod tests {
         {
             let _entered = a.enter();
             crate::log::note_mismatch(&line);
+            crate::log::resolve_mismatches(&|_| true);
         }
         {
             let _entered = b.enter();

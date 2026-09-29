@@ -256,9 +256,13 @@ impl Renderer {
         // A failure message names the derivation that failed, which is the
         // only per-derivation verdict the protocol carries.
         self.note_failures(&text);
-        // the line below may end up in a build's buffer, which `log::format`
-        // never sees, so the mismatch is read off it first
-        crate::log::note_mismatch(&text);
+        // Only the daemon's own line counts, and only until the plan confirms
+        // it: a build's log can print the same words, and `fix-hashes` acts on
+        // the answer. The line may end up in a build's buffer, which
+        // `log::format` never sees, so it is read off here.
+        if e.drv.is_empty() {
+            crate::log::note_mismatch(&text);
+        }
         // A line the daemon did not attribute belongs to the running build
         // when there is exactly one: that is what a remote builder's own
         // stderr looks like coming back through the daemon.

@@ -27,6 +27,9 @@ pub struct Log {
     sid: OnceLock<String>,
     next_activity: AtomicU64,
     mismatches: Mutex<Vec<(String, String)>>,
+    /// Mismatches a build reported, before `resolve_mismatches` says which of
+    /// them are about a fixed-output derivation the client planned.
+    pending: Mutex<Vec<(String, String)>>,
     want_mismatch: Mutex<Option<String>>,
     /// Where messages go. `None` writes nowhere: a library says nothing
     /// unless the host asked for it. `ietsp` points it at stderr.
@@ -589,6 +592,9 @@ fn wanted(log: &Log, text: &str) -> bool {
 /// not as the build's result, so the line is read here too. The resolved copy
 /// has a drv path of its own, so only the pair of hashes carries over; that
 /// is all `fix-hashes` and `prefetch` need.
+///
+/// The pair is only a candidate: `resolve_mismatches` keeps the ones that name
+/// a fixed-output derivation of the plan. Anything can print this text.
 pub fn note_mismatch(text: &str) {
     if text.contains(MISMATCH)
         && let Some(m) = mismatch(&strip_ansi(text))
@@ -600,10 +606,31 @@ pub fn note_mismatch(text: &str) {
 /// One `(specified, got)` pair, skipping one that is already there: a
 /// mismatch can reach both paths that note one.
 fn push_mismatch(log: &Log, m: (String, String)) {
-    let mut v = log.mismatches.lock().unwrap_or_else(|e| e.into_inner());
+    let mut v = log.pending.lock().unwrap_or_else(|e| e.into_inner());
     if !v.contains(&m) {
         v.push(m);
     }
+}
+
+/// Decides the candidates: `planned` says whether a `specified` hash is the
+/// output hash of a fixed-output derivation the client is building. Nothing
+/// else counts, because a build log and an evaluation can print the same
+/// text, and `fix-hashes` writes the answer into a file of the user.
+/// Returns how many were kept.
+pub fn resolve_mismatches(planned: &dyn Fn(&str) -> bool) -> usize {
+    let log = &cur().log;
+    let candidates = std::mem::take(&mut *log.pending.lock().unwrap_or_else(|e| e.into_inner()));
+    let mut kept = 0;
+    let mut v = log.mismatches.lock().unwrap_or_else(|e| e.into_inner());
+    for m in candidates {
+        if planned(&m.0) {
+            kept += 1;
+            if !v.contains(&m) {
+                v.push(m);
+            }
+        }
+    }
+    kept
 }
 
 /// The `(specified, got)` pairs of the hash mismatches reported since the
@@ -970,12 +997,68 @@ mod tests {
         );
         note_mismatch(&line);
         note_mismatch(&line);
+        assert_eq!(resolve_mismatches(&|s| s == a), 1);
         assert_eq!(
             take_mismatches(),
             vec![(a.to_string(), "sha256-BoBoBoBoBo=".to_string())]
         );
         note_mismatch("error: build of resolved derivation '/nix/store/r-x.drv' failed");
+        assert_eq!(resolve_mismatches(&|_| true), 0);
         assert_eq!(take_mismatches(), Vec::new());
+    }
+
+    /// A build log, a `builtins.trace` or any other text can print the same
+    /// words: a mismatch that names no planned fixed-output derivation is
+    /// dropped, so `fix-hashes` never writes it into a file of the user.
+    #[test]
+    fn a_forged_mismatch_is_dropped() {
+        let s = Session::new();
+        let _entered = s.enter();
+        let line = format!(
+            "{MISMATCH} 'x':\n  specified: sha256-AoAoAoAoAo=\n     got:    sha256-BoBoBoBoBo="
+        );
+        note_mismatch(&line);
+        assert_eq!(resolve_mismatches(&|_| false), 0);
+        assert_eq!(take_mismatches(), Vec::new());
+        // the same text through `format`, as a build log line reaches stderr
+        let _ = format(&line);
+        assert_eq!(resolve_mismatches(&|_| true), 0);
+        assert_eq!(take_mismatches(), Vec::new());
+    }
+
+    #[test]
+    fn escapes_are_filtered_the_way_nix_filters_them() {
+        let coloured = "\x1b[31;1merror:\x1b[0m boom";
+        assert_eq!(filter_ansi(coloured, true), "error: boom");
+        assert_eq!(filter_ansi(coloured, false), coloured);
+        // cursor movement, clear screen and OSC never survive
+        assert_eq!(filter_ansi("a\x1b[2Jb\x1b[3Dc", false), "abc");
+        assert_eq!(filter_ansi("a\x1b]0;title\x07b", false), "ab");
+        assert_eq!(filter_ansi("a\x1b]8;;http://x\x1b\\b", false), "ab");
+        assert_eq!(filter_ansi("a\rb\x07", false), "ab");
+        assert_eq!(filter_ansi("a\tb", false), "a       b");
+    }
+
+    #[test]
+    fn a_coloured_error_is_an_error_record() {
+        let s = Session::new();
+        let _entered = s.enter();
+        s.log.json.store(true, Ordering::Relaxed);
+        let out = format("\x1b[31;1merror:\x1b[0m boom");
+        assert!(out.contains(r#""level":0"#), "{out}");
+    }
+
+    #[test]
+    fn a_mismatch_reason_keeps_both_hashes() {
+        let raw = "status 5: hash mismatch in fixed-output derivation '/nix/store/x.drv':\n  specified: sha256-AAAA=\n     got:    sha256-BBBB=";
+        assert_eq!(
+            reason_line(raw),
+            "status 5: hash mismatch in fixed-output derivation '/nix/store/x.drv': specified: sha256-AAAA=, got: sha256-BBBB="
+        );
+        assert_eq!(
+            reason_line("status 3: Cannot build 'x'.\nmore"),
+            "status 3: Cannot build 'x'."
+        );
     }
 
     #[test]
