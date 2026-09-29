@@ -189,19 +189,13 @@ fn put(d: &mut Dir, name: &[u8], node: Node, replace: bool) {
 }
 
 /// Puts `node` at `parts`, with the missing parents created. A parent that is
-/// not a directory is replaced, as `make_parents` replaces it; one that is a
-/// symlink is refused (`ARCHIVE_EXTRACT_SECURE_SYMLINKS`).
-fn insert(
-    at: &mut Dir,
-    parts: &[Vec<u8>],
-    full: &[Vec<u8>],
-    node: Node,
-    replace: bool,
-) -> Result<()> {
+/// not a directory is replaced, a symlink included, as `make_parents` replaces
+/// it (git-utils.cc:addNode emplaces a directory at every parent name).
+fn insert(at: &mut Dir, parts: &[Vec<u8>], node: Node, replace: bool) {
     let (name, rest) = parts.split_first().expect("a non-empty member path");
     if rest.is_empty() {
         put(at, name, node, replace);
-        return Ok(());
+        return;
     }
     let i = match find(at, name) {
         Ok(i) => i,
@@ -210,20 +204,13 @@ fn insert(
             i
         }
     };
-    if let Node::Symlink(_) = at[i].1 {
-        return Err(bad(format!(
-            "tarball member '{}' is under the symlink '{}'",
-            show(full),
-            String::from_utf8_lossy(name)
-        )));
-    }
     if !matches!(at[i].1, Node::Dir(_)) {
         at[i].1 = Node::Dir(Dir::new());
     }
     let Node::Dir(d) = &mut at[i].1 else {
         unreachable!("a directory")
     };
-    insert(d, rest, full, node, replace)
+    insert(d, rest, node, replace)
 }
 
 fn lookup<'a>(root: &'a Dir, parts: &[Vec<u8>]) -> Option<&'a Node> {
@@ -277,22 +264,28 @@ impl Tree {
                         .map_err(|e| Error::io("cannot read a tarball member name", e))?
                         .into_owned(),
                 };
-                let parts = parts_of(&super::unpack::member_path(&name)?);
+                let parts = parts_of(&super::unpack::member_path(&name));
                 if parts.is_empty() {
                     continue;
                 }
+                if kind.is_character_special() || kind.is_block_special() || kind.is_fifo() {
+                    return Err(bad(format!(
+                        "file '{}' in tarball has unsupported file type {kind:?}",
+                        name.display()
+                    )));
+                }
                 if kind.is_dir() {
-                    insert(&mut root, &parts, &parts, Node::Dir(Dir::new()), true)?;
+                    insert(&mut root, &parts, Node::Dir(Dir::new()), true);
                 } else if kind.is_symlink() {
                     let target = link_target(&mut entry, &parts, "symlink")?;
-                    insert(&mut root, &parts, &parts, Node::Symlink(target), true)?;
+                    insert(&mut root, &parts, Node::Symlink(target), true);
                 } else if kind.is_hard_link() {
                     let target = link_target(&mut entry, &parts, "link")?;
-                    let target = super::unpack::member_path(Path::new(
-                        std::ffi::OsStr::from_bytes(&target),
-                    ))?;
+                    let target =
+                        super::unpack::member_path(Path::new(std::ffi::OsStr::from_bytes(&target)));
                     links.insert(parts, parts_of(&target));
-                } else if kind.is_file() || kind.is_contiguous() || kind.is_gnu_sparse() {
+                } else {
+                    // libarchive gives every other type flag AE_IFREG (tarfile.cc:224)
                     let exec = entry.header().mode().unwrap_or(0o644) & 0o100 != 0;
                     // A sparse member's holes are not in the archive, so it is
                     // the one member whose bytes must be written out to be
@@ -335,12 +328,7 @@ impl Tree {
                             at
                         }
                     };
-                    insert(&mut root, &parts, &parts, Node::File { at, exec }, true)?;
-                } else {
-                    return Err(bad(format!(
-                        "file '{}' in tarball has unsupported file type {kind:?}",
-                        name.display()
-                    )));
+                    insert(&mut root, &parts, Node::File { at, exec }, true);
                 }
             }
         }
@@ -364,7 +352,7 @@ impl Tree {
                     )));
                 }
             };
-            insert(&mut root, &parts, &parts, copy, false)?;
+            insert(&mut root, &parts, copy, false);
         }
         Ok(Tree {
             spool,
@@ -967,15 +955,21 @@ mod tests {
     fn tar_gz(entries: &[(&str, tar::EntryType, u32, &[u8])]) -> Vec<u8> {
         let mut b = tar::Builder::new(Vec::new());
         for (name, kind, mode, data) in entries {
+            let carries = !matches!(*kind, DIR | SYM | HARD);
             let mut h = tar::Header::new_ustar();
             h.set_entry_type(*kind);
             h.set_mode(*mode);
-            h.set_size(if *kind == REG { data.len() as u64 } else { 0 });
+            h.set_size(if carries { data.len() as u64 } else { 0 });
             if *kind == SYM || *kind == HARD {
                 h.set_link_name(std::str::from_utf8(data).unwrap()).unwrap();
             }
-            let body: &[u8] = if *kind == REG { data } else { &[] };
-            b.append_data(&mut h, name, body).unwrap();
+            // `set_path` refuses a `..`, which is a member name a tarball may
+            // hold; the field is 100 bytes and these names are short
+            let raw = &mut h.as_ustar_mut().unwrap().name;
+            raw[..name.len()].copy_from_slice(name.as_bytes());
+            h.set_cksum();
+            let body: &[u8] = if carries { data } else { &[] };
+            b.append(&h, body).unwrap();
         }
         let tar = b.into_inner().unwrap();
         let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
@@ -1091,14 +1085,6 @@ mod tests {
                 "hard link",
             ),
             (
-                "under-symlink",
-                vec![
-                    ("t", SYM, 0o777u32, &b"/etc"[..]),
-                    ("t/f", REG, 0o644, &b"x"[..]),
-                ],
-                "symlink",
-            ),
-            (
                 "link-to-dir",
                 vec![
                     ("d/", DIR, 0o755u32, &b""[..]),
@@ -1113,6 +1099,57 @@ mod tests {
             assert!(e.contains(why), "{tag}: {e}");
             assert!(tree.is_err(), "{tag}: the tree path accepted it");
         }
+    }
+
+    /// The archives the git sink takes and libarchive's extract flags would
+    /// not: a `..` that `CanonPath` applies, a member below a symlink, and a
+    /// type flag libarchive gives `AE_IFREG`.
+    #[test]
+    fn archives_the_git_sink_accepts() {
+        let escaped = same(
+            "dotdot",
+            &[
+                ("t/", DIR, 0o755, b""),
+                ("t/a", REG, 0o644, b"in"),
+                ("t/../../esc", REG, 0o644, b"out"),
+            ],
+        );
+        let want = same(
+            "dotdot-want",
+            &[
+                ("t/", DIR, 0o755, b""),
+                ("t/a", REG, 0o644, b"in"),
+                ("esc", REG, 0o644, b"out"),
+            ],
+        );
+        assert_eq!(escaped, want, "'..' is applied, not refused");
+
+        let under = same(
+            "under-a-symlink",
+            &[
+                ("t/", DIR, 0o755, b""),
+                ("t/s", SYM, 0o777, b"/etc"),
+                ("t/s/f", REG, 0o644, b"x"),
+            ],
+        );
+        let want = same(
+            "under-a-symlink-want",
+            &[("t/", DIR, 0o755, b""), ("t/s/f", REG, 0o644, b"x")],
+        );
+        assert_eq!(under, want, "the symlink becomes the directory");
+
+        let unknown = same(
+            "unknown-type-flag",
+            &[
+                ("t/", DIR, 0o755, b""),
+                ("t/f", tar::EntryType::new(b'Z'), 0o644, b"hello"),
+            ],
+        );
+        let want = same(
+            "unknown-type-flag-want",
+            &[("t/", DIR, 0o755, b""), ("t/f", REG, 0o644, b"hello")],
+        );
+        assert_eq!(unknown, want, "an unknown type flag is a regular file");
     }
 
     /// No byte of a stored index is believed on its own: one flipped byte is a

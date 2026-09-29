@@ -182,9 +182,20 @@ the lock's `narHash` hashes:
 - the pax global header GitHub's tarballs start with is archive metadata,
   not a member.
 
-Any other member type is an error (`tarfile.cc:253`), and so is a `..` in
-a member name or a member under a symlink
-(`ARCHIVE_EXTRACT_SECURE_NODOTDOT`, `ARCHIVE_EXTRACT_SECURE_SYMLINKS`).
+A member name is a `CanonPath`: any root is stripped and a `..` removes
+the component before it, with nothing to remove at the top, so no member
+names anything outside the tree. A member below a symlink replaces that
+symlink with a directory; nothing is ever written through it. A device, a
+socket and a fifo are an error (`tarfile.cc:253`); every other type flag
+is a regular file, as `archive_entry_filetype` gives it. These three
+match the git sink behind a locked input. `nix store prefetch-file
+--unpack` is Nix's other archive path, with libarchive's extract flags,
+and refuses all three.
+
+Two limits are ietsp's own. `fetch-max-size` covers the spool and
+everything a sparse member expands to together
+(`docs/reference/settings.md`). A stream with over eight layers of
+compression is refused, where libarchive stacks filters without a bound.
 
 The NAR hash of the result is compared with the lock's `narHash`. A
 mismatch names both hashes and keeps nothing: the staged directory goes,

@@ -23,29 +23,27 @@ fn bad(why: String) -> Error {
     Error::Store(why)
 }
 
-/// `std::filesystem::path(name).relative_path()` plus libarchive's
-/// `ARCHIVE_EXTRACT_SECURE_NODOTDOT` (tarfile.cc:135, 156): the member path with
-/// any root stripped, `.` dropped, and `..` refused.
-pub(crate) fn member_path(name: &Path) -> Result<PathBuf> {
+/// `CanonPath{name}` (tarfile.cc:204): the member path with any root stripped,
+/// `.` dropped and `..` applied. A `..` at the top has nothing to remove, so no
+/// member ever names anything outside the tree.
+pub(crate) fn member_path(name: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in name.components() {
         match c {
             Component::Normal(p) => out.push(p),
             Component::CurDir | Component::RootDir | Component::Prefix(_) => {}
             Component::ParentDir => {
-                return Err(bad(format!(
-                    "tarball member '{}' escapes the archive",
-                    name.display()
-                )));
+                out.pop();
             }
         }
     }
-    Ok(out)
+    out
 }
 
-/// `root` joined with a checked member path, with the missing parents created.
-/// A parent that exists and is not a directory is replaced, and one reached
-/// through a symlink is refused (`ARCHIVE_EXTRACT_SECURE_SYMLINKS`).
+/// `root` joined with a member path, with the missing parents created. A parent
+/// that exists and is not a directory is replaced, a symlink included: the sink
+/// never follows one out of the tree, it overwrites it (git-utils.cc:addNode
+/// emplaces a directory at every parent name).
 fn make_parents(root: &Path, rel: &Path) -> Result<PathBuf> {
     let mut at = root.to_path_buf();
     let n = rel.components().count();
@@ -56,13 +54,6 @@ fn make_parents(root: &Path, rel: &Path) -> Result<PathBuf> {
         }
         match std::fs::symlink_metadata(&at) {
             Ok(m) if m.is_dir() => {}
-            Ok(m) if m.is_symlink() => {
-                return Err(bad(format!(
-                    "tarball member '{}' is under the symlink '{}'",
-                    rel.display(),
-                    at.display()
-                )));
-            }
             Ok(_) => {
                 std::fs::remove_file(&at)
                     .map_err(|e| Error::io(format!("cannot replace {}", at.display()), e))?;
@@ -115,9 +106,15 @@ pub fn unpack(bytes: Vec<u8>, dest: &Path) -> Result<PathBuf> {
                 .map_err(|e| Error::io("cannot read a tarball member name", e))?
                 .into_owned(),
         };
-        let rel = member_path(&name)?;
+        let rel = member_path(&name);
         if rel.as_os_str().is_empty() {
             continue;
+        }
+        if kind.is_character_special() || kind.is_block_special() || kind.is_fifo() {
+            return Err(bad(format!(
+                "file '{}' in tarball has unsupported file type {kind:?}",
+                name.display()
+            )));
         }
         let at = make_parents(dest, &rel)?;
         if kind.is_dir() {
@@ -143,8 +140,9 @@ pub fn unpack(bytes: Vec<u8>, dest: &Path) -> Result<PathBuf> {
                 .map_err(|e| Error::io("cannot read a hard link target", e))?
                 .ok_or_else(|| bad(format!("tarball link '{}' has no target", rel.display())))?
                 .into_owned();
-            links.insert(rel, member_path(&target)?);
-        } else if kind.is_file() || kind.is_contiguous() || kind.is_gnu_sparse() {
+            links.insert(rel, member_path(&target));
+        } else {
+            // libarchive gives every other type flag AE_IFREG (tarfile.cc:224)
             let executable = entry.header().mode().unwrap_or(0o644) & 0o100 != 0;
             clear(&at)?;
             let out = std::fs::File::create(&at)
@@ -161,11 +159,6 @@ pub fn unpack(bytes: Vec<u8>, dest: &Path) -> Result<PathBuf> {
                 std::fs::Permissions::from_mode(if executable { 0o755 } else { 0o644 }),
             )
             .map_err(|e| Error::io(format!("cannot set the mode of {}", at.display()), e))?;
-        } else {
-            return Err(bad(format!(
-                "file '{}' in tarball has unsupported file type {kind:?}",
-                name.display()
-            )));
         }
     }
     for (rel, target) in links {
@@ -388,17 +381,16 @@ mod tests {
         std::fs::remove_dir_all(&w).unwrap();
     }
 
-    /// An absolute member name loses its root, as `relative_path()` does; `..`
-    /// is refused, as `ARCHIVE_EXTRACT_SECURE_NODOTDOT` refuses it.
+    /// An absolute member name loses its root and `..` is applied, as
+    /// `CanonPath` applies it; a `..` at the top removes nothing.
     #[test]
     fn member_names_are_made_relative_and_cannot_escape() {
-        assert_eq!(member_path(Path::new("/a/b")).unwrap(), Path::new("a/b"));
-        assert_eq!(member_path(Path::new("./a")).unwrap(), Path::new("a"));
-        assert_eq!(member_path(Path::new("a/./b")).unwrap(), Path::new("a/b"));
-        let e = member_path(Path::new("../outside")).unwrap_err();
-        assert!(e.to_string().contains("escapes the archive"));
-        let e = member_path(Path::new("a/../../b")).unwrap_err();
-        assert!(e.to_string().contains("escapes the archive"));
+        assert_eq!(member_path(Path::new("/a/b")), Path::new("a/b"));
+        assert_eq!(member_path(Path::new("./a")), Path::new("a"));
+        assert_eq!(member_path(Path::new("a/./b")), Path::new("a/b"));
+        assert_eq!(member_path(Path::new("a/../b")), Path::new("b"));
+        assert_eq!(member_path(Path::new("../outside")), Path::new("outside"));
+        assert_eq!(member_path(Path::new("t/../../esc")), Path::new("esc"));
     }
 
     /// The NAR hash of an unpacked tree is what `nix hash path` prints for it;

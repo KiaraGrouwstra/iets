@@ -576,35 +576,74 @@ impl Read for Sniffed {
     }
 }
 
-/// `read` with the compression its first bytes announce undone, as
-/// `archive_read_support_filter_all` does it, without holding the stream.
-pub fn decompress_reader(mut read: Box<dyn Read>) -> Result<Box<dyn Read>> {
-    let mut head = [0u8; 6];
-    let mut n = 0;
-    while n < head.len() {
-        match read.read(&mut head[n..]) {
-            Ok(0) => break,
-            Ok(k) => n += k,
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(e) => return Err(Error::io("cannot read the archive", e)),
+/// Gzip members one after another, and the stream over as soon as what follows
+/// the last one is not a gzip header. `MultiGzDecoder` makes that an error;
+/// libarchive's filter bids on the bytes and, finding no filter, hands the rest
+/// to the tar reader, which stops at its own end-of-archive marker.
+struct MultiGz {
+    at: flate2::bufread::GzDecoder<std::io::BufReader<Box<dyn Read>>>,
+}
+
+impl Read for MultiGz {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            match self.at.read(buf)? {
+                0 => {}
+                n => return Ok(n),
+            }
+            let rest = self.at.get_mut();
+            if !std::io::BufRead::fill_buf(rest)?.starts_with(&[0x1f, 0x8b]) {
+                return Ok(0);
+            }
+            let inner = std::mem::replace(rest, std::io::BufReader::new(Box::new(&[][..])));
+            self.at = flate2::bufread::GzDecoder::new(inner);
         }
     }
-    let kind = Compression::sniff(&head[..n]);
-    let src = Sniffed {
-        head: head[..n].to_vec(),
-        pos: 0,
-        rest: read,
-    };
-    Ok(match kind {
-        Compression::None => Box::new(src),
-        Compression::Gzip => Box::new(flate2::read::MultiGzDecoder::new(src)),
-        Compression::Xz => Box::new(lzma_rust2::XzReader::new(src, true)),
-        Compression::Zstd => Box::new(
-            zstd::stream::read::Decoder::new(src)
-                .map_err(|e| Error::io("cannot start the zstd decoder", e))?,
-        ),
-        Compression::Bzip2 => Box::new(bzip2::read::MultiBzDecoder::new(src)),
-    })
+}
+
+/// How many filters `archive_read_support_filter_all` may stack before ietsp
+/// calls the stream a bomb: a doubly compressed tarball is one Nix accepts.
+const MAX_FILTERS: usize = 8;
+
+/// `read` with the compression its first bytes announce undone, as
+/// `archive_read_support_filter_all` does it, without holding the stream. A
+/// filter's own output is sniffed again, so a doubly compressed archive
+/// unpacks.
+pub fn decompress_reader(read: Box<dyn Read>) -> Result<Box<dyn Read>> {
+    let mut read = read;
+    for _ in 0..MAX_FILTERS {
+        let mut head = [0u8; 6];
+        let mut n = 0;
+        while n < head.len() {
+            match read.read(&mut head[n..]) {
+                Ok(0) => break,
+                Ok(k) => n += k,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(Error::io("cannot read the archive", e)),
+            }
+        }
+        let kind = Compression::sniff(&head[..n]);
+        let src = Box::new(Sniffed {
+            head: head[..n].to_vec(),
+            pos: 0,
+            rest: read,
+        }) as Box<dyn Read>;
+        read = match kind {
+            Compression::None => return Ok(src),
+            Compression::Gzip => Box::new(MultiGz {
+                at: flate2::bufread::GzDecoder::new(std::io::BufReader::new(src)),
+            }),
+            Compression::Xz => Box::new(lzma_rust2::XzReader::new(src, true)),
+            Compression::Zstd => Box::new(
+                zstd::stream::read::Decoder::new(src)
+                    .map_err(|e| Error::io("cannot start the zstd decoder", e))?,
+            ),
+            Compression::Bzip2 => Box::new(bzip2::read::MultiBzDecoder::new(src)),
+        };
+    }
+    Err(Error::Usage(format!(
+        "the archive has over {MAX_FILTERS} layers of compression"
+    )))
 }
 
 /// `bytes` with the compression it announces undone.
@@ -664,6 +703,38 @@ mod tests {
         assert_eq!(
             resolve("https://x.example/a/b", "c"),
             "https://x.example/a/c"
+        );
+    }
+
+    /// libarchive ignores what follows the last gzip member and bids its
+    /// filters on a filter's own output, so both of these unpack.
+    #[test]
+    fn trailing_bytes_and_a_second_layer() {
+        let gz = |bytes: &[u8]| {
+            let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+            e.write_all(bytes).unwrap();
+            e.finish().unwrap()
+        };
+        let one = gz(b"payload");
+        for extra in [&b""[..], &[0u8; 8][..], b"GARBAGE"] {
+            let mut bytes = one.clone();
+            bytes.extend_from_slice(extra);
+            assert_eq!(decompress(bytes).unwrap(), b"payload", "{extra:?}");
+        }
+        let mut two = one.clone();
+        two.extend_from_slice(&one);
+        assert_eq!(decompress(two).unwrap(), b"payloadpayload");
+        assert_eq!(decompress(gz(&one)).unwrap(), b"payload");
+
+        let mut onion = b"deep".to_vec();
+        for _ in 0..MAX_FILTERS + 1 {
+            onion = gz(&onion);
+        }
+        assert!(
+            decompress(onion)
+                .unwrap_err()
+                .to_string()
+                .contains("layers")
         );
     }
 

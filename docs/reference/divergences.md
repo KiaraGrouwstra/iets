@@ -141,6 +141,22 @@ Where ietsp still errors, the wording is its own. These are
 `publicKeys`, which Nix renders only with the `verified-fetches`
 experimental feature on.
 
+## Tarball inputs
+
+The tree of an archive input is the git sink's
+(`docs/reference/flakes.md`), member for member: a `..` in a name, a
+member below a symlink and an unknown type flag give what Nix gives, not
+an error. Nix's other archive path, `nix store prefetch-file --unpack`,
+refuses those three, so `ietsp prefetch --unpack` takes archives that
+command refuses. One tree, one rule, and it is the rule a `narHash` in a
+lock file was computed with.
+
+Two limits have no counterpart in Nix, because Nix has no setting for
+either. `fetch-max-size` bounds the spool and everything a sparse member
+expands to together, so an archive of ten kilobytes cannot write two
+gigabytes. A stream with over eight layers of compression is refused;
+libarchive stacks its filters without a bound.
+
 ## `revCount` of a source tree
 
 The value of `revCount` is that of Nix, and the attribute is there when
