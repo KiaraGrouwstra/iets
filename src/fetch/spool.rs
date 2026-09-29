@@ -105,19 +105,40 @@ fn show(parts: &[Vec<u8>]) -> String {
 }
 
 /// A file in TMPDIR, unlinked as soon as it is open: the bytes live exactly as
-/// long as the handle, whatever happens to the process.
+/// long as the handle, whatever happens to the process. The name is random and
+/// the open is exclusive, so a name another user can guess cannot make this
+/// truncate and write a file of theirs.
 pub fn scratch(tag: &str) -> Result<File> {
-    let path = std::env::temp_dir().join(format!("ietsp-spool-{}-{tag}", std::process::id()));
-    let file = File::options()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&path)
-        .map_err(|e| Error::io(format!("cannot create {}", path.display()), e))?;
-    std::fs::remove_file(&path)
-        .map_err(|e| Error::io(format!("cannot unlink {}", path.display()), e))?;
-    Ok(file)
+    use std::os::unix::fs::OpenOptionsExt;
+    let dir = std::env::temp_dir();
+    let mut last = None;
+    for _ in 0..8 {
+        let path = dir.join(format!("ietsp-spool-{tag}-{:016x}", random_u64()));
+        match File::options()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&path)
+        {
+            Ok(file) => {
+                std::fs::remove_file(&path)
+                    .map_err(|e| Error::io(format!("cannot unlink {}", path.display()), e))?;
+                return Ok(file);
+            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => last = Some((path, e)),
+            Err(e) => return Err(Error::io(format!("cannot create {}", path.display()), e)),
+        }
+    }
+    let (path, e) = last.expect("a failed attempt");
+    Err(Error::io(format!("cannot create {}", path.display()), e))
+}
+
+fn random_u64() -> u64 {
+    let mut b = [0u8; 8];
+    // SAFETY: getrandom(2) writes at most `len` bytes into the buffer.
+    unsafe { libc::getrandom(b.as_mut_ptr().cast(), b.len(), 0) };
+    u64::from_ne_bytes(b)
 }
 
 fn parts_of(rel: &Path) -> Parts {
@@ -866,6 +887,23 @@ mod tests {
             assert!(e.contains(why), "{tag}: {e}");
             assert!(tree.is_err(), "{tag}: the tree path accepted it");
         }
+    }
+
+    /// `ietsp-spool-<pid>-<tag>`, the name the scratch file had before it was
+    /// random, as a symlink: the open must not follow it.
+    #[test]
+    fn the_scratch_file_never_follows_a_symlink() {
+        let dir = std::env::temp_dir();
+        let victim = dir.join(format!("ietsp-spool-victim-{}", std::process::id()));
+        std::fs::write(&victim, b"precious").unwrap();
+        let bait = dir.join(format!("ietsp-spool-{}-bait", std::process::id()));
+        let _ = std::fs::remove_file(&bait);
+        std::os::unix::fs::symlink(&victim, &bait).unwrap();
+        let mut file = scratch("bait").unwrap();
+        file.write_all(b"the archive").unwrap();
+        assert_eq!(std::fs::read(&victim).unwrap(), b"precious");
+        std::fs::remove_file(&bait).unwrap();
+        std::fs::remove_file(&victim).unwrap();
     }
 
     /// The fixture whose `narHash` a lock file records, hashed out of the spool.
