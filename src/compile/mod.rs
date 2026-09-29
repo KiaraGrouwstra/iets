@@ -313,7 +313,9 @@ impl<'a> Compiler<'a> {
             Expr::Path(p) => self.path(p.kind, ast.parts(p.parts), pos)?,
             Expr::Var(sym) => {
                 let sym = *sym;
-                if sym == self.sym_cur_pos && self.lexical_lookup(sym).is_none() {
+                // parser.y makes every `__curPos` an ExprPos, so a binding
+                // of that name has no effect
+                if sym == self.sym_cur_pos {
                     return Ok(Ir::CurPos(pos));
                 }
                 match self.resolve(sym) {
@@ -435,8 +437,11 @@ impl<'a> Compiler<'a> {
                     BinOp::Eq => Ir::Eq(l, r, pos),
                     BinOp::Ne => Ir::Ne(l, r, pos),
                     BinOp::Lt => Ir::Lt(l, r, pos),
-                    BinOp::Gt => Ir::Gt(l, r, pos),
-                    BinOp::Le => Ir::Le(l, r, pos),
+                    // parser.y desugars `a > b` to `__lessThan b a` and
+                    // `a <= b` to `!(__lessThan b a)`, so the right operand
+                    // is evaluated first
+                    BinOp::Gt => Ir::Lt(r, l, pos),
+                    BinOp::Le => Ir::Ge(r, l, pos),
                     BinOp::Ge => Ir::Ge(l, r, pos),
                     BinOp::And => Ir::And(l, r, pos),
                     BinOp::Or => Ir::Or(l, r, pos),
@@ -1082,7 +1087,7 @@ impl<'a> Compiler<'a> {
     }
 
     fn var_ir(&mut self, var: Sym, pos: Pos) -> CResult<IrRef> {
-        if var == self.sym_cur_pos && self.lexical_lookup(var).is_none() {
+        if var == self.sym_cur_pos {
             return Ok(self.alloc(Ir::CurPos(pos)));
         }
         match self.resolve(var) {

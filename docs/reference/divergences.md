@@ -68,6 +68,21 @@ Nix returns a copy of the unforced argument thunk; inside a list,
 argument and prints the value. Selecting from the result behaves the same
 in both.
 
+## A local binding of an operator's builtin
+
+`parser.y` desugars `a - b` to `__sub a b`, `a * b` to `__mul a b`, `a / b`
+to `__div a b`, `-a` to `__sub 0 a` and the four comparisons to
+`__lessThan`. A lexical binding of one of those names therefore changes the
+operator in Nix: `let __sub = a: b: 42; in 5 - 1` gives 42. ietsp compiles
+the operators to their own operations and gives 4.
+
+A `with` does not reach them in Nix either, because the four names are in
+the base environment. Only a `let`, a `rec` set or a lambda parameter can
+shadow them, and no file of the pinned nixpkgs binds any of the four.
+Matching this would cost a scope lookup for every arithmetic and
+comparison operator at compile time, which the evaluator does not pay
+today.
+
 ## Nesting depth of a file
 
 The parser recurses. Nix recurses too and reports
