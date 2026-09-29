@@ -230,11 +230,21 @@ pub fn get(name: &str) -> Option<Arc<StoredTree>> {
 /// Whether the store holds `name`, for the tracing cache: an entry's presence
 /// is the whole observation, because its name is its content address.
 pub fn has(name: &[u8], version: u8) -> bool {
-    version == spool::INDEX_VERSION
-        && std::str::from_utf8(name)
-            .ok()
-            .and_then(dir_of)
-            .is_some_and(|dir| dir.join(spool::SPOOL).exists() && dir.join(spool::INDEX).exists())
+    if version != spool::INDEX_VERSION {
+        return false;
+    }
+    let Some(dir) = std::str::from_utf8(name).ok().and_then(dir_of) else {
+        return false;
+    };
+    if !(dir.join(spool::SPOOL).exists() && dir.join(spool::INDEX).exists()) {
+        return false;
+    }
+    // a tracing-cache hit reads nothing out of the entry, so this is the only
+    // thing that keeps the TTL sweep from removing an input that is in use.
+    // `touch` compares the mtime first, so a hit inside the interval writes
+    // nothing (docs/explanation/caching.md)
+    cachefs::touch(&dir);
+    true
 }
 
 /// A place to download into, under the store root. The staged directory is

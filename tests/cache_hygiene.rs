@@ -299,6 +299,59 @@ fn an_entry_that_is_not_a_plain_file_is_refused() {
     assert!(dir.join("huge").exists(), "and nothing was allocated");
 }
 
+/// The child of `an_input_observation_marks_its_entry_as_used`: the input
+/// store is under `XDG_CACHE_HOME`, so this runs in a process of its own.
+#[test]
+fn input_touch_child() {
+    use ietsp::fetch::spool;
+    let Some(name) = std::env::var_os("IETSP_INPUT_NAME") else {
+        return;
+    };
+    let name = name.to_string_lossy().into_owned();
+    // prepared first: a store with an entry and no version file is wiped
+    let dir = ietsp::treestore::root().expect("input store").join(&name);
+    std::fs::create_dir_all(&dir).expect("entry");
+    std::fs::write(dir.join(spool::SPOOL), b"").expect("spool");
+    std::fs::write(dir.join(spool::INDEX), b"").expect("index");
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(40 * 24 * 60 * 60);
+    std::fs::File::open(&dir)
+        .expect("dir")
+        .set_modified(old)
+        .expect("back-date");
+
+    let mut obs = vec![Obs::Input {
+        entry: name.into_bytes(),
+        version: spool::INDEX_VERSION,
+    }];
+    ietsp::trace::validate::validate(&mut obs, 1).expect("the entry is there");
+    let now = std::fs::metadata(&dir)
+        .expect("stat")
+        .modified()
+        .expect("mtime");
+    assert!(now > old, "a validated input observation marks the entry");
+}
+
+/// A hit reads nothing out of an input-store entry, so validating its
+/// observation is what keeps the sweep from removing an input that is in use.
+#[test]
+fn an_input_observation_marks_its_entry_as_used() {
+    let dir = tmp("inputtouch");
+    let out = Command::new(std::env::current_exe().expect("this test binary"))
+        .args(["input_touch_child", "--exact", "--nocapture"])
+        .env("XDG_CACHE_HOME", &dir)
+        .env(
+            "IETSP_INPUT_NAME",
+            "a3ck4d9zzk4l1r76rz5zv2wgycmpsy1y-source",
+        )
+        .output()
+        .expect("run the child");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
 #[test]
 fn cache_gc_removes_entries_past_the_ttl() {
     let dir = tmp("gc");

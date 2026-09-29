@@ -458,7 +458,10 @@ observation, not one per file, because the entry's name *is* the NAR hash
 of its tree: a name that is still there still holds the bytes the run read.
 Validating a whole nixpkgs is therefore two stat calls and a version-byte
 comparison, against the 3,513 file observations the same tree would cost if
-its files were checked one by one.
+its files were checked one by one. A validated observation also marks the
+entry as used, at most once a day as every other touch is, because a hit
+reads nothing out of the entry and the sweep would otherwise take an input
+that is in use.
 
 There is one place a process waits for a sibling. Before it downloads,
 a process takes a lock on that tree's name. A second process that needs the
