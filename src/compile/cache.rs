@@ -137,7 +137,7 @@ impl IrCache {
         use std::sync::atomic::Ordering;
         let path = self.entry(key);
         let dir = path.parent().expect("entry has a parent");
-        let _ = std::fs::create_dir_all(dir);
+        let _ = crate::cachefs::create_dir(dir);
         let name = &key[2..];
         if let Some(_lock) = crate::cachefs::write_lock(&self.root) {
             let sum = crate::cachefs::checksum(key, &[bytes]);

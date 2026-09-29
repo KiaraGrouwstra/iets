@@ -183,7 +183,7 @@ impl Store {
         chunks.push(&table);
         chunks.extend(parts.iter().map(|(_, b)| *b));
         let dir = self.entry_dir(key);
-        fs::create_dir_all(&dir)?;
+        cachefs::create_dir(&dir)?;
         let Some(_lock) = cachefs::write_lock(&self.root) else {
             return Ok(false);
         };

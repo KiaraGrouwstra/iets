@@ -228,7 +228,13 @@ fn put_obs(e: &mut Enc, o: &Obs) {
         Obs::Env { name, value } => {
             e.u8(5);
             e.bytes(name);
-            e.opt_bytes(value.as_deref());
+            match value {
+                None => e.u8(0),
+                Some(h) => {
+                    e.u8(1);
+                    e.digest(h);
+                }
+            }
         }
         Obs::Cmd { dir, query, hash } => {
             e.u8(6);
@@ -299,7 +305,11 @@ fn get_obs(d: &mut Dec<'_>) -> R<Obs> {
         },
         5 => Obs::Env {
             name: d.vec()?,
-            value: d.opt_vec()?,
+            value: match d.u8()? {
+                0 => None,
+                1 => Some(d.digest()?),
+                _ => return Err(()),
+            },
         },
         6 => Obs::Cmd {
             dir: d.vec()?,
@@ -611,7 +621,7 @@ mod tests {
             },
             Obs::Env {
                 name: b"HOME".to_vec(),
-                value: Some(b"/h".to_vec()),
+                value: Some([9; 32]),
             },
         ];
         let b = encode_readset(&obs);

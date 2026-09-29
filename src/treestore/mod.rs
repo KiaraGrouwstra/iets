@@ -274,7 +274,7 @@ pub fn stage(name: &str) -> Option<Staged> {
         cachefs::tag()
     ));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).ok()?;
+    cachefs::create_dir(&dir).ok()?;
     Some(Staged { dir })
 }
 

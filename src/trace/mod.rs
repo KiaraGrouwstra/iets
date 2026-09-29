@@ -116,9 +116,12 @@ pub enum Obs {
         path: Vec<u8>,
         target: Option<Vec<u8>>,
     },
+    /// `value` is a keyed hash, not the value: the observation needs only to
+    /// know whether the value changed, and an entry that held the answer of
+    /// every `getEnv` in clear would be a file of the user's secrets.
     Env {
         name: Vec<u8>,
-        value: Option<Vec<u8>>,
+        value: Option<Digest32>,
     },
     /// A query of an SCM asked in `dir`; `hash` covers its exit status and
     /// stdout. The entry names the query, never the command line it is.
@@ -356,10 +359,9 @@ impl Trace {
 
     pub fn env(&self, name: &[u8]) {
         if self.is_on() {
-            let v = std::env::var_os(std::ffi::OsStr::from_bytes(name));
             self.record(Obs::Env {
                 name: name.to_vec(),
-                value: v.map(|v| v.as_bytes().to_vec()),
+                value: env_hash(name),
             });
         }
     }
@@ -473,6 +475,19 @@ impl Trace {
 
 pub fn sha256(bytes: &[u8]) -> Digest32 {
     Sha256::digest(bytes).into()
+}
+
+/// What an `Env` observation records: the keyed hash of the value of `name`,
+/// or `None` when the variable is not set. The key is the cache's own
+/// (`cachefs::env_key`), so the entry says whether the value changed and
+/// nothing else about it.
+pub fn env_hash(name: &[u8]) -> Option<Digest32> {
+    let v = std::env::var_os(std::ffi::OsStr::from_bytes(name))?;
+    let mut h = blake3::Hasher::new_keyed(crate::cachefs::env_key());
+    h.update(&(name.len() as u64).to_le_bytes());
+    h.update(name);
+    h.update(v.as_bytes());
+    Some(*h.finalize().as_bytes())
 }
 
 pub fn mtime_ns(m: &fs::Metadata) -> i64 {
@@ -728,11 +743,11 @@ mod tests {
         let t = Trace::enabled();
         let o1 = Obs::Env {
             name: b"A".to_vec(),
-            value: Some(b"1".to_vec()),
+            value: Some([1; 32]),
         };
         let o2 = Obs::Env {
             name: b"A".to_vec(),
-            value: Some(b"2".to_vec()),
+            value: Some([2; 32]),
         };
         t.record(o1.clone());
         t.record(o1.clone());

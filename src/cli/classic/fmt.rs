@@ -166,7 +166,7 @@ fn link_dir(link: &Path) -> crate::error::Result<()> {
     let Some(dir) = link.parent() else {
         return Ok(());
     };
-    std::fs::create_dir_all(dir)
+    crate::cachefs::create_dir(dir)
         .map_err(|e| crate::error::Error::io(format!("cannot create {}", dir.display()), e))
 }
 

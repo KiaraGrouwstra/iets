@@ -33,10 +33,11 @@ pub fn cmd_cache_dump(file: &str) -> i32 {
                 s(path),
                 target.as_deref().map_or("(none)".to_string(), s)
             ),
+            // the value is a keyed hash; the entry never holds it
             Obs::Env { name, value } => println!(
-                "env {}={}",
+                "env {} {}",
                 s(name),
-                value.as_deref().map_or("(unset)".to_string(), s)
+                value.map_or("(unset)".to_string(), |h| hex(&h)[..16].to_string())
             ),
             Obs::Cmd { dir, query, hash } => println!(
                 "cmd {} `{}` {}",

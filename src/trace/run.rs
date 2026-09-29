@@ -28,6 +28,8 @@ impl Cache {
         if !crate::cachefs::prepare(store.root(), crate::cachefs::Shape::Dirs, timings) {
             return None;
         }
+        // before any evaluation records an `Env` observation
+        crate::cachefs::use_env_key(store.root());
         Some(Cache {
             store,
             key: key.finish(),

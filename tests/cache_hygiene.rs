@@ -27,13 +27,13 @@ fn key_of(i: usize) -> String {
     format!("{i:064x}")
 }
 
-/// One writer's read set for `key`: every value is the writer's own byte, so a
+/// One writer's read set for `key`: every hash is the writer's own byte, so a
 /// reader that sees two writers' bytes in one entry has read a torn file.
 fn payload(key: usize, writer: u8) -> Vec<u8> {
     let obs: Vec<Obs> = (0..OBS)
         .map(|i| Obs::Env {
             name: format!("IETSP_TEST_{key}_{i}").into_bytes(),
-            value: Some(vec![writer; 300]),
+            value: Some([writer; 32]),
         })
         .collect();
     wire::encode_readset(&obs)
@@ -87,7 +87,6 @@ fn check(store: &Store, key: usize) -> Option<usize> {
         };
         assert_eq!(name, format!("IETSP_TEST_{key}_{i}").as_bytes());
         let v = value.as_ref().expect("a value");
-        assert_eq!(v.len(), 300);
         writers.insert(writer_of(v, "value"));
     }
     // the review's case: a new result beside an old read set, or two
@@ -297,6 +296,31 @@ fn an_entry_that_is_not_a_plain_file_is_refused() {
         "a length no entry has"
     );
     assert!(dir.join("huge").exists(), "and nothing was allocated");
+}
+
+/// The cache holds what an evaluation read, so its directories and files are
+/// the user's whatever the umask, and an older cache root is tightened.
+#[test]
+fn a_cache_is_private_to_its_owner() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tmp("modes");
+    let root = dir.join("trace");
+    std::fs::create_dir_all(&root).expect("root");
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).expect("wide");
+    assert!(cachefs::prepare(&root, cachefs::Shape::Dirs, false));
+    let mode = |p: &Path| std::fs::metadata(p).expect("stat").permissions().mode() & 0o777;
+    assert_eq!(mode(&root), 0o700, "an older root is tightened");
+    assert_eq!(mode(&root.join("version")), 0o600);
+
+    let store = Store::locate(Some(dir.to_str().expect("utf-8 path"))).expect("store");
+    assert!(
+        store
+            .publish(&key_of(0), &[(Part::Readset, &hit_entry())])
+            .expect("publish")
+    );
+    assert_eq!(mode(&store.entry_dir(&key_of(0))), 0o700);
+    assert_eq!(mode(&store.entry_dir(&key_of(0)).join(ENTRY)), 0o600);
+    assert_eq!(mode(&root.join("lock")), 0o600);
 }
 
 /// The child of `an_input_observation_marks_its_entry_as_used`: the input

@@ -42,6 +42,34 @@ const LOCK_POLL: Duration = Duration::from_millis(2);
 const VERSION: &str = "version";
 const LOCK: &str = "lock";
 const STAMP: &str = "gc-stamp";
+const ENV_KEY: &str = "env-key";
+
+/// A cache entry holds what an evaluation read — the bytes of every file and
+/// the answer of every `getEnv` — so it is the user's, not the machine's.
+/// Directories and files carry these modes whatever the umask.
+const DIR_MODE: u32 = 0o700;
+const FILE_MODE: u32 = 0o600;
+
+/// `create_dir_all` with [`DIR_MODE`] on every component it makes.
+pub fn create_dir(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(DIR_MODE)
+        .create(path)
+}
+
+/// Narrows `path` to [`DIR_MODE`] when it is wider. A cache root a run of an
+/// older ietsp made follows the umask, and the user cannot be asked to fix
+/// it: tightening is the whole repair, and it costs the run nothing, where
+/// refusing the directory would cost every entry in it.
+fn tighten(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(md) = fs::metadata(path) else { return };
+    if md.permissions().mode() & 0o077 != 0 {
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(DIR_MODE));
+    }
+}
 
 /// The directory every cache store lives under: `--cache-dir DIR`, else
 /// `IETSP_CACHE_DIR`, else `$XDG_CACHE_HOME/ietsp`, else `~/.cache/ietsp`.
@@ -202,9 +230,15 @@ fn stamp_age(bytes: &[u8]) -> Option<Duration> {
 /// concurrent writers of one name inside one process.
 pub fn write_atomic(dir: &Path, name: &str, tag: u64, chunks: &[&[u8]]) -> io::Result<()> {
     use io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
     let tmp = dir.join(format!(".{name}.{}.{tag}.tmp", std::process::id()));
     let write = || -> io::Result<()> {
-        let mut f = fs::File::create(&tmp)?;
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(FILE_MODE)
+            .open(&tmp)?;
         for c in chunks {
             f.write_all(c)?;
         }
@@ -285,8 +319,10 @@ enum Owner {
 /// A name a store of `shape` puts in its own root: a store-level file, a
 /// temporary file, an entry, or an IR shard.
 fn belongs(name: &std::ffi::OsStr, shape: Shape) -> bool {
-    matches!(name.as_bytes(), b"version" | b"lock" | b"gc-stamp")
-        || is_tmp(name)
+    matches!(
+        name.as_bytes(),
+        b"version" | b"lock" | b"gc-stamp" | b"env-key"
+    ) || is_tmp(name)
         || is_key(name, shape)
         || (matches!(shape, Shape::ShardedFiles) && is_shard(name))
 }
@@ -331,7 +367,7 @@ fn owner(root: &Path, shape: Shape) -> Owner {
 /// the store-level files, the temporary files, the entries and the IR
 /// shards. Anything else in the directory stays.
 fn wipe(root: &Path, shape: Shape) {
-    for name in [VERSION, LOCK, STAMP] {
+    for name in [VERSION, LOCK, STAMP, ENV_KEY] {
         let p = root.join(name);
         let _ = fs::remove_file(&p).or_else(|_| fs::remove_dir_all(&p));
     }
@@ -389,11 +425,49 @@ pub fn prepare(root: &Path, shape: Shape, timings: bool) -> bool {
             return false;
         }
     }
-    if fs::create_dir_all(root).is_ok() && fs::read(root.join(VERSION)).is_err() {
+    if create_dir(root).is_ok() && fs::read(root.join(VERSION)).is_err() {
         let _ = write_atomic(root, VERSION, tag(), &[FORMAT]);
     }
+    tighten(root);
     true
 }
+
+/// The key of this process's `getEnv` hashes, from `<root>/env-key`. An
+/// observation of an environment variable needs only to know whether the
+/// value changed, so an entry holds a keyed hash and never the value; the key
+/// is what keeps that hash from being a guessing game for anyone who reads
+/// the file. One process uses one cache, so the first store to be prepared
+/// sets it; `env_key` without one hashes with zeros, and nothing that run
+/// records reaches disk.
+pub fn use_env_key(root: &Path) {
+    ENV_SECRET.get_or_init(|| {
+        let read = || {
+            fs::read(root.join(ENV_KEY))
+                .ok()
+                .and_then(|b| <[u8; 32]>::try_from(&b[..]).ok())
+        };
+        if let Some(k) = read() {
+            return k;
+        }
+        // two cold processes must not each publish a key: the loser's entries
+        // would then hash with one the winner's run cannot reproduce
+        let _lock = write_lock(root);
+        if let Some(k) = read() {
+            return k;
+        }
+        let mut k = [0u8; 32];
+        // SAFETY: 32 bytes into a buffer of 32 bytes.
+        unsafe { libc::getrandom(k.as_mut_ptr().cast(), k.len(), 0) };
+        let _ = write_atomic(root, ENV_KEY, tag(), &[&k]);
+        k
+    });
+}
+
+pub fn env_key() -> &'static [u8; 32] {
+    ENV_SECRET.get_or_init(|| [0u8; 32])
+}
+
+static ENV_SECRET: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
 
 fn empty(root: &Path) -> bool {
     fs::read_dir(root).is_ok_and(|mut d| d.next().is_none())
@@ -436,10 +510,12 @@ pub fn write_lock(root: &Path) -> Option<WriteLock> {
 /// download). `on_wait` runs once when a sibling holds it. The file is
 /// touched, so a sweep never takes a lock file that is in use.
 pub fn wait_lock(path: &Path, on_wait: impl FnOnce()) -> Option<WriteLock> {
+    use std::os::unix::fs::OpenOptionsExt;
     let f = fs::OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(false)
+        .mode(FILE_MODE)
         .open(path)
         .ok()?;
     let fd = f.as_raw_fd();

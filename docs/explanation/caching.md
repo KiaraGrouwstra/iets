@@ -87,6 +87,14 @@ own choosing. `nix fmt` is the one command that runs what an entry
 remembered, and it runs it only when the entry names a file inside a store
 path of the store directory.
 
+**Nothing in an entry is in clear that does not have to be.** An observation
+of an environment variable holds a hash keyed with the cache's own secret,
+because knowing whether the value changed is the whole job. Directories of a
+cache are 0700 and its files 0600 whatever the umask, and a root of an older
+ietsp is tightened on the next run. What is still in clear is what an entry
+is for: the paths a run read, the bytes it printed, and the content hash of
+every file it read.
+
 That holds for *any* bytes, not only for bytes ietsp wrote: a cache
 directory is writable by whoever runs ietsp, so a truncated, corrupt or
 crafted entry must be a miss and never a crash. The IR decoder therefore
@@ -203,6 +211,7 @@ Every primop that looks at the world records one observation.
 | a copied tree's NAR hash and stat hash | `./path` coerced to a string, `builtins.path`, `filterSource`, a flake's working tree, a `path:` input | recompute the stat hash with `lstat` only; on a mismatch re-dump the NAR with the recorded filter and compare. A `path:` input also records its newest mtime, which the evaluation sees as `lastModified`, and the same bytes with another date are a change |
 | a resolved symlink | `storePath`, `builtins.path` and `filterSource` when canonicalising changed the path | canonicalise again |
 | an environment variable | `getEnv`; `HOME` when a `~/` literal is compiled | read it again |
+| an environment variable, as a keyed hash | `getEnv`; `HOME` when a `~/` literal is compiled | read it again and hash it again |
 | which query of which SCM was asked in which directory, and its exit status and output | the queries of the SCM that read a flake working tree; for git, `ls-files`, `status` and `rev-parse HEAD` | ask the same query again, rehash |
 
 What follows from an observation is no observation. The date and the

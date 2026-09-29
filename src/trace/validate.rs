@@ -194,7 +194,7 @@ fn check(o: &Obs, rehashed: &AtomicUsize) -> Outcome {
             }
         }
         Obs::Env { name, value } => {
-            let now = std::env::var_os(OsStr::from_bytes(name)).map(|v| v.as_bytes().to_vec());
+            let now = super::env_hash(name);
             let what = match (&now, value) {
                 _ if now == *value => return Outcome::Same,
                 (Some(_), None) => "is now set",
