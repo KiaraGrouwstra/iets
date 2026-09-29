@@ -42,43 +42,40 @@ fn is_ietsp(canonical: &Path, me: Option<&Path>) -> bool {
     Some(canonical) == me || canonical.file_name() == Some(std::ffi::OsStr::new("ietsp"))
 }
 
+/// `dir/<name>` as a real nix: the file itself when it is not ietsp, else the
+/// bin directory the farm entry for that ietsp records. `None` means the
+/// directory offers no real nix, so the caller must look further. Without
+/// this every candidate would be a candidate to exec, and a directory that
+/// holds ietsp's own classic names makes the fallback exec ietsp again.
+fn candidate(dir: &Path, name: &str, me: Option<&Path>) -> Option<PathBuf> {
+    let p = dir.join(name);
+    if !executable(&p) {
+        return None;
+    }
+    if !std::fs::canonicalize(&p).is_ok_and(|c| is_ietsp(&c, me)) {
+        return Some(p);
+    }
+    let r = farm_real_dir(&p)?.join(name);
+    executable(&r).then_some(r)
+}
+
 /// The first `<name>` in `dirs` that is not ietsp, or the bin directory the
 /// farm entry for an ietsp records. Every ietsp is skipped like ourselves,
 /// so a second build of ietsp under the name `nix` never wins.
 fn on_path(name: &str, dirs: impl Iterator<Item = PathBuf>, me: Option<&Path>) -> Option<PathBuf> {
-    let mut found = None;
-    for dir in dirs {
-        let p = dir.join(name);
-        if !executable(&p) {
-            continue;
-        }
-        match std::fs::canonicalize(&p) {
-            Ok(c) if is_ietsp(&c, me) => {
-                if let Some(real) = farm_real_dir(&p) {
-                    let r = real.join(name);
-                    if executable(&r) {
-                        return Some(r);
-                    }
-                }
-            }
-            Ok(_) if found.is_none() => found = Some(p),
-            _ => {}
-        }
-    }
-    found
+    dirs.filter_map(|dir| candidate(&dir, name, me)).next()
 }
 
 /// The real `<name>`: `$IETSP_NIX_BIN_DIR/<name>` when it exists there, else
 /// the bin directory the farm on `PATH` was built for, else the first
 /// `<name>` on `PATH` that is not ietsp.
 pub fn real(name: &str) -> Option<PathBuf> {
-    if let Some(dir) = &crate::session::Session::current().settings().nix_bin_dir {
-        let p = dir.join(name);
-        if executable(&p) {
-            return Some(p);
-        }
-    }
     let me = std::fs::canonicalize("/proc/self/exe").ok();
+    if let Some(dir) = &crate::session::Session::current().settings().nix_bin_dir
+        && let Some(p) = candidate(dir, name, me.as_deref())
+    {
+        return Some(p);
+    }
     let dirs = std::env::split_paths(&std::env::var_os("PATH")?).collect::<Vec<_>>();
     on_path(name, dirs.into_iter(), me.as_deref()).or_else(|| sibling(name))
 }
@@ -159,6 +156,12 @@ mod tests {
         );
         assert_eq!(on_path("nix", dirs[..2].iter().cloned(), None), None);
         assert_eq!(on_path("nix", dirs.iter().cloned(), Some(&nix)), None);
+
+        // what `nix-bin-dir` points at goes through the same test, so a
+        // directory of ietsp's own classic names cannot exec ietsp again
+        assert_eq!(candidate(&x, "nix", None), None);
+        assert_eq!(candidate(&real, "nix", None), Some(nix));
+        assert_eq!(candidate(&real, "nix-build", None), None);
 
         std::fs::remove_dir_all(&tmp).unwrap();
     }

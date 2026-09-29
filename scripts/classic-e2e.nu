@@ -420,6 +420,19 @@ def main [] {
   let nofb = (with-env {IETSP_NO_FALLBACK: "1"} { ^$"($farm)/nix-instantiate" --parse -E 1 | complete })
   $ok = ($ok | append (verdict ($nofb.exit_code == 1) "IETSP_NO_FALLBACK=1 exits 1" $"exit ($nofb.exit_code)"))
 
+  # nix-bin-dir naming a farm of ietsp's own classic names: every candidate is
+  # ietsp, so the fallback must stop instead of exec'ing ietsp again
+  let loop_dir = $"($tmp)/loop"
+  mkdir $"($loop_dir)/bin"
+  for n in [nix-instantiate nix-build nix-eval-jobs nix-shell nix] { ^ln -sf $ietsp $"($loop_dir)/bin/($n)" }
+  let looped = (with-env {IETSP_NIX_BIN_DIR: $"($loop_dir)/bin", PATH: $"($loop_dir)/bin"} {
+    ^timeout 20 $"($farm)/nix-instantiate" --parse -E 1 | complete
+  })
+  $ok = ($ok | append (verdict
+    ($looped.exit_code == 1 and ($looped.stderr | str contains "cannot fall back to nix-instantiate: not found on PATH"))
+    "nix-bin-dir full of ietsp: the fallback stops, it does not loop"
+    $"exit ($looped.exit_code), stderr ($looped.stderr | str substring 0..300)"))
+
   mkdir $"($tmp)/tb"
   "hi\n" | save $"($tmp)/tb/f"
   ^tar -czf $"($tmp)/x.tar.gz" -C $tmp tb
