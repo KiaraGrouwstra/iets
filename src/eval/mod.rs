@@ -1556,7 +1556,7 @@ impl Evaluator {
                 }
             }
             Ir::Let(l) => {
-                let env2 = self.alloc_rec_env(env, l.binds, l.from);
+                let env2 = self.alloc_rec_env(env, l.binds, l.from, false);
                 self.eval(env2, l.body)
             }
             Ir::With { scope, body, .. } => {
@@ -1930,12 +1930,17 @@ impl Evaluator {
         env: &'static EnvObj,
         binds: &'static [BindIr],
         from: &'static [IrRef],
+        overrides: bool,
     ) -> &'static EnvObj {
         let env2 = self.arena.alloc_env(Some(env), binds.len() + from.len());
         let slots = env2.slots_n(binds.len() + from.len());
         for (i, b) in binds.iter().enumerate() {
             let w = match b.scope {
                 BindScope::Outer => self.maybe_thunk(env, b.value),
+                // eval.cc:ExprAttrs::eval takes a real thunk for every
+                // binding that is not inherited when `__overrides` is
+                // there, so the override reaches the other bindings
+                _ if overrides => self.mk_thunk_counted(env2, b.value),
                 _ => self.maybe_thunk(env2, b.value),
             };
             slots[i].set(w);
@@ -1956,7 +1961,7 @@ impl Evaluator {
         let dyn_env: &'static EnvObj;
         let mut needs_sort = false;
         if a.rec {
-            let env2 = self.alloc_rec_env(env, a.binds, a.from);
+            let env2 = self.alloc_rec_env(env, a.binds, a.from, a.overrides.is_some());
             dyn_env = env2;
             for (i, b) in a.binds.iter().enumerate() {
                 entries.push((b.sym, b.pos, env2.slot(i).get()));
@@ -2022,7 +2027,7 @@ impl Evaluator {
     fn eval_static_attrs(&mut self, env: &'static EnvObj, a: &'static AttrsIr) -> Word {
         let out = self.arena.alloc_attrs_as(a.binds.len(), Stat::AttrsLit);
         if a.rec {
-            let env2 = self.alloc_rec_env(env, a.binds, a.from);
+            let env2 = self.alloc_rec_env(env, a.binds, a.from, false);
             for (i, b) in a.binds.iter().enumerate() {
                 out.init(i, b.sym, b.pos, env2.slot(i).get());
             }
