@@ -412,26 +412,39 @@ pub enum CellState {
     Busy,
 }
 
-/// Unbox a forced cell. A helper leaves the cell alone: its work must stay
-/// invisible until the demand path asks for the value. This is the one
-/// path that takes a value without `force_thunk`, so the demand path
-/// claims a helper's thunk and its held-back effects here too.
+/// What a walk found in a cell, with the demand path's unboxing done in
+/// the same read of the thunk. A helper leaves the cell alone: its work
+/// must stay invisible until the demand path asks for the value. This is
+/// the one path that takes a value without `force_thunk`, so the demand
+/// path takes the effects held on a helper's thunk here too.
+enum Taken {
+    Value(Word),
+    Unclaimed,
+    Busy,
+}
+
 #[inline]
-fn set_forced(ev: &mut Evaluator, c: &Cell, v: Word) {
-    if !ev.par.is_main {
-        return;
-    }
+fn take(ev: &mut Evaluator, c: &Cell) -> Taken {
     let w = c.get();
-    if w.is_thunk() {
-        let st = w.thunk_state_cell();
-        if w.thunk_speculated(st.get()) {
-            st.set(Word::EMPTY);
-            if NPENDING.load(Ordering::Relaxed) != 0 {
-                release(ev, st as *const Cell as u64);
-            }
-        }
+    if !w.is_thunk() {
+        return Taken::Value(w);
     }
-    c.set(v);
+    let st = w.thunk_state_cell();
+    let s = st.get();
+    if s.is_blackhole() {
+        return Taken::Busy;
+    }
+    if w.thunk_unforced(s) {
+        return Taken::Unclaimed;
+    }
+    let v = w.thunk_value(s);
+    if ev.par.is_main {
+        if w.thunk_speculated(s) {
+            take_speculated(ev, st);
+        }
+        c.set(v);
+    }
+    Taken::Value(v)
 }
 
 #[inline]
@@ -565,13 +578,10 @@ fn coerce_walk(ev: &mut Evaluator, v: Word, depth: u32) -> bool {
 }
 
 fn coerce_step(ev: &mut Evaluator, c: &Cell, depth: u32) -> bool {
-    let v = match cell_state(c) {
-        CellState::Busy => return true,
-        CellState::Ready(v) => {
-            set_forced(ev, c, v);
-            v
-        }
-        CellState::Unclaimed => match ev.force_cell(c) {
+    let v = match take(ev, c) {
+        Taken::Busy => return true,
+        Taken::Value(v) => v,
+        Taken::Unclaimed => match ev.force_cell(c) {
             Ok(v) => v,
             Err(_) => return false,
         },
@@ -658,18 +668,15 @@ fn walk(
         let c = cell(i);
         // a ready cell already gave up its value: forcing it again would
         // walk the claim protocol of a thunk a helper left boxed
-        let ready = match cell_state(c) {
-            CellState::Busy => {
+        let ready = match take(ev, c) {
+            Taken::Busy => {
                 if demand {
                     deferred.push(i);
                 }
                 continue;
             }
-            CellState::Ready(v) => {
-                set_forced(ev, c, v);
-                Some(v)
-            }
-            CellState::Unclaimed => None,
+            Taken::Value(v) => Some(v),
+            Taken::Unclaimed => None,
         };
         if !demand && bail_requested(ev) {
             return Err(cancelled());
@@ -763,10 +770,9 @@ fn range_step(ev: &mut Evaluator, c: &Cell, deep: bool, seen: &mut HashSet<u64>)
     if bail_requested(ev) {
         return false;
     }
-    match cell_state(c) {
-        CellState::Unclaimed => {}
-        CellState::Ready(v) if deep => {
-            set_forced(ev, c, v);
+    match take(ev, c) {
+        Taken::Unclaimed => {}
+        Taken::Value(v) if deep => {
             return deep_inner(ev, v, seen, false).is_ok();
         }
         _ => return true,
