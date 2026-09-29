@@ -314,7 +314,7 @@ closed:
 
 - **The cell.** Only the demand path unboxes a forced cell. A helper
   forces the thunk and leaves the cell alone (`Evaluator::force_cell`,
-  `parallel::force::set_forced`). A cell that holds a value is therefore a
+  `parallel::force::take`). A cell that holds a value is therefore a
   cell the program asked for, which is what `==` reads for the identity of
   a function and what the printers read for `<CODE>`.
 - **The thunk state.** A helper publishes `SPECULATED` where the demand
@@ -322,8 +322,15 @@ closed:
   the demand path's mark makes the value printable. The first demand of a
   speculated thunk upgrades the mark.
 
-The cost is one branch on the force path and one store per thunk a helper
-forced and the demand path then took.
+This is the price of the guarantee, and it is paid on the demand path. A
+helper leaves its value inside the thunk, so the demand path reads the
+cell, the thunk state and the value, writes the value into the cell, and
+writes `EMPTY` over a helper's mark; a run that let helpers unbox finds
+the value in the cell with one load. `force_thunk` answers a forced thunk
+inline for that reason, and `take` does the whole cell in one read of the
+thunk. Measured on bld1, nixos-desktop at four workers: 3.7 % of the wall,
+of which about 1 point is the store that upgrades the mark. At one worker
+there is no helper and no boxed cell, so the same run costs nothing.
 
 Two effects are not values and are held back instead. A lint finding and a
 `--dump-drvs` file that a helper produced are parked on the thunk the
@@ -344,8 +351,11 @@ one failing evaluation per task, which was measured at 20 s and 11 GB
 against 0.01 s and 38 MB at one worker. The runtime now notes the thunk
 that failed in a small direct-mapped table. A helper that meets it drops
 its task, before the claim and again after a wait, so only the demand path
-evaluates it once more and reports. A publish also wakes the demand fiber
-first, since every fiber behind it only speculates.
+evaluates it once more and reports. A flag says whether the table can hold
+anything, so a run that fails nothing never reads it. A publish also wakes
+the demand fiber first, since every fiber behind it only speculates; the
+demand fiber takes the front of a thunk's waiter list when it parks, so
+the wake order costs the publish nothing.
 
 ### Stack
 
@@ -353,7 +363,10 @@ The demand fiber has the stack of the process main thread
 (`fiber::MAIN_STACK`), so a program that works at one worker is not a
 crash at four. A helper's stack is smaller, and the force path and the
 deep walk stop a fiber that comes within `fiber::MARGIN` of its guard
-page: a helper drops its task in silence and the demand path computes the
+page. The check reads the stack pointer with one instruction
+(`fiber::sp`), because it runs on every force: a helper that returned the
+address of its own frame could not be inlined and cost a call each time.
+A helper drops its task in silence and the demand path computes the
 value, the demand fiber reports what Nix reports. A guard page that is hit
 anyway — the compiler recurses over a deeply nested expression without
 forcing — is caught by a handler on an alternate signal stack, which
