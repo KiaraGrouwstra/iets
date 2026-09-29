@@ -637,11 +637,13 @@ impl<'a> Compiler<'a> {
                 p.extend_from_slice(text);
                 canon_path(&p)
             }
+            // parser.y's HPATH rule joins `$HOME` and the text and does not
+            // call absPath, so `~/a/../b` keeps its `..`
             PathKind::Home => {
                 self.used_home.set(true);
                 let mut p = self.home.clone().unwrap_or_else(|| b"/".to_vec());
                 p.extend_from_slice(text);
-                canon_path(&p)
+                p
             }
             // `<x>` is a lookup, not a literal: `path` returns before this.
             PathKind::Search => unreachable!("a search path has no literal to resolve"),
