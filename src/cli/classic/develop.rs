@@ -103,13 +103,15 @@ fn run(
     cfg: &crate::config::Config,
     dev: &crate::cli::devenv::DevEnv,
 ) -> crate::error::Result<()> {
-    let tmp = std::env::temp_dir();
-    let attrs_dir = tmp.join(format!("ietsp-develop-{}", std::process::id()));
+    // a private directory, so no other user can put a symlink where the rc
+    // file and the attribute files go
+    let dir = private_dir()?;
+    let attrs_dir = dir.join("attrs");
     let outputs_dir = Path::new(
         <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&crate::cli::cwd()),
     )
     .join("outputs");
-    let rc_path = tmp.join(format!("ietsp-nix-shell-{}", std::process::id()));
+    let rc_path = dir.join("rc");
     let mut script = crate::devenv::make_rc_script(&dev.env, &attrs_dir, &outputs_dir)?.script;
     script.push_str(&format!("command rm -f '{}'\n", rc_path.display()));
 
@@ -166,6 +168,33 @@ fn run(
         format!("cannot execute '{shell}'"),
         e,
     ))
+}
+
+/// A fresh directory in `$TMPDIR` that only this user can enter, made with
+/// exclusive creation so it is never something that was already there.
+fn private_dir() -> crate::error::Result<std::path::PathBuf> {
+    use std::os::unix::fs::DirBuilderExt;
+    let tmp = std::env::temp_dir();
+    for _ in 0..16 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.subsec_nanos());
+        let dir = tmp.join(format!("ietsp-develop-{}-{nanos}", std::process::id()));
+        match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => {
+                return Err(crate::error::Error::io(
+                    format!("cannot create '{}'", dir.display()),
+                    e,
+                ));
+            }
+        }
+    }
+    Err(crate::error::Error::Usage(format!(
+        "cannot make a private directory in '{}'",
+        tmp.display()
+    )))
 }
 
 /// command.cc:MixEnvironment::setEnviron, then develop.cc's `NIX_GCROOT` and `SHELL`.

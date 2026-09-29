@@ -428,7 +428,9 @@ impl Dispatcher {
         std::fs::create_dir_all(dir)
             .map_err(|e| Error::io(format!("cannot create {}", dir.display()), e))?;
         let sp = StorePath::parse(store_path)?;
-        if dir.join(sp.base_name()).exists() {
+        // symlink_metadata: a dangling symlink is a path that is there, and
+        // the restore must not write through it
+        if std::fs::symlink_metadata(dir.join(sp.base_name())).is_ok() {
             return Err(Error::Usage(format!(
                 "fetch: '{}' already exists",
                 dir.join(sp.base_name()).display()

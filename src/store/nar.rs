@@ -729,7 +729,12 @@ impl Restorer<'_> {
 
     fn regular(&mut self, executable: bool) -> io::Result<()> {
         let len = self.r.u64()?;
-        let mut f = fs::File::create(self.cur())?;
+        // exclusive: a symlink that is already there must never be written
+        // through, and a NAR never names one entry twice
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(self.cur())?;
         self.r.contents_to(&mut f, len)?;
         if executable {
             f.set_permissions(fs::Permissions::from_mode(0o755))?;

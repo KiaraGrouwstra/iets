@@ -24,14 +24,40 @@ impl Fix {
         format!("{}:{}:{}", self.file.display(), self.line, self.column)
     }
 
+    /// A temporary file beside the original, renamed over it: a crash or a
+    /// full disk must never leave a source file of the user cut in half.
     pub fn write(&self) -> Result<(), String> {
+        use std::io::Write;
         let err = |e: std::io::Error| format!("{}: {e}", self.file.display());
         let mut text = std::fs::read(&self.file).map_err(err)?;
         if text.get(self.at..self.at + self.old.len()) != Some(self.old.as_bytes()) {
             return Err(format!("{} changed since it was read", self.file.display()));
         }
         text.splice(self.at..self.at + self.old.len(), self.new.bytes());
-        std::fs::write(&self.file, &text).map_err(err)
+        let mode = std::fs::metadata(&self.file)
+            .map(|m| std::os::unix::fs::PermissionsExt::mode(&m.permissions()))
+            .map_err(err)?;
+        let dir = self.file.parent().unwrap_or(std::path::Path::new("."));
+        let name = self.file.file_name().unwrap_or_default().to_string_lossy();
+        let tmp = dir.join(format!(".{}.{}", name, std::process::id()));
+        let write = || -> std::io::Result<()> {
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&tmp)?;
+            f.write_all(&text)?;
+            f.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(mode))?;
+            f.sync_all()
+        };
+        if let Err(e) = write() {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(err(e));
+        }
+        std::fs::rename(&tmp, &self.file).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            err(e)
+        })
     }
 }
 
