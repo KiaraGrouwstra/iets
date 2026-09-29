@@ -262,6 +262,13 @@ def main [] {
     (run-both $farm nix-instantiate -I $"nixpkgs=($np)" "<nixpkgs>" -A glibc.dev)))
   $ok = ($ok | append (cmp-case "instantiate two -A in one run"
     (run-both $farm nix-instantiate -I $"nixpkgs=($np)" "<nixpkgs>" -A hello -A glibc.dev)))
+  # one getDerivations per attribute path, so one derivation named twice is
+  # printed twice and gets two roots
+  $ok = ($ok | append (cmp-case "instantiate two -A that name one derivation"
+    (run-both $farm nix-instantiate -I $"nixpkgs=($np)" "<nixpkgs>" -A hello -A hello)))
+  # an empty --add-root is "no root": the drv path and the GC warning
+  $ok = ($ok | append (cmp-case "instantiate --add-root ''"
+    (run-both $farm nix-instantiate --add-root "" -I $"nixpkgs=($np)" "<nixpkgs>" -A hello)))
 
   # --- nix-instantiate: --eval
   $ok = ($ok | append (cmp-case "instantiate --eval --strict --json"
@@ -278,6 +285,9 @@ def main [] {
     (run-both $farm nix-instantiate --eval --raw -E $"($rawp)/p.txt")))
   $ok = ($ok | append (cmp-case "instantiate --eval --raw an outPath"
     (run-both $farm nix-instantiate --eval --raw -E $"\({ outPath = ($rawp)/p.txt; }).outPath")))
+  # each value is written as it is made, so what ran before a failure is out
+  $ok = ($ok | append (cmp-case "instantiate --eval, a later expression throws"
+    (run-both $farm nix-instantiate --eval -E "1" "throw \"x\"")))
   $ok = ($ok | append (cmp-case "instantiate --eval --argstr"
     (run-both $farm nix-instantiate --eval --strict --json --argstr who world -E "{ who }: { inherit who; }")))
 

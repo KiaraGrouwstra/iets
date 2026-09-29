@@ -18,6 +18,9 @@ use crate::runtime::Word;
 
 const NAME: &str = "nix-instantiate";
 
+/// shared.cc:printGCWarning, which fires at the first derivation.
+const GC_WARNING: &str = "warning: you did not specify '--add-root'; the result might be removed by the garbage collector";
+
 #[derive(Default, PartialEq, Eq, Clone, Copy)]
 enum Output {
     #[default]
@@ -53,7 +56,8 @@ fn parse(argv: &[String]) -> Result<Inst, String> {
             "--strict" => i.strict = true,
             "--json" => i.output = Output::Json,
             "--raw" => i.output = Output::Raw,
-            "--add-root" => i.add_root = Some(a.value("--add-root")?),
+            // nix-instantiate.cc: an empty `gcRoot` is "no root", warning and all
+            "--add-root" => i.add_root = Some(a.value("--add-root")?).filter(|s| !s.is_empty()),
             "--no-gc-warning" => i.gc_warning = false,
             "-Q" | "--no-build-output" => i.c.quiet = true,
             // it changes `--xml` output only, and `--xml` falls back
@@ -89,8 +93,8 @@ fn parse(argv: &[String]) -> Result<Inst, String> {
 }
 
 enum Made {
-    /// `--eval`: the whole stdout, already formatted.
-    Values(Vec<u8>),
+    /// `--eval`: each value went to stdout as it was made.
+    Values,
     /// The default mode: the roots to register and print, and their closure.
     Drvs(Vec<Root>, Option<Box<Plan>>),
 }
@@ -116,10 +120,7 @@ pub fn main(argv: &[String]) -> i32 {
     match crate::cli::run_reported(crate::cli::Run::on(ec), move |ev, _| run(ev, &inst)) {
         Outcome::Failed(code) => code,
         Outcome::Unsupported(reason) => fallback(NAME, argv, &reason),
-        Outcome::Ok(Made::Values(text)) => {
-            crate::cli::render::bytes(&text);
-            0
-        }
+        Outcome::Ok(Made::Values) => 0,
         Outcome::Ok(Made::Drvs(roots, plan)) => {
             finish(&i, &transport, &options, &roots, plan.map(|p| *p))
         }
@@ -128,25 +129,35 @@ pub fn main(argv: &[String]) -> i32 {
 
 fn run(ev: &mut Evaluator, i: &Inst) -> crate::error::Result<Made> {
     let cwd = cwd();
-    let mut text: Vec<u8> = Vec::new();
     let mut roots: Vec<Root> = Vec::new();
-    let mut seen = HashSet::new();
     let args = auto_args(ev, &i.c.flags.args, &cwd)?;
     let has_args = !i.c.flags.args.is_empty();
+    let mut warned = false;
     for file in &i.c.files {
         let root = super::eval_input(ev, &i.c, file, &cwd)?;
         for attr in &i.c.flags.attrs {
             let v = crate::api::installable::find_along_attr_path(ev, root, attr, args)?;
             if i.eval_only {
                 let v = if has_args { ev.auto_call(v, args)? } else { v };
+                // nix-instantiate.cc writes each value as it has it, so what
+                // ran before a failing expression is on stdout already
+                let mut text: Vec<u8> = Vec::new();
                 print_value(ev, v, i, &mut text)?;
+                crate::cli::render::bytes(&text);
             } else {
+                // nix-instantiate.cc: one `getDerivations` per attribute path,
+                // so two of them that name one derivation give two roots
+                let mut seen = HashSet::new();
                 installable::get_drvs_at(ev, v, args, &mut roots, &mut seen, attr)?;
+                if !warned && !roots.is_empty() && i.add_root.is_none() && i.gc_warning {
+                    warned = true;
+                    crate::log::line(GC_WARNING);
+                }
             }
         }
     }
     if i.eval_only {
-        return Ok(Made::Values(text));
+        return Ok(Made::Values);
     }
     if i.readonly || roots.is_empty() {
         return Ok(Made::Drvs(roots, None));
@@ -197,11 +208,6 @@ fn finish(
     roots: &[Root],
     plan: Option<Plan>,
 ) -> i32 {
-    if i.add_root.is_none() && i.gc_warning && !roots.is_empty() {
-        crate::log::line(
-            "warning: you did not specify '--add-root'; the result might be removed by the garbage collector",
-        );
-    }
     let mut up = None;
     if let Some(plan) = plan {
         // no build, so nothing to render: the daemon's log lines go out as they
