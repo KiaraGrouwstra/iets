@@ -167,7 +167,14 @@ impl Renderer {
 
     fn write(&mut self, lines: &[String]) {
         for l in lines {
-            let _ = writeln!(self.out, "{}", crate::log::format(l));
+            let text = crate::log::format(l);
+            // logging.cc:SimpleLogger::log filters every line it writes; an
+            // internal-json record keeps the bytes it was given
+            let text = match crate::log::json() {
+                true => text,
+                false => crate::log::filter_ansi(&text, self.style.mode != Mode::Tty),
+            };
+            let _ = writeln!(self.out, "{text}");
         }
         let _ = self.out.flush();
     }

@@ -318,10 +318,12 @@ impl Drop for Activity {
 /// `text` as it goes to stderr, without the newline: itself, or a `msg`
 /// record at the verbosity its prefix implies.
 pub fn format(text: &str) -> String {
-    note_mismatch(text);
-    let level = if text.starts_with("error:") || text.starts_with("trace:") {
+    // the daemon's own messages arrive coloured, and the prefix is what says
+    // how severe they are
+    let plain = strip_ansi(text);
+    let level = if plain.starts_with("error:") || plain.starts_with("trace:") {
         0
-    } else if text.starts_with("warning:") || text.starts_with("evaluation warning:") {
+    } else if plain.starts_with("warning:") || plain.starts_with("evaluation warning:") {
         1
     } else {
         3
@@ -733,6 +735,78 @@ pub fn strip_ansi(s: &str) -> String {
             // 7-bit C1 Fe other than CSI
             Some(c) if (0x40..=0x5a).contains(c) || (0x5c..=0x5f).contains(c) => i += 1,
             _ => {}
+        }
+    }
+    out
+}
+
+/// terminal.cc:filterANSIEscapes, what every line Nix writes to stderr goes
+/// through: only a colour sequence survives, and only when the reader is a
+/// terminal. Cursor movement, a clear screen and an OSC string never do.
+pub fn filter_ansi(s: &str, filter_all: bool) -> String {
+    let b = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut col = 0usize;
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            0x1b => {
+                let start = i;
+                i += 1;
+                let mut last = 0u8;
+                match b.get(i) {
+                    Some(b'[') => {
+                        i += 1;
+                        while b.get(i).is_some_and(|c| (0x30..=0x3f).contains(c)) {
+                            i += 1;
+                        }
+                        while b.get(i).is_some_and(|c| (0x20..=0x2f).contains(c)) {
+                            i += 1;
+                        }
+                        if let Some(c) = b.get(i).filter(|c| (0x40..=0x7e).contains(*c)) {
+                            last = *c;
+                            i += 1;
+                        }
+                    }
+                    Some(b']') => {
+                        i += 1;
+                        while b.get(i).is_some_and(|c| *c != 0x1b && *c != 0x07) {
+                            i += 1;
+                        }
+                        if let Some(v) = b.get(i).copied() {
+                            i += 1;
+                            if v == 0x1b && b.get(i) == Some(&b'\\') {
+                                i += 1;
+                            }
+                        }
+                    }
+                    Some(c) if (0x40..=0x5f).contains(c) => i += 1,
+                    _ => {}
+                }
+                if !filter_all && last == b'm' {
+                    out.push_str(&String::from_utf8_lossy(&b[start..i]));
+                }
+            }
+            b'\t' => {
+                i += 1;
+                loop {
+                    col += 1;
+                    out.push(' ');
+                    if col.is_multiple_of(8) {
+                        break;
+                    }
+                }
+            }
+            b'\r' | 0x07 => i += 1,
+            _ => {
+                let start = i;
+                while i < b.len() && !matches!(b[i], 0x1b | b'\t' | b'\r' | 0x07) {
+                    i += 1;
+                }
+                let chunk = String::from_utf8_lossy(&b[start..i]);
+                col += chunk.chars().count();
+                out.push_str(&chunk);
+            }
         }
     }
     out
