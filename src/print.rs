@@ -9,7 +9,12 @@ use crate::runtime::*;
 /// C's `%g` with precision 6, as `std::ostream << double` prints.
 pub fn format_g(f: f64) -> String {
     if f.is_nan() {
-        return "nan".into();
+        // glibc prints the sign bit of a NaN; an x86 default NaN has it set
+        return if f.is_sign_negative() {
+            "-nan".into()
+        } else {
+            "nan".into()
+        };
     }
     if f.is_infinite() {
         return if f > 0.0 { "inf".into() } else { "-inf".into() };

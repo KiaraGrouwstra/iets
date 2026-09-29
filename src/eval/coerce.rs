@@ -204,8 +204,10 @@ impl Evaluator {
         {
             crate::lint::coerce::eq(self, a, b, pos)?;
         }
-        if a == b && a.value_type() == ValueType::Function {
-            return Ok(false);
+        // the operands are fresh copies in Nix, so its slot shortcut never
+        // applies here: a function is unequal and a NaN is unequal to itself
+        if a == b && matches!(a.value_type(), ValueType::Function | ValueType::Float) {
+            return self.eq_forced(a, b, pos);
         }
         self.eq_values(a, a, b, b, pos)
     }
