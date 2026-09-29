@@ -898,7 +898,9 @@ impl Connection {
         let mut results = Vec::new();
         for _ in 0..n {
             let path = read_str(self.r())?;
-            let status = read_u64(self.r())?;
+            // a status the protocol does not define is a failure, never the 0
+            // that a truncation to eight bits would make of it
+            let status = u8::try_from(read_u64(self.r())?).unwrap_or(u8::MAX);
             let msg = read_str(self.r())?;
             for _ in 0..4 {
                 read_u64(self.r())?;
@@ -915,11 +917,7 @@ impl Connection {
                 read_str(self.r())?;
                 read_str(self.r())?;
             }
-            results.push(BuildResult {
-                path,
-                status: status as u8,
-                msg,
-            });
+            results.push(BuildResult { path, status, msg });
         }
         Ok(results)
     }
@@ -956,7 +954,18 @@ impl Connection {
         for _ in 0..n {
             let name = read_str(self.r())?;
             let path = read_str(self.r())?;
-            map.insert(name, if path.is_empty() { None } else { Some(path) });
+            if path.is_empty() {
+                map.insert(name, None);
+                continue;
+            }
+            // the answer names paths this client later hands to the user and
+            // to `nix build -o`: a store that says /etc/passwd is broken
+            crate::store::path::StorePath::parse(&path).map_err(|e| {
+                Error::Protocol(format!(
+                    "the daemon named an output that is not a store path: {e}"
+                ))
+            })?;
+            map.insert(name, Some(path));
         }
         Ok(map)
     }
