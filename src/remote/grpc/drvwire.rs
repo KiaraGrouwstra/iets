@@ -87,7 +87,7 @@ pub fn write_basic_derivation(
 /// `<dummy hash>!<output name>` with JSON values).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BuildResult {
-    pub status: u8,
+    pub status: u64,
     pub error_msg: String,
     pub times_built: u64,
     pub is_non_deterministic: bool,
@@ -110,7 +110,7 @@ impl BuildResult {
     /// retry; the others are the build's own verdict.
     pub fn read(r: &mut dyn std::io::Read) -> io::Result<BuildResult> {
         let mut res = BuildResult {
-            status: read_u64(r)? as u8,
+            status: read_u64(r)?,
             error_msg: read_str(r)?,
             ..BuildResult::default()
         };

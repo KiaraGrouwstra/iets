@@ -556,7 +556,7 @@ fn pos_fields(pos: Option<&str>) -> [(String, Value); 3] {
 /// build-result.cc:failingExitStatus of one failed build, from its
 /// worker-protocol status. The daemon sends a hash mismatch as
 /// OutputRejected, so its message tells it apart.
-pub fn build_exit(status: u8, msg: &str) -> i32 {
+pub fn build_exit(status: u64, msg: &str) -> i32 {
     match status {
         // 10 is DependencyFailed: a goal of the run failed, which is the same
         // flag Nix's worker sets for the build that failed itself

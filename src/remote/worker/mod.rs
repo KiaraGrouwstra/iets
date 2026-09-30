@@ -450,7 +450,7 @@ pub struct Missing {
 #[derive(Debug, Clone)]
 pub struct BuildResult {
     pub path: String,
-    pub status: u8,
+    pub status: u64,
     pub msg: String,
 }
 
@@ -900,7 +900,7 @@ impl Connection {
             let path = read_str(self.r())?;
             // a status the protocol does not define is a failure, never the 0
             // that a truncation to eight bits would make of it
-            let status = u8::try_from(read_u64(self.r())?).unwrap_or(u8::MAX);
+            let status = read_u64(self.r())?;
             let msg = read_str(self.r())?;
             for _ in 0..4 {
                 read_u64(self.r())?;
@@ -1089,6 +1089,20 @@ pub fn failed_event(drv_path: &str, reason: &str) -> Event {
 
 #[cfg(test)]
 mod tests {
+    /// A status of 256 truncated to a `u8` is 0, which `success` reads as
+    /// Built: a failed build would have been reported as a success.
+    #[test]
+    fn a_status_over_a_byte_is_not_a_success() {
+        let r = |status| BuildResult {
+            path: String::new(),
+            status,
+            msg: String::new(),
+        };
+        assert!(r(0).success() && r(13).success());
+        assert!(!r(256).success() && !r(269).success() && !r(3).success());
+        assert_eq!(format!("status {}", r(256).status), "status 256");
+    }
+
     use super::*;
 
     #[test]
