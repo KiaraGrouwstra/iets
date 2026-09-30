@@ -15,7 +15,7 @@ use crate::eval::Evaluator;
 use crate::runtime::Arena;
 
 pub use force::{
-    defer, defer_io, fanout_attrs_coerce, fanout_list, fanout_list_coerce, force_deep, force_thunk,
+    defer, fanout_attrs_coerce, fanout_list, fanout_list_coerce, force_deep, force_thunk,
     import_thunk, journal,
 };
 

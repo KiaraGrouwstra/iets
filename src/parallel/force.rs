@@ -333,9 +333,10 @@ type Deferred = Box<dyn FnOnce(&mut Evaluator) + Send>;
 
 /// Effects a helper produced, by the thunk whose value carries them. The
 /// demand path runs them when it takes that value and drops them
-/// otherwise, so a warning or a dumped `.drv` from work the program never
-/// asks for is never seen. The counter keeps the demand path off the lock
-/// while the map is empty, which is every run without lints.
+/// otherwise, so a warning from work the program never asks for is never
+/// seen. Only for an effect the program may lose without losing anything
+/// it returns. The counter keeps the demand path off the lock while the
+/// map is empty, which is every run without lints.
 static PENDING: std::sync::Mutex<Option<std::collections::HashMap<u64, Vec<Deferred>>>> =
     std::sync::Mutex::new(None);
 static NPENDING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -355,26 +356,6 @@ pub fn defer(ev: &mut Evaluator, f: impl FnOnce(&mut Evaluator) + Send + 'static
         .or_default()
         .push(Box::new(f));
     NPENDING.fetch_add(1, Ordering::Relaxed);
-}
-
-/// `defer` for an effect that can fail. The demand path runs it and keeps
-/// the error; a helper's is held back, and a failure that only shows up
-/// after the value was demanded is a warning, since the value is already
-/// the program's.
-pub fn defer_io(
-    ev: &mut Evaluator,
-    what: String,
-    f: impl FnOnce() -> std::io::Result<()> + Send + 'static,
-) -> std::io::Result<()> {
-    if !ev.par.on || ev.par.is_main || ev.par.root == 0 {
-        return f();
-    }
-    defer(ev, move |_| {
-        if let Err(e) = f() {
-            crate::errln!("warning: {what}: {e}");
-        }
-    });
-    Ok(())
 }
 
 /// The thunk was reset, so nothing carries its effects.

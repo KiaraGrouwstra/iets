@@ -153,10 +153,6 @@ terms is Nix's error and ietsp's answer.
 `error: too many symbols`, exit 1. Above 2^30 attribute names in one run
 ietsp stops; Nix has no limit of its own.
 
-A `--dump-drvs` file that a helper fiber wrote waits for the demand path,
-so a write that fails after the value was demanded is a `warning:` line
-and not the error it is on the demand path.
-
 ## Experimental-feature builtins
 
 Nix leaves `fetchTree` out of `builtins` unless `fetch-tree` or `flakes`

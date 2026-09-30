@@ -332,16 +332,24 @@ thunk. Measured on bld1, nixos-desktop at four workers: 3.7 % of the wall,
 of which about 1 point is the store that upgrades the mark. At one worker
 there is no helper and no boxed cell, so the same run costs nothing.
 
-Two effects are not values and are held back instead. A lint finding and a
-`--dump-drvs` file that a helper produced are parked on the thunk the
-helper was forcing (`parallel::force::defer`). The demand path runs them
-when it takes that thunk's value and drops them otherwise. Cancelling the
-helper, as `trace` does, was measured at 15 % of the wall for lints, and
-turning the fan-out off in the builtins that stop early (`any`, `all`,
-`elem`, `filter`, `foldl'`, `concatMap`) costs 37 % at four workers, so
-neither is the answer for them. A finding whose value the demand path
-reaches through a different thunk than the helper's first claim is
-dropped, which is a lost warning and never a wrong one.
+A lint finding is not a value and is held back instead. One a helper
+produced is parked on the thunk the helper was forcing
+(`parallel::force::defer`). The demand path runs it when it takes that
+thunk's value and drops it otherwise. Cancelling the helper, as `trace`
+does, was measured at 15 % of the wall for lints, and turning the fan-out
+off in the builtins that stop early (`any`, `all`, `elem`, `filter`,
+`foldl'`, `concatMap`) costs 37 % at four workers, so neither is the
+answer. A finding whose value the demand path reaches through a different
+thunk than the helper's first claim is dropped, which is a lost warning
+and never a wrong one.
+
+A `--dump-drvs` file is written where the derivation is made, not held
+back. The drop above is only safe for an effect the program may lose
+without losing anything it returns, and that is not true of a `.drv`: the
+value escapes into its cell whichever thunk the demand path takes, so a
+parked dump goes missing while the `drvPath` that names it is returned.
+Held back, the directory lost between 4 % and 26 % of the derivations of a
+repkgs evaluation, and a different set on every run.
 
 ### A failure stops the speculation
 

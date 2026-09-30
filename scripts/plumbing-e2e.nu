@@ -77,6 +77,35 @@ in derivation {
 }
 '#
 
+# MANY is flat: the demand path takes each dep's own thunk, so an effect
+# parked on it is released. DEEP is not. A helper claims one group's thunk
+# and makes nine derivations under it, and the demand path reaches those
+# values through the attribute, never through the thunk the helper claimed.
+# Held back, the dump lost 126 to 142 of the 145 on repeated runs.
+const DEEP = r#'let
+  dep = n: derivation {
+    name = "plumb-deep-dep-${toString n}";
+    system = "@SYSTEM@";
+    builder = "/bin/sh";
+    args = [ "-c" "echo @NONCE@ ${toString n} > $out" ];
+  };
+  group = g: {
+    drv = derivation {
+      name = "plumb-deep-group-${toString g}";
+      system = "@SYSTEM@";
+      builder = "/bin/sh";
+      args = [ "-c" "echo @NONCE@ > $out" ] ++ map (n: "${dep (g * 8 + n)}") (builtins.genList (x: x) 8);
+    };
+  };
+  groups = map (g: (group g).drv) (builtins.genList (x: x) 16);
+in derivation {
+  name = "plumb-deep-root";
+  system = "@SYSTEM@";
+  builder = "/bin/sh";
+  args = [ "-c" "echo @NONCE@ > $out" ] ++ map (d: "${d}") groups;
+}
+'#
+
 const BAD = r#'derivation {
   name = "plumb-bad";
   system = "@SYSTEM@";
@@ -96,6 +125,7 @@ run-in $work {
   $CHAIN | str replace -a "@SYSTEM@" $system | str replace -a "@NONCE@" $nonce | save -f $"($work)/chain.nix"
   $SET | str replace -a "@SYSTEM@" $system | str replace -a "@NONCE@" $nonce | save -f $"($work)/set.nix"
   $MANY | str replace -a "@SYSTEM@" $system | str replace -a "@NONCE@" $nonce | save -f $"($work)/many.nix"
+  $DEEP | str replace -a "@SYSTEM@" $system | str replace -a "@NONCE@" $nonce | save -f $"($work)/deep.nix"
   cd $work
   # the ops read the closure from /nix/store, so the roots are instantiated
   # there first; nothing here builds them.
@@ -122,6 +152,14 @@ run-in $work {
   let many = (out-of $ietsp plumbing resolve --dump-drvs many many.nix | from json)
   $ok = (verdict (($many.roots | length) == 1) "resolve: the one root" $"($many.roots)") and $ok
   $ok = (verdict ((ls many | length) == 33) "resolve --dump-drvs: every derivation, whichever fiber made it" $"(ls many | length)") and $ok
+  # same, where the demand path never takes the thunk the helper claimed.
+  # Three runs, because a held-back dump loses a different subset each time.
+  let deep = (1..3 | each {|i|
+    rm -rf $"deep($i)"
+    out-of $ietsp plumbing resolve --dump-drvs $"deep($i)" deep.nix | ignore
+    ls $"deep($i)" | length
+  })
+  $ok = (verdict ($deep == [145 145 145]) "resolve --dump-drvs: every derivation under a helper's thunk, every run" $"($deep)") and $ok
 
   print "== 2. plan"
   let p = (out-of $ietsp plumbing plan $hello | from json)

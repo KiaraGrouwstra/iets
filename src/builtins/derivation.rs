@@ -635,12 +635,19 @@ fn derivation_strict_internal(
         .insert(drv_path.clone(), h);
     ev.drv.nr_derivations += 1;
 
+    // not held back like a warning: the value this derivation is part of
+    // escapes into its cell whether or not the demand path takes the thunk
+    // the helper was forcing, so a dump parked on that thunk is dropped
+    // while the drvPath that names it is returned
     if let Some(dir) = &ev.drv.dump_dir {
         let file = dir.join(drv_path.base_name());
-        let what = format!("writing '{}'", file.display());
-        let text = text.clone();
-        crate::parallel::defer_io(ev, what.clone(), move || std::fs::write(&file, &text))
-            .map_err(|e| Error::boxed(ErrorKind::Io, format!("{what}: {e}"), pos))?;
+        std::fs::write(&file, &text).map_err(|e| {
+            Error::boxed(
+                ErrorKind::Io,
+                format!("writing '{}': {e}", file.display()),
+                pos,
+            )
+        })?;
     }
 
     let mut references: BTreeSet<StorePath> = drv.input_srcs.clone();
