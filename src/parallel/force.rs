@@ -398,25 +398,19 @@ pub enum CellState {
 /// must stay invisible until the demand path asks for the value. This is
 /// the one path that takes a value without `force_thunk`, so the demand
 /// path takes the effects held on a helper's thunk here too.
-enum Taken {
-    Value(Word),
-    Unclaimed,
-    Busy,
-}
-
 #[inline]
-fn take(ev: &mut Evaluator, c: &Cell) -> Taken {
+pub fn take_cell(ev: &mut Evaluator, c: &Cell) -> CellState {
     let w = c.get();
     if !w.is_thunk() {
-        return Taken::Value(w);
+        return CellState::Ready(w);
     }
     let st = w.thunk_state_cell();
     let s = st.get();
     if s.is_blackhole() {
-        return Taken::Busy;
+        return CellState::Busy;
     }
     if w.thunk_unforced(s) {
-        return Taken::Unclaimed;
+        return CellState::Unclaimed;
     }
     let v = w.thunk_value(s);
     if ev.par.is_main {
@@ -425,11 +419,11 @@ fn take(ev: &mut Evaluator, c: &Cell) -> Taken {
         }
         c.set(v);
     }
-    Taken::Value(v)
+    CellState::Ready(v)
 }
 
 #[inline]
-pub fn cell_state(cell: &Cell) -> CellState {
+fn cell_state(cell: &Cell) -> CellState {
     let w = cell.get();
     if !w.is_thunk() {
         return CellState::Ready(w);
@@ -559,10 +553,10 @@ fn coerce_walk(ev: &mut Evaluator, v: Word, depth: u32) -> bool {
 }
 
 fn coerce_step(ev: &mut Evaluator, c: &Cell, depth: u32) -> bool {
-    let v = match take(ev, c) {
-        Taken::Busy => return true,
-        Taken::Value(v) => v,
-        Taken::Unclaimed => match ev.force_cell(c) {
+    let v = match take_cell(ev, c) {
+        CellState::Busy => return true,
+        CellState::Ready(v) => v,
+        CellState::Unclaimed => match ev.force_cell(c) {
             Ok(v) => v,
             Err(_) => return false,
         },
@@ -649,15 +643,15 @@ fn walk(
         let c = cell(i);
         // a ready cell already gave up its value: forcing it again would
         // walk the claim protocol of a thunk a helper left boxed
-        let ready = match take(ev, c) {
-            Taken::Busy => {
+        let ready = match take_cell(ev, c) {
+            CellState::Busy => {
                 if demand {
                     deferred.push(i);
                 }
                 continue;
             }
-            Taken::Value(v) => Some(v),
-            Taken::Unclaimed => None,
+            CellState::Ready(v) => Some(v),
+            CellState::Unclaimed => None,
         };
         if !demand && bail_requested(ev) {
             return Err(cancelled());
@@ -751,9 +745,9 @@ fn range_step(ev: &mut Evaluator, c: &Cell, deep: bool, seen: &mut HashSet<u64>)
     if bail_requested(ev) {
         return false;
     }
-    match take(ev, c) {
-        Taken::Unclaimed => {}
-        Taken::Value(v) if deep => {
+    match take_cell(ev, c) {
+        CellState::Unclaimed => {}
+        CellState::Ready(v) if deep => {
             return deep_inner(ev, v, seen, false).is_ok();
         }
         _ => return true,

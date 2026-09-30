@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Mutex, OnceLock};
 
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
-use crate::parallel::force::{CellState, T_JOB, bail_requested, cell_state, fanout_range};
+use crate::parallel::force::{CellState, T_JOB, bail_requested, fanout_range, take_cell};
 use crate::print::{json_escape, lexicographic_order, print_json};
 use crate::runtime::*;
 use crate::store::drv::{Derivation, DerivationOutput, load_derivation_from_store};
@@ -830,12 +830,12 @@ fn prefetch_child(
     if d == cfg.opts.chunk_depth && !admit(h, d, false) {
         return Ok(());
     }
-    let v = match cell_state(&attr.cell) {
+    // only the demand path may unbox a cell and take the effects a helper
+    // held on its thunk (docs/explanation/evaluation.md); a prefetch task
+    // runs on a helper, so it reads through the same call as a walk
+    let v = match take_cell(ev, &attr.cell) {
         CellState::Busy => return Ok(()),
-        CellState::Ready(v) => {
-            attr.cell.set(v);
-            v
-        }
+        CellState::Ready(v) => v,
         CellState::Unclaimed => match ev.force_cell(&attr.cell) {
             Ok(v) => v,
             Err(e) if e.kind == ErrorKind::Cancelled => return Err(()),
