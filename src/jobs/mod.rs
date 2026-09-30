@@ -387,8 +387,14 @@ fn coerce_store_path(ev: &mut Evaluator, w: Word, pos: Pos, what: &str) -> EvalR
     StorePath::parse(&s).map_err(|e| Error::boxed(ErrorKind::Eval, e.0, pos))
 }
 
-/// get-drvs.cc:queryOutputs(withPaths = true).
-fn outputs(ev: &mut Evaluator, a: &'static AttrsObj) -> EvalResult<BTreeMap<String, StorePath>> {
+/// get-drvs.cc:queryOutputs. Without `with_paths` the names are read and
+/// every path is left unknown, which is how a floating content-addressed
+/// output reaches the JSON as a `null`.
+fn outputs(
+    ev: &mut Evaluator,
+    a: &'static AttrsObj,
+    with_paths: bool,
+) -> EvalResult<BTreeMap<String, Option<StorePath>>> {
     let mut out = BTreeMap::new();
     match a.get(config().syms.outputs) {
         Some(o) => {
@@ -404,6 +410,10 @@ fn outputs(ev: &mut Evaluator, a: &'static AttrsObj) -> EvalResult<BTreeMap<Stri
                     "while evaluating the name of an output of a derivation",
                 )?;
                 let name = String::from_utf8_lossy(name).into_owned();
+                if !with_paths {
+                    out.insert(name, None);
+                    continue;
+                }
                 let sym = ev.sym(name.as_bytes());
                 let Some(v) = a.get(sym) else { continue };
                 let va = ev.force_attrs(
@@ -420,14 +430,17 @@ fn outputs(ev: &mut Evaluator, a: &'static AttrsObj) -> EvalResult<BTreeMap<Stri
                     p.pos,
                     "while evaluating an output path of a derivation",
                 )?;
-                out.insert(name, sp);
+                out.insert(name, Some(sp));
             }
+        }
+        None if !with_paths => {
+            out.insert("out".into(), None);
         }
         None => {
             let Some(p) = a.get(ev.s.out_path) else {
                 return Err(Error::boxed(
                     ErrorKind::Eval,
-                    "CA derivations are not yet supported",
+                    "derivation has no 'outPath' attribute",
                     Pos::NONE,
                 ));
             };
@@ -437,7 +450,7 @@ fn outputs(ev: &mut Evaluator, a: &'static AttrsObj) -> EvalResult<BTreeMap<Stri
                 p.pos,
                 "while evaluating the output path of a derivation",
             )?;
-            out.insert("out".into(), sp);
+            out.insert("out".into(), Some(sp));
         }
     }
     Ok(out)
@@ -703,14 +716,23 @@ fn job_inner(ev: &mut Evaluator, a: &'static AttrsObj, path: &[String]) -> EvalR
             ));
         }
     };
-    let outs = outputs(ev, a).map_err(|mut e| {
-        e.msg = format!(
-            "derivation '{}' does not have valid outputs: {}",
-            attr_join(path),
-            e.msg
-        );
-        e
-    })?;
+    // drv.cc:queryOutputs: an output path the evaluation cannot know yet is
+    // a `null`, not an error, so a failure to resolve them is retried with
+    // the names alone. nix-eval-jobs makes that retry conditional on
+    // `ca-derivations`; ietsp never asks for the feature to evaluate such a
+    // derivation, so it does not ask here either.
+    let outs = match outputs(ev, a, true) {
+        Ok(o) => o,
+        Err(e) if e.kind == ErrorKind::Cancelled => return Err(e),
+        Err(_) => outputs(ev, a, false).map_err(|mut e| {
+            e.msg = format!(
+                "derivation '{}' does not have valid outputs: {}",
+                attr_join(path),
+                e.msg
+            );
+            e
+        })?,
+    };
     let system = if cfg.opts.no_instantiate {
         // get-drvs.cc:PackageInfo::querySystem.
         match a.get(cfg.syms.system) {
@@ -766,7 +788,7 @@ fn job_inner(ev: &mut Evaluator, a: &'static AttrsObj, path: &[String]) -> EvalR
         attr: attr_join(path),
         attr_path: path.to_vec(),
         drv_path,
-        outputs: outs.into_iter().map(|(k, v)| (k, Some(v))).collect(),
+        outputs: outs,
         constituents,
         named_constituents: Some(named),
         glob_constituents: glob,
@@ -866,7 +888,7 @@ fn prefetch_job(ev: &mut Evaluator, a: &'static AttrsObj) -> EvalResult<()> {
         let mut ctx = Vec::new();
         ev.coerce_to_string(d.cell.get(), &mut ctx, d.pos, "", false, false, true)?;
     }
-    outputs(ev, a)?;
+    outputs(ev, a, true)?;
     if cfg.opts.meta
         && let Some(m) = a.get(cfg.syms.meta)
     {

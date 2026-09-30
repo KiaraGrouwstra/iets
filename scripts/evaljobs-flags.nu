@@ -154,6 +154,8 @@ def run-all [ctx: record, np: string]: nothing -> int {
     [check constituents [--constituents --gc-roots-dir GCROOTS --meta aggregates.nix]]
     [check constituents-flake [--constituents --flake ./flake#legacyPackages.x86_64-linux --meta]]
     [check constituents-select [--constituents --select 'j: { inherit (j) success; }' aggregates.nix]]
+    [check ca [--extra-experimental-features ca-derivations --no-instantiate --meta ca.nix]]
+    [check ca-workers [--extra-experimental-features ca-derivations --no-instantiate --workers 3 ca.nix]]
     [check cache-status [--check-cache-status --meta -I $"nixpkgs=($np)" cache.nix]]
     [check cache-status-constituents [--check-cache-status --constituents --gc-roots-dir GCROOTS aggregates.nix]]
     [check restart [--max-memory-size 1 --workers 2 --meta --gc-roots-dir GCROOTS ci.nix]]

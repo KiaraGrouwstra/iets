@@ -782,7 +782,12 @@ Three differences that stay:
 
 `scripts/evaljobs-flags.nu` runs nix-eval-jobs 2.35.2 and ietsp with
 every flag combination above on the jobsets in `tests/evaljobs/` and
-diffs the sorted output: 41 cases, all identical, exit codes included.
+diffs the sorted output: 48 cases, all identical, exit codes included.
+2.35.2 is the version the flake pins, and the suite needs that one: 2.35.4
+adds a `stats` key to every line, prints `requiredSystemFeatures` without
+`--show-input-drvs`, and quotes an `attr` element that is not an identifier
+(`names."7zip"`, where 2.35.2 writes `names.7zip`). Bumping the pin means
+following all three.
 
 ## `print-dev-env`
 
