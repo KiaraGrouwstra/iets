@@ -328,9 +328,15 @@ cell, the thunk state and the value, writes the value into the cell, and
 writes `EMPTY` over a helper's mark; a run that let helpers unbox finds
 the value in the cell with one load. `force_thunk` answers a forced thunk
 inline for that reason, and `take` does the whole cell in one read of the
-thunk. Measured on bld1, nixos-desktop at four workers: 3.7 % of the wall,
-of which about 1 point is the store that upgrades the mark. At one worker
-there is no helper and no boxed cell, so the same run costs nothing.
+thunk. Measured on bld1, nixos-desktop at four workers, against the same
+tree with helper unboxing put back: 3.2 % of the instructions, of which
+about 1 point is the store that upgrades the mark. At one worker there is
+no helper and no boxed cell, so the same run costs nothing.
+
+The instruction count is the number to quote here. Rebuilding one source
+moved this workload's wall by up to two points at an instruction count
+equal to 0.01 %, so a wall difference under two points says nothing about
+the change that produced it.
 
 A lint finding is not a value and is held back instead. One a helper
 produced is parked on the thunk the helper was forcing
@@ -350,6 +356,50 @@ value escapes into its cell whichever thunk the demand path takes, so a
 parked dump goes missing while the `drvPath` that names it is returned.
 Held back, the directory lost between 4 % and 26 % of the derivations of a
 repkgs evaluation, and a different set on every run.
+
+#### One cell is not enough
+
+A thunk whose word reaches exactly one cell looks safe to unbox: no second
+cell can disagree with it. That holds for `==` and for nothing else, so
+the idea does not work. The cell is not only the proxy for Nix's slot
+identity. It is the record of demand, and the reader that needs that
+record needs no second cell:
+
+- `print_ambiguous` reads a cell. A cell that holds a thunk prints
+  `<CODE>`; a cell that holds a value prints the value. A helper that
+  unboxes the one cell of a `genList` thunk therefore makes the value
+  printable, where Nix prints `<CODE>` (`scripts/partest.nu`,
+  `print-code-single`). The same reader is behind `trace`, `warn` and the
+  error messages that print a value, so no run mode is free of it.
+- A lint finding a helper held back is released when the demand path takes
+  the thunk (`parallel::force::take_speculated`). A demand path that finds
+  the value in the cell never reads the thunk, so the finding is lost
+  (`lint-demanded`).
+
+Two distinct single-cell thunks that force to one function are a third
+case. Unboxing both makes their cells hold the same word, and `==` then
+answers true where the sequential run answers false.
+
+A mark would also have to be set wherever a thunk word reaches a second
+cell. Those routes are most of the evaluator: a variable and a selection
+in `maybe_thunk`, an argument bound into an env slot, `++`, `tail`,
+`filter`, `attrValues`, `catAttrs`, `listToAttrs`, `removeAttrs`,
+`intersectAttrs`, `zipAttrsWith`, the argument of a `map` or `mapAttrs`
+thunk, the flat copy of a `//`, a `rec` set built from its env, `inherit
+(e)`, and `with`. The mark is one bit in the thunk state, set by a
+compare-and-exchange at each of those routes. With nothing reading it, it
+costs 3.1 % of the instructions on bld1, on nixos-desktop at four
+workers, and 1.2 % at one worker, where no mark is ever set and only the
+branch at each route remains. `scripts/partest.nu` keeps a case per
+route, so the routes stay covered whatever reads the box next.
+
+Only a `Thunk` can carry that bit. A `ThunkApp` and a `ThunkApp2` keep the
+argument as their unforced state. An argument is any value word: the tag
+owns the low three bits, and an immediate integer owns the rest. So `map`,
+`genList`, `mapAttrs` over a large set and `zipAttrsWith` all count as
+shared, and only a `Thunk` cell could be unboxed. That alone returns
+2.3 % of the instructions. The mark costs 0.8 points more than the
+unboxing it allows can return, so the box stays.
 
 ### A failure stops the speculation
 
