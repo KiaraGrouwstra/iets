@@ -1,8 +1,8 @@
 //! Named lints for language corner cases, each `off`, `warn` or `error`.
 //! The registry lives here, one line per lint; each family file holds
 //! the trigger logic its hooks call (`allow.rs` for `meta`). Levels
-//! resolve from the built-in default, then `[lint]` in each `ietsp.toml`
-//! (machine, user, project), then `IETSP_LINT`, then `--lint`; inside one
+//! resolve from the built-in default, then `[lint]` in each `iets.toml`
+//! (machine, user, project), then `IETS_LINT`, then `--lint`; inside one
 //! source a lint name beats `family:NAME`, which beats `all`. A site is
 //! reported only inside the lint roots unless the scope is `all` or the
 //! site's locked input has its own levels. See docs/reference/lints.md.
@@ -159,7 +159,7 @@ registry! {
     AbsolutePathInDrv: "absolute-path-in-drv", Purity, Evaluator, Off, "a derivation attribute holds the text of a path under a flake root, an absolute path a flake evaluation would have copied";
     TreeMetaInDrv: "tree-meta-in-drv", Purity, Evaluator, Warn, "a derivation attribute holds metadata of the flake's source tree (`self.rev`, `self.lastModifiedDate`, ...), so each commit gives a new .drv and a rebuild; a locked input is silent without `[lint.inputs.<node>]`";
     RevCount: "rev-count", Purity, Evaluator, Warn, "the evaluation reads `revCount` of the flake's source tree, which is deprecated: the count is expensive, a shallow clone has none, and each commit changes it; use `lastModifiedDate` and `shortRev`; a locked input is silent without `[lint.inputs.<node>]`";
-    UnknownAllow: "unknown-allow", Meta, Parser, Warn, "a `# ietsp: allow` comment that names a lint the registry does not know, so a typo does not silence nothing";
+    UnknownAllow: "unknown-allow", Meta, Parser, Warn, "a `# iets: allow` comment that names a lint the registry does not know, so a typo does not silence nothing";
 }
 
 pub const N: usize = LINTS.len();
@@ -244,7 +244,7 @@ pub struct Config {
     pub max_bytes: u64,
     pub scope: Scope,
     /// Canonical absolute directories: the entry directory, then `roots`
-    /// of `ietsp.toml`, then `--lint-root`.
+    /// of `iets.toml`, then `--lint-root`.
     pub roots: Vec<Vec<u8>>,
     /// `[lint.inputs.<node>]`: the levels that hold inside that locked
     /// input's tree, by lock node name; `None` leaves the scope rule.
@@ -298,7 +298,7 @@ pub fn select(selector: &str) -> Result<(Specificity, Vec<LintId>), String> {
     }
 }
 
-/// The settings of one source (a `[lint]` table, `IETSP_LINT`, the `--lint`
+/// The settings of one source (a `[lint]` table, `IETS_LINT`, the `--lint`
 /// flags) before they reach the levels. A TOML table has no order, so
 /// "later wins" cannot hold inside a source: a name beats `family:NAME`,
 /// which beats `all`; among settings of one specificity the later one
@@ -327,14 +327,14 @@ impl Layer {
         Ok(())
     }
 
-    /// `set` for a file or `IETSP_LINT`: a selector the registry does not
+    /// `set` for a file or `IETS_LINT`: a selector the registry does not
     /// know is one `unknown-lint` warning, and the run goes on. An error
     /// there stops every command in the repository, the one that installs
     /// the fix included.
     fn set_from(&mut self, selector: &str, level: Level, origin: &str) {
         if self.set(selector, level).is_err() {
             let raw = format!(
-                "{origin}: ietsp does not know the lint '{selector}' and ignores it; 'ietsp help lints' has the list (docs/reference/lints.md)"
+                "{origin}: iets does not know the lint '{selector}' and ignores it; 'iets help lints' has the list (docs/reference/lints.md)"
             );
             crate::ignored::note("unknown-lint", &format!("{origin} {selector}"), raw);
         }
@@ -487,18 +487,18 @@ impl Config {
         Ok(())
     }
 
-    /// `IETSP_LINT="name=level,name=level"`: one source.
+    /// `IETS_LINT="name=level,name=level"`: one source.
     pub fn apply_env(&mut self, s: &str) -> Result<(), String> {
         let mut layer = Layer::default();
         for pair in s.split(',').map(str::trim).filter(|p| !p.is_empty()) {
             let (name, level) = split_pair(pair)?;
-            layer.set_from(name, level, "IETSP_LINT");
+            layer.set_from(name, level, "IETS_LINT");
         }
         layer.apply(&mut self.levels);
         Ok(())
     }
 
-    /// The `[lint]` table of an `ietsp.toml`: `name = "level"`, or
+    /// The `[lint]` table of an `iets.toml`: `name = "level"`, or
     /// `name = { level = "warn", max-bytes = 1000 }` for a lint with knobs,
     /// plus `scope`, `roots` (relative to the file) and `inputs.<node>`.
     pub fn apply_toml(&mut self, text: &str, origin: &Path) -> Result<(), String> {
@@ -568,8 +568,8 @@ impl Config {
         Ok(())
     }
 
-    /// Default, then the settings files, then the project `ietsp.toml` found
-    /// by walking up from `start`, then `IETSP_LINT`, then `flags` as one
+    /// Default, then the settings files, then the project `iets.toml` found
+    /// by walking up from `start`, then `IETS_LINT`, then `flags` as one
     /// source. `start` is the first lint root; `roots` (`--lint-root`) follow and
     /// `scope` (`--lint-scope`) wins over the file's.
     pub fn resolve(
@@ -599,8 +599,8 @@ impl Config {
             crate::settings::check_project(&text, &file)?;
             c.apply_toml(&text, &file)?;
         }
-        if let Ok(env) = std::env::var("IETSP_LINT") {
-            c.apply_env(&env).map_err(|m| format!("IETSP_LINT: {m}"))?;
+        if let Ok(env) = std::env::var("IETS_LINT") {
+            c.apply_env(&env).map_err(|m| format!("IETS_LINT: {m}"))?;
         }
         let mut layer = Layer::default();
         for (selector, level) in flags {
@@ -667,16 +667,16 @@ fn level_char(l: Level) -> char {
     }
 }
 
-/// The nearest `ietsp.toml` in `start` or an ancestor.
-/// The nearest project `ietsp.toml` at or above `start`, stopping at the
+/// The nearest `iets.toml` in `start` or an ancestor.
+/// The nearest project `iets.toml` at or above `start`, stopping at the
 /// project root. The walk must not leave the project: a world-writable
-/// `/tmp/ietsp.toml` would otherwise set a lint level for every evaluation
+/// `/tmp/iets.toml` would otherwise set a lint level for every evaluation
 /// below it, and the file is untrusted input (`settings::check_project`).
 /// A directory that holds `.git` or `flake.nix` is the root.
 pub fn find_config_file(start: &Path) -> Option<PathBuf> {
     let mut dir = start.to_path_buf();
     loop {
-        let f = dir.join("ietsp.toml");
+        let f = dir.join("iets.toml");
         if f.is_file() {
             return Some(f);
         }
@@ -689,7 +689,7 @@ pub fn find_config_file(start: &Path) -> Option<PathBuf> {
     }
 }
 
-/// `ietsp lint list`: every lint with its effective level.
+/// `iets lint list`: every lint with its effective level.
 pub fn list(c: &Config) -> String {
     let mut out = String::new();
     for d in LINTS {
@@ -875,7 +875,7 @@ impl Evaluator {
     }
 
     /// Reports a lint site: nothing at `off`, outside the scope, or on a
-    /// line a `# ietsp: allow` comment covers (`allow`); one warning per
+    /// line a `# iets: allow` comment covers (`allow`); one warning per
     /// (lint, pos) at `warn`, an error `tryEval` does not catch at `error`.
     #[inline]
     pub fn lint(&mut self, id: LintId, pos: Pos, msg: impl FnOnce() -> String) -> EvalResult<()> {
@@ -1133,19 +1133,19 @@ impl Evaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    /// A `/tmp/ietsp.toml` must not set a lint level for a project below it:
+    /// A `/tmp/iets.toml` must not set a lint level for a project below it:
     /// the walk stops at the root, and the file is untrusted input.
     #[test]
     fn the_project_file_walk_stops_at_the_project_root() {
-        let d = std::env::temp_dir().join(format!("ietsp-walk-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("iets-walk-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let deep = d.join("repo/sub");
         std::fs::create_dir_all(&deep).unwrap();
-        std::fs::write(d.join("ietsp.toml"), "[lint]\n").unwrap();
-        assert_eq!(find_config_file(&deep), Some(d.join("ietsp.toml")));
+        std::fs::write(d.join("iets.toml"), "[lint]\n").unwrap();
+        assert_eq!(find_config_file(&deep), Some(d.join("iets.toml")));
         std::fs::create_dir_all(d.join("repo/.git")).unwrap();
         assert_eq!(find_config_file(&deep), None, "the walk left the project");
-        let own = d.join("repo/ietsp.toml");
+        let own = d.join("repo/iets.toml");
         std::fs::write(&own, "[lint]\n").unwrap();
         assert_eq!(find_config_file(&deep), Some(own));
         let _ = std::fs::remove_dir_all(&d);
@@ -1324,7 +1324,7 @@ mod tests {
         let mut c = Config::default();
         c.apply_toml(
             "[lint]\nabsolute-path-literal = \"warn\"\nroots = [\"lib\", \"/abs/../x\"]\n[lint.inputs.nixpkgs]\nfod = \"warn\"\n\"family:path\" = \"off\"\n",
-            Path::new("/repo/ietsp.toml"),
+            Path::new("/repo/iets.toml"),
         )
         .unwrap();
         assert_eq!(c.scope, Scope::Root);
@@ -1378,7 +1378,7 @@ mod tests {
         let mut c = Config::default();
         c.apply_toml(
             "[lint]\nnope = \"error\"\n\"family:nope\" = \"warn\"\ngone = { level = \"warn\" }\nfod = \"warn\"\n[lint.inputs.x]\nnope = \"warn\"\n",
-            Path::new("/r/ietsp.toml"),
+            Path::new("/r/iets.toml"),
         )
         .unwrap();
         c.apply_env("nope=warn, ifd=error").unwrap();
@@ -1389,10 +1389,10 @@ mod tests {
         assert_eq!(
             noted,
             [
-                "/r/ietsp.toml family:nope",
-                "/r/ietsp.toml gone",
-                "/r/ietsp.toml nope",
-                "IETSP_LINT nope"
+                "/r/iets.toml family:nope",
+                "/r/iets.toml gone",
+                "/r/iets.toml nope",
+                "IETS_LINT nope"
             ]
         );
         assert!(c.apply_env("nope=loud").is_err());

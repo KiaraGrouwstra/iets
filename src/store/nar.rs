@@ -252,7 +252,7 @@ impl<'a> NarSink<'a> {
     }
 }
 
-/// The one NAR writer: every NAR byte ietsp produces is framed here.
+/// The one NAR writer: every NAR byte iets produces is framed here.
 ///
 /// A tree that is walked — a directory on disk, an indexed archive, a string —
 /// drives it with the nodes it finds, in NAR order, and keeps its own
@@ -865,7 +865,7 @@ pub(crate) mod tests {
     /// printf '#!/bin/sh\necho hi\n' > tree/run.sh; chmod +x tree/run.sh;
     /// ln -s a.txt tree/link; : > tree/sub/empty; printf zzz > tree/sub/z
     pub(crate) fn fixture_tree(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ietsp-nar-{}-{tag}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("iets-nar-{}-{tag}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let tree = dir.join("tree");
         fs::create_dir_all(tree.join("sub")).unwrap();
@@ -966,7 +966,7 @@ pub(crate) mod tests {
 
     #[test]
     fn restore_rejects_garbage() {
-        let out = std::env::temp_dir().join(format!("ietsp-nar-garbage-{}", std::process::id()));
+        let out = std::env::temp_dir().join(format!("iets-nar-garbage-{}", std::process::id()));
         assert!(restore_path(&mut &b"nix-archive-2"[..], &out).is_err());
     }
 

@@ -2,10 +2,10 @@
 //!
 //! `cargo run --example value -- [-E EXPR]`
 //!
-//! Uses the library only (`ietsp::api::value`), never `ietsp::cli`.
+//! Uses the library only (`iets::api::value`), never `iets::cli`.
 
-use ietsp::api::value::{ContextElem, Eval, Value, ValueKind};
-use ietsp::eval::Evaluator;
+use iets::api::value::{ContextElem, Eval, Value, ValueKind};
+use iets::eval::Evaluator;
 
 const DEFAULT: &str = r#"
   rec {
@@ -23,7 +23,7 @@ const DEFAULT: &str = r#"
 
 fn main() -> std::process::ExitCode {
     // a frontend owns the run state and says where messages go
-    let session = ietsp::session::Session::new();
+    let session = iets::session::Session::new();
     session.log.write_to_stderr();
     let _entered = session.enter();
     let mut argv = std::env::args().skip(1);
@@ -38,7 +38,7 @@ fn main() -> std::process::ExitCode {
     let root = match e.eval_expr(&src, b"/").and_then(|v| e.force(v)) {
         Ok(v) => v,
         Err(err) => {
-            ietsp::api::report(e.evaluator(), &err);
+            iets::api::report(e.evaluator(), &err);
             return std::process::ExitCode::from(1);
         }
     };
@@ -61,7 +61,7 @@ fn main() -> std::process::ExitCode {
         let v = match e.force(v) {
             Ok(v) => v,
             Err(err) => {
-                ietsp::api::report(e.evaluator(), &err);
+                iets::api::report(e.evaluator(), &err);
                 return std::process::ExitCode::from(1);
             }
         };
@@ -86,7 +86,7 @@ fn main() -> std::process::ExitCode {
         match e.call(f, arg).and_then(|r| e.force(r)) {
             Ok(r) => println!("greet \"world\" = {}", show_value(r)),
             Err(err) => {
-                ietsp::api::report(e.evaluator(), &err);
+                iets::api::report(e.evaluator(), &err);
             }
         }
     }

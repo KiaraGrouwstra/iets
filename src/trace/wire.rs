@@ -553,7 +553,7 @@ pub fn decode_sources(b: &[u8]) -> Option<HashMap<StorePath, SourceOrigin>> {
 
 // ---- build result ----------------------------------------------------------
 
-/// The roots `ietsp build` resolved: drv path and the output named by context.
+/// The roots `iets build` resolved: drv path and the output named by context.
 pub fn encode_roots(roots: &[(StorePath, Option<String>)]) -> Vec<u8> {
     let mut e = Enc::new();
     e.u64(roots.len() as u64);

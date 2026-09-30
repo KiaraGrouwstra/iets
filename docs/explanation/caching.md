@@ -1,6 +1,6 @@
 # Caching, and why the input store is safe
 
-ietsp keeps three things on disk. Two are caches — they hold the result of
+iets keeps three things on disk. Two are caches — they hold the result of
 work that can be done again. One is not a cache at all: it is where a
 fetched flake input *lives*. All three follow the same discipline, and this
 page explains what that discipline is and why the third one is safe to keep
@@ -8,18 +8,18 @@ in a user's home directory with no daemon and no signature.
 
 | store | default root | entry | keyed on |
 |---|---|---|---|
-| compiled IR | `~/.cache/ietsp/ir` | one file | build id, path, system, store directory, `pure-eval`, lint levels, source |
-| tracing runs | `~/.cache/ietsp/trace` | one file in a directory | the whole command; for the count of a revision, the SCM and the revision |
-| fetched inputs | `~/.cache/ietsp/inputs` | one directory | the store path the lock implies |
+| compiled IR | `~/.cache/iets/ir` | one file | build id, path, system, store directory, `pure-eval`, lint levels, source |
+| tracing runs | `~/.cache/iets/trace` | one file in a directory | the whole command; for the count of a revision, the SCM and the revision |
+| fetched inputs | `~/.cache/iets/inputs` | one directory | the store path the lock implies |
 
 Each cache has a flag that turns it off. `--no-tracing-cache` turns off
 the tracing cache. `--no-ir-cache` turns off the IR cache. `--no-cache`
-turns off both, and `IETSP_CACHE=0` and the `cache` setting are the same
+turns off both, and `IETS_CACHE=0` and the `cache` setting are the same
 switch. No flag turns off the input store, because it is not a cache: a
 run needs the input's bytes. `--cache-dir DIR` moves all four stores.
 
-A fourth directory, `~/.cache/ietsp/roots`, is neither a cache nor a
-store of content: it holds the GC roots ietsp owns. See the section on it
+A fourth directory, `~/.cache/iets/roots`, is neither a cache nor a
+store of content: it holds the GC roots iets owns. See the section on it
 below.
 
 The ideas come from Mic92's nix-tarmac: a writer lock a caller may give up
@@ -51,7 +51,7 @@ A killed writer leaves a temporary file that no reader looks at and that the
 sweep removes after a day; the entry it was replacing stays whole and
 usable.
 
-Measured: four `ietsp eval` processes filling one cold store in parallel
+Measured: four `iets eval` processes filling one cold store in parallel
 wrote 97 IR entries and skipped none.
 
 Two things the rename does not promise, and does not have to. Nothing is
@@ -91,12 +91,12 @@ path of the store directory.
 of an environment variable holds a hash keyed with the cache's own secret,
 because knowing whether the value changed is the whole job. Directories of a
 cache are 0700 and its files 0600 whatever the umask, and a root of an older
-ietsp is tightened on the next run. What is still in clear is what an entry
+iets is tightened on the next run. What is still in clear is what an entry
 is for: the paths a run read, the bytes it printed, and the content hash of
 every file it read.
 
-That holds for *any* bytes, not only for bytes ietsp wrote: a cache
-directory is writable by whoever runs ietsp, so a truncated, corrupt or
+That holds for *any* bytes, not only for bytes iets wrote: a cache
+directory is writable by whoever runs iets, so a truncated, corrupt or
 crafted entry must be a miss and never a crash. The IR decoder therefore
 checks every stored constant against the immediate encodings the writer can
 produce — a word is never a raw bit pattern the evaluator would follow as a
@@ -109,14 +109,14 @@ an allow table is in the order the writer wrote it), and bounds both its
 nesting and the items its counted runs may ask for by the entry's own
 length.
 
-**ietsp removes only what ietsp put there.** A wipe is scoped to the names
+**iets removes only what iets put there.** A wipe is scoped to the names
 that store's own layout makes — the version file, the lock, the stamp, the
 temporary files, the entries and, for the IR cache, its shard directories.
 Anything else in the directory survives, and the directory itself is never
 removed. The three stores are subdirectories (`trace/`, `ir/`, `inputs/`)
-of the cache root, so `--cache-dir DIR` and `IETSP_CACHE_DIR` never make
+of the cache root, so `--cache-dir DIR` and `IETS_CACHE_DIR` never make
 `DIR` itself a removal target. A store subdirectory that exists, holds
-something, and carries no name from that layout is not ietsp's: ietsp
+something, and carries no name from that layout is not iets's: iets
 refuses it with an error naming it and runs without that cache, rather than
 writing into it or removing anything from it.
 
@@ -175,8 +175,8 @@ see. On `nixos/release-small.nix` with four workers, 16-core EPYC:
 
 | tool | run | wall | max RSS |
 |---|---|---|---|
-| `ietsp eval-jobs` | cold | 0.29 s | 85 MiB |
-| `ietsp eval-jobs` | warm | 0.26 s | 85 MiB |
+| `iets eval-jobs` | cold | 0.29 s | 85 MiB |
+| `iets eval-jobs` | warm | 0.26 s | 85 MiB |
 | `nix-eval-jobs` | cold | 0.68 s | 113 MiB |
 | `nix-eval-jobs` | warm | 0.66 s | 113 MiB |
 
@@ -192,12 +192,12 @@ holds the nixpkgs path.
 
 ## The tracing cache: keyed on what a run read
 
-This is the one that is not in Nix. `ietsp eval` and `ietsp build` remember
+This is the one that is not in Nix. `iets eval` and `iets build` remember
 what a run printed, together with every observation of the outside world
 the run made. A later run with the same command validates those
 observations. If nothing changed, it replays the result and skips
 evaluation entirely. `print-dev-env` and `search` do the same, and so do the
-subcommands ietsp serves under the classic `nix` name — `nix eval`,
+subcommands iets serves under the classic `nix` name — `nix eval`,
 `nix build`, `nix derivation show`, `nix develop`, `nix fmt` — each with a
 key of its own (`docs/reference/classic.md` says what each entry holds).
 
@@ -230,7 +230,7 @@ parent directory then misses, as it must: the flake becomes a git tree
 whose files are the tracked ones.
 
 One limit: a replace ref (`git replace`) or a graft changes the history
-that `git` shows, and the revision stays. ietsp does not observe them, so
+that `git` shows, and the revision stays. iets does not observe them, so
 a count that the store kept does not follow such a change.
 
 The count is kept in this store by revision. The key holds the build id,
@@ -247,7 +247,7 @@ build, a warm IR cache, `hyperfine`, 10 runs, 2026-09-28). "Before" is the
 commit that made both values observations and counted before the
 evaluation:
 
-| run of `ietsp eval --raw .#ATTR` | before | after | `git` processes |
+| run of `iets eval --raw .#ATTR` | before | after | `git` processes |
 |---|---:|---:|---|
 | a miss, the attribute does not read `revCount` | 2.23 s | 1.18 s | 5, then 4 |
 | a hit | 1.09 s | 0.63 s | 5, then 3 |
@@ -266,7 +266,7 @@ same bytes, by the argument that makes an input store entry one observation
 file, and costs two system calls now. A store path whose name is not the
 hash of its content — a build output, say — keeps its tree observation.
 
-The read set has a second reader. `ietsp print-dev-env --watch-files` prints
+The read set has a second reader. `iets print-dev-env --watch-files` prints
 the mutable paths in it as a `watch_file` line for direnv, so direnv reloads
 a shell when a file its evaluation read changes
 (`docs/how-to/use-with-direnv.md`).
@@ -274,7 +274,7 @@ a shell when a file its evaluation read changes
 A run that had an entry and lost it says why, in one line:
 
 ```
-$ ietsp eval --strict ./flake-attrs.nix
+$ iets eval --strict ./flake-attrs.nix
 re-evaluating: /home/u/repo/flake.nix changed
 ```
 
@@ -363,7 +363,7 @@ values keyed on the locked flake's fingerprint. A `path:` flake with a
 `github:` nixpkgs that is already in the store, a local daemon, every output
 already valid, medians on a 16-core EPYC that was busy with other work:
 
-| command | ietsp, evaluating | ietsp, hit | Nix 2.34.8, warm |
+| command | iets, evaluating | iets, hit | Nix 2.34.8, warm |
 |---|---|---|---|
 | `nix eval .#hello` | 0.16 s | 0.013 s | 0.44 s |
 | `nix build --no-link .#hello` | 0.17 s | 0.039 s | 0.048 s |
@@ -378,7 +378,7 @@ tens of milliseconds of each other. The difference is in when each one has
 a warm path at all: Nix's is off for a dirty git tree, for `-f` and for
 `--expr`, which is the state a tree is in while somebody works on it. A git
 tree also costs Nix a copy on every run, clean or dirty. In this repository
-`nix develop -c true` is 0.04 s on an ietsp hit and 0.20 s in Nix either
+`nix develop -c true` is 0.04 s on an iets hit and 0.20 s in Nix either
 way, `nix derivation show .#default` 0.03 s against 0.08 s, and
 `nix eval --raw .#default.drvPath` 0.03 s against 1.1 s.
 
@@ -406,7 +406,7 @@ replays them.
 ## The input store, and why FOD-only makes it safe
 
 A locked flake input that is not in `/nix/store` has to become readable
-somehow. ietsp downloads it into `~/.cache/ietsp/inputs`, and evaluation
+somehow. iets downloads it into `~/.cache/iets/inputs`, and evaluation
 then reads the input's bytes out of *that*, not out of a store. A build
 uploads the input's NAR straight out of it as well. Nothing is registered
 with any daemon, at any point.
@@ -417,7 +417,7 @@ named by the hash its content must have, and that hash is known before the
 fetch begins.**
 
 A locked flake input is a fixed-output derivation in the only sense that
-matters here. The lock file states the input's `narHash`. ietsp derives the
+matters here. The lock file states the input's `narHash`. iets derives the
 store path from that hash before it opens a socket. It streams the archive
 into a staged directory, writes the NAR out of the index straight into a
 hasher, and the staged directory becomes an entry **only if that hash is
@@ -484,20 +484,20 @@ same tree prints one line, blocks, and then reads the entry the first one
 stored. If the first fetch failed, the second downloads it itself. The lock
 is per tree, so different inputs still download in parallel.
 
-## The roots store: what ietsp keeps alive
+## The roots store: what iets keeps alive
 
-`~/.cache/ietsp/roots` is where ietsp keeps the GC roots it owns. Every
+`~/.cache/iets/roots` is where iets keeps the GC roots it owns. Every
 other root mechanism takes a path from the caller — `print-dev-env
 --gc-root PATH`, `eval-jobs --gc-roots-dir DIR`, `plumbing build --gc-root
 DIR`, `nix-instantiate --add-root PATH`, `nix-build -o` — and this is the
-one ietsp decides for itself. Its users:
+one iets decides for itself. Its users:
 
 | Who | What the root holds | Key | Switch |
 |:---|:---|:---|:---|
 | `nix fmt` | the formatter's output | flake directory, `formatter.<system>` | none |
 | `nix develop` | the `-env` output, which references the whole shell | flake directory, attribute path | `shell-gc-root` |
 | `nix-shell` | every input the entry realised, one link each | working directory, the files and attributes asked for, the path's place in the sorted list | `shell-gc-root` |
-| `ietsp build` | every output it printed | working directory, installable, attribute, output | `build-gc-root` |
+| `iets build` | every output it printed | working directory, installable, attribute, output | `build-gc-root` |
 | `nix-build --no-out-link`, `nix build --no-link` | every output that got no symlink | working directory, the files, attributes or installables asked for, the name the symlink would have had | `build-gc-root` |
 
 An entry is a symlink into `/nix/store`, named by a 64-hex key of what the
@@ -511,8 +511,8 @@ ignored.
 
 One root per thing. Where a caller named a path, that path is the root and
 the roots store stays out of it: `print-dev-env --gc-root PATH` keeps its
-own link (and owns the failure, where a root ietsp chose is best effort),
-`nix-build -o result` keeps `result`, and `ietsp build --fetch-to DIR`
+own link (and owns the failure, where a root iets chose is best effort),
+`nix-build -o result` keeps `result`, and `iets build --fetch-to DIR`
 already has the bytes outside the store.
 
 A shell with no single store path to hold — `nix-shell` realises the
@@ -536,12 +536,12 @@ writer is `replaceSymlink`, which is already atomic. The TTL sweep is the
 rule that does apply, and it fits better here than anywhere else — "keep
 alive what somebody used recently" is exactly what a root should mean — so
 every run touches its link (`utimensat` on the link, not on the store path
-it names, whose mtime is the store's epoch) and `ietsp cache gc` walks this
+it names, whose mtime is the store's epoch) and `iets cache gc` walks this
 store with the other three. A swept root frees nothing by itself; it lets
 the next `nix collect-garbage` decide.
 
-The store is not ietsp's to claim by itself. A sweep removes only names of
-its own shape, so anything else in the directory survives, and a root ietsp
+The store is not iets's to claim by itself. A sweep removes only names of
+its own shape, so anything else in the directory survives, and a root iets
 cannot register — no local daemon, a store that refuses — is a warning, not
 a failure: the command it belongs to still answers.
 
@@ -557,7 +557,7 @@ answers the first with an `LD_PRELOAD` shim that records the mtime of every
 file the evaluation opened, and the second with an out-link under
 `~/.cache/flake-fmt` that doubles as a GC root.
 
-ietsp already answers the first, natively and better. `nix fmt` goes through
+iets already answers the first, natively and better. `nix fmt` goes through
 the tracing cache, keyed on the flake and the system, so a second run with
 nothing changed revalidates its read set and evaluates nothing. The read set
 holds content hashes, not mtimes, and that is exactly the difference a
@@ -580,7 +580,7 @@ need to: `builtins.storePath` hands such a path to the daemon, which
 substitutes it before any read, and import-from-derivation is unsupported,
 so the evaluator never needs bytes the store does not have yet.
 
-`git` and `hg` inputs are the other gap. They need a repository, which ietsp
+`git` and `hg` inputs are the other gap. They need a repository, which iets
 cannot clone, so they still go through a real `nix` that writes
 `/nix/store`.
 

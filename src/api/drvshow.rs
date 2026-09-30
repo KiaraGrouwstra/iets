@@ -194,7 +194,7 @@ fn inputs(drv: &Derivation) -> Value {
     Value::Object(o)
 }
 
-/// One `inputDrvs` entry. `dynamicOutputs` is always empty: ietsp refuses a
+/// One `inputDrvs` entry. `dynamicOutputs` is always empty: iets refuses a
 /// dynamic-derivation input when it parses the ATerm.
 fn input_drv(outputs: &BTreeSet<String>) -> Value {
     let mut o = Map::new();

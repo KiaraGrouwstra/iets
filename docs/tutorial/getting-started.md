@@ -1,8 +1,8 @@
-# Getting started with ietsp
+# Getting started with iets
 
-This tutorial takes about ten minutes. You will build ietsp, evaluate an
+This tutorial takes about ten minutes. You will build iets, evaluate an
 expression, evaluate a file that reads nixpkgs, build a small derivation,
-watch the cache make a second run instant, and see ietsp answer to a
+watch the cache make a second run instant, and see iets answer to a
 classic Nix command name.
 
 You need a checkout of this repository, a working `nix` with flakes, and a
@@ -11,7 +11,7 @@ running `nix-daemon`.
 Every command below is meant to be typed exactly as it is written. Run them
 in order, in one terminal.
 
-## 1. Build ietsp
+## 1. Build iets
 
 From the repository root:
 
@@ -29,19 +29,19 @@ export PATH="$PWD/target/release:$PATH"
 Check it:
 
 ```sh
-ietsp version
+iets version
 ```
 
 You see a version and the commit it was built from. Your commit differs:
 
 ```
-ietsp 0.1.0 (037e49d)
+iets 0.1.0 (037e49d)
 ```
 
 ## 2. Evaluate an expression
 
 ```sh
-ietsp eval --strict -E '1 + 1'
+iets eval --strict -E '1 + 1'
 ```
 
 ```
@@ -53,11 +53,11 @@ whole value instead of only its top level.
 
 ## 3. Get the nixpkgs this repository pins
 
-The next steps read nixpkgs. Ask ietsp for the exact tree this repository's
+The next steps read nixpkgs. Ask iets for the exact tree this repository's
 `flake.lock` names, so your results match the ones printed here:
 
 ```sh
-nixpkgs=$(ietsp eval --raw --impure -E "(builtins.getFlake \"path:$PWD\").inputs.nixpkgs.outPath")
+nixpkgs=$(iets eval --raw --impure -E "(builtins.getFlake \"path:$PWD\").inputs.nixpkgs.outPath")
 echo "$nixpkgs"
 ```
 
@@ -73,7 +73,7 @@ the tutorial uses the variable.
 Make a working directory and write a file in it:
 
 ```sh
-mkdir -p ~/ietsp-tour && cd ~/ietsp-tour
+mkdir -p ~/iets-tour && cd ~/iets-tour
 ```
 
 ```sh
@@ -91,7 +91,7 @@ EOF
 Evaluate it. `-I` says where `<nixpkgs>` is:
 
 ```sh
-ietsp eval --strict --json -I nixpkgs=$nixpkgs hello.nix
+iets eval --strict --json -I nixpkgs=$nixpkgs hello.nix
 ```
 
 ```
@@ -99,12 +99,12 @@ ietsp eval --strict --json -I nixpkgs=$nixpkgs hello.nix
 ```
 
 That derivation path is the same one Nix 2.34.8 computes for the same tree.
-Parity on derivation paths is the invariant ietsp is built around.
+Parity on derivation paths is the invariant iets is built around.
 
 Select one attribute with `-A`:
 
 ```sh
-ietsp eval --raw -I nixpkgs=$nixpkgs hello.nix -A name
+iets eval --raw -I nixpkgs=$nixpkgs hello.nix -A name
 ```
 
 ```
@@ -116,7 +116,7 @@ function, and every step of an attribute path calls one with the
 arguments it has, so nothing has to be wrapped:
 
 ```sh
-ietsp eval --raw $nixpkgs -A hello.name
+iets eval --raw $nixpkgs -A hello.name
 ```
 
 ```
@@ -133,7 +133,7 @@ derivation {
   name = "greeting";
   system = builtins.currentSystem;
   builder = "/bin/sh";
-  args = [ "-c" "echo hello from ietsp > $out" ];
+  args = [ "-c" "echo hello from iets > $out" ];
 }
 EOF
 ```
@@ -141,16 +141,16 @@ EOF
 Build it on your local daemon:
 
 ```sh
-ietsp build --builder daemon greeting.nix
+iets build --builder daemon greeting.nix
 ```
 
 ```
-▶ building greeting (/home/you/ietsp-tour/greeting.nix:2:3)
-✔  greeting (/home/you/ietsp-tour/greeting.nix:2:3) (0s)
+▶ building greeting (/home/you/iets-tour/greeting.nix:2:3)
+✔  greeting (/home/you/iets-tour/greeting.nix:2:3) (0s)
 /nix/store/vwp4kv8mzqx77xsf8x4dff531r5bcxkz-greeting
 ```
 
-ietsp evaluated the derivation in memory, uploaded it to the daemon, and
+iets evaluated the derivation in memory, uploaded it to the daemon, and
 asked the daemon to build it. It wrote nothing to `/nix/store` itself. Run
 it again and only the output path is printed: the daemon already has it.
 
@@ -162,7 +162,7 @@ cat /nix/store/vwp4kv8mzqx77xsf8x4dff531r5bcxkz-greeting
 ```
 
 ```
-hello from ietsp
+hello from iets
 ```
 
 ## 6. Watch the cache
@@ -171,7 +171,7 @@ hello from ietsp
 cache. Use a cache directory of your own so this step starts cold:
 
 ```sh
-ietsp eval --timings --cache-dir ~/ietsp-tour/cache \
+iets eval --timings --cache-dir ~/iets-tour/cache \
   --strict --json -I nixpkgs=$nixpkgs hello.nix
 ```
 
@@ -189,7 +189,7 @@ checked.
 Run exactly the same command again:
 
 ```sh
-ietsp eval --timings --cache-dir ~/ietsp-tour/cache \
+iets eval --timings --cache-dir ~/iets-tour/cache \
   --strict --json -I nixpkgs=$nixpkgs hello.nix
 ```
 
@@ -198,7 +198,7 @@ cache: hit, 1218 entries validated, 0 rehashed, load 0.000s, validate 0.005s
 {"drv":"/nix/store/2bkip97lh6y3dws9inyhjssyayh9vfhq-hello-2.12.3.drv","name":"hello-2.12.3"}
 ```
 
-There is no `eval:` line, because nothing was evaluated. ietsp checked the
+There is no `eval:` line, because nothing was evaluated. iets checked the
 1,218 observations in 5 milliseconds, found that nothing had changed, and
 replayed the answer.
 
@@ -206,7 +206,7 @@ Now change the file and run the same command a third time:
 
 ```sh
 touch hello.nix
-ietsp eval --timings --cache-dir ~/ietsp-tour/cache \
+iets eval --timings --cache-dir ~/iets-tour/cache \
   --strict --json -I nixpkgs=$nixpkgs hello.nix
 ```
 
@@ -215,7 +215,7 @@ cache: hit, 1218 entries validated, 1 rehashed, load 0.002s, validate 0.012s
 {"drv":"/nix/store/2bkip97lh6y3dws9inyhjssyayh9vfhq-hello-2.12.3.drv","name":"hello-2.12.3"}
 ```
 
-`1 rehashed`: the modification time of `hello.nix` changed, so ietsp hashed
+`1 rehashed`: the modification time of `hello.nix` changed, so iets hashed
 the file again, found the same contents, and still hit. Change what the
 file says and the next run misses.
 
@@ -225,7 +225,7 @@ The same binary answers to Nix's own command names. Ask it to instantiate
 your derivation:
 
 ```sh
-ietsp nix-instantiate greeting.nix
+iets nix-instantiate greeting.nix
 ```
 
 ```
@@ -245,7 +245,7 @@ warning: you did not specify '--add-root'; the result might be removed by the ga
 ```
 
 Same warning, same path, byte for byte. That is what "drop-in" means here.
-Under those names ietsp handles what it implements and runs the real `nix`
+Under those names iets handles what it implements and runs the real `nix`
 for the rest.
 
 ## What you have seen
@@ -258,5 +258,5 @@ Where to go next:
 
 - [How to build on a remote builder](../how-to/build-remotely.md)
 - [How to replace nix-diff, nvd, nurl and the rest](../how-to/replace-nix-tools.md)
-- [How ietsp evaluates](../explanation/evaluation.md)
+- [How iets evaluates](../explanation/evaluation.md)
 - [Every command and flag](../reference/commands.md)

@@ -1,4 +1,4 @@
-//! `ietsp plumbing OP`: the machine-first commands. One operation each,
+//! `iets plumbing OP`: the machine-first commands. One operation each,
 //! JSON on stdout, a stable contract (docs/reference/plumbing.md).
 
 use std::collections::HashMap;
@@ -16,10 +16,10 @@ use crate::runtime::Word;
 use crate::store::path::StorePath;
 
 pub const HELP: &str = "\
-usage: ietsp plumbing OP [FLAGS] ...
+usage: iets plumbing OP [FLAGS] ...
 
 The machine-first operations the user-facing commands are written against.
-Each one writes JSON on stdout ('ietsp help reference/plumbing').
+Each one writes JSON on stdout ('iets help reference/plumbing').
 
 operations:
   resolve   an installable becomes derivation roots
@@ -33,7 +33,7 @@ previous op's stdout with --roots -. They read the closure from /nix/store
 unless --drvs DIR, or a \"drvDir\" on stdin, names a resolve --dump-drvs
 directory; then the derivations come from there.
 
-usage: ietsp plumbing resolve [FLAGS] (-E EXPR | FILE | FLAKEREF[#FRAGMENT])
+usage: iets plumbing resolve [FLAGS] (-E EXPR | FILE | FLAKEREF[#FRAGMENT])
 
 Print {\"attrPaths\", \"roots\"}: the attribute paths that were tried, and
 one object per derivation root with \"drv\", \"output\" and \"attr\".
@@ -53,12 +53,12 @@ one object per derivation root with \"drv\", \"output\" and \"attr\".
                         in /nix/store
   --no-drvs             report the attribute paths only
 
-usage: ietsp plumbing plan [--drvs DIR] [--roots -] DRV...
+usage: iets plumbing plan [--drvs DIR] [--roots -] DRV...
 
 Print {\"drvs\", \"sources\", \"storeDrvs\"}: the closure to upload, in
 dependency order, references first.
 
-usage: ietsp plumbing missing [FLAGS] [--roots -] DRV...
+usage: iets plumbing missing [FLAGS] [--roots -] DRV...
 
 Print {\"willBuild\", \"willSubstitute\", \"unknown\", \"downloadSize\",
 \"narSize\"}: what building the roots on the builder would take.
@@ -67,10 +67,10 @@ Print {\"willBuild\", \"willSubstitute\", \"unknown\", \"downloadSize\",
   --check-cache-status  add \"roots\": one {\"drv\", \"cacheStatus\",
                         \"neededBuilds\", \"neededSubstitutes\"} per root
 
-usage: ietsp plumbing build [FLAGS] [--roots -] DRV...
+usage: iets plumbing build [FLAGS] [--roots -] DRV...
 
 Build the roots and print {\"outcomes\"}: one {\"drv\", \"success\",
-\"outputs\", \"reason\", \"logTail\"} each. Exit codes: 'ietsp help errors'.
+\"outputs\", \"reason\", \"logTail\"} each. Exit codes: 'iets help errors'.
 
   --builder URL         where the builds go; the builder setting by default
   --out NAME            an output to build besides the roots' own
@@ -80,8 +80,8 @@ Build the roots and print {\"outcomes\"}: one {\"drv\", \"success\",
                         and report the links as \"gcRoots\"
   --no-build            register the closure and stop
 
-usage: ietsp plumbing fetch [FLAGS] URL
-       ietsp plumbing fetch [FLAGS] (-E EXPR | FILE | FLAKEREF[#FRAGMENT])
+usage: iets plumbing fetch [FLAGS] URL
+       iets plumbing fetch [FLAGS] (-E EXPR | FILE | FLAKEREF[#FRAGMENT])
 
 Print {\"hash\", \"url\"} for what URL serves, or {\"hash\", \"drvPath\"} for
 the hash a fixed-output derivation produces. Nothing is added to a store.
@@ -640,7 +640,7 @@ pub fn hash_line(json: bool, hash: &str, key: &'static str, value: &str) -> i32 
 }
 
 /// The hash the one fixed-output derivation an installable names really
-/// produces. `ietsp prefetch` is the other frontend.
+/// produces. `iets prefetch` is the other frontend.
 pub fn hash_of_drv(ev: &mut Evaluator, a: EvalArgs, json: bool) -> i32 {
     let mut roots = Vec::new();
     if let Err(e) = evaluate(ev, a).and_then(|v| drv_roots(ev, v, &mut roots)) {
@@ -656,7 +656,7 @@ pub fn hash_of_drv(ev: &mut Evaluator, a: EvalArgs, json: bool) -> i32 {
     }
 }
 
-/// The flags `fetch` and `ietsp prefetch` share, and what is left of the argv.
+/// The flags `fetch` and `iets prefetch` share, and what is left of the argv.
 pub fn fetch_flags(argv: &[String]) -> (bool, crate::store::hash::HashAlgo, Vec<String>) {
     let (mut unpack, mut algo) = (false, crate::store::hash::HashAlgo::Sha256);
     let mut rest: Vec<String> = Vec::new();

@@ -1,7 +1,7 @@
 # Builtins API
 
 The primop signature, the forcing helpers, the constructors, the error
-kinds, and every builtin ietsp implements.
+kinds, and every builtin iets implements.
 
 Primops live in `src/builtins/<family>.rs`. Each file has one entry point:
 
@@ -147,4 +147,4 @@ differs from nix-instantiate.
 `tests/corpus/<name>.nix` holds one case per builtin family member, with
 `.exp` captured from `nix-instantiate --eval --strict` and an optional
 `.flags` file. `scripts/corpus.nu --update` regenerates the `.exp` files;
-`scripts/corpus.nu` checks them against `target/release/ietsp`.
+`scripts/corpus.nu` checks them against `target/release/iets`.

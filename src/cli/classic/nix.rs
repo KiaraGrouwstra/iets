@@ -1,4 +1,4 @@
-//! `nix` (src/nix): the subcommands ietsp implements — `eval`, `build`,
+//! `nix` (src/nix): the subcommands iets implements — `eval`, `build`,
 //! `derivation show`, `print-dev-env`, `develop`, `search`, `fmt` and `flake
 //! prefetch-inputs` — with the same exec fallback as the other classic names
 //! for everything else.
@@ -41,7 +41,7 @@ const GLOBALS: &[(&str, usize)] = &[
     ("--argstr", 2),
     ("--store", 1),
     // The `nix-farm` wrapper passes `--eval-store auto` because the farm
-    // refuses the worker-protocol tunnel; ietsp always evaluates locally.
+    // refuses the worker-protocol tunnel; iets always evaluates locally.
     ("--eval-store", 1),
     ("-j", 1),
     ("--max-jobs", 1),
@@ -97,7 +97,7 @@ pub fn main(argv: &[String]) -> i32 {
 }
 
 /// The index of the subcommand word: the first argument that is not one of
-/// the global flags ietsp accepts.
+/// the global flags iets accepts.
 fn find_sub(argv: &[String]) -> Result<usize, String> {
     let mut i = 0;
     while i < argv.len() {
@@ -120,7 +120,7 @@ pub fn global_flag(c: &mut Common, a: &mut Argv, s: &str) -> Result<bool, String
     }
     match s {
         "--accept-flake-config" => crate::ignored::flag(s, crate::ignored::NO_NIX_CONFIG),
-        // ietsp has every feature but this one, which changes what `fromTOML`
+        // iets has every feature but this one, which changes what `fromTOML`
         // returns (docs/reference/divergences.md). Under a classic name the
         // value is still a setting, because the builtins Nix gates on a
         // feature are gated here too (`builtins::install`).
@@ -135,7 +135,7 @@ pub fn global_flag(c: &mut Common, a: &mut Argv, s: &str) -> Result<bool, String
         }
         "--eval-store" => match a.value(s)?.as_str() {
             "auto" | "daemon" | "" => {
-                crate::ignored::flag(s, "ietsp evaluates in memory and needs no evaluation store")
+                crate::ignored::flag(s, "iets evaluates in memory and needs no evaluation store")
             }
             v => return Err(format!("'--eval-store {v}' is not implemented")),
         },

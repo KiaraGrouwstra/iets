@@ -1,5 +1,5 @@
 //! `fetch`: a URL or a fixed-output derivation becomes a hash. The two
-//! frontends are `ietsp plumbing fetch` and `ietsp prefetch`
+//! frontends are `iets plumbing fetch` and `iets prefetch`
 //! (docs/reference/plumbing.md, docs/reference/commands.md). Nothing is added to a store.
 
 use std::collections::HashMap;

@@ -69,7 +69,7 @@ impl Session {
         self.settings.get_or_init(Settings::default)
     }
 
-    /// Reads the `ietsp.toml` settings files and applies the `--ietsp-option` pairs.
+    /// Reads the `iets.toml` settings files and applies the `--iets-option` pairs.
     /// Call it once, on an entered session, before anything reads a setting.
     pub fn load_settings(&self, options: &[(String, String)]) -> crate::error::Result<()> {
         let s = Settings::load(options)?;

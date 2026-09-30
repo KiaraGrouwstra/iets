@@ -300,7 +300,7 @@ pub fn drv_roots(
                     let (layers, root) = crate::runtime::split_built(drv);
                     if !layers.is_empty() {
                         return Err(bad(
-                            "ietsp: the output of a dynamic derivation is not an installable"
+                            "iets: the output of a dynamic derivation is not an installable"
                                 .to_string(),
                         ));
                     }
@@ -334,7 +334,7 @@ pub fn drv_roots(
     ))
 }
 
-/// What `ietsp build` builds. A derivation, a string with derivation context
+/// What `iets build` builds. A derivation, a string with derivation context
 /// or a list is [`drv_roots`]. Any other attrset is a tree for
 /// [`get_drvs_at`], entered at its member named after the current system when
 /// it has one: that is how a flake lays out `checks` and `packages`.

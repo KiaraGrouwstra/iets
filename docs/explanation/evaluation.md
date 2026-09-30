@@ -1,6 +1,6 @@
-# How ietsp evaluates
+# How iets evaluates
 
-ietsp is a tree-walking evaluator over a compiled intermediate
+iets is a tree-walking evaluator over a compiled intermediate
 representation. It is lazy, like Nix, and it forces thunks on several
 threads at once. This page explains why those two properties can hold
 together, and why the memory layout is the thing that decides how large a
@@ -403,7 +403,7 @@ unboxing it allows can return, so the box stays.
 
 ### A failure stops the speculation
 
-Nix evaluates a failed thunk again at every force, and so does ietsp: a
+Nix evaluates a failed thunk again at every force, and so does iets: a
 failure resets the thunk. Under fan-out that turned one failing thunk into
 one failing evaluation per task, which was measured at 20 s and 11 GB
 against 0.01 s and 38 MB at one worker. The runtime now notes the thunk

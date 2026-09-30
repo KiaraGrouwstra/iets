@@ -1,4 +1,4 @@
-//! `ietsp --help`, `ietsp COMMAND --help`, `--version`, and the one way a
+//! `iets --help`, `iets COMMAND --help`, `--version`, and the one way a
 //! native command reports a bad command line.
 
 use std::process::exit;
@@ -7,7 +7,7 @@ use std::sync::RwLock;
 use crate::cli::docs;
 
 pub const OVERVIEW: &str = "\
-usage: ietsp COMMAND [ARGS...]
+usage: iets COMMAND [ARGS...]
 
 A Nix evaluator, and a client that builds what it evaluates.
 
@@ -24,14 +24,14 @@ commands:
   cache          sweep old cache entries, or dump a cache entry's read set
   help, version
 
-classic: 'ietsp NAME ARGS...' with NAME one of nix-instantiate, nix-build,
+classic: 'iets NAME ARGS...' with NAME one of nix-instantiate, nix-build,
   nix-shell, nix-eval-jobs or nix acts like that Nix command,
-  and falls back to the real one for the rest ('ietsp help classic').
+  and falls back to the real one for the rest ('iets help classic').
 
-Scripting: JSON, stable exit codes, plumbing ops: 'ietsp help plumbing'.
+Scripting: JSON, stable exit codes, plumbing ops: 'iets help plumbing'.
 
-Every command also takes --ietsp-option NAME VALUE.
-Run 'ietsp COMMAND --help' for the flags of a command.
+Every command also takes --iets-option NAME VALUE.
+Run 'iets COMMAND --help' for the flags of a command.
 ";
 
 const INPUT: &str = "
@@ -52,12 +52,12 @@ common:
   --log-format F        internal-json: stderr as Nix JSON records
   --show-trace          put the trace in the JSON error records too
 
-see: 'ietsp help commands' for every flag, 'ietsp help errors'
+see: 'iets help commands' for every flag, 'iets help errors'
   for the codes and the records.
 ";
 
 const EVAL: &str = "\
-usage: ietsp eval [FLAGS] (-E EXPR | FILE | FLAKEREF#attr)
+usage: iets eval [FLAGS] (-E EXPR | FILE | FLAKEREF#attr)
 
 Evaluate an expression, a file or a locked flake and print the value.
 
@@ -69,16 +69,16 @@ Evaluate an expression, a file or a locked flake and print the value.
   --lint-root DIR       report lint sites under DIR too
   --lint-scope root|all  report sites in the lint roots only, or everywhere
 
-'ietsp help lints' is the lint registry.
+'iets help lints' is the lint registry.
 ";
 
 const BUILD: &str = "\
-usage: ietsp build [FLAGS] (-E EXPR | FILE | FLAKEREF[#ATTR])
-       ietsp build [FLAGS] [--source STOREPATH=LOCAL]... DRV
+usage: iets build [FLAGS] (-E EXPR | FILE | FLAKEREF[#ATTR])
+       iets build [FLAGS] [--source STOREPATH=LOCAL]... DRV
 
 Evaluate to derivations, send the closure the builder lacks from memory,
-build, and print the output paths ('ietsp help build-remotely'). A set of
-derivations is built whole, each member to its own verdict: 'ietsp build
+build, and print the output paths ('iets help build-remotely'). A set of
+derivations is built whole, each member to its own verdict: 'iets build
 .#checks' builds the checks of this system.
 
   --builder URL         daemon, unix:///path, ssh-ng://[user@]host or
@@ -94,10 +94,10 @@ derivations is built whole, each member to its own verdict: 'ietsp build
 ";
 
 const SEARCH: &str = "\
-usage: ietsp search [INSTALLABLE] [FLAGS] REGEX...
+usage: iets search [INSTALLABLE] [FLAGS] REGEX...
 
 Print the packages whose attribute path, name or description match every
-REGEX ('ietsp help commands'). INSTALLABLE is a flake reference, a path or
+REGEX ('iets help commands'). INSTALLABLE is a flake reference, a path or
 <name>; the default is <nixpkgs>. '^' matches every package.
 
   -e, --exclude REGEX   hide the packages this matches
@@ -118,12 +118,12 @@ REGEX ('ietsp help commands'). INSTALLABLE is a flake reference, a path or
 ";
 
 const DIFF: &str = "\
-usage: ietsp diff [FLAGS] A B
-       ietsp diff [FLAGS] -A X -A Y (-E EXPR | FILE | FLAKEREF)
+usage: iets diff [FLAGS] A B
+       iets diff [FLAGS] -A X -A Y (-E EXPR | FILE | FLAKEREF)
 
 Print what differs between two derivations, in place of nix-diff: the local
 differences first, then the input derivations that differ. A and B are
-.drv store paths, flake references or files ('ietsp help commands').
+.drv store paths, flake references or files ('iets help commands').
 Exit: 0 they are equal, 1 they differ, 2 trouble.
 
   --depth N             levels of input derivations to walk (default 2)
@@ -134,14 +134,14 @@ Exit: 0 they are equal, 1 they differ, 2 trouble.
   --builder URL         the store --closure asks (default: daemon)
   -f, --file FILE       the same as the positional FILE
   -I P=PATH, --arg N E, --argstr N S, --option N V, --impure  as for eval
-  --log-format F, --show-trace  as for 'ietsp eval'
+  --log-format F, --show-trace  as for 'iets eval'
 ";
 
 const EVAL_JOBS: &str = "\
-usage: ietsp eval-jobs [FLAGS] (-E EXPR | FILE | --flake FLAKEREF[#attr])
+usage: iets eval-jobs [FLAGS] (-E EXPR | FILE | --flake FLAKEREF[#attr])
 
 Walk a jobset and print one JSON line per derivation, like nix-eval-jobs
-('ietsp help commands').
+('iets help commands').
 
   -E, --expr EXPR       evaluate EXPR instead of FILE
   --flake               the argument is a flake reference
@@ -164,14 +164,14 @@ Walk a jobset and print one JSON line per derivation, like nix-eval-jobs
   --chunks M, --chunk N  evaluate part N (0 to M-1) of M parts of the tree
   --chunk-depth D       split the tree at depth D (default 2)
   --quiet               no summary line on stderr
-  --log-format F, --show-trace  as for 'ietsp eval'
+  --log-format F, --show-trace  as for 'iets eval'
 ";
 
 const PRINT_DEV_ENV: &str = "\
-usage: ietsp print-dev-env [FLAGS] [FLAKEREF[#attr]]
+usage: iets print-dev-env [FLAGS] [FLAKEREF[#attr]]
 
 Print the bash that 'nix print-dev-env' prints for a flake's devShell
-(default: .), for direnv ('ietsp help use-with-direnv').
+(default: .), for direnv ('iets help use-with-direnv').
 
   --builder URL         the Nix daemon: daemon (default), unix:///path or
                         ssh-ng://[user@]host
@@ -179,16 +179,16 @@ Print the bash that 'nix print-dev-env' prints for a flake's devShell
   --json                print what 'nix print-dev-env --json' prints
   --watch-files         print a watch_file line for direnv: the files the
                         evaluation read, from the cache entry
-  --workers N, --timings, --cache-dir DIR  as for 'ietsp eval'
-  --no-tracing-cache, --no-ir-cache, --no-cache  as for 'ietsp eval'
-  --log-format F, --show-trace  as for 'ietsp eval'
+  --workers N, --timings, --cache-dir DIR  as for 'iets eval'
+  --no-tracing-cache, --no-ir-cache, --no-cache  as for 'iets eval'
+  --log-format F, --show-trace  as for 'iets eval'
 ";
 
 const LINT: &str = "\
-usage: ietsp lint list [FLAGS] [PATH]
+usage: iets lint list [FLAGS] [PATH]
 
 Print the lint registry with the levels a run from PATH (default: the
-current directory) uses, then the scope and its roots ('ietsp help lints').
+current directory) uses, then the scope and its roots ('iets help lints').
 
   --lint NAME=LEVEL     set a lint to off, warn or error
   --lint-root DIR       add a lint root
@@ -196,7 +196,7 @@ current directory) uses, then the scope and its roots ('ietsp help lints').
 ";
 
 const PARSE: &str = "\
-usage: ietsp parse [-q | --json] [--log-format F] FILE...
+usage: iets parse [-q | --json] [--log-format F] FILE...
 
 Parse each FILE and print its syntax tree; FILE - reads the list from stdin.
 
@@ -204,15 +204,15 @@ Parse each FILE and print its syntax tree; FILE - reads the list from stdin.
   --json                print each tree as one line of JSON
   --log-format F        internal-json: stderr as Nix JSON records
 
-'ietsp help syntax-tree' is the schema of the JSON.
+'iets help syntax-tree' is the schema of the JSON.
 ";
 
 const CACHE: &str = "\
-usage: ietsp cache gc [--ttl DAYS] [--dry-run] [--cache-dir DIR]
-       ietsp cache dump ENTRY
+usage: iets cache gc [--ttl DAYS] [--dry-run] [--cache-dir DIR]
+       iets cache dump ENTRY
 
 gc removes the cache entries nobody read for DAYS days; dump prints the
-read set of a tracing-cache entry ('ietsp help caching').
+read set of a tracing-cache entry ('iets help caching').
 
   --ttl DAYS            the age limit in days
   -n, --dry-run         count what gc would remove, remove nothing
@@ -222,7 +222,7 @@ read set of a tracing-cache entry ('ietsp help caching').
 pub const COMMANDS: &str =
     "eval build search diff eval-jobs print-dev-env prefetch plumbing lint parse cache";
 
-/// The native command being parsed, "ietsp" before the command word; unset
+/// The native command being parsed, "iets" before the command word; unset
 /// under a classic name.
 static COMMAND: RwLock<Option<&'static str>> = RwLock::new(None);
 
@@ -257,7 +257,7 @@ pub fn out(text: &str) {
     crate::cli::render::bytes(text.as_bytes());
 }
 
-/// `ietsp help [COMMAND | TOPIC]`, and `ietsp COMMAND --help`. A name that
+/// `iets help [COMMAND | TOPIC]`, and `iets COMMAND --help`. A name that
 /// is both a command and a topic is the command, and the help says where
 /// the page is.
 pub fn help(cmd: Option<&str>) -> ! {
@@ -266,7 +266,7 @@ pub fn help(cmd: Option<&str>) -> ! {
         (Some(c), Some([own, input])) => {
             let page = docs::find(c).map(|p| {
                 format!(
-                    "\nThe page of the same name: 'ietsp help {}/{c}'.\n",
+                    "\nThe page of the same name: 'iets help {}/{c}'.\n",
                     p.quadrant
                 )
             });
@@ -325,7 +325,7 @@ pub fn suggest<'a>(word: &str, candidates: impl IntoIterator<Item = &'a str>) ->
         .map(|(_, c)| c)
 }
 
-/// Every word `ietsp WORD` takes: the native commands, the classic names it
+/// Every word `iets WORD` takes: the native commands, the classic names it
 /// answers to, and the two that are not commands.
 fn command_words() -> Vec<&'static str> {
     (COMMANDS.split(' '))
@@ -334,13 +334,13 @@ fn command_words() -> Vec<&'static str> {
         .collect()
 }
 
-/// The report of a bad command line under `cmd` ("ietsp" before the command
+/// The report of a bad command line under `cmd` ("iets" before the command
 /// word, `None` under a classic name).
 pub fn usage(cmd: Option<&str>, msg: &str, maybe: Option<&str>) -> crate::log::Report {
     let maybe = maybe.map(|m| format!("did you mean '{m}'?"));
     let help = match cmd {
-        Some("ietsp") => Some("run 'ietsp --help' for the commands".to_string()),
-        Some(c) => Some(format!("run 'ietsp {c} --help' for the flags")),
+        Some("iets") => Some("run 'iets --help' for the commands".to_string()),
+        Some(c) => Some(format!("run 'iets {c} --help' for the flags")),
         None => None,
     };
     let hint: Vec<String> = maybe.into_iter().chain(help).collect();
@@ -437,7 +437,7 @@ mod tests {
     #[test]
     fn messages() {
         let t = usage(Some("eval"), "unknown flag '--stirct'", Some("--strict")).text();
-        let want = "did you mean '--strict'?\nrun 'ietsp eval --help' for the flags";
+        let want = "did you mean '--strict'?\nrun 'iets eval --help' for the flags";
         assert_eq!(t, format!("error: unknown flag '--stirct'\n{want}"));
         assert_eq!(usage(None, "x", None).text(), "error: x");
     }

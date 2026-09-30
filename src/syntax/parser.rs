@@ -166,7 +166,7 @@ impl<'a> Parser<'a> {
         Ok(self.ast)
     }
 
-    /// The `# ietsp:` comments the lexer noted: their names go into the
+    /// The `# iets:` comments the lexer noted: their names go into the
     /// allow table, the words it cannot resolve become `unknown-allow` notes.
     fn allows(&mut self) {
         for a in self.lx.take_allows() {

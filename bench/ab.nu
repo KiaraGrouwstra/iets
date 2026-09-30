@@ -1,6 +1,6 @@
 #!/usr/bin/env nu
 # Usage: bench/ab.nu [--runs N] [--skip-outpaths] BEFORE AFTER
-# Interleaved A/B of two ietsp binaries: one hyperfine invocation per
+# Interleaved A/B of two iets binaries: one hyperfine invocation per
 # workload (`--warmup 1 --runs N`, default 7) so the runs alternate, on
 # nixos-desktop at 1 and 4 workers, nixos-minimal at 1 worker, and outpaths
 # chunk 0 of 8 (`eval-jobs --no-instantiate`) at 1 worker. Prints the

@@ -1,4 +1,4 @@
-# EREs that libstdc++ rejects, so both nix-instantiate and ietsp must fail.
+# EREs that libstdc++ rejects, so both nix-instantiate and iets must fail.
 # builtins.tryEval cannot catch "invalid regular expression", so scripts/parity.nu
 # runs one process per entry and compares the exit status.
 [

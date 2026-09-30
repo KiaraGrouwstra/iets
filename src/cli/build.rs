@@ -1,4 +1,4 @@
-//! `ietsp build`: evaluate to derivations and build them through a daemon.
+//! `iets build`: evaluate to derivations and build them through a daemon.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -25,7 +25,7 @@ struct BuildArgs {
     root_key: Vec<Vec<u8>>,
 }
 
-/// `ietsp build`: evaluate to derivations and ship their closure from memory, or (legacy)
+/// `iets build`: evaluate to derivations and ship their closure from memory, or (legacy)
 /// take a `.drv` path and read its closure from `/nix/store`. A fixed-output
 /// build that fails on its hash gets it fixed per the `fix-hashes` setting.
 pub fn cmd_build(argv: &[String]) -> i32 {
@@ -405,7 +405,7 @@ fn build_roots(
 }
 
 /// A run that printed no store path for a target it was asked to build.
-/// `ietsp build` is read by capturing its stdout, so the caller gets a path
+/// `iets build` is read by capturing its stdout, so the caller gets a path
 /// or a non-zero exit, never silence and success (docs/reference/errors.md).
 const NO_OUTPUT: &str = "no-output";
 

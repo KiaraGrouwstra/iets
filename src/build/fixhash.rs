@@ -198,7 +198,7 @@ mod tests {
     const GOT: &str = "sha256-GzabkpW8L2UH4rzBkFdv61RoJl8DQlICqZvY9Ql1MAU=";
 
     fn tmp(name: &str, text: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("ietsp-fixhash-{}-{name}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("iets-fixhash-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
         let f = d.join("default.nix");
         std::fs::write(&f, text).unwrap();

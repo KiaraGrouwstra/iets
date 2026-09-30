@@ -1,4 +1,4 @@
-//! `ietsp prefetch`: the hash of what a URL serves, or of what a fixed-output
+//! `iets prefetch`: the hash of what a URL serves, or of what a fixed-output
 //! derivation produces, on stdout (docs/reference/commands.md). It replaces nurl,
 //! nix-prefetch and nix-prefetch-url for the common cases. Nothing is written
 //! to a store and no file is edited: the hash is the whole answer. The
@@ -7,12 +7,12 @@
 use crate::cli::plumbing;
 
 pub const HELP: &str = "\
-usage: ietsp prefetch [FLAGS] URL
-       ietsp prefetch [FLAGS] (-E EXPR | FILE -A ATTR | FLAKEREF#ATTR)
+usage: iets prefetch [FLAGS] URL
+       iets prefetch [FLAGS] (-E EXPR | FILE -A ATTR | FLAKEREF#ATTR)
 
 Print the SRI hash of what URL serves, or the hash a fixed-output
 derivation produces, so nothing has to be edited and built to learn it
-('ietsp help commands'). Nothing is added to the store.
+('iets help commands'). Nothing is added to the store.
 
   --unpack              hash the NAR of the unpacked tarball (fetchzip)
   --hash-type ALGO      md5, sha1, sha256 (default) or sha512

@@ -28,7 +28,7 @@ use crate::store::path::{STORE_DIR, StorePath};
 use crate::store::source::{SourceOrigin, Src, SrcPath};
 use crate::trace::Kind;
 
-/// Nix reads a copied tree from the store; ietsp never writes the store, so
+/// Nix reads a copied tree from the store; iets never writes the store, so
 /// a path under a store path this evaluation produced from a local tree
 /// (`"${./x}"`, `builtins.path`, the flake root, a `path:` input) reads the
 /// local tree instead, and a path under a fetched input reads that input's
@@ -240,7 +240,7 @@ pub fn recopy_unsupported(path: &[u8], pos: Pos) -> Box<Error> {
     Error::boxed(
         ErrorKind::Unsupported,
         format!(
-            "ietsp: copying '{}' to the store again is not supported",
+            "iets: copying '{}' to the store again is not supported",
             String::from_utf8_lossy(path)
         ),
         pos,

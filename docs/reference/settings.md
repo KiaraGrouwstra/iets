@@ -1,15 +1,15 @@
 # Settings
 
-Every `IETSP_*` environment variable, every `ietsp.toml` setting, the
-`--ietsp-option` flag, and how ietsp reads Nix's own `nix.conf`.
+Every `IETS_*` environment variable, every `iets.toml` setting, the
+`--iets-option` flag, and how iets reads Nix's own `nix.conf`.
 
-ietsp reads two settings files. `nix.conf` is Nix's, shared with the real
-nix behind the classic fallback; `ietsp.toml` is ietsp's own, in TOML, and
+iets reads two settings files. `nix.conf` is Nix's, shared with the real
+nix behind the classic fallback; `iets.toml` is iets's own, in TOML, and
 no nix ever sees it.
 
-Every `IETSP_*` variable is read once at startup into one `Settings`
-struct (`src/settings.rs`), together with the `ietsp.toml` files and the
-`--ietsp-option` flag. A `Session` owns it, not a static: read it with
+Every `IETS_*` variable is read once at startup into one `Settings`
+struct (`src/settings.rs`), together with the `iets.toml` files and the
+`--iets-option` flag. A `Session` owns it, not a static: read it with
 `ev.session().settings()` where an evaluator is at hand, else
 `session::Session::current().settings()` (`docs/reference/library.md`).
 `Session::load_settings` reads the files; until then a session has the
@@ -18,25 +18,25 @@ use, so a knob cannot change halfway through a run.
 
 ## Environment variables
 
-A variable with a **File** entry is also an `ietsp.toml` key, under the
+A variable with a **File** entry is also an `iets.toml` key, under the
 kebab-case name given. The variable wins over the file: the file is the
 configuration, the environment is the override. The perf-tuning knobs
-(`IETSP_SPIN`, `IETSP_SPINNERS`, `IETSP_HANDOFF`, `IETSP_FANOUT`) and the
+(`IETS_SPIN`, `IETS_SPINNERS`, `IETS_HANDOFF`, `IETS_FANOUT`) and the
 statistics knobs stay environment-only.
 
 The **Type** column is the variable's. In the file the same setting has its
 TOML type: `cache = false`, `no-fallback = true`, `workers = 4`,
-`cache-dir = "/var/cache/ietsp"`.
+`cache-dir = "/var/cache/iets"`.
 
 A Boolean variable takes a nix.conf Boolean: `true`, `yes` or `1`, and
 `false`, `no` or `0`. Any other text is an error that names the variable,
 and so is a value of a number knob that is not a number.
 
-A level knob (`IETSP_STATS`, `IETSP_PAR_STATS`) is off when unset, `2`
+A level knob (`IETS_STATS`, `IETS_PAR_STATS`) is off when unset, `2`
 selects level 2, and any other value selects level 1.
 
 The evaluation counters — thunks, calls, derivations, compile time, in an
-`IETSP_STATS` line and in the `--timings` derivation count — are per fiber.
+`IETS_STATS` line and in the `--timings` derivation count — are per fiber.
 A fiber adds its own to one run total whenever it parks or finishes its
 task, so the printed numbers cover the helper fibers, and the derivation
 count of a workload is the same at one worker and at four. Only a fiber
@@ -45,27 +45,27 @@ the main fiber's own: each worker owns an arena.
 
 | Variable | File | Type | Default | Effect |
 |:---|:---|:---|:---|:---|
-| `IETSP_WORKERS` | `workers` | usize ≥ 1 | cores, capped at 4 | Worker threads. `--workers N` overrides it. |
-| `IETSP_FIBER_STACK_MB` | `fiber-stack-mb` | usize (MiB) | 256 | Stack of every fiber. The reservation is `MAP_NORESERVE`, and workers × stack may not pass 64 GiB. |
-| `IETSP_SPIN` | | u32 | 2000 | Scans an idle searcher makes before it parks (one scan is 64 polls). |
-| `IETSP_SPINNERS` | | usize | workers / 4, at least 1 | Idle workers that may search for work at once. |
-| `IETSP_HANDOFF` | | usize | 8 | Queued tasks per awake worker that justify waking a sleeper. |
-| `IETSP_FANOUT` | | u32 bitmask | 7 | Strict-demand fan-out: 1 deep walks, 2 coercions, 4 list builtins. |
-| `IETSP_PAR_STATS` | | level | 0 | 1 prints the scheduler summary, 2 adds the sample timeline and the file table. |
-| `IETSP_STATS` | | level | 0 | 1 prints allocation counts and bytes per object kind, RSS and glibc's `malloc_stats`; 2 adds the memory census — histograms, duplicates, objects never read — on a binary built with `--features stats2`. The hooks are compiled out otherwise. |
-| `IETSP_CACHE` | `cache` | Boolean | on | The tracing cache and the IR cache. Same as `--no-cache`. |
-| `IETSP_CACHE_DIR` | `cache-dir` | path | `$XDG_CACHE_HOME/ietsp` | Cache root. The three stores live in its `trace/`, `ir/` and `inputs/` subdirectories, so the directory you name is never itself a removal target. A store subdirectory that already exists, holds something, and is not ietsp's is refused with an error, not wiped. `--cache-dir DIR` overrides it. |
-| `IETSP_IR_STATS` | | set = on | off | One line per compiled file on stderr. |
-| `IETSP_IR_MIN` | | usize (bytes) | 1024 | Sources smaller than this compile faster than their cache entry loads, so they are not cached. |
-| `IETSP_PROVENANCE` | `provenance` | Boolean | on | Rewrites store paths and positions back to local trees (`docs/explanation/provenance.md`). |
-| `IETSP_NIX_BIN_DIR` | `nix-bin-dir` | path | unset | Where the real Nix binaries live. Unset searches `PATH`, skipping every ietsp. |
-| `IETSP_NO_FALLBACK` | `no-fallback` | Boolean | off | A classic command fails instead of running the real Nix (`docs/reference/classic.md`). |
-| `IETSP_FETCHING` | | set = on | off | Set on the Nix subprocess that fetches a flake input, so a recursive fetch is an error, not a loop. |
-| `IETSP_OFFLINE` | | set = on | off | Any download is an error. A flake whose inputs the input store already holds still evaluates. |
-| `IETSP_SESSION_ID` | | string | a new UUIDv7 | The `sid` of every JSON log record (`docs/reference/errors.md`). `eval-jobs` sets it on its workers. `src/log.rs` reads it, not `Settings`: a settings error is itself a record. |
+| `IETS_WORKERS` | `workers` | usize ≥ 1 | cores, capped at 4 | Worker threads. `--workers N` overrides it. |
+| `IETS_FIBER_STACK_MB` | `fiber-stack-mb` | usize (MiB) | 256 | Stack of every fiber. The reservation is `MAP_NORESERVE`, and workers × stack may not pass 64 GiB. |
+| `IETS_SPIN` | | u32 | 2000 | Scans an idle searcher makes before it parks (one scan is 64 polls). |
+| `IETS_SPINNERS` | | usize | workers / 4, at least 1 | Idle workers that may search for work at once. |
+| `IETS_HANDOFF` | | usize | 8 | Queued tasks per awake worker that justify waking a sleeper. |
+| `IETS_FANOUT` | | u32 bitmask | 7 | Strict-demand fan-out: 1 deep walks, 2 coercions, 4 list builtins. |
+| `IETS_PAR_STATS` | | level | 0 | 1 prints the scheduler summary, 2 adds the sample timeline and the file table. |
+| `IETS_STATS` | | level | 0 | 1 prints allocation counts and bytes per object kind, RSS and glibc's `malloc_stats`; 2 adds the memory census — histograms, duplicates, objects never read — on a binary built with `--features stats2`. The hooks are compiled out otherwise. |
+| `IETS_CACHE` | `cache` | Boolean | on | The tracing cache and the IR cache. Same as `--no-cache`. |
+| `IETS_CACHE_DIR` | `cache-dir` | path | `$XDG_CACHE_HOME/iets` | Cache root. The three stores live in its `trace/`, `ir/` and `inputs/` subdirectories, so the directory you name is never itself a removal target. A store subdirectory that already exists, holds something, and is not iets's is refused with an error, not wiped. `--cache-dir DIR` overrides it. |
+| `IETS_IR_STATS` | | set = on | off | One line per compiled file on stderr. |
+| `IETS_IR_MIN` | | usize (bytes) | 1024 | Sources smaller than this compile faster than their cache entry loads, so they are not cached. |
+| `IETS_PROVENANCE` | `provenance` | Boolean | on | Rewrites store paths and positions back to local trees (`docs/explanation/provenance.md`). |
+| `IETS_NIX_BIN_DIR` | `nix-bin-dir` | path | unset | Where the real Nix binaries live. Unset searches `PATH`, skipping every iets. |
+| `IETS_NO_FALLBACK` | `no-fallback` | Boolean | off | A classic command fails instead of running the real Nix (`docs/reference/classic.md`). |
+| `IETS_FETCHING` | | set = on | off | Set on the Nix subprocess that fetches a flake input, so a recursive fetch is an error, not a loop. |
+| `IETS_OFFLINE` | | set = on | off | Any download is an error. A flake whose inputs the input store already holds still evaluates. |
+| `IETS_SESSION_ID` | | string | a new UUIDv7 | The `sid` of every JSON log record (`docs/reference/errors.md`). `eval-jobs` sets it on its workers. `src/log.rs` reads it, not `Settings`: a settings error is itself a record. |
 | | `fix-hashes` | `ask`, `always`, `never` | `ask` | See **fix-hashes** below. |
 
-`IETSP_BUILD_ID` is not a setting: the build script bakes it in
+`IETS_BUILD_ID` is not a setting: the build script bakes it in
 (`src/trace/key.rs`), and it keys the caches to the binary.
 
 ### The measurement scripts
@@ -79,14 +79,14 @@ against.
 | `bench/perf.nu` | wall, user, sys and peak RSS for one binary |
 | `bench/ab.nu` | the same, comparing two binaries; `--runs N`, `--skip-outpaths` |
 | `bench/nar.nu` | the NAR writer, reader and hashes; `--nix` adds the real-nix reference rows |
-| `bench/eval-jobs.nu [rounds]` | `ietsp eval-jobs` against `nix-eval-jobs` on `nixos/release-small.nix`, 4 workers, cold and warm cache runs interleaved; `--no-parity` skips the `--force-recurse` job-set comparison |
+| `bench/eval-jobs.nu [rounds]` | `iets eval-jobs` against `nix-eval-jobs` on `nixos/release-small.nix`, 4 workers, cold and warm cache runs interleaved; `--no-parity` skips the `--force-recurse` job-set comparison |
 | `bench/cache-growth.nu` | evaluates `bench/workloads/nixos-desktop.nix` at two nixpkgs revisions and reports what the second adds to each cache |
 
 The two standard workloads:
 
 ```
-ietsp eval --strict --no-tracing-cache --workers 1 -I nixpkgs=$NP bench/workloads/nixos-desktop.nix
-ietsp eval-jobs --no-instantiate --workers 1 --chunks 8 --chunk 0   # ci/eval/outpaths.nix
+iets eval --strict --no-tracing-cache --workers 1 -I nixpkgs=$NP bench/workloads/nixos-desktop.nix
+iets eval-jobs --no-instantiate --workers 1 --chunks 8 --chunk 0   # ci/eval/outpaths.nix
 ```
 
 ### fix-hashes
@@ -96,7 +96,7 @@ the log format is not `internal-json`; `a` takes this fix and the rest of
 the run. Elsewhere `ask` only prints the hint. `always` fixes without
 asking, for CI and agents. `never` never fixes.
 
-With a fix, `ietsp build` rewrites the hash of a fixed-output build that
+With a fix, `iets build` rewrites the hash of a fixed-output build that
 failed on it and builds again. The old hash must appear once, in any
 spelling, in the local files evaluation parsed; store paths are never
 edited. A derivation with inputs is built as a resolved copy of itself,
@@ -108,32 +108,32 @@ Only the daemon reports a mismatch, and only about a fixed-output
 derivation of the closure the run is building, whose output hash is the
 hash the message names. A build log, a `builtins.trace` and every other
 text that holds the same words are ignored: a derivation must not be able
-to make ietsp rewrite a hash in a file of the user. Each fix is a
+to make iets rewrite a hash in a file of the user. Each fix is a
 `hash-fixed` record
 (`docs/reference/errors.md`). After a mismatch, one more evaluation
 without the tracing cache lists the files. Files read with `readFile` or
 `importJSON` are not searched.
 
-## `--ietsp-option`
+## `--iets-option`
 
-`--ietsp-option NAME VALUE` sets any `ietsp.toml` setting for one run. Every
-ietsp command and every classic name accepts it, and it never reaches the
+`--iets-option NAME VALUE` sets any `iets.toml` setting for one run. Every
+iets command and every classic name accepts it, and it never reaches the
 real nix: it leaves the argv before a classic fallback execs
 (`src/main.rs`).
 
 VALUE is a TOML value when it reads as a boolean, an integer, a quoted
-string or an array, and the text itself otherwise: `--ietsp-option workers
-4`, `--ietsp-option fix-hashes always` and `--ietsp-option builder
+string or an array, and the text itself otherwise: `--iets-option workers
+4`, `--iets-option fix-hashes always` and `--iets-option builder
 ssh-ng://bld1` need no quotes. Text for `source-map` is a
 whitespace-separated list.
 
-A command that starts a second ietsp passes the pairs on: `eval-jobs`
+A command that starts a second iets passes the pairs on: `eval-jobs`
 puts them on the argv of every worker process, so a setting the collector
 was given holds in the workers too.
 
-# `ietsp.toml`
+# `iets.toml`
 
-`src/settings.rs` reads ietsp's own settings. The format is TOML: the
+`src/settings.rs` reads iets's own settings. The format is TOML: the
 settings are top-level keys with the names below, and `[lint]` is a table
 (`docs/reference/lints.md`).
 
@@ -149,16 +149,16 @@ path-copy = "warn"
 ```
 
 The keys are flat because there are thirteen of them and because the names
-stay the ones `--ietsp-option` takes. A value has its
+stay the ones `--iets-option` takes. A value has its
 TOML type: a switch is `true` or `false`, a number is an integer, a path or
 a URL is a string, `source-map` is an array of strings. A wrong type is an
 error naming the key and the file; `workers = "4"` is not read as 4.
 
-Nothing but ietsp reads this file, so a user can send ietsp's builds
+Nothing but iets reads this file, so a user can send iets's builds
 somewhere without touching `nix.conf`, which the real nix behind the
 classic fallback also reads.
 
-There is no machine file. ietsp is a client: where it builds and which
+There is no machine file. iets is a client: where it builds and which
 token it uses are the user's. A machine file held a path into one user's
 home directory for every account, root included
 (`docs/explanation/history.md`).
@@ -167,12 +167,12 @@ home directory for every account, root included
 
 Later wins.
 
-1. `$XDG_CONFIG_HOME/ietsp/ietsp.toml`, default
-   `~/.config/ietsp/ietsp.toml`: the user.
-2. `$IETSP_CONFIG`, treated as one more file's text, so it is TOML too:
-   `IETSP_CONFIG='builder = "daemon"'`.
-3. The `--ietsp-option NAME VALUE` pairs from the command line.
-4. The `IETSP_*` variable of a setting that has one.
+1. `$XDG_CONFIG_HOME/iets/iets.toml`, default
+   `~/.config/iets/iets.toml`: the user.
+2. `$IETS_CONFIG`, treated as one more file's text, so it is TOML too:
+   `IETS_CONFIG='builder = "daemon"'`.
+3. The `--iets-option NAME VALUE` pairs from the command line.
+4. The `IETS_*` variable of a setting that has one.
 
 A later source **replaces** a key. `source-map` is the exception: its
 entries **add up** across the sources, lowest first, so a command maps a
@@ -182,25 +182,25 @@ gone.
 
 A file that is missing is skipped; one that is there and cannot be read is
 an error. An **unknown key is an error** naming the file: this file is
-ietsp's, so a name it does not know is a mistake, not a setting for
+iets's, so a name it does not know is a mistake, not a setting for
 somebody else.
 
 A `[lint]` table in the user file sets lint levels for every
-evaluation, below the project's (`docs/reference/lints.md`). `$IETSP_CONFIG`
-and `--ietsp-option` refuse it: `IETSP_LINT` and `--lint` are their
+evaluation, below the project's (`docs/reference/lints.md`). `$IETS_CONFIG`
+and `--iets-option` refuse it: `IETS_LINT` and `--lint` are their
 spelling.
 
 ## The project file, and why it holds only `[lint]`
 
-A second `ietsp.toml` is the project's: the nearest one found by walking up
+A second `iets.toml` is the project's: the nearest one found by walking up
 from the entry file or the flake directory (`docs/reference/lints.md`). **The
 walk stops at the project root**, the first directory that holds a `.git` or a
 `flake.nix`, and it looks in that directory before it stops. It must not leave
-the project: a `/tmp/ietsp.toml`, which every user may write, would otherwise
+the project: a `/tmp/iets.toml`, which every user may write, would otherwise
 set a lint level for every evaluation below it. The
 user file is trusted, because whoever can write it already controls the
 account. The project file is not: it arrives with
-whatever repository was cloned, and running `ietsp` in a clone must not be
+whatever repository was cloned, and running `iets` in a clone must not be
 a way to run its author's code or to send data to its author. So the
 project file is an allow-list of one entry, the `[lint]` table, which only
 selects diagnostics. Any other key in it is an **error** that names the key
@@ -221,12 +221,12 @@ that tries to set `nix-bin-dir` is worth stopping on.
 | `cache`, `provenance` | nothing worse than a slow run or plainer output, and nothing a project needs: the default is no |
 
 A project file that is one of the two settings files (an evaluation started
-below `~/.config/ietsp`) is read as the settings file it is.
+below `~/.config/iets`) is read as the settings file it is.
 
 ## Before 2026-09
 
-These files were `ietsp.conf`, in nix.conf's line syntax. That file is not read
-any more. On NixOS the module below writes `ietsp.toml`, and the old file
+These files were `iets.conf`, in nix.conf's line syntax. That file is not read
+any more. On NixOS the module below writes `iets.toml`, and the old file
 leaves `/etc` at the same switch, so nothing checks for it.
 
 ## Keys
@@ -244,13 +244,13 @@ there, plus three keys that have no environment variable:
 
 `shell-gc-root` is the switch on the roots `nix-shell` and `nix develop`
 keep for themselves: on, a shell entry links what it realised in
-`~/.cache/ietsp/roots`, so the next `nix collect-garbage` leaves it and the
+`~/.cache/iets/roots`, so the next `nix collect-garbage` leaves it and the
 next entry rebuilds nothing (`docs/explanation/caching.md`). Off, no root is
 made and no link is touched, which is the switch to take on a small disk: a
 dev shell's closure is large, and a root nobody asked for still pins it for
 the 30 days of the roots TTL.
 
-`build-gc-root` is the same switch for the outputs of a build: `ietsp
+`build-gc-root` is the same switch for the outputs of a build: `iets
 build` roots every path it prints, because the caller reads those paths and
 uses them after the run, and `nix-build --no-out-link` and `nix build
 --no-link` keep a root in place of the symlink they were told not to make.
@@ -260,7 +260,7 @@ Nix's behaviour back.
 
 Neither switch touches the roots a caller names: `nix-instantiate
 --add-root`, `nix-build -o`, `eval-jobs --gc-roots-dir`, `plumbing build
---gc-root`, `print-dev-env --gc-root` and `ietsp build --fetch-to`. One
+--gc-root`, `print-dev-env --gc-root` and `iets build --fetch-to`. One
 root per thing.
 
 `source-map` is the only list. `fetch-max-size` caps
@@ -269,11 +269,11 @@ sparse member of the archive expands to; a stream that
 decompresses over 1000 times its size past its first 16 MiB is refused
 too.
 
-ietsp has no local store of its own, so `auto` and an empty value both
+iets has no local store of its own, so `auto` and an empty value both
 mean the local daemon.
 
 `builder` is where derivations are realised. Every command takes it:
-`ietsp build --builder` and `ietsp print-dev-env --builder` win over it,
+`iets build --builder` and `iets print-dev-env --builder` win over it,
 and so does a classic `--store` or `--option store`. `nix-build`, `nix build`, `nix-shell` and `nix develop`
 have no flag of their own and use it as it stands. Registration is not
 affected: drvs and sources for `nix-instantiate --add-root`, its GC roots
@@ -318,7 +318,7 @@ A file that is missing or unreadable is skipped, not an error.
   not a list, the pair is kept under its literal name, as Nix keeps it in
   `unknownSettings`.
 - An unknown setting is kept and readable with `Config::str`. Nix warns
-  about it, and so does ietsp, with the same text (**What is applied**,
+  about it, and so does iets, with the same text (**What is applied**,
   class 5).
 
 ## Values
@@ -333,7 +333,7 @@ carry Nix's defaults: `store` (`auto`), `system` (the build target),
 file, as `configuration.cc:192` does.
 
 Nix parses a value where it is set, so a value it refuses stops the run
-with exit 1. ietsp gives the same text at the same place:
+with exit 1. iets gives the same text at the same place:
 
 | setting | values | text |
 | --- | --- | --- |
@@ -348,16 +348,16 @@ Some integer settings live in a 32-bit field in Nix, so a value above
 
 ## What is applied
 
-Nix has about 130 settings. For ietsp each one is in one of five classes.
+Nix has about 130 settings. For iets each one is in one of five classes.
 `src/config.rs` has the lists: `KNOWN`, `ALIASES`, `CLIENT` and
 `UNIMPLEMENTED`.
 
-**1. ietsp reads it.**
+**1. iets reads it.**
 
 | Setting | Effect |
 |:---|:---|
 | `store` | the last fallback for `builder` |
-| `system` | `builtins.currentSystem` under the classic names; the `system=` default of a `grpc://` URL. ietsp's own commands use the system ietsp was built for |
+| `system` | `builtins.currentSystem` under the classic names; the `system=` default of a `grpc://` URL. iets's own commands use the system iets was built for |
 | `pure-eval` | see **`pure-eval`** below |
 | `nix-path` | the search path after `-I`, when `NIX_PATH` is not in the environment. `--option nix-path` replaces `NIX_PATH`, and `--option extra-nix-path` adds to it, as in Nix (`configuration.cc:192`). Nix's channel defaults are not applied |
 | `show-trace` | the same as `--show-trace` |
@@ -388,13 +388,13 @@ client-specified setting 'NAME'`, as it does for a Nix client. `store` is
 not sent: it names the daemon. A list setting that only got `extra-` values
 goes as `extra-NAME`, which the daemon appends to its own value.
 
-The classic names do this. ietsp's own commands (`ietsp
+The classic names do this. iets's own commands (`iets
 eval`, `build`, `eval-jobs`, `print-dev-env`, `diff`) send
 `Options::default()` and no overrides. There, a store setting given with
 `--option` is one warning:
 
 ```
-warning: setting 'sandbox' is ignored: ietsp's own commands send a daemon no settings; the classic names do
+warning: setting 'sandbox' is ignored: iets's own commands send a daemon no settings; the classic names do
 ```
 
 A `grpc://` builder has no `SetOptions`. For it the classic names give the
@@ -406,47 +406,47 @@ apply.
 
 | Setting | Why it holds |
 |:---|:---|
-| `allow-import-from-derivation`, `trace-import-from-derivation` | ietsp never builds during evaluation. An import from derivation is an error in ietsp's own commands, and a fallback under a classic name, where the real nix applies the setting. |
-| `eval-cache` | ietsp has no Nix evaluation cache. Its own caches check every input they read, and `--no-cache` turns them off. |
-| `warn-dirty`, `allow-dirty-locks`, `commit-lock-file-summary` | ietsp prints no dirty-tree warning and writes no lock file. |
-| `flake-registry`, `use-registries` | ietsp has no registry. A reference that needs one falls back, or is an error in ietsp's own commands. |
+| `allow-import-from-derivation`, `trace-import-from-derivation` | iets never builds during evaluation. An import from derivation is an error in iets's own commands, and a fallback under a classic name, where the real nix applies the setting. |
+| `eval-cache` | iets has no Nix evaluation cache. Its own caches check every input they read, and `--no-cache` turns them off. |
+| `warn-dirty`, `allow-dirty-locks`, `commit-lock-file-summary` | iets prints no dirty-tree warning and writes no lock file. |
+| `flake-registry`, `use-registries` | iets has no registry. A reference that needs one falls back, or is an error in iets's own commands. |
 | `nix-shell-shebang-arguments-relative-to-script`, `nix-shell-always-looks-for-shell-nix` | a `#!` script falls back, and so does `nix-shell` when the second one is `false`. |
 | `eval-profile-file`, `eval-profiler-frequency` | they only act with `eval-profiler`, which is in class 4. |
 | `eval-attrset-update-layer-rhs-threshold`, `preallocate-contents`, `use-case-hack` | they tune Nix's own data structures and file writes. No result changes. |
 
-**4. ietsp has nothing for it.** `UNIMPLEMENTED`. It counts when the value
+**4. iets has nothing for it.** `UNIMPLEMENTED`. It counts when the value
 is not Nix's default, from any file or from `--option`. Then
 `nix-instantiate`, `nix-build`, `nix-shell` and the `nix` subcommands fall
-back to the real nix, which applies it (`ietsp: falling back to nix-build:
+back to the real nix, which applies it (`iets: falling back to nix-build:
 the setting 'restrict-eval' is not implemented`). Two settings are no reason
 to fall back and give the warning below instead: `accept-flake-config`,
 because a flake seldom has a `nixConfig`, and `log-lines`, which changes no
-result. The commands that cannot fall back — ietsp's own and
+result. The commands that cannot fall back — iets's own and
 `nix-eval-jobs` — give one warning per setting and process, with the
 reason:
 
 ```
-warning: setting 'restrict-eval' is ignored: ietsp has no restricted mode, so every path and URI stays readable
+warning: setting 'restrict-eval' is ignored: iets has no restricted mode, so every path and URI stays readable
 ```
 
 | Setting | Nix's default | The reason in the warning |
 |:---|:---|:---|
-| `restrict-eval`, `allowed-uris` | `false`, empty | ietsp has no restricted mode, so every path and URI stays readable |
-| `eval-system` | empty | ietsp does not read it; `builtins.currentSystem` is `system`, or the system ietsp was built for |
+| `restrict-eval`, `allowed-uris` | `false`, empty | iets has no restricted mode, so every path and URI stays readable |
+| `eval-system` | empty | iets does not read it; `builtins.currentSystem` is `system`, or the system iets was built for |
 | `max-call-depth` | 10000 | the call depth limit is fixed at 10000 |
-| `accept-flake-config` | `false` | ietsp never applies a flake's `nixConfig` (`docs/reference/divergences.md`) |
-| `allow-dirty` | `true` | ietsp evaluates a dirty Git tree as it is |
+| `accept-flake-config` | `false` | iets never applies a flake's `nixConfig` (`docs/reference/divergences.md`) |
+| `allow-dirty` | `true` | iets evaluates a dirty Git tree as it is |
 | `impure-env` | empty | `builtins.getEnv` reads the process environment alone |
 | `abort-on-warn` | `false` | `builtins.warn` never stops an evaluation |
 | `trace-verbose` | `false` | `builtins.traceVerbose` never prints |
-| `trace-function-calls` | `false` | ietsp has no function-call trace |
-| `eval-profiler` | `disabled` | ietsp has no evaluation profiler; `IETSP_STATS` gives its counters |
-| `debugger-on-trace`, `debugger-on-warn`, `ignore-try` | `false` | ietsp has no debugger |
-| `allow-unsafe-native-code-during-evaluation` | `false` | ietsp has no `builtins.exec` and no `builtins.importNative` |
-| `plugin-files` | empty | ietsp loads no plugins |
-| `lint-absolute-path-literals`, `lint-short-path-literals`, `lint-url-literals`, `warn-short-path-literals` | `ignore`, `false` | ietsp does not read it; `ietsp eval` has the `--lint` flags |
-| `log-lines` | 25 | ietsp prints the last 200 lines of a failed build |
-| `tarball-ttl`, `trust-tarballs-from-git-forges` | 3600, `true` | ietsp's fetcher has no such switch |
+| `trace-function-calls` | `false` | iets has no function-call trace |
+| `eval-profiler` | `disabled` | iets has no evaluation profiler; `IETS_STATS` gives its counters |
+| `debugger-on-trace`, `debugger-on-warn`, `ignore-try` | `false` | iets has no debugger |
+| `allow-unsafe-native-code-during-evaluation` | `false` | iets has no `builtins.exec` and no `builtins.importNative` |
+| `plugin-files` | empty | iets loads no plugins |
+| `lint-absolute-path-literals`, `lint-short-path-literals`, `lint-url-literals`, `warn-short-path-literals` | `ignore`, `false` | iets does not read it; `iets eval` has the `--lint` flags |
+| `log-lines` | 25 | iets prints the last 200 lines of a failed build |
+| `tarball-ttl`, `trust-tarballs-from-git-forges` | 3600, `true` | iets's fetcher has no such switch |
 
 The record has the code `ignored-setting` (`docs/reference/errors.md`).
 Nix prints nothing for these, so the warning is a divergence on stderr
@@ -463,13 +463,13 @@ classic name.
 
 Two limits. A setting of the system `nix.conf` that is both a client and a
 store setting (`netrc-file`, `ssl-cert-file`, `http2`, the `download-*`
-group) acts in the daemon only: ietsp's own fetcher does not read it. The
+group) acts in the daemon only: iets's own fetcher does not read it. The
 fetcher still retries a transient HTTP status the way Nix does, with the
 defaults `download-attempts` and `RETRY_TIME_MS_DEFAULT` have: five
 attempts, from 250 ms, doubled each time, and from a minute for a 429. A
 404, a 410 and an authorisation failure are final. And
 `extra-platforms`, `system-features` and the other store settings change
-what the *daemon* builds, not what ietsp evaluates.
+what the *daemon* builds, not what iets evaluates.
 
 # `pure-eval`
 
@@ -487,9 +487,9 @@ The same rules as Nix, per command:
 | Command | Default | Changed by |
 |:---|:---|:---|
 | `nix-instantiate`, `nix-build`, `nix-shell` | nix.conf `pure-eval`, else off | `--pure-eval`, `--no-pure-eval`, `--impure`, `--option pure-eval`; the last one wins |
-| `nix eval`, `nix build`, `nix develop`, `nix print-dev-env` | on (main.cc); nix.conf does not change it | the same flags. `-f`/`--file` turns it off, and is a usage error when `pure-eval` was **overridden** — set by a flag, a user `nix.conf`, `$NIX_CONFIG` or `--option`, whatever the value; the system `$NIX_CONF_DIR/nix.conf` does not count, because `loadConfFile` clears the bit after it (installables.cc:460). A flag that turns purity off takes `-f` instead of refusing it. ietsp falls back on the error |
+| `nix eval`, `nix build`, `nix develop`, `nix print-dev-env` | on (main.cc); nix.conf does not change it | the same flags. `-f`/`--file` turns it off, and is a usage error when `pure-eval` was **overridden** — set by a flag, a user `nix.conf`, `$NIX_CONFIG` or `--option`, whatever the value; the system `$NIX_CONF_DIR/nix.conf` does not count, because `loadConfFile` clears the bit after it (installables.cc:460). A flag that turns purity off takes `-f` instead of refusing it. iets falls back on the error |
 | `nix-eval-jobs` | `--flake`: on. Otherwise nix.conf, else off | `--impure` beats `--flake`; without `--flake`, `--pure-eval` and `--option pure-eval` |
-| `ietsp eval`, `ietsp build`, `ietsp eval-jobs` | off | `--pure-eval`, `--no-pure-eval`, `--impure`, `--option pure-eval`; `eval-jobs --flake` as nix-eval-jobs. nix.conf is read by `eval-jobs` only |
+| `iets eval`, `iets build`, `iets eval-jobs` | off | `--pure-eval`, `--no-pure-eval`, `--impure`, `--option pure-eval`; `eval-jobs --flake` as nix-eval-jobs. nix.conf is read by `eval-jobs` only |
 
 `nix-shell --impure` is the shell's environment flag (nix-build.cc takes
 it), not `pure-eval`.
@@ -529,7 +529,7 @@ Classic mode falls back to the real nix on these, so the answer is still
 Nix's:
 
 - an unlocked `git` or `hg` input: Nix names it with query parameters
-  (`?shallow=1`) that ietsp does not reproduce;
+  (`?shallow=1`) that iets does not reproduce;
 - `getFlake` on a reference that may be locked, one with a `rev` or a
   `narHash`;
 - `restrict-eval`, which is a separate setting: it has no effect, and
@@ -543,7 +543,7 @@ is dropped and recompiled, and the compile reports the undefined
 variable.
 
 An entry that does not decode is dropped and recompiled the same way. That
-holds for every byte sequence, not only for an entry ietsp wrote: the
+holds for every byte sequence, not only for an entry iets wrote: the
 decoders validate constants, indices, nesting and counts, so a truncated or
 crafted entry in the cache directory is a miss and never a crash
 (`docs/explanation/caching.md`).

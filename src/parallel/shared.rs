@@ -52,7 +52,7 @@ impl<K: Hash + Eq, V: Clone> SharedMap<K, V> {
         self.len() == 0
     }
 
-    /// The map itself, for callers that read it whole (`ietsp build`).
+    /// The map itself, for callers that read it whole (`iets build`).
     pub fn lock(&self) -> MutexGuard<'_, HashMap<K, V>> {
         self.0.lock().unwrap()
     }

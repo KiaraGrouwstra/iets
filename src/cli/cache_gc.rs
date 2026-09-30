@@ -1,4 +1,4 @@
-//! `ietsp cache gc`: sweep both cache stores by entry age.
+//! `iets cache gc`: sweep both cache stores by entry age.
 
 use std::time::Duration;
 
@@ -7,7 +7,7 @@ use crate::cli::help::{arg_error, unknown_flag, value};
 
 const DAY: u64 = 24 * 60 * 60;
 
-/// `ietsp cache gc [--ttl DAYS] [--dry-run] [--cache-dir DIR]`. Entries unread
+/// `iets cache gc [--ttl DAYS] [--dry-run] [--cache-dir DIR]`. Entries unread
 /// for longer than the TTL go; a swept tracing entry simply misses next time.
 pub fn cmd_cache_gc(argv: &[String]) -> i32 {
     let mut ttl_days = cachefs::TTL_DAYS;

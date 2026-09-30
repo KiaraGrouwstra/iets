@@ -1,16 +1,16 @@
-//! `ietsp help TOPIC` from outside the repository: the binary carries the
+//! `iets help TOPIC` from outside the repository: the binary carries the
 //! reference pages, so no `docs/` directory has to be reachable.
 
 use std::process::{Command, Output};
 
 /// The binary, run from `/`, where there is no `docs/`.
 fn run(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_ietsp"))
+    Command::new(env!("CARGO_BIN_EXE_iets"))
         .args(args)
         .current_dir("/")
         .env("XDG_CONFIG_HOME", "/nonexistent")
         .output()
-        .expect("ietsp runs")
+        .expect("iets runs")
 }
 
 fn stdout(args: &[&str]) -> String {
@@ -22,7 +22,7 @@ fn stdout(args: &[&str]) -> String {
 #[test]
 fn help_lists_the_topics() {
     let s = stdout(&["help"]);
-    assert!(s.contains("usage: ietsp COMMAND"));
+    assert!(s.contains("usage: iets COMMAND"));
     assert!(s.contains("topics:"));
     for t in ["settings", "errors", "lints", "divergences", "caching"] {
         assert!(s.contains(t), "{t} is not listed");
@@ -33,7 +33,7 @@ fn help_lists_the_topics() {
 fn a_topic_prints_its_page() {
     let s = stdout(&["help", "settings"]);
     assert!(s.starts_with("# Settings"), "{}", &s[..40.min(s.len())]);
-    assert!(s.contains("IETSP_WORKERS"));
+    assert!(s.contains("IETS_WORKERS"));
 
     let s = stdout(&["help", "errors"]);
     assert!(s.contains("| `build-failed` |"));
@@ -45,8 +45,8 @@ fn a_topic_prints_its_page() {
 #[test]
 fn a_command_wins_over_a_topic_of_the_same_name() {
     let s = stdout(&["help", "plumbing"]);
-    assert!(s.contains("usage: ietsp plumbing OP"));
-    assert!(s.contains("'ietsp help reference/plumbing'"));
+    assert!(s.contains("usage: iets plumbing OP"));
+    assert!(s.contains("'iets help reference/plumbing'"));
 
     let s = stdout(&["help", "reference/plumbing"]);
     assert!(s.starts_with("# Plumbing operations"));

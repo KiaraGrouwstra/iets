@@ -21,7 +21,7 @@ fn run(trace: &Trace, root: &Path, args: &[&str]) -> Result<(i32, Vec<u8>), Stri
     argv.extend(args.iter().map(|a| a.as_bytes().to_vec()));
     trace
         .cmd(root, &argv)
-        .map_err(|e| format!("ietsp: cannot run git: {e}"))
+        .map_err(|e| format!("iets: cannot run git: {e}"))
 }
 
 /// A traced query. Its argv comes from `trace::Query`, so the command and the
@@ -34,7 +34,7 @@ fn git(trace: &Trace, root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     let (status, out) = run(trace, root, args)?;
     if status != 0 {
         return Err(format!(
-            "ietsp: `git {}` failed in '{}' (exit {status})",
+            "iets: `git {}` failed in '{}' (exit {status})",
             args.join(" "),
             root.display()
         ));

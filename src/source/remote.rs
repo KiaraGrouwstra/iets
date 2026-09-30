@@ -1,7 +1,7 @@
 //! A locked reference's tree: read from `/nix/store` when it is there, else
 //! from the user-level input store (`crate::treestore`), else substituted by
 //! a daemon if one is reachable, else downloaded into the input store by
-//! ietsp itself (`github`, `gitlab`, `sourcehut`, `tarball`), else fetched by
+//! iets itself (`github`, `gitlab`, `sourcehut`, `tarball`), else fetched by
 //! running `nix` once (`git`, `hg`). Only that last step needs a daemon.
 //!
 //! The `narHash` is known before the fetch, so the tree names itself and the
@@ -21,12 +21,12 @@ use crate::store::source::{SourceOrigin, SrcPath};
 pub fn locked(ev: &mut Evaluator, attrs: &Attrs, pos: Pos) -> EvalResult<Tree> {
     let Some(nar_hash) = str_attr(attrs, "narHash") else {
         let msg = format!(
-            "ietsp: cannot fetch unlocked input '{}' (no narHash); run nix flake lock",
+            "iets: cannot fetch unlocked input '{}' (no narHash); run nix flake lock",
             to_url(attrs)
         );
         let mut e = Error::new(ErrorKind::Unsupported, msg, pos);
         e.hint = Some(
-            "ietsp needs the 'narHash' to know the store path: pass it to fetchTree, \
+            "iets needs the 'narHash' to know the store path: pass it to fetchTree, \
              or run 'nix flake update' to write it into flake.lock"
                 .into(),
         );
@@ -128,7 +128,7 @@ impl LazyStore {
 
 /// fetchers.cc:getAccessorUnchecked: a locked input carries `__final`, so Nix
 /// substitutes its store path before it runs any fetcher. An expression cannot
-/// mark an input final (`fetchFinalTree` is an internal primop), so ietsp
+/// mark an input final (`fetchFinalTree` is an internal primop), so iets
 /// substitutes the tree itself first, and only then fetches. One
 /// `QueryValidPaths` with the substitute flag does it: the daemon runs
 /// `Store::substitutePaths` and answers with the paths it now has
@@ -141,7 +141,7 @@ fn substitute(ev: &mut Evaluator, store_path: &str) -> bool {
     match conn.substitute_paths(std::slice::from_ref(&store_path.to_string()), &mut |_| {}) {
         Ok(valid) => valid.iter().any(|p| p == store_path),
         Err(e) => {
-            crate::log::line(&format!("ietsp: cannot substitute '{store_path}': {e}"));
+            crate::log::line(&format!("iets: cannot substitute '{store_path}': {e}"));
             false
         }
     }
@@ -175,7 +175,7 @@ pub fn ensure_readable(
     }
     let name = input_name(ev, attrs);
     crate::log::line(&format!(
-        "ietsp: input '{name}' is not in the store ({full}), fetching it"
+        "iets: input '{name}' is not in the store ({full}), fetching it"
     ));
     if substitute(ev, &full) {
         ev.trace()
@@ -192,7 +192,7 @@ pub fn ensure_readable(
         bail!(
             ErrorKind::Io,
             pos,
-            "ietsp: input '{name}' is not in the store ({full})"
+            "iets: input '{name}' is not in the store ({full})"
         );
     }
     Ok(())
@@ -224,7 +224,7 @@ fn nix_conf(s: &crate::session::Session) -> &crate::config::Config {
 /// (github.cc:GitArchiveInputScheme, tarball.cc:TarballInputScheme). `git` and
 /// `hg` are not here: they need a repository, so they still go through nix.
 /// `file` is not either: its store path is the flat hash of the bytes under the
-/// input's name, which the lock's `narHash` does not give, so ietsp cannot say
+/// input's name, which the lock's `narHash` does not give, so iets cannot say
 /// where the file belongs before it has it.
 fn is_tarball_type(attrs: &Attrs) -> bool {
     matches!(
@@ -327,14 +327,14 @@ fn fetch_tarball(
     let name = input_name(ev, attrs);
     let fail = |e: String| Error::boxed(ErrorKind::Eval, e, pos);
     let (url, headers) = tarball_url(nix_conf(ev.session()), attrs)
-        .map_err(|e| fail(format!("ietsp: cannot fetch input '{name}': {e}")))?;
+        .map_err(|e| fail(format!("iets: cannot fetch input '{name}': {e}")))?;
     let expected = str_attr(attrs, "narHash")
         .and_then(|h| parse_nar_hash(h).ok())
-        .ok_or_else(|| fail(format!("ietsp: input '{name}' has no usable 'narHash'")))?;
+        .ok_or_else(|| fail(format!("iets: input '{name}' has no usable 'narHash'")))?;
 
     let _fetching = crate::treestore::fetch_lock(sp.base_name(), || {
         crate::log::line(&format!(
-            "ietsp: waiting for another process to fetch input '{name}'"
+            "iets: waiting for another process to fetch input '{name}'"
         ))
     });
     if let Some(entry) = crate::treestore::reopen(sp.base_name()) {
@@ -342,25 +342,25 @@ fn fetch_tarball(
     }
     let staged = crate::treestore::stage(sp.base_name()).ok_or_else(|| {
         fail(format!(
-            "ietsp: cannot fetch input '{name}': no cache directory to hold it"
+            "iets: cannot fetch input '{name}': no cache directory to hold it"
         ))
     })?;
     let mut spool = crate::fetch::spool::spool_file(staged.dir())
-        .map_err(|e| fail(format!("ietsp: cannot fetch input '{name}': {e}")))?;
+        .map_err(|e| fail(format!("iets: cannot fetch input '{name}': {e}")))?;
     let limits = crate::fetch::http::Limits::new(nix_conf(ev.session()))
-        .map_err(|e| fail(format!("ietsp: cannot fetch input '{name}': {e}")))?;
+        .map_err(|e| fail(format!("iets: cannot fetch input '{name}': {e}")))?;
     crate::fetch::http::get_decompressed(&url, &headers, limits, &mut spool)
-        .map_err(|e| fail(format!("ietsp: cannot fetch input '{name}': {e}")))?;
+        .map_err(|e| fail(format!("iets: cannot fetch input '{name}': {e}")))?;
     let tree = crate::fetch::spool::Tree::index(spool, limits.max_size)
-        .map_err(|e| fail(format!("ietsp: cannot unpack input '{name}': {e}")))?;
+        .map_err(|e| fail(format!("iets: cannot unpack input '{name}': {e}")))?;
 
     // the store verifies the tree against the lock's hash and names it by
     // what it hashes to, so a wrong tree is never named, read or uploaded
     crate::treestore::put(sp.name(), &expected, staged, tree).map_err(|e| match e {
         crate::treestore::Rejected::Mismatch(got) => {
             let msg = format!(
-                "ietsp: NAR hash mismatch in input '{name}' ({}): expected '{}' \
-                 but the tree ietsp fetched hashes to '{}'",
+                "iets: NAR hash mismatch in input '{name}' ({}): expected '{}' \
+                 but the tree iets fetched hashes to '{}'",
                 crate::fetch::http::shown(&url),
                 expected.to_sri(),
                 got.to_sri()
@@ -369,16 +369,16 @@ fn fetch_tarball(
         }
         crate::treestore::Rejected::Io(e) => Error::boxed(
             ErrorKind::Io,
-            format!("ietsp: cannot hash the tree of input '{name}': {e}"),
+            format!("iets: cannot hash the tree of input '{name}': {e}"),
             pos,
         ),
         crate::treestore::Rejected::Unstorable => fail(format!(
-            "ietsp: cannot keep the fetched input '{name}' in the input store"
+            "iets: cannot keep the fetched input '{name}' in the input store"
         )),
     })
 }
 
-/// The last shell-out: a `git` or `hg` input needs a repository, which ietsp
+/// The last shell-out: a `git` or `hg` input needs a repository, which iets
 /// cannot clone yet, so its locked attrs go to Nix's own `fetchTree` and the
 /// store path Nix reports must be the one the lock implies.
 fn fetch_with_nix(full: &str, name: &str, attrs: &Attrs, pos: Pos) -> EvalResult<()> {
@@ -386,14 +386,14 @@ fn fetch_with_nix(full: &str, name: &str, attrs: &Attrs, pos: Pos) -> EvalResult
         bail!(
             ErrorKind::Eval,
             pos,
-            "ietsp: recursive fetch of input '{name}': the nix on PATH is ietsp itself"
+            "iets: recursive fetch of input '{name}': the nix on PATH is iets itself"
         );
     }
     let Some(nix) = crate::nixbin::real("nix") else {
         bail!(
             ErrorKind::Eval,
             pos,
-            "ietsp: input '{name}' is not in the store and nix is not on PATH; \
+            "iets: input '{name}' is not in the store and nix is not on PATH; \
              fetch it with nix ({}) first",
             to_url(attrs)
         );
@@ -403,7 +403,7 @@ fn fetch_with_nix(full: &str, name: &str, attrs: &Attrs, pos: Pos) -> EvalResult
         nix_string_literal(&attrs_to_json(attrs))
     );
     let out = std::process::Command::new(&nix)
-        .env("IETSP_FETCHING", "1")
+        .env("IETS_FETCHING", "1")
         .args([
             "--extra-experimental-features",
             "nix-command flakes",
@@ -418,14 +418,14 @@ fn fetch_with_nix(full: &str, name: &str, attrs: &Attrs, pos: Pos) -> EvalResult
         .map_err(|e| {
             Error::boxed(
                 ErrorKind::Io,
-                format!("ietsp: cannot run nix to fetch input '{name}': {e}"),
+                format!("iets: cannot run nix to fetch input '{name}': {e}"),
                 pos,
             )
         })?;
     crate::session::Session::current().log.err(&out.stderr);
     if !out.status.success() {
         let msg = format!(
-            "ietsp: nix could not fetch input '{name}' ({})",
+            "iets: nix could not fetch input '{name}' ({})",
             to_url(attrs)
         );
         // fetchers.cc:Input::checkLocks
@@ -448,7 +448,7 @@ fn fetch_with_nix(full: &str, name: &str, attrs: &Attrs, pos: Pos) -> EvalResult
         bail!(
             ErrorKind::Eval,
             pos,
-            "ietsp: nix fetched '{got}' for input '{name}' but the lock implies '{full}'"
+            "iets: nix fetched '{got}' for input '{name}' but the lock implies '{full}'"
         );
     }
     Ok(())
@@ -632,7 +632,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_archive_types_are_fetched_by_ietsp() {
+    fn only_the_archive_types_are_fetched_by_iets() {
         for ty in ["github", "gitlab", "sourcehut", "tarball"] {
             assert!(is_tarball_type(&attrs(&[("type", ty)])), "{ty}");
         }

@@ -1,4 +1,4 @@
-# How to drive ietsp from a script or an agent
+# How to drive iets from a script or an agent
 
 Every command speaks JSON, returns a stable exit code, and can put its
 whole stderr into machine-readable records. This page shows the four things
@@ -15,7 +15,7 @@ every plumbing operation's contract is in
 `print-dev-env`:
 
 ```sh
-ietsp eval --strict --json -I nixpkgs=$nixpkgs hello.nix
+iets eval --strict --json -I nixpkgs=$nixpkgs hello.nix
 ```
 
 ```json
@@ -23,7 +23,7 @@ ietsp eval --strict --json -I nixpkgs=$nixpkgs hello.nix
 ```
 
 ```sh
-ietsp diff --json -A a -A b demo.nix
+iets diff --json -A a -A b demo.nix
 ```
 
 ```json
@@ -32,12 +32,12 @@ ietsp diff --json -A a -A b demo.nix
  "equal":false}
 ```
 
-`ietsp eval-jobs` writes JSON lines by default, one object per job.
+`iets eval-jobs` writes JSON lines by default, one object per job.
 
 ## Branch on the exit code
 
 ```sh
-ietsp build --builder daemon fail.nix; echo $?
+iets build --builder daemon fail.nix; echo $?
 ```
 
 | code | meaning |
@@ -54,13 +54,13 @@ The build codes follow Nix's own `failingExitStatus`: `0b1100000` plus one
 bit per kind of failure, so several failures combine their bits and a
 timeout beside a failed build gives 101. Real Nix computes these only when
 it builds in its own store; as a client it exits 1, because the worker
-protocol does not carry the status. ietsp is always a client and reads the
+protocol does not carry the status. iets is always a client and reads the
 status of each build result, so you get the code.
 
-`ietsp diff` is the one exception, and it follows `diff(1)`: 0 equal, 1
+`iets diff` is the one exception, and it follows `diff(1)`: 0 equal, 1
 different, 2 a usage error or any other failure.
 
-The classic names exit 1 as Nix does. `ietsp eval-jobs` exits 0 when only jobs
+The classic names exit 1 as Nix does. `iets eval-jobs` exits 0 when only jobs
 fail; their errors are in the job lines.
 
 ## Read the log as records
@@ -70,23 +70,23 @@ by one JSON object — the format of Nix's own `JSONLogger`, so
 `nix-output-monitor` works unchanged:
 
 ```sh
-ietsp eval --log-format internal-json -E '{a=1;}.b'
+iets eval --log-format internal-json -E '{a=1;}.b'
 ```
 
 ```
 @nix {"action":"msg","code":"missing-attr","column":1,"file":"«string»:1:1","level":0,"line":1,"msg":"error: attribute 'b' missing\n       at «string»:1:1","raw_msg":"attribute 'b' missing","sid":"01a0d7d6-f649-78fc-b0a9-70261702a3f8"}
 ```
 
-Three keys are ietsp's own and are the ones a caller wants:
+Three keys are iets's own and are the ones a caller wants:
 
 - `code` — a stable error code. Branch on this, not on the message text.
-- `hint` — what to do about it, present only when ietsp is certain. A hash
+- `hint` — what to do about it, present only when iets is certain. A hash
   mismatch names the hash the build got; a `flake.lock` entry without a
   `narHash` names the input and the `nix flake update` that locks it.
 - `sid` — one session id on every record of one run. Set it yourself with
-  `IETSP_SESSION_ID` to correlate a run with your own logs.
+  `IETS_SESSION_ID` to correlate a run with your own logs.
 
-`raw_msg` is the message alone and `msg` is the whole text ietsp would have
+`raw_msg` is the message alone and `msg` is the whole text iets would have
 printed. `level` is 0 for an error and 1 for a warning. With `--show-trace`
 a `trace` array is added, innermost first.
 
@@ -97,7 +97,7 @@ a `trace` array is added, innermost first.
 a human can still watch the run:
 
 ```sh
-ietsp eval --json-log-path ./log.json -E '{a=1;}.b'
+iets eval --json-log-path ./log.json -E '{a=1;}.b'
 cat log.json
 ```
 
@@ -116,20 +116,20 @@ Two things change when a terminal is not there, and you should set them
 explicitly rather than rely on the detection:
 
 ```sh
-ietsp --ietsp-option fix-hashes always build --builder daemon src.nix
+iets --iets-option fix-hashes always build --builder daemon src.nix
 ```
 
 `fix-hashes` defaults to `ask`, which only prompts on a terminal and
 otherwise prints a hint. `always` rewrites without asking. See
 [fix-hashes.md](fix-hashes.md).
 
-The other is colour in `ietsp search`: Nix writes its escape sequences to
-stdout whether or not stdout is a terminal, and ietsp matches it for
+The other is colour in `iets search`: Nix writes its escape sequences to
+stdout whether or not stdout is a terminal, and iets matches it for
 byte-parity. Use `--json` when a program reads the output.
 
 ## Compose the plumbing operations
 
-`ietsp plumbing` is the layer underneath the user-facing commands: one
+`iets plumbing` is the layer underneath the user-facing commands: one
 operation per command, JSON in and JSON out, nothing else on stdout. There
 are five of them — `resolve`, `plan`, `missing`, `build` and `fetch`.
 
@@ -137,7 +137,7 @@ Every operation that takes roots accepts `--roots -` and reads the previous
 one's stdout, so they pipe:
 
 ```sh
-ietsp plumbing resolve greeting.nix
+iets plumbing resolve greeting.nix
 ```
 
 ```json
@@ -145,7 +145,7 @@ ietsp plumbing resolve greeting.nix
 ```
 
 ```sh
-ietsp plumbing resolve greeting.nix | ietsp plumbing plan --roots -
+iets plumbing resolve greeting.nix | iets plumbing plan --roots -
 ```
 
 ```json
@@ -153,8 +153,8 @@ ietsp plumbing resolve greeting.nix | ietsp plumbing plan --roots -
 ```
 
 ```sh
-ietsp plumbing resolve greeting.nix \
-  | ietsp plumbing missing --builder daemon --check-cache-status --roots -
+iets plumbing resolve greeting.nix \
+  | iets plumbing missing --builder daemon --check-cache-status --roots -
 ```
 
 ```json
@@ -165,7 +165,7 @@ ietsp plumbing resolve greeting.nix \
 ```
 
 ```sh
-ietsp plumbing resolve greeting.nix | ietsp plumbing build --builder daemon --roots -
+iets plumbing resolve greeting.nix | iets plumbing build --builder daemon --roots -
 ```
 
 ```json
@@ -175,7 +175,7 @@ ietsp plumbing resolve greeting.nix | ietsp plumbing build --builder daemon --ro
               "reason":null,"success":true}]}
 ```
 
-`missing`'s object is byte-for-byte what `ietsp build --dry-run --json`
+`missing`'s object is byte-for-byte what `iets build --dry-run --json`
 prints, and that is checked by a test.
 
 One thing to know when you pipe across processes: by default the
@@ -184,7 +184,7 @@ for a derivation that is already there. To hand over a closure that is not,
 dump it:
 
 ```sh
-ietsp plumbing resolve --dump-drvs dd demo.nix -A a
+iets plumbing resolve --dump-drvs dd demo.nix -A a
 ```
 
 ```json
@@ -195,5 +195,5 @@ The `drvDir` key travels with the roots, so the next operation in the pipe
 reads the derivations out of that directory instead. `--drvs DIR` sets it
 by hand.
 
-`ietsp plumbing` is deliberately absent from the top-level help: that help
-is for people. `ietsp plumbing --help` lists every operation.
+`iets plumbing` is deliberately absent from the top-level help: that help
+is for people. `iets plumbing --help` lists every operation.

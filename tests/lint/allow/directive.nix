@@ -1,2 +1,2 @@
-# ietsp: allo url-literal
+# iets: allo url-literal
 http://example.com

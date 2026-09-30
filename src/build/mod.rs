@@ -1,11 +1,11 @@
-//! The one build path. Every ietsp command that realises a derivation goes
+//! The one build path. Every iets command that realises a derivation goes
 //! through `Dispatcher`: one connection carries the uploads and the builds of
 //! a batch of ready derivations, and every build reports through one
 //! structured event stream with provenance attached.
 //!
 //! Three axes, kept apart:
 //!
-//! - **What to feed it.** `ietsp build`, `nix-build` and `nix build` hand over
+//! - **What to feed it.** `iets build`, `nix-build` and `nix build` hand over
 //!   a fixed set of roots (`upload::PlanUpload`). `eval-jobs` instantiation
 //!   hands over batches as the walk finishes attributes
 //!   (`upload::StreamUpload`). See docs/reference/commands.md.
@@ -787,7 +787,7 @@ mod tests {
 
     /// A target the build op came back without leaves no output path, so the
     /// dispatcher must exit non-zero. It used to skip it and exit 0, which
-    /// left `ietsp build` silent and successful.
+    /// left `iets build` silent and successful.
     #[test]
     fn a_target_with_no_verdict_fails() {
         let style = Style {

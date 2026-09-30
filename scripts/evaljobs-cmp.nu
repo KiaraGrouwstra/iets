@@ -1,5 +1,5 @@
 #!/usr/bin/env nu
-# Usage: scripts/evaljobs-cmp.nu NEJ.jsonl IETSP.jsonl [--meta]
+# Usage: scripts/evaljobs-cmp.nu NEJ.jsonl IETS.jsonl [--meta]
 # Compares two nix-eval-jobs style outputs attr by attr: job and error
 # counts on each side, attrs only one side has, attrs whose drvPath (or
 # whole job line minus the error text, with --meta) differs. Order does

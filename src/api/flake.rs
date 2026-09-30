@@ -34,7 +34,7 @@ pub fn outputs(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
     crate::flake::eval_flake(ev, fr)
 }
 
-/// flakeref.cc:FlakeRef::to_string for the references ietsp parses: how a
+/// flakeref.cc:FlakeRef::to_string for the references iets parses: how a
 /// local flake names itself in a message.
 pub fn url(fr: &FlakeRef) -> String {
     match &fr.source {

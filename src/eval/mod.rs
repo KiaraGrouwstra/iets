@@ -35,7 +35,7 @@ pub struct FileInfo {
     pub path: Vec<u8>,
     pub base: u32,
     pub line_starts: Vec<u32>,
-    /// The `# ietsp: allow` lines, set once the file is parsed or its IR
+    /// The `# iets: allow` lines, set once the file is parsed or its IR
     /// cache entry loaded, before any of its IR runs.
     allows: std::sync::OnceLock<crate::lint::allow::Allows>,
     /// The source and its tree, read and parsed again for the first finding
@@ -258,7 +258,7 @@ pub const DEFAULT_SYSTEM: &str = "x86_64-linux";
 /// setting goes here (docs/explanation/evaluation.md).
 ///
 /// ```compile_fail
-/// let mut ev = ietsp::eval::Evaluator::new();
+/// let mut ev = iets::eval::Evaluator::new();
 /// ev.pure = true;
 /// ```
 #[derive(Clone)]
@@ -361,7 +361,7 @@ impl EvalConfig {
         self
     }
 
-    /// `ietsp eval --dump-drvs DIR`: every created derivation is written as
+    /// `iets eval --dump-drvs DIR`: every created derivation is written as
     /// `DIR/<drv basename>` in ATerm form.
     pub fn dump_dir(mut self, dir: std::path::PathBuf) -> EvalConfig {
         self.dump_dir = Some(dir);
@@ -602,7 +602,7 @@ impl Evaluator {
     /// "root"` keys like an unlinted one) is loaded instead of parsing and
     /// compiling, and a fresh compile writes one. The entry carries the
     /// lint warnings the compile produced, so a load reports them again,
-    /// and the file's `# ietsp: allow` table, which the runtime lints check.
+    /// and the file's `# iets: allow` table, which the runtime lints check.
     /// Files with `~/` paths bypass it. Embedded corepkgs are never linted.
     pub fn compile_file(
         &mut self,
@@ -2528,7 +2528,7 @@ impl Evaluator {
         self.t_compile = std::time::Duration::ZERO;
     }
 
-    /// `IETSP_STATS=1`: allocation and phase counters on stderr.
+    /// `IETS_STATS=1`: allocation and phase counters on stderr.
     pub fn print_stats(&self) {
         let st = &self.arena.stats;
         let c = self.counts();

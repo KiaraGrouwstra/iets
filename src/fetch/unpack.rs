@@ -251,7 +251,7 @@ mod tests {
     }
 
     fn work(name: &str) -> PathBuf {
-        let p = std::env::temp_dir().join(format!("ietsp-unpack-{}-{name}", std::process::id()));
+        let p = std::env::temp_dir().join(format!("iets-unpack-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p

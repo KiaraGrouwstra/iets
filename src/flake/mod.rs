@@ -16,7 +16,7 @@ use crate::runtime::Word;
 use crate::source::{self, SourceRef, lock};
 
 pub const CALL_FLAKE: &str = include_str!("call-flake.nix");
-pub const LOCK_ERROR: &str = "ietsp: flake.lock missing or incomplete, run nix flake lock";
+pub const LOCK_ERROR: &str = "iets: flake.lock missing or incomplete, run nix flake lock";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FlakeRef {
@@ -73,23 +73,23 @@ pub fn parse_flake_ref(arg: &str, cwd: &[u8], home: Option<&[u8]>) -> Result<Fla
             "flake registry references ({loc}#…) are not supported; use a path or a locked input"
         )),
         ty => Some(format!(
-            "flake reference '{loc}' is a '{}' input; only local paths are supported (ietsp cannot fetch a root flake)",
+            "flake reference '{loc}' is a '{}' input; only local paths are supported (iets cannot fetch a root flake)",
             ty.unwrap_or("")
         )),
     };
     if let Some(why) = why {
-        return Err(Error::Unsupported(format!("ietsp: {why}")));
+        return Err(Error::Unsupported(format!("iets: {why}")));
     }
     if p.input.len() > 2 || !p.dir.is_empty() {
         return Err(Error::Unsupported(format!(
-            "ietsp: query parameters in flake reference '{arg}' are not supported"
+            "iets: query parameters in flake reference '{arg}' are not supported"
         )));
     }
     let loc = source::str_attr(&p.input, "path").unwrap_or("");
     let full = match loc.strip_prefix('~') {
         Some(rest) if p.bare && (rest.is_empty() || rest.starts_with('/')) => {
             let Some(h) = home else {
-                return Err(Error::Flake("ietsp: $HOME is not set".to_string()));
+                return Err(Error::Flake("iets: $HOME is not set".to_string()));
             };
             [h, rest.as_bytes()].concat()
         }
@@ -258,7 +258,7 @@ pub fn eval_flake_value(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
 }
 
 /// flake-primops.cc:prim_getFlake on a local path, parsed by
-/// `flakeref::parse_absolute`. Impure only: every reference ietsp resolves
+/// `flakeref::parse_absolute`. Impure only: every reference iets resolves
 /// is unlocked, which a pure evaluation refuses. The flake still needs a
 /// complete `flake.lock`, because nothing is locked here. A directory is
 /// always a `path:` input, even inside a git repository: flakeref.cc looks
@@ -274,7 +274,7 @@ pub fn get_flake(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word
     let s = String::from_utf8_lossy(s).into_owned();
     let p = flakeref::parse_absolute(&s).map_err(|e| eval_error(e, pos))?;
     let unsupported = |why: &str| {
-        let msg = format!("ietsp: builtins.getFlake on '{s}' {why} is not supported");
+        let msg = format!("iets: builtins.getFlake on '{s}' {why} is not supported");
         EvalError::boxed(ErrorKind::Unsupported, msg, pos)
     };
     if ev.pure() {

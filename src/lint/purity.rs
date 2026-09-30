@@ -172,7 +172,7 @@ pub fn rev_count(ev: &mut Evaluator, source: &str, pos: Pos) -> EvalResult<()> {
     let level = tree_level(ev, id, source);
     ev.lint_site(id, pos, Some(level), Some(source), || {
         format!(
-            "'{source}.revCount' is deprecated: the count of all revisions is expensive to compute and absent on a shallow clone, and ietsp plans to remove it; use 'lastModifiedDate' and 'shortRev' for a version"
+            "'{source}.revCount' is deprecated: the count of all revisions is expensive to compute and absent on a shallow clone, and iets plans to remove it; use 'lastModifiedDate' and 'shortRev' for a version"
         )
     })
 }

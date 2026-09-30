@@ -2,14 +2,14 @@
 //!
 //! `cargo run --example eval -- [-I prefix=path]... [-A attr] (-E EXPR | FILE)`
 //!
-//! Uses the library only (`ietsp::api`), never `ietsp::cli`.
+//! Uses the library only (`iets::api`), never `iets::cli`.
 
-use ietsp::api::{self, EvalArgs, Input};
-use ietsp::eval::Pos;
+use iets::api::{self, EvalArgs, Input};
+use iets::eval::Pos;
 
 fn main() -> std::process::ExitCode {
     // a frontend owns the run state and says where messages go
-    let session = ietsp::session::Session::new();
+    let session = iets::session::Session::new();
     session.log.write_to_stderr();
     let _entered = session.enter();
     let mut a = EvalArgs {
@@ -37,7 +37,7 @@ fn main() -> std::process::ExitCode {
     }
 
     // a setting that does not resolve is reported already
-    let Ok(run) = ietsp::api::run::Run::new(&a) else {
+    let Ok(run) = iets::api::run::Run::new(&a) else {
         return std::process::ExitCode::from(1);
     };
     // The evaluator runs as the main fiber of the parallel runtime; with
@@ -52,7 +52,7 @@ fn main() -> std::process::ExitCode {
         };
         let mut out = Vec::new();
         let mut ctx = Vec::new();
-        match ietsp::print::print_json(ev, v, &mut out, &mut ctx, true, Pos::NONE) {
+        match iets::print::print_json(ev, v, &mut out, &mut ctx, true, Pos::NONE) {
             Ok(()) => {
                 out.push(b'\n');
                 use std::io::Write;

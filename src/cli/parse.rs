@@ -1,10 +1,10 @@
-//! `ietsp parse`: the parser run over whole trees.
+//! `iets parse`: the parser run over whole trees.
 
 use crate::syntax::ast::FileId;
 use crate::syntax::symbol::Interner;
 use crate::syntax::{dump, line_col, parse};
 
-/// What `ietsp parse` prints for a file that parses.
+/// What `iets parse` prints for a file that parses.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Form {
     /// S-expressions.
@@ -15,7 +15,7 @@ pub enum Form {
     Quiet,
 }
 
-/// `ietsp parse [-q | --json] [--log-format F] FILE...`; a lone `-` reads
+/// `iets parse [-q | --json] [--log-format F] FILE...`; a lone `-` reads
 /// the list of files from stdin.
 pub fn main(argv: &[String]) -> i32 {
     let mut form = Form::Text;

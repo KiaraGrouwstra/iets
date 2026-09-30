@@ -1,5 +1,5 @@
 # Differential corpus for builtins.match / builtins.split.
-# scripts/parity.nu evaluates this with nix-instantiate and with ietsp and
+# scripts/parity.nu evaluates this with nix-instantiate and with iets and
 # requires byte-equal JSON. Every entry is a (pattern, input) pair; both
 # builtins run on each. Failures are captured with tryEval, so an invalid
 # pattern compares as { err = true; } on both sides.

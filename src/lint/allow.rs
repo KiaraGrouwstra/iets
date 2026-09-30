@@ -1,4 +1,4 @@
-//! `# ietsp: allow NAME[, NAME...]`: a comment that silences the named
+//! `# iets: allow NAME[, NAME...]`: a comment that silences the named
 //! lints (`all` and `family:NAME` too) for one source line, whatever
 //! their level. On a line of its own it covers the next non-blank,
 //! non-comment line; after code it covers its own line. The lexer notes
@@ -95,7 +95,7 @@ impl Allows {
     }
 }
 
-/// The text of one comment after `# ietsp:`: the mask of the lints it
+/// The text of one comment after `# iets:`: the mask of the lints it
 /// names, and one `unknown-allow` message per name (or directive) it
 /// gets wrong, with the byte offset of that word inside `text`.
 pub fn parse_comment(text: &[u8]) -> (Mask, Vec<(u32, String)>) {
@@ -108,7 +108,7 @@ pub fn parse_comment(text: &[u8]) -> (Mask, Vec<(u32, String)>) {
             0,
             vec![(
                 0,
-                "empty `# ietsp:` comment: use `allow NAME[, NAME...]`".into(),
+                "empty `# iets:` comment: use `allow NAME[, NAME...]`".into(),
             )],
         );
     };
@@ -119,7 +119,7 @@ pub fn parse_comment(text: &[u8]) -> (Mask, Vec<(u32, String)>) {
             vec![(
                 at as u32,
                 format!(
-                    "unknown directive '{d}' in a `# ietsp:` comment: use `allow NAME[, NAME...]`"
+                    "unknown directive '{d}' in a `# iets:` comment: use `allow NAME[, NAME...]`"
                 ),
             )],
         );
@@ -135,11 +135,11 @@ pub fn parse_comment(text: &[u8]) -> (Mask, Vec<(u32, String)>) {
                     mask |= bit(id);
                 }
             }
-            Err(e) => bad.push((off as u32, format!("{e} in `# ietsp: allow`"))),
+            Err(e) => bad.push((off as u32, format!("{e} in `# iets: allow`"))),
         }
     }
     if !any {
-        bad.push((at as u32, "`# ietsp: allow` names no lint".into()));
+        bad.push((at as u32, "`# iets: allow` names no lint".into()));
     }
     (mask, bad)
 }

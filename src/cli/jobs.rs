@@ -1,4 +1,4 @@
-//! `ietsp eval-jobs`: flags, the three process roles, and the summary.
+//! `iets eval-jobs`: flags, the three process roles, and the summary.
 
 use std::process::exit;
 
@@ -15,7 +15,7 @@ use crate::runtime::Word;
 /// the same process boundary nix-eval-jobs has.
 const DEFAULT_MAX_MEMORY_MB: u64 = 4096;
 
-/// `ietsp eval-jobs`'s own flags; everything else goes to `parse_eval_args`.
+/// `iets eval-jobs`'s own flags; everything else goes to `parse_eval_args`.
 struct JobsArgs {
     opts: crate::jobs::Opts,
     check_cache_status: bool,
@@ -74,7 +74,7 @@ fn parse_jobs_args(argv: &[String]) -> (JobsArgs, Vec<String>) {
     let unsupported = |flag: &str, why: &str| -> ! {
         exit(
             CrateError::Unsupported(format!(
-                "{flag} is not supported by ietsp: {why} ('ietsp help commands')"
+                "{flag} is not supported by iets: {why} ('iets help commands')"
             ))
             .report(),
         )
@@ -106,7 +106,7 @@ fn parse_jobs_args(argv: &[String]) -> (JobsArgs, Vec<String>) {
             }
             "--eval-store" => j.eval_store = arg(&mut i),
             // holds by construction: it caps the builds of an import from
-            // derivation, and ietsp builds nothing while it evaluates
+            // derivation, and iets builds nothing while it evaluates
             "--max-jobs" | "-j" => {
                 let _ = arg(&mut i);
             }
@@ -117,12 +117,10 @@ fn parse_jobs_args(argv: &[String]) -> (JobsArgs, Vec<String>) {
             "--verbose" | "--debug" => crate::ignored::flag(s, crate::ignored::ONE_LOG_LEVEL),
             "--override-input" | "--override-flake" => unsupported(
                 s,
-                "ietsp evaluates locked flakes only; an override makes the lock file incomplete",
+                "iets evaluates locked flakes only; an override makes the lock file incomplete",
             ),
-            "--reference-lock-file" => {
-                unsupported(s, "ietsp reads the flake's own flake.lock only")
-            }
-            "--repair" => unsupported(s, "ietsp does not write or repair store paths"),
+            "--reference-lock-file" => unsupported(s, "iets reads the flake's own flake.lock only"),
+            "--repair" => unsupported(s, "iets does not write or repair store paths"),
             "--arg-from-file" => {
                 let name = arg(&mut i);
                 let path = arg(&mut i);
@@ -153,7 +151,7 @@ fn parse_jobs_args(argv: &[String]) -> (JobsArgs, Vec<String>) {
 /// replaced by the `--argstr` the main process read for it. A worker's
 /// stdin is the collector's pipe, so it cannot read the value itself.
 fn worker_argv(argv: &[String], j: &JobsArgs) -> Vec<String> {
-    // `--ietsp-option` left `argv` before this command saw it, and a worker
+    // `--iets-option` left `argv` before this command saw it, and a worker
     // reads its own settings, so the triples go back on here
     let mut out: Vec<String> = crate::session::Session::current().settings().option_argv();
     let mut read = j.stdin_args.iter();
@@ -203,7 +201,7 @@ fn check_jobs_args(j: &JobsArgs) -> crate::error::Result<crate::remote::worker::
     })
 }
 
-/// `ietsp eval-jobs`: nix-eval-jobs's JSON lines. Worker processes
+/// `iets eval-jobs`: nix-eval-jobs's JSON lines. Worker processes
 /// restarted above `--max-memory-size` (4096 MB, like nix-eval-jobs);
 /// `--max-memory-size 0` is one process with no ceiling.
 /// See docs/reference/commands.md.

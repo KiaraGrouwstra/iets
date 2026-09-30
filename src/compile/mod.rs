@@ -175,7 +175,7 @@ impl<'a> Compiler<'a> {
         self.lint_level(id) != Level::Off
     }
 
-    /// A lint site: nothing at `off` or on a line a `# ietsp: allow`
+    /// A lint site: nothing at `off` or on a line a `# iets: allow`
     /// comment covers, a diagnostic for the evaluator to report at `warn`,
     /// a compile error at `error`.
     fn lint(&mut self, id: LintId, pos: Pos, msg: impl FnOnce() -> String) -> CResult<()> {

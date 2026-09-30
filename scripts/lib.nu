@@ -50,15 +50,15 @@ export def nixpkgs []: nothing -> string {
   $env.NIXPKGS? | default "/nix/store/ah3pxz4xa52hd6vhbx17vcsci0b8bmbr-source"
 }
 
-# The ietsp under test, as an absolute path: $IETSP, else $BIN/ietsp, else
-# target/release/ietsp.
-export def ietsp-bin []: nothing -> string {
-  let p = if ($env.IETSP? | is-not-empty) {
-    $env.IETSP | path expand
+# The iets under test, as an absolute path: $IETS, else $BIN/iets, else
+# target/release/iets.
+export def iets-bin []: nothing -> string {
+  let p = if ($env.IETS? | is-not-empty) {
+    $env.IETS | path expand
   } else if ($env.BIN? | is-not-empty) {
-    $env.BIN | path join ietsp | path expand
+    $env.BIN | path join iets | path expand
   } else {
-    $ROOT | path join target/release/ietsp
+    $ROOT | path join target/release/iets
   }
   if not ($p | path exists) { error make -u {msg: $"no ($p); cargo build --release first"} }
   $p
@@ -69,15 +69,15 @@ export def current-system []: nothing -> string {
 }
 
 # Every e2e script calls this first. It returns DIR, or a fresh temporary
-# directory named after NAME, and points ietsp's config lookup into it: the
-# host's ietsp.toml must not steer the runs (a remote `builder` changes the
+# directory named after NAME, and points iets's config lookup into it: the
+# host's iets.toml must not steer the runs (a remote `builder` changes the
 # cores, the out-links and where things build).
 export def --env isolate [name: string, dir?: string]: nothing -> string {
   $env.TMPDIR = ($env.TMPDIR? | default "/tmp")
   $env.NIX_REMOTE = ($env.NIX_REMOTE? | default "daemon")
-  let work = ($dir | default (mktemp -d --tmpdir $"ietsp-($name).XXXXXX"))
+  let work = ($dir | default (mktemp -d --tmpdir $"iets-($name).XXXXXX"))
   $env.XDG_CONFIG_HOME = ($work | path join no-xdg)
-  hide-env -i IETSP_CONFIG
+  hide-env -i IETS_CONFIG
   $work
 }
 
@@ -139,11 +139,11 @@ export def resolved-cmd [cmd: string]: nothing -> string {
   if ($p | is-empty) { "" } else { ^readlink -f $p | chomp }
 }
 
-# Aborts when one of CMDS (default `nix` and `nix-instantiate`) is ietsp under
+# Aborts when one of CMDS (default `nix` and `nix-instantiate`) is iets under
 # a Nix command name, so a script that compares against the real nix cannot
-# silently compare ietsp with itself. The test is the one ietsp's own fallback
-# uses on the same path (`is_ietsp` in src/nixbin.rs): a farm entry is a
-# symlink chain that ends in a file named `ietsp`. Nothing behavioural can
+# silently compare iets with itself. The test is the one iets's own fallback
+# uses on the same path (`is_iets` in src/nixbin.rs): a farm entry is a
+# symlink chain that ends in a file named `iets`. Nothing behavioural can
 # tell them apart, because the farm execs the real nix for whatever it does
 # not implement, `--version` included. A missing command is not an error here;
 # the script fails when it runs it. Call it before the first temporary
@@ -152,11 +152,11 @@ export def require-real-nix [...cmds: string] {
   let want = (if ($cmds | is-empty) { [nix nix-instantiate] } else { $cmds })
   for c in $want {
     let real = (resolved-cmd $c)
-    if ($real | path basename) == "ietsp" {
-      print -e $"FAIL: `($c)` is ietsp, not Nix: ($real)"
-      print -e "  This script compares against the real nix, so it would compare ietsp with itself."
+    if ($real | path basename) == "iets" {
+      print -e $"FAIL: `($c)` is iets, not Nix: ($real)"
+      print -e "  This script compares against the real nix, so it would compare iets with itself."
       print -e "  Run it inside the dev shell: nix develop -c nu scripts/NAME.nu"
-      print -e "  IETSP_NIX_BIN_DIR does not help: the reference side runs what PATH has."
+      print -e "  IETS_NIX_BIN_DIR does not help: the reference side runs what PATH has."
       exit 1
     }
   }
@@ -198,8 +198,8 @@ export def make-farm [bin: string, dir: string]: nothing -> string {
   for n in [nix-instantiate nix-build nix-eval-jobs nix-shell nix] {
     ^ln -sf $bin $"($dir)/bin/($n)"
   }
-  mkdir $"($dir)/share/ietsp"
-  (real-bin-dir) | save -f $"($dir)/share/ietsp/real-nix-bin"
+  mkdir $"($dir)/share/iets"
+  (real-bin-dir) | save -f $"($dir)/share/iets/real-nix-bin"
   $"($dir)/bin"
 }
 
@@ -261,7 +261,7 @@ export def checks-flake [dir: string] {
     };
 }
 '# | str replace -a "@NONCE@" $nonce | save -f $"($dir)/flake.nix"
-  # `nix flake lock` writes nothing for a flake with no inputs, and ietsp
+  # `nix flake lock` writes nothing for a flake with no inputs, and iets
   # only evaluates locked flakes, so the empty lock is written here.
   '{"nodes":{"root":{}},"root":"root","version":7}' | save -f $"($dir)/flake.lock"
 }

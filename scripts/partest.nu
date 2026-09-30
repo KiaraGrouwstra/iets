@@ -3,7 +3,7 @@
 # 1, 2, 4 and N workers (default 8); stdout, exit code and the trace lines
 # on stderr must match. A case marked `nix` is also compared with the real
 # nix-instantiate. Usage: scripts/partest.nu [N]
-use lib.nu [chomp diff-head ietsp-bin show require-real-nix]
+use lib.nu [chomp diff-head iets-bin show require-real-nix]
 
 # stdout, exit code and the sorted effect lines of one run.
 def outcome [res: record]: nothing -> record {
@@ -26,7 +26,7 @@ def report [name: string, a: record, b: record, what: string]: nothing -> nothin
 # One case at every worker count, and against nix when the case asks for
 # it and a real nix is there. The sandbox has none, so the comparison is
 # what a run by hand adds.
-def run-case [ietsp: string, counts: list<int>, c: record, with_nix: bool]: nothing -> bool {
+def run-case [iets: string, counts: list<int>, c: record, with_nix: bool]: nothing -> bool {
   let base_flags = (if $c.strict { [--strict] } else { [] } | append ($c.flags? | default []))
   let runs = ($counts | each {|w|
     # `--dump-drvs` writes every derivation the run made, so the directory
@@ -35,7 +35,7 @@ def run-case [ietsp: string, counts: list<int>, c: record, with_nix: bool]: noth
     # scheduler's business, so the count is not part of the outcome.
     let dir = (if ($c.drvs? | default null) == null { null } else { mktemp -d --tmpdir partest.drv.XXXXXX })
     let flags = (if $dir == null { $base_flags } else { $base_flags | append [--dump-drvs $dir] })
-    let o = (outcome (^$ietsp eval ...$flags --workers $w -E $c.expr | complete))
+    let o = (outcome (^$iets eval ...$flags --workers $w -E $c.expr | complete))
     let drvs = (if $dir == null { null } else { ls $dir | length })
     if $dir != null { rm -rf $dir }
     { w: $w, o: $o, drvs: $drvs }
@@ -57,7 +57,7 @@ def run-case [ietsp: string, counts: list<int>, c: record, with_nix: bool]: noth
   if $c.nix and $with_nix {
     let n = (outcome (^nix-instantiate --eval ...$base_flags -E $c.expr | complete))
     if $n.out != $base.o.out or $n.rc != $base.o.rc {
-      report $c.name $base.o $n "ietsp vs nix"
+      report $c.name $base.o $n "iets vs nix"
       $ok = false
     }
   }
@@ -67,9 +67,9 @@ def run-case [ietsp: string, counts: list<int>, c: record, with_nix: bool]: noth
 
 def main [n: int = 8] {
   cd ($env.FILE_PWD | path join "..")
-  let ietsp = (ietsp-bin)
+  let iets = (iets-bin)
   # the second run of each case must evaluate again to print its traces
-  $env.IETSP_CACHE = "0"
+  $env.IETS_CACHE = "0"
   # a slow pure computation: it keeps the demand path busy while helpers run
   let slow = "slow = n: builtins.foldl' (a: b: a + b) 0 (builtins.genList (x: x) n);"
   # `elem` returns at the first element, so nothing below it is demanded
@@ -224,6 +224,6 @@ in builtins.foldl' (a: b: a + builtins.foldl' (x: y: x + y) 0 b) 0 rows'#]
     print "note: no nix-instantiate on PATH; comparing worker counts only"
   }
   let counts = ([1 2 4 $n] | uniq)
-  let ok = ($cases | each {|c| run-case $ietsp $counts $c $with_nix })
+  let ok = ($cases | each {|c| run-case $iets $counts $c $with_nix })
   if ($ok | any {|r| not $r }) { exit 1 }
 }

@@ -1,4 +1,4 @@
-//! `ietsp eval-jobs`: the nix-eval-jobs 2.35 walk over an attribute tree
+//! `iets eval-jobs`: the nix-eval-jobs 2.35 walk over an attribute tree
 //! and its JSON lines. The main fiber walks the tree in lexicographic
 //! depth-first order and hands every job or error to a sink; helpers run
 //! `T_JOB` range tasks that force what a job needs (`type`, `name`,
@@ -721,7 +721,7 @@ fn job_inner(ev: &mut Evaluator, a: &'static AttrsObj, path: &[String]) -> EvalR
     // drv.cc:queryOutputs: an output path the evaluation cannot know yet is
     // a `null`, not an error, so a failure to resolve them is retried with
     // the names alone. nix-eval-jobs makes that retry conditional on
-    // `ca-derivations`; ietsp never asks for the feature to evaluate such a
+    // `ca-derivations`; iets never asks for the feature to evaluate such a
     // derivation, so it does not ask here either.
     let outs = match outputs(ev, a, true) {
         Ok(o) => o,

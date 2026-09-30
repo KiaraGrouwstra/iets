@@ -1,4 +1,4 @@
-//! What a command line or a nix.conf asked for and ietsp does not do. Each
+//! What a command line or a nix.conf asked for and iets does not do. Each
 //! is one level-1 warning per key and process that says why, never silence
 //! (docs/reference/errors.md: `ignored-flag`, `ignored-setting`,
 //! `unknown-setting`). A warning waits for `flush`, so
@@ -71,8 +71,8 @@ pub fn noted(code: &str) -> Vec<String> {
 }
 
 /// Why `-v`, `--verbose` and `--debug` change nothing.
-pub const ONE_LOG_LEVEL: &str = "ietsp has one log level, the one Nix starts at";
+pub const ONE_LOG_LEVEL: &str = "iets has one log level, the one Nix starts at";
 
 /// Why `--accept-flake-config` and the `accept-flake-config` setting change
 /// nothing (docs/reference/divergences.md).
-pub const NO_NIX_CONFIG: &str = "ietsp never applies a flake's nixConfig, so a flake that sets extra-substituters or allow-import-from-derivation there runs without them; put the settings in nix.conf";
+pub const NO_NIX_CONFIG: &str = "iets never applies a flake's nixConfig, so a flake that sets extra-substituters or allow-import-from-derivation there runs without them; put the settings in nix.conf";

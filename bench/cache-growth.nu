@@ -26,10 +26,10 @@ def size_delta [now: int, before: int] { $"(mib $now) \(+(mib ($now - $before))\
 
 def main [] {
   cd ($env.FILE_PWD | path join "..")
-  let ietsp = ($env.IETSP? | default $"($env.PWD)/target/release/ietsp")
+  let iets = ($env.IETS? | default $"($env.PWD)/target/release/iets")
   let np1 = ($env.NIXPKGS? | default "/nix/store/ah3pxz4xa52hd6vhbx17vcsci0b8bmbr-source")
   let np2 = ($env.NIXPKGS2? | default "/nix/store/bgp6cqzszs95fdsrjsl6gpy540rjrac9-source")
-  let cache = $"($env.TMPDIR? | default '/tmp')/ietsp-growth-cache"
+  let cache = $"($env.TMPDIR? | default '/tmp')/iets-growth-cache"
   let workload = $"($env.PWD)/bench/workloads/nixos-desktop.nix"
   rm -rf $cache
 
@@ -40,8 +40,8 @@ def main [] {
       print $"skipping ($np): not in the store"
       continue
     }
-    with-env {IETSP_CACHE_DIR: $cache} {
-      ^$ietsp eval --strict -I $"nixpkgs=($np)" $workload | ignore
+    with-env {IETS_CACHE_DIR: $cache} {
+      ^$iets eval --strict -I $"nixpkgs=($np)" $workload | ignore
     }
     let now = (sizes $cache)
     $rows = ($rows | append {

@@ -50,7 +50,7 @@ fn builtins_name(name: &'static str) -> &'static str {
 /// Whether this run puts `name` in `builtins` at all. Nix leaves three out
 /// until an experimental feature is on, and code branches on whether they are
 /// there: `flake-compat` takes its `fetchTree` path when `builtins ? fetchTree`.
-/// Under one of Nix's own names ietsp answers as Nix does; its own commands
+/// Under one of Nix's own names iets answers as Nix does; its own commands
 /// have every feature, which is the documented divergence.
 fn exposed(name: &'static str) -> bool {
     if !crate::log::classic() {

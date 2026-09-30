@@ -14,7 +14,7 @@ use crate::cachefs;
 /// The one file of an entry directory.
 pub const ENTRY: &str = "entry";
 /// Leads the file; the key holds the build id, so an older binary's entries
-/// are never read and this only has to catch bytes ietsp did not write.
+/// are never read and this only has to catch bytes iets did not write.
 const VERSION: u8 = 2;
 /// The version byte, the number of parts, and the integrity check over the
 /// key and the rest of the file.
@@ -89,7 +89,7 @@ impl Entry {
         Some(Entry { data, slots })
     }
 
-    /// The entry file at `path`, for `ietsp cache dump`. The key is the name
+    /// The entry file at `path`, for `iets cache dump`. The key is the name
     /// of the directory the entry lives in, which is how a store names it.
     pub fn open(path: &Path) -> Option<Entry> {
         let key = path.parent()?.file_name()?.to_str()?.to_string();
@@ -121,8 +121,8 @@ pub struct Store {
 }
 
 impl Store {
-    /// `--cache-dir DIR`, else `IETSP_CACHE_DIR`, else `$XDG_CACHE_HOME/ietsp`,
-    /// else `~/.cache/ietsp`; the entries live in its `trace/` subdirectory,
+    /// `--cache-dir DIR`, else `IETS_CACHE_DIR`, else `$XDG_CACHE_HOME/iets`,
+    /// else `~/.cache/iets`; the entries live in its `trace/` subdirectory,
     /// so the directory the user names is never a removal target. `None` when
     /// no home is known.
     pub fn locate(override_dir: Option<&str>) -> Option<Store> {
@@ -230,7 +230,7 @@ mod tests {
 
     fn store(name: &str) -> Store {
         let root =
-            std::env::temp_dir().join(format!("ietsp-trace-store-{name}-{}", std::process::id()));
+            std::env::temp_dir().join(format!("iets-trace-store-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         assert!(cachefs::prepare(&root, cachefs::Shape::Dirs, false));
         Store { root }

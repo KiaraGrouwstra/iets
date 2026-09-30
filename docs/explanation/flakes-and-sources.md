@@ -2,7 +2,7 @@
 
 A flake reference on a command line is text. Evaluation needs bytes. This
 page explains the path between the two, why the root flake is read from
-your working tree and not from the store, and where ietsp still has to hand
+your working tree and not from the store, and where iets still has to hand
 the job to a real `nix`.
 
 Scope and the exact reference syntax are in
@@ -12,7 +12,7 @@ leaves out are in
 
 ## What is in scope, and why
 
-`ietsp eval --raw DIR#attr.path` prints what
+`iets eval --raw DIR#attr.path` prints what
 `nix eval --raw --option eval-cache false DIR#attr.path` prints. The
 reference goes through the same parser `builtins.parseFlakeRef` uses, which
 follows Nix's `parseFlakeRefWithFragment`: a flake id first, then a URL,
@@ -32,7 +32,7 @@ names fall back cleanly to the real `nix` on it:
 root needs a `narHash`, or must be a relative `path:` input, and every
 input the `flake.nix` declares needs a lock entry. Otherwise the run says
 `flake.lock missing or incomplete, run nix flake lock`. There is no
-registry, no in-memory locking and no `nix flake lock` of its own: ietsp
+registry, no in-memory locking and no `nix flake lock` of its own: iets
 evaluates what a lock file already decided. Note the consequence — a
 `flake.nix` input whose URL changed without re-locking is not detected. The
 lock wins.
@@ -59,7 +59,7 @@ the evaluation:
 - the words for messages: the name of the SCM and the command that tracks
   a file.
 
-ietsp has one list of the SCMs that it knows, and detection reads only
+iets has one list of the SCMs that it knows, and detection reads only
 that list. git is the one entry. A Jujutsu workspace without `.git` and a
 Mercurial working tree are thus plain paths, as they are for Nix.
 
@@ -75,20 +75,20 @@ A clean tree gets `rev`, `shortRev` and `revCount`; a dirty one gets
 An index entry that is not in the working tree makes the tree dirty, and
 `git status` does not report every one of them: it never reports an entry
 that git checks no more, which is what a sparse checkout and
-`update-index --skip-worktree` make. `-v` tags such an entry, and ietsp
+`update-index --skip-worktree` make. `-v` tags such an entry, and iets
 looks for it on disk. Nix reads the same rule out of libgit2's status.
 
 `revCount` is a lazy value. The attribute is in the set when Nix gives
 one, so `self ? revCount` and `builtins.attrNames self` are those of Nix.
 The fifth command, `rev-list --count`, runs only when the evaluation reads
 the value: it takes 1 s on a nixpkgs checkout, and almost no flake reads
-it. ietsp then keeps the count in the tracing store, with the name of the
+it. iets then keeps the count in the tracing store, with the name of the
 SCM and the revision as the key, and the next run at that revision starts
 no count (`docs/explanation/caching.md`). Nix keeps the count by revision
 too (git.cc:getRevCount).
 
 **Deprecated:** `revCount`. The count is expensive, a shallow clone has
-none, and each commit changes it. ietsp plans to remove the attribute. A
+none, and each commit changes it. iets plans to remove the attribute. A
 read gives the warning `rev-count` (`docs/reference/lints.md`). Use
 `lastModifiedDate` and `shortRev` for a version string.
 
@@ -107,7 +107,7 @@ Two things follow from that, and both are the point:
 - **Untracked files behave as git says.** Reading one fails with Nix's own
   "Path '...' in the repository ... is not tracked by Git" error,
   `pathExists` says `false`, and `readDir` does not list it. The tracked
-  file set is the filter, so ietsp and Nix disagree about nothing here.
+  file set is the filter, so iets and Nix disagree about nothing here.
 
 The flake's own `flake.nix` is imported under its store path, so positions,
 `./x` path literals and `readDir` see exactly what Nix sees.
@@ -152,8 +152,8 @@ An input is locked, so its store path is known before anything happens. It
 still has to become readable. Four steps run in order, and the first that
 works wins.
 
-**0. The input store.** If ietsp has fetched this tree before, it is
-already in `~/.cache/ietsp/inputs`, keyed by the store path the lock
+**0. The input store.** If iets has fetched this tree before, it is
+already in `~/.cache/iets/inputs`, keyed by the store path the lock
 implies. Two `open` calls, no network, no daemon, no store. Why this is safe
 without a signature is in [caching.md](caching.md).
 
@@ -165,11 +165,11 @@ it marks such an input `__final` and substitutes its store path first.
 
 An expression cannot reach that path in Nix, because `builtins.fetchTree`
 rejects a `__final` input and the internal primop that would do it is absent
-from `builtins`. So ietsp substitutes the tree itself. A local copy beats a
+from `builtins`. So iets substitutes the tree itself. A local copy beats a
 download, which is why this comes before the fetcher. When no daemon
 answers, the step is skipped silently.
 
-This step is also what makes ietsp agree with `nix eval` on a locked `git`
+This step is also what makes iets agree with `nix eval` on a locked `git`
 input that a substituter holds but the fetcher cannot reach. Nix's git
 fetcher raises `Cannot find Git revision '<rev>' in ref '<ref>'` whenever
 the fetch of the rev fails and a stale local ref swallows the failure; the
@@ -180,8 +180,8 @@ it replaced (0.49 s cold), plus 0.05 s once for the connection.
 The connection goes to the *eval* store — `nix.conf`'s `store`, never the
 `builder` setting. A remote builder has no say in what `import` reads.
 
-**2. The archive types, fetched by ietsp.** `github`, `gitlab`, `sourcehut`
-and `tarball` are one download and one index, so ietsp does them itself.
+**2. The archive types, fetched by iets.** `github`, `gitlab`, `sourcehut`
+and `tarball` are one download and one index, so iets does them itself.
 The URLs and headers are the ones Nix builds, the access token comes from
 `nix.conf`'s `access-tokens` matched the way Nix matches it, and the four
 compressions libarchive would autodetect — gzip, xz, zstd, bzip2 — are
@@ -205,16 +205,16 @@ stripped, but only when it is the only entry at the top. Anything else — a
 device node, a `..` in a name, a member under a symlink — is an error.
 
 **3. `git` and `hg`, the last shell-out.** These need a repository, which
-ietsp cannot clone. It runs
+iets cannot clone. It runs
 `nix eval --raw --impure --expr '(builtins.fetchTree <locked attrs>).outPath'`
 and then checks that the path `nix` reports is the one the lock implies, so
 a difference in the file set is an error rather than a silent divergence.
-When no `nix` other than ietsp itself is on `PATH`, the error says so and
+When no `nix` other than iets itself is on `PATH`, the error says so and
 names the command to run first.
 
 `file` inputs are not in this set, for a specific reason: a `file` input's
 store path is the *flat* hash of the bytes under the input's name, which
-the lock's `narHash` does not give. ietsp cannot say where the file belongs
+the lock's `narHash` does not give. iets cannot say where the file belongs
 before it has it, so the type stays unsupported.
 
 ## What a remote root flake would need
@@ -230,11 +230,11 @@ The download itself exists. Four parts do not:
    index keeps no modification times.
 3. **A flake reference is assumed to be a local directory** in three
    places: the lock file is read from disk, the root tree is copied from a
-   local directory, and both the cache key and the `ietsp.toml` walk read
+   local directory, and both the cache key and the `iets.toml` walk read
    the directory. A root in the input store needs a third kind of source.
 4. **An unlocked reference must first resolve to a revision**, which needs
    the forge API per scheme, `tarball-ttl`, and the flake registries. A
-   `git` reference needs a git fetcher, which ietsp has not got.
+   `git` reference needs a git fetcher, which iets has not got.
 
 Items 1 to 3 would make a *locked* `github:`, `gitlab:` or tarball root
 work. Item 4 is what most command lines actually need.
@@ -261,11 +261,11 @@ Against real Nix, on a NixOS flake with 31 locked inputs and a devShell:
 | run | wall |
 |---|---|
 | `nix eval --raw --option eval-cache false` | 4.28 s |
-| `ietsp eval --raw --no-tracing-cache` | 0.49 s |
-| `ietsp eval --raw`, cache miss | 0.56 s |
-| `ietsp eval --raw`, cache hit | 0.02 s |
+| `iets eval --raw --no-tracing-cache` | 0.49 s |
+| `iets eval --raw`, cache miss | 0.56 s |
+| `iets eval --raw`, cache hit | 0.02 s |
 
-The same flake's whole NixOS system configuration: `nix` 7.21 s, ietsp
+The same flake's whole NixOS system configuration: `nix` 7.21 s, iets
 1.27 s uncached.
 
 ## What the cache records

@@ -1,9 +1,9 @@
 #!/usr/bin/env nu
-# Runs tests/lang/eval-okay-*.nix and eval-fail-*.nix against ietsp, from
+# Runs tests/lang/eval-okay-*.nix and eval-fail-*.nix against iets, from
 # the tests/ directory like Nix's own harness (paths print as /pwd/lang/...).
 # Exits nonzero on a failure that tests/lang/expected-failures.txt does not
 # list, and on a listed case that starts passing.
-use lib.nu [chomp exit-code flags-of glob-sorted ietsp-bin]
+use lib.nu [chomp exit-code flags-of glob-sorted iets-bin]
 
 def expected-failures []: nothing -> list<string> {
   let f = "lang/expected-failures.txt"
@@ -13,7 +13,7 @@ def expected-failures []: nothing -> list<string> {
 
 def main [] {
   cd ($env.FILE_PWD | path join "..")
-  let ietsp = (ietsp-bin)
+  let iets = (iets-bin)
   $env.HOME = "/fake-home"
   $env.TEST_VAR = "foo" # for eval-okay-getenv.nix
   cd tests
@@ -26,7 +26,7 @@ def main [] {
   for f in (glob-sorted lang/eval-okay-*.nix) {
     let n = ($f | str replace -r '\.nix$' '')
     if not ($"($n).exp" | path exists) { continue }
-    let r = (^$ietsp eval --strict ...(flags-of $n) $f | complete)
+    let r = (^$iets eval --strict ...(flags-of $n) $f | complete)
     let out = ($r.stdout | str replace -a $pwd "/pwd" | chomp)
     if $out == (open --raw $"($n).exp" | chomp) {
       $pass += 1
@@ -38,7 +38,7 @@ def main [] {
   }
   for f in (glob-sorted lang/eval-fail-*.nix) {
     let n = ($f | str replace -r '\.nix$' '')
-    let rc = (exit-code $ietsp eval --strict ...(flags-of $n) $f)
+    let rc = (exit-code $iets eval --strict ...(flags-of $n) $f)
     let base = ($n | path basename)
     if $rc == 0 {
       $fail += 1

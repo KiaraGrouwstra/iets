@@ -1,6 +1,6 @@
 //! `--max-memory-size`: nix-eval-jobs's worker restarts. The main process
 //! runs one collector thread per `--workers`, each driving a worker
-//! process (`ietsp eval-jobs --worker ...`) through a line protocol; a
+//! process (`iets eval-jobs --worker ...`) through a line protocol; a
 //! worker whose peak RSS crosses the limit finishes its instantiation
 //! batch, says `restart`, and the collector spawns a fresh one.
 //!
@@ -165,7 +165,7 @@ impl Proc {
         let mut child = Command::new(exe)
             .arg("eval-jobs")
             .arg("--worker")
-            .env("IETSP_SESSION_ID", crate::log::session_id())
+            .env("IETS_SESSION_ID", crate::log::session_id())
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

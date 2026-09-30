@@ -1,4 +1,4 @@
-warning: [unknown-allow] unknown lint 'url-literl' in `# ietsp: allow`
-  at /pwd/lint/unknown-allow.nix:1:16
-warning: [unknown-allow] unknown lint 'nope' in `# ietsp: allow`
-  at /pwd/lint/unknown-allow.nix:2:35
+warning: [unknown-allow] unknown lint 'url-literl' in `# iets: allow`
+  at /pwd/lint/unknown-allow.nix:1:15
+warning: [unknown-allow] unknown lint 'nope' in `# iets: allow`
+  at /pwd/lint/unknown-allow.nix:2:34

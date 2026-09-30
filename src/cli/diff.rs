@@ -1,4 +1,4 @@
-//! `ietsp diff A B`: what differs between two derivations (docs/reference/commands.md).
+//! `iets diff A B`: what differs between two derivations (docs/reference/commands.md).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -76,7 +76,7 @@ fn parse(argv: &[String]) -> (Opts, Vec<Side>) {
                     .unwrap_or_else(|_| arg_error(format!("--depth wants a number, got '{v}'")));
             }
             "-E" | "--expr" => expr = Some(next()),
-            // a synonym for the positional side, as for 'ietsp eval'
+            // a synonym for the positional side, as for 'iets eval'
             "-f" | "--file" => pos.push(next()),
             _ if s.starts_with('-') && s != "-" => unknown_flag(s),
             _ => pos.push(s.to_string()),
@@ -235,7 +235,7 @@ fn closure(
             let e = Error::Store(format!("'{path}' is not in the store"));
             return Err(Error::Hint(
                 e.into(),
-                format!("build it first: ietsp build {p}"),
+                format!("build it first: iets build {p}"),
             ));
         };
         let (n, v) = name_version(base_name(&path));

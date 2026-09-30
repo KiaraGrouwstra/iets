@@ -1,11 +1,11 @@
 #!/usr/bin/env nu
-# Runs nix-eval-jobs and ietsp eval-jobs with every supported flag
+# Runs nix-eval-jobs and iets eval-jobs with every supported flag
 # combination on the small jobsets in tests/evaljobs/ and diffs the sorted
 # output: `jq -S` per line, sorted by attrPath, error text replaced by
 # `true`. Also compares the exit codes and, with --gc-roots-dir, the roots.
 #
 # usage: scripts/evaljobs-flags.nu          # NEJ=~/tmp/nej/bin/nix-eval-jobs
-use lib.nu [ROOT diff-head ietsp-bin isolate nixpkgs require-real-nix run-in show]
+use lib.nu [ROOT diff-head iets-bin isolate nixpkgs require-real-nix run-in show]
 
 # `jq -S` per line, error text replaced by true, sorted.
 def norm []: string -> list<string> {
@@ -24,38 +24,38 @@ def gc-roots [dir: string]: nothing -> list<string> { ls $dir | get name | path 
 def check [ctx: record, name: string, args: list<string>]: nothing -> bool {
   let work = $ctx.work
   let nargs = ($args | each { str replace -a GCROOTS $"($work)/($name).nej-gc" })
-  let iargs = ($args | each { str replace -a GCROOTS $"($work)/($name).ietsp-gc" })
-  mkdir $"($work)/($name).nej-gc" $"($work)/($name).ietsp-gc"
+  let iargs = ($args | each { str replace -a GCROOTS $"($work)/($name).iets-gc" })
+  mkdir $"($work)/($name).nej-gc" $"($work)/($name).iets-gc"
   let stdin = (open --raw ($env.STDIN? | default "/dev/null"))
   let n = ($stdin | nej $ctx ...$nargs | complete)
-  let i = ($stdin | ^($ctx.ietsp) eval-jobs ...$iargs | complete)
+  let i = ($stdin | ^($ctx.iets) eval-jobs ...$iargs | complete)
   let nn = ($n.stdout | norm)
   let ii = ($i.stdout | norm)
   let nr = (gc-roots $"($work)/($name).nej-gc")
-  let ir = (gc-roots $"($work)/($name).ietsp-gc")
+  let ir = (gc-roots $"($work)/($name).iets-gc")
   if $n.exit_code == $i.exit_code and $nn == $ii and $nr == $ir {
     print $"ok   ($name) \(($nn | length) lines, exit ($n.exit_code)\)"
     true
   } else {
-    print $"FAIL ($name) \(exit nej=($n.exit_code) ietsp=($i.exit_code)\)"
+    print $"FAIL ($name) \(exit nej=($n.exit_code) iets=($i.exit_code)\)"
     $nn | str join "\n" | save -f $"($work)/($name).nej.norm"
-    $ii | str join "\n" | save -f $"($work)/($name).ietsp.norm"
+    $ii | str join "\n" | save -f $"($work)/($name).iets.norm"
     $nr | str join "\n" | save -f $"($work)/($name).nej.roots"
-    $ir | str join "\n" | save -f $"($work)/($name).ietsp.roots"
-    diff-head $"($work)/($name).nej.norm" $"($work)/($name).ietsp.norm" ($env.SHOW? | default 6 | into int) | show
-    diff-head $"($work)/($name).nej.roots" $"($work)/($name).ietsp.roots" 4 | show
+    $ir | str join "\n" | save -f $"($work)/($name).iets.roots"
+    diff-head $"($work)/($name).nej.norm" $"($work)/($name).iets.norm" ($env.SHOW? | default 6 | into int) | show
+    diff-head $"($work)/($name).nej.roots" $"($work)/($name).iets.roots" 4 | show
     $i.stderr | lines | last 3 | show
     false
   }
 }
 
-# chunks NAME ARGS: ietsp in two chunks against one nix-eval-jobs run.
+# chunks NAME ARGS: iets in two chunks against one nix-eval-jobs run.
 def chunks [ctx: record, name: string, args: list<string>]: nothing -> bool {
   let work = $ctx.work
   let n = (nej $ctx ...$args | complete)
-  let i0 = (^($ctx.ietsp) eval-jobs --chunks 2 --chunk 0 ...$args | complete)
+  let i0 = (^($ctx.iets) eval-jobs --chunks 2 --chunk 0 ...$args | complete)
   let i = if $i0.exit_code == 0 {
-    let i1 = (^($ctx.ietsp) eval-jobs --chunks 2 --chunk 1 ...$args | complete)
+    let i1 = (^($ctx.iets) eval-jobs --chunks 2 --chunk 1 ...$args | complete)
     { stdout: ($i0.stdout + $i1.stdout), exit_code: $i1.exit_code }
   } else {
     $i0
@@ -66,10 +66,10 @@ def chunks [ctx: record, name: string, args: list<string>]: nothing -> bool {
     print $"ok   ($name) \(($nn | length) lines\)"
     true
   } else {
-    print $"FAIL ($name) \(exit nej=($n.exit_code) ietsp=($i.exit_code)\)"
+    print $"FAIL ($name) \(exit nej=($n.exit_code) iets=($i.exit_code)\)"
     $nn | str join "\n" | save -f $"($work)/($name).nej.norm"
-    $ii | str join "\n" | save -f $"($work)/($name).ietsp.norm"
-    diff-head $"($work)/($name).nej.norm" $"($work)/($name).ietsp.norm" 6 | show
+    $ii | str join "\n" | save -f $"($work)/($name).iets.norm"
+    diff-head $"($work)/($name).nej.norm" $"($work)/($name).iets.norm" 6 | show
     false
   }
 }
@@ -77,24 +77,24 @@ def chunks [ctx: record, name: string, args: list<string>]: nothing -> bool {
 # expect-fail NAME ARGS: both tools must exit non-zero.
 def expect-fail [ctx: record, name: string, args: list<string>]: nothing -> bool {
   let nrc = (nej $ctx ...$args | complete | get exit_code)
-  let irc = (^($ctx.ietsp) eval-jobs ...$args | complete | get exit_code)
+  let irc = (^($ctx.iets) eval-jobs ...$args | complete | get exit_code)
   if $nrc != 0 and $irc != 0 {
     print $"ok   ($name) \(both fail\)"
     true
   } else {
-    print $"FAIL ($name) \(exit nej=($nrc) ietsp=($irc)\)"
+    print $"FAIL ($name) \(exit nej=($nrc) iets=($irc)\)"
     false
   }
 }
 
 # session: every internal-json record of one run, the workers' `trace:`
-# lines and the main process's summary, carries one `sid`; IETSP_SESSION_ID
-# sets it (docs/reference/errors.md). ietsp only: nix-eval-jobs has no such field.
+# lines and the main process's summary, carries one `sid`; IETS_SESSION_ID
+# sets it (docs/reference/errors.md). iets only: nix-eval-jobs has no such field.
 def session [ctx: record]: nothing -> bool {
   let e = '{ a = builtins.trace "a" (derivation { name = "a"; system = "x"; builder = ":"; }); b = builtins.trace "b" (derivation { name = "b"; system = "x"; builder = ":"; }); }'
-  let sids = {|| ^($ctx.ietsp) eval-jobs --workers 2 --no-instantiate --log-format internal-json --expr $e | complete | get stderr | lines | where ($it | str starts-with "@nix ") | each { str substring 5.. | from json | get -o sid } }
+  let sids = {|| ^($ctx.iets) eval-jobs --workers 2 --no-instantiate --log-format internal-json --expr $e | complete | get stderr | lines | where ($it | str starts-with "@nix ") | each { str substring 5.. | from json | get -o sid } }
   let own = (do $sids)
-  let given = (with-env {IETSP_SESSION_ID: "run-42"} { do $sids })
+  let given = (with-env {IETS_SESSION_ID: "run-42"} { do $sids })
   let ok = ($own | length) == 3 and ($own | uniq | length) == 1 and ($own.0 =~ '^[0-9a-f]{8}-[0-9a-f]{4}-7') and ($given | uniq) == ["run-42"]
   if $ok { print "ok   session (3 records, one sid)" } else { print $"FAIL session: own ($own | to json -r), given ($given | to json -r)" }
   $ok
@@ -104,23 +104,23 @@ def session [ctx: record]: nothing -> bool {
 # with the reason, from the main process only; `--max-jobs` holds, since
 # nothing is built, and `--quiet` works (docs/reference/divergences.md).
 def ignored [ctx: record]: nothing -> bool {
-  let r = (^($ctx.ietsp) eval-jobs --workers 2 --verbose --debug --verbose --max-jobs 1 --quiet --no-instantiate ci.nix | complete)
+  let r = (^($ctx.iets) eval-jobs --workers 2 --verbose --debug --verbose --max-jobs 1 --quiet --no-instantiate ci.nix | complete)
   let warned = ($r.stderr | lines | where ($it | str starts-with "warning: "))
-  let want = ["--verbose" "--debug"] | each {|f| $"warning: '($f)' is ignored: ietsp has one log level, the one Nix starts at" }
+  let want = ["--verbose" "--debug"] | each {|f| $"warning: '($f)' is ignored: iets has one log level, the one Nix starts at" }
   let ok = $r.exit_code == 0 and $warned == $want
   if $ok { print "ok   ignored (one warning per flag, with the reason)" } else { print $"FAIL ignored: ($r.stderr)" }
   $ok
 }
 
-# options: `--ietsp-option` leaves the argv before any command sees it, so
+# options: `--iets-option` leaves the argv before any command sees it, so
 # the collector must put it back on the argv of every worker process.
 # `cache-dir` shows it: only a worker that read the setting makes the
-# directory. ietsp only: nix-eval-jobs has no such flag.
+# directory. iets only: nix-eval-jobs has no such flag.
 def options [ctx: record]: nothing -> bool {
   let dir = $"($ctx.work)/opt-cache"
-  let r = (^($ctx.ietsp) eval-jobs --ietsp-option cache-dir $dir --workers 2 --no-instantiate ci.nix | complete)
+  let r = (^($ctx.iets) eval-jobs --iets-option cache-dir $dir --workers 2 --no-instantiate ci.nix | complete)
   let ok = $r.exit_code == 0 and ($dir | path exists)
-  if $ok { print "ok   options (--ietsp-option reaches the workers)" } else { print $"FAIL options: exit ($r.exit_code), ($dir) ($dir | path exists): ($r.stderr)" }
+  if $ok { print "ok   options (--iets-option reaches the workers)" } else { print $"FAIL options: exit ($r.exit_code), ($dir) ($dir | path exists): ($r.stderr)" }
   $ok
 }
 
@@ -200,7 +200,7 @@ def main [] {
   let nej = ($env.NEJ? | default $"($env.HOME)/tmp/nej/bin/nix-eval-jobs")
   require-real-nix $nej
   let ctx = {
-    ietsp: (ietsp-bin)
+    iets: (iets-bin)
     work: (isolate evaljobs-flags)
     nej: $nej
   }

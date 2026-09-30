@@ -1,9 +1,9 @@
 # The syntax tree as JSON
 
-The output of `ietsp parse --json`: the kinds of node, their fields and
+The output of `iets parse --json`: the kinds of node, their fields and
 their spans. Code: `src/syntax/dump.rs`.
 
-`ietsp parse --json FILE...` prints one line for each file that parses.
+`iets parse --json FILE...` prints one line for each file that parses.
 The line is one JSON object:
 
 ```json
@@ -18,7 +18,7 @@ The line is one JSON object:
 A file that does not parse gives no line. Its error goes to stderr and the
 exit code is 1 (`docs/reference/commands.md`).
 
-The text form of `ietsp parse` and the JSON form come from one walk of the
+The text form of `iets parse` and the JSON form come from one walk of the
 tree. The two forms show the same nodes.
 
 ## Nodes
@@ -79,7 +79,7 @@ is the name after `@`, or `null`.
 
 ```
 $ printf 'a: a.b or 1' > t.nix
-$ ietsp parse --json t.nix
+$ iets parse --json t.nix
 {"file":"t.nix","root":{"kind":"lambda","start":0,"end":11,"arg":"a","formals":null,"ellipsis":false,"body":{"kind":"select","start":3,"end":11,"subject":{"kind":"var","start":3,"end":4,"name":"a"},"path":["b"],"default":{"kind":"int","start":10,"end":11,"value":1}}}}
 ```
 
@@ -106,5 +106,5 @@ reads the tree must ignore a key that it does not know.
 - A span of a `binary`, `select`, `has-attr` or `apply` node starts where
   its first operand starts. Thus some nodes have the same `start`.
 - Text that is not UTF-8 has the replacement character U+FFFD for each
-  incorrect sequence. The text form of `ietsp parse` shows the bytes.
+  incorrect sequence. The text form of `iets parse` shows the bytes.
 - A `float` that JSON cannot show (infinity) has the value `null`.

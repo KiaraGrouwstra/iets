@@ -1,4 +1,4 @@
-//! Classic mode: ietsp installed under Nix's own command names, with an exec
+//! Classic mode: iets installed under Nix's own command names, with an exec
 //! fallback to the real binary for everything it does not implement.
 //! See `docs/reference/classic.md`.
 
@@ -20,7 +20,7 @@ use crate::eval::{EvalConfig, EvalResult, Evaluator, Pos};
 use crate::remote::worker::{DEFAULT_SOCKET, Options, Transport};
 use crate::runtime::Word;
 
-/// The command names ietsp answers to when it is installed as classic Nix.
+/// The command names iets answers to when it is installed as classic Nix.
 pub const NAMES: &[&str] = &[
     "nix-instantiate",
     "nix-build",
@@ -41,23 +41,23 @@ pub fn dispatch(name: &str, argv: &[String]) -> i32 {
     }
 }
 
-/// Execs the real `name` with the same arguments. `IETSP_NO_FALLBACK=1` makes
+/// Execs the real `name` with the same arguments. `IETS_NO_FALLBACK=1` makes
 /// this an error instead, so a test can see which cases fall back.
 pub fn fallback(name: &str, argv: &[String], reason: &str) -> ! {
-    crate::log::line(&format!("ietsp: falling back to {name}: {reason}"));
+    crate::log::line(&format!("iets: falling back to {name}: {reason}"));
     if crate::session::Session::current().settings().no_fallback {
-        crate::log::line(&format!("ietsp: no-fallback is set, not running {name}"));
+        crate::log::line(&format!("iets: no-fallback is set, not running {name}"));
         exit(1)
     }
     let Some(real) = crate::nixbin::real(name) else {
-        eprintln!("ietsp: cannot fall back to {name}: not found on PATH");
+        eprintln!("iets: cannot fall back to {name}: not found on PATH");
         exit(1)
     };
     let e = Command::new(&real)
         .arg0(name)
         .args(argv.iter().map(|a| crate::argv::os(a)))
         .exec();
-    eprintln!("ietsp: cannot exec '{}': {e}", real.display());
+    eprintln!("iets: cannot exec '{}': {e}", real.display());
     exit(1)
 }
 
@@ -132,7 +132,7 @@ pub fn transport_of(store: &str, system: &str) -> Result<Transport, String> {
                 .ok_or_else(|| format!("cannot parse the store URL '{s}'"))
         }
         s => Err(format!(
-            "store '{s}' is not supported; ietsp speaks the worker protocol and grpc:// only"
+            "store '{s}' is not supported; iets speaks the worker protocol and grpc:// only"
         )),
     }
 }

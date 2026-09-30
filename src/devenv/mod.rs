@@ -1,4 +1,4 @@
-//! `ietsp print-dev-env`: the shell environment of a derivation, computed as
+//! `iets print-dev-env`: the shell environment of a derivation, computed as
 //! `nix print-dev-env` (src/nix/develop.cc, Nix 2.34.8) computes it. This module
 //! holds the pure parts: the `-env` derivation, the JSON `get-env.sh` writes,
 //! and the bash `makeRcScript` prints. The daemon flow lives in `main.rs`.
@@ -508,7 +508,7 @@ pub const WATCH_MAX: usize = 500;
 
 /// What direnv can watch of a read set, in the order the run read it: the
 /// files, directory listings and path kinds outside `skip` (the Nix store and
-/// ietsp's own stores, which do not change), and the file an SCM names for
+/// iets's own stores, which do not change), and the file an SCM names for
 /// its queries. A tree that lies inside another tree is a path the expression
 /// copied, so its members follow. An outermost tree is the flake's source,
 /// which every edit changes and few shells depend on: only what the run read
@@ -729,7 +729,7 @@ mod tests {
     #[test]
     fn watch_paths_keeps_what_direnv_can_watch() {
         use crate::trace::{Filtered, Obs};
-        let d = std::env::temp_dir().join(format!("ietsp-watch-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("iets-watch-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         for sub in [".git", "src/keep", "src/drop"] {
             std::fs::create_dir_all(d.join(sub)).unwrap();

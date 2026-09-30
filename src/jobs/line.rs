@@ -1,5 +1,5 @@
 //! One nix-eval-jobs output line: a job or an error. Keys are byte-sorted
-//! like nlohmann's `std::map`; values ietsp never inspects stay raw JSON so
+//! like nlohmann's `std::map`; values iets never inspects stay raw JSON so
 //! a line survives a round trip through a worker pipe unchanged.
 
 use std::collections::BTreeMap;

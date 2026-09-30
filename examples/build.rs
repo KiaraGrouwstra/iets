@@ -3,23 +3,23 @@
 //!
 //! `cargo run --example build -- [--builder URL] [-I prefix=path]... [-A attr] (-E EXPR | FILE)`
 //!
-//! Uses the library only (`ietsp::api`), never `ietsp::cli`.
+//! Uses the library only (`iets::api`), never `iets::cli`.
 
 use std::collections::HashMap;
 
-use ietsp::api::installable::drv_roots;
-use ietsp::api::{self, EvalArgs, Input};
-use ietsp::build::render::Style;
-use ietsp::build::upload::PlanUpload;
-use ietsp::build::{Dispatcher, Target};
-use ietsp::eval::Evaluator;
-use ietsp::remote::{plan, worker};
-use ietsp::store::locate::locate_in_store;
-use ietsp::store::path::StorePath;
+use iets::api::installable::drv_roots;
+use iets::api::{self, EvalArgs, Input};
+use iets::build::render::Style;
+use iets::build::upload::PlanUpload;
+use iets::build::{Dispatcher, Target};
+use iets::eval::Evaluator;
+use iets::remote::{plan, worker};
+use iets::store::locate::locate_in_store;
+use iets::store::path::StorePath;
 
 fn main() -> std::process::ExitCode {
     // a frontend owns the run state and says where messages go
-    let session = ietsp::session::Session::new();
+    let session = iets::session::Session::new();
     session.log.write_to_stderr();
     let _entered = session.enter();
     let mut url = "daemon".to_string();
@@ -44,7 +44,7 @@ fn main() -> std::process::ExitCode {
     }
 
     // a setting that does not resolve is reported already
-    let Ok(run) = ietsp::api::run::Run::new(&a) else {
+    let Ok(run) = iets::api::run::Run::new(&a) else {
         return std::process::ExitCode::from(1);
     };
     let r = run.go(move |ev, _| eval_and_build(ev, a, url));
@@ -65,7 +65,7 @@ fn eval_and_build(ev: &mut Evaluator, a: EvalArgs, url: String) -> u8 {
     }
     // `--out` would add wanted outputs; the roots' string context is enough here.
     let (root_paths, outputs) = api::build_targets(&[], &roots);
-    let prov = ietsp::provenance::Provenance::snapshot(ev);
+    let prov = iets::provenance::Provenance::snapshot(ev);
 
     // Every derivation and source this evaluation created, straight from
     // memory: the plan reads `/nix/store` only for what it did not create.

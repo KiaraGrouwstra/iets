@@ -1,4 +1,4 @@
-//! The `ietsp` command line: argument parsing shared by the subcommands and
+//! The `iets` command line: argument parsing shared by the subcommands and
 //! one module per subcommand. Everything that is not about parsing a command
 //! line lives in `crate::api`.
 
@@ -55,7 +55,7 @@ pub fn eval_flag(
 ) -> Result<bool, String> {
     match s {
         "-I" | "--include" => f.includes.push(parse_include(&next()?)),
-        // `-IP=PATH` is ietsp's own spelling: Nix's short-flag clustering
+        // `-IP=PATH` is iets's own spelling: Nix's short-flag clustering
         // reads it as `-I -f -o -o …` and refuses it, so a classic name
         // must too (docs/reference/commands.md)
         _ if s.starts_with("-I") && s.len() > 2 && help::command().is_some() => {
@@ -223,7 +223,7 @@ pub fn parse_lint_scope(v: &str) -> crate::lint::Scope {
         .unwrap_or_else(|| arg_error(format!("--lint-scope {v}: use root or all")))
 }
 
-/// `ietsp lint list [--lint SELECTOR=LEVEL]... [--lint-root DIR]...
+/// `iets lint list [--lint SELECTOR=LEVEL]... [--lint-root DIR]...
 /// [--lint-scope root|all] [PATH]`: the registry with the levels a run
 /// from `PATH` (default: cwd) would use.
 pub fn cmd_lint(argv: &[String]) -> i32 {
@@ -284,7 +284,7 @@ pub fn run_reported<T: Send + 'static>(
 }
 
 fn stacks<R>(e: crate::parallel::fiber::StackError) -> R {
-    crate::log::line(&format!("ietsp: {e}"));
+    crate::log::line(&format!("iets: {e}"));
     std::process::exit(1)
 }
 

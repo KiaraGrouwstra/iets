@@ -17,7 +17,7 @@ pub struct Emitter {
     pub stats: Stats,
     /// A fatal error line was seen: nix-eval-jobs stops with exit 1.
     pub fatal: bool,
-    /// The reader closed the pipe (`ietsp eval-jobs | head`). Nothing more
+    /// The reader closed the pipe (`iets eval-jobs | head`). Nothing more
     /// is written; the frontend stops with exit 0.
     pub closed: bool,
 }

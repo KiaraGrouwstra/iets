@@ -622,7 +622,7 @@ fn derivation_strict_internal(
 
     // A text-addressed output is a `.drv`, so `builtins.outputOf` may read
     // this derivation back. Nix reads it from the store, which it has written
-    // by then; ietsp writes nothing during an evaluation, so the ATerm of a
+    // by then; iets writes nothing during an evaluation, so the ATerm of a
     // producer is kept whatever the flags say. There are as many of these as
     // there are dynamic derivations, which is none in nixpkgs.
     let produces_drv = ingestion_method == Some(IngestionMethod::Text);
@@ -824,7 +824,7 @@ fn output_of(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         "while evaluating the second argument to builtins.outputOf",
     )?;
     let name = utf8(name, pos)?;
-    // eval.cc:coerceToSingleDerivedPathUnchecked. `Impure` is ietsp's own mark
+    // eval.cc:coerceToSingleDerivedPathUnchecked. `Impure` is iets's own mark
     // and is no part of what Nix counts.
     let elems: Vec<&Ctx> = (s.ctx.iter())
         .filter(|c| !matches!(c, Ctx::Impure(_)))

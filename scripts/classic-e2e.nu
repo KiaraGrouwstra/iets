@@ -7,7 +7,7 @@
 #
 # usage: nu scripts/classic-e2e.nu
 #        BIN=target/debug nu scripts/classic-e2e.nu
-use lib.nu [chomp current-system isolate ietsp-bin make-farm nixpkgs real-bin-dir require-real-nix scratch-daemon show verdict]
+use lib.nu [chomp current-system isolate iets-bin make-farm nixpkgs real-bin-dir require-real-nix scratch-daemon show verdict]
 
 def --wrapped run-both [farm: string, name: string, --cwd: string = ".", ...args: string] {
   let ours = (^$"($farm)/($name)" ...$args | complete)
@@ -39,7 +39,7 @@ def cmp-case [label: string, r: record]: nothing -> bool {
 }
 
 # The first level-0 `--log-format internal-json` error record on stderr, with
-# the fields both sides fill alike: Nix colours raw_msg, ietsp does not.
+# the fields both sides fill alike: Nix colours raw_msg, iets does not.
 def err-record [stderr: string]: nothing -> record {
   let recs = ($stderr | lines | where ($it | str starts-with "@nix ") | each { str substring 5.. | from json })
   let r = ($recs | where {|r| $r.level? == 0 and ($r.raw_msg? != null) } | get -o 0 | default {})
@@ -63,7 +63,7 @@ def cmp-record [label: string, code: string, r: record]: nothing -> bool {
 # The structure of a build's activity records: the starts and stops of the
 # daemon worker's realise, builds and copy-paths activities and of each
 # build, in order, and which result types each activity type got. Ids,
-# timings, texts, the substituter queries and ietsp's own upload ("copying N
+# timings, texts, the substituter queries and iets's own upload ("copying N
 # paths", which has a text) are left out.
 def act-shape [stderr: string]: nothing -> record {
   let recs = ($stderr | lines | where ($it | str starts-with "@nix ") | each { str substring 5.. | from json })
@@ -105,7 +105,7 @@ def cmp-env [label: string, r: record]: nothing -> bool {
 def fallback-reason [farm: string, cmd: list<string>]: nothing -> string {
   let name = ($cmd | first)
   let args = ($cmd | skip 1)
-  (with-env {IETSP_NO_FALLBACK: "1"} { ^$"($farm)/($name)" ...$args | complete }).stderr
+  (with-env {IETS_NO_FALLBACK: "1"} { ^$"($farm)/($name)" ...$args | complete }).stderr
 }
 
 # The tracing cache under the `nix` name (docs/reference/classic.md). The
@@ -114,7 +114,7 @@ def fallback-reason [farm: string, cmd: list<string>]: nothing -> string {
 # trace line and a hit does not, which is the only way to tell them apart,
 # because a hit prints what the evaluation printed. Each command in COMMANDS
 # goes through the same steps: cold, hit, an edit, another lock, `--impure`
-# with a variable that changes, and `--override-input`, which is not ietsp's.
+# with a variable that changes, and `--override-input`, which is not iets's.
 def cache-cases [farm: string, tmp: string, np: string, sys: string]: nothing -> list<bool> {
   let cc = $"($tmp)/cc"
   mkdir $"($cc)/flake" $"($cc)/tbA" $"($cc)/tbB"
@@ -163,7 +163,7 @@ def cache-cases [farm: string, tmp: string, np: string, sys: string]: nothing ->
     {name: "nix develop", args: [develop], attr: "", tail: [-c sh -c "echo \"$val\""], value: {|r| $r.stdout }}
   ]
   let ran = {|r| $r.stderr | str contains "trace: EVALUATED" }
-  $env.IETSP_CACHE_DIR = $"($cc)/cache"
+  $env.IETS_CACHE_DIR = $"($cc)/cache"
   for c in $commands {
     let one = {|flags: list<string>| ^$"($farm)/nix" ...$c.args ...$flags $"($ref)($c.attr)" ...$c.tail | complete }
     let entries = {|| try { ls $"($cc)/cache/trace" | where type == dir | length } catch { 0 } }
@@ -178,7 +178,7 @@ def cache-cases [farm: string, tmp: string, np: string, sys: string]: nothing ->
     $res ++= [((cmp-case $"($c.name): a hit prints what nix prints" {ours: $hit, real: $real})
       and (verdict ((not (do $ran $hit)) and ($hit.stdout | into binary) == ($cold.stdout | into binary))
         $"($c.name): the second run is a hit with the same bytes" $"stderr ($hit.stderr | str substring 0..300)"))]
-    # `stamp` is what `tree-meta-in-drv` reports under the ietsp names
+    # `stamp` is what `tree-meta-in-drv` reports under the iets names
     $res ++= [(verdict (not (($cold.stderr + $hit.stderr) | str contains "warning: ["))
       $"($c.name): no lint under a classic name" $"stderr ($cold.stderr | str substring 0..300)")]
     # a flag or a setting with no effect has none on a hit either, so the
@@ -238,25 +238,25 @@ def cache-cases [farm: string, tmp: string, np: string, sys: string]: nothing ->
   let shell = (^$"($farm)/nix" develop $ref -c true | complete)
   $res ++= [(verdict ((not (do $ran $shell)) and $shell.exit_code == 0 and (do $roots) == 1)
     "nix develop: a hit keeps the root" $"((do $roots)) roots, stderr ($shell.stderr | str substring 0..200)")]
-  hide-env IETSP_CACHE_DIR
+  hide-env IETS_CACHE_DIR
   $res
 }
 
 def main [] {
   require-real-nix nix nix-instantiate nix-build nix-shell
-  let ietsp = (ietsp-bin)
+  let iets = (iets-bin)
   let tmp = (isolate classic-e2e)
   let np = (nixpkgs)
   let real = (real-bin-dir)
   print $"real nix: ($real)"
-  $env.IETSP_NIX_BIN_DIR = $real
-  let farm = (make-farm $ietsp $tmp)
+  $env.IETS_NIX_BIN_DIR = $real
+  let farm = (make-farm $iets $tmp)
   mut ok = []
 
   # --- the builtins surface: the same names Nix has ----------------------------
   # Under a classic name the three builtins Nix gates on an experimental feature
   # are gated here too (`builtins::exposed`), so the sets are equal whatever the
-  # features are. ietsp's own commands keep every feature on, which is the
+  # features are. iets's own commands keep every feature on, which is the
   # documented divergence (docs/reference/divergences.md).
   for mode in ["--impure" "--pure-eval"] {
     for feats in ["" "dynamic-derivations" "dynamic-derivations fetch-closure fetch-tree"] {
@@ -520,7 +520,7 @@ in { aDrv = a.drvPath; bDrv = b.drvPath; aOut = a.outPath; bOut = b.outPath; }
   let wd = $"($tmp)/build-builder"
   mkdir $wd
   cd $wd
-  let r = (with-env {IETSP_CONFIG: $'builder = "unix://($sock)"'} {
+  let r = (with-env {IETS_CONFIG: $'builder = "unix://($sock)"'} {
     ^$"($farm)/nix-build" $"($d)/builder.nix" | complete
   })
   let printed = ($r.stdout | chomp)
@@ -540,30 +540,30 @@ in { aDrv = a.drvPath; bDrv = b.drvPath; aOut = a.outPath; bOut = b.outPath; }
   # --- fallbacks
   $ok = ($ok | append (cmp-case "--parse execs the real nix-instantiate"
     (run-both $farm nix-instantiate --parse -E 1)))
-  # `--ietsp-option` is ours: the fallback must exec nix without it.
-  $ok = ($ok | append (cmp-case "--ietsp-option never reaches the fallback nix" {
-    ours: (^$"($farm)/nix-instantiate" --ietsp-option workers 2 --parse -E 1 | complete),
+  # `--iets-option` is ours: the fallback must exec nix without it.
+  $ok = ($ok | append (cmp-case "--iets-option never reaches the fallback nix" {
+    ours: (^$"($farm)/nix-instantiate" --iets-option workers 2 --parse -E 1 | complete),
     real: (^nix-instantiate --parse -E 1 | complete)
   }))
   let fb = (^$"($farm)/nix-instantiate" --parse -E 1 | complete)
-  $ok = ($ok | append (verdict ($fb.stderr | str contains "ietsp: falling back to nix-instantiate:")
+  $ok = ($ok | append (verdict ($fb.stderr | str contains "iets: falling back to nix-instantiate:")
     "the fallback prints one line on stderr" $"stderr was '($fb.stderr)'"))
 
-  let nofb = (with-env {IETSP_NO_FALLBACK: "1"} { ^$"($farm)/nix-instantiate" --parse -E 1 | complete })
-  $ok = ($ok | append (verdict ($nofb.exit_code == 1) "IETSP_NO_FALLBACK=1 exits 1" $"exit ($nofb.exit_code)"))
+  let nofb = (with-env {IETS_NO_FALLBACK: "1"} { ^$"($farm)/nix-instantiate" --parse -E 1 | complete })
+  $ok = ($ok | append (verdict ($nofb.exit_code == 1) "IETS_NO_FALLBACK=1 exits 1" $"exit ($nofb.exit_code)"))
 
-  # nix-bin-dir naming a farm of ietsp's own classic names: every candidate is
-  # ietsp, so the fallback must stop instead of exec'ing ietsp again
+  # nix-bin-dir naming a farm of iets's own classic names: every candidate is
+  # iets, so the fallback must stop instead of exec'ing iets again
   let loop_dir = $"($tmp)/loop"
   mkdir $"($loop_dir)/bin"
-  for n in [nix-instantiate nix-build nix-eval-jobs nix-shell nix] { ^ln -sf $ietsp $"($loop_dir)/bin/($n)" }
+  for n in [nix-instantiate nix-build nix-eval-jobs nix-shell nix] { ^ln -sf $iets $"($loop_dir)/bin/($n)" }
   let timeout_bin = (which timeout | get 0.path)
-  let looped = (with-env {IETSP_NIX_BIN_DIR: $"($loop_dir)/bin", PATH: $"($loop_dir)/bin"} {
+  let looped = (with-env {IETS_NIX_BIN_DIR: $"($loop_dir)/bin", PATH: $"($loop_dir)/bin"} {
     ^$timeout_bin 20 $"($farm)/nix-instantiate" --parse -E 1 | complete
   })
   $ok = ($ok | append (verdict
     ($looped.exit_code == 1 and ($looped.stderr | str contains "cannot fall back to nix-instantiate: not found on PATH"))
-    "nix-bin-dir full of ietsp: the fallback stops, it does not loop"
+    "nix-bin-dir full of iets: the fallback stops, it does not loop"
     $"exit ($looped.exit_code), stderr ($looped.stderr | str substring 0..300)"))
 
   # a write that fails on stdout: `nix eval` reports it and exits 1, the
@@ -579,24 +579,24 @@ in { aDrv = a.drvPath; bDrv = b.drvPath; aOut = a.outPath; bOut = b.outPath; }
       $"($case.label): ours ($ours), real ($real), want ($case.want)"))
   }
   for c in [[version], [parse, $"($d)/multi.nix"], [--help], [lint, list]] {
-    let code = (do $full ([$ietsp] ++ $c))
-    $ok = ($ok | append (verdict ($code == 1) $"ietsp ($c | str join ' ') > /dev/full reports, not aborts" $"exit ($code)"))
+    let code = (do $full ([$iets] ++ $c))
+    $ok = ($ok | append (verdict ($code == 1) $"iets ($c | str join ' ') > /dev/full reports, not aborts" $"exit ($code)"))
   }
 
-  # an ietsp.toml with a mistake in it stops a command that reads a setting,
+  # an iets.toml with a mistake in it stops a command that reads a setting,
   # and not `version` or the help, which read none
   let badconf = $"($tmp)/badconf"
-  mkdir $"($badconf)/ietsp"
-  "bogus = 1\n" | save -f $"($badconf)/ietsp/ietsp.toml"
+  mkdir $"($badconf)/iets"
+  "bogus = 1\n" | save -f $"($badconf)/iets/iets.toml"
   for case in [{args: [version], want: 0} {args: [--help], want: 0} {args: [eval, -E, "1"], want: 1}] {
-    let r = (with-env {XDG_CONFIG_HOME: $badconf} { ^$ietsp ...$case.args | complete })
+    let r = (with-env {XDG_CONFIG_HOME: $badconf} { ^$iets ...$case.args | complete })
     $ok = ($ok | append (verdict ($r.exit_code == $case.want)
-      $"a bad ietsp.toml and 'ietsp ($case.args | str join ' ')'"
+      $"a bad iets.toml and 'iets ($case.args | str join ' ')'"
       $"exit ($r.exit_code), want ($case.want): ($r.stderr)"))
   }
   # the log format is read before anything can fail, so an early error is a record
   let rec = (with-env {XDG_CONFIG_HOME: $badconf} {
-    ^$ietsp eval --log-format internal-json -E "1" | complete })
+    ^$iets eval --log-format internal-json -E "1" | complete })
   $ok = ($ok | append (verdict ($rec.stderr | str starts-with "@nix ")
     "an early error is a record under internal-json" $"stderr ($rec.stderr | str substring 0..200)"))
 
@@ -609,9 +609,9 @@ in { aDrv = a.drvPath; bDrv = b.drvPath; aOut = a.outPath; bOut = b.outPath; }
   let ifd = $"import \(derivation { name = \"x\"; system = builtins.currentSystem; builder = \"/bin/sh\"; args = [\"-c\" \"echo 42 > $out\"]; })"
   $ok = ($ok | append (cmp-case "import from derivation falls back"
     (run-both $farm nix-instantiate --eval -E $ifd)))
-  let r = (^$ietsp eval -E $ifd | complete)
+  let r = (^$iets eval -E $ifd | complete)
   $ok = ($ok | append (verdict ($r.exit_code == 1 and ($r.stderr | str contains "import from derivation is not supported"))
-    "ietsp eval refuses import from derivation" $"exit ($r.exit_code), stderr '($r.stderr)'"))
+    "iets eval refuses import from derivation" $"exit ($r.exit_code), stderr '($r.stderr)'"))
 
   # --- a file name that is not UTF-8
   let ff = $"($tmp)/ff"
@@ -620,13 +620,13 @@ in { aDrv = a.drvPath; bDrv = b.drvPath; aOut = a.outPath; bOut = b.outPath; }
   let real_ff = (with-ff $ff nix-instantiate --eval)
   $ok = ($ok | append (cmp-case "instantiate --eval a non-UTF-8 file name"
     {ours: (with-ff $ff $"($farm)/nix-instantiate" --eval), real: $real_ff}))
-  $ok = ($ok | append (cmp-case "ietsp eval a non-UTF-8 file name"
-    {ours: (with-ff $ff $ietsp eval), real: $real_ff}))
+  $ok = ($ok | append (cmp-case "iets eval a non-UTF-8 file name"
+    {ours: (with-ff $ff $iets eval), real: $real_ff}))
   $ok = ($ok | append (cmp-case "a non-UTF-8 file name reaches the fallback intact"
     {ours: (with-ff $ff $"($farm)/nix-instantiate" --parse), real: (with-ff $ff nix-instantiate --parse)}))
 
   let repl = (^$"($farm)/nix" repl --version | complete)
-  $ok = ($ok | append (verdict ($repl.stderr | str contains "ietsp: falling back to nix:")
+  $ok = ($ok | append (verdict ($repl.stderr | str contains "iets: falling back to nix:")
     "the 'nix' name falls back" $"stderr was '($repl.stderr)'"))
 
   # --- the `nix` name: a locked flake with no inputs, copied out of the
@@ -648,7 +648,7 @@ in { aDrv = a.drvPath; bDrv = b.drvPath; aOut = a.outPath; bOut = b.outPath; }
 
   let pf = (run-both $farm nix flake prefetch-inputs $fref)
   $ok = ($ok | append ((cmp-case "nix flake prefetch-inputs, no inputs" $pf) and (verdict (not ($pf.ours.stderr | str contains "falling back"))
-    "nix flake prefetch-inputs is ietsp's own" $"stderr '($pf.ours.stderr)'")))
+    "nix flake prefetch-inputs is iets's own" $"stderr '($pf.ours.stderr)'")))
 
   # the farm first on PATH: copying a fresh tree must spawn the real nix, not us
   let fdir2 = $"($tmp)/flake-fresh"
@@ -660,12 +660,12 @@ in { aDrv = a.drvPath; bDrv = b.drvPath; aOut = a.outPath; bOut = b.outPath; }
   let real = (^nix eval --json $"path:($fdir2)#x" | complete)
   $ok = ($ok | append (cmp-case "nix eval, farm first on PATH, fresh tree" {ours: $ours, real: $real}))
 
-  # the farm shadows the real nix out of PATH and no IETSP_NIX_BIN_DIR is set:
+  # the farm shadows the real nix out of PATH and no IETS_NIX_BIN_DIR is set:
   # the fallback must find nix through the farm's own marker
   let shadow = $"($tmp)/shadow"
   mkdir $shadow
   ^ln -sf (which bash | get 0.path) $"($shadow)/bash"
-  let ours = (with-env { PATH: $"($farm):($shadow)", IETSP_NIX_BIN_DIR: null } { ^$"($farm)/nix-instantiate" --parse -E "1 + 1" | complete })
+  let ours = (with-env { PATH: $"($farm):($shadow)", IETS_NIX_BIN_DIR: null } { ^$"($farm)/nix-instantiate" --parse -E "1 + 1" | complete })
   let real = (^nix-instantiate --parse -E "1 + 1" | complete)
   $ok = ($ok | append (cmp-case "fallback through the farm marker, real nix off PATH" {ours: $ours, real: $real}))
   $ok = ($ok | append (cmp-case "nix eval .#pkg (a derivation)"
@@ -722,7 +722,7 @@ in { aDrv = a.drvPath; bDrv = b.drvPath; aOut = a.outPath; bOut = b.outPath; }
       (with-env $case.env { run-both $farm nix eval ...$case.args -f $"($d)/multi.nix" outputs })))
   }
   # `-j` and `--cores` set a setting, so the value is checked as one; the
-  # clustered `-IP=PATH` is ietsp's own spelling and Nix refuses it
+  # clustered `-IP=PATH` is iets's own spelling and Nix refuses it
   for args in [[-j 4294967296] [--cores 4294967296] [-j auto] [--cores 1K] [-j 2] [-Ifoo=/etc]] {
     $ok = ($ok | append (cmp-case $"instantiate ($args | str join ' ')"
       (run-both $farm nix-instantiate ...($args | each { into string }) --eval -E "1")))
@@ -730,8 +730,8 @@ in { aDrv = a.drvPath; bDrv = b.drvPath; aOut = a.outPath; bOut = b.outPath; }
   # the classic name is nix-eval-jobs, which says nothing on stderr
   let nej = (^$"($farm)/nix-eval-jobs" --no-instantiate -E "{ }" | complete)
   $ok = ($ok | append (verdict ($nej.stderr | is-empty) "nix-eval-jobs prints no summary" $"stderr '($nej.stderr)'"))
-  let own = (^$ietsp eval-jobs --no-instantiate -E "{ }" | complete)
-  $ok = ($ok | append (verdict ($own.stderr | str contains "eval-jobs: ") "ietsp eval-jobs keeps its summary" $"stderr '($own.stderr)'"))
+  let own = (^$iets eval-jobs --no-instantiate -E "{ }" | complete)
+  $ok = ($ok | append (verdict ($own.stderr | str contains "eval-jobs: ") "iets eval-jobs keeps its summary" $"stderr '($own.stderr)'"))
   # a value Nix refuses stops the run with Nix's own text and exit 1; the
   # unit prefix and the words `auto` and `relaxed` are accepted
   let err1 = {|s: string| $s | ansi strip | lines | where ($it | str starts-with "error:") | get -o 0 | default "" }
@@ -753,7 +753,7 @@ in { aDrv = a.drvPath; bDrv = b.drvPath; aOut = a.outPath; bOut = b.outPath; }
     (run-both $farm nix eval --expr "{ f = x: x; p = builtins.add; q = builtins.add 1; }")))
 
   # --- symlinks below a store path the evaluation copied. Nix reads such a
-  # path out of the store copy, where a link resolves inside the copy; ietsp
+  # path out of the store copy, where a link resolves inside the copy; iets
   # reads the local tree the copy stands for, so it must resolve on the text
   # of the path instead (docs/explanation/flakes-and-sources.md).
   let sl = $"($tmp)/symlinks"
@@ -804,14 +804,14 @@ in { aDrv = a.drvPath; bDrv = b.drvPath; aOut = a.outPath; bOut = b.outPath; }
   ] {
     $ok = ($ok | append (cmp-case $"auto-call a function file, ($case.label): nix-instantiate"
       (run-both $farm nix-instantiate --eval ...$case.args $fun -A $case.attr)))
-    $ok = ($ok | append (cmp-case $"auto-call a function file, ($case.label): ietsp eval"
-      {ours: (^$ietsp eval ...$case.args $fun -A $case.attr | complete),
+    $ok = ($ok | append (cmp-case $"auto-call a function file, ($case.label): iets eval"
+      {ours: (^$iets eval ...$case.args $fun -A $case.attr | complete),
        real: (^nix eval ...$case.args -f $fun $case.attr | complete)}))
     # formals with `...` are handed every argument, named or not
     $ok = ($ok | append (cmp-case $"auto-call a '...' function file, ($case.label): nix-instantiate"
       (run-both $farm nix-instantiate --eval ...$case.args --arg extra 9 $ell -A $case.attr)))
-    $ok = ($ok | append (cmp-case $"auto-call a '...' function file, ($case.label): ietsp eval"
-      {ours: (^$ietsp eval ...$case.args --arg extra 9 $ell -A $case.attr | complete),
+    $ok = ($ok | append (cmp-case $"auto-call a '...' function file, ($case.label): iets eval"
+      {ours: (^$iets eval ...$case.args --arg extra 9 $ell -A $case.attr | complete),
        real: (^nix eval ...$case.args --arg extra 9 -f $ell $case.attr | complete)}))
   }
   # a required formal nobody supplied: all three fail the same way
@@ -819,7 +819,7 @@ in { aDrv = a.drvPath; bDrv = b.drvPath; aOut = a.outPath; bOut = b.outPath; }
   '{ a, b ? 2 }: { sum = a + b; }' | save -f $na
   let first = {|s: string| $s | ansi strip | lines | where ($it | str starts-with "error:") | get -o 0 | default "" }
   let na_real = (^nix eval -f $na sum | complete)
-  let na_eval = (^$ietsp eval $na -A sum | complete)
+  let na_eval = (^$iets eval $na -A sum | complete)
   let na_inst = (^$"($farm)/nix-instantiate" --eval $na -A sum | complete)
   let na_lines = [(do $first $na_real.stderr) (do $first $na_eval.stderr) (do $first $na_inst.stderr)]
   $ok = ($ok | append (verdict
@@ -896,52 +896,52 @@ in
   $ok = ($ok | append (cmp-record "internal-json: nix eval, missing attribute" missing-attr
     (run-both $farm nix eval ...$json --expr "{ a = 1; }.b")))
   # A daemon client nix exits 1 on any failed build, and so do the classic
-  # names; `ietsp build` exits with the build status (docs/reference/errors.md).
+  # names; `iets build` exits with the build status (docs/reference/errors.md).
   let fail = 'derivation { name = "classic-e2e-fail"; system = "x86_64-linux"; builder = "/bin/sh"; args = [ "-c" "echo oops; exit 3" ]; }'
   $ok = ($ok | append (cmp-record "internal-json: a failed build" build-failed
     (run-both $farm nix-build ...$json --no-out-link -E $fail)))
   let fod = 'derivation { name = "classic-e2e-fod"; system = "x86_64-linux"; builder = "/bin/sh"; args = [ "-c" "echo hi > $out" ]; outputHashMode = "flat"; outputHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; }'
   $ok = ($ok | append (cmp-record "internal-json: a hash mismatch" hash-mismatch
     (run-both $farm nix-build ...$json --no-out-link -E $fod)))
-  let bf = (^$ietsp build -E $fail | complete)
-  $ok = ($ok | append (verdict ($bf.exit_code == 100) "ietsp build: a failed build exits 100" $"exit ($bf.exit_code)"))
+  let bf = (^$iets build -E $fail | complete)
+  $ok = ($ok | append (verdict ($bf.exit_code == 100) "iets build: a failed build exits 100" $"exit ($bf.exit_code)"))
   # a successful build's block ends with its ✔: nothing follows it
   let okdrv = ('derivation { name = "classic-e2e-order"; system = "x86_64-linux"; builder = "/bin/sh"; args = [ "-c" "echo from-the-builder; echo x > $out" ]; salt = "SALT"; }' | str replace SALT (random uuid))
-  let ob = (^$ietsp build -E $okdrv | complete)
+  let ob = (^$iets build -E $okdrv | complete)
   let olines = ($ob.stderr | ansi strip | lines)
   let at = {|pat: string| $olines | enumerate | where {|r| $r.item | str contains $pat } | get -o 0.index }
   let ilog = (do $at "from-the-builder")
   let iok = (do $at "✔")
   $ok = ($ok | append (verdict ($ob.exit_code == 0 and $ilog != null and $iok != null and $ilog < $iok)
-    "ietsp build: the ✔ is the last line of a successful block" $"exit ($ob.exit_code), stderr ($ob.stderr)"))
-  let hm = (^$ietsp build ...$json -E $fod | complete)
+    "iets build: the ✔ is the last line of a successful block" $"exit ($ob.exit_code), stderr ($ob.stderr)"))
+  let hm = (^$iets build ...$json -E $fod | complete)
   $ok = ($ok | append (verdict ($hm.exit_code == 102 and ($hm.stderr | str contains '"hint":"set the expected hash to '))
-    "ietsp build: a hash mismatch exits 102 and names the hash" $"exit ($hm.exit_code), stderr '($hm.stderr | str substring 0..400)'"))
+    "iets build: a hash mismatch exits 102 and names the hash" $"exit ($hm.exit_code), stderr '($hm.stderr | str substring 0..400)'"))
   # every record of the run, activity records included, has the one sid
   let hm_recs = ($hm.stderr | lines | where ($it | str starts-with "@nix ") | each { str substring 5.. | from json })
   let hm_sids = ($hm_recs | get -o sid | uniq)
   $ok = ($ok | append (verdict (($hm_recs | where action == start | length) > 0 and ($hm_sids | length) == 1 and ($hm_recs | all { $in.sid? != null }))
-    "ietsp build: every record, activities too, has one sid" $"sids ($hm_sids | to json -r)"))
+    "iets build: every record, activities too, has one sid" $"sids ($hm_sids | to json -r)"))
   # fix-hashes: the fake hash in the file becomes the one the build got, and the rebuild succeeds
   mkdir $"($d)/fix"
   $"{ pkg = ($fod); }\n" | save -f $"($d)/fix/default.nix"
-  let fx = (do { cd $"($d)/fix"; ^$ietsp --ietsp-option fix-hashes always build ./default.nix -A pkg | complete })
+  let fx = (do { cd $"($d)/fix"; ^$iets --iets-option fix-hashes always build ./default.nix -A pkg | complete })
   let fixed = (open --raw $"($d)/fix/default.nix")
   $ok = ($ok | append (verdict ($fx.exit_code == 0 and not ($fixed | str contains "AAAAAAAA") and ($fx.stderr | str contains "fixed: "))
-    "ietsp build with fix-hashes: rewrites the hash and builds" $"exit ($fx.exit_code), file '($fixed)', stderr '($fx.stderr | str substring 0..400)'"))
+    "iets build with fix-hashes: rewrites the hash and builds" $"exit ($fx.exit_code), file '($fixed)', stderr '($fx.stderr | str substring 0..400)'"))
   # the default asks, and with no terminal nobody can answer: the file stays
   $"{ pkg = ($fod); }\n" | save -f $"($d)/fix/default.nix"
-  let fa = (do { cd $"($d)/fix"; ^$ietsp build ./default.nix -A pkg | complete })
+  let fa = (do { cd $"($d)/fix"; ^$iets build ./default.nix -A pkg | complete })
   $ok = ($ok | append (verdict ($fa.exit_code == 102 and (open --raw $"($d)/fix/default.nix" | str contains "AAAAAAAA"))
-    "ietsp build without a terminal: fix-hashes asks nobody, the file stays" $"exit ($fa.exit_code)"))
+    "iets build without a terminal: fix-hashes asks nobody, the file stays" $"exit ($fa.exit_code)"))
   # a fixed-output derivation with an input derivation is built as a resolved
   # copy, whose mismatch the daemon reports as a line, not as the build's result
   let fodin = ('derivation { name = "classic-e2e-fod-in"; system = "x86_64-linux"; builder = "/bin/sh"; args = [ "-c" "echo hi > $out" ]; dep = derivation { name = "classic-e2e-fod-dep"; system = "x86_64-linux"; builder = "/bin/sh"; args = [ "-c" "echo SALT > $out" ]; }; outputHashMode = "flat"; outputHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; }' | str replace SALT (random uuid))
   $"{ pkg = ($fodin); }\n" | save -f $"($d)/fix/default.nix"
-  let fr = (do { cd $"($d)/fix"; ^$ietsp --ietsp-option fix-hashes always build ./default.nix -A pkg | complete })
+  let fr = (do { cd $"($d)/fix"; ^$iets --iets-option fix-hashes always build ./default.nix -A pkg | complete })
   let frfile = (open --raw $"($d)/fix/default.nix")
   $ok = ($ok | append (verdict ($fr.exit_code == 0 and not ($frfile | str contains "AAAAAAAA") and ($fr.stderr | str contains "fixed: "))
-    "ietsp build with fix-hashes: a resolved derivation's mismatch is fixed too" $"exit ($fr.exit_code), file '($frfile)', stderr '($fr.stderr | str substring 0..600)'"))
+    "iets build with fix-hashes: a resolved derivation's mismatch is fixed too" $"exit ($fr.exit_code), file '($frfile)', stderr '($fr.stderr | str substring 0..600)'"))
 
   # --- activity records: a build's stream has the shape of Nix's, and nom reads it
   let act = {|| 'derivation { name = "classic-e2e-act"; system = "x86_64-linux"; builder = "/bin/sh"; args = [ "-c" "echo top; echo $0 > $out" (derivation { name = "classic-e2e-act-dep"; system = "x86_64-linux"; builder = "/bin/sh"; args = [ "-c" "echo dep; echo x > $out" ]; salt = "SALT"; }) ]; }' | str replace SALT (random uuid) }
@@ -962,14 +962,14 @@ in
   } else { [$"cannot build nom: ($nom.stderr | str substring 0..400)"] }
   for s in $seen {
     $ok = ($ok | append (verdict ((not ($s | str contains "nix-output-monitor error")) and ($s | str contains "classic-e2e-act-dep") and ($s | str contains "Finished at"))
-      "nom --json reads ietsp's activity records" $"nom said '($s | str substring (-600)..)'"))
+      "nom --json reads iets's activity records" $"nom said '($s | str substring (-600)..)'"))
   }
 
   # --- the roots a build keeps. `--no-out-link` and `--no-link` ask for no
-  # symlink; nix then lets the output go, and ietsp keeps a root in its roots
+  # symlink; nix then lets the output go, and iets keeps a root in its roots
   # store instead (docs/reference/divergences.md) — a side effect on the
   # daemon, so stdout and the exit code still match nix's byte for byte.
-  # Native `ietsp build` roots every path it prints, for the same reason: the
+  # Native `iets build` roots every path it prints, for the same reason: the
   # caller uses those paths after the run.
   let brdrv = ('derivation { name = "classic-e2e-noout"; system = "@SYS@"; builder = "/bin/sh"; args = [ "-c" "echo x > $out" ]; salt = "SALT"; }' | str replace SALT (random uuid) | str replace -a "@SYS@" (current-system))
   let brdir = $"($tmp)/noout"
@@ -980,7 +980,7 @@ in
     {label: "nix build --no-link --print-out-paths", name: "nix", args: [build --no-link --print-out-paths --expr]}
   ] {
     let cache = $"($tmp)/broots-($case.name)"
-    let r = (with-env {IETSP_CACHE_DIR: $cache} { run-both $farm $case.name ...$case.args $brdrv })
+    let r = (with-env {IETS_CACHE_DIR: $cache} { run-both $farm $case.name ...$case.args $brdrv })
     $ok = ($ok | append (cmp-case $case.label $r))
     let links = (try { ls $"($cache)/roots" | get name | sort } catch { [] })
     let link = ($links | get -o 0 | default "")
@@ -990,35 +990,35 @@ in
       $"($case.label) keeps a root instead of nothing" $"($links | length) links, '($link)' -> '($target)', held ($held), printed ($r.ours.stdout | chomp)"))
   }
   let broff = $"($tmp)/broots-off"
-  let nbo = (with-env {IETSP_CACHE_DIR: $broff} { ^$"($farm)/nix-build" --ietsp-option build-gc-root false --no-out-link -E $brdrv | complete })
+  let nbo = (with-env {IETS_CACHE_DIR: $broff} { ^$"($farm)/nix-build" --iets-option build-gc-root false --no-out-link -E $brdrv | complete })
   $ok = ($ok | append (verdict ($nbo.exit_code == 0 and (not ($"($broff)/roots" | path exists)))
     "build-gc-root = false keeps no root, as in nix" $"exit ($nbo.exit_code), stderr ($nbo.stderr | str substring 0..200)"))
   let nvcache = $"($tmp)/broots-native"
-  let nv = (with-env {IETSP_CACHE_DIR: $nvcache} { ^$ietsp build -E $brdrv | complete })
+  let nv = (with-env {IETS_CACHE_DIR: $nvcache} { ^$iets build -E $brdrv | complete })
   let nvlinks = (try { ls $"($nvcache)/roots" | get name } catch { [] })
   let nvtarget = (if (($nvlinks | length) == 1) { ^readlink ($nvlinks | first) | chomp } else { "" })
   $ok = ($ok | append (verdict ($nv.exit_code == 0 and $nvtarget == ($nv.stdout | chomp))
-    "ietsp build roots the path it printed" $"exit ($nv.exit_code), ($nvlinks | length) links -> '($nvtarget)', printed ($nv.stdout | chomp)"))
+    "iets build roots the path it printed" $"exit ($nv.exit_code), ($nvlinks | length) links -> '($nvtarget)', printed ($nv.stdout | chomp)"))
   cd $tmp
 
-  # --- ietsp build --dry-run: nix build --dry-run's text, and the same sets as JSON
+  # --- iets build --dry-run: nix build --dry-run's text, and the same sets as JSON
   let dry = (do $act)
   let dr = (^nix build --dry-run --expr $dry | complete)
-  let dj = (^$ietsp build --dry-run --json -E $dry | complete)
+  let dj = (^$iets build --dry-run --json -E $dry | complete)
   let plan = ($dj.stdout | from json)
   $ok = ($ok | append (verdict ($dj.exit_code == 0 and $dj.stderr == $dr.stderr and ($plan.willBuild | length) == 2 and ($dr.stderr | str contains ($plan.willBuild | str join "\n  ")))
-    "ietsp build --dry-run: nix build --dry-run's text, and the plan as JSON" $"exit ($dj.exit_code)\n  real: ($dr.stderr)\n  ours: ($dj.stderr)\n  json: ($dj.stdout)"))
+    "iets build --dry-run: nix build --dry-run's text, and the plan as JSON" $"exit ($dj.exit_code)\n  real: ($dr.stderr)\n  ours: ($dj.stderr)\n  json: ($dj.stdout)"))
 
   # --- json-log-path: stderr stays text, the file gets the same records unprefixed
   let jlog = {|f| {stderr: (open --raw $f | lines | each {|l| $"@nix ($l)" } | str join "\n")} }
   let jo = (^$"($farm)/nix" eval --option json-log-path $"($d)/jlog-ours" --expr "{ a = 1; }.b" | complete)
-  let jr = (^$"($env.IETSP_NIX_BIN_DIR)/nix" eval --option json-log-path $"($d)/jlog-real" --expr "{ a = 1; }.b" | complete)
+  let jr = (^$"($env.IETS_NIX_BIN_DIR)/nix" eval --option json-log-path $"($d)/jlog-real" --expr "{ a = 1; }.b" | complete)
   $ok = ($ok | append (cmp-record "json-log-path: the file holds the error record" missing-attr
     {ours: ({exit_code: $jo.exit_code} | merge (do $jlog $"($d)/jlog-ours")),
      real: ({exit_code: $jr.exit_code} | merge (do $jlog $"($d)/jlog-real"))}))
   $ok = ($ok | append (verdict ($jo.stderr | str starts-with "error: attribute 'b' missing")
     "json-log-path: stderr stays text" $"stderr '($jo.stderr | str substring 0..200)'"))
-  let jb = (^$ietsp build --json-log-path $"($d)/jlog-build" -E (do $act) | complete)
+  let jb = (^$iets build --json-log-path $"($d)/jlog-build" -E (do $act) | complete)
   let jrecs = (open --raw $"($d)/jlog-build" | lines | each { from json })
   $ok = ($ok | append (verdict ($jb.exit_code == 0 and ($jrecs | where {|r| $r.action == "start" and $r.type? == 105 } | length) == 2 and not ($jb.stderr | str contains "@nix"))
     "json-log-path: the file gets a build's activity records, stderr stays text" $"exit ($jb.exit_code), stderr '($jb.stderr | str substring 0..300)'"))
@@ -1029,7 +1029,7 @@ in
   let recs = {|stderr, code| $stderr | lines | where ($it | str starts-with "@nix ") | each { str substring 5.. | from json } | where code? == $code }
   let once = {|stderr, text| ($stderr | lines | where ($it | str contains $text) | length) == 1 }
   let vb = (run-both $farm nix-instantiate --eval -v --verbose -E "1 + 1")
-  $ok = ($ok | append ((cmp-case "nix-instantiate -v --verbose" $vb) and (verdict (do $once $vb.ours.stderr "warning: '--verbose' is ignored: ietsp has one log level")
+  $ok = ($ok | append ((cmp-case "nix-instantiate -v --verbose" $vb) and (verdict (do $once $vb.ours.stderr "warning: '--verbose' is ignored: iets has one log level")
     "-v is one warning with the reason" $"stderr '($vb.ours.stderr)'")))
   let ncdir = $"($tmp)/flake-nixconfig"
   mkdir $ncdir
@@ -1037,8 +1037,8 @@ in
   "{\n  nixConfig.extra-substituters = [ \"https://cache.invalid\" ];\n  outputs = { self }: { x = 1; };\n}\n" | save $"($ncdir)/flake.nix"
   let ac = (run-both $farm nix eval --accept-flake-config --eval-store auto --eval-store auto $"path:($ncdir)#x")
   $ok = ($ok | append ((cmp-case "nix eval --accept-flake-config --eval-store auto, a flake with a nixConfig" $ac)
-    and (verdict ((do $once $ac.ours.stderr "'--accept-flake-config' is ignored: ietsp never applies a flake's nixConfig")
-        and (do $once $ac.ours.stderr "'--eval-store' is ignored: ietsp evaluates in memory")
+    and (verdict ((do $once $ac.ours.stderr "'--accept-flake-config' is ignored: iets never applies a flake's nixConfig")
+        and (do $once $ac.ours.stderr "'--eval-store' is ignored: iets evaluates in memory")
         and not ($ac.ours.stderr | str contains "falling back"))
       "--accept-flake-config and --eval-store auto are one warning each, with the reason" $"stderr '($ac.ours.stderr)'")))
   let aj = (^$"($farm)/nix" eval --log-format internal-json --accept-flake-config --expr "1" | complete)
@@ -1056,7 +1056,7 @@ in
   $ok = ($ok | append ((cmp-case "a nix.conf with the settings of a fork changes nothing" $fk)
     and (verdict ($fk.ours.stderr == $fk.real.stderr and (do $once $fk.real.stderr "unknown setting 'lazy-trees'"))
       "each of them is Nix's own unknown-setting warning, once" $"ours '($fk.ours.stderr)' real '($fk.real.stderr)'")))
-  let fj = (with-env {NIX_USER_CONF_FILES: $fconf} { ^$ietsp eval --log-format internal-json --option eval-cores 4 -E "1" | complete })
+  let fj = (with-env {NIX_USER_CONF_FILES: $fconf} { ^$iets eval --log-format internal-json --option eval-cores 4 -E "1" | complete })
   let fjr = (do $recs $fj.stderr "unknown-setting")
   $ok = ($ok | append (verdict ($fj.stdout == "1\n" and ($fjr | get raw_msg) == ["unknown setting 'eval-cores'" "unknown setting 'lazy-trees'"] and ($fjr | all { $in.level == 1 }))
     "an unknown setting is a level-1 unknown-setting record, once per name" $"stderr '($fj.stderr)'"))
@@ -1067,15 +1067,15 @@ in
   $ok = ($ok | append ((cmp-case "accept-flake-config = true in NIX_CONFIG" $afc)
     and (verdict ((do $once $afc.ours.stderr "setting 'accept-flake-config' is ignored:") and (do $once $afc.ours.stderr "setting 'log-lines' is ignored:")
         and ($afc.ours.stderr | lines | length) == 2)
-      "a client setting ietsp has nothing for is one warning; a default and one that holds are none" $"stderr '($afc.ours.stderr)'")))
+      "a client setting iets has nothing for is one warning; a default and one that holds are none" $"stderr '($afc.ours.stderr)'")))
   let re = [nix-instantiate --eval -E "builtins.readFile /etc/hostname" --option restrict-eval "true"]
   $ok = ($ok | append ((cmp-case "restrict-eval is left to the real nix" (run-both $farm ($re | first) ...($re | skip 1)))
     and (verdict ((fallback-reason $farm $re) | str contains "the setting 'restrict-eval' is not implemented")
       "restrict-eval falls back" (fallback-reason $farm $re))))
-  let ns = (^$ietsp eval --log-format internal-json --option build-use-sandbox false --option eval-cache false -E "1" | complete)
+  let ns = (^$iets eval --log-format internal-json --option build-use-sandbox false --option eval-cache false -E "1" | complete)
   let nsr = (do $recs $ns.stderr "ignored-setting")
-  $ok = ($ok | append (verdict ($ns.stdout == "1\n" and ($nsr | length) == 1 and ($nsr.0.raw_msg | str starts-with "setting 'sandbox' is ignored: ietsp's own commands send a daemon no settings"))
-    "ietsp eval --option sandbox: one ignored-setting record" $"stderr '($ns.stderr)'"))
+  $ok = ($ok | append (verdict ($ns.stdout == "1\n" and ($nsr | length) == 1 and ($nsr.0.raw_msg | str starts-with "setting 'sandbox' is ignored: iets's own commands send a daemon no settings"))
+    "iets eval --option sandbox: one ignored-setting record" $"stderr '($ns.stderr)'"))
 
   # --- the daemon gets the store settings of the command line, as from Nix
   let slow = $"($tmp)/slow.nix"
@@ -1121,11 +1121,11 @@ in
   }
   $ok = ($ok | append (verdict $same "nix build .#pkg --print-out-paths -o result-x" "see above"))
 
-  # `nix print-dev-env` is `ietsp print-dev-env`, so only the dispatch is new.
+  # `nix print-dev-env` is `iets print-dev-env`, so only the dispatch is new.
   let pde_nix = (^$"($farm)/nix" print-dev-env $"($fref)#pkg" | complete)
   let pde_own = (^(^readlink -f $"($farm)/nix" | chomp) print-dev-env $"($fref)#pkg" | complete)
   $ok = ($ok | append (verdict (($pde_nix.stdout == $pde_own.stdout) and ($pde_nix.exit_code == $pde_own.exit_code))
-    "nix print-dev-env is ietsp print-dev-env" $"exit ($pde_nix.exit_code) vs ($pde_own.exit_code)"))
+    "nix print-dev-env is iets print-dev-env" $"exit ($pde_nix.exit_code) vs ($pde_own.exit_code)"))
 
   # --- nix derivation show: the derivation JSON of Nix 2.34.8, byte for byte.
   # Nothing here is built; the fixed-output case carries a hash no build matches.
@@ -1180,12 +1180,12 @@ in {
   }
   let miss = (run-both $farm nix derivation show -f $depshow nope)
   $ok = ($ok | append (cmp-case "derivation show an installable that does not exist" $miss))
-  # only the first line: nix adds a "Did you mean" line that ietsp has nowhere
+  # only the first line: nix adds a "Did you mean" line that iets has nowhere
   # (docs/reference/classic.md).
   $ok = ($ok | append (verdict (($miss.ours.stderr | lines | get -o 0) == ($miss.real.stderr | lines | get -o 0))
     "derivation show an installable that does not exist: the same error line"
     $"ours '($miss.ours.stderr)' real '($miss.real.stderr)'"))
-  # ietsp answers from the derivations the evaluation holds, so the store does
+  # iets answers from the derivations the evaluation holds, so the store does
   # not gain the `.drv` the real nix registers (docs/reference/divergences.md).
   let saltshow = $"($tmp)/show-salt.nix"
   ('derivation { name = "classic-e2e-show-salt"; system = "x86_64-linux"; builder = "/bin/sh"; args = [ "-c" "true" ]; salt = "SALT"; }' | str replace SALT (random uuid)) | save -f $saltshow
@@ -1198,7 +1198,7 @@ in {
     $"($sp): ours left it ($before), real left it ($sp | path exists)"))
   for f in [[--stdin] [/nix/store/00000000000000000000000000000000-x.drv]] {
     let why = (fallback-reason $farm ([nix derivation show] | append $f))
-    $ok = ($ok | append (verdict ($why | str contains "ietsp: falling back to nix:")
+    $ok = ($ok | append (verdict ($why | str contains "iets: falling back to nix:")
       $"derivation show ($f | str join ' ') falls back" $"stderr was '($why)'"))
   }
 
@@ -1271,7 +1271,7 @@ in derivation {
   let ssock = (scratch-daemon $sstore --option substituters "" --option builders "")
   let sscratch = $"local?root=($sstore)"
   let scache = $"($tmp)/shellroots"
-  let senv = {IETSP_CACHE_DIR: $scache, NIX_BUILD_SHELL: (^bash -c 'command -v bash' | chomp)}
+  let senv = {IETS_CACHE_DIR: $scache, NIX_BUILD_SHELL: (^bash -c 'command -v bash' | chomp)}
   cd $sdir
   let s1 = (with-env $senv { ^$"($farm)/nix-shell" --option store $"unix://($ssock)" --run 'true' | complete })
   let slinks = (try { ls $"($scache)/roots" | get name | sort } catch { [] })
@@ -1287,18 +1287,18 @@ in derivation {
   let s2 = (with-env $senv { ^$"($farm)/nix-shell" --option store $"unix://($ssock)" --run 'true' | complete })
   $ok = ($ok | append (verdict ($sgc.exit_code == 0 and $skept and $s2.exit_code == 0 and (not ($s2.stderr | str contains "building the dep")))
     "a collection leaves nix-shell's root, and the next entry builds nothing" $"kept ($skept), stderr ($s2.stderr | str substring 0..200)"))
-  # `ietsp cache gc` walks the roots store and releases the link
-  let scgc = (^$ietsp cache gc --ttl 0 --cache-dir $scache | complete)
+  # `iets cache gc` walks the roots store and releases the link
+  let scgc = (^$iets cache gc --ttl 0 --cache-dir $scache | complete)
   $ok = ($ok | append (verdict ($scgc.exit_code == 0 and ($scgc.stdout | str contains $"($scache)/roots: 1 of 1 entries") and (not ($slink | path exists)))
-    "ietsp cache gc sweeps nix-shell's roots" $"exit ($scgc.exit_code), stdout ($scgc.stdout)"))
+    "iets cache gc sweeps nix-shell's roots" $"exit ($scgc.exit_code), stdout ($scgc.stdout)"))
   # the switch, and the proof that the root is what held the output: with
   # `shell-gc-root` off, the same collection takes it and the next entry builds
   let soff = $"($tmp)/shellroots-off"
-  let offenv = {IETSP_CACHE_DIR: $soff, NIX_BUILD_SHELL: ($senv.NIX_BUILD_SHELL)}
-  let s3 = (with-env $offenv { ^$"($farm)/nix-shell" --ietsp-option shell-gc-root false --option store $"unix://($ssock)" --run 'true' | complete })
+  let offenv = {IETS_CACHE_DIR: $soff, NIX_BUILD_SHELL: ($senv.NIX_BUILD_SHELL)}
+  let s3 = (with-env $offenv { ^$"($farm)/nix-shell" --iets-option shell-gc-root false --option store $"unix://($ssock)" --run 'true' | complete })
   let off_roots = ($"($soff)/roots" | path exists)
   let sgc2 = (^nix-store --store $sscratch --gc | complete)
-  let s4 = (with-env $offenv { ^$"($farm)/nix-shell" --ietsp-option shell-gc-root false --option store $"unix://($ssock)" --run 'true' | complete })
+  let s4 = (with-env $offenv { ^$"($farm)/nix-shell" --iets-option shell-gc-root false --option store $"unix://($ssock)" --run 'true' | complete })
   $ok = ($ok | append (verdict ($s3.exit_code == 0 and (not $off_roots) and $sgc2.exit_code == 0 and ($s4.stderr | str contains "building the dep"))
     "shell-gc-root = false keeps no root, and the collection takes the output" $"roots store ($off_roots), stderr ($s4.stderr | str substring 0..200)"))
   cd $tmp
@@ -1320,8 +1320,8 @@ in derivation {
   # a second entry replaces in place. The output references the whole shell, so
   # one link holds all of it.
   let devcache = $"($tmp)/devcache"
-  let dev = (with-env {IETSP_CACHE_DIR: $devcache} { ^$"($farm)/nix" develop $repo -c true | complete })
-  let again = (with-env {IETSP_CACHE_DIR: $devcache} { ^$"($farm)/nix" develop $repo -c true | complete })
+  let dev = (with-env {IETS_CACHE_DIR: $devcache} { ^$"($farm)/nix" develop $repo -c true | complete })
+  let again = (with-env {IETS_CACHE_DIR: $devcache} { ^$"($farm)/nix" develop $repo -c true | complete })
   let dlinks = (try { ls $"($devcache)/roots" | get name | sort } catch { [] })
   let dlink = ($dlinks | get -o 0 | default "")
   let dtarget = (if ($dlink | is-not-empty) { ^readlink $dlink | chomp } else { "" })
@@ -1330,7 +1330,7 @@ in derivation {
     "nix develop keeps the shell's environment under a GC root" $"($dlinks | length) links, '($dlink)' -> '($dtarget)', held: ($dheld)"))
   # the switch: no link, and no roots store either
   let devoff = $"($tmp)/devcache-off"
-  let dv = (with-env {IETSP_CACHE_DIR: $devoff} { ^$"($farm)/nix" develop --ietsp-option shell-gc-root false $repo -c true | complete })
+  let dv = (with-env {IETS_CACHE_DIR: $devoff} { ^$"($farm)/nix" develop --iets-option shell-gc-root false $repo -c true | complete })
   $ok = ($ok | append (verdict ($dv.exit_code == 0 and (not ($"($devoff)/roots" | path exists)))
     "shell-gc-root = false keeps no root for nix develop" $"exit ($dv.exit_code), stderr ($dv.stderr | str substring 0..200)"))
 
@@ -1362,7 +1362,7 @@ in derivation {
   if $flock.exit_code != 0 { print $"FAIL nix flake lock: ($flock.stderr)" }
   $ok = ($ok | append (verdict ($flock.exit_code == 0) "nix flake lock for the fmt fixture" $flock.stderr))
   # the out-link goes under this cache root, so the test can find it
-  $env.IETSP_CACHE_DIR = $fmtcache
+  $env.IETS_CACHE_DIR = $fmtcache
   cd $fmtdir
   # `name` has a version and there is no `meta.mainProgram`, so the program is
   # names.cc:DrvName's `fmt-e2e`
@@ -1388,11 +1388,11 @@ in derivation {
   let held = (if ($target | is-not-empty) { (^nix-store --query --roots $target | complete).stdout | str contains $link } else { false })
   $ok = ($ok | append (verdict (($links | length) == 1 and ($target | str starts-with "/nix/store/") and $held)
     "nix fmt keeps the formatter under a GC root" $"link '($link)' -> '($target)', held: ($held)"))
-  # `ietsp cache gc` walks the roots store: a zero TTL drops the one link
-  let gc = (^$ietsp cache gc --ttl 0 --cache-dir $fmtcache | complete)
+  # `iets cache gc` walks the roots store: a zero TTL drops the one link
+  let gc = (^$iets cache gc --ttl 0 --cache-dir $fmtcache | complete)
   $ok = ($ok | append (verdict ($gc.exit_code == 0 and ($gc.stdout | str contains $"($fmtcache)/roots: 1 of 1 entries") and (not ($link | path exists)))
-    "ietsp cache gc sweeps the roots store" $"exit ($gc.exit_code), stdout ($gc.stdout)"))
-  hide-env IETSP_CACHE_DIR
+    "iets cache gc sweeps the roots store" $"exit ($gc.exit_code), stdout ($gc.stdout)"))
+  hide-env IETS_CACHE_DIR
 
   # a flake with no `formatter` output: nix's own message, and no fallback
   cd $fdir
@@ -1405,7 +1405,7 @@ in derivation {
 
   $ok = ($ok | append (cache-cases $farm $tmp $np $sys))
 
-  # --- fallbacks, priced with IETSP_NO_FALLBACK so the real run never happens
+  # --- fallbacks, priced with IETS_NO_FALLBACK so the real run never happens
   for case in [
     {label: "nix fmt --json falls back", want: "'--json' is not implemented"
      args: [nix fmt --json]}
@@ -1422,7 +1422,7 @@ in derivation {
     $ok = ($ok | append (verdict ($err | str contains $case.want) $case.label $"stderr was '($err)'"))
   }
   $ok = ($ok | append (cmp-case "nix-shell <nixpkgs> fetches the sha256-pinned tarball of nixpkgs/shell.nix itself"
-    (with-env {IETSP_NO_FALLBACK: "1"} { run-both $farm nix-shell -I $"nixpkgs=($np)" "<nixpkgs>" -A hello --run 'echo $name' })))
+    (with-env {IETS_NO_FALLBACK: "1"} { run-both $farm nix-shell -I $"nixpkgs=($np)" "<nixpkgs>" -A hello --run 'echo $name' })))
   let shebang = $"($tmp)/script.sh"
   "#! /usr/bin/env nix-shell\n#! nix-shell -p hello -i bash\necho hi\n" | save -f $shebang
   let err = (fallback-reason $farm [nix-shell $shebang])
@@ -1436,11 +1436,11 @@ in derivation {
     {ref: "github:NixOS/nixpkgs#lib.version", want: "only local paths are supported"}
   ] {
     let err = (fallback-reason $farm [nix eval $case.ref])
-    $ok = ($ok | append (verdict (($err | str contains "falling back to nix: ietsp: ") and ($err | str contains $case.want))
+    $ok = ($ok | append (verdict (($err | str contains "falling back to nix: iets: ") and ($err | str contains $case.want))
       $"nix eval ($case.ref) falls back" $"stderr was '($err)'"))
-    let r = (^$ietsp eval $case.ref | complete)
+    let r = (^$iets eval $case.ref | complete)
     $ok = ($ok | append (verdict ($r.exit_code == 1 and ($r.stderr | str contains $case.want))
-      $"ietsp eval ($case.ref) says why" $"exit ($r.exit_code), stderr '($r.stderr)'"))
+      $"iets eval ($case.ref) says why" $"exit ($r.exit_code), stderr '($r.stderr)'"))
   }
   let apply = (^$"($farm)/nix" eval --apply "x: x" --expr 1 | complete)
   $ok = ($ok | append (verdict ($apply.stderr | str contains "'--apply' is not implemented")

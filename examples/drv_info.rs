@@ -3,13 +3,13 @@
 //!
 //! `cargo run --example drv_info -- [-I prefix=path]... [-A attr] (-E EXPR | FILE)`
 //!
-//! Uses the library only (`ietsp::api`), never `ietsp::cli`.
+//! Uses the library only (`iets::api`), never `iets::cli`.
 
-use ietsp::api::{self, EvalArgs, Input};
+use iets::api::{self, EvalArgs, Input};
 
 fn main() -> std::process::ExitCode {
     // a frontend owns the run state and says where messages go
-    let session = ietsp::session::Session::new();
+    let session = iets::session::Session::new();
     session.log.write_to_stderr();
     let _entered = session.enter();
     let mut a = EvalArgs::new();
@@ -32,7 +32,7 @@ fn main() -> std::process::ExitCode {
     }
 
     // a setting that does not resolve is reported already
-    let Ok(run) = ietsp::api::run::Run::new(&a) else {
+    let Ok(run) = iets::api::run::Run::new(&a) else {
         return std::process::ExitCode::from(1);
     };
     let r = run.go(move |ev, _| {
@@ -50,7 +50,7 @@ fn main() -> std::process::ExitCode {
         // evaluator cannot know: the walk records it.
         if let Some(t) = &target {
             let mut roots = Vec::new();
-            if ietsp::api::installable::drv_roots(ev, v, &mut roots).is_ok() {
+            if iets::api::installable::drv_roots(ev, v, &mut roots).is_ok() {
                 for (p, _) in &roots {
                     ev.drv.set_attr(p, t);
                 }
@@ -64,7 +64,7 @@ fn main() -> std::process::ExitCode {
                 let pos = info
                     .pos
                     .map(|p| {
-                        ietsp::provenance::describe_pos(ev, p).unwrap_or_else(|| ev.describe_pos(p))
+                        iets::provenance::describe_pos(ev, p).unwrap_or_else(|| ev.describe_pos(p))
                     })
                     .unwrap_or_else(|| "-".to_string());
                 let outs: Vec<&str> = info.outputs.iter().map(String::as_str).collect();

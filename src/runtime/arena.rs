@@ -224,7 +224,7 @@ impl Arena {
     }
 }
 
-/// Allocation kind for `IETSP_STATS`.
+/// Allocation kind for `IETS_STATS`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(usize)]
 pub enum Stat {

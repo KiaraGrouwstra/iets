@@ -1,6 +1,6 @@
 #!/usr/bin/env nu
 # Usage: bench/eval-jobs.nu [rounds] [--no-parity]
-# `ietsp eval-jobs` against `nix-eval-jobs` on nixos/release-small.nix with 4
+# `iets eval-jobs` against `nix-eval-jobs` on nixos/release-small.nix with 4
 # workers, cold and warm runs interleaved. Reports the median of each cell.
 # GNU time comes from the system, not the dev shell: set TIME_BIN to move it.
 # Then one --force-recurse run of each tool, whose job sets must match
@@ -8,7 +8,7 @@
 use ../scripts/lib.nu [require-real-nix]
 
 def timed [cache: path, env_vars: record, cmd: list<string>] {
-  let out = (mktemp -t ietsp-bench-XXXXXX)
+  let out = (mktemp -t iets-bench-XXXXXX)
   let t = ($env.TIME_BIN? | default "/run/current-system/sw/bin/time")
   let r = (with-env $env_vars { ^$t -f "%e %U %S %M" -o $out ...$cmd | complete })
   let f = (open $out | str trim | split row " ")
@@ -33,9 +33,9 @@ def norm []: string -> list<string> {
 }
 
 # One run of each tool with --force-recurse: the job sets must be equal.
-# Error text is not compared (ietsp renders its own traces).
-def parity [ietsp: string, nej: string, args: list<string>]: nothing -> bool {
-  let i = (^$ietsp eval-jobs --force-recurse ...$args | complete)
+# Error text is not compared (iets renders its own traces).
+def parity [iets: string, nej: string, args: list<string>]: nothing -> bool {
+  let i = (^$iets eval-jobs --force-recurse ...$args | complete)
   let n = (^$nej --force-recurse ...$args | complete)
   let ii = ($i.stdout | norm)
   let nn = ($n.stdout | norm)
@@ -43,34 +43,34 @@ def parity [ietsp: string, nej: string, args: list<string>]: nothing -> bool {
     print $"parity ok: --force-recurse, ($ii | length) lines, exit ($i.exit_code)"
     return true
   }
-  print $"parity FAIL: --force-recurse, ietsp ($ii | length) lines exit ($i.exit_code), nix-eval-jobs ($nn | length) lines exit ($n.exit_code)"
+  print $"parity FAIL: --force-recurse, iets ($ii | length) lines exit ($i.exit_code), nix-eval-jobs ($nn | length) lines exit ($n.exit_code)"
   $nn | where {|l| $l not-in $ii } | take 3 | each {|l| print $"  only nix-eval-jobs: ($l)" } | ignore
-  $ii | where {|l| $l not-in $nn } | take 3 | each {|l| print $"  only ietsp: ($l)" } | ignore
-  $i.stderr | lines | last 3 | each {|l| print $"  ietsp: ($l)" } | ignore
+  $ii | where {|l| $l not-in $nn } | take 3 | each {|l| print $"  only iets: ($l)" } | ignore
+  $i.stderr | lines | last 3 | each {|l| print $"  iets: ($l)" } | ignore
   false
 }
 
 def main [rounds: int = 3, --no-parity] {
   cd ($env.FILE_PWD | path join "..")
   let np = ($env.NIXPKGS? | default "/nix/store/ah3pxz4xa52hd6vhbx17vcsci0b8bmbr-source")
-  let ietsp = ($env.IETSP? | default $"($env.PWD)/target/release/ietsp")
+  let iets = ($env.IETS? | default $"($env.PWD)/target/release/iets")
   let nej = ($env.NIX_EVAL_JOBS? | default (which nix-eval-jobs | get command.0? | default $"($env.HOME)/tmp/nej/bin/nix-eval-jobs"))
   require-real-nix $nej
-  let cache = $"($env.TMPDIR? | default '/tmp')/ietsp-bench-cache"
+  let cache = $"($env.TMPDIR? | default '/tmp')/iets-bench-cache"
   let nixpkgs_arg = $"{ outPath = \"($np)\"; revCount = 1; shortRev = \"abcdefg\"; }"
   let args = ["--workers" "4" "-I" $"nixpkgs=($np)" "--arg" "nixpkgs" $nixpkgs_arg $"($np)/nixos/release-small.nix"]
 
   let tools = if ($nej | path exists) {
-    [[name, cmd, cached]; ["ietsp eval-jobs", ([$ietsp "eval-jobs"] ++ $args), true]
+    [[name, cmd, cached]; ["iets eval-jobs", ([$iets "eval-jobs"] ++ $args), true]
                           ["nix-eval-jobs", ([$nej] ++ $args), false]]
   } else {
-    print "nix-eval-jobs not found; measuring ietsp alone"
-    [[name, cmd, cached]; ["ietsp eval-jobs", ([$ietsp "eval-jobs"] ++ $args), true]]
+    print "nix-eval-jobs not found; measuring iets alone"
+    [[name, cmd, cached]; ["iets eval-jobs", ([$iets "eval-jobs"] ++ $args), true]]
   }
 
   mut rows = []
   for t in $tools {
-    let vars = if $t.cached { {IETSP_CACHE_DIR: $cache} } else { {} }
+    let vars = if $t.cached { {IETS_CACHE_DIR: $cache} } else { {} }
     mut cold = []
     mut warm = []
     for _ in 1..$rounds {
@@ -92,5 +92,5 @@ def main [rounds: int = 3, --no-parity] {
   rm -rf $cache
   print ($rows | to md --pretty)
   if $no_parity or not ($nej | path exists) { return }
-  if not (parity $ietsp $nej $args) { exit 1 }
+  if not (parity $iets $nej $args) { exit 1 }
 }

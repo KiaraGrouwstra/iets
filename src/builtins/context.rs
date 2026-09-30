@@ -39,7 +39,7 @@ fn get_context(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> 
                 bail!(
                     ErrorKind::Unsupported,
                     pos,
-                    "ietsp: builtins.getContext cannot handle the output '{}' of a dynamic derivation",
+                    "iets: builtins.getContext cannot handle the output '{}' of a dynamic derivation",
                     String::from_utf8_lossy(output)
                 )
             }

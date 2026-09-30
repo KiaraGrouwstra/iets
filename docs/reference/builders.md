@@ -4,7 +4,7 @@ Where a build goes, what the client sends it, and the two protocols it
 speaks: the Nix worker protocol and `grpc://`. The NAR format both use is
 at the end.
 
-`ietsp build` evaluates in memory, computes the closure of the root
+`iets build` evaluates in memory, computes the closure of the root
 derivations, and ships what the store lacks. The client owns no local
 store: nothing on either path reads `/nix/store` unless an input
 derivation came from there. Why this shape instead of `nix-build`'s:
@@ -19,7 +19,7 @@ derivation came from there. Why this shape instead of `nix-build`'s:
 --builder grpc://host:port[?k=v&…]
 ```
 
-Without the flag the URL is the `builder` setting in the user `ietsp.toml`, and
+Without the flag the URL is the `builder` setting in the user `iets.toml`, and
 nix.conf's `store` when that is unset (`docs/reference/settings.md`). A
 classic `--store URL` or `--option store URL` wins over both.
 
@@ -68,13 +68,13 @@ hashes only the sources the daemon lacks, on a thread pool. A `toFile`
 text is listed after the sources it references, so the daemon sees every
 reference before the path that needs it.
 
-`ietsp plumbing plan` prints the result of that walk
+`iets plumbing plan` prints the result of that walk
 (`docs/reference/plumbing.md`).
 
 ### The legacy `DRV` form
 
 ```
-ietsp build [--source STOREPATH=LOCAL]... DRV
+iets build [--source STOREPATH=LOCAL]... DRV
 ```
 
 `DRV` is a `.drv` store path, or a copy of one named
@@ -86,7 +86,7 @@ tables.
 ## The dispatcher
 
 Every command that realises a derivation goes through
-`crate::build::Dispatcher`, over every transport: `ietsp build`, classic
+`crate::build::Dispatcher`, over every transport: `iets build`, classic
 `nix-build` and `nix build`. `nix-instantiate`,
 `nix-shell` and `print-dev-env` use the same two halves without the
 renderer.
@@ -231,7 +231,7 @@ and bytes written to the socket.
 ## `grpc://`
 
 [nix-grpc-store](https://github.com/Mic92/nix-grpc-store) is a gRPC
-service in front of a Nix store. ietsp speaks it natively, so
+service in front of a Nix store. iets speaks it natively, so
 `--builder grpc://…` and `--store grpc://…` need no nix, no plugin and no
 local store. Code: `src/remote/grpc/` (`mod.rs` the URL, TLS, auth and the
 retry policy; `drvwire.rs` the worker-protocol payloads the messages
@@ -276,7 +276,7 @@ defaults (`src/client/store.hh`):
    path makes.
 2. The sources the client cannot produce go to the store: a worker
    substitutes an input when the build asks for it
-   (daemon/main.cc:`gatherInputs`), so ietsp only checks that some
+   (daemon/main.cc:`gatherInputs`), so iets only checks that some
    substituter has them, which is what `QueryValidPaths` with `substitute`
    answers.
 3. `AddMultipleToStore`: one client-streamed zstd stream whose
@@ -308,7 +308,7 @@ defaults (`src/client/store.hh`):
 
 The worker-protocol tunnel (`Connect`) is never opened. A farm endpoint
 refuses it with `UNIMPLEMENTED`, which is why `nix` needs `--eval-store
-auto` there; ietsp always evaluates in its own process, so it needs
+auto` there; iets always evaluates in its own process, so it needs
 nothing.
 
 ### What a `write` token can and cannot do
@@ -316,10 +316,10 @@ nothing.
 `write` — the role an OIDC token usually gets — may request builds and
 import **signed** paths. The daemon forces `CheckSigs` on for that role no
 matter how trusted the proxy's uid is (`src/daemon/main.cc`). Everything
-ietsp uploads is content-addressed, so the daemon recomputes the address
+iets uploads is content-addressed, so the daemon recomputes the address
 and accepts it without a signature. Sending an *unsigned,
 input-addressed* path — an output built locally — needs the `trusted`
-role, which is what a CI host's client certificate gets. ietsp never needs
+role, which is what a CI host's client certificate gets. iets never needs
 it: it uploads only sources and derivations.
 
 Outputs land in the farm's binary cache, not in the local store.
@@ -343,7 +343,7 @@ local `nix.conf` must therefore list and trust the cache (`substituters`,
 | a unary call | `GrpcStore::retrying`: 500 ms doubling to 4 s, until `connect-timeout` has passed |
 | the `Schedule` stream | reconnects when the scheduler says `Restarting`, or goes away with `UNAVAILABLE`, `UNKNOWN` or `INTERNAL`, for up to `restart-grace`, and sends every unanswered `Want` again |
 | a bounced `BuildDerivation` (`ABORTED`, `FAILED_PRECONDITION`, `UNAVAILABLE`, `UNKNOWN`, `INTERNAL`) | back to the scheduler, up to `reschedule-retries` times (build.cc:`buildAssigned`). Unlike build.cc, each ask after the first waits: 1 s doubling to 30 s |
-| `NOT_FOUND` | the worker has not got the `.drv` closure: ietsp uploads it (`QueryValidPaths` then `AddMultipleToStore`, with the same routing headers) and asks once more |
+| `NOT_FOUND` | the worker has not got the `.drv` closure: iets uploads it (`QueryValidPaths` then `AddMultipleToStore`, with the same routing headers) and asks once more |
 
 A worker that crashed stays placeable until the scheduler notices, and
 every bounce off it is instant.
@@ -429,11 +429,11 @@ What the other cases check:
   local daemon, which refuses it for lacking a signature. That is correct,
   because a scratch daemon builds unsigned outputs; on a real farm the
   local daemon substitutes the output from the cache instead.
-- **Case 6** runs `ietsp build --builder grpc://… --json` on the `checks`
+- **Case 6** runs `iets build --builder grpc://… --json` on the `checks`
   of `scripts/lib.nu`'s `checks-flake` and compares every outcome's
   attribute and success with the same flake built over the worker
   protocol on the same store.
-- **Case 7** checks that a multi-root `ietsp build` over `grpc://` names
+- **Case 7** checks that a multi-root `iets build` over `grpc://` names
   every attribute on stderr.
 
 Against `farm.numtide.com` with a Keycloak `write` token (2026-09-20): a

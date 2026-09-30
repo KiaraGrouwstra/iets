@@ -1,6 +1,6 @@
 # How to fix a wrong fixed-output hash
 
-A fixed-output derivation whose hash is wrong fails the build. `ietsp
+A fixed-output derivation whose hash is wrong fails the build. `iets
 build` can rewrite that hash in the file it came from and build again. The
 setting is `fix-hashes`, and it has three values: `ask` (the default),
 `always` and `never`.
@@ -25,10 +25,10 @@ remaining one in the run. Anywhere else — a pipe, a CI job, a JSON log —
 `always` rewrites without asking:
 
 ```sh
-ietsp --ietsp-option fix-hashes always build --builder daemon src.nix
+iets --iets-option fix-hashes always build --builder daemon src.nix
 ```
 
-Or put it in `~/.config/ietsp/ietsp.toml` once:
+Or put it in `~/.config/iets/iets.toml` once:
 
 ```
 fix-hashes = "always"
@@ -62,21 +62,21 @@ in the JSON log; see [reference/errors.md](../reference/errors.md).
 ## To turn it off: `never`
 
 ```sh
-ietsp --ietsp-option fix-hashes never build --builder daemon src.nix
+iets --iets-option fix-hashes never build --builder daemon src.nix
 ```
 
 The mismatch is reported and nothing is edited.
 
 ## How it finds the place to edit
 
-After a mismatch, ietsp runs one more evaluation without the tracing cache
+After a mismatch, iets runs one more evaluation without the tracing cache
 to list the files that evaluation read, then looks for the old hash in
 them. It matches any spelling of the hash, so SRI, base32 and base16 all
 work.
 
 It also handles the case where the derivation has inputs. Such a derivation
 is built as a resolved copy of itself, and the daemon reports the mismatch
-as a line in the build log instead of as a result. ietsp reads it from
+as a line in the build log instead of as a result. iets reads it from
 there when the log names a derivation of the same name.
 
 `__structuredAttrs` is fine: Nix fills the output paths in when it builds,
@@ -98,7 +98,7 @@ Zero places gets the same treatment. That happens when the hash is not
 written literally in a file this evaluation read — computed, or fetched
 from JSON.
 
-**It will not chase a build that is not reproducible.** If a hash ietsp
+**It will not chase a build that is not reproducible.** If a hash iets
 wrote mismatches again on the next build, it stops. A second mismatch means
 the output is not deterministic, and no hash is the right one.
 

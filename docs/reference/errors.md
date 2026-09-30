@@ -5,7 +5,7 @@ record shape, the activity records and the `json-log-path` setting.
 
 Every error goes through one reporter (`src/log.rs`). It prints Nix's
 plain text, or with `--log-format internal-json` one `@nix` JSON record.
-It also sets the exit code. The `ietsp` command sends it to stderr; a
+It also sets the exit code. The `iets` command sends it to stderr; a
 library host sets its own sink, or none, on its `Session`
 (docs/reference/library.md). Humans read the text. Programs read the
 record and the exit code. Agents read the `hint`.
@@ -34,20 +34,20 @@ in `src/error.rs` for the rest, and the daemon's build status for builds.
 | `ignored-flag` | `src/ignored.rs` | a level-1 record: a flag that has no effect, and why (docs/reference/divergences.md) |
 | `ignored-setting` | `src/config.rs` | a level-1 record: a Nix setting that has no effect, and why (docs/reference/settings.md) |
 | `unknown-setting` | `src/config.rs` | a level-1 record: a setting Nix 2.34.8 does not know either, with Nix's text |
-| `unknown-lint` | `src/lint/mod.rs` | a level-1 record: a lint name in an `ietsp.toml` or in `IETSP_LINT` that the registry does not have (docs/reference/lints.md) |
+| `unknown-lint` | `src/lint/mod.rs` | a level-1 record: a lint name in an `iets.toml` or in `IETS_LINT` that the registry does not have (docs/reference/lints.md) |
 | `cache-invalidated` | `src/trace/run.rs` | a level-3 record: what changed under a tracing cache entry, so the run evaluates again |
 | `io` | `ErrorKind::Io`, `Error::Io` | a file that cannot be read or written |
-| `unsupported` | `ErrorKind::Unsupported`, `Error::Unsupported` | a feature ietsp does not have; classic mode falls back to Nix |
+| `unsupported` | `ErrorKind::Unsupported`, `Error::Unsupported` | a feature iets does not have; classic mode falls back to Nix |
 | `cancelled` | `ErrorKind::Cancelled` | a parallel helper was stopped; never reaches the user |
 | `usage` | `Error::Usage` | a bad command line |
-| `config` | `Error::Config` | a bad `nix.conf` or ietsp setting |
+| `config` | `Error::Config` | a bad `nix.conf` or iets setting |
 | `store` | `Error::Store` | a bad store path, derivation or hash |
 | `flake` | `Error::Flake` | a bad flake reference or lock file |
 | `protocol` | `Error::Protocol` | bad data from another process (daemon, worker) |
 | `cache` | `Error::Cache` | the tracing cache |
 | `plan` | `Error::Plan` | a derivation closure that cannot be built |
-| `no-results` | `ietsp search` | no package matched every regex (docs/reference/commands.md) |
-| `no-output` | `ietsp build` | a root put no store path on stdout: nothing to build, no build result, or no such output (docs/reference/commands.md) |
+| `no-results` | `iets search` | no package matched every regex (docs/reference/commands.md) |
+| `no-output` | `iets build` | a root put no store path on stdout: nothing to build, no build result, or no such output (docs/reference/commands.md) |
 | `build-failed` | build status | a build that failed |
 
 ## Exit codes
@@ -56,8 +56,8 @@ in `src/error.rs` for the rest, and the daemon's build status for builds.
 | --- | --- |
 | 0 | Success. |
 | 1 | Any error. Also a build failure that has no code of its own. |
-| 2 | A usage error of a native command (`ietsp eval --bogus`). Under a classic name the code is 1, as in Nix. |
-| 1, 2 | `ietsp diff` alone follows `diff(1)`: 0 the two are equal, 1 they differ, 2 a usage error or any other failure (docs/reference/commands.md). |
+| 2 | A usage error of a native command (`iets eval --bogus`). Under a classic name the code is 1, as in Nix. |
+| 1, 2 | `iets diff` alone follows `diff(1)`: 0 the two are equal, 1 they differ, 2 a usage error or any other failure (docs/reference/commands.md). |
 | 100 | A build failed (`PermanentFailure`, `InputRejected`, `DependencyFailed`). |
 | 101 | A build timed out. |
 | 102 | A fixed-output build had a hash mismatch. |
@@ -67,15 +67,15 @@ The build codes follow `ExitStatusFlags::failingExitStatus` in Nix's
 `src/libstore/build-result.cc`. The value is `0b1100000` plus one bit
 per kind of failure: 4 build failed, 1 timeout, 2 hash mismatch, 8 not
 deterministic. Several failures combine their bits: a timeout and a
-failed build give 101. `ietsp build` uses them. Nix computes them only
+failed build give 101. `iets build` uses them. Nix computes them only
 when it builds in its own store; as a client of a daemon it exits 1,
-because the worker protocol does not carry the exit status. ietsp is
+because the worker protocol does not carry the exit status. iets is
 always a client, but it reads the status of each `BuildResult`. A root
 whose dependency failed reports `DependencyFailed`, so it exits 100, and
 102 as well when the daemon reported a hash mismatch in the same run,
 because Nix's flags combine over all its goals. The
 classic names (`nix-build`, `nix build`, `nix-shell`) exit 1, as Nix
-does through a daemon. `ietsp eval-jobs` exits 0 when only jobs fail;
+does through a daemon. `iets eval-jobs` exits 0 when only jobs fail;
 their errors are in the job lines.
 
 A NAR hash mismatch of a fetched tree has code `hash-mismatch` but exits
@@ -91,7 +91,7 @@ error with Nix's message.
 
 Every stderr line is then `@nix ` and one JSON object, the format of
 `JSONLogger` in Nix's `src/libutil/logging.cc`. The keys are sorted, as
-Nix sorts them. An error is `logEI`'s record plus `code` and, when ietsp
+Nix sorts them. An error is `logEI`'s record plus `code` and, when iets
 knows the fix, `hint`:
 
 ```json
@@ -104,15 +104,15 @@ knows the fix, `hint`:
 | --- | --- |
 | `action` | `"msg"` |
 | `level` | 0 for an error, 1 for a warning |
-| `msg` | the whole text ietsp prints without `--log-format` |
+| `msg` | the whole text iets prints without `--log-format` |
 | `raw_msg` | the message alone |
 | `line`, `column` | where the error is, or `null` |
 | `file` | `FILE:LINE:COL`, as Nix fills it, or `null` |
-| `code` | the error code (ietsp only) |
-| `hint` | what to do about it (ietsp only, only when known) |
-| `start`, `end` | the place in the file as byte offsets from 0; `end` is the offset after the last byte (ietsp only, only when known) |
-| `replacement` | the text that replaces the bytes `start` to `end - 1` (ietsp only, only when the record has an edit) |
-| `sid` | the session: one id for every record of one run (ietsp only) |
+| `code` | the error code (iets only) |
+| `hint` | what to do about it (iets only, only when known) |
+| `start`, `end` | the place in the file as byte offsets from 0; `end` is the offset after the last byte (iets only, only when known) |
+| `replacement` | the text that replaces the bytes `start` to `end - 1` (iets only, only when the record has an edit) |
+| `sid` | the session: one id for every record of one run (iets only) |
 | `trace` | with `--show-trace` only: `[{raw_msg, line, column, file}]`, innermost first |
 
 A lint warning is a level-1 record with code `lint`; its `raw_msg` starts
@@ -158,7 +158,7 @@ it is an ordinary invalidation and the line names it.
 Any other line is `{"action":"msg","level":N,"msg":TEXT}`: level 0 for
 `error:` and `trace:` lines, 1 for warnings, 3 for the rest (build
 progress, summaries, classic fallback notes). The lines that `--timings`
-and `IETSP_STATS` add stay plain text.
+and `IETS_STATS` add stay plain text.
 
 ### Activity records
 
@@ -180,15 +180,15 @@ phase, 105 progress, 106 set expected.
 
 - **From the daemon.** A worker-protocol daemon (`daemon`, `unix://`,
   `ssh-ng://`) sends its activities during a build or a substitution.
-  ietsp forwards each one, as `worker-protocol-connection.cc:processStderr`
+  iets forwards each one, as `worker-protocol-connection.cc:processStderr`
   does. Each forwarded activity gets an id of this process, and its
   `parent` follows.
-- **ietsp's own uploads.** The derivations and sources ietsp sends with
+- **iets's own uploads.** The derivations and sources iets sends with
   `AddMultipleToStore`, and a remote builder's outputs copied back to the
   local daemon, are one `copying N paths` activity (type 103) with
   progress results and one `copying path` activity (type 100) per path,
   as `nix copy` shows them (`store-api.cc:copyPaths`).
-- **`grpc://`.** There is no daemon stream, so ietsp makes the records of
+- **`grpc://`.** There is no daemon stream, so iets makes the records of
   `build/worker.cc` itself. They are the realise, builds and copy-paths
   activities around a batch, and one `building 'DRV' on 'URL'` activity
   per derivation. The build's log lines and phases are its results. The
@@ -212,8 +212,8 @@ message, plus `start`, `end` and `replacement`.
 | a lint finding, code `lint`, at level 1 (`warn`) or 0 (`error`) | the site of the finding | the text that corrects the finding; only `url-literal` and `short-path-literal` have one |
 | `hash-fixed`, at level 3 | the hash in the file, before the edit | the hash that `fix-hashes` wrote |
 
-A lint finding is a proposal: ietsp does not change the file. A
-`hash-fixed` record is a report: ietsp made the edit.
+A lint finding is a proposal: iets does not change the file. A
+`hash-fixed` record is a report: iets made the edit.
 
 ```json
 {"action":"msg","code":"lint","column":17,"end":30,
@@ -223,11 +223,11 @@ A lint finding is a proposal: ietsp does not change the file. A
  "replacement":"./data/hello.txt","start":16}
 ```
 
-The offsets are those of `ietsp parse --json` (`docs/reference/syntax-tree.md`).
+The offsets are those of `iets parse --json` (`docs/reference/syntax-tree.md`).
 Thus a program finds the node of a finding in the tree of the file.
 
 The evaluator keeps the position where a node starts. It does not keep
-the end. For the first finding in a file, ietsp reads the file again and
+the end. For the first finding in a file, iets reads the file again and
 parses it. Then the span is that of the smallest node that starts at the
 site and has a kind that the lint reports:
 
@@ -256,9 +256,9 @@ Limits:
   record then has no `start` and no `end`, and `file`, `line` and `column`
   are null. `raw_msg` names the tree.
 
-## The build plan: `ietsp build --dry-run`
+## The build plan: `iets build --dry-run`
 
-`ietsp build --dry-run` registers the closure, as `--no-build` does, and
+`iets build --dry-run` registers the closure, as `--no-build` does, and
 asks the daemon what a build would do (`QueryMissing`,
 `remote-store.cc:queryMissing`). It builds nothing. It prints what
 `nix build --dry-run` prints (`printMissing` in `src/libmain/shared.cc`),
@@ -280,7 +280,7 @@ name. The sizes are Nix's `renderSize`: at least KiB, one decimal. A
 there.
 
 With `--json`, stdout also gets the plan as one JSON object. This is an
-ietsp extension: `nix build --dry-run --json` prints the installables'
+iets extension: `nix build --dry-run --json` prints the installables'
 derived paths, not the plan.
 
 ```json
@@ -299,25 +299,25 @@ derived paths, not the plan.
 
 The names are the fields of Nix's `MissingPaths`.
 
-`ietsp plumbing missing` prints the same object, and
-`ietsp plumbing build` the outcomes of the same dispatch, from derivation
+`iets plumbing missing` prints the same object, and
+`iets plumbing build` the outcomes of the same dispatch, from derivation
 paths instead of an installable (docs/reference/plumbing.md). Both, and
-`ietsp build`, go through one call, `api::build::Dispatch`.
+`iets build`, go through one call, `api::build::Dispatch`.
 
 ### `sid`: the session
 
 Every record carries `sid`, activity records included, on stderr and in the
 `json-log-path` file. It lets a program that reads several streams group
 the records of one run.
-This is an ietsp extension: Nix 2.34.8 has no such field. The key and the
+This is an iets extension: Nix 2.34.8 has no such field. The key and the
 default value have the shape Determinate Nix uses (`sid`, a UUIDv7).
 
 - By default each session makes a new UUIDv7, for example
   `019e037b-f603-7443-8071-cfd8585ec8c6`. It starts with the time in
   milliseconds, so ids sort by start time.
-- `IETSP_SESSION_ID=ID` sets it. Use this to give several invocations one
+- `IETS_SESSION_ID=ID` sets it. Use this to give several invocations one
   session.
-- `eval-jobs` starts its worker processes with `IETSP_SESSION_ID` set to its
+- `eval-jobs` starts its worker processes with `IETS_SESSION_ID` set to its
   own id, so the workers' records have the id of the run that started them.
 
 ## `json-log-path`
@@ -351,5 +351,5 @@ A hint is there only when it is certain:
   repository "R" is not tracked by Git.`), and the hint is the
   `git -C "R" add "F"` that makes it visible.
 
-A missing attribute or an undefined variable has no hint: ietsp has no
+A missing attribute or an undefined variable has no hint: iets has no
 did-you-mean suggestion for them yet.

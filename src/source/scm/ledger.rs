@@ -97,7 +97,7 @@ mod tests {
     /// A working tree with three tracked files, one untracked file and the
     /// revision `r12`; `plain` holds the tracked files and nothing else.
     fn fixture(tag: &str) -> (PathBuf, PathBuf) {
-        let d = std::env::temp_dir().join(format!("ietsp-ledger-{}-{tag}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("iets-ledger-{}-{tag}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         let (root, plain) = (d.join("tree"), d.join("plain"));
         for top in [&root, &plain] {

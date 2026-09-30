@@ -137,7 +137,7 @@ fn run(
         }
     }
 
-    // develop.cc takes bash from `nixpkgs#bashInteractive`; ietsp cannot fetch,
+    // develop.cc takes bash from `nixpkgs#bashInteractive`; iets cannot fetch,
     // so the shell derivation's own builder is the bash (docs/reference/classic.md).
     let store_bash = Path::new(&dev.builder).is_file();
     let shell = if store_bash {
@@ -179,7 +179,7 @@ fn private_dir() -> crate::error::Result<std::path::PathBuf> {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.subsec_nanos());
-        let dir = tmp.join(format!("ietsp-develop-{}-{nanos}", std::process::id()));
+        let dir = tmp.join(format!("iets-develop-{}-{nanos}", std::process::id()));
         match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
             Ok(()) => return Ok(dir),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,

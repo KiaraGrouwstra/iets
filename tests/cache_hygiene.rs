@@ -7,17 +7,17 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use ietsp::cachefs;
-use ietsp::trace::Obs;
-use ietsp::trace::run::Cache;
-use ietsp::trace::store::{ENTRY, Opened, Part, Store};
-use ietsp::trace::{key::Key, wire};
+use iets::cachefs;
+use iets::trace::Obs;
+use iets::trace::run::Cache;
+use iets::trace::store::{ENTRY, Opened, Part, Store};
+use iets::trace::{key::Key, wire};
 
 const KEYS: usize = 4;
 const OBS: usize = 400;
 
 fn tmp(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("ietsp-hygiene-{}-{tag}", std::process::id()));
+    let d = std::env::temp_dir().join(format!("iets-hygiene-{}-{tag}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).expect("temp dir");
     d
@@ -32,7 +32,7 @@ fn key_of(i: usize) -> String {
 fn payload(key: usize, writer: u8) -> Vec<u8> {
     let obs: Vec<Obs> = (0..OBS)
         .map(|i| Obs::Env {
-            name: format!("IETSP_TEST_{key}_{i}").into_bytes(),
+            name: format!("IETS_TEST_{key}_{i}").into_bytes(),
             value: Some([writer; 32]),
         })
         .collect();
@@ -85,7 +85,7 @@ fn check(store: &Store, key: usize) -> Option<usize> {
         let Obs::Env { name, value } = o else {
             panic!("wrong observation kind")
         };
-        assert_eq!(name, format!("IETSP_TEST_{key}_{i}").as_bytes());
+        assert_eq!(name, format!("IETS_TEST_{key}_{i}").as_bytes());
         let v = value.as_ref().expect("a value");
         writers.insert(writer_of(v, "value"));
     }
@@ -133,7 +133,7 @@ fn concurrent_readers_and_writers_never_see_a_torn_entry() {
 /// fast as it can until SIGKILL. A no-op in a normal test run.
 #[test]
 fn crash_writer_child() {
-    let Some(dir) = std::env::var_os("IETSP_CRASH_DIR") else {
+    let Some(dir) = std::env::var_os("IETS_CRASH_DIR") else {
         return;
     };
     let store = Store::locate(Some(&dir.to_string_lossy())).expect("store");
@@ -146,7 +146,7 @@ fn crash_writer_child() {
 fn spawn_and_kill(dir: &Path, ms: u64) {
     let mut child = Command::new(std::env::current_exe().expect("this test binary"))
         .args(["crash_writer_child", "--exact", "--nocapture"])
-        .env("IETSP_CRASH_DIR", dir)
+        .env("IETS_CRASH_DIR", dir)
         .spawn()
         .expect("spawn the writer");
     std::thread::sleep(std::time::Duration::from_millis(ms));
@@ -176,7 +176,7 @@ fn a_killed_writer_leaves_the_store_usable() {
 
 fn hit_entry() -> Vec<u8> {
     wire::encode_readset(&[Obs::Env {
-        name: b"IETSP_NO_SUCH_VARIABLE".to_vec(),
+        name: b"IETS_NO_SUCH_VARIABLE".to_vec(),
         value: None,
     }])
 }
@@ -268,7 +268,7 @@ fn a_changed_byte_or_a_copied_entry_is_a_miss() {
     );
 }
 
-/// Whoever runs ietsp can write the cache directory, so an entry name that is
+/// Whoever runs iets can write the cache directory, so an entry name that is
 /// a symbolic link, a FIFO or a length no entry can have is refused before
 /// anything is read: `truncate -s 1T` used to abort the run on the allocation.
 #[test]
@@ -327,13 +327,13 @@ fn a_cache_is_private_to_its_owner() {
 /// store is under `XDG_CACHE_HOME`, so this runs in a process of its own.
 #[test]
 fn input_touch_child() {
-    use ietsp::fetch::spool;
-    let Some(name) = std::env::var_os("IETSP_INPUT_NAME") else {
+    use iets::fetch::spool;
+    let Some(name) = std::env::var_os("IETS_INPUT_NAME") else {
         return;
     };
     let name = name.to_string_lossy().into_owned();
     // prepared first: a store with an entry and no version file is wiped
-    let dir = ietsp::treestore::root().expect("input store").join(&name);
+    let dir = iets::treestore::root().expect("input store").join(&name);
     std::fs::create_dir_all(&dir).expect("entry");
     std::fs::write(dir.join(spool::SPOOL), b"").expect("spool");
     std::fs::write(dir.join(spool::INDEX), b"").expect("index");
@@ -347,7 +347,7 @@ fn input_touch_child() {
         entry: name.into_bytes(),
         version: spool::INDEX_VERSION,
     }];
-    ietsp::trace::validate::validate(&mut obs, 1).expect("the entry is there");
+    iets::trace::validate::validate(&mut obs, 1).expect("the entry is there");
     let now = std::fs::metadata(&dir)
         .expect("stat")
         .modified()
@@ -363,10 +363,7 @@ fn an_input_observation_marks_its_entry_as_used() {
     let out = Command::new(std::env::current_exe().expect("this test binary"))
         .args(["input_touch_child", "--exact", "--nocapture"])
         .env("XDG_CACHE_HOME", &dir)
-        .env(
-            "IETSP_INPUT_NAME",
-            "a3ck4d9zzk4l1r76rz5zv2wgycmpsy1y-source",
-        )
+        .env("IETS_INPUT_NAME", "a3ck4d9zzk4l1r76rz5zv2wgycmpsy1y-source")
         .output()
         .expect("run the child");
     assert!(
@@ -390,19 +387,19 @@ fn cache_gc_removes_entries_past_the_ttl() {
         );
     }
     let ir_key = key_of(0);
-    let ir_cache = ietsp::compile::cache::IrCache::locate(Some(path), false).expect("ir cache");
+    let ir_cache = iets::compile::cache::IrCache::locate(Some(path), false).expect("ir cache");
     ir_cache.write(&ir_key, b"ir entry");
     let ir = dir.join("ir").join(&ir_key[..2]);
     assert!(ir.join(&ir_key[2..]).exists(), "an IR entry to sweep");
 
     let gc = |args: &[&str]| {
-        let out = Command::new(env!("CARGO_BIN_EXE_ietsp"))
+        let out = Command::new(env!("CARGO_BIN_EXE_iets"))
             .args(["cache", "gc", "--cache-dir"])
             .arg(&dir)
             .args(args)
             .env("XDG_CONFIG_HOME", "/nonexistent")
             .output()
-            .expect("run ietsp cache gc");
+            .expect("run iets cache gc");
         assert!(out.status.success(), "cache gc exits 0");
         String::from_utf8(out.stdout).expect("utf-8 output")
     };

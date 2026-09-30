@@ -1,5 +1,5 @@
 #!/usr/bin/env nu
-# End-to-end test of `ietsp build` over an attribute tree, against the local
+# End-to-end test of `iets build` over an attribute tree, against the local
 # nix-daemon.
 #
 # The flake has `checks.<system>` for two systems with four tiny /bin/sh
@@ -17,14 +17,14 @@
 #
 # usage: nu scripts/build-e2e.nu
 #        BIN=target/debug nu scripts/build-e2e.nu
-use lib.nu [current-system checks-flake ietsp-bin isolate verdict]
+use lib.nu [current-system checks-flake iets-bin isolate verdict]
 
 def --wrapped go [...cmd: string]: nothing -> record {
   ^($cmd | first) ...($cmd | skip 1) | complete
 }
 
 def main [] {
-  let ietsp = (ietsp-bin)
+  let iets = (iets-bin)
   let tmp = (isolate build-e2e)
   let system = (current-system)
   let flake = $"($tmp)/flake"
@@ -34,7 +34,7 @@ def main [] {
   mut ok = []
 
   print "== 1. build path:DIR#checks"
-  let r1 = (go $ietsp build --builder daemon $checks)
+  let r1 = (go $iets build --builder daemon $checks)
   let paths = ($r1.stdout | lines)
   $ok = ($ok | append (verdict ($r1.exit_code == 100) "a failing check exits 100" $"exit ($r1.exit_code)"))
   $ok = ($ok | append (verdict ($r1.stderr =~ $"checks.($system).bad failed") "the failing attribute is named" $r1.stderr))
@@ -46,7 +46,7 @@ def main [] {
   $ok = ($ok | append (verdict (not ($r1.stderr =~ 'aarch64-linux')) "the other system is not evaluated into the build" $r1.stderr))
 
   print "== 2. --json"
-  let r2 = (go $ietsp build --builder daemon --json $checks)
+  let r2 = (go $iets build --builder daemon --json $checks)
   let j = ($r2.stdout | from json)
   let bad = ($j.outcomes | where attr == $"checks.($system).bad" | first)
   let goods = ($j.outcomes | where attr != $"checks.($system).bad")
@@ -62,12 +62,12 @@ def main [] {
   $ok = ($ok | append (verdict ($r2.stderr =~ 'about to fail') "the failure is tried again" $r2.stderr))
 
   print "== 4. one root"
-  let r4 = (go $ietsp build --builder daemon $"($checks).($system).bad")
+  let r4 = (go $iets build --builder daemon $"($checks).($system).bad")
   $ok = ($ok | append (verdict (($r4.exit_code == 100) and ($r4.stdout == "")) "the failing check alone: exit 100, no path" $"exit ($r4.exit_code) ($r4.stdout)"))
   $ok = ($ok | append (verdict (not ($r4.stderr =~ ' built, ')) "one root has no closing line" $r4.stderr))
-  let r4p = (go $ietsp build --builder daemon $"path:($flake)#packages")
+  let r4p = (go $iets build --builder daemon $"path:($flake)#packages")
   $ok = ($ok | append (verdict (($r4p.exit_code == 0) and ($r4p.stdout =~ '-fb-lone\n$')) "#packages builds its one member" $"exit ($r4p.exit_code) ($r4p.stdout)"))
-  let r4o = (go $ietsp build --builder daemon $"path:($flake)#checks.aarch64-linux" --dry-run --json)
+  let r4o = (go $iets build --builder daemon $"path:($flake)#checks.aarch64-linux" --dry-run --json)
   $ok = ($ok | append (verdict (($r4o.stdout | from json | get willBuild | length) == 4) "a system named in full is walked as it is" $r4o.stdout))
 
   print "== 5. a file, -A and --argstr"
@@ -76,22 +76,22 @@ def main [] {
 let f = import ($flake)/flake.nix; o = f.outputs { self = null; };
 in { ci = o.checks.${system}; }
 " | save -f $rel
-  let r5 = (go $ietsp build --builder daemon $rel -A ci --argstr system $system -k)
+  let r5 = (go $iets build --builder daemon $rel -A ci --argstr system $system -k)
   $ok = ($ok | append (verdict ($r5.exit_code == 100) "-A ci reaches the failing check" $"exit ($r5.exit_code)"))
   $ok = ($ok | append (verdict ($r5.stderr =~ 'ci.bad failed') "the failure is named by its attribute path" $r5.stderr))
   $ok = ($ok | append (verdict (($r5.stdout | lines) == $paths) "the same paths as the flake gave" $r5.stdout))
 
   print "== 6. --dry-run over a tree"
   checks-flake $"($tmp)/fresh"
-  let r6 = (go $ietsp build --builder daemon --dry-run --json $"path:($tmp)/fresh#checks")
+  let r6 = (go $iets build --builder daemon --dry-run --json $"path:($tmp)/fresh#checks")
   let m = ($r6.stdout | from json)
   $ok = ($ok | append (verdict (($r6.exit_code == 0) and (($m.willBuild | length) == 4)) "the plan has the four checks" $r6.stdout))
 
   print "== 7. no verdict without an evaluation"
-  let r7 = (go $ietsp build --builder daemon --no-tracing-cache -E $"let f = import ($tmp)/fresh/flake.nix; in \(f.outputs { self = null; }\).checks.($system) // { broken = throw \"boom\"; }")
+  let r7 = (go $iets build --builder daemon --no-tracing-cache -E $"let f = import ($tmp)/fresh/flake.nix; in \(f.outputs { self = null; }\).checks.($system) // { broken = throw \"boom\"; }")
   $ok = ($ok | append (verdict (($r7.exit_code == 1) and ($r7.stdout == "") and ($r7.stderr =~ 'boom')) "an attribute that throws stops the run" $"exit ($r7.exit_code) ($r7.stderr)"))
   $ok = ($ok | append (verdict (not ($r7.stderr =~ 'building fb-')) "nothing was built" $r7.stderr))
-  let r7e = (go $ietsp build --builder daemon -E '{ a = { }; }')
+  let r7e = (go $iets build --builder daemon -E '{ a = { }; }')
   $ok = ($ok | append (verdict (($r7e.exit_code == 1) and ($r7e.stderr =~ 'nothing to build')) "a tree with no derivation is an error" $"exit ($r7e.exit_code) ($r7e.stderr)"))
 
   print "== 8. a failure in a dependency"
@@ -108,9 +108,9 @@ in {
   overFod = derivation { name = \"be-over-fod\"; system = \"($system)\"; builder = \"/bin/sh\"; args = [ \"-c\" \"echo x > $out\" ]; dep = depFod; inherit salt; };
 }
 " | save -f $deps
-  let r8a = (go $ietsp build --builder daemon $deps -A overFail)
+  let r8a = (go $iets build --builder daemon $deps -A overFail)
   $ok = ($ok | append (verdict ($r8a.exit_code == 100) "a dependency that failed to build exits 100" $"exit ($r8a.exit_code)"))
-  let r8b = (go $ietsp --ietsp-option fix-hashes never build --builder daemon $deps -A overFod)
+  let r8b = (go $iets --iets-option fix-hashes never build --builder daemon $deps -A overFod)
   $ok = ($ok | append (verdict ($r8b.exit_code == 102) "a dependency with a hash mismatch exits 102" $"exit ($r8b.exit_code)"))
   $ok = ($ok | append (verdict ($r8b.stderr =~ 'be-depfod failed') "the dependency that failed keeps no check mark" $r8b.stderr))
 
@@ -129,7 +129,7 @@ in {
   };
 }
 " | save -f $forge
-  let r9 = (go $ietsp --ietsp-option fix-hashes always build --builder daemon $forge -A forge)
+  let r9 = (go $iets --iets-option fix-hashes always build --builder daemon $forge -A forge)
   $ok = ($ok | append (verdict ((open --raw $forge) | str contains $good) "a forged mismatch never rewrites a hash in the file" (open --raw $forge)))
   $ok = ($ok | append (verdict (not ($r9.stderr =~ 'fixed: ')) "nothing was fixed" $r9.stderr))
 

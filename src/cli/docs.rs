@@ -1,13 +1,13 @@
-//! The documentation an installed binary carries: `ietsp help TOPIC`.
+//! The documentation an installed binary carries: `iets help TOPIC`.
 //!
 //! The reference quadrant is embedded with `include_str!`, so a binary
-//! answers `ietsp help settings` with no `docs/` directory in sight. The
+//! answers `iets help settings` with no `docs/` directory in sight. The
 //! other quadrants stay in the repository and their topics print the path
 //! they live at.
 
 use std::process::exit;
 
-/// One documentation page `ietsp help` can be asked for.
+/// One documentation page `iets help` can be asked for.
 pub struct Page {
     /// The bare topic name, which is also the file's base name.
     pub topic: &'static str,
@@ -67,7 +67,7 @@ pub const PAGES: &[Page] = &[
     ),
     embedded(
         "settings",
-        "ietsp.toml, the IETSP_* variables and nix.conf",
+        "iets.toml, the IETS_* variables and nix.conf",
         include_str!("../../docs/reference/settings.md"),
     ),
     embedded(
@@ -82,7 +82,7 @@ pub const PAGES: &[Page] = &[
     ),
     embedded(
         "syntax-tree",
-        "the JSON of 'ietsp parse --json'",
+        "the JSON of 'iets parse --json'",
         include_str!("../../docs/reference/syntax-tree.md"),
     ),
     embedded(
@@ -92,7 +92,7 @@ pub const PAGES: &[Page] = &[
     ),
     embedded(
         "divergences",
-        "where ietsp differs from Nix 2.34.8",
+        "where iets differs from Nix 2.34.8",
         include_str!("../../docs/reference/divergences.md"),
     ),
     embedded(
@@ -117,7 +117,7 @@ pub const PAGES: &[Page] = &[
         "put the classic names on PATH",
     ),
     in_repo("how-to", "fix-hashes", "let a build write the hash it got"),
-    in_repo("how-to", "script-ietsp", "drive it from a program"),
+    in_repo("how-to", "script-iets", "drive it from a program"),
     in_repo("how-to", "embed-the-evaluator", "link the library"),
     in_repo("explanation", "evaluation", "how the evaluator works"),
     in_repo("explanation", "caching", "what the caches hold and key on"),
@@ -136,7 +136,7 @@ pub const PAGES: &[Page] = &[
         "provenance",
         "store paths back to local trees",
     ),
-    in_repo("explanation", "lint-scope", "what ietsp lints, and why"),
+    in_repo("explanation", "lint-scope", "what iets lints, and why"),
     in_repo("explanation", "history", "how it got here"),
 ];
 
@@ -156,16 +156,16 @@ pub fn names() -> impl Iterator<Item = &'static str> {
     PAGES.iter().map(|p| p.topic)
 }
 
-/// The topic block of `ietsp help`.
+/// The topic block of `iets help`.
 pub fn list() -> String {
-    let mut s = String::from("\ntopics: 'ietsp help TOPIC' prints a page\n");
+    let mut s = String::from("\ntopics: 'iets help TOPIC' prints a page\n");
     for p in PAGES {
         let mark = if p.text.is_some() { ' ' } else { '*' };
         s.push_str(&format!("{mark} {:<22} {}\n", p.topic, p.about));
     }
     s.push_str(
         "\n* is a page this binary does not carry: it is docs/<quadrant>/<topic>.md\n  \
-         in the ietsp repository, and 'ietsp help TOPIC' prints that path.\n",
+         in the iets repository, and 'iets help TOPIC' prints that path.\n",
     );
     s
 }
@@ -175,8 +175,8 @@ pub fn show(p: &Page) -> ! {
     match p.text {
         Some(t) => crate::cli::help::out(t),
         None => crate::cli::help::out(&format!(
-            "'{topic}' is docs/{q}/{topic}.md in the ietsp repository.\n\
-             This binary carries the reference pages only; 'ietsp help' lists them.\n",
+            "'{topic}' is docs/{q}/{topic}.md in the iets repository.\n\
+             This binary carries the reference pages only; 'iets help' lists them.\n",
             topic = p.topic,
             q = p.quadrant
         )),

@@ -8,7 +8,7 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use ietsp::store::nar;
+use iets::store::nar;
 
 fn have_nix() -> bool {
     Command::new("nix")
@@ -18,7 +18,7 @@ fn have_nix() -> bool {
 }
 
 fn tmp(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("ietsp-narparity-{}-{tag}", std::process::id()));
+    let d = std::env::temp_dir().join(format!("iets-narparity-{}-{tag}", std::process::id()));
     let _ = fs::remove_dir_all(&d);
     fs::create_dir_all(&d).expect("temp dir");
     d

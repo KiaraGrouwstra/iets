@@ -1,7 +1,7 @@
 # Provenance: from a store path back to the file that made it
 
 A store path tells you nothing about the tree it came from. A `.drv` path
-tells you nothing about the attribute that made it. ietsp keeps both while
+tells you nothing about the attribute that made it. iets keeps both while
 it evaluates, and prints them.
 
 So a failed build says this:
@@ -35,7 +35,7 @@ of you. It stops being fine at the two moments you most need to know:
   under a name that does not exist in your editor.
 
 Both are cheap to fix at the moment the information exists, and expensive
-to reconstruct afterwards. So ietsp records it during evaluation.
+to reconstruct afterwards. So iets records it during evaluation.
 
 ## The source map
 
@@ -54,10 +54,10 @@ Three things fill it:
    working on.
 2. **The `source-map` setting**, for trees this evaluation did not copy.
    A list of `"STOREPATH=LOCALDIR"` strings, in the user
-   `ietsp.toml`. This
+   `iets.toml`. This
    is how a nixpkgs checkout is mapped onto the store path of the nixpkgs
    the lock names. It was a `nix.conf` setting first; Nix warns about a key
-   it does not know, so it moved to ietsp's own file. Nothing checks that
+   it does not know, so it moved to iets's own file. Nothing checks that
    the directory holds the same tree as the store path.
 3. **A revision**, for display only, when the root flake is a git working
    tree: the `HEAD` commit, with `-dirty` appended when the tree is dirty.
@@ -91,7 +91,7 @@ The flake root and `./.` cases build `derivation` directly or set `name` in
 the package file, so they point where you want.
 
 **The attribute path comes from the command line walk, not from the
-evaluator.** Classic mode records the path it walked; `ietsp build` uses
+evaluator.** Classic mode records the path it walked; `iets build` uses
 `-A` or the flake fragment. The evaluator core is untouched by any of this.
 
 ## What is printed, and what is not
@@ -123,7 +123,7 @@ Some things are deliberately not mapped:
 - **`builtins.toFile` texts**, which are held in memory and come from no
   local tree.
 
-`IETSP_PROVENANCE=0` turns every rewrite and every provenance line off, for
+`IETS_PROVENANCE=0` turns every rewrite and every provenance line off, for
 a byte comparison against the real `nix`.
 
 ## One position, one verdict

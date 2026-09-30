@@ -1,5 +1,5 @@
-//! ietsp's own settings: the `ietsp.toml` files, `--ietsp-option` and every
-//! `IETSP_*` environment knob, read once into one struct. Each key, its type,
+//! iets's own settings: the `iets.toml` files, `--iets-option` and every
+//! `IETS_*` environment knob, read once into one struct. Each key, its type,
 //! its default and its effect: docs/reference/settings.md.
 
 use std::collections::BTreeMap;
@@ -37,59 +37,59 @@ pub struct Settings {
     pub builder: Option<String>,
     /// `source-map`: `STOREPATH=LOCALDIR` pairs (docs/explanation/provenance.md).
     pub source_map: Vec<(String, String)>,
-    /// `workers`, `IETSP_WORKERS`: worker threads. `None` asks the machine.
+    /// `workers`, `IETS_WORKERS`: worker threads. `None` asks the machine.
     pub workers: Option<usize>,
-    /// `fiber-stack-mb`, `IETSP_FIBER_STACK_MB`: fiber stack size in MiB.
+    /// `fiber-stack-mb`, `IETS_FIBER_STACK_MB`: fiber stack size in MiB.
     pub fiber_stack_mb: Option<usize>,
-    /// `IETSP_SPIN`: scans an idle searcher makes before it parks.
+    /// `IETS_SPIN`: scans an idle searcher makes before it parks.
     pub spin: u32,
-    /// `IETSP_SPINNERS`: idle workers that may search at once. `None` is
+    /// `IETS_SPINNERS`: idle workers that may search at once. `None` is
     /// a quarter of the workers.
     pub spinners: Option<usize>,
-    /// `IETSP_HANDOFF`: queued tasks per awake worker that wake a sleeper.
+    /// `IETS_HANDOFF`: queued tasks per awake worker that wake a sleeper.
     pub handoff: usize,
-    /// `IETSP_FANOUT` bitmask: 1 deep, 2 coerce, 4 list builtins.
+    /// `IETS_FANOUT` bitmask: 1 deep, 2 coerce, 4 list builtins.
     pub fanout: u32,
-    /// `IETSP_PAR_STATS`: 1 the summary line, 2 adds the timeline.
+    /// `IETS_PAR_STATS`: 1 the summary line, 2 adds the timeline.
     pub par_stats: u8,
-    /// `IETSP_STATS`: 1 the evaluator counters, 2 adds the memory census.
+    /// `IETS_STATS`: 1 the evaluator counters, 2 adds the memory census.
     pub stats: u8,
-    /// `cache`, `IETSP_CACHE`: the tracing and IR caches.
+    /// `cache`, `IETS_CACHE`: the tracing and IR caches.
     pub cache: bool,
-    /// `cache-dir`, `IETSP_CACHE_DIR`: cache root, below `--cache-dir`.
+    /// `cache-dir`, `IETS_CACHE_DIR`: cache root, below `--cache-dir`.
     pub cache_dir: Option<PathBuf>,
-    /// `IETSP_IR_STATS`: one line per compiled file on stderr.
+    /// `IETS_IR_STATS`: one line per compiled file on stderr.
     pub ir_stats: bool,
-    /// `IETSP_IR_MIN`: sources below this size are not cached.
+    /// `IETS_IR_MIN`: sources below this size are not cached.
     pub ir_min: usize,
-    /// `provenance`, `IETSP_PROVENANCE`: `false` prints plain store paths.
+    /// `provenance`, `IETS_PROVENANCE`: `false` prints plain store paths.
     pub provenance: bool,
-    /// `nix-bin-dir`, `IETSP_NIX_BIN_DIR`: where the real Nix binaries live.
+    /// `nix-bin-dir`, `IETS_NIX_BIN_DIR`: where the real Nix binaries live.
     pub nix_bin_dir: Option<PathBuf>,
-    /// `no-fallback`, `IETSP_NO_FALLBACK`: fail instead of running the real Nix.
+    /// `no-fallback`, `IETS_NO_FALLBACK`: fail instead of running the real Nix.
     pub no_fallback: bool,
     /// `shell-gc-root`: `nix-shell` and `nix develop` keep the closure they
-    /// entered alive with a link in ietsp's roots store
+    /// entered alive with a link in iets's roots store
     /// (docs/explanation/caching.md). `false` keeps none, for a small disk.
     pub shell_gc_root: bool,
-    /// `build-gc-root`: `ietsp build` keeps the outputs it printed alive, and
+    /// `build-gc-root`: `iets build` keeps the outputs it printed alive, and
     /// `--no-out-link`/`--no-link` keeps a root instead of nothing
     /// (docs/reference/divergences.md). `false` is Nix's behaviour back.
     pub build_gc_root: bool,
-    /// `IETSP_FETCHING`: set on the Nix we call to fetch a flake input, so
+    /// `IETS_FETCHING`: set on the Nix we call to fetch a flake input, so
     /// a recursive fetch is an error instead of a loop.
     pub fetching: bool,
-    /// `IETSP_OFFLINE`: any download is an error. A flake whose inputs the
+    /// `IETS_OFFLINE`: any download is an error. A flake whose inputs the
     /// input store already holds evaluates; one that would fetch fails and says
     /// which URL it wanted.
     pub offline: bool,
     /// `fetch-max-size`: the most bytes one download may decompress to.
     pub fetch_max_size: u64,
-    /// `fix-hashes`: what `ietsp build` does with a wrong fixed-output hash
+    /// `fix-hashes`: what `iets build` does with a wrong fixed-output hash
     /// (docs/reference/settings.md).
     pub fix_hashes: FixHashes,
-    /// The `--ietsp-option` pairs this run was given, in flag order. A
-    /// command that starts a second ietsp passes them on: they left the argv
+    /// The `--iets-option` pairs this run was given, in flag order. A
+    /// command that starts a second iets passes them on: they left the argv
     /// in [`take_options`], so they are nowhere else.
     pub options: Vec<(String, String)>,
 }
@@ -102,22 +102,22 @@ pub enum FixHashes {
     Never,
 }
 
-/// The flag every ietsp command and every classic name accepts. It is ours, so
+/// The flag every iets command and every classic name accepts. It is ours, so
 /// it never reaches the real nix: [`take_options`] removes it from the argv a
 /// fallback execs.
-pub const FLAG: &str = "--ietsp-option";
+pub const FLAG: &str = "--iets-option";
 
 /// What [`take_options`] splits a command line into.
 pub type Taken = (Vec<String>, Vec<(String, String)>);
 
-/// `argv` without its `--ietsp-option name value` triples, and the pairs
+/// `argv` without its `--iets-option name value` triples, and the pairs
 /// themselves for [`Settings::load`]. Call it before any setting is read.
 pub fn take_options(argv: &[String]) -> Result<Taken> {
     let mut rest = Vec::with_capacity(argv.len());
     let mut opts = Vec::new();
     let mut i = 0;
     // `--` ends this command's flags: what follows belongs to whatever the
-    // command runs, and that may be a second ietsp with options of its own
+    // command runs, and that may be a second iets with options of its own
     let end = argv.iter().position(|a| a == "--").unwrap_or(argv.len());
     while i < argv.len() {
         if argv[i] != FLAG || i >= end {
@@ -147,14 +147,14 @@ pub fn builder(flag: Option<&str>, cfg: &crate::config::Config) -> String {
         .unwrap_or_else(|| cfg.store())
 }
 
-/// The user's settings file. It may set every key; a project's `ietsp.toml`
-/// may not ([`check_project`]). There is no machine file: ietsp is a client,
+/// The user's settings file. It may set every key; a project's `iets.toml`
+/// may not ([`check_project`]). There is no machine file: iets is a client,
 /// and what it builds with is the user's (docs/reference/settings.md).
 pub fn conf_file() -> PathBuf {
-    crate::config::config_home().join("ietsp/ietsp.toml")
+    crate::config::config_home().join("iets/iets.toml")
 }
 
-/// Refuses every key of a project's `ietsp.toml` but `lint`. The file comes
+/// Refuses every key of a project's `iets.toml` but `lint`. The file comes
 /// with whatever repository was cloned, so it may not decide what runs
 /// (`nix-bin-dir`), where sources go (`builder`) or what gets rewritten
 /// (`fix-hashes`): docs/reference/settings.md has the threat model.
@@ -177,7 +177,7 @@ pub fn check_project(text: &str, origin: &Path) -> std::result::Result<(), Strin
 }
 
 impl Settings {
-    /// The file, then `$IETSP_CONFIG`, then `overrides`, then the environment
+    /// The file, then `$IETS_CONFIG`, then `overrides`, then the environment
     /// for the knobs that have a variable. Later wins.
     pub fn load(overrides: &[(String, String)]) -> Result<Settings> {
         Settings::load_from(&conf_file(), overrides, &Env(|n| std::env::var_os(n)))
@@ -190,8 +190,8 @@ impl Settings {
             Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {}
             Err(e) => return Err(Error::Config(format!("{}: {e}", file.display()))),
         }
-        if let Some(text) = env.str("IETSP_CONFIG") {
-            c.apply(&text, "$IETSP_CONFIG", false)?;
+        if let Some(text) = env.str("IETS_CONFIG") {
+            c.apply(&text, "$IETS_CONFIG", false)?;
         }
         for (name, value) in overrides {
             c.set(name, flag_value(name, value), FLAG, false)?;
@@ -202,8 +202,8 @@ impl Settings {
         })
     }
 
-    /// The `--ietsp-option` triples this run was given, for the argv of an
-    /// ietsp it starts.
+    /// The `--iets-option` triples this run was given, for the argv of an
+    /// iets it starts.
     pub fn option_argv(&self) -> Vec<String> {
         let triple = |(n, v): &(String, String)| [FLAG.to_string(), n.clone(), v.clone()];
         self.options.iter().flat_map(triple).collect()
@@ -227,7 +227,7 @@ impl Settings {
                 ));
             }
         }
-        let workers: Option<usize> = env.num("IETSP_WORKERS")?.or(c.int("workers")?);
+        let workers: Option<usize> = env.num("IETS_WORKERS")?.or(c.int("workers")?);
         if workers == Some(0) {
             return Err(Error::Config("workers must be 1 or more".into()));
         }
@@ -245,26 +245,24 @@ impl Settings {
             builder: c.str("builder")?,
             source_map,
             workers,
-            fiber_stack_mb: env
-                .num("IETSP_FIBER_STACK_MB")?
-                .or(c.int("fiber-stack-mb")?),
-            spin: env.num("IETSP_SPIN")?.unwrap_or(2000),
-            spinners: env.num("IETSP_SPINNERS")?,
-            handoff: env.num("IETSP_HANDOFF")?.unwrap_or(8),
-            fanout: env.num("IETSP_FANOUT")?.unwrap_or(7),
-            par_stats: env.level("IETSP_PAR_STATS"),
-            stats: env.level("IETSP_STATS"),
-            cache: env.flag("IETSP_CACHE", c.bool("cache")?, true)?,
-            cache_dir: env.dir("IETSP_CACHE_DIR").or(c.str("cache-dir")?),
-            ir_stats: env.set("IETSP_IR_STATS"),
-            ir_min: env.num("IETSP_IR_MIN")?.unwrap_or(1024),
-            provenance: env.flag("IETSP_PROVENANCE", c.bool("provenance")?, true)?,
-            nix_bin_dir: env.dir("IETSP_NIX_BIN_DIR").or(c.str("nix-bin-dir")?),
-            no_fallback: env.flag("IETSP_NO_FALLBACK", c.bool("no-fallback")?, false)?,
+            fiber_stack_mb: env.num("IETS_FIBER_STACK_MB")?.or(c.int("fiber-stack-mb")?),
+            spin: env.num("IETS_SPIN")?.unwrap_or(2000),
+            spinners: env.num("IETS_SPINNERS")?,
+            handoff: env.num("IETS_HANDOFF")?.unwrap_or(8),
+            fanout: env.num("IETS_FANOUT")?.unwrap_or(7),
+            par_stats: env.level("IETS_PAR_STATS"),
+            stats: env.level("IETS_STATS"),
+            cache: env.flag("IETS_CACHE", c.bool("cache")?, true)?,
+            cache_dir: env.dir("IETS_CACHE_DIR").or(c.str("cache-dir")?),
+            ir_stats: env.set("IETS_IR_STATS"),
+            ir_min: env.num("IETS_IR_MIN")?.unwrap_or(1024),
+            provenance: env.flag("IETS_PROVENANCE", c.bool("provenance")?, true)?,
+            nix_bin_dir: env.dir("IETS_NIX_BIN_DIR").or(c.str("nix-bin-dir")?),
+            no_fallback: env.flag("IETS_NO_FALLBACK", c.bool("no-fallback")?, false)?,
             shell_gc_root: c.bool("shell-gc-root")?.unwrap_or(true),
             build_gc_root: c.bool("build-gc-root")?.unwrap_or(true),
-            fetching: env.set("IETSP_FETCHING"),
-            offline: env.set("IETSP_OFFLINE"),
+            fetching: env.set("IETS_FETCHING"),
+            offline: env.set("IETS_OFFLINE"),
             fetch_max_size: c.int("fetch-max-size")?.unwrap_or(16 << 30),
             fix_hashes: fix_hashes.unwrap_or(FixHashes::Ask),
             options: Vec::new(),
@@ -284,7 +282,7 @@ impl Default for Settings {
     }
 }
 
-/// The VALUE of `--ietsp-option NAME VALUE`: a TOML boolean, integer, string
+/// The VALUE of `--iets-option NAME VALUE`: a TOML boolean, integer, string
 /// or array when it reads as one, else the text itself, so `fix-hashes always`
 /// needs no quotes. Bare text for `source-map` is a whitespace-separated list.
 fn flag_value(name: &str, value: &str) -> toml::Value {
@@ -326,7 +324,7 @@ impl Conf {
         }
         if !KEYS.contains(&name) {
             return Err(Error::Config(format!(
-                "unknown ietsp setting '{name}' in {at}"
+                "unknown iets setting '{name}' in {at}"
             )));
         }
         let mut at = at.to_string();
@@ -355,7 +353,7 @@ impl Conf {
         };
         read(v).map(Some).ok_or_else(|| {
             Error::Config(format!(
-                "ietsp setting '{name}' wants {want}, got {v} in {at}"
+                "iets setting '{name}' wants {want}, got {v} in {at}"
             ))
         })
     }
@@ -373,7 +371,7 @@ impl Conf {
     }
 }
 
-/// A Boolean `IETSP_*` variable, parsed the way nix.conf parses a Boolean.
+/// A Boolean `IETS_*` variable, parsed the way nix.conf parses a Boolean.
 fn env_bool(name: &str, v: &std::ffi::OsStr) -> Result<bool> {
     let bad = || Error::Config(format!("{name}: '{}' is not true or false", v.display()));
     crate::config::parse_bool(name, v.to_str().ok_or_else(bad)?).map_err(|_| bad())
@@ -413,8 +411,8 @@ impl Env {
     }
 
     /// The environment wins over the file, which wins over `default`. The
-    /// value is a nix.conf Boolean, so `IETSP_CACHE=false` turns the cache
-    /// off and `IETSP_NO_FALLBACK=yes` turns the fallback off.
+    /// value is a nix.conf Boolean, so `IETS_CACHE=false` turns the cache
+    /// off and `IETS_NO_FALLBACK=yes` turns the fallback off.
     fn flag(&self, name: &str, file: Option<bool>, default: bool) -> Result<bool> {
         match (self.0)(name) {
             Some(v) => env_bool(name, &v),
@@ -434,10 +432,10 @@ mod tests {
     const NO_ENV: Env = Env(|_| None);
 
     fn scratch(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("ietsp-settings-{name}-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("iets-settings-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(d.join("user")).unwrap();
-        d.join("user/ietsp.toml")
+        d.join("user/iets.toml")
     }
 
     fn opts(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -462,9 +460,9 @@ mod tests {
         )
         .unwrap();
         let env = Env(|n| match n {
-            "IETSP_CONFIG" => Some("builder = \"inline\"\nworkers = 3\n".into()),
-            "IETSP_WORKERS" => Some("5".into()),
-            "IETSP_CACHE" => Some("1".into()),
+            "IETS_CONFIG" => Some("builder = \"inline\"\nworkers = 3\n".into()),
+            "IETS_WORKERS" => Some("5".into()),
+            "IETS_CACHE" => Some("1".into()),
             _ => None,
         });
         let s = Settings::load_from(&file, &opts(&[("builder", "flag")]), &env).unwrap();
@@ -472,12 +470,12 @@ mod tests {
         assert_eq!(s.workers, Some(5));
         assert_eq!(s.fiber_stack_mb, Some(2));
         assert_eq!(s.fetch_max_size, 1);
-        assert!(s.cache, "IETSP_CACHE=1 wins over cache = false");
+        assert!(s.cache, "IETS_CACHE=1 wins over cache = false");
         let s = Settings::load_from(&file, &[], &NO_ENV).unwrap();
         assert_eq!(s.builder.as_deref(), Some("user"));
         assert_eq!(s.workers, Some(2));
         assert!(!s.cache);
-        let inline = Env(|n| (n == "IETSP_CONFIG").then(|| "workers = 3".into()));
+        let inline = Env(|n| (n == "IETS_CONFIG").then(|| "workers = 3".into()));
         let s = Settings::load_from(&file, &opts(&[("workers", "4")]), &inline).unwrap();
         assert_eq!(s.workers, Some(4));
         let s = Settings::load_from(&file, &[], &inline).unwrap();
@@ -489,7 +487,7 @@ mod tests {
         let file = scratch("lists");
         std::fs::write(&file, "source-map = [\"/nix/store/a=/a\"]\n").unwrap();
         let inline =
-            Env(|n| (n == "IETSP_CONFIG").then(|| "source-map = [\"/nix/store/b=/b\"]".into()));
+            Env(|n| (n == "IETS_CONFIG").then(|| "source-map = [\"/nix/store/b=/b\"]".into()));
         let o = opts(&[("source-map", "/nix/store/c=/c /nix/store/d=/d")]);
         let s = Settings::load_from(&file, &o, &inline).unwrap();
         let stores: Vec<&str> = s.source_map.iter().map(|(s, _)| s.as_str()).collect();
@@ -508,7 +506,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(e.contains("'source-map' wants a list"), "{e}");
-        assert!(e.contains("user/ietsp.toml"), "{e}");
+        assert!(e.contains("user/iets.toml"), "{e}");
     }
 
     #[test]
@@ -524,14 +522,14 @@ mod tests {
 
     #[test]
     fn a_project_file_holds_lint_and_nothing_else() {
-        let at = Path::new("/repo/ietsp.toml");
+        let at = Path::new("/repo/iets.toml");
         assert_eq!(check_project("[lint]\npath-copy = \"warn\"\n", at), Ok(()));
         assert_eq!(check_project("", at), Ok(()));
         for key in KEYS {
             let e = check_project(&format!("{key} = true\n[lint]\n"), at).unwrap_err();
             assert!(
                 e.starts_with(&format!(
-                    "/repo/ietsp.toml: '{key}' may not be set in a project file"
+                    "/repo/iets.toml: '{key}' may not be set in a project file"
                 )),
                 "{e}"
             );
@@ -553,9 +551,9 @@ mod tests {
     fn a_settings_file_may_hold_lint_and_the_other_sources_may_not() {
         assert!(load("[lint]\npath-copy = \"warn\"\n").is_ok());
         let mut c = Conf::default();
-        let e = c.apply("[lint]\n", "$IETSP_CONFIG", false).unwrap_err();
+        let e = c.apply("[lint]\n", "$IETS_CONFIG", false).unwrap_err();
         assert!(
-            e.to_string().contains("setting 'lint' in $IETSP_CONFIG"),
+            e.to_string().contains("setting 'lint' in $IETS_CONFIG"),
             "{e}"
         );
     }
@@ -566,7 +564,7 @@ mod tests {
             .map(|_| ())
             .unwrap_err()
             .to_string();
-        assert_eq!(e, "unknown ietsp setting 'nope' in t.toml");
+        assert_eq!(e, "unknown iets setting 'nope' in t.toml");
         let e = load("extra-source-map = []\n").map(|_| ()).unwrap_err();
         assert!(e.to_string().contains("'extra-source-map'"), "{e}");
     }
@@ -684,7 +682,7 @@ mod tests {
 
     /// The pairs go on the argv of the worker processes eval-jobs starts.
     #[test]
-    fn the_flag_pairs_are_kept_for_a_second_ietsp() {
+    fn the_flag_pairs_are_kept_for_a_second_iets() {
         let o = opts(&[("workers", "2"), ("cache-dir", "/d")]);
         let s = Settings::load_from(Path::new("/nonexistent"), &o, &NO_ENV).unwrap();
         assert_eq!(
@@ -701,6 +699,6 @@ mod tests {
 
     #[test]
     fn the_file_is_the_users() {
-        assert!(conf_file().ends_with("ietsp/ietsp.toml"));
+        assert!(conf_file().ends_with("iets/iets.toml"));
     }
 }

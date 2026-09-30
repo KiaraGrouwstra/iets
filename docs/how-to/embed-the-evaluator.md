@@ -6,7 +6,7 @@
 > grows without limit. Use the library for a run-once frontend: another
 > command line, a test harness, a one-shot tool. The API can change.
 
-The crate is a library with a thin `ietsp` binary on top. Another command
+The crate is a library with a thin `iets` binary on top. Another command
 line or a one-shot tool links the library and calls the
 entry points. Nothing is process-global, so two evaluators can run side by
 side in one process.
@@ -25,15 +25,15 @@ messages go, the tree store, the `nix.conf` that was read, the hash
 mismatches a build reported.
 
 ```rust
-let session = ietsp::session::Session::new();
-session.load_settings(&[])?;            // ietsp.toml, optional
+let session = iets::session::Session::new();
+session.load_settings(&[])?;            // iets.toml, optional
 session.log.write_to_stderr();          // or leave the sink unset
 let _entered = session.enter();         // for this thread
-let mut ev = ietsp::eval::Evaluator::new();   // adopts the session
+let mut ev = iets::eval::Evaluator::new();   // adopts the session
 ```
 
 The library never writes to stdout or stderr on its own: a session's log
-sink starts as nothing, and `write_to_stderr()` is what the `ietsp` binary
+sink starts as nothing, and `write_to_stderr()` is what the `iets` binary
 itself does. The library never exits either. It returns errors and your
 program decides the exit code.
 
@@ -47,7 +47,7 @@ thread-local altogether.
 `examples/eval.rs` is a complete frontend. Its core:
 
 ```rust
-use ietsp::api::{self, EvalArgs, Input};
+use iets::api::{self, EvalArgs, Input};
 
 let mut a = EvalArgs { strict: true, json: true, ..EvalArgs::new() };
 a.input = Some(Input::Expr("{ a = 1; b = [1 2]; }".into()));
@@ -80,7 +80,7 @@ evaluator has no setter, so a setting that you want goes to the
 `EvalConfig`:
 
 ```rust
-let config = ietsp::eval::EvalConfig::new().system("aarch64-linux").pure(true);
+let config = iets::eval::EvalConfig::new().system("aarch64-linux").pure(true);
 let run = api::run::Run::over(config, &a)?;
 ```
 
@@ -105,8 +105,8 @@ getter that dereferences it are `pub(crate)`, so no safe call can invent
 one. Pass a `Word` back to the library, or read it through `api::value`.
 
 ```rust
-use ietsp::api::value::Eval;
-use ietsp::eval::Evaluator;
+use iets::api::value::Eval;
+use iets::eval::Evaluator;
 
 let mut evaluator = Evaluator::new();
 let mut e = Eval::new(&mut evaluator);
@@ -214,7 +214,7 @@ store path. Each `DrvInfo` carries `attr` and `pos`, and
 trees they were copied from. See
 [explanation/provenance.md](../explanation/provenance.md).
 
-## Report errors the way ietsp does
+## Report errors the way iets does
 
 ```rust
 api::report(ev, &err);          // to the session log; returns the exit code

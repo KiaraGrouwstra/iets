@@ -1,6 +1,6 @@
-# How to use ietsp with direnv
+# How to use iets with direnv
 
-`ietsp print-dev-env` prints the bash that `nix print-dev-env` prints, byte
+`iets print-dev-env` prints the bash that `nix print-dev-env` prints, byte
 for byte. It replaces nix-direnv's `use flake` in an `.envrc`, and it
 answers from the cache in tens of milliseconds instead of seconds.
 
@@ -11,15 +11,15 @@ The flags are in [reference/commands.md](../reference/commands.md).
 Add this to your `.envrc`:
 
 ```bash
-use_ietsp() {
+use_iets() {
   local root script
-  root="$(direnv_layout_dir)/ietsp-env"
+  root="$(direnv_layout_dir)/iets-env"
   watch_file flake.nix flake.lock
-  script="$(ietsp print-dev-env --builder daemon --gc-root "$root" "${1:-.}")" || true
-  eval "$(ietsp print-dev-env --watch-files "${1:-.}")"
+  script="$(iets print-dev-env --builder daemon --gc-root "$root" "${1:-.}")" || true
+  eval "$(iets print-dev-env --watch-files "${1:-.}")"
   eval "$script"
 }
-use_ietsp
+use_iets
 ```
 
 Then `direnv allow`.
@@ -52,7 +52,7 @@ empty string leaves your environment alone.
 ## What direnv reloads on
 
 nix-direnv watches `flake.nix` and `flake.lock` and leaves the rest to
-`direnv reload`. ietsp does not have to guess. The tracing cache records
+`direnv reload`. iets does not have to guess. The tracing cache records
 every observation the evaluation made
 ([explanation/caching.md](../explanation/caching.md)), and `--watch-files`
 turns that read set into direnv watches:
@@ -70,7 +70,7 @@ it one, the index changes, and direnv reloads.
 
 Some things are left out on purpose:
 
-- Everything under `/nix/store` and in ietsp's own stores. Those paths do
+- Everything under `/nix/store` and in iets's own stores. Those paths do
   not change.
 - The flake's source tree as a whole. Every edit of every file changes it,
   and few shells depend on it, so a watch on it would cost an evaluation for
@@ -81,7 +81,7 @@ Some things are left out on purpose:
   a variable, and it does not run `.envrc` again when one changes. The cache
   still checks them, so the next reload for any other reason evaluates again.
 - More than 500 paths. direnv stats every watched path on every prompt, so
-  the list has a bound: 500 watches add about 3 ms to a prompt. ietsp keeps
+  the list has a bound: 500 watches add about 3 ms to a prompt. iets keeps
   the first 500 in the order the evaluation read them, and says so on
   stderr. A usual flake shell has 10 to 20.
 
@@ -91,7 +91,7 @@ still there, so direnv still watches the file you have to fix.
 
 ## Use the NixOS module instead
 
-If you run NixOS, import `nixosModules.default`. It installs ietsp and
+If you run NixOS, import `nixosModules.default`. It installs iets and
 replaces nix-direnv's `use flake` with the repository's own `direnvrc`, for
 local flake references with an optional `#attr`. Keep `use flake` in your
 `.envrc` and change nothing else.
@@ -103,14 +103,14 @@ Without a fragment, `print-dev-env` takes the first of
 `packages.<system>.default` and `defaultPackage.<system>`:
 
 ```sh
-ietsp print-dev-env .
+iets print-dev-env .
 ```
 
 With `#x` it takes the first of `devShells.<system>.x`,
 `packages.<system>.x`, `legacyPackages.<system>.x` and `x`:
 
 ```sh
-ietsp print-dev-env .#ci
+iets print-dev-env .#ci
 ```
 
 ## Check what it costs
@@ -119,7 +119,7 @@ ietsp print-dev-env .#ci
 the bash:
 
 ```sh
-ietsp print-dev-env --timings . > /dev/null
+iets print-dev-env --timings . > /dev/null
 ```
 
 A cold run on this repository:
@@ -142,12 +142,12 @@ back to the full path and rebuilds it.
 
 For scale, on a NixOS flake with 31 locked inputs and a devShell:
 `nix print-dev-env --option eval-cache false` took 3.48 s, a cold
-`ietsp print-dev-env` took 0.67-0.83 s, and a cached one 21-35 ms.
+`iets print-dev-env` took 0.67-0.83 s, and a cached one 21-35 ms.
 
 ## Inspect the environment as JSON
 
 ```sh
-ietsp print-dev-env --json .
+iets print-dev-env --json .
 ```
 
 This is what `nix print-dev-env --json` prints.

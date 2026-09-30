@@ -170,7 +170,7 @@ pub enum PathPart {
     End,
 }
 
-/// A `# ietsp:` comment: its text after the marker, and the byte range of
+/// A `# iets:` comment: its text after the marker, and the byte range of
 /// the line it covers (docs/reference/lints.md, "Silencing one site").
 #[derive(Clone, Copy, Debug)]
 pub struct Allow {
@@ -181,10 +181,10 @@ pub struct Allow {
 pub struct Lexer<'a> {
     src: &'a [u8],
     pos: usize,
-    /// `# ietsp:` comments as `#`-start and end offsets; `take_allows`
+    /// `# iets:` comments as `#`-start and end offsets; `take_allows`
     /// resolves their lines, so the token path pays nothing for them.
     allows: Vec<(usize, usize)>,
-    /// End of the last `# ietsp:` comment noted: the parser rewinds for
+    /// End of the last `# iets:` comment noted: the parser rewinds for
     /// its third token of lookahead, and a comment is noted once.
     noted_to: usize,
 }
@@ -238,7 +238,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// The `# ietsp:` comments lexed so far, in source order, each with
+    /// The `# iets:` comments lexed so far, in source order, each with
     /// the line it covers: after code its own line; on a line of its own
     /// the line of the next token, found by skipping trivia again from the
     /// comment's end (an own-line comment at the end of the file covers
@@ -248,7 +248,7 @@ impl<'a> Lexer<'a> {
         raw.into_iter()
             .filter_map(|(start, end)| {
                 let text = Span {
-                    start: (start + "# ietsp:".len()) as u32,
+                    start: (start + "# iets:".len()) as u32,
                     end: end as u32,
                 };
                 let mut i = start;
@@ -298,7 +298,7 @@ impl<'a> Lexer<'a> {
         i
     }
 
-    /// A `#` comment to the end of its line, noted when it is `# ietsp:`.
+    /// A `#` comment to the end of its line, noted when it is `# iets:`.
     /// Out of line so `next_token` stays small enough for its callers to
     /// inline it: as part of `skip_trivia` this arm cost 1.5 % of the
     /// instructions of a parse of nixpkgs.
@@ -312,7 +312,7 @@ impl<'a> Lexer<'a> {
         }
         self.pos = i;
         if self.at(start + 2) == b'i'
-            && src[start..i].starts_with(b"# ietsp:")
+            && src[start..i].starts_with(b"# iets:")
             && start >= self.noted_to
         {
             self.noted_to = i;

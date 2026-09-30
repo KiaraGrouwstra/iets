@@ -1,9 +1,9 @@
-# ietsp architecture
+# iets architecture
 
 A map of the crate. The reasoning behind each part is in
 `docs/explanation/`; this file says what exists and where it lives.
 
-ietsp is a from-scratch Nix language evaluator in Rust. It parses Nix,
+iets is a from-scratch Nix language evaluator in Rust. It parses Nix,
 evaluates lazily, computes derivations and store paths in memory, and
 prints results. It writes no store of its own: builds go to a Nix daemon or
 to a nix-grpc-store service, and a flake input it fetches itself lives in
@@ -13,12 +13,12 @@ its own cache.
 
 Compress the Nix stack. A Nix user today assembles a working setup from a
 dozen helper tools, and most of them exist because Nix lacks one
-capability or one good default. ietsp supplies the capability or the
+capability or one good default. iets supplies the capability or the
 default, so the tool is no longer needed and Nix feels good to use with no
 configuration. Evaluation speed is the first result of this, not the last.
 
 The way to get there is good abstractions and good defaults, not more
-code. ietsp is not a jumbo binary that bundles every tool. A feature
+code. iets is not a jumbo binary that bundles every tool. A feature
 belongs when it falls out of something the evaluator already owns (the
 derivation graph, the read set of a run, the fetchers, the cache stores)
 and needs little new code. If a feature needs its own large subsystem, the
@@ -51,7 +51,7 @@ VM.
 
 nix-grpc-store (github.com/Mic92/nix-grpc-store) is the supported gRPC
 transport, spoken natively from its vendored `proto/nix_remote.proto`. Its
-daemon is somebody else's daemon, which is the point: ietsp is a client of
+daemon is somebody else's daemon, which is the point: iets is a client of
 it, not a replacement for it.
 
 ## Pipeline
@@ -71,7 +71,7 @@ Why each stage is shaped as it is: `docs/explanation/evaluation.md`.
 The evaluator:
 
 - `syntax/`: `symbol.rs` (interner), `ast.rs`, `lexer.rs`, `parser.rs`,
-  `dump.rs` (`ietsp parse`, as text and as JSON). The parser keeps raw
+  `dump.rs` (`iets parse`, as text and as JSON). The parser keeps raw
   bindings; attribute-path merging and scope resolution happen in
   `compile`.
 - `compile/`: AST to IR (`ir.rs`). Every variable becomes a local slot or a
@@ -120,7 +120,7 @@ Around it:
 - `devenv/`: `print-dev-env`.
 - `provenance.rs`: store paths and derivations back to local trees and
   source positions.
-- `config.rs`: `nix.conf`. `settings.rs`: `ietsp.toml` and every `IETSP_*`
+- `config.rs`: `nix.conf`. `settings.rs`: `iets.toml` and every `IETS_*`
   variable. `ignored.rs`: the warning for a flag or a setting that has no
   effect.
 - `nixbin.rs`: the real Nix binaries behind the classic fallback.
@@ -173,14 +173,14 @@ needs the `uid-range` system feature (`auto-allocate-uids = true`).
 
 Every script that compares against the real nix calls `require-real-nix`
 first. On a host that installs the classic farm, `nix` and
-`nix-instantiate` on `PATH` are ietsp, so outside the dev shell the
-comparison would be ietsp against itself, and the run would pass while
+`nix-instantiate` on `PATH` are iets, so outside the dev shell the
+comparison would be iets against itself, and the run would pass while
 testing nothing. The guard resolves the symlink chain of each name and
-aborts when it ends in `ietsp`, the same test the fallback uses
-(`is_ietsp`, `src/nixbin.rs`). Nothing behavioural can tell them apart:
+aborts when it ends in `iets`, the same test the fallback uses
+(`is_iets`, `src/nixbin.rs`). Nothing behavioural can tell them apart:
 the farm execs the real nix for whatever it does not implement,
 `--version` included. The same guard warns when the reference nix is not
-2.34.8. The ietsp-only scripts do not call it and still run anywhere.
+2.34.8. The iets-only scripts do not call it and still run anywhere.
 
 | script | what it compares | runs |
 |---|---|---|
@@ -191,17 +191,17 @@ the farm execs the real nix for whatever it does not implement,
 | `linttest.nu` | the lints on their fixtures | check, sandbox |
 | `cachetest.nu` | the tracing cache's hits and misses | check, container |
 | `difftest.nu`, `drvdiff.nu` | one expression against `nix-instantiate`; the first differing derivation | by hand |
-| `diff-e2e.nu` | `ietsp diff` on two small derivations | check, sandbox |
+| `diff-e2e.nu` | `iets diff` on two small derivations | check, sandbox |
 | `classic-e2e.nu` | the classic names against the real nix, stdout byte for byte | check, container |
-| `daemon-e2e.nu` | `ietsp build` over the worker protocol | check, container; not by hand on a host whose store refuses `nix-store --delete` |
-| `build-e2e.nu` | `ietsp build` over an attribute tree: the verdicts, the exit code, `--json` | check, container |
-| `grpc-e2e.nu` | `ietsp build` over `grpc://` | by hand |
+| `daemon-e2e.nu` | `iets build` over the worker protocol | check, container; not by hand on a host whose store refuses `nix-store --delete` |
+| `build-e2e.nu` | `iets build` over an attribute tree: the verdicts, the exit code, `--json` | check, container |
+| `grpc-e2e.nu` | `iets build` over `grpc://` | by hand |
 | `flaketest.nu` | flake evaluation and the input store against `nix eval` | check, container, less the 3 cases that need the network (`online` in `lib.nu`); all 39 by hand |
-| `plumbing-e2e.nu` | `ietsp plumbing`, one case per op | check, container |
-| `prefetch-e2e.nu` | `ietsp prefetch` against `nix store prefetch-file` and `nix hash` | check, container |
+| `plumbing-e2e.nu` | `iets plumbing`, one case per op | check, container |
+| `prefetch-e2e.nu` | `iets prefetch` against `nix store prefetch-file` and `nix hash` | check, container |
 | `devenv-test.nu` | `print-dev-env` against `nix print-dev-env` | by hand |
 | `provenance-e2e.nu` | the rewritten paths and positions | by hand |
-| `evaljobs-flags.nu` | `ietsp eval-jobs` against `nix-eval-jobs`, flag by flag | check, container |
+| `evaljobs-flags.nu` | `iets eval-jobs` against `nix-eval-jobs`, flag by flag | check, container |
 | `evaljobs-cmp.nu` | two `eval-jobs` outputs, attribute by attribute | by hand |
 
 `bench/` holds the workloads and the runners (`bench/run.nu`, `ab.nu`,

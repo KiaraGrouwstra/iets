@@ -17,7 +17,7 @@ fn fail<T>(m: impl Into<String>) -> R<T> {
 }
 
 fn unsupported<T>(w: impl fmt::Display) -> R<T> {
-    Err(Error::Unsupported(format!("ietsp: {w} is not supported")))
+    Err(Error::Unsupported(format!("iets: {w} is not supported")))
 }
 
 #[derive(Default)]

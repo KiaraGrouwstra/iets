@@ -1,5 +1,5 @@
 #!/usr/bin/env nu
-# End-to-end test of `ietsp prefetch` (docs/reference/commands.md).
+# End-to-end test of `iets prefetch` (docs/reference/commands.md).
 #
 # 1. a file:// URL, flat: the hash `nix store prefetch-file` and `nix hash
 #    file` print for the same bytes.
@@ -20,7 +20,7 @@
 #
 # usage: scripts/prefetch-e2e.nu
 #        BIN=target/debug scripts/prefetch-e2e.nu
-use lib.nu [ROOT chomp current-system exit-code fail ietsp-bin isolate out-of require-real-nix run-in scratch-daemon verdict]
+use lib.nu [ROOT chomp current-system exit-code fail iets-bin isolate out-of require-real-nix run-in scratch-daemon verdict]
 
 # The `hash` field of `nix store prefetch-file --json`.
 def --wrapped prefetched [...args: string]: nothing -> string {
@@ -56,7 +56,7 @@ derivation {
 '# | str replace -a "@FROM@" $from | str replace -a "@DIR@" $dir | str replace -a "@SYSTEM@" $system | str replace -a "@MODE@" $mode | save -f $"($dir)/fod.nix"
 }
 
-def run-tests [ietsp: string, work: string] {
+def run-tests [iets: string, work: string] {
   mkdir $"($work)/src/sub"
   "hello\n" | save -f $"($work)/src/a.txt"
   "sub\n" | save -f $"($work)/src/sub/b.txt"
@@ -65,21 +65,21 @@ def run-tests [ietsp: string, work: string] {
   mut ok = []
 
   print "== 1. a file:// URL, flat"
-  let ours = (out-of $ietsp prefetch $url | chomp)
+  let ours = (out-of $iets prefetch $url | chomp)
   let theirs = (prefetched $url)
   let hashed = (out-of nix hash file --sri $"($work)/src.tar.gz" | chomp)
   $ok = ($ok | append (verdict ($ours == $theirs and $ours == $hashed) "flat hash"
     $"flat: ours ($ours), prefetch-file ($theirs), nix hash ($hashed)"))
 
   print "== 2. the same URL, --unpack"
-  let ours = (out-of $ietsp prefetch --unpack $url | chomp)
+  let ours = (out-of $iets prefetch --unpack $url | chomp)
   let theirs = (prefetched --unpack $url)
   $ok = ($ok | append (verdict ($ours == $theirs) "unpacked NAR hash" $"unpack: ours ($ours), nix ($theirs)"))
-  let j = (out-of $ietsp prefetch --json --unpack $url | from json)
+  let j = (out-of $iets prefetch --json --unpack $url | from json)
   $ok = ($ok | append (verdict ($j == {hash: $ours, url: $url}) "--json object" $"json: ($j | to json -r)"))
 
   print "== 3. --hash-type sha512"
-  let ours = (out-of $ietsp prefetch --hash-type sha512 $url | chomp)
+  let ours = (out-of $iets prefetch --hash-type sha512 $url | chomp)
   let hashed = (out-of nix hash file --sri --type sha512 $"($work)/src.tar.gz" | chomp)
   $ok = ($ok | append (verdict ($ours == $hashed) "sha512" $"sha512: ours ($ours), nix ($hashed)"))
 
@@ -87,7 +87,7 @@ def run-tests [ietsp: string, work: string] {
   "hello prefetch\n" | save -f $"($work)/msg.txt"
   let sock = (scratch-daemon $"($work)/store" --option builders "" --option max-jobs 2)
   make-fod $work flat (current-system) dep
-  let r = (with-env {IETSP_CONFIG: $'builder = "unix://($sock)"'} { ^$ietsp prefetch $"($work)/fod.nix" | complete })
+  let r = (with-env {IETS_CONFIG: $'builder = "unix://($sock)"'} { ^$iets prefetch $"($work)/fod.nix" | complete })
   let hashed = (out-of nix hash file --sri $"($work)/msg.txt" | chomp)
   let lines = ($r.stdout | lines)
   $ok = ($ok | append (verdict ($r.exit_code == 0 and $lines == [$hashed]) "a faked fixed-output build"
@@ -95,7 +95,7 @@ def run-tests [ietsp: string, work: string] {
 
   print "== 5. the expression form, recursive"
   make-fod $work recursive (current-system)
-  let r = (with-env {IETSP_CONFIG: $'builder = "unix://($sock)"'} { ^$ietsp prefetch --json $"($work)/fod.nix" | complete })
+  let r = (with-env {IETS_CONFIG: $'builder = "unix://($sock)"'} { ^$iets prefetch --json $"($work)/fod.nix" | complete })
   let hashed = (out-of nix hash path --sri $"($work)/msg.txt" | chomp)
   let j = (try { $r.stdout | from json } catch { {} })
   $ok = ($ok | append (verdict ($r.exit_code == 0 and $j.hash? == $hashed and ($j.drvPath? | default "" | str ends-with ".drv")) "a recursive fixed-output build"
@@ -110,23 +110,23 @@ def run-tests [ietsp: string, work: string] {
     "end\n" | save --append $"($work)/sp/top/hole"
     ^tar -S ...$form.args -cf $"($work)/sp-($form.tag).tar" -C $"($work)/sp" top
     let url = $"file://($work)/sp-($form.tag).tar"
-    let ours = (out-of $ietsp prefetch --unpack $url | chomp)
+    let ours = (out-of $iets prefetch --unpack $url | chomp)
     let theirs = (prefetched --unpack $url)
     $ok = ($ok | append (verdict ($ours == $theirs) $"sparse ($form.tag)"
       $"sparse ($form.tag): ours ($ours), nix ($theirs)"))
   }
   # the archive is 10 KiB and the file it names is 4 MiB: the cap counts the
   # bytes the expansion writes, not the bytes that arrived
-  let capped = (^$ietsp prefetch --unpack --ietsp-option fetch-max-size 1048576 $"file://($work)/sp-gnu.tar" | complete)
+  let capped = (^$iets prefetch --unpack --iets-option fetch-max-size 1048576 $"file://($work)/sp-gnu.tar" | complete)
   $ok = ($ok | append (verdict ($capped.exit_code != 0 and ($capped.stderr | str contains "fetch-max-size")) "sparse fetch-max-size"
     $"cap: exit ($capped.exit_code), stderr ($capped.stderr | chomp)"))
 
   print "== 7. the command lines that are errors"
   let codes = [
-    (exit-code $ietsp prefetch --bogus)
-    (exit-code $ietsp prefetch --hash-type sha7 $url)
-    (exit-code $ietsp prefetch --unpack -E "1")
-    (exit-code $ietsp prefetch $"file://($work)/nothing.tar.gz")
+    (exit-code $iets prefetch --bogus)
+    (exit-code $iets prefetch --hash-type sha7 $url)
+    (exit-code $iets prefetch --unpack -E "1")
+    (exit-code $iets prefetch $"file://($work)/nothing.tar.gz")
   ]
   $ok = ($ok | append (verdict ($codes == [2 2 2 1]) "exit codes" $"codes: ($codes | to json -r)"))
 
@@ -136,8 +136,8 @@ def run-tests [ietsp: string, work: string] {
 
 def main [] {
   require-real-nix nix
-  let ietsp = (ietsp-bin)
+  let iets = (iets-bin)
   cd $ROOT
   let work = (isolate prefetch-e2e)
-  run-in $work { run-tests $ietsp $work }
+  run-in $work { run-tests $iets $work }
 }

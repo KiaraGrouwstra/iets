@@ -1,11 +1,11 @@
 [package]
-name = "ietsp"
+name = "iets"
 version = "0.1.0"
 license = "LGPL-2.1-or-later"
 edition = "2024"
 
 [[bin]]
-name = "ietsp"
+name = "iets"
 path = "src/main.rs"
 
 
@@ -37,7 +37,7 @@ lzma-rust2 = { version = "0.16", default-features = false, features = ["std", "x
 bzip2 = "0.6"
 
 [features]
-# Memory census behind IETSP_STATS=2 (docs/reference/settings.md); off the hot path when unset.
+# Memory census behind IETS_STATS=2 (docs/reference/settings.md); off the hot path when unset.
 stats2 = []
 
 [build-dependencies]

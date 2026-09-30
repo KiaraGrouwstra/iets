@@ -32,13 +32,13 @@ use super::value::{LambdaObj, MapDesc, ThunkApp2Obj, ThunkAppObj, ThunkObj};
 /// Outside the crate the bits cannot be invented:
 ///
 /// ```compile_fail,E0423
-/// let w = ietsp::runtime::Word(8);
+/// let w = iets::runtime::Word(8);
 /// ```
 ///
 /// and the word cannot be dereferenced:
 ///
 /// ```compile_fail,E0624
-/// fn f(w: ietsp::runtime::Word) -> ietsp::runtime::Value {
+/// fn f(w: iets::runtime::Word) -> iets::runtime::Value {
 ///     w.view()
 /// }
 /// ```
@@ -47,8 +47,8 @@ use super::value::{LambdaObj, MapDesc, ThunkApp2Obj, ThunkAppObj, ThunkObj};
 /// library, and reads it through `api::value`:
 ///
 /// ```no_run
-/// let mut ev = ietsp::eval::Evaluator::new();
-/// let mut e = ietsp::api::value::Eval::new(&mut ev);
+/// let mut ev = iets::eval::Evaluator::new();
+/// let mut e = iets::api::value::Eval::new(&mut ev);
 /// let v = e.eval_expr("1 + 1", b"/").unwrap();
 /// assert_eq!(e.force(v).unwrap().as_int(), Some(2));
 /// ```

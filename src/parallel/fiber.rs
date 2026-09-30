@@ -20,7 +20,7 @@ pub const MARGIN: usize = 1 << 20;
 
 /// Address space the fiber stacks of one runtime may reserve. The mappings
 /// are `MAP_NORESERVE`, so they cost address space and page tables, not
-/// memory; the cap turns an absurd `--workers` or `IETSP_FIBER_STACK_MB`
+/// memory; the cap turns an absurd `--workers` or `IETS_FIBER_STACK_MB`
 /// into an error at startup instead of a failed mmap in the middle of a run.
 pub const MAX_RESERVE: usize = 64 << 30;
 
@@ -49,7 +49,7 @@ impl std::fmt::Display for StackError {
         match &self.why {
             Why::OverLimit => write!(
                 f,
-                "over the {} MiB limit, lower --workers or IETSP_FIBER_STACK_MB",
+                "over the {} MiB limit, lower --workers or IETS_FIBER_STACK_MB",
                 MAX_RESERVE >> 20
             ),
             Why::Mmap(e) => write!(f, "{e}"),
@@ -523,7 +523,7 @@ mod tests {
             e.to_string(),
             format!(
                 "cannot reserve {} MiB of fiber stacks: over the {} MiB limit, \
-                 lower --workers or IETSP_FIBER_STACK_MB",
+                 lower --workers or IETS_FIBER_STACK_MB",
                 (DEFAULT_STACK * 1023 + MAIN_STACK) >> 20,
                 MAX_RESERVE >> 20
             )

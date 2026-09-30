@@ -140,12 +140,12 @@ const ALIASES: &[(&str, &str)] = &[
     ("trusted-binary-caches", "trusted-substituters"),
 ];
 
-const NO_DEBUGGER: &str = "ietsp has no debugger";
+const NO_DEBUGGER: &str = "iets has no debugger";
 const NO_RESTRICTED_MODE: &str =
-    "ietsp has no restricted mode, so every path and URI stays readable";
-const NO_LINT_SETTINGS: &str = "ietsp does not read it; 'ietsp eval' has the '--lint' flags";
+    "iets has no restricted mode, so every path and URI stays readable";
+const NO_LINT_SETTINGS: &str = "iets does not read it; 'iets eval' has the '--lint' flags";
 
-/// The settings that act in the Nix client and that ietsp has nothing for:
+/// The settings that act in the Nix client and that iets has nothing for:
 /// the name, Nix's default, and why. With any other value, whatever set it,
 /// a classic name falls back to the real nix (`Config::left_to_nix`), and the
 /// commands that cannot give one `ignored-setting` warning. The other client
@@ -164,12 +164,12 @@ const UNIMPLEMENTED: &[(&str, &str, &str)] = &[
     (
         "allow-dirty",
         "true",
-        "ietsp evaluates a dirty Git tree as it is",
+        "iets evaluates a dirty Git tree as it is",
     ),
     (
         "allow-unsafe-native-code-during-evaluation",
         "false",
-        "ietsp has no builtins.exec and no builtins.importNative",
+        "iets has no builtins.exec and no builtins.importNative",
     ),
     ("allowed-uris", "", NO_RESTRICTED_MODE),
     ("debugger-on-trace", "false", NO_DEBUGGER),
@@ -177,12 +177,12 @@ const UNIMPLEMENTED: &[(&str, &str, &str)] = &[
     (
         "eval-profiler",
         "disabled",
-        "ietsp has no evaluation profiler; IETSP_STATS gives its counters",
+        "iets has no evaluation profiler; IETS_STATS gives its counters",
     ),
     (
         "eval-system",
         "",
-        "ietsp does not read it; builtins.currentSystem is 'system', or the system ietsp was built for",
+        "iets does not read it; builtins.currentSystem is 'system', or the system iets was built for",
     ),
     ("ignore-try", "false", NO_DEBUGGER),
     (
@@ -201,15 +201,15 @@ const UNIMPLEMENTED: &[(&str, &str, &str)] = &[
     (
         "log-lines",
         "25",
-        "ietsp prints the last 200 lines of a failed build",
+        "iets prints the last 200 lines of a failed build",
     ),
-    ("plugin-files", "", "ietsp loads no plugins"),
+    ("plugin-files", "", "iets loads no plugins"),
     ("restrict-eval", "false", NO_RESTRICTED_MODE),
-    ("tarball-ttl", "3600", "ietsp's fetcher has no such switch"),
+    ("tarball-ttl", "3600", "iets's fetcher has no such switch"),
     (
         "trace-function-calls",
         "false",
-        "ietsp has no function-call trace",
+        "iets has no function-call trace",
     ),
     (
         "trace-verbose",
@@ -219,7 +219,7 @@ const UNIMPLEMENTED: &[(&str, &str, &str)] = &[
     (
         "trust-tarballs-from-git-forges",
         "true",
-        "ietsp's fetcher has no such switch",
+        "iets's fetcher has no such switch",
     ),
     ("warn-short-path-literals", "false", NO_LINT_SETTINGS),
 ];
@@ -228,7 +228,7 @@ const UNIMPLEMENTED: &[(&str, &str, &str)] = &[
 /// seldom has a `nixConfig`, and `log-lines` changes no result.
 const WARN_ONLY: &[&str] = &["accept-flake-config", "log-lines"];
 
-/// The other settings that act in the Nix client. ietsp applies them, or
+/// The other settings that act in the Nix client. iets applies them, or
 /// they hold by construction; docs/reference/settings.md says which and why.
 /// A known setting outside this list and `UNIMPLEMENTED` acts in the store,
 /// and goes to the daemon (`Config::forwarded`).
@@ -308,7 +308,7 @@ pub fn user_conf_files() -> Vec<PathBuf> {
 
 /// Whether an experimental feature is on for this run: `experimental-features`
 /// of nix.conf, plus what the command line added. Only the classic names ask,
-/// for the builtins Nix gates on one; ietsp's own commands have every feature
+/// for the builtins Nix gates on one; iets's own commands have every feature
 /// (docs/reference/divergences.md). Before the settings are read nothing is on,
 /// which is Nix's own default.
 pub fn xp_on(feature: &str) -> bool {
@@ -486,14 +486,14 @@ impl Config {
         }
     }
 
-    /// `load` for ietsp's own commands, which send a daemon no settings.
+    /// `load` for iets's own commands, which send a daemon no settings.
     pub fn load_native(overrides: &[(String, String)]) -> Result<Config> {
-        let why = "ietsp's own commands send a daemon no settings; the classic names do";
+        let why = "iets's own commands send a daemon no settings; the classic names do";
         note_unsent(overrides, &[], why);
         Config::load(overrides)
     }
 
-    /// `load` without the warnings, for a reader inside ietsp: the log sink,
+    /// `load` without the warnings, for a reader inside iets: the log sink,
     /// the fetcher.
     pub fn read(overrides: &[(String, String)]) -> Result<Config> {
         let mut c = Config::empty();

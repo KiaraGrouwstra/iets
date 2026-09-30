@@ -60,7 +60,7 @@ impl Clone for Arena {
     }
 }
 
-/// Number of workers from `--workers`, `IETSP_WORKERS`, or the machine.
+/// Number of workers from `--workers`, `IETS_WORKERS`, or the machine.
 pub fn default_workers() -> usize {
     if let Some(n) = crate::session::Session::current().settings().workers {
         return n;

@@ -31,7 +31,7 @@ const NAME: &str = "nix-shell";
 /// nix-build.cc: the environment variables `--pure` keeps, plus
 /// `networkProxyVariables`. Nix means to keep the upper-case proxy variables as
 /// well, but `getAllVariables` transforms into an empty string, so only these
-/// lower-case names survive; ietsp keeps the same set.
+/// lower-case names survive; iets keeps the same set.
 const KEEP_VARS: &[&str] = &[
     "HOME",
     "XDG_RUNTIME_DIR",
@@ -438,7 +438,7 @@ fn realise(s: &Shell, transport: &Transport, options: &Options, r: Ready, cores:
     }
 }
 
-/// Keeps what this entry realised alive: one link in ietsp's roots store per
+/// Keeps what this entry realised alive: one link in iets's roots store per
 /// path, so the next `nix collect-garbage` leaves them and the next entry
 /// rebuilds nothing. `nix-shell` builds the derivation's inputs and not the
 /// derivation, and no store path holds them all, so there is one link each —

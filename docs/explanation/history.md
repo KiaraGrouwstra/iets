@@ -9,12 +9,12 @@ A page of failed experiments is worth keeping for two reasons. It stops the
 same idea being tried a third time, and it shows what the measuring bar
 actually was.
 
-## Where ietsp stands today
+## Where iets stands today
 
 On an idle 32-core machine, against Nix 2.34.8 on the same nixpkgs, with
 identical derivation paths:
 
-| workload | ietsp | nix 2.34.8 |
+| workload | iets | nix 2.34.8 |
 |---|---:|---:|
 | nixos-minimal, instructions | 7.2 G | 19.4 G |
 | nixos-desktop, instructions | 9.4 G | 25.8 G |
@@ -25,7 +25,7 @@ About 2.7× fewer instructions, and 2.4× to 4.9× faster in wall time. The
 instruction ratio is the durable number; the wall ratio depends on how many
 workers the critical chain can use.
 
-The ietsp column is a warm compiled-file cache, which is how this benchmark
+The iets column is a warm compiled-file cache, which is how this benchmark
 has always been run and what a second evaluation of a tree gets. That cache is
 worth 2.23 G instructions on desktop, 19% of the run, so with `--no-ir-cache`
 the ratio falls to 2.07× on minimal and 2.22× on desktop. Nix has no
@@ -34,19 +34,19 @@ the honest evaluator comparison.
 
 ## 2026-09-27: the machine settings file
 
-ietsp read `/etc/ietsp/ietsp.toml` (or `$IETSP_CONF_DIR/ietsp.toml`) below
-the user file, and the NixOS module had an `ietsp.settings` option that
+iets read `/etc/iets/iets.toml` (or `$IETS_CONF_DIR/iets.toml`) below
+the user file, and the NixOS module had an `iets.settings` option that
 wrote it. This copied the shape of `/etc/nix/nix.conf`. The file is
 removed, with the option and the variable.
 
-ietsp is a client. The one setting that the file held in practice was
+iets is a client. The one setting that the file held in practice was
 `builder`, with a `token-file` in the home directory of one user. Each
 account on the host got that builder, and root read the token of that
 user. The setting is the user's, so it is in the user's file,
-`~/.config/ietsp/ietsp.toml`. The sources are now four: the user file,
-`$IETSP_CONFIG`, `--ietsp-option` and the `IETSP_*` variables.
+`~/.config/iets/iets.toml`. The sources are now four: the user file,
+`$IETS_CONFIG`, `--iets-option` and the `IETS_*` variables.
 
-An existing `/etc/ietsp/ietsp.toml` is not read and is not an error.
+An existing `/etc/iets/iets.toml` is not read and is not an error.
 
 ## 2026-09-27: the lints that read only the syntax
 
@@ -58,11 +58,11 @@ the compiler about how code looks: `with`, `with-non-literal`,
 `eq-bool`, `manual-inherit`, `empty-let` and `ellipsis-without-bind`. They
 are removed, with the families `scope` and `style`.
 
-The reason is the scope rule: ietsp reports what only an evaluator can
+The reason is the scope rule: iets reports what only an evaluator can
 know, and it has no opinion about how code looks
 (`docs/explanation/lint-scope.md`). Style is a decision of the project.
 nixpkgs has its own style for each type of file. statix and deadnix read
-the syntax already, so a copy of their rules in ietsp gave no new data.
+the syntax already, so a copy of their rules in iets gave no new data.
 
 The removal took 523 lines out of `src/`. The compiler does not record
 the bindings and the uses of a frame any more. On nixos-desktop with one
@@ -70,7 +70,7 @@ worker, a run that compiles each file went from 12.201 G to 12.183 G
 instructions. A run with a warm compiled-file cache did not change
 (9.393 G).
 
-In place of the lints, ietsp gives the data. `ietsp parse --json` gives
+In place of the lints, iets gives the data. `iets parse --json` gives
 the syntax tree with the byte span of each node, and a finding is a
 record with a span and an edit. A rule is an external program.
 
@@ -93,10 +93,10 @@ the evaluator are private. A late write does not compile
 
 ## 2026-09-26: `fast-build`, a second build command
 
-`ietsp fast-build` and the classic name `nix-fast-build` were removed. It
+`iets fast-build` and the classic name `nix-fast-build` were removed. It
 was 920 lines of another tool's command line: twelve flags it existed to
 refuse, its own meaning for `-f`, its own `--option` handling and its own
-reject type, beside 510 lines of `ietsp build`. With them went the result
+reject type, beside 510 lines of `iets build`. With them went the result
 records behind it (`build/results.rs`: the JSON and JUnit result files,
 `--stream-json-lines`, the Actions step summary), the stream that fed it
 (`jobs/stream.rs`) and `--retries` in the dispatcher.
@@ -113,12 +113,12 @@ uploader. On this repository's 18 checks the whole tree evaluates in
 against builds that take minutes; and the tracing cache, which the
 streaming walk could not use, makes the second run 0.03 s.
 
-## 2026-09-26: `ietsp.conf`
+## 2026-09-26: `iets.conf`
 
-ietsp's own settings lived in `ietsp.conf`, in nix.conf's line syntax, while
-the lints lived in a TOML `ietsp.toml`: two formats for one program. The
-settings are TOML now, in an `ietsp.toml` per machine and per user
-(`docs/reference/settings.md`). `ietsp.conf` is not read. Nothing checks for a
+iets's own settings lived in `iets.conf`, in nix.conf's line syntax, while
+the lints lived in a TOML `iets.toml`: two formats for one program. The
+settings are TOML now, in an `iets.toml` per machine and per user
+(`docs/reference/settings.md`). `iets.conf` is not read. Nothing checks for a
 leftover one: the NixOS module writes the new file and removes the old one at
 the same switch. `include` and `extra-<name>` went with the format.
 
@@ -213,7 +213,7 @@ whatever the worker count.
 
 nix-grpc-store dropped `BuildPaths` and the `farm` flag in its store info
 reply: every node now builds through its scheduler, so a standalone daemon
-schedules onto itself. ietsp followed — one schedule stream per batch, a
+schedules onto itself. iets followed — one schedule stream per batch, a
 want per derivation, one build call to the assigned worker. The client-side
 salting that worked around an unavailable worker went with it; a bounced
 build goes back to the scheduler instead. Before this change, every build
@@ -232,7 +232,7 @@ files, 88 MB, regenerated by a script), one machine's benchmark results, a
 workload generator and two workloads nothing ran, a demo script, and the
 test fixtures of the removed object store. Kept on purpose: the parse cases
 of the vendored Nix language suite, which no script runs yet, because
-`ietsp parse` dumps its own AST format and not Nix's.
+`iets parse` dumps its own AST format and not Nix's.
 
 ## 2026-09-19: the first slimming pass
 
@@ -269,7 +269,7 @@ creation budget. Removed.
 
 ## 2026-09-18: build scheduling levers over the worker protocol
 
-Six flags on `ietsp build`: a pool of N connections, upload batches of B
+Six flags on `iets build`: a pool of N connections, upload batches of B
 objects on M connections, per-derivation or K-at-a-time build operations,
 submitting while the upload runs, critical-path order, and skipping
 substitutable paths. Measured on synthetic graphs of several widths and
@@ -321,10 +321,10 @@ reuses. Only a collector or a process restart bounds a long run.
 
 ## 2026-09-18: a builder daemon of our own
 
-`ietsp-builderd` with its own protocol, and a content-defined-chunking
+`iets-builderd` with its own protocol, and a content-defined-chunking
 object store, were both removed. The `grpc://` transport that exists today
 is a *client* of nix-grpc-store, added the same day. That is the point:
-somebody else's daemon, and ietsp is a client of it.
+somebody else's daemon, and iets is a client of it.
 
 ## 2026-09-17: an eval cache layer on the binary cache
 

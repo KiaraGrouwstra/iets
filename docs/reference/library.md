@@ -1,4 +1,4 @@
-# Using ietsp as a library
+# Using iets as a library
 
 > **Not ready for long-lived hosts.** The evaluator's arena does not free
 > memory until the process exits (`src/runtime/arena.rs`). A program that
@@ -9,11 +9,11 @@
 Every public entry point of the crate: what a frontend calls, what a
 `Session` owns, and the value API with its mapping to Nix's C API.
 
-The crate is a library with a thin `ietsp` binary on top. A frontend —
+The crate is a library with a thin `iets` binary on top. A frontend —
 another CLI, a test harness, a one-shot tool — links the library and
 calls the entry points below. `examples/eval.rs`, `examples/build.rs`,
 `examples/drv_info.rs` and `examples/value.rs` are working frontends; they
-use `pub` items only and never touch `ietsp::cli`.
+use `pub` items only and never touch `iets::cli`.
 
 **Rule: frontends never reach into evaluator internals.** No `cli`
 module, no private field, no copied helper. When something a frontend
@@ -79,7 +79,7 @@ destination, different mismatch list — so a host may run two evaluators
 side by side.
 
 The library never writes to stdout or stderr on its own. A session's log
-sink starts as nothing; `Session::log.write_to_stderr()` is what `ietsp`
+sink starts as nothing; `Session::log.write_to_stderr()` is what `iets`
 itself does. A host that renders its own errors uses `api::report_of` and
 leaves the sink unset. The library never exits either: it returns errors,
 and the frontend decides the exit code.
@@ -89,8 +89,8 @@ evaluator reads `ev.session()` — no lookup. The rest reaches
 `Session::current()`, the session this thread entered:
 
 ```rust
-let session = ietsp::session::Session::new();
-session.load_settings(&[])?;            // ietsp.toml, optional
+let session = iets::session::Session::new();
+session.load_settings(&[])?;            // iets.toml, optional
 let _entered = session.enter();         // for this thread
 let mut ev = Evaluator::new();          // adopts the session
 ```
@@ -167,7 +167,7 @@ Notes:
   to a *different* `Eval` does not dangle; it reads names through the wrong
   symbol table. The lifetime does not rule that out (two borrows can share
   one region). Keep one `Eval` per evaluator.
-- External values (`NIX_TYPE_EXTERNAL`) do not exist in ietsp, so
+- External values (`NIX_TYPE_EXTERNAL`) do not exist in iets, so
   `ValueKind` has no `External`.
 
 ### Mapping to Nix's C API
@@ -200,7 +200,7 @@ item corresponds to.
 | `nix_string_realise`, `nix_alloc_primop`, `nix_register_primop` | not yet |
 
 The string context has no C counterpart in that header beyond
-`nix_string_realise`; `ContextElem` carries the four element kinds ietsp
+`nix_string_realise`; `ContextElem` carries the four element kinds iets
 keeps (`Opaque`, `DrvDeep`, `Built`, and the `Impure` marker that a path
 coercion or the metadata of a source tree leaves, which
 `builtins.getContext` does not show).

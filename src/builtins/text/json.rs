@@ -5,7 +5,7 @@ use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
 use crate::runtime::*;
 use crate::syntax::symbol::Sym;
 
-/// A recursive-descent limit ietsp needs and nlohmann does not: the parser
+/// A recursive-descent limit iets needs and nlohmann does not: the parser
 /// recurses, and a fiber stack is 256 MiB.
 const MAX_JSON_DEPTH: u32 = 100_000;
 

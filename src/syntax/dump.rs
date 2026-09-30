@@ -1,6 +1,6 @@
 //! The syntax tree as data. `tree` walks an `Ast` once; `json` prints the
-//! machine form of `ietsp parse --json` (docs/reference/syntax-tree.md) and
-//! `sexp` the S-expressions of `ietsp parse` and of the tests.
+//! machine form of `iets parse --json` (docs/reference/syntax-tree.md) and
+//! `sexp` the S-expressions of `iets parse` and of the tests.
 
 use super::ast::*;
 use super::symbol::{Interner, Sym};

@@ -69,12 +69,12 @@ pub struct Ast {
     pub formals: Vec<Formal>,
     /// Constructs the parser accepts but a lint may report (docs/reference/lints.md).
     pub notes: Vec<Note>,
-    /// The lines `# ietsp: allow` comments cover (docs/reference/lints.md).
+    /// The lines `# iets: allow` comments cover (docs/reference/lints.md).
     pub allows: crate::lint::allow::Allows,
 }
 
 /// A construct the parser saw and a lint may report: a `url-literal`
-/// node, and a `# ietsp: allow` word the registry does
+/// node, and a `# iets: allow` word the registry does
 /// not know (`unknown-allow`), with its byte offset and its message in
 /// `bytes`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

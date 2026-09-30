@@ -3,11 +3,11 @@
 # Differential test of the builtins whose answers come from a C++ library:
 # builtins.match and builtins.split (libstdc++ std::regex in POSIX extended
 # mode) and builtins.fromTOML (toml11 at spec 1.0.0). Runs the real
-# nix-instantiate and ietsp over tests/parity/* and requires byte-equal JSON.
+# nix-instantiate and iets over tests/parity/* and requires byte-equal JSON.
 #
 # It needs a working nix-instantiate, so it is not a flake check; run it by
-# hand in the dev shell. NIX=... picks another nix, IETSP=... another binary.
-use lib.nu [chomp diff-head env-cmd ietsp-bin require-real-nix show verdict]
+# hand in the dev shell. NIX=... picks another nix, IETS=... another binary.
+use lib.nu [chomp diff-head env-cmd iets-bin require-real-nix show verdict]
 
 # Corpora evaluated in one process each and compared as JSON.
 const VALUE_CORPORA = [
@@ -37,8 +37,8 @@ def --wrapped run-nix [...args: string]: nothing -> record {
   ^($n | first) ...($n | skip 1) --eval --strict --option pure-eval false ...$args | complete
 }
 
-def --wrapped run-ietsp [...args: string]: nothing -> record {
-  let i = (ietsp-bin)
+def --wrapped run-iets [...args: string]: nothing -> record {
+  let i = (iets-bin)
   ^$i eval --strict ...$args | complete
 }
 
@@ -48,9 +48,9 @@ def check-values [c: record]: nothing -> bool {
   if $n.exit_code != 0 {
     return (verdict false $c.name $"($c.name): nix-instantiate failed\n($n.stderr | lines | last 3 | str join (char nl))")
   }
-  let i = (run-ietsp --json ...$c.flags $c.file)
+  let i = (run-iets --json ...$c.flags $c.file)
   if $i.exit_code != 0 {
-    return (verdict false $c.name $"($c.name): ietsp failed\n($i.stderr | lines | last 3 | str join (char nl))")
+    return (verdict false $c.name $"($c.name): iets failed\n($i.stderr | lines | last 3 | str join (char nl))")
   }
   let exp = ($n.stdout | chomp)
   let got = ($i.stdout | chomp)
@@ -74,9 +74,9 @@ def check-rejects [c: record]: nothing -> bool {
     for call in $c.calls {
       let e = ($call | str replace "ENTRY" $entry)
       let n = (run-nix ...$c.flags -E $e)
-      let i2 = (run-ietsp ...$c.flags -E $e)
+      let i2 = (run-iets ...$c.flags -E $e)
       if $n.exit_code == 0 or $i2.exit_code == 0 {
-        print $"FAIL ($c.name)[($i)]: nix=($n.exit_code) ietsp=($i2.exit_code) for ($call)"
+        print $"FAIL ($c.name)[($i)]: nix=($n.exit_code) iets=($i2.exit_code) for ($call)"
         $ok = false
       }
     }

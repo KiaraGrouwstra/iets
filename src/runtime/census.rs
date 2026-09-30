@@ -1,4 +1,4 @@
-//! Memory census behind the `stats2` cargo feature and `IETSP_STATS=2`:
+//! Memory census behind the `stats2` cargo feature and `IETS_STATS=2`:
 //! histograms by object kind, duplicate strings and contexts, `//` shapes,
 //! and which objects were never read. Every hook is `cfg(feature)` so the
 //! default build carries none of it (docs/explanation/evaluation.md).
@@ -223,7 +223,7 @@ impl Census {
 
     pub(crate) fn report(&self, out: &mut String) {
         use std::fmt::Write;
-        let _ = writeln!(out, "--- census (IETSP_STATS=2) ---");
+        let _ = writeln!(out, "--- census (IETS_STATS=2) ---");
         let _ = writeln!(out, "envs by slot count (count, bytes):");
         for (i, (c, b)) in self.env_hist.iter().enumerate() {
             if *c > 0 {

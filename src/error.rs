@@ -18,7 +18,7 @@ pub enum Error {
     Store(String),
     Flake(String),
     Cache(String),
-    /// Something Nix does that ietsp does not, such as a flake registry
+    /// Something Nix does that iets does not, such as a flake registry
     /// lookup: classic mode falls back on it (`ErrorKind::Unsupported`).
     Unsupported(String),
     Eval(Box<crate::eval::error::Error>),

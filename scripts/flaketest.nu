@@ -1,24 +1,24 @@
 #!/usr/bin/env nu
-# End-to-end flake evaluation: `ietsp eval --raw FLAKE#attr` must print what
+# End-to-end flake evaluation: `iets eval --raw FLAKE#attr` must print what
 # `nix eval --raw --option eval-cache false FLAKE#attr` prints, on this
 # repo's flake, on a scratch flake with locked inputs of every offline type
 # (`path:`, `git+file://`, a `file://` tarball), a `follows`, a devShell and a
 # NixOS system, and on a scratch git flake with a `path:` input, a relative
 # `path:` input (no `narHash` in the lock), a `follows`, a clean tree, a
-# dirty tree, and a `git worktree` at a path nix has never copied (ietsp
+# dirty tree, and a `git worktree` at a path nix has never copied (iets
 # must not fetch the root tree). The only fetch is this repo's own nixpkgs
 # input; the scratch flakes reuse that store tree through a `path:` input.
 #
 # It also covers the input store (docs/reference/flakes.md): a fetched input is kept
-# there and not registered anywhere, `ietsp` alone evaluates such a flake with
+# there and not registered anywhere, `iets` alone evaluates such a flake with
 # no nix, no daemon and a fresh cache, a second run does it with
-# `IETSP_OFFLINE=1`, and `build --no-build` sends the input's NAR out of the
+# `IETS_OFFLINE=1`, and `build --no-build` sends the input's NAR out of the
 # same spool.
-use lib.nu [ROOT chomp ietsp-bin isolate online require-real-nix run-in show verdict]
+use lib.nu [ROOT chomp iets-bin isolate online require-real-nix run-in show verdict]
 
 def --wrapped nixf [...args: string] { ^nix --extra-experimental-features "nix-command flakes" ...$args }
 def --wrapped git-in [repo: string, ...args: string] {
-  ^git -c user.name=ietsp -c user.email=ietsp@example.com -c init.defaultBranch=main -C $repo ...$args
+  ^git -c user.name=iets -c user.email=iets@example.com -c init.defaultBranch=main -C $repo ...$args
 }
 
 # the `--log-format internal-json` records in STDERR
@@ -27,9 +27,9 @@ def records [stderr: string]: nothing -> list<record> {
 }
 
 # check NAME REF ENV: both evaluators must agree and succeed. Prints the verdict, returns it.
-def check [ietsp: string, name: string, ref: string, extra?: record]: nothing -> bool {
+def check [iets: string, name: string, ref: string, extra?: record]: nothing -> bool {
   let n = (nixf eval --raw --option eval-cache "false" $ref | complete)
-  let i = (with-env ($extra | default {}) { ^$ietsp eval --raw --no-tracing-cache $ref | complete })
+  let i = (with-env ($extra | default {}) { ^$iets eval --raw --no-tracing-cache $ref | complete })
   let exp = ($n.stdout | chomp)
   let got = ($i.stdout | chomp)
   if $exp != "" and $exp == $got {
@@ -39,17 +39,17 @@ def check [ietsp: string, name: string, ref: string, extra?: record]: nothing ->
     print $"FAIL ($name)"
     print $"  nix:   ($exp)"
     $n.stderr | lines | where not ($it | str contains "is dirty") | last 3 | show
-    print $"  ietsp: ($got)"
+    print $"  iets: ($got)"
     $i.stderr | lines | last 3 | show
     false
   }
 }
 
 # check-fresh NAME REF: like check, on a tree nix has never copied to the
-# store. ietsp runs first, with the cache off, and must not fetch anything;
+# store. iets runs first, with the cache off, and must not fetch anything;
 # nix then gives the expected value (and copies the tree).
-def check-fresh [ietsp: string, name: string, ref: string]: nothing -> bool {
-  let i = (with-env {IETSP_CACHE: "0"} { ^$ietsp eval --raw --no-cache $ref | complete })
+def check-fresh [iets: string, name: string, ref: string]: nothing -> bool {
+  let i = (with-env {IETS_CACHE: "0"} { ^$iets eval --raw --no-cache $ref | complete })
   let fetched = ($i.stderr | lines | where ($it | str contains "fetching"))
   let n = (nixf eval --raw --option eval-cache "false" $ref | complete)
   let exp = ($n.stdout | chomp)
@@ -60,19 +60,19 @@ def check-fresh [ietsp: string, name: string, ref: string]: nothing -> bool {
   } else {
     print $"FAIL ($name)"
     print $"  nix:   ($exp)"
-    print $"  ietsp: ($got)"
+    print $"  iets: ($got)"
     $i.stderr | lines | last 3 | show
     false
   }
 }
 
-# check-error NAME REF: both must refuse, with the same `error:` line. ietsp
+# check-error NAME REF: both must refuse, with the same `error:` line. iets
 # runs with `--pure-eval`, which is what `nix eval` on a flake always has, and
 # with the provenance rewrite off, so the message names the store path.
-def check-error [ietsp: string, name: string, ref: string]: nothing -> bool {
+def check-error [iets: string, name: string, ref: string]: nothing -> bool {
   let first = {|s: string| $s | lines | each { str trim } | where ($it | str starts-with "error: ") | get -o 0 | default "" }
   let n = (nixf eval --raw --option eval-cache "false" $ref | complete)
-  let i = (with-env {IETSP_PROVENANCE: "0"} { ^$ietsp eval --raw --no-tracing-cache --pure-eval $ref | complete })
+  let i = (with-env {IETS_PROVENANCE: "0"} { ^$iets eval --raw --no-tracing-cache --pure-eval $ref | complete })
   let exp = (do $first $n.stderr)
   let got = (do $first $i.stderr)
   if $exp != "" and $exp == $got and $n.exit_code == $i.exit_code {
@@ -81,16 +81,16 @@ def check-error [ietsp: string, name: string, ref: string]: nothing -> bool {
   } else {
     print $"FAIL ($name)"
     print $"  nix:   ($exp) \(exit ($n.exit_code)\)"
-    print $"  ietsp: ($got) \(exit ($i.exit_code)\)"
+    print $"  iets: ($got) \(exit ($i.exit_code)\)"
     false
   }
 }
 
-# fetch-only NAME REF EXPECTED NOBIN: ietsp alone, with NOBIN (an empty
-# directory) as the whole PATH and as IETSP_NIX_BIN_DIR, so no nix exists to
+# fetch-only NAME REF EXPECTED NOBIN: iets alone, with NOBIN (an empty
+# directory) as the whole PATH and as IETS_NIX_BIN_DIR, so no nix exists to
 # fall back on. It must say it is fetching the input and print EXPECTED.
-def fetch-only [ietsp: string, name: string, ref: string, expected: string, nobin: string]: nothing -> bool {
-  let i = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp eval --raw --no-tracing-cache $ref | complete })
+def fetch-only [iets: string, name: string, ref: string, expected: string, nobin: string]: nothing -> bool {
+  let i = (with-env {IETS_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$iets eval --raw --no-tracing-cache $ref | complete })
   let got = ($i.stdout | chomp)
   if $expected != "" and $got == $expected and ($i.stderr | str contains "fetching it") {
     print $"ok   ($name)"
@@ -98,29 +98,29 @@ def fetch-only [ietsp: string, name: string, ref: string, expected: string, nobi
   } else {
     print $"FAIL ($name)"
     print $"  want:  ($expected)"
-    print $"  ietsp: ($got)"
+    print $"  iets: ($got)"
     $i.stderr | lines | last 3 | show
     false
   }
 }
 
-# standalone NAME REF EXPECTED NOBIN CACHE: ietsp with no nix on PATH, no
-# IETSP_NIX_BIN_DIR, an unreachable store (nix.conf's `store`, which
+# standalone NAME REF EXPECTED NOBIN CACHE: iets with no nix on PATH, no
+# IETS_NIX_BIN_DIR, an unreachable store (nix.conf's `store`, which
 # `Connection::open` reads), and a cache root of its own. The first run must
 # fetch into the input store and print EXPECTED; the second must print it
-# again with IETSP_OFFLINE=1, which makes any download an error.
-def standalone [ietsp: string, name: string, ref: string, expected: string, nobin: string, cache: string]: nothing -> bool {
+# again with IETS_OFFLINE=1, which makes any download an error.
+def standalone [iets: string, name: string, ref: string, expected: string, nobin: string, cache: string]: nothing -> bool {
   let vars = {
-    IETSP_NIX_BIN_DIR: $nobin,
+    IETS_NIX_BIN_DIR: $nobin,
     PATH: $nobin,
-    NIX_CONFIG: "store = unix:///nonexistent/ietsp-no-daemon",
+    NIX_CONFIG: "store = unix:///nonexistent/iets-no-daemon",
     XDG_CACHE_HOME: $cache,
-    IETSP_CACHE_DIR: $"($cache)/ietsp",
+    IETS_CACHE_DIR: $"($cache)/iets",
   }
   rm -rf $cache
-  let one = (with-env $vars { ^$ietsp eval --raw --no-tracing-cache $ref | complete })
-  let two = (with-env ($vars | merge {IETSP_OFFLINE: "1"}) { ^$ietsp eval --raw --no-tracing-cache $ref | complete })
-  let entries = (try { ls $"($cache)/ietsp/inputs" | where type == dir | length } catch { 0 })
+  let one = (with-env $vars { ^$iets eval --raw --no-tracing-cache $ref | complete })
+  let two = (with-env ($vars | merge {IETS_OFFLINE: "1"}) { ^$iets eval --raw --no-tracing-cache $ref | complete })
+  let entries = (try { ls $"($cache)/iets/inputs" | where type == dir | length } catch { 0 })
   let ok = (
     $expected != "" and ($one.stdout | chomp) == $expected and ($two.stdout | chomp) == $expected
       and ($one.stderr | str contains "fetching it") and not ($two.stderr | str contains "fetching it")
@@ -146,16 +146,16 @@ def input-path [dir: string, input: string]: nothing -> string {
 }
 
 # the `cache:` lines of a --timings run
-def cache-lines [ietsp: string, ref: string]: nothing -> list<string> {
-  ^$ietsp eval --raw --timings $ref | complete | get stderr | lines | where $it =~ '^cache:'
+def cache-lines [iets: string, ref: string]: nothing -> list<string> {
+  ^$iets eval --raw --timings $ref | complete | get stderr | lines | where $it =~ '^cache:'
 }
 
-def run-tests [ietsp: string, work: string]: nothing -> int {
-  $env.IETSP_CACHE_DIR = $"($work)/cache"
+def run-tests [iets: string, work: string]: nothing -> int {
+  $env.IETS_CACHE_DIR = $"($work)/cache"
   mut res = []
 
   # ---- this repo ---------------------------------------------------------------
-  $res ++= [(check $ietsp "repo packages.default" ".#packages.x86_64-linux.default.drvPath")]
+  $res ++= [(check $iets "repo packages.default" ".#packages.x86_64-linux.default.drvPath")]
 
   # ---- a flake with locked inputs of every type, a devShell and a NixOS system --
   # Offline: nixpkgs is the store tree this repo's lock names (`path:`), `lib`
@@ -208,15 +208,15 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
 '# | save $"($big)/configuration.nix"
   let lock = (do { cd $big; nixf flake lock } | complete)
   if $lock.exit_code != 0 { print $"FAIL nix flake lock: ($lock.stderr)"; $res ++= [false] }
-  $res ++= [(check $ietsp "big: devShell" $"($big)#devShells.x86_64-linux.default.drvPath")]
-  $res ++= [(check $ietsp "big: devShell, IETSP_WORKERS=8" $"($big)#devShells.x86_64-linux.default.drvPath" {IETSP_WORKERS: "8"})]
-  $res ++= [(check $ietsp "big: nixosConfigurations.scratch toplevel" $"($big)#nixosConfigurations.scratch.config.system.build.toplevel.drvPath")]
+  $res ++= [(check $iets "big: devShell" $"($big)#devShells.x86_64-linux.default.drvPath")]
+  $res ++= [(check $iets "big: devShell, IETS_WORKERS=8" $"($big)#devShells.x86_64-linux.default.drvPath" {IETS_WORKERS: "8"})]
+  $res ++= [(check $iets "big: nixosConfigurations.scratch toplevel" $"($big)#nixosConfigurations.scratch.config.system.build.toplevel.drvPath")]
   # the metadata of an input is silent until the input has a level of its own;
   # the site is the binding in the root flake, through nixpkgs's mkDerivation
-  let quiet = (^$ietsp eval --raw --no-tracing-cache $"($big)#devShells.x86_64-linux.default.drvPath" | complete | get stderr)
-  "[lint.inputs.lib]\ntree-meta-in-drv = \"warn\"\n" | save $"($big)/ietsp.toml"
-  let loud = (^$ietsp eval --raw --no-tracing-cache $"($big)#devShells.x86_64-linux.default.drvPath" | complete | get stderr)
-  rm $"($big)/ietsp.toml"
+  let quiet = (^$iets eval --raw --no-tracing-cache $"($big)#devShells.x86_64-linux.default.drvPath" | complete | get stderr)
+  "[lint.inputs.lib]\ntree-meta-in-drv = \"warn\"\n" | save $"($big)/iets.toml"
+  let loud = (^$iets eval --raw --no-tracing-cache $"($big)#devShells.x86_64-linux.default.drvPath" | complete | get stderr)
+  rm $"($big)/iets.toml"
   let ok = (not ($quiet | str contains "tree-meta-in-drv")) and ($loud | str contains "attribute 'GREETING' holds 'inputs.lib.shortRev', a value that changes with every update of the lock file") and ($loud | str contains $"at ($big)/flake.nix:14:9")
   $res ++= [(verdict $ok "big: tree-meta-in-drv reports an input's metadata under [lint.inputs.lib]" $"tree-meta, input: ($quiet) | ($loud)")]
 
@@ -277,23 +277,23 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let fresh = $"($work)/fresh"
   git-in $repo worktree add -q $fresh HEAD
   "untracked\n" | save $"($fresh)/untracked"
-  $res ++= [(check-fresh $ietsp "worktree: clean tree nix never saw, nothing fetched" $"($fresh)#packages.x86_64-linux.default.drvPath")]
+  $res ++= [(check-fresh $iets "worktree: clean tree nix never saw, nothing fetched" $"($fresh)#packages.x86_64-linux.default.drvPath")]
   "changed\n" | save -f $"($fresh)/file"
-  $res ++= [(check-fresh $ietsp "worktree: dirty tree nix never saw, nothing fetched" $"($fresh)#packages.x86_64-linux.default.drvPath")]
+  $res ++= [(check-fresh $iets "worktree: dirty tree nix never saw, nothing fetched" $"($fresh)#packages.x86_64-linux.default.drvPath")]
   git-in $repo worktree remove --force $fresh
 
   # this repo's own flake from a fresh worktree
-  let mine = $"($work)/ietsp-fresh"
+  let mine = $"($work)/iets-fresh"
   git-in $env.PWD worktree add -q $mine HEAD
-  $res ++= [(check-fresh $ietsp "worktree: this repo's packages.default, nothing fetched" $"($mine)#packages.x86_64-linux.default.drvPath")]
+  $res ++= [(check-fresh $iets "worktree: this repo's packages.default, nothing fetched" $"($mine)#packages.x86_64-linux.default.drvPath")]
   git-in $env.PWD worktree remove --force $mine
 
-  $res ++= [(check $ietsp "scratch: clean tree" $"($scratch).drvPath")]
+  $res ++= [(check $iets "scratch: clean tree" $"($scratch).drvPath")]
   # the marks on the metadata change nothing that Nix sees
-  $res ++= [(check $ietsp "scratch: a string of the tree metadata has no context" $"($repo)#visible")]
-  $res ++= [(check $ietsp "scratch: --raw on a derivation prints its outPath" $scratch)]
+  $res ++= [(check $iets "scratch: a string of the tree metadata has no context" $"($repo)#visible")]
+  $res ++= [(check $iets "scratch: --raw on a derivation prints its outPath" $scratch)]
   "untracked\n" | save $"($repo)/untracked"
-  $res ++= [(check $ietsp "scratch: untracked file is ignored" $"($scratch).drvPath")]
+  $res ++= [(check $iets "scratch: untracked file is ignored" $"($scratch).drvPath")]
   # reading an untracked file is Nix's error, and the hint is the `git add`
   let ut = $"($work)/untracked"
   mkdir $ut
@@ -304,45 +304,45 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   git-in $ut add flake.nix flake.lock
   let ut_line = $"Path 'extra' in the repository \"($ut)\" is not tracked by Git."
   let ut_n = (nixf eval --raw $"($ut)#v" | complete)
-  let ut_i = (^$ietsp eval --raw --no-tracing-cache --log-format internal-json $"($ut)#v" | complete)
+  let ut_i = (^$iets eval --raw --no-tracing-cache --log-format internal-json $"($ut)#v" | complete)
   let ut_rec = (records $ut_i.stderr | where level? == 0 | get -o 0 | default {})
   let ut_ok = ($ut_n.exit_code == 1 and ($ut_n.stderr | str contains $ut_line) and $ut_i.exit_code == 1
     and ($ut_rec.raw_msg? | default "" | str starts-with $ut_line)
     and ($ut_rec.hint? | default "") == $"run 'git -C \"($ut)\" add \"extra\"'")
   $res ++= [(verdict $ut_ok "git: reading an untracked file is Nix's error, the hint is the git add" $"untracked read \(exit ($ut_n.exit_code)/($ut_i.exit_code)\): ($ut_rec | to json -r)")]
   "three\n" | save -f $"($repo)/file"
-  $res ++= [(check $ietsp "scratch: dirty tree (modified tracked file)" $"($scratch).drvPath")]
-  let held = (^$ietsp eval --raw --no-tracing-cache $"($scratch).drvPath" | complete | get stderr)
+  $res ++= [(check $iets "scratch: dirty tree (modified tracked file)" $"($scratch).drvPath")]
+  let held = (^$iets eval --raw --no-tracing-cache $"($scratch).drvPath" | complete | get stderr)
   $res ++= [(verdict ($held | str contains "holds 'self.dirtyRev', 'self.dirtyShortRev', 'self.lastModifiedDate', 'self.narHash'") "scratch: tree-meta-in-drv names the metadata of a dirty tree" $"tree-meta, dirty: ($held)")]
   rm $"($repo)/nested/tracked"
-  $res ++= [(check $ietsp "scratch: dirty tree (deleted tracked file)" $"($scratch).drvPath")]
+  $res ++= [(check $iets "scratch: dirty tree (deleted tracked file)" $"($scratch).drvPath")]
   "four\n" | save $"($repo)/added"
   git-in $repo add added
-  $res ++= [(check $ietsp "scratch: dirty tree (staged new file)" $"($scratch).drvPath")]
+  $res ++= [(check $iets "scratch: dirty tree (staged new file)" $"($scratch).drvPath")]
   git-in $repo commit -q -am next
-  $res ++= [(check $ietsp "scratch: clean again after commit" $"($scratch).drvPath")]
-  let held = (^$ietsp eval --raw --no-tracing-cache $"($scratch).drvPath" | complete | get stderr)
+  $res ++= [(check $iets "scratch: clean again after commit" $"($scratch).drvPath")]
+  let held = (^$iets eval --raw --no-tracing-cache $"($scratch).drvPath" | complete | get stderr)
   $res ++= [(verdict ($held | str contains "[tree-meta-in-drv] derivation 'scratch': attribute 'args' holds 'self.lastModifiedDate', 'self.narHash', 'self.rev', 'self.shortRev'") "scratch: tree-meta-in-drv names the metadata of a clean tree" $"tree-meta, clean: ($held)")]
-  $res ++= [(check $ietsp "scratch: subdirectory flake ref" $"($repo)/.#packages.x86_64-linux.default.drvPath")]
-  $res ++= [(check $ietsp "scratch: path: ref copies the whole tree" $"path:($repo)#packages.x86_64-linux.default.drvPath")]
+  $res ++= [(check $iets "scratch: subdirectory flake ref" $"($repo)/.#packages.x86_64-linux.default.drvPath")]
+  $res ++= [(check $iets "scratch: path: ref copies the whole tree" $"path:($repo)#packages.x86_64-linux.default.drvPath")]
 
   let exp = (nixf eval --json --option eval-cache "false" $"($scratch).drvPath" | complete | get stdout | chomp)
-  let got = (^$ietsp eval --json --no-tracing-cache $"($scratch).drvPath" | complete | get stdout | chomp)
+  let got = (^$iets eval --json --no-tracing-cache $"($scratch).drvPath" | complete | get stdout | chomp)
   $res ++= [(verdict ($exp != "" and $exp == $got) "scratch: --json" $"scratch: --json \(($exp) vs ($got)\)")]
 
   # tracing cache: hit after a miss, miss after the tree changes
-  ^$ietsp eval --raw $"($scratch).drvPath" | complete | ignore
-  let st = (cache-lines $ietsp $"($scratch).drvPath" | str join "\n")
+  ^$iets eval --raw $"($scratch).drvPath" | complete | ignore
+  let st = (cache-lines $iets $"($scratch).drvPath" | str join "\n")
   $res ++= [(verdict ($st | str contains "cache: hit") "cache: second run hits" $"cache: second run hits \(($st)\)")]
   # the date and the count follow from the revision, so they are no
   # observations: a validation starts no `git log` and no `git rev-list`
-  let cmds = (glob $"($work)/cache/trace/*/entry" | each {|e| ^$ietsp cache dump $e | complete | get stdout | lines } | flatten | where ($it | str starts-with $"cmd ($repo) ") | each {|l| $l | split row " " | get 3 } | uniq | sort)
+  let cmds = (glob $"($work)/cache/trace/*/entry" | each {|e| ^$iets cache dump $e | complete | get stdout | lines } | flatten | where ($it | str starts-with $"cmd ($repo) ") | each {|l| $l | split row " " | get 3 } | uniq | sort)
   $res ++= [(verdict ($cmds == [ls-files rev-parse status]) "cache: the git observations are ls-files, status and rev-parse" $"cache: git observations: ($cmds | str join ' ')")]
   "five\n" | save -f $"($repo)/file"
-  let st = (cache-lines $ietsp $"($scratch).drvPath" | get -o 0 | default "")
+  let st = (cache-lines $iets $"($scratch).drvPath" | get -o 0 | default "")
   $res ++= [(verdict ($st | str contains "miss (") "cache: editing a tracked file misses" $"cache: editing a tracked file misses \(($st)\)")]
   git-in $repo commit -q -am five
-  let st = (cache-lines $ietsp $"($scratch).drvPath" | get -o 0 | default "")
+  let st = (cache-lines $iets $"($scratch).drvPath" | get -o 0 | default "")
   $res ++= [(verdict ($st =~ 'miss \(.*git') "cache: a commit misses on a git command" $"cache: a commit misses on a git command \(($st)\)")]
 
   # ---- revCount: there when Nix has it, counted when it is read ----------------
@@ -385,7 +385,7 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
       scope = with self; toString revCount;
     };
     silent = {
-      allowed = toString self.revCount; # ietsp: allow rev-count
+      allowed = toString self.revCount; # iets: allow rev-count
       other = toString { revCount = 2; }.revCount;
       whole = builtins.toJSON self;
     };
@@ -398,10 +398,10 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   git-in $cnt add -A
   git-in $cnt commit -q -m one
   git-in $cnt commit -q --allow-empty -m two
-  $res ++= [(check $ietsp "revCount: clean tree" $"($cnt)#meta")]
+  $res ++= [(check $iets "revCount: clean tree" $"($cnt)#meta")]
   let shallow = $"($work)/count-shallow"
   git-in $work clone -q --depth 1 $"file://($cnt)" $shallow
-  $res ++= [(check $ietsp "revCount: shallow clone" $"($shallow)#meta")]
+  $res ++= [(check $iets "revCount: shallow clone" $"($shallow)#meta")]
   # `git rev-list` fails here: a run that does not read the count starts
   # none, and a run that reads it takes the count that the store kept
   let nolist = $"($work)/nolist"
@@ -409,10 +409,10 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   $"#!/bin/sh\ncase \"$1\" in rev-list\) exit 9 ;; esac\nexec (which git | get 0.path) \"$@\"\n" | save $"($nolist)/git"
   chmod 755 $"($nolist)/git"
   let no_list = {PATH: ($env.PATH | prepend $nolist)}
-  let lazy = (with-env $no_list { ^$ietsp eval --raw --no-tracing-cache $"($cnt)#names" | complete })
-  let none = (with-env $no_list { ^$ietsp eval --raw --no-tracing-cache $"($cnt)#again" | complete })
-  ^$ietsp eval --raw $"($cnt)#meta" | complete | ignore
-  let kept = (with-env $no_list { ^$ietsp eval --raw $"($cnt)#again" | complete })
+  let lazy = (with-env $no_list { ^$iets eval --raw --no-tracing-cache $"($cnt)#names" | complete })
+  let none = (with-env $no_list { ^$iets eval --raw --no-tracing-cache $"($cnt)#again" | complete })
+  ^$iets eval --raw $"($cnt)#meta" | complete | ignore
+  let kept = (with-env $no_list { ^$iets eval --raw $"($cnt)#again" | complete })
   let ok = ($lazy.exit_code == 0 and ($lazy.stdout | str starts-with "[true,") and $none.exit_code == 1 and ($none.stderr | str contains "`git rev-list --count") and $kept.exit_code == 0 and $kept.stdout == "2")
   $res ++= [(verdict $ok "revCount: lazy, and kept by revision" $"revCount: lazy \(exit ($lazy.exit_code)\) ($lazy.stdout), no store \(exit ($none.exit_code)\) ($none.stderr | lines | last 2 | str join ' | '), kept \(exit ($kept.exit_code)\) ($kept.stdout) ($kept.stderr | lines | last 2 | str join ' | ')")]
   # rev-count: a read of the count is one finding for each tree, with its site,
@@ -421,11 +421,11 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let found = {|r| records $r.stderr | where code? == "lint" | where ($it.raw_msg | str starts-with $finding) | length }
   let sites = {|r| records $r.stderr | where code? == "lint" | get -o start }
   let json = [--raw --timings --log-format internal-json --cache-dir $"($work)/count-cache" $"($cnt)#twice"]
-  let r1 = (^$ietsp eval ...$json | complete)
-  let r2 = (^$ietsp eval ...$json | complete)
+  let r1 = (^$iets eval ...$json | complete)
+  let r2 = (^$iets eval ...$json | complete)
   let ok = ($r1.stdout == "4" and $r2.stdout == "4" and (do $found $r1) == 1 and (do $found $r2) == 1 and (do $sites $r1 | compact | length) == 1 and (do $sites $r1) == (do $sites $r2) and ($r2.stderr | str contains "cache: hit") and not ($lazy.stderr | str contains "rev-count"))
   $res ++= [(verdict $ok "rev-count: one finding for a tree, on a cache hit too, none for the names" $"rev-count: ($r1.stderr) | ($r2.stderr) | ($lazy.stderr)")]
-  let r = (^$ietsp eval --raw --no-tracing-cache --lint rev-count=error $"($cnt)#again" | complete)
+  let r = (^$iets eval --raw --no-tracing-cache --lint rev-count=error $"($cnt)#again" | complete)
   $res ++= [(verdict ($r.exit_code == 1 and ($r.stderr | str starts-with $"error: ($finding)")) "rev-count: --lint sets the level" $"rev-count: error: rc=($r.exit_code) ($r.stderr)")]
   # a selection of the count is the site, in the code of an input too: the
   # span covers these bytes. A read without a selection has no site
@@ -459,35 +459,35 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
     "silent.whole": "exit 0, 0 findings"
   }
   let bad = ($want | transpose name text | each {|w|
-    let got = (do $covered (^$ietsp eval --raw --no-tracing-cache --log-format internal-json $"($cnt)#($w.name)" | complete))
+    let got = (do $covered (^$iets eval --raw --no-tracing-cache --log-format internal-json $"($cnt)#($w.name)" | complete))
     if $got == $w.text { null } else { $"($w.name): ($got)" }
   } | compact)
   $res ++= [(verdict ($bad | is-empty) "rev-count: a selection is the site, a read without one has none" $"rev-count: sites: ($bad | str join ' | ')")]
-  $res ++= [(check $ietsp "revCount: each spelling gives the value of Nix" $"($cnt)#all")]
+  $res ++= [(check $iets "revCount: each spelling gives the value of Nix" $"($cnt)#all")]
   # the count of a locked input comes from the lock; it is silent until the
   # input has a level of its own
   let cin = $"($work)/count-in"
   mkdir $cin
   '{ inputs.lib.url = "git+file://@WORK@/lib"; outputs = { self, lib }: { n = toString lib.revCount; }; }' + "\n" | str replace "@WORK@" $work | save $"($cin)/flake.nix"
   do { cd $cin; nixf flake lock } | complete | ignore
-  $res ++= [(check $ietsp "revCount: locked input" $"($cin)#n")]
-  let quiet = (^$ietsp eval --raw --no-tracing-cache $"($cin)#n" | complete | get stderr)
-  "[lint.inputs.lib]\nrev-count = \"warn\"\n" | save $"($cin)/ietsp.toml"
-  let loud = (^$ietsp eval --raw --no-tracing-cache $"($cin)#n" | complete | get stderr)
-  rm $"($cin)/ietsp.toml"
+  $res ++= [(check $iets "revCount: locked input" $"($cin)#n")]
+  let quiet = (^$iets eval --raw --no-tracing-cache $"($cin)#n" | complete | get stderr)
+  "[lint.inputs.lib]\nrev-count = \"warn\"\n" | save $"($cin)/iets.toml"
+  let loud = (^$iets eval --raw --no-tracing-cache $"($cin)#n" | complete | get stderr)
+  rm $"($cin)/iets.toml"
   let ok = (not ($quiet | str contains "rev-count")) and ($loud | str contains "warning: [rev-count] 'inputs.lib.revCount' is deprecated") and ($loud | str contains $"\n  at ($cin)/flake.nix:1:")
   $res ++= [(verdict $ok "rev-count: an input is silent without [lint.inputs.lib]" $"rev-count, input: ($quiet) | ($loud)")]
   "\n" | save --append $"($cnt)/flake.nix"
-  $res ++= [(check $ietsp "revCount: dirty tree" $"($cnt)#meta")]
+  $res ++= [(check $iets "revCount: dirty tree" $"($cnt)#meta")]
 
   # ---- fetching an input, with no nix to fall back on -------------------------
-  # `nobin` is empty, so IETSP_NIX_BIN_DIR and PATH find no nix at all: every
-  # case below is ietsp's own substitution or its own fetch.
+  # `nobin` is empty, so IETS_NIX_BIN_DIR and PATH find no nix at all: every
+  # case below is iets's own substitution or its own fetch.
   let nobin = $"($work)/nobin"
   mkdir $nobin
 
   # a `file://` tarball, offline: nix locks it, the store copy goes away, and
-  # ietsp downloads, unpacks (one leading component stripped), hashes and
+  # iets downloads, unpacks (one leading component stripped), hashes and
   # registers the tree again.
   let tbf = $"($work)/tbflake"
   mkdir $tbf $"($work)/tb2src/sub"
@@ -507,13 +507,13 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let tb_exp = (nixf eval --raw --option eval-cache "false" $"($tbf)#v" | complete | get stdout | chomp)
   let tb_path = (input-path $tbf "tb")
   nixf store delete $tb_path | complete | ignore
-  $res ++= [(fetch-only $ietsp "tarball: file:// input indexed into ietsp's input store" $"($tbf)#v" $tb_exp $nobin)]
+  $res ++= [(fetch-only $iets "tarball: file:// input indexed into iets's input store" $"($tbf)#v" $tb_exp $nobin)]
   # nothing was registered: the tree lives in the input store, not the store
   let tb_entry = $"($work)/cache/inputs/($tb_path | path basename)"
   let virt_ok = (not ($tb_path | path exists)) and ($"($tb_entry)/spool" | path exists) and ($"($tb_entry)/index" | path exists)
   $res ++= [(verdict $virt_ok "tarball: the fetch wrote the input store, not /nix/store" $"input store entry ($tb_entry)")]
 
-  # `ietsp build --no-build` is the only thing that uploads an input, and it
+  # `iets build --no-build` is the only thing that uploads an input, and it
   # sends the NAR out of that spool. The lock is written by hand from
   # `nix hash path` of the tree the tar holds, so nix never fetches this input
   # and its store path is one the daemon has never seen.
@@ -546,8 +546,8 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
     root: "root"
     version: 7
   } | to json | save $"($upf)/flake.lock"
-  let ub = (^$ietsp build --no-build --timings --ietsp-option builder daemon $"($upf)#packages.x86_64-linux.default" | complete)
-  let tb3_path = (^$ietsp eval --raw --no-tracing-cache -E $"\(builtins.fetchTree { type = \"tarball\"; url = \"file://($work)/tb3.tar.gz\"; narHash = \"($tb3_hash)\"; }).outPath" | complete | get stdout | str trim)
+  let ub = (^$iets build --no-build --timings --iets-option builder daemon $"($upf)#packages.x86_64-linux.default" | complete)
+  let tb3_path = (^$iets eval --raw --no-tracing-cache -E $"\(builtins.fetchTree { type = \"tarball\"; url = \"file://($work)/tb3.tar.gz\"; narHash = \"($tb3_hash)\"; }).outPath" | complete | get stdout | str trim)
   let tb3_valid = ((nixf path-info $tb3_path | complete).exit_code == 0)
   let resolve = ($ub.stderr | lines | where $it =~ '^resolve:' | get -o 0 | default "")
   let add = ($ub.stderr | lines | where $it =~ '^add:' | get -o 0 | default "")
@@ -593,12 +593,12 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
     root: "root"
     version: 7
   } | to json | save $"($upg)/flake.lock"
-  let fb = (^$ietsp build --no-build --ietsp-option builder daemon $"($upg)#packages.x86_64-linux.default" | complete)
+  let fb = (^$iets build --no-build --iets-option builder daemon $"($upg)#packages.x86_64-linux.default" | complete)
   let fb_ok = ($fb.exit_code == 0 and ($fb.stderr | str contains "fetching it"))
   $res ++= [(verdict $fb_ok "build --no-build uploads a filtered copy of an input member" $"build --no-build \(exit ($fb.exit_code)\): ($fb.stderr | lines | last 1 | str join '')")]
 
   # one download per tree: a sibling holds the tree's fetch lock and stores
-  # the entry before it lets go, so ietsp waits and then reads that entry,
+  # the entry before it lets go, so iets waits and then reads that entry,
   # with every download refused.
   let wf = $"($work)/waitflake"
   mkdir $wf $"($work)/tb5src"
@@ -614,15 +614,15 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
     root: "root"
     version: 7
   } | to json | save $"($wf)/flake.lock"
-  let no_daemon = {IETSP_NIX_BIN_DIR: $nobin, NIX_CONFIG: "store = unix:///nonexistent/ietsp-no-daemon"}
-  let first = (with-env ($no_daemon | merge {IETSP_CACHE_DIR: $"($work)/waitsrc"}) { ^$ietsp eval --raw --no-tracing-cache $"($wf)#v" | complete })
+  let no_daemon = {IETS_NIX_BIN_DIR: $nobin, NIX_CONFIG: "store = unix:///nonexistent/iets-no-daemon"}
+  let first = (with-env ($no_daemon | merge {IETS_CACHE_DIR: $"($work)/waitsrc"}) { ^$iets eval --raw --no-tracing-cache $"($wf)#v" | complete })
   let entry5 = (try { ls $"($work)/waitsrc/inputs" | where type == dir | get 0.name } catch { "" })
   let wc = $"($work)/waitcache"
   mkdir $"($wc)/inputs"
   cp $"($work)/waitsrc/inputs/version" $"($wc)/inputs/"
   let lockf = $"($wc)/inputs/.($entry5 | path basename).fetching.tmp"
-  let script = $"flock '($lockf)' sh -c 'sleep 1; cp -r ($entry5) ($wc)/inputs/' & sleep 0.3; '($ietsp)' eval --raw --no-tracing-cache '($wf)#v'; wait"
-  let w = (with-env ($no_daemon | merge {IETSP_CACHE_DIR: $wc, IETSP_OFFLINE: "1"}) { ^bash -c $script | complete })
+  let script = $"flock '($lockf)' sh -c 'sleep 1; cp -r ($entry5) ($wc)/inputs/' & sleep 0.3; '($iets)' eval --raw --no-tracing-cache '($wf)#v'; wait"
+  let w = (with-env ($no_daemon | merge {IETS_CACHE_DIR: $wc, IETS_OFFLINE: "1"}) { ^bash -c $script | complete })
   let w_ok = ($first.exit_code == 0 and $w.exit_code == 0 and $w.stdout == $"hello5 ($work)\n" and ($w.stderr | str contains "waiting for another process to fetch input 'tb'"))
   $res ++= [(verdict $w_ok "tarball: a second process waits for the first one's download and reads its entry" $"fetch lock \(exit ($first.exit_code)/($w.exit_code)\): ($w.stdout) ($w.stderr | lines | last 2 | str join ' | ')")]
 
@@ -640,9 +640,9 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
     root: "root"
     version: 7
   } | to json | save $"($pf)/flake.lock"
-  let pvars = ($no_daemon | merge {IETSP_CACHE_DIR: $"($work)/prefetchcache", PATH: $nobin})
-  let p = (with-env $pvars { ^$ietsp nix flake prefetch-inputs $pf | complete })
-  let pe = (with-env ($pvars | merge {IETSP_OFFLINE: "1"}) { ^$ietsp eval --raw --no-tracing-cache $"($pf)#v" | complete })
+  let pvars = ($no_daemon | merge {IETS_CACHE_DIR: $"($work)/prefetchcache", PATH: $nobin})
+  let p = (with-env $pvars { ^$iets nix flake prefetch-inputs $pf | complete })
+  let pe = (with-env ($pvars | merge {IETS_OFFLINE: "1"}) { ^$iets eval --raw --no-tracing-cache $"($pf)#v" | complete })
   let p_ok = ($p.exit_code == 0 and $p.stdout == "" and ($p.stderr | lines | where ($it | str contains "fetching it") | length) == 2
     and $pe.exit_code == 0 and $pe.stdout == $"hello5 ($work)\nhello6 ($work)\n" and not ($pe.stderr | str contains "fetching it"))
   $res ++= [(verdict $p_ok "prefetch-inputs: fetches every input, then an offline eval downloads nothing" $"prefetch-inputs \(exit ($p.exit_code)/($pe.exit_code)\): ($p.stderr | lines | last 2 | str join ' | ') / ($pe.stderr | lines | last 2 | str join ' | ')")]
@@ -654,7 +654,7 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   nixf store delete $tb_path | complete | ignore
   "changed\n" | save -f $"($work)/tb2src/a"
   ^tar -C $work -czf $"($work)/tb2.tar.gz" tb2src
-  let mm = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp eval --raw --no-tracing-cache $"($tbf)#v" | complete })
+  let mm = (with-env {IETS_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$iets eval --raw --no-tracing-cache $"($tbf)#v" | complete })
   let mm_ok = ($mm.exit_code != 0 and $mm.stdout == "" and ($mm.stderr | str contains "NAR hash mismatch") and not ($tb_path | path exists))
   $res ++= [(verdict $mm_ok "tarball: a changed tarball is refused, not registered" $"tarball mismatch \(exit ($mm.exit_code)\): ($mm.stderr | lines | first 1 | str join '')")]
 
@@ -674,14 +674,14 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
     let gh_exp = (nixf eval --raw --option eval-cache "false" $"($ghf)#v" | complete | get stdout | chomp)
     let gh_path = (input-path $ghf "tiny")
     nixf store delete $gh_path | complete | ignore
-    $res ++= [(fetch-only $ietsp "github: input fetched over https by ietsp" $"($ghf)#v" $gh_exp $nobin)]
+    $res ++= [(fetch-only $iets "github: input fetched over https by iets" $"($ghf)#v" $gh_exp $nobin)]
 
     # the standalone case: no nix, no daemon (nix.conf's `store` points at a
     # socket that is not there), a fresh cache. The first run fetches into the
-    # input store and evaluates; the second evaluates again with IETSP_OFFLINE=1,
+    # input store and evaluates; the second evaluates again with IETS_OFFLINE=1,
     # so any download would be an error.
     nixf store delete $gh_path | complete | ignore
-    $res ++= [(standalone $ietsp "standalone: no nix, no daemon, fetch then an offline hit" $"($ghf)#v" $gh_exp $nobin $"($work)/alone")]
+    $res ++= [(standalone $iets "standalone: no nix, no daemon, fetch then an offline hit" $"($ghf)#v" $gh_exp $nobin $"($work)/alone")]
 
     # a path cache.nixos.org has and this machine has not: the daemon substitutes
     # it, so there is no download at all. The lock names a `github` input whose
@@ -706,13 +706,13 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
       root: "root"
       version: 7
     } | to json | save $"($subf)/flake.lock"
-    let sb = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp eval --raw --no-tracing-cache $"($subf)#v" | complete })
+    let sb = (with-env {IETS_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$iets eval --raw --no-tracing-cache $"($subf)#v" | complete })
     let sb_ok = (($sb.stdout | chomp) == $src and not ($sb.stderr | str contains "cannot fetch"))
-    $res ++= [(verdict $sb_ok "substitute: the daemon substitutes the input, ietsp downloads nothing" $"substitute \(exit ($sb.exit_code)\): ($sb.stdout | chomp) ($sb.stderr | lines | last 2 | str join ' | ')")]
+    $res ++= [(verdict $sb_ok "substitute: the daemon substitutes the input, iets downloads nothing" $"substitute \(exit ($sb.exit_code)\): ($sb.stdout | chomp) ($sb.stderr | lines | last 2 | str join ' | ')")]
     nixf store delete $src | complete | ignore
   }
 
-  # `git` and `hg` are the last shell-out: ietsp has no git fetcher, so a
+  # `git` and `hg` are the last shell-out: iets has no git fetcher, so a
   # missing git input goes to nix, and without nix it is an error that names it.
   let gitf = $"($work)/gitflake"
   mkdir $gitf
@@ -725,25 +725,25 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   let git_exp = (nixf eval --raw --option eval-cache "false" $"($gitf)#v" | complete | get stdout | chomp)
   let git_path = (input-path $gitf "lib")
   nixf store delete $git_path | complete | ignore
-  let gf = (^$ietsp eval --raw --no-tracing-cache $"($gitf)#v" | complete)
+  let gf = (^$iets eval --raw --no-tracing-cache $"($gitf)#v" | complete)
   let gf_ok = (($gf.stdout | chomp) == $git_exp and $git_exp != "")
   $res ++= [(verdict $gf_ok "git: a missing git input still goes through nix" $"git input \(exit ($gf.exit_code)\): ($gf.stdout | chomp) vs ($git_exp)")]
   nixf store delete $git_path | complete | ignore
-  let gn = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp eval --raw --no-tracing-cache $"($gitf)#v" | complete })
+  let gn = (with-env {IETS_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$iets eval --raw --no-tracing-cache $"($gitf)#v" | complete })
   let gn_ok = ($gn.exit_code != 0 and ($gn.stderr | str contains "nix is not on PATH") and ($gn.stderr | str contains "input 'lib'"))
   $res ++= [(verdict $gn_ok "git: without nix the error names the input" $"git input, no nix \(exit ($gn.exit_code)\): ($gn.stderr | lines | last 2 | str join ' | ')")]
   # a git input whose tree is not the one the lock names: nix reports a NAR
-  # hash mismatch, and ietsp's record names the usual causes
+  # hash mismatch, and iets's record names the usual causes
   let gm = $"($work)/gitmismatch"
   mkdir $gm
   cp $"($gitf)/flake.nix" $gm
-  open --raw $"($gitf)/flake.lock" | from json | update nodes.lib.locked.narHash $"sha256-('ietsp-git-mismatch-never-stored!' | encode base64)" | to json | save $"($gm)/flake.lock"
-  let gmr = (^$ietsp eval --raw --no-tracing-cache --log-format internal-json $"($gm)#v" | complete)
+  open --raw $"($gitf)/flake.lock" | from json | update nodes.lib.locked.narHash $"sha256-('iets-git-mismatch-never-stored!!' | encode base64)" | to json | save $"($gm)/flake.lock"
+  let gmr = (^$iets eval --raw --no-tracing-cache --log-format internal-json $"($gm)#v" | complete)
   let gm_rec = (records $gmr.stderr | where code? == "hash-mismatch" | get -o 0 | default {})
   $res ++= [(verdict ($gmr.exit_code == 1 and ($gm_rec.hint? | default "" | str contains "export-subst")) "git: a NAR hash mismatch is hash-mismatch, and the hint names filters, export-subst, submodules" $"git mismatch \(exit ($gmr.exit_code)\): ($gm_rec | to json -r)")]
 
   rm $"($repo)/flake.lock"
-  let err = (^$ietsp eval --raw --no-tracing-cache $"($scratch).drvPath" | complete | get stderr)
+  let err = (^$iets eval --raw --no-tracing-cache $"($scratch).drvPath" | complete | get stderr)
   $res ++= [(verdict ($err | str contains "flake.lock missing or incomplete, run nix flake lock") "missing flake.lock is an error" $"missing flake.lock is an error \(($err)\)")]
 
   # a locked remote input that no substituter has and no forge serves: the two
@@ -760,24 +760,24 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
     root: "root"
     version: 7
   } | to json | save $"($ghost)/flake.lock"
-  let g = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp eval --raw --no-tracing-cache $"($ghost)#v" | complete })
+  let g = (with-env {IETS_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$iets eval --raw --no-tracing-cache $"($ghost)#v" | complete })
   let named = ($g.stderr | lines | where ($it | str contains "input 'ghost'") | length)
-  $res ++= [(verdict ($g.exit_code != 0 and $g.stdout == "" and $named == 2 and ($g.stderr | str contains "cannot fetch input 'ghost'")) "unfetchable input: both messages name it, the failed fetch was ietsp's own" $"unfetchable input \(exit ($g.exit_code)\): ($g.stderr | lines | first 2 | str join ' | ')")]
+  $res ++= [(verdict ($g.exit_code != 0 and $g.stdout == "" and $named == 2 and ($g.stderr | str contains "cannot fetch input 'ghost'")) "unfetchable input: both messages name it, the failed fetch was iets's own" $"unfetchable input \(exit ($g.exit_code)\): ($g.stderr | lines | first 2 | str join ' | ')")]
   # a lock entry without a narHash: the hint names the input and the command
   let unl = $"($work)/unlocked"
   mkdir $unl
   cp $"($ghost)/flake.nix" $unl
   open --raw $"($ghost)/flake.lock" | from json | reject nodes.ghost.locked.narHash | to json | save $"($unl)/flake.lock"
-  let u = (^$ietsp eval --raw --no-tracing-cache --log-format internal-json $"($unl)#v" | complete)
+  let u = (^$iets eval --raw --no-tracing-cache --log-format internal-json $"($unl)#v" | complete)
   let u_rec = (records $u.stderr | where level? == 0 | get -o 0 | default {})
   $res ++= [(verdict ($u.exit_code == 1 and ($u_rec.hint? | default "" | str contains "run 'nix flake update ghost'")) "lock: an entry without narHash has a hint that names the input" $"unlocked entry \(exit ($u.exit_code)\): ($u_rec | to json -r)")]
 
-  let gp = (with-env {IETSP_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$ietsp nix flake prefetch-inputs $ghost | complete })
+  let gp = (with-env {IETS_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$iets nix flake prefetch-inputs $ghost | complete })
   $res ++= [(verdict ($gp.exit_code == 1 and ($gp.stderr | str contains "cannot fetch input 'ghost'")) "prefetch-inputs: an unfetchable input is an error that names it, exit 1" $"prefetch-inputs ghost \(exit ($gp.exit_code)\): ($gp.stderr | lines | last 2 | str join ' | ')")]
 
 
   # ---- symlinks in a working tree, and the tree the flake directory names ----
-  # ietsp reads the root tree from the working tree, so a link must resolve
+  # iets reads the root tree from the working tree, so a link must resolve
   # where the store copy puts it: inside the copy, under the tracked file set.
   let sym = $"($work)/sym"
   mkdir $"($sym)/d"
@@ -798,22 +798,22 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   "tracked\n" | save $"($sym)/d/t.txt"
   "untracked\n" | save $"($sym)/untracked.txt"
   ^ln -s ../outside.txt $"($sym)/esc"
-  ^ln -s /nonexistent/ietsp-symlink-test $"($sym)/abs"
+  ^ln -s /nonexistent/iets-symlink-test $"($sym)/abs"
   ^ln -s untracked.txt $"($sym)/unt"
   ^ln -s d $"($sym)/okdir"
   git-in $sym init -q
   git-in $sym add flake.nix flake.lock d/t.txt esc abs unt okdir
   git-in $sym commit -q -m sym
-  $res ++= [(check-error $ietsp "sym: a link out of the tree is refused" $"($sym)#esc")]
-  $res ++= [(check-error $ietsp "sym: an absolute link is refused" $"($sym)#abs")]
-  $res ++= [(check-error $ietsp "sym: a link to an untracked file is Nix's git error" $"($sym)#unt")]
-  $res ++= [(check $ietsp "sym: readFile through a tracked link to a tracked directory" $"($sym)#ok")]
-  $res ++= [(check $ietsp "sym: readDir of a tracked link to a tracked directory" $"($sym)#okdir")]
-  $res ++= [(check $ietsp "sym: pathExists of a tracked link to a tracked directory" $"($sym)#okex")]
+  $res ++= [(check-error $iets "sym: a link out of the tree is refused" $"($sym)#esc")]
+  $res ++= [(check-error $iets "sym: an absolute link is refused" $"($sym)#abs")]
+  $res ++= [(check-error $iets "sym: a link to an untracked file is Nix's git error" $"($sym)#unt")]
+  $res ++= [(check $iets "sym: readFile through a tracked link to a tracked directory" $"($sym)#ok")]
+  $res ++= [(check $iets "sym: readDir of a tracked link to a tracked directory" $"($sym)#okdir")]
+  $res ++= [(check $iets "sym: pathExists of a tracked link to a tracked directory" $"($sym)#okex")]
   # a flake directory that is a link to a working tree is that tree, not the
   # link object: git.cc opens the repository, which resolves the path
   ^ln -s sym $"($work)/sym-link"
-  $res ++= [(check $ietsp "sym: a flake directory that is a link is the working tree" $"($work)/sym-link#nar")]
+  $res ++= [(check $iets "sym: a flake directory that is a link is the working tree" $"($work)/sym-link#nar")]
 
   # ---- a sparse checkout is a dirty tree ------------------------------------
   # `git status` never reports a skip-worktree entry, but libgit2's status,
@@ -828,9 +828,9 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   git-in $sparse init -q
   git-in $sparse add -A
   git-in $sparse commit -q -m init
-  $res ++= [(check $ietsp "sparse: the whole tree is clean" $"($sparse)#v")]
+  $res ++= [(check $iets "sparse: the whole tree is clean" $"($sparse)#v")]
   git-in $sparse sparse-checkout set --no-cone "/*" "!/d/"
-  $res ++= [(check $ietsp "sparse: an index entry that is not on disk makes it dirty" $"($sparse)#v")]
+  $res ++= [(check $iets "sparse: an index entry that is not on disk makes it dirty" $"($sparse)#v")]
 
   # ---- a git working tree still caches ----------------------------------------
   # every traced git query must be in `trace::Query`, or the run is uncacheable
@@ -841,8 +841,8 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   '{"nodes":{"root":{}},"root":"root","version":7}' | save $"($cacheable)/flake.lock"
   git-in $cacheable init -q
   git-in $cacheable add -A
-  let cold = (^$ietsp eval --timings --raw $"($cacheable)#v" | complete)
-  let warm = (^$ietsp eval --timings --raw $"($cacheable)#v" | complete)
+  let cold = (^$iets eval --timings --raw $"($cacheable)#v" | complete)
+  let warm = (^$iets eval --timings --raw $"($cacheable)#v" | complete)
   $res ++= [(verdict (($cold.stderr | str contains "cache: wrote") and ($warm.stderr | str contains "cache: hit"))
     "git: a working tree evaluation is cacheable"
     $"cold ($cold.stderr | lines | last 2 | str join ' | '), warm ($warm.stderr | lines | last 2 | str join ' | ')")]
@@ -855,9 +855,9 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
   '{ outputs = { self }: { v = builtins.toJSON [ (self ? rev) (builtins.pathExists (self + "/b")) ]; }; }' + "\n" | save $"($above)/fl/flake.nix"
   '{"nodes":{"root":{}},"root":"root","version":7}' | save $"($above)/fl/flake.lock"
   "b\n" | save $"($above)/fl/b"
-  let before = (^$ietsp eval --raw $"($above)/fl#v" | complete)
+  let before = (^$iets eval --raw $"($above)/fl#v" | complete)
   git-in $above init -q
-  let after = (^$ietsp eval --raw $"($above)/fl#v" | complete)
+  let after = (^$iets eval --raw $"($above)/fl#v" | complete)
   let real = (nixf eval --raw --option eval-cache "false" $"($above)/fl#v" | complete)
   let ok = ($before.exit_code == 0 and $before.stdout == "[false,true]" and $after.exit_code == $real.exit_code
     and $after.exit_code == 1 and ($after.stderr | str contains "is not tracked by Git"))
@@ -869,8 +869,8 @@ def run-tests [ietsp: string, work: string]: nothing -> int {
 
 def main [] {
   require-real-nix nix
-  let ietsp = (ietsp-bin)
+  let iets = (iets-bin)
   cd $ROOT
   let work = (isolate flaketest)
-  run-in $work { run-tests $ietsp $work }
+  run-in $work { run-tests $iets $work }
 }

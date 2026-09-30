@@ -1,5 +1,5 @@
 #!/usr/bin/env nu
-# `ietsp print-dev-env` against `nix print-dev-env --option eval-cache false`:
+# `iets print-dev-env` against `nix print-dev-env --option eval-cache false`:
 #  a. byte-identical bash for this repo's flake and a scratch mkShell flake;
 #  b. --json identical modulo key order (jq -S);
 #  c. warm run (cache hit) time, printed;
@@ -7,7 +7,7 @@
 #  e. a garbage-collected env output is rebuilt on the next (cached) run;
 #  f. a shell whose package is absent from /nix/store gets it substituted;
 #  g. `#attr` selects a shell;
-#  h. a `git worktree` of this repo at a path nix has never copied: ietsp
+#  h. a `git worktree` of this repo at a path nix has never copied: iets
 #     prints the same bash without fetching the root tree;
 #  i. `--watch-files` lists the files the shell read, for a plain directory
 #     and a git work tree, and nothing from the store;
@@ -17,8 +17,8 @@
 # so nothing is fetched: both evaluators find the tree in the store by narHash).
 #
 # usage: scripts/devenv-test.nu            # uses target/release
-#        IETSP=target/debug/ietsp scripts/devenv-test.nu
-use lib.nu [ROOT chomp diff-head ietsp-bin isolate require-real-nix run-in same-file show]
+#        IETS=target/debug/iets scripts/devenv-test.nu
+use lib.nu [ROOT chomp diff-head iets-bin isolate require-real-nix run-in same-file show]
 
 def --wrapped nixf [...args: string] { ^nix --extra-experimental-features "nix-command flakes" ...$args }
 
@@ -40,18 +40,18 @@ def --wrapped nix-env [work: string, flake: string, file: string, ...args: strin
   $r.stderr | save -f $"($work)/nix.err"
   $r.exit_code
 }
-def --wrapped ietsp-env [ctx: record, flake: string, file: string, ...args: string]: nothing -> int {
+def --wrapped iets-env [ctx: record, flake: string, file: string, ...args: string]: nothing -> int {
   cd $flake
-  let r = (^($ctx.ietsp) print-dev-env ...$args $flake | complete)
+  let r = (^($ctx.iets) print-dev-env ...$args $flake | complete)
   $r.stdout | save -f $file
-  $r.stderr | save -f $"($ctx.work)/ietsp.err"
+  $r.stderr | save -f $"($ctx.work)/iets.err"
   $r.exit_code
 }
 
 def run-tests [ctx: record]: nothing -> int {
   let work = $ctx.work
-  let ietsp = $ctx.ietsp
-  $env.IETSP_CACHE_DIR = $"($work)/cache"
+  let iets = $ctx.iets
+  $env.IETS_CACHE_DIR = $"($work)/cache"
   mut res = []
 
   # The scratch flakes: `shell` for a-c, `scratch` for e-g (its default shell
@@ -85,26 +85,26 @@ def run-tests [ctx: record]: nothing -> int {
   for flake in [$env.PWD $shell] {
     let name = ($flake | path basename)
     if (nix-env $work $flake $"($work)/nix.sh") != 0 { $res ++= [(bad $"nix print-dev-env ($name)" (tail-of $"($work)/nix.err" 3))] }
-    if (ietsp-env $ctx $flake $"($work)/ietsp.sh" --no-tracing-cache) != 0 { $res ++= [(bad $"ietsp print-dev-env ($name)" (tail-of $"($work)/ietsp.err" 3))] }
-    if (same-file $"($work)/nix.sh" $"($work)/ietsp.sh") {
+    if (iets-env $ctx $flake $"($work)/iets.sh" --no-tracing-cache) != 0 { $res ++= [(bad $"iets print-dev-env ($name)" (tail-of $"($work)/iets.err" 3))] }
+    if (same-file $"($work)/nix.sh" $"($work)/iets.sh") {
       $res ++= [(ok $"a. bash identical: ($name) \((open --raw $"($work)/nix.sh" | into binary | bytes length) bytes\)")]
     } else {
-      $res ++= [(bad $"a. bash differs: ($name)" (diff-head $"($work)/nix.sh" $"($work)/ietsp.sh" 8 | str join "\n"))]
+      $res ++= [(bad $"a. bash differs: ($name)" (diff-head $"($work)/nix.sh" $"($work)/iets.sh" 8 | str join "\n"))]
     }
 
     nix-env $work $flake $"($work)/nix.json" --json
-    ietsp-env $ctx $flake $"($work)/ietsp.json" --no-tracing-cache --json
+    iets-env $ctx $flake $"($work)/iets.json" --no-tracing-cache --json
     sorted-json $"($work)/nix.json" | save -f $"($work)/nix.sorted.json"
-    sorted-json $"($work)/ietsp.json" | save -f $"($work)/ietsp.sorted.json"
-    if (same-file $"($work)/nix.sorted.json" $"($work)/ietsp.sorted.json") {
+    sorted-json $"($work)/iets.json" | save -f $"($work)/iets.sorted.json"
+    if (same-file $"($work)/nix.sorted.json" $"($work)/iets.sorted.json") {
       $res ++= [(ok $"b. json identical: ($name)")]
     } else {
-      $res ++= [(bad $"b. json differs: ($name)" (diff-head $"($work)/nix.sorted.json" $"($work)/ietsp.sorted.json" 8 | str join "\n"))]
+      $res ++= [(bad $"b. json differs: ($name)" (diff-head $"($work)/nix.sorted.json" $"($work)/iets.sorted.json" 8 | str join "\n"))]
     }
 
-    ietsp-env $ctx $flake $"($work)/miss.sh"          # cache miss, writes the entry
+    iets-env $ctx $flake $"($work)/miss.sh"          # cache miss, writes the entry
     let t0 = (date now)
-    ietsp-env $ctx $flake $"($work)/hit.sh"
+    iets-env $ctx $flake $"($work)/hit.sh"
     let t1 = (date now)
     if (same-file $"($work)/nix.sh" $"($work)/hit.sh") {
       $res ++= [(ok $"c. warm run identical: ($name), (ms $t0 $t1) ms")]
@@ -141,7 +141,7 @@ def run-tests [ctx: record]: nothing -> int {
   $lock | to json | save $"($scratch)/flake.lock"
   let root = $"($work)/roots/env"
 
-  if (ietsp-env $ctx $scratch $"($work)/scratch.sh" --gc-root $root) != 0 { $res ++= [(bad "ietsp print-dev-env scratch" (tail-of $"($work)/ietsp.err" 5))] }
+  if (iets-env $ctx $scratch $"($work)/scratch.sh" --gc-root $root) != 0 { $res ++= [(bad "iets print-dev-env scratch" (tail-of $"($work)/iets.err" 5))] }
   let outpath = (^readlink $root | complete | get stdout | chomp)
   if $outpath =~ '^/nix/store/.*-nix-shell-env$' {
     $res ++= [(ok $"d. gc root symlink: ($root) -> ($outpath)")]
@@ -172,51 +172,51 @@ def run-tests [ctx: record]: nothing -> int {
   let deleted = ($outpath != "" and (^nix-store --delete $outpath | complete | get exit_code) == 0 and not ($outpath | path exists))
   if $deleted {
     let t0 = (date now)
-    ietsp-env $ctx $scratch $"($work)/scratch2.sh" --gc-root $root --timings
+    iets-env $ctx $scratch $"($work)/scratch2.sh" --gc-root $root --timings
     let t1 = (date now)
     let relinked = (^readlink $root | complete | get stdout | chomp) == $outpath
     if ($outpath | path exists) and $relinked and (same-file $"($work)/scratch.sh" $"($work)/scratch2.sh") {
-      let notices = (open --raw $"($work)/ietsp.err" | lines | where ($it | str contains "cache: env output") | length)
+      let notices = (open --raw $"($work)/iets.err" | lines | where ($it | str contains "cache: env output") | length)
       $res ++= [(ok $"e. deleted env output rebuilt on the next run, (ms $t0 $t1) ms \(($notices) fallback notice\)")]
     } else {
-      $res ++= [(bad "e. env output not rebuilt" (tail-of $"($work)/ietsp.err" 5))]
+      $res ++= [(bad "e. env output not rebuilt" (tail-of $"($work)/iets.err" 5))]
     }
   } else {
     $res ++= [(bad $"e. could not delete ($outpath) \(another root holds it?\)")]
   }
 
   # g. #attr
-  ietsp-env $ctx $scratch $"($work)/other.sh" ""
-  do { cd $scratch; ^$ietsp print-dev-env $"($scratch)#other" | complete } | do {|r| $r.stdout | save -f $"($work)/other.sh"; $r.stderr | save -f $"($work)/ietsp.err" } $in
+  iets-env $ctx $scratch $"($work)/other.sh" ""
+  do { cd $scratch; ^$iets print-dev-env $"($scratch)#other" | complete } | do {|r| $r.stdout | save -f $"($work)/other.sh"; $r.stderr | save -f $"($work)/iets.err" } $in
   do { cd $scratch; nixf print-dev-env --option eval-cache "false" $"($scratch)#other" | complete | get stdout } | save -f $"($work)/other-nix.sh"
   let has_foo = (open --raw $"($work)/other.sh" | lines | any {|l| $l == "FOO='bar'" })
   if $has_foo and (same-file $"($work)/other.sh" $"($work)/other-nix.sh") {
     $res ++= [(ok "g. #other selects devShells.x86_64-linux.other, identical to nix")]
   } else {
-    $res ++= [(bad "g. #other" (diff-head $"($work)/other-nix.sh" $"($work)/other.sh" 5 | str join "\n") (tail-of $"($work)/ietsp.err" 3))]
+    $res ++= [(bad "g. #other" (diff-head $"($work)/other-nix.sh" $"($work)/other.sh" 5 | str join "\n") (tail-of $"($work)/iets.err" 3))]
   }
-  let missing = (do { cd $scratch; ^$ietsp print-dev-env $"($scratch)#missing" | complete })
-  $missing.stderr | save -f $"($work)/ietsp.err"
+  let missing = (do { cd $scratch; ^$iets print-dev-env $"($scratch)#missing" | complete })
+  $missing.stderr | save -f $"($work)/iets.err"
   if $missing.exit_code == 0 {
     $res ++= [(bad "g. #missing should fail")]
   } else if ($missing.stderr | str contains "does not provide attribute 'devShells.x86_64-linux.missing'") {
     $res ++= [(ok "g. #missing reports the attribute paths tried")]
   } else {
-    $res ++= [(bad "g. #missing error text" (tail-of $"($work)/ietsp.err" 2))]
+    $res ++= [(bad "g. #missing error text" (tail-of $"($work)/iets.err" 2))]
   }
 
-  # h. ietsp first (cache off) on a worktree nix has never copied; then nix for the reference
+  # h. iets first (cache off) on a worktree nix has never copied; then nix for the reference
   let fresh = $"($work)/fresh"
   ^git -C $env.PWD worktree add -q $fresh HEAD
-  let r = (do { cd $fresh; with-env {IETSP_CACHE: "0"} { ^$ietsp print-dev-env --no-cache $fresh | complete } })
+  let r = (do { cd $fresh; with-env {IETS_CACHE: "0"} { ^$iets print-dev-env --no-cache $fresh | complete } })
   $r.stdout | save -f $"($work)/fresh.sh"
-  $r.stderr | save -f $"($work)/ietsp.err"
+  $r.stderr | save -f $"($work)/iets.err"
   nix-env $work $fresh $"($work)/fresh-nix.sh"
   ^git -C $env.PWD worktree remove --force $fresh
   if $r.exit_code == 0 and not ($r.stderr | str contains "fetching") and (same-file $"($work)/fresh-nix.sh" $"($work)/fresh.sh") {
     $res ++= [(ok "h. worktree nix never saw: bash identical, nothing fetched")]
   } else {
-    $res ++= [(bad $"h. worktree \(exit ($r.exit_code)\)" (tail-of $"($work)/ietsp.err" 3) (diff-head $"($work)/fresh-nix.sh" $"($work)/fresh.sh" 5 | str join "\n"))]
+    $res ++= [(bad $"h. worktree \(exit ($r.exit_code)\)" (tail-of $"($work)/iets.err" 3) (diff-head $"($work)/fresh-nix.sh" $"($work)/fresh.sh" 5 | str join "\n"))]
   }
 
   # i-k. the watch list. One flake, as a plain directory and as a git work tree.
@@ -244,18 +244,18 @@ def run-tests [ctx: record]: nothing -> int {
   ^git -C $tracked add -A
   ^git -C $tracked -c user.name=t -c user.email=t@example.org commit -q -m init
 
-  let cold = (do { cd $watched; ^$ietsp print-dev-env --watch-files $watched | complete })
+  let cold = (do { cd $watched; ^$iets print-dev-env --watch-files $watched | complete })
   if $cold.exit_code == 0 and ($cold.stdout | is-empty) {
     $res ++= [(ok "i. --watch-files with no entry: prints nothing, exit 0")]
   } else {
     $res ++= [(bad $"i. --watch-files with no entry \(exit ($cold.exit_code)\)" $cold.stdout)]
   }
   for c in [[name dir extra]; [path $watched []] [git $tracked [".git/index"]]] {
-    ietsp-env $ctx $c.dir $"($work)/watched.sh"
-    let r = (do { cd $c.dir; ^$ietsp print-dev-env --watch-files --timings $c.dir | complete })
+    iets-env $ctx $c.dir $"($work)/watched.sh"
+    let r = (do { cd $c.dir; ^$iets print-dev-env --watch-files --timings $c.dir | complete })
     let want = ([flake.nix flake.lock other.nix versions.json hook.sh] ++ $c.extra | each {|f| $"'($c.dir)/($f)'" })
     let missing = ($want | where {|w| not ($r.stdout | str contains $w) })
-    let unwanted = (["/nix/store" $env.IETSP_CACHE_DIR "unread.txt"] | where {|u| $r.stdout | str contains $u })
+    let unwanted = (["/nix/store" $env.IETS_CACHE_DIR "unread.txt"] | where {|u| $r.stdout | str contains $u })
     if $r.exit_code == 0 and ($r.stdout | str starts-with "watch_file '") and ($missing | is-empty) and ($unwanted | is-empty) {
       $res ++= [(ok $"i. ($c.name) flake: the files the shell read are watched, the store and unread.txt are not")]
     } else {
@@ -277,8 +277,8 @@ def run-tests [ctx: record]: nothing -> int {
   "use flake\n" | save $"($tracked)/.envrc"
   let denv = {
     DIRENV_CONFIG: $dconf, XDG_DATA_HOME: $"($work)/direnv-data", DIRENV_LOG_FORMAT: "",
-    IETSP_CACHE_DIR: $"($work)/direnv-cache",
-    PATH: ([($ietsp | path dirname)] ++ $env.PATH),
+    IETS_CACHE_DIR: $"($work)/direnv-cache",
+    PATH: ([($iets | path dirname)] ++ $env.PATH),
   }
   hide-env -i DIRENV_DIR DIRENV_FILE DIRENV_DIFF DIRENV_WATCHES
   let load = {|state: record| with-env ($denv | merge $state) { cd $tracked; ^direnv export json | complete | get stdout } }
@@ -304,8 +304,8 @@ def run-tests [ctx: record]: nothing -> int {
 
 def main [] {
   require-real-nix nix
-  let ietsp = (ietsp-bin)
+  let iets = (iets-bin)
   cd $ROOT
-  let ctx = {ietsp: $ietsp, work: (isolate devenv)}
+  let ctx = {iets: $iets, work: (isolate devenv)}
   run-in $ctx.work { run-tests $ctx }
 }

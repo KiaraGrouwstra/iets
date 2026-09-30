@@ -229,7 +229,7 @@ fn check_source_path(path: &StorePath, kind: &SourceKind, nar_hash: &Hash) -> Re
 
 /// Maps input source store paths that eval did not record, in one batch, to where to read
 /// them and how they were addressed; `None` when the local side cannot produce the path and
-/// the daemon must substitute it. `ietsp build` asks the local store.
+/// the daemon must substitute it. `iets build` asks the local store.
 pub type Locator<'a> = dyn Fn(&[StorePath]) -> Result<Vec<Option<SourceOrigin>>> + 'a;
 
 /// What the evaluation knows: the drv table and the origin of every added source. Both may

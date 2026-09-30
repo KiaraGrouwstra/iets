@@ -92,12 +92,12 @@ def main [--cold, --nix, --tag: string = "run"] {
 
 
   # (d) the store-path computation every `nix-build ./.` pays: "${./tree}".
-  let ietsp = ($env.IETSP? | default $"($env.CARGO_TARGET_DIR? | default "./target")/release/ietsp")
+  let iets = ($env.IETS? | default $"($env.CARGO_TARGET_DIR? | default "./target")/release/iets")
   let expr = ($fx.base | path join "coerce.nix")
   $"\"${($fx.tree)}\"\n" | save -f $expr
   drop-caches $cold
   let t2 = (date now)
-  ^$ietsp eval --raw --no-tracing-cache $expr | ignore
+  ^$iets eval --raw --no-tracing-cache $expr | ignore
   let ms2 = ((date now) - $t2 | into int) / 1000000
   $rows = ($rows | append { op: "coerce", path: $expr, best_ms: $ms2, mean_ms: $ms2, mbs: 0, case: "tree-coerce" })
 

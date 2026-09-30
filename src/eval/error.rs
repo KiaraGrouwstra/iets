@@ -31,7 +31,7 @@ pub enum ErrorKind {
     Io,
     /// A parallel helper fiber was told to stop. Never caught.
     Cancelled,
-    /// A feature ietsp does not implement (network fetchers, flakes without a
+    /// A feature iets does not implement (network fetchers, flakes without a
     /// lock, import-from-derivation). Classic mode turns this into an exec of
     /// the real nix; see `crate::cli::classic`.
     Unsupported,

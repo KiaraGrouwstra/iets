@@ -1,6 +1,6 @@
 //! The entry points a frontend needs: evaluation arguments, the evaluate
 //! call, error reporting, the build target list and the cache key. The
-//! `ietsp` command line is one frontend on top of this; docs/reference/library.md
+//! `iets` command line is one frontend on top of this; docs/reference/library.md
 //! lists the whole surface.
 
 pub mod build;
@@ -28,19 +28,19 @@ pub struct EvalArgs {
     pub input: Option<Input>,
     pub dump_drvs: Option<String>,
     pub attr: Option<String>,
-    /// `--lint SELECTOR=LEVEL` in order; applied after `ietsp.toml` and
-    /// `IETSP_LINT` (docs/reference/lints.md).
+    /// `--lint SELECTOR=LEVEL` in order; applied after `iets.toml` and
+    /// `IETS_LINT` (docs/reference/lints.md).
     pub lints: Vec<(String, crate::lint::Level)>,
     /// `--lint-root DIR`: lint roots after the entry directory.
     pub lint_roots: Vec<String>,
-    /// `--lint-scope root|all`; `None` keeps `ietsp.toml`'s or the default.
+    /// `--lint-scope root|all`; `None` keeps `iets.toml`'s or the default.
     pub lint_scope: Option<crate::lint::Scope>,
     pub xp_features: Vec<String>,
     pub workers: usize,
     pub timings: bool,
-    /// `--no-tracing-cache` or `IETSP_CACHE=0`: evaluate, never replay a run.
+    /// `--no-tracing-cache` or `IETS_CACHE=0`: evaluate, never replay a run.
     pub no_tracing_cache: bool,
-    /// `--no-ir-cache` or `IETSP_CACHE=0`: compile every import from source.
+    /// `--no-ir-cache` or `IETS_CACHE=0`: compile every import from source.
     pub no_ir_cache: bool,
     pub cache_dir: Option<String>,
     /// `eval-jobs --flake DIR` with no fragment: the whole `callFlake` result,
@@ -162,8 +162,8 @@ pub fn report_of(ev: &Evaluator, e: &Error) -> crate::log::Report {
     } else {
         rewrite_msg(ev, &e.msg)
     };
-    // "ietsp: " marks what classic mode falls back on; here it only doubles "error: "
-    let msg = msg.strip_prefix("ietsp: ").unwrap_or(&msg);
+    // "iets: " marks what classic mode falls back on; here it only doubles "error: "
+    let msg = msg.strip_prefix("iets: ").unwrap_or(&msg);
     let mut r = crate::log::Report::eval(e, msg, &at, &|m| rewrite_msg(ev, m));
     if e.kind == crate::eval::ErrorKind::Lint {
         r.site = ev.lint_site_of_error(e);
@@ -176,7 +176,7 @@ pub fn report(ev: &Evaluator, e: &Error) -> i32 {
     report_of(ev, e).emit()
 }
 
-/// The directory the `ietsp.toml` walk starts from: the entry file's
+/// The directory the `iets.toml` walk starts from: the entry file's
 /// directory, the flake directory, or cwd for an expression.
 pub fn entry_dir(a: &EvalArgs) -> std::path::PathBuf {
     use std::os::unix::ffi::OsStrExt;

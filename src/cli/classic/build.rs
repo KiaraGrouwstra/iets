@@ -112,7 +112,7 @@ fn run(ev: &mut Evaluator, b: &Build) -> crate::error::Result<Built> {
 
 /// `--no-out-link` asks for no symlink, and in nix that means the output is
 /// collectable the moment the run ends: the opt-out protects nothing. Here it
-/// keeps a root in ietsp's roots store instead — the workflow the flag is for,
+/// keeps a root in iets's roots store instead — the workflow the flag is for,
 /// without a `result` in the tree — keyed on the working directory, the files
 /// and attributes asked for, and the name the symlink would have had, so a
 /// second build replaces its own roots in place. It is a divergence from Nix,

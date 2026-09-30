@@ -136,7 +136,7 @@ pub fn scratch(tag: &str) -> Result<File> {
     let dir = std::env::temp_dir();
     let mut last = None;
     for _ in 0..8 {
-        let path = dir.join(format!("ietsp-spool-{tag}-{:016x}", random_u64()));
+        let path = dir.join(format!("iets-spool-{tag}-{:016x}", random_u64()));
         match File::options()
             .read(true)
             .write(true)
@@ -991,7 +991,7 @@ mod tests {
         });
 
         let dest =
-            std::env::temp_dir().join(format!("ietsp-spool-tree-{}-{tag}", std::process::id()));
+            std::env::temp_dir().join(format!("iets-spool-tree-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dest);
         let tree = crate::fetch::unpack::unpack(plain, &dest).and_then(|root| {
             let mut nar = Vec::new();
@@ -1061,7 +1061,7 @@ mod tests {
     #[test]
     fn an_empty_archive_is_an_empty_directory() {
         let nar = same("empty", &[]);
-        let dest = std::env::temp_dir().join(format!("ietsp-spool-bare-{}", std::process::id()));
+        let dest = std::env::temp_dir().join(format!("iets-spool-bare-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dest);
         std::fs::create_dir_all(&dest).unwrap();
         let mut want = Vec::new();
@@ -1156,7 +1156,7 @@ mod tests {
     /// miss, never a crash and never a tree that is not the one stored.
     #[test]
     fn a_changed_index_byte_is_a_miss() {
-        let dir = std::env::temp_dir().join(format!("ietsp-spool-reopen-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("iets-spool-reopen-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let plain = crate::fetch::http::decompress(tar_gz(&[
@@ -1228,14 +1228,14 @@ mod tests {
         assert_eq!(chain, want, "a link to a link that comes later");
     }
 
-    /// `ietsp-spool-<pid>-<tag>`, the name the scratch file had before it was
+    /// `iets-spool-<pid>-<tag>`, the name the scratch file had before it was
     /// random, as a symlink: the open must not follow it.
     #[test]
     fn the_scratch_file_never_follows_a_symlink() {
         let dir = std::env::temp_dir();
-        let victim = dir.join(format!("ietsp-spool-victim-{}", std::process::id()));
+        let victim = dir.join(format!("iets-spool-victim-{}", std::process::id()));
         std::fs::write(&victim, b"precious").unwrap();
-        let bait = dir.join(format!("ietsp-spool-{}-bait", std::process::id()));
+        let bait = dir.join(format!("iets-spool-{}-bait", std::process::id()));
         let _ = std::fs::remove_file(&bait);
         std::os::unix::fs::symlink(&victim, &bait).unwrap();
         let mut file = scratch("bait").unwrap();

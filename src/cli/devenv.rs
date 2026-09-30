@@ -1,4 +1,4 @@
-//! `ietsp print-dev-env`: the shell environment of a flake's devShell.
+//! `iets print-dev-env`: the shell environment of a flake's devShell.
 
 use std::sync::Arc;
 
@@ -19,13 +19,13 @@ struct DevEnvArgs {
 
 /// Where the root of a shell's environment goes. A caller that named a path
 /// owns it: the path is a contract and a failure is the command's. Where
-/// nothing was named, `nix develop` takes a link in ietsp's roots store, and
+/// nothing was named, `nix develop` takes a link in iets's roots store, and
 /// that one is best effort — see [`keep_root`].
 pub enum GcRoot {
     None,
     /// `print-dev-env --gc-root PATH`, absolute.
     Given(std::path::PathBuf),
-    /// A link in ietsp's roots store, from [`shell_root`].
+    /// A link in iets's roots store, from [`shell_root`].
     Store(std::path::PathBuf),
 }
 
@@ -74,7 +74,7 @@ pub fn flake_shell_root(f: &str, transport: &crate::remote::worker::Transport) -
     shell_root(transport, &parts).map_or(GcRoot::None, GcRoot::Store)
 }
 
-/// The link ietsp keeps for a shell of its own accord, named by `parts` as
+/// The link iets keeps for a shell of its own accord, named by `parts` as
 /// `nix fmt`'s is (`src/cli/classic/fmt.rs`). `None` when the `shell-gc-root`
 /// setting is off, when the daemon is not local — only a local daemon takes a
 /// root — or when no cache root is known.
@@ -111,7 +111,7 @@ fn own_root(on: bool, transport: &crate::remote::worker::Transport) -> bool {
     on && matches!(transport, crate::remote::worker::Transport::Unix(_))
 }
 
-/// Keeps the outputs a build printed alive under roots of ietsp's own: one
+/// Keeps the outputs a build printed alive under roots of iets's own: one
 /// link in the roots store per output, named by `key` — where the command ran
 /// and what it was asked to build — and by the name that tells two outputs of
 /// one run apart, so a second run of the same command replaces its own roots in
@@ -175,14 +175,14 @@ impl EventSink {
             Event::Log(l) => {
                 let line = self.prov.rewrite_str(&String::from_utf8_lossy(&l.line));
                 if self.live {
-                    crate::log::line(&format!("ietsp: {line}"));
+                    crate::log::line(&format!("iets: {line}"));
                 } else {
                     self.log.push(line);
                 }
             }
             Event::Started(s) if self.live => match self.prov.started(&s.drv_path) {
-                Some(l) => crate::log::line(&format!("ietsp: {l}")),
-                None => crate::log::line(&format!("ietsp: building {}", s.drv_path)),
+                Some(l) => crate::log::line(&format!("iets: {l}")),
+                None => crate::log::line(&format!("iets: building {}", s.drv_path)),
             },
             Event::Failed(f) => {
                 self.failed = Some(match self.prov.failed(&f.drv_path, &f.reason) {
@@ -200,12 +200,12 @@ impl EventSink {
 
     fn dump(&self) {
         for l in &self.log {
-            crate::log::line(&format!("ietsp: {l}"));
+            crate::log::line(&format!("iets: {l}"));
         }
     }
 }
 
-/// `ietsp print-dev-env`: the bash `nix print-dev-env` prints for a flake's shell, from the
+/// `iets print-dev-env`: the bash `nix print-dev-env` prints for a flake's shell, from the
 /// in-memory shell derivation through a Nix daemon. See docs/reference/commands.md.
 pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
     let mut url: Option<String> = None;
@@ -327,7 +327,7 @@ fn print_watch_files(a: &EvalArgs) -> i32 {
     if paths.len() > crate::devenv::WATCH_MAX {
         paths.truncate(crate::devenv::WATCH_MAX);
         crate::log::line(&format!(
-            "ietsp: the shell depends on more than {0} paths; direnv watches the first {0}",
+            "iets: the shell depends on more than {0} paths; direnv watches the first {0}",
             crate::devenv::WATCH_MAX
         ));
     }
@@ -508,7 +508,7 @@ fn dev_env_full(
         } else {
             let attrs_dir = match d.gc_root.given() {
                 Some(r) => std::path::PathBuf::from(format!("{}-attrs", r.display())),
-                None => std::env::temp_dir().join(format!("ietsp-dev-env-{}", std::process::id())),
+                None => std::env::temp_dir().join(format!("iets-dev-env-{}", std::process::id())),
             };
             let outputs_dir = std::path::Path::new(
                 <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&cwd),
@@ -730,8 +730,7 @@ fn read_env_output(
                 std::fs::read(p).map_err(|e| CrateError::io(format!("cannot read '{p}'"), e))?
             }
             Transport::Ssh { .. } | Transport::Grpc(_) => {
-                let dir =
-                    std::env::temp_dir().join(format!("ietsp-dev-env-{}", std::process::id()));
+                let dir = std::env::temp_dir().join(format!("iets-dev-env-{}", std::process::id()));
                 std::fs::create_dir_all(&dir)?;
                 let dest = dir.join(StorePath::parse(p)?.base_name());
                 let _ = std::fs::remove_file(&dest);

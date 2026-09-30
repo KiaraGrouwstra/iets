@@ -1,11 +1,11 @@
 //! The real Nix binaries. Under the classic symlink farm, `nix` on `PATH` is
-//! ietsp itself, so every subprocess and the fallback resolve past it.
+//! iets itself, so every subprocess and the fallback resolve past it.
 
 use std::path::{Path, PathBuf};
 
 /// Written by the farm derivation next to its `bin/`: the directory that
 /// holds the nix the farm shadows.
-const REAL_DIR_FILE: &str = "share/ietsp/real-nix-bin";
+const REAL_DIR_FILE: &str = "share/iets/real-nix-bin";
 
 fn executable(p: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
@@ -34,41 +34,41 @@ fn farm_real_dir(p: &Path) -> Option<PathBuf> {
     None
 }
 
-/// A candidate that is ietsp, whatever build of it: this executable, or a
-/// symlink chain that ends in a file named `ietsp`. A host can hold several
+/// A candidate that is iets, whatever build of it: this executable, or a
+/// symlink chain that ends in a file named `iets`. A host can hold several
 /// builds of the same source, and a farm made by one of them points at its
-/// own `bin/ietsp`, which is not `/proc/self/exe`.
-fn is_ietsp(canonical: &Path, me: Option<&Path>) -> bool {
-    Some(canonical) == me || canonical.file_name() == Some(std::ffi::OsStr::new("ietsp"))
+/// own `bin/iets`, which is not `/proc/self/exe`.
+fn is_iets(canonical: &Path, me: Option<&Path>) -> bool {
+    Some(canonical) == me || canonical.file_name() == Some(std::ffi::OsStr::new("iets"))
 }
 
-/// `dir/<name>` as a real nix: the file itself when it is not ietsp, else the
-/// bin directory the farm entry for that ietsp records. `None` means the
+/// `dir/<name>` as a real nix: the file itself when it is not iets, else the
+/// bin directory the farm entry for that iets records. `None` means the
 /// directory offers no real nix, so the caller must look further. Without
 /// this every candidate would be a candidate to exec, and a directory that
-/// holds ietsp's own classic names makes the fallback exec ietsp again.
+/// holds iets's own classic names makes the fallback exec iets again.
 fn candidate(dir: &Path, name: &str, me: Option<&Path>) -> Option<PathBuf> {
     let p = dir.join(name);
     if !executable(&p) {
         return None;
     }
-    if !std::fs::canonicalize(&p).is_ok_and(|c| is_ietsp(&c, me)) {
+    if !std::fs::canonicalize(&p).is_ok_and(|c| is_iets(&c, me)) {
         return Some(p);
     }
     let r = farm_real_dir(&p)?.join(name);
     executable(&r).then_some(r)
 }
 
-/// The first `<name>` in `dirs` that is not ietsp, or the bin directory the
-/// farm entry for an ietsp records. Every ietsp is skipped like ourselves,
-/// so a second build of ietsp under the name `nix` never wins.
+/// The first `<name>` in `dirs` that is not iets, or the bin directory the
+/// farm entry for an iets records. Every iets is skipped like ourselves,
+/// so a second build of iets under the name `nix` never wins.
 fn on_path(name: &str, dirs: impl Iterator<Item = PathBuf>, me: Option<&Path>) -> Option<PathBuf> {
     dirs.filter_map(|dir| candidate(&dir, name, me)).next()
 }
 
-/// The real `<name>`: `$IETSP_NIX_BIN_DIR/<name>` when it exists there, else
+/// The real `<name>`: `$IETS_NIX_BIN_DIR/<name>` when it exists there, else
 /// the bin directory the farm on `PATH` was built for, else the first
-/// `<name>` on `PATH` that is not ietsp.
+/// `<name>` on `PATH` that is not iets.
 pub fn real(name: &str) -> Option<PathBuf> {
     let me = std::fs::canonicalize("/proc/self/exe").ok();
     if let Some(dir) = &crate::session::Session::current().settings().nix_bin_dir
@@ -91,7 +91,7 @@ fn sibling(name: &str) -> Option<PathBuf> {
         }
         let real = std::fs::canonicalize(&probe).ok()?;
         let p = real.parent()?.join(name);
-        if executable(&p) && !std::fs::canonicalize(&p).is_ok_and(|c| is_ietsp(&c, me.as_deref())) {
+        if executable(&p) && !std::fs::canonicalize(&p).is_ok_and(|c| is_iets(&c, me.as_deref())) {
             return Some(p);
         }
     }
@@ -110,11 +110,11 @@ mod tests {
 
     #[test]
     fn farm_marker_is_found_through_two_hops() {
-        let tmp = std::env::temp_dir().join(format!("ietsp-nixbin-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("iets-nixbin-{}", std::process::id()));
         let farm = tmp.join("farm");
         let sys = tmp.join("sys");
         std::fs::create_dir_all(farm.join("bin")).unwrap();
-        std::fs::create_dir_all(farm.join("share/ietsp")).unwrap();
+        std::fs::create_dir_all(farm.join("share/iets")).unwrap();
         std::fs::create_dir_all(sys.join("bin")).unwrap();
         std::fs::write(farm.join(REAL_DIR_FILE), "/real/bin\n").unwrap();
         std::os::unix::fs::symlink("/proc/self/exe", farm.join("bin/nix")).unwrap();
@@ -127,13 +127,13 @@ mod tests {
         std::fs::remove_dir_all(&tmp).unwrap();
     }
 
-    /// Two builds of ietsp on `PATH`, both shadowing `nix`: neither is the
+    /// Two builds of iets on `PATH`, both shadowing `nix`: neither is the
     /// real nix, whichever one is running.
     #[test]
-    fn every_ietsp_build_is_skipped() {
+    fn every_iets_build_is_skipped() {
         use std::os::unix::fs::PermissionsExt;
 
-        let tmp = std::env::temp_dir().join(format!("ietsp-nixbin-two-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("iets-nixbin-two-{}", std::process::id()));
         let (x, y, real) = (tmp.join("x"), tmp.join("y"), tmp.join("real"));
         let exe = |p: &Path| {
             std::fs::write(p, "#!/bin/sh\nexit 0\n").unwrap();
@@ -143,8 +143,8 @@ mod tests {
             std::fs::create_dir_all(d).unwrap();
         }
         for d in [&x, &y] {
-            exe(&d.join("ietsp"));
-            std::os::unix::fs::symlink(d.join("ietsp"), d.join("nix")).unwrap();
+            exe(&d.join("iets"));
+            std::os::unix::fs::symlink(d.join("iets"), d.join("nix")).unwrap();
         }
         let nix = real.join("nix");
         exe(&nix);
@@ -158,7 +158,7 @@ mod tests {
         assert_eq!(on_path("nix", dirs.iter().cloned(), Some(&nix)), None);
 
         // what `nix-bin-dir` points at goes through the same test, so a
-        // directory of ietsp's own classic names cannot exec ietsp again
+        // directory of iets's own classic names cannot exec iets again
         assert_eq!(candidate(&x, "nix", None), None);
         assert_eq!(candidate(&real, "nix", None), Some(nix));
         assert_eq!(candidate(&real, "nix-build", None), None);

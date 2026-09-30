@@ -1,7 +1,7 @@
 //! The local content-addressed tree store: where a fetched tree lives instead
 //! of `/nix/store`.
 //!
-//! Two different things are called a store in ietsp. `crate::remote` is a Nix
+//! Two different things are called a store in iets. `crate::remote` is a Nix
 //! store reached over a protocol, with its trust model. This is the other one:
 //! content we own on local disk, under `crate::cachefs`'s rules — a version
 //! file, one writer at a time, an atomic rename into place, a TTL sweep
@@ -21,7 +21,7 @@
 //! Today the only user is `crate::source`, which fetches a
 //! `github`/`gitlab`/`sourcehut`/`tarball` input as one decompressed tar and
 //! indexes it (`crate::fetch::spool`). The spool is kept under
-//! `$XDG_CACHE_HOME/ietsp/inputs/<store path base name>/` with its index
+//! `$XDG_CACHE_HOME/iets/inputs/<store path base name>/` with its index
 //! beside it, and evaluation reads the input straight out of it: `import`,
 //! `readFile`, `readDir`, `pathExists`, `readFileType`, `hashFile`,
 //! `builtins.path`, `filterSource` and string coercion all answer from the
@@ -134,8 +134,8 @@ impl StoredTree {
     }
 }
 
-/// `--cache-dir DIR`, else `IETSP_CACHE_DIR`, else `$XDG_CACHE_HOME/ietsp`,
-/// else `~/.cache/ietsp`; the entries live in its `inputs/` subdirectory.
+/// `--cache-dir DIR`, else `IETS_CACHE_DIR`, else `$XDG_CACHE_HOME/iets`,
+/// else `~/.cache/iets`; the entries live in its `inputs/` subdirectory.
 /// `None` when no home is known.
 pub fn locate(override_dir: Option<&str>) -> Option<PathBuf> {
     Some(crate::cachefs::root(override_dir)?.join("inputs"))
@@ -374,7 +374,7 @@ mod tests {
 
     #[test]
     fn a_staged_directory_goes_when_it_is_dropped() {
-        let d = std::env::temp_dir().join(format!("ietsp-inputs-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("iets-inputs-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).expect("temp dir");
         let staged = Staged { dir: d.join("x") };

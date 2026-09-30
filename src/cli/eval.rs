@@ -1,4 +1,4 @@
-//! `ietsp eval`: evaluate an expression and print it.
+//! `iets eval`: evaluate an expression and print it.
 
 use std::collections::HashSet;
 

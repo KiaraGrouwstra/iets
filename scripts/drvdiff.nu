@@ -4,11 +4,11 @@
 #   evaluate to a drvPath string.
 #
 # Evaluates with nix-instantiate (read-write, so the .drv files land in
-# /nix/store) and with ietsp (--dump-drvs). On mismatch, walks the Nix
+# /nix/store) and with iets (--dump-drvs). On mismatch, walks the Nix
 # derivation graph from the root and reports the first derivation whose
-# inputs ietsp reproduced exactly but which ietsp itself did not, then diffs
-# its ATerm against ietsp's derivation of the same name.
-use lib.nu [chomp diff-head env-cmd ietsp-bin require-real-nix show]
+# inputs iets reproduced exactly but which iets itself did not, then diffs
+# its ATerm against iets's derivation of the same name.
+use lib.nu [chomp diff-head env-cmd iets-bin require-real-nix show]
 
 # Input .drv paths of a Nix derivation: the second ATerm section.
 def inputs [drv: string]: nothing -> list<string> {
@@ -18,7 +18,7 @@ def inputs [drv: string]: nothing -> list<string> {
     | each {|r| $r.capture0 }
 }
 
-def compare [ietsp: string, nix: list<string>, dump: string, argv: list<string>]: nothing -> int {
+def compare [iets: string, nix: list<string>, dump: string, argv: list<string>]: nothing -> int {
   mut args = []
   mut i = 0
   while $i < ($argv | length) {
@@ -33,14 +33,14 @@ def compare [ietsp: string, nix: list<string>, dump: string, argv: list<string>]
 
   let n = (^($nix | first) ...($nix | skip 1) --eval --strict --read-write-mode --option pure-eval false ...$args | complete)
   let nixdrv = ($n.stdout | str replace -a '"' '' | chomp)
-  let r = (^$ietsp eval --strict --dump-drvs $dump ...$args | complete)
-  let ietspdrv = ($r.stdout | str replace -a '"' '' | chomp)
+  let r = (^$iets eval --strict --dump-drvs $dump ...$args | complete)
+  let ietsdrv = ($r.stdout | str replace -a '"' '' | chomp)
   print $"nix:   ($nixdrv)"
-  print $"ietsp: ($ietspdrv)"
-  if $nixdrv == "" or $ietspdrv == "" { print "one evaluator failed"; return 1 }
-  if $nixdrv == $ietspdrv { print "ok"; return 0 }
+  print $"iets: ($ietsdrv)"
+  if $nixdrv == "" or $ietsdrv == "" { print "one evaluator failed"; return 1 }
+  if $nixdrv == $ietsdrv { print "ok"; return 0 }
 
-  # Descend from the root until every input is reproduced by ietsp.
+  # Descend from the root until every input is reproduced by iets.
   mut cur = $nixdrv
   mut seen = []
   loop {
@@ -60,25 +60,25 @@ def compare [ietsp: string, nix: list<string>, dump: string, argv: list<string>]
   let name = ($cur | str replace -r '^[^-]*-' '')
   let mine = (ls $dump | get name | path basename | sort | where ($it | str ends-with $"-($name)") | get -o 0 | default "")
   if $mine == "" {
-    print $"ietsp produced no derivation named '($name)'"
+    print $"iets produced no derivation named '($name)'"
     return 1
   }
-  print $"ietsp counterpart: ($dump)/($mine)"
+  print $"iets counterpart: ($dump)/($mine)"
   let tmp = (mktemp -d --tmpdir drvdiff-diff.XXXXXX)
   open --raw $cur | str replace -a "," "\n" | save -f $"($tmp)/nix"
-  open --raw $"($dump)/($mine)" | str replace -a "," "\n" | save -f $"($tmp)/ietsp"
-  diff-head $"($tmp)/nix" $"($tmp)/ietsp" ($env.SHOW? | default 60 | into int) | show
+  open --raw $"($dump)/($mine)" | str replace -a "," "\n" | save -f $"($tmp)/iets"
+  diff-head $"($tmp)/nix" $"($tmp)/iets" ($env.SHOW? | default 60 | into int) | show
   rm -rf $tmp
   1
 }
 
 def --wrapped main [...argv: string] {
   cd ($env.FILE_PWD | path join "..")
-  let ietsp = (ietsp-bin)
+  let iets = (iets-bin)
   let nix = (env-cmd NIX nix-instantiate)
   require-real-nix ($nix | first)
   let dump = (mktemp -d --tmpdir drvdiff.XXXXXX)
-  let code = (try { compare $ietsp $nix $dump $argv } catch {|e| print -e $e.rendered; 1 })
+  let code = (try { compare $iets $nix $dump $argv } catch {|e| print -e $e.rendered; 1 })
   rm -rf $dump
   exit $code
 }

@@ -190,7 +190,7 @@ mod tests {
     /// helper fiber has every setting of the arguments.
     #[test]
     fn a_fiber_template_carries_the_configuration() {
-        let d = std::env::temp_dir().join(format!("ietsp-run-cfg-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("iets-run-cfg-{}", std::process::id()));
         let mut a = args("1", &d, 4);
         a.includes = vec![(b"nixpkgs".to_vec(), b"/nonexistent".to_vec())];
         a.lint_roots = vec!["/nonexistent".into()];
@@ -209,7 +209,7 @@ mod tests {
     /// four-worker count collapses.
     #[test]
     fn helper_fibers_read_the_ir_cache() {
-        let d = std::env::temp_dir().join(format!("ietsp-run-ircache-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("iets-run-ircache-{}", std::process::id()));
         let n = 400;
         let expr = workload(&d.join("src"), n);
         let cache = d.join("cache");
@@ -250,7 +250,7 @@ mod tests {
     /// counters alone the four-worker number is a fraction of it.
     #[test]
     fn the_counters_cover_the_helper_fibers() {
-        let d = std::env::temp_dir().join(format!("ietsp-run-counts-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("iets-run-counts-{}", std::process::id()));
         let n = 400;
         let expr = format!(
             "builtins.genList (i: derivation {{ name = \"c${{toString i}}\"; \

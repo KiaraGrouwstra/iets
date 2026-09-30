@@ -86,7 +86,7 @@ impl std::fmt::Debug for dyn Scm {
     }
 }
 
-/// Every SCM that ietsp knows, in the order detection asks them.
+/// Every SCM that iets knows, in the order detection asks them.
 static KNOWN: &[&dyn Scm] = &[
     &git::Git,
     #[cfg(test)]

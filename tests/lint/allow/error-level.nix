@@ -1,2 +1,2 @@
-# ietsp: allow url-literal
+# iets: allow url-literal
 builtins.stringLength http://example.com

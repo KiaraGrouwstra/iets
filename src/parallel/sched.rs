@@ -38,14 +38,14 @@ const LEN_MAX: u32 = u16::MAX as u32;
 struct Tuning {
     /// Scans of 64 polls an idle searcher makes before it parks (~2 ms). A
     /// shorter spin (64 scans) saved no user time once searchers were capped,
-    /// and cost 3-5 % wall in futex round trips. `IETSP_SPIN` overrides.
+    /// and cost 3-5 % wall in futex round trips. `IETS_SPIN` overrides.
     spin: u32,
     /// Queued tasks per awake worker that justify waking one more sleeper.
     /// A fan-out burst of a few tiny tasks is cleared faster by the workers
     /// already awake than by a futex round trip; a deep queue recruits
-    /// sleepers one handoff at a time (`IETSP_HANDOFF` overrides).
+    /// sleepers one handoff at a time (`IETS_HANDOFF` overrides).
     handoff: usize,
-    /// Idle workers allowed to search at once (`IETSP_SPINNERS` overrides).
+    /// Idle workers allowed to search at once (`IETS_SPINNERS` overrides).
     spinner_cap: usize,
 }
 
@@ -258,7 +258,7 @@ impl Runtime {
         }));
         for i in 1..n {
             std::thread::Builder::new()
-                .name(format!("ietsp-w{i}"))
+                .name(format!("iets-w{i}"))
                 .stack_size(4 << 20)
                 .spawn(crate::session::bind(move || {
                     fiber::install_overflow_handler();
@@ -425,7 +425,7 @@ impl Runtime {
     /// run that cannot grow its fiber pool finishes on the fibers it has.
     fn report_no_stack(&self, e: &fiber::StackError) {
         if !self.stack_failed.swap(true, Ordering::Relaxed) {
-            crate::errln!("ietsp: {e}; continuing without new fibers");
+            crate::errln!("iets: {e}; continuing without new fibers");
         }
     }
 
@@ -729,7 +729,7 @@ impl Runtime {
             if self.has_work() {
                 return;
             }
-            crate::errln!("ietsp: internal error: all workers idle with the main fiber parked");
+            crate::errln!("iets: internal error: all workers idle with the main fiber parked");
             std::process::abort();
         }
     }

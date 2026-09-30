@@ -1,4 +1,4 @@
-//! The one HTTP client ietsp has: a streaming GET, for flake inputs
+//! The one HTTP client iets has: a streaming GET, for flake inputs
 //! (`flake::fetch`). hyper over tokio-rustls, the stack tonic already
 //! brings; no libcurl. Redirects are followed like
 //! filetransfer.cc (`CURLOPT_FOLLOWLOCATION`, `CURLOPT_MAXREDIRS` 10) and
@@ -167,7 +167,7 @@ impl Url {
 /// the credentials go along. libcurl sends a custom `Authorization` only to the
 /// first scheme, host and port (http.c:Curl_allow_auth_to_host, the
 /// CVE-2022-27776 fix), and filetransfer.cc never sets
-/// `CURLOPT_UNRESTRICTED_AUTH`. ietsp's headers are all credentials, so the rule
+/// `CURLOPT_UNRESTRICTED_AUTH`. iets's headers are all credentials, so the rule
 /// covers `Private-token` too. An https-to-http redirect is refused: libcurl
 /// allows it, but it drops TLS from a download nothing has verified yet.
 fn redirect(first: &Url, from: &Url, to: &Url) -> std::result::Result<bool, &'static str> {
@@ -278,7 +278,7 @@ fn tls() -> Result<Arc<rustls::ClientConfig>> {
 /// read from the file system instead. Nothing buffers the whole body.
 /// `headers` are credentials: they go only where [`redirect`] lets them.
 ///
-/// `IETSP_OFFLINE=1` makes any download an error. A run that has every input in
+/// `IETS_OFFLINE=1` makes any download an error. A run that has every input in
 /// the input store then costs nothing and needs nothing; a run that is missing
 /// one says which URL it wanted.
 pub fn get_decompressed(
@@ -290,7 +290,7 @@ pub fn get_decompressed(
     get(url, headers, limits, true, sink)
 }
 
-/// [`get_decompressed`], with the decompression optional: `ietsp prefetch`
+/// [`get_decompressed`], with the decompression optional: `iets prefetch`
 /// hashes the bytes the URL serves, as `nix store prefetch-file` does.
 pub fn get(
     url: &str,
@@ -308,7 +308,7 @@ pub fn get(
     };
     if crate::session::Session::current().settings().offline {
         return Err(Error::Usage(format!(
-            "cannot fetch '{url}': IETSP_OFFLINE is set"
+            "cannot fetch '{url}': IETS_OFFLINE is set"
         )));
     }
     let read_in = Rc::new(Cell::new(0));
@@ -547,7 +547,7 @@ async fn once(url: &str, headers: &[(String, String)], limits: Limits) -> Result
         .method("GET")
         .uri(&u.target)
         .header("host", u.authority())
-        .header("user-agent", concat!("ietsp/", env!("CARGO_PKG_VERSION")));
+        .header("user-agent", concat!("iets/", env!("CARGO_PKG_VERSION")));
     for (name, value) in headers {
         req = req.header(name.as_str(), value.as_str());
     }
@@ -575,7 +575,7 @@ trait Stream: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin {}
 impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin> Stream for T {}
 
 /// The magic bytes libarchive's `archive_read_support_filter_all` recognises,
-/// for the filters ietsp implements (tarfile.cc:TarArchive).
+/// for the filters iets implements (tarfile.cc:TarArchive).
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Compression {
     None,
@@ -647,7 +647,7 @@ impl Read for MultiGz {
     }
 }
 
-/// How many filters `archive_read_support_filter_all` may stack before ietsp
+/// How many filters `archive_read_support_filter_all` may stack before iets
 /// calls the stream a bomb: a doubly compressed tarball is one Nix accepts.
 const MAX_FILTERS: usize = 8;
 
@@ -934,7 +934,7 @@ mod tests {
     }
 
     fn file_url(name: &str, bytes: &[u8]) -> String {
-        let f = std::env::temp_dir().join(format!("ietsp-http-{}-{name}", std::process::id()));
+        let f = std::env::temp_dir().join(format!("iets-http-{}-{name}", std::process::id()));
         std::fs::write(&f, bytes).unwrap();
         format!("file://{}", f.display())
     }

@@ -11,7 +11,7 @@ becomes a tree), reached through `crate::api::flake`. Judge:
 
 ## Scope
 
-`ietsp eval --raw DIR#attr.path` evaluates a locked flake and prints what
+`iets eval --raw DIR#attr.path` evaluates a locked flake and prints what
 `nix eval --raw --option eval-cache false DIR#attr.path` prints.
 
 - `DIR` goes through the parser `builtins.parseFlakeRef` uses, with cwd as
@@ -22,7 +22,7 @@ becomes a tree), reached through `crate::api::flake`. Judge:
   - registry references (`nixpkgs#hello`, and `x#y` even where `./x`
     exists, as in flakeref.cc:parseFlakeIdRef);
   - remote references (`github:`, `gitlab:`, `git+https:`, `git+file:`,
-    `https://….tar.gz`): ietsp cannot fetch a root flake;
+    `https://….tar.gz`): iets cannot fetch a root flake;
   - `?query` parameters on a path (`?dir=`, `?rev=`, `?narHash=`);
   - what the parser itself leaves out (`hg+…`, `sourcehut:` — see
     `docs/reference/divergences.md`).
@@ -36,7 +36,7 @@ becomes a tree), reached through `crate::api::flake`. Judge:
 - `flake.lock` must exist and be complete: every node reachable from the
   root has a `narHash`, or is a relative `path:` input, and every input
   `flake.nix` declares has a lock entry. Otherwise:
-  `ietsp: flake.lock missing or incomplete, run nix flake lock`. A
+  `iets: flake.lock missing or incomplete, run nix flake lock`. A
   `flake.nix` input whose URL changed without re-locking is not detected;
   the lock wins.
 - `--strict`, `--json` and `--raw` work as with a file. `--raw` mirrors
@@ -68,7 +68,7 @@ these libfetchers schemes:
 
 Each scheme keeps the query parameters Nix keeps for it. As in Nix,
 `parseFlakeRef` has no base directory, so a relative path is an error.
-For valid input the output is Nix's; the corners where ietsp is looser or
+For valid input the output is Nix's; the corners where iets is looser or
 stricter are in `docs/reference/divergences.md`.
 
 ## `builtins.getFlake`
@@ -76,7 +76,7 @@ stricter are in `docs/reference/divergences.md`.
 `builtins.getFlake REF` takes an absolute `/abs` or `path:/abs`, parsed
 like `parseFlakeRef`, and returns what `callFlake` returns.
 
-- It is **impure only**: every reference ietsp resolves is unlocked, which
+- It is **impure only**: every reference iets resolves is unlocked, which
   pure evaluation refuses (`docs/reference/settings.md`, "pure-eval").
 - `REF` is always a `path:` input, also inside a git repository, because
   flakeref.cc looks for `.git` only when it has a base directory and
@@ -84,7 +84,7 @@ like `parseFlakeRef`, and returns what `callFlake` returns.
 - A relative `REF` and a `#fragment` are errors, as in Nix.
 - A virtual copy (`"${./.}"` without its context) stands for its local
   tree.
-- The lock rule above holds. Nix locks a missing input in memory; ietsp
+- The lock rule above holds. Nix locks a missing input in memory; iets
   falls back.
 - Remote references (`github:`, `git+https:`) and a fetched input's tree
   are `ErrorKind::Unsupported`.
@@ -93,10 +93,10 @@ like `parseFlakeRef`, and returns what `callFlake` returns.
 
 A remote input whose locked tree is not in `/nix/store` must become
 readable first. `source::tree` takes four steps, in order; from the second
-on it prints `ietsp: input '<name>' is not in the store (<path>),
+on it prints `iets: input '<name>' is not in the store (<path>),
 fetching it`. The root tree and `path:` inputs never reach it.
 
-0. **The input store**, ietsp's own (below). An entry that is there costs
+0. **The input store**, iets's own (below). An entry that is there costs
    two `open` calls and no network, no daemon and no store.
 1. **Substitution, as one daemon op.** `QueryValidPaths` with the
    substitute flag (`wopQueryValidPaths`, protocol >= 1.27) makes the
@@ -107,22 +107,22 @@ fetching it`. The root tree and `path:` inputs never reach it.
    rest of the evaluation. A `grpc://` store is not a worker-protocol
    daemon, so there is nothing to substitute with and step 2 decides.
    When no daemon answers, the step is skipped without a word.
-2. **The archive types, fetched by ietsp**: `github`, `gitlab`,
-   `sourcehut` and `tarball` are one download and one index, so ietsp does
+2. **The archive types, fetched by iets**: `github`, `gitlab`,
+   `sourcehut` and `tarball` are one download and one index, so iets does
    them itself, into the input store.
 3. **`git` and `hg`, the last shell-out**:
    `nix eval --raw --impure --expr '(builtins.fetchTree <locked
    attrs>).outPath'`, then a check that the path nix reports is the one
    the lock implies, so a difference in the file set is an error and not a
-   silent divergence. When no nix other than ietsp itself is on `PATH`,
-   the error is `ietsp: input '<name>' is not in the store and nix is not
+   silent divergence. When no nix other than iets itself is on `PATH`,
+   the error is `iets: input '<name>' is not in the store and nix is not
    on PATH; fetch it with nix (...) first`.
 
 `file` is not in this set. Its store path is the flat hash of the bytes
 under the input's name (`tarball.cc:FileInputScheme`), which the lock's
 `narHash` does not give, so the type stays unsupported.
 
-`IETSP_OFFLINE=1` makes any download an error that names the URL. A flake
+`IETS_OFFLINE=1` makes any download an error that names the URL. A flake
 whose inputs the input store already holds still evaluates.
 
 ### The archive URL, per type
@@ -195,7 +195,7 @@ match the git sink behind a locked input. `nix store prefetch-file
 --unpack` is Nix's other archive path, with libarchive's extract flags,
 and refuses all three.
 
-Two limits are ietsp's own. `fetch-max-size` covers the spool and
+Two limits are iets's own. `fetch-max-size` covers the spool and
 everything a sparse member expands to together
 (`docs/reference/settings.md`). A stream with over eight layers of
 compression is refused, where libarchive stacks filters without a bound.
@@ -206,12 +206,12 @@ so a wrong tree is never named, never read and never uploaded. A match is
 moved into the input store with one `rename`. Nothing is registered in any
 store.
 
-This is also the tree `ietsp prefetch --unpack` hashes
+This is also the tree `iets prefetch --unpack` hashes
 (`docs/reference/commands.md`).
 
 ## The input store
 
-`$XDG_CACHE_HOME/ietsp/inputs/` — `--cache-dir DIR` or `IETSP_CACHE_DIR`
+`$XDG_CACHE_HOME/iets/inputs/` — `--cache-dir DIR` or `IETS_CACHE_DIR`
 moves it to `DIR/inputs` — holds one directory per fetched input, named by
 the store-path base name the lock implies. Code: `src/treestore`, a local
 content-addressed tree store on `crate::cachefs`. Its `put` takes the hash

@@ -78,20 +78,20 @@ macro_rules! unsupported {
 unsupported!(
     fetchurl,
     "fetchurl",
-    "ietsp: network fetchers are not supported (builtins.fetchurl)"
+    "iets: network fetchers are not supported (builtins.fetchurl)"
 );
 unsupported!(
     fetch_git,
     "fetchGit",
-    "ietsp: network fetchers are not supported (builtins.fetchGit)"
+    "iets: network fetchers are not supported (builtins.fetchGit)"
 );
 unsupported!(
     fetch_mercurial,
-    "ietsp: network fetchers are not supported (builtins.fetchMercurial)"
+    "iets: network fetchers are not supported (builtins.fetchMercurial)"
 );
 unsupported!(
     fetch_closure,
-    "ietsp: network fetchers are not supported (builtins.fetchClosure)"
+    "iets: network fetchers are not supported (builtins.fetchClosure)"
 );
 
 fn lossy(b: &[u8]) -> std::borrow::Cow<'_, str> {
@@ -209,7 +209,7 @@ pub fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>
                 {
                     kind = ErrorKind::Unsupported;
                     format!(
-                        "ietsp: '{}' is not in the store and this run did not keep its text (--no-tracing-cache)",
+                        "iets: '{}' is not in the store and this run did not keep its text (--no-tracing-cache)",
                         lossy(sp)
                     )
                 } else {
@@ -219,7 +219,7 @@ pub fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>
             Ctx::Built { drv: d, .. } => {
                 kind = ErrorKind::Unsupported;
                 format!(
-                    "ietsp: import from derivation is not supported: '{}' is not built",
+                    "iets: import from derivation is not supported: '{}' is not built",
                     lossy(d)
                 )
             }

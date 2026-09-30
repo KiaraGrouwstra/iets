@@ -14,7 +14,7 @@ use crate::runtime::*;
 pub const MIN_FANOUT: usize = 4;
 pub const BATCH: u32 = 16;
 
-/// `IETSP_FANOUT` bitmask for experiments: 1 deep, 2 coerce, 4 list builtins.
+/// `IETS_FANOUT` bitmask for experiments: 1 deep, 2 coerce, 4 list builtins.
 #[inline]
 fn fanout_mask(ev: &Evaluator) -> u32 {
     ev.session().settings().fanout
@@ -29,7 +29,7 @@ pub const T_ATTRS_DEEP: u8 = 4;
 /// `concatStringsSep` demand.
 pub const T_LIST_COERCE: u8 = 6;
 pub const T_ATTRS_COERCE: u8 = 7;
-/// `ietsp eval-jobs` prefetch of a range of attrs (`crate::jobs`).
+/// `iets eval-jobs` prefetch of a range of attrs (`crate::jobs`).
 pub const T_JOB: u8 = 8;
 const COERCE_BATCH: u32 = 4;
 
@@ -180,7 +180,7 @@ pub fn bail_requested(ev: &Evaluator) -> bool {
 }
 
 /// Position of the thunk the main fiber forced last (diagnostics: the
-/// `IETSP_PAR_STATS=2` timeline samples it). These three and `EFFECT_BAILS`
+/// `IETS_PAR_STATS=2` timeline samples it). These three and `EFFECT_BAILS`
 /// stay process-wide: they are sampled on the force path, where a session
 /// lookup would cost more than the diagnostic is worth, and two sessions
 /// would only blur one debug line.

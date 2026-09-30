@@ -1,1 +1,1 @@
-(derivation { name = "x"; system = "s"; builder = "b"; src = toString /etc/ietsp-lint-example; }).drvPath
+(derivation { name = "x"; system = "s"; builder = "b"; src = toString /etc/iets-lint-example; }).drvPath

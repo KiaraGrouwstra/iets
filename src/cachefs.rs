@@ -5,7 +5,7 @@
 //! and nothing else: a symlink has no format to version and no torn state to
 //! wipe.
 //!
-//! Many `ietsp` processes share one cache directory (eval-jobs workers,
+//! Many `iets` processes share one cache directory (eval-jobs workers,
 //! direnv, the classic command names). The invariant they hold together:
 //! **an entry is one file, written to a temporary name and renamed into
 //! place, so one rename publishes the whole entry, a reader sees either the
@@ -60,7 +60,7 @@ pub fn create_dir(path: &Path) -> io::Result<()> {
 }
 
 /// Narrows `path` to [`DIR_MODE`] when it is wider. A cache root a run of an
-/// older ietsp made follows the umask, and the user cannot be asked to fix
+/// older iets made follows the umask, and the user cannot be asked to fix
 /// it: tightening is the whole repair, and it costs the run nothing, where
 /// refusing the directory would cost every entry in it.
 fn tighten(path: &Path) {
@@ -72,7 +72,7 @@ fn tighten(path: &Path) {
 }
 
 /// The directory every cache store lives under: `--cache-dir DIR`, else
-/// `IETSP_CACHE_DIR`, else `$XDG_CACHE_HOME/ietsp`, else `~/.cache/ietsp`.
+/// `IETS_CACHE_DIR`, else `$XDG_CACHE_HOME/iets`, else `~/.cache/iets`.
 /// Each store takes a subdirectory of it — `trace/`, `ir/`, `inputs/`,
 /// `roots/` — so the directory the user names is never a removal target.
 /// `None` when no home is known.
@@ -87,13 +87,13 @@ pub fn root(override_dir: Option<&str>) -> Option<PathBuf> {
         Some(x) if !x.is_empty() => PathBuf::from(x),
         _ => PathBuf::from(std::env::var_os("HOME")?).join(".cache"),
     };
-    Some(base.join("ietsp"))
+    Some(base.join("iets"))
 }
 
-/// The GC roots ietsp owns, under `<cache root>/roots`. A root is not a cache
+/// The GC roots iets owns, under `<cache root>/roots`. A root is not a cache
 /// entry: it holds nothing that can be recomputed, it is a claim on the
 /// daemon's store. The TTL sweep still fits — a root nobody has used in
-/// `TTL_DAYS` days is one nobody wants kept — so `ietsp cache gc` walks it,
+/// `TTL_DAYS` days is one nobody wants kept — so `iets cache gc` walks it,
 /// but the version file, the writer lock and poison-and-wipe do not, which is
 /// why it is not `prepare`d.
 pub fn roots(override_dir: Option<&str>) -> Option<PathBuf> {
@@ -118,7 +118,7 @@ pub fn root_link(override_dir: Option<&str>, parts: &[&[u8]]) -> Option<PathBuf>
 
 /// Whether a cache entry may send a run to `program`: it has to be a file
 /// inside `out_path`, and `out_path` a path of the store directory. A cache
-/// directory is writable by whoever runs ietsp, so an entry that named a
+/// directory is writable by whoever runs iets, so an entry that named a
 /// program freely would be a way to start one; what the store holds under
 /// that name is the daemon's to say. `nix fmt` is the one command that runs
 /// what an entry remembered.
@@ -288,7 +288,7 @@ pub fn checksum(key: &str, parts: &[&[u8]]) -> [u8; SUM] {
 }
 
 /// Opens an entry for reading under the rules a cache directory needs: it is
-/// writable by whoever runs ietsp, so the name must not be a symbolic link,
+/// writable by whoever runs iets, so the name must not be a symbolic link,
 /// what it names must be a regular file, and its length must be one an entry
 /// can have. `O_NONBLOCK` keeps the open of a FIFO from waiting for a writer.
 pub fn open_entry(path: &Path) -> Option<(fs::File, fs::Metadata)> {
@@ -311,13 +311,13 @@ pub fn tag() -> u64 {
 
 // ---- store-level structure --------------------------------------------------
 
-/// Whose directory a store root is, before ietsp writes to it.
+/// Whose directory a store root is, before iets writes to it.
 enum Owner {
-    /// ietsp's, and usable as it stands.
+    /// iets's, and usable as it stands.
     Ready,
-    /// ietsp's, but of another format or with a broken store-level file.
+    /// iets's, but of another format or with a broken store-level file.
     Stale(&'static str),
-    /// Not ietsp's: it holds a name that no store of this shape can have.
+    /// Not iets's: it holds a name that no store of this shape can have.
     Foreign,
 }
 
@@ -333,7 +333,7 @@ fn belongs(name: &std::ffi::OsStr, shape: Shape) -> bool {
 }
 
 /// True when every name in `root` is one this store's own layout makes. An
-/// unreadable directory or entry counts as foreign: ietsp removes only what
+/// unreadable directory or entry counts as foreign: iets removes only what
 /// it can prove it put there.
 fn all_ours(root: &Path, shape: Shape) -> bool {
     let Ok(rd) = fs::read_dir(root) else {
@@ -368,7 +368,7 @@ fn owner(root: &Path, shape: Shape) -> Owner {
     }
 }
 
-/// Empties a store ietsp owns, touching only the names its own layout makes:
+/// Empties a store iets owns, touching only the names its own layout makes:
 /// the store-level files, the temporary files, the entries and the IR
 /// shards. Anything else in the directory stays.
 fn wipe(root: &Path, shape: Shape) {
@@ -407,7 +407,7 @@ fn wipe_shard(dir: &Path) {
 
 /// Makes `root` usable, and says whether it is. A version mismatch or an
 /// unreadable store-level file wipes the store and starts it empty: a cache
-/// is never repaired in place. A directory that is not ietsp's — it exists,
+/// is never repaired in place. A directory that is not iets's — it exists,
 /// holds something, and carries no store of this shape — is refused instead,
 /// because `--cache-dir` points this at a directory the user names.
 #[must_use]
@@ -422,8 +422,8 @@ pub fn prepare(root: &Path, shape: Shape, timings: bool) -> bool {
         }
         Owner::Foreign => {
             crate::errln!(
-                "error: {} is not an ietsp cache and is not empty, so ietsp will not \
-                 use it; point --cache-dir (or IETSP_CACHE_DIR) at a new or empty \
+                "error: {} is not an iets cache and is not empty, so iets will not \
+                 use it; point --cache-dir (or IETS_CACHE_DIR) at a new or empty \
                  directory, or empty this one",
                 root.display()
             );
@@ -745,7 +745,7 @@ mod tests {
     use super::*;
 
     fn tmp(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("ietsp-cachefs-{}-{tag}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("iets-cachefs-{}-{tag}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).expect("temp dir");
         d
@@ -792,7 +792,7 @@ mod tests {
     }
 
     fn ready(d: &Path) {
-        assert!(prepare(d, Shape::Dirs, false), "the store is ietsp's");
+        assert!(prepare(d, Shape::Dirs, false), "the store is iets's");
     }
 
     #[test]
@@ -827,7 +827,7 @@ mod tests {
     }
 
     #[test]
-    fn a_directory_that_is_not_ietsps_is_refused_untouched() {
+    fn a_directory_that_is_not_ours_is_refused_untouched() {
         let d = tmp("foreign");
         fs::write(d.join("unrelated.txt"), b"PRECIOUS").expect("file");
         fs::create_dir_all(d.join("notes")).expect("dir");
@@ -841,7 +841,7 @@ mod tests {
     }
 
     #[test]
-    fn a_wipe_keeps_what_ietsp_did_not_create() {
+    fn a_wipe_keeps_what_iets_did_not_create() {
         let d = tmp("scoped");
         ready(&d);
         fs::create_dir_all(d.join(OLD)).expect("entry");
@@ -873,7 +873,7 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_directory_is_ietsps_to_take() {
+    fn an_empty_directory_is_ours_to_take() {
         let d = tmp("empty");
         assert!(prepare(&d, Shape::Dirs, false));
         assert_eq!(fs::read(d.join(VERSION)).expect("version"), FORMAT);
@@ -979,10 +979,7 @@ mod tests {
         assert_eq!((s.scanned, s.removed, s.bytes), (2, 1, 0));
         assert!(!d.join(OLD).exists(), "a root nobody used goes");
         assert!(d.join(YOUNG).exists(), "a root in use stays");
-        assert!(
-            target.exists(),
-            "what a root named is not ietsp's to remove"
-        );
+        assert!(target.exists(), "what a root named is not iets's to remove");
 
         back_date_link(&d.join(YOUNG), 40 * DAY);
         touch_link(&d.join(YOUNG));

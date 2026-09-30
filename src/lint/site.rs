@@ -128,7 +128,7 @@ mod tests {
         );
         assert_eq!(span(src, LintId::DrvList, "d;"), Some("d".into()));
         assert_eq!(span(src, id, "= \"a\""), None);
-        let src = "# ietsp: allow nope, fod\n1";
+        let src = "# iets: allow nope, fod\n1";
         assert_eq!(span(src, LintId::UnknownAllow, "nope"), Some("nope".into()));
     }
 

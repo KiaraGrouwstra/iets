@@ -24,7 +24,7 @@ fn collect_attrs(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Attrs> {
         bail!(
             ErrorKind::Unsupported,
             pos,
-            "ietsp: 'fetchTree' with a URL argument is not supported; pass the locked attribute set"
+            "iets: 'fetchTree' with a URL argument is not supported; pass the locked attribute set"
         );
     };
     let mut out = Attrs::new();
@@ -76,7 +76,7 @@ fn collect_attrs(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Attrs> {
 /// locked (a `narHash` for `path` and `tarball`, a `rev` for the rest). The
 /// message names the input the way `Input::to_string` does
 /// (`flakeref::attrs_to_string`); for `git` (fetchTree adds `?shallow=1`) and
-/// what ietsp cannot show, it is unsupported and classic mode falls back.
+/// what iets cannot show, it is unsupported and classic mode falls back.
 fn check_locked(attrs: &Attrs, pos: Pos) -> EvalResult<()> {
     let ty = str_attr(attrs, "type").unwrap_or("");
     let locked = match ty {
@@ -103,7 +103,7 @@ fn check_locked(attrs: &Attrs, pos: Pos) -> EvalResult<()> {
         None => bail!(
             ErrorKind::Unsupported,
             pos,
-            "ietsp: an unlocked '{ty}' input in pure evaluation mode is not supported"
+            "iets: an unlocked '{ty}' input in pure evaluation mode is not supported"
         ),
     }
 }
@@ -191,7 +191,7 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
         other => bail!(
             ErrorKind::Unsupported,
             pos,
-            "ietsp: fetchTree input type '{other}' is not supported"
+            "iets: fetchTree input type '{other}' is not supported"
         ),
     };
     let name = str_attr(&tree.attrs, "narHash").and_then(|h| ev.input_names.get(h));
@@ -256,7 +256,7 @@ pub fn fetch_tarball_builtin(ev: &mut Evaluator, args: &[Word], pos: Pos) -> Eva
         bail!(
             ErrorKind::Unsupported,
             pos,
-            "ietsp: builtins.fetchTarball without a sha256 is not supported"
+            "iets: builtins.fetchTarball without a sha256 is not supported"
         );
     };
     // not `source::tree`: `fetchTarball` names the entry itself, and the
@@ -302,7 +302,7 @@ fn rev_count(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     }
     let scm = of.first().and_then(|n| crate::source::scm::named(n));
     let (Some(scm), [_, root, rev]) = (scm, of.as_slice()) else {
-        bail!(ErrorKind::Eval, pos, "ietsp: revCount of an unknown tree");
+        bail!(ErrorKind::Eval, pos, "iets: revCount of an unknown tree");
     };
     let n = crate::source::scm::rev_count(ev.trace(), scm, Path::new(root), rev)
         .map_err(|e| Error::boxed(ErrorKind::Io, e, pos))?;
@@ -501,7 +501,7 @@ mod tests {
 
     fn toml(text: &str) -> Config {
         let mut c = Config::default();
-        c.apply_toml(text, std::path::Path::new("/r/ietsp.toml"))
+        c.apply_toml(text, std::path::Path::new("/r/iets.toml"))
             .unwrap();
         c
     }
@@ -621,11 +621,11 @@ mod tests {
         let site_first = "t: t.revCount + (with t; revCount) + t.revCount - 7";
         assert_eq!(one(site_first), ["self 1:4"]);
         assert_eq!(one("t: (with t; revCount) + t.revCount"), ["self"]);
-        let allowed = "t: t.revCount + t.revCount # ietsp: allow rev-count";
+        let allowed = "t: t.revCount + t.revCount # iets: allow rev-count";
         assert!(one(allowed).is_empty());
-        let next = "t: t.revCount # ietsp: allow rev-count\n  + t.revCount";
+        let next = "t: t.revCount # iets: allow rev-count\n  + t.revCount";
         assert_eq!(one(next), ["self 2:5"]);
-        let force = "t: t.revCount # ietsp: allow rev-count\n  + (with t; revCount)";
+        let force = "t: t.revCount # iets: allow rev-count\n  + (with t; revCount)";
         assert_eq!(one(force), ["self"]);
     }
 

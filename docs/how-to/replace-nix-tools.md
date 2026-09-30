@@ -1,17 +1,17 @@
-# How to replace your Nix tools with ietsp
+# How to replace your Nix tools with iets
 
 One binary covers seven separate tools, and they share one evaluator and
 one cache. This page gives a worked example of each replacement.
 
 | you used | use instead |
 |---|---|
-| `nix search` | `ietsp search` |
-| `nix-diff` | `ietsp diff` |
-| `nvd` | `ietsp diff --closure` |
-| `nurl`, `nix-prefetch`, `nix-prefetch-url` | `ietsp prefetch` |
-| `nix-fast-build` | `ietsp build .#checks` |
-| `nix-eval-jobs` | `ietsp eval-jobs` |
-| nix-direnv's `use flake` | `ietsp print-dev-env` |
+| `nix search` | `iets search` |
+| `nix-diff` | `iets diff` |
+| `nvd` | `iets diff --closure` |
+| `nurl`, `nix-prefetch`, `nix-prefetch-url` | `iets prefetch` |
+| `nix-fast-build` | `iets build .#checks` |
+| `nix-eval-jobs` | `iets eval-jobs` |
+| nix-direnv's `use flake` | `iets print-dev-env` |
 
 Every flag is in [reference/commands.md](../reference/commands.md). Where
 behaviour differs from the tool being replaced on purpose, it is recorded
@@ -25,7 +25,7 @@ See [reference/classic.md](../reference/classic.md).
 ## `nix search`
 
 ```sh
-ietsp search -I nixpkgs=$nixpkgs '^ripgrep$'
+iets search -I nixpkgs=$nixpkgs '^ripgrep$'
 ```
 
 ```
@@ -42,7 +42,7 @@ produced then goes into the cache, keyed on the installable and not on the
 regular expressions, so any later search over the same set is a hit:
 
 ```sh
-ietsp search --timings -I nixpkgs=$nixpkgs fd find
+iets search --timings -I nixpkgs=$nixpkgs fd find
 ```
 
 ```
@@ -54,22 +54,22 @@ For the pinned nixpkgs: 6.5 s the first time, 0.15 s thereafter, against
 evaluation cache for a flake installable only; with `--file` or `--expr` it
 evaluates every time.
 
-Without an installable, `ietsp search` searches `<nixpkgs>` from `-I` or
+Without an installable, `iets search` searches `<nixpkgs>` from `-I` or
 `NIX_PATH`. Give one explicitly when you want another:
 
 ```sh
-ietsp search ./pkgs.nix '^'
-ietsp search path:/some/flake ripgrep
-ietsp search --expr 'import <nixpkgs> {}' git gui
+iets search ./pkgs.nix '^'
+iets search path:/some/flake ripgrep
+iets search --expr 'import <nixpkgs> {}' git gui
 ```
 
-`ietsp search` has no flake registry, so `nix search nixpkgs ^` under the
+`iets search` has no flake registry, so `nix search nixpkgs ^` under the
 classic name falls back to the real `nix`.
 
 ## `nix-diff`
 
 ```sh
-ietsp diff -A a -A b demo.nix
+iets diff -A a -A b demo.nix
 ```
 
 ```
@@ -90,7 +90,7 @@ other form takes two installables — a `.drv` path, a flake reference or a
 Nix file — each of which must evaluate to exactly one derivation:
 
 ```sh
-ietsp diff /nix/store/…-a.drv /nix/store/…-b.drv
+iets diff /nix/store/…-a.drv /nix/store/…-b.drv
 ```
 
 Exit codes follow `diff(1)`: 0 when the two are equal, 1 when they differ,
@@ -109,7 +109,7 @@ so nothing goes missing silently.
 filters on one key and never needs a shape per part:
 
 ```sh
-ietsp diff --json -A a -A b demo.nix
+iets diff --json -A a -A b demo.nix
 ```
 
 ```json
@@ -125,7 +125,7 @@ ietsp diff --json -A a -A b demo.nix
 version instead of comparing the derivations:
 
 ```sh
-ietsp diff --closure -A a -A b demo.nix
+iets diff --closure -A a -A b demo.nix
 ```
 
 ```
@@ -142,17 +142,17 @@ changed hello 2.12 -> 2.12.1
 
 Both outputs must be in the store, because the daemon answers with
 `QueryPathInfo`. A path it has not got is an error that names the
-`ietsp build` which makes it. `--builder URL` picks the store to read.
+`iets build` which makes it. `--builder URL` picks the store to read.
 
 ## `nurl`, `nix-prefetch`, `nix-prefetch-url`
 
 The hash of something not fetched yet, on one line of stdout and nothing
-else, so `$(ietsp prefetch …)` is usable directly.
+else, so `$(iets prefetch …)` is usable directly.
 
 A URL, hashed flat, as `nix store prefetch-file` hashes it:
 
 ```sh
-ietsp prefetch https://github.com/numtide/treefmt/archive/v2.0.0.tar.gz
+iets prefetch https://github.com/numtide/treefmt/archive/v2.0.0.tar.gz
 ```
 
 ```
@@ -163,7 +163,7 @@ sha256-/Sb+qZOLHhmr1D63ANxTxkhA4uTOpn0IcUO2UmQyRuo=
 `fetchTarball`, `fetchzip` and `fetchFromGitHub` want:
 
 ```sh
-ietsp prefetch --unpack https://github.com/numtide/treefmt/archive/v2.0.0.tar.gz
+iets prefetch --unpack https://github.com/numtide/treefmt/archive/v2.0.0.tar.gz
 ```
 
 ```
@@ -177,33 +177,33 @@ For anything a `fetch*` function makes, give an expression, a file with
 `-A`, or a flake fragment instead of a URL:
 
 ```sh
-ietsp prefetch -E '(import <nixpkgs> {}).hello.src'
-ietsp prefetch -E 'with import <nixpkgs> {}; fetchzip {
+iets prefetch -E '(import <nixpkgs> {}).hello.src'
+iets prefetch -E 'with import <nixpkgs> {}; fetchzip {
     url = "https://github.com/numtide/treefmt/archive/v2.0.0.tar.gz";
     hash = ""; }'
-ietsp prefetch default.nix -A mypkg.cargoDeps
+iets prefetch default.nix -A mypkg.cargoDeps
 ```
 
 The hash the expression names is ignored, so `hash = ""`, `lib.fakeHash`
-and last month's hash all work. Nothing in your files is edited: ietsp
+and last month's hash all work. Nothing in your files is edited: iets
 rewrites the *derivation* — the fixed output hash becomes the all-zero hash
 of the same algorithm and the paths are recomputed — builds it, and reads
 the hash out of the daemon's mismatch report. The fetcher runs exactly as
 it would have.
 
-There is no `-f FILE`. The file is a positional, as it is for `ietsp eval`
-and `ietsp build`.
+There is no `-f FILE`. The file is a positional, as it is for `iets eval`
+and `iets build`.
 
 Unlike `nix store prefetch-file`, nothing is added to any store, which is
 also why there is no `--name`, `--executable` or `--expected-hash`.
 
 ## `nix-fast-build`
 
-There is no separate command. `ietsp build` takes a set of derivations,
+There is no separate command. `iets build` takes a set of derivations,
 so the checks of a flake are one installable:
 
 ```sh
-ietsp build .#checks
+iets build .#checks
 ```
 
 ```
@@ -222,9 +222,9 @@ builder already has is not built again. None of that needs a flag. The
 exit code is Nix's: 100 when a build failed.
 
 ```sh
-ietsp build --builder ssh-ng://builder .#checks
-ietsp build release.nix -A ci --argstr system x86_64-linux
-ietsp build --json .#checks > outcomes.json
+iets build --builder ssh-ng://builder .#checks
+iets build release.nix -A ci --argstr system x86_64-linux
+iets build --json .#checks > outcomes.json
 ```
 
 `--json` is the report: `{"outcomes":[{attr, drv, success, outputs,
@@ -236,7 +236,7 @@ pushed to a binary cache: that is the builder's job.
 ## `nix-eval-jobs`
 
 ```sh
-ietsp eval-jobs --no-instantiate demo.nix
+iets eval-jobs --no-instantiate demo.nix
 ```
 
 ```json
@@ -259,10 +259,10 @@ Three things to know before you swap it in:
 - Line order is completion order, as it is for nix-eval-jobs. Sort by
   `attrPath` when you compare two runs.
 - `--override-input`, `--override-flake`, `--reference-lock-file` and
-  `--repair` are errors. ietsp evaluates a flake from its own complete
+  `--repair` are errors. iets evaluates a flake from its own complete
   `flake.lock` only.
 
-Two flags are ietsp's own. `--provenance` adds a `pos` key per job, naming
+Two flags are iets's own. `--provenance` adds a `pos` key per job, naming
 the file, line and column where the derivation was defined; it is off by
 default so the output stays identical to nix-eval-jobs. `--chunks M --chunk
 N` splits a jobset, which is how nixpkgs CI shards its evaluation.

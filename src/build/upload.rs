@@ -3,7 +3,7 @@
 //!
 //! Two shapes. `PlanUpload` ships a `remote::plan::Plan` computed once, for
 //! the commands that evaluate to a fixed set of roots before they build
-//! anything (`ietsp build`, `nix-build`, `nix build`). `StreamUpload` is
+//! anything (`iets build`, `nix-build`, `nix build`). `StreamUpload` is
 //! incremental, for the eval-jobs walk that hands over jobs while it runs:
 //! per batch it walks only the part of the closure it has not registered
 //! yet, one `QueryValidPaths` and one `AddMultipleToStore`. The walk

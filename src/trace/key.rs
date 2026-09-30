@@ -7,7 +7,7 @@ use crate::syntax::ast::{Expr, FileId, PathKind};
 use crate::syntax::symbol::Interner;
 
 /// Build id from `build.rs`: the hash of the sources this binary was built from.
-pub const BUILD_ID: &str = env!("IETSP_BUILD_ID");
+pub const BUILD_ID: &str = env!("IETS_BUILD_ID");
 
 pub struct Key {
     h: Sha256,

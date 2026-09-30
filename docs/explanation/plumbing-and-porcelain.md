@@ -1,6 +1,6 @@
 # Plumbing and porcelain
 
-ietsp has one code path. Every capability is an operation in the library,
+iets has one code path. Every capability is an operation in the library,
 with a machine-first contract. A plumbing command exposes that operation
 with JSON in and JSON out. A user-facing command — the porcelain — is
 written against the same operation. This is git's split.
@@ -33,7 +33,7 @@ porcelain.
 
 ### Why a namespace and not a second binary
 
-`ietsp plumbing OP`, not `ietsp-plumbing`:
+`iets plumbing OP`, not `iets-plumbing`:
 
 - A second binary doubles a large static binary and the Nix package, for no
   gain.
@@ -42,9 +42,9 @@ porcelain.
 - A hidden prefix hides a contract that must be stable, and a contract
   nobody can find gets copied instead of called.
 
-`ietsp plumbing` stays out of the top-level overview, because that help is
+`iets plumbing` stays out of the top-level overview, because that help is
 for people and the operations are for programs. It is discoverable through
-`ietsp plumbing --help` and through the reference page.
+`iets plumbing --help` and through the reference page.
 
 ## How the rule is enforced
 
@@ -144,8 +144,8 @@ is deleted in the same stage.
 This rule is why stage 9 was cancelled. `index`, `jobs`, `dev-env`,
 `drv-show`, `drv-diff` and `closure-diff` were charged +150 for six on the
 same arithmetic that cost 384 for three, so about +720 — and every one of
-them exposes something a caller can already reach. `ietsp eval-jobs` and
-`ietsp print-dev-env` are the JSON contract already. `ietsp diff` composes
+them exposes something a caller can already reach. `iets eval-jobs` and
+`iets print-dev-env` are the JSON contract already. `iets diff` composes
 `resolve` with its own comparison. `api::installable` and `api::build` own
 the rest. Six operations at that price buys capability that already exists.
 
@@ -153,7 +153,7 @@ The same arithmetic stopped two more. `flake-info` and `flake-tree` would
 have been about +240, and nothing needed them: the layering rule asks that
 a porcelain command reach a capability through `crate::api`, and
 `api::flake` *is* that, as a library surface. An operation is warranted
-when a program *outside* ietsp needs the contract, or when a porcelain
+when a program *outside* iets needs the contract, or when a porcelain
 command would otherwise reach past `crate::api`. Neither was true.
 
 ### 4. Count the copies, not the call sites
@@ -195,10 +195,10 @@ sixteen evaluation scaffolds and two NAR framings. There is one of each. Ten
 porcelain files call `api::installable`; five no longer reach into
 `crate::store`.
 
-**A contract.** `ietsp plumbing resolve | ietsp plumbing plan` composes
+**A contract.** `iets plumbing resolve | iets plumbing plan` composes
 across processes, `missing` is byte-for-byte `build --dry-run --json`, and
 every operation's JSON shape is in the reference with an end-to-end case
-that checks it. That is the part a program outside ietsp can use, and it
+that checks it. That is the part a program outside iets can use, and it
 did not exist before.
 
 Several stages were worth it for reasons the ledger cannot show. Stage 5
@@ -222,7 +222,7 @@ cancelled. It is recorded as a gap, not as a plan.
 `drv-show` was to be the reader of a dumped-derivation directory, which
 `api::build::drvs_in_dir` already is. `nix derivation show` later needed the
 other half — drv paths to the JSON Nix prints — and got it as a capability,
-`api::drvshow::show`, with no op and no `ietsp plumbing drv-show`. The
+`api::drvshow::show`, with no op and no `iets plumbing drv-show`. The
 porcelain is 80 lines of argv and printing over it, which is what the
 cancelled op would have cost on its own.
 

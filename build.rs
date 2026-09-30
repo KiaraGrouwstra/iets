@@ -40,20 +40,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         h.update(std::fs::read(f).unwrap_or_default());
     }
     let id: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
-    println!("cargo:rustc-env=IETSP_BUILD_ID={id}");
+    println!("cargo:rustc-env=IETS_BUILD_ID={id}");
     let version = std::env::var("CARGO_PKG_VERSION")?;
     println!(
-        "cargo:rustc-env=IETSP_VERSION=ietsp {version} ({})",
+        "cargo:rustc-env=IETS_VERSION=iets {version} ({})",
         git_rev()
     );
     Ok(())
 }
 
-/// For `ietsp --version`: the flake sets IETSP_GIT_REV, because its source
+/// For `iets --version`: the flake sets IETS_GIT_REV, because its source
 /// tree has no .git; a cargo build in a checkout asks git.
 fn git_rev() -> String {
-    println!("cargo:rerun-if-env-changed=IETSP_GIT_REV");
-    if let Ok(rev) = std::env::var("IETSP_GIT_REV") {
+    println!("cargo:rerun-if-env-changed=IETS_GIT_REV");
+    if let Ok(rev) = std::env::var("IETS_GIT_REV") {
         return rev;
     }
     let git = |args: &[&str]| {

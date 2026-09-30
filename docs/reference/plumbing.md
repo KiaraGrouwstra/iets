@@ -1,10 +1,10 @@
 # Plumbing operations
 
-Every `ietsp plumbing` operation: its contract, its flags, the exact JSON
+Every `iets plumbing` operation: its contract, its flags, the exact JSON
 it writes, its exit codes, and how the operations compose.
 
 ```
-ietsp plumbing OP [FLAGS] ...
+iets plumbing OP [FLAGS] ...
 ```
 
 Each op reads flags, and optionally JSON on stdin, and writes one JSON
@@ -24,7 +24,7 @@ boundary between them and the user-facing commands runs:
 | `build` | derivation roots are built; outcomes come back |
 | `fetch` | a URL or a fixed-output derivation becomes a hash |
 
-These five exist. `ietsp plumbing --help` lists them, and an unknown op
+These five exist. `iets plumbing --help` lists them, and an unknown op
 is the usage error `unknown subcommand 'X'`, with a suggestion when it is
 close to one of the five.
 
@@ -60,7 +60,7 @@ key is the usage error `--roots -: no "roots" and no "drvs" on stdin`.
 
 The three read the closure from `/nix/store` by default, so a root must
 be there. `resolve` alone does not put it there — it evaluates and keeps
-the derivations in memory, which is what lets `ietsp build` ship a
+the derivations in memory, which is what lets `iets build` ship a
 closure that was never written to disk. A root that is in no store is the
 error `cannot read derivation 'PATH': No such file or directory`, exit 1.
 
@@ -71,15 +71,15 @@ carries `drvDir`.
 
 The dump carries derivations only. An input **source** that evaluation
 produced and never wrote to the store is still read from the local store,
-so a closure with such sources needs `ietsp build --no-build` or
-`ietsp plumbing build --no-build` first.
+so a closure with such sources needs `iets build --no-build` or
+`iets plumbing build --no-build` first.
 
 ## `resolve`
 
 An installable becomes derivation roots.
 
 ```
-ietsp plumbing resolve [EVAL FLAGS]
+iets plumbing resolve [EVAL FLAGS]
        [--prefixes package|dev-shell|package-set|none]
        [--want first|all] [--walk context|get-drvs|to-install]
        [--dump-drvs DIR] [--no-drvs]
@@ -103,7 +103,7 @@ attribute path itself.
 
 | `--walk` | Nix | Used by |
 |:---|:---|:---|
-| `context` (default) | `drvPath`, or the derivations in a string's context | `ietsp build`, `diff`, `prefetch` |
+| `context` (default) | `drvPath`, or the derivations in a string's context | `iets build`, `diff`, `prefetch` |
 | `get-drvs` | get-drvs.cc:getDerivations, recursing with `recurseForDerivations` | `nix-build`, `nix-shell`, `nix-instantiate` |
 | `to-install` | get-drvs.cc:queryOutputs: `outputSpecified`, else `meta.outputsToInstall`, else every output (`out` for a flake) | `nix build` |
 
@@ -134,7 +134,7 @@ Exit: 0; 1 on an evaluation error; 2 on a usage error.
 Derivation roots become an upload plan.
 
 ```
-ietsp plumbing plan [--drvs DIR] [--roots -] DRV...
+iets plumbing plan [--drvs DIR] [--roots -] DRV...
 ```
 
 ```json
@@ -155,7 +155,7 @@ Exit: 0; 1 when a derivation cannot be read; 2 on a usage error.
 A plan and a builder become what will be built and what will be fetched.
 
 ```
-ietsp plumbing missing [--builder URL] [--check-cache-status]
+iets plumbing missing [--builder URL] [--check-cache-status]
                        [--drvs DIR] [--roots -] DRV...
 ```
 
@@ -179,10 +179,10 @@ ietsp plumbing missing [--builder URL] [--check-cache-status]
 | `narSize` | bytes of those paths unpacked |
 
 The names are the fields of Nix's `MissingPaths`. This object is byte for
-byte what `ietsp build --dry-run --json` prints.
+byte what `iets build --dry-run --json` prints.
 
 `--check-cache-status` adds one object per root, from the
-cache-status-resolver.cc algorithm — the same keys `ietsp eval-jobs
+cache-status-resolver.cc algorithm — the same keys `iets eval-jobs
 --check-cache-status` reports:
 
 ```json
@@ -209,7 +209,7 @@ it is the usage error `--dry-run needs a worker-protocol builder`.
 Derivation roots are built; the outcomes come back.
 
 ```
-ietsp plumbing build [--builder URL] [--out NAME]... [--fetch-to DIR]
+iets plumbing build [--builder URL] [--out NAME]... [--fetch-to DIR]
                      [--source STOREPATH=LOCAL]... [--gc-root DIR]
                      [--no-build] [--drvs DIR] [--roots -] DRV...
 ```
@@ -231,7 +231,7 @@ ietsp plumbing build [--builder URL] [--out NAME]... [--fetch-to DIR]
 | Key | Value |
 |:---|:---|
 | `outcomes` | one object per root |
-| `outcomes[].attr` | what the root is called: the derivation name here, the attribute path in `ietsp build --json` |
+| `outcomes[].attr` | what the root is called: the derivation name here, the attribute path in `iets build --json` |
 | `outcomes[].drv` | the derivation path |
 | `outcomes[].success` | true when the build produced its outputs |
 | `outcomes[].outputs` | output name to store path; `{}` on a failure |
@@ -254,8 +254,8 @@ A URL, or the fixed-output derivation an installable names, becomes a
 hash. Nothing is added to any store.
 
 ```
-ietsp plumbing fetch [--unpack] [--hash-type ALGO] URL
-ietsp plumbing fetch [EVAL FLAGS] (-E EXPR | FILE | FLAKEREF[#FRAGMENT])
+iets plumbing fetch [--unpack] [--hash-type ALGO] URL
+iets plumbing fetch [EVAL FLAGS] (-E EXPR | FILE | FLAKEREF[#FRAGMENT])
 ```
 
 | Flag | Effect |
@@ -269,7 +269,7 @@ ietsp plumbing fetch [EVAL FLAGS] (-E EXPR | FILE | FLAKEREF[#FRAGMENT])
 ```
 
 `drvPath` is the rewritten derivation that was built, not the one the
-expression evaluated to. `ietsp prefetch` is this op plus the choice
+expression evaluated to. `iets prefetch` is this op plus the choice
 between the object and the bare hash; how the rewrite works is under
 `prefetch` in `docs/reference/commands.md`.
 
@@ -287,17 +287,17 @@ usage error, which includes no argument at all
 A closure that is in `/nix/store` already:
 
 ```console
-$ ietsp plumbing resolve nixpkgs#hello | ietsp plumbing missing --roots -
+$ iets plumbing resolve nixpkgs#hello | iets plumbing missing --roots -
 ```
 
 A closure that is in no store at all, carried across the process boundary
 by the ATerm dump:
 
 ```console
-$ ietsp plumbing resolve --dump-drvs d ./chain.nix
+$ iets plumbing resolve --dump-drvs d ./chain.nix
 {"attrPaths":[],"drvDir":"d","roots":[{"attr":null,"drv":"/nix/store/…-top.drv","output":null}]}
 
-$ ietsp plumbing resolve --dump-drvs d ./chain.nix | ietsp plumbing plan --roots -
+$ iets plumbing resolve --dump-drvs d ./chain.nix | iets plumbing plan --roots -
 {"drvs":["/nix/store/…-dep.drv","/nix/store/…-top.drv"],"sources":[],"storeDrvs":0}
 ```
 
@@ -305,15 +305,15 @@ $ ietsp plumbing resolve --dump-drvs d ./chain.nix | ietsp plumbing plan --roots
 dump the same pipe fails, because the root is in no store:
 
 ```console
-$ ietsp plumbing resolve ./chain.nix | ietsp plumbing plan --roots -
+$ iets plumbing resolve ./chain.nix | iets plumbing plan --roots -
 error: cannot read derivation '/nix/store/…-top.drv': No such file or directory
 ```
 
 Resolve, build and root the outputs in one pipeline:
 
 ```console
-$ ietsp plumbing resolve --dump-drvs d ./ok.nix \
-    | ietsp plumbing build --gc-root gcr --roots -
+$ iets plumbing resolve --dump-drvs d ./ok.nix \
+    | iets plumbing build --gc-root gcr --roots -
 {"gcRoots":["gcr/…-ok"],"outcomes":[{"drv":"/nix/store/…-ok.drv","logTail":[],
  "outputs":{"out":"/nix/store/…-ok"},"reason":null,"success":true}]}
 ```
@@ -321,7 +321,7 @@ $ ietsp plumbing resolve --dump-drvs d ./ok.nix \
 Read a plan back with `--drvs`, without a pipe:
 
 ```console
-$ ietsp plumbing plan --drvs d /nix/store/…-ok.drv
+$ iets plumbing plan --drvs d /nix/store/…-ok.drv
 {"drvs":["/nix/store/…-ok.drv"],"sources":[],"storeDrvs":0}
 ```
 
@@ -335,14 +335,14 @@ op in between.
 
 | Command | The operations it uses | What is the command's own |
 |:---|:---|:---|
-| `ietsp eval` | `eval` | the human value printer, `--timings` |
-| `ietsp build` | `resolve` (the get-drvs walk for a set), `plan`, `missing`, `build`, through `api::build::Dispatch` | the closing line, the `--dry-run` text, `render_size`, the `fix-hashes` prompts, the `.drv` legacy input |
-| `ietsp search` | `index` | regex compile and match, `--exclude`, colour, `--pretty`, the no-results hint |
-| `ietsp diff` | `resolve`, `drv-diff`, `closure-diff` | the text rendering, the `diff(1)` exit codes |
-| `ietsp eval-jobs` | `jobs` | the worker/collector process model, `--max-memory-size`, the summary line |
-| `ietsp print-dev-env` | `resolve`, `dev-env` | the bash rendering, the direnv cache, the GC root |
-| `ietsp prefetch` | `fetch` | the `--json` shape choice |
-| `ietsp lint`, `ietsp parse`, `ietsp cache` | none | they are already thin over the library |
+| `iets eval` | `eval` | the human value printer, `--timings` |
+| `iets build` | `resolve` (the get-drvs walk for a set), `plan`, `missing`, `build`, through `api::build::Dispatch` | the closing line, the `--dry-run` text, `render_size`, the `fix-hashes` prompts, the `.drv` legacy input |
+| `iets search` | `index` | regex compile and match, `--exclude`, colour, `--pretty`, the no-results hint |
+| `iets diff` | `resolve`, `drv-diff`, `closure-diff` | the text rendering, the `diff(1)` exit codes |
+| `iets eval-jobs` | `jobs` | the worker/collector process model, `--max-memory-size`, the summary line |
+| `iets print-dev-env` | `resolve`, `dev-env` | the bash rendering, the direnv cache, the GC root |
+| `iets prefetch` | `fetch` | the `--json` shape choice |
+| `iets lint`, `iets parse`, `iets cache` | none | they are already thin over the library |
 | `nix-instantiate` | `resolve` (get-drvs walk), `plan` | Nix argv parsing, `--add-root`, out-links, the exec fallback |
 | `nix-build` | `resolve`, `plan`, `build` | `result` symlinks, `--add-root`, Nix's exit codes, the fallback |
 | `nix-shell` | `resolve`, `plan`, `build` | the env, `execve` of the shell, `--run`, `--pure` |
@@ -364,11 +364,11 @@ a design.
    run's derivations, not its sources, so a closure whose sources are not
    in the local store still needs an instantiation first. The shape it
    wants is the batch form of `build --source STOREPATH=LOCAL`.
-   `ietsp diff` keeps its in-memory table, because it evaluates and
+   `iets diff` keeps its in-memory table, because it evaluates and
    compares in one process.
-2. **Hash mismatch capture.** `ietsp prefetch` drives a build that is
+2. **Hash mismatch capture.** `iets prefetch` drives a build that is
    meant to fail and reads the mismatch out of the log
-   (`log::want_mismatch`, `log::take_mismatches`); `ietsp build`'s
+   (`log::want_mismatch`, `log::take_mismatches`); `iets build`'s
    `fix-hashes` reads the same channel. `build` should report a mismatch
    as structured output, not as a log line the caller greps.
 3. **The eval-store split.** `eval-jobs --eval-store` instantiates on one

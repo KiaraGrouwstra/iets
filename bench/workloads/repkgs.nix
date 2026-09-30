@@ -8,12 +8,12 @@
 # Resolve it through the search path, so the workload is portable and is
 # skipped where the tree is absent:
 #
-#   ietsp eval-jobs --impure --no-instantiate -I repkgs=../repkgs \
+#   iets eval-jobs --impure --no-instantiate -I repkgs=../repkgs \
 #     bench/workloads/repkgs.nix
 #
 # `eval-jobs` is the driver, not `eval`: a handful of attributes abort, in this
 # set and in the reference tools alike, so a whole-set `eval` cannot finish.
 # Measured on 2026-09-29 against Nix 2.34.8 and nix-eval-jobs: `attr` and
 # `bash` give byte-identical `drvPath` and `outPath`, and every attribute that
-# fails fails with the same message in ietsp and in nix-eval-jobs.
+# fails fails with the same message in iets and in nix-eval-jobs.
 import <repkgs> { system = builtins.currentSystem; }

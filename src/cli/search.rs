@@ -1,4 +1,4 @@
-//! `nix search` and `ietsp search`: the package walk of Nix's
+//! `nix search` and `iets search`: the package walk of Nix's
 //! `src/nix/search.cc` over an index the tracing cache keeps between runs
 //! (docs/reference/commands.md).
 
@@ -77,10 +77,10 @@ pub fn classic_main(argv: &[String], rest: &[String]) -> i32 {
     run(s, Some(argv))
 }
 
-/// `ietsp search [INSTALLABLE] REGEX...` (docs/reference/commands.md).
+/// `iets search [INSTALLABLE] REGEX...` (docs/reference/commands.md).
 pub fn cmd_search(argv: &[String]) -> i32 {
     let mut s = parse(argv, true).unwrap_or_else(|e| help::arg_error(e));
-    // The default installable is `<nixpkgs>`: ietsp has no flake registry, so
+    // The default installable is `<nixpkgs>`: iets has no flake registry, so
     // `nix search nixpkgs` has nothing to resolve.
     match s.what.take() {
         Some(w) if crate::api::flake::is_flake_ref(&w) => s.what = Some(w),
@@ -108,7 +108,7 @@ fn parse(argv: &[String], native: bool) -> Result<Search, String> {
             "--expr" => s.expr = Some(a.value(&t)?),
             "-f" | "--file" => s.file = Some(a.value(&t)?),
             "--timings" if native => s.timings = true,
-            // the cache flags are ietsp's own, so a classic `nix search`
+            // the cache flags are iets's own, so a classic `nix search`
             // keeps rejecting them and falls back
             _ if native
                 && crate::cli::cache_flag(&mut s.cache, &t, || {
@@ -126,7 +126,7 @@ fn parse(argv: &[String], native: bool) -> Result<Search, String> {
         a.i += 1;
     }
     // The first argument is the installable; natively only when it names one,
-    // so that `ietsp search hello` searches nixpkgs.
+    // so that `iets search hello` searches nixpkgs.
     let takes = !pos.is_empty()
         && (!native || (s.expr.is_none() && s.file.is_none() && looks_installable(&pos[0])));
     if takes {

@@ -3,12 +3,12 @@
 
 use std::process::{Command, Output};
 
-fn ietsp(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_ietsp"))
+fn iets(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_iets"))
         .args(args)
         .env("XDG_CONFIG_HOME", "/nonexistent")
         .output()
-        .expect("run ietsp")
+        .expect("run iets")
 }
 
 fn text(b: &[u8]) -> String {
@@ -29,19 +29,19 @@ fn help_and_version_go_to_stdout() {
         &["version"],
         &["--version"],
     ] {
-        let o = ietsp(args);
+        let o = iets(args);
         assert_eq!(o.status.code(), Some(0), "{args:?}");
         assert!(o.stderr.is_empty(), "{args:?}: {}", text(&o.stderr));
         assert!(!o.stdout.is_empty(), "{args:?}");
     }
-    let o = ietsp(&["--help"]);
+    let o = iets(&["--help"]);
     assert!(text(&o.stdout).contains("  eval-jobs "));
-    let o = ietsp(&["eval", "--help"]);
-    assert!(text(&o.stdout).starts_with("usage: ietsp eval "));
+    let o = iets(&["eval", "--help"]);
+    assert!(text(&o.stdout).starts_with("usage: iets eval "));
     assert!(text(&o.stdout).contains("--strict"));
-    let v = text(&ietsp(&["--version"]).stdout);
+    let v = text(&iets(&["--version"]).stdout);
     assert!(
-        v.starts_with(&format!("ietsp {} (", env!("CARGO_PKG_VERSION"))),
+        v.starts_with(&format!("iets {} (", env!("CARGO_PKG_VERSION"))),
         "{v}"
     );
 }
@@ -61,7 +61,7 @@ fn a_bad_command_line_names_the_problem() {
         ),
         (
             &["eval", "--stirct", "-E", "1"],
-            "error: unknown flag '--stirct'\ndid you mean '--strict'?\nrun 'ietsp eval --help' for the flags\n",
+            "error: unknown flag '--stirct'\ndid you mean '--strict'?\nrun 'iets eval --help' for the flags\n",
         ),
         (
             &["eval", "--workers", "0", "-E", "1"],
@@ -76,7 +76,7 @@ fn a_bad_command_line_names_the_problem() {
         (&["build", "--what"], "unknown flag '--what'"),
         (&["cache", "dunp"], "did you mean 'dump'?"),
     ] {
-        let o = ietsp(args);
+        let o = iets(args);
         let err = text(&o.stderr);
         assert_eq!(o.status.code(), Some(2), "{args:?}: {err}");
         assert!(o.stdout.is_empty(), "{args:?}");
@@ -99,10 +99,10 @@ fn dash_f_names_the_file_in_the_native_namespace() {
         &["prefetch", "-f", "/nonexistent/missing.nix"],
         &["eval-jobs", "-f", "/nonexistent/missing.nix"],
     ] {
-        let err = text(&ietsp(args).stderr);
+        let err = text(&iets(args).stderr);
         assert!(err.contains("No such file or directory"), "{args:?}: {err}");
     }
-    let o = ietsp(&["nix-eval-jobs", "-f", "/nonexistent/missing.nix"]);
+    let o = iets(&["nix-eval-jobs", "-f", "/nonexistent/missing.nix"]);
     let err = text(&o.stderr);
     assert!(err.contains("unknown flag '-f'"), "{err}");
     assert_eq!(o.status.code(), Some(1), "{err}");
@@ -110,7 +110,7 @@ fn dash_f_names_the_file_in_the_native_namespace() {
 
 #[test]
 fn io_errors_read_like_strerror() {
-    let o = ietsp(&["eval", "/nonexistent/missing.nix"]);
+    let o = iets(&["eval", "/nonexistent/missing.nix"]);
     let err = text(&o.stderr);
     assert!(err.contains("No such file or directory"), "{err}");
     assert!(!err.contains("os error"), "{err}");

@@ -1,13 +1,13 @@
 # Lints
 
 Every lint: its name, family, hook, default level and trigger, plus the
-level resolution, the scope rules and the `# ietsp: allow` comment.
+level resolution, the scope rules and the `# iets: allow` comment.
 
-ietsp reports what only an evaluator can know. It has no opinion about
+iets reports what only an evaluator can know. It has no opinion about
 how code looks. `docs/explanation/lint-scope.md` has the rule, and it
-tells you how to make rules of your own with `ietsp parse --json`.
+tells you how to make rules of your own with `iets parse --json`.
 
-ietsp has a registry of named lints for language corner cases. Each lint
+iets has a registry of named lints for language corner cases. Each lint
 is `off`, `warn` or `error`. Code: `src/lint/` (`mod.rs` holds the
 registry and the emission, one file per family holds the triggers);
 fixtures: `tests/lint/<name>.nix`, checked by `scripts/linttest.nu`.
@@ -38,16 +38,16 @@ The level of a lint comes from these sources, in this order; a later
 source wins over an earlier one:
 
 1. the built-in default (the table below);
-2. the `[lint]` table of the user's `ietsp.toml`
+2. the `[lint]` table of the user's `iets.toml`
    (`docs/reference/settings.md`);
-3. the `[lint]` table of the project's `ietsp.toml`: the nearest one found
+3. the `[lint]` table of the project's `iets.toml`: the nearest one found
    by walking up from the entry file's directory, the flake directory, or
    cwd for `-E` (each `[lint.inputs.<node>]` table is a source of its own,
    see Scope); the walk stops at the project root, the first directory
    holding a `.git` or a `flake.nix`; any key but `[lint]` in this file is an
    error
    (`docs/reference/settings.md`);
-4. `IETSP_LINT="name=level,name=level"`;
+4. `IETS_LINT="name=level,name=level"`;
 5. `--lint SELECTOR=LEVEL`, repeatable.
 
 A selector is a lint name, `all`, `family:NAME` (`path`, `coerce`,
@@ -69,23 +69,23 @@ dir-copy-flake = "warn"     # warn, in either order
 ```
 
 The `--lint` flags of one command line are one source, and so are the
-pairs of one `IETSP_LINT`: among settings of the same specificity the
+pairs of one `IETS_LINT`: among settings of the same specificity the
 later one wins, but a name given earlier still beats a family or `all`
 given later. `--lint all=error --lint fod=off` and `--lint fod=off
 --lint all=error` both give `fod=off` with everything else at `error`;
 `--lint fod=off --lint fod=warn` gives `warn`. Between sources the
-specificity does not count: `all = "off"` in `IETSP_LINT` turns off a
-lint `ietsp.toml` names.
+specificity does not count: `all = "off"` in `IETS_LINT` turns off a
+lint `iets.toml` names.
 
 A selector that the registry does not have is not the same in each source:
 
 | source | effect |
 |---|---|
-| an `ietsp.toml`, `IETSP_LINT` | one warning for each name, with the code `unknown-lint`; ietsp ignores the name and the run continues |
+| an `iets.toml`, `IETS_LINT` | one warning for each name, with the code `unknown-lint`; iets ignores the name and the run continues |
 | `--lint` | a usage error, exit code 2 |
 
 ```
-warning: /repo/ietsp.toml: ietsp does not know the lint 'nope' and ignores it; 'ietsp help lints' has the list (docs/reference/lints.md)
+warning: /repo/iets.toml: iets does not know the lint 'nope' and ignores it; 'iets help lints' has the list (docs/reference/lints.md)
 ```
 
 An error in a file stops each command in that repository. That includes
@@ -94,7 +94,7 @@ The command line gets an error, because the user can correct it
 immediately. An incorrect level (`fod = "loud"`) is an error in each
 source.
 
-`ietsp lint list [--lint ...] [--lint-root DIR]... [--lint-scope root|all]
+`iets lint list [--lint ...] [--lint-root DIR]... [--lint-scope root|all]
 [PATH]` prints the registry with the levels a run from `PATH` (default
 cwd) gets, then the scope and its roots.
 
@@ -112,7 +112,7 @@ all=warn` on a NixOS configuration reports the sites in that repository
 and nothing from its inputs.
 
 - `--lint-root DIR` (repeatable) adds a root; `roots = ["dir", ...]` in
-  `ietsp.toml` does the same, relative to the file.
+  `iets.toml` does the same, relative to the file.
 - `--lint-scope all`, or `scope = "all"`, reports every site.
 - `[lint.inputs.<node>]`, with the same `name = level` keys (selectors
   included), gives the tree of that locked input its own levels; `<node>`
@@ -125,7 +125,7 @@ copies to the local tree it stands for, lies under a root directory. So
 the flake directory is (containment wins). A relative `path:` input lives
 under its parent's tree and follows it.
 
-The scope resolves with the levels (default, `ietsp.toml`, `IETSP_LINT`,
+The scope resolves with the levels (default, `iets.toml`, `IETS_LINT`,
 `--lint`); `--lint-scope` and `--lint-root` come last. It is part of
 both cache keys: a file is compiled under the levels its location gets,
 so a store file under `scope = "root"` keys the IR cache like an unlinted
@@ -196,7 +196,7 @@ not silent, because the value is the user's. The finding then goes to the
 position of the attribute, in the file that binds it:
 
 ```
-$ ietsp eval --raw .#wrapped.drvPath     # wrapped = dep.mk self.narHash;
+$ iets eval --raw .#wrapped.drvPath     # wrapped = dep.mk self.narHash;
 warning: [tree-meta-in-drv] derivation 'wrapped': attribute 'v' holds 'self.narHash', a value that changes with every commit or edit, so this derivation and all that depend on it are built again each time; keep the value out of the build, or read it at run time
   at /repo/dep/flake.nix:2:79
 ```
@@ -214,8 +214,8 @@ The site of `rev-count` is the selection that reads the attribute:
 | `builtins.attrValues`, `builtins.toJSON`, `builtins.mapAttrs` on the attribute set of the tree | none |
 
 ```
-$ ietsp eval --raw .#version             # version = "1.${toString self.revCount}";
-warning: [rev-count] 'self.revCount' is deprecated: the count of all revisions is expensive to compute and absent on a shallow clone, and ietsp plans to remove it; use 'lastModifiedDate' and 'shortRev' for a version
+$ iets eval --raw .#version             # version = "1.${toString self.revCount}";
+warning: [rev-count] 'self.revCount' is deprecated: the count of all revisions is expensive to compute and absent on a shallow clone, and iets plans to remove it; use 'lastModifiedDate' and 'shortRev' for a version
   at /repo/app/flake.nix:4:29
 ```
 
@@ -228,14 +228,14 @@ The location of the site does not change the level, as for
 the root tree, because the value is the user's:
 
 ```
-$ ietsp eval --raw .#wrapped             # wrapped = lib.mkVersion self;
-warning: [rev-count] 'self.revCount' is deprecated: the count of all revisions is expensive to compute and absent on a shallow clone, and ietsp plans to remove it; use 'lastModifiedDate' and 'shortRev' for a version
+$ iets eval --raw .#wrapped             # wrapped = lib.mkVersion self;
+warning: [rev-count] 'self.revCount' is deprecated: the count of all revisions is expensive to compute and absent on a shallow clone, and iets plans to remove it; use 'lastModifiedDate' and 'shortRev' for a version
   at /repo/lib/flake.nix:1:54
 ```
 
 One run gives one finding for each tree: that of the first read. The
 subsequent reads of that tree are silent, with a site or without. A site
-that a `# ietsp: allow` comment covers is not a finding, so the next read
+that a `# iets: allow` comment covers is not a finding, so the next read
 of that tree reports.
 
 A read that is not a selection has no site. `fetchTree` and the root tree
@@ -245,8 +245,8 @@ reads it. The evaluator keeps no call trace. Thus the message names the
 tree, and the finding has no position:
 
 ```
-$ ietsp eval --raw .#scoped              # scoped = with self; "1.${toString revCount}";
-warning: [rev-count] 'self.revCount' is deprecated: the count of all revisions is expensive to compute and absent on a shallow clone, and ietsp plans to remove it; use 'lastModifiedDate' and 'shortRev' for a version
+$ iets eval --raw .#scoped              # scoped = with self; "1.${toString revCount}";
+warning: [rev-count] 'self.revCount' is deprecated: the count of all revisions is expensive to compute and absent on a shallow clone, and iets plans to remove it; use 'lastModifiedDate' and 'shortRev' for a version
 ```
 
 At the level `error`, the trace of that error has the position of the
@@ -254,16 +254,16 @@ nearest call that has one.
 
 ## Silencing one site
 
-A comment `# ietsp: allow NAME[, NAME...]` silences the named lints for
+A comment `# iets: allow NAME[, NAME...]` silences the named lints for
 one source line, whatever their level (`warn` or `error`). The names
 are selectors: lint names, Nix's setting names, `family:NAME`, or
 `all`; commas or spaces separate them.
 
 ```nix
-# ietsp: allow url-literal
+# iets: allow url-literal
 src = http://example.com/src.tar.gz;
 
-x == "a" # ietsp: allow eq-type-mismatch
+x == "a" # iets: allow eq-type-mismatch
 ```
 
 - On a line of its own the comment covers the next line that is neither
@@ -278,14 +278,14 @@ x == "a" # ietsp: allow eq-type-mismatch
   `meta`, default `warn`), reported at the word's position, so a typo
   does not silently silence nothing. The known names of the same
   comment still count. `allow` is the only directive; another word
-  after `# ietsp:` is `unknown-allow` too.
-- The comment must start with exactly `# ietsp:`; `#ietsp:` and `/* ietsp:
+  after `# iets:` is `unknown-allow` too.
+- The comment must start with exactly `# iets:`; `#iets:` and `/* iets:
   */` are plain comments.
 - An allow that silences nothing is not reported: a runtime lint fires
   only when the value is computed, so an unused allow on one run may be
   the one that matters on the next.
 
-The lexer notes the `# ietsp:` comments (other comments cost nothing
+The lexer notes the `# iets:` comments (other comments cost nothing
 more), the parser resolves the names into a per-file table of covered
 lines, and the compiler and the evaluator check that table before a
 site's level. The table travels in the IR cache entry with the
@@ -295,7 +295,7 @@ it: a run whose comment changed misses.
 ## Configuration file
 
 ```toml
-# ietsp.toml, anywhere above the file being evaluated
+# iets.toml, anywhere above the file being evaluated
 [lint]
 path-copy = "warn"
 unhashed-fetch = "error"
@@ -352,7 +352,7 @@ are part of the IR cache key and their warnings are stored in the entry;
 | `absolute-path-in-drv` | purity | evaluator | off | as above, for a path under a `flake.nix` directory: an absolute path a flake evaluation would have copied |
 | `tree-meta-in-drv` | purity | evaluator | **warn** | a derivation attribute (env, `args`, structured attrs) holds metadata of a source tree as a string: `rev`, `shortRev`, `dirtyRev`, `dirtyShortRev`, `lastModifiedDate` or `narHash`, so each commit gives a new .drv and a rebuild. The tree that the value comes from gives the level (Scope): the root tree by default, a locked input only with `[lint.inputs.<node>]`. Not for the integers `lastModified` and `revCount` (Limits); `rev-count` reports a read of `revCount` |
 | `rev-count` | purity | evaluator | **warn** | the evaluation reads `revCount` of a source tree that has a name (`self.revCount`, `inputs.<node>.revCount`). The attribute is deprecated: the count of all revisions is expensive to compute, a shallow clone has none, and each commit changes it. `self ? revCount` and `builtins.attrNames self` are not a read. The tree gives the level (Scope): the root tree by default, a locked input only with `[lint.inputs.<node>]`. The site is the selection that reads the attribute; a read that is not a selection has no site (Scope) |
-| `unknown-allow` | meta | parser | **warn** | a word of a `# ietsp: allow` comment that is not a lint name, a family or `all`, or a `# ietsp:` directive other than `allow` (Silencing one site) |
+| `unknown-allow` | meta | parser | **warn** | a word of a `# iets: allow` comment that is not a lint name, a family or `all`, or a `# iets:` directive other than `allow` (Silencing one site) |
 
 `impure-path-in-drv` works like Nix's store references: a coercion that
 keeps the text of a path outside the store (`toString ./x`, `"/x" +
@@ -367,7 +367,7 @@ attribute. The flake root of a path is the nearest ancestor holding a
 `tree-meta-in-drv` uses the same context element with a different
 payload. `fetchTree` and the root tree of a flake put it on each metadata
 string of a tree, with the name of the value: `self.rev` for the root
-tree, `inputs.<node>.rev` for a locked input. ietsp makes the mark only
+tree, `inputs.<node>.rev` for a locked input. iets makes the mark only
 when the lint is on for that tree, so an input without a level has none.
 The mark changes nothing that Nix sees: the `.drv` files, `getContext`,
 `hasContext`, `==` and `toJSON` give the same result with and without
@@ -385,7 +385,7 @@ it. `scripts/flaketest.nu` compares them with Nix.
 ```
 
 ```
-$ ietsp eval --raw .#packages.x86_64-linux.default.drvPath
+$ iets eval --raw .#packages.x86_64-linux.default.drvPath
 warning: [tree-meta-in-drv] derivation 'hello-2.12.3': attribute 'BUILD_REV' holds 'self.shortRev', a value that changes with every commit or edit, so this derivation and all that depend on it are built again each time; keep the value out of the build, or read it at run time
   at /repo/flake.nix:5:7
 ```
@@ -393,7 +393,7 @@ warning: [tree-meta-in-drv] derivation 'hello-2.12.3': attribute 'BUILD_REV' hol
 If the rebuild is small and you want the value in the build, there are
 two procedures:
 
-- Put `# ietsp: allow tree-meta-in-drv` on the line before the site.
+- Put `# iets: allow tree-meta-in-drv` on the line before the site.
 - Remove the mark where you read the value:
   `builtins.unsafeDiscardStringContext self.rev`. Use this when the site
   is in an input, such as `system.configurationRevision` of NixOS, which
@@ -422,7 +422,7 @@ version = "1.0.${builtins.substring 0 8 self.lastModifiedDate}.${self.shortRev o
 To silence one read, put the comment at the selection:
 
 ```nix
-version = "1.${toString self.revCount}"; # ietsp: allow rev-count
+version = "1.${toString self.revCount}"; # iets: allow rev-count
 ```
 
 A read that is not a selection has no site, so no comment covers it
@@ -433,7 +433,7 @@ A read that is not a selection has no site, so no comment covers it
 rev-count = "off"
 ```
 
-ietsp computes the count only when the evaluation reads it, and keeps it
+iets computes the count only when the evaluation reads it, and keeps it
 by revision (`docs/explanation/flakes-and-sources.md`). Thus the lint
 adds no cost to a flake that does not read the attribute.
 
@@ -492,7 +492,7 @@ the build with those exemptions (outpaths then had 168 errors);
 The pinned nixpkgs lives in the store, so every copy of a nixpkgs path is
 a `store-path-recopy` and never a `dir-copy-unfiltered`; the latter needs
 a checkout outside the store. `ifd` never fires on these workloads
-because ietsp cannot build (an IFD is an `Unsupported` error), `git-in-
+because iets cannot build (an IFD is an `Unsupported` error), `git-in-
 source` because a git flake root is a filtered tree.
 
 `impure-path-in-drv` and `absolute-path-in-drv` are zero above for the
@@ -507,7 +507,7 @@ with `-I nixpkgs=<copy> --lint-scope all --lint impure-path-in-drv=warn
 | `absolute-path-in-drv` | 3 | 3 |
 
 `tree-meta-in-drv` and `rev-count` are zero above because none of these
-workloads is a flake: no tree has a name, so ietsp makes no mark and no
+workloads is a flake: no tree has a name, so iets makes no mark and no
 lazy count. The row of `rev-count` is not measured; it follows from that.
 The pinned nixpkgs reads `revCount` of no flake tree. The count for the
 outpaths column is not measured; it follows from that. Measured on a
@@ -541,7 +541,7 @@ lints, which the parser and the compiler reported
 (docs/explanation/lint-scope.md). The cost of the present registry is
 not higher.
 
-`IETSP_LINT=all=warn` against the defaults, same box (16-core EPYC with
+`IETS_LINT=all=warn` against the defaults, same box (16-core EPYC with
 other builds running), `bench/ab.nu --runs 9 --skip-outpaths`, IR and
 tracing caches as the benchmark uses them (`--no-tracing-cache` keeps the IR
 cache):
@@ -573,7 +573,7 @@ was measured:
   freezes its map on first use and an error report needs the map of the
   whole run.
 
-The `# ietsp: allow` table costs the parse nothing measurable: `ietsp
+The `# iets: allow` table costs the parse nothing measurable: `iets
 parse -q` over the 44,303 files of the pinned nixpkgs (hyperfine, 30
 runs, 2026-09-19) took 1.128 s ± 0.034 before and 1.122 s ± 0.025 after;
 the instruction count (`perf stat`) rose 0.5 %, from 6.728 G to 6.763 G.
@@ -615,7 +615,7 @@ cache (3 runs for each binary, each file compiles): 12.1825 G before and
 - The IR cache keys an entry on the compile-time lint levels the file
   gets after the scope rule and stores the warnings the compile
   produced, so a file loaded from the cache reports them again, and the
-  file's `# ietsp: allow` table, so a runtime lint on a loaded file is
+  file's `# iets: allow` table, so a runtime lint on a loaded file is
   silenced like on a compiled one. With every compile-time lint `off`
   for that file (every store file under `scope = "root"`) the key is
   the same as before the registry existed.
@@ -671,7 +671,7 @@ cache (3 runs for each binary, each file compiles): 12.1825 G before and
 - `rev-count` has a site only for a selection, `inherit (e) revCount;` and
   `builtins.getAttr`. The other reads force the lazy value, and the
   evaluator does not know the position of the read when it computes the
-  value. Thus a `# ietsp: allow` comment cannot silence such a read, and
+  value. Thus a `# iets: allow` comment cannot silence such a read, and
   its record has no byte span.
 - `rev-count` gives one finding for each tree in a run, not one for each
   read. When the first read has no site, a subsequent selection of that
@@ -686,7 +686,7 @@ cache (3 runs for each binary, each file compiles): 12.1825 G before and
   changes with each commit.
 - `tree-meta-in-drv` knows where the value goes, not where the code read
   it. When nixpkgs binds the attribute, the site is in nixpkgs, and a
-  `# ietsp: allow` comment cannot go there. Remove the mark at the place
+  `# iets: allow` comment cannot go there. Remove the mark at the place
   that reads the value (`builtins.unsafeDiscardStringContext`).
 - `unhashed-fetch` treats any of `sha256`, `hash`, `narHash`,
   `outputHash` or `rev` as pinning; it does not check the value.
@@ -698,7 +698,7 @@ cache (3 runs for each binary, each file compiles): 12.1825 G before and
   table above shows.
 - `eval-jobs` with worker processes (`--max-memory-size`, the default)
   deduplicates per process.
-- `# ietsp: allow` covers positions on one line, so the derivation
+- `# iets: allow` covers positions on one line, so the derivation
   attribute lints, whose site can be the `name` binding or the
   `derivationStrict` call (Scope), need the comment at that site, not
   at the value.

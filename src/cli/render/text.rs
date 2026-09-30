@@ -42,7 +42,7 @@ pub fn missing(m: &Missing) {
     }
 }
 
-/// One store path per output: what a caller of `ietsp build` captures.
+/// One store path per output: what a caller of `iets build` captures.
 impl Text for Outcomes<'_> {
     fn text(&self) -> String {
         let paths = self.0.iter().flat_map(|o| o.outputs.values());

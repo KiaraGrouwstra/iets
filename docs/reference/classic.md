@@ -1,26 +1,26 @@
 # Classic mode
 
-Every classic Nix name ietsp answers to, the flags each one handles, and
+Every classic Nix name iets answers to, the flags each one handles, and
 what makes it fall back to the real `nix`.
 
-The same `ietsp` binary installed under Nix's own command names. Each name
-handles the subset ietsp implements and execs the real binary for the rest,
+The same `iets` binary installed under Nix's own command names. Each name
+handles the subset iets implements and execs the real binary for the rest,
 so it is a drop-in only where the real nix is also on `PATH`.
 
 ```
 nix build .#classic     # bin/{nix-instantiate,nix-build,nix-eval-jobs,nix-shell,nix}
 ```
 
-Every symlink points at `bin/ietsp`; the basename of `argv[0]` picks the
+Every symlink points at `bin/iets`; the basename of `argv[0]` picks the
 command. Without symlinks the same commands work as subcommands:
-`ietsp nix-instantiate ...`, `ietsp nix-build ...`.
+`iets nix-instantiate ...`, `iets nix-build ...`.
 
 ## Where the builds go
 
 None of the classic names has a `--builder` flag, so the build target is the
-`builder` setting in the user `ietsp.toml`, and nix.conf's `store` when that is unset.
+`builder` setting in the user `iets.toml`, and nix.conf's `store` when that is unset.
 `--store URL` and `--option store URL` on the command line win over both.
-`--ietsp-option name value` sets any ietsp setting for one run, and is stripped
+`--iets-option name value` sets any iets setting for one run, and is stripped
 from the argv before a fallback execs the real nix (`docs/reference/settings.md`).
 
 Registration stays local whatever `builder` says:
@@ -40,12 +40,12 @@ Registration stays local whatever `builder` says:
 ## The NixOS module
 
 `nix/module.nix` installs `packages.default` and the direnv hook.
-`ietsp.classic.enable` (default `false`) adds the farm as well:
+`iets.classic.enable` (default `false`) adds the farm as well:
 
 ```nix
 {
-  imports = [ ietsp.nixosModules.default ];
-  ietsp.classic.enable = true;
+  imports = [ iets.nixosModules.default ];
+  iets.classic.enable = true;
 }
 ```
 
@@ -58,10 +58,10 @@ that skip it would ignore.
 
 The loser of a `buildEnv` collision is not in the system path at all, so
 the fallback cannot find a second `nix` on `PATH`. The farm therefore
-records the nix it was built for in `share/ietsp/real-nix-bin`, and the
+records the nix it was built for in `share/iets/real-nix-bin`, and the
 fallback follows the symlink chain from the `PATH` entry to that file. It
 works in every process, login shell or not. The module builds the farm for
-`config.nix.package`; `IETSP_NIX_BIN_DIR` stays as an override.
+`config.nix.package`; `IETS_NIX_BIN_DIR` stays as an override.
 
 To check a configuration, build its `system.path` and look at a symlink:
 
@@ -85,7 +85,7 @@ readlink $(nix build --no-link --print-out-paths \
 
 Default mode evaluates, walks the value like `getDerivations`, computes the
 drv closure, registers it through the daemon (`QueryValidPaths` then one
-`AddMultipleToStore`, as `ietsp build --no-build` does) and prints one root
+`AddMultipleToStore`, as `iets build --no-build` does) and prints one root
 per line: the drv path, plus `!<output>` when the derivation's `outputName`
 is not `out`. `--add-root` creates the symlink, `AddIndirectRoot`s it, and
 prints the link instead of the drv path, numbering the second and later
@@ -160,7 +160,7 @@ through the daemon, else — when that expression does not evaluate — `bash` f
 the environment, with nix's `uses bash from your environment` notice.
 
 Before it execs bash it keeps what it realised alive: one link per path in
-ietsp's roots store, keyed on the working directory, the files and attributes
+iets's roots store, keyed on the working directory, the files and attributes
 you named, and the path's place in the sorted list. Nix keeps no root here, so
 a `nix collect-garbage` between two entries makes the second one rebuild the
 whole closure; this is the hole nix-direnv fills by hand. There is one link
@@ -179,7 +179,7 @@ derivation, any other flag.
 
 ### `nix-eval-jobs`
 
-The existing `ietsp eval-jobs`, which already matches nix-eval-jobs 2.35
+The existing `iets eval-jobs`, which already matches nix-eval-jobs 2.35
 flag for flag. See `docs/reference/commands.md`. Under this name it prints
 no summary line on stderr, because nix-eval-jobs prints none.
 
@@ -193,7 +193,7 @@ evaluates purely unless told otherwise, `-f` is impure), `-I`, `--arg`/`--argstr
 `--option`, `--store`, `--show-trace`, `--experimental-features` and
 `--extra-experimental-features` (every feature is always on, so they hold;
 `parse-toml-timestamps` falls back), `--accept-flake-config` (no effect,
-one warning: ietsp never applies a flake's `nixConfig`,
+one warning: iets never applies a flake's `nixConfig`,
 `docs/reference/divergences.md`).
 
 The output is `nix eval`'s, which is not `nix-instantiate --eval`'s
@@ -234,13 +234,13 @@ error.
 `--store grpc://host:port[?…]` builds on a nix-grpc-store service instead,
 natively: no plugin, no `nix` on the other side. `--eval-store auto` (or
 `daemon`, or empty) has no effect and gives one `ignored-flag` warning, because
-ietsp evaluates in memory and needs no evaluation store. So the invocation the `nix-farm`
+iets evaluates in memory and needs no evaluation store. So the invocation the `nix-farm`
 wrapper makes — `nix build --store 'grpc://farm.numtide.com:50051?token-file=…'
 --eval-store auto .#pkg` — works as it stands; any other `--eval-store` value
-falls back, since ietsp always evaluates in its own process. A build farm
+falls back, since iets always evaluates in its own process. A build farm
 publishes its outputs to a binary cache instead of a local store, so an
 out-link needs them copied in first: the local daemon substitutes them from
-its caches, and ietsp fetches the rest with `FetchNars` and registers it with
+its caches, and iets fetches the rest with `FetchNars` and registers it with
 their signatures over the worker protocol before it makes the symlink. With
 `--store` given, `--no-link` skips all of that. Without it the `builder`
 setting stands in for the local store, as a build hook does, so the outputs
@@ -268,7 +268,7 @@ and `{}` when it is deferred. `--pretty` indents by two spaces and is the
 default on a terminal (`common-args.hh:MixPrintJSON`).
 
 `-r` adds the whole input-derivation closure. The real nix reads it from the
-store with `computeFSClosure` after instantiating; ietsp walks `inputDrvs`
+store with `computeFSClosure` after instantiating; iets walks `inputDrvs`
 over the derivations the evaluation holds in memory and reads `/nix/store`
 only for a member the evaluation did not make, such as one pinned with
 `builtins.storePath`. So the answer is the same and nothing is written to the
@@ -279,10 +279,10 @@ store — see the divergence below.
 flags. The output is `search.cc`'s, byte for byte, escape sequences
 included; the index of the walk is cached, so a second search over the
 same package set answers without evaluating (`docs/reference/commands.md`). An
-installable ietsp cannot evaluate — a flake registry reference such as
+installable iets cannot evaluate — a flake registry reference such as
 `nixpkgs`, an unlocked flake — falls back, as does any other flag.
 
-`nix print-dev-env [FLAKEREF[#attr]] [--json]` is `ietsp print-dev-env`
+`nix print-dev-env [FLAKEREF[#attr]] [--json]` is `iets print-dev-env`
 (`docs/reference/commands.md`).
 
 `nix develop [INSTALLABLE]`: `-c`/`--command CMD ARGS...` (like nix, it takes
@@ -298,7 +298,7 @@ derivation is built through the daemon. On top of `makeRcScript` it appends what
 prefix of the bash directory close the script. `NIX_GCROOT` holds the `-env`
 output so the shell keeps it alive — nix's runtime root, which the collector
 finds in the process environment and which lasts exactly as long as the shell.
-On top of that ietsp links the `-env` output in its roots store, keyed on the
+On top of that iets links the `-env` output in its roots store, keyed on the
 flake directory and the attribute path, so the closure also survives a
 collection between two entries; the output references the whole shell, so one
 link holds all of it. `shell-gc-root = false` keeps none
@@ -333,13 +333,13 @@ error: flake 'path:/home/you/proj' does not provide attribute 'formatter.x86_64-
 ```
 
 The formatter's closure comes to the local store, because the formatter runs
-here whatever `builder` built it, and the output is linked in ietsp's roots
-store at `~/.cache/ietsp/roots/<key>`, keyed on the flake directory and
+here whatever `builder` built it, and the output is linked in iets's roots
+store at `~/.cache/iets/roots/<key>`, keyed on the flake directory and
 `formatter.<system>`. That link is registered as an indirect GC root on the
 local daemon, so the formatter is not swept and rebuilt between runs. The
 idea is Mic92's flake-fmt. A root is a claim on the store and not part of
 the answer, so a daemon that will not take one is a warning and the
-formatter still runs. `ietsp cache gc` drops the roots nothing has used for
+formatter still runs. `iets cache gc` drops the roots nothing has used for
 its TTL (`docs/explanation/caching.md`).
 
 The run also goes through the tracing cache, so a second `nix fmt` with
@@ -347,7 +347,7 @@ nothing changed neither evaluates nor builds; a formatter that rewrote a
 file to the same bytes is still a hit, because the read set holds content
 hashes.
 
-There is no native `ietsp fmt`. The classic name is the one users reach
+There is no native `iets fmt`. The classic name is the one users reach
 for, and a second spelling would add nothing.
 
 Falls back on: `--json`, `nix formatter build`, `nix formatter run`, a
@@ -358,7 +358,7 @@ is `flake-prefetch-inputs.cc`: it fetches every locked input that the root
 of `flake.lock` reaches, on up to 25 threads (the default of
 `http-connections`). Each input takes the path an evaluation takes
 (`docs/explanation/flakes-and-sources.md`): `/nix/store`, then the input store, then a substitute,
-then ietsp's own download for `github`, `gitlab`, `sourcehut` and `tarball`,
+then iets's own download for `github`, `gitlab`, `sourcehut` and `tarball`,
 then the real nix for `git` and `hg`. So a tarball-shaped input lands in the
 input store, not in `/nix/store`. A `path:` input is read in place and has
 nothing to fetch. An input that fails prints its error, the others go on, and
@@ -384,8 +384,8 @@ refuses that), `nix flake …` but `prefetch-inputs`, `nix run`, `nix shell`,
 listed above.
 
 `nix store prefetch-file` and `nix-prefetch-url` keep falling back on
-purpose. Both add the file to the store and print its path, and ietsp has no
-store to add it to. `ietsp prefetch` prints the same hash and nothing else
+purpose. Both add the file to the store and print its path, and iets has no
+store to add it to. `iets prefetch` prints the same hash and nothing else
 (`docs/reference/commands.md`).
 
 #### The tracing cache
@@ -413,19 +413,19 @@ and tree the evaluation read, and under `--impure` every environment
 variable it asked for are in the read set, so an edit, a `nix flake update`
 and a changed variable all evaluate again. No other flag these parsers
 accept reaches the evaluator. `--override-input`, `--override-flake`,
-`--reference-lock-file` and the lock-writing flags are not ietsp's: the
+`--reference-lock-file` and the lock-writing flags are not iets's: the
 command line falls back before any entry is looked up. A flake with no
 complete `flake.lock` falls back from the evaluation, which writes no entry.
 
 This is not Nix's evaluation cache. Nix's is keyed on the locked flake's
 fingerprint, holds attribute values, is skipped for a dirty tree and for
 `-f`/`--expr`, and `nix eval` does not answer from it (`src/nix/eval.cc`
-forces the value). ietsp's is keyed on
+forces the value). iets's is keyed on
 the command and validated by what the run read, so it also answers for a
 dirty tree, a `path:` flake, `--expr` and `-f`.
 
-`--ietsp-option cache false`, `IETSP_CACHE=0` or `cache = false` in
-`ietsp.toml` turn it off. The cache flags of the native commands
+`--iets-option cache false`, `IETS_CACHE=0` or `cache = false` in
+`iets.toml` turn it off. The cache flags of the native commands
 (`--no-tracing-cache`, `--cache-dir`) are not Nix's, so under `nix` they
 fall back.
 
@@ -434,7 +434,7 @@ fall back.
 Two triggers:
 
 1. A flag or subcommand the parser does not implement, seen before any
-   work starts. A setting counts too: a Nix client setting ietsp has
+   work starts. A setting counts too: a Nix client setting iets has
    nothing for, with a value that is not Nix's default
    (`docs/reference/settings.md`, class 4), and `nix-instantiate --store`
    with another store than the local daemon.
@@ -455,28 +455,28 @@ The fallback prints one line on stderr and then `execve`s the real binary
 with the same `argv`:
 
 ```
-ietsp: falling back to nix-instantiate: '--parse' is not implemented
+iets: falling back to nix-instantiate: '--parse' is not implemented
 ```
 
 | variable | effect |
 |---|---|
-| `IETSP_NIX_BIN_DIR` | the directory the real binary is taken from |
-| `IETSP_NO_FALLBACK=1` (any nix.conf Boolean) | print the reason and exit 1 instead of exec'ing |
+| `IETS_NIX_BIN_DIR` | the directory the real binary is taken from |
+| `IETS_NO_FALLBACK=1` (any nix.conf Boolean) | print the reason and exit 1 instead of exec'ing |
 
-Lookup order: `IETSP_NIX_BIN_DIR/<name>` when it exists there; else the
-directory named by `share/ietsp/real-nix-bin` next to the farm entry on
-`PATH` that resolves to ietsp; else the first `<name>` on `PATH` that is not
-ietsp. Nothing found at all:
-`ietsp: cannot fall back to <name>: not found on PATH`, exit 1.
+Lookup order: `IETS_NIX_BIN_DIR/<name>` when it exists there; else the
+directory named by `share/iets/real-nix-bin` next to the farm entry on
+`PATH` that resolves to iets; else the first `<name>` on `PATH` that is not
+iets. Nothing found at all:
+`iets: cannot fall back to <name>: not found on PATH`, exit 1.
 
-A candidate is ietsp when its canonical path is `/proc/self/exe` **or** when
-that path's file name is `ietsp`. A host can hold two builds of ietsp, and
-the farm one of them made points at its own `bin/ietsp`, not at the binary
+A candidate is iets when its canonical path is `/proc/self/exe` **or** when
+that path's file name is `iets`. A host can hold two builds of iets, and
+the farm one of them made points at its own `bin/iets`, not at the binary
 that is running. Such a candidate is skipped like ourselves: its marker is
 read, and the walk over `PATH` goes on. Without the file-name rule the other
 build looked like a foreign nix, so a flake-input fetch spawned it and the
-child stopped at the `IETSP_FETCHING` guard
-(`ietsp: recursive fetch ...`, `docs/explanation/flakes-and-sources.md`).
+child stopped at the `IETS_FETCHING` guard
+(`iets: recursive fetch ...`, `docs/explanation/flakes-and-sources.md`).
 
 ## Config
 
@@ -500,15 +500,15 @@ honoured; any other store falls back.
 - A flag or a setting that has no effect is one warning on stderr, where
   Nix prints nothing: `-v`, `--accept-flake-config`, `--eval-store auto`,
   `accept-flake-config = true` and `log-lines`. Any other client setting
-  ietsp has nothing for (`restrict-eval`, `eval-system`, …) falls back.
+  iets has nothing for (`restrict-eval`, `eval-system`, …) falls back.
   stdout and the exit code stay Nix's. `docs/reference/divergences.md`,
-  **Flags and settings with no effect**, has the table and says what ietsp
+  **Flags and settings with no effect**, has the table and says what iets
   does with a flake's `nixConfig`: nothing.
 - `--show-trace` only puts the trace into the `--log-format internal-json`
-  error records (`docs/reference/errors.md`): ietsp always prints the full
+  error records (`docs/reference/errors.md`): iets always prints the full
   trace it has.
 - `--no-out-link` (`nix build --no-link`) creates no symlink and keeps a
-  GC root in ietsp's roots store instead, so the output survives the next
+  GC root in iets's roots store instead, so the output survives the next
   `nix collect-garbage`. `nix-build` links into a temporary directory and
   lets it be deleted, which roots the output for the length of the run and
   no longer. `build-gc-root = false` gives Nix's behaviour back
@@ -519,7 +519,7 @@ honoured; any other store falls back.
 - `--add-root` does not refuse a link that already exists and points
   outside the store; it replaces it.
 - A missing attribute in an installable's path is one line. Nix adds a
-  `Did you mean …?` line from `Suggestions`, which ietsp does not have; the
+  `Did you mean …?` line from `Suggestions`, which iets does not have; the
   `error:` line itself is the same.
 - The `nix` subcommands answer from the tracing cache (see above), where
   Nix answers from its own evaluation cache or evaluates. stdout and the exit
@@ -536,10 +536,10 @@ honoured; any other store falls back.
   evaluate. The real one writes the `.drv` files while computing `drvPath`, so
   a real `nix derivation show` leaves its whole input closure — every `.drv`
   and every input source — in the store, and `-r` can then answer from the
-  store alone. ietsp answers from the derivations the evaluation holds, so the
+  store alone. iets answers from the derivations the evaluation holds, so the
   store gains nothing and a caller that relied on the side effect (`nix
   derivation show X` then `nix-store --realise X`) must instantiate first, with
-  `nix-instantiate` or `ietsp build --no-build`.
+  `nix-instantiate` or `iets build --no-build`.
 - `nix build` prints the log lines only with `-L`. The real one shows the
   last line in the progress bar and the whole log when a build fails.
 - Two installables that name the same derivation print one output path
@@ -549,7 +549,7 @@ honoured; any other store falls back.
   run can fall back to the real nix.
 - **`nix develop` takes bash from the shell derivation's own builder.**
   `develop.cc` builds `nixpkgs#bashInteractive` from the flake's `nixpkgs`
-  input (or the registry), which needs a fetcher ietsp does not have. The
+  input (or the registry), which needs a fetcher iets does not have. The
   builder of a derivation `nix develop` accepts is a `bin/bash` in the store
   by definition, and in a nixpkgs dev shell it is the same store path nix
   picks, so `SHELL` and the `PATH` prefix come out the same. With no such
@@ -559,7 +559,7 @@ honoured; any other store falls back.
 - `nix-shell --pure` keeps the lower-case proxy variables (`http_proxy` …)
   and not the upper-case ones. `network-proxy.cc:getAllVariables` means to add
   the upper-case names but writes into an empty `std::string`, so nix inserts
-  an empty name instead; ietsp keeps the set nix keeps, not the set nix means
+  an empty name instead; iets keeps the set nix keeps, not the set nix means
   to keep.
 - `nix-shell` computes `NIX_BUILD_CORES` from the `cores` setting, else the
   cgroup CPU quota, else the CPU count — `globals.cc:getDefaultCores`, with
@@ -579,17 +579,17 @@ complete `flake.lock`, copied out of the repository so both sides see a `path:`
 flake. It writes to the store and needs a live `nix-daemon`, so `nix flake check`
 runs it in a NixOS test container (`nix/e2e-test.nix`). By hand, run it from the
 dev shell after `cargo build --release`. It refuses to run anywhere else: on a
-host that installs the farm, the `nix` it would compare against is ietsp, so it
-aborts with the resolved path instead of comparing ietsp with itself.
+host that installs the farm, the `nix` it would compare against is iets, so it
+aborts with the resolved path instead of comparing iets with itself.
 
 **A comparison by hand needs the same care, and the scripts cannot help you
 there.** On a host that installs the farm, every classic name in the system
-path is ietsp: `nix`, `nix-instantiate`, `nix-build`, `nix-shell` and
+path is iets: `nix`, `nix-instantiate`, `nix-build`, `nix-shell` and
 `nix-eval-jobs`. A reference run that finds its binary through `PATH`
-therefore compares ietsp with ietsp and says the two agree, or blames the
-reference for ietsp's own behaviour. Name the store path of the reference
+therefore compares iets with iets and says the two agree, or blames the
+reference for iets's own behaviour. Name the store path of the reference
 instead, and check it: `readlink -f $(command -v nix-eval-jobs)` must not end
-in an `ietsp` output. `scripts/lib.nu`'s `require-real-nix` does exactly that
+in an `iets` output. `scripts/lib.nu`'s `require-real-nix` does exactly that
 check for the suites; it cannot do it for a command you type.
 
 The shell cases compare an `env` dump, which is only comparable without the
@@ -600,5 +600,5 @@ compared line by line after `sort`. `nix-shell` runs on
 `'<nixpkgs>' -A hello`: that resolves to `nixpkgs/shell.nix`, which fetches a
 pinned tree and therefore falls back. `nix develop` runs on this repository's
 own flake, the only `mkShell`-shaped shell around — the flake fixture has no
-nixpkgs. The fallback cases use `IETSP_NO_FALLBACK=1`, so no real `nix-shell -p`
+nixpkgs. The fallback cases use `IETS_NO_FALLBACK=1`, so no real `nix-shell -p`
 or `nix develop --phase build` build ever runs.

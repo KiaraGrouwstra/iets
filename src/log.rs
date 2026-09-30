@@ -32,7 +32,7 @@ pub struct Log {
     pending: Mutex<Vec<(String, String)>>,
     want_mismatch: Mutex<Option<String>>,
     /// Where messages go. `None` writes nowhere: a library says nothing
-    /// unless the host asked for it. `ietsp` points it at stderr.
+    /// unless the host asked for it. `iets` points it at stderr.
     err: Mutex<Option<Box<dyn Write + Send>>>,
 }
 
@@ -42,7 +42,7 @@ impl Log {
         *self.err.lock().unwrap_or_else(|e| e.into_inner()) = Some(w);
     }
 
-    /// What `ietsp` itself does, and what a host that wants Nix's own
+    /// What `iets` itself does, and what a host that wants Nix's own
     /// behaviour does.
     pub fn write_to_stderr(&self) {
         self.write_to(Box::new(std::io::stderr()));
@@ -118,7 +118,7 @@ pub fn set_classic() {
 }
 
 /// Whether this process answers to one of Nix's names. Under those, what an
-/// experimental feature gates is gated (`builtins::install`); ietsp's own
+/// experimental feature gates is gated (`builtins::install`); iets's own
 /// commands have every feature.
 pub fn classic() -> bool {
     cur().log.classic.load(Ordering::Relaxed)
@@ -130,8 +130,8 @@ pub fn set_json_log_path(path: String) {
     let _ = cur().log.json_log_path.set(path);
 }
 
-/// `sid`, the session of every record: `IETSP_SESSION_ID` when a parent
-/// ietsp or the user set it, else a UUIDv7 made for this one. The
+/// `sid`, the session of every record: `IETS_SESSION_ID` when a parent
+/// iets or the user set it, else a UUIDv7 made for this one. The
 /// `eval-jobs` workers get their parent's, so one run's records share one
 /// id (docs/reference/errors.md).
 pub fn session_id() -> String {
@@ -141,7 +141,7 @@ pub fn session_id() -> String {
 impl Log {
     fn sid(&self) -> &str {
         self.sid.get_or_init(|| {
-            std::env::var("IETSP_SESSION_ID")
+            std::env::var("IETS_SESSION_ID")
                 .ok()
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| uuid_v7(std::time::SystemTime::now()))
@@ -243,7 +243,7 @@ fn out(v: &Value, text: Option<&str>) {
 }
 
 /// error.hh:Verbosity, and logging.hh:ActivityType and ResultType, the ones
-/// ietsp emits itself.
+/// iets emits itself.
 pub const LVL_ERROR: u64 = 0;
 pub const LVL_INFO: u64 = 3;
 pub const ACT_COPY_PATH: u64 = 100;
@@ -304,7 +304,7 @@ pub fn result(id: u64, ty: u64, f: Vec<Value>) {
     }
 }
 
-/// An activity of ietsp's own, without a parent; it stops when dropped.
+/// An activity of iets's own, without a parent; it stops when dropped.
 pub struct Activity(pub u64);
 
 impl Activity {
@@ -594,7 +594,7 @@ pub fn mismatch(raw: &str) -> Option<(String, String)> {
     Some((field("specified:")?, field("got:")?))
 }
 
-/// `ietsp prefetch` builds a derivation whose hash is wrong on purpose: a
+/// `iets prefetch` builds a derivation whose hash is wrong on purpose: a
 /// mismatch of a derivation called `name` is its answer, not a failure.
 pub fn want_mismatch(name: &str) {
     *cur()

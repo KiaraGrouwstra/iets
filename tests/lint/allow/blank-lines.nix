@@ -1,4 +1,4 @@
-# ietsp: allow url-literal
+# iets: allow url-literal
 
 # a comment between
 http://example.com

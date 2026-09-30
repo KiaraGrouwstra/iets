@@ -291,7 +291,7 @@ mod tests {
     use super::*;
 
     fn tmp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("ietsp-trace-{name}-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("iets-trace-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
@@ -370,7 +370,7 @@ mod tests {
                 kind: Kind::Directory,
             },
             Obs::Env {
-                name: b"IETSP_TRACE_TEST_UNSET".to_vec(),
+                name: b"IETS_TRACE_TEST_UNSET".to_vec(),
                 value: None,
             },
         ];
@@ -383,12 +383,12 @@ mod tests {
     #[test]
     fn the_lowest_failing_observation_is_the_one_reported() {
         let gone = |n: usize| Obs::Stat {
-            path: format!("/nonexistent/ietsp-validate-{n}").into_bytes(),
+            path: format!("/nonexistent/iets-validate-{n}").into_bytes(),
             follow: true,
             kind: Kind::Regular,
         };
         let here = Obs::Env {
-            name: b"IETSP_TRACE_TEST_UNSET".to_vec(),
+            name: b"IETS_TRACE_TEST_UNSET".to_vec(),
             value: None,
         };
         let mut obs: Vec<Obs> = (0..64)
@@ -396,7 +396,7 @@ mod tests {
             .collect();
         for _ in 0..50 {
             let e = validate(&mut obs, 4).expect_err("the missing paths fail");
-            assert_eq!(e.0, "/nonexistent/ietsp-validate-3 is gone");
+            assert_eq!(e.0, "/nonexistent/iets-validate-3 is gone");
         }
     }
 }

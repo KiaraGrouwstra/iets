@@ -10,9 +10,9 @@
 # 4. classic `nix build --store grpc://…?insecure=1 --eval-store auto`
 #    compared with the real nix plus its nix-grpc-store plugin.
 # 5. the out-link: the output is fetched back and registered locally.
-# 6. `ietsp build --builder grpc://… DIR#checks`: the same outcomes as the
+# 6. `iets build --builder grpc://… DIR#checks`: the same outcomes as the
 #    same flake built over the worker protocol on the same store.
-# 7. a multi-root `ietsp build` over grpc: one progress line per attribute.
+# 7. a multi-root `iets build` over grpc: one progress line per attribute.
 #
 # A real farm (balancer, niks3, several workers) is not covered here; see
 # docs/how-to/build-remotely.md for the run against farm.numtide.com.
@@ -20,7 +20,7 @@
 # usage: nu scripts/grpc-e2e.nu            # uses target/release
 #        BIN=target/debug nu scripts/grpc-e2e.nu
 #        DAEMON=/nix/store/…-nix-grpc-store-0.1.0 nu scripts/grpc-e2e.nu
-use lib.nu [ROOT bytes-of chomp current-system fail checks-flake ietsp-bin isolate make-farm nixpkgs out-of quiet-ok require-real-nix run-in same-file scratch-daemon show show-matching]
+use lib.nu [ROOT bytes-of chomp current-system fail checks-flake iets-bin isolate make-farm nixpkgs out-of quiet-ok require-real-nix run-in same-file scratch-daemon show show-matching]
 
 const FLAKE = "github:Mic92/nix-grpc-store/4f6d239e834f96bd1544a8b243d46c41a892016e"
 
@@ -68,7 +68,7 @@ def start-daemon [pkg: string, work: string, port: int]: nothing -> record {
   {url: $"grpc://127.0.0.1:($port)?insecure=1", sock: $sock}
 }
 
-def run-tests [ietsp: string, nixpkgs: string, work: string] {
+def run-tests [iets: string, nixpkgs: string, work: string] {
   let system = (current-system)
   let pkg = (daemon-package)
   print $"daemon: ($pkg)"
@@ -79,14 +79,14 @@ def run-tests [ietsp: string, nixpkgs: string, work: string] {
   let scratch = $"local?root=($work)/store"
 
   print "== 1. custom derivation with a source tree, built on the gRPC daemon"
-  make-case $"($work)/c1" ietsp-grpc-e2e $system
+  make-case $"($work)/c1" iets-grpc-e2e $system
   let drv = (^nix-instantiate $"($work)/c1/case.nix" err> /dev/null | chomp)
   let src = (out-of nix-store -q --references $drv | chomp)
   let expected = (out-of nix-store -q --outputs $drv | chomp)
   print $"drv: ($drv)"
   cp $drv $"($work)/c1/nix.drv"
   if not (quiet-ok nix-store --delete $drv $src) { fail $"cannot delete ($drv) and ($src)" }
-  let r = (^$ietsp build --builder $url --timings --no-tracing-cache --fetch-to $"($work)/c1/fetch" $"($work)/c1/case.nix" | complete)
+  let r = (^$iets build --builder $url --timings --no-tracing-cache --fetch-to $"($work)/c1/fetch" $"($work)/c1/case.nix" | complete)
   $r.stderr | save -f $"($work)/client1.log"
   if $r.exit_code != 0 { print ($r.stderr | chomp); print (open --raw $"($work)/grpc.log" | chomp); fail "client exited non-zero" }
   let out = ($r.stdout | chomp)
@@ -99,7 +99,7 @@ def run-tests [ietsp: string, nixpkgs: string, work: string] {
 
   print "== 2. hello cold, --no-build"
   let hello = (^nix-instantiate -I $"nixpkgs=($nixpkgs)" '<nixpkgs>' -A hello err> /dev/null | chomp)
-  let r = (^$ietsp build --builder $url --timings --no-tracing-cache --no-build -I $"nixpkgs=($nixpkgs)" -E '(import <nixpkgs> {}).hello' | complete)
+  let r = (^$iets build --builder $url --timings --no-tracing-cache --no-build -I $"nixpkgs=($nixpkgs)" -E '(import <nixpkgs> {}).hello' | complete)
   $r.stderr | save -f $"($work)/client2.log"
   if $r.exit_code != 0 { print ($r.stderr | chomp); fail "client exited non-zero" }
   show-matching '^(eval|plan|connect|query|add|grpc):' $"($work)/client2.log"
@@ -111,7 +111,7 @@ def run-tests [ietsp: string, nixpkgs: string, work: string] {
   print $"ok: ($missing)"
 
   print "== 3. hello warm, --no-build"
-  let r = (^$ietsp build --builder $url --timings --no-tracing-cache --no-build -I $"nixpkgs=($nixpkgs)" -E '(import <nixpkgs> {}).hello' | complete)
+  let r = (^$iets build --builder $url --timings --no-tracing-cache --no-build -I $"nixpkgs=($nixpkgs)" -E '(import <nixpkgs> {}).hello' | complete)
   $r.stderr | save -f $"($work)/client3.log"
   if $r.exit_code != 0 { print ($r.stderr | chomp); fail "client exited non-zero" }
   show-matching '^(query|add|grpc):' $"($work)/client3.log"
@@ -126,10 +126,10 @@ def run-tests [ietsp: string, nixpkgs: string, work: string] {
   let sys_probe = if ($sys | path exists) { (^$sys store info --store $url | complete) } else { {exit_code: 1} }
   let ref_nix = if $probe.exit_code == 0 { "nix" } else if $sys_probe.exit_code == 0 { $sys } else { "" }
   let plugin_ok = ($ref_nix != "")
-  make-case $"($work)/c4" ietsp-grpc-e2e-classic $system
-  let farm = (make-farm $ietsp $"($work)/farm")
+  make-case $"($work)/c4" iets-grpc-e2e-classic $system
+  let farm = (make-farm $iets $"($work)/farm")
   let tail = [--eval-store auto --no-link --print-out-paths -f $"($work)/c4/case.nix"]
-  let ours = (with-env {IETSP_NO_FALLBACK: "1"} { ^$"($farm)/nix" build --store $url ...$tail | complete })
+  let ours = (with-env {IETS_NO_FALLBACK: "1"} { ^$"($farm)/nix" build --store $url ...$tail | complete })
   if $ours.exit_code != 0 { print ($ours.stderr | chomp); print (open --raw $"($work)/grpc.log" | chomp); fail "ours exited non-zero" }
   let ref = if $plugin_ok {
     print $"reference: ($ref_nix) with its nix-grpc-store plugin"
@@ -147,9 +147,9 @@ def run-tests [ietsp: string, nixpkgs: string, work: string] {
   print $"ok: same as the reference nix, ($ours.stdout | chomp)"
 
   print "== 5. classic out-link: the output is fetched back and registered locally"
-  make-case $"($work)/c5" ietsp-grpc-e2e-link $system
+  make-case $"($work)/c5" iets-grpc-e2e-link $system
   let link = $"($work)/c5/result"
-  let r = (with-env {IETSP_NO_FALLBACK: "1"} { ^$"($farm)/nix" build --store $url --eval-store auto -o $link --print-out-paths -f $"($work)/c5/case.nix" | complete })
+  let r = (with-env {IETS_NO_FALLBACK: "1"} { ^$"($farm)/nix" build --store $url --eval-store auto -o $link --print-out-paths -f $"($work)/c5/case.nix" | complete })
   # A real farm signs its outputs with the cache key, so the local daemon
   # accepts them. This scratch daemon builds them unsigned, and registration
   # checks signatures exactly as `nix copy --from` does, so the refusal is the
@@ -174,7 +174,7 @@ def run-tests [ietsp: string, nixpkgs: string, work: string] {
   checks-flake $"($work)/fb-grpc"
   checks-flake $"($work)/fb-worker"
   let verdicts = {|store: string, name: string|
-    let r = (^$ietsp build --builder $store --no-tracing-cache --json $"path:($work)/($name)#checks" | complete)
+    let r = (^$iets build --builder $store --no-tracing-cache --json $"path:($work)/($name)#checks" | complete)
     if ($r.stdout | is-empty) { print ($r.stderr | chomp); fail $"($name): no outcomes" }
     {
       exit: $r.exit_code,
@@ -197,13 +197,13 @@ def run-tests [ietsp: string, nixpkgs: string, work: string] {
   if not ($over_grpc.stderr | str contains "building fb-chain") { fail "the dependent check did not build" }
   print $"ok: ($over_grpc.rows | length) records, exit ($over_grpc.exit), the same either way"
 
-  print "== 7. a multi-root ietsp build over grpc names every attribute"
-  make-case $"($work)/c7a" ietsp-grpc-e2e-multi-a $system
-  make-case $"($work)/c7b" ietsp-grpc-e2e-multi-b $system
+  print "== 7. a multi-root iets build over grpc names every attribute"
+  make-case $"($work)/c7a" iets-grpc-e2e-multi-a $system
+  make-case $"($work)/c7b" iets-grpc-e2e-multi-b $system
   let expr = $"[ \(import ($work)/c7a/case.nix\) \(import ($work)/c7b/case.nix\) ]"
-  let r = (^$ietsp build --builder $url --no-tracing-cache -E $expr | complete)
+  let r = (^$iets build --builder $url --no-tracing-cache -E $expr | complete)
   if $r.exit_code != 0 { print ($r.stderr | chomp); print (open --raw $"($work)/grpc.log" | chomp); fail "multi-root build exited non-zero" }
-  for n in [ietsp-grpc-e2e-multi-a ietsp-grpc-e2e-multi-b] {
+  for n in [iets-grpc-e2e-multi-a iets-grpc-e2e-multi-b] {
     if not ($r.stderr | str contains $"building ($n)") { print ($r.stderr | chomp); fail $"no progress line for ($n)" }
   }
   if (($r.stdout | chomp | lines | length) != 2) { fail $"expected two output paths, got ($r.stdout)" }
@@ -213,8 +213,8 @@ def run-tests [ietsp: string, nixpkgs: string, work: string] {
 
 def main [] {
   require-real-nix
-  let ietsp = (ietsp-bin)
+  let iets = (iets-bin)
   cd $ROOT
   let work = (isolate grpc-e2e)
-  run-in $work { run-tests $ietsp (nixpkgs) $work }
+  run-in $work { run-tests $iets (nixpkgs) $work }
 }

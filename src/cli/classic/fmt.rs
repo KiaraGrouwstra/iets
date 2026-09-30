@@ -1,5 +1,5 @@
 //! `nix fmt` (src/nix/formatter.cc): the `formatter.<system>` of the flake in
-//! the working directory, built once and kept alive by a link in ietsp's roots
+//! the working directory, built once and kept alive by a link in iets's roots
 //! store, then exec'd with the arguments the user gave. See
 //! `docs/reference/classic.md`.
 
@@ -127,7 +127,7 @@ pub fn main(argv: &[String], rest: &[String]) -> i32 {
     }
 }
 
-/// Where the root of this flake's formatter lives: one link in ietsp's roots
+/// Where the root of this flake's formatter lives: one link in iets's roots
 /// store, named by the flake directory and the attribute it holds, so two
 /// flakes on one machine keep two roots. `None` when no home is known, which
 /// costs the root and nothing else.
@@ -136,7 +136,7 @@ fn out_link(dir: &Path, attr: &str) -> Option<PathBuf> {
 }
 
 /// A cache hit is usable while the program is still there. A cache directory
-/// is writable by whoever runs ietsp, so the entry may only ever name a
+/// is writable by whoever runs iets, so the entry may only ever name a
 /// program inside the output it remembered, and that output must be a path of
 /// the store directory: a planted entry can then point `nix fmt` at no file of
 /// its choosing. What the store holds under that name is the daemon's to say.

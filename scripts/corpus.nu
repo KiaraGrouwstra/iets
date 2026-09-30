@@ -1,11 +1,11 @@
 #!/usr/bin/env nu
-# Runs tests/corpus/*.nix against ietsp and compares with the .exp files.
+# Runs tests/corpus/*.nix against iets and compares with the .exp files.
 # `--update [NAME...]` regenerates the .exp files from nix-instantiate
 # ($NIX overrides it) instead. Runs from tests/ so paths print as /pwd/....
-use lib.nu [ROOT chomp env-cmd flags-of glob-sorted ietsp-bin require-real-nix show]
+use lib.nu [ROOT chomp env-cmd flags-of glob-sorted iets-bin require-real-nix show]
 
 def main [--update, ...names: string] {
-  let ietsp = if $update { "" } else { ietsp-bin }
+  let iets = if $update { "" } else { iets-bin }
   $env.HOME = "/fake-home"
   $env.TEST_VAR = "foo"
   cd ($ROOT | path join tests)
@@ -21,7 +21,7 @@ def main [--update, ...names: string] {
   for f in $files {
     let n = ($f | str replace -r '\.nix$' '')
     if not ($"($n).exp" | path exists) { continue }
-    let r = (^$ietsp eval --strict ...(flags-of $n) $f | complete)
+    let r = (^$iets eval --strict ...(flags-of $n) $f | complete)
     let out = ($r.stdout | str replace -a $pwd "/pwd" | chomp)
     if $out == (open --raw $"($n).exp" | chomp) {
       $pass += 1

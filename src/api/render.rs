@@ -1,5 +1,5 @@
 //! What an operation produced, and the JSON that is its contract: the same
-//! bytes `ietsp plumbing OP` writes and a porcelain `--json` writes. A value
+//! bytes `iets plumbing OP` writes and a porcelain `--json` writes. A value
 //! two frontends can emit belongs here; how a terminal shows it belongs in
 //! `crate::cli::render` (docs/explanation/plumbing-and-porcelain.md).
 
@@ -13,7 +13,7 @@ pub trait Report {
 }
 
 /// What a build will build and what it will fetch: `plumbing missing`, and
-/// `ietsp build --dry-run --json`.
+/// `iets build --dry-run --json`.
 pub struct Missing {
     pub will_build: Vec<String>,
     pub will_substitute: Vec<String>,
@@ -56,7 +56,7 @@ impl Report for Missing {
     }
 }
 
-/// What became of every root: `plumbing build`, and `ietsp build --json`.
+/// What became of every root: `plumbing build`, and `iets build --json`.
 pub struct Outcomes<'a>(pub &'a [crate::build::Outcome]);
 
 impl Report for Outcomes<'_> {
@@ -86,7 +86,7 @@ pub struct Change {
 }
 
 /// Two output closures compared by package name and version, as nvd does:
-/// `plumbing closure-diff`, and `ietsp diff --closure --json`.
+/// `plumbing closure-diff`, and `iets diff --closure --json`.
 pub struct Closure {
     pub a: String,
     pub b: String,
@@ -138,7 +138,7 @@ impl Report for Closure {
 }
 
 /// A hash and what it was taken of: `plumbing fetch`, and
-/// `ietsp prefetch --json`.
+/// `iets prefetch --json`.
 pub struct Fetched {
     pub hash: String,
     /// `"url"` or `"drvPath"`, and what it names.
@@ -152,7 +152,7 @@ impl Report for Fetched {
     }
 }
 
-/// `plumbing drv-diff`, and `ietsp diff --json`. Only the root carries
+/// `plumbing drv-diff`, and `iets diff --json`. Only the root carries
 /// `equal`; an input derivation under it is [`node`]'s shape.
 impl Report for crate::store::drvdiff::Diff {
     fn json(&self) -> Value {

@@ -1,4 +1,4 @@
-//! `ietsp cache dump` (also `cache-dump`): the read set of a tracing-cache entry as text.
+//! `iets cache dump` (also `cache-dump`): the read set of a tracing-cache entry as text.
 
 /// One line per observation of an `entry` file, for debugging misses.
 pub fn cmd_cache_dump(file: &str) -> i32 {

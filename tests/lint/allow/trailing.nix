@@ -1,1 +1,1 @@
-http://example.com # ietsp: allow url-literal
+http://example.com # iets: allow url-literal

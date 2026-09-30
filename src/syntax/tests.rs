@@ -34,7 +34,7 @@ fn str_value(src: &str) -> String {
 fn lang_corpus() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/lang");
     // These two are scope errors that Nix reports from its resolver, not
-    // from the parser; ietsp reports them in `compile`.
+    // from the parser; iets reports them in `compile`.
     let not_parser_errors = [
         "parse-fail-undef-var.nix",
         "parse-fail-regression-20060610.nix",
@@ -328,37 +328,37 @@ fn allow_comments() {
     };
     // own line: the next non-blank, non-comment line; trailing: its own line
     let src =
-        "# ietsp: allow fod\n\n# plain\n  with a; [\n  (with b; x) # ietsp: allow fod, ifd\n]\n";
+        "# iets: allow fod\n\n# plain\n  with a; [\n  (with b; x) # iets: allow fod, ifd\n]\n";
     let (a, notes) = parse_allows(src);
     assert!(notes.is_empty());
     let l = a.lines();
     assert_eq!(l.len(), 2);
     assert_eq!(
         (l[0].start, l[0].end, l[0].mask),
-        (28, 39, bit(LintId::Fod))
+        (27, 38, bit(LintId::Fod))
     );
-    assert_eq!((l[1].start, l[1].end), (40, 77));
+    assert_eq!((l[1].start, l[1].end), (39, 75));
     assert_eq!(l[1].mask, bit(LintId::Fod) | bit(LintId::Ifd));
     assert!(a.covers(30, LintId::Fod));
-    assert!(!a.covers(39, LintId::Fod));
+    assert!(!a.covers(38, LintId::Fod));
     assert!(!a.covers(30, LintId::Ifd));
     assert!(a.covers(45, LintId::Ifd));
     // a comment before the third token of lookahead is noted once
-    let (a, _) = parse_allows("{\n# ietsp: allow fod\nb = with x; y; }");
+    let (a, _) = parse_allows("{\n# iets: allow fod\nb = with x; y; }");
     assert_eq!(a.lines().len(), 1);
-    assert_eq!((a.lines()[0].start, a.lines()[0].end), (21, 37));
+    assert_eq!((a.lines()[0].start, a.lines()[0].end), (20, 36));
     // an own-line comment at the end of the file covers nothing
-    let (a, _) = parse_allows("1\n# ietsp: allow fod\n");
+    let (a, _) = parse_allows("1\n# iets: allow fod\n");
     assert!(a.is_empty());
     // unknown names are notes; the known ones still count
-    let (a, notes) = parse_allows("# ietsp: allow fdo, fod\n1");
+    let (a, notes) = parse_allows("# iets: allow fdo, fod\n1");
     assert_eq!(a.lines()[0].mask, bit(LintId::Fod));
-    assert!(matches!(notes[..], [Note::UnknownAllow { at: 15, .. }]));
-    let (a, notes) = parse_allows("1 # ietsp: allo fod");
+    assert!(matches!(notes[..], [Note::UnknownAllow { at: 14, .. }]));
+    let (a, notes) = parse_allows("1 # iets: allo fod");
     assert!(a.is_empty());
-    assert!(matches!(notes[..], [Note::UnknownAllow { at: 11, .. }]));
+    assert!(matches!(notes[..], [Note::UnknownAllow { at: 10, .. }]));
     // other comments are not parsed
-    let (a, notes) = parse_allows("# ietsp allow fod\n#ietsp: allow fod\n1");
+    let (a, notes) = parse_allows("# iets allow fod\n#iets: allow fod\n1");
     assert!(a.is_empty() && notes.is_empty());
 }
 
@@ -477,7 +477,7 @@ fn differential_strings_against_nix() {
             for ((s, mine), theirs) in accepted.iter().zip(got) {
                 if mine.as_slice() != theirs {
                     mismatches.push(format!(
-                        "{s:?}: ietsp {:?} nix {:?}",
+                        "{s:?}: iets {:?} nix {:?}",
                         String::from_utf8_lossy(mine),
                         String::from_utf8_lossy(theirs)
                     ));
@@ -487,14 +487,14 @@ fn differential_strings_against_nix() {
         None => {
             for (s, _) in &accepted {
                 if nix_eval_raw(s).is_none() {
-                    mismatches.push(format!("{s:?}: ietsp accepts, nix rejects"));
+                    mismatches.push(format!("{s:?}: iets accepts, nix rejects"));
                 }
             }
         }
     }
     for s in rejected.iter().take(150) {
         if nix_eval_raw(s).is_some() {
-            mismatches.push(format!("{s:?}: ietsp rejects, nix accepts"));
+            mismatches.push(format!("{s:?}: iets rejects, nix accepts"));
         }
     }
     assert!(

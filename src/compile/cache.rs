@@ -18,13 +18,13 @@ use crate::eval::{Evaluator, Pos};
 use crate::runtime::{Kind, Word};
 use crate::syntax::symbol::{FxHashMap, Sym};
 
-const MAGIC: &[u8; 8] = b"IETSPIR2";
+const MAGIC: &[u8; 8] = b"IETS_IR2";
 
 pub struct IrCache {
     root: PathBuf,
     /// Sources below this size compile faster than their entry loads.
     pub min_size: usize,
-    /// `IETSP_IR_STATS=1`: one line per file on stderr.
+    /// `IETS_IR_STATS=1`: one line per file on stderr.
     pub stats: bool,
     /// The store is swept at most once per process, on the first write.
     swept: std::sync::atomic::AtomicBool,
@@ -34,10 +34,10 @@ pub struct IrCache {
 }
 
 impl IrCache {
-    /// `--cache-dir DIR`, else `IETSP_CACHE_DIR`, else `$XDG_CACHE_HOME/ietsp`,
-    /// else `~/.cache/ietsp`; the entries live in its `ir/` subdirectory, so
+    /// `--cache-dir DIR`, else `IETS_CACHE_DIR`, else `$XDG_CACHE_HOME/iets`,
+    /// else `~/.cache/iets`; the entries live in its `ir/` subdirectory, so
     /// the directory the user names is never a removal target. `None` when
-    /// that subdirectory is not ietsp's to write in.
+    /// that subdirectory is not iets's to write in.
     pub fn locate(override_dir: Option<&str>, timings: bool) -> Option<IrCache> {
         let session = crate::session::Session::current();
         let set = session.settings();
@@ -126,7 +126,7 @@ impl IrCache {
     }
 
     /// How many entries this run read, the `ir-cache load` lines of
-    /// `IETSP_IR_STATS=1` less the ones that failed to decode.
+    /// `IETS_IR_STATS=1` less the ones that failed to decode.
     pub fn hits(&self) -> u64 {
         self.hits.load(std::sync::atomic::Ordering::Relaxed)
     }
@@ -194,7 +194,7 @@ struct Ser {
 }
 
 /// The entry for `ir`, the lint warnings its compile produced and the
-/// file's `# ietsp: allow` table, or `None` when a constant cannot be named.
+/// file's `# iets: allow` table, or `None` when a constant cannot be named.
 pub fn serialize(
     ev: &Evaluator,
     ir: IrRef,
@@ -1331,12 +1331,12 @@ mod tests {
 
         // the reviewer's case: a constant word of 8, which tag 0 used to
         // hand to the evaluator as a pointer
-        assert!(!loads(b"IETSPIR2\x00\x00\x00\x08\x00\x00"));
+        assert!(!loads(b"IETS_IR2\x00\x00\x00\x08\x00\x00"));
         for w in 0u8..64 {
             // names=0, node tag 0 (a constant), word tag 0, the word, then
             // no warnings and no allow lines
             let b = [
-                b'I', b'E', b'T', b'S', b'P', b'I', b'R', b'2', 0, 0, 0, w, 0, 0,
+                b'I', b'E', b'T', b'S', b'_', b'I', b'R', b'2', 0, 0, 0, w, 0, 0,
             ];
             let ok = loads(&b);
             let imm = Word::imm_from_bits(u64::from(w)).is_some();
@@ -1431,7 +1431,7 @@ mod tests {
     /// one a miss before anything is decoded, and the entry is poisoned.
     #[test]
     fn a_changed_byte_of_a_stored_entry_is_a_miss() {
-        let dir = std::env::temp_dir().join(format!("ietsp-ir-fuzz-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("iets-ir-fuzz-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let cache = IrCache::locate(Some(dir.to_str().expect("utf-8 path")), false).expect("cache");
         let key = "ab".to_string() + &"c".repeat(60);

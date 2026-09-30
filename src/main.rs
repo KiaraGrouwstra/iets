@@ -1,11 +1,11 @@
 use std::process::exit;
 
-use ietsp::cli::{self, help};
+use iets::cli::{self, help};
 
 /// The demand path has this stack whether it runs here or on a fiber.
-const STACK_SIZE: usize = ietsp::parallel::fiber::MAIN_STACK;
+const STACK_SIZE: usize = iets::parallel::fiber::MAIN_STACK;
 
-/// Rust masks SIGPIPE, so a closed stdout (`ietsp eval-jobs | head`) surfaces
+/// Rust masks SIGPIPE, so a closed stdout (`iets eval-jobs | head`) surfaces
 /// as an EPIPE panic. The default disposition makes the process die quietly.
 fn restore_sigpipe() {
     unsafe {
@@ -27,7 +27,7 @@ fn classic_name() -> Option<String> {
 fn on_big_stack(f: impl FnOnce() -> i32 + Send + 'static) -> i32 {
     std::thread::Builder::new()
         .stack_size(STACK_SIZE)
-        .spawn(ietsp::session::bind(f))
+        .spawn(iets::session::bind(f))
         .expect("spawn evaluator thread")
         .join()
         .unwrap_or(1)
@@ -35,18 +35,18 @@ fn on_big_stack(f: impl FnOnce() -> i32 + Send + 'static) -> i32 {
 
 fn main() {
     restore_sigpipe();
-    let session = ietsp::session::Session::new();
+    let session = iets::session::Session::new();
     // a command line says what it has to say on stderr; a library says it
     // to whatever sink its host set, or to none (docs/reference/library.md)
     session.log.write_to_stderr();
     let _entered = session.enter();
     let argv: Vec<String> = std::env::args_os()
         .skip(1)
-        .map(ietsp::argv::encode)
+        .map(iets::argv::encode)
         .collect();
-    // `--ietsp-option` is ours, so it leaves the argv here: a classic fallback
+    // `--iets-option` is ours, so it leaves the argv here: a classic fallback
     // execs the real nix with what is left (docs/reference/settings.md).
-    let (argv, options) = match ietsp::settings::take_options(&argv) {
+    let (argv, options) = match iets::settings::take_options(&argv) {
         Ok(a) => a,
         Err(e) => {
             e.report();
@@ -56,18 +56,18 @@ fn main() {
     // the log format shapes every record, an error's included, so it is read
     // before the first thing that can fail
     if let Some(i) = argv.iter().position(|a| a == "--log-format") {
-        let _ = ietsp::log::set_format(argv.get(i + 1).map_or("", String::as_str));
+        let _ = iets::log::set_format(argv.get(i + 1).map_or("", String::as_str));
     }
     // `version` and `help` read no setting, so a settings file with a
     // mistake in it does not stop them
     if classic_name().is_none() {
         match argv.first().map(String::as_str) {
             Some("--version" | "version") => {
-                cli::render::bytes(concat!(env!("IETSP_VERSION"), "\n").as_bytes());
+                cli::render::bytes(concat!(env!("IETS_VERSION"), "\n").as_bytes());
                 exit(0)
             }
             Some("--help" | "-h" | "help") => {
-                help::set_command("ietsp");
+                help::set_command("iets");
                 help::help(argv.get(1).map(String::as_str))
             }
             _ => {}
@@ -89,7 +89,7 @@ fn main() {
         exit(on_big_stack(move || cli::classic::dispatch(&name, &rest)))
     }
     let mut rest: Vec<String> = argv[1..].to_vec();
-    help::set_command("ietsp");
+    help::set_command("iets");
     let cmd = match cmd.as_str() {
         "cache-dump" => {
             rest.insert(0, "dump".into());

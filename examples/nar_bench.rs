@@ -12,8 +12,8 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::time::Instant;
 
-use ietsp::store::hash::HashAlgo;
-use ietsp::store::nar;
+use iets::store::hash::HashAlgo;
+use iets::store::nar;
 
 fn die(msg: &str) -> ! {
     eprintln!("nar_bench: {msg}");

@@ -2,7 +2,7 @@
 //! derivations back to the attribute and the source position that defined
 //! them. See docs/explanation/provenance.md.
 //!
-//! `IETSP_PROVENANCE=0` turns every rewrite off, so a byte comparison against
+//! `IETS_PROVENANCE=0` turns every rewrite off, so a byte comparison against
 //! the real nix sees the plain store paths.
 
 use std::collections::HashMap;
