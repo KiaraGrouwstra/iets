@@ -621,7 +621,8 @@ fn build(o: &BuildOpts, r: Roots) -> crate::error::Result<i32> {
 /// A URL is a positional this op fetches itself; anything else is an
 /// installable, which `parse_eval_args` reads.
 pub fn is_url(s: &str) -> bool {
-    ["https://", "http://", "file://"]
+    // `file:/abs` is one slash and libcurl reads it, so `file:/` covers all three
+    ["https://", "http://", "file:/"]
         .iter()
         .any(|p| s.starts_with(p))
 }
@@ -715,6 +716,23 @@ fn op_fetch(argv: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    /// libcurl reads `file:/abs`, and a lock file may hold that form.
+    #[test]
+    fn a_file_url_needs_one_slash_not_three() {
+        for u in [
+            "file:/a/b",
+            "file:///a/b",
+            "file://localhost/a/b",
+            "http://x/y",
+            "https://x/y",
+        ] {
+            assert!(super::is_url(u), "{u}");
+        }
+        for s in ["/a/b", "./a", "a/b", "fil:/a"] {
+            assert!(!super::is_url(s), "{s}");
+        }
+    }
+
     #[test]
     fn a_url_is_the_positional_fetch_takes_itself() {
         assert!(super::is_url("file:///tmp/a.tar.gz"));
