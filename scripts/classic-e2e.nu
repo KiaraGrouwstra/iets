@@ -386,6 +386,33 @@ in derivation {
 }
 '# | save $"($d)/dyndrv.nix"
 
+  # Two consumers of one producer that differ only in which dynamic output
+  # they take. `hash_derivation_modulo` drops the children of an input, so
+  # this is the pair that would collide if that mattered: it does not, because
+  # the producer makes both consumers deferred and the placeholder is in the
+  # env the modulo ATerm hashes (docs/reference/divergences.md).
+  r#'let
+  producer = derivation {
+    name = "classic-e2e-h.drv";
+    system = "x86_64-linux";
+    builder = "/bin/sh";
+    args = [ "-c" "echo done > $out" ];
+    __contentAddressed = true;
+    outputHashMode = "text";
+    outputHashAlgo = "sha256";
+  };
+  cons = out: derivation {
+    name = "classic-e2e-h-cons";
+    system = "x86_64-linux";
+    builder = "/bin/sh";
+    args = [ "-c" "true" ];
+    dep = builtins.outputOf producer.outPath out;
+  };
+  a = cons "outA";
+  b = cons "outB";
+in { aDrv = a.drvPath; bDrv = b.drvPath; aOut = a.outPath; bOut = b.outPath; }
+'# | save $"($d)/dyndeferred.nix"
+
   $ok = ($ok | append (cmp-case "instantiate a custom drv"
     (run-both $farm nix-instantiate $"($d)/default.nix")))
   $ok = ($ok | append (cmp-case "drv closure follows the references of a toFile"
@@ -397,6 +424,9 @@ in derivation {
     (run-both $farm nix-instantiate --extra-experimental-features "ca-derivations dynamic-derivations"
       --read-write-mode --eval --strict --json -E
       $"let f = import ($d)/dyndrv.nix; in f.drvPath")))
+  $ok = ($ok | append (cmp-case "two consumers of one dynamic producer stay apart"
+    (run-both $farm nix-instantiate --extra-experimental-features "ca-derivations dynamic-derivations"
+      --read-write-mode --eval --strict --json $"($d)/dyndeferred.nix")))
   $ok = ($ok | append (cmp-case "instantiate --readonly-mode"
     (run-both $farm nix-instantiate --readonly-mode $"($d)/default.nix")))
 

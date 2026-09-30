@@ -173,6 +173,24 @@ ietsp writes nothing. A producer this run made is kept in memory when its
 output is text addressed, which is every dynamic derivation; one that is
 neither is read from `/nix/store` and fails there if it is absent.
 
+That keep buys more than parity. Because ietsp answers from the ATerm it
+holds, `outputOf` works with nothing written at all, and
+`nix-eval-jobs --no-instantiate` over a jobset that uses it succeeds where
+the real one cannot: without the producer's `.drv` in the store it reports
+`path '…-cargo-vendor.drv.drv' is not a valid store path` for every such
+attribute. On repkgs that is 33 of 199 jobs.
+
+`hash_derivation_modulo` drops the `children` of each input, so a
+dependency on the output of a dynamic derivation is not in the modulo
+hash. That is what derivations.cc does and ietsp mirrors it. It is not
+observable: the producer is a key of `input_drvs` whatever its children
+are, its own modulo kind is `Deferred` because a text-addressed output has
+no path, and that makes every consumer `Deferred` too, so no output path
+is computed from the hash in the first place. Two consumers that differ
+only in which dynamic output they take also differ in the `env` that
+carries the placeholder, which the modulo ATerm includes. Both evaluators
+give the same two drvPaths and the same two placeholders for that pair.
+
 `builtins.getContext` of a string whose context is a dynamic derivation
 output is an error. Nix resolves the derived path first, which means
 building the producer, and evaluation does not build.
