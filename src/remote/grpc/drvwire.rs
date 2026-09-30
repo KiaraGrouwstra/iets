@@ -240,8 +240,8 @@ pub fn basic_input_srcs(
     output_of: &dyn Fn(&StorePath, &str) -> Option<StorePath>,
 ) -> Result<std::collections::BTreeSet<StorePath>> {
     let mut srcs = drv.input_srcs.clone();
-    for (dep, outputs) in &drv.input_drvs {
-        for o in outputs {
+    for (dep, node) in &drv.input_drvs {
+        for o in &node.outputs {
             let Some(p) = output_of(dep, o) else {
                 return Err(Error::Plan(format!(
                     "'{drv_path}': input '{dep}!{o}' has no statically known path; \

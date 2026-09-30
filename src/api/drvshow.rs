@@ -186,7 +186,7 @@ fn inputs(drv: &Derivation) -> Value {
         "drvs".into(),
         Value::Object(
             (drv.input_drvs.iter())
-                .map(|(p, outs)| (p.base_name().to_string(), input_drv(outs)))
+                .map(|(p, node)| (p.base_name().to_string(), input_drv(&node.outputs)))
                 .collect(),
         ),
     );

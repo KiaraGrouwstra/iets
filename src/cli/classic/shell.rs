@@ -377,8 +377,13 @@ fn realise(s: &Shell, transport: &Transport, options: &Options, r: Ready, cores:
         .drv
         .input_drvs
         .iter()
-        .filter(|(_, outs)| !outs.is_empty())
-        .map(|(p, outs)| format!("{p}!{}", outs.iter().cloned().collect::<Vec<_>>().join(",")))
+        .filter(|(_, node)| !node.outputs.is_empty())
+        .map(|(p, node)| {
+            format!(
+                "{p}!{}",
+                node.outputs.iter().cloned().collect::<Vec<_>>().join(",")
+            )
+        })
         .collect();
     wanted.extend(r.drv.input_srcs.iter().map(StorePath::to_string));
     if let Bash::Drv(p) = &r.bash {
@@ -456,8 +461,8 @@ fn keep_inputs(
     }
     let key: Vec<&[u8]> = r.key.iter().map(|p| p.as_slice()).collect();
     let mut paths: BTreeSet<String> = r.drv.input_srcs.iter().map(StorePath::to_string).collect();
-    for (drv, outputs) in &r.drv.input_drvs {
-        if outputs.is_empty() {
+    for (drv, node) in &r.drv.input_drvs {
+        if node.outputs.is_empty() {
             continue;
         }
         let Ok(map) = w
@@ -466,7 +471,11 @@ fn keep_inputs(
         else {
             return;
         };
-        paths.extend(outputs.iter().filter_map(|o| map.get(o).cloned().flatten()));
+        paths.extend(
+            node.outputs
+                .iter()
+                .filter_map(|o| map.get(o).cloned().flatten()),
+        );
     }
     // `shell` is `<output>/bin/bash` when nixpkgs built the bash
     if matches!(r.bash, Bash::Drv(_))

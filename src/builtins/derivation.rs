@@ -11,8 +11,8 @@ use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
 use crate::print::{json_escape, lexicographic_order, print_json};
 use crate::runtime::*;
 use crate::store::drv::{
-    Derivation, DerivationOutput, DrvError, DrvHashCache, finalize_input_addressed_outputs,
-    hash_derivation_modulo, load_derivation_from_store,
+    Derivation, DerivationOutput, DrvError, DrvHashCache, InputNode,
+    finalize_input_addressed_outputs, hash_derivation_modulo, load_derivation_from_store,
 };
 use crate::store::hash::{Hash, HashAlgo, hash_bytes};
 use crate::store::path::{
@@ -508,6 +508,7 @@ fn derivation_strict_internal(
                 drv.input_drvs
                     .entry(parse_store_path(d, pos)?)
                     .or_default()
+                    .outputs
                     .insert(utf8(output, pos)?);
             }
             Ctx::DrvDeep(d) => {
@@ -515,7 +516,7 @@ fn derivation_strict_internal(
                 for (j, outputs) in drv_closure(ev, &d, pos)? {
                     drv.input_srcs.insert(j.clone());
                     if let Some(outputs) = outputs {
-                        drv.input_drvs.insert(j, outputs);
+                        drv.input_drvs.insert(j, InputNode::of(outputs));
                     }
                 }
             }

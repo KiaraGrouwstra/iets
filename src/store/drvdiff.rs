@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use super::drv::{DerivationOutput, DrvError, DrvLoader};
+use super::drv::{DerivationOutput, DrvError, DrvLoader, InputNode};
 use super::path::StorePath;
 
 /// One local difference. `what` names the part, `key` the entry inside it
@@ -104,7 +104,7 @@ fn walk(
     let (pairs, added, removed) = pair_inputs(&a.input_drvs, &b.input_drvs);
     one_sided(v, "input drv", removed.iter(), true);
     one_sided(v, "input drv", added.iter(), false);
-    let want = |s: &BTreeSet<String>| Some(s.iter().cloned().collect::<Vec<_>>().join(","));
+    let want = |n: &InputNode| Some(n.outputs.iter().cloned().collect::<Vec<_>>().join(","));
     for (x, y) in pairs {
         let mut c = match depth {
             0 => node(&x, &y, Some("depth")),
@@ -184,8 +184,8 @@ fn fixed(o: &DerivationOutput) -> Option<String> {
 /// The input derivations that are not on both sides, paired by derivation
 /// name; the rest are added or removed.
 fn pair_inputs(
-    a: &BTreeMap<StorePath, BTreeSet<String>>,
-    b: &BTreeMap<StorePath, BTreeSet<String>>,
+    a: &BTreeMap<StorePath, InputNode>,
+    b: &BTreeMap<StorePath, InputNode>,
 ) -> (Vec<(StorePath, StorePath)>, Vec<StorePath>, Vec<StorePath>) {
     let mut pairs: Vec<(StorePath, StorePath)> = Vec::new();
     let mut by_name: [BTreeMap<&str, Vec<&StorePath>>; 2] = Default::default();
@@ -335,7 +335,7 @@ mod tests {
             s.add(drv("dep", &["-c", "a"], &[])),
             s.add(drv("dep", &["-c", "b"], &[])),
         );
-        let out = BTreeSet::from(["out".to_string()]);
+        let out = InputNode::of(BTreeSet::from(["out".to_string()]));
         let (mut ta, mut tb) = (drv("top", &[], &[]), drv("top", &[], &[]));
         ta.input_drvs.insert(pa, out.clone());
         tb.input_drvs.insert(pb, out);
@@ -355,7 +355,7 @@ mod tests {
     #[test]
     fn the_depth_limit_names_the_input_without_walking_it() {
         let mut s = Store::default();
-        let out = BTreeSet::from(["out".to_string()]);
+        let out = InputNode::of(BTreeSet::from(["out".to_string()]));
         let (mut ta, mut tb) = (drv("top", &[], &[]), drv("top", &[], &[]));
         ta.input_drvs
             .insert(s.add(drv("dep", &["a"], &[])), out.clone());
@@ -381,7 +381,7 @@ mod tests {
         b.input_srcs
             .insert(src("11111111111111111111111111111111-b.txt"));
         b.input_drvs
-            .insert(dep, BTreeSet::from(["out".to_string()]));
+            .insert(dep, InputNode::of(BTreeSet::from(["out".to_string()])));
         let fix = |bytes: &[u8]| DerivationOutput::Fixed {
             method: IngestionMethod::Flat,
             hash: hash_bytes(HashAlgo::Sha256, bytes),

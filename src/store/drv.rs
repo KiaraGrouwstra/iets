@@ -48,13 +48,37 @@ pub enum DerivationOutput {
 /// The env var that carries structured attrs (parsed-derivations.hh:StructuredAttrs::envVarName).
 pub const STRUCTURED_ATTRS_ENV: &str = "__json";
 
+/// Mirrors derived-path-map.hh:DerivedPathMap<StringSet>::ChildNode, the value of
+/// `input_drvs`. `outputs` are the outputs of that `.drv` this derivation uses.
+/// `children` names the outputs that are themselves `.drv`s, and what is used of
+/// them: a dependency on the output of a dynamic derivation. It is empty for every
+/// derivation that has none, and an empty one writes the traditional `Derive(` ATerm.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct InputNode {
+    pub outputs: BTreeSet<String>,
+    pub children: BTreeMap<String, InputNode>,
+}
+
+impl InputNode {
+    pub fn of(outputs: BTreeSet<String>) -> InputNode {
+        InputNode {
+            outputs,
+            children: BTreeMap::new(),
+        }
+    }
+
+    fn is_dynamic(&self) -> bool {
+        !self.children.is_empty()
+    }
+}
+
 /// Mirrors derivations.hh:Derivation. `env` must be sorted by key, bytewise, without duplicates.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Derivation {
     pub name: String,
     pub outputs: BTreeMap<String, DerivationOutput>,
     pub input_srcs: BTreeSet<StorePath>,
-    pub input_drvs: BTreeMap<StorePath, BTreeSet<String>>,
+    pub input_drvs: BTreeMap<StorePath, InputNode>,
     pub platform: String,
     pub builder: String,
     pub args: Vec<String>,
@@ -196,7 +220,7 @@ impl Derivation {
     pub fn unparse_with(
         &self,
         mask_outputs: bool,
-        actual_inputs: Option<&BTreeMap<String, BTreeSet<String>>>,
+        actual_inputs: Option<&BTreeMap<String, InputNode>>,
     ) -> Result<String, DrvError> {
         let mut s = String::with_capacity(4096);
         self.unparse_into(&mut s, mask_outputs, actual_inputs)?;
@@ -218,9 +242,15 @@ impl Derivation {
         &self,
         s: &mut String,
         mask_outputs: bool,
-        actual_inputs: Option<&BTreeMap<String, BTreeSet<String>>>,
+        actual_inputs: Option<&BTreeMap<String, InputNode>>,
     ) -> Result<(), DrvError> {
-        s.push_str("Derive([");
+        // derivations.cc:hasDynamicDrvDep, over this derivation's own inputs and
+        // never over `actual_inputs`, whose nodes the hash-modulo form flattens
+        if self.input_drvs.values().any(InputNode::is_dynamic) {
+            s.push_str("DrvWithVersion(\"xp-dyn-drv\",[");
+        } else {
+            s.push_str("Derive([");
+        }
         for (i, (name, out)) in self.outputs.iter().enumerate() {
             if i > 0 {
                 s.push(',');
@@ -263,26 +293,24 @@ impl Derivation {
         s.push_str("],[");
         match actual_inputs {
             Some(inputs) => {
-                for (i, (hash_hex, outputs)) in inputs.iter().enumerate() {
+                for (i, (hash_hex, node)) in inputs.iter().enumerate() {
                     if i > 0 {
                         s.push(',');
                     }
                     s.push('(');
                     print_unquoted(s, hash_hex);
-                    s.push(',');
-                    print_list(s, outputs.iter().map(String::as_str), false);
+                    unparse_node(s, node);
                     s.push(')');
                 }
             }
             None => {
-                for (i, (drv_path, outputs)) in self.input_drvs.iter().enumerate() {
+                for (i, (drv_path, node)) in self.input_drvs.iter().enumerate() {
                     if i > 0 {
                         s.push(',');
                     }
                     s.push('(');
                     print_store_path(s, drv_path);
-                    s.push(',');
-                    print_list(s, outputs.iter().map(String::as_str), false);
+                    unparse_node(s, node);
                     s.push(')');
                 }
             }
@@ -357,7 +385,8 @@ impl Derivation {
                 .all(|o| matches!(o, DerivationOutput::Fixed { .. }))
     }
 
-    /// Mirrors derivations.cc:parseDerivation for the traditional `Derive(...)` form.
+    /// Mirrors derivations.cc:parseDerivation, both the traditional `Derive(...)`
+    /// form and `DrvWithVersion("xp-dyn-drv",...)`.
     pub fn parse(s: &str, name: &str) -> Result<Derivation, DrvError> {
         let mut p = Parser {
             s: s.as_bytes(),
@@ -367,7 +396,20 @@ impl Derivation {
             name: name.to_string(),
             ..Default::default()
         };
-        p.expect(b"Derive([")?;
+        let dynamic = if s.starts_with("DrvWithVersion(") {
+            p.expect(b"DrvWithVersion(")?;
+            let v = p.string()?;
+            if v != "xp-dyn-drv" {
+                return Err(DrvError(format!(
+                    "derivation '{name}', ATerm format version '{v}' is not supported"
+                )));
+            }
+            p.expect(b",[")?;
+            true
+        } else {
+            p.expect(b"Derive([")?;
+            false
+        };
         while !p.end_of_list()? {
             p.expect(b"(")?;
             let id = p.string()?;
@@ -385,15 +427,9 @@ impl Derivation {
         while !p.end_of_list()? {
             p.expect(b"(")?;
             let drv_path = p.path()?;
-            p.expect(b",")?;
-            if p.peek() == Some(b'(') {
-                return Err(DrvError(
-                    "dynamic derivation inputs are not supported".into(),
-                ));
-            }
-            let outputs = p.string_list()?;
+            let node = p.input_node(dynamic)?;
             p.expect(b")")?;
-            drv.input_drvs.insert(StorePath::parse(&drv_path)?, outputs);
+            drv.input_drvs.insert(StorePath::parse(&drv_path)?, node);
         }
         p.expect(b",")?;
         for src in p.string_list()? {
@@ -611,6 +647,54 @@ impl Parser<'_> {
         }
         Ok(res)
     }
+
+    /// Mirrors derivations.cc:parseDerivedPathMapNode. The leading comma is the
+    /// one after the `.drv` path or the output name. An `xp-dyn-drv` derivation
+    /// may still write the flat form for an input that has no dynamic output.
+    fn input_node(&mut self, dynamic: bool) -> Result<InputNode, DrvError> {
+        self.expect(b",")?;
+        if !dynamic || self.peek() == Some(b'[') {
+            return Ok(InputNode::of(self.string_list()?));
+        }
+        if self.peek() != Some(b'(') {
+            return Err(DrvError("invalid inputDrvs entry in derivation".into()));
+        }
+        self.expect(b"(")?;
+        let outputs = self.string_list()?;
+        self.expect(b",[")?;
+        let mut children = BTreeMap::new();
+        while !self.end_of_list()? {
+            self.expect(b"(")?;
+            let name = self.string()?;
+            let child = self.input_node(dynamic)?;
+            self.expect(b")")?;
+            children.insert(name, child);
+        }
+        self.expect(b")")?;
+        Ok(InputNode { outputs, children })
+    }
+}
+
+/// Mirrors derivations.cc:unparseDerivedPathMapNode, including the comma it writes.
+fn unparse_node(s: &mut String, node: &InputNode) {
+    s.push(',');
+    if node.children.is_empty() {
+        print_list(s, node.outputs.iter().map(String::as_str), false);
+        return;
+    }
+    s.push('(');
+    print_list(s, node.outputs.iter().map(String::as_str), false);
+    s.push_str(",[");
+    for (i, (name, child)) in node.children.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push('(');
+        print_unquoted(s, name);
+        unparse_node(s, child);
+        s.push(')');
+    }
+    s.push_str("])");
 }
 
 /// Mirrors derivations.cc:hashDerivationModulo. `loader` reads .drv files that are not cached.
@@ -658,14 +742,16 @@ pub fn hash_derivation_modulo(
         DrvHashKind::Regular
     };
 
-    let mut inputs2: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    // nix drops `children` here: only the direct output names of each input go
+    // through the modulo hash, so the nodes of `inputs2` are always flat
+    let mut inputs2: BTreeMap<String, InputNode> = BTreeMap::new();
     let mut hex = String::with_capacity(128);
-    for (drv_path, outputs) in &drv.input_drvs {
+    for (drv_path, node) in &drv.input_drvs {
         let res = path_derivation_modulo(drv_path, cache, loader)?;
         if res.kind == DrvHashKind::Deferred {
             kind = DrvHashKind::Deferred;
         }
-        for output in outputs {
+        for output in &node.outputs {
             let h = res.hashes.get(output).ok_or_else(|| {
                 DrvError(format!(
                     "no hash for output '{output}' of derivation '{}'",
@@ -676,10 +762,11 @@ pub fn hash_derivation_modulo(
             h.write_string_with(&mut hex, HashFormat::Base16, false);
             // the same modulo hash covers every output of one input
             match inputs2.get_mut(hex.as_str()) {
-                Some(v) => v.insert(output.clone()),
+                Some(v) => v.outputs.insert(output.clone()),
                 None => inputs2
                     .entry(hex.clone())
                     .or_default()
+                    .outputs
                     .insert(output.clone()),
             };
         }
@@ -912,6 +999,58 @@ mod tests {
         assert!(n >= 20, "recomputed only {n} derivations");
     }
 
+    /// derivations.cc:unparseDerivedPathMapNode and parseDerivedPathMapNode. An
+    /// input with children puts the whole derivation in the versioned form, and
+    /// one without keeps the flat node even there.
+    #[test]
+    fn a_dynamic_input_writes_the_versioned_aterm_and_parses_back() {
+        let dep = StorePath::parse("/nix/store/00000000000000000000000000000000-dep.drv").unwrap();
+        let plain =
+            StorePath::parse("/nix/store/11111111111111111111111111111111-plain.drv").unwrap();
+        let mut drv = simple("dyn", &["out"]);
+        drv.input_drvs
+            .insert(plain, InputNode::of(BTreeSet::from(["out".to_string()])));
+        drv.input_drvs.insert(
+            dep,
+            InputNode {
+                outputs: BTreeSet::from(["out".to_string()]),
+                children: BTreeMap::from([(
+                    "out".to_string(),
+                    InputNode {
+                        outputs: BTreeSet::from(["out".to_string()]),
+                        children: BTreeMap::from([(
+                            "out".to_string(),
+                            InputNode::of(BTreeSet::from(["out".to_string()])),
+                        )]),
+                    },
+                )]),
+            },
+        );
+        let aterm = drv.unparse().unwrap();
+        assert!(
+            aterm.starts_with("DrvWithVersion(\"xp-dyn-drv\",["),
+            "{aterm}"
+        );
+        assert!(
+            aterm.contains(
+                "(\"/nix/store/00000000000000000000000000000000-dep.drv\",\
+                 ([\"out\"],[(\"out\",([\"out\"],[(\"out\",[\"out\"])]))]))"
+            ),
+            "{aterm}"
+        );
+        assert!(
+            aterm.contains("(\"/nix/store/11111111111111111111111111111111-plain.drv\",[\"out\"])"),
+            "{aterm}"
+        );
+        assert_eq!(Derivation::parse(&aterm, "dyn").unwrap(), drv);
+
+        // without children the traditional form comes back
+        drv.input_drvs.retain(|p, _| p.name() == "plain.drv");
+        let flat = drv.unparse().unwrap();
+        assert!(flat.starts_with("Derive(["), "{flat}");
+        assert_eq!(Derivation::parse(&flat, "dyn").unwrap(), drv);
+    }
+
     fn simple(name: &str, outputs: &[&str]) -> Derivation {
         let mut drv = Derivation {
             name: name.into(),
@@ -1026,9 +1165,11 @@ mod tests {
             "/nix/store/pzjq1hdf1x9qs1dxcqiba82dyl1274aa-dep".into(),
         );
         drv.input_drvs
-            .insert(ia, ["dev".to_string()].into_iter().collect());
-        drv.input_drvs
-            .insert(dep.clone(), ["out".to_string()].into_iter().collect());
+            .insert(ia, InputNode::of(["dev".to_string()].into_iter().collect()));
+        drv.input_drvs.insert(
+            dep.clone(),
+            InputNode::of(["out".to_string()].into_iter().collect()),
+        );
         let mut cache = DrvHashCache::new();
         finalize_input_addressed_outputs(&mut drv, &mut cache, &mut fixture_loader).unwrap();
         assert_eq!(

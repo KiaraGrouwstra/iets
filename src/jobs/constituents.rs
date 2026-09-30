@@ -15,7 +15,8 @@ use crate::remote::plan::Object;
 use crate::remote::worker::Connection;
 use crate::remote::worker::wire::write_object;
 use crate::store::drv::{
-    DerivationOutput, DrvHashCache, finalize_input_addressed_outputs, load_derivation_from_store,
+    DerivationOutput, DrvHashCache, InputNode, finalize_input_addressed_outputs,
+    load_derivation_from_store,
 };
 use crate::store::path::StorePath;
 
@@ -310,7 +311,8 @@ pub fn rewrite(
                         Error::Store(format!("derivation '{child}' has no outputs"))
                     })?;
                 job.constituents.push(child.clone());
-                drv.input_drvs.insert(child, BTreeSet::from([first]));
+                drv.input_drvs
+                    .insert(child, InputNode::of(BTreeSet::from([first])));
             }
             // Deferred outputs make fillInOutputPaths recompute them with
             // the new inputDrvs.

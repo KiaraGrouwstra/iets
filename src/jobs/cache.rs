@@ -220,7 +220,7 @@ impl Resolver {
         // the closure.
         if !outputs.complete {
             for (p, names) in &drv.input_drvs {
-                self.visit_drv(t, p, names)?;
+                self.visit_drv(t, p, &names.outputs)?;
             }
             return Ok(());
         }
@@ -237,7 +237,7 @@ impl Resolver {
             return Ok(());
         }
         for (p, names) in &drv.input_drvs {
-            self.visit_drv(t, p, names)?;
+            self.visit_drv(t, p, &names.outputs)?;
         }
         t.needed_builds.push(drv_path.clone());
         Ok(())

@@ -755,7 +755,7 @@ fn job_inner(ev: &mut Evaluator, a: &'static AttrsObj, path: &[String]) -> EvalR
                 }
                 v.extend(line::json_str(&p.to_string()));
                 v.push(b':');
-                v.extend(line::json_str_list(names.iter()));
+                v.extend(line::json_str_list(names.outputs.iter()));
             }
             v.push(b'}');
             extra.insert("inputDrvs".into(), v);
