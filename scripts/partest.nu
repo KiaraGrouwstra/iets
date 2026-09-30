@@ -29,20 +29,28 @@ def report [name: string, a: record, b: record, what: string]: nothing -> nothin
 def run-case [ietsp: string, counts: list<int>, c: record, with_nix: bool]: nothing -> bool {
   let base_flags = (if $c.strict { [--strict] } else { [] } | append ($c.flags? | default []))
   let runs = ($counts | each {|w|
-    # a `.drv` a helper wrote is an effect the program did not ask for, so
-    # the file count is part of the outcome
-    let dir = (if ($c.dump? | default false) { mktemp -d --tmpdir partest.drv.XXXXXX } else { null })
+    # `--dump-drvs` writes every derivation the run made, so the directory
+    # must hold at least the ones the program demanded. It may hold more: a
+    # helper that made one has made it, and which helper ran is the
+    # scheduler's business, so the count is not part of the outcome.
+    let dir = (if ($c.drvs? | default null) == null { null } else { mktemp -d --tmpdir partest.drv.XXXXXX })
     let flags = (if $dir == null { $base_flags } else { $base_flags | append [--dump-drvs $dir] })
     let o = (outcome (^$ietsp eval ...$flags --workers $w -E $c.expr | complete))
-    let o = (if $dir == null { $o } else { $o | insert drvs (ls $dir | length) })
+    let drvs = (if $dir == null { null } else { ls $dir | length })
     if $dir != null { rm -rf $dir }
-    { w: $w, o: $o }
+    { w: $w, o: $o, drvs: $drvs }
   })
   let base = ($runs | first)
   mut ok = true
   for r in ($runs | skip 1) {
     if $r.o != $base.o {
       report $"($c.name) w($r.w)" $base.o $r.o $"1 vs ($r.w) workers"
+      $ok = false
+    }
+  }
+  for r in $runs {
+    if $r.drvs != null and $r.drvs < $c.drvs {
+      report $"($c.name) w($r.w)" {drvs: $c.drvs} {drvs: $r.drvs} "derivations missing from --dump-drvs"
       $ok = false
     }
   }
@@ -117,16 +125,18 @@ in builtins.foldl' (a: b: a + builtins.foldl' (x: y: x + y) 0 b) 0 rows'#]
     # speculation instead of starting it again from every task.
     [failing-shared true true $"let ($slow) bad = builtins.seq \(slow 100000\) \(throw \"bad\"\); l = builtins.genList \(i: bad + i\) 20000; in builtins.foldl' \(a: b: a + b\) 0 l"]
   ]
-  # Effects of work the program never asks for: a lint finding and a
-  # dumped .drv must follow demand, not the scheduler.
+  # A lint finding is work the program never asked for, so it follows demand
+  # and the two `lint-*` cases hold it to that. A dumped `.drv` does not:
+  # `drvs` is how many the program demands, and the directory must hold at
+  # least those at every worker count, whichever fiber made them.
   let effect_cases = [
-    [name strict nix flags dump expr];
-    [lint-speculated true false [--lint eq-type-mismatch=warn] false
+    [name strict nix flags drvs expr];
+    [lint-speculated true false [--lint eq-type-mismatch=warn] null
       $"let ($slow) in builtins.any \(x: x\) [ \(slow 3000000 > 0\) \(1 == \"a\"\) \(2 == \"b\"\) \(3 == \"c\"\) \(4 == \"d\"\) ]"]
-    [lint-demanded true false [--lint eq-type-mismatch=warn] false
+    [lint-demanded true false [--lint eq-type-mismatch=warn] null
       $"let ($slow) in builtins.all \(x: x == false\) [ \(slow 2000000 > 0 && false\) \(1 == \"a\"\) \(2 == \"b\"\) \(3 == \"c\"\) \(4 == \"d\"\) ]"]
-    [drv-speculated true false [] true $"($stops) in builtins.elem 1 [ \(slow 3000000 * 0 + 1\) \(builtins.stringLength \(d 1\)\) \(builtins.stringLength \(d 2\)\) \(builtins.stringLength \(d 3\)\) ]"]
-    [drv-demanded true false [] true $"($stops) in map \(i: builtins.stringLength \(d i\)\) [ 1 2 3 4 5 6 7 8 ]"]
+    [drv-speculated true false [] 0 $"($stops) in builtins.elem 1 [ \(slow 3000000 * 0 + 1\) \(builtins.stringLength \(d 1\)\) \(builtins.stringLength \(d 2\)\) \(builtins.stringLength \(d 3\)\) ]"]
+    [drv-demanded true false [] 8 $"($stops) in map \(i: builtins.stringLength \(d i\)\) [ 1 2 3 4 5 6 7 8 ]"]
   ]
   # Every route by which one thunk's word reaches a second cell. `pre`
   # binds the shape, `a` and `b` build two cells from the one thunk `t`
@@ -193,7 +203,7 @@ in builtins.foldl' (a: b: a + builtins.foldl' (x: y: x + y) 0 b) 0 rows'#]
       strict: true,
       nix: false,
       flags: [],
-      dump: false,
+      drvs: null,
       expr: $"let ($slow) t = \(x: y: x\) 1; ($r.pre) A = ($r.a); B = ($r.b); in builtins.seq \(builtins.any \(x: false\) A\) \(builtins.seq \(slow 3000000\) \(A == B\)\)",
     }
   } | append {
@@ -201,10 +211,10 @@ in builtins.foldl' (a: b: a + builtins.foldl' (x: y: x + y) 0 b) 0 rows'#]
     strict: true,
     nix: false,
     flags: [],
-    dump: false,
+    drvs: null,
     expr: $"let ($slow) t = \(x: y: x\) 1; ($stress) A = ($stress_a); B = ($stress_a); in builtins.seq \(builtins.any \(x: false\) A\) \(builtins.seq \(slow 3000000\) \(A == B\)\)",
   })
-  let cases = ($cases | each {|c| $c | insert flags [] | insert dump false } | append $effect_cases | append $route_cases)
+  let cases = ($cases | each {|c| $c | insert flags [] | insert drvs null } | append $effect_cases | append $route_cases)
   # The sandbox this runs in for `nix flake check` has no nix at all, so
   # the comparison against the reference is what a run by hand adds.
   let with_nix = ((which nix-instantiate | length) > 0)
