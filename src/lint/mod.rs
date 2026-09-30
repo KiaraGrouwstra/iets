@@ -668,12 +668,20 @@ fn level_char(l: Level) -> char {
 }
 
 /// The nearest `ietsp.toml` in `start` or an ancestor.
+/// The nearest project `ietsp.toml` at or above `start`, stopping at the
+/// project root. The walk must not leave the project: a world-writable
+/// `/tmp/ietsp.toml` would otherwise set a lint level for every evaluation
+/// below it, and the file is untrusted input (`settings::check_project`).
+/// A directory that holds `.git` or `flake.nix` is the root.
 pub fn find_config_file(start: &Path) -> Option<PathBuf> {
     let mut dir = start.to_path_buf();
     loop {
         let f = dir.join("ietsp.toml");
         if f.is_file() {
             return Some(f);
+        }
+        if dir.join(".git").exists() || dir.join("flake.nix").is_file() {
+            return None;
         }
         if !dir.pop() {
             return None;
@@ -1125,6 +1133,23 @@ impl Evaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// A `/tmp/ietsp.toml` must not set a lint level for a project below it:
+    /// the walk stops at the root, and the file is untrusted input.
+    #[test]
+    fn the_project_file_walk_stops_at_the_project_root() {
+        let d = std::env::temp_dir().join(format!("ietsp-walk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let deep = d.join("repo/sub");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(d.join("ietsp.toml"), "[lint]\n").unwrap();
+        assert_eq!(find_config_file(&deep), Some(d.join("ietsp.toml")));
+        std::fs::create_dir_all(d.join("repo/.git")).unwrap();
+        assert_eq!(find_config_file(&deep), None, "the walk left the project");
+        let own = d.join("repo/ietsp.toml");
+        std::fs::write(&own, "[lint]\n").unwrap();
+        assert_eq!(find_config_file(&deep), Some(own));
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn names_are_unique_kebab_case() {

@@ -193,7 +193,11 @@ spelling.
 ## The project file, and why it holds only `[lint]`
 
 A second `ietsp.toml` is the project's: the nearest one found by walking up
-from the entry file or the flake directory (`docs/reference/lints.md`). The
+from the entry file or the flake directory (`docs/reference/lints.md`). **The
+walk stops at the project root**, the first directory that holds a `.git` or a
+`flake.nix`, and it looks in that directory before it stops. It must not leave
+the project: a `/tmp/ietsp.toml`, which every user may write, would otherwise
+set a lint level for every evaluation below it. The
 user file is trusted, because whoever can write it already controls the
 account. The project file is not: it arrives with
 whatever repository was cloned, and running `ietsp` in a clone must not be
