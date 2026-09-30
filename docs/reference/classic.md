@@ -582,6 +582,16 @@ dev shell after `cargo build --release`. It refuses to run anywhere else: on a
 host that installs the farm, the `nix` it would compare against is ietsp, so it
 aborts with the resolved path instead of comparing ietsp with itself.
 
+**A comparison by hand needs the same care, and the scripts cannot help you
+there.** On a host that installs the farm, every classic name in the system
+path is ietsp: `nix`, `nix-instantiate`, `nix-build`, `nix-shell` and
+`nix-eval-jobs`. A reference run that finds its binary through `PATH`
+therefore compares ietsp with ietsp and says the two agree, or blames the
+reference for ietsp's own behaviour. Name the store path of the reference
+instead, and check it: `readlink -f $(command -v nix-eval-jobs)` must not end
+in an `ietsp` output. `scripts/lib.nu`'s `require-real-nix` does exactly that
+check for the suites; it cannot do it for a command you type.
+
 The shell cases compare an `env` dump, which is only comparable without the
 variables that legitimately differ: `NIX_BUILD_TOP`, the `TMP*` family,
 `NIX_ATTRS_*_FILE`, `__*`, `SHLVL`, `_`, `PWD`, `OLDPWD` and `PS1`. The rest is
