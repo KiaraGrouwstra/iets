@@ -233,6 +233,7 @@ fn render(m: IngestionMethod) -> &'static str {
     match m {
         IngestionMethod::Flat => "flat",
         IngestionMethod::Recursive => "nar",
+        IngestionMethod::Text => "text",
     }
 }
 

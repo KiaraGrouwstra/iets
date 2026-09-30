@@ -53,7 +53,9 @@ pub fn unhashed_fetch(ev: &mut Evaluator, builtin: &str, arg: Word, pos: Pos) ->
 /// `import` of a string whose context names a derivation.
 pub fn ifd(ev: &mut Evaluator, ctx: &[Ctx], pos: Pos) -> EvalResult<()> {
     let drv = ctx.iter().find_map(|c| match c {
-        Ctx::DrvDeep(d) | Ctx::Built { drv: d, .. } => Some(*d),
+        Ctx::DrvDeep(d) => Some(*d),
+        // the `.drv` at the bottom of the chain is the one to build first
+        Ctx::Built { drv: d, .. } => Some(crate::runtime::split_built(d).1),
         Ctx::Opaque(_) | Ctx::Impure(_) => None,
     });
     let Some(drv) = drv else {

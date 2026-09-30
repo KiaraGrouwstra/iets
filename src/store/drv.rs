@@ -529,16 +529,16 @@ fn parse_output(path: &str, hash_algo: &str, hash: &str) -> Result<DerivationOut
         }
         return Ok(DerivationOutput::InputAddressed(StorePath::parse(path)?));
     }
-    let (method, algo_name) = match hash_algo.strip_prefix("r:") {
-        Some(rest) => (IngestionMethod::Recursive, rest),
-        None => {
-            if hash_algo.starts_with("git:") || hash_algo.starts_with("text:") {
-                return Err(DrvError(format!(
-                    "unsupported output hash method '{hash_algo}'"
-                )));
-            }
-            (IngestionMethod::Flat, hash_algo)
-        }
+    let (method, algo_name) = if let Some(rest) = hash_algo.strip_prefix("r:") {
+        (IngestionMethod::Recursive, rest)
+    } else if let Some(rest) = hash_algo.strip_prefix("text:") {
+        (IngestionMethod::Text, rest)
+    } else if hash_algo.starts_with("git:") {
+        return Err(DrvError(format!(
+            "unsupported output hash method '{hash_algo}'"
+        )));
+    } else {
+        (IngestionMethod::Flat, hash_algo)
     };
     let algo = HashAlgo::parse(algo_name)
         .ok_or_else(|| DrvError(format!("unknown hash algorithm '{algo_name}'")))?;

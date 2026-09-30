@@ -213,22 +213,28 @@ pub fn make_output_path(
 pub enum IngestionMethod {
     Flat,
     Recursive,
+    /// `outputHashMode = "text"`: the output is addressed as `.drv` files and
+    /// `builtins.toFile` are. A derivation whose output is itself a `.drv`
+    /// needs it, so it is the producer half of a dynamic derivation.
+    Text,
 }
 
 impl IngestionMethod {
-    /// Mirrors content-address.cc:makeFileIngestionPrefix.
+    /// Mirrors content-address.cc:ContentAddressMethod::renderPrefix.
     pub fn prefix(self) -> &'static str {
         match self {
             IngestionMethod::Flat => "",
             IngestionMethod::Recursive => "r:",
+            IngestionMethod::Text => "text:",
         }
     }
 
-    /// Mirrors primops.cc:derivationStrict `handleHashMode` ("flat", "recursive", "nar").
+    /// Mirrors primops.cc:derivationStrict `handleHashMode` ("flat", "recursive", "nar", "text").
     pub fn parse(s: &str) -> Option<IngestionMethod> {
         match s {
             "flat" => Some(IngestionMethod::Flat),
             "recursive" | "nar" => Some(IngestionMethod::Recursive),
+            "text" => Some(IngestionMethod::Text),
             _ => None,
         }
     }
@@ -260,6 +266,15 @@ pub fn make_fixed_output_path(
     name: &str,
     references: &BTreeSet<StorePath>,
 ) -> Result<StorePath, StorePathError> {
+    if method == IngestionMethod::Text {
+        if hash.algo != HashAlgo::Sha256 {
+            return Err(StorePathError(format!(
+                "text content address of '{name}' must be sha256, not {}",
+                hash.algo.name()
+            )));
+        }
+        return make_text_path(name, hash, references);
+    }
     if hash.algo == HashAlgo::Sha256 && method == IngestionMethod::Recursive {
         return make_store_path(&make_type("source".into(), references, false), hash, name);
     }

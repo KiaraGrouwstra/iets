@@ -23,6 +23,7 @@ use crate::syntax::symbol::Sym;
 pub fn register(r: &mut Registry) {
     r.op("derivationStrict", 1, derivation_strict);
     r.op("placeholder", 1, placeholder);
+    r.op("outputOf", 2, output_of);
 }
 
 /// What later derivations need about one we created: its output names and
@@ -219,7 +220,7 @@ impl Builder<'_> {
                 self.ingestion_method = Some(m);
                 Ok(())
             }
-            None if s == "text" || s == "git" => bail!(
+            None if s == "git" => bail!(
                 ErrorKind::Eval,
                 pos,
                 "outputHashMode '{s}' is not supported (experimental feature)"
@@ -505,11 +506,18 @@ fn derivation_strict_internal(
                 drv.input_srcs.insert(parse_store_path(p, pos)?);
             }
             Ctx::Built { drv: d, output } => {
-                drv.input_drvs
-                    .entry(parse_store_path(d, pos)?)
-                    .or_default()
-                    .outputs
-                    .insert(utf8(output, pos)?);
+                // derived-path-map.hh:DerivedPathMap::ensureSlot: one child per
+                // layer, from the `.drv` at the bottom outwards, and the output
+                // is taken of the node the last layer reaches
+                let (layers, root) = split_built(d);
+                let mut node = drv
+                    .input_drvs
+                    .entry(parse_store_path(root, pos)?)
+                    .or_default();
+                for name in layers.iter().rev() {
+                    node = node.children.entry(utf8(name, pos)?).or_default();
+                }
+                node.outputs.insert(utf8(output, pos)?);
             }
             Ctx::DrvDeep(d) => {
                 let d = parse_store_path(d, pos)?;
@@ -529,7 +537,12 @@ fn derivation_strict_internal(
     if drv.platform.is_empty() {
         bail!(ErrorKind::Eval, pos, "required attribute 'system' missing");
     }
-    if drv_name.ends_with(DRV_EXTENSION) {
+    // a text-addressed single `out` is a derivation that produces a `.drv`
+    if drv_name.ends_with(DRV_EXTENSION)
+        && !(ingestion_method == Some(IngestionMethod::Text)
+            && outputs.len() == 1
+            && outputs.contains("out"))
+    {
         bail!(
             ErrorKind::Eval,
             pos,
@@ -573,6 +586,7 @@ fn derivation_strict_internal(
             let mode = match method {
                 IngestionMethod::Flat => "flat",
                 IngestionMethod::Recursive => "recursive",
+                IngestionMethod::Text => "text",
             };
             let fallback = fallback(ev);
             let site = crate::lint::coerce::drv_attr_pos(ev, name_pos, fallback);
@@ -606,9 +620,15 @@ fn derivation_strict_internal(
         .map_err(|e| drv_err(e, pos))?;
     }
 
+    // A text-addressed output is a `.drv`, so `builtins.outputOf` may read
+    // this derivation back. Nix reads it from the store, which it has written
+    // by then; ietsp writes nothing during an evaluation, so the ATerm of a
+    // producer is kept whatever the flags say. There are as many of these as
+    // there are dynamic derivations, which is none in nixpkgs.
+    let produces_drv = ingestion_method == Some(IngestionMethod::Text);
     // the ATerm is only kept when something asks for it; the path it is
     // hashed into is all a plain evaluation wants
-    let keep_text = ev.drv.keep_aterm || ev.drv.dump_dir.is_some();
+    let keep_text = ev.drv.keep_aterm || ev.drv.dump_dir.is_some() || produces_drv;
     let (drv_path, text) = drv
         .with_aterm(|t| {
             (
@@ -674,7 +694,7 @@ fn derivation_strict_internal(
         DrvInfo {
             outputs: drv.outputs.keys().cloned().collect(),
             references,
-            aterm: ev.drv.keep_aterm.then(|| Arc::new(text.into_bytes())),
+            aterm: (ev.drv.keep_aterm || produces_drv).then(|| Arc::new(text.into_bytes())),
             pos: site,
             attr: None,
         },
@@ -725,16 +745,141 @@ fn output_string(
 }
 
 /// Mirrors downstream-placeholder.cc:DownstreamPlaceholder::unknownCaOutput.
-fn downstream_placeholder(drv_path: &StorePath, drv_name: &str, output: &str) -> String {
+fn unknown_ca_output(drv_path: &StorePath, drv_name: &str, output: &str) -> Hash {
     let clear = format!(
         "nix-upstream-output:{}:{}",
         drv_path.hash_part(),
         output_path_name(drv_name, output)
     );
-    format!(
-        "/{}",
-        hash_bytes(HashAlgo::Sha256, clear.as_bytes()).to_nix32()
-    )
+    hash_bytes(HashAlgo::Sha256, clear.as_bytes())
+}
+
+/// Mirrors downstream-placeholder.cc:DownstreamPlaceholder::unknownDerivation:
+/// an output of a derivation that is itself the output of one.
+fn unknown_derivation(parent: &Hash, output: &str) -> Hash {
+    let clear = format!(
+        "nix-computed-output:{}:{}",
+        crate::store::hash::compress_hash(parent, 20).to_nix32(),
+        output
+    );
+    hash_bytes(HashAlgo::Sha256, clear.as_bytes())
+}
+
+/// Mirrors downstream-placeholder.cc:DownstreamPlaceholder::render.
+fn render_placeholder(h: &Hash) -> String {
+    format!("/{}", h.to_nix32())
+}
+
+fn downstream_placeholder(drv_path: &StorePath, drv_name: &str, output: &str) -> String {
+    render_placeholder(&unknown_ca_output(drv_path, drv_name, output))
+}
+
+/// Mirrors eval.cc:mkSingleDerivedPathStringRaw of a `SingleDerivedPath::Built`,
+/// spelled as this evaluation holds it: the `.drv` at the bottom, the output
+/// names of the layers above it outermost first, and the output being taken.
+/// The path when the run can know it, the downstream placeholder otherwise.
+fn render_built(
+    ev: &mut Evaluator,
+    root: &StorePath,
+    layers: &[&[u8]],
+    output: &str,
+    pos: Pos,
+) -> EvalResult<String> {
+    let drv_name = Derivation::name_from_path(root).map_err(|e| drv_err(e, pos))?;
+    let Some((innermost, above)) = layers.split_last() else {
+        // the derivation is a real `.drv`, so the output may have a path
+        let drv = load_drv(ev, root).map_err(|e| drv_err(e, pos))?;
+        let Some(out) = drv.outputs.get(output) else {
+            return Err(Error::boxed(
+                ErrorKind::Eval,
+                format!("derivation '{root}' does not have output '{output}'"),
+                pos,
+            ));
+        };
+        return Ok(
+            match out.path(drv_name, output).map_err(|e| drv_err(e, pos))? {
+                Some(p) => p.to_string(),
+                None => downstream_placeholder(root, drv_name, output),
+            },
+        );
+    };
+    // downstream-placeholder.cc:fromSingleDerivedPathBuilt, from the bottom up
+    let mut h = unknown_ca_output(root, drv_name, &utf8(innermost, pos)?);
+    for name in above.iter().rev() {
+        h = unknown_derivation(&h, &utf8(name, pos)?);
+    }
+    Ok(render_placeholder(&unknown_derivation(&h, output)))
+}
+
+/// primops.cc:prim_outputOf. The first argument is a string whose one context
+/// element names a derivation; the second an output of it. The result names
+/// that output, and carries it as context, so a derivation that uses the
+/// string depends on it.
+fn output_of(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
+    const CTX: &str = "while evaluating the first argument to builtins.outputOf";
+    let s = ev.force_string(args[0], pos, CTX)?;
+    let name = ev.force_string_no_ctx(
+        args[1],
+        pos,
+        "while evaluating the second argument to builtins.outputOf",
+    )?;
+    let name = utf8(name, pos)?;
+    // eval.cc:coerceToSingleDerivedPathUnchecked. `Impure` is ietsp's own mark
+    // and is no part of what Nix counts.
+    let elems: Vec<&Ctx> = (s.ctx.iter())
+        .filter(|c| !matches!(c, Ctx::Impure(_)))
+        .collect();
+    let text = String::from_utf8_lossy(s.bytes).into_owned();
+    let [elem] = elems[..] else {
+        return Err(Error::boxed(
+            ErrorKind::Eval,
+            format!(
+                "string '{text}' has {} entries in its context. It should only have exactly one entry",
+                elems.len()
+            ),
+            pos,
+        ));
+    };
+    // the derivation the result's output comes from, as a `Ctx::Built.drv`
+    let (drv, expected) = match elem {
+        Ctx::Opaque(p) => (*p, String::from_utf8_lossy(p).into_owned()),
+        Ctx::DrvDeep(_) => {
+            return Err(Error::boxed(
+                ErrorKind::Eval,
+                format!(
+                    "string '{text}' has a context which refers to a complete source and binary closure. This is not supported at this time"
+                ),
+                pos,
+            ));
+        }
+        Ctx::Built { drv, output } => {
+            let (layers, root) = split_built(drv);
+            let root = parse_store_path(root, pos)?;
+            let out = utf8(output, pos)?;
+            let expected = render_built(ev, &root, &layers, &out, pos)?;
+            let mut tail = Vec::with_capacity(output.len() + 1 + drv.len());
+            tail.extend_from_slice(output);
+            tail.push(b'!');
+            tail.extend_from_slice(drv);
+            (ev.arena.alloc_bytes(&tail), expected)
+        }
+        Ctx::Impure(_) => unreachable!("filtered out above"),
+    };
+    if text != expected {
+        return Err(Error::boxed(
+            ErrorKind::Eval,
+            format!(
+                "string '{text}' has context with a derivation output, but the string is not the right placeholder for it. It should be '{expected}'"
+            ),
+            pos,
+        ));
+    }
+    let (layers, root) = split_built(drv);
+    let root = parse_store_path(root, pos)?;
+    let rendered = render_built(ev, &root, &layers, &name, pos)?;
+    let bytes = ev.arena.alloc_bytes(rendered.as_bytes());
+    let output = ev.arena.alloc_bytes(name.as_bytes());
+    Ok(ev.arena.mk_string_ctx(bytes, &[Ctx::Built { drv, output }]))
 }
 
 /// `load_derivation_from_store` plus a `File` observation of the `.drv`.
@@ -905,3 +1050,49 @@ let
 in
 (builtins.head outputsList).value
 ";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The reference values come from nix 2.35pre, `--extra-experimental-features
+    /// 'ca-derivations dynamic-derivations'`, over
+    ///   producer = name: derivation { inherit name; system = "x86_64-linux";
+    ///     builder = "/bin/sh"; args = [ "-c" "echo done > $out" ];
+    ///     __contentAddressed = true; outputHashMode = "text";
+    ///     outputHashAlgo = "sha256"; };
+    ///   one = builtins.outputOf (producer "p.drv").outPath "out";
+    ///   two = builtins.outputOf (builtins.outputOf (producer "q.drv.drv").outPath "out") "out";
+    #[test]
+    fn a_dynamic_output_renders_the_placeholder_nix_renders() {
+        let p = StorePath::parse("/nix/store/y86qixskwxs9z8i9gbd9x06h3q0hy1ji-p.drv.drv").unwrap();
+        let h = unknown_derivation(&unknown_ca_output(&p, "p.drv", "out"), "out");
+        assert_eq!(
+            render_placeholder(&h),
+            "/1k5662fdf252qa1rsrq0s5xc0w9a9wb1qsgzfk2i9zhx4as0qf76"
+        );
+
+        // one more layer: the output of the derivation that output is
+        let q =
+            StorePath::parse("/nix/store/czdvshq1r2b3acsxv0r6jmrr3jg302mq-q.drv.drv.drv").unwrap();
+        let mut h = unknown_ca_output(&q, "q.drv.drv", "out");
+        for _ in 0..2 {
+            h = unknown_derivation(&h, "out");
+        }
+        assert_eq!(
+            render_placeholder(&h),
+            "/16v25j0s9i1rfcgz7lcr8hlsh14m83b35f0c63lkgcpwj9nj4c9s"
+        );
+    }
+
+    /// `hashPlaceholder` is the env value of a floating output and is not the
+    /// same function; a mix-up would move every CA drvPath.
+    #[test]
+    fn the_two_placeholders_are_not_the_same() {
+        let p = StorePath::parse("/nix/store/y86qixskwxs9z8i9gbd9x06h3q0hy1ji-p.drv.drv").unwrap();
+        assert_ne!(
+            downstream_placeholder(&p, "p.drv", "out"),
+            hash_placeholder("out")
+        );
+    }
+}

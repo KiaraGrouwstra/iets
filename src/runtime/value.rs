@@ -95,7 +95,11 @@ pub enum Ctx {
     Opaque(&'static [u8]),
     /// `=drv`: the whole derivation closure.
     DrvDeep(&'static [u8]),
-    /// `!out!drv`: one output of a derivation.
+    /// `!out!drv`: one output of a derivation. `drv` is the derivation that
+    /// output comes from, written as value/context.cc writes it: the `.drv`
+    /// path, or one `<output>!` per layer of dynamic derivation above it, so
+    /// `out!/nix/store/x.drv` is the output of the derivation that is the
+    /// `out` of `x.drv`. `split_built` takes it apart.
     Built {
         drv: &'static [u8],
         output: &'static [u8],
@@ -104,6 +108,20 @@ pub enum Ctx {
     /// `hasContext`, never in an ATerm; the lints on derivation attributes
     /// read it. Last so the store elements sort first.
     Impure(Taint),
+}
+
+/// Takes a `Ctx::Built.drv` apart: the output names of the dynamic derivations
+/// above the `.drv` at the bottom, outermost first, and that `.drv` path.
+/// Mirrors the `parseRest` of value/context.cc:NixStringContextElem::parse.
+/// A plain built path has no names.
+pub fn split_built(drv: &[u8]) -> (Vec<&[u8]>, &[u8]) {
+    let mut names = Vec::new();
+    let mut rest = drv;
+    while let Some(i) = rest.iter().position(|&b| b == b'!') {
+        names.push(&rest[..i]);
+        rest = &rest[i + 1..];
+    }
+    (names, rest)
 }
 
 /// What makes a string impure.

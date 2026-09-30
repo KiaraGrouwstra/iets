@@ -161,8 +161,19 @@ is on, `fetchClosure` unless `fetch-closure` is, and `outputOf` unless
 `--extra-experimental-features`). ietsp always has all three, so
 `builtins ? fetchTree` is true under ietsp where nix, with no feature
 on, says false; code that branches on it (flake-compat) takes the
-`fetchTree` branch. `builtins.fetchClosure` and `builtins.outputOf` are
-unsupported either way, so classic mode falls back when they are called.
+`fetchTree` branch. `builtins.fetchClosure` is unsupported either way, so
+classic mode falls back when it is called.
+
+`builtins.outputOf` is implemented. What a run cannot do is read back a
+producer it did not make itself and that is not in the store: nix writes
+each `.drv` as it evaluates, so `readDerivation` always finds one, while
+ietsp writes nothing. A producer this run made is kept in memory when its
+output is text addressed, which is every dynamic derivation; one that is
+neither is read from `/nix/store` and fails there if it is absent.
+
+`builtins.getContext` of a string whose context is a dynamic derivation
+output is an error. Nix resolves the derived path first, which means
+building the producer, and evaluation does not build.
 
 ## Flake references (`parseFlakeRef`, `flakeRefToString`, the command line)
 

@@ -33,6 +33,16 @@ fn get_context(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> 
         match c {
             Ctx::Opaque(p) => infos.entry(p).or_default().path = true,
             Ctx::DrvDeep(d) => infos.entry(d).or_default().all_outputs = true,
+            // primops/context.cc resolves the derived path first, which builds
+            // the producer; an evaluation does not build
+            Ctx::Built { drv, output } if !split_built(drv).0.is_empty() => {
+                bail!(
+                    ErrorKind::Unsupported,
+                    pos,
+                    "ietsp: builtins.getContext cannot handle the output '{}' of a dynamic derivation",
+                    String::from_utf8_lossy(output)
+                )
+            }
             Ctx::Built { drv, output } => infos.entry(drv).or_default().outputs.push(output),
             Ctx::Impure(_) => {}
         }

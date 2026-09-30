@@ -297,8 +297,15 @@ pub fn drv_roots(
         for c in s.ctx {
             match c {
                 Ctx::Built { drv, output } => {
+                    let (layers, root) = crate::runtime::split_built(drv);
+                    if !layers.is_empty() {
+                        return Err(bad(
+                            "ietsp: the output of a dynamic derivation is not an installable"
+                                .to_string(),
+                        ));
+                    }
                     let out = String::from_utf8_lossy(output).into_owned();
-                    roots.push((parse_drv(drv)?, Some(out)));
+                    roots.push((parse_drv(root)?, Some(out)));
                     found = true;
                 }
                 Ctx::DrvDeep(drv) => {

@@ -36,7 +36,6 @@ pub fn register(r: &mut Registry) {
     r.op("__filterSource", 2, filter_source);
     r.op("__path", 1, path);
     r.op("__toFile", 2, to_file);
-    r.op("__outputOf", 2, output_of);
     r.op("__fetchurl", 1, fetchurl);
     r.op(
         "fetchTarball",
@@ -93,10 +92,6 @@ unsupported!(
 unsupported!(
     fetch_closure,
     "ietsp: network fetchers are not supported (builtins.fetchClosure)"
-);
-unsupported!(
-    output_of,
-    "ietsp: dynamic derivations are not supported (builtins.outputOf)"
 );
 
 fn lossy(b: &[u8]) -> std::borrow::Cow<'_, str> {
@@ -587,6 +582,8 @@ fn add_path_inner(
     let mut accepted: Option<HashSet<PathBuf>> = filter.map(|_| HashSet::new());
     let mut nar_size = 0u64;
     let hash = match method {
+        // only `outputHashMode` reaches it, never a path added to the store
+        IngestionMethod::Text => unreachable!("a source tree is not text addressed"),
         IngestionMethod::Flat => hash_bytes(
             HashAlgo::Sha256,
             &at.read(ev, true).map_err(|e| read_error(e, path, pos))?,
@@ -817,7 +814,17 @@ fn ctx_internal(c: &Ctx) -> String {
     match c {
         Ctx::Opaque(p) => base(p),
         Ctx::DrvDeep(d) => format!("={}", base(d)),
-        Ctx::Built { drv, output } => format!("!{}!{}", lossy(output), base(drv)),
+        // value/context.cc: one `<output>!` per layer, then the `.drv`'s name
+        Ctx::Built { drv, output } => {
+            let (layers, root) = crate::runtime::split_built(drv);
+            let mut s = format!("!{}!", lossy(output));
+            for l in layers {
+                s.push_str(&lossy(l));
+                s.push('!');
+            }
+            s.push_str(&base(root));
+            s
+        }
         Ctx::Impure(m) => lossy(m.bytes()).into_owned(),
     }
 }

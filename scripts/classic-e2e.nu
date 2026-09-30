@@ -360,10 +360,40 @@ in [
 }
 '# | save $"($d)/floats.nix"
 
+  # builtins.outputOf over a text-addressed producer, once and nested, and a
+  # consumer of both: its inputDrvs are a tree and its ATerm is the versioned
+  # form, so the printed drvPath covers the whole chain
+  r#'let
+  producer = name: derivation {
+    inherit name;
+    system = "x86_64-linux";
+    builder = "/bin/sh";
+    args = [ "-c" "echo done > $out" ];
+    __contentAddressed = true;
+    outputHashMode = "text";
+    outputHashAlgo = "sha256";
+  };
+  one = builtins.outputOf (producer "classic-e2e-p.drv").outPath "out";
+  two = builtins.outputOf (builtins.outputOf (producer "classic-e2e-q.drv.drv").outPath "out") "out";
+in derivation {
+  name = "classic-e2e-dyn";
+  system = "x86_64-linux";
+  builder = "/bin/sh";
+  args = [ "-c" "echo ${one} ${two} > $out" ];
+}
+'# | save $"($d)/dyndrv.nix"
+
   $ok = ($ok | append (cmp-case "instantiate a custom drv"
     (run-both $farm nix-instantiate $"($d)/default.nix")))
   $ok = ($ok | append (cmp-case "drv closure follows the references of a toFile"
     (run-both $farm nix-instantiate $"($d)/textrefs.nix")))
+  $ok = ($ok | append (cmp-case "instantiate builtins.outputOf, once and nested"
+    (run-both $farm nix-instantiate --extra-experimental-features "ca-derivations dynamic-derivations"
+      $"($d)/dyndrv.nix")))
+  $ok = ($ok | append (cmp-case "eval builtins.outputOf placeholders"
+    (run-both $farm nix-instantiate --extra-experimental-features "ca-derivations dynamic-derivations"
+      --read-write-mode --eval --strict --json -E
+      $"let f = import ($d)/dyndrv.nix; in f.drvPath")))
   $ok = ($ok | append (cmp-case "instantiate --readonly-mode"
     (run-both $farm nix-instantiate --readonly-mode $"($d)/default.nix")))
 

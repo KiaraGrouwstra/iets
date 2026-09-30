@@ -604,7 +604,9 @@ fn extract_constituents(
     let mut drvs = Vec::new();
     for e in ctx {
         if let Ctx::Built { drv, .. } = e {
-            let p = StorePath::parse(&String::from_utf8_lossy(drv))
+            // the `.drv` at the bottom of the chain: what a build starts from
+            let (_, root) = crate::runtime::split_built(drv);
+            let p = StorePath::parse(&String::from_utf8_lossy(root))
                 .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, c.pos))?;
             if drvs.last() != Some(&p) {
                 drvs.push(p);
