@@ -158,6 +158,8 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
                 let v = next();
                 a.xp_features
                     .extend(v.split_whitespace().map(str::to_owned));
+                // as a setting too, so `config::xp_on` sees it
+                f.overrides.push((s.trim_start_matches('-').to_string(), v));
             }
             // a synonym for the positional FILE, in the native namespace
             // only: a classic name's argv stays Nix's

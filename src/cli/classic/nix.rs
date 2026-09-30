@@ -120,12 +120,18 @@ pub fn global_flag(c: &mut Common, a: &mut Argv, s: &str) -> Result<bool, String
     }
     match s {
         "--accept-flake-config" => crate::ignored::flag(s, crate::ignored::NO_NIX_CONFIG),
-        // every feature is on in ietsp but this one, which changes what
-        // `fromTOML` returns (docs/reference/divergences.md)
+        // ietsp has every feature but this one, which changes what `fromTOML`
+        // returns (docs/reference/divergences.md). Under a classic name the
+        // value is still a setting, because the builtins Nix gates on a
+        // feature are gated here too (`builtins::install`).
         "--experimental-features" | "--extra-experimental-features" => {
-            if a.value(s)?.split_whitespace().any(|f| f == TOML_TIMESTAMPS) {
+            let v = a.value(s)?;
+            if v.split_whitespace().any(|f| f == TOML_TIMESTAMPS) {
                 return Err(format!("'{s} {TOML_TIMESTAMPS}' is not implemented"));
             }
+            c.flags
+                .overrides
+                .push((s.trim_start_matches('-').to_string(), v));
         }
         "--eval-store" => match a.value(s)?.as_str() {
             "auto" | "daemon" | "" => {

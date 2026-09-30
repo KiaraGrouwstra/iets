@@ -117,6 +117,13 @@ pub fn set_classic() {
     cur().log.classic.store(true, Ordering::Relaxed);
 }
 
+/// Whether this process answers to one of Nix's names. Under those, what an
+/// experimental feature gates is gated (`builtins::install`); ietsp's own
+/// commands have every feature.
+pub fn classic() -> bool {
+    cur().log.classic.load(Ordering::Relaxed)
+}
+
 /// `json-log-path` from the command line; it wins over nix.conf. Set it
 /// before the first line goes out.
 pub fn set_json_log_path(path: String) {

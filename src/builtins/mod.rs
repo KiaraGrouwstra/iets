@@ -47,6 +47,25 @@ fn builtins_name(name: &'static str) -> &'static str {
     name.strip_prefix("__").unwrap_or(name)
 }
 
+/// Whether this run puts `name` in `builtins` at all. Nix leaves three out
+/// until an experimental feature is on, and code branches on whether they are
+/// there: `flake-compat` takes its `fetchTree` path when `builtins ? fetchTree`.
+/// Under one of Nix's own names ietsp answers as Nix does; its own commands
+/// have every feature, which is the documented divergence.
+fn exposed(name: &'static str) -> bool {
+    if !crate::log::classic() {
+        return true;
+    }
+    match builtins_name(name) {
+        // primops.cc: `fetch-tree` or `flakes`, since the flake machinery is
+        // written in Nix and calls it
+        "fetchTree" => crate::config::xp_on("fetch-tree") || crate::config::xp_on("flakes"),
+        "fetchClosure" => crate::config::xp_on("fetch-closure"),
+        "outputOf" => crate::config::xp_on("dynamic-derivations"),
+        _ => true,
+    }
+}
+
 pub fn install(ev: &mut Evaluator) {
     let mut r = Registry {
         ops: Vec::new(),
@@ -93,6 +112,9 @@ pub fn install(ev: &mut Evaluator) {
 
     let mut entries: Vec<(Sym, Pos, Word)> = Vec::new();
     for (name, arity, f) in &r.ops {
+        if !exposed(name) {
+            continue;
+        }
         let w = ev.arena.mk_primop(name, *arity, *f);
         let bsym = ev.sym(builtins_name(name).as_bytes());
         entries.push((bsym, Pos::NONE, w));

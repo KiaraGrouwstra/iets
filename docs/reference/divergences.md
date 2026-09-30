@@ -158,11 +158,13 @@ ietsp stops; Nix has no limit of its own.
 Nix leaves `fetchTree` out of `builtins` unless `fetch-tree` or `flakes`
 is on, `fetchClosure` unless `fetch-closure` is, and `outputOf` unless
 `dynamic-derivations` is (`experimental-features` in nix.conf or
-`--extra-experimental-features`). ietsp always has all three, so
-`builtins ? fetchTree` is true under ietsp where nix, with no feature
-on, says false; code that branches on it (flake-compat) takes the
-`fetchTree` branch. `builtins.fetchClosure` is unsupported either way, so
-classic mode falls back when it is called.
+`--extra-experimental-features`). Under one of Nix's own names ietsp does
+the same (`builtins::exposed`), so `builtins.attrNames builtins` is the
+same list on both sides whatever the features are. Its own commands have
+every feature, so `builtins ? fetchTree` is true there where nix with no
+feature on says false, and code that branches on it (flake-compat) takes
+the `fetchTree` branch. `builtins.fetchClosure` is unsupported either way,
+so classic mode falls back when it is called.
 
 `builtins.outputOf` is implemented. What a run cannot do is read back a
 producer it did not make itself and that is not in the store: nix writes

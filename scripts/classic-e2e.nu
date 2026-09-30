@@ -253,20 +253,23 @@ def main [] {
   let farm = (make-farm $ietsp $tmp)
   mut ok = []
 
-  # --- the builtins surface: nothing Nix has may be missing --------------------
-  # Every extra ietsp has must be one an experimental feature gates in Nix, which
-  # ietsp always has on (docs/reference/divergences.md).
+  # --- the builtins surface: the same names Nix has ----------------------------
+  # Under a classic name the three builtins Nix gates on an experimental feature
+  # are gated here too (`builtins::exposed`), so the sets are equal whatever the
+  # features are. ietsp's own commands keep every feature on, which is the
+  # documented divergence (docs/reference/divergences.md).
   for mode in ["--impure" "--pure-eval"] {
-    let b = (run-both $farm nix-instantiate --eval --json -E "builtins.attrNames builtins" $mode)
-    let ours = (try { $b.ours.stdout | from json } catch { [] })
-    let real = (try { $b.real.stdout | from json } catch { [] })
-    let missing = ($real | where {|n| $n not-in $ours })
-    let extra = ($ours | where {|n| $n not-in $real })
-    let gated = ["outputOf" "fetchClosure"]
-    let unexplained = ($extra | where {|n| $n not-in $gated })
-    $ok = ($ok | append (verdict (($missing | is-empty) and ($unexplained | is-empty))
-      $"builtins ($mode): every name nix has, and no unexplained extra"
-      $"missing ($missing | str join ' '), extra ($extra | str join ' ')"))
+    for feats in ["" "dynamic-derivations" "dynamic-derivations fetch-closure fetch-tree"] {
+      let b = (run-both $farm nix-instantiate --option experimental-features $"nix-command flakes ($feats)"
+        --eval --json -E "builtins.attrNames builtins" $mode)
+      let ours = (try { $b.ours.stdout | from json } catch { [] })
+      let real = (try { $b.real.stdout | from json } catch { [] })
+      let missing = ($real | where {|n| $n not-in $ours })
+      let extra = ($ours | where {|n| $n not-in $real })
+      $ok = ($ok | append (verdict (($missing | is-empty) and ($extra | is-empty))
+        $"builtins ($mode) [($feats)]: the same names nix has"
+        $"missing ($missing | str join ' '), extra ($extra | str join ' ')"))
+    }
   }
 
   # --- nix-instantiate: drv paths
