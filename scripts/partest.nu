@@ -100,6 +100,13 @@ in builtins.foldl' (a: b: a + builtins.foldl' (x: y: x + y) 0 b) 0 rows'#]
     [fn-identity true true $"let ($slow) t = \(x: y: x\) 1; A = [ t t t t t t t t ]; B = [ t t t t t t t t ]; in builtins.seq \(builtins.any \(x: false\) A\) \(builtins.seq \(slow 3000000\) \(A == B\)\)"]
     # A thunk only a helper forced still prints as <CODE>.
     [print-code false true $"let ($slow) l = map \(x: x + slow 20000\) [ 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 ]; in builtins.seq \(builtins.any \(x: x > 0\) l\) l"]
+    # The same, where every thunk sits in exactly one cell: `genList` puts
+    # its thunk in the result cell and nothing copies it, because `any`
+    # stops at the first element and never passes the others to the
+    # predicate. Knowing that a thunk reaches one cell therefore does not
+    # make unboxing it invisible: the cell it does reach is the one the
+    # printer reads (docs/explanation/evaluation.md, "One cell is not enough").
+    [print-code-single false true $"let ($slow) l = builtins.genList \(i: slow 20000 * 0 + i + 1\) 20; in builtins.seq \(builtins.any \(x: x > 0\) l\) l"]
     # A NaN is not equal to itself, and keeps its sign when printed.
     ["nan" true true r#'let inf = 1.0e308 * 10.0; nan = inf - inf; in [ (nan == nan) nan (0.0 - nan) inf (-inf) ]'#]
     # A chain deeper than a helper stack, and deeper than nix takes: the
@@ -121,7 +128,83 @@ in builtins.foldl' (a: b: a + builtins.foldl' (x: y: x + y) 0 b) 0 rows'#]
     [drv-speculated true false [] true $"($stops) in builtins.elem 1 [ \(slow 3000000 * 0 + 1\) \(builtins.stringLength \(d 1\)\) \(builtins.stringLength \(d 2\)\) \(builtins.stringLength \(d 3\)\) ]"]
     [drv-demanded true false [] true $"($stops) in map \(i: builtins.stringLength \(d i\)\) [ 1 2 3 4 5 6 7 8 ]"]
   ]
-  let cases = ($cases | each {|c| $c | insert flags [] | insert dump false } | append $effect_cases)
+  # Every route by which one thunk's word reaches a second cell. `pre`
+  # binds the shape, `a` and `b` build two cells from the one thunk `t`
+  # through that route. `any` fans the first list out so the helpers force
+  # `t`, `slow` gives them the time, and `==` then reads both cells: the
+  # word before forcing decides the identity of a function, so a cell a
+  # helper unboxed is not equal to one it left alone. Every route needs its
+  # own case, because a route nothing marks is a silent return of the bug
+  # and the routes that are marked would not show it.
+  let routes = [
+    [name pre a b];
+    [local "" "[ t t t t t t t t ]" "[ t t t t t t t t ]"]
+    [select "s = { inherit t; };"
+      "[ s.t s.t s.t s.t s.t s.t s.t s.t ]" "[ s.t s.t s.t s.t s.t s.t s.t s.t ]"]
+    [apply "f = x: [ x x x x x x x x ];" "f t" "f t"]
+    [concat "L = [ t t t t ]; M = [ t t t t ];" "L ++ M" "L ++ M"]
+    [tail "L = [ 0 t t t t t t t t ];" "builtins.tail L" "builtins.tail L"]
+    [filter "L = [ t 1 t 2 t 3 t 4 t 5 t 6 t 7 t 8 ];"
+      "builtins.filter (x: !(builtins.isInt x)) L" "builtins.filter (x: !(builtins.isInt x)) L"]
+    [attr-values "s = { a = t; b = t; c = t; d = t; e = t; f = t; g = t; h = t; };"
+      "builtins.attrValues s" "builtins.attrValues s"]
+    [cat-attrs "l = builtins.genList (i: { k = t; }) 8;"
+      "builtins.catAttrs \"k\" l" "builtins.catAttrs \"k\" l"]
+    [list-to-attrs "l = builtins.genList (i: { name = \"k${toString i}\"; value = t; }) 8;"
+      "builtins.attrValues (builtins.listToAttrs l)"
+      "builtins.attrValues (builtins.listToAttrs l)"]
+    [update "s = { a = t; b = t; c = t; d = t; e = t; f = t; g = t; h = t; };"
+      "builtins.attrValues (s // { z = 1; })" "builtins.attrValues (s // { z = 1; })"]
+    [inherit-from "s = { a = t; b = t; c = t; d = t; e = t; f = t; g = t; h = t; };"
+      "builtins.attrValues { inherit (s) a b c d e f g h; }"
+      "builtins.attrValues { inherit (s) a b c d e f g h; }"]
+    [rec-attrs "" "builtins.attrValues (rec { a = t; b = t; c = t; d = t; e = t; f = t; g = t; h = t; })"
+      "builtins.attrValues (rec { a = t; b = t; c = t; d = t; e = t; f = t; g = t; h = t; })"]
+    [map-arg "L = [ t t t t t t t t ];"
+      "builtins.concatLists (builtins.map (x: [ x ]) L)"
+      "builtins.concatLists (builtins.map (x: [ x ]) L)"]
+    # one `mapAttrs` result, read twice: a second call would make fresh map
+    # words and the two sides would differ whatever the workers do
+    [map-attrs "s = { a = t; b = t; c = t; d = t; e = t; f = t; g = t; h = t; }; m = builtins.attrValues (builtins.mapAttrs (n: v: v) s);"
+      "builtins.tail ([ 0 ] ++ m)" "builtins.tail ([ 0 ] ++ m)"]
+    [zip-attrs "s = { a = t; };"
+      "(builtins.zipAttrsWith (n: vs: vs) [ s s s s s s s s ]).a"
+      "(builtins.zipAttrsWith (n: vs: vs) [ s s s s s s s s ]).a"]
+    [with-scope "s = { a = t; b = t; c = t; d = t; };"
+      "with s; [ a b c d a b c d ]" "with s; [ a b c d a b c d ]"]
+    [remove-attrs "s = { a = t; b = t; c = t; d = t; e = t; f = t; g = t; h = t; z = 1; };"
+      "builtins.attrValues (builtins.removeAttrs s [ \"z\" ])"
+      "builtins.attrValues (builtins.removeAttrs s [ \"z\" ])"]
+    [intersect-attrs "s = { a = t; b = t; c = t; d = t; e = t; f = t; g = t; h = t; };"
+      "builtins.attrValues (builtins.intersectAttrs s s)"
+      "builtins.attrValues (builtins.intersectAttrs s s)"]
+    [foldl "L = [ t t t t t t t t ];"
+      "builtins.foldl' (acc: x: acc ++ [ x ]) [] L" "builtins.foldl' (acc: x: acc ++ [ x ]) [] L"]
+  ]
+  # One thunk shared through many routes at once: the stress case the guard
+  # runs under.
+  let stress = "L = [ t t t t ]; s = { a = t; b = t; c = t; d = t; }; W = (builtins.tail ([ 0 ] ++ L)) ++ (builtins.attrValues s) ++ (builtins.attrValues { inherit (s) a b c d; }) ++ (builtins.concatLists (builtins.map (x: [ x ]) L)) ++ (builtins.attrValues (builtins.mapAttrs (n: v: v) s)) ++ (builtins.filter (x: !(builtins.isInt x)) [ t 1 t 2 ]) ++ (with s; [ a b c d ]) ++ (builtins.attrValues (s // { z = 1; })) ++ (builtins.attrValues (rec { e = t; f = t; })) ++ [ s.a s.b ];"
+  # two copies of one list, so every cell of both sides holds a word that
+  # came through one of the routes above
+  let stress_a = "builtins.tail ([ 0 ] ++ W)"
+  let route_cases = ($routes | each {|r|
+    {
+      name: $"route-($r.name)",
+      strict: true,
+      nix: false,
+      flags: [],
+      dump: false,
+      expr: $"let ($slow) t = \(x: y: x\) 1; ($r.pre) A = ($r.a); B = ($r.b); in builtins.seq \(builtins.any \(x: false\) A\) \(builtins.seq \(slow 3000000\) \(A == B\)\)",
+    }
+  } | append {
+    name: "route-stress",
+    strict: true,
+    nix: false,
+    flags: [],
+    dump: false,
+    expr: $"let ($slow) t = \(x: y: x\) 1; ($stress) A = ($stress_a); B = ($stress_a); in builtins.seq \(builtins.any \(x: false\) A\) \(builtins.seq \(slow 3000000\) \(A == B\)\)",
+  })
+  let cases = ($cases | each {|c| $c | insert flags [] | insert dump false } | append $effect_cases | append $route_cases)
   # The sandbox this runs in for `nix flake check` has no nix at all, so
   # the comparison against the reference is what a run by hand adds.
   let with_nix = ((which nix-instantiate | length) > 0)
