@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::eval::{FileInfo, Pos};
 use crate::runtime::Word;
+use crate::runtime::arena::NSTATS;
 use crate::syntax::ast::FileId;
 use crate::syntax::symbol::Sym;
 
@@ -219,6 +220,20 @@ pub struct Totals {
     calls: AtomicU64,
     derivations: AtomicU64,
     compile_ns: AtomicU64,
+    arena_bytes: AtomicU64,
+    arena_mapped: AtomicU64,
+    kind_counts: Kinds,
+    kind_bytes: Kinds,
+}
+
+/// One counter per object kind. Only a stats run folds anything into these,
+/// so a run without `IETS_STATS` never touches them.
+pub struct Kinds([AtomicU64; NSTATS]);
+
+impl Default for Kinds {
+    fn default() -> Kinds {
+        Kinds(std::array::from_fn(|_| AtomicU64::new(0)))
+    }
 }
 
 /// Counters of one fiber, or of a whole run.
@@ -228,6 +243,17 @@ pub struct Counts {
     pub calls: u64,
     pub derivations: u64,
     pub compile: std::time::Duration,
+}
+
+/// What arenas hold: one arena's unfolded delta, or every arena of a run.
+/// Each worker allocates from its own arena, so only the sum is the run's
+/// memory; one arena is a quarter of it at the default worker count.
+#[derive(Default, Clone, Copy)]
+pub struct ArenaUse {
+    pub bytes: u64,
+    pub mapped: u64,
+    pub counts: [u64; NSTATS],
+    pub kind_bytes: [u64; NSTATS],
 }
 
 impl Totals {
@@ -245,6 +271,32 @@ impl Totals {
             calls: self.calls.load(Ordering::Relaxed),
             derivations: self.derivations.load(Ordering::Relaxed),
             compile: std::time::Duration::from_nanos(self.compile_ns.load(Ordering::Relaxed)),
+        }
+    }
+
+    /// A zero add is skipped: these lines are shared between workers, and
+    /// most kinds see nothing in any one task.
+    pub fn add_arena(&self, u: &ArenaUse) {
+        if u.bytes != 0 {
+            self.arena_bytes.fetch_add(u.bytes, Ordering::Relaxed);
+        }
+        if u.mapped != 0 {
+            self.arena_mapped.fetch_add(u.mapped, Ordering::Relaxed);
+        }
+        for i in 0..NSTATS {
+            if u.counts[i] != 0 {
+                self.kind_counts.0[i].fetch_add(u.counts[i], Ordering::Relaxed);
+                self.kind_bytes.0[i].fetch_add(u.kind_bytes[i], Ordering::Relaxed);
+            }
+        }
+    }
+
+    pub fn arena(&self) -> ArenaUse {
+        ArenaUse {
+            bytes: self.arena_bytes.load(Ordering::Relaxed),
+            mapped: self.arena_mapped.load(Ordering::Relaxed),
+            counts: std::array::from_fn(|i| self.kind_counts.0[i].load(Ordering::Relaxed)),
+            kind_bytes: std::array::from_fn(|i| self.kind_bytes.0[i].load(Ordering::Relaxed)),
         }
     }
 }

@@ -19,6 +19,9 @@ pub struct Arena {
     /// Total chunk bytes mapped (and populated) so far.
     pub(crate) mapped: usize,
     pub(crate) stats: Stats,
+    /// Boxed: `Arena` is swapped on every fiber switch, so the marks must
+    /// not add their 448 bytes to that move.
+    folded: Box<Folded>,
     /// Advise huge pages until a chunk populate stalls in compaction.
     thp: bool,
     /// String bytes by content, and the context-free string object over
@@ -60,10 +63,40 @@ impl Arena {
             bytes_allocated: 0,
             mapped: 0,
             stats: Stats::default(),
+            folded: Box::default(),
             thp: true,
             strings: FxHashMap::default(),
             ctxs: FxHashSet::default(),
         }
+    }
+
+    /// Whether a fold would carry anything. The placeholder arena never
+    /// allocates, so every switch into a fiber answers false here.
+    #[inline]
+    pub(crate) fn allocated_since_fold(&self) -> bool {
+        self.bytes_allocated != self.folded.bytes
+    }
+
+    /// The arena use not yet folded into the run's totals, marked folded.
+    ///
+    /// `release` and `shrink_last` give bytes back, so a total can fall below
+    /// its own mark. The fold saturates there and keeps whatever it published,
+    /// which overstates by the bytes given back since the last fold.
+    pub(crate) fn take_unfolded(&mut self) -> crate::parallel::shared::ArenaUse {
+        let mut u = crate::parallel::shared::ArenaUse {
+            bytes: self.bytes_allocated.saturating_sub(self.folded.bytes) as u64,
+            mapped: self.mapped.saturating_sub(self.folded.mapped) as u64,
+            ..Default::default()
+        };
+        self.folded.bytes = self.bytes_allocated;
+        self.folded.mapped = self.mapped;
+        for i in 0..NSTATS {
+            u.counts[i] = self.stats.counts[i].saturating_sub(self.folded.counts[i]);
+            u.kind_bytes[i] = self.stats.bytes[i].saturating_sub(self.folded.kind_bytes[i]);
+        }
+        self.folded.counts = self.stats.counts;
+        self.folded.kind_bytes = self.stats.bytes;
+        u
     }
 
     #[inline]
@@ -257,7 +290,7 @@ pub enum Stat {
     Ir,
 }
 
-pub(crate) const NSTATS: usize = 27;
+pub const NSTATS: usize = 27;
 
 pub(crate) const STAT_NAMES: [&str; NSTATS] = [
     "thunk",
@@ -303,6 +336,16 @@ impl Stat {
             _ => 0,
         }
     }
+}
+
+/// The marks of the last fold, so a switch-out adds a delta and never the
+/// running total again.
+#[derive(Default)]
+struct Folded {
+    bytes: usize,
+    mapped: usize,
+    counts: [u64; NSTATS],
+    kind_bytes: [u64; NSTATS],
 }
 
 #[derive(Default)]

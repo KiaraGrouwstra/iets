@@ -155,6 +155,9 @@ pub struct Evaluator {
     /// Where those counters and `drv.nr_derivations` go when this fiber
     /// finishes a task. Shared, so a stats line covers every fiber.
     totals: std::sync::Arc<crate::parallel::shared::Totals>,
+    /// `IETS_STATS`: a stats line will read the arena totals, so a switch
+    /// folds into them. Nothing else does, so a normal run skips the fold.
+    fold_arenas: bool,
     /// One shared context-free string per symbol, made on first use.
     sym_strings: crate::parallel::shared::SymWords,
     /// Source path -> virtual store path, like Nix's `srcToStore`.
@@ -438,6 +441,7 @@ impl EvalConfig {
             nr_function_calls: 0,
             t_compile: std::time::Duration::ZERO,
             totals: Default::default(),
+            fold_arenas: crate::session::Session::current().settings().stats >= 1,
             sym_strings: crate::parallel::shared::SymWords::new(),
             src_to_store: Default::default(),
             known: Default::default(),
@@ -2512,6 +2516,34 @@ impl Evaluator {
         }
     }
 
+    /// Arena use of the whole run: every arena that has folded, plus what
+    /// the one this fiber holds has allocated since. Read it, not
+    /// `self.arena`, which is this worker's share alone.
+    pub fn arena_use(&mut self) -> crate::parallel::shared::ArenaUse {
+        let mut u = self.totals.arena();
+        let mine = self.arena.take_unfolded();
+        self.totals.add_arena(&mine);
+        u.bytes += mine.bytes;
+        u.mapped += mine.mapped;
+        for i in 0..crate::runtime::arena::NSTATS {
+            u.counts[i] += mine.counts[i];
+            u.kind_bytes[i] += mine.kind_bytes[i];
+        }
+        u
+    }
+
+    /// Move an arena's new allocation into the run's totals. Only a stats
+    /// run reads them, and the scheduler calls this on every fiber switch,
+    /// so the flag is the whole reason it costs a run nothing.
+    #[inline]
+    pub fn fold_arena(&self, arena: &mut crate::runtime::arena::Arena) {
+        if !self.fold_arenas || !arena.allocated_since_fold() {
+            return;
+        }
+        let u = arena.take_unfolded();
+        self.totals.add_arena(&u);
+    }
+
     /// Move this fiber's counters into the run's totals. The scheduler
     /// calls it when a fiber finishes a task, which is why the counters
     /// themselves need no atomics.
@@ -2528,9 +2560,11 @@ impl Evaluator {
         self.t_compile = std::time::Duration::ZERO;
     }
 
-    /// `IETS_STATS=1`: allocation and phase counters on stderr.
-    pub fn print_stats(&self) {
-        let st = &self.arena.stats;
+    /// `IETS_STATS=1`: allocation and phase counters on stderr. The arena
+    /// figures are the run's, summed over every worker's arena; a fiber
+    /// running elsewhere right now has not folded its last task yet.
+    pub fn print_stats(&mut self) {
+        let a = self.arena_use();
         let c = self.counts();
         crate::errln!(
             "files={} thunks={} calls={} drvs={} arena_bytes={} arena_mapped={} rss_kb={} compile={:?} ir_size={}",
@@ -2538,8 +2572,8 @@ impl Evaluator {
             c.thunks,
             c.calls,
             c.derivations,
-            self.arena.bytes_allocated,
-            self.arena.mapped,
+            a.bytes,
+            a.mapped,
             std::fs::read_to_string("/proc/self/statm")
                 .ok()
                 .and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok())
@@ -2550,9 +2584,9 @@ impl Evaluator {
         for (i, name) in STAT_NAMES.iter().enumerate() {
             crate::errln!(
                 "{name:>12} count={:>9} bytes={:>11} ({:.1} MiB)",
-                st.counts[i],
-                st.bytes[i],
-                st.bytes[i] as f64 / (1 << 20) as f64
+                a.counts[i],
+                a.kind_bytes[i],
+                a.kind_bytes[i] as f64 / (1 << 20) as f64
             );
         }
         let mut line_table = 0usize;
@@ -2583,8 +2617,10 @@ impl Evaluator {
         if self.session.settings().stats >= 2 {
             #[cfg(feature = "stats2")]
             {
+                // the census is about duplicates inside one arena, so unlike
+                // the totals above it stays this worker's own
                 let mut out = String::new();
-                st.census.report(&mut out);
+                self.arena.stats.census.report(&mut out);
                 self.session.log.err(out.as_bytes());
             }
             #[cfg(not(feature = "stats2"))]

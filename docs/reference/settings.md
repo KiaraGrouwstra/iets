@@ -40,8 +40,14 @@ The evaluation counters — thunks, calls, derivations, compile time, in an
 A fiber adds its own to one run total whenever it parks or finishes its
 task, so the printed numbers cover the helper fibers, and the derivation
 count of a workload is the same at one worker and at four. Only a fiber
-running at that instant is not in the sum yet. Arena bytes and RSS stay
-the main fiber's own: each worker owns an arena.
+running at that instant is not in the sum yet.
+
+Each worker owns an arena, so the arena figures are summed the same way, on
+every fiber switch. Reporting one arena made memory look like it fell as
+workers were added, when it rises: on nixos-desktop the sum is ~630 MB at
+one worker and ~645 MB at four, because the string table is per arena and
+the same text is interned once per worker. `rss_kb` is the process, not an
+arena, and was always the whole run.
 
 | Variable | File | Type | Default | Effect |
 |:---|:---|:---|:---|:---|
@@ -52,7 +58,7 @@ the main fiber's own: each worker owns an arena.
 | `IETS_HANDOFF` | | usize | 8 | Queued tasks per awake worker that justify waking a sleeper. |
 | `IETS_FANOUT` | | u32 bitmask | 7 | Strict-demand fan-out: 1 deep walks, 2 coercions, 4 list builtins. |
 | `IETS_PAR_STATS` | | level | 0 | 1 prints the scheduler summary, 2 adds the sample timeline and the file table. |
-| `IETS_STATS` | | level | 0 | 1 prints allocation counts and bytes per object kind, RSS and glibc's `malloc_stats`; 2 adds the memory census — histograms, duplicates, objects never read — on a binary built with `--features stats2`. The hooks are compiled out otherwise. |
+| `IETS_STATS` | | level | 0 | 1 prints allocation counts and bytes per object kind, RSS and glibc's `malloc_stats`; 2 adds the memory census — histograms, duplicates, objects never read — on a binary built with `--features stats2`. The hooks are compiled out otherwise. Each worker allocates from its own arena, so `arena_bytes`, `arena_mapped` and the per-kind table are the sum over every arena, folded on each fiber switch. Setting this is what turns the fold on, at ~0.1% of instructions. |
 | `IETS_CACHE` | `cache` | Boolean | on | The tracing cache and the IR cache. Same as `--no-cache`. |
 | `IETS_CACHE_DIR` | `cache-dir` | path | `$XDG_CACHE_HOME/iets` | Cache root. The three stores live in its `trace/`, `ir/` and `inputs/` subdirectories, so the directory you name is never itself a removal target. A store subdirectory that already exists, holds something, and is not iets's is refused with an error, not wiped. `--cache-dir DIR` overrides it. |
 | `IETS_IR_STATS` | | set = on | off | One line per compiled file on stderr. |

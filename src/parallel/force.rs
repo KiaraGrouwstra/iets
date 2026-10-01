@@ -70,6 +70,9 @@ impl Driver for SyncEv {
         // a fiber parked in the middle of a task keeps its counters until it
         // is resumed, which a stats line printed meanwhile would not see
         ev.fold_counters();
+        // the arena stays with the worker, so the run's memory is the sum over
+        // workers; on a switch-in `w.arena` is the placeholder and folds zero
+        ev.fold_arena(&mut w.arena);
     }
 }
 

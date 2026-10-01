@@ -225,5 +225,23 @@ in builtins.foldl' (a: b: a + builtins.foldl' (x: y: x + y) 0 b) 0 rows'#]
   }
   let counts = ([1 2 4 $n] | uniq)
   let ok = ($cases | each {|c| run-case $iets $counts $c $with_nix })
+  # Every worker allocates from its own arena, so a stats line that reports
+  # one of them shrinks as workers are added. The sum does not: it rises a
+  # little, because the string table is per arena. A band, not equality.
+  # `xs` stays live across the deepSeq, so the arena can release none of it,
+  # and the outer list fans out, so helpers allocate most of it. Reporting
+  # the main arena alone gave 0.2% of the one-worker figure here.
+  let alloc = "let xs = builtins.genList (i: builtins.genList (j: { a = j; b = toString (i + j); }) 3000) 300; in builtins.length (builtins.deepSeq xs xs)"
+  let totals = ([1 4] | each {|w|
+    let r = (with-env {IETS_STATS: "1"} { ^$iets eval --strict --no-tracing-cache --workers $w -E $alloc | complete })
+    $r.stderr | lines | where $it =~ 'arena_bytes=' | first | parse -r 'arena_bytes=(?<b>\d+)' | get b.0 | into int
+  })
+  let ratio = ($totals.1 / $totals.0)
+  if $ratio >= 0.9 and $ratio <= 1.5 {
+    print $"ok   arena total is the run's, not one worker's \(($totals.0) -> ($totals.1) bytes\)"
+  } else {
+    print $"FAIL arena total follows the worker count: ($totals.0) at 1, ($totals.1) at 4"
+    exit 1
+  }
   if ($ok | any {|r| not $r }) { exit 1 }
 }
