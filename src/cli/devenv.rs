@@ -308,18 +308,31 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
 }
 
 /// `print-dev-env --watch-files`: one `watch_file` line for direnv, from the
-/// read set of the entry the same command without the flag wrote. Nothing is
-/// validated and nothing is evaluated: the entry of a run that has failed
-/// since still names the file whose fix direnv has to see. No entry prints
-/// nothing, and the caller keeps its own floor.
+/// read set the same command without the flag wrote. It validates and
+/// evaluates nothing, so a run that has failed since still names the file
+/// whose fix direnv has to see.
+///
+/// No read set is an error, because an empty line cannot be told from a shell
+/// that has nothing to watch outside the store. Evaluating here instead would
+/// need a daemon and would re-run the evaluation that just failed, under the
+/// configured builder rather than the caller's.
 fn print_watch_files(a: &EvalArgs) -> i32 {
     use crate::trace::store::Part;
-    let obs = run_for(a)
+    let Some(obs) = run_for(a)
         .cached(a, "print-dev-env")
         .cache
         .and_then(|c| c.part(Part::Readset))
         .and_then(|b| crate::trace::wire::decode_readset(&b))
-        .unwrap_or_default();
+    else {
+        let mut r = crate::log::Report::new(
+            "no-read-set",
+            "no print-dev-env read set for this shell, so direnv has nothing to watch: \
+             run `iets print-dev-env` for it first, or fix the error it reported",
+        );
+        // a hint prints for a usage error only, so the fix is in the message too
+        r.hint = Some("run `iets print-dev-env` for this shell, with the same flake ref".into());
+        return r.emit();
+    };
     let store = std::path::Path::new(crate::store::path::STORE_DIR);
     let own = crate::cachefs::root(a.cache_dir.as_deref());
     let skip: Vec<&std::path::Path> = std::iter::once(store).chain(own.as_deref()).collect();

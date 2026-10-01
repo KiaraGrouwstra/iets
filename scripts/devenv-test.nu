@@ -10,7 +10,8 @@
 #  h. a `git worktree` of this repo at a path nix has never copied: iets
 #     prints the same bash without fetching the root tree;
 #  i. `--watch-files` lists the files the shell read, for a plain directory
-#     and a git work tree, and nothing from the store;
+#     and a git work tree, and nothing from the store; with no entry it is an
+#     error, so direnv cannot mistake it for a shell with nothing to watch;
 #  j. it reads the cache entry and evaluates nothing;
 #  k. a real direnv with nix/direnvrc reloads when such a file is edited.
 # The scratch flakes sit on the nixpkgs this repo pins (lock written by hand,
@@ -245,10 +246,10 @@ def run-tests [ctx: record]: nothing -> int {
   ^git -C $tracked -c user.name=t -c user.email=t@example.org commit -q -m init
 
   let cold = (do { cd $watched; ^$iets print-dev-env --watch-files $watched | complete })
-  if $cold.exit_code == 0 and ($cold.stdout | is-empty) {
-    $res ++= [(ok "i. --watch-files with no entry: prints nothing, exit 0")]
+  if $cold.exit_code != 0 and ($cold.stdout | is-empty) and ($cold.stderr | str contains "print-dev-env") {
+    $res ++= [(ok "i. --watch-files with no entry: an error that names the command, empty stdout")]
   } else {
-    $res ++= [(bad $"i. --watch-files with no entry \(exit ($cold.exit_code)\)" $cold.stdout)]
+    $res ++= [(bad $"i. --watch-files with no entry \(exit ($cold.exit_code)\)" $cold.stdout $cold.stderr)]
   }
   for c in [[name dir extra]; [path $watched []] [git $tracked [".git/index"]]] {
     iets-env $ctx $c.dir $"($work)/watched.sh"

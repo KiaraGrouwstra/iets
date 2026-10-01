@@ -833,14 +833,16 @@ empty string leaves the environment alone.
 set of the cache entry that the same command without the flag wrote. It
 validates nothing, evaluates nothing and needs no daemon. Give it the same
 `FLAKEREF` and evaluation flags.
-stdout: one line, `watch_file 'PATH' 'PATH' ...`, for direnv to `eval`; nothing
-when there is no entry. The paths are the files, directory listings and path
+stdout: one line, `watch_file 'PATH' 'PATH' ...`, for direnv to `eval`. The paths are the files, directory listings and path
 kinds the evaluation observed outside `/nix/store` and iets's stores, the git
 index when it queried git, and the members of each path the expression
 copied. The flake's own source tree is not expanded, and environment
 variables have nothing to watch. The list stops at 500 paths, with a note on
 stderr. `docs/how-to/use-with-direnv.md` has the `.envrc`.
-Exit: 0.
+Exit: 0, and 1 with code `no-read-set` when there is no entry for this shell,
+because an empty line cannot be told from a shell that has nothing to watch
+outside the store. Run `print-dev-env` without the flag first; the flag never
+evaluates on its own.
 
 A `__structuredAttrs` shell gets its `.attrs.sh` and `.attrs.json`
 written next to the GC root (`PATH-attrs/`), or under

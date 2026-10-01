@@ -89,6 +89,12 @@ Some things are left out on purpose:
 entry and prints. If the evaluation fails, the entry of the last good run is
 still there, so direnv still watches the file you have to fix.
 
+With no entry at all it fails, with code `no-read-set` and empty stdout, so
+`eval` leaves the environment alone. That is on purpose: an empty line cannot
+be told from a shell with nothing to watch outside the store, and direnv would
+then sit there watching nothing. A first load that never evaluated gets this
+alongside the real error; fix that one.
+
 ## Use the NixOS module instead
 
 If you run NixOS, import `nixosModules.default`. It installs iets and
