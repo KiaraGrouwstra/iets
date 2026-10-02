@@ -525,8 +525,18 @@ pub fn watch_paths(obs: &[crate::trace::Obs], skip: &[&Path]) -> Vec<String> {
     let mut trees = Vec::new();
     for o in obs {
         match o {
-            Obs::File { path: p, .. } | Obs::Dir { path: p, .. } | Obs::Stat { path: p, .. } => {
-                out.extend(kept(p))
+            Obs::File { path: p, .. } | Obs::Dir { path: p, .. } => out.extend(kept(p)),
+            // A `Stat` observed a path's existence and kind, never its
+            // contents, and direnv can only compare an mtime. For a path that
+            // is there the mtime answers a question nobody asked: a git index
+            // refresh moves `.git`, so a build reloads the shell although
+            // `.git` is still a directory. A path observed `Missing` is the
+            // one worth watching: it has no mtime to churn, and direnv reads
+            // its creation as the change it is.
+            Obs::Stat { path: p, kind, .. } => {
+                if *kind == crate::trace::Kind::Missing {
+                    out.extend(kept(p))
+                }
             }
             Obs::Tree { root, filtered, .. } => {
                 trees.extend(kept(root).map(|r| (r, filtered.as_ref())))
@@ -775,6 +785,13 @@ mod tests {
                 path: b("local.nix"),
                 follow: false,
                 kind: crate::trace::Kind::Missing,
+            },
+            // a kind observation of a path that is there: not a watch, or a
+            // lock file inside `.git` reloads the shell
+            Obs::Stat {
+                path: b(".git"),
+                follow: true,
+                kind: crate::trace::Kind::Directory,
             },
             Obs::Dir {
                 path: b("conf.d"),

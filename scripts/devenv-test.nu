@@ -292,10 +292,13 @@ def run-tests [ctx: record]: nothing -> int {
   ^touch -d "5 seconds" $"($tracked)/versions.json"
   let again = (do $load $state)
   let reloaded = if ($again | is-empty) { "" } else { $again | from json | get -o GREETING | default "" }
-  if $first.GREETING? == "hi" and $"($tracked)/versions.json" in $watches and ($idle | is-empty) and $reloaded == "yo" {
-    $res ++= [(ok $"k. direnv: ($watches | length) watches on the first load, idle without an edit, reloads on an edit of versions.json")]
+  # `.git` itself is observed by kind only, and a git index refresh moves its
+  # mtime, so watching it would reload the shell after every build
+  let git_watched = ($"($tracked)/.git" in $watches)
+  if $first.GREETING? == "hi" and $"($tracked)/versions.json" in $watches and ($idle | is-empty) and $reloaded == "yo" and not $git_watched {
+    $res ++= [(ok $"k. direnv: ($watches | length) watches on the first load, .git not among them, idle without an edit, reloads on an edit of versions.json")]
   } else {
-    $res ++= [(bad "k. direnv reload" $"first GREETING: ($first.GREETING?)" $"watches: ($watches)" $"idle: ($idle)" $"after the edit: ($reloaded)")]
+    $res ++= [(bad "k. direnv reload" $"first GREETING: ($first.GREETING?)" $"watches: ($watches)" $".git watched: ($git_watched)" $"idle: ($idle)" $"after the edit: ($reloaded)")]
   }
 
   let fail = ($res | where not $it | length)
