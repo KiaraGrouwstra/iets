@@ -148,9 +148,54 @@ Leaves alone: `IETS_STATS`, because counters are not events;
 `--log-format internal-json`, because that schema is Nix's and a Nix client
 reads it; `src/trace/`, which is a cache and only shares a word.
 
-Not a goal: OpenTelemetry, spans, or a second binary encoding. A duration
-is an event with a `dur_us` field. A script turns the stream into a Chrome
-trace for perfetto if somebody wants to look at it that way.
+Not a goal: a second binary encoding for a hot group. At 10^8 records the
+honest answer is a counter, not a smaller record.
+
+## Where OpenTelemetry fits
+
+The question splits three ways: the protocol, the SDK, and the model.
+
+**The protocol is cheap here.** iets already depends on tonic and prost for
+the worker and store protocols, so an OTLP exporter is a prost message and a
+channel — a few hundred lines and no new dependency tree. The backend
+exists too: mon runs an OTLP collector on `:4317` over mTLS against the
+fleet CA, with pipelines for logs, metrics and traces into ClickHouse
+`otel`, and Grafana's traces explorer already points at `otel_traces`. So
+"nobody would see it" is not true.
+
+**The SDK is not cheap.** `opentelemetry` plus `opentelemetry_sdk` plus
+`opentelemetry-otlp` plus `tracing`, `tracing-subscriber` and
+`tracing-opentelemetry` is a stack, and it is async-first: a span costs an
+`Arc`, a provider read, a `Vec` of owned key-value pairs, and a batch queue
+behind a tokio task. It buys nothing that a prost message does not.
+
+**The model fits one half of iets.** It fits work that has a beginning, an
+end and one parent: a fetch, a file compiled, a plan, a build, an upload,
+and above all a *remote* build. A trace id carried into a grpc builder or a
+farm worker stitches eval, fetch, build and upload into one trace. A flat
+local stream cannot do that, and for the farm that is the whole point.
+
+It does not fit evaluation. A span is a scope on a thread; a thunk force
+parks, migrates to another worker and is resumed somewhere else. A forced
+value has many readers, so "what caused this store add" is a DAG, and a
+span parent would name whichever fiber forced it first — an artefact of
+scheduling, not a fact about the program. At 10^8 forces the answer is a
+counter anyway, so spans never reach that part of the evaluator.
+
+**Two things break if OTLP becomes the source of truth.** The stream is
+deterministic: two runs of the same evaluation produce the same bytes, which
+is how the cost of one write per line was proved to change nothing. Span ids
+are random and batches arrive out of order. And a 70 ms process must flush
+before it exits, while a collector that cannot be reached must never stall
+an evaluation.
+
+**So the stream stays the source of truth and OTLP is a sink.**
+`IETS_EVENTS_TO=otlp://host:4317` exports the groups that are span-shaped;
+`-` or a path keeps the JSON lines. One vocabulary, two renderings: an event
+with a `dur_us` becomes a span, the rest ride as span events. The semantic
+conventions have nothing for a build system, so the attribute names are ours
+either way. A script turns the JSON stream into a Chrome trace for perfetto,
+for the local case where no collector is wanted.
 
 ## Steps
 
@@ -163,6 +208,8 @@ trace for perfetto if somebody wants to look at it that way.
 5. The warm groups: `drv`, `io`.
 6. The hot groups behind `--features trace-eval`, and `IETS_PAR_STATS=2`
    re-expressed as the `sched` group's sampler.
+7. The OTLP sink, for the groups whose events carry a duration, and trace
+   propagation into a remote builder.
 
 Step 1 is worth doing whatever happens to the rest.
 
@@ -177,3 +224,8 @@ Step 1 is worth doing whatever happens to the rest.
   that only wants a count does not need it. It could be opt-in.
 * Whether a hot group needs a binary encoding. 10^8 records is 10 GB of
   JSON; at that point the honest answer is a counter, not an event.
+* Whether the worker protocol carries a `traceparent`. Step 7 needs one
+  field in the grpc request for a remote build to join the caller's trace,
+  and an external protocol does not grow a field without a conversation
+  first. The alternative keeps the remote side a trace of its own, which
+  costs the join.
