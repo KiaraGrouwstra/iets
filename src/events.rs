@@ -1,7 +1,8 @@
 //! Instrumentation: one JSON object per line, naming what an evaluation did.
 //! The `IETS_STATS` counters say how much; these say which path, from where,
-//! and how big. `IETS_EVENTS=PATH` opens the stream (`-` is stderr), and a
-//! host opens it with [`Events::write_to`] (docs/reference/settings.md).
+//! and how big. `IETS_EVENTS` names the groups a run watches and
+//! `IETS_EVENTS_TO` where they go; a host calls [`Events::watch`] and
+//! [`Events::write_to`] instead (docs/reference/events.md).
 //!
 //! The stream is for a program to read: every record has an `event` name and
 //! keeps the fields it was published with. Adding a field is not a change a
@@ -9,6 +10,7 @@
 
 use std::cell::RefCell;
 use std::io::Write;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 thread_local! {
@@ -17,26 +19,124 @@ thread_local! {
     static LINE: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Where one session's events go. `None` is the normal case: nothing asked
-/// for them, so no hook builds a record.
+/// A part of the evaluator, and the unit a run turns on. A group costs what
+/// its rate class costs, so `all` takes the cold ones and a warm one is
+/// named or left out (docs/reference/events.md).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Group {
+    Syntax,
+    Ir,
+    Import,
+    Store,
+    Drv,
+    Fetch,
+    Flake,
+    Cache,
+    Io,
+    Build,
+    Lint,
+    Error,
+}
+
+impl Group {
+    /// Every group, in the order `iets help events` lists them.
+    pub const ALL: [Group; 12] = [
+        Group::Syntax,
+        Group::Ir,
+        Group::Import,
+        Group::Store,
+        Group::Drv,
+        Group::Fetch,
+        Group::Flake,
+        Group::Cache,
+        Group::Io,
+        Group::Build,
+        Group::Lint,
+        Group::Error,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Group::Syntax => "syntax",
+            Group::Ir => "ir",
+            Group::Import => "import",
+            Group::Store => "store",
+            Group::Drv => "drv",
+            Group::Fetch => "fetch",
+            Group::Flake => "flake",
+            Group::Cache => "cache",
+            Group::Io => "io",
+            Group::Build => "build",
+            Group::Lint => "lint",
+            Group::Error => "error",
+        }
+    }
+
+    /// A group whose rate makes it worth naming: `all` leaves it out.
+    pub fn warm(self) -> bool {
+        matches!(self, Group::Drv | Group::Io)
+    }
+
+    fn bit(self) -> u32 {
+        1 << self as u32
+    }
+
+    /// The mask `names` asks for: a comma-separated list, or `all` for every
+    /// cold group. The error names what was not understood, because a
+    /// mistyped group would otherwise watch nothing in silence.
+    pub fn mask(names: &str) -> std::result::Result<u32, String> {
+        let mut mask = 0;
+        for name in names.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+            if name == "all" {
+                mask |= Group::ALL
+                    .iter()
+                    .filter(|g| !g.warm())
+                    .fold(0, |m, g| m | g.bit());
+                continue;
+            }
+            match Group::ALL.iter().find(|g| g.name() == name) {
+                Some(g) => mask |= g.bit(),
+                None => {
+                    let all: Vec<&str> = Group::ALL.iter().map(|g| g.name()).collect();
+                    return Err(format!(
+                        "'{name}' is not an event group (all, {})",
+                        all.join(", ")
+                    ));
+                }
+            }
+        }
+        Ok(mask)
+    }
+}
+
+/// Where one session's events go, and which groups it wants. No group is
+/// the normal case: nothing asked for them, so no hook builds a record.
 #[derive(Default)]
 pub struct Events {
+    groups: AtomicU32,
     sink: OnceLock<Option<Mutex<Box<dyn Write + Send>>>>,
 }
 
 impl Events {
+    /// Watches the groups in `mask` ([`Group::mask`] parses the names).
+    pub fn watch(&self, mask: u32) {
+        self.groups.store(mask, Ordering::Relaxed);
+    }
+
     /// Sends every event to `w`.
     pub fn write_to(&self, w: Box<dyn Write + Send>) {
         let _ = self.sink.set(Some(Mutex::new(w)));
     }
 
-    /// Opens what `IETS_EVENTS` names, if it names anything. A path that
-    /// does not open is reported once and the stream stays off, as a
+    /// Watches what `IETS_EVENTS` names, where `IETS_EVENTS_TO` says. A path
+    /// that does not open is reported once and the stream stays off, as a
     /// `json-log-path` that does not open is.
     pub fn open(&self, settings: &crate::settings::Settings) {
-        let Some(path) = settings.events.as_deref() else {
+        if settings.events == 0 {
             return;
-        };
+        }
+        self.watch(settings.events);
+        let path = settings.events_to.as_deref().unwrap_or("-");
         if path == "-" {
             self.write_to(Box::new(std::io::stderr()));
             return;
@@ -50,15 +150,19 @@ impl Events {
         }
     }
 
-    /// Whether anything reads the stream.
-    pub fn on(&self) -> bool {
-        self.sink.get().is_some_and(Option::is_some)
+    /// Whether `group` is watched. A site that must gather something before
+    /// it can fill a record asks this first.
+    pub fn on(&self, group: Group) -> bool {
+        self.groups.load(Ordering::Relaxed) & group.bit() != 0
     }
 
-    /// A builder for one `{"event": NAME, …}` line, and `None` when nothing
-    /// reads the stream: a call site asks first and builds nothing for a run
-    /// that does not watch. [`Rec`] writes the line when it drops.
-    pub fn rec<'a>(&'a self, event: &str) -> Option<Rec<'a>> {
+    /// A builder for one `{"event": NAME, …}` line, and `None` when the
+    /// group is not watched: a call site asks first and builds nothing for a
+    /// run that does not want it. [`Rec`] writes the line when it drops.
+    pub fn rec<'a>(&'a self, group: Group, event: &str) -> Option<Rec<'a>> {
+        if !self.on(group) {
+            return None;
+        }
         let Some(Some(sink)) = self.sink.get() else {
             return None;
         };

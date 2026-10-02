@@ -2554,7 +2554,11 @@ impl Evaluator {
         pos: Pos,
     ) {
         self.nr_store_adds += 1;
-        let Some(mut r) = self.session.events.rec("store-add") else {
+        let Some(mut r) = self
+            .session
+            .events
+            .rec(crate::events::Group::Store, "store-add")
+        else {
             return;
         };
         r.set("path", sp)

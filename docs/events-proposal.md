@@ -279,7 +279,9 @@ event stream's split of what from where.
 1. The record builder and `json_escape`, with `store-add` as its first user.
    Done: a `Field` trait the domain types implement, and the stream costs
    0.42% of a `hello` evaluation instead of 1.0%.
-2. The group enum, the two knobs, and the off-group check.
+2. The group enum, the two knobs, and the off-group check. Done: twelve
+   groups, `IETS_EVENTS` names them and `IETS_EVENTS_TO` takes the sink, and
+   a group that is not watched costs one relaxed load and a branch.
 3. The registry, `iets events --schema`, and the drift test.
 4. The cold groups: `ir`, `import`, `fetch`, `cache`, `flake`, `build`,
    `lint`, `error`.

@@ -1,19 +1,62 @@
 # Events
 
-`IETS_EVENTS=PATH` makes a run write one JSON object per line to `PATH`; `-`
-is stderr, and a unix socket is connected to. The stream says what an
-evaluation did. The `IETS_STATS` counters say how much of it
+`IETS_EVENTS` names the parts of a run to watch, and `IETS_EVENTS_TO` says
+where the records go: a file, a unix socket, or `-` for stderr, which is the
+default. Each record is one JSON object on one line. The stream says what an
+evaluation did; the `IETS_STATS` counters say how much of it
 (`docs/reference/settings.md`).
+
+```
+IETS_EVENTS=store                       # one group, to stderr
+IETS_EVENTS=store,fetch                 # two
+IETS_EVENTS=all IETS_EVENTS_TO=/tmp/e.jsonl
+```
 
 A reader matches on the `event` field and reads the fields it knows. A new
 field, and a new event name, are not changes a reader must follow. A field
 that is there keeps its meaning. The order the fields appear in is not part
 of the promise, and `event` is first only as a courtesy to `grep`.
 
-Nothing is written when the variable is unset, and no hook builds a record,
-so an unwatched run pays nothing. A watched one pays about 0.4% of its
+Nothing is written when no group is named, and no hook builds a record, so
+an unwatched run pays nothing. A watched one pays about 0.4% of its
 instructions, and one line is one `write`: 337 events of a `hello`
 evaluation cost 0.42% on bld1.
+
+## The groups
+
+A group is the unit that is turned on, and its class is what it costs. A
+cold group may be on in any run, and `all` takes every one of them. A warm
+group runs often enough to be worth naming, so `all` leaves it out and it
+is asked for by name.
+
+A group that is not yet instrumented is still a name this binary accepts,
+and it writes nothing. The **Events** column is what exists today.
+
+| Group | Covers | Class | Events |
+|:---|:---|:---|:---|
+| `syntax` | a file parsed | cold | — |
+| `ir` | compiled, or loaded from the IR cache | cold | — |
+| `import` | a file imported, and the cache hit that answered it | cold | — |
+| `store` | a path added, a `.drv` written | cold | `store-add` |
+| `drv` | a derivation instantiated | warm | — |
+| `fetch` | an input fetched | cold | — |
+| `flake` | a reference resolved, a lock node used | cold | — |
+| `cache` | the tracing cache and the input store: hit, miss, write | cold | — |
+| `io` | `readFile`, `readDir`, `pathExists`, `hashFile` | warm | — |
+| `build` | plan, missing, build, upload | cold | — |
+| `lint` | each warning | cold | — |
+| `error` | each error raised | cold | — |
+
+A name that is not a group is an error, not a silence: a mistyped group
+would otherwise watch nothing and look like a quiet run.
+
+```
+$ IETS_EVENTS=stor iets eval -f . -A x
+error: IETS_EVENTS: 'stor' is not an event group (all, syntax, ir, import, …)
+```
+
+`docs/events-proposal.md` has the plan the rest of the table follows, and
+why evaluation itself is a sampled flame graph instead of a group.
 
 ## `store-add`
 
