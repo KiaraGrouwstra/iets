@@ -190,6 +190,29 @@ pub struct Evaluator {
     session: std::sync::Arc<crate::session::Session>,
 }
 
+/// A position in a record, `file:line:column`, the way an error names one.
+pub enum At {
+    Known(&'static [u8], u32, u32),
+    None,
+}
+
+impl crate::events::Field for At {
+    fn write(self, out: &mut Vec<u8>) {
+        let start = out.len();
+        match self {
+            At::Known(file, line, col) => {
+                out.extend_from_slice(file);
+                for n in [line, col] {
+                    out.push(b':');
+                    crate::events::push_u64(out, n as u64);
+                }
+            }
+            At::None => out.extend_from_slice("«none»".as_bytes()),
+        }
+        crate::events::quote_in_place(out, start);
+    }
+}
+
 /// What an evaluation knows about one store path.
 #[derive(Clone, Default)]
 pub struct Known {
@@ -2531,15 +2554,25 @@ impl Evaluator {
         pos: Pos,
     ) {
         self.nr_store_adds += 1;
-        if self.session.events.on() {
-            let ev = serde_json::json!({
-                "path": sp.to_full_string(),
-                "kind": kind,
-                "size": size,
-                "from": from.describe(),
-                "at": self.describe_pos(pos),
-            });
-            self.session.events.emit("store-add", ev);
+        let Some(mut r) = self.session.events.rec("store-add") else {
+            return;
+        };
+        r.set("path", sp)
+            .set("kind", kind)
+            .set("size", size)
+            .set("from", from)
+            .set("at", self.at(pos));
+    }
+
+    /// `pos` as a record field, without the `String` [`Self::describe_pos`]
+    /// builds.
+    pub fn at(&self, pos: Pos) -> At {
+        match self.file_of(pos) {
+            Some((f, off)) => {
+                let (line, col) = f.line_col(off);
+                At::Known(&f.path, line, col)
+            }
+            None => At::None,
         }
     }
 

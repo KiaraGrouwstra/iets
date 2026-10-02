@@ -154,6 +154,16 @@ impl StorePath {
     }
 }
 
+impl crate::events::Field for &StorePath {
+    fn write(self, out: &mut Vec<u8>) {
+        let start = out.len();
+        out.extend_from_slice(STORE_DIR.as_bytes());
+        out.push(b'/');
+        out.extend_from_slice(self.base_name().as_bytes());
+        crate::events::quote_in_place(out, start);
+    }
+}
+
 /// Mirrors store-dir-config.cc:makeStorePath(type, std::string_view hash, name).
 pub fn make_store_path_str(ty: &str, hash: &str, name: &str) -> Result<StorePath, StorePathError> {
     let mut s = String::with_capacity(ty.len() + hash.len() + STORE_DIR.len() + name.len() + 3);

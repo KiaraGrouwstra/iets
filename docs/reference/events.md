@@ -7,12 +7,13 @@ evaluation did. The `IETS_STATS` counters say how much of it
 
 A reader matches on the `event` field and reads the fields it knows. A new
 field, and a new event name, are not changes a reader must follow. A field
-that is there keeps its meaning.
+that is there keeps its meaning. The order the fields appear in is not part
+of the promise, and `event` is first only as a courtesy to `grep`.
 
 Nothing is written when the variable is unset, and no hook builds a record,
-so an unwatched run pays nothing. A watched one pays about 1% of its
+so an unwatched run pays nothing. A watched one pays about 0.4% of its
 instructions, and one line is one `write`: 337 events of a `hello`
-evaluation cost 1.0% on bld1.
+evaluation cost 0.42% on bld1.
 
 ## `store-add`
 
@@ -39,7 +40,7 @@ the exact record.
 
 ```
 $ IETS_EVENTS=- iets eval --no-cache --raw -f ./nixpkgs -A hello.drvPath
-{"at":"/tmp/nixpkgs/pkgs/stdenv/generic/make-derivation.nix:693:11","event":"store-add","from":"/tmp/nixpkgs/pkgs/build-support/fetchurl/builder.sh","kind":"tree","path":"/nix/store/d0h3b1fj9hahy3lvh2kpny75w47la15s-builder.sh","size":5288}
+{"event":"store-add","path":"/nix/store/d0h3b1fj9hahy3lvh2kpny75w47la15s-builder.sh","kind":"tree","size":5288,"from":"/tmp/nixpkgs/pkgs/build-support/fetchurl/builder.sh","at":"/tmp/nixpkgs/pkgs/stdenv/generic/make-derivation.nix:693:11"}
 ```
 
 Totals, biggest first:

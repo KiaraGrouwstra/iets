@@ -69,21 +69,32 @@ impl SrcPath {
 
     /// Where the bytes are, for a message: the local root, the input store
     /// entry it is served out of, or the text itself. `(filtered)` when a
-    /// filter keeps part of the tree out of the copy.
-    pub fn describe(&self) -> String {
-        let (base, accepted) = match &self.src {
-            Src::Fs { root, accepted } => (root.display().to_string(), accepted),
-            Src::Spool { name, accepted } => (format!("input-store:{name}"), accepted),
-            Src::Mem(_) => return "text".to_string(),
+    /// filter keeps part of the tree out of the copy. Appends, because the
+    /// event stream builds a record without allocating.
+    pub fn describe_into(&self, out: &mut Vec<u8>) {
+        use std::os::unix::ffi::OsStrExt;
+        let accepted = match &self.src {
+            Src::Fs { root, accepted } => {
+                out.extend_from_slice(root.as_os_str().as_bytes());
+                accepted
+            }
+            Src::Spool { name, accepted } => {
+                out.extend_from_slice(b"input-store:");
+                out.extend_from_slice(name.as_bytes());
+                accepted
+            }
+            Src::Mem(_) => {
+                out.extend_from_slice(b"text");
+                return;
+            }
         };
-        let sub = String::from_utf8_lossy(&self.rel);
-        let sep = if self.rel.is_empty() { "" } else { "/" };
-        let filtered = if accepted.is_some() {
-            " (filtered)"
-        } else {
-            ""
-        };
-        format!("{base}{sep}{sub}{filtered}")
+        if !self.rel.is_empty() {
+            out.push(b'/');
+            out.extend_from_slice(&self.rel);
+        }
+        if accepted.is_some() {
+            out.extend_from_slice(b" (filtered)");
+        }
     }
 
     /// `sub` below this path.
@@ -119,6 +130,14 @@ pub struct SourceOrigin {
     /// `AddMultipleToStore` needs, so no upload path hashes the tree a second time. `None`
     /// for a text, and for a store path the plan must hash itself.
     pub nar: Option<(Hash, u64)>,
+}
+
+impl crate::events::Field for &SrcPath {
+    fn write(self, out: &mut Vec<u8>) {
+        let start = out.len();
+        self.describe_into(out);
+        crate::events::quote_in_place(out, start);
+    }
 }
 
 impl SourceOrigin {
