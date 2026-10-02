@@ -18,6 +18,7 @@ pub mod config;
 pub mod devenv;
 pub mod error;
 pub mod eval;
+pub mod events;
 pub mod fetch;
 pub(crate) mod flake;
 pub mod ignored;

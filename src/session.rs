@@ -17,6 +17,8 @@ use crate::settings::Settings;
 #[derive(Default)]
 pub struct Session {
     pub log: Log,
+    /// Where this run's instrumentation events go (`crate::events`).
+    pub events: crate::events::Events,
     settings: std::sync::OnceLock<Settings>,
     /// What this run was asked for and does not do (`crate::ignored`).
     pub ignored: crate::ignored::Ignored,

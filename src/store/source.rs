@@ -67,6 +67,25 @@ impl SrcPath {
         self
     }
 
+    /// Where the bytes are, for a message: the local root, the input store
+    /// entry it is served out of, or the text itself. `(filtered)` when a
+    /// filter keeps part of the tree out of the copy.
+    pub fn describe(&self) -> String {
+        let (base, accepted) = match &self.src {
+            Src::Fs { root, accepted } => (root.display().to_string(), accepted),
+            Src::Spool { name, accepted } => (format!("input-store:{name}"), accepted),
+            Src::Mem(_) => return "text".to_string(),
+        };
+        let sub = String::from_utf8_lossy(&self.rel);
+        let sep = if self.rel.is_empty() { "" } else { "/" };
+        let filtered = if accepted.is_some() {
+            " (filtered)"
+        } else {
+            ""
+        };
+        format!("{base}{sep}{sub}{filtered}")
+    }
+
     /// `sub` below this path.
     pub fn join(mut self, sub: &[u8]) -> SrcPath {
         if !sub.is_empty() {

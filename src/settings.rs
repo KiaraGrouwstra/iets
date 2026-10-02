@@ -54,6 +54,8 @@ pub struct Settings {
     pub par_stats: u8,
     /// `IETS_STATS`: 1 the evaluator counters, 2 adds the memory census.
     pub stats: u8,
+    /// `IETS_EVENTS`: where the instrumentation events go, `-` for stderr.
+    pub events: Option<String>,
     /// `cache`, `IETS_CACHE`: the tracing and IR caches.
     pub cache: bool,
     /// `cache-dir`, `IETS_CACHE_DIR`: cache root, below `--cache-dir`.
@@ -252,6 +254,7 @@ impl Settings {
             fanout: env.num("IETS_FANOUT")?.unwrap_or(7),
             par_stats: env.level("IETS_PAR_STATS"),
             stats: env.level("IETS_STATS"),
+            events: env.str("IETS_EVENTS"),
             cache: env.flag("IETS_CACHE", c.bool("cache")?, true)?,
             cache_dir: env.dir("IETS_CACHE_DIR").or(c.str("cache-dir")?),
             ir_stats: env.set("IETS_IR_STATS"),

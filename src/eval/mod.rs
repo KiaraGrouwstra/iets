@@ -19,7 +19,7 @@ use crate::parallel::shared::SharedMap;
 use crate::runtime::arena::{STAT_NAMES, Stat};
 use crate::runtime::*;
 use crate::store::path::{STORE_DIR, StorePath};
-use crate::store::source::SourceOrigin;
+use crate::store::source::{SourceOrigin, SrcPath};
 use crate::syntax::ast::FileId;
 use crate::syntax::symbol::{FxHashMap, Interner, Sym};
 
@@ -2516,6 +2516,30 @@ impl Evaluator {
             derivations: t.derivations + self.drv.nr_derivations,
             store_adds: t.store_adds + self.nr_store_adds,
             compile: t.compile + self.t_compile,
+        }
+    }
+
+    /// Count a store path this evaluation made, and name it on the event
+    /// stream: what Nix would `addToStore` or `addTextToStore`. `size` is
+    /// the NAR size of a tree, the byte count of a flat add or a text.
+    pub fn note_store_add(
+        &mut self,
+        sp: &StorePath,
+        kind: &'static str,
+        size: u64,
+        from: &SrcPath,
+        pos: Pos,
+    ) {
+        self.nr_store_adds += 1;
+        if self.session.events.on() {
+            let ev = serde_json::json!({
+                "path": sp.to_full_string(),
+                "kind": kind,
+                "size": size,
+                "from": from.describe(),
+                "at": self.describe_pos(pos),
+            });
+            self.session.events.emit("store-add", ev);
         }
     }
 

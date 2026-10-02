@@ -580,14 +580,15 @@ fn add_path_inner(
         }
     };
     let mut accepted: Option<HashSet<PathBuf>> = filter.map(|_| HashSet::new());
-    let mut nar_size = 0u64;
+    let nar_size: u64;
     let hash = match method {
         // only `outputHashMode` reaches it, never a path added to the store
         IngestionMethod::Text => unreachable!("a source tree is not text addressed"),
-        IngestionMethod::Flat => hash_bytes(
-            HashAlgo::Sha256,
-            &at.read(ev, true).map_err(|e| read_error(e, path, pos))?,
-        ),
+        IngestionMethod::Flat => {
+            let bytes = at.read(ev, true).map_err(|e| read_error(e, path, pos))?;
+            nar_size = bytes.len() as u64;
+            hash_bytes(HashAlgo::Sha256, &bytes)
+        }
         IngestionMethod::Recursive => {
             // The observation records `accepted`, which is the dump's own decisions unless
             // an enclosing tree's `parent` set is the only thing narrowing them: then the
@@ -655,7 +656,12 @@ fn add_path_inner(
         }
     };
     let sp = make_fixed_output_path(method, &hash, name, &refs).map_err(store_err)?;
-    ev.nr_store_adds += 1;
+    let kind = if method == IngestionMethod::Recursive {
+        "tree"
+    } else {
+        "flat"
+    };
+    ev.note_store_add(&sp, kind, nar_size, &at, pos);
     if method == IngestionMethod::Recursive {
         if on_disk {
             let at = SrcPath::fs(resolved, accepted.map(Arc::new).or(parent));
@@ -862,10 +868,8 @@ fn to_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let h = hash_bytes(HashAlgo::Sha256, contents.bytes);
     let sp = make_text_path(utf8(name, pos)?, &h, &refs)
         .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, pos))?;
-    ev.nr_store_adds += 1;
-    ev.known.add(
-        sp.clone(),
-        SourceOrigin::text(contents.bytes.to_vec(), refs),
-    );
+    let o = SourceOrigin::text(contents.bytes.to_vec(), refs);
+    ev.note_store_add(&sp, "text", contents.bytes.len() as u64, &o.at, pos);
+    ev.known.add(sp.clone(), o);
     Ok(store_path_string(ev, &sp))
 }

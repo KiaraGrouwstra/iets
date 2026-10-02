@@ -76,6 +76,7 @@ fn main() {
     if let Err(e) = session.load_settings(&options) {
         exit(e.report())
     }
+    session.events.open(session.settings());
     if let Some(name) = classic_name() {
         exit(on_big_stack(move || cli::classic::dispatch(&name, &argv)))
     }

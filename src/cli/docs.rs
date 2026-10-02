@@ -71,6 +71,11 @@ pub const PAGES: &[Page] = &[
         include_str!("../../docs/reference/settings.md"),
     ),
     embedded(
+        "events",
+        "the JSON event stream of 'IETS_EVENTS'",
+        include_str!("../../docs/reference/events.md"),
+    ),
+    embedded(
         "errors",
         "the error codes, the exit codes and the log records",
         include_str!("../../docs/reference/errors.md"),

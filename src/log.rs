@@ -213,7 +213,7 @@ impl Log {
     }
 }
 
-fn open_sink(path: &std::path::Path) -> std::io::Result<Box<dyn Write + Send>> {
+pub(crate) fn open_sink(path: &std::path::Path) -> std::io::Result<Box<dyn Write + Send>> {
     use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
     if std::fs::metadata(path).is_ok_and(|m| m.file_type().is_socket()) {
         return Ok(Box::new(std::os::unix::net::UnixStream::connect(path)?));

@@ -604,7 +604,7 @@ pub fn copy_path_to_store(
         }
     };
     let full = ev.arena.alloc_bytes(sp.to_full_string().as_bytes());
-    ev.nr_store_adds += 1;
+    ev.note_store_add(&sp, "tree", nar_size, &origin, pos);
     ev.src_to_store.insert(path.to_vec(), full);
     let origin_on_disk = origin.local().is_some();
     let o = SourceOrigin::tree(origin, hash, nar_size);

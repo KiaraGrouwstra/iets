@@ -152,6 +152,7 @@ behaviour differs on purpose,
 | [reference/classic.md](docs/reference/classic.md) | what each classic name handles |
 | [reference/settings.md](docs/reference/settings.md) | `iets.toml`, `nix.conf` and every `IETS_*` variable |
 | [reference/errors.md](docs/reference/errors.md) | error codes, exit codes, log records |
+| [reference/events.md](docs/reference/events.md) | the `IETS_EVENTS` JSON stream |
 | [reference/lints.md](docs/reference/lints.md) | every lint |
 | [reference/syntax-tree.md](docs/reference/syntax-tree.md) | the JSON form of the syntax tree |
 | [reference/builtins.md](docs/reference/builtins.md) | the primop surface |
