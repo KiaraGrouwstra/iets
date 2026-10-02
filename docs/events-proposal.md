@@ -62,6 +62,10 @@ Each group has a rate class, which decides how it may be built.
 | `sched` | task spawned, stolen, parked; a fiber switch | hot |
 | `eval` | a thunk forced, a call, a select miss, a `tryEval` scope | hot |
 
+A hot group is not a stream of records. Nobody reads 10^8 lines. What a hot
+group gives is a counter, or a sampled stack — see **A flame graph for
+evaluation**.
+
 Cold groups may be on in any run. Warm groups are off unless named. Hot
 groups are not in the default binary at all: they are behind a cargo
 feature, as the census is, so the force path keeps no branch it does not
@@ -197,6 +201,79 @@ conventions have nothing for a build system, so the attribute names are ours
 either way. A script turns the JSON stream into a Chrome trace for perfetto,
 for the local case where no collector is wanted.
 
+## A flame graph for evaluation
+
+An event per call is the wrong instrument for evaluation, and so is a span.
+The question about an evaluation is "where did the time go", and the answer
+has a shape: a stack with a weight. That is the third mechanism, the
+sampler, and it is the one part of this proposal with a finished design
+elsewhere to learn from.
+
+### What Nix does
+
+`--eval-profiler flamegraph` (Nix 2.30) keeps a shadow stack through a
+`preFunctionCall` and a `postFunctionCall` hook, and on **every** call it
+reads `high_resolution_clock`; when 1/99 s has passed since the last sample
+it does `callCount[stack] += 1`, hashing the whole stack as the key. It
+flushes folded lines every two seconds: `frame;frame;frame <count>`, which
+`flamegraph.pl` and every compatible tool read
+(`src/libexpr/eval-profiler.cc`).
+
+The output format is right and iets should produce exactly it. The sampling
+is not sampling: the clock read is paid per call, whether or not a sample
+is taken. At 48 million calls for one `hello` that is a syscall-free but
+real ~20 ns each, about a second of overhead to collect 99 samples a second.
+
+### What iets should do instead
+
+**Do not read the clock on the call path.** A timer thread sets a flag; the
+call path tests it. iets already has that shape: `force::SAMPLE_POS` is an
+`AtomicBool` and `MAIN_POS` an `AtomicU64` that the `IETS_PAR_STATS=2`
+thread samples. Generalise it: one relaxed load and a branch per call, and
+the stack is hashed only when the flag is set, 99 times a second.
+
+**Keep the shadow stack out of the default binary.** A per-fiber
+`Vec<u32>` of frame ids costs two stores per call. That is affordable but
+not free, so it lives behind `--features profile-eval`, as the memory
+census lives behind `stats2`. A binary without the feature has no push, no
+pop and no branch.
+
+**A frame is a `u32`, symbolised at the end.** The call-site `Pos` plus the
+lambda's name symbol identify a frame, and both are already interned;
+`describe_pos` turns them into `file:line:col:name` when the profile is
+written, not while it is collected. Cap the depth, so hashing a sample
+stays bounded.
+
+**Sample on the worker, at a call boundary.** Reading another thread's
+shadow stack while it runs is a race, so each worker samples its own fiber
+when it sees the flag. The bias is the same one Nix has: time inside one
+long primop — a NAR hash, a regex — lands at the call that entered it, not
+inside it. `perf` already answers that side, and a sample at every thunk
+force narrows it.
+
+**Weigh by what is scarce, not only by time.** The sampler adds 1 to a
+stack's count today. Add the arena bytes allocated since the last sample
+instead, and the same machinery draws an allocation flame graph — which
+stack built the 630 MB that `nixos-desktop` holds. That is the question
+`IETS_STATS=2` answers by object kind and cannot answer by call stack, and
+Nix's profiler cannot answer at all.
+
+**One graph, merged over workers.** Each worker folds its own samples; the
+counts merge at the end into CPU time across the run. Laziness makes the
+cost of a thunk land under whichever fiber forced it first, so two runs at
+four workers do not fold identically. A profile is still honest — the
+stack really was on CPU — but a profile to *compare* wants `--workers 1`,
+as the bench workloads already use.
+
+### The flags
+
+`eval-profiler`, `eval-profiler-frequency` and `eval-profile-file` are
+Nix's names, and `docs/reference/settings.md` lists all three as not
+implemented. This implements them, so a classic `nix eval --eval-profiler
+flamegraph` works and its output feeds the same tools. The native knob is
+`IETS_PROFILE=eval`, with `IETS_PROFILE_TO` for the file, matching the
+event stream's split of what from where.
+
 ## Steps
 
 1. The record builder and `json_escape`, with `store-add` as its first user.
@@ -206,10 +283,13 @@ for the local case where no collector is wanted.
 4. The cold groups: `ir`, `import`, `fetch`, `cache`, `flake`, `build`,
    `lint`, `error`.
 5. The warm groups: `drv`, `io`.
-6. The hot groups behind `--features trace-eval`, and `IETS_PAR_STATS=2`
-   re-expressed as the `sched` group's sampler.
+6. The sampler: the flag, the shadow stack behind `--features profile-eval`,
+   folded output, the three Nix flags, and the allocation weight. It needs
+   nothing from steps 2 to 5 and is the answer to "where did the time go".
 7. The OTLP sink, for the groups whose events carry a duration, and trace
    propagation into a remote builder.
+8. The hot `sched` group, and `IETS_PAR_STATS=2` re-expressed as its
+   sampler.
 
 Step 1 is worth doing whatever happens to the rest.
 
@@ -224,6 +304,9 @@ Step 1 is worth doing whatever happens to the rest.
   that only wants a count does not need it. It could be opt-in.
 * Whether a hot group needs a binary encoding. 10^8 records is 10 GB of
   JSON; at that point the honest answer is a counter, not an event.
+* Whether the shadow stack earns its place in the default binary. Two
+  stores per call is perhaps 1% to 3%, and it would make a profile
+  something a user turns on, not something they rebuild for.
 * Whether the worker protocol carries a `traceparent`. Step 7 needs one
   field in the grpc request for a remote build to join the caller's trace,
   and an external protocol does not grow a field without a conversation
