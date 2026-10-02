@@ -151,6 +151,7 @@ pub struct Evaluator {
     current_system: &'static str,
     pub nr_thunks: u64,
     pub nr_function_calls: u64,
+    pub nr_store_adds: u64,
     pub t_compile: std::time::Duration,
     /// Where those counters and `drv.nr_derivations` go when this fiber
     /// finishes a task. Shared, so a stats line covers every fiber.
@@ -439,6 +440,7 @@ impl EvalConfig {
             current_system: self.system,
             nr_thunks: 0,
             nr_function_calls: 0,
+            nr_store_adds: 0,
             t_compile: std::time::Duration::ZERO,
             totals: Default::default(),
             fold_arenas: crate::session::Session::current().settings().stats >= 1,
@@ -2512,6 +2514,7 @@ impl Evaluator {
             thunks: t.thunks + self.nr_thunks,
             calls: t.calls + self.nr_function_calls,
             derivations: t.derivations + self.drv.nr_derivations,
+            store_adds: t.store_adds + self.nr_store_adds,
             compile: t.compile + self.t_compile,
         }
     }
@@ -2552,10 +2555,12 @@ impl Evaluator {
             thunks: self.nr_thunks,
             calls: self.nr_function_calls,
             derivations: self.drv.nr_derivations,
+            store_adds: self.nr_store_adds,
             compile: self.t_compile,
         });
         self.nr_thunks = 0;
         self.nr_function_calls = 0;
+        self.nr_store_adds = 0;
         self.drv.nr_derivations = 0;
         self.t_compile = std::time::Duration::ZERO;
     }
@@ -2567,11 +2572,12 @@ impl Evaluator {
         let a = self.arena_use();
         let c = self.counts();
         crate::errln!(
-            "files={} thunks={} calls={} drvs={} arena_bytes={} arena_mapped={} rss_kb={} compile={:?} ir_size={}",
+            "files={} thunks={} calls={} drvs={} store_adds={} arena_bytes={} arena_mapped={} rss_kb={} compile={:?} ir_size={}",
             self.files.len(),
             c.thunks,
             c.calls,
             c.derivations,
+            c.store_adds,
             a.bytes,
             a.mapped,
             std::fs::read_to_string("/proc/self/statm")

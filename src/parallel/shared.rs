@@ -219,6 +219,7 @@ pub struct Totals {
     thunks: AtomicU64,
     calls: AtomicU64,
     derivations: AtomicU64,
+    store_adds: AtomicU64,
     compile_ns: AtomicU64,
     arena_bytes: AtomicU64,
     arena_mapped: AtomicU64,
@@ -242,6 +243,11 @@ pub struct Counts {
     pub thunks: u64,
     pub calls: u64,
     pub derivations: u64,
+    /// Source trees and `toFile` texts turned into a store path: the
+    /// `addToStore` and `addTextToStore` calls Nix would make. A `.drv` is
+    /// `derivations`; a fetched input is already in the store and counts in
+    /// neither.
+    pub store_adds: u64,
     pub compile: std::time::Duration,
 }
 
@@ -261,6 +267,7 @@ impl Totals {
         self.thunks.fetch_add(c.thunks, Ordering::Relaxed);
         self.calls.fetch_add(c.calls, Ordering::Relaxed);
         self.derivations.fetch_add(c.derivations, Ordering::Relaxed);
+        self.store_adds.fetch_add(c.store_adds, Ordering::Relaxed);
         self.compile_ns
             .fetch_add(c.compile.as_nanos() as u64, Ordering::Relaxed);
     }
@@ -270,6 +277,7 @@ impl Totals {
             thunks: self.thunks.load(Ordering::Relaxed),
             calls: self.calls.load(Ordering::Relaxed),
             derivations: self.derivations.load(Ordering::Relaxed),
+            store_adds: self.store_adds.load(Ordering::Relaxed),
             compile: std::time::Duration::from_nanos(self.compile_ns.load(Ordering::Relaxed)),
         }
     }

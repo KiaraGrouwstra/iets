@@ -655,6 +655,7 @@ fn add_path_inner(
         }
     };
     let sp = make_fixed_output_path(method, &hash, name, &refs).map_err(store_err)?;
+    ev.nr_store_adds += 1;
     if method == IngestionMethod::Recursive {
         if on_disk {
             let at = SrcPath::fs(resolved, accepted.map(Arc::new).or(parent));
@@ -861,6 +862,7 @@ fn to_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let h = hash_bytes(HashAlgo::Sha256, contents.bytes);
     let sp = make_text_path(utf8(name, pos)?, &h, &refs)
         .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, pos))?;
+    ev.nr_store_adds += 1;
     ev.known.add(
         sp.clone(),
         SourceOrigin::text(contents.bytes.to_vec(), refs),
