@@ -123,6 +123,7 @@ impl Scm for Git {
 
     fn untracked(&self, root: &Path, rel: &OsStr) -> Option<String> {
         let tracked = std::process::Command::new("git")
+            .arg("--no-optional-locks")
             .arg("-C")
             .arg(root)
             .args(["ls-files", "--error-unmatch", "--"])

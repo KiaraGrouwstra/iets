@@ -182,11 +182,26 @@ impl Query {
         }
     }
 
+    /// `--no-optional-locks` on every query: evaluation writes nothing to a
+    /// repository. Without it `git status` persists its refreshed stat cache,
+    /// which rewrites `.git/index` whenever any worktree file's stat moved —
+    /// an untracked one is enough. The output is byte-identical either way,
+    /// but direnv watches that file, so a build reloaded the shell for an
+    /// index whose content had not changed.
     pub fn argv(self) -> &'static [&'static str] {
         match self {
-            Query::GitLsFiles => &["git", "ls-files", "-z", "--cached", "--stage", "-v"],
+            Query::GitLsFiles => &[
+                "git",
+                "--no-optional-locks",
+                "ls-files",
+                "-z",
+                "--cached",
+                "--stage",
+                "-v",
+            ],
             Query::GitStatus => &[
                 "git",
+                "--no-optional-locks",
                 "status",
                 "--porcelain=v1",
                 "-z",
@@ -194,7 +209,14 @@ impl Query {
                 "--no-renames",
                 "--ignore-submodules=all",
             ],
-            Query::GitHead => &["git", "rev-parse", "--verify", "-q", "HEAD"],
+            Query::GitHead => &[
+                "git",
+                "--no-optional-locks",
+                "rev-parse",
+                "--verify",
+                "-q",
+                "HEAD",
+            ],
         }
     }
 
