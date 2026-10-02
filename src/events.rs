@@ -51,7 +51,9 @@ impl Events {
         self.sink.get().is_some_and(Option::is_some)
     }
 
-    /// One `{"event": NAME, ...fields}` line.
+    /// One `{"event": NAME, ...fields}` line, in one write: a `Display` of
+    /// the value straight into the sink costs a syscall per JSON fragment,
+    /// which was 4.5% of a nixpkgs evaluation's instructions.
     pub fn emit(&self, name: &str, mut fields: Value) {
         let Some(Some(w)) = self.sink.get() else {
             return;
@@ -59,7 +61,9 @@ impl Events {
         if let Some(o) = fields.as_object_mut() {
             o.insert("event".into(), json!(name));
         }
+        let mut line = fields.to_string();
+        line.push('\n');
         let mut w = w.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = writeln!(w, "{fields}");
+        let _ = w.write_all(line.as_bytes());
     }
 }

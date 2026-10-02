@@ -10,7 +10,9 @@ field, and a new event name, are not changes a reader must follow. A field
 that is there keeps its meaning.
 
 Nothing is written when the variable is unset, and no hook builds a record,
-so an unwatched run pays nothing.
+so an unwatched run pays nothing. A watched one pays about 1% of its
+instructions, and one line is one `write`: 337 events of a `hello`
+evaluation cost 1.0% on bld1.
 
 ## `store-add`
 
