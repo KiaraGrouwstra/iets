@@ -6,7 +6,8 @@ format and its own parser. This says how to instrument every part of the
 language without that happening again, and without the hot paths paying for
 it.
 
-Status: a proposal. Nothing here is built except the `store-add` event.
+Status: steps 1 and 2 are built, and the sampler of step 6 collects lambda
+frames. The rest is still a proposal.
 
 ## What exists today
 
@@ -289,6 +290,10 @@ event stream's split of what from where.
 6. The sampler: the flag, the shadow stack behind `--features profile-eval`,
    folded output, the three Nix flags, and the allocation weight. It needs
    nothing from steps 2 to 5 and is the answer to "where did the time go".
+   Done for lambda frames: `IETS_PROFILE=eval` writes folded lines, at 0.8%
+   of a `hello` evaluation and nothing at all in a stock binary
+   (docs/reference/profile.md). A frame per primop, the allocation weight
+   and the three Nix flags are still open.
 7. The OTLP sink, for the groups whose events carry a duration, and trace
    propagation into a remote builder.
 8. The hot `sched` group, and `IETS_PAR_STATS=2` re-expressed as its
@@ -307,9 +312,11 @@ Step 1 is worth doing whatever happens to the rest.
   that only wants a count does not need it. It could be opt-in.
 * Whether a hot group needs a binary encoding. 10^8 records is 10 GB of
   JSON; at that point the honest answer is a counter, not an event.
-* Whether the shadow stack earns its place in the default binary. Two
-  stores per call is perhaps 1% to 3%, and it would make a profile
-  something a user turns on, not something they rebuild for.
+* Whether the shadow stack earns its place in the default binary. The guess
+  was 1% to 3%; measured it is 0.4% of a `hello` evaluation with the feature
+  on and the profile off, inside this machine's run-to-run spread. It is
+  behind `--features profile-eval` today, and that number is an argument for
+  moving it.
 * Whether the worker protocol carries a `traceparent`. Step 7 needs one
   field in the grpc request for a remote build to join the caller's trace,
   and an external protocol does not grow a field without a conversation

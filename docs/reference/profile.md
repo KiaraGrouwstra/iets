@@ -1,0 +1,68 @@
+# The evaluation profile
+
+`IETS_PROFILE=eval` collects a sampled flame graph of an evaluation, and
+`IETS_PROFILE_TO` says where it goes: a file, or `-` for stderr, which is
+the default. The output is the folded form, one line per stack:
+
+```
+frame;frame;frame <count>
+```
+
+`flamegraph.pl` and every tool that reads its input take it unchanged.
+
+```
+IETS_PROFILE=eval IETS_PROFILE_TO=/tmp/p.folded iets eval --workers 1 -f . -A x
+flamegraph.pl /tmp/p.folded > /tmp/p.svg
+```
+
+A frame is `file:line:column:name` — the call site and the lambda it
+entered — and `file:line:column` for a lambda with no name. A frame holds
+no `;` and no space, so a path that has either is rewritten.
+
+## It needs its own binary
+
+The shadow stack is two stores per call, which is not free, so it lives
+behind a Cargo feature:
+
+```
+cargo build --release --features profile-eval
+```
+
+A binary without the feature has no push, no pop and no branch, and says so
+when `IETS_PROFILE` asks it for a profile. With the feature and no
+`IETS_PROFILE`, a `hello` evaluation costs 0.4% more instructions than a
+stock binary; collecting a profile costs 0.8%. Both are inside this
+machine's run-to-run spread, measured interleaved with
+`perf stat -e instructions:u`.
+
+The cost is low because no clock is read on the call path. A tick thread
+bumps a counter 99 times a second — `IETS_PROFILE_HZ` sets the rate — and a
+call tests one relaxed load against the last tick it answered. Nix's
+`--eval-profiler` reads `high_resolution_clock` on every call instead, which
+is about a second of work for the 48 million calls of a `hello`.
+
+## Read it at one worker
+
+Use `--workers 1`.
+
+Each fiber samples its own shadow stack, because reading another thread's
+while it runs is a race. A fiber's stack starts at the thunk it was handed,
+not at the root of the evaluation, so a run at many workers gives many
+shallow stacks — often one frame — and the graph has no shape. The same
+`hello` evaluation gives 78-frame stacks at one worker.
+
+Laziness biases the result the same way Nix's profiler is biased: the cost
+of a thunk lands under whichever fiber forced it first, so two runs at the
+same worker count do not fold identically either. A profile to compare
+wants one worker.
+
+## What it does not see
+
+A sample is taken at a call boundary, so time with no call in it is
+invisible: parsing and compiling a file, and the inside of one long primop
+— a NAR hash, a regular expression. `perf` answers that side, and
+`IETS_STATS` says how much of each kind of work a run did
+(`docs/reference/settings.md`).
+
+A run too short for one tick writes nothing and says so, rather than leave
+an empty file behind.

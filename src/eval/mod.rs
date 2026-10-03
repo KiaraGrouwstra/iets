@@ -175,6 +175,9 @@ pub struct Evaluator {
     pub lints: crate::lint::Lints,
     pub drv: crate::builtins::derivation::DrvState,
     pub par: crate::parallel::Ctx,
+    /// This fiber's shadow stack for the sampled profile.
+    #[cfg(feature = "profile-eval")]
+    prof: crate::profile::Stack,
     /// Read-set recorder for the tracing cache; off unless the run has an entry to write.
     trace: crate::trace::Trace,
     /// Compiled-IR cache for imported files; `None` when disabled.
@@ -479,6 +482,8 @@ impl EvalConfig {
                 self.dump_dir,
             ),
             par: Default::default(),
+            #[cfg(feature = "profile-eval")]
+            prof: Default::default(),
             trace: if self.trace {
                 crate::trace::Trace::enabled_in(self.trace_store)
             } else {
@@ -490,6 +495,9 @@ impl EvalConfig {
             session: self.session,
         };
         crate::builtins::install(&mut ev);
+        if ev.session.profile.on() {
+            ev.session.profile.names(&ev.files, &ev.interner);
+        }
         ev
     }
 }
@@ -1367,9 +1375,24 @@ impl Evaluator {
     /// Apply `func` to `args` left to right. Returns a forced value.
     pub fn apply(&mut self, func: Word, args: &[Word], pos: Pos) -> EvalResult<Word> {
         self.enter_call(pos)?;
+        #[cfg(feature = "profile-eval")]
+        let depth = self.prof.depth();
         let r = self.apply_inner(func, args, pos);
+        #[cfg(feature = "profile-eval")]
+        self.prof.unwind(depth);
         self.call_depth -= 1;
         r
+    }
+
+    /// Enters a frame for a call of `name` at `pos`, and answers the depth
+    /// the caller returns to.
+    #[cfg(feature = "profile-eval")]
+    #[inline]
+    fn prof_enter(&mut self, pos: Pos, name: Option<Sym>) -> usize {
+        let d = self.prof.depth();
+        self.prof
+            .enter(crate::profile::frame(pos, name), &self.session.profile);
+        d
     }
 
     fn apply_inner(&mut self, func: Word, args: &[Word], pos: Pos) -> EvalResult<Word> {
@@ -1380,7 +1403,11 @@ impl Evaluator {
             match cur.view() {
                 Value::Lambda(l) => {
                     self.nr_function_calls += 1;
+                    #[cfg(feature = "profile-eval")]
+                    let d = self.prof_enter(pos, l.lam.name);
                     cur = self.call_lambda(l, args[0], pos)?;
+                    #[cfg(feature = "profile-eval")]
+                    self.prof.unwind(d);
                     args = &args[1..];
                 }
                 Value::PrimOp(op) => {

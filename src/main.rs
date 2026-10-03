@@ -77,8 +77,11 @@ fn main() {
         exit(e.report())
     }
     session.events.open(session.settings());
+    iets::profile::open(&session);
     if let Some(name) = classic_name() {
-        exit(on_big_stack(move || cli::classic::dispatch(&name, &argv)))
+        let code = on_big_stack(move || cli::classic::dispatch(&name, &argv));
+        session.profile.write();
+        exit(code)
     }
     let Some(cmd) = argv.first() else {
         eprint!("{}", help::OVERVIEW);
@@ -87,7 +90,9 @@ fn main() {
     if cli::classic::NAMES.contains(&cmd.as_str()) {
         let name = cmd.clone();
         let rest: Vec<String> = argv[1..].to_vec();
-        exit(on_big_stack(move || cli::classic::dispatch(&name, &rest)))
+        let code = on_big_stack(move || cli::classic::dispatch(&name, &rest));
+        session.profile.write();
+        exit(code)
     }
     let mut rest: Vec<String> = argv[1..].to_vec();
     help::set_command("iets");
@@ -141,5 +146,6 @@ fn main() {
             _ => cli::eval::run_eval(cli::parse_eval_args(&rest)),
         }),
     };
+    session.profile.write();
     exit(code)
 }

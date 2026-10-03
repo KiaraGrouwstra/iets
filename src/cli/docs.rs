@@ -76,6 +76,11 @@ pub const PAGES: &[Page] = &[
         include_str!("../../docs/reference/events.md"),
     ),
     embedded(
+        "profile",
+        "the sampled flame graph of 'IETS_PROFILE=eval'",
+        include_str!("../../docs/reference/profile.md"),
+    ),
+    embedded(
         "errors",
         "the error codes, the exit codes and the log records",
         include_str!("../../docs/reference/errors.md"),

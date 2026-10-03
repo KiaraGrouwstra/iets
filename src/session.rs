@@ -17,6 +17,8 @@ use crate::settings::Settings;
 #[derive(Default)]
 pub struct Session {
     pub log: Log,
+    /// This run's sampled flame graph (`crate::profile`).
+    pub profile: crate::profile::Profile,
     /// Where this run's instrumentation events go (`crate::events`).
     pub events: crate::events::Events,
     settings: std::sync::OnceLock<Settings>,
