@@ -292,7 +292,8 @@ event stream's split of what from where.
    Done: `IETS_PROFILE=eval` weighs a sample by time and `alloc` by arena
    bytes, over lambda and builtin frames, at about 0.9% of a `hello`
    evaluation and nothing at all in a stock binary
-   (docs/reference/profile.md). The three Nix flags are still open.
+   (docs/reference/profile.md). Nix's three flag spellings are not wired:
+   they come through nix.conf, which no evaluator-wide knob reads yet.
 7. The OTLP sink, for the groups whose events carry a duration, and trace
    propagation into a remote builder.
 8. The hot `sched` group, and `IETS_PAR_STATS=2` re-expressed as its

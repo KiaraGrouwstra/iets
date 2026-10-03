@@ -86,3 +86,15 @@ each kind of work a run did (`docs/reference/settings.md`).
 
 A run too short for one tick writes nothing and says so, rather than leave
 an empty file behind.
+
+## Nix's own flags
+
+`--eval-profiler`, `--eval-profiler-frequency` and `--eval-profile-file` are
+not implemented, and `iets eval --help` does not offer them. They are
+nix.conf settings, and no evaluator-wide knob in iets reads nix.conf yet:
+the ones that exist come from `iets.toml`, `--iets-option` and the `IETS_*`
+variables. Wiring them is a change to that route, not to this profiler, so
+it waits for a reason to make it.
+
+The output format is already Nix's, so a profile collected here feeds the
+same tools as one collected there.

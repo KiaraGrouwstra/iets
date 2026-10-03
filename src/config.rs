@@ -177,7 +177,7 @@ const UNIMPLEMENTED: &[(&str, &str, &str)] = &[
     (
         "eval-profiler",
         "disabled",
-        "iets has no evaluation profiler; IETS_STATS gives its counters",
+        "iets profiles an evaluation with IETS_PROFILE, not with this setting (docs/reference/profile.md)",
     ),
     (
         "eval-system",

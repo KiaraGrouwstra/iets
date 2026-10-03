@@ -422,7 +422,7 @@ apply.
 | `warn-dirty`, `allow-dirty-locks`, `commit-lock-file-summary` | iets prints no dirty-tree warning and writes no lock file. |
 | `flake-registry`, `use-registries` | iets has no registry. A reference that needs one falls back, or is an error in iets's own commands. |
 | `nix-shell-shebang-arguments-relative-to-script`, `nix-shell-always-looks-for-shell-nix` | a `#!` script falls back, and so does `nix-shell` when the second one is `false`. |
-| `eval-profile-file`, `eval-profiler-frequency` | they only act with `eval-profiler`, which is in class 4. |
+| `eval-profile-file`, `eval-profiler-frequency` | they only act with `eval-profiler`, which is in class 4; `IETS_PROFILE_TO` and `IETS_PROFILE_HZ` are the knobs that act. |
 | `eval-attrset-update-layer-rhs-threshold`, `preallocate-contents`, `use-case-hack` | they tune Nix's own data structures and file writes. No result changes. |
 
 **4. iets has nothing for it.** `UNIMPLEMENTED`. It counts when the value
@@ -451,7 +451,7 @@ warning: setting 'restrict-eval' is ignored: iets has no restricted mode, so eve
 | `abort-on-warn` | `false` | `builtins.warn` never stops an evaluation |
 | `trace-verbose` | `false` | `builtins.traceVerbose` never prints |
 | `trace-function-calls` | `false` | iets has no function-call trace |
-| `eval-profiler` | `disabled` | iets has no evaluation profiler; `IETS_STATS` gives its counters |
+| `eval-profiler` | `disabled` | iets has an evaluation profiler, under `IETS_PROFILE` (`docs/reference/profile.md`). This setting is not wired to it: it arrives through nix.conf, which no evaluator-wide knob reads yet. |
 | `debugger-on-trace`, `debugger-on-warn`, `ignore-try` | `false` | iets has no debugger |
 | `allow-unsafe-native-code-during-evaluation` | `false` | iets has no `builtins.exec` and no `builtins.importNative` |
 | `plugin-files` | empty | iets loads no plugins |
