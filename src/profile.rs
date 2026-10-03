@@ -24,6 +24,27 @@ use crate::syntax::symbol::Sym;
 /// A nixpkgs attribute reaches about 200.
 pub const MAX_DEPTH: usize = 512;
 
+/// What a sample stands for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    /// One sample, so a stack's count is the time it was on CPU.
+    Time,
+    /// The arena bytes allocated since the last sample, so a stack's count
+    /// is the memory it built.
+    Bytes,
+}
+
+impl Mode {
+    /// `IETS_PROFILE`, or `None` when the word names no profile.
+    pub fn parse(name: &str) -> Option<Mode> {
+        match name {
+            "eval" => Some(Mode::Time),
+            "alloc" => Some(Mode::Bytes),
+            _ => None,
+        }
+    }
+}
+
 /// Set on the low word of a frame whose callee is a builtin, so a primop
 /// name and a lambda name are never read for each other.
 const PRIMOP: u32 = 1 << 31;
@@ -77,17 +98,30 @@ impl Default for Stack {
 
 #[cfg(feature = "profile-eval")]
 impl Stack {
-    /// Enters `f`, and takes a sample when the tick thread has asked for one
-    /// since this fiber's last.
+    /// Enters `f`. The whole cost of a call that is not sampled.
     #[inline]
-    pub fn enter(&mut self, f: u64, p: &Profile) {
+    pub fn enter(&mut self, f: u64) {
         self.frames.push(f);
-        let t = p.tick.load(Ordering::Relaxed);
-        if t != self.last_tick {
-            self.last_tick = t;
-            let n = self.frames.len().min(MAX_DEPTH);
-            p.sample(&self.frames[..n]);
-        }
+    }
+
+    /// Whether the tick thread has asked for a sample since this fiber's
+    /// last. One relaxed load and a compare, which is what a call pays.
+    #[inline]
+    pub fn due(&mut self, p: &Profile) -> bool {
+        p.tick.load(Ordering::Relaxed) != self.last_tick
+    }
+
+    /// Credits this fiber's stack with `bytes`, or with one sample when the
+    /// profile weighs time. Cold: 99 times a second per fiber on CPU.
+    pub fn take(&mut self, p: &Profile, bytes: u64) {
+        self.last_tick = p.tick.load(Ordering::Relaxed);
+        let w = if p.by_bytes.load(Ordering::Relaxed) {
+            bytes
+        } else {
+            1
+        };
+        let n = self.frames.len().min(MAX_DEPTH);
+        p.sample(&self.frames[..n], w);
     }
 
     #[inline]
@@ -108,6 +142,9 @@ impl Stack {
 /// each profile their own run.
 #[derive(Default)]
 pub struct Profile {
+    /// Weighs a sample by the arena bytes since the one before it, instead
+    /// of by one for the time it stood for.
+    by_bytes: AtomicBool,
     /// Bumped by the tick thread; compared by the call path.
     tick: AtomicU64,
     stop: AtomicBool,
@@ -134,11 +171,11 @@ impl Profile {
     }
 
     #[cfg(feature = "profile-eval")]
-    fn sample(&self, frames: &[u64]) {
+    fn sample(&self, frames: &[u64], weight: u64) {
         let Ok(mut g) = self.folded.lock() else {
             return;
         };
-        *g.entry(frames.into()).or_insert(0) += 1;
+        *g.entry(frames.into()).or_insert(0) += weight;
     }
 
     /// Writes the folded lines, and stops the tick thread. Called once, when
@@ -215,9 +252,9 @@ impl Profile {
 /// holds the session: it ends on the first tick after [`Profile::write`].
 pub fn open(session: &Arc<crate::session::Session>) {
     let s = session.settings();
-    if !s.profile_eval {
+    let Some(mode) = s.profile else {
         return;
-    }
+    };
     if !cfg!(feature = "profile-eval") {
         crate::errln!(
             "error (ignored): this iets has no --features profile-eval, so IETS_PROFILE collects nothing"
@@ -226,6 +263,10 @@ pub fn open(session: &Arc<crate::session::Session>) {
     }
     let hz = s.profile_hz.max(1);
     session.profile.hz.store(hz as u64, Ordering::Relaxed);
+    session
+        .profile
+        .by_bytes
+        .store(mode == Mode::Bytes, Ordering::Relaxed);
     let _ = session
         .profile
         .to
@@ -266,11 +307,20 @@ mod tests {
         let p = Profile::default();
         let mut s = Stack::default();
         p.tick.store(1, Ordering::Relaxed);
-        s.enter(10, &p);
-        s.enter(20, &p);
+        s.enter(10);
+        if s.due(&p) {
+            s.take(&p, 0);
+        }
+        s.enter(20);
+        if s.due(&p) {
+            s.take(&p, 0);
+        }
         assert_eq!(folded(&p), vec![(vec![10], 1)]);
         p.tick.store(2, Ordering::Relaxed);
-        s.enter(30, &p);
+        s.enter(30);
+        if s.due(&p) {
+            s.take(&p, 0);
+        }
         assert_eq!(folded(&p), vec![(vec![10], 1), (vec![10, 20, 30], 1)]);
     }
 
@@ -279,12 +329,21 @@ mod tests {
         let p = Profile::default();
         let mut s = Stack::default();
         let d = s.depth();
-        s.enter(10, &p);
-        s.enter(20, &p);
+        s.enter(10);
+        if s.due(&p) {
+            s.take(&p, 0);
+        }
+        s.enter(20);
+        if s.due(&p) {
+            s.take(&p, 0);
+        }
         s.unwind(d);
         assert_eq!(s.depth(), 0);
         p.tick.store(1, Ordering::Relaxed);
-        s.enter(30, &p);
+        s.enter(30);
+        if s.due(&p) {
+            s.take(&p, 0);
+        }
         assert_eq!(folded(&p), vec![(vec![30], 1)]);
     }
 
@@ -293,9 +352,25 @@ mod tests {
         let p = Profile::default();
         let mut s = Stack::default();
         for i in 0..(MAX_DEPTH as u64 + 10) {
-            s.enter(i, &p);
+            s.enter(i);
+            if s.due(&p) {
+                s.take(&p, 0);
+            }
             p.tick.store(i + 1, Ordering::Relaxed);
         }
         assert!(folded(&p).iter().all(|(k, _)| k.len() <= MAX_DEPTH));
+    }
+
+    #[test]
+    fn a_weight_is_bytes_when_the_profile_asks_for_them() {
+        let p = Profile::default();
+        p.by_bytes.store(true, Ordering::Relaxed);
+        let mut s = Stack::default();
+        p.tick.store(1, Ordering::Relaxed);
+        s.enter(10);
+        if s.due(&p) {
+            s.take(&p, 4096);
+        }
+        assert_eq!(folded(&p), vec![(vec![10], 4096)]);
     }
 }

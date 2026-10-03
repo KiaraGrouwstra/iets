@@ -59,9 +59,10 @@ pub struct Settings {
     pub events: u32,
     /// `IETS_EVENTS_TO`: where the events go. `None` is stderr.
     pub events_to: Option<String>,
-    /// `IETS_PROFILE=eval`, `eval-profiler=flamegraph`: sample the call
-    /// stack. Needs `--features profile-eval` to collect anything.
-    pub profile_eval: bool,
+    /// `IETS_PROFILE`, `eval-profiler=flamegraph`: sample the call
+    /// stack, weighed by time (`eval`) or by arena bytes (`alloc`). Needs
+    /// `--features profile-eval` to collect anything.
+    pub profile: Option<crate::profile::Mode>,
     /// `IETS_PROFILE_TO`, `eval-profile-file`: where the folded lines go.
     /// `None` is stderr.
     pub profile_to: Option<String>,
@@ -271,12 +272,16 @@ impl Settings {
                 None => 0,
             },
             events_to: env.str("IETS_EVENTS_TO"),
-            profile_eval: match env.str("IETS_PROFILE").as_deref() {
-                None => false,
-                Some("eval") => true,
-                Some(w) => {
-                    return Err(Error::Config(format!("IETS_PROFILE: '{w}' is not 'eval'")));
-                }
+            profile: match env.str("IETS_PROFILE").as_deref() {
+                None => None,
+                Some(w) => match crate::profile::Mode::parse(w) {
+                    Some(m) => Some(m),
+                    None => {
+                        return Err(Error::Config(format!(
+                            "IETS_PROFILE: '{w}' is not 'eval' or 'alloc'"
+                        )));
+                    }
+                },
             },
             profile_to: env.str("IETS_PROFILE_TO"),
             profile_hz: env.num("IETS_PROFILE_HZ")?.unwrap_or(99),

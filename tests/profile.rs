@@ -116,8 +116,55 @@ fn a_builtin_names_itself_in_a_frame() {
     );
     let folded = std::fs::read_to_string(&out).expect("the profile file");
     let _ = std::fs::remove_dir_all(&dir);
+    assert!(folded.contains(":«"), "no builtin frame:\n{folded}");
+}
+
+/// `alloc` weighs a sample by the arena bytes since the one before it, so
+/// the folded counts add up to what the arena allocated. Every byte is
+/// taken by the next sample, so only what came after the last one is
+/// missing.
+#[test]
+#[cfg(feature = "profile-eval")]
+fn an_allocation_profile_accounts_for_the_arena() {
+    let dir = std::env::temp_dir().join(format!("iets-profile-alloc-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let out = dir.join("p.folded");
+    let expr = "builtins.length (builtins.foldl' (a: _: a ++ builtins.genList toString 200) [] \
+                (builtins.genList (x: x) 2000))";
+    let o = eval(
+        expr,
+        &[
+            ("IETS_PROFILE", "alloc"),
+            ("IETS_PROFILE_TO", out.to_str().unwrap()),
+            ("IETS_PROFILE_HZ", "1000"),
+            ("IETS_STATS", "1"),
+        ],
+    );
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let folded = std::fs::read_to_string(&out).expect("the profile file");
+    let _ = std::fs::remove_dir_all(&dir);
+    let weighed: u64 = folded
+        .lines()
+        .map(|l| {
+            l.rsplit_once(' ')
+                .expect("a stack and a count")
+                .1
+                .parse::<u64>()
+                .expect("a count")
+        })
+        .sum();
+    let err = String::from_utf8_lossy(&o.stderr);
+    let total: u64 = err
+        .split_whitespace()
+        .find_map(|w| w.strip_prefix("arena_bytes=")?.parse().ok())
+        .expect("arena_bytes in the stats line");
     assert!(
-        folded.contains("«__genList»"),
-        "no builtin frame:\n{folded}"
+        weighed * 100 > total * 90 && weighed <= total,
+        "weighed {weighed} of {total} arena bytes"
     );
 }

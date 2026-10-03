@@ -1384,14 +1384,25 @@ impl Evaluator {
         r
     }
 
+    /// Takes a sample when the tick thread asked for one. The arena is
+    /// touched only here, so a call that is not sampled does not read it.
+    #[cfg(feature = "profile-eval")]
+    #[inline]
+    fn prof_take(&mut self) {
+        if self.prof.due(&self.session.profile) {
+            let bytes = self.arena.bytes_since_sample();
+            self.prof.take(&self.session.profile, bytes);
+        }
+    }
+
     /// Enters a frame for a call of `name` at `pos`, and answers the depth
     /// the caller returns to.
     #[cfg(feature = "profile-eval")]
     #[inline]
     fn prof_enter(&mut self, pos: Pos, name: Option<Sym>) -> usize {
         let d = self.prof.depth();
-        self.prof
-            .enter(crate::profile::frame(pos, name), &self.session.profile);
+        self.prof.enter(crate::profile::frame(pos, name));
+        self.prof_take();
         d
     }
 
@@ -1400,10 +1411,8 @@ impl Evaluator {
     #[inline]
     fn prof_enter_op(&mut self, pos: Pos, sym: crate::syntax::symbol::Sym) -> usize {
         let d = self.prof.depth();
-        self.prof.enter(
-            crate::profile::primop_frame(pos, sym),
-            &self.session.profile,
-        );
+        self.prof.enter(crate::profile::primop_frame(pos, sym));
+        self.prof_take();
         d
     }
 

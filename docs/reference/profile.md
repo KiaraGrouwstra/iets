@@ -1,6 +1,7 @@
 # The evaluation profile
 
-`IETS_PROFILE=eval` collects a sampled flame graph of an evaluation, and
+`IETS_PROFILE` collects a sampled flame graph of an evaluation — `eval` for
+the time it spent, `alloc` for the memory it built — and
 `IETS_PROFILE_TO` says where it goes: a file, or `-` for stderr, which is
 the default. The output is the folded form, one line per stack:
 
@@ -14,6 +15,20 @@ frame;frame;frame <count>
 IETS_PROFILE=eval IETS_PROFILE_TO=/tmp/p.folded iets eval --workers 1 -f . -A x
 flamegraph.pl /tmp/p.folded > /tmp/p.svg
 ```
+
+## Two weights
+
+`IETS_PROFILE=eval` counts one per sample, so a stack's number is the time
+it was on CPU. `IETS_PROFILE=alloc` counts the arena bytes allocated since
+the sample before it, so a stack's number is the memory it built, and the
+same graph answers "which stack made the 630 MB this run holds". Nix's
+profiler cannot answer that, and `IETS_STATS=2` answers it by object kind
+and not by call stack.
+
+Every byte is credited to the next sample, so the folded counts add up to
+what the arena allocated and only what came after the last sample is
+missing: 27,414,293 of the 27,427,237 bytes of a `hello` evaluation, which
+a test asserts.
 
 A frame is `file:line:column:name` — the call site and the lambda it
 entered — and `file:line:column` for a lambda with no name. A builtin is a
@@ -34,7 +49,9 @@ A binary without the feature has no push, no pop and no branch, and says so
 when `IETS_PROFILE` asks it for a profile. With the feature and no
 `IETS_PROFILE`, a `hello` evaluation costs between 0.1% and 0.4% more
 instructions than a stock binary, which is inside the run-to-run spread of
-either; collecting a profile costs about 1%. Measured interleaved with
+either; collecting a profile costs about 0.9%, and `alloc` costs the same
+as `eval` because the arena is read only where a sample is taken. Measured
+interleaved with
 `perf stat -e instructions:u`.
 
 The cost is low because no clock is read on the call path. A tick thread

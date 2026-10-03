@@ -6,8 +6,7 @@ format and its own parser. This says how to instrument every part of the
 language without that happening again, and without the hot paths paying for
 it.
 
-Status: steps 1 and 2 are built, and the sampler of step 6 collects lambda
-and builtin frames. The rest is still a proposal.
+Status: steps 1, 2 and 6 are built. The rest is still a proposal.
 
 ## What exists today
 
@@ -290,10 +289,10 @@ event stream's split of what from where.
 6. The sampler: the flag, the shadow stack behind `--features profile-eval`,
    folded output, the three Nix flags, and the allocation weight. It needs
    nothing from steps 2 to 5 and is the answer to "where did the time go".
-   Done for lambda and builtin frames: `IETS_PROFILE=eval` writes folded
-   lines, at about 1% of a `hello` evaluation and nothing at all in a stock
-   binary (docs/reference/profile.md). The allocation weight and the three
-   Nix flags are still open.
+   Done: `IETS_PROFILE=eval` weighs a sample by time and `alloc` by arena
+   bytes, over lambda and builtin frames, at about 0.9% of a `hello`
+   evaluation and nothing at all in a stock binary
+   (docs/reference/profile.md). The three Nix flags are still open.
 7. The OTLP sink, for the groups whose events carry a duration, and trace
    propagation into a remote builder.
 8. The hot `sched` group, and `IETS_PAR_STATS=2` re-expressed as its
