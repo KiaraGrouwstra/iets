@@ -16,7 +16,9 @@ flamegraph.pl /tmp/p.folded > /tmp/p.svg
 ```
 
 A frame is `file:line:column:name` — the call site and the lambda it
-entered — and `file:line:column` for a lambda with no name. A frame holds
+entered — and `file:line:column` for a lambda with no name. A builtin is a
+frame too, written `file:line:column:«__genList»`, so time inside one is
+not blamed on the lambda that called it. A frame holds
 no `;` and no space, so a path that has either is rewritten.
 
 ## It needs its own binary
@@ -30,9 +32,9 @@ cargo build --release --features profile-eval
 
 A binary without the feature has no push, no pop and no branch, and says so
 when `IETS_PROFILE` asks it for a profile. With the feature and no
-`IETS_PROFILE`, a `hello` evaluation costs 0.4% more instructions than a
-stock binary; collecting a profile costs 0.8%. Both are inside this
-machine's run-to-run spread, measured interleaved with
+`IETS_PROFILE`, a `hello` evaluation costs between 0.1% and 0.4% more
+instructions than a stock binary, which is inside the run-to-run spread of
+either; collecting a profile costs about 1%. Measured interleaved with
 `perf stat -e instructions:u`.
 
 The cost is low because no clock is read on the call path. A tick thread
@@ -59,10 +61,11 @@ wants one worker.
 ## What it does not see
 
 A sample is taken at a call boundary, so time with no call in it is
-invisible: parsing and compiling a file, and the inside of one long primop
-— a NAR hash, a regular expression. `perf` answers that side, and
-`IETS_STATS` says how much of each kind of work a run did
-(`docs/reference/settings.md`).
+invisible: parsing and compiling a file, and the inside of one long builtin.
+A NAR hash lands on its `«__hashFile»` frame and not under the loop that
+does the work, which says which call cost the time but not where inside it
+the time went. `perf` answers that side, and `IETS_STATS` says how much of
+each kind of work a run did (`docs/reference/settings.md`).
 
 A run too short for one tick writes nothing and says so, rather than leave
 an empty file behind.

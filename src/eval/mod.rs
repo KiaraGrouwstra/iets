@@ -1395,6 +1395,18 @@ impl Evaluator {
         d
     }
 
+    /// Enters a frame for a call of the builtin `sym` at `pos`.
+    #[cfg(feature = "profile-eval")]
+    #[inline]
+    fn prof_enter_op(&mut self, pos: Pos, sym: crate::syntax::symbol::Sym) -> usize {
+        let d = self.prof.depth();
+        self.prof.enter(
+            crate::profile::primop_frame(pos, sym),
+            &self.session.profile,
+        );
+        d
+    }
+
     fn apply_inner(&mut self, func: Word, args: &[Word], pos: Pos) -> EvalResult<Word> {
         let mut cur = self.force(func)?;
         let mut args = args;
@@ -1415,10 +1427,14 @@ impl Evaluator {
                     if args.len() < arity {
                         return Ok(self.arena.mk_primop_app(op, args));
                     }
+                    #[cfg(feature = "profile-eval")]
+                    let d = self.prof_enter_op(pos, op.sym);
                     cur = (op.f)(self, &args[..arity], pos).map_err(|mut e| {
                         e.add_trace(pos, format!("while calling the '{}' builtin", op.name));
                         e
                     })?;
+                    #[cfg(feature = "profile-eval")]
+                    self.prof.unwind(d);
                     args = &args[arity..];
                 }
                 Value::PrimOpApp(app) => {
@@ -1433,10 +1449,14 @@ impl Evaluator {
                     let mut all: [Word; 8] = [Word::EMPTY; 8];
                     all[..app.args.len()].copy_from_slice(app.args);
                     all[app.args.len()..arity].copy_from_slice(&args[..need]);
+                    #[cfg(feature = "profile-eval")]
+                    let d = self.prof_enter_op(pos, op.sym);
                     cur = (op.f)(self, &all[..arity], pos).map_err(|mut e| {
                         e.add_trace(pos, format!("while calling the '{}' builtin", op.name));
                         e
                     })?;
+                    #[cfg(feature = "profile-eval")]
+                    self.prof.unwind(d);
                     args = &args[need..];
                 }
                 Value::Attrs(a) => {

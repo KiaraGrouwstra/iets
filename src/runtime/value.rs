@@ -266,6 +266,9 @@ pub type PrimFn =
 pub struct PrimOpObj {
     pub kind: Kind,
     pub arity: u8,
+    /// The interned `name`, for a profile frame. It sits in the padding
+    /// after `arity`, so the object is the same size with it.
+    pub sym: crate::syntax::symbol::Sym,
     pub name: &'static str,
     pub f: PrimFn,
 }
@@ -1378,11 +1381,18 @@ impl Arena {
         Word::lambda_from_ref(self.alloc(LambdaObj { env, lam }))
     }
 
-    pub(crate) fn mk_primop(&mut self, name: &'static str, arity: u8, f: PrimFn) -> Word {
+    pub(crate) fn mk_primop(
+        &mut self,
+        name: &'static str,
+        arity: u8,
+        f: PrimFn,
+        sym: crate::syntax::symbol::Sym,
+    ) -> Word {
         Word::from_ref(self.alloc(PrimOpObj {
             kind: Kind::PrimOp,
             arity,
             name,
+            sym,
             f,
         }))
     }
@@ -1577,5 +1587,17 @@ mod alloc_tests {
         let done = t.thunk_finish(Word::imm_int(7), true);
         assert!(!t.thunk_unforced(done));
         assert!(!t.thunk_speculated(done));
+    }
+}
+
+#[cfg(test)]
+mod layout {
+    use super::*;
+
+    /// `sym` was added for a profile frame and must stay free: it sits in
+    /// the padding after `arity`, and every primop is one of these.
+    #[test]
+    fn a_primop_pays_nothing_for_its_symbol() {
+        assert_eq!(size_of::<PrimOpObj>(), 32);
     }
 }

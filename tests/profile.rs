@@ -89,3 +89,35 @@ fn a_folded_line_is_a_stack_and_a_count() {
     }
     assert!(deepest > 2, "every stack is shallow:\n{folded}");
 }
+
+/// A builtin is a frame too, so time inside one is not blamed on the lambda
+/// that called it.
+#[test]
+#[cfg(feature = "profile-eval")]
+fn a_builtin_names_itself_in_a_frame() {
+    let dir = std::env::temp_dir().join(format!("iets-profile-op-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let out = dir.join("p.folded");
+    let expr = "builtins.length (builtins.foldl' (a: _: a ++ builtins.genList (x: x) 50) [] \
+                (builtins.genList (x: x) 2000))";
+    let o = eval(
+        expr,
+        &[
+            ("IETS_PROFILE", "eval"),
+            ("IETS_PROFILE_TO", out.to_str().unwrap()),
+            ("IETS_PROFILE_HZ", "1000"),
+        ],
+    );
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let folded = std::fs::read_to_string(&out).expect("the profile file");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        folded.contains("«__genList»"),
+        "no builtin frame:\n{folded}"
+    );
+}

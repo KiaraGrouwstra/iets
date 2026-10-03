@@ -24,8 +24,12 @@ use crate::syntax::symbol::Sym;
 /// A nixpkgs attribute reaches about 200.
 pub const MAX_DEPTH: usize = 512;
 
+/// Set on the low word of a frame whose callee is a builtin, so a primop
+/// name and a lambda name are never read for each other.
+const PRIMOP: u32 = 1 << 31;
+
 /// Low word of a frame whose lambda has no name.
-const ANON: u32 = u32::MAX;
+const ANON: u32 = !PRIMOP;
 
 /// A call site and the lambda it entered, in one word: both halves are
 /// already interned, and `Profile::write` turns them into text at the end
@@ -34,6 +38,13 @@ const ANON: u32 = u32::MAX;
 #[cfg(feature = "profile-eval")]
 pub fn frame(pos: Pos, name: Option<Sym>) -> u64 {
     ((pos.0 as u64) << 32) | name.map_or(ANON, |s| s.0) as u64
+}
+
+/// A call site and the builtin it entered.
+#[inline]
+#[cfg(feature = "profile-eval")]
+pub fn primop_frame(pos: Pos, sym: Sym) -> u64 {
+    ((pos.0 as u64) << 32) | (sym.0 | PRIMOP) as u64
 }
 
 /// One fiber's shadow stack. Pushed and popped by the call path, read by
@@ -187,6 +198,9 @@ impl Profile {
             None => "«none»".to_string(),
         };
         let mut s = match low {
+            l if l & PRIMOP != 0 => {
+                format!("{at}:«{}»", interner.name_str(Sym(l & !PRIMOP)))
+            }
             ANON => at,
             sym => format!("{at}:{}", interner.name_str(Sym(sym))),
         };
