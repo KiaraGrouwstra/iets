@@ -234,7 +234,7 @@ the stack is hashed only when the flag is set, 99 times a second.
 
 **Keep the shadow stack out of the default binary.** A per-fiber
 `Vec<u32>` of frame ids costs two stores per call. That is affordable but
-not free, so it lives behind `--features profile-eval`, as the memory
+not free, and was expected to live behind a feature as the memory
 census lives behind `stats2`. A binary without the feature has no push, no
 pop and no branch.
 
@@ -292,7 +292,10 @@ event stream's split of what from where.
    Done: `IETS_PROFILE=eval` weighs a sample by time and `alloc` by arena
    bytes, over lambda and builtin frames, at about 0.9% of a `hello`
    evaluation and nothing at all in a stock binary
-   (docs/reference/profile.md). Nix's three flag spellings are not wired:
+   (docs/reference/profile.md). The sampler is in every binary: the shadow
+   stack was expected to earn a `--features profile-eval` gate and measured
+   inside the noise instead.
+   Nix's three flag spellings are not wired:
    they come through nix.conf, which no evaluator-wide knob reads yet.
 7. The OTLP sink, for the groups whose events carry a duration, and trace
    propagation into a remote builder.
@@ -315,8 +318,8 @@ Step 1 is worth doing whatever happens to the rest.
 * Whether the shadow stack earns its place in the default binary. The guess
   was 1% to 3%; measured it is 0.1% to 0.4% of a `hello` evaluation with the
   feature on and the profile off, inside the run-to-run spread. It is
-  behind `--features profile-eval` today, and that number is an argument for
-  moving it.
+  in every binary since the sampler landed, because that number is inside
+  the run-to-run spread of a build without it.
 * Whether the worker protocol carries a `traceparent`. Step 7 needs one
   field in the grpc request for a remote build to join the caller's trace,
   and an external protocol does not grow a field without a conversation

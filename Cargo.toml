@@ -3,12 +3,9 @@ name = "iets"
 version = "0.1.0"
 license = "LGPL-2.1-or-later"
 edition = "2024"
-
 [[bin]]
 name = "iets"
 path = "src/main.rs"
-
-
 [dependencies]
 sha2 = "0.10"
 blake3 = "1"
@@ -40,10 +37,6 @@ bzip2 = "0.6"
 # Memory census behind IETS_STATS=2 (docs/reference/settings.md); off the hot path when unset.
 stats2 = []
 
-# A sampled flame graph of evaluation behind IETS_PROFILE=eval
-# (docs/reference/profile.md); two stores per call, so it is not default.
-profile-eval = []
-
 [build-dependencies]
 sha2 = "0.10"
 tonic-prost-build = "0.14"
@@ -55,6 +48,5 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 debug = 1
-
 [profile.bench]
 inherits = "release"

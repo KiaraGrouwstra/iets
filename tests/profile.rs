@@ -31,21 +31,9 @@ fn an_unprofiled_run_says_nothing_about_a_profile() {
     assert!(!err.contains("profile"), "{err}");
 }
 
-/// Without the feature the hooks are compiled out, so asking for a profile
-/// must say so and not leave an empty file behind.
-#[test]
-#[cfg(not(feature = "profile-eval"))]
-fn a_binary_without_the_feature_says_it_collects_nothing() {
-    let o = eval("1", &[("IETS_PROFILE", "eval")]);
-    assert_eq!(o.status.code(), Some(0));
-    let err = String::from_utf8_lossy(&o.stderr);
-    assert!(err.contains("no --features profile-eval"), "{err}");
-}
-
 /// A run with no call in it takes no sample, and an empty profile is said
 /// out loud rather than written as an empty file.
 #[test]
-#[cfg(feature = "profile-eval")]
 fn a_run_shorter_than_a_tick_says_it_sampled_nothing() {
     let o = eval("1 + 1", &[("IETS_PROFILE", "eval")]);
     assert_eq!(o.status.code(), Some(0));
@@ -54,7 +42,6 @@ fn a_run_shorter_than_a_tick_says_it_sampled_nothing() {
 }
 
 #[test]
-#[cfg(feature = "profile-eval")]
 fn a_folded_line_is_a_stack_and_a_count() {
     let dir = std::env::temp_dir().join(format!("iets-profile-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
@@ -93,7 +80,6 @@ fn a_folded_line_is_a_stack_and_a_count() {
 /// A builtin is a frame too, so time inside one is not blamed on the lambda
 /// that called it.
 #[test]
-#[cfg(feature = "profile-eval")]
 fn a_builtin_names_itself_in_a_frame() {
     let dir = std::env::temp_dir().join(format!("iets-profile-op-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
@@ -124,7 +110,6 @@ fn a_builtin_names_itself_in_a_frame() {
 /// taken by the next sample, so only what came after the last one is
 /// missing.
 #[test]
-#[cfg(feature = "profile-eval")]
 fn an_allocation_profile_accounts_for_the_arena() {
     let dir = std::env::temp_dir().join(format!("iets-profile-alloc-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
@@ -167,4 +152,33 @@ fn an_allocation_profile_accounts_for_the_arena() {
         weighed * 100 > total * 90 && weighed <= total,
         "weighed {weighed} of {total} arena bytes"
     );
+}
+
+/// A profile is read per fiber, so more than one worker gives stacks with no
+/// shape. Asking for both is refused rather than answered misleadingly.
+#[test]
+fn a_profile_refuses_more_than_one_worker() {
+    let mut c = Command::new(env!("CARGO_BIN_EXE_iets"));
+    let o = c
+        .args(["eval", "--no-cache", "--workers", "4", "-E", "1"])
+        .env("XDG_CONFIG_HOME", "/nonexistent")
+        .env("IETS_PROFILE", "eval")
+        .output()
+        .expect("run iets");
+    assert_ne!(o.status.code(), Some(0));
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("--workers must be 1, not 4"), "{err}");
+
+    // the same through the setting rather than the flag
+    let mut c = Command::new(env!("CARGO_BIN_EXE_iets"));
+    let o = c
+        .args(["eval", "--no-cache", "-E", "1"])
+        .env("XDG_CONFIG_HOME", "/nonexistent")
+        .env("IETS_PROFILE", "eval")
+        .env("IETS_WORKERS", "4")
+        .output()
+        .expect("run iets");
+    assert_ne!(o.status.code(), Some(0));
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("workers must be 1, not 4"), "{err}");
 }

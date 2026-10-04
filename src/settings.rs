@@ -241,10 +241,35 @@ impl Settings {
                 ));
             }
         }
+        let profile = match env.str("IETS_PROFILE").as_deref() {
+            None => None,
+            Some(w) => match crate::profile::Mode::parse(w) {
+                Some(m) => Some(m),
+                None => {
+                    return Err(Error::Config(format!(
+                        "IETS_PROFILE: '{w}' is not 'eval' or 'alloc'"
+                    )));
+                }
+            },
+        };
         let workers: Option<usize> = env.num("IETS_WORKERS")?.or(c.int("workers")?);
         if workers == Some(0) {
             return Err(Error::Config("workers must be 1 or more".into()));
         }
+        // A profile is read per fiber, and a fiber's stack starts at the thunk
+        // it was handed, so at more than one worker the graph is a pile of
+        // two-frame stacks and no shape (docs/reference/profile.md). Profiling
+        // therefore pins the worker count rather than quietly misleading.
+        let workers = match (profile, workers) {
+            (Some(_), None) => Some(1),
+            (Some(_), Some(1)) => Some(1),
+            (Some(_), Some(n)) => {
+                return Err(Error::Config(format!(
+                    "a profile needs one worker, so workers must be 1, not {n}"
+                )));
+            }
+            (None, w) => w,
+        };
         let fix_hashes = c.get(
             "fix-hashes",
             "\"ask\", \"always\" or \"never\"",
@@ -272,17 +297,7 @@ impl Settings {
                 None => 0,
             },
             events_to: env.str("IETS_EVENTS_TO"),
-            profile: match env.str("IETS_PROFILE").as_deref() {
-                None => None,
-                Some(w) => match crate::profile::Mode::parse(w) {
-                    Some(m) => Some(m),
-                    None => {
-                        return Err(Error::Config(format!(
-                            "IETS_PROFILE: '{w}' is not 'eval' or 'alloc'"
-                        )));
-                    }
-                },
-            },
+            profile,
             profile_to: env.str("IETS_PROFILE_TO"),
             profile_hz: env.num("IETS_PROFILE_HZ")?.unwrap_or(99),
             cache: env.flag("IETS_CACHE", c.bool("cache")?, true)?,

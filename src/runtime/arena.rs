@@ -85,7 +85,6 @@ impl Arena {
     /// The bytes this arena allocated since the last sample, marked taken.
     /// `release` and `shrink_last` give bytes back, so a total can fall
     /// below its own mark; the sample saturates at nothing there.
-    #[cfg(feature = "profile-eval")]
     pub(crate) fn bytes_since_sample(&mut self) -> u64 {
         let d = self.bytes_allocated.saturating_sub(self.folded.sample);
         self.folded.sample = self.bytes_allocated;
@@ -355,7 +354,6 @@ struct Folded {
     /// Mark for the allocation profile, which weighs a sample by the bytes
     /// since the one before it. In this box because the box is already paid
     /// for by the fiber switch.
-    #[cfg(feature = "profile-eval")]
     sample: usize,
     bytes: usize,
     mapped: usize,

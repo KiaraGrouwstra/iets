@@ -12,7 +12,7 @@ frame;frame;frame <count>
 `flamegraph.pl` and every tool that reads its input take it unchanged.
 
 ```
-IETS_PROFILE=eval IETS_PROFILE_TO=/tmp/p.folded iets eval --workers 1 -f . -A x
+IETS_PROFILE=eval IETS_PROFILE_TO=/tmp/p.folded iets eval -f . -A x
 flamegraph.pl /tmp/p.folded > /tmp/p.svg
 ```
 
@@ -36,23 +36,19 @@ frame too, written `file:line:column:«__genList»`, so time inside one is
 not blamed on the lambda that called it. A frame holds
 no `;` and no space, so a path that has either is rewritten.
 
-## It needs its own binary
+## What it costs
 
-The shadow stack is two stores per call, which is not free, so it lives
-behind a Cargo feature:
+Nothing you can measure when you are not using it. The shadow stack is two
+stores per call, which was expected to earn a Cargo feature gate and did
+not: a `hello` evaluation on a binary with the sampler compiled in and no
+`IETS_PROFILE` set is inside the run-to-run spread of one built without it
+at all — four interleaved runs each, 589.7M against 598.6M instructions,
+with the two bands overlapping. So it is always in, and `IETS_PROFILE` is
+the only switch.
 
-```
-cargo build --release --features profile-eval
-```
-
-A binary without the feature has no push, no pop and no branch, and says so
-when `IETS_PROFILE` asks it for a profile. With the feature and no
-`IETS_PROFILE`, a `hello` evaluation costs between 0.1% and 0.4% more
-instructions than a stock binary, which is inside the run-to-run spread of
-either; collecting a profile costs about 0.9%, and `alloc` costs the same
-as `eval` because the arena is read only where a sample is taken. Measured
-interleaved with
-`perf stat -e instructions:u`.
+Collecting a profile costs about 0.9% of a `hello` evaluation, and `alloc`
+costs the same as `eval` because the arena is read only where a sample is
+taken. Measured interleaved with `perf stat -e instructions:u`.
 
 The cost is low because no clock is read on the call path. A tick thread
 bumps a counter 99 times a second — `IETS_PROFILE_HZ` sets the rate — and a
@@ -60,20 +56,20 @@ call tests one relaxed load against the last tick it answered. Nix's
 `--eval-profiler` reads `high_resolution_clock` on every call instead, which
 is about a second of work for the 48 million calls of a `hello`.
 
-## Read it at one worker
+## It runs at one worker
 
-Use `--workers 1`.
+Profiling pins the run to one worker. An explicit `--workers` or `workers`
+setting that is not 1 is an error, rather than a profile with no shape in it.
 
 Each fiber samples its own shadow stack, because reading another thread's
 while it runs is a race. A fiber's stack starts at the thunk it was handed,
 not at the root of the evaluation, so a run at many workers gives many
-shallow stacks — often one frame — and the graph has no shape. The same
+shallow stacks — often one frame — and the graph says nothing. The same
 `hello` evaluation gives 78-frame stacks at one worker.
 
 Laziness biases the result the same way Nix's profiler is biased: the cost
-of a thunk lands under whichever fiber forced it first, so two runs at the
-same worker count do not fold identically either. A profile to compare
-wants one worker.
+of a thunk lands under whichever fiber forced it first. One worker makes
+that the only bias there is, which is why it is not optional.
 
 ## What it does not see
 
@@ -96,5 +92,9 @@ the ones that exist come from `iets.toml`, `--iets-option` and the `IETS_*`
 variables. Wiring them is a change to that route, not to this profiler, so
 it waits for a reason to make it.
 
-The output format is already Nix's, so a profile collected here feeds the
-same tools as one collected there.
+The folded output is byte-for-byte the shape Nix writes — frames joined by
+`;`, a space, the count (`eval-profiler.cc`) — and a lambda frame is the
+same `callsite:name`. One label differs: Nix renders a builtin as
+`callsite:primop foo` and iets as `callsite:«__foo»`. A flame graph tool
+treats both as opaque text, so either feeds the same tools; a frame-by-frame
+diff between a Nix profile and an iets one would not line up on builtins.

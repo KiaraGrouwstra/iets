@@ -99,14 +99,27 @@ pub fn cache_flag(a: &mut EvalArgs, s: &str, mut next: impl FnMut() -> String) -
             a.no_tracing_cache = true;
             a.no_ir_cache = true;
         }
-        "--cache-dir" => a.cache_dir = Some(next()),
         "--workers" => {
             let v = next();
-            a.workers =
+            let n: usize =
                 v.parse().ok().filter(|n| *n >= 1).unwrap_or_else(|| {
                     arg_error(format!("--workers wants a number >= 1, got '{v}'"))
                 });
+            // the settings path pins this too; here is where a flag would
+            // override it (docs/reference/profile.md)
+            if n != 1
+                && crate::session::Session::current()
+                    .settings()
+                    .profile
+                    .is_some()
+            {
+                arg_error(format!(
+                    "a profile needs one worker, so --workers must be 1, not {n}"
+                ))
+            }
+            a.workers = n;
         }
+        "--cache-dir" => a.cache_dir = Some(next()),
         _ => return false,
     }
     true

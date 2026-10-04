@@ -6,9 +6,10 @@
 //! the folded form `frame;frame <count>` that `flamegraph.pl` and every
 //! compatible tool read (docs/reference/profile.md).
 //!
-//! The shadow stack costs two stores per call, so it lives behind
-//! `--features profile-eval`: a binary without the feature has no push, no
-//! pop and no branch.
+//! The shadow stack is two stores per call. That was expected to earn a
+//! feature gate and did not: a `hello` evaluation with the sampler compiled
+//! in and no profile asked for is inside the run-to-run spread of one without
+//! it, so it is always in and `IETS_PROFILE` is the only switch.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -56,21 +57,18 @@ const ANON: u32 = !PRIMOP;
 /// already interned, and `Profile::write` turns them into text at the end
 /// instead of while the samples are collected.
 #[inline]
-#[cfg(feature = "profile-eval")]
 pub fn frame(pos: Pos, name: Option<Sym>) -> u64 {
     ((pos.0 as u64) << 32) | name.map_or(ANON, |s| s.0) as u64
 }
 
 /// A call site and the builtin it entered.
 #[inline]
-#[cfg(feature = "profile-eval")]
 pub fn primop_frame(pos: Pos, sym: Sym) -> u64 {
     ((pos.0 as u64) << 32) | (sym.0 | PRIMOP) as u64
 }
 
 /// One fiber's shadow stack. Pushed and popped by the call path, read by
 /// nothing else.
-#[cfg(feature = "profile-eval")]
 pub struct Stack {
     frames: Vec<u64>,
     last_tick: u64,
@@ -79,14 +77,12 @@ pub struct Stack {
 /// A fiber made from another starts its own stack: `Evaluator` is `Clone`
 /// and the clone runs elsewhere, so copying the frames would blame the new
 /// fiber for its maker's call chain.
-#[cfg(feature = "profile-eval")]
 impl Clone for Stack {
     fn clone(&self) -> Stack {
         Stack::default()
     }
 }
 
-#[cfg(feature = "profile-eval")]
 impl Default for Stack {
     fn default() -> Stack {
         Stack {
@@ -96,7 +92,6 @@ impl Default for Stack {
     }
 }
 
-#[cfg(feature = "profile-eval")]
 impl Stack {
     /// Enters `f`. The whole cost of a call that is not sampled.
     #[inline]
@@ -170,7 +165,6 @@ impl Profile {
         let _ = self.names.set((files.clone(), interner.clone()));
     }
 
-    #[cfg(feature = "profile-eval")]
     fn sample(&self, frames: &[u64], weight: u64) {
         let Ok(mut g) = self.folded.lock() else {
             return;
@@ -255,12 +249,6 @@ pub fn open(session: &Arc<crate::session::Session>) {
     let Some(mode) = s.profile else {
         return;
     };
-    if !cfg!(feature = "profile-eval") {
-        crate::errln!(
-            "error (ignored): this iets has no --features profile-eval, so IETS_PROFILE collects nothing"
-        );
-        return;
-    }
     let hz = s.profile_hz.max(1);
     session.profile.hz.store(hz as u64, Ordering::Relaxed);
     session
@@ -283,7 +271,7 @@ pub fn open(session: &Arc<crate::session::Session>) {
         });
 }
 
-#[cfg(all(test, feature = "profile-eval"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

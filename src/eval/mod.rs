@@ -176,7 +176,6 @@ pub struct Evaluator {
     pub drv: crate::builtins::derivation::DrvState,
     pub par: crate::parallel::Ctx,
     /// This fiber's shadow stack for the sampled profile.
-    #[cfg(feature = "profile-eval")]
     prof: crate::profile::Stack,
     /// Read-set recorder for the tracing cache; off unless the run has an entry to write.
     trace: crate::trace::Trace,
@@ -482,7 +481,6 @@ impl EvalConfig {
                 self.dump_dir,
             ),
             par: Default::default(),
-            #[cfg(feature = "profile-eval")]
             prof: Default::default(),
             trace: if self.trace {
                 crate::trace::Trace::enabled_in(self.trace_store)
@@ -1375,10 +1373,8 @@ impl Evaluator {
     /// Apply `func` to `args` left to right. Returns a forced value.
     pub fn apply(&mut self, func: Word, args: &[Word], pos: Pos) -> EvalResult<Word> {
         self.enter_call(pos)?;
-        #[cfg(feature = "profile-eval")]
         let depth = self.prof.depth();
         let r = self.apply_inner(func, args, pos);
-        #[cfg(feature = "profile-eval")]
         self.prof.unwind(depth);
         self.call_depth -= 1;
         r
@@ -1386,7 +1382,6 @@ impl Evaluator {
 
     /// Takes a sample when the tick thread asked for one. The arena is
     /// touched only here, so a call that is not sampled does not read it.
-    #[cfg(feature = "profile-eval")]
     #[inline]
     fn prof_take(&mut self) {
         if self.prof.due(&self.session.profile) {
@@ -1397,7 +1392,6 @@ impl Evaluator {
 
     /// Enters a frame for a call of `name` at `pos`, and answers the depth
     /// the caller returns to.
-    #[cfg(feature = "profile-eval")]
     #[inline]
     fn prof_enter(&mut self, pos: Pos, name: Option<Sym>) -> usize {
         let d = self.prof.depth();
@@ -1407,7 +1401,6 @@ impl Evaluator {
     }
 
     /// Enters a frame for a call of the builtin `sym` at `pos`.
-    #[cfg(feature = "profile-eval")]
     #[inline]
     fn prof_enter_op(&mut self, pos: Pos, sym: crate::syntax::symbol::Sym) -> usize {
         let d = self.prof.depth();
@@ -1424,10 +1417,8 @@ impl Evaluator {
             match cur.view() {
                 Value::Lambda(l) => {
                     self.nr_function_calls += 1;
-                    #[cfg(feature = "profile-eval")]
                     let d = self.prof_enter(pos, l.lam.name);
                     cur = self.call_lambda(l, args[0], pos)?;
-                    #[cfg(feature = "profile-eval")]
                     self.prof.unwind(d);
                     args = &args[1..];
                 }
@@ -1436,13 +1427,11 @@ impl Evaluator {
                     if args.len() < arity {
                         return Ok(self.arena.mk_primop_app(op, args));
                     }
-                    #[cfg(feature = "profile-eval")]
                     let d = self.prof_enter_op(pos, op.sym);
                     cur = (op.f)(self, &args[..arity], pos).map_err(|mut e| {
                         e.add_trace(pos, format!("while calling the '{}' builtin", op.name));
                         e
                     })?;
-                    #[cfg(feature = "profile-eval")]
                     self.prof.unwind(d);
                     args = &args[arity..];
                 }
@@ -1458,13 +1447,11 @@ impl Evaluator {
                     let mut all: [Word; 8] = [Word::EMPTY; 8];
                     all[..app.args.len()].copy_from_slice(app.args);
                     all[app.args.len()..arity].copy_from_slice(&args[..need]);
-                    #[cfg(feature = "profile-eval")]
                     let d = self.prof_enter_op(pos, op.sym);
                     cur = (op.f)(self, &all[..arity], pos).map_err(|mut e| {
                         e.add_trace(pos, format!("while calling the '{}' builtin", op.name));
                         e
                     })?;
-                    #[cfg(feature = "profile-eval")]
                     self.prof.unwind(d);
                     args = &args[need..];
                 }
