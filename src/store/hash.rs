@@ -318,6 +318,22 @@ impl Write for Hasher {
 
 const NIX32_CHARS: &[u8; 32] = b"0123456789abcdfghijklmnpqrsvwxyz";
 
+const NIX32_DIGITS: [u8; 256] = {
+    let mut t = [0xff; 256];
+    let mut i = 0;
+    while i < NIX32_CHARS.len() {
+        t[NIX32_CHARS[i] as usize] = i as u8;
+        i += 1;
+    }
+    t
+};
+
+/// Whether `c` is one of [`NIX32_CHARS`], which is what nix tests a store
+/// path's hash part against (path.cc:StorePath::StorePath).
+pub fn is_nix32_char(c: u8) -> bool {
+    NIX32_DIGITS[c as usize] != 0xff
+}
+
 /// Mirrors base-nix-32.hh:BaseNix32::encodedLength.
 pub fn nix32_encoded_len(n: usize) -> usize {
     (n * 8 - 1) / 5 + 1
@@ -356,21 +372,22 @@ pub fn nix32_encode_into(s: &mut String, bytes: &[u8]) {
 /// Mirrors base-nix-32.cc:BaseNix32::decode.
 pub fn nix32_decode(s: &str) -> Result<Vec<u8>, HashError> {
     let bytes = s.as_bytes();
-    let mut res: Vec<u8> = Vec::with_capacity(bytes.len() * 5 / 8 + 1);
+    if bytes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut res: Vec<u8> = vec![0; (bytes.len() * 5 - 5) / 8 + 1];
     for n in 0..bytes.len() {
         let c = bytes[bytes.len() - n - 1];
-        let digit = NIX32_CHARS.iter().position(|&x| x == c).ok_or_else(|| {
-            HashError(format!(
+        let digit = NIX32_DIGITS[c as usize];
+        if digit == 0xff {
+            return Err(HashError(format!(
                 "invalid character in Nix32 (Nix's Base32 variation) string: '{}'",
                 c as char
-            ))
-        })? as u8;
+            )));
+        }
         let b = n * 5;
         let i = b / 8;
         let j = b % 8;
-        if res.len() < i + 1 {
-            res.resize(i + 1, 0);
-        }
         res[i] |= digit << j;
         let carry = digit.checked_shr((8 - j) as u32).unwrap_or(0);
         if carry != 0 {
