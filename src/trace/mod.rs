@@ -491,8 +491,14 @@ impl Trace {
             return;
         };
         let filtered = accepted.map(|a| {
+            // Only the members under this root can decide this tree. The set
+            // a caller passes is the enclosing filter's — for a flake input
+            // that is every tracked file of the whole input — so a single
+            // patch file copied out of nixpkgs recorded 54k paths it could
+            // never read, 8.4 MB for one observation.
             let mut accepted: Vec<Vec<u8>> = a
                 .iter()
+                .filter(|p| p.starts_with(root))
                 .map(|p| p.as_os_str().as_bytes().to_vec())
                 .collect();
             accepted.sort();

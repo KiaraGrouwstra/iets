@@ -164,6 +164,19 @@ impl Store {
     pub fn publish(&self, key: &str, parts: &[(Part, &[u8])]) -> io::Result<bool> {
         let count = u8::try_from(parts.len()).map_err(|_| io::ErrorKind::InvalidInput)?;
         let head = [VERSION, count];
+        // an entry over the cap is one no reader will open (cachefs::MAX_ENTRY),
+        // so write nothing rather than seconds of bytes that are dead on arrival
+        let total = (HEADER + parts.len() * SLOT) as u64
+            + parts.iter().map(|(_, b)| b.len() as u64).sum::<u64>();
+        if total > cachefs::MAX_ENTRY {
+            return Err(io::Error::new(
+                io::ErrorKind::FileTooLarge,
+                format!(
+                    "cache entry is {total} bytes, over the {} byte limit",
+                    cachefs::MAX_ENTRY
+                ),
+            ));
+        }
         let mut table = Vec::with_capacity(parts.len() * SLOT);
         let mut at = (HEADER + parts.len() * SLOT) as u64;
         for (p, bytes) in parts {
