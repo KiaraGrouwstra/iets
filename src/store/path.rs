@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use super::hash::{Hash, HashAlgo, compress_hash, hash_bytes, nix32_decode};
+use super::hash::{Hash, HashAlgo, compress_hash, hash_bytes, is_nix32_char};
 
 pub const STORE_DIR: &str = "/nix/store";
 
@@ -110,9 +110,11 @@ impl StorePath {
         if !rest.starts_with('-') {
             return Err(bad("missing dash"));
         }
-        let decoded = nix32_decode(hash_part).map_err(|e| bad(&e.0))?;
-        if decoded.len() != 20 {
-            return Err(bad("invalid hash part"));
+        if let Some(c) = hash_part.bytes().find(|&c| !is_nix32_char(c)) {
+            return Err(bad(&format!(
+                "illegal base-32 character '{}' in the hash part",
+                c as char
+            )));
         }
         check_name(&rest[1..]).map_err(|e| bad(&e.0))?;
         Ok(StorePath {
