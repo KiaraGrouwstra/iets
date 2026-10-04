@@ -61,6 +61,9 @@ arena, and was always the whole run.
 | `IETS_STATS` | | level | 0 | 1 prints allocation counts and bytes per object kind, RSS and glibc's `malloc_stats`; 2 adds the memory census — histograms, duplicates, objects never read — on a binary built with `--features stats2`. The hooks are compiled out otherwise. Each worker allocates from its own arena, so `arena_bytes`, `arena_mapped` and the per-kind table are the sum over every arena, folded on each fiber switch. Setting this is what turns the fold on, at ~0.1% of instructions. `store_adds` counts the source trees and `toFile` texts the evaluation turned into a store path; `IETS_EVENTS=store` names each one. |
 | `IETS_EVENTS` | | group list | | The parts of the run to watch, comma-separated, or `all` for every cold group: `store`, `fetch`, `cache`, … A name that is not a group is an error. `docs/reference/events.md` has the table and the schema. |
 | `IETS_EVENTS_TO` | | path | `-` | Where those records go. `-` is stderr, a unix socket is connected to, any other path is appended to. It acts only when `IETS_EVENTS` names a group. |
+| `IETS_PROFILE` | | `eval` or `alloc` | | Collects a sampled flame graph of the evaluation: `eval` weighs a sample by the time it stood for, `alloc` by the arena bytes since the sample before it. Any other word is an error. A profile is read per fiber, so it pins the run to one worker and refuses an explicit `--workers` or `workers` that is not 1 (`docs/reference/profile.md`). |
+| `IETS_PROFILE_TO` | | path | `-` | Where the folded lines go. `-` is stderr, any other path is written. It acts only with `IETS_PROFILE`. |
+| `IETS_PROFILE_HZ` | | number | 99 | Samples a second the tick thread asks for. |
 | `IETS_CACHE` | `cache` | Boolean | on | The tracing cache and the IR cache. Same as `--no-cache`. |
 | `IETS_CACHE_DIR` | `cache-dir` | path | `$XDG_CACHE_HOME/iets` | Cache root. The three stores live in its `trace/`, `ir/` and `inputs/` subdirectories, so the directory you name is never itself a removal target. A store subdirectory that already exists, holds something, and is not iets's is refused with an error, not wiped. `--cache-dir DIR` overrides it. |
 | `IETS_IR_STATS` | | set = on | off | One line per compiled file on stderr. |
@@ -419,7 +422,7 @@ apply.
 | `warn-dirty`, `allow-dirty-locks`, `commit-lock-file-summary` | iets prints no dirty-tree warning and writes no lock file. |
 | `flake-registry`, `use-registries` | iets has no registry. A reference that needs one falls back, or is an error in iets's own commands. |
 | `nix-shell-shebang-arguments-relative-to-script`, `nix-shell-always-looks-for-shell-nix` | a `#!` script falls back, and so does `nix-shell` when the second one is `false`. |
-| `eval-profile-file`, `eval-profiler-frequency` | they only act with `eval-profiler`, which is in class 4. |
+| `eval-profile-file`, `eval-profiler-frequency` | they only act with `eval-profiler`, which is in class 4; `IETS_PROFILE_TO` and `IETS_PROFILE_HZ` are the knobs that act. |
 | `eval-attrset-update-layer-rhs-threshold`, `preallocate-contents`, `use-case-hack` | they tune Nix's own data structures and file writes. No result changes. |
 
 **4. iets has nothing for it.** `UNIMPLEMENTED`. It counts when the value
@@ -448,7 +451,7 @@ warning: setting 'restrict-eval' is ignored: iets has no restricted mode, so eve
 | `abort-on-warn` | `false` | `builtins.warn` never stops an evaluation |
 | `trace-verbose` | `false` | `builtins.traceVerbose` never prints |
 | `trace-function-calls` | `false` | iets has no function-call trace |
-| `eval-profiler` | `disabled` | iets has no evaluation profiler; `IETS_STATS` gives its counters |
+| `eval-profiler` | `disabled` | iets has an evaluation profiler, under `IETS_PROFILE` (`docs/reference/profile.md`). This setting is not wired to it: it arrives through nix.conf, which no evaluator-wide knob reads yet. |
 | `debugger-on-trace`, `debugger-on-warn`, `ignore-try` | `false` | iets has no debugger |
 | `allow-unsafe-native-code-during-evaluation` | `false` | iets has no `builtins.exec` and no `builtins.importNative` |
 | `plugin-files` | empty | iets loads no plugins |

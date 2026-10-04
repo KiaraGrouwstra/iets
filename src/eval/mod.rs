@@ -175,6 +175,8 @@ pub struct Evaluator {
     pub lints: crate::lint::Lints,
     pub drv: crate::builtins::derivation::DrvState,
     pub par: crate::parallel::Ctx,
+    /// This fiber's shadow stack for the sampled profile.
+    prof: crate::profile::Stack,
     /// Read-set recorder for the tracing cache; off unless the run has an entry to write.
     trace: crate::trace::Trace,
     /// Compiled-IR cache for imported files; `None` when disabled.
@@ -479,6 +481,7 @@ impl EvalConfig {
                 self.dump_dir,
             ),
             par: Default::default(),
+            prof: Default::default(),
             trace: if self.trace {
                 crate::trace::Trace::enabled_in(self.trace_store)
             } else {
@@ -490,6 +493,9 @@ impl EvalConfig {
             session: self.session,
         };
         crate::builtins::install(&mut ev);
+        if ev.session.profile.on() {
+            ev.session.profile.names(&ev.files, &ev.interner);
+        }
         ev
     }
 }
@@ -1367,9 +1373,40 @@ impl Evaluator {
     /// Apply `func` to `args` left to right. Returns a forced value.
     pub fn apply(&mut self, func: Word, args: &[Word], pos: Pos) -> EvalResult<Word> {
         self.enter_call(pos)?;
+        let depth = self.prof.depth();
         let r = self.apply_inner(func, args, pos);
+        self.prof.unwind(depth);
         self.call_depth -= 1;
         r
+    }
+
+    /// Takes a sample when the tick thread asked for one. The arena is
+    /// touched only here, so a call that is not sampled does not read it.
+    #[inline]
+    fn prof_take(&mut self) {
+        if self.prof.due(&self.session.profile) {
+            let bytes = self.arena.bytes_since_sample();
+            self.prof.take(&self.session.profile, bytes);
+        }
+    }
+
+    /// Enters a frame for a call of `name` at `pos`, and answers the depth
+    /// the caller returns to.
+    #[inline]
+    fn prof_enter(&mut self, pos: Pos, name: Option<Sym>) -> usize {
+        let d = self.prof.depth();
+        self.prof.enter(crate::profile::frame(pos, name));
+        self.prof_take();
+        d
+    }
+
+    /// Enters a frame for a call of the builtin `sym` at `pos`.
+    #[inline]
+    fn prof_enter_op(&mut self, pos: Pos, sym: crate::syntax::symbol::Sym) -> usize {
+        let d = self.prof.depth();
+        self.prof.enter(crate::profile::primop_frame(pos, sym));
+        self.prof_take();
+        d
     }
 
     fn apply_inner(&mut self, func: Word, args: &[Word], pos: Pos) -> EvalResult<Word> {
@@ -1380,7 +1417,9 @@ impl Evaluator {
             match cur.view() {
                 Value::Lambda(l) => {
                     self.nr_function_calls += 1;
+                    let d = self.prof_enter(pos, l.lam.name);
                     cur = self.call_lambda(l, args[0], pos)?;
+                    self.prof.unwind(d);
                     args = &args[1..];
                 }
                 Value::PrimOp(op) => {
@@ -1388,10 +1427,12 @@ impl Evaluator {
                     if args.len() < arity {
                         return Ok(self.arena.mk_primop_app(op, args));
                     }
+                    let d = self.prof_enter_op(pos, op.sym);
                     cur = (op.f)(self, &args[..arity], pos).map_err(|mut e| {
                         e.add_trace(pos, format!("while calling the '{}' builtin", op.name));
                         e
                     })?;
+                    self.prof.unwind(d);
                     args = &args[arity..];
                 }
                 Value::PrimOpApp(app) => {
@@ -1406,10 +1447,12 @@ impl Evaluator {
                     let mut all: [Word; 8] = [Word::EMPTY; 8];
                     all[..app.args.len()].copy_from_slice(app.args);
                     all[app.args.len()..arity].copy_from_slice(&args[..need]);
+                    let d = self.prof_enter_op(pos, op.sym);
                     cur = (op.f)(self, &all[..arity], pos).map_err(|mut e| {
                         e.add_trace(pos, format!("while calling the '{}' builtin", op.name));
                         e
                     })?;
+                    self.prof.unwind(d);
                     args = &args[need..];
                 }
                 Value::Attrs(a) => {

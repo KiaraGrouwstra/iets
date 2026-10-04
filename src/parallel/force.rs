@@ -774,7 +774,8 @@ fn range_step(ev: &mut Evaluator, c: &Cell, deep: bool, seen: &mut HashSet<u64>)
 pub fn import_thunk(ev: &mut Evaluator, resolved: &[u8], pos: Pos) -> Word {
     let path = ev.mk_string(resolved);
     let posw = Word::imm_int(pos.0 as i64);
-    let op = ev.arena.mk_primop("importRaw", 2, import_raw);
+    let s = ev.sym(b"importRaw");
+    let op = ev.arena.mk_primop("importRaw", 2, import_raw, s);
     let Value::PrimOp(p) = op.view() else {
         unreachable!("mk_primop makes a primop")
     };

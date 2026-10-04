@@ -82,6 +82,15 @@ impl Arena {
     /// `release` and `shrink_last` give bytes back, so a total can fall below
     /// its own mark. The fold saturates there and keeps whatever it published,
     /// which overstates by the bytes given back since the last fold.
+    /// The bytes this arena allocated since the last sample, marked taken.
+    /// `release` and `shrink_last` give bytes back, so a total can fall
+    /// below its own mark; the sample saturates at nothing there.
+    pub(crate) fn bytes_since_sample(&mut self) -> u64 {
+        let d = self.bytes_allocated.saturating_sub(self.folded.sample);
+        self.folded.sample = self.bytes_allocated;
+        d as u64
+    }
+
     pub(crate) fn take_unfolded(&mut self) -> crate::parallel::shared::ArenaUse {
         let mut u = crate::parallel::shared::ArenaUse {
             bytes: self.bytes_allocated.saturating_sub(self.folded.bytes) as u64,
@@ -342,6 +351,10 @@ impl Stat {
 /// running total again.
 #[derive(Default)]
 struct Folded {
+    /// Mark for the allocation profile, which weighs a sample by the bytes
+    /// since the one before it. In this box because the box is already paid
+    /// for by the fiber switch.
+    sample: usize,
     bytes: usize,
     mapped: usize,
     counts: [u64; NSTATS],

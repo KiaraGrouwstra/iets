@@ -59,6 +59,15 @@ pub struct Settings {
     pub events: u32,
     /// `IETS_EVENTS_TO`: where the events go. `None` is stderr.
     pub events_to: Option<String>,
+    /// `IETS_PROFILE`, `eval-profiler=flamegraph`: sample the call
+    /// stack, weighed by time (`eval`) or by arena bytes (`alloc`). Needs
+    /// `--features profile-eval` to collect anything.
+    pub profile: Option<crate::profile::Mode>,
+    /// `IETS_PROFILE_TO`, `eval-profile-file`: where the folded lines go.
+    /// `None` is stderr.
+    pub profile_to: Option<String>,
+    /// `IETS_PROFILE_HZ`, `eval-profiler-frequency`: samples a second.
+    pub profile_hz: u32,
     /// `cache`, `IETS_CACHE`: the tracing and IR caches.
     pub cache: bool,
     /// `cache-dir`, `IETS_CACHE_DIR`: cache root, below `--cache-dir`.
@@ -232,10 +241,35 @@ impl Settings {
                 ));
             }
         }
+        let profile = match env.str("IETS_PROFILE").as_deref() {
+            None => None,
+            Some(w) => match crate::profile::Mode::parse(w) {
+                Some(m) => Some(m),
+                None => {
+                    return Err(Error::Config(format!(
+                        "IETS_PROFILE: '{w}' is not 'eval' or 'alloc'"
+                    )));
+                }
+            },
+        };
         let workers: Option<usize> = env.num("IETS_WORKERS")?.or(c.int("workers")?);
         if workers == Some(0) {
             return Err(Error::Config("workers must be 1 or more".into()));
         }
+        // A profile is read per fiber, and a fiber's stack starts at the thunk
+        // it was handed, so at more than one worker the graph is a pile of
+        // two-frame stacks and no shape (docs/reference/profile.md). Profiling
+        // therefore pins the worker count rather than quietly misleading.
+        let workers = match (profile, workers) {
+            (Some(_), None) => Some(1),
+            (Some(_), Some(1)) => Some(1),
+            (Some(_), Some(n)) => {
+                return Err(Error::Config(format!(
+                    "a profile needs one worker, so workers must be 1, not {n}"
+                )));
+            }
+            (None, w) => w,
+        };
         let fix_hashes = c.get(
             "fix-hashes",
             "\"ask\", \"always\" or \"never\"",
@@ -263,6 +297,9 @@ impl Settings {
                 None => 0,
             },
             events_to: env.str("IETS_EVENTS_TO"),
+            profile,
+            profile_to: env.str("IETS_PROFILE_TO"),
+            profile_hz: env.num("IETS_PROFILE_HZ")?.unwrap_or(99),
             cache: env.flag("IETS_CACHE", c.bool("cache")?, true)?,
             cache_dir: env.dir("IETS_CACHE_DIR").or(c.str("cache-dir")?),
             ir_stats: env.set("IETS_IR_STATS"),

@@ -251,9 +251,10 @@ pub fn eval_flake_value(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
     // its own primop, not the one in `builtins`: under a classic name that
     // one is there only with `fetch-tree` or `flakes` (`builtins::exposed`),
     // and `call-flake.nix` needs it either way
+    let fetch_sym = ev.sym(b"fetchTree");
     let fetch_tree = ev
         .arena
-        .mk_primop("fetchTree", 1, crate::flake::fetch::fetch_tree);
+        .mk_primop("fetchTree", 1, crate::flake::fetch::fetch_tree, fetch_sym);
     ev.apply(call_flake, &[lock_str, overrides, fetch_tree], pos)
 }
 

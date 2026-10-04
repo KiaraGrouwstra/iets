@@ -4,7 +4,8 @@
 where the records go: a file, a unix socket, or `-` for stderr, which is the
 default. Each record is one JSON object on one line. The stream says what an
 evaluation did; the `IETS_STATS` counters say how much of it
-(`docs/reference/settings.md`).
+(`docs/reference/settings.md`); `IETS_PROFILE=eval` says where the time
+went (`docs/reference/profile.md`).
 
 ```
 IETS_EVENTS=store                       # one group, to stderr

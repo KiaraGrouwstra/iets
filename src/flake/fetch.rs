@@ -371,7 +371,8 @@ pub fn emit_tree_attrs(
     if let Some(mut w) = of {
         if tree.counter.is_some() || counted.is_some() {
             let name = counted.map_or(Word::NULL, |s| ev.mk_string(s.as_bytes()));
-            let op = ev.arena.mk_primop(COUNT, 2, rev_count);
+            let count_sym = ev.sym(COUNT.as_bytes());
+            let op = ev.arena.mk_primop(COUNT, 2, rev_count, count_sym);
             w = ev.arena.mk_thunk_app2(op, name, w);
         }
         entries.push((ev.sym(b"revCount"), pos, w));

@@ -105,7 +105,10 @@ pub fn install(ev: &mut Evaluator) {
     let np = ev.mk_list(&items);
     r.constant("__nixPath", np);
     if !ev.pure() {
-        let ct_op = ev.arena.mk_primop("currentTimeRaw", 1, text::current_time);
+        let s = ev.sym(b"currentTimeRaw");
+        let ct_op = ev
+            .arena
+            .mk_primop("currentTimeRaw", 1, text::current_time, s);
         let ct = ev.arena.mk_thunk_app(ct_op, Word::NULL);
         r.constant("__currentTime", ct);
     }
@@ -115,10 +118,10 @@ pub fn install(ev: &mut Evaluator) {
         if !exposed(name) {
             continue;
         }
-        let w = ev.arena.mk_primop(name, *arity, *f);
+        let gsym = ev.sym(name.as_bytes());
+        let w = ev.arena.mk_primop(name, *arity, *f, gsym);
         let bsym = ev.sym(builtins_name(name).as_bytes());
         entries.push((bsym, Pos::NONE, w));
-        let gsym = ev.sym(name.as_bytes());
         ev.globals.table.insert(gsym, w);
     }
     for (name, w) in &r.consts {
