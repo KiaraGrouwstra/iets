@@ -129,8 +129,6 @@ pub fn from_outputs(
     Ok(found)
 }
 
-// ---- an attribute path inside a value ----------------------------------------
-
 /// attr-path.cc:findAlongAttrPath. Auto-calls at every step, selects an
 /// attribute by name or a list element by index. Every command that takes
 /// `-A` or an attr-path fragment goes through this, so a file whose top
@@ -201,8 +199,6 @@ pub fn find_along_attr_path(
     Ok(v)
 }
 
-// ---- a derivation's attributes -----------------------------------------------
-
 fn parse_drv(p: &[u8]) -> EvalResult<StorePath> {
     StorePath::parse(&String::from_utf8_lossy(p))
         .map_err(|e| Error::boxed(ErrorKind::Eval, e.0, Pos::NONE))
@@ -265,8 +261,6 @@ fn output_name(
     };
     forced_string(ev, on.cell.get(), "while evaluating 'outputName'")
 }
-
-// ---- a value's derivations ---------------------------------------------------
 
 /// The derivations a build result names: an attrset with `drvPath`, a string
 /// with derivation context, or a list of those. `!out!drv` context also names
@@ -484,8 +478,6 @@ fn is_attr_path_component(name: &[u8]) -> bool {
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'+'))
 }
 
-// ---- the program an installable runs ------------------------------------------
-
 /// The program a flake output names, and the derivation output that holds it.
 pub struct App {
     pub drv: StorePath,
@@ -581,8 +573,6 @@ fn main_program(
         None => Ok(None),
     }
 }
-
-// ---- the outputs an installable installs -------------------------------------
 
 /// One installable's derivation and the outputs it installs.
 pub struct Install {
