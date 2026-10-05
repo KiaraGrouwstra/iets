@@ -339,6 +339,7 @@ pub fn nix32_encoded_len(n: usize) -> usize {
     (n * 8 - 1) / 5 + 1
 }
 
+#[cfg(test)]
 /// Mirrors base-nix-32.cc:BaseNix32::encode (Nix's reversed-bit-order base32).
 pub fn nix32_encode(bytes: &[u8]) -> String {
     if bytes.is_empty() {

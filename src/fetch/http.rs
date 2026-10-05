@@ -692,6 +692,7 @@ pub fn decompress_reader(read: Box<dyn Read>) -> Result<Box<dyn Read>> {
     )))
 }
 
+#[cfg(test)]
 /// `bytes` with the compression it announces undone.
 pub fn decompress(bytes: Vec<u8>) -> Result<Vec<u8>> {
     let mut out = Vec::new();
