@@ -377,10 +377,6 @@ impl Tree {
         }
     }
 
-    pub fn root(&self) -> &Node {
-        &self.root
-    }
-
     /// Every file's blob, once: a hard link shares its target's.
     pub fn files(&self) -> Vec<Blob> {
         fn walk(n: &Node, seen: &mut std::collections::HashSet<Blob>, out: &mut Vec<Blob>) {

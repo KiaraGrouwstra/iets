@@ -166,19 +166,6 @@ impl crate::events::Field for &StorePath {
     }
 }
 
-/// Mirrors store-dir-config.cc:makeStorePath(type, std::string_view hash, name).
-pub fn make_store_path_str(ty: &str, hash: &str, name: &str) -> Result<StorePath, StorePathError> {
-    let mut s = String::with_capacity(ty.len() + hash.len() + STORE_DIR.len() + name.len() + 3);
-    s.push_str(ty);
-    s.push(':');
-    s.push_str(hash);
-    s.push(':');
-    s.push_str(STORE_DIR);
-    s.push(':');
-    s.push_str(name);
-    from_payload(&s, name)
-}
-
 /// Mirrors store-dir-config.cc:makeStorePath(type, const Hash &, name). The
 /// `<algo>:<base16>` of the hash goes straight into the payload.
 pub fn make_store_path(ty: &str, hash: &Hash, name: &str) -> Result<StorePath, StorePathError> {

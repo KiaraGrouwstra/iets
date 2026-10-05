@@ -685,13 +685,6 @@ pub struct Entry {
     pub line: usize,
 }
 
-impl Entry {
-    /// `file:line`, what an error message shows.
-    pub fn at(&self) -> String {
-        format!("{}:{}", self.file.display(), self.line)
-    }
-}
-
 /// configuration.cc:parseConfigFiles. Returns the entries in file order,
 /// includes expanded in place.
 pub fn parse(text: &str, origin: &Path) -> Result<Vec<Entry>> {

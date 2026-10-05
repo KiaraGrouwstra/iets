@@ -12,13 +12,21 @@
 //! and mode (git-utils.cc:1348-1364). Everything else is an error
 //! (tarfile.cc:253). A member listed twice keeps the last copy
 //! (git-utils.cc:1213, "only import the latest version of a path").
+//!
+//! A fetch writes no tree: `fetch::spool` indexes the archive and shares
+//! `member_path` with this module. `unpack` is built for the tests alone, as
+//! the oracle the spool's NAR is held to (`spool_matches_the_tree`).
 
+#[cfg(test)]
 use std::os::unix::ffi::OsStringExt;
+#[cfg(test)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 
+#[cfg(test)]
 use crate::error::{Error, Result};
 
+#[cfg(test)]
 fn bad(why: String) -> Error {
     Error::Store(why)
 }
@@ -40,6 +48,7 @@ pub(crate) fn member_path(name: &Path) -> PathBuf {
     out
 }
 
+#[cfg(test)]
 /// `root` joined with a member path, with the missing parents created. A parent
 /// that exists and is not a directory is replaced, a symlink included: the sink
 /// never follows one out of the tree, it overwrites it (git-utils.cc:addNode
@@ -65,10 +74,12 @@ fn make_parents(root: &Path, rel: &Path) -> Result<PathBuf> {
     Ok(at)
 }
 
+#[cfg(test)]
 fn mkdir(at: &Path) -> Result<()> {
     std::fs::create_dir(at).map_err(|e| Error::io(format!("cannot create {}", at.display()), e))
 }
 
+#[cfg(test)]
 /// Whatever is at `at` goes away, whichever type it has.
 fn clear(at: &Path) -> Result<()> {
     match std::fs::symlink_metadata(at) {
@@ -79,6 +90,7 @@ fn clear(at: &Path) -> Result<()> {
     }
 }
 
+#[cfg(test)]
 /// Unpacks the tar stream in `bytes` under `dest` and answers the directory to
 /// hash: `dest`, or its single entry when that is the only one and is a
 /// directory (git-utils.cc:dereferenceSingletonDirectory).
@@ -185,6 +197,7 @@ pub fn unpack(bytes: Vec<u8>, dest: &Path) -> Result<PathBuf> {
     Ok(singleton(dest))
 }
 
+#[cfg(test)]
 /// git-utils.cc:dereferenceSingletonDirectory: one entry, and a directory.
 fn singleton(dest: &Path) -> PathBuf {
     let mut entries = match std::fs::read_dir(dest) {

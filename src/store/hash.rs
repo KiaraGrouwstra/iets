@@ -339,6 +339,7 @@ pub fn nix32_encoded_len(n: usize) -> usize {
     (n * 8 - 1) / 5 + 1
 }
 
+#[cfg(test)]
 /// Mirrors base-nix-32.cc:BaseNix32::encode (Nix's reversed-bit-order base32).
 pub fn nix32_encode(bytes: &[u8]) -> String {
     if bytes.is_empty() {
@@ -400,14 +401,7 @@ pub fn nix32_decode(s: &str) -> Result<Vec<u8>, HashError> {
     Ok(res)
 }
 
-/// Mirrors base-n.cc:base16::encode.
-pub fn base16_encode(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    base16_encode_into(&mut s, bytes);
-    s
-}
-
-/// `base16_encode` appended to a buffer the caller keeps.
+/// Mirrors base-n.cc:base16::encode, appended to a buffer the caller keeps.
 pub fn base16_encode_into(s: &mut String, bytes: &[u8]) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     for b in bytes {

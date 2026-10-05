@@ -848,6 +848,7 @@ fn take(r: &mut Reader<'_>, max: usize, out: &mut Vec<u8>) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 /// Hashes `contents` as a NAR regular file (what `nix hash path` gives for that file).
 pub fn nar_hash_of_string(contents: &[u8]) -> Hash {
     let mut h = Hasher::new(HashAlgo::Sha256);

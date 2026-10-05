@@ -480,6 +480,7 @@ impl Derivation {
             .ok_or_else(|| DrvError(format!("'{drv_path}' is not a derivation path")))
     }
 
+    #[cfg(test)]
     /// The path of this derivation, for a caller with no ATerm at hand. Mirrors
     /// derivations.cc:computeStorePath. Used by the drv and devenv tests.
     pub fn drv_path(&self) -> Result<StorePath, DrvError> {

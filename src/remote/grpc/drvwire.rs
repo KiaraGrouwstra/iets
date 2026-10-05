@@ -149,20 +149,6 @@ fn read_opt_u64(r: &mut dyn std::io::Read) -> io::Result<Option<u64>> {
     }
 }
 
-/// worker-protocol.cc:`Serialise<vector<KeyedBuildResult>>`: the derived path
-/// (a string at protocol >= 1.30) then the `BuildResult`.
-pub fn read_keyed_build_results(
-    r: &mut dyn std::io::Read,
-) -> io::Result<Vec<(String, BuildResult)>> {
-    let n = read_u64(r)?;
-    let mut out = Vec::with_capacity(n.min(1 << 16) as usize);
-    for _ in 0..n {
-        let path = read_str(r)?;
-        out.push((path, BuildResult::read(r)?));
-    }
-    Ok(out)
-}
-
 /// One path's `UnkeyedValidPathInfo` at protocol 1.16, as it arrives in a
 /// `PathInfo` message (path-info-wire.hh:`encodePathInfo`).
 #[derive(Debug, Clone, PartialEq, Eq)]
