@@ -369,6 +369,65 @@ pub fn put(
     Ok(stored)
 }
 
+/// Reads, hashes and, unless some pack already holds it, compresses every
+/// distinct file of `tree` on several threads, a batch at a time so that one
+/// batch bounds the memory, and appends the new ones to `writer` in the tree's
+/// order. Gives each file's id, and the files left to the packs that hold them.
+fn objects(
+    tree: &Tree,
+    packs: &pack::Packs,
+    writer: &mut pack::PackWriter,
+) -> io::Result<(HashMap<Blob, pack::Id>, HashMap<pack::Id, Blob>)> {
+    const BATCH: u64 = 32 << 20;
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(8));
+    let files = tree.files();
+    let mut ids = HashMap::with_capacity(files.len());
+    let mut elsewhere = HashMap::new();
+    let mut start = 0;
+    while start < files.len() {
+        let (mut end, mut size) = (start, 0);
+        while end < files.len() && (end == start || size < BATCH) {
+            size += files[end].size();
+            end += 1;
+        }
+        let batch = &files[start..end];
+        let parts: Vec<io::Result<Vec<_>>> = std::thread::scope(|s| {
+            let workers: Vec<_> = batch
+                .chunks(batch.len().div_ceil(threads))
+                .map(|part| {
+                    s.spawn(move || {
+                        part.iter()
+                            .map(|at| {
+                                let bytes = tree.read(at)?;
+                                let id = pack::id_of(&bytes);
+                                let new = !packs.contains(&id);
+                                Ok((*at, id, new.then(|| pack::prepare(bytes))))
+                            })
+                            .collect()
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .map(|w| w.join().expect("an object worker panicked"))
+                .collect()
+        });
+        for part in parts {
+            for (at, id, prepared) in part? {
+                ids.insert(at, id);
+                match prepared {
+                    Some(p) => writer.add_prepared(id, p)?,
+                    None => {
+                        elsewhere.entry(id).or_insert(at);
+                    }
+                }
+            }
+        }
+        start = end;
+    }
+    Ok((ids, elsewhere))
+}
+
 /// [`put`] into the store at `root`; the name of the entry, and the tree read
 /// back out of the packs.
 fn store(
@@ -378,30 +437,26 @@ fn store(
     expect: &Hash,
     tree: Tree,
 ) -> std::result::Result<(String, StoredTree), Rejected> {
-    let mut hasher = crate::store::hash::Hasher::new(expect.algo);
-    tree.dump(&mut hasher).map_err(Rejected::Io)?;
-    let nar_size = hasher.bytes_written();
-    let nar_hash = hasher.finish();
+    let mut writer = pack::PackWriter::new(packs.dir()).map_err(Rejected::Io)?;
+    // the objects go into a pack that is still a temporary, so they can be
+    // made while the NAR is hashed: a mismatch drops the pack unnamed
+    let (nar, objects) = std::thread::scope(|s| {
+        let nar = s.spawn(|| -> io::Result<(u64, Hash)> {
+            let mut h = crate::store::hash::Hasher::new(expect.algo);
+            tree.dump(&mut h)?;
+            Ok((h.bytes_written(), h.finish()))
+        });
+        let objects = objects(&tree, &packs, &mut writer);
+        (nar.join().expect("the NAR hasher panicked"), objects)
+    });
+    let (nar_size, nar_hash) = nar.map_err(Rejected::Io)?;
     if nar_hash != *expect {
         return Err(Rejected::Mismatch(nar_hash));
     }
+    let (ids, elsewhere) = objects.map_err(Rejected::Io)?;
     let sp = store_path(name, &nar_hash).map_err(|_| Rejected::Unstorable)?;
     let name = sp.base_name();
-
-    let mut writer = pack::PackWriter::new(packs.dir()).map_err(Rejected::Io)?;
-    let mut elsewhere: HashMap<pack::Id, Blob> = HashMap::new();
-    let stored_root = tree
-        .to_objects(&mut |id, at, bytes| {
-            if writer.has(&id) || elsewhere.contains_key(&id) {
-                Ok(())
-            } else if packs.contains(&id) {
-                elsewhere.insert(id, *at);
-                Ok(())
-            } else {
-                writer.add(id, bytes)
-            }
-        })
-        .map_err(Rejected::Io)?;
+    let stored_root = tree.with_ids(&ids);
     let index = spool::encode_index(&stored_root, (&nar_hash, nar_size));
     {
         // `collect` holds the lock for as long as a compaction takes, so this

@@ -232,6 +232,33 @@ impl Pack {
     }
 }
 
+/// An object's payload as a pack stores it, made apart from the writer so that
+/// several threads can compress while one appends.
+pub struct Prepared {
+    payload: Vec<u8>,
+    raw: u64,
+    flags: u8,
+}
+
+pub fn prepare(bytes: Vec<u8>) -> Prepared {
+    let raw = bytes.len() as u64;
+    let packed = (bytes.len() >= MIN_COMPRESS)
+        .then(|| lz4_flex::block::compress(&bytes))
+        .filter(|c| c.len() < bytes.len());
+    match packed {
+        Some(payload) => Prepared {
+            payload,
+            raw,
+            flags: LZ4,
+        },
+        None => Prepared {
+            payload: bytes,
+            raw,
+            flags: 0,
+        },
+    }
+}
+
 /// A pack being written, under a temporary name in the packs directory, so a
 /// killed writer leaves a `.tmp` the sweep removes.
 pub struct PackWriter {
@@ -277,17 +304,14 @@ impl PackWriter {
     }
 
     pub fn add(&mut self, id: Id, bytes: &[u8]) -> io::Result<()> {
+        self.add_prepared(id, prepare(bytes.to_vec()))
+    }
+
+    pub fn add_prepared(&mut self, id: Id, p: Prepared) -> io::Result<()> {
         if !self.ids.insert(id) {
             return Ok(());
         }
-        let packed = (bytes.len() >= MIN_COMPRESS)
-            .then(|| lz4_flex::block::compress(bytes))
-            .filter(|c| c.len() < bytes.len());
-        let (payload, flags) = match &packed {
-            Some(c) => (&c[..], LZ4),
-            None => (bytes, 0),
-        };
-        self.push(id, payload, bytes.len() as u64, flags)
+        self.push(id, &p.payload, p.raw, p.flags)
     }
 
     /// An object copied from another pack as it is stored, for a compaction:

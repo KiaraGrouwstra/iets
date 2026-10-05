@@ -31,7 +31,7 @@ use std::sync::Arc;
 use crate::error::{Error, Result};
 use crate::store::hash::{Hash, HashAlgo};
 use crate::store::nar::{FileType, NAR_MAX_DEPTH, PathFilter, TreeWriter};
-use crate::treestore::pack::{Id, Packs, id_of};
+use crate::treestore::pack::{Id, Packs};
 
 /// One directory's entries, in the byte order a NAR wants them. A sorted vector,
 /// not a map: a full nixpkgs holds 38 000 directories of two or three entries
@@ -54,7 +54,7 @@ pub enum Node {
 /// Where a file's bytes are: in the spooled archive, in the side file that
 /// holds the expanded GNU sparse members, or, once the tree is stored, in the
 /// input store's packs under the id of the bytes.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Blob {
     Spool {
         offset: u64,
@@ -68,7 +68,7 @@ pub enum Blob {
 }
 
 impl Blob {
-    fn size(&self) -> u64 {
+    pub fn size(&self) -> u64 {
         match self {
             Blob::Spool { size, .. } | Blob::Object { size, .. } => *size,
         }
@@ -97,10 +97,6 @@ impl Node {
         }
     }
 }
-
-/// What [`Tree::to_objects`] calls with each file: its object id, where its
-/// bytes lie now, and the bytes.
-pub type PutObject<'a> = dyn FnMut(Id, &Blob, &[u8]) -> io::Result<()> + 'a;
 
 /// An index of members, and where their bytes are.
 #[derive(Debug)]
@@ -385,34 +381,45 @@ impl Tree {
         &self.root
     }
 
-    /// The same tree with every file named by the id of its bytes. `put` is
-    /// given each file's id, where it lies now and its bytes, and decides
-    /// whether the store needs them.
-    pub fn to_objects(&self, put: &mut PutObject<'_>) -> io::Result<Node> {
-        self.objects_of(&self.root, put)
+    /// Every file's blob, once: a hard link shares its target's.
+    pub fn files(&self) -> Vec<Blob> {
+        fn walk(n: &Node, seen: &mut std::collections::HashSet<Blob>, out: &mut Vec<Blob>) {
+            match n {
+                Node::File { at, .. } => {
+                    if seen.insert(*at) {
+                        out.push(*at);
+                    }
+                }
+                Node::Dir(d) => d.iter().for_each(|(_, c)| walk(c, seen, out)),
+                Node::Symlink(_) => {}
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.root, &mut Default::default(), &mut out);
+        out
     }
 
-    fn objects_of(&self, n: &Node, put: &mut PutObject<'_>) -> io::Result<Node> {
-        Ok(match n {
-            Node::File { at, exec } => {
-                let bytes = self.read(at)?;
-                let id = id_of(&bytes);
-                put(id, at, &bytes)?;
-                Node::File {
+    /// The same tree with every file named by the id of its bytes, which `ids`
+    /// holds for every blob [`Tree::files`] gave.
+    pub fn with_ids(&self, ids: &std::collections::HashMap<Blob, Id>) -> Node {
+        fn walk(n: &Node, ids: &std::collections::HashMap<Blob, Id>) -> Node {
+            match n {
+                Node::File { at, exec } => Node::File {
                     at: Blob::Object {
-                        id,
+                        id: ids[at],
                         size: at.size(),
                     },
                     exec: *exec,
-                }
+                },
+                Node::Symlink(t) => Node::Symlink(t.clone()),
+                Node::Dir(d) => Node::Dir(
+                    d.iter()
+                        .map(|(name, c)| (name.clone(), walk(c, ids)))
+                        .collect(),
+                ),
             }
-            Node::Symlink(t) => Node::Symlink(t.clone()),
-            Node::Dir(d) => Node::Dir(
-                d.iter()
-                    .map(|(name, c)| Ok((name.clone(), self.objects_of(c, put)?)))
-                    .collect::<io::Result<_>>()?,
-            ),
-        })
+        }
+        walk(&self.root, ids)
     }
 
     /// A spool member's file: no seek, so two threads may read one tree at
@@ -1198,9 +1205,14 @@ mod tests {
     /// `dir`, and the index naming them.
     fn stored(dir: &Path, tree: &Tree) -> (Tree, Vec<u8>) {
         let mut w = crate::treestore::pack::PackWriter::new(dir).unwrap();
-        let root = tree
-            .to_objects(&mut |id, _, bytes| w.add(id, bytes))
-            .unwrap();
+        let mut ids = std::collections::HashMap::new();
+        for at in tree.files() {
+            let bytes = tree.read(&at).unwrap();
+            let id = crate::treestore::pack::id_of(&bytes);
+            w.add(id, &bytes).unwrap();
+            ids.insert(at, id);
+        }
+        let root = tree.with_ids(&ids);
         w.finish().unwrap();
         let mut h = crate::store::hash::Hasher::new(HashAlgo::Sha256);
         tree.dump(&mut h).unwrap();
