@@ -89,7 +89,7 @@ fn check(store: &Store, key: usize) -> Option<usize> {
         let v = value.as_ref().expect("a value");
         writers.insert(writer_of(v, "value"));
     }
-    // the review's case: a new result beside an old read set, or two
+    // a new result beside an old read set, or two
     // generations mixed by a sibling that published in between
     let result = e
         .part(Part::Result)
@@ -270,7 +270,8 @@ fn a_changed_byte_or_a_copied_entry_is_a_miss() {
 
 /// Whoever runs iets can write the cache directory, so an entry name that is
 /// a symbolic link, a FIFO or a length no entry can have is refused before
-/// anything is read: `truncate -s 1T` used to abort the run on the allocation.
+/// anything is read: an entry made by `truncate -s 1T` would abort the run on
+/// the allocation.
 #[test]
 fn an_entry_that_is_not_a_plain_file_is_refused() {
     let dir = tmp("openrules");

@@ -206,8 +206,8 @@ fn set_positional(a: &mut EvalArgs, s: &str) {
     }
 }
 
-/// The last input wins, as it did, but an expression and a file together is
-/// a mistake worth naming.
+/// The last input wins, but an expression and a file together is a mistake
+/// worth naming.
 fn set_input(a: &mut EvalArgs, input: Input) {
     if let Some(old) = &a.input
         && matches!(old, Input::Expr(_)) != matches!(input, Input::Expr(_))

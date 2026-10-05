@@ -265,8 +265,6 @@ fn run(ev: &mut Evaluator, a: EvalArgs, o: Opts) -> Result<(), Box<Error>> {
     Ok(())
 }
 
-// ---- roots -------------------------------------------------------------------
-
 /// What an op works on: the roots, and the directory their derivations were
 /// dumped to, if any.
 struct Roots {
@@ -398,8 +396,6 @@ fn split_flags(
     }
     (rest, stdin, drvs)
 }
-
-// ---- the ops -----------------------------------------------------------------
 
 fn op_plan(argv: &[String]) -> i32 {
     let (args, stdin, drvs) = split_flags(argv, |_, _| false);
@@ -615,8 +611,6 @@ fn build(o: &BuildOpts, r: Roots) -> crate::error::Result<i32> {
     println!("{v}");
     Ok(d.d.exit)
 }
-
-// ---- fetch -------------------------------------------------------------------
 
 /// A URL is a positional this op fetches itself; anything else is an
 /// installable, which `parse_eval_args` reads.

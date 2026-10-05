@@ -210,8 +210,7 @@ fn finish(
 ) -> i32 {
     let mut up = None;
     if let Some(plan) = plan {
-        // no build, so nothing to render: the daemon's log lines go out as they
-        // are, as they did before a dispatcher carried the upload.
+        // no build, so nothing to render: the daemon's log lines go out as they are
         let style = Style {
             quiet: true,
             ..Style::detect()

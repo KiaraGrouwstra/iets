@@ -344,8 +344,6 @@ fn with_in_nix_shell(
     ev.mk_attrs(&mut entries, Pos::NONE)
 }
 
-// ---- the shell ---------------------------------------------------------------
-
 /// Uploads the closure, builds the derivation's inputs (and bash), writes the rc
 /// file and execs bash. Returns only on failure.
 fn realise(s: &Shell, transport: &Transport, options: &Options, r: Ready, cores: u64) -> i32 {
@@ -626,8 +624,6 @@ fn rc_script(s: &Shell, shell: &str, tmp: &str, structured_rc: &str) -> String {
     rc.push_str(&s.env_command);
     rc
 }
-
-// ---- structured attributes ---------------------------------------------------
 
 /// parsed-derivations.cc:StructuredAttrs::prepareStructuredAttrs. `outputs`
 /// becomes the output placeholders; `exportReferencesGraph` would need path
