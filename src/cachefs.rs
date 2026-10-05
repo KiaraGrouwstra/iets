@@ -319,8 +319,6 @@ pub fn tag() -> u64 {
     N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
-// ---- store-level structure --------------------------------------------------
-
 /// Whose directory a store root is, before iets writes to it.
 enum Owner {
     /// iets's, and usable as it stands.
@@ -563,8 +561,6 @@ pub fn wait_lock(path: &Path, on_wait: impl FnOnce()) -> Option<WriteLock> {
     Some(WriteLock(f))
 }
 
-// ---- touching --------------------------------------------------------------
-
 fn set_now(fd: RawFd, path: Option<&Path>) {
     let times = [
         libc::timespec {
@@ -610,8 +606,6 @@ pub fn touch_open(f: &fs::File, modified: Option<SystemTime>) {
     }
     set_now(f.as_raw_fd(), None);
 }
-
-// ---- sweeping --------------------------------------------------------------
 
 #[derive(Default, Debug, PartialEq, Eq)]
 pub struct Swept {
@@ -1064,8 +1058,8 @@ mod tests {
         assert!(!old.exists());
     }
 
-    /// A stamp ahead of the clock held every sweep off until the clock caught
-    /// up with it, and a stamp is not a reason to wipe a store either.
+    /// A stamp ahead of the clock must not hold every sweep off until the
+    /// clock catches up, and is no reason to wipe the store.
     #[test]
     fn a_stamp_in_the_future_is_due() {
         let d = tmp("future");

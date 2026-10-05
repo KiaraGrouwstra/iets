@@ -6,10 +6,10 @@
 //! the folded form `frame;frame <count>` that `flamegraph.pl` and every
 //! compatible tool read (docs/reference/profile.md).
 //!
-//! The shadow stack is two stores per call. That was expected to earn a
-//! feature gate and did not: a `hello` evaluation with the sampler compiled
-//! in and no profile asked for is inside the run-to-run spread of one without
-//! it, so it is always in and `IETS_PROFILE` is the only switch.
+//! The shadow stack is two stores per call. A `hello` evaluation with the
+//! sampler compiled in and no profile asked for is inside the run-to-run
+//! spread of one without it, so there is no feature gate: `IETS_PROFILE` is
+//! the only switch.
 
 use std::collections::HashMap;
 use std::io::Write;

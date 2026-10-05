@@ -292,8 +292,6 @@ pub fn ctx_display(c: &Ctx) -> String {
     }
 }
 
-// ---- JSON --------------------------------------------------------------------
-
 pub fn json_escape(out: &mut Vec<u8>, s: &[u8]) -> EvalResult<()> {
     let st = std::str::from_utf8(s).map_err(|_| {
         Error::boxed(

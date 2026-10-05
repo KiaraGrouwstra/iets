@@ -29,8 +29,7 @@ const KEYS: &[&str] = &[
 ];
 
 /// The settings of this process: the files, then the environment for the knobs
-/// that have one. Defaults match the behaviour each knob had when it was read
-/// at its point of use.
+/// that have one.
 pub struct Settings {
     /// `builder`: where derivations are realised. `None` falls back to the
     /// nix.conf `store` setting; resolve it with [`builder`].
@@ -60,8 +59,7 @@ pub struct Settings {
     /// `IETS_EVENTS_TO`: where the events go. `None` is stderr.
     pub events_to: Option<String>,
     /// `IETS_PROFILE`, `eval-profiler=flamegraph`: sample the call
-    /// stack, weighed by time (`eval`) or by arena bytes (`alloc`). Needs
-    /// `--features profile-eval` to collect anything.
+    /// stack, weighed by time (`eval`) or by arena bytes (`alloc`).
     pub profile: Option<crate::profile::Mode>,
     /// `IETS_PROFILE_TO`, `eval-profile-file`: where the folded lines go.
     /// `None` is stderr.
@@ -444,8 +442,8 @@ impl Env {
             .ok_or_else(|| Error::Config(format!("{name}: '{}' is not a number", v.display())))
     }
 
-    /// A level knob: unset is 0, `2` is 2, any other value is 1. Two levels
-    /// grew out of one `is_some` check, so anything set means at least 1.
+    /// A level knob: unset is 0, `2` is 2, any other value is 1, so a knob
+    /// set as a plain on/off switch still turns on.
     fn level(&self, name: &str) -> u8 {
         match (self.0)(name) {
             None => 0,
@@ -700,8 +698,6 @@ mod tests {
         assert!(take_options(&bad).is_err());
     }
 
-    /// A knob is a nix.conf Boolean, so every spelling of it acts, and one
-    /// that is not a Boolean is an error that names the variable.
     /// A knob is a nix.conf Boolean, so every spelling of it acts, and one
     /// that is not a Boolean is an error that names the variable.
     #[test]

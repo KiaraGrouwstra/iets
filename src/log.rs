@@ -580,8 +580,6 @@ pub fn combine_exit(a: i32, b: i32) -> i32 {
 /// What every fixed-output hash mismatch message starts with.
 pub const MISMATCH: &str = "hash mismatch in fixed-output derivation";
 
-/// A failed build as a record; `reason` is `status N: MSG` or a plain
-/// message, `pos` where the derivation was defined.
 /// The `specified` and `got` hashes of a fixed-output hash mismatch
 /// message.
 pub fn mismatch(raw: &str) -> Option<(String, String)> {
@@ -715,6 +713,8 @@ fn fixed_report(pos: &str, at: usize, old: &str, new: &str) -> Report {
     }
 }
 
+/// A failed build as a record; `reason` is `status N: MSG` or a plain
+/// message, `pos` where the derivation was defined.
 fn build_report(pos: Option<String>, reason: &str, exit: i32) -> Report {
     let msg = match reason.split_once(": ") {
         Some((s, m)) if s.starts_with("status ") => m,

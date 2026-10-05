@@ -104,7 +104,6 @@ pub fn bind<R>(f: impl FnOnce() -> R) -> impl FnOnce() -> R {
 mod tests {
     use super::*;
 
-    /// The whole point of the type: one process, two runs, nothing shared.
     #[test]
     fn two_sessions_share_no_state() {
         let line = format!(

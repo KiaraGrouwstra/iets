@@ -59,7 +59,6 @@ fn main() {
                     .unwrap_or_else(|e| die(&format!("{e}")));
                 sink.0
             }
-            // The parser on its own: framing only, contents thrown away.
             "parse" => {
                 let mut f = std::fs::File::open(path).unwrap_or_else(|e| die(&format!("{e}")));
                 let n = nar::parse_length(&mut f).unwrap_or_else(|e| die(&format!("{e}")));
