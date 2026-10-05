@@ -161,7 +161,7 @@ command would otherwise reach past `crate::api`. Neither was true.
 Nine renderers, sixteen evaluation scaffolds and eight dispatch sequences
 are three different numbers of copies: sixteen and eight were copies, nine
 were not. Stage 2's nine renderers were nine different *outputs*. What
-actually repeated across them was one byte writer, one JSON dump and four
+repeated across them was one byte writer, one JSON dump and four
 `if json { … } else { … }` branches — about 60 lines. Only one per-command
 output type existed to delete.
 

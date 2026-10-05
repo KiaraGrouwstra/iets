@@ -157,7 +157,7 @@ Without `--json` the same information is printed as text on stderr. The
 JSON is byte-for-byte what `iets plumbing missing` prints; see
 [reference/plumbing.md](../reference/plumbing.md).
 
-Note that `--dry-run` and `--no-build` still let the daemon substitute a
+`--dry-run` and `--no-build` still let the daemon substitute a
 source it needs, because the derivations cannot register otherwise.
 
 ## Get the outputs back

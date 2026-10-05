@@ -64,8 +64,8 @@ Three things fill it:
 
 ## Which position is "where it was defined"
 
-This is the part that needed thought. A derivation could be attributed to
-several positions, and only one of them is useful.
+A derivation could be attributed to several positions, and only one of
+them is useful.
 
 The position recorded is **the position of the `name` attribute's value**,
 not of the `derivation` call. The reason is mechanical: `derivation` is a

@@ -34,8 +34,8 @@ rename is atomic, so one rename publishes the whole entry: a reader sees
 either the whole old entry or the whole new one, never a torn file and never
 two generations mixed.
 
-**Readers never lock.** They do not have to. The rename is what makes the
-lock unnecessary on the read path, and the read path is the hot one. A
+**Readers never lock.** The rename makes the lock unnecessary on the read
+path, and the read path is the hot one. A
 reader opens the entry once and reads every part it needs through that one
 descriptor, so the bytes it goes on to use are the generation it validated,
 whatever a sibling publishes meanwhile. The old file stays alive for as long
@@ -183,9 +183,9 @@ see. On `nixos/release-small.nix` with four workers, 16-core EPYC:
 nix-eval-jobs keeps no on-disk evaluation cache for a file argument, so its
 two rows differ only in page cache.
 
-How much a second nixpkgs costs is worth knowing before you worry about
-disk. Evaluating the nixos-desktop workload at the pinned nixpkgs and then
-at a nixpkgs two releases older: the second added one tracing entry
+What a second nixpkgs costs on disk, measured by evaluating the
+nixos-desktop workload at the pinned nixpkgs and then at a nixpkgs two
+releases older: the second added one tracing entry
 (0.9 MiB) and 56 IR entries (0.5 MiB). Ten of the 66 IR entries carried
 over — 15 % — and the tracing entry shares nothing at all, because its key
 holds the nixpkgs path.
@@ -318,8 +318,7 @@ included — is an invalidation that names it.
 
 Some things make a run uncacheable rather than wrong: `builtins.currentTime`
 and every network fetcher without a hash. `currentTime` is a lazy thunk over
-an internal primop, so the mark happens only if the program actually forces
-it.
+an internal primop, so the mark happens only if the program forces it.
 
 An entry is one file, `entry`, in a directory named by the key. The file
 starts with a version byte, the number of parts, the checksum over the key
