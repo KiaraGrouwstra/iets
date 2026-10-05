@@ -636,7 +636,8 @@ Walk a jobset and print one JSON line per derivation, as nix-eval-jobs
 | `--log-format F` | accepted | `internal-json`: stderr is Nix's `@nix {...}` records, with a `code` and a `hint` on each error. `raw`, `raw-with-logs`, `bar`, `bar-with-logs`: plain lines. |
 | `--max-jobs N` | holds | It caps the builds of an import from derivation, and iets never builds during evaluation. |
 | `--provenance` | iets only | Adds a `pos` key per job: `file:line:col` of the derivation, mapped back to the local tree (`docs/explanation/provenance.md`). nix-eval-jobs 2.35 has no such key, so the flag is off by default. |
-| `--override-input`, `--override-flake`, `--reference-lock-file` | error | iets evaluates a flake from its own complete `flake.lock` only. |
+| `--reference-lock-file PATH` | supported, no merging | The root flake's lock is read from `PATH` instead of `DIR/flake.lock`. Nix locks the flake again with `PATH` as its starting point; iets takes `PATH` as the lock, so it must be complete for the inputs `flake.nix` declares. Nothing is written either way. |
+| `--override-input`, `--override-flake` | error | iets evaluates a flake from a complete lock file only. |
 | `--repair` | error | iets never repairs store paths. |
 
 stdout: one JSON line per job or error.

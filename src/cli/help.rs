@@ -157,6 +157,7 @@ Walk a jobset and print one JSON line per derivation, like nix-eval-jobs
   --no-instantiate      do not write the .drv files
   --eval-store URL      the daemon that gets the .drv files (default daemon)
   --gc-roots-dir DIR    add a GC root for each job in DIR
+  --reference-lock-file PATH  read PATH instead of the flake's flake.lock
   --check-cache-status  add whether each job is built or substitutable
   --constituents        resolve Hydra aggregate constituents
   --apply EXPR          add the result of EXPR applied to each job

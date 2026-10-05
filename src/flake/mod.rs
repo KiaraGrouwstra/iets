@@ -30,6 +30,8 @@ pub struct FlakeRef {
     /// `source` came from a probe for a working tree, not from an explicit
     /// `path:`, so the evaluation records what the probe saw.
     pub probed: bool,
+    /// `--reference-lock-file PATH`, read in place of `dir/flake.lock`.
+    pub lock: Option<PathBuf>,
 }
 
 /// A command-line input that names a flake rather than a `.nix` file: it
@@ -139,6 +141,7 @@ fn local_flake(full: &[u8], explicit_path: bool, attr: Vec<String>) -> Result<Fl
         source,
         attr,
         probed: !explicit_path,
+        lock: None,
     })
 }
 
@@ -185,8 +188,14 @@ fn read_traced(ev: &Evaluator, p: &Path) -> std::io::Result<Vec<u8>> {
 /// `sourceInfo` and its fields), as `nix-eval-jobs --flake DIR` walks it.
 pub fn eval_flake_value(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
     let pos = Pos::NONE;
-    let lock_bytes = read_traced(ev, &fr.dir.join("flake.lock"))
-        .map_err(|_| EvalError::boxed(ErrorKind::Unsupported, LOCK_ERROR, pos))?;
+    let lock_path = fr.lock.clone().unwrap_or_else(|| fr.dir.join("flake.lock"));
+    let lock_bytes = read_traced(ev, &lock_path).map_err(|_| {
+        let msg = match &fr.lock {
+            Some(p) => format!("iets: cannot read the lock file '{}'", p.display()),
+            None => LOCK_ERROR.to_string(),
+        };
+        EvalError::boxed(ErrorKind::Unsupported, msg, pos)
+    })?;
     let lock = lock::check(&lock_bytes).map_err(|why| {
         let mut e = EvalError::boxed(ErrorKind::Unsupported, format!("{LOCK_ERROR} ({why})"), pos);
         e.hint = why.to_report().hint;

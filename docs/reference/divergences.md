@@ -237,6 +237,14 @@ Where iets still errors, the wording is its own. These are
 `publicKeys`, which Nix renders only with the `verified-fetches`
 experimental feature on.
 
+## `--reference-lock-file`
+
+Nix locks the flake again with the given file as the starting point, so it
+can lock a missing or changed input in memory. iets takes the file as the
+lock, which must be complete for the inputs `flake.nix` declares, like the
+flake's own `flake.lock`. Neither writes the file. The path belongs to the
+tracing-cache key (`docs/reference/classic.md`).
+
 ## Tarball inputs
 
 The tree of an archive input is the git sink's

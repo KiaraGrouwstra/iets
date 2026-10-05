@@ -125,6 +125,9 @@ def options [ctx: record]: nothing -> bool {
 }
 
 def run-all [ctx: record, np: string]: nothing -> int {
+  # the fixture's lock, outside the flake: --reference-lock-file must read it
+  let alt_lock = $"($ctx.work)/alt.lock"
+  cp ./flake/flake.lock $alt_lock
   let cases = [
     [check basic [ci.nix]]
     [check meta [--meta ci.nix]]
@@ -151,6 +154,7 @@ def run-all [ctx: record, np: string]: nothing -> int {
     [check flake-select [--flake ./flake --select 'flake: flake.outputs.hydraJobs' --meta]]
     [check flake-select-fragment [--flake ./flake#hydraJobs --select 'outputs: { inherit (outputs) builtJob; }']]
     [check flake-legacy [--flake ./flake#legacyPackages.x86_64-linux.success --meta]]
+    [check flake-reference-lock [--flake ./flake#hydraJobs --reference-lock-file $alt_lock --meta]]
     [check constituents [--constituents --gc-roots-dir GCROOTS --meta aggregates.nix]]
     [check constituents-flake [--constituents --flake ./flake#legacyPackages.x86_64-linux --meta]]
     [check constituents-select [--constituents --select 'j: { inherit (j) success; }' aggregates.nix]]
