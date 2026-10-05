@@ -540,8 +540,6 @@ impl Evaluator {
         self.ir_cache.as_ref()
     }
 
-    // ---- files ------------------------------------------------------------
-
     /// Register a source file: only its path and line table are kept, so
     /// 40 MB of nixpkgs text does not stay resident.
     pub fn add_file(&mut self, path: &[u8], src: &[u8]) -> FileId {
@@ -874,8 +872,6 @@ impl Evaluator {
         }
     }
 
-    // ---- forcing ----------------------------------------------------------
-
     /// Force a word to weak head normal form.
     #[inline]
     pub fn force(&mut self, w: Word) -> EvalResult<Word> {
@@ -1159,8 +1155,6 @@ impl Evaluator {
         Ok(())
     }
 
-    // ---- typed forcing helpers ------------------------------------------
-
     pub fn type_error<T>(&self, expected: &str, got: Word, pos: Pos, ctx: &str) -> EvalResult<T> {
         let mut e = Error::new(
             ErrorKind::Type,
@@ -1283,8 +1277,6 @@ impl Evaluator {
         }
     }
 
-    // ---- construction helpers --------------------------------------------
-
     pub fn mk_string(&mut self, bytes: &[u8]) -> Word {
         self.arena.mk_string(bytes)
     }
@@ -1353,8 +1345,6 @@ impl Evaluator {
         ];
         self.arena.mk_attrs(&mut entries).expect("distinct keys")
     }
-
-    // ---- function application --------------------------------------------
 
     #[inline]
     fn enter_call(&mut self, pos: Pos) -> EvalResult<()> {
@@ -1590,7 +1580,6 @@ impl Evaluator {
         }
     }
 
-    /// Convenience: call with one argument.
     #[inline]
     pub fn call1(&mut self, f: Word, a: Word, pos: Pos) -> EvalResult<Word> {
         self.apply(f, &[a], pos)
@@ -1600,8 +1589,6 @@ impl Evaluator {
     pub fn call2(&mut self, f: Word, a: Word, b: Word, pos: Pos) -> EvalResult<Word> {
         self.apply(f, &[a, b], pos)
     }
-
-    // ---- evaluation -------------------------------------------------------
 
     /// Evaluate `ir` in `env` to weak head normal form.
     pub fn eval(&mut self, env: &'static EnvObj, ir: IrRef) -> EvalResult<Word> {
@@ -2303,8 +2290,6 @@ impl Evaluator {
         }
     }
 
-    // ---- attrs and lists ---------------------------------------------------
-
     /// `a // b`. A large left side is not copied: the result is a union
     /// that probes `b` then `a` (docs/explanation/evaluation.md). Small left sides and
     /// unions past the leaf budget are merged flat in two linear passes:
@@ -2394,8 +2379,6 @@ impl Evaluator {
         }
         Word::from_ref(out)
     }
-
-    // ---- arithmetic -----------------------------------------------------------
 
     pub fn arith(&mut self, a: Word, b: Word, op: ArithOp, pos: Pos) -> EvalResult<Word> {
         let a = self.force(a)?;

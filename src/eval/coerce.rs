@@ -176,8 +176,6 @@ impl Evaluator {
         Err(Box::new(e))
     }
 
-    /// Store path of a source path. The store module supplies the NAR hash;
-    /// until it is linked this is a hard error.
     pub fn copy_path_to_store(
         &mut self,
         path: &'static [u8],

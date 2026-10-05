@@ -160,8 +160,6 @@ impl IrCache {
     }
 }
 
-// ---- encoding ---------------------------------------------------------------
-
 fn put_u32(out: &mut Vec<u8>, mut v: u32) {
     while v >= 0x80 {
         out.push((v as u8) | 0x80);
@@ -564,8 +562,6 @@ impl Ser {
         self.pos(pos);
     }
 }
-
-// ---- decoding ---------------------------------------------------------------
 
 /// One scope the compiler pushed. The decoder mirrors the compiler's scope
 /// stack so it can check every stored index against the env that will hold
@@ -1329,8 +1325,8 @@ mod tests {
             assert!(!loads(&bytes[..n]), "{n} bytes of {} load", bytes.len());
         }
 
-        // the reviewer's case: a constant word of 8, which tag 0 used to
-        // hand to the evaluator as a pointer
+        // a constant word of 8 under tag 0 must not reach the evaluator as
+        // a pointer
         assert!(!loads(b"IETS_IR2\x00\x00\x00\x08\x00\x00"));
         for w in 0u8..64 {
             // names=0, node tag 0 (a constant), word tag 0, the word, then
