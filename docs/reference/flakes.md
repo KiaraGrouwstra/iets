@@ -38,7 +38,8 @@ becomes a tree), reached through `crate::api::flake`. Judge:
   `flake.nix` declares has a lock entry. Otherwise:
   `iets: flake.lock missing or incomplete, run nix flake lock`. A
   `flake.nix` input whose URL changed without re-locking is not detected;
-  the lock wins.
+  the lock wins. `--reference-lock-file PATH` reads the root flake's lock
+  from `PATH` instead, under the same completeness rule.
 - `--strict`, `--json` and `--raw` work as with a file. `--raw` mirrors
   `nix eval --raw`: the value is coerced to a string without copying paths
   to the store, and printed without a newline.

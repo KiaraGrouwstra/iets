@@ -119,7 +119,6 @@ fn parse_jobs_args(argv: &[String]) -> (JobsArgs, Vec<String>) {
                 s,
                 "iets evaluates locked flakes only; an override makes the lock file incomplete",
             ),
-            "--reference-lock-file" => unsupported(s, "iets reads the flake's own flake.lock only"),
             "--repair" => unsupported(s, "iets does not write or repair store paths"),
             "--arg-from-file" => {
                 let name = arg(&mut i);

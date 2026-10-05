@@ -147,6 +147,7 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
                 set_input(&mut a, Input::Expr(e));
             }
             "--dump-drvs" => a.dump_drvs = Some(next()),
+            "--reference-lock-file" => a.reference_lock_file = Some(next()),
             "--lint" => a.lints.push(parse_lint_flag(&next())),
             "--lint-root" => a.lint_roots.push(next()),
             "--lint-scope" => a.lint_scope = Some(parse_lint_scope(&next())),

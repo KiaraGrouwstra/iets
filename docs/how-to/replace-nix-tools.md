@@ -258,9 +258,9 @@ Three things to know before you swap it in:
   With `--max-memory-size 0` it means fibers of one process instead.
 - Line order is completion order, as it is for nix-eval-jobs. Sort by
   `attrPath` when you compare two runs.
-- `--override-input`, `--override-flake`, `--reference-lock-file` and
-  `--repair` are errors. iets evaluates a flake from its own complete
-  `flake.lock` only.
+- `--override-input`, `--override-flake` and `--repair` are errors. iets
+  evaluates a flake from a complete lock file only. `--reference-lock-file`
+  works: that file is the lock, and it must be complete too.
 
 Two flags are iets's own. `--provenance` adds a `pos` key per job, naming
 the file, line and column where the derivation was defined; it is off by

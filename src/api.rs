@@ -50,6 +50,9 @@ pub struct EvalArgs {
     /// The last of `--pure-eval`, `--no-pure-eval`, `--impure` and `--option
     /// pure-eval`; `None` when none was given (docs/reference/settings.md).
     pub pure: Option<bool>,
+    /// `--reference-lock-file PATH`: the root flake's lock file, in place of
+    /// its own `flake.lock`. It must be complete all the same.
+    pub reference_lock_file: Option<String>,
 }
 
 impl Default for EvalArgs {
@@ -75,6 +78,7 @@ impl Default for EvalArgs {
             cache_dir: None,
             flake_whole: false,
             pure: None,
+            reference_lock_file: None,
         }
     }
 }
@@ -210,13 +214,17 @@ pub fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
         Some(Input::Expr(e)) => ev.eval_string(&e, &cwd)?,
         Some(Input::File(f)) => ev.eval_file(&abs_path(&f, &cwd), Pos::NONE)?,
         Some(Input::Flake(f)) => {
-            let fr = flake_ref(&f, &cwd).map_err(|m| {
+            let mut fr = flake_ref(&f, &cwd).map_err(|m| {
                 let kind = match m {
                     crate::error::Error::Unsupported(_) => crate::eval::ErrorKind::Unsupported,
                     _ => crate::eval::ErrorKind::Eval,
                 };
                 Error::boxed(kind, m.to_string(), Pos::NONE)
             })?;
+            fr.lock = a
+                .reference_lock_file
+                .as_deref()
+                .map(|p| abs_pathbuf(p, &cwd));
             if a.flake_whole && fr.attr.is_empty() {
                 crate::flake::eval_flake_value(ev, &fr)?
             } else {
@@ -275,6 +283,12 @@ pub fn cwd() -> Vec<u8> {
     std::env::current_dir()
         .map(|p| p.into_os_string().into_encoded_bytes())
         .unwrap_or_else(|_| b"/".to_vec())
+}
+
+/// [`abs_path`] as a path.
+pub fn abs_pathbuf(f: &str, cwd: &[u8]) -> std::path::PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+    std::path::PathBuf::from(std::ffi::OsStr::from_bytes(&abs_path(f, cwd)))
 }
 
 /// `f` is in `crate::argv`'s encoding.
@@ -351,6 +365,11 @@ pub fn setup_cache_more(
     let mut k = Key::new(subcommand);
     if a.pure == Some(true) {
         k.field("pure-eval", b"1");
+    }
+    // the read set holds the file this names, but not the fact that another
+    // run read another file under the same command
+    if let Some(p) = &a.reference_lock_file {
+        k.field("reference-lock-file", &abs_path(p, &cwd));
     }
     let mut needs_cwd = false;
     match a.input.as_ref()? {

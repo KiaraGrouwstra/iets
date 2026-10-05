@@ -412,9 +412,10 @@ setting, and the working directory. `flake.nix`, `flake.lock`, every file
 and tree the evaluation read, and under `--impure` every environment
 variable it asked for are in the read set, so an edit, a `nix flake update`
 and a changed variable all evaluate again. No other flag these parsers
-accept reaches the evaluator. `--override-input`, `--override-flake`,
-`--reference-lock-file` and the lock-writing flags are not iets's: the
-command line falls back before any entry is looked up. A flake with no
+accept reaches the evaluator, except `--reference-lock-file`, whose path is
+in the key as well. `--override-input`, `--override-flake` and the
+lock-writing flags are not iets's: the command line falls back before any
+entry is looked up. A flake with no
 complete `flake.lock` falls back from the evaluation, which writes no entry.
 
 This is not Nix's evaluation cache. Nix's is keyed on the locked flake's
