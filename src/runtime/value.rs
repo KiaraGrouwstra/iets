@@ -917,8 +917,6 @@ impl Word {
     }
 }
 
-// Constructors.
-
 impl Arena {
     #[inline]
     pub(crate) fn mk_int(&mut self, v: i64) -> Word {
@@ -1594,8 +1592,8 @@ mod alloc_tests {
 mod layout {
     use super::*;
 
-    /// `sym` was added for a profile frame and must stay free: it sits in
-    /// the padding after `arity`, and every primop is one of these.
+    /// `sym`, for a profile frame, must stay free: it sits in the padding
+    /// after `arity`, and every primop is one of these.
     #[test]
     fn a_primop_pays_nothing_for_its_symbol() {
         assert_eq!(size_of::<PrimOpObj>(), 32);

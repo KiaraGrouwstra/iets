@@ -464,8 +464,6 @@ fn dev_env_main(argv: &[String], rest: &[String]) -> i32 {
     crate::cli::devenv::cmd_print_dev_env(&pass)
 }
 
-// ---- installables ------------------------------------------------------------
-
 /// The value one installable names: an attribute of the `--expr`/`--file`
 /// value, or a flake output attribute.
 pub(super) fn resolve(ev: &mut Evaluator, n: &Nix, what: &str, cwd: &[u8]) -> EvalResult<Word> {
@@ -537,8 +535,6 @@ fn flat_roots(targets: &[installable::Install]) -> Vec<Root> {
         })
         .collect()
 }
-
-// ---- building ----------------------------------------------------------------
 
 /// Uploads the closure, builds every target in one call, makes the symlinks
 /// (command.cc:createOutLinks) and prints with `--print-out-paths`.
@@ -628,8 +624,6 @@ fn realise(
     crate::cli::render::bytes(out.as_bytes());
     0
 }
-
-// ---- printing ----------------------------------------------------------------
 
 /// An error the printer shows in place of the value. `Unsupported` must
 /// escape so the caller can fall back to the real nix instead.

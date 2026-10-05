@@ -18,10 +18,7 @@ pub const BUILD_PROTOCOL: u32 = (1 << 8) | 37;
 
 /// derivation/aterm.cc:`write(Sink &, const StoreDirConfig &, const Basic &)`.
 /// `name` is not on the wire: the reader takes it from the drv path.
-///
-/// `outputs_of(dep, output)` gives the store path of an input derivation's
-/// output, which is how `nix`'s own `DerivationGoal` turns a `Derivation` into
-/// the `BasicDerivation` a builder gets (nix-compat.hh:`toBasicDrv`).
+/// `input_srcs` comes from `basic_input_srcs`.
 pub fn write_basic_derivation(
     w: &mut dyn Write,
     drv: &Derivation,

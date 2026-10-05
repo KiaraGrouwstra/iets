@@ -138,7 +138,6 @@ pub fn changed(obs: &Obs) -> Option<String> {
     Some(format!("the {} working tree in {root} changed", scm.name()))
 }
 
-/// The SCM with the name `name`.
 pub fn named(name: &str) -> Option<&'static dyn Scm> {
     KNOWN.iter().copied().find(|s| s.name() == name)
 }

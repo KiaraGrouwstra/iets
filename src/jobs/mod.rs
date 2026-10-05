@@ -182,9 +182,8 @@ fn walk(
                 .collect();
             for (n, attr) in ordered.iter().enumerate() {
                 if n % WINDOW == 0 {
-                    // Fan out the next window (in sym order, which is what
-                    // the cells are stored in; the walk order differs but
-                    // every window is covered before the walk reaches it).
+                    // the cell range is in sym order, not walk order, but it
+                    // covers the whole window before the walk reaches it
                     let lo = index[n..(n + WINDOW).min(ordered.len())]
                         .iter()
                         .copied()
@@ -797,8 +796,6 @@ fn job_inner(ev: &mut Evaluator, a: &'static AttrsObj, path: &[String]) -> EvalR
         extra,
     })
 }
-
-// ---- helper side ------------------------------------------------------------
 
 /// A `T_JOB` range task: force what the main walk will ask of each child
 /// in `start..end` of `attrs`. Never parks on a cell another fiber holds;

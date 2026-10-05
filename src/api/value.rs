@@ -280,8 +280,6 @@ impl<'e> Eval<'e> {
         val(self.ev.arena.mk_thunk_app(f.w, arg.w))
     }
 
-    // ---- construction ----------------------------------------------------
-
     pub fn int(&mut self, i: i64) -> Value<'e> {
         val(self.ev.mk_int(i))
     }

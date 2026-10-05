@@ -1,7 +1,7 @@
 //! `iets print-dev-env`: the shell environment of a derivation, computed as
 //! `nix print-dev-env` (src/nix/develop.cc, Nix 2.34.8) computes it. This module
 //! holds the pure parts: the `-env` derivation, the JSON `get-env.sh` writes,
-//! and the bash `makeRcScript` prints. The daemon flow lives in `main.rs`.
+//! and the bash `makeRcScript` prints. The daemon flow lives in `src/cli/devenv.rs`.
 //! See docs/reference/commands.md.
 
 use std::collections::{BTreeMap, BTreeSet};

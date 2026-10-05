@@ -129,8 +129,6 @@ pub fn run_worker(
     flush(&mut inst)
 }
 
-// ---- collector side ---------------------------------------------------------
-
 pub type Sink = Arc<Mutex<Box<dyn FnMut(Line) + Send>>>;
 
 struct State {

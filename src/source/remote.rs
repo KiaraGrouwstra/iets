@@ -113,8 +113,8 @@ impl LazyStore {
             let session = crate::session::Session::current();
             match Transport::parse(&nix_conf(&session).store()) {
                 Some(Transport::Grpc(_)) | None => {}
-                // A daemon that is not there is not an error any more: the input
-                // store holds the fetched inputs and evaluation writes no store.
+                // a missing daemon is not an error: the input store holds the
+                // fetched inputs and evaluation writes no store
                 Some(t) => {
                     if let Ok(c) = Connection::open(&t, &mut |_| {}) {
                         self.conn = Some(c);
@@ -583,8 +583,8 @@ mod tests {
         assert_eq!(access_token(&c, "gitlab.com", "gitlab.com/z/y"), None);
     }
 
-    /// What the substitution step costs, against the `nix build --no-link` it
-    /// replaced, on a store path no substituter has: both must answer "no", and
+    /// What the substitution step costs, against `nix build --no-link`, on a
+    /// store path no substituter has: both must answer "no", and
     /// the op must be the cheaper way to hear it. Needs a running daemon and a
     /// nix on `PATH`, so it is ignored by default:
     /// `cargo test --release -- --ignored --nocapture substitution`.

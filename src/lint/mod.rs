@@ -667,7 +667,6 @@ fn level_char(l: Level) -> char {
     }
 }
 
-/// The nearest `iets.toml` in `start` or an ancestor.
 /// The nearest project `iets.toml` at or above `start`, stopping at the
 /// project root. The walk must not leave the project: a world-writable
 /// `/tmp/iets.toml` would otherwise set a lint level for every evaluation
@@ -728,8 +727,6 @@ pub fn list(c: &Config) -> String {
     }
     out
 }
-
-// ---- emission -----------------------------------------------------------
 
 /// Warnings wait in `pending` until it holds this much, then go to stderr
 /// in one write: 13k lines on nixos-desktop cost 7 % of the wall at 4

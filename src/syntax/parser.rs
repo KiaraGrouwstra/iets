@@ -188,8 +188,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    // ---- token plumbing ----
-
     #[inline]
     fn peek(&mut self) -> Token {
         match self.tok {
@@ -290,8 +288,6 @@ impl<'a> Parser<'a> {
         self.sc_parts.push(p);
         commit(&mut self.ast.parts, &mut self.sc_parts, mark)
     }
-
-    // ---- grammar ----
 
     pub fn parse_expr(&mut self) -> R<ExprId> {
         self.parse_function()
@@ -1319,7 +1315,7 @@ fn drop_trailing_blank_line(pending: &mut Vec<u8>, token_start: usize) {
     }
 }
 
-// ---- duplicate attribute detection (mirrors ParserState::addAttr) ----
+// duplicate attribute detection, mirrors ParserState::addAttr
 
 enum NodeKind {
     Leaf,

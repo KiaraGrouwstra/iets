@@ -65,8 +65,8 @@ The heap kinds behind a `PTR` are `Float`, `BigInt`,
 `Thunk { code, state }`.
 
 A `Cell` is an `AtomicU64` holding a `Word`. Environment slots, list
-elements and attribute values are all cells. That single decision is what
-lets the sequential path and the parallel path share one shape: there is no
+elements and attribute values are all cells. That decision lets the
+sequential path and the parallel path share one shape: there is no
 "parallel value" and no "sequential value", only a cell that happens to be
 read by one thread or by four. Cells that a value is read from never hold a
 blackhole; only a thunk's own state cell does.
@@ -116,7 +116,7 @@ flat copy is sized at the sum of the leaf lengths, filled in one merge pass
 and then handed the tail the duplicates left back at the bump pointer;
 sizing it exactly would mean merging twice.
 
-This is measurement again. On nixos-desktop the merge ran 8.4 million
+On nixos-desktop the merge ran 8.4 million
 times, 4.9 million of them over six to eight leaves, where a rescan cost 16
 head checks per attribute. The tree took the run from 10.03 G to 9.74 G
 instructions, and the merge itself from 7.1 % to 4.5 % of it.

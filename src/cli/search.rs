@@ -434,8 +434,6 @@ fn entry_file(p: Vec<u8>) -> String {
     crate::argv::encode(std::ffi::OsString::from_vec(p))
 }
 
-// ---- matching and output -----------------------------------------------------
-
 fn compile_all(res: &[String]) -> Result<Vec<Prog>, String> {
     res.iter()
         .map(|r| {
@@ -565,8 +563,6 @@ fn json_out(m: &BTreeMap<&[u8], &Entry>) -> Result<serde_json::Value, Box<Error>
     }
     Ok(serde_json::Value::Object(obj))
 }
-
-// ---- the cached index --------------------------------------------------------
 
 /// The arguments the cache key is made of: the installable, the `--arg`s, the
 /// search path and pure evaluation. The regexes are not in it, so a second

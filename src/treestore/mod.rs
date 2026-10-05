@@ -18,7 +18,7 @@
 //! content address, which is why a reader never re-hashes and why two
 //! processes can share one entry.
 //!
-//! Today the only user is `crate::source`, which fetches a
+//! The only user is `crate::source`, which fetches a
 //! `github`/`gitlab`/`sourcehut`/`tarball` input as one decompressed tar and
 //! indexes it (`crate::fetch::spool`). The store keeps the index as
 //! `$XDG_CACHE_HOME/iets/inputs/<store path base name>`, with every file named

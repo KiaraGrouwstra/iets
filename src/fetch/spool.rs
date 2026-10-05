@@ -461,7 +461,6 @@ impl Tree {
             Blob::Object { id, size } => Box::new(io::Cursor::new(self.object(&id, size)?)),
         })
     }
-    // ---- the accessor evaluation reads through ------------------------------
 
     /// The member at the resolved components `at`, without following a symlink.
     fn at(&self, at: &[Vec<u8>]) -> Option<&Node> {
@@ -1332,8 +1331,8 @@ mod tests {
         assert_eq!(chain, want, "a link to a link that comes later");
     }
 
-    /// `iets-spool-<pid>-<tag>`, the name the scratch file had before it was
-    /// random, as a symlink: the open must not follow it.
+    /// A symlink at the guessable name `iets-spool-<pid>-<tag>`: the open must
+    /// not follow it.
     #[test]
     fn the_scratch_file_never_follows_a_symlink() {
         let dir = std::env::temp_dir();

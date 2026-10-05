@@ -33,7 +33,7 @@ root needs a `narHash`, or must be a relative `path:` input, and every
 input the `flake.nix` declares needs a lock entry. Otherwise the run says
 `flake.lock missing or incomplete, run nix flake lock`. There is no
 registry, no in-memory locking and no `nix flake lock` of its own: iets
-evaluates what a lock file already decided. Note the consequence — a
+evaluates what a lock file already decided. As a consequence, a
 `flake.nix` input whose URL changed without re-locking is not detected. The
 lock wins.
 
@@ -239,7 +239,7 @@ The download itself exists. Four parts do not:
    `git` reference needs a git fetcher, which iets has not got.
 
 Items 1 to 3 would make a *locked* `github:`, `gitlab:` or tarball root
-work. Item 4 is what most command lines actually need.
+work. Item 4 is what most command lines need.
 
 ## What this costs
 

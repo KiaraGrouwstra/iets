@@ -24,7 +24,7 @@ use crate::store::path::StorePath;
 pub struct Entry {
     pub drv_path: Option<StorePath>,
     pub error: Option<String>,
-    /// An aggregate with named constituents, withheld until now.
+    /// An aggregate with named constituents, withheld until [`rewrite`].
     pub held: Option<Job>,
 }
 

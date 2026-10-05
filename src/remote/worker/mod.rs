@@ -18,9 +18,9 @@ use crate::error::{Error, Result};
 use crate::log::{ACT_BUILD, LVL_INFO, RES_BUILD_LOG_LINE, RES_SET_PHASE};
 use wire::{Counting, FramedSink};
 
-/// What `SetOptions` sends (remote-store.cc:setOptions). `Default` is what this
-/// client has always sent; `TryFrom<&Config>` takes the values from the user's
-/// nix.conf instead, and fails the way Nix does on a bad setting value.
+/// What `SetOptions` sends (remote-store.cc:setOptions). `Default` is the
+/// built-in set; `TryFrom<&Config>` takes the values from the user's nix.conf
+/// instead, and fails the way Nix does on a bad setting value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Options {
     /// `0` would forbid local builds, so the default is the CPU count, what
@@ -499,7 +499,6 @@ impl Drop for Connection {
 }
 
 impl Connection {
-    /// Opens the transport with the options this client has always sent.
     pub fn open(transport: &Transport, on_event: &mut dyn FnMut(Event)) -> Result<Connection> {
         Connection::open_with(transport, &Options::default(), on_event)
     }

@@ -105,8 +105,8 @@ pub enum SourceRef {
     /// A local directory, copied whole (path.cc).
     Path(PathBuf),
     /// A directory inside the working tree of an SCM: only what the SCM
-    /// tracks is copied,
-    /// with the working tree's contents (git.cc:getAccessorFromWorkdir).
+    /// tracks is copied, with the working tree's contents
+    /// (git.cc:getAccessorFromWorkdir).
     Tracked {
         scm: &'static dyn scm::Scm,
         root: PathBuf,

@@ -202,8 +202,8 @@ impl Query {
     /// repository. Without it `git status` persists its refreshed stat cache,
     /// which rewrites `.git/index` whenever any worktree file's stat moved —
     /// an untracked one is enough. The output is byte-identical either way,
-    /// but direnv watches that file, so a build reloaded the shell for an
-    /// index whose content had not changed.
+    /// but direnv watches that file, so a build would reload the shell for an
+    /// index whose content did not change.
     pub fn argv(self) -> &'static [&'static str] {
         match self {
             Query::GitLsFiles => &[
@@ -368,8 +368,6 @@ impl Trace {
             .filter_map(|(o, k)| k.then_some(o))
             .collect()
     }
-
-    // ---- recording helpers ----------------------------------------------
 
     /// A regular file whose bytes are in memory.
     pub fn file(&self, path: &[u8], meta: &fs::Metadata, bytes: &[u8]) {

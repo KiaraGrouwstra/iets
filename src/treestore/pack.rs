@@ -10,9 +10,8 @@
 //! fixed-width record per object, sorted by id — and a tail: a fanout table on
 //! the first byte of the id, the count, where the index starts, a checksum over
 //! the index and the tail, and a trailer. A payload is LZ4 when that makes it
-//! smaller. The checksum covers the index; a payload is trusted, as the spool
-//! was, because the tree it belongs to was hashed against the lock before
-//! anything named it.
+//! smaller. The checksum covers the index; a payload is trusted because the
+//! tree it belongs to was hashed against the lock before anything named it.
 
 use std::collections::HashSet;
 use std::fs::File;

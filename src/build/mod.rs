@@ -590,8 +590,6 @@ mod tests {
         assert_eq!(strip_hash("plain"), "plain");
     }
 
-    // ---- a fan-out backend under the dispatcher ----------------------------
-
     /// Somewhere to read the renderer's stderr back from.
     #[derive(Clone, Default)]
     struct Sink(Arc<Mutex<Vec<u8>>>);
@@ -786,8 +784,7 @@ mod tests {
     }
 
     /// A target the build op came back without leaves no output path, so the
-    /// dispatcher must exit non-zero. It used to skip it and exit 0, which
-    /// left `iets build` silent and successful.
+    /// dispatcher must exit non-zero.
     #[test]
     fn a_target_with_no_verdict_fails() {
         let style = Style {

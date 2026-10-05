@@ -169,8 +169,6 @@ pub fn output_path(
         .flatten()
 }
 
-// ---- the batched RPCs --------------------------------------------------------
-
 /// `QueryValidPaths` on store path base names, in one call.
 pub fn query_valid_paths(
     c: &mut Client,
@@ -362,8 +360,6 @@ fn upload_outcome<T>(
         (Ok(_), w) => w.map_err(|e| tonic::Status::internal(e.to_string())),
     }
 }
-
-// ---- builds -----------------------------------------------------------------
 
 /// One derivation the farm must build, in the shape `BuildDerivation` wants.
 pub struct Job {
@@ -671,8 +667,6 @@ fn upload_closure(
         .map(|_| 2)
         .map_err(|s| c.status_error(&s, "AddMultipleToStore"))
 }
-
-// ---- fetching ---------------------------------------------------------------
 
 /// A `FetchNars` stream: one zstd stream across every path, flushed at each
 /// frame, so a frame's decompressed bytes belong to `paths[path_index]`.

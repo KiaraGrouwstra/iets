@@ -160,8 +160,6 @@ impl<'a> Compiler<'a> {
         Ok(ir)
     }
 
-    // ---- lints ------------------------------------------------------------
-
     #[inline]
     fn lint_level(&self, id: LintId) -> Level {
         match self.lints {
@@ -723,8 +721,6 @@ impl<'a> Compiler<'a> {
             pos,
         })
     }
-
-    // ---- attribute sets -------------------------------------------------
 
     fn merge_binds(&mut self, rec: bool, binds: &[Bind], pos: Pos) -> CResult<Merged> {
         let mut m = Merged::new(rec, pos);

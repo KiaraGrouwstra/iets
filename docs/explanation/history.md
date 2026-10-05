@@ -7,7 +7,7 @@ page for that feature, not here.
 
 A page of failed experiments is worth keeping for two reasons. It stops the
 same idea being tried a third time, and it shows what the measuring bar
-actually was.
+was.
 
 ## Where iets stands today
 
