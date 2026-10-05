@@ -74,8 +74,6 @@ pub fn check_reservation(workers: usize, stack_size: usize) -> Result<(), StackE
     Ok(())
 }
 
-// ---- guard pages ----------------------------------------------------------
-
 /// Base addresses of the fiber stacks, for the SIGSEGV handler. A fixed
 /// table because the handler may not lock; a run with more fibers than
 /// this loses only the message, not the exit code.

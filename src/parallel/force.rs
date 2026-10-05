@@ -330,8 +330,6 @@ pub fn journal(ev: &mut Evaluator, _msg: String) -> bool {
 
 pub static EFFECT_BAILS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-// ---- held-back effects ------------------------------------------------------
-
 type Deferred = Box<dyn FnOnce(&mut Evaluator) + Send>;
 
 /// Effects a helper produced, by the thunk whose value carries them. The
@@ -387,8 +385,6 @@ fn release(ev: &mut Evaluator, key: u64) {
         f(ev);
     }
 }
-
-// ---- fan-out --------------------------------------------------------------
 
 pub enum CellState {
     Ready(Word),
@@ -692,8 +688,6 @@ fn walk(
     }
 }
 
-// ---- tasks ------------------------------------------------------------------
-
 fn run_task(ev: &mut Evaluator, t: Task) {
     let obj = t.obj;
     let (start, end) = (t.start as usize, (t.start + t.len) as usize);
@@ -766,8 +760,6 @@ fn range_step(ev: &mut Evaluator, c: &Cell, deep: bool, seen: &mut HashSet<u64>)
         Err(_) => false,
     }
 }
-
-// ---- imports ------------------------------------------------------------------
 
 /// Lazy import: the cache maps a resolved path to this thunk so that the
 /// claim protocol serialises concurrent importers of one file.

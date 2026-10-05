@@ -386,8 +386,6 @@ impl Runtime {
         }
     }
 
-    // ---- fibers -----------------------------------------------------------
-
     fn new_slot(&self, w: &mut Worker, user: *mut ()) -> Result<*mut Slot, fiber::StackError> {
         self.new_slot_sized(w, user, self.stack_size)
     }
@@ -585,8 +583,6 @@ impl Runtime {
         None
     }
 
-    // ---- tasks ------------------------------------------------------------
-
     /// Owner push from the worker currently running the caller.
     pub fn submit_urgent(&self, w: &Worker, t: Task) -> bool {
         let (a, b) = t.pack();
@@ -637,8 +633,6 @@ impl Runtime {
                 && self.pending_tasks.0.load(Ordering::Acquire) > 0)
     }
 
-    // ---- parking ----------------------------------------------------------
-
     /// Called after work was published. Wakes one sleeper only when no
     /// searcher is awake to find it; the searcher hands off (`found_work`).
     fn notify(&self) {
@@ -652,7 +646,7 @@ impl Runtime {
     }
 
     /// A runnable fiber always is. Queued tasks are when the queue is
-    /// deeper than `handoff_factor` per awake worker, or when the caller
+    /// deeper than `handoff` per awake worker, or when the caller
     /// is the only worker awake (its own fiber may run for a long time).
     #[inline]
     fn worth_a_wake(&self) -> bool {
