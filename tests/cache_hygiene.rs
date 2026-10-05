@@ -333,13 +333,13 @@ fn input_touch_child() {
     };
     let name = name.to_string_lossy().into_owned();
     // prepared first: a store with an entry and no version file is wiped
-    let dir = iets::treestore::root().expect("input store").join(&name);
-    std::fs::create_dir_all(&dir).expect("entry");
-    std::fs::write(dir.join(spool::SPOOL), b"").expect("spool");
-    std::fs::write(dir.join(spool::INDEX), b"").expect("index");
+    let entry = iets::treestore::root().expect("input store").join(&name);
+    std::fs::write(&entry, b"").expect("entry");
     let old = std::time::SystemTime::now() - std::time::Duration::from_secs(40 * 24 * 60 * 60);
-    std::fs::File::open(&dir)
-        .expect("dir")
+    std::fs::File::options()
+        .write(true)
+        .open(&entry)
+        .expect("entry")
         .set_modified(old)
         .expect("back-date");
 
@@ -348,7 +348,7 @@ fn input_touch_child() {
         version: spool::INDEX_VERSION,
     }];
     iets::trace::validate::validate(&mut obs, 1).expect("the entry is there");
-    let now = std::fs::metadata(&dir)
+    let now = std::fs::metadata(&entry)
         .expect("stat")
         .modified()
         .expect("mtime");

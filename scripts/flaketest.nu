@@ -512,11 +512,12 @@ def run-tests [iets: string, work: string]: nothing -> int {
   $res ++= [(fetch-only $iets "tarball: file:// input indexed into iets's input store" $"($tbf)#v" $tb_exp $nobin)]
   # nothing was registered: the tree lives in the input store, not the store
   let tb_entry = $"($work)/cache/inputs/($tb_path | path basename)"
-  let virt_ok = (not ($tb_path | path exists)) and ($"($tb_entry)/spool" | path exists) and ($"($tb_entry)/index" | path exists)
+  let packs = (try { ls $"($work)/cache/inputs/packs" | where name =~ '\.pack$' | length } catch { 0 })
+  let virt_ok = (not ($tb_path | path exists)) and (($tb_entry | path type) == "file") and $packs > 0
   $res ++= [(verdict $virt_ok "tarball: the fetch wrote the input store, not /nix/store" $"input store entry ($tb_entry)")]
 
   # `iets build --no-build` is the only thing that uploads an input, and it
-  # sends the NAR out of that spool. The lock is written by hand from
+  # sends the NAR out of the input store. The lock is written by hand from
   # `nix hash path` of the tree the tar holds, so nix never fetches this input
   # and its store path is one the daemon has never seen.
   let upf = $"($work)/upflake"
@@ -564,7 +565,7 @@ def run-tests [iets: string, work: string]: nothing -> int {
       and ($add | parse -r 'add: (?<n>\d+) paths, (?<b>\d+) bytes' | get -o 0.b | default "0" | into int) > 200
       and $tb3_valid
   )
-  $res ++= [(verdict $ub_ok "build --no-build sends the input's NAR out of its spool and the daemon holds it" $"build --no-build \(exit ($ub.exit_code)\): ($resolve) | ($add) | ($tb3_path) valid=($tb3_valid)")]
+  $res ++= [(verdict $ub_ok "build --no-build sends the input's NAR out of the input store and the daemon holds it" $"build --no-build \(exit ($ub.exit_code)\): ($resolve) | ($add) | ($tb3_path) valid=($tb3_valid)")]
 
   # a filtered `builtins.path` of an input member uploads the NAR evaluation
   # hashed: the daemon checks it against the store path.
@@ -618,12 +619,12 @@ def run-tests [iets: string, work: string]: nothing -> int {
   } | to json | save $"($wf)/flake.lock"
   let no_daemon = {IETS_NIX_BIN_DIR: $nobin, NIX_CONFIG: "store = unix:///nonexistent/iets-no-daemon"}
   let first = (with-env ($no_daemon | merge {IETS_CACHE_DIR: $"($work)/waitsrc"}) { ^$iets eval --raw --no-tracing-cache $"($wf)#v" | complete })
-  let entry5 = (try { ls $"($work)/waitsrc/inputs" | where type == dir | get 0.name } catch { "" })
+  let entry5 = (try { ls $"($work)/waitsrc/inputs" | where type == file and ($it.name | path basename) =~ '^[0-9a-z]{32}-' | get 0.name } catch { "" })
   let wc = $"($work)/waitcache"
   mkdir $"($wc)/inputs"
   cp $"($work)/waitsrc/inputs/version" $"($wc)/inputs/"
   let lockf = $"($wc)/inputs/.($entry5 | path basename).fetching.tmp"
-  let script = $"flock '($lockf)' sh -c 'sleep 1; cp -r ($entry5) ($wc)/inputs/' & sleep 0.3; '($iets)' eval --raw --no-tracing-cache '($wf)#v'; wait"
+  let script = $"flock '($lockf)' sh -c 'sleep 1; cp -r ($work)/waitsrc/inputs/packs ($wc)/inputs/; cp ($entry5) ($wc)/inputs/' & sleep 0.3; '($iets)' eval --raw --no-tracing-cache '($wf)#v'; wait"
   let w = (with-env ($no_daemon | merge {IETS_CACHE_DIR: $wc, IETS_OFFLINE: "1"}) { ^bash -c $script | complete })
   let w_ok = ($first.exit_code == 0 and $w.exit_code == 0 and $w.stdout == $"hello5 ($work)\n" and ($w.stderr | str contains "waiting for another process to fetch input 'tb'"))
   $res ++= [(verdict $w_ok "tarball: a second process waits for the first one's download and reads its entry" $"fetch lock \(exit ($first.exit_code)/($w.exit_code)\): ($w.stdout) ($w.stderr | lines | last 2 | str join ' | ')")]

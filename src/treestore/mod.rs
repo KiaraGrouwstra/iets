@@ -20,16 +20,20 @@
 //!
 //! Today the only user is `crate::source`, which fetches a
 //! `github`/`gitlab`/`sourcehut`/`tarball` input as one decompressed tar and
-//! indexes it (`crate::fetch::spool`). The spool is kept under
-//! `$XDG_CACHE_HOME/iets/inputs/<store path base name>/` with its index
-//! beside it, and evaluation reads the input straight out of it: `import`,
-//! `readFile`, `readDir`, `pathExists`, `readFileType`, `hashFile`,
-//! `builtins.path`, `filterSource` and string coercion all answer from the
-//! spool by offset. No daemon is needed to evaluate a flake with fetched
-//! inputs, and none is written during evaluation; a build uploads the tree
-//! from the same spool when its target store lacks it (`remote::plan`).
+//! indexes it (`crate::fetch::spool`). The store keeps the index as
+//! `$XDG_CACHE_HOME/iets/inputs/<store path base name>`, with every file named
+//! by the blake3 of its bytes, and the bytes themselves in `inputs/packs/`
+//! (`pack`), where a file that two inputs share is stored once. Evaluation
+//! reads the input straight out of the packs: `import`, `readFile`,
+//! `readDir`, `pathExists`, `readFileType`, `hashFile`, `builtins.path`,
+//! `filterSource` and string coercion all answer from them. No daemon is
+//! needed to evaluate a flake with fetched inputs, and none is written during
+//! evaluation; a build uploads the tree from the same packs when its target
+//! store lacks it (`remote::plan`).
 
-use std::collections::HashMap;
+pub mod pack;
+
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -37,7 +41,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use crate::cachefs;
 use crate::error::Result;
 use crate::eval::Evaluator;
-use crate::fetch::spool::{self, Node, Tree};
+use crate::fetch::spool::{self, Blob, Node, Tree};
 use crate::store::hash::Hash;
 use crate::store::nar::{FileType, PathFilter};
 use crate::store::path::{IngestionMethod, StorePath, make_fixed_output_path};
@@ -146,6 +150,7 @@ pub fn locate(override_dir: Option<&str>) -> Option<PathBuf> {
 #[derive(Default)]
 pub struct Store {
     root: OnceLock<Option<PathBuf>>,
+    packs: OnceLock<Option<Arc<pack::Packs>>>,
     /// Trees opened, by store path base name. An entry is
     /// content-addressed, so one open serves every read of it; a stored
     /// `None` records a name the store does not hold, so a miss is asked
@@ -175,6 +180,14 @@ fn dir_of(name: &str) -> Option<PathBuf> {
     Some(root()?.join(name))
 }
 
+fn packs() -> Option<Arc<pack::Packs>> {
+    session()
+        .trees
+        .packs
+        .get_or_init(|| Some(Arc::new(pack::Packs::open(&root()?.join(pack::PACKS)))))
+        .clone()
+}
+
 /// What opening the trees of this run cost, for `--timings`: reading each
 /// index and decoding it is the one fixed cost the tree store adds to an
 /// evaluation that `/nix/store` does not pay.
@@ -190,9 +203,36 @@ pub fn report_timings() {
     }
 }
 
-/// The tree named `name`, opened once per run. An entry whose index does not
-/// decode, or whose spool is not the size the index recorded, is wiped: the
-/// next evaluation fetches it again.
+fn read_entry(path: &Path) -> Option<(Node, Hash, u64)> {
+    let (f, _) = cachefs::open_entry(path)?;
+    let mut bytes = Vec::new();
+    io::Read::read_to_end(&mut &f, &mut bytes).ok()?;
+    spool::decode_index(&bytes)
+}
+
+/// The entry `name` of the store at `root`. One whose index does not decode is
+/// wiped: the next evaluation fetches it again.
+fn open(root: &Path, packs: Arc<pack::Packs>, name: &str) -> Option<StoredTree> {
+    let path = root.join(name);
+    match read_entry(&path) {
+        Some((tree, nar_hash, nar_size)) => {
+            cachefs::touch(&path);
+            Some(StoredTree::new(
+                Tree::stored(tree, packs),
+                nar_hash,
+                nar_size,
+            ))
+        }
+        None => {
+            if path.exists() {
+                let _ = std::fs::remove_file(&path);
+            }
+            None
+        }
+    }
+}
+
+/// The tree named `name`, opened once per run.
 pub fn get(name: &str) -> Option<Arc<StoredTree>> {
     use std::sync::atomic::Ordering::Relaxed;
     let s = session();
@@ -200,18 +240,10 @@ pub fn get(name: &str) -> Option<Arc<StoredTree>> {
         return hit.clone();
     }
     let t0 = std::time::Instant::now();
-    let found = dir_of(name).and_then(|dir| match Tree::reopen(&dir) {
-        Some((tree, nar_hash, nar_size)) => {
-            cachefs::touch(&dir);
-            Some(Arc::new(StoredTree::new(tree, nar_hash, nar_size)))
-        }
-        None => {
-            if dir.exists() {
-                let _ = std::fs::remove_dir_all(&dir);
-            }
-            None
-        }
-    });
+    let found = root()
+        .zip(packs())
+        .and_then(|(root, packs)| open(&root, packs, name))
+        .map(Arc::new);
     if found.is_some() {
         s.trees.entries.fetch_add(1, Relaxed);
         s.trees
@@ -233,17 +265,17 @@ pub fn has(name: &[u8], version: u8) -> bool {
     if version != spool::INDEX_VERSION {
         return false;
     }
-    let Some(dir) = std::str::from_utf8(name).ok().and_then(dir_of) else {
+    let Some(path) = std::str::from_utf8(name).ok().and_then(dir_of) else {
         return false;
     };
-    if !(dir.join(spool::SPOOL).exists() && dir.join(spool::INDEX).exists()) {
+    if !std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file()) {
         return false;
     }
     // a tracing-cache hit reads nothing out of the entry, so this is the only
     // thing that keeps the TTL sweep from removing an input that is in use.
     // `touch` compares the mtime first, so a hit inside the interval writes
     // nothing (docs/explanation/caching.md)
-    cachefs::touch(&dir);
+    cachefs::touch(&path);
     true
 }
 
@@ -313,14 +345,39 @@ pub enum Rejected {
 /// that lacks a prior hash can be admitted. That is the whole of the store's
 /// trust model: no signature, no trusted builder, no daemon.
 ///
-/// The rename is atomic, so a reader sees either no entry or a whole one; a
-/// sibling that got there first wins and its files stay.
+/// The bytes go into a new pack, except those some pack already holds; the
+/// pack and then the index are renamed into place, so a reader sees either no
+/// entry or a whole one, and a sibling that got there first wins.
 pub fn put(
     name: &str,
     expect: &Hash,
     staged: Staged,
     tree: Tree,
 ) -> std::result::Result<Arc<StoredTree>, Rejected> {
+    let root = root().ok_or(Rejected::Unstorable)?;
+    let packs = packs().ok_or(Rejected::Unstorable)?;
+    let (name, stored) = store(&root, packs, name, expect, tree)?;
+    drop(staged);
+    cachefs::maybe_sweep(&root, cachefs::Shape::StoreEntries, false);
+    let stored = Arc::new(stored);
+    session()
+        .trees
+        .opened
+        .lock()
+        .unwrap()
+        .insert(name, Some(stored.clone()));
+    Ok(stored)
+}
+
+/// [`put`] into the store at `root`; the name of the entry, and the tree read
+/// back out of the packs.
+fn store(
+    root: &Path,
+    packs: Arc<pack::Packs>,
+    name: &str,
+    expect: &Hash,
+    tree: Tree,
+) -> std::result::Result<(String, StoredTree), Rejected> {
     let mut hasher = crate::store::hash::Hasher::new(expect.algo);
     tree.dump(&mut hasher).map_err(Rejected::Io)?;
     let nar_size = hasher.bytes_written();
@@ -330,30 +387,81 @@ pub fn put(
     }
     let sp = store_path(name, &nar_hash).map_err(|_| Rejected::Unstorable)?;
     let name = sp.base_name();
-    let dir = dir_of(name).ok_or(Rejected::Unstorable)?;
-    tree.persist(staged.dir(), (&nar_hash, nar_size))
+
+    let mut writer = pack::PackWriter::new(packs.dir()).map_err(Rejected::Io)?;
+    let mut elsewhere: HashMap<pack::Id, Blob> = HashMap::new();
+    let stored_root = tree
+        .to_objects(&mut |id, at, bytes| {
+            if writer.has(&id) || elsewhere.contains_key(&id) {
+                Ok(())
+            } else if packs.contains(&id) {
+                elsewhere.insert(id, *at);
+                Ok(())
+            } else {
+                writer.add(id, bytes)
+            }
+        })
         .map_err(Rejected::Io)?;
-    let root = root().ok_or(Rejected::Unstorable)?;
+    let index = spool::encode_index(&stored_root, (&nar_hash, nar_size));
     {
-        let _lock = cachefs::write_lock(&root).ok_or(Rejected::Unstorable)?;
-        if !dir.exists() && std::fs::rename(staged.dir(), &dir).is_err() {
-            return Err(Rejected::Unstorable);
+        // `collect` holds the lock for as long as a compaction takes, so this
+        // waits rather than drop a whole download; under it, a pack this tree
+        // relied on may have gone, and its objects come from the spool instead
+        let _lock = cachefs::store_lock(root).ok_or(Rejected::Unstorable)?;
+        let now = packs.refresh();
+        for (id, at) in &elsewhere {
+            if now.find(id).is_none() {
+                writer
+                    .add(*id, &tree.read(at).map_err(Rejected::Io)?)
+                    .map_err(Rejected::Io)?;
+            }
+        }
+        writer.finish().map_err(Rejected::Io)?;
+        let path = root.join(name);
+        if !path.exists() {
+            cachefs::write_atomic(root, name, cachefs::tag(), &[&index]).map_err(Rejected::Io)?;
         }
     }
-    cachefs::maybe_sweep(&root, cachefs::Shape::StoreEntries, false);
-    let stored = Arc::new(StoredTree::new(tree, nar_hash, nar_size));
-    session()
-        .trees
-        .opened
-        .lock()
-        .unwrap()
-        .insert(name.to_string(), Some(stored.clone()));
-    Ok(stored)
+    packs.refresh();
+    let tree = Tree::stored(stored_root, packs);
+    Ok((name.to_string(), StoredTree::new(tree, nar_hash, nar_size)))
+}
+
+/// Drops the objects no entry names any more: a pack none of them uses goes,
+/// and one mostly unused is rewritten (`pack::collect`). An entry whose index
+/// does not decode goes too. Runs under the store's lock, so no `put` publishes
+/// an entry between the marking and the sweeping.
+pub fn collect(root: &Path, dry_run: bool) -> pack::Collected {
+    let Some(_lock) = cachefs::store_lock(root) else {
+        return pack::Collected::default();
+    };
+    let mut live = HashSet::new();
+    let Ok(rd) = std::fs::read_dir(root) else {
+        return pack::Collected::default();
+    };
+    for e in rd.flatten() {
+        let path = e.path();
+        let is_entry = e
+            .file_name()
+            .to_str()
+            .is_some_and(|n| StorePath::from_base_name(n).is_ok());
+        if !is_entry || !e.file_type().is_ok_and(|t| t.is_file()) {
+            continue;
+        }
+        match read_entry(&path) {
+            Some((tree, _, _)) => spool::object_ids(&tree, &mut live),
+            None if !dry_run => {
+                let _ = std::fs::remove_file(&path);
+            }
+            None => {}
+        }
+    }
+    pack::collect(&root.join(pack::PACKS), &live, dry_run).unwrap_or_default()
 }
 
 /// The one observation a read of the tree store leaves in the read set. The
 /// entry's name is the NAR hash of its tree, so its presence, plus the index
-/// version that says the spool can still be read, is the whole check: there is
+/// version that says the entry can still be read, is the whole check: there is
 /// nothing per file to stat and nothing to rehash (docs/explanation/caching.md).
 pub fn record(ev: &Evaluator, tree: &StoredTree, name: &str) {
     if ev.trace().is_on()
@@ -394,5 +502,124 @@ mod tests {
             store_path("source", &h).unwrap().to_full_string(),
             "/nix/store/z4wkdlk69gck09s64a8ghpn6h7bxhkyy-source"
         );
+    }
+
+    fn store_dir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("iets-inputs-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// A spooled tarball holding `files` under one top-level directory.
+    fn tree_of(files: &[(&str, &[u8])]) -> (Tree, Hash) {
+        let mut b = tar::Builder::new(Vec::new());
+        for (name, bytes) in files {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(bytes.len() as u64);
+            h.set_mode(0o644);
+            h.set_cksum();
+            b.append_data(&mut h, format!("top/{name}"), *bytes)
+                .unwrap();
+        }
+        let mut spool = spool::scratch("test").unwrap();
+        io::Write::write_all(&mut spool, &b.into_inner().unwrap()).unwrap();
+        let tree = Tree::index(spool, u64::MAX).unwrap();
+        let mut h = crate::store::hash::Hasher::new(crate::store::hash::HashAlgo::Sha256);
+        tree.dump(&mut h).unwrap();
+        (tree, h.finish())
+    }
+
+    fn put_in(root: &Path, files: &[(&str, &[u8])]) -> String {
+        let (tree, hash) = tree_of(files);
+        let packs = Arc::new(pack::Packs::open(&root.join(pack::PACKS)));
+        store(root, packs, "source", &hash, tree).unwrap().0
+    }
+
+    fn read(root: &Path, name: &str, file: &str) -> io::Result<Vec<u8>> {
+        let packs = Arc::new(pack::Packs::open(&root.join(pack::PACKS)));
+        open(root, packs, name)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?
+            .read(file.as_bytes())
+    }
+
+    fn objects(root: &Path) -> usize {
+        pack::PackSet::load(&root.join(pack::PACKS))
+            .packs()
+            .iter()
+            .map(|p| p.ids().count())
+            .sum()
+    }
+
+    #[test]
+    fn a_stored_input_reads_back_and_a_wrong_hash_is_refused() {
+        let root = store_dir("put");
+        let name = put_in(&root, &[("a", b"alpha"), ("b", b"beta")]);
+        assert_eq!(read(&root, &name, "a").unwrap(), b"alpha");
+        assert_eq!(read(&root, &name, "b").unwrap(), b"beta");
+
+        let (tree, _) = tree_of(&[("a", b"alpha")]);
+        let (_, other) = tree_of(&[("a", b"other")]);
+        let packs = Arc::new(pack::Packs::open(&root.join(pack::PACKS)));
+        assert!(matches!(
+            store(&root, packs, "source", &other, tree),
+            Err(Rejected::Mismatch(_))
+        ));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn two_inputs_share_their_common_files() {
+        let root = store_dir("dedup");
+        let shared = vec![b's'; 5000];
+        let a = put_in(&root, &[("shared", &shared), ("only-a", b"a")]);
+        let b = put_in(&root, &[("shared", &shared), ("only-b", b"b")]);
+        assert_ne!(a, b);
+        assert_eq!(objects(&root), 3);
+        assert_eq!(read(&root, &b, "shared").unwrap(), shared);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// An input whose entry is gone loses the objects only it named; another
+    /// input keeps the ones it shares, and a reader that opened the gone input
+    /// before the collection still reads it.
+    #[test]
+    fn collect_keeps_what_an_entry_names() {
+        let root = store_dir("collect");
+        let big = vec![b'x'; 50_000];
+        let a = put_in(&root, &[("shared", b"shared bytes"), ("big", &big)]);
+        let b = put_in(&root, &[("shared", b"shared bytes"), ("small", b"y")]);
+        let packs = Arc::new(pack::Packs::open(&root.join(pack::PACKS)));
+        let early = open(&root, packs, &a).unwrap();
+
+        std::fs::remove_file(root.join(&a)).unwrap();
+        let c = collect(&root, false);
+        assert!(c.rewritten + c.removed >= 1, "{c:?}");
+        assert_eq!(objects(&root), 2, "the shared file and the small one");
+        assert_eq!(read(&root, &b, "shared").unwrap(), b"shared bytes");
+        assert_eq!(
+            early.read(b"big").unwrap(),
+            big,
+            "an open pack stays readable"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A writer that relied on a pack a collection then removed stores those
+    /// objects itself, from the spool it still holds.
+    #[test]
+    fn a_put_after_a_collection_brings_its_own_objects() {
+        let root = store_dir("race");
+        let shared = vec![b'r'; 5000];
+        let a = put_in(&root, &[("shared", &shared)]);
+        let stale = Arc::new(pack::Packs::open(&root.join(pack::PACKS)));
+        std::fs::remove_file(root.join(&a)).unwrap();
+        collect(&root, false);
+        assert_eq!(objects(&root), 0);
+
+        let (tree, hash) = tree_of(&[("shared", &shared), ("new", b"n")]);
+        let (b, _) = store(&root, stale, "source", &hash, tree).unwrap();
+        assert_eq!(read(&root, &b, "shared").unwrap(), shared);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

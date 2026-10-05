@@ -27,6 +27,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// encoding changes in a way the keys do not already cover.
 pub const FORMAT: &[u8] = b"1";
 
+/// The layout of a store of `shape`. The input store has its own, so a change
+/// to its entries wipes it alone.
+fn format(shape: Shape) -> &'static [u8] {
+    match shape {
+        Shape::StoreEntries => b"2",
+        Shape::Dirs | Shape::ShardedFiles | Shape::Links => FORMAT,
+    }
+}
+
 const DAY: u64 = 24 * 60 * 60;
 /// Entries unread for this long are swept.
 pub const TTL_DAYS: u64 = 30;
@@ -43,6 +52,7 @@ const VERSION: &str = "version";
 const LOCK: &str = "lock";
 const STAMP: &str = "gc-stamp";
 const ENV_KEY: &str = "env-key";
+const PACKS: &str = crate::treestore::pack::PACKS;
 
 /// A cache entry holds what an evaluation read — the bytes of every file and
 /// the answer of every `getEnv` — so it is the user's, not the machine's.
@@ -330,6 +340,7 @@ fn belongs(name: &std::ffi::OsStr, shape: Shape) -> bool {
     ) || is_tmp(name)
         || is_key(name, shape)
         || (matches!(shape, Shape::ShardedFiles) && is_shard(name))
+        || (matches!(shape, Shape::StoreEntries) && name.as_bytes() == PACKS.as_bytes())
 }
 
 /// True when every name in `root` is one this store's own layout makes. An
@@ -353,7 +364,7 @@ fn owner(root: &Path, shape: Shape) -> Owner {
         return Owner::Ready;
     }
     match fs::read(root.join(VERSION)) {
-        Ok(v) if v.trim_ascii() == FORMAT => {}
+        Ok(v) if v.trim_ascii() == format(shape) => {}
         Ok(_) => return Owner::Stale("format version mismatch"),
         Err(_) if empty(root) => {}
         Err(_) if all_ours(root, shape) => return Owner::Stale("no format version"),
@@ -382,12 +393,13 @@ fn wipe(root: &Path, shape: Shape) {
     for e in rd.flatten() {
         let name = e.file_name();
         let path = e.path();
-        if is_tmp(&name) {
+        if is_tmp(&name) || is_key(&name, shape) {
+            // an entry of another format may not have this one's shape
             let _ = fs::remove_file(&path).or_else(|_| fs::remove_dir_all(&path));
-        } else if is_key(&name, shape) {
-            drop_entry(&path, shape);
         } else if matches!(shape, Shape::ShardedFiles) && is_shard(&name) {
             wipe_shard(&path);
+        } else if matches!(shape, Shape::StoreEntries) && name.as_bytes() == PACKS.as_bytes() {
+            let _ = fs::remove_dir_all(&path);
         }
     }
 }
@@ -431,7 +443,7 @@ pub fn prepare(root: &Path, shape: Shape, timings: bool) -> bool {
         }
     }
     if create_dir(root).is_ok() && fs::read(root.join(VERSION)).is_err() {
-        let _ = write_atomic(root, VERSION, tag(), &[FORMAT]);
+        let _ = write_atomic(root, VERSION, tag(), &[format(shape)]);
     }
     tighten(root);
     true
@@ -519,6 +531,12 @@ pub fn try_write_lock(root: &Path) -> io::Result<Option<WriteLock>> {
     }
 }
 
+/// The store's writer lock, waited for: for a writer that must not drop its
+/// write, and for work that holds the lock longer than `LOCK_TIMEOUT`.
+pub fn store_lock(root: &Path) -> Option<WriteLock> {
+    wait_lock(&root.join(LOCK), || {})
+}
+
 /// An exclusive `flock` on the file `path`, taken without a timeout: the one
 /// wait in the caches, for work that costs far more than waiting (a
 /// download). `on_wait` runs once when a sibling holds it. The file is
@@ -604,10 +622,10 @@ pub struct Swept {
 
 fn entry_size(path: &Path, shape: Shape) -> u64 {
     match shape {
-        Shape::ShardedFiles => fs::metadata(path).map_or(0, |m| m.len()),
+        Shape::ShardedFiles | Shape::StoreEntries => fs::metadata(path).map_or(0, |m| m.len()),
         // a root holds no bytes of its own; what it frees is the daemon's to say
         Shape::Links => 0,
-        Shape::Dirs | Shape::StoreEntries => fs::read_dir(path).map_or(0, |d| {
+        Shape::Dirs => fs::read_dir(path).map_or(0, |d| {
             d.flatten()
                 .filter_map(|e| e.metadata().ok())
                 .map(|m| m.len())
@@ -618,8 +636,8 @@ fn entry_size(path: &Path, shape: Shape) -> u64 {
 
 fn drop_entry(path: &Path, shape: Shape) -> bool {
     match shape {
-        Shape::ShardedFiles | Shape::Links => fs::remove_file(path).is_ok(),
-        Shape::Dirs | Shape::StoreEntries => fs::remove_dir_all(path).is_ok(),
+        Shape::ShardedFiles | Shape::Links | Shape::StoreEntries => fs::remove_file(path).is_ok(),
+        Shape::Dirs => fs::remove_dir_all(path).is_ok(),
     }
 }
 
@@ -661,8 +679,13 @@ fn sweep_dir(dir: &Path, shape: Shape, ttl: Duration, dry_run: bool, out: &mut S
 pub fn sweep(root: &Path, shape: Shape, ttl: Duration, dry_run: bool) -> Swept {
     let mut out = Swept::default();
     match shape {
-        Shape::Dirs | Shape::StoreEntries | Shape::Links => {
+        Shape::Dirs | Shape::Links => {
             sweep_dir(root, shape, ttl, dry_run, &mut out);
+        }
+        Shape::StoreEntries => {
+            sweep_dir(root, shape, ttl, dry_run, &mut out);
+            // the entries name the objects; the packs hold them
+            out.bytes += crate::treestore::collect(root, dry_run).freed;
         }
         Shape::ShardedFiles => {
             let Ok(rd) = fs::read_dir(root) else {
@@ -804,6 +827,20 @@ mod tests {
         ready(&d);
         assert!(!d.join(OLD).exists());
         assert_eq!(fs::read(d.join(VERSION)).expect("version"), FORMAT);
+    }
+
+    /// The input store of format 1 held a directory per entry; format 2 holds
+    /// a file, so the version check is what removes the old ones.
+    #[test]
+    fn an_input_store_of_the_spool_layout_is_wiped() {
+        let d = tmp("inputs-v1");
+        let entry = d.join("z4wkdlk69gck09s64a8ghpn6h7bxhkyy-source");
+        fs::create_dir_all(&entry).expect("entry");
+        fs::write(entry.join("spool"), b"").expect("spool");
+        fs::write(d.join(VERSION), FORMAT).expect("version");
+        assert!(prepare(&d, Shape::StoreEntries, false));
+        assert!(!entry.exists());
+        assert_eq!(fs::read(d.join(VERSION)).expect("version"), b"2");
     }
 
     #[test]
