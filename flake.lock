@@ -16,9 +16,45 @@
         "type": "github"
       }
     },
+    "nixpkgs_2": {
+      "locked": {
+        "lastModified": 1789264731,
+        "narHash": "sha256-llGJbC0CcU8DfROr6mZjRJgMLQd/SKwfpzxJH/2lHO4=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "02f5696b0e6097e589076d886b317b83ff0437d7",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "repkgs": {
+      "inputs": {
+        "nixpkgs": "nixpkgs_2"
+      },
+      "locked": {
+        "lastModified": 1791213237,
+        "narHash": "sha256-Nkwb7D5avNYb1wsO/tA6KUfA/9V20w2tRr/FzBoEgRw=",
+        "owner": "zimbatm",
+        "repo": "repkgs",
+        "rev": "adcafee151ff42e9f545664313fa95542fde9d53",
+        "type": "github"
+      },
+      "original": {
+        "owner": "zimbatm",
+        "ref": "iets-packages",
+        "repo": "repkgs",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "repkgs": "repkgs"
       }
     }
   },

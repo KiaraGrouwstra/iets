@@ -1,6 +1,10 @@
 {
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-  outputs = { self, nixpkgs }:
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # the dev shell only (docs/reference/repkgs.md); nothing iets ships comes from it
+    repkgs.url = "github:zimbatm/repkgs/iets-packages";
+  };
+  outputs = { self, nixpkgs, repkgs }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAll = f: nixpkgs.lib.genAttrs systems (s: f nixpkgs.legacyPackages.${s});
@@ -30,9 +34,30 @@
       '';
     in {
       devShells = forAll (pkgs: {
-        default = pkgs.mkShell {
-          packages = [ pkgs.cargo pkgs.rustc pkgs.clippy pkgs.rustfmt pkgs.hyperfine pkgs.nix pkgs.perf pkgs.jq pkgs.nushell pkgs.direnv ];
-        };
+        # The tools come from repkgs, not nixpkgs: one LLVM toolchain, nushell build phases, and
+        # crates fetched by a dynamic derivation (docs/reference/repkgs.md). mkShellNoCC, because
+        # the compiler is repkgs own cc wrapper and nixpkgs own would shadow it. `perf` stays
+        # nixpkgs: repkgs has no package for it.
+        default =
+          if pkgs.stdenv.hostPlatform.system == "x86_64-linux" then
+            let
+              # nix/set.nix rather than the flake's own outputs: `mkShell` is there, and so is
+              # the set's own `nix`. `repkgs.packages.<system>.nix` is the one built from
+              # nixpkgs, which exists to bootstrap a daemon that can build the set at all.
+              r = import "${repkgs}/nix/set.nix" { system = pkgs.stdenv.hostPlatform.system; };
+            in
+            # repkgs' mkShell (its nix/mk-shell.nix) carries the set's cc wrapper, which is
+            # what `cargo build` links with. No part of this shell is nixpkgs'.
+            r.mkShell {
+              name = "iets-shell";
+              # `rust` is cargo, rustc, clippy and rustfmt in one output
+              packages = with r.pkgs; [ rust hyperfine nix perf jq nushell direnv ];
+            }
+          else
+            # repkgs uploads its seed nar for x86_64-linux only (its flake.nix says so)
+            pkgs.mkShell {
+              packages = [ pkgs.cargo pkgs.rustc pkgs.clippy pkgs.rustfmt pkgs.hyperfine pkgs.nix pkgs.perf pkgs.jq pkgs.nushell pkgs.direnv ];
+            };
       });
       nixosModules.default = import ./nix/module.nix self;
       lib.mkClassic = classic;

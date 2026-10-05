@@ -158,6 +158,7 @@ behaviour differs on purpose,
 | [reference/builtins.md](docs/reference/builtins.md) | the primop surface |
 | [reference/divergences.md](docs/reference/divergences.md) | where iets differs from Nix on purpose |
 | [reference/library.md](docs/reference/library.md) | the library entry points |
+| [reference/repkgs.md](docs/reference/repkgs.md) | the dev shell, whose tools come from repkgs |
 
 **Understand it.**
 
