@@ -46,8 +46,6 @@ pub(super) fn current_time(ev: &mut Evaluator, _args: &[Word], _pos: Pos) -> Eva
     Ok(Word::imm_int(now))
 }
 
-// ---- regular expressions ------------------------------------------------------
-
 /// One ERE, or why Nix would reject it; the cache keeps the rejection so a
 /// repeated bad pattern is not re-parsed. The cache is per thread and holds
 /// no run state: a pattern compiles the same way in every session.
@@ -161,8 +159,6 @@ fn split(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     Ok(ev.mk_list(&items))
 }
 
-// ---- replaceStrings -----------------------------------------------------------
-
 fn replace_strings(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let from_l = ev.force_list(
         args[0],
@@ -249,8 +245,6 @@ fn replace_strings(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wo
     let out = ev.arena.alloc_bytes(&res);
     Ok(ev.arena.mk_string_static(out, ctx))
 }
-
-// ---- hashes -------------------------------------------------------------------
 
 fn parse_algo(ev: &mut Evaluator, w: Word, pos: Pos, ctx: &str) -> EvalResult<HashAlgo> {
     let name = ev.force_string_no_ctx(w, pos, ctx)?;
@@ -373,8 +367,6 @@ fn convert_hash(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word>
     Ok(ev.mk_string(out.as_bytes()))
 }
 
-// ---- rounding -----------------------------------------------------------------
-
 fn round(ev: &mut Evaluator, w: Word, pos: Pos, ctx: &str, op: fn(f64) -> f64) -> EvalResult<Word> {
     let w = ev.force(w)?;
     let arg_int = w.as_int();
@@ -431,8 +423,6 @@ fn ceil(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         f64::ceil,
     )
 }
-
-// ---- genericClosure -----------------------------------------------------------
 
 fn missing_attr(name: &str, ctx: &str, pos: Pos) -> Box<Error> {
     let mut e = Error::new(ErrorKind::Type, format!("attribute '{name}' missing"), pos);
@@ -523,8 +513,6 @@ fn generic_closure(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wo
     }
     Ok(ev.mk_list(&res))
 }
-
-// ---- environment and control --------------------------------------------------
 
 fn get_env(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let name = ev.force_string_no_ctx(

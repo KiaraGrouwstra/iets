@@ -77,11 +77,6 @@ impl Arena {
         self.bytes_allocated != self.folded.bytes
     }
 
-    /// The arena use not yet folded into the run's totals, marked folded.
-    ///
-    /// `release` and `shrink_last` give bytes back, so a total can fall below
-    /// its own mark. The fold saturates there and keeps whatever it published,
-    /// which overstates by the bytes given back since the last fold.
     /// The bytes this arena allocated since the last sample, marked taken.
     /// `release` and `shrink_last` give bytes back, so a total can fall
     /// below its own mark; the sample saturates at nothing there.
@@ -91,6 +86,11 @@ impl Arena {
         d as u64
     }
 
+    /// The arena use not yet folded into the run's totals, marked folded.
+    ///
+    /// `release` and `shrink_last` give bytes back, so a total can fall below
+    /// its own mark. The fold saturates there and keeps whatever it published,
+    /// which overstates by the bytes given back since the last fold.
     pub(crate) fn take_unfolded(&mut self) -> crate::parallel::shared::ArenaUse {
         let mut u = crate::parallel::shared::ArenaUse {
             bytes: self.bytes_allocated.saturating_sub(self.folded.bytes) as u64,
