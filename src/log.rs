@@ -254,7 +254,6 @@ pub const ACT_BUILD: u64 = 105;
 pub const RES_BUILD_LOG_LINE: u64 = 101;
 pub const RES_SET_PHASE: u64 = 104;
 pub const RES_PROGRESS: u64 = 105;
-pub const RES_SET_EXPECTED: u64 = 106;
 
 /// Whether activity records go anywhere, so nobody builds one for nothing.
 pub fn activities() -> bool {

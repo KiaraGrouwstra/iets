@@ -400,14 +400,7 @@ pub fn nix32_decode(s: &str) -> Result<Vec<u8>, HashError> {
     Ok(res)
 }
 
-/// Mirrors base-n.cc:base16::encode.
-pub fn base16_encode(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    base16_encode_into(&mut s, bytes);
-    s
-}
-
-/// `base16_encode` appended to a buffer the caller keeps.
+/// Mirrors base-n.cc:base16::encode, appended to a buffer the caller keeps.
 pub fn base16_encode_into(s: &mut String, bytes: &[u8]) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     for b in bytes {

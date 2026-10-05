@@ -44,12 +44,6 @@ pub struct Loc {
     flags: u8,
 }
 
-impl Loc {
-    pub fn stored(&self) -> u64 {
-        self.stored
-    }
-}
-
 fn corrupt(why: &str) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
@@ -293,14 +287,6 @@ impl PackWriter {
             entries: Vec::new(),
             ids: HashSet::new(),
         })
-    }
-
-    pub fn has(&self, id: &Id) -> bool {
-        self.ids.contains(id)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
     }
 
     pub fn add(&mut self, id: Id, bytes: &[u8]) -> io::Result<()> {
