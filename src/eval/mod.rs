@@ -468,7 +468,13 @@ impl EvalConfig {
             nr_store_adds: 0,
             t_compile: std::time::Duration::ZERO,
             totals: Default::default(),
-            fold_arenas: crate::session::Session::current().settings().stats >= 1,
+            fold_arenas: {
+                let on = crate::session::Session::current().settings().stats >= 1;
+                if on {
+                    crate::store::hash::stats::enable();
+                }
+                on
+            },
             sym_strings: crate::parallel::shared::SymWords::new(),
             src_to_store: Default::default(),
             known: Default::default(),
@@ -2674,6 +2680,11 @@ impl Evaluator {
             c.compile,
             size_of::<Ir>()
         );
+        let mut hashes = String::new();
+        crate::store::hash::stats::report(&mut hashes);
+        if !hashes.is_empty() {
+            crate::errln!("{}", hashes.trim_end());
+        }
         for (i, name) in STAT_NAMES.iter().enumerate() {
             crate::errln!(
                 "{name:>12} count={:>9} bytes={:>11} ({:.1} MiB)",

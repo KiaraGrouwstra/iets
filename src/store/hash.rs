@@ -296,12 +296,25 @@ impl Hasher {
     }
 
     pub fn finish(self) -> Hash {
+        if stats::on() {
+            stats::record(self.algo(), self.bytes);
+        }
         match self.state {
             State::Md5(h) => Hash::raw(HashAlgo::Md5, &h.finalize()),
             State::Sha1(h) => Hash::raw(HashAlgo::Sha1, &h.finalize()),
             State::Sha256(h) => Hash::raw(HashAlgo::Sha256, &h.finalize()),
             State::Sha512(h) => Hash::raw(HashAlgo::Sha512, &h.finalize()),
             State::Blake3(h) => Hash::raw(HashAlgo::Blake3, h.finalize().as_bytes()),
+        }
+    }
+
+    pub fn algo(&self) -> HashAlgo {
+        match self.state {
+            State::Md5(_) => HashAlgo::Md5,
+            State::Sha1(_) => HashAlgo::Sha1,
+            State::Sha256(_) => HashAlgo::Sha256,
+            State::Sha512(_) => HashAlgo::Sha512,
+            State::Blake3(_) => HashAlgo::Blake3,
         }
     }
 }
@@ -529,6 +542,86 @@ pub fn base64_decode(s: &str) -> Result<Vec<u8>, HashError> {
         }
     }
     Ok(res)
+}
+
+/// `IETS_STATS`: what a run hashed. Off until [`stats::enable`], because the
+/// counters are process-wide atomics that every worker shares.
+pub mod stats {
+    use std::fmt::Write as _;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
+
+    use super::HashAlgo;
+
+    const ALGOS: [HashAlgo; 5] = [
+        HashAlgo::Md5,
+        HashAlgo::Sha1,
+        HashAlgo::Sha256,
+        HashAlgo::Sha512,
+        HashAlgo::Blake3,
+    ];
+    const EDGES: [u64; 8] = [64, 256, 1024, 4096, 1 << 16, 1 << 20, 1 << 24, u64::MAX];
+
+    #[allow(clippy::declare_interior_mutable_const)]
+    const Z: AtomicU64 = AtomicU64::new(0);
+    static ON: AtomicBool = AtomicBool::new(false);
+    #[allow(clippy::declare_interior_mutable_const)]
+    const ZB: [AtomicU64; 8] = [Z; 8];
+    static CALLS: [[AtomicU64; 8]; 5] = [ZB; 5];
+    static BYTES: [AtomicU64; 5] = [Z; 5];
+
+    pub fn enable() {
+        ON.store(true, Relaxed);
+    }
+
+    #[inline]
+    pub fn on() -> bool {
+        ON.load(Relaxed)
+    }
+
+    fn slot(algo: HashAlgo) -> usize {
+        match algo {
+            HashAlgo::Md5 => 0,
+            HashAlgo::Sha1 => 1,
+            HashAlgo::Sha256 => 2,
+            HashAlgo::Sha512 => 3,
+            HashAlgo::Blake3 => 4,
+        }
+    }
+
+    #[cold]
+    pub fn record(algo: HashAlgo, len: u64) {
+        let b = EDGES
+            .iter()
+            .position(|&e| len < e)
+            .unwrap_or(EDGES.len() - 1);
+        CALLS[slot(algo)][b].fetch_add(1, Relaxed);
+        BYTES[slot(algo)].fetch_add(len, Relaxed);
+    }
+
+    /// One line per algorithm the run used: digests, bytes, and the digest
+    /// count per input-size bucket.
+    pub fn report(out: &mut String) {
+        for algo in ALGOS {
+            let i = slot(algo);
+            let per: Vec<u64> = CALLS[i].iter().map(|c| c.load(Relaxed)).collect();
+            let n: u64 = per.iter().sum();
+            if n == 0 {
+                continue;
+            }
+            let _ = write!(
+                out,
+                "hash {:>6} digests={n:>8} bytes={:>12}",
+                algo.name(),
+                BYTES[i].load(Relaxed)
+            );
+            for (b, c) in per.iter().enumerate() {
+                if *c > 0 {
+                    let _ = write!(out, " <{}={c}", EDGES[b]);
+                }
+            }
+            out.push('\n');
+        }
+    }
 }
 
 #[cfg(test)]
