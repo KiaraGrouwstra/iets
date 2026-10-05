@@ -203,8 +203,8 @@ compression is refused, where libarchive stacks filters without a bound.
 The NAR hash of the result is compared with the lock's `narHash`. A
 mismatch names both hashes and keeps nothing: the staged directory goes,
 so a wrong tree is never named, never read and never uploaded. A match is
-moved into the input store with one `rename`. Nothing is registered in any
-store.
+written into the input store's packs and its index published with one
+`rename`. Nothing is registered in any store.
 
 This is also the tree `iets prefetch --unpack` hashes
 (`docs/reference/commands.md`).
@@ -212,24 +212,25 @@ This is also the tree `iets prefetch --unpack` hashes
 ## The input store
 
 `$XDG_CACHE_HOME/iets/inputs/` — `--cache-dir DIR` or `IETS_CACHE_DIR`
-moves it to `DIR/inputs` — holds one directory per fetched input, named by
-the store-path base name the lock implies. Code: `src/treestore`, a local
-content-addressed tree store on `crate::cachefs`. Its `put` takes the hash
-the tree must have and has no other form, so an entry's name is always
-what its content hashes to.
+moves it to `DIR/inputs` — holds one file per fetched input, named by the
+store-path base name the lock implies, and the packs that hold the inputs'
+bytes. Code: `src/treestore`, a local content-addressed tree store on
+`crate::cachefs`. Its `put` takes the hash the tree must have and has no
+other form, so an entry's name is always what its content hashes to.
 
-| file | what |
+| path | what |
 |---|---|
-| `spool` | the decompressed tar, exactly as it was downloaded |
-| `index` | the `spool::Tree` index: a version byte, the entry's NAR hash and size, the spool's length, then the tree as offsets, sizes, modes and symlink targets |
-| `sparse` | only when the archive had sparse members (GNU or pax), whose holes are not in the tar |
+| `<base name>` | the `spool::Tree` index: a version byte, the entry's NAR hash (with its algorithm) and size, then the tree as names, modes, symlink targets, and each file's size and object id (the blake3 of its bytes) |
+| `packs/<hex>.pack` | objects by id, LZ4 when that shrinks them, then a footer that indexes them; written once and renamed into place (`src/treestore/pack.rs`) |
 
-A reader checks the index's version byte and the spool's size against the
-length the index recorded; anything else wipes the entry, which costs one
-fetch. The store-level rules are the ones the two caches follow
-(`docs/explanation/caching.md`): a `version` file, one writer at a time
-through the store's `flock`, an atomic `rename` of a staged directory into
-place, and a TTL sweep.
+An object two inputs share is stored once, so a second revision of nixpkgs
+costs the files that changed and its own index. A reader checks the index's
+checksum and version byte, and each pack's footer checksum; anything else
+wipes the entry or the pack, which costs one fetch. The store-level rules
+are the ones the two caches follow (`docs/explanation/caching.md`): a
+`version` file, one writer at a time through the store's `flock`, an atomic
+`rename` into place, and a TTL sweep, after which a collection removes the
+objects no entry names.
 
 **Reads.** `src/builtins/store_hooks.rs:locate` is the one place that maps
 a store path to its bytes. It answers a `SrcPath` (`src/store/source.rs`,
@@ -238,7 +239,7 @@ Nix's `SourcePath`): a path in a `Src`, which is one of
 | `Src` | What it reads |
 |:---|:---|
 | `Fs` | the real file system, or the local tree a virtual copy stands for, with its filter |
-| `Spool` | an entry of the input store, read by `pread` at the offset the index holds, with the filter of a `builtins.path` or `filterSource` copy of a member |
+| `Spool` | an entry of the input store, read out of its packs by object id, with the filter of a `builtins.path` or `filterSource` copy of a member |
 | `Mem` | a `toFile` text, or a `.drv` this evaluation holds in memory |
 
 Its methods (`stat`, `read`, `read_dir`, `dump`) are the only readers, and
@@ -249,14 +250,14 @@ each records its own read-set observation. `import`, `readFile`,
 it, so a fetched input needs no `/nix/store` entry and no daemon.
 `/nix/store` is checked first and wins when it has the tree. Symlinks
 inside an entry are followed the way the kernel follows them; a target
-that leaves the tree is not resolved, because the spool holds no bytes for
+that leaves the tree is not resolved, because the entry holds no bytes for
 it.
 
 **Uploads.** Nothing is registered during evaluation. A source whose
 origin is an input-store entry keeps its `Src::Spool` name, which the
 tracing cache stores as is, with the NAR hash and size the index already
 holds; `remote::plan` opens the entry only when it dumps the NAR, and
-writes it out of the spool straight into whichever builder the build
+writes it out of the packs straight into whichever builder the build
 targets (`docs/reference/builders.md`).
 
 **What still needs a daemon.** `git` and `hg` inputs go through
