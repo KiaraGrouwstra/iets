@@ -6,7 +6,8 @@ how fast each of those is today, what the hardware allows, and which changes
 are worth making. Every number here was measured, and the harness that
 produced it is in the tree.
 
-Status: the plumbing in step 4 is built. The rest is still a proposal.
+Status: the plumbing in step 4 is built. Step 1 is prototyped and measures
+3.2x; the rest is still a proposal.
 
 ## How it was measured
 
@@ -79,8 +80,8 @@ already runs at 90% of the 2.73 GB/s ceiling.
 
 The tree is the one that pays. 405 ms of its 485 ms is one thread opening,
 stat-ing, reading and closing 54630 files. That thread is at the syscall
-limit: `cat` of every file in one process takes 376 ms. With 4 processes it
-takes 97 ms, with 16 processes 73 ms.
+limit: `cat` of every file in one process takes 376 ms, and 73 ms in sixteen.
+Proposal 1 takes that tree from 470 ms to 146 ms.
 
 ## What hashcat's book offers
 
@@ -150,23 +151,62 @@ Hashing scales across cores: 16 of these benchmarks at once run 14% slower
 than one. A faster kernel multiplies by the core count.
 ## The proposals
 
-### 1. Read the tree ahead of the hasher
+### 1. Read the tree ahead of the hasher (prototyped, 3.2x)
 
 The dominant cost of hashing a source tree is not the hash. It is one thread
-waiting on 54630 serial `open`/`read`/`close` round trips. Measured ceiling
-for the same files with 16 readers: 73 ms against 376 ms.
+waiting on 54630 serial `open`/`read`/`close` round trips and the directory
+walk around them.
 
-Keep the NAR stream exactly serial, because the digest must match Nix, and
-put the reads in front of it: a bounded ring of buffers filled in NAR order
-by the worker pool that iets already has, drained in order by the hasher.
+`examples/nar_prefetch.rs` keeps the NAR stream exactly serial, because the
+digest must be Nix's, and puts everything else beside it. Four stages run at
+once: a pool reads directories breadth first from the root; one planner
+thread walks those listings depth first, which is NAR order, blocking only on
+a directory the pool has not reached; readers fill one slab per run of
+consecutive files; and the writer replays the planner's events into the
+hasher, opening nothing itself.
 
-Value: 485 ms to roughly 150 ms for this tree, a 3.2x cut, and more when the
-cache is cold and the device wants a deeper queue. This is the single
-biggest number in this document.
+On the 54630-file tree, best of five:
 
-Risk: NAR order and the "changed while being read" errors must not move. The
-filter decides what is read, so prefetch must obey it.
+| readers | wall | against serial |
+|---:|---:|---:|
+| serial | 470 ms | 1.00x |
+| 4 | 215.6 ms | 2.18x |
+| 8 | 166.6 ms | 2.82x |
+| **16** | **145.9 ms** | **3.22x** |
+| 32 | 145.6 ms | 3.23x |
 
+Hashing 208 MB on its own is 76 ms, so the pipeline is within 2x of the only
+work that cannot be removed, and it stops improving at 16 readers.
+
+**Two earlier shapes of this lost the whole win, which is the lesson.** One
+channel message and one allocation per file costs more than the syscalls it
+saves, because the buffer is allocated on one thread and freed on another:
+that version ran at 1.19x. Enumerating the tree in level barriers before
+streaming anything costs the whole enumeration, 87 ms of it, on the critical
+path: 2.17x. Only batching the handover into slabs *and* overlapping all four
+stages gets 3.2x.
+
+What the prototype does not do, and a real implementation has to:
+
+- **Filters.** It hashes everything. `nar_hash_filtered` takes a `PathFilter`,
+  and under `builtins.filterSource` that closure is Nix code, which cannot run
+  on a reader thread. The planner is the one serial walk, so the filter
+  belongs there, which means the planner has to be the calling thread and the
+  writer has to move off it.
+- **Its own threads.** It spawns `std::thread`s. A NAR dump can happen inside
+  the evaluator's own pool, so the real one must use `src/parallel` and not
+  oversubscribe.
+- **Memory.** It holds every listing for the whole tree, about 10 MB for
+  nixpkgs, where the serial walk holds one path at a time in an arena. Slabs
+  in flight add `readers * DEPTH * RUN_BYTES`, 48 MB at the defaults.
+- **One stat per entry.** Enumeration stats everything, where the serial walk
+  takes the type from the directory entry. More syscalls in total, but they
+  are off the critical path.
+
+Digests were checked against the serial implementation on 46 store paths and
+on a fixture with empty directories, zero-length files, an executable, a file
+over the prefetch limit, a dangling symlink, and a single file and an empty
+directory as the root.
 ### 2. `mmap` the big regular files, for SHA-2 only
 
 | 380 MB file | read loop | `mmap` |
