@@ -589,7 +589,7 @@ path is iets: `nix`, `nix-instantiate`, `nix-build`, `nix-shell` and
 therefore compares iets with iets and says the two agree, or blames the
 reference for iets's own behaviour. Name the store path of the reference
 instead, and check it: `readlink -f $(command -v nix-eval-jobs)` must not end
-in an `iets` output. `scripts/lib.nu`'s `require-real-nix` does exactly that
+in an `iets` output. `scripts/lib.nu`'s `require-real-nix` does that
 check for the suites; it cannot do it for a command you type.
 
 The shell cases compare an `env` dump, which is only comparable without the

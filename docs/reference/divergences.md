@@ -1,7 +1,6 @@
 # Known divergences from Nix 2.34
 
-Every place where iets knowingly differs from Nix 2.34.8, and how to
-observe it.
+Every place where iets knowingly differs from Nix 2.34.8.
 
 Each entry says what differs, why, and how to observe it. The classic
 names add a few more, listed in `docs/reference/classic.md`.
