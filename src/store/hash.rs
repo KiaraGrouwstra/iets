@@ -244,11 +244,12 @@ pub fn hash_bytes(algo: HashAlgo, data: &[u8]) -> Hash {
 
 /// Mirrors hash.cc:compressHash.
 pub fn compress_hash(hash: &Hash, new_size: usize) -> Hash {
-    let mut out = vec![0u8; new_size];
+    debug_assert!(new_size <= MAX_HASH_SIZE);
+    let mut out = [0u8; MAX_HASH_SIZE];
     for (i, b) in hash.bytes().iter().enumerate() {
         out[i % new_size] ^= b;
     }
-    Hash::raw(hash.algo, &out)
+    Hash::raw(hash.algo, &out[..new_size])
 }
 
 enum State {
@@ -355,18 +356,30 @@ pub fn nix32_encode_into(s: &mut String, bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
-    let len = nix32_encoded_len(bytes.len());
-    for n in (0..len).rev() {
-        let b = n * 5;
-        let i = b / 8;
-        let j = b % 8;
-        let lo = bytes[i] >> j;
-        let hi = if i + 1 < bytes.len() {
-            bytes[i + 1].checked_shl((8 - j) as u32).unwrap_or(0)
-        } else {
-            0
-        };
-        s.push(NIX32_CHARS[((lo | hi) & 0x1f) as usize] as char);
+    // One window holds the longest digest nix has (sha512, 103 characters),
+    // so every hash takes one pass; longer inputs take several.
+    const W: usize = 112;
+    let mut buf = [0u8; W];
+    let mut left = nix32_encoded_len(bytes.len());
+    s.reserve(left);
+    while left > 0 {
+        let take = left.min(W);
+        for (k, slot) in buf[..take].iter_mut().enumerate() {
+            let bit = (left - 1 - k) * 5;
+            let i = bit >> 3;
+            let j = bit & 7;
+            let lo = bytes[i] >> j;
+            let hi = if j > 3 && i + 1 < bytes.len() {
+                bytes[i + 1] << (8 - j)
+            } else {
+                0
+            };
+            *slot = NIX32_CHARS[((lo | hi) & 0x1f) as usize];
+        }
+        if let Ok(part) = std::str::from_utf8(&buf[..take]) {
+            s.push_str(part);
+        }
+        left -= take;
     }
 }
 
@@ -403,12 +416,29 @@ pub fn nix32_decode(s: &str) -> Result<Vec<u8>, HashError> {
 
 /// Mirrors base-n.cc:base16::encode, appended to a buffer the caller keeps.
 pub fn base16_encode_into(s: &mut String, bytes: &[u8]) {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    for b in bytes {
-        s.push(HEX[(b >> 4) as usize] as char);
-        s.push(HEX[(b & 0xf) as usize] as char);
+    s.reserve(bytes.len() * 2);
+    for chunk in bytes.chunks(32) {
+        let mut buf = [0u8; 64];
+        for (i, b) in chunk.iter().enumerate() {
+            buf[2 * i..2 * i + 2].copy_from_slice(&HEX_PAIRS[*b as usize].to_le_bytes());
+        }
+        if let Ok(part) = std::str::from_utf8(&buf[..2 * chunk.len()]) {
+            s.push_str(part);
+        }
     }
 }
+
+/// Both hex digits of a byte, as the two ASCII bytes of a little-endian `u16`.
+const HEX_PAIRS: [u16; 256] = {
+    let d = *b"0123456789abcdef";
+    let mut t = [0u16; 256];
+    let mut i = 0;
+    while i < 256 {
+        t[i] = (d[i >> 4] as u16) | ((d[i & 15] as u16) << 8);
+        i += 1;
+    }
+    t
+};
 
 /// Mirrors base-n.cc:base16::decode.
 pub fn base16_decode(s: &str) -> Result<Vec<u8>, HashError> {
@@ -436,6 +466,17 @@ pub fn base16_decode(s: &str) -> Result<Vec<u8>, HashError> {
 }
 
 const BASE64_CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/// The inverse of [`BASE64_CHARS`]; `0xff` for anything else.
+const BASE64_DIGITS: [u8; 256] = {
+    let mut t = [0xff; 256];
+    let mut i = 0;
+    while i < BASE64_CHARS.len() {
+        t[BASE64_CHARS[i] as usize] = i as u8;
+        i += 1;
+    }
+    t
+};
 
 /// Mirrors base-n.hh:base64::encodedLength.
 pub fn base64_encoded_len(n: usize) -> usize {
@@ -473,14 +514,15 @@ pub fn base64_decode(s: &str) -> Result<Vec<u8>, HashError> {
         if c == b'\n' {
             continue;
         }
-        let digit = BASE64_CHARS.iter().position(|&x| x == c).ok_or_else(|| {
-            HashError(format!(
+        let digit = BASE64_DIGITS[c as usize];
+        if digit == 0xff {
+            return Err(HashError(format!(
                 "invalid character in Base64 string: '{}'",
                 c as char
-            ))
-        })? as u32;
+            )));
+        }
         bits += 6;
-        d = d << 6 | digit;
+        d = d << 6 | digit as u32;
         if bits >= 8 {
             res.push((d >> (bits - 8) & 0xff) as u8);
             bits -= 8;
