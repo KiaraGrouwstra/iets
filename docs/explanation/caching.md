@@ -453,34 +453,49 @@ So the content verifies itself. Follow what that removes:
   determines the content. That is why the concurrency rules above are
   enough and no protocol is needed on top of them.
 
-What a reader *does* check on open is small: the index's own checksum, its
-version byte, the spool's length against what the index recorded, and that
-every blob the index names lies inside the file it names it in. Anything
-else wipes the entry, which costs one fetch. It never re-hashes the tree,
-because the name already is the hash: a spool whose *bytes* were changed in
-place, under a length and an index that still fit, is therefore read as it
-stands. Rehashing it on every open would read every input of every
-evaluation, which is what the index exists to avoid.
+What a reader *does* check on open is small: the index's own checksum and
+its version byte, and, for each pack, the checksum of the pack's own index
+and that every object it names lies inside it. Anything else wipes the
+entry or the pack, which costs one fetch. It never re-hashes the tree,
+because the name already is the hash: an object whose *bytes* were changed
+in place, under an index that still fits, is therefore read as it stands.
+Rehashing it on every open would read every input of every evaluation,
+which is what the index exists to avoid.
 
-An entry holds the decompressed tar exactly as downloaded (`spool`), an
-index of every member's offset, size, mode and symlink target, and a
-`sparse` file when the archive had sparse members. No tree is ever
-unpacked. That is not only a disk saving: a full nixpkgs revision costs
-19 MB of index over the evaluator's own 75 MB, where unpacking a tree cost
-307 MB — 13.5 s and 382 MB peak before, 7.7 s and 94 MB after.
+An entry is one file, `inputs/<store path base name>`: the NAR hash and size
+the fetch verified, and an index of every member's name, mode, symlink
+target, size and the id of its bytes, the blake3 of them. The bytes
+themselves are objects in `inputs/packs/`, LZ4-compressed when that shrinks
+them, and an object two inputs share is stored once. The design is
+nix-tarmac's: a store of tarball contents keyed by their hash, so a second
+revision of nixpkgs costs only the files that changed — 4 to 5 MiB, index
+included, for revisions 200 commits apart, where a spool cost 247 MiB each.
+The first revision costs 96 MiB. Where tarmac indexes
+its one pack in LMDB, here every pack is written once under a temporary name,
+indexes itself in a footer, and is renamed into place, which is the rule the
+rest of this page follows. No tree is ever unpacked: a full nixpkgs revision
+costs 19 MB of index over the evaluator's own 75 MB, where unpacking a tree
+cost 307 MB — 13.5 s and 382 MB peak before, 7.7 s and 94 MB after.
+
+The entries name the objects; the sweep removes entries. After a sweep, a
+collection under the store's lock marks every object some entry names,
+removes each pack that holds none of them, and rewrites a pack whose dead
+bytes outweigh its live ones into a new pack. A process that has a pack open
+keeps reading it after the unlink. A fetch that relied on a pack the
+collection removed sees it under the same lock before it publishes, and
+writes those objects itself, from the download it still holds.
 
 One place in the evaluator maps a store path to its bytes, and it serves
 `import`, `readFile`, `readDir`, `pathExists`, `readFileType`, `hashFile`,
 `builtins.path`, `filterSource` and a path interpolation alike, from a real
-file system, from an input-store entry read by `pread` at the index's
-offset, or from memory. `/nix/store` is checked first and wins when it has
+file system, from an input-store entry's objects, or from memory. `/nix/store` is checked first and wins when it has
 the tree; an input that appears there later, because a build registered it,
 changes nothing, since the two hold the same bytes by construction.
 
 This also gives the read set a cheap shape. An input-store entry is one
 observation, not one per file, because the entry's name *is* the NAR hash
 of its tree: a name that is still there still holds the bytes the run read.
-Validating a whole nixpkgs is therefore two stat calls and a version-byte
+Validating a whole nixpkgs is therefore one stat call and a version-byte
 comparison, against the 3,513 file observations the same tree would cost if
 its files were checked one by one. A validated observation also marks the
 entry as used, at most once a day as every other touch is, because a hit

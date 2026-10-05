@@ -194,7 +194,9 @@ reading each file back at its offset. Peak memory is therefore the queue
 plus the index — a few hundred bytes per member and nothing per byte. A full
 nixpkgs revision costs 19 MB of index over the evaluator's own 75 MB, where
 unpacking a tree cost 307 MB: 13.5 s and 382 MB peak before, 7.7 s and
-94 MB after.
+94 MB after. Once the NAR hash matches, every file goes into the input
+store's packs as an object named by the blake3 of its bytes, unless a pack
+already holds it, and the spool is deleted.
 
 The unpacking rules are not the tar's rules; they are the rules of the git
 tree behind a locked input, because that tree is what the lock's `narHash`
@@ -249,12 +251,15 @@ a warm page cache, timing the evaluation alone:
 | `nixpkgs.lib.version` | 0.271 s | 0.238 s |
 | `(import nixpkgs {}).hello.drvPath` | 0.573 s | 0.619 s |
 
-Reading a member is not the cost: it is one `pread` into the caller's
-buffer, against an `open`, an `fstat` and a growing buffer for a file under
-`/nix/store`. The heavier evaluation is in fact 7 % faster out of the spool.
-What the input store charges is opening the entry — 1.7 MB of index for a
-full nixpkgs, read and decoded in 11 ms. That is 4 % of the trivial
-evaluation and 2 % of the heavy one.
+Reading a member is not the cost: it is one `pread`, plus an LZ4
+decompression when the object was stored compressed, against an `open`, an
+`fstat` and a growing buffer for a file under `/nix/store`. The table was
+measured when an entry was a spool; with the packs, the heavier evaluation
+from three nixpkgs revisions in one store takes the time it took from the
+spool, 0.12–0.22 s either way with `--no-cache`. What the input store
+charges is opening the entry — 3.2 MB of index for a full nixpkgs, read and
+decoded in 24–40 ms, where the spool's 1.7 MB index took 12–32 ms on the
+same machine.
 
 Against real Nix, on a NixOS flake with 31 locked inputs and a devShell:
 

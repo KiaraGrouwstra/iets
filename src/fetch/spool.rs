@@ -15,20 +15,23 @@
 //! tests holds the two *walks* — the index and the unpacked tree — to the same
 //! NAR bytes.
 //!
-//! The same index also answers evaluation. `crate::treestore` keeps the spool and
-//! a serialized index in the user-level input store, and every read of a
-//! fetched flake input, `import` included, comes back out of the spool by
-//! offset instead of out of `/nix/store` (docs/reference/flakes.md).
+//! The same index also answers evaluation. `crate::treestore` keeps it, with
+//! every file named by the id of its bytes in the input store's packs instead
+//! of by an offset in the spool, and every read of a fetched flake input,
+//! `import` included, comes back out of those packs instead of out of
+//! `/nix/store` (docs/reference/flakes.md).
 
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::FileExt;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::error::{Error, Result};
 use crate::store::hash::{Hash, HashAlgo};
 use crate::store::nar::{FileType, NAR_MAX_DEPTH, PathFilter, TreeWriter};
+use crate::treestore::pack::{Id, Packs};
 
 /// One directory's entries, in the byte order a NAR wants them. A sorted vector,
 /// not a map: a full nixpkgs holds 38 000 directories of two or three entries
@@ -48,13 +51,28 @@ pub enum Node {
     Symlink(Vec<u8>),
 }
 
-/// Where a file's bytes are: in the spooled archive, or in the side file that
-/// holds the expanded GNU sparse members.
-#[derive(Clone, Copy, Debug)]
-pub struct Blob {
-    offset: u64,
-    size: u64,
-    sparse: bool,
+/// Where a file's bytes are: in the spooled archive, in the side file that
+/// holds the expanded GNU sparse members, or, once the tree is stored, in the
+/// input store's packs under the id of the bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Blob {
+    Spool {
+        offset: u64,
+        size: u64,
+        sparse: bool,
+    },
+    Object {
+        id: Id,
+        size: u64,
+    },
+}
+
+impl Blob {
+    pub fn size(&self) -> u64 {
+        match self {
+            Blob::Spool { size, .. } | Blob::Object { size, .. } => *size,
+        }
+    }
 }
 
 impl Node {
@@ -80,17 +98,22 @@ impl Node {
     }
 }
 
-/// A spooled archive and the index of its members.
+/// An index of members, and where their bytes are.
 #[derive(Debug)]
 pub struct Tree {
-    spool: File,
-    sparse: Option<File>,
+    src: Source,
     root: Node,
+}
+
+#[derive(Debug)]
+enum Source {
+    Spool { spool: File, sparse: Option<File> },
+    Packs(Arc<Packs>),
 }
 
 /// Version byte of the serialized index. A file that starts with anything else
 /// is not read; the entry holding it is wiped (`crate::treestore`).
-pub const INDEX_VERSION: u8 = 2;
+pub const INDEX_VERSION: u8 = 3;
 
 /// Bytes of the checksum the index ends with.
 const SUM: usize = 8;
@@ -100,19 +123,6 @@ const SUM: usize = 8;
 fn checksum(body: &[u8]) -> [u8; SUM] {
     let h = blake3::hash(body);
     h.as_bytes()[..SUM].try_into().expect("eight bytes")
-}
-
-/// Whether every blob the index names lies inside the file it names it in.
-/// `sparse` is the length of the side file, and `None` when there is none.
-fn fits(n: &Node, spool: u64, sparse: Option<u64>) -> bool {
-    match n {
-        Node::Symlink(_) => true,
-        Node::Dir(d) => d.iter().all(|(_, c)| fits(c, spool, sparse)),
-        Node::File { at, .. } => {
-            let len = if at.sparse { sparse } else { Some(spool) };
-            len.is_some_and(|len| at.offset.checked_add(at.size).is_some_and(|e| e <= len))
-        }
-    }
 }
 
 fn bad(why: String) -> Error {
@@ -296,7 +306,7 @@ impl Tree {
                         None => None,
                     };
                     let at = match expanded {
-                        None => Blob {
+                        None => Blob::Spool {
                             offset: entry.raw_file_position(),
                             size: entry.size(),
                             sparse: false,
@@ -319,7 +329,7 @@ impl Tree {
                                     )
                                 },
                             )?;
-                            let at = Blob {
+                            let at = Blob::Spool {
                                 offset: sparse_at,
                                 size,
                                 sparse: true,
@@ -355,30 +365,105 @@ impl Tree {
             insert(&mut root, &parts, copy, false);
         }
         Ok(Tree {
-            spool,
-            sparse,
+            src: Source::Spool { spool, sparse },
             root: Node::Dir(dereference(root)),
         })
     }
 
-    /// A member's bytes, by `pread`: no seek, so two threads may read one tree
-    /// at once.
-    fn source(&self, at: &Blob) -> &File {
-        if at.sparse {
-            self.sparse.as_ref().expect("a sparse side file")
-        } else {
-            &self.spool
+    pub fn stored(root: Node, packs: Arc<Packs>) -> Tree {
+        Tree {
+            src: Source::Packs(packs),
+            root,
         }
     }
 
-    /// A member's bytes as a reader, for the NAR writer to pull through its
-    /// own buffer: nothing holds a member whole.
-    fn blob(&self, at: &Blob) -> Bytes<'_> {
-        Bytes {
-            src: self.source(at),
-            offset: at.offset,
-            left: at.size,
+    pub fn root(&self) -> &Node {
+        &self.root
+    }
+
+    /// Every file's blob, once: a hard link shares its target's.
+    pub fn files(&self) -> Vec<Blob> {
+        fn walk(n: &Node, seen: &mut std::collections::HashSet<Blob>, out: &mut Vec<Blob>) {
+            match n {
+                Node::File { at, .. } => {
+                    if seen.insert(*at) {
+                        out.push(*at);
+                    }
+                }
+                Node::Dir(d) => d.iter().for_each(|(_, c)| walk(c, seen, out)),
+                Node::Symlink(_) => {}
+            }
         }
+        let mut out = Vec::new();
+        walk(&self.root, &mut Default::default(), &mut out);
+        out
+    }
+
+    /// The same tree with every file named by the id of its bytes, which `ids`
+    /// holds for every blob [`Tree::files`] gave.
+    pub fn with_ids(&self, ids: &std::collections::HashMap<Blob, Id>) -> Node {
+        fn walk(n: &Node, ids: &std::collections::HashMap<Blob, Id>) -> Node {
+            match n {
+                Node::File { at, exec } => Node::File {
+                    at: Blob::Object {
+                        id: ids[at],
+                        size: at.size(),
+                    },
+                    exec: *exec,
+                },
+                Node::Symlink(t) => Node::Symlink(t.clone()),
+                Node::Dir(d) => Node::Dir(
+                    d.iter()
+                        .map(|(name, c)| (name.clone(), walk(c, ids)))
+                        .collect(),
+                ),
+            }
+        }
+        walk(&self.root, ids)
+    }
+
+    /// A spool member's file: no seek, so two threads may read one tree at
+    /// once.
+    fn spool_source(&self, sparse: bool) -> &File {
+        match &self.src {
+            Source::Spool {
+                sparse: Some(f), ..
+            } if sparse => f,
+            Source::Spool { spool, .. } => spool,
+            Source::Packs(_) => unreachable!("a spool blob in a stored tree"),
+        }
+    }
+
+    fn object(&self, id: &Id, size: u64) -> io::Result<Vec<u8>> {
+        let Source::Packs(packs) = &self.src else {
+            unreachable!("an object blob in a spool")
+        };
+        let bytes = packs.read(id)?;
+        if bytes.len() as u64 != size {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "an object in the input store is not the size its index says",
+            ));
+        }
+        Ok(bytes)
+    }
+
+    /// A member's bytes as a reader, for the NAR writer to pull through its
+    /// own buffer. A spool member is read a chunk at a time; an object is one
+    /// payload, so it is read whole.
+    fn blob(&self, at: &Blob) -> io::Result<Box<dyn Read + '_>> {
+        Ok(match *at {
+            Blob::Spool {
+                offset,
+                size,
+                sparse,
+            } => Box::new(Bytes {
+                src: self.spool_source(sparse),
+                offset,
+                left: size,
+            }),
+            Blob::Object { id, size } => Box::new(io::Cursor::new(self.object(&id, size)?)),
+        })
     }
     // ---- the accessor evaluation reads through ------------------------------
 
@@ -434,9 +519,17 @@ impl Tree {
     /// `open`, no copy through a staging buffer, so a read of a member costs
     /// less than a read of the same file under `/nix/store`.
     pub fn read(&self, at: &Blob) -> io::Result<Vec<u8>> {
-        let mut out = vec![0u8; at.size as usize];
-        self.source(at)
-            .read_exact_at(&mut out, at.offset)
+        let (offset, size, sparse) = match *at {
+            Blob::Spool {
+                offset,
+                size,
+                sparse,
+            } => (offset, size, sparse),
+            Blob::Object { id, size } => return self.object(&id, size),
+        };
+        let mut out = vec![0u8; size as usize];
+        self.spool_source(sparse)
+            .read_exact_at(&mut out, offset)
             .map_err(|_| io::Error::other("the spooled tarball is truncated"))?;
         Ok(out)
     }
@@ -488,7 +581,7 @@ impl Tree {
             )));
         }
         match n {
-            Node::File { at, exec } => w.regular(*exec, at.size, &mut self.blob(at)),
+            Node::File { at, exec } => w.regular(*exec, at.size(), &mut self.blob(at)?),
             Node::Symlink(target) => w.symlink(target),
             Node::Dir(d) => {
                 w.dir()?;
@@ -511,106 +604,58 @@ impl Tree {
             }
         }
     }
+}
 
-    // ---- the persisted index -----------------------------------------------
+/// Serializes a stored index: the NAR hash and size the fetch verified against
+/// the lock, so no reader ever hashes the tree again, then the tree with every
+/// file named by its object id. Ends with its own checksum.
+pub fn encode_index(root: &Node, nar: (&Hash, u64)) -> Vec<u8> {
+    let mut e = Vec::with_capacity(1 << 16);
+    e.push(INDEX_VERSION);
+    put_bytes(&mut e, nar.0.algo.name().as_bytes());
+    put_bytes(&mut e, nar.0.bytes());
+    put_u64(&mut e, nar.1);
+    put_node(&mut e, root);
+    e.extend_from_slice(&checksum(&e));
+    e
+}
 
-    /// Writes `index` into `dir`, and the expanded sparse members beside it when
-    /// the archive had any. The spool itself is `dir/spool`, written by the
-    /// caller as the download arrived. `nar` is the NAR hash and size the fetch
-    /// verified against the lock, so no reader ever hashes the tree again.
-    pub fn persist(&self, dir: &Path, nar: (&Hash, u64)) -> io::Result<()> {
-        if let Some(sparse) = &self.sparse {
-            let mut src = sparse.try_clone()?;
-            src.rewind()?;
-            let mut out = File::create(dir.join(SPARSE))?;
-            io::copy(&mut src, &mut out)?;
-            out.sync_all()?;
-        }
-        let bytes = self.encode_index(self.spool.metadata()?.len(), nar);
-        std::fs::write(dir.join(INDEX), bytes)
+/// The tree, NAR hash and NAR size a stored index holds. `None` on anything
+/// unexpected, so the caller wipes the entry rather than repairing it.
+pub fn decode_index(bytes: &[u8]) -> Option<(Node, Hash, u64)> {
+    let body = bytes.len().checked_sub(SUM)?;
+    if checksum(&bytes[..body]) != bytes[body..] {
+        return None;
     }
-
-    fn encode_index(&self, spool_len: u64, nar: (&Hash, u64)) -> Vec<u8> {
-        let mut e = Vec::with_capacity(1 << 16);
-        e.push(INDEX_VERSION);
-        put_bytes(&mut e, nar.0.bytes());
-        put_u64(&mut e, nar.1);
-        put_u64(&mut e, spool_len);
-        match &self.sparse {
-            Some(f) => {
-                e.push(1);
-                put_u64(&mut e, f.metadata().map_or(0, |m| m.len()));
-            }
-            None => e.push(0),
-        }
-        put_node(&mut e, &self.root);
-        e.extend_from_slice(&checksum(&e));
-        e
+    let mut d = Idx {
+        b: &bytes[..body],
+        i: 0,
+    };
+    if d.u8()? != INDEX_VERSION {
+        return None;
     }
+    let algo = HashAlgo::parse(std::str::from_utf8(&d.bytes()?).ok()?)?;
+    let nar_hash = Hash::from_bytes(algo, &d.bytes()?).ok()?;
+    let nar_size = d.u64()?;
+    let root = get_node(&mut d, 0)?;
+    (d.i == body).then_some((root, nar_hash, nar_size))
+}
 
-    /// Reopens a persisted entry: the spool, its sparse side file and the index,
-    /// with the NAR hash and size the fetch recorded. `None` on anything
-    /// unexpected, so the caller wipes the entry rather than repairing it.
-    pub fn reopen(dir: &Path) -> Option<(Tree, Hash, u64)> {
-        let bytes = std::fs::read(dir.join(INDEX)).ok()?;
-        let body = bytes.len().checked_sub(SUM)?;
-        if checksum(&bytes[..body]) != bytes[body..] {
-            return None;
-        }
-        let mut d = Idx {
-            b: &bytes[..body],
-            i: 0,
-        };
-        if d.u8()? != INDEX_VERSION {
-            return None;
-        }
-        let nar_hash = Hash::from_bytes(HashAlgo::Sha256, &d.bytes()?).ok()?;
-        let nar_size = d.u64()?;
-        let spool_len = d.u64()?;
-        let sparse_len = match d.u8()? {
-            0 => None,
-            1 => Some(d.u64()?),
-            _ => return None,
-        };
-        let root = get_node(&mut d, 0)?;
-        if d.i != body {
-            return None;
-        }
-        let spool = File::open(dir.join(SPOOL)).ok()?;
-        if spool.metadata().ok()?.len() != spool_len {
-            return None;
-        }
-        let sparse = match sparse_len {
-            None => None,
-            Some(len) => {
-                let f = File::open(dir.join(SPARSE)).ok()?;
-                if f.metadata().ok()?.len() != len {
-                    return None;
-                }
-                Some(f)
-            }
-        };
-        if !fits(&root, spool_len, sparse_len) {
-            return None;
-        }
-        Some((
-            Tree {
-                spool,
-                sparse,
-                root,
-            },
-            nar_hash,
-            nar_size,
-        ))
+pub fn object_ids(n: &Node, out: &mut impl Extend<Id>) {
+    match n {
+        Node::File {
+            at: Blob::Object { id, .. },
+            ..
+        } => out.extend([*id]),
+        Node::Dir(d) => d.iter().for_each(|(_, c)| object_ids(c, out)),
+        Node::File { .. } | Node::Symlink(_) => {}
     }
 }
 
-/// The three files a persisted entry holds.
+/// The file the download is spooled into, in a staged directory of the store.
 pub const SPOOL: &str = "spool";
-pub const INDEX: &str = "index";
-pub const SPARSE: &str = "sparse";
 
-/// The spool of a staged entry, created for writing and kept for reading.
+/// The spool of a staged download, created for writing and read back to store it.
 pub fn spool_file(dir: &Path) -> io::Result<File> {
     File::options()
         .read(true)
@@ -648,10 +693,13 @@ fn put_node(e: &mut Vec<u8>, n: &Node) {
             }
         }
         Node::File { at, exec } => {
+            let Blob::Object { id, size } = at else {
+                unreachable!("an index is stored once its files are objects")
+            };
             e.push(1);
-            e.push(u8::from(*exec) | (u8::from(at.sparse) << 1));
-            put_u64(e, at.offset);
-            put_u64(e, at.size);
+            e.push(u8::from(*exec));
+            e.extend_from_slice(id);
+            put_u64(e, *size);
         }
         Node::Symlink(t) => {
             e.push(2);
@@ -718,13 +766,14 @@ fn get_node(d: &mut Idx<'_>, depth: usize) -> Option<Node> {
         }
         1 => {
             let flags = d.u8()?;
+            if flags > 1 {
+                return None;
+            }
+            let id: Id = d.b.get(d.i..d.i + 32)?.try_into().ok()?;
+            d.i += 32;
             Node::File {
-                at: Blob {
-                    offset: d.u64()?,
-                    size: d.u64()?,
-                    sparse: flags & 2 != 0,
-                },
-                exec: flags & 1 != 0,
+                at: Blob::Object { id, size: d.u64()? },
+                exec: flags == 1,
             }
         }
         2 => Node::Symlink(d.bytes()?),
@@ -1152,34 +1201,93 @@ mod tests {
         assert_eq!(unknown, want, "an unknown type flag is a regular file");
     }
 
+    /// The tree as the store keeps it: its files as objects in a pack under
+    /// `dir`, and the index naming them.
+    fn stored(dir: &Path, tree: &Tree) -> (Tree, Vec<u8>) {
+        let mut w = crate::treestore::pack::PackWriter::new(dir).unwrap();
+        let mut ids = std::collections::HashMap::new();
+        for at in tree.files() {
+            let bytes = tree.read(&at).unwrap();
+            let id = crate::treestore::pack::id_of(&bytes);
+            w.add(id, &bytes).unwrap();
+            ids.insert(at, id);
+        }
+        let root = tree.with_ids(&ids);
+        w.finish().unwrap();
+        let mut h = crate::store::hash::Hasher::new(HashAlgo::Sha256);
+        tree.dump(&mut h).unwrap();
+        let (size, hash) = (h.bytes_written(), h.finish());
+        let index = encode_index(&root, (&hash, size));
+        let packs = Arc::new(Packs::open(dir));
+        (Tree::stored(root, packs), index)
+    }
+
+    fn spooled(entries: &[(&str, tar::EntryType, u32, &[u8])]) -> Tree {
+        let plain = crate::fetch::http::decompress(tar_gz(entries)).unwrap();
+        let mut spool = scratch("test").unwrap();
+        spool.write_all(&plain).unwrap();
+        Tree::index(spool, u64::MAX).unwrap()
+    }
+
+    fn tmp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("iets-spool-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A stored tree is the tree that was fetched: the same NAR, member for
+    /// member, and the same answers to a read. Two members with one content
+    /// are one object.
+    #[test]
+    fn a_stored_tree_dumps_the_spools_nar() {
+        let dir = tmp_dir("stored");
+        let long = vec![b'z'; 10_000];
+        let tree = spooled(&[
+            ("t/", DIR, 0o755, b""),
+            ("t/a", REG, 0o644, b"same"),
+            ("t/sub/", DIR, 0o755, b""),
+            ("t/sub/b", REG, 0o755, b"same"),
+            ("t/sub/long", REG, 0o644, &long),
+            ("t/empty", REG, 0o644, b""),
+            ("t/l", SYM, 0o777, b"sub/b"),
+        ]);
+        let (back, index) = stored(&dir, &tree);
+        let (mut want, mut got) = (Vec::new(), Vec::new());
+        tree.dump(&mut want).unwrap();
+        back.dump(&mut got).unwrap();
+        assert_eq!(got, want);
+        let Some(Node::File { at, .. }) = back.resolve(b"l", true) else {
+            panic!("the symlink resolves to a file")
+        };
+        assert_eq!(back.read(at).unwrap(), b"same");
+        let mut ids = std::collections::HashSet::new();
+        let (root, _, _) = decode_index(&index).expect("the index decodes");
+        object_ids(&root, &mut ids);
+        assert_eq!(
+            ids.len(),
+            3,
+            "\"same\" twice, the long file and the empty one"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// No byte of a stored index is believed on its own: one flipped byte is a
     /// miss, never a crash and never a tree that is not the one stored.
     #[test]
     fn a_changed_index_byte_is_a_miss() {
-        let dir = std::env::temp_dir().join(format!("iets-spool-reopen-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let plain = crate::fetch::http::decompress(tar_gz(&[
+        let dir = tmp_dir("index");
+        let tree = spooled(&[
             ("t/", DIR, 0o755, b""),
             ("t/f", REG, 0o644, b"x"),
             ("t/l", SYM, 0o777, b"f"),
-        ]))
-        .unwrap();
-        let mut spool = spool_file(&dir).unwrap();
-        spool.write_all(&plain).unwrap();
-        let tree = Tree::index(spool, u64::MAX).unwrap();
-        let mut h = crate::store::hash::Hasher::new(HashAlgo::Sha256);
-        tree.dump(&mut h).unwrap();
-        let (size, hash) = (h.bytes_written(), h.finish());
-        tree.persist(&dir, (&hash, size)).unwrap();
-        assert!(Tree::reopen(&dir).is_some());
-
-        let good = std::fs::read(dir.join(INDEX)).unwrap();
+        ]);
+        let (_, good) = stored(&dir, &tree);
+        assert!(decode_index(&good).is_some());
         for i in 0..good.len() {
             let mut broken = good.clone();
             broken[i] ^= 0xff;
-            std::fs::write(dir.join(INDEX), &broken).unwrap();
-            assert!(Tree::reopen(&dir).is_none(), "byte {i} was believed");
+            assert!(decode_index(&broken).is_none(), "byte {i} was believed");
         }
         std::fs::remove_dir_all(&dir).unwrap();
     }
