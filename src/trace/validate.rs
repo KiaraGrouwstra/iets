@@ -244,7 +244,6 @@ pub fn validate(obs: &mut [Obs], threads: usize) -> Result<Report, Mismatch> {
         for _ in 0..threads {
             s.spawn(crate::session::bind(|| {
                 let mut mine = Vec::new();
-                // one listing buffer per thread, reused for every directory it checks
                 let mut dirs = DirBuf::default();
                 loop {
                     if failed.load(Ordering::Relaxed) {

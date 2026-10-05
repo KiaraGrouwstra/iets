@@ -80,7 +80,7 @@ fn mkdir(at: &Path) -> Result<()> {
 }
 
 #[cfg(test)]
-/// Whatever is at `at` goes away, whichever type it has.
+/// Whatever is at `at` goes away, unless it is a directory.
 fn clear(at: &Path) -> Result<()> {
     match std::fs::symlink_metadata(at) {
         Err(_) => Ok(()),

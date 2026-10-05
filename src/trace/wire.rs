@@ -154,8 +154,6 @@ impl<'a> Dec<'a> {
     }
 }
 
-// ---- read set --------------------------------------------------------------
-
 fn put_obs(e: &mut Enc, o: &Obs) {
     match o {
         Obs::File {
@@ -350,8 +348,6 @@ pub fn decode_readset(b: &[u8]) -> Option<Vec<Obs>> {
     d.done().then_some(v)
 }
 
-// ---- derivations -----------------------------------------------------------
-
 /// Every drv this evaluation produced (the ones with an ATerm); drvs read from
 /// `/nix/store` are re-read by the planner.
 pub fn encode_drvs(drvs: &HashMap<StorePath, DrvInfo>) -> Vec<u8> {
@@ -421,8 +417,6 @@ pub fn decode_drvs(b: &[u8]) -> Option<HashMap<StorePath, DrvInfo>> {
     }
     d.done().then_some(m)
 }
-
-// ---- sources ---------------------------------------------------------------
 
 pub fn encode_sources(sources: &HashMap<StorePath, SourceOrigin>) -> Vec<u8> {
     let mut e = Enc::new();
@@ -550,8 +544,6 @@ pub fn decode_sources(b: &[u8]) -> Option<HashMap<StorePath, SourceOrigin>> {
     }
     d.done().then_some(m)
 }
-
-// ---- build result ----------------------------------------------------------
 
 /// The roots `iets build` resolved: drv path and the output named by context.
 pub fn encode_roots(roots: &[(StorePath, Option<String>)]) -> Vec<u8> {

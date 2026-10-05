@@ -50,11 +50,6 @@ impl Cache {
         }
     }
 
-    /// Validates the stored read set; true on a hit. A hit that refreshed
-    /// stat fields publishes the entry again with the new read set. An entry
-    /// that existed and no longer holds reports what changed; a run with no
-    /// entry says nothing, because a first run invalidated nothing.
-    ///
     /// Where this run's entry lives, for a caller that hands the entry to
     /// `iets cache paths` instead of deriving the key again. The file need
     /// not exist yet: a first run names the entry it is about to write.
@@ -64,6 +59,11 @@ impl Cache {
             .join(crate::trace::store::ENTRY)
     }
 
+    /// Validates the stored read set; true on a hit. A hit that refreshed
+    /// stat fields publishes the entry again with the new read set. An entry
+    /// that existed and no longer holds reports what changed; a run with no
+    /// entry says nothing, because a first run invalidated nothing.
+    ///
     /// The entry is opened once per [`Cache`], as one run looks its key up
     /// once: everything this run replays comes from that one generation.
     pub fn lookup(&self) -> bool {
