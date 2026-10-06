@@ -103,27 +103,21 @@ pub fn dir_copy_unfiltered(ev: &mut Evaluator, path: &[u8], pos: Pos) -> EvalRes
     })
 }
 
-/// The nearest ancestor of `path` (or `path`) that holds a `flake.nix`.
-/// Every probe is a `Stat` observation, so a new `flake.nix` is a cache miss.
-fn flake_root_of(ev: &Evaluator, path: &[u8]) -> Option<Vec<u8>> {
-    let mut dir = crate::compile::canon_path(path);
-    loop {
-        let mut probe = dir.clone();
-        probe.extend_from_slice(b"/flake.nix");
-        if ev.trace().stat_now(&probe, true) == crate::trace::Kind::Regular {
-            return Some(dir);
-        }
-        let i = dir.iter().rposition(|&b| b == b'/')?;
-        if i == 0 {
-            return None;
-        }
-        dir.truncate(i);
-    }
+/// The nearest project root at or above `path` (`crate::project`). Every
+/// probe is a `Stat` observation, so a new marker is a cache miss.
+fn project_root_of(ev: &Evaluator, path: &[u8]) -> Option<Vec<u8>> {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let dir = crate::compile::canon_path(path);
+    let at = std::path::Path::new(std::ffi::OsStr::from_bytes(&dir));
+    let root = crate::project::find_with(at, |m| {
+        ev.trace().stat_now(m.as_os_str().as_bytes(), true) != crate::trace::Kind::Missing
+    })?;
+    Some(root.into_os_string().into_vec())
 }
 
 /// Derivation `drv_name` received attribute `key` whose value carries the
 /// text of the non-store path `path`: `absolute-path-in-drv` under a
-/// flake root, `impure-path-in-drv` elsewhere.
+/// project root, `impure-path-in-drv` elsewhere.
 fn path_in_drv(
     ev: &mut Evaluator,
     drv_name: &str,
@@ -131,12 +125,13 @@ fn path_in_drv(
     path: &[u8],
     attr_pos: Pos,
 ) -> EvalResult<()> {
-    match flake_root_of(ev, path) {
-        Some(root) => ev.lint(LintId::AbsolutePathInDrv, attr_pos, || {
+    match project_root_of(ev, path) {
+        // the root is not in the message: it is the working tree, which the
+        // reader is in, and naming it makes the text differ per checkout
+        Some(_) => ev.lint(LintId::AbsolutePathInDrv, attr_pos, || {
             format!(
-                "derivation '{drv_name}': attribute '{key}' holds the absolute path '{}' of the flake at '{}'; interpolate the path to copy it, or pass a relative name",
-                String::from_utf8_lossy(path),
-                String::from_utf8_lossy(&root)
+                "derivation '{drv_name}': attribute '{key}' holds the absolute path '{}' of this project; interpolate the path to copy it, or pass a relative name",
+                String::from_utf8_lossy(path)
             )
         }),
         None => ev.lint(LintId::ImpurePathInDrv, attr_pos, || {

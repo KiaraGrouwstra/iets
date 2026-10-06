@@ -10,6 +10,60 @@ Scope and the exact reference syntax are in
 leaves out are in
 [reference/divergences.md](../reference/divergences.md).
 
+## A project with no flake
+
+A native command evaluates purely, whether or not a flake is involved
+(`reference/settings.md`). Pure evaluation reads a file only under a store
+path the evaluation allowed, so an entry file that is not a flake would have
+nothing to read, its own text included. iets therefore gives such a run a
+**project**, found by walking up from the entry file (`src/project.rs`). A
+pure evaluation reads below it.
+
+Three markers answer, and each says something different, so each is weighed
+differently:
+
+| marker | weight | why |
+|:---|:---|:---|
+| a working tree | the nearest one wins over everything below it | the repository is the unit the code lives in, so a subdirectory marker must not stop a sibling directory from being read |
+| `flake.nix` | the nearest one, when there is no working tree | it claims a boundary: Nix makes that directory a tree. An unpacked tarball or a store copy of a checkout lands here |
+| `iets.toml` | the outermost one, and only when neither above answers | it claims nothing. It sets lint levels for what is below it, a project may hold several, and a deep one must not shrink the root |
+
+With no marker at all, the entry file's own directory is the project, so a
+one-off expression in a scratch directory still evaluates.
+
+A working tree is the one `source::scm` knows, the same detection the root
+flake of a flake reference goes through ("The root flake is your working
+tree"), so git is the one SCM that marks a root today and iets gains the
+next one in one place.
+
+The project is an **allow list, not a copy of a tree**. Nothing is hashed,
+nothing is staged, and a path keeps naming the checkout: `toString ./x` is
+`/home/me/repo/x`, and so are the positions in an error. The file set is
+not filtered either, so an untracked or ignored file reads like any other —
+the thing a flake refuses, and the reason a scratch file in a repository is
+not a special case here.
+
+Two consequences, both deliberate, both in
+[reference/divergences.md](../reference/divergences.md):
+
+- Under a flake, `toString ./x` is a store path, because the root tree is a
+  virtual store copy. Under a project it is the checkout path.
+- `"${./x}"` copies that one path, not a slice of a tree copy, so the store
+  path it gives differs from the one the same tree gives as a flake.
+
+What the checkout location can really break is a derivation, and that is
+where the check sits: a string that carries the text of a non-store path
+reaches `derivationStrict` marked, and `impure-path-in-drv` (outside a
+project) or `absolute-path-in-drv` (inside one) reports the attribute that
+holds it. Both are errors by default (`reference/lints.md`). A read cannot
+make a `.drv` depend on where the repository lives; only an attribute can.
+
+A flake reference gets no project. Its root tree is already a virtual copy
+whose filter is the tracked file set, and a second, unfiltered root would
+let the evaluation read an untracked file by its absolute path. The classic
+names get none either: each one answers like the real nix, `--pure-eval`
+included (`reference/classic.md`).
+
 ## What is in scope, and why
 
 `iets eval --raw DIR#attr.path` prints what

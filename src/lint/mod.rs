@@ -154,9 +154,9 @@ registry! {
     Fod: "fod", Purity, Evaluator, Off, "a fixed-output derivation; the message names the derivation and its hash mode";
     LargeSourceCopy: "large-source-copy", Purity, Evaluator, Off, "a path copy whose NAR exceeds `max-bytes` (default 8 MiB)";
     GitInSource: "git-in-source", Purity, Evaluator, Warn, "a path copy of a directory that contains a `.git` entry";
-    DirCopyUnfiltered: "dir-copy-unfiltered", Purity, Evaluator, Off, "a directory coerced to a string is copied whole, untracked and ignored files included; use `builtins.path` with a filter";
-    ImpurePathInDrv: "impure-path-in-drv", Purity, Evaluator, Off, "a derivation attribute holds the text of a path outside the store and outside any flake root (`toString ./x`), so the .drv depends on the checkout location";
-    AbsolutePathInDrv: "absolute-path-in-drv", Purity, Evaluator, Off, "a derivation attribute holds the text of a path under a flake root, an absolute path a flake evaluation would have copied";
+    DirCopyUnfiltered: "dir-copy-unfiltered", Purity, Evaluator, Warn, "a directory coerced to a string is copied whole, untracked and ignored files included; use `builtins.path` with a filter";
+    ImpurePathInDrv: "impure-path-in-drv", Purity, Evaluator, Error, "a derivation attribute holds the text of a path outside the store and outside any project root (`toString ./x`), so the .drv depends on the checkout location";
+    AbsolutePathInDrv: "absolute-path-in-drv", Purity, Evaluator, Error, "a derivation attribute holds the text of a path under a project root, an absolute path a flake evaluation would have copied";
     TreeMetaInDrv: "tree-meta-in-drv", Purity, Evaluator, Warn, "a derivation attribute holds metadata of the flake's source tree (`self.rev`, `self.lastModifiedDate`, ...), so each commit gives a new .drv and a rebuild; a locked input is silent without `[lint.inputs.<node>]`";
     RevCount: "rev-count", Purity, Evaluator, Warn, "the evaluation reads `revCount` of the flake's source tree, which is deprecated: the count is expensive, a shallow clone has none, and each commit changes it; use `lastModifiedDate` and `shortRev`; a locked input is silent without `[lint.inputs.<node>]`";
     UnknownAllow: "unknown-allow", Meta, Parser, Warn, "a `# iets: allow` comment that names a lint the registry does not know, so a typo does not silence nothing";
@@ -668,21 +668,19 @@ fn level_char(l: Level) -> char {
 }
 
 /// The nearest project `iets.toml` at or above `start`, stopping at the
-/// project root. The walk must not leave the project: a world-writable
-/// `/tmp/iets.toml` would otherwise set a lint level for every evaluation
-/// below it, and the file is untrusted input (`settings::check_project`).
-/// A directory that holds `.git` or `flake.nix` is the root.
+/// project root (`crate::project`). The walk must not leave the project: a
+/// world-writable `/tmp/iets.toml` would otherwise set a lint level for
+/// every evaluation below it, and the file is untrusted input
+/// (`settings::check_project`).
 pub fn find_config_file(start: &Path) -> Option<PathBuf> {
+    let root = crate::project::find(start)?;
     let mut dir = start.to_path_buf();
     loop {
         let f = dir.join("iets.toml");
         if f.is_file() {
             return Some(f);
         }
-        if dir.join(".git").exists() || dir.join("flake.nix").is_file() {
-            return None;
-        }
-        if !dir.pop() {
+        if dir == root || !dir.pop() {
             return None;
         }
     }
