@@ -33,6 +33,11 @@ Any other store URL is the usage error `unsupported builder 'URL':
 expected daemon, unix:///path, ssh-ng://[user@]host or grpc://host:port`,
 and under a classic name it falls back to the real nix.
 
+One URL at a time: `Dispatcher` holds one backend, and nix.conf `builders`
+goes to the daemon in the `SetOptions` override map, so placement across
+machines happens inside the daemon. `docs/executors-proposal.md` is what
+letting iets place it would take.
+
 ## What the client ships
 
 - Every derivation the evaluation created is in `Evaluator::drv.drvs`
