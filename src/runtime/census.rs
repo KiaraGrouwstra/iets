@@ -93,6 +93,17 @@ pub struct Census {
     pub job_scopes: [u64; 4],
 }
 
+/// `bucket=count` for every bucket that is not empty.
+fn by_bucket(counts: &[u64]) -> String {
+    counts
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| **c > 0)
+        .map(|(i, c)| format!("{}={}", SIZE_BUCKETS[i], c))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 impl Census {
     /// Open an escape-tracking scope at `bytes` allocated; false when one
     /// is already open (nested scopes are not tracked).
@@ -245,13 +256,7 @@ impl Census {
             out,
             "envs never captured by a thunk, closure or child env ({} bytes); by slots: {}",
             env_uncaptured_bytes,
-            env_uncaptured_by
-                .iter()
-                .enumerate()
-                .filter(|(_, c)| **c > 0)
-                .map(|(i, c)| format!("{}={}", SIZE_BUCKETS[i], c))
-                .collect::<Vec<_>>()
-                .join(" ")
+            by_bucket(&env_uncaptured_by)
         );
         let _ = writeln!(
             out,
@@ -259,13 +264,7 @@ impl Census {
             env_unread,
             self.envs.len(),
             env_unread_bytes,
-            env_unread_by
-                .iter()
-                .enumerate()
-                .filter(|(_, c)| **c > 0)
-                .map(|(i, c)| format!("{}={}", SIZE_BUCKETS[i], c))
-                .collect::<Vec<_>>()
-                .join(" ")
+            by_bucket(&env_unread_by)
         );
         let _ = writeln!(out, "attrsets by producer and size (counts):");
         let _ = write!(out, "  {:>12}", "");
