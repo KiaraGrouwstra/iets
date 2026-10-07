@@ -835,25 +835,7 @@ mod tests {
     #[test]
     fn the_timings_report_with_every_line() {
         let t = Timings {
-            common: crate::build::backend::Timings {
-                connect: Duration::from_millis(1),
-                query: Duration::from_millis(2),
-                resolve: Duration::from_millis(3),
-                substitute: Duration::from_millis(4),
-                add: Duration::from_millis(5),
-                build: Duration::from_millis(6),
-                outputs: Duration::from_millis(7),
-                fetch: Duration::from_millis(8),
-                trusted: Some(true),
-                query_paths: 9,
-                missing: 8,
-                resolve_paths: 7,
-                store_sources: 6,
-                substitute_paths: 5,
-                add_paths: 4,
-                add_bytes: 3,
-                fetched: 2,
-            },
+            common: crate::build::backend::tests::every_timing(),
             drvs: 11,
             drvs_cached: 10,
             calls: 12,

@@ -502,13 +502,13 @@ fn base_name(path: String) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::super::tests::drv;
     use super::*;
 
-    #[test]
-    fn the_timings_report_with_every_line() {
-        let t = Timings {
+    /// Every field set, so that `report` leaves no line out.
+    pub(crate) fn every_timing() -> Timings {
+        Timings {
             connect: Duration::from_millis(1),
             query: Duration::from_millis(2),
             resolve: Duration::from_millis(3),
@@ -526,7 +526,12 @@ mod tests {
             add_paths: 4,
             add_bytes: 3,
             fetched: 2,
-        };
+        }
+    }
+
+    #[test]
+    fn the_timings_report_with_every_line() {
+        let t = every_timing();
         let stats = Stats {
             ops: 1,
             round_trips: 2,
