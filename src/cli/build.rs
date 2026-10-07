@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use crate::api::installable::roots_of;
 use crate::build::fixhash::{self, Answer};
-use crate::cli::help::{arg_error, value};
+use crate::cli::help::{arg_error, each_arg};
 use crate::cli::{EvalArgs, Input, Run, build_targets, evaluate, parse_eval_args, report, run_for};
 use crate::error::Error as CrateError;
 use crate::eval::Evaluator;
@@ -94,33 +94,24 @@ fn parse(argv: &[String]) -> (BuildArgs, EvalArgs) {
         root_key: Vec::new(),
     };
     let mut rest: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i < argv.len() {
-        let s = argv[i].as_str();
-        let mut next = || {
-            i += 1;
-            value(argv, i, s).clone()
-        };
-        match s {
-            "--builder" => b.url = Some(next()),
-            "--timings" => b.timings = true,
-            "--no-build" => b.no_build = true,
-            "--dry-run" => b.dry_run = true,
-            "--json" => b.json = true,
-            "-k" | "--keep-going" => b.keep_going = true,
-            "--fetch-to" => b.fetch_to = Some(next().into()),
-            "--out" => b.outputs.push(next()),
-            "--source" => {
-                let spec = next();
-                let Some((store, local)) = spec.split_once('=') else {
-                    arg_error(format!("--source wants STOREPATH=LOCAL, got '{spec}'"))
-                };
-                b.sources.insert(store.to_string(), local.into());
-            }
-            s => rest.push(s.to_string()),
+    each_arg(argv, |s, next| match s {
+        "--builder" => b.url = Some(next()),
+        "--timings" => b.timings = true,
+        "--no-build" => b.no_build = true,
+        "--dry-run" => b.dry_run = true,
+        "--json" => b.json = true,
+        "-k" | "--keep-going" => b.keep_going = true,
+        "--fetch-to" => b.fetch_to = Some(next().into()),
+        "--out" => b.outputs.push(next()),
+        "--source" => {
+            let spec = next();
+            let Some((store, local)) = spec.split_once('=') else {
+                arg_error(format!("--source wants STOREPATH=LOCAL, got '{spec}'"))
+            };
+            b.sources.insert(store.to_string(), local.into());
         }
-        i += 1;
-    }
+        s => rest.push(s.to_string()),
+    });
     let a = parse_eval_args(&rest);
     b.root_key = root_key(&a);
     (b, a)

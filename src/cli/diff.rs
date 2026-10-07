@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::api::installable::drv_roots;
-use crate::cli::help::{arg_error, unknown_flag, value};
+use crate::cli::help::{arg_error, each_arg, unknown_flag};
 use crate::cli::{EvalArgs, EvalFlags, Input, Run, eval_flag, evaluate, report};
 use crate::error::{Error, Result};
 use crate::store::drv::{Derivation, DrvError, load_derivation_from_store};
@@ -54,13 +54,7 @@ fn parse(argv: &[String]) -> (Opts, Vec<Side>) {
     let mut f = EvalFlags::default();
     let mut pos: Vec<String> = Vec::new();
     let mut expr: Option<String> = None;
-    let mut i = 0;
-    while i < argv.len() {
-        let s = argv[i].as_str();
-        let mut next = || {
-            i += 1;
-            value(argv, i, s).clone()
-        };
+    each_arg(argv, |s, next| {
         match s {
             _ if eval_flag(&mut f, s, || Ok(next())).unwrap_or_else(|e| arg_error(e)) => {}
             "--json" => o.json = true,
@@ -79,8 +73,7 @@ fn parse(argv: &[String]) -> (Opts, Vec<Side>) {
             _ if s.starts_with('-') && s != "-" => unknown_flag(s),
             _ => pos.push(s.to_string()),
         }
-        i += 1;
-    }
+    });
     let _ = crate::config::Config::load_native(&f.overrides);
     // one side: the positional `p` (a .drv in the store, a flake reference
     // or a file), or `-E EXPR`, with the attribute `attr` selected

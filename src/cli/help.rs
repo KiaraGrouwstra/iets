@@ -396,6 +396,19 @@ pub fn value<'a>(argv: &'a [String], i: usize, flag: &str) -> &'a String {
         .unwrap_or_else(|| arg_error(format!("{flag} needs {wants}")))
 }
 
+/// Calls `f` with each argument; `next` takes the one after it as its value.
+pub fn each_arg(argv: &[String], mut f: impl FnMut(&str, &mut dyn FnMut() -> String)) {
+    let mut i = 0;
+    while i < argv.len() {
+        let s = argv[i].as_str();
+        f(s, &mut || {
+            i += 1;
+            value(argv, i, s).clone()
+        });
+        i += 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

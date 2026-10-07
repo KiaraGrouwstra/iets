@@ -19,7 +19,7 @@ pub mod prefetch;
 pub mod render;
 pub mod search;
 
-use help::{arg_error, value};
+use help::{arg_error, each_arg};
 
 use crate::eval::{Error, Evaluator};
 use crate::runtime::Word;
@@ -128,19 +128,13 @@ pub fn cache_flag(a: &mut EvalArgs, s: &str, mut next: impl FnMut() -> String) -
 pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
     let mut a = EvalArgs::new();
     let mut f = EvalFlags::default();
-    let mut i = 0;
-    while i < argv.len() {
-        let s = argv[i].as_str();
-        let mut next = || {
-            i += 1;
-            value(argv, i, s).clone()
-        };
+    each_arg(argv, |s, next| {
         match s {
             _ if eval_flag(&mut f, s, || Ok(next())).unwrap_or_else(|e| arg_error(e)) => {}
             "--strict" => a.strict = true,
             "--json" => a.json = true,
             "--raw" => a.raw = true,
-            _ if cache_flag(&mut a, s, &mut next) => {}
+            _ if cache_flag(&mut a, s, &mut *next) => {}
             "--timings" => a.timings = true,
             "-E" | "--expr" => {
                 let e = next();
@@ -185,8 +179,7 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
             _ if s.starts_with('-') && s != "-" => help::unknown_flag(s),
             _ => set_positional(&mut a, s),
         }
-        i += 1;
-    }
+    });
     // for its warnings, and for the session's copy that the fetcher reads
     if let Err(e) = crate::config::Config::load_native(&f.overrides) {
         std::process::exit(e.report())
@@ -247,22 +240,13 @@ pub fn cmd_lint(argv: &[String]) -> i32 {
         w => help::unknown_subcommand(w, &["list"]),
     }
     let mut a = EvalArgs::new();
-    let mut i = 1;
-    while i < argv.len() {
-        let s = argv[i].as_str();
-        let mut next = || {
-            i += 1;
-            value(argv, i, s).clone()
-        };
-        match s {
-            "--lint" => a.lints.push(parse_lint_flag(&next())),
-            "--lint-root" => a.lint_roots.push(next()),
-            "--lint-scope" => a.lint_scope = Some(parse_lint_scope(&next())),
-            s if s.starts_with('-') => help::unknown_flag(s),
-            s => a.input = Some(Input::File(s.to_string())),
-        }
-        i += 1;
-    }
+    each_arg(&argv[1..], |s, next| match s {
+        "--lint" => a.lints.push(parse_lint_flag(&next())),
+        "--lint-root" => a.lint_roots.push(next()),
+        "--lint-scope" => a.lint_scope = Some(parse_lint_scope(&next())),
+        s if s.starts_with('-') => help::unknown_flag(s),
+        s => a.input = Some(Input::File(s.to_string())),
+    });
     match crate::api::lint_config(&a) {
         Ok(c) => {
             render::bytes(crate::lint::list(&c).as_bytes());

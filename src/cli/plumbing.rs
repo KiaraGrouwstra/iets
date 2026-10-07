@@ -8,7 +8,7 @@ use crate::api::installable::{self, Prefixes, Want, drv_roots};
 use crate::api::render::Report;
 use crate::build::Target;
 use crate::build::render::Style;
-use crate::cli::help::{self, arg_error, value};
+use crate::cli::help::{self, arg_error, each_arg};
 use crate::cli::{EvalArgs, Input, evaluate, parse_eval_args, report, run_for};
 use crate::error::Error as CrateError;
 use crate::eval::{Error, Evaluator};
@@ -128,49 +128,40 @@ fn resolve(argv: &[String]) -> i32 {
         drvs: true,
     };
     let mut rest: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i < argv.len() {
-        let s = argv[i].as_str();
-        let mut next = || {
-            i += 1;
-            value(argv, i, s).clone()
-        };
-        match s {
-            "--prefixes" => {
-                let v = next();
-                o.prefixes = match v.as_str() {
-                    "none" => None,
-                    _ => Some(Prefixes::parse(&v).unwrap_or_else(|| {
-                        arg_error(format!(
-                            "--prefixes wants none, package, dev-shell or package-set, got '{v}'"
-                        ))
-                    })),
-                };
-            }
-            "--want" => {
-                let v = next();
-                o.want = match v.as_str() {
-                    "first" => Want::First,
-                    "all" => Want::All,
-                    _ => arg_error(format!("--want wants first or all, got '{v}'")),
-                };
-            }
-            "--walk" => {
-                let v = next();
-                o.walk = match v.as_str() {
-                    "context" => Walk::Context,
-                    "get-drvs" => Walk::GetDrvs,
-                    "to-install" => Walk::ToInstall,
-                    _ => arg_error(format!(
-                        "--walk wants context, get-drvs or to-install, got '{v}'"
-                    )),
-                };
-            }
-            "--no-drvs" => o.drvs = false,
-            s => rest.push(s.to_string()),
+    each_arg(argv, |s, next| match s {
+        "--prefixes" => {
+            let v = next();
+            o.prefixes = match v.as_str() {
+                "none" => None,
+                _ => Some(Prefixes::parse(&v).unwrap_or_else(|| {
+                    arg_error(format!(
+                        "--prefixes wants none, package, dev-shell or package-set, got '{v}'"
+                    ))
+                })),
+            };
         }
-        i += 1;
-    }
+        "--want" => {
+            let v = next();
+            o.want = match v.as_str() {
+                "first" => Want::First,
+                "all" => Want::All,
+                _ => arg_error(format!("--want wants first or all, got '{v}'")),
+            };
+        }
+        "--walk" => {
+            let v = next();
+            o.walk = match v.as_str() {
+                "context" => Walk::Context,
+                "get-drvs" => Walk::GetDrvs,
+                "to-install" => Walk::ToInstall,
+                _ => arg_error(format!(
+                    "--walk wants context, get-drvs or to-install, got '{v}'"
+                )),
+            };
+        }
+        "--no-drvs" => o.drvs = false,
+        s => rest.push(s.to_string()),
+    });
     let a = parse_eval_args(&rest);
     if a.input.is_none() {
         arg_error("nothing to resolve: give -E EXPR, FILE or FLAKEREF[#FRAGMENT]")
@@ -372,13 +363,7 @@ fn split_flags(
     let mut rest: Vec<String> = Vec::new();
     let mut stdin = false;
     let mut drvs: Option<std::path::PathBuf> = None;
-    let mut i = 0;
-    while i < argv.len() {
-        let s = argv[i].clone();
-        let mut next = || {
-            i += 1;
-            value(argv, i, &s).clone()
-        };
+    each_arg(argv, |s, next| {
         if s == "--roots" {
             if next() != "-" {
                 arg_error("--roots takes '-': the roots come from stdin")
@@ -386,14 +371,13 @@ fn split_flags(
             stdin = true;
         } else if s == "--drvs" {
             drvs = Some(next().into());
-        } else if !f(&s, &mut next) {
+        } else if !f(s, next) {
             if s.starts_with('-') {
-                help::unknown_flag(&s)
+                help::unknown_flag(s)
             }
-            rest.push(s);
+            rest.push(s.to_string());
         }
-        i += 1;
-    }
+    });
     (rest, stdin, drvs)
 }
 
@@ -654,24 +638,15 @@ pub fn hash_of_drv(ev: &mut Evaluator, a: EvalArgs, json: bool) -> i32 {
 pub fn fetch_flags(argv: &[String]) -> (bool, crate::store::hash::HashAlgo, Vec<String>) {
     let (mut unpack, mut algo) = (false, crate::store::hash::HashAlgo::Sha256);
     let mut rest: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i < argv.len() {
-        let s = argv[i].as_str();
-        let mut next = || {
-            i += 1;
-            value(argv, i, s).clone()
-        };
-        match s {
-            "--unpack" => unpack = true,
-            "--hash-type" => {
-                let v = next();
-                algo = crate::store::hash::HashAlgo::parse(&v)
-                    .unwrap_or_else(|| arg_error(format!("unknown hash algorithm '{v}'")));
-            }
-            s => rest.push(s.to_string()),
+    each_arg(argv, |s, next| match s {
+        "--unpack" => unpack = true,
+        "--hash-type" => {
+            let v = next();
+            algo = crate::store::hash::HashAlgo::parse(&v)
+                .unwrap_or_else(|| arg_error(format!("unknown hash algorithm '{v}'")));
         }
-        i += 1;
-    }
+        s => rest.push(s.to_string()),
+    });
     (unpack, algo, rest)
 }
 

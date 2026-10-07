@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::api::installable;
 use crate::api::installable::drv_roots;
-use crate::cli::help::{arg_error, value};
+use crate::cli::help::{arg_error, each_arg};
 use crate::cli::{EvalArgs, Input, Run, abs_path, cwd, evaluate, parse_eval_args, report, run_for};
 use crate::error::Error as CrateError;
 use crate::eval::{Error, Evaluator, Pos};
@@ -213,30 +213,21 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
     let mut rest: Vec<String> = Vec::new();
     let mut flake: Option<String> = None;
     let mut entry_to: Option<String> = None;
-    let mut i = 0;
-    while i < argv.len() {
-        let s = argv[i].as_str();
-        let mut next = || {
-            i += 1;
-            value(argv, i, s).clone()
-        };
-        match s {
-            "--builder" => url = Some(next()),
-            "--gc-root" => gc_root = Some(next()),
-            "--entry-to" => entry_to = Some(next()),
-            "--workers" | "--cache-dir" | "-I" | "--include" | "--log-format" => {
-                let v = next();
-                rest.extend([s.to_string(), v]);
-            }
-            s if s.starts_with('-') => rest.push(s.to_string()),
-            s => {
-                if let Some(old) = flake.replace(s.to_string()) {
-                    arg_error(format!("one FLAKEREF only, got '{old}' and '{s}'"))
-                }
+    each_arg(argv, |s, next| match s {
+        "--builder" => url = Some(next()),
+        "--gc-root" => gc_root = Some(next()),
+        "--entry-to" => entry_to = Some(next()),
+        "--workers" | "--cache-dir" | "-I" | "--include" | "--log-format" => {
+            let v = next();
+            rest.extend([s.to_string(), v]);
+        }
+        s if s.starts_with('-') => rest.push(s.to_string()),
+        s => {
+            if let Some(old) = flake.replace(s.to_string()) {
+                arg_error(format!("one FLAKEREF only, got '{old}' and '{s}'"))
             }
         }
-        i += 1;
-    }
+    });
     let mut a = parse_eval_args(&rest);
     a.input = Some(Input::Flake(flake.unwrap_or_else(|| ".".into())));
     let cfg = crate::config::Config::load(&[]).unwrap_or_else(|_| crate::config::Config::empty());
