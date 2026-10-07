@@ -504,18 +504,22 @@ pub fn write_lock(root: &Path) -> Option<WriteLock> {
     try_write_lock(root).ok().flatten()
 }
 
+fn open_lock(path: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .mode(FILE_MODE)
+        .open(path)
+}
+
 /// [`write_lock`] with the two failures apart: `Err` when the lock file
 /// cannot be opened at all, which is a store this run cannot write, and
 /// `Ok(None)` when a sibling held the lock past `LOCK_TIMEOUT`, which is a
 /// skipped write. The caller says which, and they read differently.
 pub fn try_write_lock(root: &Path) -> io::Result<Option<WriteLock>> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let f = fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .mode(FILE_MODE)
-        .open(root.join(LOCK))?;
+    let f = open_lock(&root.join(LOCK))?;
     let mut waited = Duration::ZERO;
     loop {
         if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
@@ -540,14 +544,7 @@ pub fn store_lock(root: &Path) -> Option<WriteLock> {
 /// download). `on_wait` runs once when a sibling holds it. The file is
 /// touched, so a sweep never takes a lock file that is in use.
 pub fn wait_lock(path: &Path, on_wait: impl FnOnce()) -> Option<WriteLock> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let f = fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .mode(FILE_MODE)
-        .open(path)
-        .ok()?;
+    let f = open_lock(path).ok()?;
     let fd = f.as_raw_fd();
     if unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         on_wait();
