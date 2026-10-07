@@ -466,16 +466,21 @@ mod tests {
         }
     }
 
-    #[test]
-    fn resume_yield_finish() {
+    fn counting(stack: usize, entry: Entry) -> (&'static mut Counter, &'static mut Fiber) {
         let c = Box::leak(Box::new(Counter {
             fiber: std::ptr::null_mut(),
             n: AtomicUsize::new(0),
         }));
         let f = Box::leak(Box::new(
-            Fiber::new(1 << 20, count_entry, c as *mut Counter as *mut ()).expect("fiber stack"),
+            Fiber::new(stack, entry, c as *mut Counter as *mut ()).expect("fiber stack"),
         ));
         c.fiber = f;
+        (c, f)
+    }
+
+    #[test]
+    fn resume_yield_finish() {
+        let (c, f) = counting(1 << 20, count_entry);
         for i in 1..=3 {
             f.state.store(RUNNING, Ordering::Relaxed);
             unsafe { f.resume() };
@@ -492,14 +497,7 @@ mod tests {
 
     #[test]
     fn migrates_between_threads() {
-        let c = Box::leak(Box::new(Counter {
-            fiber: std::ptr::null_mut(),
-            n: AtomicUsize::new(0),
-        }));
-        let f = Box::leak(Box::new(
-            Fiber::new(1 << 20, count_entry, c as *mut Counter as *mut ()).expect("fiber stack"),
-        ));
-        c.fiber = f;
+        let (c, f) = counting(1 << 20, count_entry);
         let fp = f as *mut Fiber as usize;
         for i in 1..=3 {
             std::thread::spawn(move || {
@@ -553,13 +551,7 @@ mod tests {
 
     #[test]
     fn large_stack_use_and_release() {
-        let c = Box::leak(Box::new(Counter {
-            fiber: std::ptr::null_mut(),
-            n: AtomicUsize::new(0),
-        }));
-        let f = Box::leak(Box::new(
-            Fiber::new(64 << 20, deep_entry, c as *mut Counter as *mut ()).expect("fiber stack"),
-        ));
+        let (_, f) = counting(64 << 20, deep_entry);
         f.state.store(RUNNING, Ordering::Relaxed);
         unsafe { f.resume() };
         assert_eq!(f.state.load(Ordering::Relaxed), FINISHED);
