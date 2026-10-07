@@ -215,16 +215,8 @@ impl Proc {
     fn read_control(&mut self, sink: &Sink, what: &str) -> Result<Control> {
         let mut buf = Vec::new();
         loop {
-            buf.clear();
-            let n = self
-                .from
-                .read_until(b'\n', &mut buf)
-                .map_err(|e| Error::io("reading from worker", e))?;
-            if n == 0 {
+            if !read_line(&mut self.from, &mut buf)? {
                 return Err(Error::Protocol(self.broken(what)));
-            }
-            if buf.last() == Some(&b'\n') {
-                buf.pop();
             }
             match buf.as_slice() {
                 b"next" => return Ok(Control::Next),
@@ -271,18 +263,7 @@ impl Proc {
     fn drain(mut self, sink: &Sink) -> Result<()> {
         drop(self.to);
         let mut buf = Vec::new();
-        loop {
-            buf.clear();
-            let n = self
-                .from
-                .read_until(b'\n', &mut buf)
-                .map_err(|e| Error::io("reading from worker", e))?;
-            if n == 0 {
-                break;
-            }
-            if buf.last() == Some(&b'\n') {
-                buf.pop();
-            }
+        while read_line(&mut self.from, &mut buf)? {
             if buf.first() == Some(&b'{') {
                 (sink.lock().unwrap())(Line::parse(&buf)?);
             }
@@ -290,6 +271,18 @@ impl Proc {
         let _ = self.child.wait();
         Ok(())
     }
+}
+
+/// The next line without its newline; false at the end of the stream.
+fn read_line(from: &mut impl BufRead, buf: &mut Vec<u8>) -> Result<bool> {
+    buf.clear();
+    let n = from
+        .read_until(b'\n', buf)
+        .map_err(|e| Error::io("reading from worker", e))?;
+    if buf.last() == Some(&b'\n') {
+        buf.pop();
+    }
+    Ok(n > 0)
 }
 
 fn next_job(shared: &Shared) -> Option<Vec<String>> {
