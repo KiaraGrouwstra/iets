@@ -89,6 +89,14 @@ impl Error {
         Box::new(Error::new(kind, msg.into(), pos))
     }
 
+    pub fn stack_overflow(pos: Pos) -> Box<Error> {
+        Error::boxed(
+            ErrorKind::StackOverflow,
+            "stack overflow; max-call-depth exceeded",
+            pos,
+        )
+    }
+
     /// A tree that hashes to `got`, not to what the call or the lock named;
     /// `at` is where the hash literal is, when that is known.
     pub fn hash_mismatch(

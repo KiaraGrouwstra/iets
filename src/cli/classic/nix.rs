@@ -641,11 +641,7 @@ fn print_eval(
     depth: usize,
 ) -> EvalResult<()> {
     if depth > crate::eval::MAX_CALL_DEPTH as usize {
-        return Err(Error::boxed(
-            ErrorKind::StackOverflow,
-            "stack overflow; max-call-depth exceeded",
-            Pos::NONE,
-        ));
+        return Err(Error::stack_overflow(Pos::NONE));
     }
     let w = match ev.force(w) {
         Ok(w) => w,

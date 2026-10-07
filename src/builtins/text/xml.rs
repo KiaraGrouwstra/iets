@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use crate::compile::ir::ParamIr;
-use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
+use crate::eval::{EvalResult, Evaluator, Pos};
 use crate::runtime::*;
 
 pub fn to_xml(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
@@ -101,15 +101,7 @@ fn print_xml(
     drvs_seen: &mut HashSet<&'static [u8]>,
     pos: Pos,
 ) -> EvalResult<()> {
-    ev.call_depth += 1;
-    if ev.call_depth > crate::eval::MAX_CALL_DEPTH {
-        ev.call_depth -= 1;
-        return Err(Error::boxed(
-            ErrorKind::StackOverflow,
-            "stack overflow; max-call-depth exceeded",
-            pos,
-        ));
-    }
+    ev.enter_call(pos)?;
     let r = print_xml_inner(ev, w, out, depth, ctx, drvs_seen, pos);
     ev.call_depth -= 1;
     r

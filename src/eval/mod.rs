@@ -1381,15 +1381,11 @@ impl Evaluator {
     }
 
     #[inline]
-    fn enter_call(&mut self, pos: Pos) -> EvalResult<()> {
+    pub(crate) fn enter_call(&mut self, pos: Pos) -> EvalResult<()> {
         self.call_depth += 1;
         if self.call_depth > MAX_CALL_DEPTH {
             self.call_depth -= 1;
-            bail!(
-                ErrorKind::StackOverflow,
-                pos,
-                "stack overflow; max-call-depth exceeded"
-            );
+            return Err(Error::stack_overflow(pos));
         }
         Ok(())
     }
@@ -1494,11 +1490,7 @@ impl Evaluator {
                     // that gives back a functor ends there
                     functors += 1;
                     if functors > MAX_CALL_DEPTH {
-                        bail!(
-                            ErrorKind::StackOverflow,
-                            pos,
-                            "stack overflow; max-call-depth exceeded"
-                        );
+                        return Err(Error::stack_overflow(pos));
                     }
                     let f = self.force_cell(&functor.cell)?;
                     cur = self.apply(f, &[cur], pos)?;

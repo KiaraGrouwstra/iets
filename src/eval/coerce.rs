@@ -24,15 +24,7 @@ impl Evaluator {
         copy_to_store: bool,
         canonicalize: bool,
     ) -> EvalResult<Cow<'static, [u8]>> {
-        self.call_depth += 1;
-        if self.call_depth > super::MAX_CALL_DEPTH {
-            self.call_depth -= 1;
-            bail!(
-                ErrorKind::StackOverflow,
-                pos,
-                "stack overflow; max-call-depth exceeded"
-            );
-        }
+        self.enter_call(pos)?;
         let r = self.coerce_inner(
             w,
             ctx,

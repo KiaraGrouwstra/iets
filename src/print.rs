@@ -126,11 +126,7 @@ pub fn print_ambiguous(
     depth: usize,
 ) -> EvalResult<()> {
     if depth > crate::eval::MAX_CALL_DEPTH as usize {
-        return Err(Error::boxed(
-            ErrorKind::StackOverflow,
-            "stack overflow; max-call-depth exceeded",
-            Pos::NONE,
-        ));
+        return Err(Error::stack_overflow(Pos::NONE));
     }
     if w.is_thunk() {
         let st = w.thunk_state_cell().get();
@@ -356,15 +352,7 @@ pub fn print_json(
     strict: bool,
     pos: Pos,
 ) -> EvalResult<()> {
-    ev.call_depth += 1;
-    if ev.call_depth > crate::eval::MAX_CALL_DEPTH {
-        ev.call_depth -= 1;
-        return Err(Error::boxed(
-            ErrorKind::StackOverflow,
-            "stack overflow; max-call-depth exceeded",
-            pos,
-        ));
-    }
+    ev.enter_call(pos)?;
     let r = print_json_inner(ev, w, out, ctx, strict, pos);
     ev.call_depth -= 1;
     r
