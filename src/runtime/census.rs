@@ -6,6 +6,7 @@
 use std::collections::HashSet;
 
 use super::value::{AttrsObj, EnvObj, ListObj, StringObj};
+use crate::syntax::symbol::fx_bytes;
 
 pub const SIZE_BUCKETS: [&str; 11] = [
     "0", "1", "2", "3-4", "5-8", "9-16", "17-32", "33-64", "65-128", "129-256", "257+",
@@ -92,14 +93,6 @@ pub struct Census {
     pub job_scopes: [u64; 4],
 }
 
-fn fx(bytes: &[u8]) -> u64 {
-    use std::hash::Hasher;
-    let mut h = crate::syntax::symbol::FxHasher::default();
-    h.write(bytes);
-    h.write_usize(bytes.len());
-    h.finish()
-}
-
 impl Census {
     /// Open an escape-tracking scope at `bytes` allocated; false when one
     /// is already open (nested scopes are not tracked).
@@ -154,7 +147,7 @@ impl Census {
         let b = size_bucket(bytes.len());
         self.str_len_hist[b].0 += 1;
         self.str_len_hist[b].1 += bytes.len() as u64;
-        if !self.str_seen.insert(fx(bytes)) {
+        if !self.str_seen.insert(fx_bytes(bytes)) {
             self.str_dups += 1;
             self.str_dup_bytes += bytes.len() as u64;
         }
@@ -195,7 +188,7 @@ impl Census {
             }
             key.push(0);
         }
-        if !self.ctx_seen.insert(fx(&key)) {
+        if !self.ctx_seen.insert(fx_bytes(&key)) {
             self.ctx_dups += 1;
             self.ctx_dup_bytes += size_of_val(ctx) as u64;
         }

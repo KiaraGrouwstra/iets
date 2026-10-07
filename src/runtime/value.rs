@@ -976,11 +976,7 @@ impl Arena {
     /// (about 1 in 2^64 per pair) just skips the sharing.
     #[inline]
     fn str_hash(bytes: &[u8]) -> u64 {
-        use std::hash::Hasher;
-        let mut h = crate::syntax::symbol::FxHasher::default();
-        h.write(bytes);
-        h.write_usize(bytes.len());
-        h.finish()
+        crate::syntax::symbol::fx_bytes(bytes)
     }
 
     /// Record freshly copied `b` under `hash`; the entry it collides with,

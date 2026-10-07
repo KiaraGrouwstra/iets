@@ -55,6 +55,16 @@ impl std::hash::Hasher for FxHasher {
     }
 }
 
+/// Content hash of a byte string, its length mixed in.
+#[inline]
+pub fn fx_bytes(bytes: &[u8]) -> u64 {
+    use std::hash::Hasher;
+    let mut h = FxHasher::default();
+    h.write(bytes);
+    h.write_usize(bytes.len());
+    h.finish()
+}
+
 pub type FxBuild = std::hash::BuildHasherDefault<FxHasher>;
 pub type FxHashMap<K, V> = HashMap<K, V, FxBuild>;
 pub type FxHashSet<K> = std::collections::HashSet<K, FxBuild>;
