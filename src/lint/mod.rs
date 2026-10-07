@@ -967,33 +967,11 @@ impl Evaluator {
             return if entry { Where::Root } else { Where::Elsewhere };
         }
         let mut input = None;
-        let mut p = path.to_vec();
-        for _ in 0..8 {
-            let Some((root, known)) = self.known.under(&p) else {
-                break;
-            };
-            if input.is_none()
-                && let Some(name) = &known.flake
-            {
-                input = self.lint_config().input_index(name);
+        let p = self.local_path(path, |flake| {
+            if input.is_none() {
+                input = self.lint_config().input_index(flake);
             }
-            let Some(local) = known.origin.and_then(|o| o.at.local()) else {
-                break;
-            };
-            let mut next = local.as_os_str().as_encoded_bytes().to_vec();
-            next.extend_from_slice(&p[root..]);
-            p = next;
-        }
-        for (store, local) in &self.session().settings().source_map {
-            if let Some(rest) = p.strip_prefix(store.as_bytes())
-                && (rest.is_empty() || rest[0] == b'/')
-            {
-                let mut next = local.as_bytes().to_vec();
-                next.extend_from_slice(rest);
-                p = next;
-                break;
-            }
-        }
+        });
         if self.lint_config().in_root(&p) {
             return Where::Root;
         }
@@ -1028,7 +1006,7 @@ impl Evaluator {
         };
         let (l, c) = f.line_col(off);
         let path = if crate::provenance::enabled() {
-            self.lint_local_path(&f.path)
+            self.local_path(&f.path, |_| {})
         } else {
             f.path.clone()
         };
@@ -1042,19 +1020,25 @@ impl Evaluator {
     /// produced into the directory it was copied from.
     pub fn lint_shown_path(&self, path: &[u8]) -> String {
         let path = if crate::provenance::enabled() {
-            self.lint_local_path(path)
+            self.local_path(path, |_| {})
         } else {
             path.to_vec()
         };
         String::from_utf8_lossy(&path).into_owned()
     }
 
-    fn lint_local_path(&self, path: &[u8]) -> Vec<u8> {
+    /// The local path a store copy stands for, through the copy chain and
+    /// then `source_map`. `flake` sees the lock node name of each flake tree
+    /// on the way, outermost copy first.
+    fn local_path(&self, path: &[u8], mut flake: impl FnMut(&str)) -> Vec<u8> {
         let mut p = path.to_vec();
         for _ in 0..8 {
             let Some((root, known)) = self.known.under(&p) else {
                 break;
             };
+            if let Some(name) = &known.flake {
+                flake(name);
+            }
             let Some(local) = known.origin.and_then(|o| o.at.local()) else {
                 break;
             };
