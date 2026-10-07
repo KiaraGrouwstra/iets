@@ -181,45 +181,59 @@ pub fn open(
     Ok(Box::new(Worker::open(transport, options, on_event)?))
 }
 
+/// What either backend did, in the shape `--timings` prints.
 #[derive(Debug, Default, Clone)]
-struct Timings {
-    connect: Duration,
-    query: Duration,
-    resolve: Duration,
-    substitute: Duration,
-    add: Duration,
-    build: Duration,
-    outputs: Duration,
-    fetch: Duration,
-    minor: u64,
-    trusted: Option<bool>,
-    query_paths: usize,
-    missing: usize,
+pub struct Timings {
+    pub connect: Duration,
+    pub query: Duration,
+    pub resolve: Duration,
+    pub substitute: Duration,
+    pub add: Duration,
+    pub build: Duration,
+    pub outputs: Duration,
+    pub fetch: Duration,
+    pub trusted: Option<bool>,
+    pub query_paths: usize,
+    pub missing: usize,
     /// Missing sources the client located and hashed.
-    resolve_paths: usize,
+    pub resolve_paths: usize,
     /// Of those, the ones with no eval-time origin, found through the local store.
-    store_sources: usize,
-    /// Missing sources left to the daemon's substituters.
-    substitute_paths: usize,
-    add_paths: usize,
-    add_bytes: u64,
-    fetched: usize,
-    stats: Stats,
+    pub store_sources: usize,
+    /// Missing sources left to the store's substituters.
+    pub substitute_paths: usize,
+    pub add_paths: usize,
+    pub add_bytes: u64,
+    pub fetched: usize,
 }
 
 impl Timings {
-    fn report(&self, plan: &Plan, plan_time: Duration) -> String {
+    pub fn note_upload(&mut self, p: Phase) {
+        self.missing += p.missing;
+        self.resolve += p.resolve;
+        self.resolve_paths += p.resolve_paths;
+        self.store_sources += p.store_sources;
+    }
+
+    /// `protocol`, `store` and `built` are the words that differ by transport;
+    /// the caller appends its own last line.
+    pub fn report(
+        &self,
+        plan: &Plan,
+        plan_time: Duration,
+        protocol: &str,
+        store: &str,
+        built: &str,
+    ) -> String {
         let trusted = match self.trusted {
             Some(true) => "trusted",
             Some(false) => "untrusted",
             None => "trust unknown",
         };
         let mut s = format!(
-            "plan: {} sources, {} drvs, {:.3}s\nconnect: protocol 1.{}, {trusted}, {:.3}s\nquery: {} paths, {} missing, {:.3}s\nresolve: {} sources",
+            "plan: {} sources, {} drvs, {:.3}s\nconnect: {protocol}, {trusted}, {:.3}s\nquery: {} paths, {} missing, {:.3}s\nresolve: {} sources",
             plan.sources.len(),
             plan.drvs.len(),
             plan_time.as_secs_f64(),
-            self.minor,
             self.connect.as_secs_f64(),
             self.query_paths,
             self.missing,
@@ -235,13 +249,13 @@ impl Timings {
         s.push_str(&format!(", {:.3}s", self.resolve.as_secs_f64()));
         if self.substitute_paths > 0 {
             s.push_str(&format!(
-                "\nsubstitute: {} paths left to the daemon, {:.3}s",
+                "\nsubstitute: {} paths left to the {store}, {:.3}s",
                 self.substitute_paths,
                 self.substitute.as_secs_f64()
             ));
         }
         s.push_str(&format!(
-            "\nadd: {} paths, {} bytes, {:.3}s\nbuild: {:.3}s\noutputs: {:.3}s",
+            "\nadd: {} paths, {} bytes, {:.3}s\nbuild: {built}{:.3}s\noutputs: {:.3}s",
             self.add_paths,
             self.add_bytes,
             self.add.as_secs_f64(),
@@ -255,10 +269,6 @@ impl Timings {
                 self.fetch.as_secs_f64()
             ));
         }
-        s.push_str(&format!(
-            "\nworker: {} ops, {} round trips, {} bytes sent",
-            self.stats.ops, self.stats.round_trips, self.stats.bytes_sent
-        ));
         s
     }
 }
@@ -279,7 +289,6 @@ impl Worker {
         let conn = Connection::open_with(transport, options, on_event)?;
         Ok(Worker {
             t: Timings {
-                minor: conn.minor,
                 trusted: conn.trusted,
                 ..Timings::default()
             },
@@ -455,17 +464,28 @@ impl Backend for Worker {
     }
 
     fn note_upload(&mut self, p: Phase) {
-        self.t.missing += p.missing;
-        self.t.resolve += p.resolve;
-        self.t.resolve_paths += p.resolve_paths;
-        self.t.store_sources += p.store_sources;
+        self.t.note_upload(p);
     }
 
     fn report(&self, plan: &Plan, plan_time: Duration) -> String {
-        let mut t = self.t.clone();
-        t.stats = self.conn.stats;
-        t.report(plan, plan_time)
+        worker_report(&self.t, plan, plan_time, self.conn.minor, self.conn.stats)
     }
+}
+
+fn worker_report(t: &Timings, plan: &Plan, plan_time: Duration, minor: u64, s: Stats) -> String {
+    format!(
+        "{}\nworker: {} ops, {} round trips, {} bytes sent",
+        t.report(
+            plan,
+            plan_time,
+            &format!("protocol 1.{minor}"),
+            "daemon",
+            ""
+        ),
+        s.ops,
+        s.round_trips,
+        s.bytes_sent
+    )
 }
 
 /// `/nix/store/<hash>-<name>` as `<hash>-<name>`.
@@ -507,15 +527,14 @@ mod tests {
             add_paths: 4,
             add_bytes: 3,
             fetched: 2,
-            minor: 38,
-            stats: Stats {
-                ops: 1,
-                round_trips: 2,
-                bytes_sent: 3,
-            },
+        };
+        let stats = Stats {
+            ops: 1,
+            round_trips: 2,
+            bytes_sent: 3,
         };
         assert_eq!(
-            t.report(&Plan::default(), Duration::from_millis(9)),
+            worker_report(&t, &Plan::default(), Duration::from_millis(9), 38, stats),
             "plan: 0 sources, 0 drvs, 0.009s\n\
              connect: protocol 1.38, trusted, 0.001s\n\
              query: 9 paths, 8 missing, 0.002s\n\

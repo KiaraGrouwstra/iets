@@ -30,85 +30,23 @@ use super::drvwire::{BUILD_PROTOCOL, BuildResult, PathInfo, write_basic_derivati
 use super::sched::{Answer, Sched};
 use super::{Client, Headers, c_request, first_line, gone_away, proto};
 
-/// What one `build` call did, in the shape `--timings` prints.
+/// The shared timings, and what only this transport counts.
 #[derive(Debug, Default, Clone)]
 pub struct Timings {
-    pub connect: Duration,
-    pub query: Duration,
-    pub resolve: Duration,
-    pub substitute: Duration,
-    pub add: Duration,
-    pub build: Duration,
-    pub outputs: Duration,
-    pub fetch: Duration,
-    pub trusted: Option<bool>,
-    pub query_paths: usize,
-    pub missing: usize,
-    /// Missing sources the client located and hashed.
-    pub resolve_paths: usize,
-    /// Of those, the ones with no eval-time origin, found through the local store.
-    pub store_sources: usize,
-    /// Missing sources left to the store's substituters.
-    pub substitute_paths: usize,
-    pub add_paths: usize,
-    pub add_bytes: u64,
+    pub common: crate::build::backend::Timings,
     pub drvs: usize,
     pub drvs_cached: usize,
-    pub fetched: usize,
     pub calls: usize,
 }
 
 impl Timings {
     pub fn report(&self, plan: &Plan, plan_time: Duration) -> String {
-        let trusted = match self.trusted {
-            Some(true) => "trusted",
-            Some(false) => "untrusted",
-            None => "trust unknown",
-        };
-        let mut s = format!(
-            "plan: {} sources, {} drvs, {:.3}s\nconnect: gRPC, {trusted}, {:.3}s\nquery: {} paths, {} missing, {:.3}s\nresolve: {} sources",
-            plan.sources.len(),
-            plan.drvs.len(),
-            plan_time.as_secs_f64(),
-            self.connect.as_secs_f64(),
-            self.query_paths,
-            self.missing,
-            self.query.as_secs_f64(),
-            self.resolve_paths,
-        );
-        if self.store_sources > 0 {
-            s.push_str(&format!(
-                ", {} not from this eval, read from /nix/store",
-                self.store_sources
-            ));
-        }
-        s.push_str(&format!(", {:.3}s", self.resolve.as_secs_f64()));
-        if self.substitute_paths > 0 {
-            s.push_str(&format!(
-                "\nsubstitute: {} paths left to the store, {:.3}s",
-                self.substitute_paths,
-                self.substitute.as_secs_f64()
-            ));
-        }
-        s.push_str(&format!(
-            "\nadd: {} paths, {} bytes, {:.3}s\nbuild: {} drvs, {} already valid, {:.3}s\noutputs: {:.3}s",
-            self.add_paths,
-            self.add_bytes,
-            self.add.as_secs_f64(),
-            self.drvs,
-            self.drvs_cached,
-            self.build.as_secs_f64(),
-            self.outputs.as_secs_f64(),
-        ));
-        if self.fetched > 0 {
-            s.push_str(&format!(
-                "\nfetch: {} outputs, {:.3}s",
-                self.fetched,
-                self.fetch.as_secs_f64()
-            ));
-        }
-        s.push_str(&format!("\ngrpc: {} calls", self.calls));
-        s
+        let built = format!("{} drvs, {} already valid, ", self.drvs, self.drvs_cached);
+        format!(
+            "{}\ngrpc: {} calls",
+            self.common.report(plan, plan_time, "gRPC", "store", &built),
+            self.calls
+        )
     }
 }
 
@@ -896,23 +834,25 @@ mod tests {
     #[test]
     fn the_timings_report_with_every_line() {
         let t = Timings {
-            connect: Duration::from_millis(1),
-            query: Duration::from_millis(2),
-            resolve: Duration::from_millis(3),
-            substitute: Duration::from_millis(4),
-            add: Duration::from_millis(5),
-            build: Duration::from_millis(6),
-            outputs: Duration::from_millis(7),
-            fetch: Duration::from_millis(8),
-            trusted: Some(true),
-            query_paths: 9,
-            missing: 8,
-            resolve_paths: 7,
-            store_sources: 6,
-            substitute_paths: 5,
-            add_paths: 4,
-            add_bytes: 3,
-            fetched: 2,
+            common: crate::build::backend::Timings {
+                connect: Duration::from_millis(1),
+                query: Duration::from_millis(2),
+                resolve: Duration::from_millis(3),
+                substitute: Duration::from_millis(4),
+                add: Duration::from_millis(5),
+                build: Duration::from_millis(6),
+                outputs: Duration::from_millis(7),
+                fetch: Duration::from_millis(8),
+                trusted: Some(true),
+                query_paths: 9,
+                missing: 8,
+                resolve_paths: 7,
+                store_sources: 6,
+                substitute_paths: 5,
+                add_paths: 4,
+                add_bytes: 3,
+                fetched: 2,
+            },
             drvs: 11,
             drvs_cached: 10,
             calls: 12,
