@@ -267,13 +267,7 @@ impl Tree {
                     continue;
                 }
                 let pax = pax_sparse(&mut entry)?;
-                let name = match pax.as_ref().and_then(|s| s.name.clone()) {
-                    Some(n) => std::path::PathBuf::from(std::ffi::OsString::from_vec(n)),
-                    None => entry
-                        .path()
-                        .map_err(|e| Error::io("cannot read a tarball member name", e))?
-                        .into_owned(),
-                };
+                let name = member_name(&pax, &entry)?;
                 let parts = parts_of(&super::unpack::member_path(&name));
                 if parts.is_empty() {
                     continue;
@@ -787,6 +781,20 @@ pub(super) struct Sparse {
 
 fn number(v: &[u8]) -> Option<u64> {
     std::str::from_utf8(v).ok()?.parse().ok()
+}
+
+/// The name the pax sparse records give the member, else the header's.
+pub(super) fn member_name(
+    pax: &Option<Sparse>,
+    entry: &tar::Entry<'_, impl Read>,
+) -> Result<std::path::PathBuf> {
+    match pax.as_ref().and_then(|s| s.name.clone()) {
+        Some(n) => Ok(std::ffi::OsString::from_vec(n).into()),
+        None => Ok(entry
+            .path()
+            .map_err(|e| Error::io("cannot read a tarball member name", e))?
+            .into_owned()),
+    }
 }
 
 /// The three GNU pax sparse formats (GNU tar, `Sparse Formats`): 0.0 repeats

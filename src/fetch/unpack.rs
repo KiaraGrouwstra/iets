@@ -18,7 +18,6 @@
 //! the oracle the spool's NAR is held to (`spool_matches_the_tree`).
 
 #[cfg(test)]
-use std::os::unix::ffi::OsStringExt;
 #[cfg(test)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
@@ -111,13 +110,7 @@ pub fn unpack(bytes: Vec<u8>, dest: &Path) -> Result<PathBuf> {
             continue;
         }
         let pax = super::spool::pax_sparse(&mut entry)?;
-        let name = match pax.as_ref().and_then(|s| s.name.clone()) {
-            Some(n) => PathBuf::from(std::ffi::OsString::from_vec(n)),
-            None => entry
-                .path()
-                .map_err(|e| Error::io("cannot read a tarball member name", e))?
-                .into_owned(),
-        };
+        let name = super::spool::member_name(&pax, &entry)?;
         let rel = member_path(&name);
         if rel.as_os_str().is_empty() {
             continue;
