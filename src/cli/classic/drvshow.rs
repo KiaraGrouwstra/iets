@@ -5,10 +5,10 @@
 //! See `docs/reference/classic.md`.
 
 use super::fallback;
-use super::nix::{Nix, nix_settings, resolve};
+use super::nix::{Nix, nix_settings, print_cached, resolve};
 use crate::api::drvshow;
 use crate::api::installable;
-use crate::cli::{Outcome, cwd, render};
+use crate::cli::{cwd, render};
 
 const NAME: &str = "nix";
 
@@ -46,28 +46,16 @@ pub fn main(argv: &[String], rest: &[String]) -> i32 {
     let ec = super::eval_config(&n.c, &cfg);
     // `-r` and the indentation make another document, so both are in the key
     let run = n.run(ec, "nix derivation show", n.recursive, pretty);
-    if let Some(text) = run.hit_result() {
-        render::bytes(&text);
-        return 0;
-    }
-    match crate::cli::run_reported(run, move |ev, cache| {
+    print_cached(argv, run, move |ev| {
         let cwd = cwd();
         let mut roots = Vec::new();
         for what in &n.installables {
             let v = resolve(ev, &n, what, &cwd)?;
             roots.push(installable::to_derivation(ev, v, what)?);
         }
-        let text = drvshow::json_text(&drvshow::show(ev, &roots, n.recursive)?, pretty);
-        if let Some(c) = cache {
-            c.write(ev, &text, false);
-        }
-        Ok(text)
-    }) {
-        Outcome::Failed(code) => code,
-        Outcome::Unsupported(reason) => fallback(NAME, argv, &reason),
-        Outcome::Ok(text) => {
-            render::bytes(&text);
-            0
-        }
-    }
+        Ok(drvshow::json_text(
+            &drvshow::show(ev, &roots, n.recursive)?,
+            pretty,
+        ))
+    })
 }

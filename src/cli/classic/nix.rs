@@ -287,12 +287,21 @@ fn eval_main(argv: &[String], rest: &[String]) -> i32 {
     };
     let ec = super::eval_config(&n.c, &cfg);
     let run = n.run(ec, "nix eval", false, n.json);
+    print_cached(argv, run, move |ev| eval_run(ev, &n))
+}
+
+/// Prints the stdout `f` makes, from the tracing cache when `run` hits it.
+pub(super) fn print_cached(
+    argv: &[String],
+    run: Run,
+    f: impl FnOnce(&mut Evaluator) -> crate::error::Result<Vec<u8>> + Send + 'static,
+) -> i32 {
     if let Some(text) = run.hit_result() {
         crate::cli::render::bytes(&text);
         return 0;
     }
     match crate::cli::run_reported(run, move |ev, cache| {
-        let text = eval_run(ev, &n)?;
+        let text = f(ev)?;
         if let Some(c) = cache {
             c.write(ev, &text, false);
         }
