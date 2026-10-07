@@ -589,11 +589,6 @@ impl Config {
         self.overridden.contains(name)
     }
 
-    /// Every setting that was set, known or not.
-    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.settings.iter().map(|(k, v)| (k.as_str(), v.as_str()))
-    }
-
     pub fn str(&self, name: &str) -> Option<&str> {
         self.settings.get(name).map(String::as_str)
     }
@@ -806,7 +801,6 @@ mod tests {
     fn unknown_settings_are_kept() {
         let c = load("basic.conf");
         assert_eq!(c.str("not-a-real-setting"), Some("kept"));
-        assert!(c.iter().any(|(k, _)| k == "not-a-real-setting"));
     }
 
     #[test]

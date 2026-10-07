@@ -382,10 +382,6 @@ impl Config {
         self.levels[id as usize]
     }
 
-    pub fn any_on(&self) -> bool {
-        self.levels.iter().any(|l| *l != Level::Off)
-    }
-
     /// One selector as a source of its own: `all`, `family:NAME`, a lint
     /// name, or a Nix alias.
     pub fn set(&mut self, selector: &str, level: Level) -> Result<(), String> {
@@ -926,15 +922,6 @@ impl Evaluator {
             }
             Level::Error => Err(error(id, pos, &msg())),
         }
-    }
-
-    /// The level of `id` at the site `pos`, after the scope rule.
-    pub fn site_level(&mut self, id: LintId, pos: Pos) -> Level {
-        if !self.lint_config().scoped() {
-            return self.lint_config().level(id);
-        }
-        let w = self.where_of(pos);
-        self.lint_config().site_level(id, w)
     }
 
     /// Where the file of `pos` lies, classified once per file and fiber.

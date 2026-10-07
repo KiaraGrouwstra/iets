@@ -24,7 +24,6 @@ pub enum Kind {
     PrimOp,
     PrimOpApp,
     AttrsUnion,
-    Env,
     Thunk,
     ThunkApp,
     ThunkApp2,
