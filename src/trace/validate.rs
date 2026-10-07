@@ -342,6 +342,14 @@ mod tests {
         let mut obs = vec![super::super::file_obs(&p, &m, sha256(b"AAAA"))];
         validate(&mut obs, 1).unwrap();
 
+        // the kernel stamps ctime from a clock that ticks every few
+        // milliseconds, so wait until a write can get a new one
+        while {
+            fs::File::open(&other).unwrap().set_modified(fixed).unwrap();
+            super::super::ctime_ns(&fs::metadata(&other).unwrap()) == super::super::ctime_ns(&m)
+        } {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         let mut bytes = fs::File::create(&f).unwrap();
         std::io::Write::write_all(&mut bytes, b"BBBB").unwrap();
         drop(bytes);
