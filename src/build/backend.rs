@@ -169,6 +169,24 @@ pub fn local() -> Transport {
     Transport::Unix(PathBuf::from(DEFAULT_SOCKET))
 }
 
+/// The store paths `out_links` was given.
+pub fn link_targets(links: &[(String, Option<String>)]) -> Result<Vec<StorePath>> {
+    links
+        .iter()
+        .map(|(p, _)| Ok(StorePath::parse(p)?))
+        .collect()
+}
+
+/// Makes each symlink that was asked for, as a GC root of `conn`'s store.
+pub fn add_roots(conn: &mut Connection, links: &[(String, Option<String>)]) -> Result<()> {
+    for (path, link) in links {
+        if let Some(link) = link {
+            conn.add_perm_root(path, Path::new(link))?;
+        }
+    }
+    Ok(())
+}
+
 /// Connects the transport `url` names.
 pub fn open(
     transport: &Transport,
@@ -435,28 +453,15 @@ impl Backend for Worker {
             return Ok(());
         }
         if self.transport == local() {
-            for (path, link) in links {
-                if let Some(link) = link {
-                    self.conn.add_perm_root(path, Path::new(link))?;
-                }
-            }
-            return Ok(());
+            return add_roots(&mut self.conn, links);
         }
         // A symlink and its GC root are worth nothing without the path they
         // name, so the closure comes back to the local daemon first.
-        let mut paths: Vec<StorePath> = Vec::with_capacity(links.len());
-        for (p, _) in links {
-            paths.push(StorePath::parse(p)?);
-        }
+        let paths = link_targets(links)?;
         let mut conn = Connection::open(&local(), &mut |_| {})?;
         let from = self.transport.uri();
         crate::remote::copy::closure(&mut self.conn, &from, &mut conn, &paths, &mut |_| {})?;
-        for (path, link) in links {
-            if let Some(link) = link {
-                conn.add_perm_root(path, Path::new(link))?;
-            }
-        }
-        Ok(())
+        add_roots(&mut conn, links)
     }
 
     fn note_connect(&mut self, d: Duration) {

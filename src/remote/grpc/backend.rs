@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
-use crate::build::backend::{Backend, Batch, Phase, Status, local};
+use crate::build::backend::{Backend, Batch, Phase, Status, add_roots, link_targets, local};
 use crate::build::fanout;
 use crate::error::{Error, Result};
 use crate::log::{
@@ -334,18 +334,10 @@ impl Backend for Grpc {
         if links.is_empty() {
             return Ok(());
         }
-        let mut paths: Vec<StorePath> = Vec::with_capacity(links.len());
-        for (p, _) in links {
-            paths.push(StorePath::parse(p)?);
-        }
+        let paths = link_targets(links)?;
         let mut conn = Connection::open(&local(), &mut |_| {})?;
         build::register(&mut self.c, &paths, &mut conn, &mut |_| {})?;
-        for (path, link) in links {
-            if let Some(link) = link {
-                conn.add_perm_root(path, Path::new(link))?;
-            }
-        }
-        Ok(())
+        add_roots(&mut conn, links)
     }
 
     fn note_connect(&mut self, d: Duration) {
