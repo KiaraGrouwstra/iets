@@ -595,6 +595,16 @@ impl<'a> Compiler<'a> {
         self.arena.alloc_vec(v)
     }
 
+    fn str_part(&mut self, p: &StrPart) -> CResult<&'static Ir> {
+        Ok(match p {
+            StrPart::Lit(l) => {
+                let w = self.arena.mk_string(self.ast.bytes(*l));
+                self.alloc(Ir::Const(w))
+            }
+            StrPart::Interp(e) => self.expr(*e)?,
+        })
+    }
+
     fn string(&mut self, parts: &[StrPart], pos: Pos) -> CResult<Ir> {
         let ast: &'a Ast = self.ast;
         if let [StrPart::Lit(l)] = parts {
@@ -611,13 +621,7 @@ impl<'a> Compiler<'a> {
         }
         let mut v = Vec::with_capacity(parts.len());
         for p in parts {
-            v.push(match p {
-                StrPart::Lit(l) => {
-                    let w = self.arena.mk_string(ast.bytes(*l));
-                    self.alloc(Ir::Const(w))
-                }
-                StrPart::Interp(e) => self.expr(*e)?,
-            });
+            v.push(self.str_part(p)?);
         }
         Ok(Ir::Concat {
             force_string: true,
@@ -707,13 +711,7 @@ impl<'a> Compiler<'a> {
             parts
         };
         for p in rest {
-            v.push(match p {
-                StrPart::Lit(l) => {
-                    let w = self.arena.mk_string(ast.bytes(*l));
-                    self.alloc(Ir::Const(w))
-                }
-                StrPart::Interp(e) => self.expr(*e)?,
-            });
+            v.push(self.str_part(p)?);
         }
         Ok(Ir::Concat {
             force_string: false,
