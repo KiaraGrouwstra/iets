@@ -4,8 +4,8 @@
 //! `crate::api::drvshow`'s; this file is the command line and the printing.
 //! See `docs/reference/classic.md`.
 
-use super::nix::{Nix, global_flag, nix_settings, resolve};
-use super::{Argv, fallback};
+use super::fallback;
+use super::nix::{Nix, nix_settings, resolve};
 use crate::api::drvshow;
 use crate::api::installable;
 use crate::cli::{Outcome, cwd, render};
@@ -14,29 +14,15 @@ const NAME: &str = "nix";
 
 fn parse(argv: &[String]) -> Result<Nix, String> {
     let mut n = Nix::default();
-    let mut a = Argv { all: argv, i: 0 };
-    while a.i < argv.len() {
-        let s = argv[a.i].clone();
-        match s.as_str() {
+    n.parse(argv, |n, _, s| {
+        match s {
             "-r" | "--recursive" => n.recursive = true,
             "--pretty" => n.pretty = Some(true),
             "--no-pretty" => n.pretty = Some(false),
-            "--expr" => n.expr = Some(a.value(&s)?),
-            "-f" | "--file" => n.file = Some(a.value(&s)?),
-            _ => {
-                if !global_flag(&mut n.c, &mut a, &s)? {
-                    if s.starts_with('-') {
-                        return Err(format!("'{s}' is not implemented"));
-                    }
-                    n.installables.push(s);
-                }
-            }
+            _ => return Ok(false),
         }
-        a.i += 1;
-    }
-    if n.expr.is_some() && n.file.is_some() {
-        return Err("'--file' and '--expr' are exclusive".into());
-    }
+        Ok(true)
+    })?;
     // installables.cc: an InstallablesCommand with no argument takes `.`.
     if n.installables.is_empty() {
         n.installables.push(".".into());

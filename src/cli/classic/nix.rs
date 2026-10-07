@@ -146,30 +146,16 @@ pub fn global_flag(c: &mut Common, a: &mut Argv, s: &str) -> Result<bool, String
 
 fn parse_eval(argv: &[String]) -> Result<Nix, String> {
     let mut n = Nix::default();
-    let mut a = Argv { all: argv, i: 0 };
-    while a.i < argv.len() {
-        let s = argv[a.i].clone();
-        match s.as_str() {
+    n.parse(argv, |n, _, s| {
+        match s {
             "--json" => n.json = true,
             "--raw" => n.raw = true,
-            "--expr" => n.expr = Some(a.value(&s)?),
-            "-f" | "--file" => n.file = Some(a.value(&s)?),
-            _ => {
-                if !global_flag(&mut n.c, &mut a, &s)? {
-                    if s.starts_with('-') {
-                        return Err(format!("'{s}' is not implemented"));
-                    }
-                    n.installables.push(s);
-                }
-            }
+            _ => return Ok(false),
         }
-        a.i += 1;
-    }
+        Ok(true)
+    })?;
     if n.raw && n.json {
         return Err("--raw and --json are mutually exclusive".into());
-    }
-    if n.expr.is_some() && n.file.is_some() {
-        return Err("'--file' and '--expr' are exclusive".into());
     }
     if n.installables.len() > 1 {
         return Err("'nix eval' takes one installable".into());
@@ -183,30 +169,16 @@ fn parse_build(argv: &[String]) -> Result<Nix, String> {
         out_link: "result".into(),
         ..Nix::default()
     };
-    let mut a = Argv { all: argv, i: 0 };
-    while a.i < argv.len() {
-        let s = argv[a.i].clone();
-        match s.as_str() {
-            "-o" | "--out-link" => n.out_link = a.value(&s)?,
+    n.parse(argv, |n, a, s| {
+        match s {
+            "-o" | "--out-link" => n.out_link = a.value(s)?,
             "--no-link" => n.no_link = true,
             "--print-out-paths" => n.print_out_paths = true,
             "-L" | "--print-build-logs" => n.print_build_logs = true,
-            "--expr" => n.expr = Some(a.value(&s)?),
-            "-f" | "--file" => n.file = Some(a.value(&s)?),
-            _ => {
-                if !global_flag(&mut n.c, &mut a, &s)? {
-                    if s.starts_with('-') {
-                        return Err(format!("'{s}' is not implemented"));
-                    }
-                    n.installables.push(s);
-                }
-            }
+            _ => return Ok(false),
         }
-        a.i += 1;
-    }
-    if n.expr.is_some() && n.file.is_some() {
-        return Err("'--file' and '--expr' are exclusive".into());
-    }
+        Ok(true)
+    })?;
     if n.installables.is_empty() {
         n.installables.push(".".into());
     }
@@ -215,6 +187,33 @@ fn parse_build(argv: &[String]) -> Result<Nix, String> {
 }
 
 impl Nix {
+    /// The command line of a subcommand that takes installables. `own` gets
+    /// each argument first and says whether it was one of its flags.
+    pub(super) fn parse(
+        &mut self,
+        argv: &[String],
+        mut own: impl FnMut(&mut Nix, &mut Argv, &str) -> Result<bool, String>,
+    ) -> Result<(), String> {
+        let mut a = Argv { all: argv, i: 0 };
+        while a.i < argv.len() {
+            let s = argv[a.i].clone();
+            if !own(self, &mut a, &s)? {
+                match s.as_str() {
+                    "--expr" => self.expr = Some(a.value(&s)?),
+                    "-f" | "--file" => self.file = Some(a.value(&s)?),
+                    _ if global_flag(&mut self.c, &mut a, &s)? => {}
+                    _ if s.starts_with('-') => return Err(format!("'{s}' is not implemented")),
+                    _ => self.installables.push(s),
+                }
+            }
+            a.i += 1;
+        }
+        if self.expr.is_some() && self.file.is_some() {
+            return Err("'--file' and '--expr' are exclusive".into());
+        }
+        Ok(())
+    }
+
     /// installable-flake.cc: a flake installable refuses `--arg`/`--argstr`, so
     /// the real nix reports that better than we would.
     pub(super) fn check_args_with_flake(&self) -> Result<(), String> {
