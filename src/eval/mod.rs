@@ -1086,18 +1086,7 @@ impl Evaluator {
         path: &[AttrElemIr],
         default: Option<IrRef>,
     ) -> Option<Word> {
-        let mut w = match subject {
-            Ir::Const(w) => *w,
-            Ir::Local { depth, idx } => {
-                let mut e = env;
-                for _ in 0..*depth {
-                    e = e.up()?;
-                }
-                e.mark_read();
-                e.slot(*idx as usize).get()
-            }
-            _ => return None,
-        };
+        let mut w = Self::peek(env, subject)?;
         for elem in path {
             let AttrElemIr::Static(sym) = elem else {
                 return None;
@@ -1118,21 +1107,27 @@ impl Evaluator {
         Some(w)
     }
 
-    /// The value of a cheap operand if it is already a forced integer.
+    /// What a constant or a local holds, without evaluating anything.
     #[inline]
-    fn forced_int(&self, env: &'static EnvObj, ir: IrRef) -> Option<i64> {
-        let w = match ir {
-            Ir::Const(w) => *w,
+    fn peek(env: &'static EnvObj, ir: IrRef) -> Option<Word> {
+        match ir {
+            Ir::Const(w) => Some(*w),
             Ir::Local { depth, idx } => {
                 let mut e = env;
                 for _ in 0..*depth {
                     e = e.up()?;
                 }
                 e.mark_read();
-                e.slot(*idx as usize).get()
+                Some(e.slot(*idx as usize).get())
             }
-            _ => return None,
-        };
+            _ => None,
+        }
+    }
+
+    /// The value of a cheap operand if it is already a forced integer.
+    #[inline]
+    fn forced_int(&self, env: &'static EnvObj, ir: IrRef) -> Option<i64> {
+        let w = Self::peek(env, ir)?;
         if w.is_imm_int() {
             Some(w.imm_int_value())
         } else {
@@ -1902,24 +1897,11 @@ impl Evaluator {
         pos: Pos,
     ) -> EvalResult<Word> {
         let mut v = self.eval(env, subject)?;
-        let mut pos2 = Pos::NONE;
         for elem in path {
             let name = self.attr_name(env, elem)?;
-            match default {
+            let attr = match default {
                 Some(d) => match v.as_attrs().and_then(|a| a.get(name)) {
-                    Some(a) => {
-                        pos2 = a.pos;
-                        v = self.force_cell(&a.cell).map_err(|mut e| {
-                            e.add_trace(
-                                pos2,
-                                format!(
-                                    "while evaluating the attribute '{}'",
-                                    self.show_attr_path(env, path)
-                                ),
-                            );
-                            e
-                        })?;
-                    }
+                    Some(a) => a,
                     None => {
                         if v.as_attrs().is_none() {
                             crate::lint::coerce::or_non_attrs(self, v, pos)?;
@@ -1930,19 +1912,7 @@ impl Evaluator {
                 None => {
                     let attrs = self.force_attrs(v, pos, "while selecting an attribute")?;
                     match attrs.get(name) {
-                        Some(a) => {
-                            pos2 = a.pos;
-                            v = self.force_cell(&a.cell).map_err(|mut e| {
-                                e.add_trace(
-                                    pos2,
-                                    format!(
-                                        "while evaluating the attribute '{}'",
-                                        self.show_attr_path(env, path)
-                                    ),
-                                );
-                                e
-                            })?;
-                        }
+                        Some(a) => a,
                         None => bail!(
                             ErrorKind::MissingAttr,
                             pos,
@@ -1951,9 +1921,18 @@ impl Evaluator {
                         ),
                     }
                 }
-            }
+            };
+            v = self.force_cell(&attr.cell).map_err(|mut e| {
+                e.add_trace(
+                    attr.pos,
+                    format!(
+                        "while evaluating the attribute '{}'",
+                        self.show_attr_path(env, path)
+                    ),
+                );
+                e
+            })?;
         }
-        let _ = pos2;
         Ok(v)
     }
 
