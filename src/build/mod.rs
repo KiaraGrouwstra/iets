@@ -566,9 +566,10 @@ fn strip_hash(drv_path: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    use super::render::tests::Sink;
     use super::*;
 
-    fn drv(name: &str) -> StorePath {
+    pub(super) fn drv(name: &str) -> StorePath {
         StorePath::parse(&format!(
             "/nix/store/00000000000000000000000000000000-{name}.drv"
         ))
@@ -587,21 +588,6 @@ mod tests {
     fn hash_stripping() {
         assert_eq!(strip_hash(&drv("hello").to_string()), "hello");
         assert_eq!(strip_hash("plain"), "plain");
-    }
-
-    /// Somewhere to read the renderer's stderr back from.
-    #[derive(Clone, Default)]
-    struct Sink(Arc<Mutex<Vec<u8>>>);
-
-    impl Write for Sink {
-        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(b);
-            Ok(b.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
     }
 
     /// A backend that builds every job of a batch concurrently, the way the

@@ -503,14 +503,8 @@ fn base_name(path: String) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::tests::drv;
     use super::*;
-
-    fn drv(name: &str) -> StorePath {
-        StorePath::parse(&format!(
-            "/nix/store/00000000000000000000000000000000-{name}.drv"
-        ))
-        .unwrap()
-    }
 
     #[test]
     fn the_timings_report_with_every_line() {

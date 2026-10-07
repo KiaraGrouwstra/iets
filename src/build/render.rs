@@ -609,12 +609,13 @@ fn drv_paths(text: &str) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
+    /// Somewhere to read the renderer's stderr back from.
     #[derive(Clone, Default)]
-    struct Sink(Arc<Mutex<Vec<u8>>>);
+    pub struct Sink(pub Arc<Mutex<Vec<u8>>>);
 
     impl Write for Sink {
         fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
