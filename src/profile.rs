@@ -275,6 +275,14 @@ pub fn open(session: &Arc<crate::session::Session>) {
 mod tests {
     use super::*;
 
+    /// A call the way the evaluator enters one: push, then sample if a tick passed.
+    fn call(s: &mut Stack, p: &Profile, frame: u64, bytes: u64) {
+        s.enter(frame);
+        if s.due(p) {
+            s.take(p, bytes);
+        }
+    }
+
     fn folded(p: &Profile) -> Vec<(Vec<u64>, u64)> {
         let g = p.folded.lock().unwrap();
         let mut v: Vec<_> = g.iter().map(|(k, c)| (k.to_vec(), *c)).collect();
@@ -295,20 +303,11 @@ mod tests {
         let p = Profile::default();
         let mut s = Stack::default();
         p.tick.store(1, Ordering::Relaxed);
-        s.enter(10);
-        if s.due(&p) {
-            s.take(&p, 0);
-        }
-        s.enter(20);
-        if s.due(&p) {
-            s.take(&p, 0);
-        }
+        call(&mut s, &p, 10, 0);
+        call(&mut s, &p, 20, 0);
         assert_eq!(folded(&p), vec![(vec![10], 1)]);
         p.tick.store(2, Ordering::Relaxed);
-        s.enter(30);
-        if s.due(&p) {
-            s.take(&p, 0);
-        }
+        call(&mut s, &p, 30, 0);
         assert_eq!(folded(&p), vec![(vec![10], 1), (vec![10, 20, 30], 1)]);
     }
 
@@ -317,21 +316,12 @@ mod tests {
         let p = Profile::default();
         let mut s = Stack::default();
         let d = s.depth();
-        s.enter(10);
-        if s.due(&p) {
-            s.take(&p, 0);
-        }
-        s.enter(20);
-        if s.due(&p) {
-            s.take(&p, 0);
-        }
+        call(&mut s, &p, 10, 0);
+        call(&mut s, &p, 20, 0);
         s.unwind(d);
         assert_eq!(s.depth(), 0);
         p.tick.store(1, Ordering::Relaxed);
-        s.enter(30);
-        if s.due(&p) {
-            s.take(&p, 0);
-        }
+        call(&mut s, &p, 30, 0);
         assert_eq!(folded(&p), vec![(vec![30], 1)]);
     }
 
@@ -340,10 +330,7 @@ mod tests {
         let p = Profile::default();
         let mut s = Stack::default();
         for i in 0..(MAX_DEPTH as u64 + 10) {
-            s.enter(i);
-            if s.due(&p) {
-                s.take(&p, 0);
-            }
+            call(&mut s, &p, i, 0);
             p.tick.store(i + 1, Ordering::Relaxed);
         }
         assert!(folded(&p).iter().all(|(k, _)| k.len() <= MAX_DEPTH));
@@ -355,10 +342,7 @@ mod tests {
         p.by_bytes.store(true, Ordering::Relaxed);
         let mut s = Stack::default();
         p.tick.store(1, Ordering::Relaxed);
-        s.enter(10);
-        if s.due(&p) {
-            s.take(&p, 4096);
-        }
+        call(&mut s, &p, 10, 4096);
         assert_eq!(folded(&p), vec![(vec![10], 4096)]);
     }
 }
