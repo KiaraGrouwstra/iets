@@ -16,6 +16,32 @@ fn eval(expr: &str, env: &[(&str, &str)]) -> Output {
     c.output().expect("run iets")
 }
 
+/// The folded lines of a `kind` profile of `expr`, and the run. `tag` keeps the
+/// files of concurrent tests apart.
+fn profile(tag: &str, kind: &str, expr: &str) -> (String, Output) {
+    let dir = std::env::temp_dir().join(format!("iets-profile-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let out = dir.join("p.folded");
+    let o = eval(
+        expr,
+        &[
+            ("IETS_PROFILE", kind),
+            ("IETS_PROFILE_TO", out.to_str().unwrap()),
+            ("IETS_PROFILE_HZ", "1000"),
+            ("IETS_STATS", "1"),
+        ],
+    );
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let folded = std::fs::read_to_string(&out).expect("the profile file");
+    let _ = std::fs::remove_dir_all(&dir);
+    (folded, o)
+}
+
 #[test]
 fn a_profile_that_is_not_eval_is_a_settings_error() {
     let o = eval("1", &[("IETS_PROFILE", "cpu")]);
@@ -43,28 +69,10 @@ fn a_run_shorter_than_a_tick_says_it_sampled_nothing() {
 
 #[test]
 fn a_folded_line_is_a_stack_and_a_count() {
-    let dir = std::env::temp_dir().join(format!("iets-profile-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("temp dir");
-    let out = dir.join("p.folded");
     // mutual recursion, so a sample sees a stack and not one frame
     let expr = "let f = n: if n == 0 then 0 else g (n - 1); g = n: f n; \
                 in builtins.foldl' (a: _: a + f 400) 0 (builtins.genList (x: x) 4000)";
-    let o = eval(
-        expr,
-        &[
-            ("IETS_PROFILE", "eval"),
-            ("IETS_PROFILE_TO", out.to_str().unwrap()),
-            ("IETS_PROFILE_HZ", "1000"),
-        ],
-    );
-    assert_eq!(
-        o.status.code(),
-        Some(0),
-        "{}",
-        String::from_utf8_lossy(&o.stderr)
-    );
-    let folded = std::fs::read_to_string(&out).expect("the profile file");
-    let _ = std::fs::remove_dir_all(&dir);
+    let (folded, _) = profile("stack", "eval", expr);
     let mut deepest = 0;
     for line in folded.lines() {
         let (stack, count) = line.rsplit_once(' ').expect("a stack and a count");
@@ -81,27 +89,9 @@ fn a_folded_line_is_a_stack_and_a_count() {
 /// that called it.
 #[test]
 fn a_builtin_names_itself_in_a_frame() {
-    let dir = std::env::temp_dir().join(format!("iets-profile-op-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("temp dir");
-    let out = dir.join("p.folded");
     let expr = "builtins.length (builtins.foldl' (a: _: a ++ builtins.genList (x: x) 50) [] \
                 (builtins.genList (x: x) 2000))";
-    let o = eval(
-        expr,
-        &[
-            ("IETS_PROFILE", "eval"),
-            ("IETS_PROFILE_TO", out.to_str().unwrap()),
-            ("IETS_PROFILE_HZ", "1000"),
-        ],
-    );
-    assert_eq!(
-        o.status.code(),
-        Some(0),
-        "{}",
-        String::from_utf8_lossy(&o.stderr)
-    );
-    let folded = std::fs::read_to_string(&out).expect("the profile file");
-    let _ = std::fs::remove_dir_all(&dir);
+    let (folded, _) = profile("op", "eval", expr);
     assert!(folded.contains(":«"), "no builtin frame:\n{folded}");
 }
 
@@ -111,28 +101,9 @@ fn a_builtin_names_itself_in_a_frame() {
 /// missing.
 #[test]
 fn an_allocation_profile_accounts_for_the_arena() {
-    let dir = std::env::temp_dir().join(format!("iets-profile-alloc-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("temp dir");
-    let out = dir.join("p.folded");
     let expr = "builtins.length (builtins.foldl' (a: _: a ++ builtins.genList toString 200) [] \
                 (builtins.genList (x: x) 2000))";
-    let o = eval(
-        expr,
-        &[
-            ("IETS_PROFILE", "alloc"),
-            ("IETS_PROFILE_TO", out.to_str().unwrap()),
-            ("IETS_PROFILE_HZ", "1000"),
-            ("IETS_STATS", "1"),
-        ],
-    );
-    assert_eq!(
-        o.status.code(),
-        Some(0),
-        "{}",
-        String::from_utf8_lossy(&o.stderr)
-    );
-    let folded = std::fs::read_to_string(&out).expect("the profile file");
-    let _ = std::fs::remove_dir_all(&dir);
+    let (folded, o) = profile("alloc", "alloc", expr);
     let weighed: u64 = folded
         .lines()
         .map(|l| {
