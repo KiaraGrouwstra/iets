@@ -189,18 +189,21 @@ fn throw(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     bail!(ErrorKind::Throw, pos, "{}", String::from_utf8_lossy(&s))
 }
 
+fn say(ev: &mut Evaluator, line: String) {
+    // parallel: helpers journal, the demand path prints
+    if !crate::parallel::journal(ev, line.clone()) {
+        ev.lints.flush();
+        crate::log::line(&line);
+    }
+}
+
 fn trace(ev: &mut Evaluator, args: &[Word], _pos: Pos) -> EvalResult<Word> {
     let w = ev.force(args[0])?;
     let msg = match w.view() {
         Value::String(s) => String::from_utf8_lossy(s.bytes).into_owned(),
         _ => crate::print::show_value_short(ev, w),
     };
-    let line = format!("trace: {msg}");
-    if !crate::parallel::journal(ev, line.clone()) {
-        // parallel: helpers journal, the demand path prints
-        ev.lints.flush();
-        crate::log::line(&line);
-    }
+    say(ev, format!("trace: {msg}"));
     ev.force(args[1])
 }
 
@@ -210,12 +213,10 @@ fn warn(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the first argument; the message passed to builtins.warn",
     )?;
-    let line = format!("evaluation warning: {}", String::from_utf8_lossy(s.bytes));
-    if !crate::parallel::journal(ev, line.clone()) {
-        // parallel: helpers journal, the demand path prints
-        ev.lints.flush();
-        crate::log::line(&line);
-    }
+    say(
+        ev,
+        format!("evaluation warning: {}", String::from_utf8_lossy(s.bytes)),
+    );
     ev.force(args[1])
 }
 
