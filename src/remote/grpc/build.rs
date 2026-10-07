@@ -894,6 +894,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_timings_report_with_every_line() {
+        let t = Timings {
+            connect: Duration::from_millis(1),
+            query: Duration::from_millis(2),
+            resolve: Duration::from_millis(3),
+            substitute: Duration::from_millis(4),
+            add: Duration::from_millis(5),
+            build: Duration::from_millis(6),
+            outputs: Duration::from_millis(7),
+            fetch: Duration::from_millis(8),
+            trusted: Some(true),
+            query_paths: 9,
+            missing: 8,
+            resolve_paths: 7,
+            store_sources: 6,
+            substitute_paths: 5,
+            add_paths: 4,
+            add_bytes: 3,
+            fetched: 2,
+            drvs: 11,
+            drvs_cached: 10,
+            calls: 12,
+        };
+        assert_eq!(
+            t.report(&Plan::default(), Duration::from_millis(9)),
+            "plan: 0 sources, 0 drvs, 0.009s\n\
+             connect: gRPC, trusted, 0.001s\n\
+             query: 9 paths, 8 missing, 0.002s\n\
+             resolve: 7 sources, 6 not from this eval, read from /nix/store, 0.003s\n\
+             substitute: 5 paths left to the store, 0.004s\n\
+             add: 4 paths, 3 bytes, 0.005s\n\
+             build: 11 drvs, 10 already valid, 0.006s\n\
+             outputs: 0.007s\n\
+             fetch: 2 outputs, 0.008s\n\
+             grpc: 12 calls"
+        );
+    }
+
+    #[test]
     fn a_local_upload_failure_beats_the_stream_ended_status() {
         let ended = || Err::<(), _>(tonic::Status::unavailable("gRPC stream ended"));
         let local = io::Error::other("source 'x' changed since evaluation");
