@@ -908,6 +908,22 @@ pub fn reason_line(raw: &str) -> String {
     }
 }
 
+/// Scans a CSI sequence from the byte after `ESC [`: parameter bytes,
+/// intermediate bytes, one final byte. Gives the index after it and the final
+/// byte, 0 when there is none.
+fn csi(b: &[u8], mut i: usize) -> (usize, u8) {
+    while b.get(i).is_some_and(|c| (0x30..=0x3f).contains(c)) {
+        i += 1;
+    }
+    while b.get(i).is_some_and(|c| (0x20..=0x2f).contains(c)) {
+        i += 1;
+    }
+    match b.get(i) {
+        Some(c) if (0x40..=0x7e).contains(c) => (i + 1, *c),
+        _ => (i, 0),
+    }
+}
+
 /// `s` without its ECMA-048 escape sequences.
 pub fn strip_ansi(s: &str) -> String {
     let b = s.as_bytes();
@@ -924,18 +940,8 @@ pub fn strip_ansi(s: &str) -> String {
         }
         i += 1;
         match b.get(i) {
-            // CSI: parameter bytes, intermediate bytes, one final byte
             Some(b'[') => {
-                i += 1;
-                while b.get(i).is_some_and(|c| (0x30..=0x3f).contains(c)) {
-                    i += 1;
-                }
-                while b.get(i).is_some_and(|c| (0x20..=0x2f).contains(c)) {
-                    i += 1;
-                }
-                if b.get(i).is_some_and(|c| (0x40..=0x7e).contains(c)) {
-                    i += 1;
-                }
+                (i, _) = csi(b, i + 1);
             }
             // 7-bit C1 Fe other than CSI
             Some(c) if (0x40..=0x5a).contains(c) || (0x5c..=0x5f).contains(c) => i += 1,
@@ -961,17 +967,7 @@ pub fn filter_ansi(s: &str, filter_all: bool) -> String {
                 let mut last = 0u8;
                 match b.get(i) {
                     Some(b'[') => {
-                        i += 1;
-                        while b.get(i).is_some_and(|c| (0x30..=0x3f).contains(c)) {
-                            i += 1;
-                        }
-                        while b.get(i).is_some_and(|c| (0x20..=0x2f).contains(c)) {
-                            i += 1;
-                        }
-                        if let Some(c) = b.get(i).filter(|c| (0x40..=0x7e).contains(*c)) {
-                            last = *c;
-                            i += 1;
-                        }
+                        (i, last) = csi(b, i + 1);
                     }
                     Some(b']') => {
                         i += 1;
