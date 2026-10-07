@@ -172,22 +172,8 @@ impl Default for SymWords {
 
 impl SymWords {
     pub fn new() -> SymWords {
-        let bytes = super::interner::MAX_SYMS * size_of::<AtomicU64>();
-        // SAFETY: anonymous zero-filled mapping (zero is `Word::EMPTY`),
-        // paged in on demand.
-        let p = unsafe {
-            let p = libc::mmap(
-                std::ptr::null_mut(),
-                bytes,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
-                -1,
-                0,
-            );
-            assert!(p != libc::MAP_FAILED, "sym words: mmap failed");
-            p as *mut AtomicU64
-        };
-        SymWords(Arc::new(SymWordsInner(p)))
+        // zero is `Word::EMPTY`
+        SymWords(Arc::new(SymWordsInner(super::interner::per_sym())))
     }
 
     #[inline]

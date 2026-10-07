@@ -115,22 +115,26 @@ impl Default for Interner {
     }
 }
 
+/// `MAX_SYMS` zeroed `T`s, paged in on demand and never unmapped.
+pub(super) fn per_sym<T>() -> *mut T {
+    // SAFETY: an anonymous mapping aliases nothing.
+    let p = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            MAX_SYMS * size_of::<T>(),
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
+            -1,
+            0,
+        )
+    };
+    assert!(p != libc::MAP_FAILED, "per-symbol table: mmap failed");
+    p as *mut T
+}
+
 impl Interner {
     pub fn new() -> Interner {
-        let bytes = MAX_SYMS * size_of::<AtomicPtr<&'static [u8]>>();
-        // SAFETY: anonymous zero-filled mapping, paged in on demand.
-        let names = unsafe {
-            let p = libc::mmap(
-                std::ptr::null_mut(),
-                bytes,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
-                -1,
-                0,
-            );
-            assert!(p != libc::MAP_FAILED, "interner: mmap failed");
-            p as *mut AtomicPtr<&'static [u8]>
-        };
+        let names = per_sym();
         Interner {
             shared: Arc::new(Inner {
                 shards: (0..SHARDS)
