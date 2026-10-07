@@ -59,16 +59,8 @@ pub fn substitute(c: &mut Client, paths: &[StorePath], t: &mut Timings) -> Resul
     if paths.is_empty() {
         return Ok(());
     }
-    t.calls += 1;
-    let req = proto::QueryValidPathsRequest {
-        paths: paths.iter().map(|p| p.base_name().to_string()).collect(),
-        substitute: true,
-    };
-    let reply = c.call("QueryValidPaths", |mut stub, h| {
-        let req = req.clone();
-        async move { stub.query_valid_paths(c_request(req, &h)).await }
-    })?;
-    let known: HashSet<String> = reply.paths.into_iter().collect();
+    let names: Vec<String> = paths.iter().map(|p| p.base_name().to_string()).collect();
+    let known = query(c, &names, true, t)?;
     for p in paths {
         if !known.contains(p.base_name()) {
             return Err(Error::Store(format!(
@@ -114,10 +106,19 @@ pub fn query_valid_paths(
     if names.is_empty() {
         return Ok(HashSet::new());
     }
+    query(c, names, false, t)
+}
+
+fn query(
+    c: &mut Client,
+    names: &[String],
+    substitute: bool,
+    t: &mut Timings,
+) -> Result<HashSet<String>> {
     t.calls += 1;
     let req = proto::QueryValidPathsRequest {
         paths: names.to_vec(),
-        substitute: false,
+        substitute,
     };
     let reply = c.call("QueryValidPaths", |mut stub, h| {
         let req = req.clone();
