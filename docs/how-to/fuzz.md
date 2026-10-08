@@ -1,30 +1,34 @@
 # How to fuzz iets against Nix
 
 `fuzz/` is a differential fuzzer. It gives the same input to iets and to
-Nix 2.34.8, compares the two answers, and reports each difference. The
-first target is the parser. This page shows how to run it and how to read
-what it reports.
+Nix 2.34.8, compares the two answers, and reports each difference. This
+page shows how to run it and how to read what it reports.
 
-## What the parse target compares
+| Target | The input | Compared |
+|:---|:---|:---|
+| `parse` | Nix source | accept or refuse, the position of a refusal, the desugared tree |
+| `nar-read` | a NAR | accept or refuse, bytes consumed, the tree written out again |
+| `nar-gen` | bytes that choose a NAR token by token | as `nar-read` |
+| `nar-tree` | bytes that choose a file tree on disk | the NAR of the tree, then as `nar-read` |
+
+Two oracle processes stay running while a target runs, so a comparison
+costs a pipe round trip and not a process start:
+`fuzz/oracle/parse-oracle.cc` links libnixexpr 2.34.8 and
+`fuzz/oracle/nar-oracle.cc` links libnixutil 2.34.8.
+
+## The parse target
 
 For each input, both parsers give one of two answers:
 
 - the input parses, to a tree;
 - the input is refused, at a line and a column.
 
-`fuzz/oracle/parse-oracle.cc` links libnixexpr 2.34.8 and prints Nix's
-tree. `fuzz/src/canon.rs` builds iets's tree in the same form, with the
-desugaring of Nix's `parser.y`: `a - b` is a call of `__sub`, `a.b = 1;`
-makes a nested set, `{ x } @ y` sorts its formals. Both trees then pass
-through `sx::normalise`, which removes what is not structure: the order
-Nix stores bindings in, where a lexer splits a string into tokens, and
-iets folding `-1` into a literal.
-
-The target compares:
-
-- whether both sides accept or both refuse;
-- for a refusal, the line and the column;
-- for an acceptance, the two trees.
+`parse-oracle` prints Nix's tree. `fuzz/src/canon.rs` builds iets's tree
+in the same form, with the desugaring of Nix's `parser.y`: `a - b` is a
+call of `__sub`, `a.b = 1;` makes a nested set, `{ x } @ y` sorts its
+formals. Both trees then pass through `sx::normalise`, which removes what
+is not structure: the order Nix stores bindings in, where a lexer splits
+a string into tokens, and iets folding `-1` into a literal.
 
 It does not compare:
 
@@ -36,10 +40,9 @@ It does not compare:
 
 Both sides keep one symbol table across inputs, for speed. Symbol order
 decides which of several clashing names an error reports, and a file is
-parsed in a fresh process. So a difference is checked again with a fresh
-oracle and a fresh table, and only that second answer counts.
-
-A difference has one of six kinds:
+parsed in a fresh process. So an unknown difference is checked again
+with a fresh oracle and a fresh table, and only that second answer
+counts.
 
 | Kind | Meaning |
 |:---|:---|
@@ -50,47 +53,78 @@ A difference has one of six kinds:
 | `iets-panic` | the iets parser panicked |
 | `nix-crash` | the oracle process died on the input |
 
-## Run the check
+## The NAR targets
+
+`nar-read` gives the input to Nix's `parseDump`, to `restore_path` and to
+`parse_length`. When the input is a NAR, Nix writes its memory tree out
+again, and iets dumps the directory `restore_path` made. The two must be
+the same bytes. Nix also dumps that directory, and iets's `nar_hash` and
+`nar_size` of it must describe those bytes.
+
+Random bytes are rarely a NAR, so `nar-gen` builds one from the input:
+mostly well formed, with names and symlink targets of any bytes, entries
+in any order, a wrong tag now and then, a cut at any point, and now and
+then a chain of directories across the depth limit of 64.
+
+`nar-tree` makes a tree on disk: files with any mode the owner can read,
+files past the writer's 64 KiB buffer, symlinks, FIFOs, names in any bytes
+a name may hold, and chains across the depth limit. Both sides dump it.
+
+| Kind | Meaning |
+|:---|:---|
+| `nix-only` | Nix reads the NAR, `restore_path` refuses it |
+| `iets-only` | `restore_path` reads the NAR, Nix refuses it |
+| `parse-length` | `parse_length` and Nix disagree on accept or refuse |
+| `consumed` | both read the NAR, after a different number of bytes |
+| `tree` | both read the NAR, and the trees written out again differ |
+| `dump` | the two dumps of one path differ, or only one fails |
+| `hash` | `nar_hash` or `nar_size` does not describe the dump |
+| `iets-panic` | iets panicked |
+| `nix-crash` | the oracle process died on the input |
+
+## Run the checks
 
 ```sh
 nix build .#checks.x86_64-linux.fuzz-parse -L
+nix build .#checks.x86_64-linux.fuzz-nar -L
 ```
 
-The check gives every `.nix` file of the pinned nixpkgs to both parsers,
-then runs libFuzzer for 60 seconds from an eighth of those files and
-`fuzz/regressions/parse/`. It fails on a difference that
-`fuzz/divergences.toml` does not list, and prints the input in base64.
+`fuzz-parse` gives every `.nix` file of the pinned nixpkgs to both
+parsers, then runs libFuzzer for 60 seconds from an eighth of those files
+and `fuzz/regressions/parse/`. `fuzz-nar` runs each NAR target for 20
+seconds. A check fails on a difference that `fuzz/divergences.toml` does
+not list, and prints the input in base64.
 
-## Run the fuzzer by hand
+## Run a fuzzer by hand
 
 The toolchain is the stable Rust of the flake. `cargo fuzz` runs on it
-with `--sanitizer none`; AddressSanitizer would need nightly, and the
-parser has no `unsafe` code for it to check.
+with `--sanitizer none`; AddressSanitizer would need nightly.
 
 ```sh
-nix build .#parse-oracle -o oracle
-export IETS_PARSE_ORACLE=$PWD/oracle/bin/parse-oracle
-nix shell nixpkgs#cargo-fuzz -c cargo fuzz build -s none -O parse
+nix build .#fuzz-oracles -o oracles
+nix build .#fuzzers -o fuzzers
+export IETS_PARSE_ORACLE=$PWD/oracles/bin/parse-oracle
+export IETS_NAR_ORACLE=$PWD/oracles/bin/nar-oracle
 mkdir -p corpus && cp tests/lang/*.nix corpus/
-fuzz/target/x86_64-unknown-linux-gnu/release/parse \
-  -dict=fuzz/parse.dict -max_len=4096 corpus fuzz/regressions/parse
+fuzzers/bin/fuzz-parse -dict=fuzz/parse.dict -max_len=4096 corpus fuzz/regressions/parse
+fuzzers/bin/fuzz-nar-gen -max_len=4096 nar-corpus
 ```
 
-Add `-fork=N -ignore_crashes=1` to use N cores and keep going after a
-difference. Each difference is then a file `crash-<sha1>`.
-
-`nix build .#fuzz-parse` gives the same binary as `bin/fuzz-parse`.
+`fuzz/default.nix` holds the flags of each target. Add `-fork=N
+-ignore_crashes=1` to use N cores and keep going after a difference.
+Each difference is then a file `crash-<sha1>`. While you change iets,
+`cargo fuzz build -s none -O TARGET` in `fuzz/` builds one target.
 
 ## Replay inputs
 
-`parse-diff` gives files to both parsers without libFuzzer: a crash
-artifact, a corpus, or a tree of `.nix` files.
+`fuzz-diff` gives files to a target without libFuzzer: a crash artifact,
+a corpus, or a tree of `.nix` files.
 
 ```sh
-nix build .#parse-diff -o parse-diff
-parse-diff/bin/parse-diff crash-0123abcd
-parse-diff/bin/parse-diff --nix-only ~/src/nixpkgs
-parse-diff/bin/parse-diff --json corpus/ > triage.jsonl
+nix build .#fuzz-diff -o fuzz-diff
+fuzz-diff/bin/fuzz-diff parse crash-0123abcd
+fuzz-diff/bin/fuzz-diff --nix-only parse ~/src/nixpkgs
+fuzz-diff/bin/fuzz-diff --json nar-gen corpus/ > triage.jsonl
 ```
 
 The exit code is 0 when no difference is unexpected, 1 when one is, and
@@ -110,29 +144,32 @@ parse divergence (position)
   iets: error at 1:4: syntax error, unexpected end of path, expecting '${'
 ```
 
-For a `tree`, `at` names the first subtree that differs, as a path of
-node tags and child indexes, for example `attrs[3]/bind[2]/call[1]/`.
+For a parse `tree`, `at` names the first subtree that differs, as a path
+of node tags and child indexes, for example `attrs[3]/bind[2]/call[1]/`.
+A NAR is shown as its length and its first 64 bytes in hexadecimal.
 
 1. Make the input small:
    `fuzz-parse -minimize_crash=1 -runs=10000 crash-0123abcd`.
-2. Confirm it with the real Nix. Write the input to a file and run
-   `nix-instantiate --parse FILE`. Do not use `-E` or standard input:
-   there Nix finds lines only in the text before the first NUL byte
-   (`Pos::getSource`, position.cc), so a position after a NUL is wrong.
+2. Confirm it with the real Nix. For the parser, write the input to a
+   file and run `nix-instantiate --parse FILE`. Do not use `-E` or
+   standard input: there Nix finds lines only in the text before the
+   first NUL byte (`Pos::getSource`, position.cc). For a NAR, use
+   `nix-store --restore DIR < FILE` and `nix-store --dump DIR`.
 3. Find the rule in the Nix source (`src/libexpr/parser.y`, `lexer.l`,
-   `parser-state.hh`) and decide:
-   - iets is wrong: fix it, add a test in `src/syntax/tests.rs`, and put
-     the small input in `fuzz/regressions/parse/`, named by its sha1;
+   `parser-state.hh`, `src/libutil/archive.cc`) and decide:
+   - iets is wrong: fix it, add a test next to the code, and put the
+     small input in `fuzz/regressions/TARGET/`, named by its sha1;
    - iets differs on purpose: add a section to
      `docs/reference/divergences.md` and an entry to
      `fuzz/divergences.toml`;
-   - the oracle or `canon.rs` is wrong: fix it there.
+   - the oracle or the target code is wrong: fix it there.
 
 ## Known divergences
 
-`fuzz/divergences.toml` lists the differences that are not bugs. A
-difference that matches an entry is counted as expected and is not
-added to the corpus, so the fuzzer does not find it again and again.
+`fuzz/divergences.toml` lists the differences that are not bugs, in one
+array of tables per target family: `[[parse]]` and `[[nar]]`. A
+difference that matches an entry is counted as expected and is not added
+to the corpus, so the fuzzer does not find it again and again.
 
 ```toml
 [[parse]]
@@ -160,17 +197,18 @@ list; otherwise the binaries carry the list they were built with.
 
 ```sh
 nix-farm '.#packages.x86_64-linux.fuzz-parse-campaign' --fetch-to campaign
+nix-farm '.#packages.x86_64-linux.fuzz-nar-campaign' --fetch-to campaign
 ```
 
-The campaign minimises the nixpkgs seeds, fuzzes on every core of the
-builder for an hour, and minimises the result again. Its output holds
-`corpus/` (the grown corpus), `artifacts/` (every input that differed),
-`triage.jsonl` (the artifacts replayed by `parse-diff --json`) and the
-libFuzzer logs. `(import ./fuzz { ... }).campaign { seconds; corpus; }`
-continues from an earlier corpus.
+A campaign minimises its seeds, fuzzes on every core of the builder for
+an hour, and minimises the result again. Its output holds `corpus/` (the
+grown corpus), `artifacts/` (every input that differed), `triage.jsonl`
+(the artifacts replayed by `fuzz-diff --json`) and the libFuzzer logs.
+`(import ./fuzz { ... }).campaign { target; seconds; corpus; }` runs
+another target, for another time, or from an earlier corpus.
 
-The grown corpus is not in the repository. The seeds come from the
-pinned nixpkgs again on each run, so only the growth needs a home.
+The grown corpora are not in the repository. The parse seeds come from
+the pinned nixpkgs again on each run, so only the growth needs a home.
 
 ## Measure coverage
 
@@ -186,4 +224,6 @@ llvm-cov report \
 
 `cargo fuzz coverage` looks for `llvm-profdata` in the Rust sysroot,
 where the flake's Rust has none, so the merge is a step of its own. The
-LLVM major version must be the one `rustc -vV` names.
+LLVM major version must be the one `rustc -vV` names. For several
+targets, merge their `raw` directories into one profile and give
+`llvm-cov` one binary and the others with `-object`.

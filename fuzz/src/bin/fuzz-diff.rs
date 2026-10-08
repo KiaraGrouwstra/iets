@@ -1,16 +1,18 @@
-//! Replays files through both parsers: a corpus, a crash artifact, or a
+//! Replays files through a target: a corpus, a crash artifact, or a
 //! tree of `.nix` files. Exit 0: no unexpected divergence; 1: at least one;
 //! 2: the run itself failed.
 
-use iets_fuzz::{Checker, Verdict, known};
+use iets_fuzz::Verdict;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-const USAGE: &str = "usage: parse-diff [--json] [--nix-only] PATH...
+const USAGE: &str = "usage: fuzz-diff [--json] [--nix-only] TARGET PATH...
 
-Parses each file under PATH with iets and with Nix 2.34.8 and compares.
+Gives each file under PATH to TARGET (parse, nar-read, nar-gen,
+nar-tree), which
+compares iets with Nix 2.34.8.
 A directory is walked; with --nix-only only its *.nix files are read.
 --json prints one JSON object per divergence and a summary object.";
 
@@ -21,6 +23,7 @@ fn main() {
 fn run() -> i32 {
     let mut json = false;
     let mut nix_only = false;
+    let mut target = None;
     let mut roots = Vec::new();
     for a in std::env::args().skip(1) {
         match a.as_str() {
@@ -31,20 +34,21 @@ fn run() -> i32 {
                 return 0;
             }
             _ if a.starts_with('-') => {
-                eprintln!("parse-diff: unknown flag {a}\n{USAGE}");
+                eprintln!("fuzz-diff: unknown flag {a}\n{USAGE}");
                 return 2;
             }
+            _ if target.is_none() => target = Some(a),
             _ => roots.push(PathBuf::from(a)),
         }
     }
-    if roots.is_empty() {
+    let Some(target) = target.filter(|_| !roots.is_empty()) else {
         eprintln!("{USAGE}");
         return 2;
-    }
-    let known = match known::from_env() {
-        Ok(k) => k,
+    };
+    let mut checker = match iets_fuzz::target(&target) {
+        Ok(t) => t,
         Err(e) => {
-            eprintln!("parse-diff: {e}");
+            eprintln!("fuzz-diff: {e}");
             return 2;
         }
     };
@@ -52,7 +56,6 @@ fn run() -> i32 {
     for r in &roots {
         walk(r, nix_only, &mut files);
     }
-    let mut checker = Checker::new(known);
     let (mut same, mut bugs) = (0usize, 0usize);
     let mut expected: BTreeMap<String, usize> = BTreeMap::new();
     let start = Instant::now();
@@ -66,13 +69,13 @@ fn run() -> i32 {
                 if json {
                     println!(
                         "{}",
-                        json!({"file": f, "kind": d.kind.name(), "at": d.at, "nix": d.nix, "iets": d.iets})
+                        json!({"file": f, "kind": d.kind, "at": d.at, "nix": d.nix, "iets": d.iets})
                     );
                 } else {
                     println!(
                         "{}: {}{}",
                         f.display(),
-                        d.kind.name(),
+                        d.kind,
                         if d.at.is_empty() {
                             String::new()
                         } else {

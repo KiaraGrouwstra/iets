@@ -560,8 +560,10 @@ name = "iets-fuzz"
 version = "0.0.0"
 dependencies = [
  "iets",
+ "libc",
  "libfuzzer-sys",
  "serde_json",
+ "sha2 0.10.9",
  "toml",
 ]
 

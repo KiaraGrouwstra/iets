@@ -1,13 +1,13 @@
-# Known divergences of the parse target from Nix 2.34.8: each one a hit
+# Known divergences of the fuzz targets from Nix 2.34.8: each one a hit
 # the fuzzer reports as expected, not as a bug. A hit matches an entry
 # when every field the entry gives matches. Format and meaning:
 # docs/how-to/fuzz.md.
 #
-#   [[parse]]
+#   [[parse]]       # or [[nar]], for the nar-* targets
 #   id = "..."      # names the case; reports count hits per id
 #   doc = "..."     # the section of docs/reference/divergences.md
-#   kind = "..."    # optional: nix-only, iets-only, position, tree,
-#                   # iets-panic or nix-crash
+#   kind = "..."    # optional: one of the target's kinds
+#                   # (docs/how-to/fuzz.md)
 #   input = "..."   # optional: the input contains these bytes
 #   nix = "..."     # optional: Nix's side of the report contains this
 #   iets = "..."    # optional: iets's side of the report contains this

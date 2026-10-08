@@ -1,6 +1,7 @@
-//! The known divergences of `fuzz/divergences.toml`.
+//! The known divergences of `fuzz/divergences.toml`: one array of tables
+//! per target, `[[parse]]`, `[[nar]]`.
 
-use crate::{Divergence, Kind};
+use crate::Divergence;
 
 pub struct Entry {
     pub id: String,
@@ -11,14 +12,14 @@ pub struct Entry {
     names_differ: bool,
 }
 
-pub fn load(text: &str) -> Result<Vec<Entry>, String> {
+pub fn load(text: &str, target: &str, kinds: &[&str]) -> Result<Vec<Entry>, String> {
     let table: toml::Table = text.parse().map_err(|e| format!("divergences.toml: {e}"))?;
-    let Some(list) = table.get("parse") else {
+    let Some(list) = table.get(target) else {
         return Ok(vec![]);
     };
-    let list = list
-        .as_array()
-        .ok_or("divergences.toml: `parse` is not an array of tables")?;
+    let list = list.as_array().ok_or(format!(
+        "divergences.toml: `{target}` is not an array of tables"
+    ))?;
     list.iter()
         .map(|e| {
             let field = |k: &str| e.get(k).and_then(|v| v.as_str()).map(str::to_string);
@@ -28,7 +29,7 @@ pub fn load(text: &str) -> Result<Vec<Entry>, String> {
             }
             let kind = field("kind");
             if let Some(k) = &kind
-                && !KINDS.iter().any(|x| x.name() == k)
+                && !kinds.contains(&k.as_str())
             {
                 return Err(format!(
                     "divergences.toml: `{id}` has the unknown kind `{k}`"
@@ -49,18 +50,9 @@ pub fn load(text: &str) -> Result<Vec<Entry>, String> {
         .collect()
 }
 
-const KINDS: [Kind; 6] = [
-    Kind::NixOnly,
-    Kind::IetsOnly,
-    Kind::Position,
-    Kind::Tree,
-    Kind::IetsPanic,
-    Kind::NixCrash,
-];
-
 impl Entry {
     pub fn matches(&self, d: &Divergence, src: &[u8]) -> bool {
-        self.kind.as_deref().is_none_or(|k| k == d.kind.name())
+        self.kind.as_deref().is_none_or(|k| k == d.kind)
             && self.input.as_deref().is_none_or(|i| contains(src, i))
             && self.nix.as_deref().is_none_or(|n| d.nix.contains(n))
             && self.iets.as_deref().is_none_or(|n| d.iets.contains(n))
@@ -72,12 +64,16 @@ fn contains(hay: &[u8], needle: &[u8]) -> bool {
     needle.is_empty() || hay.windows(needle.len()).any(|w| w == needle)
 }
 
-/// `$IETS_FUZZ_DIVERGENCES`, else the list next to this crate, compiled in
-/// so a fuzz binary needs no path.
-pub fn from_env() -> Result<Vec<Entry>, String> {
+/// The `target` entries of `$IETS_FUZZ_DIVERGENCES`, else of the list next
+/// to this crate, compiled in so a fuzz binary needs no path.
+pub fn from_env(target: &str, kinds: &[&str]) -> Result<Vec<Entry>, String> {
     match std::env::var("IETS_FUZZ_DIVERGENCES") {
-        Ok(p) => load(&std::fs::read_to_string(&p).map_err(|e| format!("{p}: {e}"))?),
-        Err(_) => load(include_str!("../divergences.toml")),
+        Ok(p) => load(
+            &std::fs::read_to_string(&p).map_err(|e| format!("{p}: {e}"))?,
+            target,
+            kinds,
+        ),
+        Err(_) => load(include_str!("../divergences.toml"), target, kinds),
     }
 }
 

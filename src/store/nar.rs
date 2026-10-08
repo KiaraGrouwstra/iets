@@ -713,6 +713,7 @@ impl Restorer<'_> {
             TAG_SYM => {
                 self.r.consume(&TOK_SYM, "'symlink' 'target'")?;
                 take(&mut self.r, MAX_TARGET, &mut self.name)?;
+                check_target(&self.name)?;
                 symlink(OsStr::from_bytes(&self.name), self.cur())?;
             }
             // The `)` that ends a directory's entry list is the node's own, so
@@ -759,20 +760,7 @@ impl Restorer<'_> {
             }
             self.r.consume(&TOK_ENT, "'entry' '(' 'name'")?;
             take(&mut self.r, MAX_NAME, &mut self.name)?;
-            let name = &self.name;
-            if name.is_empty()
-                || name.as_slice() == b"."
-                || name.as_slice() == b".."
-                || name.contains(&b'/')
-                || name.contains(&0)
-            {
-                return Err(bad_nar("bad entry name"));
-            }
-            if *name <= self.prev[depth] {
-                return Err(bad_nar("directory entries out of order"));
-            }
-            self.prev[depth].clear();
-            self.prev[depth].extend_from_slice(name);
+            next_name(&self.name, &mut self.prev[depth])?;
             self.r.consume(&TOK_NOD, "'node' '(' 'type'")?;
             self.path.push(b'/');
             self.path.extend_from_slice(&self.prev[depth]);
@@ -794,11 +782,17 @@ pub fn parse_length(source: &mut dyn Read) -> io::Result<u64> {
     let mut r = Reader::new(source);
     r.consume(&TOK_NAR, "a NAR header")?;
     let mut name = Vec::with_capacity(MAX_NAME);
-    parse_node(&mut r, &mut name, 0)?;
+    parse_node(&mut r, &mut name, &mut Vec::new(), 0)?;
     Ok(r.consumed)
 }
 
-fn parse_node(r: &mut Reader<'_>, name: &mut Vec<u8>, depth: usize) -> io::Result<()> {
+/// `prev[d]` is the last entry name read at depth `d`.
+fn parse_node(
+    r: &mut Reader<'_>,
+    name: &mut Vec<u8>,
+    prev: &mut Vec<Vec<u8>>,
+    depth: usize,
+) -> io::Result<()> {
     if depth >= NAR_MAX_DEPTH {
         return Err(bad_nar("directory nesting too deep"));
     }
@@ -815,10 +809,14 @@ fn parse_node(r: &mut Reader<'_>, name: &mut Vec<u8>, depth: usize) -> io::Resul
         }
         TAG_SYM => {
             r.consume(&TOK_SYM, "'symlink' 'target'")?;
-            r.token(MAX_TARGET)?;
+            check_target(r.token(MAX_TARGET)?)?;
         }
         _ => {
             r.consume(&TOK_DIR, "'directory'")?;
+            if prev.len() <= depth {
+                prev.resize(depth + 1, Vec::new());
+            }
+            prev[depth].clear();
             loop {
                 match r.peek(16)?[0] {
                     1 => return r.consume(&TOK_PAR, "')'"),
@@ -827,15 +825,39 @@ fn parse_node(r: &mut Reader<'_>, name: &mut Vec<u8>, depth: usize) -> io::Resul
                 }
                 r.consume(&TOK_ENT, "'entry' '(' 'name'")?;
                 take(r, MAX_NAME, name)?;
+                next_name(name, &mut prev[depth])?;
                 r.consume(&TOK_NOD, "'node' '(' 'type'")?;
                 // Nothing here keeps the name past this point, so one buffer
                 // serves the whole walk.
-                parse_node(r, name, depth + 1)?;
+                parse_node(r, name, prev, depth + 1)?;
                 r.consume(&TOK_PAR, "')'")?;
             }
         }
     }
     r.consume(&TOK_PAR, "')'")
+}
+
+/// archive.cc:parse's checks of an entry name: well formed, and after the
+/// previous name of its directory, which it then replaces.
+fn next_name(name: &[u8], prev: &mut Vec<u8>) -> io::Result<()> {
+    if name.is_empty() || name == b"." || name == b".." || name.contains(&b'/') || name.contains(&0)
+    {
+        return Err(bad_nar("bad entry name"));
+    }
+    if name <= prev.as_slice() {
+        return Err(bad_nar("directory entries out of order"));
+    }
+    prev.clear();
+    prev.extend_from_slice(name);
+    Ok(())
+}
+
+/// archive.cc:parse's check of a symlink target.
+fn check_target(target: &[u8]) -> io::Result<()> {
+    if target.is_empty() || target.contains(&0) {
+        return Err(bad_nar("bad symlink target"));
+    }
+    Ok(())
 }
 
 /// Reads one token into `out`, which the caller owns past the next read.
@@ -930,6 +952,49 @@ pub(crate) mod tests {
             nar_hash(&tree.join("link")).unwrap().to_base16(),
             "8d3c00cfa866e4d1b809772afeac240786246221eb2c574d69c4bba168834e81"
         );
+    }
+
+    /// A NAR of one directory holding `names`, each a one-byte file, or of a
+    /// symlink to `target` when `names` is empty.
+    fn crafted(names: &[&[u8]], target: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut w = TreeWriter::new(&mut out);
+        w.header().unwrap();
+        if names.is_empty() {
+            w.symlink(target).unwrap();
+        } else {
+            w.dir().unwrap();
+            for n in names {
+                w.entry(n).unwrap();
+                w.regular(false, 1, &mut &b"x"[..]).unwrap();
+                w.end_entry().unwrap();
+            }
+            w.end_dir().unwrap();
+        }
+        w.flush().unwrap();
+        drop(w);
+        out
+    }
+
+    // archive.cc:parse refuses each of these; found by fuzz/ (nar-read)
+    #[test]
+    fn readers_refuse_what_nix_refuses() {
+        let out = env::temp_dir().join(format!("iets-nar-{}-refuse", std::process::id()));
+        for nar in [
+            crafted(&[b"b", b"a"], b""),
+            crafted(&[b"a", b"a"], b""),
+            crafted(&[b".."], b""),
+            crafted(&[b"a/b"], b""),
+            crafted(&[], b""),
+            crafted(&[], b"a\0b"),
+        ] {
+            assert!(parse_length(&mut nar.as_slice()).is_err());
+            let _ = fs::remove_dir_all(&out);
+            let _ = fs::remove_file(&out);
+            assert!(restore_path(&mut nar.as_slice(), &out).is_err());
+        }
+        let _ = fs::remove_dir_all(&out);
+        assert!(parse_length(&mut crafted(&[b"a", b"b"], b"").as_slice()).is_ok());
     }
 
     // nix-store --dump tree | nix-store --restore out ; nix-store --dump out | sha256sum

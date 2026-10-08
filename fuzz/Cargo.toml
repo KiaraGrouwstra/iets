@@ -13,6 +13,29 @@ iets = { path = ".." }
 libfuzzer-sys = "0.4"
 serde_json = "1"
 toml = "1"
+sha2 = "0.10"
+libc = "0.2"
+
+[[bin]]
+name = "nar-read"
+path = "fuzz_targets/nar_read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "nar-gen"
+path = "fuzz_targets/nar_gen.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "nar-tree"
+path = "fuzz_targets/nar_tree.rs"
+test = false
+doc = false
+bench = false
 
 [[bin]]
 name = "parse"
@@ -22,8 +45,8 @@ doc = false
 bench = false
 
 [[bin]]
-name = "parse-diff"
-path = "src/bin/parse-diff.rs"
+name = "fuzz-diff"
+path = "src/bin/fuzz-diff.rs"
 test = false
 doc = false
 bench = false
