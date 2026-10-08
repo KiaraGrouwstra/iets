@@ -49,7 +49,9 @@ fn binop(kind: Tok) -> Option<(u8, Assoc, Option<BinOp>)> {
         Tok::Star => (9, Assoc::Left, Some(BinOp::Mul)),
         Tok::Slash => (9, Assoc::Left, Some(BinOp::Div)),
         Tok::Concat => (10, Assoc::Right, Some(BinOp::Concat)),
-        Tok::Question => (11, Assoc::None, None),
+        // `%nonassoc '?'` never applies: the right side is an attribute
+        // path, so `a ? b ? c` has no conflict to resolve and parses
+        Tok::Question => (11, Assoc::Left, None),
         _ => return None,
     })
 }
@@ -101,6 +103,10 @@ pub struct Parser<'a> {
     sc_formals: Vec<Formal>,
     sym_or: Sym,
     sym_body: Sym,
+    /// `''` strings of one literal part that Nix keeps as a concatenation
+    /// of several tokens: not a static attribute name in `${...}`. In id
+    /// order, as the parser adds nodes.
+    ind_concat: Vec<ExprId>,
     depth: u32,
 }
 
@@ -142,6 +148,7 @@ impl<'a> Parser<'a> {
             sc_formals: Vec::new(),
             sym_or,
             sym_body,
+            ind_concat: Vec::new(),
             depth: 0,
         }
     }
@@ -332,9 +339,9 @@ impl<'a> Parser<'a> {
                         self.bump();
                         let name = self.interner.intern(self.text(t));
                         let (formals, ellipsis) = self.parse_formals()?;
-                        self.validate_formals(formals, Some((name, t.span())))?;
                         self.expect(Tok::Colon, "expecting ':'")?;
                         let body = self.parse_function()?;
+                        self.validate_formals(formals, Some((name, t.span())))?;
                         Ok(self.add(
                             Expr::Lambda {
                                 param: Param::Formals {
@@ -357,11 +364,13 @@ impl<'a> Parser<'a> {
                 if self.peek().kind == Tok::At {
                     self.bump();
                     let n = self.expect(Tok::Id, "expecting identifier")?;
-                    bind = Some((self.interner.intern(self.text(n)), n.span()));
+                    // parser.y reports the clash at the start of the rule
+                    bind = Some((self.interner.intern(self.text(n)), t.span()));
                 }
-                self.validate_formals(formals, bind)?;
                 self.expect(Tok::Colon, "expecting ':'")?;
+                // parser.y validates the formals once the body is parsed
                 let body = self.parse_function()?;
+                self.validate_formals(formals, bind)?;
                 Ok(self.add(
                     Expr::Lambda {
                         param: Param::Formals {
@@ -393,18 +402,19 @@ impl<'a> Parser<'a> {
                 self.bump();
                 let binds = self.parse_binds(Tok::In)?;
                 self.expect(Tok::In, "expecting 'in'")?;
+                let body = self.parse_function()?;
+                // parser.y checks once the body is parsed, at the `let`
                 for b in self.ast.binds(binds) {
                     if let BindKind::Value { path, .. } = b.kind
                         && let Some(AttrElem::Dynamic(_)) = self.ast.elems(path).first()
                     {
                         return Err(self.error_at(
-                            b.span.start,
-                            b.span.end,
+                            t.start,
+                            t.end,
                             "dynamic attributes not allowed in let".into(),
                         ));
                     }
                 }
-                let body = self.parse_function()?;
                 Ok(self.add(Expr::Let { binds, body }, t.start, self.last_end))
             }
             _ => self.parse_if(),
@@ -523,6 +533,10 @@ impl<'a> Parser<'a> {
         self.parse_pipe()
     }
 
+    /// Mixing `|>` and `<|` is not refused here: bison reduces up through
+    /// the enclosing rules first (running their checks, such as the
+    /// duplicate formals of a lambda) and fails where the enclosing rule
+    /// meets the operator, which is where iets's caller does too.
     fn parse_pipe(&mut self) -> R<ExprId> {
         let lhs = self.parse_op(0)?;
         match self.peek().kind {
@@ -533,10 +547,6 @@ impl<'a> Parser<'a> {
                     let f = self.parse_op(0)?;
                     acc = self.make_call(f, acc);
                 }
-                let t = self.peek();
-                if t.kind == Tok::PipeFrom {
-                    return Err(self.unexpected(t, None));
-                }
                 Ok(acc)
             }
             Tok::PipeFrom => {
@@ -544,10 +554,6 @@ impl<'a> Parser<'a> {
                 while self.peek().kind == Tok::PipeFrom {
                     self.bump();
                     chain.push(self.parse_op(0)?);
-                }
-                let t = self.peek();
-                if t.kind == Tok::PipeInto {
-                    return Err(self.unexpected(t, None));
                 }
                 let mut acc = chain.pop().unwrap();
                 while let Some(f) = chain.pop() {
@@ -795,8 +801,12 @@ impl<'a> Parser<'a> {
             }
             Tok::IndOpen => {
                 self.bump();
-                let parts = self.parse_ind_string()?;
-                Ok(self.add(Expr::Str(parts), t.start, self.last_end))
+                let (parts, pieces) = self.parse_ind_string()?;
+                let e = self.add(Expr::Str(parts), t.start, self.last_end);
+                if pieces > 1 && self.ast.single_lit(parts).is_some() {
+                    self.ind_concat.push(e);
+                }
+                Ok(e)
             }
             Tok::Path | Tok::HPath => {
                 self.bump();
@@ -916,7 +926,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_ind_string(&mut self) -> R<Range> {
+    /// The parts, and how many pieces Nix's `stripIndentation` keeps.
+    fn parse_ind_string(&mut self) -> R<(Range, usize)> {
         debug_assert!(self.tok.is_none() && self.next.is_none());
         let mut parts = Vec::new();
         let mut interps = Vec::new();
@@ -933,14 +944,17 @@ impl<'a> Parser<'a> {
         }
         self.last_end = self.lx.pos() as u32;
         let mark = self.sc_parts.len();
-        strip_indentation(
+        let pieces = strip_indentation(
             self.src,
             &parts,
             &interps,
             &mut self.ast.bytes,
             &mut self.sc_parts,
         );
-        Ok(commit(&mut self.ast.parts, &mut self.sc_parts, mark))
+        Ok((
+            commit(&mut self.ast.parts, &mut self.sc_parts, mark),
+            pieces,
+        ))
     }
 
     fn parse_path(&mut self, t: Token) -> R<ExprId> {
@@ -959,17 +973,36 @@ impl<'a> Parser<'a> {
         // interpolation cannot end the path
         let mut need_interp = false;
         let mut seen_interp = false;
+        let mut last_token = t.start;
         loop {
-            let part = self.lx.lex_path_part(after_slash)?;
+            let part = match self.lx.lex_path_part(after_slash) {
+                Err(mut e) if e.span.start as usize == self.src.len() => {
+                    e.span = Span {
+                        start: last_token,
+                        end: last_token,
+                    };
+                    return Err(e);
+                }
+                part => part?,
+            };
+            if matches!(part, PathPart::End) && self.lx.pos() == self.src.len() {
+                self.lx.eof_at = Some(last_token);
+            }
             if need_interp && !matches!(part, PathPart::Interp) {
                 let what = match part {
                     PathPart::End => "end of path",
                     _ => "string",
                 };
-                let t = self.lx.pos() as u32;
+                // the end of a path is at its last token, but at the end of
+                // the file Nix unstashes the token before it: here the first
+                let at = match part {
+                    PathPart::Str(s, _) => s,
+                    _ if self.lx.pos() == self.src.len() => t.start,
+                    _ => last_token,
+                };
                 return Err(self.error_at(
-                    t,
-                    t,
+                    at,
+                    at,
                     format!("syntax error, unexpected {what}, expecting '${{'"),
                 ));
             }
@@ -977,6 +1010,7 @@ impl<'a> Parser<'a> {
                 PathPart::End => break,
                 PathPart::Str(s, e) => {
                     need_interp = !seen_interp;
+                    last_token = s;
                     let bytes = &self.src[s as usize..e as usize];
                     after_slash = bytes[bytes.len() - 1] == b'/';
                     // Consecutive literal pieces sit at the end of the
@@ -1000,7 +1034,7 @@ impl<'a> Parser<'a> {
                     need_interp = false;
                     seen_interp = true;
                     let e = self.parse_expr()?;
-                    self.expect(Tok::RBrace, "expecting '}'")?;
+                    last_token = self.expect(Tok::RBrace, "expecting '}'")?.start;
                     self.sc_parts.push(StrPart::Interp(e));
                     after_slash = false;
                 }
@@ -1060,22 +1094,44 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// `${"literal"}` counts as a static attribute, like in Nix.
+    /// `${e}` is a static attribute when Nix's tree for `e` is one
+    /// `ExprString` (parser-state.hh, `StringToken::visit`).
     fn expr_to_attr_elem(&mut self, e: ExprId) -> AttrElem {
-        if let Expr::Str(parts) = self.ast.exprs[e.0 as usize] {
-            match self.ast.parts(parts) {
-                [] => return AttrElem::Static(self.interner.intern(b"")),
-                [StrPart::Lit(l)] => {
-                    return AttrElem::Static(self.interner.intern(self.ast.bytes(*l)));
-                }
-                _ => {}
-            }
+        match self.nix_string(e) {
+            Some(r) => AttrElem::Static(self.interner.intern(&self.ast.bytes[r])),
+            None => AttrElem::Dynamic(e),
         }
-        AttrElem::Dynamic(e)
+    }
+
+    /// The text of `e` when Nix parses it to one `ExprString`: a plain
+    /// string, or a `''` string that `stripIndentation` leaves as one piece.
+    fn nix_string(&self, e: ExprId) -> Option<std::ops::Range<usize>> {
+        let Expr::Str(parts) = *self.ast.expr(e) else {
+            return None;
+        };
+        if self.ind_concat.binary_search_by_key(&e.0, |x| x.0).is_ok() {
+            return None;
+        }
+        let ind = self.src.get(self.ast.span(e).start as usize) == Some(&b'\'');
+        match self.ast.parts(parts) {
+            [] => Some(0..0),
+            [StrPart::Lit(l)] => Some(l.start as usize..(l.start + l.len) as usize),
+            [StrPart::Interp(i)] if ind => self.nix_string(*i),
+            _ => None,
+        }
     }
 
     fn parse_binds(&mut self, closer: Tok) -> R<Range> {
         let mark = self.sc_binds.len();
+        let r = self.parse_binds_until(closer);
+        let binds = commit(&mut self.ast.binds, &mut self.sc_binds, mark);
+        // Nix adds a binding to its set when the binding's `;` is read, so a
+        // clash among the complete bindings comes before a later error
+        check_dup_attrs(self.src, &self.ast, self.interner, binds)?;
+        r.map(|()| binds)
+    }
+
+    fn parse_binds_until(&mut self, closer: Tok) -> R<()> {
         loop {
             let t = self.peek();
             if t.kind == closer {
@@ -1146,9 +1202,7 @@ impl<'a> Parser<'a> {
                 kind: BindKind::Value { path, value },
             });
         }
-        let binds = commit(&mut self.ast.binds, &mut self.sc_binds, mark);
-        check_dup_attrs(self.src, &self.ast, self.interner, binds)?;
-        Ok(binds)
+        Ok(())
     }
 
     fn static_inherit_name(&self, elem: AttrElem, t: Token) -> R<Sym> {
@@ -1173,21 +1227,23 @@ fn parse_int(text: &[u8]) -> Option<i64> {
 
 /// Port of `ParserState::stripIndentation` from Nix. Token boundaries
 /// matter: only the last token loses a trailing whitespace-only line.
-/// Output text goes to `bytes`, the parts to `out`.
+/// Output text goes to `bytes`, the parts to `out`. Returns how many
+/// pieces Nix keeps: the tokens whose text is not empty, and the
+/// interpolations.
 fn strip_indentation(
     src: &[u8],
     parts: &[IndPart],
     interps: &[ExprId],
     bytes: &mut Vec<u8>,
     out: &mut Vec<StrPart>,
-) {
+) -> usize {
     let out_mark = out.len();
     if parts.is_empty() {
         out.push(StrPart::Lit(Range {
             start: bytes.len() as u32,
             len: 0,
         }));
-        return;
+        return 0;
     }
     let mut at_start = true;
     let mut min_indent = usize::MAX;
@@ -1223,6 +1279,7 @@ fn strip_indentation(
     // `pending` is bytes[pending_start..]: the literal run being built.
     let mut pending_start = bytes.len();
     let mut interp_i = 0;
+    let mut pieces = 0;
     at_start = true;
     let mut cur_dropped = 0usize;
     for (idx, p) in parts.iter().enumerate() {
@@ -1240,6 +1297,7 @@ fn strip_indentation(
                 }
                 out.push(StrPart::Interp(interps[interp_i]));
                 interp_i += 1;
+                pieces += 1;
                 continue;
             }
             IndPart::Src(s, e) => &src[*s as usize..*e as usize],
@@ -1257,6 +1315,7 @@ fn strip_indentation(
                 if last {
                     drop_trailing_blank_line(bytes, before);
                 }
+                pieces += usize::from(bytes.len() > before);
                 continue;
             }
         };
@@ -1265,6 +1324,7 @@ fn strip_indentation(
         if last {
             drop_trailing_blank_line(bytes, before);
         }
+        pieces += usize::from(bytes.len() > before);
     }
     if bytes.len() > pending_start {
         out.push(StrPart::Lit(Range {
@@ -1278,6 +1338,7 @@ fn strip_indentation(
             len: 0,
         }));
     }
+    pieces
 }
 
 fn trim_into(

@@ -223,7 +223,7 @@ fn operator_precedence() {
     assert_eq!(dump_src("assert a; b"), "(assert a b)");
     assert!(parse_err("a == b == c").contains("unexpected '=='"));
     assert!(parse_err("a < b < c").contains("unexpected '<'"));
-    assert!(parse_err("a ? b ? c").contains("unexpected '?'"));
+    assert_eq!(dump_src("a ? b ? c"), "(? (? a (b)) (c))");
     assert!(parse_err("a |> f <| b").contains("unexpected"));
     assert!(parse_err("[ -1 ]").contains("unexpected '-'"));
     assert!(parse_err("1 != != 2").contains("unexpected '!='"));
@@ -321,6 +321,20 @@ fn line_col_counts_bytes() {
     assert_eq!(line_col(src, 3), (2, 1));
     assert_eq!(line_col(src, 7), (2, 5));
     assert_eq!(line_col(src, 9), (3, 1));
+}
+
+#[test]
+fn a_line_ends_at_cr_lf_and_lone_cr() {
+    let src = b"a\rb\r\nc\n\rd";
+    assert_eq!(line_col(src, 2), (2, 1));
+    assert_eq!(line_col(src, 4), (2, 3));
+    assert_eq!(line_col(src, 5), (3, 1));
+    assert_eq!(line_col(src, 7), (4, 1));
+    assert_eq!(line_col(src, 8), (5, 1));
+    let e = parse(b"l\r =", FileId(0), &mut Interner::new())
+        .err()
+        .unwrap();
+    assert_eq!(line_col(b"l\r =", e.span.start), (2, 2));
 }
 
 #[test]
@@ -540,6 +554,92 @@ fn nul_in_string_literals() {
     // escaped NULs pass, as in Nix
     dump_src("\"a\\\0b\"");
     dump_src("''a''\\\0b''");
+}
+
+#[test]
+fn end_of_file_inside_a_path_is_at_its_last_token() {
+    let cases = [
+        ("[ ./a", (1, 3)),
+        ("[ ~/a", (1, 3)),
+        ("[ ./a${b}", (1, 9)),
+        ("[ ./a${b}c", (1, 10)),
+        ("( ./a", (1, 3)),
+        ("/a/", (1, 1)),
+        ("/a/${b}/", (1, 8)),
+        ("[ ./a/${b}/", (1, 11)),
+        // a byte after the path is a token of its own, and the end is there
+        ("[ ./a ", (1, 7)),
+        ("./a/ ", (1, 5)),
+    ];
+    for (src, pos) in cases {
+        let e = parse(src.as_bytes(), FileId(0), &mut Interner::new())
+            .err()
+            .unwrap_or_else(|| panic!("{src:?} parsed"));
+        assert_eq!(line_col(src.as_bytes(), e.span.start), pos, "{src:?}");
+    }
+}
+
+#[test]
+fn the_error_reported_is_the_one_nix_meets_first() {
+    let cases = [
+        ("/a//0", "unexpected end of path", (1, 1)),
+        ("/a//0 ", "unexpected end of path", (1, 4)),
+        ("x/a//0//1", "unexpected string", (1, 8)),
+        ("{ a, a }: (", "unexpected end of file", (1, 12)),
+        (
+            "{ x } @ x: 1",
+            "duplicate formal function argument 'x'",
+            (1, 1),
+        ),
+        (
+            "{ a = 1; a = 2; b = }",
+            "attribute 'a' already defined at 1:3",
+            (1, 10),
+        ),
+        (
+            "let a.b = 1; a = 2; in",
+            "attribute 'a' already defined at 1:5",
+            (1, 14),
+        ),
+        (
+            "let ${a} = 1; in 1",
+            "dynamic attributes not allowed in let",
+            (1, 1),
+        ),
+        ("let ${a} = 1; in (", "unexpected end of file", (1, 19)),
+        (
+            "{l,l}:v|>l<|",
+            "duplicate formal function argument 'l'",
+            (1, 4),
+        ),
+        ("(a <| b |> c)", "unexpected '|>', expecting ')'", (1, 9)),
+        (
+            "let x = a |> b <| c; in x",
+            "unexpected '<|', expecting ';'",
+            (1, 16),
+        ),
+    ];
+    for (src, msg, pos) in cases {
+        let e = parse(src.as_bytes(), FileId(0), &mut Interner::new())
+            .err()
+            .unwrap_or_else(|| panic!("{src:?} parsed"));
+        assert!(e.msg.contains(msg), "{src:?}: {}", e.msg);
+        assert_eq!(line_col(src.as_bytes(), e.span.start), pos, "{src:?}");
+    }
+}
+
+#[test]
+fn an_interpolated_name_is_static_when_nix_has_one_string_node() {
+    assert_eq!(dump_src("r.${''${\"t\"}''}"), "(select r (t))");
+    assert_eq!(dump_src("r.${'' ${\"t\"}''}"), "(select r (t))");
+    assert_eq!(
+        dump_src("r.${'''''t''}"),
+        r#"(select r ((dyn (str "''t"))))"#
+    );
+    assert_eq!(
+        dump_src("rec { ${''${\"a\"}''} = 1; b = a; }"),
+        "(rec-attrs (= (a) 1) (= (b) a))"
+    );
 }
 
 #[test]

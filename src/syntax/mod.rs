@@ -34,14 +34,26 @@ pub fn parse(src: &[u8], file: FileId, interner: &mut Interner) -> Result<Ast, P
 /// 1-based line and column of a byte offset. The column counts bytes, like
 /// Nix does.
 pub fn line_col(src: &[u8], offset: u32) -> (u32, u32) {
-    let offset = (offset as usize).min(src.len());
-    let mut line = 1u32;
-    let mut line_start = 0usize;
-    for (i, &b) in src[..offset].iter().enumerate() {
-        if b == b'\n' {
-            line += 1;
-            line_start = i + 1;
-        }
+    let offset = offset.min(src.len() as u32);
+    let starts = line_starts(src);
+    let line = starts.partition_point(|&s| s <= offset);
+    (line as u32, offset - starts[line - 1] + 1)
+}
+
+/// The offset of each line's first byte. A line ends at `\n`, at `\r\n`
+/// and at a lone `\r`, as Nix counts lines (position.cc,
+/// `Pos::LinesIterator`).
+pub fn line_starts(src: &[u8]) -> Vec<u32> {
+    let mut starts = vec![0u32];
+    let mut i = 0;
+    while let Some(j) = src[i..].iter().position(|&b| b == b'\n' || b == b'\r') {
+        let eol = i + j;
+        i = if src[eol] == b'\r' && src.get(eol + 1) == Some(&b'\n') {
+            eol + 2
+        } else {
+            eol + 1
+        };
+        starts.push(i as u32);
     }
-    (line, (offset - line_start) as u32 + 1)
+    starts
 }

@@ -189,6 +189,10 @@ pub struct Lexer<'a> {
     /// End of the last `# iets:` comment noted: the parser rewinds for
     /// its third token of lookahead, and a comment is noted once.
     noted_to: usize,
+    /// Where an error places the end of the file when a path runs into
+    /// it: the last token of the path, which Nix's lexer unstashes there
+    /// (lexer.l, `<INPATH><<EOF>>`).
+    pub eof_at: Option<u32>,
 }
 
 #[inline]
@@ -237,6 +241,7 @@ impl<'a> Lexer<'a> {
             pos: 0,
             allows: Vec::new(),
             noted_to: 0,
+            eof_at: None,
         }
     }
 
@@ -558,7 +563,12 @@ impl<'a> Lexer<'a> {
             end: end as u32,
         };
         if start >= self.src.len() {
-            return tok(Tok::Eof, start);
+            let at = self.eof_at.unwrap_or(start as u32);
+            return Token {
+                kind: Tok::Eof,
+                start: at,
+                end: at,
+            };
         }
         let b = self.src[start];
         let (kind, end) = match b {
