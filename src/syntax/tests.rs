@@ -626,6 +626,20 @@ fn the_error_reported_is_the_one_nix_meets_first() {
 }
 
 #[test]
+fn an_interpolated_name_is_static_when_nix_has_one_string_node() {
+    assert_eq!(dump_src("r.${''${\"t\"}''}"), "(select r (t))");
+    assert_eq!(dump_src("r.${'' ${\"t\"}''}"), "(select r (t))");
+    assert_eq!(
+        dump_src("r.${'''''t''}"),
+        r#"(select r ((dyn (str "''t"))))"#
+    );
+    assert_eq!(
+        dump_src("rec { ${''${\"a\"}''} = 1; b = a; }"),
+        "(rec-attrs (= (a) 1) (= (b) a))"
+    );
+}
+
+#[test]
 fn json_gives_every_node_its_kind_and_span() {
     use serde_json::Value;
     let json_of = |src: &str| {

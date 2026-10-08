@@ -96,6 +96,10 @@ pub struct Parser<'a> {
     sc_formals: Vec<Formal>,
     sym_or: Sym,
     sym_body: Sym,
+    /// `''` strings of one literal part that Nix keeps as a concatenation
+    /// of several tokens: not a static attribute name in `${...}`. In id
+    /// order, as the parser adds nodes.
+    ind_concat: Vec<ExprId>,
     depth: u32,
 }
 
@@ -137,6 +141,7 @@ impl<'a> Parser<'a> {
             sc_formals: Vec::new(),
             sym_or,
             sym_body,
+            ind_concat: Vec::new(),
             depth: 0,
         }
     }
@@ -789,8 +794,12 @@ impl<'a> Parser<'a> {
             }
             Tok::IndOpen => {
                 self.bump();
-                let parts = self.parse_ind_string()?;
-                Ok(self.add(Expr::Str(parts), t.start, self.last_end))
+                let (parts, pieces) = self.parse_ind_string()?;
+                let e = self.add(Expr::Str(parts), t.start, self.last_end);
+                if pieces > 1 && self.ast.single_lit(parts).is_some() {
+                    self.ind_concat.push(e);
+                }
+                Ok(e)
             }
             Tok::Path | Tok::HPath => {
                 self.bump();
@@ -910,7 +919,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_ind_string(&mut self) -> R<Range> {
+    /// The parts, and how many pieces Nix's `stripIndentation` keeps.
+    fn parse_ind_string(&mut self) -> R<(Range, usize)> {
         debug_assert!(self.tok.is_none() && self.next.is_none());
         let mut parts = Vec::new();
         let mut interps = Vec::new();
@@ -927,14 +937,17 @@ impl<'a> Parser<'a> {
         }
         self.last_end = self.lx.pos() as u32;
         let mark = self.sc_parts.len();
-        strip_indentation(
+        let pieces = strip_indentation(
             self.src,
             &parts,
             &interps,
             &mut self.ast.bytes,
             &mut self.sc_parts,
         );
-        Ok(commit(&mut self.ast.parts, &mut self.sc_parts, mark))
+        Ok((
+            commit(&mut self.ast.parts, &mut self.sc_parts, mark),
+            pieces,
+        ))
     }
 
     fn parse_path(&mut self, t: Token) -> R<ExprId> {
@@ -1074,18 +1087,31 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// `${"literal"}` counts as a static attribute, like in Nix.
+    /// `${e}` is a static attribute when Nix's tree for `e` is one
+    /// `ExprString` (parser-state.hh, `StringToken::visit`).
     fn expr_to_attr_elem(&mut self, e: ExprId) -> AttrElem {
-        if let Expr::Str(parts) = self.ast.exprs[e.0 as usize] {
-            match self.ast.parts(parts) {
-                [] => return AttrElem::Static(self.interner.intern(b"")),
-                [StrPart::Lit(l)] => {
-                    return AttrElem::Static(self.interner.intern(self.ast.bytes(*l)));
-                }
-                _ => {}
-            }
+        match self.nix_string(e) {
+            Some(r) => AttrElem::Static(self.interner.intern(&self.ast.bytes[r])),
+            None => AttrElem::Dynamic(e),
         }
-        AttrElem::Dynamic(e)
+    }
+
+    /// The text of `e` when Nix parses it to one `ExprString`: a plain
+    /// string, or a `''` string that `stripIndentation` leaves as one piece.
+    fn nix_string(&self, e: ExprId) -> Option<std::ops::Range<usize>> {
+        let Expr::Str(parts) = *self.ast.expr(e) else {
+            return None;
+        };
+        if self.ind_concat.binary_search_by_key(&e.0, |x| x.0).is_ok() {
+            return None;
+        }
+        let ind = self.src.get(self.ast.span(e).start as usize) == Some(&b'\'');
+        match self.ast.parts(parts) {
+            [] => Some(0..0),
+            [StrPart::Lit(l)] => Some(l.start as usize..(l.start + l.len) as usize),
+            [StrPart::Interp(i)] if ind => self.nix_string(*i),
+            _ => None,
+        }
     }
 
     fn parse_binds(&mut self, closer: Tok) -> R<Range> {
@@ -1194,21 +1220,23 @@ fn parse_int(text: &[u8]) -> Option<i64> {
 
 /// Port of `ParserState::stripIndentation` from Nix. Token boundaries
 /// matter: only the last token loses a trailing whitespace-only line.
-/// Output text goes to `bytes`, the parts to `out`.
+/// Output text goes to `bytes`, the parts to `out`. Returns how many
+/// pieces Nix keeps: the tokens whose text is not empty, and the
+/// interpolations.
 fn strip_indentation(
     src: &[u8],
     parts: &[IndPart],
     interps: &[ExprId],
     bytes: &mut Vec<u8>,
     out: &mut Vec<StrPart>,
-) {
+) -> usize {
     let out_mark = out.len();
     if parts.is_empty() {
         out.push(StrPart::Lit(Range {
             start: bytes.len() as u32,
             len: 0,
         }));
-        return;
+        return 0;
     }
     let mut at_start = true;
     let mut min_indent = usize::MAX;
@@ -1244,6 +1272,7 @@ fn strip_indentation(
     // `pending` is bytes[pending_start..]: the literal run being built.
     let mut pending_start = bytes.len();
     let mut interp_i = 0;
+    let mut pieces = 0;
     at_start = true;
     let mut cur_dropped = 0usize;
     for (idx, p) in parts.iter().enumerate() {
@@ -1261,6 +1290,7 @@ fn strip_indentation(
                 }
                 out.push(StrPart::Interp(interps[interp_i]));
                 interp_i += 1;
+                pieces += 1;
                 continue;
             }
             IndPart::Src(s, e) => &src[*s as usize..*e as usize],
@@ -1278,6 +1308,7 @@ fn strip_indentation(
                 if last {
                     drop_trailing_blank_line(bytes, before);
                 }
+                pieces += usize::from(bytes.len() > before);
                 continue;
             }
         };
@@ -1286,6 +1317,7 @@ fn strip_indentation(
         if last {
             drop_trailing_blank_line(bytes, before);
         }
+        pieces += usize::from(bytes.len() > before);
     }
     if bytes.len() > pending_start {
         out.push(StrPart::Lit(Range {
@@ -1299,6 +1331,7 @@ fn strip_indentation(
             len: 0,
         }));
     }
+    pieces
 }
 
 fn trim_into(
