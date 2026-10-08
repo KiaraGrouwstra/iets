@@ -390,18 +390,19 @@ impl<'a> Parser<'a> {
                 self.bump();
                 let binds = self.parse_binds(Tok::In)?;
                 self.expect(Tok::In, "expecting 'in'")?;
+                let body = self.parse_function()?;
+                // parser.y checks once the body is parsed, at the `let`
                 for b in self.ast.binds(binds) {
                     if let BindKind::Value { path, .. } = b.kind
                         && let Some(AttrElem::Dynamic(_)) = self.ast.elems(path).first()
                     {
                         return Err(self.error_at(
-                            b.span.start,
-                            b.span.end,
+                            t.start,
+                            t.end,
                             "dynamic attributes not allowed in let".into(),
                         ));
                     }
                 }
-                let body = self.parse_function()?;
                 Ok(self.add(Expr::Let { binds, body }, t.start, self.last_end))
             }
             _ => self.parse_if(),

@@ -598,6 +598,12 @@ fn the_error_reported_is_the_one_nix_meets_first() {
             "attribute 'a' already defined at 1:5",
             (1, 14),
         ),
+        (
+            "let ${a} = 1; in 1",
+            "dynamic attributes not allowed in let",
+            (1, 1),
+        ),
+        ("let ${a} = 1; in (", "unexpected end of file", (1, 19)),
     ];
     for (src, msg, pos) in cases {
         let e = parse(src.as_bytes(), FileId(0), &mut Interner::new())
