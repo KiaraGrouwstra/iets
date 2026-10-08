@@ -4,6 +4,7 @@
 #include <nix/util/archive.hh>
 #include <nix/util/memory-source-accessor.hh>
 #include <nix/util/serialise.hh>
+#include <nix/util/terminal.hh>
 #include <nix/util/util.hh>
 
 #include <cstdint>
@@ -87,7 +88,7 @@ int main()
         try {
             reply(0, op == 0 ? parse(input) : dump(input));
         } catch (std::exception & e) {
-            reply(1, e.what());
+            reply(1, filterANSIEscapes(e.what(), true));
         }
     }
 }

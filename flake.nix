@@ -41,8 +41,10 @@
       packages = forAll (pkgs: {
         default = iets pkgs;
         classic = classic pkgs (iets pkgs) pkgs.nix;
-        inherit (fuzz pkgs) parse-oracle parse-diff fuzz-parse;
-        fuzz-parse-campaign = (fuzz pkgs).campaign { };
+        fuzz-oracles = (fuzz pkgs).oracles;
+        inherit (fuzz pkgs) fuzz-diff fuzzers;
+        fuzz-parse-campaign = (fuzz pkgs).campaign { target = "parse"; };
+        fuzz-nar-campaign = (fuzz pkgs).campaign { target = "nar-gen"; };
       });
       checks = forAll (pkgs:
         let
@@ -79,8 +81,8 @@
           ast-grep = pkgs.runCommand "iets-ast-grep" { nativeBuildInputs = [ pkgs.ast-grep ]; } "cd ${self} && ast-grep scan && touch $out";
           diff-e2e = nuScript "diff-e2e";
           langtests = nuScript "langtests";
-          # every .nix file of nixpkgs through both parsers, then a minute of libFuzzer
-          fuzz-parse = (fuzz pkgs).check { seconds = 60; };
+          # the differential fuzzers against Nix (fuzz/default.nix)
+          inherit ((fuzz pkgs).checks) fuzz-parse fuzz-nar;
           linttest = nuScript "linttest";
           partest = nuScript "partest";
         } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {

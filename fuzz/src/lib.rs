@@ -2,54 +2,19 @@
 
 pub mod canon;
 pub mod known;
+pub mod nar;
 pub mod oracle;
+pub mod parse;
 pub mod sx;
 
-use iets::syntax::{self, ast::FileId, symbol::Interner};
-use oracle::{Oracle, Reply};
-use sx::Sx;
-
-pub enum Side {
-    Parsed(Sx),
-    Error { line: u32, col: u32, msg: String },
-}
-
-/// How the two sides differ. The names are the `kind` of a known
-/// divergence and of a report.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Kind {
-    /// Nix parses it, iets refuses it.
-    NixOnly,
-    /// iets parses it, Nix refuses it.
-    IetsOnly,
-    /// Both refuse it, at different places.
-    Position,
-    /// Both parse it, to different trees.
-    Tree,
-    /// The iets parser panicked.
-    IetsPanic,
-    /// The oracle died: Nix itself crashes on the input.
-    NixCrash,
-}
-
-impl Kind {
-    pub fn name(self) -> &'static str {
-        match self {
-            Kind::NixOnly => "nix-only",
-            Kind::IetsOnly => "iets-only",
-            Kind::Position => "position",
-            Kind::Tree => "tree",
-            Kind::IetsPanic => "iets-panic",
-            Kind::NixCrash => "nix-crash",
-        }
-    }
-}
-
+/// One input that the two sides answer differently.
 pub struct Divergence {
-    pub kind: Kind,
+    /// What differs; one of the target's `KINDS`. A known divergence
+    /// matches on it.
+    pub kind: &'static str,
     pub nix: String,
     pub iets: String,
-    /// Where two trees part, as `tag[child]/...`, or empty.
+    /// Where two trees part, or empty.
     pub at: String,
 }
 
@@ -59,127 +24,79 @@ pub enum Verdict {
     Bug(Divergence),
 }
 
-pub struct Checker {
-    oracle: Oracle,
-    interner: Interner,
-    known: Vec<known::Entry>,
+pub trait Target {
+    fn check(&mut self, input: &[u8]) -> Verdict;
 }
 
-impl Checker {
-    pub fn new(known: Vec<known::Entry>) -> Checker {
-        Checker {
-            oracle: Oracle::from_env(),
-            interner: Interner::new(),
-            known,
-        }
+/// The verdict on `d`: expected when an entry of `known` matches.
+pub fn classify(known: &[known::Entry], d: Option<Divergence>, input: &[u8]) -> Verdict {
+    let Some(d) = d else { return Verdict::Same };
+    match known.iter().find(|k| k.matches(&d, input)) {
+        Some(k) => Verdict::Expected(k.id.clone()),
+        None => Verdict::Bug(d),
     }
+}
 
-    pub fn iets(&mut self, src: &[u8]) -> Result<Side, String> {
-        let interner = &mut self.interner;
-        let run = std::panic::AssertUnwindSafe(|| match syntax::parse(src, FileId(0), interner) {
-            Ok(ast) => Side::Parsed(sx::normalise(canon::tree(&ast, src, interner))),
-            Err(e) => {
-                let (line, col) = syntax::line_col(src, e.span.start);
-                Side::Error {
-                    line,
-                    col,
-                    msg: e.msg,
-                }
-            }
-        });
-        std::panic::catch_unwind(run).map_err(|p| {
-            p.downcast_ref::<String>()
-                .cloned()
-                .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
-                .unwrap_or_default()
-        })
-    }
+/// Runs `f`, turning a panic into its message.
+pub fn no_panic<T>(f: impl FnOnce() -> T) -> Result<T, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|p| {
+        p.downcast_ref::<String>()
+            .cloned()
+            .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_default()
+    })
+}
 
-    pub fn nix(&mut self, src: &[u8]) -> Result<Side, String> {
-        match self.oracle.ask(src) {
-            Reply::Parsed(text) => sx::parse(&text)
-                .map(|t| Side::Parsed(sx::normalise(t)))
-                .map_err(|e| format!("unreadable oracle tree: {e}")),
-            Reply::Error { line, col, msg } => Ok(Side::Error { line, col, msg }),
-            Reply::Crashed(why) => Err(why),
+/// The target `name`, with its known divergences.
+pub fn target(name: &str) -> Result<Box<dyn Target + Send>, String> {
+    Ok(match name {
+        "parse" => Box::new(parse::Parse::new(known::from_env("parse", parse::KINDS)?)),
+        "nar-read" | "nar-gen" | "nar-tree" => {
+            let mode = match name {
+                "nar-read" => nar::Mode::Read,
+                "nar-gen" => nar::Mode::Gen,
+                _ => nar::Mode::Tree,
+            };
+            Box::new(nar::Nar::new(known::from_env("nar", nar::KINDS)?, mode))
         }
-    }
-
-    pub fn check(&mut self, src: &[u8]) -> Verdict {
-        if self.compare(src).is_none() {
-            return Verdict::Same;
+        _ => {
+            return Err(format!(
+                "unknown target `{name}`: parse, nar-read, nar-gen or nar-tree"
+            ));
         }
-        // Both sides keep a symbol table across inputs, and which of two
-        // clashing names an error reports follows symbol order. A file is
-        // parsed in a fresh process, so a difference counts only when it
-        // holds with fresh tables.
-        self.oracle.restart();
-        self.interner = Interner::new();
-        let Some(d) = self.compare(src) else {
-            return Verdict::Same;
-        };
-        match self.known.iter().find(|k| k.matches(&d, src)) {
-            Some(k) => Verdict::Expected(k.id.clone()),
-            None => Verdict::Bug(d),
-        }
-    }
+    })
+}
 
-    fn compare(&mut self, src: &[u8]) -> Option<Divergence> {
-        let nix = match self.nix(src) {
-            Ok(n) => n,
-            Err(why) => {
-                return Some(Divergence {
-                    kind: Kind::NixCrash,
-                    nix: why,
-                    iets: String::new(),
-                    at: String::new(),
-                });
-            }
-        };
-        let iets = match self.iets(src) {
-            Ok(i) => i,
-            Err(msg) => {
-                return Some(Divergence {
-                    kind: Kind::IetsPanic,
-                    nix: show(&nix),
-                    iets: msg,
-                    at: String::new(),
-                });
-            }
-        };
-        let (kind, at) = match (&nix, &iets) {
-            (Side::Parsed(a), Side::Parsed(b)) => match sx::first_difference(a, b) {
-                None => return None,
-                Some((at, ..)) => (Kind::Tree, at),
+/// What libFuzzer does with an input: keep it, drop it (a known divergence
+/// teaches the fuzzer nothing new), or stop on a bug.
+pub fn corpus(name: &str, v: Verdict) -> libfuzzer_sys::Corpus {
+    match v {
+        Verdict::Same => libfuzzer_sys::Corpus::Keep,
+        Verdict::Expected(_) => libfuzzer_sys::Corpus::Reject,
+        Verdict::Bug(d) => panic!(
+            "{name} divergence ({}{})\n  nix:  {}\n  iets: {}",
+            d.kind,
+            if d.at.is_empty() {
+                String::new()
+            } else {
+                format!(" at {}", d.at)
             },
-            (
-                Side::Error {
-                    line: l1, col: c1, ..
-                },
-                Side::Error {
-                    line: l2, col: c2, ..
-                },
-            ) => {
-                if *l1 == 0 || (l1, c1) == (l2, c2) {
-                    return None;
-                }
-                (Kind::Position, String::new())
-            }
-            (Side::Parsed(_), Side::Error { .. }) => (Kind::NixOnly, String::new()),
-            (Side::Error { .. }, Side::Parsed(_)) => (Kind::IetsOnly, String::new()),
-        };
-        Some(Divergence {
-            kind,
-            nix: show(&nix),
-            iets: show(&iets),
-            at,
-        })
+            d.nix,
+            d.iets
+        ),
     }
 }
 
-pub fn show(s: &Side) -> String {
-    match s {
-        Side::Parsed(t) => sx::print(t),
-        Side::Error { line, col, msg } => format!("error at {line}:{col}: {msg}"),
-    }
+/// The body of a fuzz target binary.
+#[macro_export]
+macro_rules! fuzz_main {
+    ($name:literal) => {
+        static TARGET: std::sync::LazyLock<std::sync::Mutex<Box<dyn $crate::Target + Send>>> =
+            std::sync::LazyLock::new(|| {
+                std::sync::Mutex::new($crate::target($name).unwrap_or_else(|e| panic!("{e}")))
+            });
+        libfuzzer_sys::fuzz_target!(|input: &[u8]| -> libfuzzer_sys::Corpus {
+            $crate::corpus($name, TARGET.lock().unwrap().check(input))
+        });
+    };
 }
