@@ -6,15 +6,13 @@ observe it.
 Each entry says what differs, why, and how to observe it. The classic
 names add a few more, listed in `docs/reference/classic.md`.
 
-`scripts/parity.nu` runs the differential corpora under `tests/parity/`
-(272 regex pattern/input pairs through both `builtins.match` and
+`checks.conformance` runs the cases of nix-conformance, among them one
+case for each entry of the regex and TOML corpora (`lang/corpora/`: 272
+regex pattern/input pairs through both `builtins.match` and
 `builtins.split`, 46 patterns both sides must reject, 77 TOML documents
-and 46 rejected ones) against the real `nix-instantiate` and requires
-byte-equal `--strict --json` output. It needs a nix binary, so it is not
-a flake check; run it by hand in the dev shell. `NIX=` and `IETS=`
-override either side. Like every script here that compares against the
-real nix, it aborts when that nix is the classic farm, and warns when it
-is not 2.34.8.
+and 46 rejected ones), against answers Nix 2.34.8 gave.
+`fuzz/conformance-known` lists the cases iets fails on purpose, each
+under its section of this page.
 
 ## Regular expressions (`builtins.match`, `builtins.split`)
 

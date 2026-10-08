@@ -186,7 +186,6 @@ the farm execs the real nix for whatever it does not implement,
 |---|---|---|
 | `langtests.nu` | Nix 2.34.8's functional tests, `tests/lang/` | check, sandbox |
 | `corpus.nu` | `tests/corpus/` against `.exp` from `nix-instantiate` (`--update` rewrites them) | by hand |
-| `parity.nu` | `match`, `split`, `fromTOML` against the real `nix-instantiate` | by hand |
 | `partest.nu` | 1 against N workers | check, sandbox |
 | `linttest.nu` | the lints on their fixtures | check, sandbox |
 | `cachetest.nu` | the tracing cache's hits and misses | check, container |
