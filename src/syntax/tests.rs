@@ -216,7 +216,7 @@ fn operator_precedence() {
     assert_eq!(dump_src("assert a; b"), "(assert a b)");
     assert!(parse_err("a == b == c").contains("unexpected '=='"));
     assert!(parse_err("a < b < c").contains("unexpected '<'"));
-    assert!(parse_err("a ? b ? c").contains("unexpected '?'"));
+    assert_eq!(dump_src("a ? b ? c"), "(? (? a (b)) (c))");
     assert!(parse_err("a |> f <| b").contains("unexpected"));
     assert!(parse_err("[ -1 ]").contains("unexpected '-'"));
     assert!(parse_err("1 != != 2").contains("unexpected '!='"));
@@ -572,6 +572,38 @@ fn end_of_file_inside_a_path_is_at_its_last_token() {
         let e = parse(src.as_bytes(), FileId(0), &mut Interner::new())
             .err()
             .unwrap_or_else(|| panic!("{src:?} parsed"));
+        assert_eq!(line_col(src.as_bytes(), e.span.start), pos, "{src:?}");
+    }
+}
+
+#[test]
+fn the_error_reported_is_the_one_nix_meets_first() {
+    let cases = [
+        ("/a//0", "unexpected end of path", (1, 1)),
+        ("/a//0 ", "unexpected end of path", (1, 4)),
+        ("x/a//0//1", "unexpected string", (1, 8)),
+        ("{ a, a }: (", "unexpected end of file", (1, 12)),
+        (
+            "{ x } @ x: 1",
+            "duplicate formal function argument 'x'",
+            (1, 1),
+        ),
+        (
+            "{ a = 1; a = 2; b = }",
+            "attribute 'a' already defined at 1:3",
+            (1, 10),
+        ),
+        (
+            "let a.b = 1; a = 2; in",
+            "attribute 'a' already defined at 1:5",
+            (1, 14),
+        ),
+    ];
+    for (src, msg, pos) in cases {
+        let e = parse(src.as_bytes(), FileId(0), &mut Interner::new())
+            .err()
+            .unwrap_or_else(|| panic!("{src:?} parsed"));
+        assert!(e.msg.contains(msg), "{src:?}: {}", e.msg);
         assert_eq!(line_col(src.as_bytes(), e.span.start), pos, "{src:?}");
     }
 }

@@ -42,7 +42,9 @@ fn binop(kind: Tok) -> Option<(u8, Assoc, Option<BinOp>)> {
         Tok::Star => (9, Assoc::Left, Some(BinOp::Mul)),
         Tok::Slash => (9, Assoc::Left, Some(BinOp::Div)),
         Tok::Concat => (10, Assoc::Right, Some(BinOp::Concat)),
-        Tok::Question => (11, Assoc::None, None),
+        // `%nonassoc '?'` never applies: the right side is an attribute
+        // path, so `a ? b ? c` has no conflict to resolve and parses
+        Tok::Question => (11, Assoc::Left, None),
         _ => return None,
     })
 }
@@ -325,9 +327,9 @@ impl<'a> Parser<'a> {
                         self.bump();
                         let name = self.interner.intern(self.text(t));
                         let (formals, ellipsis) = self.parse_formals()?;
-                        self.validate_formals(formals, Some((name, t.span())))?;
                         self.expect(Tok::Colon, "expecting ':'")?;
                         let body = self.parse_function()?;
+                        self.validate_formals(formals, Some((name, t.span())))?;
                         Ok(self.add(
                             Expr::Lambda {
                                 param: Param::Formals {
@@ -350,11 +352,13 @@ impl<'a> Parser<'a> {
                 if self.peek().kind == Tok::At {
                     self.bump();
                     let n = self.expect(Tok::Id, "expecting identifier")?;
-                    bind = Some((self.interner.intern(self.text(n)), n.span()));
+                    // parser.y reports the clash at the start of the rule
+                    bind = Some((self.interner.intern(self.text(n)), t.span()));
                 }
-                self.validate_formals(formals, bind)?;
                 self.expect(Tok::Colon, "expecting ':'")?;
+                // parser.y validates the formals once the body is parsed
                 let body = self.parse_function()?;
+                self.validate_formals(formals, bind)?;
                 Ok(self.add(
                     Expr::Lambda {
                         param: Param::Formals {
@@ -972,10 +976,16 @@ impl<'a> Parser<'a> {
                     PathPart::End => "end of path",
                     _ => "string",
                 };
-                let t = self.lx.pos() as u32;
+                // the end of a path is at its last token, but at the end of
+                // the file Nix unstashes the token before it: here the first
+                let at = match part {
+                    PathPart::Str(s, _) => s,
+                    _ if self.lx.pos() == self.src.len() => t.start,
+                    _ => last_token,
+                };
                 return Err(self.error_at(
-                    t,
-                    t,
+                    at,
+                    at,
                     format!("syntax error, unexpected {what}, expecting '${{'"),
                 ));
             }
@@ -1083,6 +1093,15 @@ impl<'a> Parser<'a> {
 
     fn parse_binds(&mut self, closer: Tok) -> R<Range> {
         let mark = self.sc_binds.len();
+        let r = self.parse_binds_until(closer);
+        let binds = commit(&mut self.ast.binds, &mut self.sc_binds, mark);
+        // Nix adds a binding to its set when the binding's `;` is read, so a
+        // clash among the complete bindings comes before a later error
+        check_dup_attrs(self.src, &self.ast, self.interner, binds)?;
+        r.map(|()| binds)
+    }
+
+    fn parse_binds_until(&mut self, closer: Tok) -> R<()> {
         loop {
             let t = self.peek();
             if t.kind == closer {
@@ -1153,9 +1172,7 @@ impl<'a> Parser<'a> {
                 kind: BindKind::Value { path, value },
             });
         }
-        let binds = commit(&mut self.ast.binds, &mut self.sc_binds, mark);
-        check_dup_attrs(self.src, &self.ast, self.interner, binds)?;
-        Ok(binds)
+        Ok(())
     }
 
     fn static_inherit_name(&self, elem: AttrElem, t: Token) -> R<Sym> {
