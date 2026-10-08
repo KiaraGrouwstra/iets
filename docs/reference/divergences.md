@@ -136,6 +136,18 @@ same attribute at the same place.
 `fuzz/divergences.toml` holds this case as `which-duplicate-formal`
 and `which-duplicate-attribute`.
 
+## A `%` in an `or` argument
+
+Nix warns when `or` is an argument (`f "x" or`: `or` will become an
+identifier). The warning quotes the source and passes the text to
+`warn` as a format string (`ExprCall::warnIfCursedOr`, nixexpr.cc). A
+`%` in the quoted text then fails in boost: `f "%" or` gives
+`error: boost::bad_format_string: format-string is ill-formed`, and
+`f "%d" or` gives `boost::too_few_args`. This is a bug of Nix 2.34.8.
+iets parses both, as Nix does without the `%`.
+
+`fuzz/divergences.toml` holds this case as `percent-in-a-cursed-or`.
+
 ## Unforced values in lazy positions
 
 In a list element, an attribute value, a `let` binding or a function

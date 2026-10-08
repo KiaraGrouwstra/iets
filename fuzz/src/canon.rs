@@ -114,7 +114,7 @@ impl Canon<'_> {
             // `e or` is `expr_simple OR_KW` in parser.y: a call of its own,
             // never an extension of `e`
             Expr::Apply { func, args } if self.cursed_or(args) => {
-                call(self.expr(func), vec![var("or")])
+                call(self.expr(func), self.ast.ids(args).iter().map(|a| self.expr(*a)).collect())
             }
             // makeCall: applying a call extends it, whatever made the call
             Expr::Apply { func, args } => {
@@ -176,9 +176,10 @@ impl Canon<'_> {
         }
     }
 
-    /// `or` lexes as a keyword, so a variable `or` can only be its argument.
+    /// `or` lexes as a keyword, so a variable `or` can only be the first
+    /// argument of such a call; later arguments extend that call.
     fn cursed_or(&self, args: Range) -> bool {
-        matches!(self.ast.ids(args), [a] if matches!(self.ast.expr(*a), Expr::Var(s) if self.interner.name(*s) == b"or"))
+        matches!(self.ast.ids(args), [a, ..] if matches!(self.ast.expr(*a), Expr::Var(s) if self.interner.name(*s) == b"or"))
     }
 
     fn parts(&self, parts: Range) -> Vec<Sx> {

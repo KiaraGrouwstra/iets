@@ -35,3 +35,10 @@ kind = "position"
 nix = "already defined at"
 iets = "already defined at"
 names_differ = true
+
+[[parse]]
+id = "percent-in-a-cursed-or"
+doc = "docs/reference/divergences.md#a-in-an-or-argument"
+kind = "iets-only"
+input = "%"
+nix = "boost::"

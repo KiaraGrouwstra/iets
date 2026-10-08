@@ -316,6 +316,9 @@ void serve()
                 col = pos->column;
             }
             reply(1, line, col, filterANSIEscapes(err.info().msg.str(), true));
+        } catch (std::exception & err) {
+            // not a nix::Error: nix-instantiate prints it as an error too
+            reply(1, 0, 0, err.what());
         }
     }
 }
