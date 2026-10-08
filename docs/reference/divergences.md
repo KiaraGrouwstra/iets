@@ -67,6 +67,20 @@ Observe it with `builtins.substring 0 1 "é"`, which is one byte that is not
 UTF-8: as `builder = "/bin/sh" + …` the evaluation fails, as `v = …` it
 gives `/nix/store/vhkdfhp7f0qfk8j0kx9b54hpn6cyg8m1-x.drv` like Nix.
 
+## Bytes that are not UTF-8 in a derivation
+
+Nix keeps a derivation's strings as bytes and writes them into the `.drv`
+as they are. iets does the same for the values of `env` and for `args`.
+It refuses bytes that are not UTF-8 in the name of an `env` entry, in
+`builder` and in `system`: `derivationStrict` stops with `string is not
+valid UTF-8`, where Nix gives a drvPath. iets holds these three as text.
+
+Observe it: `lang/eval-okay-derivation-non-utf8.nix` of nix-conformance
+makes one derivation for each field; Nix 2.34.8 gives five drvPaths, iets
+the first two and then the error. Such derivations exist in real stores:
+`drv/` of nix-conformance holds six. `fuzz/conformance-known` lists the
+case.
+
 ## `builtins.genericClosure`
 
 The key set is a sorted vector with binary search instead of a

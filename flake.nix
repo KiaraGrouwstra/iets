@@ -1,6 +1,8 @@
 {
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-  outputs = { self, nixpkgs }:
+  # the reference stays on its own nixpkgs, where nix is 2.34.8
+  inputs.nix-conformance.url = "git+ssh://git@github.com/numtide/nix-conformance";
+  outputs = { self, nixpkgs, nix-conformance }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAll = f: nixpkgs.lib.genAttrs systems (s: f nixpkgs.legacyPackages.${s});
@@ -29,7 +31,13 @@
         done
       '';
       # the differential fuzzer against Nix (docs/how-to/fuzz.md)
-      fuzz = pkgs: import ./fuzz { inherit pkgs; src = self; nixpkgsSrc = nixpkgs; };
+      fuzz = pkgs: import ./fuzz {
+        inherit pkgs;
+        src = self;
+        nixpkgsSrc = nixpkgs;
+        conformance = nix-conformance;
+        iets = iets pkgs;
+      };
     in {
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
@@ -82,7 +90,7 @@
           diff-e2e = nuScript "diff-e2e";
           langtests = nuScript "langtests";
           # the differential fuzzers against Nix (fuzz/default.nix)
-          inherit ((fuzz pkgs).checks) fuzz-parse fuzz-nar;
+          inherit ((fuzz pkgs).checks) fuzz-parse fuzz-nar conformance;
           linttest = nuScript "linttest";
           partest = nuScript "partest";
         } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {

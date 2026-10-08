@@ -1,0 +1,15 @@
+# The nix-conformance cases iets fails on purpose; each names its section of
+# docs/reference/divergences.md. `run --known` fails when one starts passing.
+
+# A NUL byte outside a string
+parse/0eb30b8fcb4d7fd7ae201ea5f118c0cf35cc49db.nix
+parse/11f7751701ce6d5c70005d3b4a9de519fbb73e7f.nix
+parse/256754d33c60f16aa776170bca82f6b4b3fd6e01.nix
+parse/608e9cc4c17c2c96fd211d9527720320a9d0a9d3.nix
+parse/fb7f3bce87e2d8a33fa80649a2f07a728a8c091b.nix
+
+# Which of several clashes an error names
+parse/baba3aa312fa7c13d28c43faff8f81b99724e6a1.nix
+
+# Bytes that are not UTF-8 in a derivation
+lang/eval-okay-derivation-non-utf8.nix

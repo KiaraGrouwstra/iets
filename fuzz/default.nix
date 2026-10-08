@@ -1,8 +1,8 @@
 # The fuzz targets as packages, checks and campaigns (docs/how-to/fuzz.md).
-{ pkgs, src, nixpkgsSrc }:
+{ pkgs, src, nixpkgsSrc, conformance, iets }:
 let
   inherit (pkgs) lib;
-  oracles = pkgs.callPackage ./oracle { };
+  oracles = conformance.packages.${pkgs.stdenv.hostPlatform.system}.oracles;
   common = {
     version = "0.0.0";
     inherit src;
@@ -12,6 +12,12 @@ let
     doCheck = false;
     meta.license = lib.licenses.lgpl21Plus;
   };
+  # the cases and the grown corpora of nix-conformance, as libFuzzer seeds
+  link = dirs: name: ''
+    find ${toString dirs} -name '${name}' | while read -r f; do
+      ln -sf "$f" "seeds/$(echo "$f" | sha1sum | cut -c1-40)"
+    done
+  '';
   # what each libFuzzer binary is run with; the seeds go to a directory `seeds`
   targets = {
     parse = {
@@ -21,9 +27,13 @@ let
         find ${nixpkgsSrc} -name '*.nix' -size -32k | awk 'NR % ${toString every} == 0' | while read -r f; do
           ln -s "$f" "seeds/$(echo "$f" | sha1sum | cut -c1-40)"
         done
+        ${link [ "${conformance}/parse" "${conformance}/corpus/parse" ] "*.nix"}
       '';
     };
-    nar-read = { flags = "-max_len=65536 -dict=${./nar.dict}"; seeds = _: ""; };
+    nar-read = {
+      flags = "-max_len=65536 -dict=${./nar.dict}";
+      seeds = _: link [ "${conformance}/nar" "${conformance}/corpus/nar" ] "*.nar";
+    };
     nar-gen = { flags = "-max_len=4096"; seeds = _: ""; };
     nar-tree = { flags = "-max_len=4096"; seeds = _: ""; };
   };
@@ -34,7 +44,7 @@ let
   # the replay tool, built plain: it is fast and needs no libFuzzer
   fuzz-diff = pkgs.rustPlatform.buildRustPackage (common // {
     pname = "iets-fuzz-diff";
-    cargoBuildFlags = [ "--bin" "fuzz-diff" ];
+    cargoBuildFlags = [ "--bin" "fuzz-diff" "--bin" "conformance-adapter" ];
   });
   # the libFuzzer binaries, instrumented by cargo-fuzz on the stable compiler
   fuzzers = pkgs.rustPlatform.buildRustPackage (common // {
@@ -54,14 +64,13 @@ let
     '';
     dontFixup = true;
   });
-  regressions = name: lib.optionalString (builtins.pathExists (./regressions + "/${name}")) "${./regressions + "/${name}"}";
   # one target for a fixed time; a divergence fails the build and prints the input
   run = name: seconds: ''
     mkdir -p seeds new-${name}
     rm -f seeds/*
     ${targets.${name}.seeds 8}
     fuzz-${name} -max_total_time=${toString seconds} ${targets.${name}.flags} \
-      -artifact_prefix=art-${name}- new-${name} seeds ${regressions name} || {
+      -artifact_prefix=art-${name}- new-${name} seeds || {
         for a in art-${name}-*; do echo "the input, in base64: $(base64 -w0 "$a")" >&2; done
         exit 1
       }
@@ -81,7 +90,7 @@ let
     ${env}
     mkdir seeds grown $out $out/corpus $out/artifacts
     ${targets.${target}.seeds 1}
-    fuzz-${target} -merge=1 ${targets.${target}.flags} grown seeds ${regressions target} ${toString corpus} 2> $out/seed.log
+    fuzz-${target} -merge=1 ${targets.${target}.flags} grown seeds ${toString corpus} 2> $out/seed.log
     fuzz-${target} -fork=$NIX_BUILD_CORES -ignore_crashes=1 -max_total_time=${toString seconds} \
       ${targets.${target}.flags} -artifact_prefix=$out/artifacts/ grown 2> $out/fuzz.log || true
     fuzz-${target} -merge=1 ${targets.${target}.flags} $out/corpus grown 2> $out/merge.log
@@ -98,6 +107,16 @@ in
         fuzz-diff --nix-only parse ${nixpkgsSrc}
         ${run "parse" 60}
       '';
+    };
+    # every case of nix-conformance through iets, with the trees; the cases
+    # in conformance-known fail on purpose
+    conformance = conformance.lib.${pkgs.stdenv.hostPlatform.system}.check {
+      name = "iets";
+      adapter = "${pkgs.writeShellScript "iets-conformance-adapter" ''
+        export IETS=${iets}/bin/iets
+        exec ${fuzz-diff}/bin/conformance-adapter "$@"
+      ''}";
+      flags = [ "--tree" "--known" "${./conformance-known}" ];
     };
     # twenty seconds of each NAR target
     fuzz-nar = check {
