@@ -18,10 +18,14 @@ use std::collections::HashSet;
 use std::hash::BuildHasherDefault;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::{env, fs};
 
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, FileInfo, Pos};
-use crate::log::Site;
+use crate::log::{self, Site};
+use crate::session::Session;
 use crate::syntax::symbol::{FxHashMap, FxHasher};
+use crate::{compile, ignored, parallel, project, provenance, settings};
+use std::os::unix::ffi::OsStrExt;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub enum Level {
@@ -336,7 +340,7 @@ impl Layer {
             let raw = format!(
                 "{origin}: iets does not know the lint '{selector}' and ignores it; 'iets help lints' has the list (docs/reference/lints.md)"
             );
-            crate::ignored::note("unknown-lint", &format!("{origin} {selector}"), raw);
+            ignored::note("unknown-lint", &format!("{origin} {selector}"), raw);
         }
     }
 
@@ -401,7 +405,7 @@ impl Config {
 
     /// Adds a lint root; `dir` is made canonical.
     pub fn add_root(&mut self, dir: &[u8]) {
-        let dir = crate::compile::canon_path(dir);
+        let dir = compile::canon_path(dir);
         if !self.roots.contains(&dir) {
             self.roots.push(dir);
         }
@@ -498,7 +502,6 @@ impl Config {
     /// `name = { level = "warn", max-bytes = 1000 }` for a lint with knobs,
     /// plus `scope`, `roots` (relative to the file) and `inputs.<node>`.
     pub fn apply_toml(&mut self, text: &str, origin: &Path) -> Result<(), String> {
-        use std::os::unix::ffi::OsStrExt;
         let from = origin.display().to_string();
         let at = |m: String| format!("{from}: {m}");
         let table: toml::Table = text.parse().map_err(|e| at(format!("{e}")))?;
@@ -574,14 +577,12 @@ impl Config {
         roots: &[Vec<u8>],
         scope: Option<Scope>,
     ) -> Result<Config, String> {
-        use std::os::unix::ffi::OsStrExt;
         let mut c = Config::default();
         if let Some(dir) = start {
             c.add_root(dir.as_os_str().as_bytes());
         }
-        let read =
-            |f: &Path| std::fs::read_to_string(f).map_err(|e| format!("{}: {e}", f.display()));
-        let settings = crate::settings::conf_file();
+        let read = |f: &Path| fs::read_to_string(f).map_err(|e| format!("{}: {e}", f.display()));
+        let settings = settings::conf_file();
         if settings.is_file() {
             c.apply_toml(&read(&settings)?, &settings)?;
         }
@@ -592,10 +593,10 @@ impl Config {
         };
         if let Some(file) = start.and_then(find_config_file).filter(|f| !is_settings(f)) {
             let text = read(&file)?;
-            crate::settings::check_project(&text, &file)?;
+            settings::check_project(&text, &file)?;
             c.apply_toml(&text, &file)?;
         }
-        if let Ok(env) = std::env::var("IETS_LINT") {
+        if let Ok(env) = env::var("IETS_LINT") {
             c.apply_env(&env).map_err(|m| format!("IETS_LINT: {m}"))?;
         }
         let mut layer = Layer::default();
@@ -609,7 +610,7 @@ impl Config {
         if let Some(s) = scope {
             c.scope = s;
         }
-        crate::ignored::flush();
+        ignored::flush();
         Ok(c)
     }
 
@@ -669,7 +670,7 @@ fn level_char(l: Level) -> char {
 /// every evaluation below it, and the file is untrusted input
 /// (`settings::check_project`).
 pub fn find_config_file(start: &Path) -> Option<PathBuf> {
-    let root = crate::project::find(start)?;
+    let root = project::find(start)?;
     let mut dir = start.to_path_buf();
     loop {
         let f = dir.join("iets.toml");
@@ -741,7 +742,7 @@ struct Emitted {
 impl Emitted {
     fn flush(&mut self) {
         if !self.pending.is_empty() {
-            crate::session::Session::current().log.err(&self.pending);
+            Session::current().log.err(&self.pending);
             self.pending.clear();
         }
     }
@@ -835,7 +836,7 @@ impl Lints {
             return false;
         }
         g.counted.extend(tree.map(String::from));
-        let (shown, record) = crate::log::lint(line, site);
+        let (shown, record) = log::lint(line, site);
         g.pending.extend_from_slice(shown.as_bytes());
         g.pending.push(b'\n');
         g.records.push(record);
@@ -876,14 +877,13 @@ impl Evaluator {
         self.lint_site(id, pos, None, None, msg)
     }
 
-    /// Any fiber reports: the site set keeps a warning to one line, so a
-    /// helper reporting a site the demand path reaches again costs
-    /// nothing, and bailing like `trace` does (docs/explanation/evaluation.md, Effects)
-    /// cost 15 % of the wall on nixos-desktop at 4 workers. A site the
-    /// scope silences enters the set too; an `error` site never does, so
-    /// every fiber that reaches it fails. A `level` is that of the tree a
-    /// value comes from, where the location of the site does not decide. A
-    /// finding of `tree` is one for the tree, so the site set does not see it.
+    /// Any fiber reports: the site set keeps a warning to one line, and bailing
+    /// like `trace` does (docs/explanation/evaluation.md, Effects) cost 15 % of the
+    /// wall on nixos-desktop at 4 workers. A site the scope silences enters the set
+    /// too; an `error` site never does, so every fiber that reaches it fails. A
+    /// `level` is that of the tree a value comes from, where the location of the
+    /// site does not decide. A finding of `tree` is one for the tree, so the site
+    /// set does not see it.
     #[inline(never)]
     fn lint_site(
         &mut self,
@@ -992,7 +992,7 @@ impl Evaluator {
             return self.describe_pos(pos);
         };
         let (l, c) = f.line_col(off);
-        let path = if crate::provenance::enabled() {
+        let path = if provenance::enabled() {
             self.local_path(&f.path, |_| {})
         } else {
             f.path.clone()
@@ -1006,7 +1006,7 @@ impl Evaluator {
     /// where `provenance::rewrite_msg` would turn the store path a copy
     /// produced into the directory it was copied from.
     pub fn lint_shown_path(&self, path: &[u8]) -> String {
-        let path = if crate::provenance::enabled() {
+        let path = if provenance::enabled() {
             self.local_path(path, |_| {})
         } else {
             path.to_vec()
@@ -1059,7 +1059,7 @@ impl Evaluator {
         let tree = tree.map(String::from);
         // a helper may reach a site the program never asks for; the
         // finding then waits for the thunk whose value carries it
-        crate::parallel::defer(self, move |ev| {
+        parallel::defer(self, move |ev| {
             ev.lints.record(id, pos, &line, site, tree.as_deref());
         });
     }
@@ -1103,18 +1103,18 @@ mod tests {
     /// the walk stops at the root, and the file is untrusted input.
     #[test]
     fn the_project_file_walk_stops_at_the_project_root() {
-        let d = std::env::temp_dir().join(format!("iets-walk-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
+        let d = env::temp_dir().join(format!("iets-walk-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
         let deep = d.join("repo/sub");
-        std::fs::create_dir_all(&deep).unwrap();
-        std::fs::write(d.join("iets.toml"), "[lint]\n").unwrap();
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(d.join("iets.toml"), "[lint]\n").unwrap();
         assert_eq!(find_config_file(&deep), Some(d.join("iets.toml")));
-        std::fs::create_dir_all(d.join("repo/.git")).unwrap();
+        fs::create_dir_all(d.join("repo/.git")).unwrap();
         assert_eq!(find_config_file(&deep), None, "the walk left the project");
         let own = d.join("repo/iets.toml");
-        std::fs::write(&own, "[lint]\n").unwrap();
+        fs::write(&own, "[lint]\n").unwrap();
         assert_eq!(find_config_file(&deep), Some(own));
-        let _ = std::fs::remove_dir_all(&d);
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]
@@ -1339,7 +1339,7 @@ mod tests {
 
     #[test]
     fn an_unknown_name_is_a_warning_in_a_file_and_an_error_in_a_flag() {
-        let s = crate::session::Session::new();
+        let s = Session::new();
         let _entered = s.enter();
         let mut c = Config::default();
         c.apply_toml(
@@ -1350,7 +1350,7 @@ mod tests {
         c.apply_env("nope=warn, ifd=error").unwrap();
         assert_eq!(c.level(LintId::Fod), Level::Warn);
         assert_eq!(c.level(LintId::Ifd), Level::Error);
-        let mut noted = crate::ignored::noted("unknown-lint");
+        let mut noted = ignored::noted("unknown-lint");
         noted.sort();
         assert_eq!(
             noted,

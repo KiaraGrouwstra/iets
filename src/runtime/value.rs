@@ -8,8 +8,12 @@ use super::word::{
     TAG_THUNK_MAP, Word,
 };
 use crate::compile::ir::{Ir, LambdaIr};
-use crate::eval::Pos;
-use crate::syntax::symbol::Sym;
+use crate::eval::{self, Evaluator, Pos};
+use crate::syntax::symbol::{self, Sym};
+#[cfg(feature = "stats2")]
+use std::sync::atomic::{AtomicU8, AtomicUsize};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::{ptr, slice};
 
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -196,7 +200,7 @@ pub struct AttrsObj {
     /// Flat slices an iteration merges: 1 for a flat set.
     pub leaves: u8,
     /// Entry count; `u32::MAX` on a union whose count was not needed yet.
-    pub len: std::sync::atomic::AtomicU32,
+    pub len: AtomicU32,
     // followed by `len` Attrs sorted by sym, or by a `UnionTail`
 }
 
@@ -258,8 +262,7 @@ pub struct LambdaObj {
     pub lam: &'static LambdaIr,
 }
 
-pub type PrimFn =
-    fn(&mut crate::eval::Evaluator, &[Word], Pos) -> Result<Word, Box<crate::eval::Error>>;
+pub type PrimFn = fn(&mut Evaluator, &[Word], Pos) -> Result<Word, Box<eval::Error>>;
 
 #[repr(C)]
 pub struct PrimOpObj {
@@ -267,7 +270,7 @@ pub struct PrimOpObj {
     pub arity: u8,
     /// The interned `name`, for a profile frame. It sits in the padding
     /// after `arity`, so the object is the same size with it.
-    pub sym: crate::syntax::symbol::Sym,
+    pub sym: Sym,
     pub name: &'static str,
     pub f: PrimFn,
 }
@@ -381,7 +384,6 @@ impl ThunkObj {
 #[cfg(feature = "stats2")]
 #[inline]
 fn mark_byte(p: *const u8, f: impl Fn(u8) -> u8) {
-    use std::sync::atomic::{AtomicU8, Ordering};
     // SAFETY: `p` is a flags byte inside a live arena object, viewed as an
     // atomic byte.
     let a = unsafe { &*(p as *const AtomicU8) };
@@ -396,7 +398,7 @@ impl ListObj {
         // SAFETY: the allocator placed `len` cells directly after the header.
         unsafe {
             let p = (self as *const ListObj).add(1) as *const Cell;
-            std::slice::from_raw_parts(p, self.len as usize)
+            slice::from_raw_parts(p, self.len as usize)
         }
     }
 }
@@ -422,13 +424,13 @@ impl AttrsObj {
         // SAFETY: the allocator placed `len` attrs directly after the header.
         unsafe {
             let p = (self as *const AttrsObj).add(1) as *const Attr;
-            std::slice::from_raw_parts(p, self.len_raw() as usize)
+            slice::from_raw_parts(p, self.len_raw() as usize)
         }
     }
 
     #[inline]
     fn len_raw(&self) -> u32 {
-        self.len.load(std::sync::atomic::Ordering::Relaxed)
+        self.len.load(Ordering::Relaxed)
     }
 
     #[inline]
@@ -451,7 +453,7 @@ impl AttrsObj {
         // SAFETY: `alloc_union` placed `leaves` pointers after the tail.
         unsafe {
             let p = (self.union() as *const UnionTail).add(1) as *const &'static AttrsObj;
-            std::slice::from_raw_parts(p, self.leaves as usize)
+            slice::from_raw_parts(p, self.leaves as usize)
         }
     }
 
@@ -473,8 +475,7 @@ impl AttrsObj {
             return n as usize;
         }
         let n = self.iter().count();
-        self.len
-            .store(n as u32, std::sync::atomic::Ordering::Relaxed);
+        self.len.store(n as u32, Ordering::Relaxed);
         n
     }
 
@@ -548,19 +549,13 @@ impl AttrsObj {
 /// The leaf slot that stands for an exhausted stream while the tree is built.
 const SENTINEL: usize = MAX_LEAVES as usize;
 
-/// Merging iterator over the flat leaves of a set, lowest priority first;
-/// on equal syms the last leaf wins (`b` over `a`).
-///
-/// More than one leaf runs a loser tree over the leaf heads: `tree[0]` is
-/// the current winner and `tree[i]`, for `i` in `1..n`, is the loser of the
-/// match between the two subtrees under node `i`, the parent of leaf `s`
-/// being `(s + n) / 2`. That invariant is what makes an advance cost one
-/// root path, `ceil(log2 n)` comparisons, instead of a rescan of every
-/// head. The key of leaf `i` is `(sym + 1) << 3 | (7 - i)`, so equal syms
-/// put the last leaf first: the winner is the entry that wins the `//` and
-/// the duplicates that follow it are dropped. Key 0 is left free for the
-/// sentinel and an exhausted leaf keys as `u64::MAX`, so neither can tie
-/// with a real head.
+/// Merging iterator over the flat leaves of a set, lowest priority first; on
+/// equal syms the last leaf wins (`b` over `a`). More than one leaf runs a loser
+/// tree: `tree[0]` is the winner and `tree[i]` the loser of the match under node
+/// `i`, the parent of leaf `s` being `(s + n) / 2`, so an advance costs one root
+/// path instead of a rescan of every head. Leaf `i` keys as
+/// `(sym + 1) << 3 | (7 - i)`, which puts the last leaf first on equal syms. Key
+/// 0 is the sentinel and `u64::MAX` an exhausted leaf, so neither ties with a head.
 pub struct AttrIter {
     leaves: [&'static [Attr]; SENTINEL + 1],
     keys: [u64; SENTINEL + 1],
@@ -655,7 +650,7 @@ impl EnvObj {
         // SAFETY: as for `slot`; the caller passes the `n` it allocated.
         unsafe {
             let p = (self as *const EnvObj).add(1) as *const Cell;
-            std::slice::from_raw_parts(p, n)
+            slice::from_raw_parts(p, n)
         }
     }
 
@@ -689,8 +684,8 @@ impl EnvObj {
         // SAFETY: `up` is a pointer-sized, pointer-aligned word viewed as an
         // atomic; the low bits are free (8-byte aligned) and masked by `up()`.
         unsafe {
-            let a = &*(&self.up as *const *const EnvObj as *const std::sync::atomic::AtomicUsize);
-            a.fetch_or(bit, std::sync::atomic::Ordering::Relaxed);
+            let a = &*(&self.up as *const *const EnvObj as *const AtomicUsize);
+            a.fetch_or(bit, Ordering::Relaxed);
         }
     }
 }
@@ -975,7 +970,7 @@ impl Arena {
     /// (about 1 in 2^64 per pair) just skips the sharing.
     #[inline]
     fn str_hash(bytes: &[u8]) -> u64 {
-        crate::syntax::symbol::fx_bytes(bytes)
+        symbol::fx_bytes(bytes)
     }
 
     /// Record freshly copied `b` under `hash`; the entry it collides with,
@@ -1117,7 +1112,7 @@ impl Arena {
                 len: n as u32,
             });
             let cells = p.add(1) as *mut u64;
-            std::ptr::write_bytes(cells, 0, n);
+            ptr::write_bytes(cells, 0, n);
             #[cfg(feature = "stats2")]
             self.stats.census.note_list(p);
             &*p
@@ -1133,7 +1128,7 @@ impl Arena {
         // SAFETY: `alloc_list_as` placed `len` cells after the header; this
         // is the fill, not a read, so the census read mark stays clear.
         let cells = unsafe {
-            std::slice::from_raw_parts((l as *const ListObj).add(1) as *const Cell, items.len())
+            slice::from_raw_parts((l as *const ListObj).add(1) as *const Cell, items.len())
         };
         for (c, w) in cells.iter().zip(items) {
             c.set(*w);
@@ -1153,7 +1148,7 @@ impl Arena {
                 origin: bucket.attrs_origin(),
                 flags: 0,
                 leaves: 1,
-                len: std::sync::atomic::AtomicU32::new(n as u32),
+                len: AtomicU32::new(n as u32),
             });
             #[cfg(feature = "stats2")]
             self.stats.census.note_attrs(p, bucket.attrs_origin(), n);
@@ -1176,7 +1171,7 @@ impl Arena {
                 origin: Stat::AttrsUpd.attrs_origin(),
                 flags: 0,
                 leaves: n as u8,
-                len: std::sync::atomic::AtomicU32::new(u32::MAX),
+                len: AtomicU32::new(u32::MAX),
             });
             let tail = p.add(1) as *mut UnionTail;
             tail.write(UnionTail {
@@ -1218,13 +1213,12 @@ impl Arena {
             out.init_from(n, e);
             n += 1;
         }
-        out.len
-            .store(n as u32, std::sync::atomic::Ordering::Relaxed);
+        out.len.store(n as u32, Ordering::Relaxed);
         // SAFETY: nothing was allocated since `out`, and `out` never had
         // more than `n` of its `cap` entries written.
         unsafe { self.shrink_last((cap - n) * size_of::<Attr>(), Stat::AttrsUpd) };
         let out: &'static AttrsObj = out;
-        a.len.store(n as u32, std::sync::atomic::Ordering::Relaxed);
+        a.len.store(n as u32, Ordering::Relaxed);
         u.flat.set(Word::from_ref(out));
         out
     }
@@ -1256,7 +1250,7 @@ impl Arena {
         for (slot, (sym, pos, w)) in slots.iter_mut().zip(entries) {
             // SAFETY: writing into uninitialised arena memory of the right type.
             unsafe {
-                std::ptr::write(
+                ptr::write(
                     slot,
                     Attr {
                         sym: *sym,
@@ -1280,10 +1274,10 @@ impl Arena {
         // SAFETY: fresh allocation sized for header plus n cells.
         unsafe {
             p.write(EnvObj {
-                up: up.map_or(std::ptr::null(), |e| e as *const EnvObj),
+                up: up.map_or(ptr::null(), |e| e as *const EnvObj),
             });
             let cells = p.add(1) as *mut u64;
-            std::ptr::write_bytes(cells, 0, n);
+            ptr::write_bytes(cells, 0, n);
             #[cfg(feature = "stats2")]
             self.stats.census.note_env(p, n);
             &*p
@@ -1374,13 +1368,7 @@ impl Arena {
         Word::lambda_from_ref(self.alloc(LambdaObj { env, lam }))
     }
 
-    pub(crate) fn mk_primop(
-        &mut self,
-        name: &'static str,
-        arity: u8,
-        f: PrimFn,
-        sym: crate::syntax::symbol::Sym,
-    ) -> Word {
+    pub(crate) fn mk_primop(&mut self, name: &'static str, arity: u8, f: PrimFn, sym: Sym) -> Word {
         Word::from_ref(self.alloc(PrimOpObj {
             kind: Kind::PrimOp,
             arity,
@@ -1410,7 +1398,7 @@ impl AttrsObj {
         // SAFETY: see `attrs`; exclusive access through `&mut self`.
         unsafe {
             let p = (self as *mut AttrsObj).add(1) as *mut Attr;
-            std::slice::from_raw_parts_mut(p, self.len_raw() as usize)
+            slice::from_raw_parts_mut(p, self.len_raw() as usize)
         }
     }
 }
@@ -1435,7 +1423,7 @@ impl AttrsObj {
         // `write` does not read the uninitialised slot.
         unsafe {
             let p = (self as *mut AttrsObj).add(1) as *mut Attr;
-            std::ptr::write(
+            ptr::write(
                 p.add(i),
                 Attr {
                     sym,
@@ -1456,10 +1444,12 @@ impl AttrsObj {
 mod tests {
     use super::*;
 
+    use std::collections::BTreeMap;
+
     /// The leaves of `sets`, folded left to right: the last set holding a sym
     /// wins, as `//` does.
     fn reference(sets: &[Vec<(u32, i64)>]) -> Vec<(u32, i64)> {
-        let mut m: std::collections::BTreeMap<u32, i64> = std::collections::BTreeMap::new();
+        let mut m: BTreeMap<u32, i64> = BTreeMap::new();
         for s in sets {
             for (sym, v) in s {
                 m.insert(*sym, *v);
