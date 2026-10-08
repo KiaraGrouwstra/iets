@@ -106,9 +106,17 @@ impl Checker {
     }
 
     pub fn check(&mut self, src: &[u8]) -> Verdict {
-        let d = match self.compare(src) {
-            None => return Verdict::Same,
-            Some(d) => d,
+        if self.compare(src).is_none() {
+            return Verdict::Same;
+        }
+        // Both sides keep a symbol table across inputs, and which of two
+        // clashing names an error reports follows symbol order. A file is
+        // parsed in a fresh process, so a difference counts only when it
+        // holds with fresh tables.
+        self.oracle.restart();
+        self.interner = Interner::new();
+        let Some(d) = self.compare(src) else {
+            return Verdict::Same;
         };
         match self.known.iter().find(|k| k.matches(&d, src)) {
             Some(k) => Verdict::Expected(k.id.clone()),

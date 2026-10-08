@@ -113,9 +113,10 @@ impl Canon<'_> {
             }
             // `e or` is `expr_simple OR_KW` in parser.y: a call of its own,
             // never an extension of `e`
-            Expr::Apply { func, args } if self.cursed_or(args) => {
-                call(self.expr(func), self.ast.ids(args).iter().map(|a| self.expr(*a)).collect())
-            }
+            Expr::Apply { func, args } if self.cursed_or(args) => call(
+                self.expr(func),
+                self.ast.ids(args).iter().map(|a| self.expr(*a)).collect(),
+            ),
             // makeCall: applying a call extends it, whatever made the call
             Expr::Apply { func, args } => {
                 let mut f = self.expr(func);

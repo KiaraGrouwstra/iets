@@ -34,6 +34,14 @@ impl Oracle {
         }
     }
 
+    /// Stops the child; the next request starts a fresh one.
+    pub fn restart(&mut self) {
+        if let Some((mut c, ..)) = self.child.take() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+
     pub fn ask(&mut self, src: &[u8]) -> Reply {
         match self.round_trip(src) {
             Ok(r) => r,

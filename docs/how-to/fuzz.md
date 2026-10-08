@@ -34,6 +34,11 @@ It does not compare:
   variables in `compile`, which the evaluator target will test;
 - warnings, lints and doc comments.
 
+Both sides keep one symbol table across inputs, for speed. Symbol order
+decides which of several clashing names an error reports, and a file is
+parsed in a fresh process. So a difference is checked again with a fresh
+oracle and a fresh table, and only that second answer counts.
+
 A difference has one of six kinds:
 
 | Kind | Meaning |

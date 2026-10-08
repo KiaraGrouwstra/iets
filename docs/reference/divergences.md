@@ -143,10 +143,12 @@ identifier). The warning quotes the source and passes the text to
 `warn` as a format string (`ExprCall::warnIfCursedOr`, nixexpr.cc). A
 `%` in the quoted text then fails in boost: `f "%" or` gives
 `error: boost::bad_format_string: format-string is ill-formed`, and
-`f "%d" or` gives `boost::too_few_args`. This is a bug of Nix 2.34.8.
+`f "%d" or` gives `boost::too_few_args`. With more `%` signs a boost
+assertion fails and Nix aborts. This is a bug of Nix 2.34.8.
 iets parses both, as Nix does without the `%`.
 
-`fuzz/divergences.toml` holds this case as `percent-in-a-cursed-or`.
+`fuzz/divergences.toml` holds this case as `percent-in-a-cursed-or` and
+`percent-in-a-cursed-or-abort`.
 
 ## Unforced values in lazy positions
 
