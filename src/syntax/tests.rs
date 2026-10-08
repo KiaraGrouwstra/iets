@@ -317,6 +317,20 @@ fn line_col_counts_bytes() {
 }
 
 #[test]
+fn a_line_ends_at_cr_lf_and_lone_cr() {
+    let src = b"a\rb\r\nc\n\rd";
+    assert_eq!(line_col(src, 2), (2, 1));
+    assert_eq!(line_col(src, 4), (2, 3));
+    assert_eq!(line_col(src, 5), (3, 1));
+    assert_eq!(line_col(src, 7), (4, 1));
+    assert_eq!(line_col(src, 8), (5, 1));
+    let e = parse(b"l\r =", FileId(0), &mut Interner::new())
+        .err()
+        .unwrap();
+    assert_eq!(line_col(b"l\r =", e.span.start), (2, 2));
+}
+
+#[test]
 fn allow_comments() {
     use super::ast::Note;
     use crate::lint::LintId;

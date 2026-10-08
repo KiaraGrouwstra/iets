@@ -45,22 +45,11 @@ pub struct FileInfo {
 
 impl FileInfo {
     pub(crate) fn new(path: Vec<u8>, src: &[u8], base: u32) -> FileInfo {
-        let mut line_starts = vec![0u32];
-        let mut rest = src;
-        let mut off = 0usize;
-        // SAFETY: memchr reads at most `rest.len()` bytes of `rest`.
-        while let Some(i) = unsafe {
-            let p = libc::memchr(
-                rest.as_ptr() as *const libc::c_void,
-                b'\n' as i32,
-                rest.len(),
-            );
-            (!p.is_null()).then(|| p as usize - rest.as_ptr() as usize)
-        } {
-            off += i + 1;
-            line_starts.push(off as u32);
-            rest = &rest[i + 1..];
-        }
+        let line_starts = if src.contains(&b'\r') {
+            crate::syntax::line_starts(src)
+        } else {
+            newline_starts(src)
+        };
         FileInfo {
             path,
             base,
@@ -105,6 +94,27 @@ impl FileInfo {
         };
         (line as u32 + 1, offset - self.line_starts[line] + 1)
     }
+}
+
+/// `syntax::line_starts` for a source with no `\r`, at memchr speed.
+fn newline_starts(src: &[u8]) -> Vec<u32> {
+    let mut line_starts = vec![0u32];
+    let mut rest = src;
+    let mut off = 0usize;
+    // SAFETY: memchr reads at most `rest.len()` bytes of `rest`.
+    while let Some(i) = unsafe {
+        let p = libc::memchr(
+            rest.as_ptr() as *const libc::c_void,
+            b'\n' as i32,
+            rest.len(),
+        );
+        (!p.is_null()).then(|| p as usize - rest.as_ptr() as usize)
+    } {
+        off += i + 1;
+        line_starts.push(off as u32);
+        rest = &rest[i + 1..];
+    }
+    line_starts
 }
 
 /// Interned symbols the evaluator needs by name.
