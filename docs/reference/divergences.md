@@ -105,6 +105,37 @@ when the C stack runs out. iets counts the nesting instead and gives the
 same message above 50,000 levels, so no input makes it crash. Nix accepts
 more: 400,000 nested lists parse there and stop only in the printer.
 
+## A NUL byte outside a string
+
+Nix's lexer gives each byte that no rule takes as a token of its own
+(lexer.l, the last `{ANY}` rule), and the byte 0 is the end-of-input
+token of the bison parser. So a NUL byte outside a string or a comment
+ends the file for Nix: `1<NUL> + garbage` parses as `1`, and `{ a<NUL>`
+is an unexpected end of file one byte after the NUL. iets refuses the
+NUL with `unexpected invalid token` at the byte itself. Matching Nix
+would make iets read part of a file in silence. Inside a string both
+give the same `cannot be represented as Nix string` error, and in a
+comment both ignore it.
+
+`fuzz/divergences.toml` holds this case as `nul-outside-a-string`.
+
+## Which of several clashes an error names
+
+A file with two or more duplicate formal arguments, or two or more
+attributes that clash when Nix merges nested sets, is refused by both,
+with the same message. The name in the message can differ. Nix sorts the
+formals by symbol to find a duplicate (`validateFormals`,
+parser-state.hh) and merges a set's attributes in symbol order
+(`addAttr`, the same file). A symbol's place in that order is the time
+the evaluator first saw the name, and the names of the builtins come
+first: in `{ lib, fetchurl, lib, fetchurl }: 1` Nix names `fetchurl`.
+iets names a clash by its own symbol order. Matching Nix would mean
+creating iets's symbols in Nix's order. With one clash both name the
+same attribute at the same place.
+
+`fuzz/divergences.toml` holds this case as `which-duplicate-formal`
+and `which-duplicate-attribute`.
+
 ## Unforced values in lazy positions
 
 In a list element, an attribute value, a `let` binding or a function

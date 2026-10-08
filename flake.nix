@@ -28,6 +28,8 @@
           ln -s ${ietsPkg}/bin/iets $out/bin/$n
         done
       '';
+      # the differential fuzzer against Nix (docs/how-to/fuzz.md)
+      fuzz = pkgs: import ./fuzz { inherit pkgs; src = self; nixpkgsSrc = nixpkgs; };
     in {
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
@@ -36,7 +38,12 @@
       });
       nixosModules.default = import ./nix/module.nix self;
       lib.mkClassic = classic;
-      packages = forAll (pkgs: { default = iets pkgs; classic = classic pkgs (iets pkgs) pkgs.nix; });
+      packages = forAll (pkgs: {
+        default = iets pkgs;
+        classic = classic pkgs (iets pkgs) pkgs.nix;
+        inherit (fuzz pkgs) parse-oracle parse-diff fuzz-parse;
+        fuzz-parse-campaign = (fuzz pkgs).campaign { };
+      });
       checks = forAll (pkgs:
         let
           pkg = iets pkgs;
@@ -70,6 +77,8 @@
           fmt = lint "fmt" pkgs.rustfmt "fmt --check";
           diff-e2e = nuScript "diff-e2e";
           langtests = nuScript "langtests";
+          # every .nix file of nixpkgs through both parsers, then a minute of libFuzzer
+          fuzz-parse = (fuzz pkgs).check { seconds = 60; };
           linttest = nuScript "linttest";
           partest = nuScript "partest";
         } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {

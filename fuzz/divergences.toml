@@ -1,0 +1,37 @@
+# Known divergences of the parse target from Nix 2.34.8: each one a hit
+# the fuzzer reports as expected, not as a bug. A hit matches an entry
+# when every field the entry gives matches. Format and meaning:
+# docs/how-to/fuzz.md.
+#
+#   [[parse]]
+#   id = "..."      # names the case; reports count hits per id
+#   doc = "..."     # the section of docs/reference/divergences.md
+#   kind = "..."    # optional: nix-only, iets-only, position, tree,
+#                   # iets-panic or nix-crash
+#   input = "..."   # optional: the input contains these bytes
+#   nix = "..."     # optional: Nix's side of the report contains this
+#   iets = "..."    # optional: iets's side of the report contains this
+#   names_differ = true  # optional: the two errors name different things
+#                        # (the first '...' of each message)
+
+[[parse]]
+id = "nul-outside-a-string"
+doc = "docs/reference/divergences.md#a-nul-byte-outside-a-string"
+input = "\u0000"
+iets = "unexpected invalid token"
+
+[[parse]]
+id = "which-duplicate-formal"
+doc = "docs/reference/divergences.md#which-of-several-clashes-an-error-names"
+kind = "position"
+nix = "duplicate formal function argument"
+iets = "duplicate formal function argument"
+names_differ = true
+
+[[parse]]
+id = "which-duplicate-attribute"
+doc = "docs/reference/divergences.md#which-of-several-clashes-an-error-names"
+kind = "position"
+nix = "already defined at"
+iets = "already defined at"
+names_differ = true
