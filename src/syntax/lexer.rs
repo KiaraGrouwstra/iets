@@ -7,6 +7,8 @@
 use super::ParseError;
 use super::ast::Span;
 
+use std::mem;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tok {
     Id,
@@ -244,7 +246,7 @@ impl<'a> Lexer<'a> {
     /// comment's end (an own-line comment at the end of the file covers
     /// nothing).
     pub fn take_allows(&mut self) -> Vec<Allow> {
-        let raw = std::mem::take(&mut self.allows);
+        let raw = mem::take(&mut self.allows);
         raw.into_iter()
             .filter_map(|(start, end)| {
                 let text = Span {
@@ -465,6 +467,24 @@ impl<'a> Lexer<'a> {
         if i == body { None } else { Some(i) }
     }
 
+    /// Longest match: `kind` up to `end`, unless a float or a path that starts
+    /// at `start` runs further.
+    fn or_float_or_path(&self, start: usize, mut kind: Tok, mut end: usize) -> (Tok, usize) {
+        if let Some(e) = self.scan_float(start)
+            && e > end
+        {
+            kind = Tok::Float;
+            end = e;
+        }
+        if let Some(e) = self.scan_path_token(start)
+            && e > end
+        {
+            kind = Tok::Path;
+            end = e;
+        }
+        (kind, end)
+    }
+
     fn scan_float(&self, p: usize) -> Option<usize> {
         let mut i = p;
         let b = self.at(i);
@@ -584,21 +604,7 @@ impl<'a> Lexer<'a> {
                 while self.at(i).is_ascii_digit() {
                     i += 1;
                 }
-                let mut kind = Tok::Int;
-                let mut end = i;
-                if let Some(e) = self.scan_float(start)
-                    && e > end
-                {
-                    kind = Tok::Float;
-                    end = e;
-                }
-                if let Some(e) = self.scan_path_token(start)
-                    && e > end
-                {
-                    kind = Tok::Path;
-                    end = e;
-                }
-                (kind, end)
+                self.or_float_or_path(start, Tok::Int, i)
             }
             b'.' => {
                 let mut kind = Tok::Dot;
@@ -607,19 +613,7 @@ impl<'a> Lexer<'a> {
                     kind = Tok::Ellipsis;
                     end = start + 3;
                 }
-                if let Some(e) = self.scan_float(start)
-                    && e > end
-                {
-                    kind = Tok::Float;
-                    end = e;
-                }
-                if let Some(e) = self.scan_path_token(start)
-                    && e > end
-                {
-                    kind = Tok::Path;
-                    end = e;
-                }
-                (kind, end)
+                self.or_float_or_path(start, kind, end)
             }
             b'/' => {
                 if let Some(e) = self.scan_path_token(start) {

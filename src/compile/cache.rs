@@ -11,12 +11,25 @@
 //! loader re-sorts them and rewrites every `Local` index through a
 //! permutation stack that mirrors the compiler's scope pushes.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use super::ir::*;
+use super::ir::{
+    AttrElemIr, AttrsIr, BindIr, BindScope, DynBindIr, FormalIr, Ir, IrRef, LambdaIr, LetIr,
+    ParamIr, SelectIr,
+};
+use crate::cachefs::{self, Shape};
 use crate::eval::{Evaluator, Pos};
-use crate::runtime::{Kind, Word};
+use crate::lint::allow::{Allows, Line};
+use crate::lint::{Diag, LintId};
+use crate::runtime::word::{TAG_IMM, TAG_INT};
+use crate::runtime::{self, Kind, Word};
+use crate::session::Session;
 use crate::syntax::symbol::{FxHashMap, Sym};
+use crate::trace::key::BUILD_ID;
+use std::io::Read;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Instant;
+use std::{fs, slice};
 
 const MAGIC: &[u8; 8] = b"IETS_IR2";
 
@@ -27,10 +40,10 @@ pub struct IrCache {
     /// `IETS_IR_STATS=1`: one line per file on stderr.
     pub stats: bool,
     /// The store is swept at most once per process, on the first write.
-    swept: std::sync::atomic::AtomicBool,
+    swept: AtomicBool,
     /// Entries read, over every fiber: the cache is one handle shared by all
     /// of them, so this counts the whole run.
-    hits: std::sync::atomic::AtomicU64,
+    hits: AtomicU64,
 }
 
 impl IrCache {
@@ -39,36 +52,32 @@ impl IrCache {
     /// the directory the user names is never a removal target. `None` when
     /// that subdirectory is not iets's to write in.
     pub fn locate(override_dir: Option<&str>, timings: bool) -> Option<IrCache> {
-        let session = crate::session::Session::current();
+        let session = Session::current();
         let set = session.settings();
-        let root = crate::cachefs::root(override_dir)?.join("ir");
-        if !crate::cachefs::prepare(&root, crate::cachefs::Shape::ShardedFiles, timings) {
+        let root = cachefs::root(override_dir)?.join("ir");
+        if !cachefs::prepare(&root, Shape::ShardedFiles, timings) {
             return None;
         }
         Some(IrCache {
             root,
             min_size: set.ir_min,
             stats: set.ir_stats,
-            swept: std::sync::atomic::AtomicBool::new(false),
-            hits: std::sync::atomic::AtomicU64::new(0),
+            swept: AtomicBool::new(false),
+            hits: AtomicU64::new(0),
         })
     }
 
-    pub fn root(&self) -> &std::path::Path {
+    pub fn root(&self) -> &Path {
         &self.root
     }
 
     /// Everything the compiler folds out of the evaluator's configuration is
-    /// here, or the entry of one configuration answers another one.
-    /// `fold_builtins_select` and the global-variable fold store a string,
-    /// path, float or int constant by content, so `builtins.currentSystem`
-    /// (`system`), `builtins.storeDir` (`store_dir`) and the `impureOnly`
-    /// names that `pure` removes all belong in the key; `builtins.nixVersion`
-    /// and `builtins.langVersion` follow the build id. Every other constant is
-    /// stored by name and looked up in the live tables on load, so the search
-    /// path is not in the key, and a `~/` literal is never cached at all.
-    /// `lint_key` is `lint::Config::compile_key`: the compile-time lint
-    /// levels, whose warnings the entry carries.
+    /// here, or the entry of one configuration answers another one. The folds
+    /// store a constant by content, so `system`, `store_dir` and `pure` (which
+    /// removes the `impureOnly` names) are in the key; `nixVersion` and
+    /// `langVersion` follow the build id. Every other constant is looked up by name
+    /// on load, and a `~/` literal is never cached. `lint_key` is
+    /// `lint::Config::compile_key`, whose warnings the entry carries.
     pub fn key(
         &self,
         path: &[u8],
@@ -80,7 +89,7 @@ impl IrCache {
     ) -> String {
         let mut h = blake3::Hasher::new();
         for part in [
-            crate::trace::key::BUILD_ID.as_bytes(),
+            BUILD_ID.as_bytes(),
             path,
             system.as_bytes(),
             store_dir,
@@ -103,60 +112,54 @@ impl IrCache {
     /// integrity check is verified before the caller decodes anything, and an
     /// entry that fails it is poisoned like one that does not decode.
     pub fn read(&self, key: &str) -> Option<Vec<u8>> {
-        use std::io::Read;
-        let (f, md) = crate::cachefs::open_entry(&self.entry(key))?;
+        let (f, md) = cachefs::open_entry(&self.entry(key))?;
         let mut bytes = Vec::with_capacity(md.len() as usize + 1);
         let mut r = &f;
         if r.read_to_end(&mut bytes).is_err() {
             self.discard(key);
             return None;
         }
-        let Some(n) = bytes.len().checked_sub(crate::cachefs::SUM) else {
+        let Some(n) = bytes.len().checked_sub(cachefs::SUM) else {
             self.discard(key);
             return None;
         };
-        if bytes[n..] != crate::cachefs::checksum(key, &[&bytes[..n]]) {
+        if bytes[n..] != cachefs::checksum(key, &[&bytes[..n]]) {
             self.discard(key);
             return None;
         }
         bytes.truncate(n);
-        crate::cachefs::touch_open(&f, md.modified().ok());
-        self.hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        cachefs::touch_open(&f, md.modified().ok());
+        self.hits.fetch_add(1, Ordering::Relaxed);
         Some(bytes)
     }
 
     /// How many entries this run read, the `ir-cache load` lines of
     /// `IETS_IR_STATS=1` less the ones that failed to decode.
     pub fn hits(&self) -> u64 {
-        self.hits.load(std::sync::atomic::Ordering::Relaxed)
+        self.hits.load(Ordering::Relaxed)
     }
 
     /// Skips the write when a sibling process holds the store lock: the file
     /// is compiled again next run, which is cheaper than waiting here.
     pub fn write(&self, key: &str, bytes: &[u8]) {
-        use std::sync::atomic::Ordering;
         let path = self.entry(key);
         let dir = path.parent().expect("entry has a parent");
-        let _ = crate::cachefs::create_dir(dir);
+        let _ = cachefs::create_dir(dir);
         let name = &key[2..];
-        if let Some(_lock) = crate::cachefs::write_lock(&self.root) {
-            let sum = crate::cachefs::checksum(key, &[bytes]);
-            let _ = crate::cachefs::write_atomic(dir, name, crate::cachefs::tag(), &[bytes, &sum]);
+        if let Some(_lock) = cachefs::write_lock(&self.root) {
+            let sum = cachefs::checksum(key, &[bytes]);
+            let _ = cachefs::write_atomic(dir, name, cachefs::tag(), &[bytes, &sum]);
         } else if self.stats {
-            crate::errln!("ir-cache skip {name} (a sibling holds the store lock)");
+            errln!("ir-cache skip {name} (a sibling holds the store lock)");
         }
         if !self.swept.swap(true, Ordering::Relaxed) {
-            crate::cachefs::maybe_sweep(
-                &self.root,
-                crate::cachefs::Shape::ShardedFiles,
-                self.stats,
-            );
+            cachefs::maybe_sweep(&self.root, Shape::ShardedFiles, self.stats);
         }
     }
 
     /// Poison and wipe, never repair: an entry that does not decode goes.
     pub fn discard(&self, key: &str) {
-        let _ = std::fs::remove_file(self.entry(key));
+        let _ = fs::remove_file(self.entry(key));
     }
 }
 
@@ -197,8 +200,8 @@ pub fn serialize(
     ev: &Evaluator,
     ir: IrRef,
     base: u32,
-    diags: &[crate::lint::Diag],
-    allows: &crate::lint::allow::Allows,
+    diags: &[Diag],
+    allows: &Allows,
 ) -> Option<Vec<u8>> {
     let mut rev = FxHashMap::default();
     if let Some(b) = ev.globals.builtins {
@@ -321,7 +324,7 @@ impl Ser {
                 }
                 Some(Kind::Path) => {
                     let p = match w.view() {
-                        crate::runtime::Value::Path(p) => p,
+                        runtime::Value::Path(p) => p,
                         _ => unreachable!(),
                     };
                     self.out.push(2);
@@ -330,7 +333,7 @@ impl Ser {
                 }
                 Some(Kind::Float) => {
                     let f = match w.view() {
-                        crate::runtime::Value::Float(f) => f,
+                        runtime::Value::Float(f) => f,
                         _ => unreachable!(),
                     };
                     self.out.push(3);
@@ -345,9 +348,7 @@ impl Ser {
                 }
                 _ => {}
             }
-        } else if w.tag() == crate::runtime::word::TAG_INT
-            || w.tag() == crate::runtime::word::TAG_IMM
-        {
+        } else if w.tag() == TAG_INT || w.tag() == TAG_IMM {
             self.out.push(0);
             put_u64(&mut self.out, w.bits());
             return;
@@ -610,8 +611,8 @@ pub fn deserialize(
     base: u32,
     span: u32,
     stats: bool,
-) -> Option<(IrRef, Vec<crate::lint::Diag>, crate::lint::allow::Allows)> {
-    let t0 = std::time::Instant::now();
+) -> Option<(IrRef, Vec<Diag>, Allows)> {
+    let t0 = Instant::now();
     if data.len() < MAGIC.len() || &data[..MAGIC.len()] != MAGIC {
         return None;
     }
@@ -647,11 +648,11 @@ pub fn deserialize(
         if !d.ok {
             break;
         }
-        let id = crate::lint::LintId::from_u8(d.u8());
+        let id = LintId::from_u8(d.u8());
         let pos = d.pos();
         let msg = String::from_utf8_lossy(d.bytes()).into_owned();
         match id {
-            Some(id) => diags.push(crate::lint::Diag { id, pos, msg }),
+            Some(id) => diags.push(Diag { id, pos, msg }),
             None => d.ok = false,
         }
     }
@@ -664,17 +665,17 @@ pub fn deserialize(
         let start = d.u32();
         let end = d.u32();
         let mask = d.u64();
-        lines.push(crate::lint::allow::Line { start, end, mask });
+        lines.push(Line { start, end, mask });
     }
-    let allows = match crate::lint::allow::Allows::from_sorted(lines) {
+    let allows = match Allows::from_sorted(lines) {
         Some(a) => a,
         None => {
             d.ok = false;
-            crate::lint::allow::Allows::default()
+            Allows::default()
         }
     };
     if stats {
-        crate::errln!(
+        errln!(
             "ir-cache   syms={} {}us nodes {}us",
             n,
             t1.as_micros(),
@@ -797,7 +798,7 @@ impl<'a> De<'a, '_> {
             for i in 0..n {
                 p.add(i).write(item(self));
             }
-            std::slice::from_raw_parts(p, n)
+            slice::from_raw_parts(p, n)
         }
     }
 
@@ -969,7 +970,7 @@ impl<'a> De<'a, '_> {
         });
         // SAFETY: `fill` handed out a fresh arena slice that nothing else
         // holds yet; the entries are rewritten in place below.
-        let out_mut = unsafe { std::slice::from_raw_parts_mut(out.as_ptr() as *mut BindIr, n) };
+        let out_mut = unsafe { slice::from_raw_parts_mut(out.as_ptr() as *mut BindIr, n) };
         for i in 0..n {
             if !self.ok {
                 break;
@@ -1161,9 +1162,8 @@ impl<'a> De<'a, '_> {
                         pos: Pos::NONE,
                     });
                     // SAFETY: as in `binds`: a fresh slice, rewritten in place.
-                    let fm = unsafe {
-                        std::slice::from_raw_parts_mut(formals.as_ptr() as *mut FormalIr, n)
-                    };
+                    let fm =
+                        unsafe { slice::from_raw_parts_mut(formals.as_ptr() as *mut FormalIr, n) };
                     for i in 0..n {
                         let default = self.opt_node();
                         let new = fperm.as_ref().map_or(i, |p| p[i] as usize);
@@ -1275,6 +1275,12 @@ impl<'a> De<'a, '_> {
 mod tests {
     use super::*;
 
+    use std::collections::HashSet;
+    use std::thread::Builder;
+    use std::{env, iter};
+
+    use crate::print;
+
     const SRC: &str = "let f = a: with { x = a; }; [ x 1 true null \"s\" ./p 2.5 ]; in f 3\n";
     const PATH: &[u8] = b"/t/test.nix";
 
@@ -1286,8 +1292,7 @@ mod tests {
         let ir = ev
             .compile_source(PATH, SRC.as_bytes().to_vec(), b"/t", None)
             .expect("compile");
-        let bytes =
-            serialize(&ev, ir, base, &[], &crate::lint::allow::Allows::default()).expect("entry");
+        let bytes = serialize(&ev, ir, base, &[], &Allows::default()).expect("entry");
         (ev, bytes, base, SRC.len() as u32)
     }
 
@@ -1297,14 +1302,7 @@ mod tests {
         let r = ev.eval(root, ir).and_then(|w| {
             let w = ev.force_deep(w)?;
             let mut out = Vec::new();
-            crate::print::print_ambiguous(
-                ev,
-                w,
-                1,
-                &mut out,
-                &mut std::collections::HashSet::new(),
-                0,
-            )?;
+            print::print_ambiguous(ev, w, 1, &mut out, &mut HashSet::new(), 0)?;
             Ok(String::from_utf8_lossy(&out).into_owned())
         });
         match r {
@@ -1368,13 +1366,12 @@ mod tests {
         assert!(!loads(&huge), "a count past the entry misses");
     }
 
-    /// Every changed byte of a real entry, over every source shape the
-    /// decoder has an invariant for. What the decoder accepts is evaluated
-    /// deeply: the decoder's job is that no entry can make the evaluator read
-    /// a slot, a `with` env or an inherit env that is not there, and those
-    /// faults are a panic or a SIGSEGV, not a wrong value. A changed byte
-    /// that names another symbol is a well-formed entry for another program,
-    /// and the store's integrity check — not the decoder — is what stops it
+    /// Every changed byte of a real entry, over every source shape the decoder
+    /// has an invariant for. What it accepts is evaluated deeply: no entry may
+    /// make the evaluator read a slot, a `with` env or an inherit env that is not
+    /// there, and those faults are a panic or a SIGSEGV, not a wrong value. A byte
+    /// that names another symbol is a well-formed entry for another program, which
+    /// the store's integrity check stops
     /// (`a_changed_byte_of_a_stored_entry_is_a_miss`).
     #[test]
     fn a_changed_byte_never_makes_the_evaluator_read_past_its_env() {
@@ -1396,8 +1393,7 @@ mod tests {
             let ir = ev
                 .compile_source(&path, src.as_bytes().to_vec(), b"/t", None)
                 .expect("compile");
-            let bytes = serialize(&ev, ir, base, &[], &crate::lint::allow::Allows::default())
-                .expect("entry");
+            let bytes = serialize(&ev, ir, base, &[], &Allows::default()).expect("entry");
             let want = strict_print(&mut ev, ir);
             assert!(!want.is_empty(), "case {n} evaluates");
             let mut loaded = 0;
@@ -1427,15 +1423,15 @@ mod tests {
     /// one a miss before anything is decoded, and the entry is poisoned.
     #[test]
     fn a_changed_byte_of_a_stored_entry_is_a_miss() {
-        let dir = std::env::temp_dir().join(format!("iets-ir-fuzz-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = env::temp_dir().join(format!("iets-ir-fuzz-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
         let cache = IrCache::locate(Some(dir.to_str().expect("utf-8 path")), false).expect("cache");
         let key = "ab".to_string() + &"c".repeat(60);
         let other = "ab".to_string() + &"d".repeat(60);
         let (_, bytes, _, _) = entry();
         cache.write(&key, &bytes);
         let file = dir.join("ir").join("ab").join(&key[2..]);
-        let stored = std::fs::read(&file).expect("stored entry");
+        let stored = fs::read(&file).expect("stored entry");
         assert_eq!(cache.read(&key).as_deref(), Some(bytes.as_slice()));
 
         for i in 0..stored.len() {
@@ -1445,19 +1441,19 @@ mod tests {
                 }
                 let mut bad = stored.clone();
                 bad[i] = b;
-                std::fs::write(&file, &bad).expect("entry");
+                fs::write(&file, &bad).expect("entry");
                 assert!(cache.read(&key).is_none(), "byte {i} set to {b:#04x}");
                 assert!(!file.exists(), "and the entry is poisoned");
-                std::fs::write(&file, &stored).expect("entry");
+                fs::write(&file, &stored).expect("entry");
             }
         }
 
         // the check covers the key, so an entry copied to another name is not
         // an entry there
         cache.write(&other, &stored);
-        std::fs::copy(&file, dir.join("ir").join("ab").join(&other[2..])).expect("copy");
+        fs::copy(&file, dir.join("ir").join("ab").join(&other[2..])).expect("copy");
         assert!(cache.read(&other).is_none(), "an entry under another key");
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// The nesting cap is sized for the evaluator's stack, not a test
@@ -1466,8 +1462,8 @@ mod tests {
     fn nesting_past_the_cap_misses() {
         let mut deep = Vec::from(MAGIC.as_slice());
         deep.push(0); // no names
-        deep.extend(std::iter::repeat_n(17u8, MAX_NEST as usize + 16)); // Not(Not(…
-        let t = std::thread::Builder::new()
+        deep.extend(iter::repeat_n(17u8, MAX_NEST as usize + 16)); // Not(Not(…
+        let t = Builder::new()
             .stack_size(64 << 20)
             .spawn(move || {
                 let (mut ev, _, base, span) = entry();

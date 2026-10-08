@@ -2,17 +2,23 @@
 //! must see: file table, import cache, source-to-store map, derivation
 //! tables. Cloning shares.
 
+use std::array;
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::ops::Index;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
+use std::vec::IntoIter;
 
 use crate::eval::{FileInfo, Pos};
 use crate::runtime::Word;
 use crate::runtime::arena::NSTATS;
 use crate::syntax::ast::FileId;
 use crate::syntax::symbol::Sym;
+
+use super::interner;
 
 pub struct SharedMap<K, V>(Arc<Mutex<HashMap<K, V>>>);
 
@@ -31,7 +37,7 @@ impl<K, V> Default for SharedMap<K, V> {
 impl<K: Hash + Eq, V: Clone> SharedMap<K, V> {
     pub fn get<Q: ?Sized + Hash + Eq>(&self, k: &Q) -> Option<V>
     where
-        K: std::borrow::Borrow<Q>,
+        K: Borrow<Q>,
     {
         self.0.lock().unwrap().get(k).cloned()
     }
@@ -59,7 +65,7 @@ impl<K: Hash + Eq, V: Clone> SharedMap<K, V> {
     }
 
     /// Snapshot of all entries.
-    pub fn iter(&self) -> std::vec::IntoIter<(K, V)>
+    pub fn iter(&self) -> IntoIter<(K, V)>
     where
         K: Clone,
     {
@@ -172,22 +178,8 @@ impl Default for SymWords {
 
 impl SymWords {
     pub fn new() -> SymWords {
-        let bytes = super::interner::MAX_SYMS * size_of::<AtomicU64>();
-        // SAFETY: anonymous zero-filled mapping (zero is `Word::EMPTY`),
-        // paged in on demand.
-        let p = unsafe {
-            let p = libc::mmap(
-                std::ptr::null_mut(),
-                bytes,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
-                -1,
-                0,
-            );
-            assert!(p != libc::MAP_FAILED, "sym words: mmap failed");
-            p as *mut AtomicU64
-        };
-        SymWords(Arc::new(SymWordsInner(p)))
+        // zero is `Word::EMPTY`
+        SymWords(Arc::new(SymWordsInner(interner::per_sym())))
     }
 
     #[inline]
@@ -233,7 +225,7 @@ pub struct Kinds([AtomicU64; NSTATS]);
 
 impl Default for Kinds {
     fn default() -> Kinds {
-        Kinds(std::array::from_fn(|_| AtomicU64::new(0)))
+        Kinds(array::from_fn(|_| AtomicU64::new(0)))
     }
 }
 
@@ -248,7 +240,7 @@ pub struct Counts {
     /// `derivations`; a fetched input is already in the store and counts in
     /// neither.
     pub store_adds: u64,
-    pub compile: std::time::Duration,
+    pub compile: Duration,
 }
 
 /// What arenas hold: one arena's unfolded delta, or every arena of a run.
@@ -278,7 +270,7 @@ impl Totals {
             calls: self.calls.load(Ordering::Relaxed),
             derivations: self.derivations.load(Ordering::Relaxed),
             store_adds: self.store_adds.load(Ordering::Relaxed),
-            compile: std::time::Duration::from_nanos(self.compile_ns.load(Ordering::Relaxed)),
+            compile: Duration::from_nanos(self.compile_ns.load(Ordering::Relaxed)),
         }
     }
 
@@ -303,8 +295,8 @@ impl Totals {
         ArenaUse {
             bytes: self.arena_bytes.load(Ordering::Relaxed),
             mapped: self.arena_mapped.load(Ordering::Relaxed),
-            counts: std::array::from_fn(|i| self.kind_counts.0[i].load(Ordering::Relaxed)),
-            kind_bytes: std::array::from_fn(|i| self.kind_bytes.0[i].load(Ordering::Relaxed)),
+            counts: array::from_fn(|i| self.kind_counts.0[i].load(Ordering::Relaxed)),
+            kind_bytes: array::from_fn(|i| self.kind_bytes.0[i].load(Ordering::Relaxed)),
         }
     }
 }

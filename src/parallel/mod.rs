@@ -10,14 +10,17 @@ pub mod shared;
 pub mod thunk;
 
 use std::sync::Mutex;
+use std::{ptr, thread};
 
 use crate::eval::Evaluator;
 use crate::runtime::Arena;
+use crate::session::Session;
 
 pub use force::{
     defer, fanout_attrs_coerce, fanout_list, fanout_list_coerce, force_deep, force_thunk,
     import_thunk, journal,
 };
+use std::sync::atomic::Ordering::Relaxed;
 
 /// Per-fiber evaluator state. `on` is false on the sequential path.
 #[derive(Clone)]
@@ -45,7 +48,7 @@ impl Default for Ctx {
             cancelled: false,
             stack_lo: 0,
             root: 0,
-            slot: std::ptr::null_mut(),
+            slot: ptr::null_mut(),
         }
     }
 }
@@ -62,16 +65,16 @@ impl Clone for Arena {
 
 /// Number of workers from `--workers`, `IETS_WORKERS`, or the machine.
 pub fn default_workers() -> usize {
-    if let Some(n) = crate::session::Session::current().settings().workers {
+    if let Some(n) = Session::current().settings().workers {
         return n;
     }
     // the critical chain, not core count, sets the floor; past 4 workers the
     // idle spin costs more wall time than the extra stealing gains
-    std::thread::available_parallelism().map_or(1, |n| n.get().min(4))
+    thread::available_parallelism().map_or(1, |n| n.get().min(4))
 }
 
 fn stack_size() -> usize {
-    crate::session::Session::current()
+    Session::current()
         .settings()
         .fiber_stack_mb
         .map_or(fiber::DEFAULT_STACK, |mb| mb << 20)
@@ -109,7 +112,7 @@ pub fn try_run<R: Send + 'static>(
             ev.lints.flush();
             if ev.session().settings().par_stats >= 2 {
                 for i in 0..ev.files.len() {
-                    crate::errln!(
+                    errln!(
                         "file{i} base={} = {}",
                         ev.files[i].base,
                         String::from_utf8_lossy(&ev.files[i].path)
@@ -117,12 +120,11 @@ pub fn try_run<R: Send + 'static>(
                 }
             }
             if ev.session().settings().par_stats >= 1 {
-                use std::sync::atomic::Ordering::Relaxed;
                 // SAFETY: the main fiber still owns the slot; evaluation is
                 // over, so nothing else reads it.
                 let slot = unsafe { &*slot };
                 let rt = slot.runtime();
-                crate::errln!(
+                errln!(
                     "parallel: fibers={} tasks={} effect-bails={} steals={} parks={} fiber-parks={} main-parks={} main-wait={}ms busy={}ms deadlocks={} main-stack-resident={}K",
                     rt.stats_fibers(),
                     rt.stat_tasks(),

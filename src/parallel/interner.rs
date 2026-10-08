@@ -3,9 +3,11 @@
 //! table.
 
 use std::collections::HashMap;
-use std::hash::Hasher;
+use std::hash::{BuildHasherDefault, Hasher};
+use std::str::from_utf8;
 use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
+use std::{process, ptr};
 
 use crate::syntax::symbol::{FxHasher, Sym};
 
@@ -40,7 +42,7 @@ fn mix(h: u64) -> u64 {
     h ^ (h >> 32)
 }
 
-type MixBuild = std::hash::BuildHasherDefault<MixHasher>;
+type MixBuild = BuildHasherDefault<MixHasher>;
 
 /// Symbols one run may hold. The id table is one `MAP_NORESERVE` mapping
 /// of `MAX_SYMS` words, so a larger cap costs address space and nothing
@@ -115,22 +117,26 @@ impl Default for Interner {
     }
 }
 
+/// `MAX_SYMS` zeroed `T`s, paged in on demand and never unmapped.
+pub(super) fn per_sym<T>() -> *mut T {
+    // SAFETY: an anonymous mapping aliases nothing.
+    let p = unsafe {
+        libc::mmap(
+            ptr::null_mut(),
+            MAX_SYMS * size_of::<T>(),
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
+            -1,
+            0,
+        )
+    };
+    assert!(p != libc::MAP_FAILED, "per-symbol table: mmap failed");
+    p as *mut T
+}
+
 impl Interner {
     pub fn new() -> Interner {
-        let bytes = MAX_SYMS * size_of::<AtomicPtr<&'static [u8]>>();
-        // SAFETY: anonymous zero-filled mapping, paged in on demand.
-        let names = unsafe {
-            let p = libc::mmap(
-                std::ptr::null_mut(),
-                bytes,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
-                -1,
-                0,
-            );
-            assert!(p != libc::MAP_FAILED, "interner: mmap failed");
-            p as *mut AtomicPtr<&'static [u8]>
-        };
+        let names = per_sym();
         Interner {
             shared: Arc::new(Inner {
                 shards: (0..SHARDS)
@@ -178,8 +184,8 @@ impl Interner {
         if (id as usize) >= MAX_SYMS {
             // no way back from here: the id is already handed out, and the
             // caller's signature cannot fail
-            crate::errln!("error: too many symbols (more than {MAX_SYMS})");
-            std::process::exit(1);
+            errln!("error: too many symbols (more than {MAX_SYMS})");
+            process::exit(1);
         }
         let entry: *mut &'static [u8] = Box::into_raw(Box::new(leaked));
         // SAFETY: id < MAX_SYMS indexes the mapping.
@@ -208,7 +214,7 @@ impl Interner {
     }
 
     pub fn name_str(&self, s: Sym) -> &'static str {
-        std::str::from_utf8(self.name(s)).unwrap_or("<non-utf8>")
+        from_utf8(self.name(s)).unwrap_or("<non-utf8>")
     }
 
     pub fn len(&self) -> usize {
@@ -223,6 +229,8 @@ impl Interner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::thread;
 
     #[test]
     fn intern_is_stable_and_shared() {
@@ -255,7 +263,7 @@ mod tests {
         let hs: Vec<_> = (0..8)
             .map(|t| {
                 let mut i = i.clone();
-                std::thread::spawn(move || {
+                thread::spawn(move || {
                     let mut v = Vec::new();
                     for k in 0..5000u32 {
                         let name = format!("sym{}", (k * 7 + t) % 3000);

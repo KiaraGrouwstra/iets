@@ -1,13 +1,20 @@
 //! `iets diff A B`: what differs between two derivations (docs/reference/commands.md).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::result;
+use std::sync::Arc;
 
+use crate::api::flake;
 use crate::api::installable::drv_roots;
-use crate::cli::help::{arg_error, unknown_flag, value};
-use crate::cli::{EvalArgs, EvalFlags, Input, Run, eval_flag, evaluate, report};
+use crate::api::render::Closure;
+use crate::cli::help::{arg_error, each_arg, unknown_flag};
+use crate::cli::{self, EvalArgs, EvalFlags, Input, Run, eval_flag, evaluate, render, report};
+use crate::config;
 use crate::error::{Error, Result};
-use crate::store::drv::{Derivation, DrvError, load_derivation_from_store};
-use crate::store::path::StorePath;
+use crate::remote::worker::{Connection, Transport};
+use crate::store::drv::{Derivation, DrvError, DrvLoader, load_derivation_from_store};
+use crate::store::drvdiff;
+use crate::store::path::{self, StorePath};
 
 struct Opts {
     json: bool,
@@ -32,7 +39,7 @@ pub fn cmd_diff(argv: &[String]) -> i32 {
         Err(code) => return code.max(2),
     };
     // a derivation this run evaluated, else the one in /nix/store
-    let mut load = |p: &StorePath| -> std::result::Result<Derivation, DrvError> {
+    let mut load = |p: &StorePath| -> result::Result<Derivation, DrvError> {
         match aterms.get(p) {
             Some(t) => Derivation::parse(t, Derivation::name_from_path(p)?),
             None => load_derivation_from_store(p),
@@ -54,13 +61,7 @@ fn parse(argv: &[String]) -> (Opts, Vec<Side>) {
     let mut f = EvalFlags::default();
     let mut pos: Vec<String> = Vec::new();
     let mut expr: Option<String> = None;
-    let mut i = 0;
-    while i < argv.len() {
-        let s = argv[i].as_str();
-        let mut next = || {
-            i += 1;
-            value(argv, i, s).clone()
-        };
+    each_arg(argv, |s, next| {
         match s {
             _ if eval_flag(&mut f, s, || Ok(next())).unwrap_or_else(|e| arg_error(e)) => {}
             "--json" => o.json = true,
@@ -79,9 +80,8 @@ fn parse(argv: &[String]) -> (Opts, Vec<Side>) {
             _ if s.starts_with('-') && s != "-" => unknown_flag(s),
             _ => pos.push(s.to_string()),
         }
-        i += 1;
-    }
-    let _ = crate::config::Config::load_native(&f.overrides);
+    });
+    let _ = config::Config::load_native(&f.overrides);
     // one side: the positional `p` (a .drv in the store, a flake reference
     // or a file), or `-E EXPR`, with the attribute `attr` selected
     let side = |p: Option<&String>, attr: Option<String>| match (p, &expr) {
@@ -93,7 +93,7 @@ fn parse(argv: &[String]) -> (Opts, Vec<Side>) {
         (Some(_), Some(_)) => arg_error("-E and FILE cannot be combined"),
         (p, e) => Side::Eval(Box::new(EvalArgs {
             input: match (p, e) {
-                (Some(p), _) if crate::api::flake::is_flake_ref(p) => Some(Input::Flake(p.clone())),
+                (Some(p), _) if flake::is_flake_ref(p) => Some(Input::Flake(p.clone())),
                 (Some(p), _) => Some(Input::File(p.clone())),
                 (None, Some(e)) => Some(Input::Expr(e.clone())),
                 (None, None) => None,
@@ -122,21 +122,21 @@ fn base_name(arg: &str) -> &str {
     arg.rsplit('/').next().unwrap_or(arg)
 }
 
-fn run(o: &Opts, load: &mut crate::store::drv::DrvLoader<'_>, roots: &[StorePath]) -> Result<i32> {
+fn run(o: &Opts, load: &mut DrvLoader<'_>, roots: &[StorePath]) -> Result<i32> {
     let (a, b) = (&roots[0], &roots[1]);
     if o.closure {
         return closure_diff(o, load, a, b);
     }
-    let d = crate::store::drvdiff::diff(load, a, b, o.depth)?;
-    crate::cli::render::emit(&d, o.json);
+    let d = drvdiff::diff(load, a, b, o.depth)?;
+    render::emit(&d, o.json);
     Ok(i32::from(!d.is_empty()))
 }
 
-type Aterms = std::collections::HashMap<StorePath, std::sync::Arc<Vec<u8>>>;
+type Aterms = HashMap<StorePath, Arc<Vec<u8>>>;
 
 /// The two root derivations, and the ATerms an evaluation produced for the
 /// derivations under them; the rest are read from `/nix/store`.
-fn resolve(sides: Vec<Side>) -> std::result::Result<(Aterms, Vec<StorePath>), i32> {
+fn resolve(sides: Vec<Side>) -> result::Result<(Aterms, Vec<StorePath>), i32> {
     // the sides share their flags in practice, so the first side's settings
     // are the run's
     let first = sides.iter().find_map(|s| match s {
@@ -153,7 +153,7 @@ fn resolve(sides: Vec<Side>) -> std::result::Result<(Aterms, Vec<StorePath>), i3
             .collect();
         return Ok((Aterms::new(), paths));
     };
-    crate::cli::run_parallel(run?, move |ev, _| {
+    cli::run_parallel(run?, move |ev, _| {
         let mut roots = Vec::new();
         for s in sides {
             let a = match s {
@@ -186,13 +186,7 @@ fn resolve(sides: Vec<Side>) -> std::result::Result<(Aterms, Vec<StorePath>), i3
 
 /// `--closure`: the output closures compared by package name and version,
 /// as nvd does. The daemon answers what each path refers to.
-fn closure_diff(
-    o: &Opts,
-    load: &mut crate::store::drv::DrvLoader<'_>,
-    a: &StorePath,
-    b: &StorePath,
-) -> Result<i32> {
-    use crate::remote::worker::{Connection, Transport};
+fn closure_diff(o: &Opts, load: &mut DrvLoader<'_>, a: &StorePath, b: &StorePath) -> Result<i32> {
     // the closure is read where the outputs are, so this is the local daemon
     // and not the `builder` setting
     let url = o.builder.as_deref().unwrap_or("daemon");
@@ -203,22 +197,22 @@ fn closure_diff(
     };
     let mut conn = Connection::open(&t, &mut |_| {})?;
     let (ca, cb) = (closure(&mut conn, load, a)?, closure(&mut conn, load, b)?);
-    let c = crate::api::render::Closure::of(&a.to_string(), &b.to_string(), &ca, &cb);
-    crate::cli::render::emit(&c, o.json);
+    let c = Closure::of(&a.to_string(), &b.to_string(), &ca, &cb);
+    render::emit(&c, o.json);
     Ok(i32::from(!c.is_empty()))
 }
 
 /// The versions of each package name in the closure of every output of the
 /// derivation `p`.
 fn closure(
-    conn: &mut crate::remote::worker::Connection,
-    load: &mut crate::store::drv::DrvLoader<'_>,
+    conn: &mut Connection,
+    load: &mut DrvLoader<'_>,
     p: &StorePath,
 ) -> Result<BTreeMap<String, BTreeSet<String>>> {
     let drv = load(p)?;
     let outs = (drv.outputs.iter()).map(|(name, out)| out.path(&drv.name, name));
     let mut todo: Vec<String> = outs
-        .collect::<std::result::Result<Vec<_>, _>>()?
+        .collect::<result::Result<Vec<_>, _>>()?
         .into_iter()
         .flatten()
         .map(|sp| sp.to_string())
@@ -246,9 +240,7 @@ fn closure(
 /// `<hash>-NAME-VERSION`: the name ends at the first dash before a digit,
 /// as Nix's `parseDrvName` and nvd split it.
 fn name_version(base: &str) -> (&str, &str) {
-    let n = base
-        .get(crate::store::path::HASH_PART_LEN + 1..)
-        .unwrap_or(base);
+    let n = base.get(path::HASH_PART_LEN + 1..).unwrap_or(base);
     let dash = |i: usize| n.as_bytes()[i] == b'-' && n.as_bytes()[i + 1].is_ascii_digit();
     match (0..n.len().saturating_sub(1)).find(|i| dash(*i)) {
         Some(i) => (&n[..i], &n[i + 1..]),

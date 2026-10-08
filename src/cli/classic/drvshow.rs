@@ -4,39 +4,24 @@
 //! `crate::api::drvshow`'s; this file is the command line and the printing.
 //! See `docs/reference/classic.md`.
 
-use super::nix::{Nix, global_flag, nix_settings, resolve};
-use super::{Argv, fallback};
-use crate::api::drvshow;
-use crate::api::installable;
-use crate::cli::{Outcome, cwd, render};
+use super::nix::{Nix, nix_settings, print_cached, resolve};
+use super::{eval_config, fallback};
+use crate::api::{drvshow, installable};
+use crate::cli::{cwd, render};
 
 const NAME: &str = "nix";
 
 fn parse(argv: &[String]) -> Result<Nix, String> {
     let mut n = Nix::default();
-    let mut a = Argv { all: argv, i: 0 };
-    while a.i < argv.len() {
-        let s = argv[a.i].clone();
-        match s.as_str() {
+    n.parse(argv, |n, _, s| {
+        match s {
             "-r" | "--recursive" => n.recursive = true,
             "--pretty" => n.pretty = Some(true),
             "--no-pretty" => n.pretty = Some(false),
-            "--expr" => n.expr = Some(a.value(&s)?),
-            "-f" | "--file" => n.file = Some(a.value(&s)?),
-            _ => {
-                if !global_flag(&mut n.c, &mut a, &s)? {
-                    if s.starts_with('-') {
-                        return Err(format!("'{s}' is not implemented"));
-                    }
-                    n.installables.push(s);
-                }
-            }
+            _ => return Ok(false),
         }
-        a.i += 1;
-    }
-    if n.expr.is_some() && n.file.is_some() {
-        return Err("'--file' and '--expr' are exclusive".into());
-    }
+        Ok(true)
+    })?;
     // installables.cc: an InstallablesCommand with no argument takes `.`.
     if n.installables.is_empty() {
         n.installables.push(".".into());
@@ -57,31 +42,19 @@ pub fn main(argv: &[String], rest: &[String]) -> i32 {
         Err(reason) => fallback(NAME, argv, &reason),
     };
     let pretty = n.pretty.unwrap_or_else(render::pretty);
-    let ec = super::eval_config(&n.c, &cfg);
+    let ec = eval_config(&n.c, &cfg);
     // `-r` and the indentation make another document, so both are in the key
     let run = n.run(ec, "nix derivation show", n.recursive, pretty);
-    if let Some(text) = run.hit_result() {
-        render::bytes(&text);
-        return 0;
-    }
-    match crate::cli::run_reported(run, move |ev, cache| {
+    print_cached(argv, run, move |ev| {
         let cwd = cwd();
         let mut roots = Vec::new();
         for what in &n.installables {
             let v = resolve(ev, &n, what, &cwd)?;
             roots.push(installable::to_derivation(ev, v, what)?);
         }
-        let text = drvshow::json_text(&drvshow::show(ev, &roots, n.recursive)?, pretty);
-        if let Some(c) = cache {
-            c.write(ev, &text, false);
-        }
-        Ok(text)
-    }) {
-        Outcome::Failed(code) => code,
-        Outcome::Unsupported(reason) => fallback(NAME, argv, &reason),
-        Outcome::Ok(text) => {
-            render::bytes(&text);
-            0
-        }
-    }
+        Ok(drvshow::json_text(
+            &drvshow::show(ev, &roots, n.recursive)?,
+            pretty,
+        ))
+    })
 }

@@ -3,10 +3,14 @@
 //! non-attrset. Hook: the evaluator, at the coercion site.
 
 use super::{LintId, Where};
+use crate::builtins::store_hooks;
 use crate::eval::{EvalResult, Evaluator, Pos};
-use crate::runtime::{Value, ValueType, Word};
+use crate::runtime::{AttrsObj, Value, ValueType, Word};
+use crate::trace;
 
-fn lossy(b: &[u8]) -> std::borrow::Cow<'_, str> {
+use std::borrow::Cow;
+
+fn lossy(b: &[u8]) -> Cow<'_, str> {
     String::from_utf8_lossy(b)
 }
 
@@ -20,7 +24,7 @@ pub fn path_copy(ev: &mut Evaluator, path: &[u8], store_path: &[u8], pos: Pos) -
     let shown = ev.lint_shown_path(path);
     if ev.flake_tree_of(path).is_some() {
         if !ev.lint_on(LintId::DirCopyFlake)
-            || crate::builtins::store_hooks::stat(ev, path, true) != crate::trace::Kind::Directory
+            || store_hooks::stat(ev, path, true) != trace::Kind::Directory
         {
             return Ok(());
         }
@@ -93,22 +97,14 @@ pub fn read_through_copy(ev: &mut Evaluator, path: &[u8], pos: Pos) -> EvalResul
     })
 }
 
-/// The position the value lints on derivation attributes
-/// (`impure-path-in-drv`, `absolute-path-in-drv`, `fod`) fall back to
-/// when the attribute's own position is out of scope: nixpkgs's
-/// `mkDerivation` and `fetchurl` bind the attributes, but the offending
-/// value is the user's whatever the wrapper, so the user's derivation
-/// must be found elsewhere. The `derivationStrict` call, the `name`
-/// attribute, then the first attribute (in the set's order) whose
-/// position lies in a lint root; `Pos::NONE` when none does. The
-/// evaluator keeps no call trace, so a derivation whose attribute set
-/// holds no position from the root (a nixpkgs fetcher call) stays silent.
-pub fn drv_fallback(
-    ev: &mut Evaluator,
-    attrs: &'static crate::runtime::AttrsObj,
-    pos: Pos,
-    name_pos: Pos,
-) -> Pos {
+/// Where the value lints on derivation attributes (`impure-path-in-drv`,
+/// `absolute-path-in-drv`, `fod`) fall back to when the attribute's position is
+/// out of scope: a wrapper such as `mkDerivation` binds the attribute, but the
+/// value is the user's. The `derivationStrict` call, the `name` attribute, then
+/// the first attribute whose position lies in a lint root, else `Pos::NONE`.
+/// There is no call trace, so a derivation with no position from the root (a
+/// nixpkgs fetcher call) stays silent.
+pub fn drv_fallback(ev: &mut Evaluator, attrs: &'static AttrsObj, pos: Pos, name_pos: Pos) -> Pos {
     if !ev.lint_config().scoped() {
         return Pos::NONE;
     }
@@ -125,15 +121,12 @@ pub fn drv_fallback(
     Pos::NONE
 }
 
-/// The site of the derivation itself, for the encoding lints
-/// (`drv-bool-null`, `drv-list`): the `derivationStrict` call when the
-/// scope sees it (a direct call), else the `builder` attribute's
-/// position when the scope sees that. `derivation` is a wrapper in
-/// `«derivation-internal»`, so a direct `derivation { }` call is known
-/// by its `builder` binding. `None` when neither is seen: the derivation
-/// was made by a wrapper out of scope, such as nixpkgs's `mkDerivation`,
-/// and a list or Boolean there is the wrapper's contract, not a coercion
-/// the user chose.
+/// The site of the derivation itself, for the encoding lints (`drv-bool-null`,
+/// `drv-list`): the `derivationStrict` call when the scope sees it, else the
+/// `builder` attribute's position, because `derivation` is a wrapper in
+/// `«derivation-internal»`. `None` when the scope sees neither: a wrapper out
+/// of scope, such as `mkDerivation`, made the derivation, and a list or Boolean
+/// there is the wrapper's contract, not a coercion the user chose.
 pub fn drv_owner(ev: &mut Evaluator, pos: Pos, builder_pos: Pos) -> Option<Pos> {
     if !ev.lint_config().scoped() {
         return Some(pos);

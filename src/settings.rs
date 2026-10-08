@@ -3,12 +3,18 @@
 //! its default and its effect: docs/reference/settings.md.
 
 use std::collections::BTreeMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::{env, fs, result};
 
 use crate::error::{Error, Result};
+use crate::events::Group;
+use crate::profile::Mode;
+use crate::session::Session;
+use crate::{config, log};
+use toml::Value;
 
 /// Keys a settings file may set. Nothing else: the file is ours, so a name
 /// that is not here is a mistake, not a setting for someone else.
@@ -87,7 +93,7 @@ pub struct Settings {
     pub events_to: Option<String>,
     /// `IETS_PROFILE`: sample the call
     /// stack, weighed by time (`eval`) or by arena bytes (`alloc`).
-    pub profile: Option<crate::profile::Mode>,
+    pub profile: Option<Mode>,
     /// `IETS_PROFILE_TO`: where the folded lines go.
     /// `None` is stderr.
     pub profile_to: Option<String>,
@@ -181,17 +187,14 @@ pub fn take_options(argv: &[String]) -> Result<Taken> {
 
 /// Where a command builds: its own flag, else the `builder` setting, else the
 /// nix.conf `store` setting. Never empty.
-pub fn builders(flag: Option<&str>, cfg: &crate::config::Config) -> Vec<BuilderSpec> {
+pub fn builders(flag: Option<&str>, cfg: &config::Config) -> Vec<BuilderSpec> {
     if let Some(flag) = flag {
         let specs = split_urls(flag);
         if !specs.is_empty() {
             return specs;
         }
     }
-    let set = crate::session::Session::current()
-        .settings()
-        .builder
-        .clone();
+    let set = Session::current().settings().builder.clone();
     if !set.is_empty() {
         return set;
     }
@@ -202,14 +205,14 @@ pub fn builders(flag: Option<&str>, cfg: &crate::config::Config) -> Vec<BuilderS
 /// may not ([`check_project`]). There is no machine file: iets is a client,
 /// and what it builds with is the user's (docs/reference/settings.md).
 pub fn conf_file() -> PathBuf {
-    crate::config::config_home().join("iets/iets.toml")
+    config::config_home().join("iets/iets.toml")
 }
 
 /// Refuses every key of a project's `iets.toml` but `lint`. The file comes
 /// with whatever repository was cloned, so it may not decide what runs
 /// (`nix-bin-dir`), where sources go (`builder`) or what gets rewritten
 /// (`fix-hashes`): docs/reference/settings.md has the threat model.
-pub fn check_project(text: &str, origin: &Path) -> std::result::Result<(), String> {
+pub fn check_project(text: &str, origin: &Path) -> result::Result<(), String> {
     // a file that does not parse is `apply_toml`'s to report
     let table = text.parse::<toml::Table>().unwrap_or_default();
     let Some(key) = table.keys().find(|k| *k != "lint") else {
@@ -231,12 +234,12 @@ impl Settings {
     /// The file, then `$IETS_CONFIG`, then `overrides`, then the environment
     /// for the knobs that have a variable. Later wins.
     pub fn load(overrides: &[(String, String)]) -> Result<Settings> {
-        Settings::load_from(&conf_file(), overrides, &Env(|n| std::env::var_os(n)))
+        Settings::load_from(&conf_file(), overrides, &Env(|n| env::var_os(n)))
     }
 
     fn load_from(file: &Path, overrides: &[(String, String)], env: &Env) -> Result<Settings> {
         let mut c = Conf::default();
-        match std::fs::read_to_string(file) {
+        match fs::read_to_string(file) {
             Ok(text) => c.apply(&text, &file.display().to_string(), true)?,
             Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {}
             Err(e) => return Err(Error::Config(format!("{}: {e}", file.display()))),
@@ -264,7 +267,7 @@ impl Settings {
     fn from_conf(c: &Conf, env: &Env) -> Result<Settings> {
         let source_map: Vec<(String, String)> = c
             .get("source-map", "a list of \"STOREPATH=LOCALDIR\"", |v| {
-                let pair = |e: &toml::Value| {
+                let pair = |e: &Value| {
                     let (store, local) = e.as_str()?.split_once('=')?;
                     Some((store.to_string(), local.to_string()))
                 };
@@ -273,14 +276,14 @@ impl Settings {
             .unwrap_or_default();
         for (_, local) in &source_map {
             if !Path::new(local).is_dir() {
-                crate::log::line(&format!(
+                log::line(&format!(
                     "warning: source-map: '{local}' is not a directory"
                 ));
             }
         }
         let profile = match env.str("IETS_PROFILE").as_deref() {
             None => None,
-            Some(w) => match crate::profile::Mode::parse(w) {
+            Some(w) => match Mode::parse(w) {
                 Some(m) => Some(m),
                 None => {
                     return Err(Error::Config(format!(
@@ -335,8 +338,9 @@ impl Settings {
             par_stats: env.level("IETS_PAR_STATS"),
             stats: env.level("IETS_STATS"),
             events: match env.str("IETS_EVENTS") {
-                Some(names) => crate::events::Group::mask(&names)
-                    .map_err(|e| Error::Config(format!("IETS_EVENTS: {e}")))?,
+                Some(names) => {
+                    Group::mask(&names).map_err(|e| Error::Config(format!("IETS_EVENTS: {e}")))?
+                }
                 None => 0,
             },
             events_to: env.str("IETS_EVENTS_TO"),
@@ -368,7 +372,7 @@ impl Default for Settings {
     /// whole environment is dropped instead of failing a library's session.
     fn default() -> Settings {
         let empty = || Settings::from_conf(&Conf::default(), &Env(|_| None));
-        Settings::from_conf(&Conf::default(), &Env(|n| std::env::var_os(n)))
+        Settings::from_conf(&Conf::default(), &Env(|n| env::var_os(n)))
             .or_else(|_| empty())
             .expect("no file and no environment cannot fail")
     }
@@ -379,14 +383,14 @@ impl Default for Settings {
 /// needs no quotes. Bare text for `source-map` is a whitespace-separated list.
 /// `builder` in each of its three forms: one URL, several URLs, or several
 /// tables that also carry the constraints.
-fn read_builders(v: &toml::Value) -> Option<Vec<BuilderSpec>> {
+fn read_builders(v: &Value) -> Option<Vec<BuilderSpec>> {
     if let Some(url) = v.as_str() {
         return Some(split_urls(url));
     }
     v.as_array()?.iter().map(read_builder).collect()
 }
 
-fn read_builder(v: &toml::Value) -> Option<BuilderSpec> {
+fn read_builder(v: &Value) -> Option<BuilderSpec> {
     if let Some(url) = v.as_str() {
         return Some(BuilderSpec::bare(url));
     }
@@ -419,15 +423,17 @@ fn split_urls(spec: &str) -> Vec<BuilderSpec> {
         .collect()
 }
 
-fn flag_value(name: &str, value: &str) -> toml::Value {
-    use toml::Value::{Array, Boolean, Integer, String};
+fn flag_value(name: &str, value: &str) -> Value {
     let table = format!("v = {value}").parse::<toml::Table>();
     match table.ok().and_then(|mut t| t.remove("v")) {
-        Some(v @ (Boolean(_) | Integer(_) | String(_) | Array(_))) => v,
-        _ if name == "source-map" => {
-            Array(value.split_whitespace().map(|e| String(e.into())).collect())
-        }
-        _ => String(value.into()),
+        Some(v @ (Value::Boolean(_) | Value::Integer(_) | Value::String(_) | Value::Array(_))) => v,
+        _ if name == "source-map" => Value::Array(
+            value
+                .split_whitespace()
+                .map(|e| Value::String(e.into()))
+                .collect(),
+        ),
+        _ => Value::String(value.into()),
     }
 }
 
@@ -436,7 +442,7 @@ fn flag_value(name: &str, value: &str) -> toml::Value {
 /// `source-map`, whose entries add up.
 #[derive(Debug, Default)]
 struct Conf {
-    at: BTreeMap<String, (toml::Value, String)>,
+    at: BTreeMap<String, (Value, String)>,
 }
 
 impl Conf {
@@ -452,7 +458,7 @@ impl Conf {
 
     /// `file` is a settings file, where a `[lint]` table is `lint::Config`'s
     /// to read.
-    fn set(&mut self, name: &str, value: toml::Value, at: &str, file: bool) -> Result<()> {
+    fn set(&mut self, name: &str, value: Value, at: &str, file: bool) -> Result<()> {
         if name == "lint" && file {
             return Ok(());
         }
@@ -463,12 +469,10 @@ impl Conf {
         }
         let mut at = at.to_string();
         let value = match (self.at.remove(name), value) {
-            (Some((toml::Value::Array(mut old), before)), toml::Value::Array(new))
-                if name == "source-map" =>
-            {
+            (Some((Value::Array(mut old), before)), Value::Array(new)) if name == "source-map" => {
                 old.extend(new);
                 at = format!("{before} and {at}");
-                toml::Value::Array(old)
+                Value::Array(old)
             }
             (_, value) => value,
         };
@@ -480,7 +484,7 @@ impl Conf {
         &self,
         name: &str,
         want: &str,
-        read: impl Fn(&toml::Value) -> Option<T>,
+        read: impl Fn(&Value) -> Option<T>,
     ) -> Result<Option<T>> {
         let Some((v, at)) = self.at.get(name) else {
             return Ok(None);
@@ -493,7 +497,7 @@ impl Conf {
     }
 
     fn bool(&self, name: &str) -> Result<Option<bool>> {
-        self.get(name, "true or false", toml::Value::as_bool)
+        self.get(name, "true or false", Value::as_bool)
     }
 
     fn int<T: TryFrom<i64>>(&self, name: &str) -> Result<Option<T>> {
@@ -506,9 +510,9 @@ impl Conf {
 }
 
 /// A Boolean `IETS_*` variable, parsed the way nix.conf parses a Boolean.
-fn env_bool(name: &str, v: &std::ffi::OsStr) -> Result<bool> {
+fn env_bool(name: &str, v: &OsStr) -> Result<bool> {
     let bad = || Error::Config(format!("{name}: '{}' is not true or false", v.display()));
-    crate::config::parse_bool(name, v.to_str().ok_or_else(bad)?).map_err(|_| bad())
+    config::parse_bool(name, v.to_str().ok_or_else(bad)?).map_err(|_| bad())
 }
 
 /// The environment a load reads: the process's, or a test's.
@@ -566,9 +570,9 @@ mod tests {
     const NO_ENV: Env = Env(|_| None);
 
     fn scratch(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("iets-settings-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(d.join("user")).unwrap();
+        let d = env::temp_dir().join(format!("iets-settings-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(d.join("user")).unwrap();
         d.join("user/iets.toml")
     }
 
@@ -588,7 +592,7 @@ mod tests {
     #[test]
     fn each_source_wins_over_the_one_before() {
         let file = scratch("order");
-        std::fs::write(
+        fs::write(
             &file,
             "builder = \"user\"\nworkers = 2\nfiber-stack-mb = 2\ncache = false\nfetch-max-size = 1\n",
         )
@@ -619,7 +623,7 @@ mod tests {
     #[test]
     fn source_map_adds_up_and_every_other_key_replaces() {
         let file = scratch("lists");
-        std::fs::write(&file, "source-map = [\"/nix/store/a=/a\"]\n").unwrap();
+        fs::write(&file, "source-map = [\"/nix/store/a=/a\"]\n").unwrap();
         let inline =
             Env(|n| (n == "IETS_CONFIG").then(|| "source-map = [\"/nix/store/b=/b\"]".into()));
         let o = opts(&[("source-map", "/nix/store/c=/c /nix/store/d=/d")]);
@@ -634,7 +638,7 @@ mod tests {
                 "/nix/store/d"
             ]
         );
-        std::fs::write(&file, "source-map = [\"no-equals-sign\"]\n").unwrap();
+        fs::write(&file, "source-map = [\"no-equals-sign\"]\n").unwrap();
         let e = Settings::load_from(&file, &[], &NO_ENV)
             .map(|_| ())
             .unwrap_err()
@@ -648,7 +652,7 @@ mod tests {
         let one = |text: &str| {
             let env = Env(|n| (n == "IETS_CONFIG").then(|| "".into()));
             let file = scratch("builders");
-            std::fs::write(&file, text).unwrap();
+            fs::write(&file, text).unwrap();
             Settings::load_from(&file, &[], &env).unwrap().builder
         };
         assert_eq!(
@@ -707,7 +711,7 @@ mod tests {
     #[test]
     fn the_user_file_turns_purity_off() {
         let f = scratch("pure");
-        std::fs::write(&f, "pure = false\n").unwrap();
+        fs::write(&f, "pure = false\n").unwrap();
         assert!(!Settings::load_from(&f, &[], &NO_ENV).unwrap().pure);
         let s = Settings::load_from(&f, &opts(&[("pure", "true")]), &NO_ENV).unwrap();
         assert!(s.pure, "--iets-option wins over the file");
@@ -798,7 +802,6 @@ mod tests {
 
     #[test]
     fn the_flag_value_is_toml_when_it_reads_as_toml() {
-        use toml::Value;
         assert_eq!(flag_value("workers", "4"), Value::Integer(4));
         assert_eq!(flag_value("cache", "false"), Value::Boolean(false));
         assert_eq!(

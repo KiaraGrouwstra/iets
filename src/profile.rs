@@ -12,13 +12,18 @@
 //! the only switch.
 
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{self, Write};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::thread::{self, Builder};
+use std::time::Duration;
 
 use crate::eval::error::Pos;
+use crate::log;
 use crate::parallel::interner::Interner;
 use crate::parallel::shared::Files;
+use crate::session::Session;
 use crate::syntax::symbol::Sym;
 
 /// Frames below this are left out of a sample, so hashing one stays bounded.
@@ -179,7 +184,7 @@ impl Profile {
         let Some(to) = self.to.get() else { return };
         let Ok(g) = self.folded.lock() else { return };
         if g.is_empty() {
-            crate::errln!(
+            errln!(
                 "profile: no samples at {} Hz, so the evaluation was shorter than one tick",
                 self.hz.load(Ordering::Relaxed)
             );
@@ -198,14 +203,14 @@ impl Profile {
             let _ = writeln!(out, " {count}");
         }
         if to == "-" {
-            let _ = std::io::stderr().write_all(&out);
+            let _ = io::stderr().write_all(&out);
             return;
         }
-        match crate::log::open_sink(std::path::Path::new(to)) {
+        match log::open_sink(Path::new(to)) {
             Ok(mut w) => {
                 let _ = w.write_all(&out);
             }
-            Err(e) => crate::errln!(
+            Err(e) => errln!(
                 "error (ignored): opening profile file \"{to}\": {}",
                 crate::error::io_text(&e)
             ),
@@ -244,7 +249,7 @@ impl Profile {
 
 /// Starts profiling this session, when it asked for it. The tick thread
 /// holds the session: it ends on the first tick after [`Profile::write`].
-pub fn open(session: &Arc<crate::session::Session>) {
+pub fn open(session: &Arc<Session>) {
     let s = session.settings();
     let Some(mode) = s.profile else {
         return;
@@ -260,20 +265,26 @@ pub fn open(session: &Arc<crate::session::Session>) {
         .to
         .set(s.profile_to.clone().unwrap_or_else(|| "-".to_string()));
     let own = session.clone();
-    let _ = std::thread::Builder::new()
-        .name("iets-profile".into())
-        .spawn(move || {
-            let period = std::time::Duration::from_micros(1_000_000 / hz as u64);
-            while !own.profile.stop.load(Ordering::Relaxed) {
-                std::thread::sleep(period);
-                own.profile.tick.fetch_add(1, Ordering::Relaxed);
-            }
-        });
+    let _ = Builder::new().name("iets-profile".into()).spawn(move || {
+        let period = Duration::from_micros(1_000_000 / hz as u64);
+        while !own.profile.stop.load(Ordering::Relaxed) {
+            thread::sleep(period);
+            own.profile.tick.fetch_add(1, Ordering::Relaxed);
+        }
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A call the way the evaluator enters one: push, then sample if a tick passed.
+    fn call(s: &mut Stack, p: &Profile, frame: u64, bytes: u64) {
+        s.enter(frame);
+        if s.due(p) {
+            s.take(p, bytes);
+        }
+    }
 
     fn folded(p: &Profile) -> Vec<(Vec<u64>, u64)> {
         let g = p.folded.lock().unwrap();
@@ -295,20 +306,11 @@ mod tests {
         let p = Profile::default();
         let mut s = Stack::default();
         p.tick.store(1, Ordering::Relaxed);
-        s.enter(10);
-        if s.due(&p) {
-            s.take(&p, 0);
-        }
-        s.enter(20);
-        if s.due(&p) {
-            s.take(&p, 0);
-        }
+        call(&mut s, &p, 10, 0);
+        call(&mut s, &p, 20, 0);
         assert_eq!(folded(&p), vec![(vec![10], 1)]);
         p.tick.store(2, Ordering::Relaxed);
-        s.enter(30);
-        if s.due(&p) {
-            s.take(&p, 0);
-        }
+        call(&mut s, &p, 30, 0);
         assert_eq!(folded(&p), vec![(vec![10], 1), (vec![10, 20, 30], 1)]);
     }
 
@@ -317,21 +319,12 @@ mod tests {
         let p = Profile::default();
         let mut s = Stack::default();
         let d = s.depth();
-        s.enter(10);
-        if s.due(&p) {
-            s.take(&p, 0);
-        }
-        s.enter(20);
-        if s.due(&p) {
-            s.take(&p, 0);
-        }
+        call(&mut s, &p, 10, 0);
+        call(&mut s, &p, 20, 0);
         s.unwind(d);
         assert_eq!(s.depth(), 0);
         p.tick.store(1, Ordering::Relaxed);
-        s.enter(30);
-        if s.due(&p) {
-            s.take(&p, 0);
-        }
+        call(&mut s, &p, 30, 0);
         assert_eq!(folded(&p), vec![(vec![30], 1)]);
     }
 
@@ -340,10 +333,7 @@ mod tests {
         let p = Profile::default();
         let mut s = Stack::default();
         for i in 0..(MAX_DEPTH as u64 + 10) {
-            s.enter(i);
-            if s.due(&p) {
-                s.take(&p, 0);
-            }
+            call(&mut s, &p, i, 0);
             p.tick.store(i + 1, Ordering::Relaxed);
         }
         assert!(folded(&p).iter().all(|(k, _)| k.len() <= MAX_DEPTH));
@@ -355,10 +345,7 @@ mod tests {
         p.by_bytes.store(true, Ordering::Relaxed);
         let mut s = Stack::default();
         p.tick.store(1, Ordering::Relaxed);
-        s.enter(10);
-        if s.due(&p) {
-            s.take(&p, 4096);
-        }
+        call(&mut s, &p, 10, 4096);
         assert_eq!(folded(&p), vec![(vec![10], 4096)]);
     }
 }

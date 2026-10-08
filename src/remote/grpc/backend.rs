@@ -19,13 +19,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
-use crate::build::backend::{Backend, Batch, Phase, Status, local};
+use crate::build::backend::{self, Backend, Batch, Phase, Status, add_roots, link_targets, local};
 use crate::build::fanout;
 use crate::error::{Error, Result};
 use crate::log::{
-    ACT_BUILD, ACT_BUILDS, ACT_COPY_PATH, ACT_COPY_PATHS, ACT_REALISE, ACT_UNKNOWN, Activity,
+    self, ACT_BUILD, ACT_BUILDS, ACT_COPY_PATH, ACT_COPY_PATHS, ACT_REALISE, ACT_UNKNOWN, Activity,
     LVL_ERROR, LVL_INFO, LVL_TALKATIVE, RES_PROGRESS,
 };
+use crate::remote::copy::Copying;
 use crate::remote::event::{Event, Started};
 use crate::remote::plan::{Object, Plan};
 use crate::remote::worker::{Connection, failed_event};
@@ -52,7 +53,10 @@ impl Grpc {
         let c = Client::open(cfg)?;
         Ok(Grpc {
             t: Timings {
-                trusted: c.info.trusted,
+                common: backend::Timings {
+                    trusted: c.info.trusted,
+                    ..Default::default()
+                },
                 calls: 1,
                 ..Timings::default()
             },
@@ -63,10 +67,8 @@ impl Grpc {
     }
 }
 
-/// A `Want` and a `BuildDerivation` per derivation of the batch's closure, at most
-/// `max-builds` in flight, a derivation only once every input
-/// derivation of it is done.
-///
+/// A `Want` and a `BuildDerivation` per derivation of the batch's closure, at
+/// most `max-builds` in flight, a derivation only once its inputs are done.
 /// Derivations whose outputs the store already reports valid are skipped. The
 /// C++ plugin sends them anyway and lets the niks3 claim answer `AlreadyValid`,
 /// which costs one RPC per derivation; one extra `QueryValidPaths` over the
@@ -200,7 +202,7 @@ fn build_batch(
             Some(res) if res.success() => continue,
             Some(res) => (
                 format!("status {}: {}", res.status, res.error_msg),
-                crate::log::build_exit(res.status, &res.error_msg),
+                log::build_exit(res.status, &res.error_msg),
             ),
             None => ("the farm never reached this derivation".to_string(), 1),
         };
@@ -225,10 +227,10 @@ impl Backend for Grpc {
             return Ok(HashSet::new());
         }
         let names: Vec<String> = paths.iter().map(|p| p.base_name().to_string()).collect();
-        self.t.query_paths += names.len();
+        self.t.common.query_paths += names.len();
         let t0 = Instant::now();
         let valid = build::query_valid_paths(&mut self.c, &names, &mut self.t)?;
-        self.t.query += t0.elapsed();
+        self.t.common.query += t0.elapsed();
         Ok(valid)
     }
 
@@ -236,7 +238,7 @@ impl Backend for Grpc {
         if paths.is_empty() {
             return Ok(());
         }
-        self.t.substitute_paths += paths.len();
+        self.t.common.substitute_paths += paths.len();
         let t0 = Instant::now();
         let url = self.c.cfg.url();
         let n = paths.len();
@@ -244,7 +246,7 @@ impl Backend for Grpc {
         let what = format!("substituting {n} paths on '{url}'");
         let _act = Activity::new(LVL_TALKATIVE, ACT_UNKNOWN, &what, vec![]);
         let r = build::substitute(&mut self.c, paths, &mut self.t);
-        self.t.substitute += t0.elapsed();
+        self.t.common.substitute += t0.elapsed();
         r
     }
 
@@ -254,11 +256,11 @@ impl Backend for Grpc {
             return Ok(0);
         }
         let t0 = Instant::now();
-        let _copying = crate::remote::copy::Copying::new(objects.len(), "local", &self.c.cfg.url());
+        let _copying = Copying::new(objects.len(), "local", &self.c.cfg.url());
         let bytes = build::add_multiple(&mut self.c, objects, &mut self.t)?;
-        self.t.add += t0.elapsed();
-        self.t.add_paths += objects.len();
-        self.t.add_bytes += bytes;
+        self.t.common.add += t0.elapsed();
+        self.t.common.add_paths += objects.len();
+        self.t.common.add_bytes += bytes;
         self.objects.extend(objects);
         Ok(bytes)
     }
@@ -281,7 +283,7 @@ impl Backend for Grpc {
             batch,
             on_event,
         );
-        self.t.build += t0.elapsed();
+        self.t.common.build += t0.elapsed();
         r
     }
 
@@ -306,7 +308,7 @@ impl Backend for Grpc {
             };
             out.insert(name.clone(), Some(p.to_string()));
         }
-        self.t.outputs += t0.elapsed();
+        self.t.common.outputs += t0.elapsed();
         Ok(out)
     }
 
@@ -316,8 +318,8 @@ impl Backend for Grpc {
         let _act = Activity::new(LVL_INFO, ACT_COPY_PATH, &what, vec![store_path.into()]);
         let paths = [StorePath::parse(store_path)?];
         build::fetch_into_dir(&mut self.c, &paths, dir, &mut self.t)?;
-        self.t.fetch += t0.elapsed();
-        self.t.fetched += 1;
+        self.t.common.fetch += t0.elapsed();
+        self.t.common.fetched += 1;
         Ok(())
     }
 
@@ -331,29 +333,18 @@ impl Backend for Grpc {
         if links.is_empty() {
             return Ok(());
         }
-        let mut paths: Vec<StorePath> = Vec::with_capacity(links.len());
-        for (p, _) in links {
-            paths.push(StorePath::parse(p)?);
-        }
+        let paths = link_targets(links)?;
         let mut conn = Connection::open(&local(), &mut |_| {})?;
         build::register(&mut self.c, &paths, &mut conn, &mut |_| {})?;
-        for (path, link) in links {
-            if let Some(link) = link {
-                conn.add_perm_root(path, Path::new(link))?;
-            }
-        }
-        Ok(())
+        add_roots(&mut conn, links)
     }
 
     fn note_connect(&mut self, d: Duration) {
-        self.t.connect = d;
+        self.t.common.connect = d;
     }
 
     fn note_upload(&mut self, p: Phase) {
-        self.t.missing += p.missing;
-        self.t.resolve += p.resolve;
-        self.t.resolve_paths += p.resolve_paths;
-        self.t.store_sources += p.store_sources;
+        self.t.common.note_upload(p);
     }
 
     fn report(&self, plan: &Plan, plan_time: Duration) -> String {
