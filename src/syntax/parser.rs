@@ -521,6 +521,10 @@ impl<'a> Parser<'a> {
         self.parse_pipe()
     }
 
+    /// Mixing `|>` and `<|` is not refused here: bison reduces up through
+    /// the enclosing rules first (running their checks, such as the
+    /// duplicate formals of a lambda) and fails where the enclosing rule
+    /// meets the operator, which is where iets's caller does too.
     fn parse_pipe(&mut self) -> R<ExprId> {
         let lhs = self.parse_op(0)?;
         match self.peek().kind {
@@ -531,10 +535,6 @@ impl<'a> Parser<'a> {
                     let f = self.parse_op(0)?;
                     acc = self.make_call(f, acc);
                 }
-                let t = self.peek();
-                if t.kind == Tok::PipeFrom {
-                    return Err(self.unexpected(t, None));
-                }
                 Ok(acc)
             }
             Tok::PipeFrom => {
@@ -542,10 +542,6 @@ impl<'a> Parser<'a> {
                 while self.peek().kind == Tok::PipeFrom {
                     self.bump();
                     chain.push(self.parse_op(0)?);
-                }
-                let t = self.peek();
-                if t.kind == Tok::PipeInto {
-                    return Err(self.unexpected(t, None));
                 }
                 let mut acc = chain.pop().unwrap();
                 while let Some(f) = chain.pop() {

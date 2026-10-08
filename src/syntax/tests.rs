@@ -604,6 +604,17 @@ fn the_error_reported_is_the_one_nix_meets_first() {
             (1, 1),
         ),
         ("let ${a} = 1; in (", "unexpected end of file", (1, 19)),
+        (
+            "{l,l}:v|>l<|",
+            "duplicate formal function argument 'l'",
+            (1, 4),
+        ),
+        ("(a <| b |> c)", "unexpected '|>', expecting ')'", (1, 9)),
+        (
+            "let x = a |> b <| c; in x",
+            "unexpected '<|', expecting ';'",
+            (1, 16),
+        ),
     ];
     for (src, msg, pos) in cases {
         let e = parse(src.as_bytes(), FileId(0), &mut Interner::new())
