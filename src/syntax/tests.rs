@@ -540,6 +540,29 @@ fn nul_in_string_literals() {
 }
 
 #[test]
+fn end_of_file_inside_a_path_is_at_its_last_token() {
+    let cases = [
+        ("[ ./a", (1, 3)),
+        ("[ ~/a", (1, 3)),
+        ("[ ./a${b}", (1, 9)),
+        ("[ ./a${b}c", (1, 10)),
+        ("( ./a", (1, 3)),
+        ("/a/", (1, 1)),
+        ("/a/${b}/", (1, 8)),
+        ("[ ./a/${b}/", (1, 11)),
+        // a byte after the path is a token of its own, and the end is there
+        ("[ ./a ", (1, 7)),
+        ("./a/ ", (1, 5)),
+    ];
+    for (src, pos) in cases {
+        let e = parse(src.as_bytes(), FileId(0), &mut Interner::new())
+            .err()
+            .unwrap_or_else(|| panic!("{src:?} parsed"));
+        assert_eq!(line_col(src.as_bytes(), e.span.start), pos, "{src:?}");
+    }
+}
+
+#[test]
 fn json_gives_every_node_its_kind_and_span() {
     use serde_json::Value;
     let json_of = |src: &str| {

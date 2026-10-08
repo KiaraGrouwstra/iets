@@ -952,8 +952,21 @@ impl<'a> Parser<'a> {
         // interpolation cannot end the path
         let mut need_interp = false;
         let mut seen_interp = false;
+        let mut last_token = t.start;
         loop {
-            let part = self.lx.lex_path_part(after_slash)?;
+            let part = match self.lx.lex_path_part(after_slash) {
+                Err(mut e) if e.span.start as usize == self.src.len() => {
+                    e.span = Span {
+                        start: last_token,
+                        end: last_token,
+                    };
+                    return Err(e);
+                }
+                part => part?,
+            };
+            if matches!(part, PathPart::End) && self.lx.pos() == self.src.len() {
+                self.lx.eof_at = Some(last_token);
+            }
             if need_interp && !matches!(part, PathPart::Interp) {
                 let what = match part {
                     PathPart::End => "end of path",
@@ -970,6 +983,7 @@ impl<'a> Parser<'a> {
                 PathPart::End => break,
                 PathPart::Str(s, e) => {
                     need_interp = !seen_interp;
+                    last_token = s;
                     let bytes = &self.src[s as usize..e as usize];
                     after_slash = bytes[bytes.len() - 1] == b'/';
                     // Consecutive literal pieces sit at the end of the
@@ -993,7 +1007,7 @@ impl<'a> Parser<'a> {
                     need_interp = false;
                     seen_interp = true;
                     let e = self.parse_expr()?;
-                    self.expect(Tok::RBrace, "expecting '}'")?;
+                    last_token = self.expect(Tok::RBrace, "expecting '}'")?.start;
                     self.sc_parts.push(StrPart::Interp(e));
                     after_slash = false;
                 }
