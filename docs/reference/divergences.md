@@ -244,6 +244,9 @@ What stays different:
 The answer is the same at every worker count. Nix's exact rules would cost
 about 1% of the instructions of a NixOS evaluation, and make no difference
 on nixpkgs.
+The eval fuzz target can switch on Nix's exact rules, to tell this
+divergence apart from other differences (`eq-rule`,
+`docs/reference/fuzz.md`).
 
 ## `«repeated»` for a list
 

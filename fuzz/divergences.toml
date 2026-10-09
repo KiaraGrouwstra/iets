@@ -96,20 +96,7 @@ float_digits = true
 [[eval]]
 id = "eq-shortcut"
 doc = "docs/reference/divergences.md#unforced-values-in-lazy-positions"
-kind = "iets-only"
-input = " == "
-
-[[eval]]
-id = "eq-shortcut-ne"
-doc = "docs/reference/divergences.md#unforced-values-in-lazy-positions"
-kind = "iets-only"
-input = " != "
-
-[[eval]]
-id = "eq-shortcut-elem"
-doc = "docs/reference/divergences.md#unforced-values-in-lazy-positions"
-kind = "iets-only"
-input = "builtins.elem "
+kind = "eq-rule"
 
 [[drv]]
 id = "drv-string-not-utf8"

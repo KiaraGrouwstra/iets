@@ -174,6 +174,7 @@ with a fresh oracle and, if it holds, a fresh evaluator, as a fresh
 | `value` | both give a value, and the values differ |
 | `iets-panic` | iets panicked |
 | `nix-crash` | the oracle process died on the expression |
+| `eq-rule` | `iets-only` or `value`, and iets with Nix's exact `==` rules gives Nix's answer: the `==` difference in `docs/reference/divergences.md` |
 
 ## drv-read, drv-gen
 
