@@ -13,7 +13,7 @@ The setting is defined in [reference/settings.md](../reference/settings.md).
 format is not `internal-json`, iets asks you about each fix:
 
 ```
-[y/n/a]
+fix the hash at /home/you/tour/src.nix:4:13: 'sha256-AAAA…=' to 'sha256-/Sb+…='? [y/n/a]
 ```
 
 `y` takes this fix, `n` refuses it, and `a` takes this one and every other
@@ -25,7 +25,7 @@ prints the hint and changes nothing.
 `always` rewrites without asking:
 
 ```sh
-iets --iets-option fix-hashes always build --builder daemon src.nix
+iets --iets-option fix-hashes always build --impure --builder daemon src.nix
 ```
 
 Or put it in `~/.config/iets/iets.toml` once:
@@ -44,13 +44,16 @@ in pkgs.fetchurl {
 }
 ```
 
-iets shows the mismatch, tells you what it changed, and finishes the build:
+iets shows the mismatch, tells you what it changed, and finishes the build.
+The file reads `<nixpkgs>`, so the command needs `--impure`. Here is the
+output without the progress and log lines:
 
 ```
 error: hash mismatch in fixed-output derivation '/nix/store/7ssr…-v2.0.0.tar.gz.drv':
          specified: sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
             got:    sha256-/Sb+qZOLHhmr1D63ANxTxkhA4uTOpn0IcUO2UmQyRuo=
 fixed: /home/you/tour/src.nix:4:13: 'sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' is now 'sha256-/Sb+qZOLHhmr1D63ANxTxkhA4uTOpn0IcUO2UmQyRuo='
+re-evaluating: /home/you/tour/src.nix changed
 /nix/store/ljk32s16w758r5yi91dp39icx5yraw0r-v2.0.0.tar.gz
 ```
 
@@ -61,7 +64,7 @@ Your file now has the right hash. In the JSON log, each fix is also a
 ## To turn it off: `never`
 
 ```sh
-iets --iets-option fix-hashes never build --builder daemon src.nix
+iets --iets-option fix-hashes never build --impure --builder daemon src.nix
 ```
 
 The mismatch is reported and nothing is edited.
