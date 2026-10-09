@@ -12,13 +12,12 @@ pub const BASE: &str = "/case";
 /// `~` is this, as the oracle's `$HOME`.
 pub const HOME: &str = "/home/case";
 
-pub fn tree(ast: &Ast, src: &[u8], interner: &Interner) -> Sx {
-    Canon { ast, src, interner }.expr(ast.root)
+pub fn tree(ast: &Ast, interner: &Interner) -> Sx {
+    Canon { ast, interner }.expr(ast.root)
 }
 
 struct Canon<'a> {
     ast: &'a Ast,
-    src: &'a [u8],
     interner: &'a Interner,
 }
 
@@ -62,7 +61,7 @@ impl Canon<'_> {
         match *self.ast.expr(id) {
             Expr::Int(i) => node("int", vec![Sx::Atom(i.to_string())]),
             Expr::Float(f) => float(f),
-            Expr::Str(parts) => self.string(id, parts),
+            Expr::Str(parts) => self.string(parts),
             Expr::Path(p) => self.path(p),
             Expr::Var(s) if self.interner.name(s) == b"__curPos" => node("cur-pos", vec![]),
             Expr::Var(s) => node("var", vec![Sx::Str(self.name(s))]),
@@ -195,18 +194,12 @@ impl Canon<'_> {
             .collect()
     }
 
-    /// A URL literal is a plain string to Nix; the source tells it apart
-    /// from a quoted one.
-    fn string(&self, id: ExprId, parts: Range) -> Sx {
-        let quoted = matches!(
-            self.src.get(self.ast.span(id).start as usize),
-            Some(b'"' | b'\'')
-        );
-        match (quoted, self.ast.single_lit(parts)) {
-            (_, Some(s)) => str_lit(s),
-            (false, None) => str_lit(&[]),
-            (true, None) if parts.is_empty() => str_lit(&[]),
-            (true, None) => node("interp", self.parts(parts)),
+    /// `"…"`, `''…''` and a URL literal: one literal is a plain string.
+    fn string(&self, parts: Range) -> Sx {
+        match self.ast.single_lit(parts) {
+            Some(s) => str_lit(s),
+            None if parts.is_empty() => str_lit(&[]),
+            None => node("interp", self.parts(parts)),
         }
     }
 

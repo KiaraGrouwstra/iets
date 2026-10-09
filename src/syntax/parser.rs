@@ -103,10 +103,10 @@ pub struct Parser<'a> {
     sc_formals: Vec<Formal>,
     sym_or: Sym,
     sym_body: Sym,
-    /// `''` strings of one literal part that Nix keeps as a concatenation
-    /// of several tokens: not a static attribute name in `${...}`. In id
-    /// order, as the parser adds nodes.
-    ind_concat: Vec<ExprId>,
+    /// Every `''` string node, with whether Nix keeps it as a concatenation
+    /// of several tokens although it is one literal part here. In id order,
+    /// as the parser adds nodes.
+    ind_strs: Vec<(ExprId, bool)>,
     depth: u32,
 }
 
@@ -148,7 +148,7 @@ impl<'a> Parser<'a> {
             sc_formals: Vec::new(),
             sym_or,
             sym_body,
-            ind_concat: Vec::new(),
+            ind_strs: Vec::new(),
             depth: 0,
         }
     }
@@ -803,9 +803,8 @@ impl<'a> Parser<'a> {
                 self.bump();
                 let (parts, pieces) = self.parse_ind_string()?;
                 let e = self.add(Expr::Str(parts), t.start, self.last_end);
-                if pieces > 1 && self.ast.single_lit(parts).is_some() {
-                    self.ind_concat.push(e);
-                }
+                let concat = pieces > 1 && self.ast.single_lit(parts).is_some();
+                self.ind_strs.push((e, concat));
                 Ok(e)
             }
             Tok::Path | Tok::HPath => {
@@ -1109,10 +1108,10 @@ impl<'a> Parser<'a> {
         let Expr::Str(parts) = *self.ast.expr(e) else {
             return None;
         };
-        if self.ind_concat.binary_search_by_key(&e.0, |x| x.0).is_ok() {
-            return None;
-        }
-        let ind = self.src.get(self.ast.span(e).start as usize) == Some(&b'\'');
+        let ind = match self.ind_strs.binary_search_by_key(&e.0, |x| x.0.0) {
+            Ok(i) if self.ind_strs[i].1 => return None,
+            found => found.is_ok(),
+        };
         match self.ast.parts(parts) {
             [] => Some(0..0),
             [StrPart::Lit(l)] => Some(l.start as usize..(l.start + l.len) as usize),

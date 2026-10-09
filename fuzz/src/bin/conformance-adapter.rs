@@ -48,7 +48,7 @@ fn parse(file: &str) -> i32 {
     let mut interner = Interner::new();
     match syntax::parse(&src, FileId(0), &mut interner) {
         Ok(ast) => {
-            let tree = sx::normalise(canon::tree(&ast, &src, &interner));
+            let tree = sx::normalise(canon::tree(&ast, &interner));
             println!("ok {}", sx::print(&tree));
         }
         Err(e) => {
