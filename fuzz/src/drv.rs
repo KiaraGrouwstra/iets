@@ -22,7 +22,16 @@ pub const KINDS: &[&str] = &[
     "nix-only",
     // iets accepts the input, Nix refuses it
     "iets-only",
-    // both accept, and the ATerms written again differ
+    // both accept, and the ATerms written again differ: in this field, read
+    // back from both ATerms, or `aterm` when that does not tell
+    "aterm-outputs",
+    "aterm-inputs",
+    "aterm-sources",
+    "aterm-system",
+    "aterm-builder",
+    "aterm-args",
+    "aterm-env",
+    "aterm-json",
     "aterm",
     // both accept, and the drvPaths differ
     "path",
@@ -95,7 +104,7 @@ impl Drv {
                 if na != ia {
                     let at = na.iter().zip(ia).take_while(|(a, b)| a == b).count();
                     Some(Divergence {
-                        kind: "aterm",
+                        kind: field(na, ia),
                         nix: excerpt(na, at),
                         iets: excerpt(ia, at),
                         at: format!("byte {at}"),
@@ -287,11 +296,7 @@ pub fn generate(u: &mut Unstructured) -> Vec<u8> {
     } else {
         out.extend_from_slice(b"Derive([");
     }
-    let mut names = keys(u, 3, NAMES);
-    // of two outputs with one name iets keeps the last, Nix the first
-    // (docs/reference/divergences.md#reading-a-drv-file)
-    let mut seen = std::collections::HashSet::new();
-    names.retain(|n| seen.insert(n.clone()));
+    let names = keys(u, 3, NAMES);
     for (i, name) in names.iter().enumerate() {
         if i > 0 {
             out.push(b',');
@@ -390,4 +395,31 @@ pub fn generate(u: &mut Unstructured) -> Vec<u8> {
         out.truncate(at);
     }
     out
+}
+
+/// The kind for two ATerms that differ: the first field in which the
+/// derivations read back from them differ.
+fn field(nix: &[u8], iets: &[u8]) -> &'static str {
+    let (Ok(n), Ok(i)) = (Derivation::parse(nix, "x"), Derivation::parse(iets, "x")) else {
+        return "aterm";
+    };
+    if n.outputs != i.outputs {
+        "aterm-outputs"
+    } else if n.input_drvs != i.input_drvs {
+        "aterm-inputs"
+    } else if n.input_srcs != i.input_srcs {
+        "aterm-sources"
+    } else if n.platform != i.platform {
+        "aterm-system"
+    } else if n.builder != i.builder {
+        "aterm-builder"
+    } else if n.args != i.args {
+        "aterm-args"
+    } else if n.env != i.env {
+        "aterm-env"
+    } else if n.structured_attrs != i.structured_attrs {
+        "aterm-json"
+    } else {
+        "aterm"
+    }
 }

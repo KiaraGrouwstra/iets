@@ -88,9 +88,11 @@ names them.
   in the section above. Three of the six real files in `drv/` of
   nix-conformance (`u4`, `u5`, `u6`) hit it.
   (`drv-string-not-utf8`)
-- **A `__json` value that is not JSON:** Nix refuses the file with
-  `cannot process __json attribute`. iets keeps the text. Only a `.drv`
-  written by hand holds one. (`drv-json-not-checked`)
+- **`__json`:** Nix reads the value as JSON and writes it again, with
+  the keys sorted; a value that is not JSON stops it with `cannot process
+  __json attribute`. iets keeps the text as it is. A `.drv` that Nix
+  wrote holds the sorted form already, so only a `.drv` written by hand
+  shows this. (`drv-json-not-checked`, `drv-json-kept-as-text`)
 - **A `blake3` hash:** Nix needs the experimental feature
   `blake3-hashes`; in iets every feature is on (**Experimental-feature
   builtins** below). (`drv-blake3-without-feature`)
@@ -105,8 +107,8 @@ names them.
   not in the Nix store`. (`store-path-not-canonical`)
 - **Two outputs with one name:** Nix keeps the first
   (`drv.outputs.emplace`, `derivations.cc`), iets keeps the last. This is
-  an iets bug, not a choice; `drv-gen` does not make such files until it
-  is fixed.
+  an iets bug, not a choice. Until it is fixed, the entry
+  `drv-duplicate-output` hides every difference in the outputs.
 
 ## `builtins.genericClosure`
 

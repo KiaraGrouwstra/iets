@@ -140,3 +140,15 @@ id = "store-path-not-canonical"
 doc = "docs/reference/divergences.md#reading-a-drv-file"
 kind = "nix-only"
 iets = "is not in the Nix store"
+
+[[drv]]
+id = "drv-json-kept-as-text"
+doc = "docs/reference/divergences.md#reading-a-drv-file"
+kind = "aterm-json"
+
+[[drv]]
+# an iets bug, not a choice: this entry hides every difference in the
+# outputs until src/store/drv.rs keeps the first of two outputs; remove it then
+id = "drv-duplicate-output"
+doc = "docs/reference/divergences.md#reading-a-drv-file"
+kind = "aterm-outputs"

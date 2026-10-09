@@ -185,7 +185,8 @@ byte changed.
 |:---|:---|
 | `nix-only` | Nix reads the file, iets refuses it |
 | `iets-only` | iets reads the file, Nix refuses it |
-| `aterm` | both read it and write different ATerms; `at` is the first byte that differs |
+| `aterm-FIELD` | both read it and write different ATerms. Read back, the two derivations first differ in FIELD: `outputs`, `inputs`, `sources`, `system`, `builder`, `args`, `env` or `json` (`__json`). `at` is the first byte that differs |
+| `aterm` | as `aterm-FIELD`, but an ATerm does not read back, or the fields are the same |
 | `path` | the ATerms are the same, the drvPaths are not |
 | `iets-panic` | iets panicked |
 | `nix-crash` | the oracle process died on the input |
