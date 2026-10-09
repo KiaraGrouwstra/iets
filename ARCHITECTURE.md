@@ -191,6 +191,9 @@ aborts when it ends in `iets`, the same test the fallback uses
 the farm execs the real nix for whatever it does not implement,
 `--version` included. The same guard warns when the reference nix is not
 2.34.8. The iets-only scripts do not call it and still run anywhere.
+A comparison typed by hand has no guard: name the reference by its store
+path, and check that `readlink -f $(command -v nix-eval-jobs)` does not end
+in an `iets` output.
 
 | script | what it compares | runs |
 |---|---|---|

@@ -1,46 +1,45 @@
 # Classic mode
 
-Every classic Nix name iets answers to, the flags each one handles, and
-what makes it fall back to the real `nix`.
+iets can stand in for Nix's own commands. Install it under the names
+`nix-instantiate`, `nix-build`, `nix-shell`, `nix-eval-jobs` and `nix`, and
+each name handles what iets implements. For everything else, it runs the
+real Nix for you. So the real `nix` must also be on your `PATH`.
 
-The same `iets` binary installed under Nix's own command names. Each name
-handles the subset iets implements and execs the real binary for the rest,
-so it is a drop-in only where the real nix is also on `PATH`.
+This page lists the flags each name handles, and what makes it fall back.
 
 ```
 nix build .#classic     # bin/{nix-instantiate,nix-build,nix-eval-jobs,nix-shell,nix}
 ```
 
-Every symlink points at `bin/iets`; the basename of `argv[0]` picks the
-command. Without symlinks the same commands work as subcommands:
+Every symlink points at `bin/iets`, and the name you call picks the command.
+You can skip the symlinks and use subcommands instead:
 `iets nix-instantiate ...`, `iets nix-build ...`.
 
 ## Where the builds go
 
-None of the classic names has a `--builder` flag, so the build target is the
-`builder` setting in the user `iets.toml`, and nix.conf's `store` when that is unset.
-`--store URL` and `--option store URL` on the command line win over both.
-`--iets-option name value` sets any iets setting for one run, and is stripped
-from the argv before a fallback execs the real nix (`docs/reference/settings.md`).
+The classic names have no `--builder` flag. They build on the `builder`
+setting in your user `iets.toml`, else on nix.conf's `store`. `--store URL`
+and `--option store URL` win over both. `--iets-option name value` sets any
+iets setting for one run, and iets removes it before a fallback runs the
+real Nix (`docs/reference/settings.md`).
 
-Registration stays local whatever `builder` says:
+Some things stay local whatever `builder` says:
 
-- `nix-instantiate` registers the drvs and their sources on the local daemon,
-  and `--add-root` links them there. It builds nothing, so the builder is
-  irrelevant to it.
-- `nix-build`, `nix build` and `nix fmt` build on the builder. When that is not the local
-  daemon, the outputs' closure is copied back to the local store
-  (`QueryPathInfo` and `NarFromPath` there, one `AddMultipleToStore` here)
-  before `result` is linked and `AddIndirectRoot`ed, so the link names a path
-  this machine has. The same thing the `grpc://` path has always done.
-- `nix-shell`, `nix develop` and `nix print-dev-env` skip the `builder`
-  setting: the shell runs here, so its inputs belong in the local store, and
-  the local daemon builds or substitutes them. `--store` still wins.
+- `nix-instantiate` registers the drvs and their sources on the local
+  daemon, and `--add-root` links them there. It builds nothing, so the
+  builder does not matter.
+- `nix-build`, `nix build` and `nix fmt` build on the builder. When that is
+  not the local daemon, iets copies the outputs' closure back to your local
+  store before it makes `result`. So the link names a path your machine
+  has, and the link is a GC root.
+- `nix-shell`, `nix develop` and `nix print-dev-env` ignore `builder`. The
+  shell runs on your machine, so the local daemon builds or substitutes its
+  inputs. `--store` still wins.
 
 ## The NixOS module
 
-`nix/module.nix` installs `packages.default` and the direnv hook.
-`iets.classic.enable` (default `false`) adds the farm as well:
+`nix/module.nix` installs `packages.default` and the direnv hook. Set
+`iets.classic.enable` (default `false`) to also install the classic names:
 
 ```nix
 {
@@ -49,19 +48,14 @@ Registration stays local whatever `builder` says:
 }
 ```
 
-The farm goes into `environment.systemPackages` under `lib.hiPrio`.
-`system.path` is a `buildEnv`, which resolves a collision between two
-`bin/nix-instantiate` by `meta.priority` — lower wins, `hiPrio` is -10
-against nix's default 5 — so the farm's symlinks are the ones in the
-system path. No `PATH` juggling in `environment.extraInit`, which shells
-that skip it would ignore.
+The names go into `environment.systemPackages` with `lib.hiPrio`, so they
+win over Nix's own `bin/nix-instantiate` and the rest in the system path.
+This works in every shell, login or not.
 
-The loser of a `buildEnv` collision is not in the system path at all, so
-the fallback cannot find a second `nix` on `PATH`. The farm therefore
-records the nix it was built for in `share/iets/real-nix-bin`, and the
-fallback follows the symlink chain from the `PATH` entry to that file. It
-works in every process, login shell or not. The module builds the farm for
-`config.nix.package`; `IETS_NIX_BIN_DIR` stays as an override.
+The real Nix then is not in the system path. So the farm writes the Nix it
+was built for into `share/iets/real-nix-bin`, and a fallback finds it there.
+The module builds the farm for `config.nix.package`. `IETS_NIX_BIN_DIR`
+overrides it.
 
 To check a configuration, build its `system.path` and look at a symlink:
 
@@ -74,145 +68,160 @@ readlink $(nix build --no-link --print-out-paths \
 
 ### `nix-instantiate`
 
-`[FILE...]` (default `./default.nix`, a directory resolves to its
-`default.nix`, `<name>` goes through the search path), `-E`/`--expr`,
-`-A`/`--attr` (repeatable, `"quoted"` components and list indices),
-`--arg`/`--argstr`, `-I`/`--include`, `--eval` with `--strict`, `--json`,
-`--raw`, `--add-root PATH` (`--indirect` accepted), `--readonly-mode`,
-`--read-write-mode`, `--dry-run`, `--show-trace`, `--no-gc-warning`,
-`--option`, `--store`, `-j`/`--max-jobs`, `--cores`, `-k`, `-K`, `-Q`,
-`--quiet`, `-v`.
+Flags:
 
-Default mode evaluates, walks the value like `getDerivations`, computes the
-drv closure, registers it through the daemon (`QueryValidPaths` then one
-`AddMultipleToStore`, as `iets build --no-build` does) and prints one root
-per line: the drv path, plus `!<output>` when the derivation's `outputName`
-is not `out`. `--add-root` creates the symlink, `AddIndirectRoot`s it, and
-prints the link instead of the drv path, numbering the second and later
-roots `-2`, `-3`, … `--readonly-mode` (and `--eval` without
-`--read-write-mode`) registers nothing.
+- `[FILE...]`: default `./default.nix`. A directory means its
+  `default.nix`, and `<name>` goes through the search path.
+- `-E`/`--expr`, `--arg`/`--argstr`, `-I`/`--include`.
+- `-A`/`--attr`: repeatable, with `"quoted"` components and list indices.
+- `--eval` with `--strict`, `--json`, `--raw`.
+- `--add-root PATH` (`--indirect` is accepted), `--readonly-mode`,
+  `--read-write-mode`, `--dry-run`.
+- `--show-trace`, `--no-gc-warning`, `--option`, `--store`,
+  `-j`/`--max-jobs`, `--cores`, `-k`, `-K`, `-Q`, `--quiet`, `-v`.
 
-`--add-root ""` is "no root", as an empty `gcRoot` is in
-`nix-instantiate.cc`: the drv path is printed and the GC warning with it.
+By default it evaluates, finds the derivations in the value, registers
+their closure with the daemon, and prints one root per line. A root is the
+drv path, plus `!<output>` when the derivation's `outputName` is not `out`.
+
+With `--add-root`, it makes the symlink, registers it as a GC root, and
+prints the link instead. The second and later roots get `-2`, `-3`, … at
+the end. `--add-root ""` means no root, as in Nix: you get the drv path and
+the GC warning. `--readonly-mode`, and `--eval` without `--read-write-mode`,
+register nothing.
 
 Falls back on: `--parse`, `--parse-only`, `--xml`, `--find-file`, `-`
-(stdin), `--add-root` together with a read-only store, a `-j`/`--cores`
-value that is not the setting's, `-IP=PATH` (Nix reads the clustered form
-as several short flags and refuses it), any other flag.
+(stdin), `--add-root` with a read-only store, a `-j`/`--cores` value that
+is not the setting's, `-IP=PATH` (Nix reads that as several short flags and
+refuses it), and any other flag.
 
 ### `nix-build`
 
-`[FILE...]` (default `.`), `-E`, `-A`, `--arg`/`--argstr`, `-I`,
+Flags: `[FILE...]` (default `.`), `-E`, `-A`, `--arg`/`--argstr`, `-I`,
 `-o`/`--out-link`, `--no-out-link`/`--no-link`, `-j`/`--max-jobs`,
 `--cores`, `-k`, `-K`, `-Q`/`--no-build-output`, `--quiet`, `-v`,
-`--show-trace`, `--option`, `--store`, `--add-drv-link` and `--indirect`
-(no-ops in Nix too). `-v` has no effect and gives one warning
-(`docs/reference/divergences.md`, **Flags and settings with no effect**).
+`--show-trace`, `--option`, `--store`, and `--add-drv-link` and
+`--indirect` (these two do nothing in Nix either). `-v` has no effect and
+gives one warning (`docs/reference/divergences.md`, **Flags and settings
+with no effect**).
 
-Uploads the closure once, builds every root in one
-`BuildPathsWithResults`, then links: `result` for the first drv's `out`,
-`result-<output>` for another output of the same drv, `result-<n>` for the
-n-th distinct drv from 2 on (`nix-build.cc`), each link registered as an
-indirect GC root. Prints the output paths in root order. stderr carries
-`building '<drv>'...` per build and the daemon's log lines.
+It uploads the closure once and builds every root in one go. Then it makes
+the links, as Nix does:
 
-Exit codes: 0, or 1 for an evaluation error, a daemon error or a build
-failure — what the real `nix-build` returns here, where the daemon
-delegates builds to a remote builder.
+- `result` for the first drv's `out`;
+- `result-<output>` for another output of the same drv;
+- `result-<n>` for the n-th distinct drv, from 2 on.
+
+Each link is a GC root. It prints the output paths in root order. stderr
+shows `building '<drv>'...` for each build, and the daemon's log lines.
+
+The exit code is 0, or 1 for an evaluation error, a daemon error or a build
+failure. The real `nix-build` gives the same codes when its daemon hands
+builds to a remote builder.
 
 Falls back on: `--dry-run`, `--drv-link`, `--run-env`, `--command`,
 `--run`, `--repair`, `--check`, `--pure`, `--exclude`, `--keep`,
-`-p`/`--packages`, `-`, any other flag.
+`-p`/`--packages`, `-`, and any other flag.
 
 ### `nix-shell`
 
-`[FILE]` (a directory, or nothing, resolves to `shell.nix` and then
-`default.nix`; `<name>` goes through the search path), `-E`/`--expr`, `-A`,
-`--arg`/`--argstr`, `-I`, `--run CMD`, `--command CMD`, `--pure`, `--impure`,
-`--keep NAME`, `--option`, `--store`, `-j`/`--max-jobs`, `--cores`, `-k`, `-K`,
-`-Q`/`--no-build-output`, `--quiet`, `-v`, `--show-trace`, `--add-drv-link`,
-`--indirect`, `--no-gc-warning` (the last three are no-ops in Nix's
-nix-shell too). `-v` gives one warning, as for `nix-build`.
+Flags: `[FILE]`, `-E`/`--expr`, `-A`, `--arg`/`--argstr`, `-I`,
+`--run CMD`, `--command CMD`, `--pure`, `--impure`, `--keep NAME`,
+`--option`, `--store`, `-j`/`--max-jobs`, `--cores`, `-k`, `-K`,
+`-Q`/`--no-build-output`, `--quiet`, `-v`, `--show-trace`, and
+`--add-drv-link`, `--indirect` and `--no-gc-warning` (these three do
+nothing in Nix's `nix-shell` either). With no `FILE`, or a directory, it
+looks for `shell.nix` and then `default.nix`. `<name>` goes through the
+search path. `-v` gives one warning, as for `nix-build`.
 
-This is `nix-build.cc`'s `runEnv` path, not `print-dev-env`: nothing builds the
-`-env` derivation. It
+This is the classic `nix-shell`, not `print-dev-env`. Nothing builds a
+`-env` derivation. It works in five steps:
 
-1. evaluates to exactly one derivation (`nix-shell requires a single
-   derivation`), with `inNixShell = true` passed to a function that has that
-   formal;
-2. realises the derivation's **inputs** — every `inputDrvs` output and every
-   `inputSrcs` path — through the daemon, never the derivation itself;
-3. builds the environment: the current environment (filtered to nix's
-   `keepVars` with `--pure`), then `NIX_BUILD_TOP` and the `TMP*` family, the
-   per-run temporary directory, `NIX_STORE`, `NIX_BUILD_CORES`, then every
-   `drv.env` pair, with `passAsFile` names written to `.attr-<n>` files and
-   exposed as `<name>Path`;
-4. writes the rc file `nix-build.cc` writes — the tmpdir cleanup trap,
-   `~/.bashrc` when impure, `unset PATH`, the structured attributes as
-   `declare` lines, `source $stdenv/setup`, `PATH`/`SHELL`/`BASH`, `PS1`,
-   `runHook shellHook`, `shopt -s execfail`, then the `--run`/`--command`
-   command with `exit` appended;
-5. execs `bash --rcfile <rc>` when the shell will be interactive (stdin and
-   stderr are both a tty, and `--run` was not used), else `bash <rc>`.
+1. It evaluates to exactly one derivation. If not, you get `nix-shell
+   requires a single derivation`. A function with an `inNixShell` argument
+   gets `inNixShell = true`.
+2. It builds or fetches the derivation's **inputs**, through the daemon:
+   every `inputDrvs` output and every `inputSrcs` path. It never builds the
+   derivation itself.
+3. It makes the environment. First your current environment (with
+   `--pure`, only the variables Nix keeps). Then `NIX_BUILD_TOP`, the `TMP*`
+   variables, a temporary directory for this run, `NIX_STORE` and
+   `NIX_BUILD_CORES`. Last, every `drv.env` pair. A name in `passAsFile`
+   goes to a `.attr-<n>` file, and `<name>Path` points at it.
+4. It writes the same rc file as Nix: the cleanup trap for the temporary
+   directory, `~/.bashrc` when impure, `unset PATH`, the structured
+   attributes as `declare` lines, `source $stdenv/setup`,
+   `PATH`/`SHELL`/`BASH`, `PS1`, `runHook shellHook`,
+   `shopt -s execfail`, and then the `--run` or `--command` command with
+   `exit` after it.
+5. It runs `bash --rcfile <rc>` when the shell is interactive (stdin and
+   stderr are a tty, and there is no `--run`). Else it runs `bash <rc>`.
 
-bash is `$NIX_BUILD_SHELL`, else `(import <nixpkgs> {}).bashInteractive` built
-through the daemon, else — when that expression does not evaluate — `bash` from
-the environment, with nix's `uses bash from your environment` notice.
+The bash is `$NIX_BUILD_SHELL`. Else it is
+`(import <nixpkgs> {}).bashInteractive`, built through the daemon. If that
+does not evaluate, it is `bash` from your environment, with Nix's
+`uses bash from your environment` notice.
 
-Before it execs bash it keeps what it realised alive: one link per path in
-iets's roots store, keyed on the working directory, the files and attributes
-you named, and the path's place in the sorted list. Nix keeps no root here, so
-a `nix collect-garbage` between two entries makes the second one rebuild the
-whole closure; this is the hole nix-direnv fills by hand. There is one link
-per path because `nix-shell` realises the derivation's inputs and no single
-store path holds them all. The root is a side effect on the daemon: stdout,
-stderr and the exit code stay nix's, and a root the daemon will not take is
-not reported. `shell-gc-root = false` keeps none
+Before it starts bash, iets keeps what it built alive. It adds one link per
+path to its roots store. The key is your working directory, the files and
+attributes you named, and the path's place in the list. Nix keeps no root
+here, so a `nix collect-garbage` between two shells makes the second one
+rebuild everything. (nix-direnv fills that gap by hand.) The root does not
+change stdout, stderr or the exit code. If the daemon refuses the root,
+iets says nothing. `shell-gc-root = false` turns this off
 (`docs/reference/settings.md`, `docs/explanation/caching.md`).
 
-Falls back on: `-p`/`--packages`, a `#!` script (the first argument is a file
-starting with `#!`, which is `-i INTERPRETER` mode), `--exclude`, `--dry-run`,
-`--check`, `--repair`, `-o`/`--out-link`, `--no-out-link`/`--no-link`, `-`
-(stdin), a derivation that nix would have to resolve first (any output that is
-not input-addressed), `exportReferencesGraph` in a structured-attributes
-derivation, any other flag.
+Falls back on: `-p`/`--packages`, a `#!` script (the first argument is a
+file that starts with `#!`), `--exclude`, `--dry-run`, `--check`,
+`--repair`, `-o`/`--out-link`, `--no-out-link`/`--no-link`, `-` (stdin), a
+derivation that Nix would have to resolve first (an output that is not
+input-addressed), `exportReferencesGraph` in a structured-attributes
+derivation, and any other flag.
 
 ### `nix-eval-jobs`
 
-The existing `iets eval-jobs`, which already matches nix-eval-jobs 2.35
-flag for flag. See `docs/reference/commands.md`. Under this name it prints
-no summary line on stderr, because nix-eval-jobs prints none.
+This is `iets eval-jobs`, which already matches nix-eval-jobs 2.35 flag for
+flag (`docs/reference/commands.md`). Under this name it prints no summary
+line on stderr, because nix-eval-jobs prints none.
 
 ### `nix`
 
-Eight subcommands; every other one execs the real `nix`.
+iets handles eight subcommands. Every other one runs the real `nix`.
 
-`nix eval [INSTALLABLE]`: `--json`, `--raw`, `--expr E`, `-f`/`--file FILE`,
-`--impure`, `--pure-eval`, `--no-pure-eval` (`docs/explanation/evaluation.md`: `nix`
-evaluates purely unless told otherwise, `-f` is impure), `-I`, `--arg`/`--argstr`,
-`--option`, `--store`, `--show-trace`, `--experimental-features` and
-`--extra-experimental-features` (they decide whether `builtins` has
-`fetchTree`, `fetchClosure` and `outputOf`, as in Nix;
-`parse-toml-timestamps` falls back), `--accept-flake-config` (no effect,
-one warning: iets never applies a flake's `nixConfig`,
-`docs/reference/divergences.md`).
+#### `nix eval [INSTALLABLE]`
 
-The output is `nix eval`'s, which is not `nix-instantiate --eval`'s
-(`print.cc:Printer` with `force`, `derivationPaths` and `trackRepeated`):
-every value is forced, a derivation prints as
-`«derivation /nix/store/….drv»`, a function as `«lambda f @ FILE:L:C»`,
-`«primop add»` or `«partially applied primop add»` (`eval.cc:addPrimOp`
-drops a leading `__` from the name), a value seen twice as `«repeated»`,
-and a value that fails to evaluate as `«error: …»` — only an error at the
-top level is reported and exits 1. `--json` is `printValueAsJSON` with
-`strict`, so a derivation becomes its output path. `--raw` coerces without
-quoting.
+Flags: `--json`, `--raw`, `--expr E`, `-f`/`--file FILE`, `--impure`,
+`--pure-eval`, `--no-pure-eval`, `-I`, `--arg`/`--argstr`, `--option`,
+`--store`, `--show-trace`, `--experimental-features` and
+`--extra-experimental-features`, `--accept-flake-config`.
+
+- `nix` evaluates purely unless you say otherwise, and `-f` is impure
+  (`docs/explanation/evaluation.md`).
+- The experimental features decide whether `builtins` has `fetchTree`,
+  `fetchClosure` and `outputOf`, as in Nix. `parse-toml-timestamps` falls
+  back.
+- `--accept-flake-config` has no effect and gives one warning. iets never
+  applies a flake's `nixConfig` (`docs/reference/divergences.md`).
+
+The output is `nix eval`'s, which is not the same as
+`nix-instantiate --eval`'s:
+
+- every value is forced;
+- a derivation prints as `«derivation /nix/store/….drv»`;
+- a function prints as `«lambda f @ FILE:L:C»`, `«primop add»` or
+  `«partially applied primop add»` (a leading `__` is dropped);
+- a value seen twice prints as `«repeated»`;
+- a value that fails prints as `«error: …»`. Only an error at the top level
+  is reported, with exit code 1.
+
+`--json` forces everything and prints a derivation as its output path.
+`--raw` prints the string without quotes.
 
 An INSTALLABLE is `FLAKEREF[#ATTR]` on a locked local flake (`.`, `path:`,
-a directory inside a git repository — see `docs/explanation/flakes-and-sources.md`), or the
-attribute path of the `-f`/`--expr` value. `.` is the whole value. The
-flake attr-path candidates are `installable-flake.cc:getActualAttrPaths`
-with `installables.cc`'s defaults:
+or a directory in a git repository; see
+`docs/explanation/flakes-and-sources.md`). With `-f` or `--expr`, it is an
+attribute path into that value, and `.` is the whole value. For a flake,
+iets tries these attribute paths, in order:
 
 | fragment | candidates, in order |
 |---|---|
@@ -220,38 +229,45 @@ with `installables.cc`'s defaults:
 | `.foo` | `foo` |
 | `foo` | `packages.<system>.foo`, `legacyPackages.<system>.foo`, `foo` |
 
-`nix build [INSTALLABLE...]` (default `.`): `-o`/`--out-link PATH`,
-`--no-link`, `--print-out-paths`, `-L`/`--print-build-logs`, `-f`,
-`--expr`, plus the same global flags. It evaluates like `nix eval`, then
-builds through the daemon the way `nix-build` does. The outputs it installs
-are `get-drvs.cc:queryOutputs`: `outputSpecified` picks one, else
-`meta.outputsToInstall`, else every output of an `-f`/`--expr` installable
-and `out` of a flake one. The links are `build.cc:createOutLinks`:
-`result`, `result-<n>` for the n-th installable from 1 on, and
-`-<output>` appended for an output other than `out`. stdout is empty
-without `--print-out-paths`. Exit 1 on an evaluation, daemon or build
-error.
+#### `nix build [INSTALLABLE...]`
 
-`--store grpc://host:port[?…]` builds on a nix-grpc-store service instead,
-natively: no plugin, no `nix` on the other side. `--eval-store auto` (or
-`daemon`, or empty) has no effect and gives one `ignored-flag` warning, because
-iets evaluates in memory and needs no evaluation store. So the invocation the `nix-farm`
-wrapper makes — `nix build --store 'grpc://farm.numtide.com:50051?token-file=…'
---eval-store auto .#pkg` — works as it stands; any other `--eval-store` value
-falls back, since iets always evaluates in its own process. A build farm
-publishes its outputs to a binary cache instead of a local store, so an
-out-link needs them copied in first: the local daemon substitutes them from
-its caches, and iets fetches the rest with `FetchNars` and registers it with
-their signatures over the worker protocol before it makes the symlink. With
-`--store` given, `--no-link` skips all of that. Without it the `builder`
-setting stands in for the local store, as a build hook does, so the outputs
-come back even under `--no-link`: `nix build --no-link` followed by
-`nix copy` works. See `docs/how-to/build-remotely.md`.
+Default `.`. Flags: `-o`/`--out-link PATH`, `--no-link`,
+`--print-out-paths`, `-L`/`--print-build-logs`, `-f`, `--expr`, and the
+global flags of `nix eval`.
 
-`nix derivation show [INSTALLABLE...]` (default `.`): `-r`/`--recursive`,
-`--pretty`, `--no-pretty`, `-f`/`--file`, `--expr`, plus the same global
-flags. There is no `--json`: the JSON is the output. The document is
-`derivation-show.cc`'s, byte for byte —
+It evaluates like `nix eval`, then builds through the daemon like
+`nix-build`. It installs these outputs: the one named by `outputSpecified`,
+else `meta.outputsToInstall`, else every output for `-f`/`--expr` and `out`
+for a flake. The links are `result`, then `result-<n>` for the n-th
+installable from 1 on, with `-<output>` after it for an output other than
+`out`. stdout is empty without `--print-out-paths`. The exit code is 1 on an
+evaluation, daemon or build error.
+
+`--store grpc://host:port[?…]` builds on a nix-grpc-store service, with no
+plugin and no `nix` on the other side. `--eval-store auto` (or `daemon`, or
+empty) has no effect and gives one `ignored-flag` warning, because iets
+evaluates in memory. So the command that the `nix-farm` wrapper runs works
+as it is:
+
+```
+nix build --store 'grpc://farm.numtide.com:50051?token-file=…' --eval-store auto .#pkg
+```
+
+Any other `--eval-store` value falls back.
+
+A build farm puts its outputs in a binary cache, not in your store. So
+before it makes the out-link, iets brings them in: your local daemon
+substitutes what it can, and iets fetches the rest with their signatures.
+With `--store` set, `--no-link` skips all of that. Without `--store`, the
+`builder` setting acts like a build hook, so the outputs come back even with
+`--no-link`. `nix build --no-link` and then `nix copy` works. See
+`docs/how-to/build-remotely.md`.
+
+#### `nix derivation show [INSTALLABLE...]`
+
+Default `.`. Flags: `-r`/`--recursive`, `--pretty`, `--no-pretty`,
+`-f`/`--file`, `--expr`, and the global flags. There is no `--json`,
+because the output is JSON. It is the same as Nix's, byte for byte:
 
 ```json
 {"derivations":{"<hash>-<name>.drv":{"args":[…],"builder":"…","env":{…},
@@ -260,141 +276,164 @@ flags. There is no `--json`: the JSON is the output. The document is
 "structuredAttrs":{…},"system":"…","version":4}},"version":4}
 ```
 
-— with every key sorted, every store path as its base name, `structuredAttrs`
-only when the derivation has `__json` (which then leaves `env`), and an output
-shown as `{"path":…}` when it is input-addressed, `{"hash":…,"method":…}` when
-it is fixed (`flat` or `nar`; nix prints no path, because the serializer does
-not know the store directory), `{"method":…,"hashAlgo":…}` when it is floating
-and `{}` when it is deferred. `--pretty` indents by two spaces and is the
-default on a terminal (`common-args.hh:MixPrintJSON`).
+- Every key is sorted, and every store path is its base name.
+- `structuredAttrs` appears only when the derivation has `__json`, and then
+  `env` leaves it out.
+- An output is `{"path":…}` when it is input-addressed,
+  `{"hash":…,"method":…}` when it is fixed (`flat` or `nar`; Nix prints no
+  path here either), `{"method":…,"hashAlgo":…}` when it is floating, and
+  `{}` when it is deferred.
+- `--pretty` indents by two spaces. It is the default on a terminal.
 
-`-r` adds the whole input-derivation closure. The real nix reads it from the
-store with `computeFSClosure` after instantiating; iets walks `inputDrvs`
-over the derivations the evaluation holds in memory and reads `/nix/store`
-only for a member the evaluation did not make, such as one pinned with
-`builtins.storePath`. So the answer is the same and nothing is written to the
-store — see the divergence below.
+`-r` adds every input derivation. iets takes them from the evaluation, and
+reads `/nix/store` only for one the evaluation did not make, such as one
+pinned with `builtins.storePath`. The answer is the same as Nix's, but
+nothing is written to the store. See **Known divergences** below.
 
-`nix search INSTALLABLE REGEX...`: `-e`/`--exclude REGEX`, `--json`,
-`--pretty`, `--no-pretty`, `-f`/`--file`, `--expr`, plus the same global
-flags. The output is `search.cc`'s, byte for byte, escape sequences
-included; the index of the walk is cached, so a second search over the
-same package set answers without evaluating (`docs/reference/commands.md`). An
-installable iets cannot evaluate — a flake registry reference such as
-`nixpkgs`, an unlocked flake — falls back, as does any other flag.
+#### `nix search INSTALLABLE REGEX...`
 
-`nix print-dev-env [FLAKEREF[#attr]] [--json]` is `iets print-dev-env`
-(`docs/reference/commands.md`).
+Flags: `-e`/`--exclude REGEX`, `--json`, `--pretty`, `--no-pretty`,
+`-f`/`--file`, `--expr`, and the global flags. The output is Nix's, byte for
+byte, escape codes too. iets caches the index of the package set, so a
+second search over the same set answers without evaluating
+(`docs/reference/commands.md`). An installable that iets cannot evaluate,
+such as the registry name `nixpkgs` or an unlocked flake, falls back. So
+does any other flag.
 
-`nix develop [INSTALLABLE]`: `-c`/`--command CMD ARGS...` (like nix, it takes
-every remaining argument), `-i`/`--ignore-env`/`--ignore-environment`,
-`-k`/`--keep`/`--keep-env-var NAME`, `-u`/`--unset`/`--unset-env-var NAME`, plus
-the same global flags. The environment is the one `nix print-dev-env` prints,
-computed by the same code (`docs/reference/commands.md`), so the shell derivation's `-env`
-derivation is built through the daemon. On top of `makeRcScript` it appends what
-`CmdDevelop::run` appends: the rc file deletes itself, `--command` becomes
-`exec`, an interactive shell is wrapped in the `~/.bashrc` and
-`shopt -u expand_aliases` pair, the `bash-prompt`, `bash-prompt-prefix` and
-`bash-prompt-suffix` settings become `PS1` lines, and `SHELL` plus the `PATH`
-prefix of the bash directory close the script. `NIX_GCROOT` holds the `-env`
-output so the shell keeps it alive — nix's runtime root, which the collector
-finds in the process environment and which lasts exactly as long as the shell.
-On top of that iets links the `-env` output in its roots store, keyed on the
-flake directory and the attribute path, so the closure also survives a
-collection between two entries; the output references the whole shell, so one
-link holds all of it. `shell-gc-root = false` keeps none
-(`docs/explanation/caching.md`). `--ignore-env` clears the environment except
-the `--keep` names; `--unset` removes names; both are
-`command.cc:MixEnvironment::setEnviron`, so `NIX_GCROOT` and `SHELL` are set
-afterwards and always survive.
+#### `nix print-dev-env [FLAKEREF[#attr]] [--json]`
 
-The attribute paths are `develop.cc`'s: `devShells.<system>.default`,
-`devShell.<system>`, `packages.<system>.default`, `defaultPackage.<system>` with
-no fragment; `devShells.<system>.<f>`, `packages.<system>.<f>`,
-`legacyPackages.<system>.<f>`, `<f>` for a fragment.
+This is `iets print-dev-env` (`docs/reference/commands.md`).
+
+#### `nix develop [INSTALLABLE]`
+
+Flags: `-c`/`--command CMD ARGS...` (it takes every argument after it, like
+Nix), `-i`/`--ignore-env`/`--ignore-environment`,
+`-k`/`--keep`/`--keep-env-var NAME`, `-u`/`--unset`/`--unset-env-var NAME`,
+and the global flags.
+
+The environment is the one `nix print-dev-env` prints, so the shell's
+`-env` derivation is built through the daemon. Then iets adds what Nix
+adds:
+
+- the rc file deletes itself;
+- `--command` becomes `exec`;
+- an interactive shell is wrapped in `~/.bashrc` and
+  `shopt -u expand_aliases`;
+- the `bash-prompt`, `bash-prompt-prefix` and `bash-prompt-suffix` settings
+  become `PS1` lines;
+- `SHELL` and the bash directory at the front of `PATH` close the script.
+
+`NIX_GCROOT` holds the `-env` output, so it stays alive while the shell
+runs, as in Nix. iets also links the `-env` output in its roots store, keyed
+on the flake directory and the attribute path. So the shell also survives a
+garbage collection between two runs. `shell-gc-root = false` turns this off
+(`docs/explanation/caching.md`).
+
+`--ignore-env` clears the environment except the `--keep` names, and
+`--unset` removes names. `NIX_GCROOT` and `SHELL` are set after that, so
+they always survive.
+
+iets tries these attribute paths:
+
+- no fragment: `devShells.<system>.default`, `devShell.<system>`,
+  `packages.<system>.default`, `defaultPackage.<system>`;
+- fragment `f`: `devShells.<system>.<f>`, `packages.<system>.<f>`,
+  `legacyPackages.<system>.<f>`, `<f>`.
 
 Falls back on: `--phase`, `--unpack`, `--configure`, `--build`, `--check`,
 `--install`, `--installcheck`, `--profile`, `--redirect`, more than one
-installable, any other flag.
+installable, and any other flag.
 
-`nix fmt [ARG...]` (nix's alias for `nix formatter run`) is `formatter.cc`.
-It evaluates `formatter.<system>` of the flake in the working directory —
-the installable is always `.`, never an argument — builds it and execs it.
-`app.cc:toApp` turns that derivation into a program: `<output>/bin/<main>`,
-where `main` is `meta.mainProgram`, else `pname`, else `name` without its
-version (`names.cc:DrvName`). Every positional argument is forwarded to the
-formatter. The first `--` is dropped and everything after it is an argument,
-flags included, which is how a flag reaches the formatter. `PRJ_ROOT` is set
-to the flake directory (prj-spec), so a formatter run from a subdirectory
-still sees the whole tree. A flake with no `formatter` output fails with
-nix's own message:
+#### `nix fmt [ARG...]`
+
+`nix fmt` is Nix's short name for `nix formatter run`. It evaluates
+`formatter.<system>` of the flake in your working directory, builds it, and
+runs it. The installable is always `.`, never an argument.
+
+The program is `<output>/bin/<main>`. `main` is `meta.mainProgram`, else
+`pname`, else `name` without its version. Every argument goes to the
+formatter. The first `--` is dropped, and everything after it is an
+argument, flags too. That is how you pass a flag to the formatter.
+`PRJ_ROOT` is the flake directory, so a formatter that you run from a
+subdirectory still sees the whole tree.
+
+A flake with no `formatter` output fails with Nix's own message:
 
 ```
 error: flake 'path:/home/you/proj' does not provide attribute 'formatter.x86_64-linux'
 ```
 
-The formatter's closure comes to the local store, because the formatter runs
-here whatever `builder` built it, and the output is linked in iets's roots
-store at `~/.cache/iets/roots/<key>`, keyed on the flake directory and
-`formatter.<system>`. That link is registered as an indirect GC root on the
-local daemon, so the formatter is not swept and rebuilt between runs. The
-idea is Mic92's flake-fmt. A root is a claim on the store and not part of
-the answer, so a daemon that will not take one is a warning and the
-formatter still runs. `iets cache gc` drops the roots nothing has used for
-its TTL (`docs/explanation/caching.md`).
+The formatter runs on your machine, whatever `builder` built it, so its
+closure comes to your local store. iets links it in its roots store at
+`~/.cache/iets/roots/<key>`, keyed on the flake directory and
+`formatter.<system>`, and registers that link as a GC root. So the
+formatter is not deleted and rebuilt between runs. (The idea comes from
+Mic92's flake-fmt.) If the daemon refuses the root, you get a warning and
+the formatter still runs. `iets cache gc` drops roots that nothing has used
+for their TTL (`docs/explanation/caching.md`).
 
-The run also goes through the tracing cache, so a second `nix fmt` with
-nothing changed neither evaluates nor builds; a formatter that rewrote a
-file to the same bytes is still a hit, because the read set holds content
-hashes.
+A second `nix fmt` with nothing changed neither evaluates nor builds. That
+is still true when the formatter rewrote a file to the same bytes, because
+the cache looks at content.
 
-There is no native `iets fmt`. The classic name is the one users reach
-for, and a second spelling would add nothing.
+There is no `iets fmt`. People type `nix fmt`, and a second name would add
+nothing.
 
 Falls back on: `--json`, `nix formatter build`, `nix formatter run`, a
 working directory with no `flake.nix`, and any other flag.
 
-`nix flake prefetch-inputs [FLAKEREF]` (default `.`), plus the global flags,
-is `flake-prefetch-inputs.cc`: it fetches every locked input that the root
-of `flake.lock` reaches, on up to 25 threads (the default of
-`http-connections`). Each input takes the path an evaluation takes
-(`docs/explanation/flakes-and-sources.md`): `/nix/store`, then the input store, then a substitute,
-then iets's own download for `github`, `gitlab`, `sourcehut` and `tarball`,
-then the real nix for `git` and `hg`. So a tarball-shaped input lands in the
-input store, not in `/nix/store`. A `path:` input is read in place and has
-nothing to fetch. An input that fails prints its error, the others go on, and
-the exit code is 1. Falls back on: a missing or incomplete `flake.lock`
-(the real one locks the flake first), an input of another type, a non-local
-flake reference, any other flag.
+#### `nix flake prefetch-inputs [FLAKEREF]`
 
-`eval-jobs --flake` does not prefetch. An evaluation often
-uses only some of the inputs, so a prefetch can download trees that nothing
-reads, and parallel workers already share one download per tree
-(`docs/explanation/caching.md`).
+Default `.`, with the global flags. It fetches every locked input that the
+root of `flake.lock` reaches, on up to 25 threads (the default of
+`http-connections`). Each input is found the same way an evaluation finds
+it (`docs/explanation/flakes-and-sources.md`):
 
-Falls back on: `nix eval --apply`, `--write-to` or more than one
-installable, `nix build --rebuild`, `--dry-run` or `--json`,
-`nix derivation show --stdin`, an installable
-that is a store path (`/nix/store/…`, or an `^outputs` suffix), a
-non-local flake reference such as `nixpkgs#hello`, an installable that is
-not a derivation under `nix build` or `nix derivation show`,
-`--arg`/`--argstr` with a flake (nix
-refuses that), `nix flake …` but `prefetch-inputs`, `nix run`, `nix shell`,
-`nix profile`, `nix store`, `nix copy`, `nix repl`, `nix log`,
-`nix why-depends`, every other subcommand, and any flag not
-listed above.
+1. `/nix/store`;
+2. the input store;
+3. a substitute;
+4. iets's own download for `github`, `gitlab`, `sourcehut` and `tarball`;
+5. the real Nix for `git` and `hg`.
 
-`nix store prefetch-file` and `nix-prefetch-url` keep falling back on
-purpose. Both add the file to the store and print its path, and iets has no
-store to add it to. `iets prefetch` prints the same hash and nothing else
+So a tarball-shaped input lands in the input store, not in `/nix/store`. A
+`path:` input is read in place and has nothing to fetch. If an input fails,
+iets prints its error, goes on with the others, and exits 1.
+
+Falls back on: a missing or incomplete `flake.lock` (the real one locks the
+flake first), an input of another type, a flake reference that is not
+local, and any other flag.
+
+`eval-jobs --flake` does not prefetch. An evaluation often uses only some
+inputs, so a prefetch could download trees that nothing reads. Parallel
+workers already share one download per tree (`docs/explanation/caching.md`).
+
+#### What `nix` falls back on
+
+- `nix eval --apply`, `--write-to`, or more than one installable;
+- `nix build --rebuild`, `--dry-run` or `--json`;
+- `nix derivation show --stdin`;
+- an installable that is a store path (`/nix/store/…`, or with an
+  `^outputs` suffix);
+- a flake reference that is not local, such as `nixpkgs#hello`;
+- an installable that is not a derivation, under `nix build` or
+  `nix derivation show`;
+- `--arg`/`--argstr` with a flake (Nix refuses that);
+- every `nix flake …` command except `prefetch-inputs`;
+- `nix run`, `nix shell`, `nix profile`, `nix store`, `nix copy`,
+  `nix repl`, `nix log`, `nix why-depends`, and every other subcommand;
+- any flag not listed above.
+
+`nix store prefetch-file` and `nix-prefetch-url` always fall back. Both add
+the file to the store and print its path, and iets has no store to add it
+to. `iets prefetch` prints the same hash and nothing else
 (`docs/reference/commands.md`).
 
 #### The tracing cache
 
-Every `nix` subcommand that evaluates goes through the tracing cache
-(`docs/explanation/caching.md`): a second run of the same command with
-nothing changed validates what the first one read and evaluates nothing. A
-hit skips the evaluation and nothing else.
+Every `nix` subcommand that evaluates uses the tracing cache
+(`docs/explanation/caching.md`). Run the same command again with nothing
+changed, and iets checks what the first run read and evaluates nothing. A
+hit skips the evaluation and nothing else:
 
 | subcommand | the entry holds | a hit still does |
 |---|---|---|
@@ -406,41 +445,45 @@ hit skips the evaluation and nothing else.
 | `nix search` | the index of the package set; the regexes are not in the key | the matching and the printing |
 | `nix fmt` | the formatter's output path and program | keeps the root, runs the formatter; a program that is gone is a miss |
 
-The key is the subcommand, the installables (a flake by the text and the
-directory it resolves to, never by its content), `--expr` or `--file`, the
-`--arg`s, `-I` and `NIX_PATH`, `pure-eval`, `--json` and `--raw`, the `system`
-setting, and the working directory. `flake.nix`, `flake.lock`, every file
-and tree the evaluation read, and under `--impure` every environment
-variable it asked for are in the read set, so an edit, a `nix flake update`
-and a changed variable all evaluate again. No other flag these parsers
-accept reaches the evaluator, except `--reference-lock-file`, whose path is
-in the key as well. `--override-input`, `--override-flake` and the
-lock-writing flags are not iets's: the command line falls back before any
-entry is looked up. A flake with no
-complete `flake.lock` falls back from the evaluation, which writes no entry.
+The key is made of:
 
-This is not Nix's evaluation cache. Nix's is keyed on the locked flake's
-fingerprint, holds attribute values, is skipped for a dirty tree and for
-`-f`/`--expr`, and `nix eval` does not answer from it (`src/nix/eval.cc`
-forces the value). iets's is keyed on
-the command and validated by what the run read, so it also answers for a
-dirty tree, a `path:` flake, `--expr` and `-f`.
+- the subcommand;
+- the installables (a flake by its text and the directory it resolves to,
+  never by its content);
+- `--expr` or `--file`, the `--arg`s, `-I` and `NIX_PATH`;
+- `pure-eval`, `--json` and `--raw`, and the `system` setting;
+- the working directory;
+- the path given to `--reference-lock-file`.
 
-`--iets-option cache false`, `IETS_CACHE=0` or `cache = false` in
-`iets.toml` turn it off. The cache flags of the native commands
-(`--no-tracing-cache`, `--cache-dir`) are not Nix's, so under `nix` they
+`flake.nix`, `flake.lock`, every file and tree the evaluation read, and
+with `--impure` every environment variable it read, are in the read set. So
+an edit, a `nix flake update` or a changed variable makes it evaluate again.
+No other flag reaches the evaluator. `--override-input`, `--override-flake`
+and the flags that write a lock file fall back before iets looks in the
+cache. A flake with no complete `flake.lock` falls back during evaluation
+and writes no entry.
+
+This is not Nix's evaluation cache. Nix keys its cache on the locked
+flake, stores attribute values, skips it for a dirty tree and for
+`-f`/`--expr`, and never answers `nix eval` from it. iets keys its cache on
+the command and checks it against what the run read. So it also answers for
+a dirty tree, a `path:` flake, `--expr` and `-f`.
+
+To turn it off, use `--iets-option cache false`, `IETS_CACHE=0`, or
+`cache = false` in `iets.toml`. The cache flags of the native commands
+(`--no-tracing-cache`, `--cache-dir`) are not Nix flags, so under `nix` they
 fall back.
 
 ## Fallback rules
 
-Two triggers:
+Two things make a name fall back:
 
-1. A flag or subcommand the parser does not implement, seen before any
-   work starts. A setting counts too: a Nix client setting iets has
-   nothing for, with a value that is not Nix's default
-   (`docs/reference/settings.md`, class 4), and `nix-instantiate --store`
-   with another store than the local daemon.
-2. An evaluation that calls something iets does not support:
+1. **A flag, subcommand or setting iets does not handle,** seen before any
+   work starts. A setting counts when it is a Nix client setting that iets
+   has nothing for, with a value that is not Nix's default
+   (`docs/reference/settings.md`, class 4). So does
+   `nix-instantiate --store` with a store other than the local daemon.
+2. **An evaluation that calls something iets does not support:**
    - `fetchurl`, `fetchGit`, `fetchMercurial` and `fetchClosure`;
    - `fetchTarball` without a `sha256`;
    - `fetchTree` with a URL string, with an input type other than `path`,
@@ -459,11 +502,11 @@ Two triggers:
    - a read of a `.drv` this run made under `--no-tracing-cache`;
    - a flake whose `flake.lock` is missing or incomplete.
 
-   Every other evaluation error is reported and exits 1, because the real
-   nix would fail the same way and re-running it would double the cost.
+   Any other evaluation error is reported, with exit code 1. The real Nix
+   would fail the same way, and running it again would double the cost.
 
-The fallback prints one line on stderr and then `execve`s the real binary
-with the same `argv`:
+A fallback prints one line on stderr and then runs the real binary with the
+same arguments:
 
 ```
 iets: falling back to nix-instantiate: '--parse' is not implemented
@@ -474,142 +517,108 @@ iets: falling back to nix-instantiate: '--parse' is not implemented
 | `IETS_NIX_BIN_DIR` | the directory the real binary is taken from |
 | `IETS_NO_FALLBACK=1` (any nix.conf Boolean) | print the reason and exit 1 instead of exec'ing |
 
-Lookup order: `IETS_NIX_BIN_DIR/<name>` when it exists there; else the
-directory named by `share/iets/real-nix-bin` next to the farm entry on
-`PATH` that resolves to iets; else the first `<name>` on `PATH` that is not
-iets. Nothing found at all:
-`iets: cannot fall back to <name>: not found on PATH`, exit 1.
+iets looks for the real binary in this order:
 
-A candidate is iets when its canonical path is `/proc/self/exe` **or** when
-that path's file name is `iets`. A host can hold two builds of iets, and
-the farm one of them made points at its own `bin/iets`, not at the binary
-that is running. Such a candidate is skipped like ourselves: its marker is
-read, and the walk over `PATH` goes on. Without the file-name rule the other
-build looked like a foreign nix, so a flake-input fetch spawned it and the
-child stopped at the `IETS_FETCHING` guard
-(`iets: recursive fetch ...`, `docs/explanation/flakes-and-sources.md`).
+1. `IETS_NIX_BIN_DIR/<name>`, when it exists;
+2. the directory named in `share/iets/real-nix-bin`, next to the farm entry
+   on `PATH` that leads to iets;
+3. the first `<name>` on `PATH` that is not iets.
+
+If it finds nothing, you get
+`iets: cannot fall back to <name>: not found on PATH`, and exit code 1.
+
+A candidate counts as iets when it resolves to the running binary, **or**
+when its file name is `iets`. A machine can have two builds of iets
+installed, and each farm points at its own `bin/iets`. Both are skipped.
+Without the file-name rule, the other build looked like a real Nix, and a
+flake input fetch stopped with `iets: recursive fetch ...`
+(`docs/explanation/flakes-and-sources.md`).
 
 ## Config
 
 The classic names read nix.conf as Nix does. `docs/reference/settings.md`
-says what reaches the daemon and which settings give a warning because they
-have no effect. On the command line, `--option name value` and the flag
-aliases (`--store`, `-j`/`--max-jobs`, `--cores`, `-k`, `-K`) are overrides
-applied in command-line order. `store = auto`, empty or `daemon` is the
-daemon socket; `unix://PATH`, `ssh-ng://HOST` and `grpc://HOST:PORT[?…]` are
-honoured; any other store falls back.
+says what reaches the daemon, and which settings give a warning because they
+have no effect. On the command line, `--option name value` and the short
+forms (`--store`, `-j`/`--max-jobs`, `--cores`, `-k`, `-K`) apply in
+command-line order.
+
+`store = auto`, empty, or `daemon` means the daemon socket. iets handles
+`unix://PATH`, `ssh-ng://HOST` and `grpc://HOST:PORT[?…]`. Any other store
+falls back.
 
 ## Known divergences
 
-`docs/reference/divergences.md` covers the evaluator. Classic mode adds:
+`docs/reference/divergences.md` covers the evaluator. Classic mode adds
+these:
 
-- `store = auto` is the daemon socket. The real nix would use the local
-  store directly when it is writable.
-- `-Q`/`--no-build-output` drops the daemon's log lines. In Nix 2.34 it
-  only switches the log format to `raw`. `--quiet` does the same here; in
-  Nix it lowers the log level by one.
-- A flag or a setting that has no effect is one warning on stderr, where
+- `store = auto` is the daemon socket. The real Nix uses the local store
+  directly when it can write to it.
+- `-Q`/`--no-build-output` drops the daemon's log lines. In Nix 2.34 it only
+  switches the log format to `raw`. `--quiet` does the same here. In Nix it
+  lowers the log level by one.
+- A flag or setting that has no effect gives one warning on stderr, where
   Nix prints nothing: `-v`, `--accept-flake-config`, `--eval-store auto`,
   `accept-flake-config = true` and `log-lines`. Any other client setting
-  iets has nothing for (`restrict-eval`, `eval-system`, …) falls back.
+  that iets has nothing for (`restrict-eval`, `eval-system`, …) falls back.
   stdout and the exit code stay Nix's. `docs/reference/divergences.md`,
-  **Flags and settings with no effect**, has the table and says what iets
-  does with a flake's `nixConfig`: nothing.
-- `--show-trace` only puts the trace into the `--log-format internal-json`
-  error records (`docs/reference/errors.md`): iets always prints the full
+  **Flags and settings with no effect**, has the table. It also says what
+  iets does with a flake's `nixConfig`: nothing.
+- `--show-trace` only adds the trace to the `--log-format internal-json`
+  error records (`docs/reference/errors.md`). iets always prints the full
   trace it has.
-- `--no-out-link` (`nix build --no-link`) creates no symlink and keeps a
-  GC root in iets's roots store instead, so the output survives the next
-  `nix collect-garbage`. `nix-build` links into a temporary directory and
-  lets it be deleted, which roots the output for the length of the run and
-  no longer. `build-gc-root = false` gives Nix's behaviour back
+- `--no-out-link` (`nix build --no-link`) makes no symlink. iets keeps a GC
+  root in its roots store instead, so the output survives the next
+  `nix collect-garbage`. Nix's `nix-build` keeps it only while the command
+  runs.
+  `build-gc-root = false` gives you Nix's behaviour
   (`docs/reference/divergences.md`, `docs/explanation/caching.md`).
-- `getDerivations` recursion covers derivations, attrsets (lexicographic
-  order, `recurseForDerivations`) and lists. `_combineChannels` and
+- Finding derivations in a value walks derivations, attrsets (in name
+  order, with `recurseForDerivations`) and lists. `_combineChannels` and
   `ignoreAssertionFailures` are not implemented.
-- `--add-root` does not refuse a link that already exists and points
-  outside the store; it replaces it.
+- `--add-root` replaces a link that already exists and points outside the
+  store. Nix refuses.
 - A missing attribute in an installable's path is one line. Nix adds a
-  `Did you mean …?` line from `Suggestions`, which iets does not have; the
-  `error:` line itself is the same.
-- The `nix` subcommands answer from the tracing cache (see above), where
-  Nix answers from its own evaluation cache or evaluates. stdout and the exit
+  `Did you mean …?` line, which iets does not have. The `error:` line is the
+  same.
+- The `nix` subcommands answer from the tracing cache (see above). Nix
+  answers from its own evaluation cache, or evaluates. stdout and the exit
   code are the same. stderr differs in one way: a hit does not evaluate, so
-  it prints no `trace:` and no `evaluation warning:` line. Nix prints none
-  either when its cache answers (`nix build`, `nix develop`), and prints them
+  it prints no `trace:` and no `evaluation warning:` lines. Nix prints none
+  either when its cache answers (`nix build`, `nix develop`). It prints them
   every time for `nix eval`, which it never caches.
-- An entry that no longer holds is invalidated without a word, as in Nix.
-  The native commands print `re-evaluating: PATH changed`
-  (`docs/reference/errors.md`); under a classic name that record goes to
-  `json-log-path` only, so stderr holds what Nix prints.
-- `nix-instantiate`, `nix-build` and `nix-shell` do not use the tracing cache.
+- When a cache entry no longer holds, iets says nothing, as Nix does. The
+  native commands print `re-evaluating: PATH changed`
+  (`docs/reference/errors.md`). Under a classic name, that record goes only
+  to `json-log-path`, so stderr holds what Nix prints.
+- `nix-instantiate`, `nix-build` and `nix-shell` do not use the tracing
+  cache.
 - `nix eval` and `nix derivation show` do not register the derivations they
-  evaluate. The real one writes the `.drv` files while computing `drvPath`, so
-  a real `nix derivation show` leaves its whole input closure — every `.drv`
-  and every input source — in the store, and `-r` can then answer from the
-  store alone. iets answers from the derivations the evaluation holds, so the
-  store gains nothing and a caller that relied on the side effect (`nix
-  derivation show X` then `nix-store --realise X`) must instantiate first, with
-  `nix-instantiate` or `iets build --no-build`.
-- `nix build` prints the log lines only with `-L`. The real one shows the
-  last line in the progress bar and the whole log when a build fails.
+  evaluate. The real ones write the `.drv` files as they go, so a real
+  `nix derivation show` leaves its whole input closure in the store. iets
+  answers from memory and leaves the store as it was. If you relied on that
+  side effect (`nix derivation show X`, then `nix-store --realise X`),
+  instantiate first, with `nix-instantiate` or `iets build --no-build`.
+- `nix build` prints log lines only with `-L`. The real one shows the last
+  line in the progress bar, and the whole log when a build fails.
 - Two installables that name the same derivation print one output path
-  each. The real `nix build` prints one per pair, so twice as many.
-- An evaluation error inside a value `nix eval` prints becomes
-  `«error: …»`, except a call iets does not support, which ends the run so
-  that it can fall back to the real nix.
-- **`nix develop` takes bash from the shell derivation's own builder.**
-  `develop.cc` builds `nixpkgs#bashInteractive` from the flake's `nixpkgs`
-  input (or the registry), which needs a fetcher iets does not have. The
-  builder of a derivation `nix develop` accepts is a `bin/bash` in the store
-  by definition, and in a nixpkgs dev shell it is the same store path nix
-  picks, so `SHELL` and the `PATH` prefix come out the same. With no such
-  file, `bash` from `PATH`, and then the `PATH` prefix line is omitted, as in
-  nix when `bashInteractive` fails.
-- `nix develop` sets no profile: `--profile` falls back.
-- `nix-shell --pure` keeps the lower-case proxy variables (`http_proxy` …)
-  and not the upper-case ones. `network-proxy.cc:getAllVariables` means to add
-  the upper-case names but writes into an empty `std::string`, so nix inserts
-  an empty name instead; iets keeps the set nix keeps, not the set nix means
-  to keep.
-- `nix-shell` computes `NIX_BUILD_CORES` from the `cores` setting, else the
-  cgroup CPU quota, else the CPU count — `globals.cc:getDefaultCores`, with
-  the cgroup2 `cpu.max` of the process's own cgroup and no `/proc/mounts`
-  check.
-- `nix-shell` leaves the derivation's `.drv` in the store. Nix registers it
-  too (`evalStore` is the store here), so this is only visible with a
-  separate eval store.
-
-## Tests
-
-`scripts/classic-e2e.nu` runs the real
-`nix-instantiate`/`nix-build`/`nix-shell`/`nix` and ours for every case and
-compares stdout byte for byte, the exit code and the `result*` symlink targets.
-The `nix` cases use `tests/fixtures/flake`, a flake with no inputs and a
-complete `flake.lock`, copied out of the repository so both sides see a `path:`
-flake. It writes to the store and needs a live `nix-daemon`, so `nix flake check`
-runs it in a NixOS test container (`nix/e2e-test.nix`). By hand, run it from the
-dev shell after `cargo build --release`. It refuses to run anywhere else: on a
-host that installs the farm, the `nix` it would compare against is iets, so it
-aborts with the resolved path instead of comparing iets with itself.
-
-**A comparison by hand needs the same care, and the scripts cannot help you
-there.** On a host that installs the farm, every classic name in the system
-path is iets: `nix`, `nix-instantiate`, `nix-build`, `nix-shell` and
-`nix-eval-jobs`. A reference run that finds its binary through `PATH`
-therefore compares iets with iets and says the two agree, or blames the
-reference for iets's own behaviour. Name the store path of the reference
-instead, and check it: `readlink -f $(command -v nix-eval-jobs)` must not end
-in an `iets` output. `scripts/lib.nu`'s `require-real-nix` does that
-check for the suites; it cannot do it for a command you type.
-
-The shell cases compare an `env` dump, which is only comparable without the
-variables that legitimately differ: `NIX_BUILD_TOP`, the `TMP*` family,
-`NIX_ATTRS_*_FILE`, `__*`, `SHLVL`, `_`, `PWD`, `OLDPWD` and `PS1`. The rest is
-compared line by line after `sort`. `nix-shell` runs on
-`<nixpkgs>/default.nix -A hello`, a structured-attributes derivation, not on
-`'<nixpkgs>' -A hello`: that resolves to `nixpkgs/shell.nix`, which fetches a
-pinned tree and therefore falls back. `nix develop` runs on this repository's
-own flake, the only `mkShell`-shaped shell around — the flake fixture has no
-nixpkgs. The fallback cases use `IETS_NO_FALLBACK=1`, so no real `nix-shell -p`
-or `nix develop --phase build` build ever runs.
+  each. The real `nix build` prints twice as many.
+- An evaluation error inside a value that `nix eval` prints becomes
+  `«error: …»`. The exception is a call iets does not support: that ends the
+  run, so that the real Nix can take over.
+- **`nix develop` takes bash from the shell derivation's own builder.** Nix
+  builds `nixpkgs#bashInteractive` from the flake's `nixpkgs` input or the
+  registry, and that needs a fetcher iets does not have. The builder of a
+  derivation that `nix develop` accepts is a `bin/bash` in the store. In a
+  nixpkgs dev shell it is the same store path Nix picks, so `SHELL` and the
+  `PATH` prefix come out the same. If there is no such file, iets takes
+  `bash` from `PATH` and leaves out the `PATH` prefix line, as Nix does when
+  `bashInteractive` fails.
+- `nix develop` sets no profile, so `--profile` falls back.
+- `nix-shell --pure` keeps the lower-case proxy variables (`http_proxy` …),
+  not the upper-case ones. Nix means to keep both, but a bug drops the
+  upper-case names. iets keeps what Nix actually keeps.
+- `nix-shell` takes `NIX_BUILD_CORES` from the `cores` setting, else from
+  the cgroup2 `cpu.max` of its own cgroup, else from the CPU count. Unlike
+  Nix, it does not check `/proc/mounts`.
+- `nix-shell` leaves the derivation's `.drv` in the store. Nix does too, so
+  you can only see this with a separate eval store.
