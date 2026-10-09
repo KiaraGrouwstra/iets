@@ -194,9 +194,8 @@ struct Var {
     hidden: bool,
 }
 
-/// Field names, which `ORDER` puts in one symbol order on both sides. `""`
-/// and `x` are not here: the two evaluators place them differently.
-const FIELDS: &[&str] = &["1", "a", "a b", "b", "c", "p", "q"];
+/// Field names, which `ORDER` puts in one symbol order on both sides.
+const FIELDS: &[&str] = &["", "1", "a", "a b", "b", "c", "p", "q", "x"];
 const NAMES: &[&str] = &["x", "y", "z", "f", "g", "s"];
 
 const INTS: &[&str] = &[
@@ -276,8 +275,7 @@ const REGEXES: &[&str] = &[
 /// names. Parsed first, the fields have the same order on both sides, for
 /// every input (`docs/reference/divergences.md`, "Which attribute's error
 /// comes first").
-const ORDER: &str =
-    "let _order = { \"1\" = 0; a = 0; \"a b\" = 0; b = 0; c = 0; p = 0; q = 0; }; in ";
+const ORDER: &str = "let _order = { \"\" = 0; \"1\" = 0; a = 0; \"a b\" = 0; b = 0; c = 0; p = 0; q = 0; x = 0; }; in ";
 
 /// The expression `input` chooses; see the module comment.
 pub fn generate(u: &mut Unstructured) -> String {

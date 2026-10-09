@@ -177,22 +177,27 @@ and `which-duplicate-attribute`.
 ## Which attribute's error comes first
 
 When two attributes of a set both fail, `==`, `builtins.deepSeq` and
-`--strict` report the one they force first. Both evaluators go through a
-set in symbol order, as in the entry above. Nix creates many symbols when
-it starts, and iets creates others, so a name one of them has seen
-already comes first there and not on the other side:
+`--strict` report the one they force first. When one attribute differs
+and another fails, `==` gives `false` or the error by the same order.
+Both evaluators go through a set in symbol order, as in the entry above:
+a name's place is the time the evaluator first saw it.
+
+Nix 2.34.8 creates 52 symbols before any other (`StaticEvalSymbols`,
+eval.hh), among them `""`, `key`, `system`, `builder`, `args`, `meta`,
+`self` and `description`. iets creates the same 52 first, in the same
+order, so both report `key` here:
 
 ```nix
 { zz = throw "zz"; key = throw "key"; } == { zz = 1; key = 1; }
 ```
 
-Nix 2.34.8 reports `key`, and iets reports `zz`. `success` goes the other
-way. Other names that differ this way include `system`, `builder`, `args`,
-`meta`, `self`, `description` and `__structuredAttrs`. When neither
-evaluator knew any of the names in advance, both report the same
-attribute. `builtins.toJSON` and
-`builtins.attrValues` go through the names in sorted order, so they agree.
-Matching Nix would mean creating iets's symbols in Nix's order.
+Three names still go the other way: iets creates `success`, `revCount`
+and `version` when it starts, and Nix only when it first needs them. With
+`success` in place of `key`, Nix reports `zz` and iets `success`. After
+the 52, each evaluator also creates the names of its builtins in its own
+order. When neither evaluator knew any of the names in advance, both
+report the same attribute. `builtins.toJSON` and `builtins.attrValues`
+go through the names in sorted order, so they agree.
 
 ## A `%` in an `or` argument
 
