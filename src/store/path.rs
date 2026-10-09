@@ -108,10 +108,11 @@ impl StorePath {
         if base_name.len() < HASH_PART_LEN + 1 {
             return Err(bad("path too short"));
         }
-        let (hash_part, rest) = base_name.split_at(HASH_PART_LEN);
-        if !rest.starts_with('-') {
+        // the dash first, as Nix does: it makes the split a char boundary
+        if base_name.as_bytes()[HASH_PART_LEN] != b'-' {
             return Err(bad("missing dash"));
         }
+        let (hash_part, rest) = base_name.split_at(HASH_PART_LEN);
         if let Some(c) = hash_part.bytes().find(|&c| !is_nix32_char(c)) {
             return Err(bad(&format!(
                 "illegal base-32 character '{}' in the hash part",
@@ -510,5 +511,11 @@ mod tests {
             hash_placeholder("out"),
             "/1rz4g4znpzjwh1xymhjpm42vipw92pr73vdgl6xs1hycac8kf2n9"
         );
+    }
+
+    #[test]
+    fn a_multibyte_char_across_the_hash_part_is_an_error() {
+        let p = format!("/nix/store/{}é-x", "a".repeat(31));
+        assert!(StorePath::parse(&p).is_err());
     }
 }
