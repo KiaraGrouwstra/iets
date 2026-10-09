@@ -16,8 +16,8 @@ use crate::parallel::shared::SharedMap;
 use crate::print::{json_escape, lexicographic_order, print_json};
 use crate::runtime::{AttrsObj, Ctx, Word, split_built};
 use crate::store::drv::{
-    Derivation, DerivationOutput, DrvError, DrvHashCache, InputNode,
-    finalize_input_addressed_outputs, hash_derivation_modulo, load_derivation_from_store,
+    Derivation, DerivationOutput, DrvError, DrvHashCache, InputNode, finalize_with_inputs,
+    hash_derivation_modulo, hash_derivation_modulo_with, load_derivation_from_store,
 };
 use crate::store::hash::{Hash, HashAlgo, hash_bytes};
 use crate::store::path::{
@@ -568,6 +568,7 @@ fn derivation_strict_internal(
 
     let trace = ev.trace().clone();
     let mut loader = move |p: &StorePath| load_drv_traced(&trace, p);
+    let mut modulo = None;
     if let Some(h) = output_hash {
         if outputs.len() != 1 || !outputs.contains("out") {
             bail!(
@@ -628,7 +629,7 @@ fn derivation_strict_internal(
             drv.env_set(o, Vec::new());
             drv.outputs.insert(o.clone(), DerivationOutput::Deferred);
         }
-        finalize_input_addressed_outputs(
+        modulo = finalize_with_inputs(
             &mut drv,
             &mut ev.drv.hash_cache.lock().unwrap(),
             &mut loader,
@@ -654,12 +655,15 @@ fn derivation_strict_internal(
         })
         .map_err(|e| drv_err(e, pos))?;
     let drv_path = drv_path.map_err(|e| drv_err(e, pos))?;
-    let h = hash_derivation_modulo(
-        &drv,
-        false,
-        &mut ev.drv.hash_cache.lock().unwrap(),
-        &mut loader,
-    )
+    let h = match &modulo {
+        Some(inputs) => hash_derivation_modulo_with(&drv, false, inputs),
+        None => hash_derivation_modulo(
+            &drv,
+            false,
+            &mut ev.drv.hash_cache.lock().unwrap(),
+            &mut loader,
+        ),
+    }
     .map_err(|e| drv_err(e, pos))?;
     ev.drv
         .hash_cache
