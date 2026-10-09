@@ -15,6 +15,7 @@ nix build .#checks.x86_64-linux.fuzz-nar -L
 nix build .#checks.x86_64-linux.fuzz-wire -L
 nix build .#checks.x86_64-linux.fuzz-eval -L
 nix build .#checks.x86_64-linux.fuzz-drv -L
+nix build .#checks.x86_64-linux.fuzz-drv-eval -L
 nix build .#checks.x86_64-linux.conformance -L
 ```
 

@@ -52,7 +52,9 @@ and the `.drv` path is the one Nix gives. These places differ:
 
 - The name of an `env` entry, `builder` and `system` must be UTF-8. Nix
   takes any bytes there; iets's `derivationStrict` stops with `string is
-  not valid UTF-8`. iets holds these three as text.
+  not valid UTF-8`. iets holds these three as text. The drv-eval fuzz
+  target meets it in each of the three (`drv-eval-builder-not-utf8`,
+  `drv-eval-system-not-utf8`, `drv-eval-env-name-not-utf8`).
 - `nix derivation show` writes each such byte as U+FFFD. Nix fails with
   `[json.exception.type_error.316]`.
 - iets's daemon client reads the strings of a reply as UTF-8 and writes
@@ -311,6 +313,13 @@ whatever the features are. Its own commands have every feature, so
 `builtins ? fetchTree` is true there, and code that branches on it
 (flake-compat) takes the `fetchTree` branch. `builtins.fetchClosure` is
 unsupported either way, so classic mode falls back when it is called.
+
+The same holds for a derivation: `outputHashMode = "text"` needs
+`dynamic-derivations` in Nix, and `outputHashAlgo = "blake3"` needs
+`blake3-hashes`; iets gives the drvPath of each. The drv-eval fuzz target
+meets both (`drv-eval-text-mode-without-feature`,
+`drv-eval-blake3-without-feature`). Its oracle has `ca-derivations` on,
+so `__contentAddressed` is compared.
 
 `builtins.outputOf` works. The one thing a run cannot do is read back a
 producer that it did not make and that is not in the store. Nix writes

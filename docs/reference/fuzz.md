@@ -15,6 +15,7 @@ divergences is written. `docs/how-to/fuzz.md` shows how to run the targets.
 | `eval` | bytes that choose an expression of a known type | the deeply forced value as `nix-instantiate --eval --strict` prints it, or an error on both sides |
 | `drv-read` | a `.drv` file | accept or refuse, the ATerm written again, the drvPath |
 | `drv-gen` | bytes that choose a `.drv` part by part | as `drv-read` |
+| `drv-eval` | bytes that choose `derivation` calls | the drvPath and outPaths of each, or an error on both sides |
 
 ## Oracles
 
@@ -27,7 +28,7 @@ input and a test suite any Nix implementation can run.
 |:---|:---|:---|
 | `parse-oracle` | libnixexpr 2.34.8 | |
 | `nar-oracle` | libnixutil 2.34.8 | |
-| `eval-oracle` | libnixexpr 2.34.8 | pure, no store |
+| `eval-oracle` | libnixexpr 2.34.8 | pure, `ca-derivations` on, a store of its own in a temporary directory |
 | `wire-oracle` | Nix 2.34.8's `RemoteStore` | |
 | `drv-oracle` | libnixstore 2.34.8 | |
 
@@ -133,7 +134,7 @@ refers to itself, so each evaluation ends. Sometimes a value of the wrong
 type takes the place of a correct one, to compare the type errors.
 
 iets evaluates the expression in the fuzzer's process, in pure mode.
-`eval-oracle` evaluates it with Nix 2.34.8 in pure mode with no store. Both
+`eval-oracle` evaluates it with Nix 2.34.8 in pure mode. Both
 force the value deeply. The two must print the same value, or both must
 fail. Error messages are not compared.
 
@@ -153,6 +154,38 @@ a fresh oracle and a fresh evaluator.
 | `iets-panic` | iets panicked |
 | `nix-crash` | the oracle process died on the expression |
 | `eq-rule` | `iets-only` or `value`, and iets with Nix's exact `==` rules gives Nix's answer: the `==` difference in `docs/reference/divergences.md` |
+
+## drv-eval
+
+`drv-eval` tests what an evaluation makes of a `derivation` call. The
+input chooses one to three calls (`fuzz/src/drveval.rs`). A later call
+can name an earlier one: `"${d0}"`, `"${d0.dev}/lib"`, `d0.drvPath` (the
+whole closure of its `.drv`), `unsafeDiscardStringContext` or
+`unsafeDiscardOutputDependency`. The expression is the list of each
+call's drvPath and the outPath of each of its outputs.
+
+Each call has a `name`, a `system` and a `builder`. Now and then it also
+has:
+
+- `args`, and several `outputs`;
+- a fixed output: `outputHash` as base16, nix32, base64 or SRI, with or
+  without `outputHashAlgo` and `outputHashMode`;
+- `__structuredAttrs`, `__ignoreNulls`, `passAsFile`, `__contentAddressed`;
+- attributes of every type: strings with escapes, integers at their
+  limits, floats, booleans, `null`, lists, sets with `outPath` or
+  `__toString`, `builtins.toFile`.
+
+The shapes follow the files in `drv/` of nix-conformance, which hold the
+nix-gc-broken seeds: a string that is not UTF-8 in an `env` value, in
+`args`, in an `env` name, in `builder` and in `system`. One expression in
+four can also hold a wrong value on purpose, such as a bad name, an empty
+`builder` or a hash of the wrong length. The others hold none, because
+one error fails the whole list.
+
+The comparison, the oracle and the kinds are those of `eval`.
+`eval-oracle` writes each `.drv` into a store of its own, as
+`nix-instantiate` does, so the closure of a drvPath's context is that of
+a real store.
 
 ## drv-read, drv-gen
 
@@ -182,7 +215,7 @@ sometimes wrong, and the file can be cut short or have one byte changed.
 |:---|:---|
 | `IETS_PARSE_ORACLE`, `IETS_NAR_ORACLE` | the oracle binary a fuzzer runs by hand |
 | `IETS_WIRE_SCRIPT=FILE` | `wire` writes the script of the last input to `FILE` |
-| `IETS_EVAL_SOURCE=FILE` | `eval` writes the expression of the last input to `FILE` |
+| `IETS_EVAL_SOURCE=FILE` | `eval` and `drv-eval` write the expression of the last input to `FILE` |
 | `IETS_DRV_WRITE=FILE` | the `drv-*` targets write the `.drv` of the last input to `FILE` |
 | `IETS_FUZZ_DIVERGENCES=FILE` | read this list of known divergences instead of the one built in |
 
@@ -239,6 +272,7 @@ An entry matches when every field it gives matches.
 | `fuzz-wire` | `wire` for 30 s |
 | `fuzz-eval` | `eval` for 60 s |
 | `fuzz-drv` | each derivation target for 20 s |
+| `fuzz-drv-eval` | `drv-eval` for 30 s |
 | `conformance` | every case of nix-conformance through `conformance-adapter`; `fuzz/conformance-known` lists the cases iets fails on purpose |
 
 A fuzz check fails on a difference that `fuzz/divergences.toml` does not
@@ -247,9 +281,10 @@ list, and prints the input in base64.
 ## Campaigns
 
 A campaign (`fuzz-parse-campaign`, `fuzz-nar-campaign`,
-`fuzz-wire-campaign`, `fuzz-eval-campaign`, `fuzz-drv-campaign`) minimizes
-its seeds, fuzzes on every core of the builder for an hour, and minimizes
-the result again. The `nar` campaign runs `nar-gen` and the `drv` campaign
-runs `drv-gen`. It leaves `corpus/` (the grown corpus), `artifacts/` (every
-input that differed), `triage.jsonl` (the artifacts replayed by
-`fuzz-diff --json`) and the libFuzzer logs.
+`fuzz-wire-campaign`, `fuzz-eval-campaign`, `fuzz-drv-campaign`,
+`fuzz-drv-eval-campaign`) minimizes its seeds, fuzzes on every core of the
+builder for an hour, and minimizes the result again. The `nar` campaign
+runs `nar-gen` and the `drv` campaign runs `drv-gen`. It leaves `corpus/`
+(the grown corpus), `artifacts/` (every input that differed),
+`triage.jsonl` (the artifacts replayed by `fuzz-diff --json`) and the
+libFuzzer logs.

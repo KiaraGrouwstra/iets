@@ -45,6 +45,7 @@ type Answer = Result<String, String>;
 pub struct Eval {
     oracle: Oracle,
     known: Vec<known::Entry>,
+    generate: fn(&mut Unstructured) -> String,
 }
 
 thread_local! {
@@ -56,9 +57,15 @@ thread_local! {
 
 impl Eval {
     pub fn new(known: Vec<known::Entry>) -> Eval {
+        Eval::with(known, generate)
+    }
+
+    /// The same comparison, of the expressions `generate` makes.
+    pub fn with(known: Vec<known::Entry>, generate: fn(&mut Unstructured) -> String) -> Eval {
         Eval {
             oracle: Oracle::from_env("IETS_EVAL_ORACLE", "eval-oracle"),
             known,
+            generate,
         }
     }
 
@@ -125,7 +132,7 @@ fn iets(ev: &mut Evaluator, src: &str) -> Answer {
 
 impl Target for Eval {
     fn check(&mut self, input: &[u8]) -> Verdict {
-        let src = generate(&mut Unstructured::new(input));
+        let src = (self.generate)(&mut Unstructured::new(input));
         if let Ok(p) = env::var("IETS_EVAL_SOURCE") {
             let _ = fs::write(p, &src);
         }

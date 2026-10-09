@@ -39,6 +39,7 @@ let
     wire = { flags = "-max_len=4096"; seeds = _: ""; };
     # a hang is a bug of its own: the expressions end (fuzz/src/eval.rs)
     eval = { flags = "-max_len=4096 -timeout=10"; seeds = _: ""; };
+    drv-eval = { flags = "-max_len=4096 -timeout=10"; seeds = _: ""; };
     drv-read = {
       flags = "-max_len=16384 -dict=${./drv.dict}";
       seeds = _: link [ "${conformance}/drv" ] "*.drv";
@@ -159,6 +160,11 @@ in
     fuzz-drv = check {
       name = "drv";
       script = lib.concatMapStrings (t: run t 20) [ "drv-read" "drv-gen" ];
+    };
+    # thirty seconds of derivation calls, their drvPaths and outPaths
+    fuzz-drv-eval = check {
+      name = "drv-eval";
+      script = run "drv-eval" 30;
     };
     # twenty seconds of each NAR target
     fuzz-nar = check {
