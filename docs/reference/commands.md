@@ -359,7 +359,7 @@ evaluation made is read from memory. Any other derivation is read from
 `/nix/store`.
 
 The first form takes two installables. Each is a `.drv` store path, a
-flake reference (`.#hello`, `nixpkgs#hello`) or a Nix file, and each must
+local flake reference (`.#hello`) or a Nix file, and each must
 evaluate to exactly one derivation. The second form evaluates one
 expression, file or flake twice, and takes a different attribute each
 time.
@@ -602,7 +602,7 @@ element that is not an identifier (`names."7zip"`, where 2.35.2 writes
 | `--constituents` | identical | Named, derivation and glob (`_hydraGlobConstituents`) constituents, dependency cycles, missing and failed constituents, rewritten `drvPath`/`outputs`, `namedConstituents` emptied, roots. Not across `--chunks`: a name in another chunk "does not exist". |
 | `--apply EXPR` | identical | `extraValue`. A result that is not an attrset is the job's error. |
 | `--select EXPR` | identical | Applied to the top level after it is called. A result that is not an attrset is fatal. |
-| `--workers N` | different meaning | Worker processes (default 4; nix-eval-jobs: 1), or fibers of one process with `--max-memory-size 0`. |
+| `--workers N` | different meaning | Worker processes (default: the cores, at most 4; nix-eval-jobs: 1), or fibers of one process with `--max-memory-size 0`. |
 | `--max-memory-size MB` | identical default | Worker processes restart above `MB`, 4096 like nix-eval-jobs. `0` is iets's own: one process with no limit. |
 | `--chunks M --chunk N`, `--chunk-depth D` | iets only | Evaluate part `N` (0 to M-1) of `M` parts of the tree, split at depth `D` (default 2). |
 | `--impure` | identical | Turns off the pure evaluation that `--flake` implies. |
