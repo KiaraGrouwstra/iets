@@ -108,18 +108,21 @@ impl StorePath {
         if base_name.len() < HASH_PART_LEN + 1 {
             return Err(bad("path too short"));
         }
-        // the dash first, as Nix does: it makes the split a char boundary
-        if base_name.as_bytes()[HASH_PART_LEN] != b'-' {
-            return Err(bad("missing dash"));
-        }
-        let (hash_part, rest) = base_name.split_at(HASH_PART_LEN);
-        if let Some(c) = hash_part.bytes().find(|&c| !is_nix32_char(c)) {
+        // the hash part first, as Nix does; once it is all base-32, byte 32 is
+        // a char boundary. Nix never checks the dash (docs/reference/divergences.md)
+        if let Some(&c) = base_name.as_bytes()[..HASH_PART_LEN]
+            .iter()
+            .find(|&&c| !is_nix32_char(c))
+        {
             return Err(bad(&format!(
                 "illegal base-32 character '{}' in the hash part",
                 c as char
             )));
         }
-        check_name(&rest[1..]).map_err(|e| bad(&e.0))?;
+        let Some(name) = base_name[HASH_PART_LEN..].strip_prefix('-') else {
+            return Err(bad("missing dash"));
+        };
+        check_name(name).map_err(|e| bad(&e.0))?;
         Ok(StorePath {
             base_name: base_name.to_string(),
         })
