@@ -145,6 +145,67 @@ fn newline_starts(src: &[u8]) -> Vec<u32> {
     line_starts
 }
 
+/// The symbols Nix 2.34.8 creates before any other, in its order
+/// (eval.hh, `StaticEvalSymbols::preallocate`). A set's attributes are in
+/// symbol order, and `==` on two sets compares them in that order, so
+/// which of a differing and a throwing attribute it meets first depends on
+/// it: `{ a = 1; meta = throw "t"; } == { a = 2; meta = 1; }` throws in
+/// Nix. The names must stay first and in this order.
+const NIX_STATIC_SYMBOLS: [&[u8]; 52] = [
+    b"<with>",
+    b"outPath",
+    b"drvPath",
+    b"type",
+    b"meta",
+    b"name",
+    b"value",
+    b"system",
+    b"__overrides",
+    b"outputs",
+    b"outputName",
+    b"__ignoreNulls",
+    b"file",
+    b"line",
+    b"column",
+    b"__functor",
+    b"__toString",
+    b"right",
+    b"wrong",
+    b"__structuredAttrs",
+    b"__json",
+    b"allowedReferences",
+    b"allowedRequisites",
+    b"disallowedReferences",
+    b"disallowedRequisites",
+    b"maxSize",
+    b"maxClosureSize",
+    b"builder",
+    b"args",
+    b"__contentAddressed",
+    b"__impure",
+    b"outputHash",
+    b"outputHashAlgo",
+    b"outputHashMode",
+    b"recurseForDerivations",
+    b"description",
+    b"self",
+    b"",
+    b"startSet",
+    b"operator",
+    b"key",
+    b"path",
+    b"prefix",
+    b"outputSpecified",
+    b"__sub",
+    b"__lessThan",
+    b"__mul",
+    b"__div",
+    b"or",
+    b"__findFile",
+    b"__nixPath",
+    b"body",
+];
+
 /// Interned symbols the evaluator needs by name.
 #[derive(Clone)]
 pub struct WellKnown {
@@ -482,6 +543,9 @@ impl EvalConfig {
     pub fn build(self) -> Evaluator {
         let mut arena = Arena::new();
         let mut interner = Interner::new();
+        for name in NIX_STATIC_SYMBOLS {
+            interner.intern(name);
+        }
         let root_env = arena.alloc_env(None, 0);
         let s = WellKnown {
             out_path: interner.intern(b"outPath"),
