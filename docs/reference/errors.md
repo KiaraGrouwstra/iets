@@ -78,6 +78,15 @@ You get a `hint` only when iets is sure of the fix:
 - A file in the working tree of a git flake that git does not track gives
   Nix's error (`Path 'F' in the repository "R" is not tracked by Git.`),
   and the hint is the `git -C "R" add "F"` that makes it visible.
+- A `fetchTree` call on an input with no `narHash` says to pass one, or
+  to run `nix flake update`.
+- `iets diff --closure` on an output that is not in the store names the
+  `iets build` that makes it.
+- `iets search` with no results says to use fewer or shorter regexes.
+
+The text on stderr shows the hint only for a usage error. For every other
+error, the hint is only in the record's `hint` field
+(`--log-format internal-json`).
 
 A missing attribute or an undefined variable has no hint yet: iets has no
 did-you-mean suggestion for them.
