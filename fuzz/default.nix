@@ -80,7 +80,10 @@ let
     mkdir -p seeds new-${name}
     rm -f seeds/*
     ${targets.${name}.seeds 8}
-    fuzz-${name} -max_total_time=${toString seconds} ${targets.${name}.flags} \
+    # the RNG seed from $out, which the drv hash names: a new seed at each
+    # change, the same inputs again on a rebuild. libFuzzer takes 0 as random.
+    seed=$(( 16#$(echo -n "$out ${name}" | sha256sum | cut -c1-8) % 4294967295 + 1 ))
+    fuzz-${name} -seed=$seed -max_total_time=${toString seconds} ${targets.${name}.flags} \
       -artifact_prefix=art-${name}- new-${name} seeds || {
         for a in art-${name}-*; do echo "the input, in base64: $(base64 -w0 "$a")" >&2; done
         exit 1
