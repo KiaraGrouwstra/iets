@@ -39,7 +39,7 @@ store paths as padded strings, and the 776 answers back. The custom drv's
 lacked for nixos-desktop are nixpkgs subtrees that no local evaluation had
 copied yet. The run registered them, as `nix-instantiate` would have.
 
-The upload is bound by the daemon: about 0.5 ms per path for the
+The upload is bound by the daemon: 0.3 to 0.5 ms per path for the
 sequential `addToStore`. No change on the client side changes that
 (`docs/explanation/history.md`).
 
