@@ -191,7 +191,8 @@ Eight subcommands; every other one execs the real `nix`.
 `--impure`, `--pure-eval`, `--no-pure-eval` (`docs/explanation/evaluation.md`: `nix`
 evaluates purely unless told otherwise, `-f` is impure), `-I`, `--arg`/`--argstr`,
 `--option`, `--store`, `--show-trace`, `--experimental-features` and
-`--extra-experimental-features` (every feature is always on, so they hold;
+`--extra-experimental-features` (they decide whether `builtins` has
+`fetchTree`, `fetchClosure` and `outputOf`, as in Nix;
 `parse-toml-timestamps` falls back), `--accept-flake-config` (no effect,
 one warning: iets never applies a flake's `nixConfig`,
 `docs/reference/divergences.md`).
@@ -439,18 +440,27 @@ Two triggers:
    nothing for, with a value that is not Nix's default
    (`docs/reference/settings.md`, class 4), and `nix-instantiate --store`
    with another store than the local daemon.
-2. An evaluation that hits `ErrorKind::Unsupported`: the network fetchers
-   (`fetchurl`, `fetchTarball` without a `sha256`, `fetchGit`, `fetchMercurial`,
-   `fetchClosure`), `getFlake` on anything but a local path, a flake
-   reference outside the subset `src/flake/flakeref.rs` parses (`hg+…`,
-   `sourcehut:`, an IP-literal host), `outputOf`, import-from-derivation (`import`,
-   `scopedImport`, `readFile`, `readDir`, `pathExists`, `readFileType` or
-   `hashFile` on a derivation output), a second copy of a `toFile` text or
-   `.drv`, a read of a `.drv` this run made under `--no-tracing-cache`, and a flake
-   whose `flake.lock` is
-   missing or incomplete. Every other evaluation error is reported and
-   exits 1, because the real nix would fail the same way and re-running it
-   would double the cost.
+2. An evaluation that calls something iets does not support:
+   - `fetchurl`, `fetchGit`, `fetchMercurial` and `fetchClosure`;
+   - `fetchTarball` without a `sha256`;
+   - `fetchTree` with a URL string, with an input type other than `path`,
+     `github`, `gitlab`, `sourcehut`, `git`, `tarball` or `hg`, or without
+     a `narHash` for a type other than `path`, or, in pure evaluation,
+     without a `rev` for a type other than `path` and `tarball`;
+   - `getFlake` on anything but a local path, or on a reference with a
+     `rev` or a `narHash` in pure evaluation;
+   - a flake reference iets does not parse (`hg+…`, `sourcehut:`, an
+     IP-literal host; `docs/reference/divergences.md`);
+   - `getContext` on the output of a dynamic derivation;
+   - import from derivation: `import`, `scopedImport`, `readFile`,
+     `readDir`, `pathExists`, `readFileType` or `hashFile` on a derivation
+     output;
+   - a second copy of a `toFile` text or `.drv`;
+   - a read of a `.drv` this run made under `--no-tracing-cache`;
+   - a flake whose `flake.lock` is missing or incomplete.
+
+   Every other evaluation error is reported and exits 1, because the real
+   nix would fail the same way and re-running it would double the cost.
 
 The fallback prints one line on stderr and then `execve`s the real binary
 with the same `argv`:
@@ -546,8 +556,8 @@ honoured; any other store falls back.
 - Two installables that name the same derivation print one output path
   each. The real `nix build` prints one per pair, so twice as many.
 - An evaluation error inside a value `nix eval` prints becomes
-  `«error: …»`, except `ErrorKind::Unsupported`, which must escape so the
-  run can fall back to the real nix.
+  `«error: …»`, except a call iets does not support, which ends the run so
+  that it can fall back to the real nix.
 - **`nix develop` takes bash from the shell derivation's own builder.**
   `develop.cc` builds `nixpkgs#bashInteractive` from the flake's `nixpkgs`
   input (or the registry), which needs a fetcher iets does not have. The
