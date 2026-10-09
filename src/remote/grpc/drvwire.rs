@@ -185,10 +185,10 @@ impl PathInfo {
         let registration_time = read_time(r)?;
         let nar_size = read_u64(r)?;
         let ultimate = read_bool(r)?;
-        let sigs = read_strs(r)?;
-        for s in &sigs {
-            wire::check_sig(s)?;
-        }
+        let sigs = read_strs(r)?
+            .iter()
+            .map(|s| wire::signature(s))
+            .collect::<io::Result<_>>()?;
         let ca = wire::content_address(&read_str(r)?)?;
         Ok(PathInfo {
             path,
@@ -369,7 +369,7 @@ mod tests {
             registration_time: 7,
             nar_size: 4096,
             ultimate: false,
-            sigs: vec!["cache.numtide.com-1:abc".into()],
+            sigs: vec!["cache.numtide.com-1:abc=".into()],
             ca: String::new(),
         };
         // `write` prefixes the path, `decode` takes it out of band, so drop it.

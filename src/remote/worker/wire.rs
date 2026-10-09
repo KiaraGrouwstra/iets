@@ -4,7 +4,7 @@
 use std::io::{self, Read, Write};
 
 use crate::remote::plan::{DrvHashes, Object};
-use crate::store::hash::{Hash, HashAlgo, base64_decode, hash_bytes};
+use crate::store::hash::{Hash, HashAlgo, base64_decode, base64_encode, hash_bytes};
 use crate::store::nar::{dump_string, flat_hash};
 use crate::store::path::StorePath;
 use crate::store::source::{SourceKind, Src};
@@ -134,14 +134,15 @@ pub fn nar_hash(s: &str) -> io::Result<String> {
         .map_err(|e| bad(&e.to_string()))
 }
 
-/// local-keys.cc:parseColonBase64: a key name, a colon and non-empty base64.
-pub fn check_sig(s: &str) -> io::Result<()> {
+/// local-keys.cc:parseColonBase64: a key name, a colon and non-empty base64,
+/// held as Signature::to_string writes it: the bytes encoded again, so a
+/// newline or what follows `=` in the reply is gone.
+pub fn signature(s: &str) -> io::Result<String> {
     match s.split_once(':') {
-        Some((name, data))
-            if !name.is_empty() && base64_decode(data).is_ok_and(|d| !d.is_empty()) =>
-        {
-            Ok(())
-        }
+        Some((name, data)) if !name.is_empty() => match base64_decode(data) {
+            Ok(d) if !d.is_empty() => Ok(format!("{name}:{}", base64_encode(&d))),
+            _ => Err(bad("signature is corrupt")),
+        },
         _ => Err(bad("signature is corrupt")),
     }
 }
@@ -380,9 +381,12 @@ mod tests {
         let hex = "4ab29c33e1fd9f3e3e1ebf6e0da0e8f8c3a5e3a73c92c4e9d6e8c04b1a5f2b3d";
         assert_eq!(nar_hash(&format!("sha256:{hex}")).unwrap(), hex);
         assert!(nar_hash("abc").is_err());
-        assert!(check_sig("cache.nixos.org-1:dGVzdA==").is_ok());
-        assert!(check_sig("no-colon").is_err());
-        assert!(check_sig(":dGVzdA==").is_err());
+        assert_eq!(
+            signature("cache.nixos.org-1:dGVz\ndA==junk").unwrap(),
+            "cache.nixos.org-1:dGVzdA=="
+        );
+        assert!(signature("no-colon").is_err());
+        assert!(signature(":dGVzdA==").is_err());
         assert_eq!(
             content_address(&format!("text:sha256:{hex}")).unwrap(),
             "text:sha256:0g9bbwd4ph78svlw94iwlzisbhzqx2h0svmz3qz3x7zxw4rrrcja"
