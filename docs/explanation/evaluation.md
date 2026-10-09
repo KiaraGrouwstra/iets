@@ -125,7 +125,8 @@ The reason is measurement, not taste. On outpaths, `//` copied 5.12 GB, of
 which 3.94 GB was left sides, and 80 % of the results were never iterated
 at all. The union took the arena from 13,253 MB to 8,936 MB. An earlier
 version that kept recursive `(a, b)` pointers instead of inline leaves cost
-3.8 % of wall time; inline leaves cost nothing.
+3.8 % of wall time; inline leaves cost nothing. The sizes, uses and lookups
+that `//` sees are in `attrset-updates.md`.
 
 ## Strings shared by content
 
