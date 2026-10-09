@@ -900,11 +900,14 @@ note that the page exists. Ask for `reference/NAME` to get the page.
 | `builders` | `docs/reference/builders.md` |
 | `flakes` | `docs/reference/flakes.md` |
 | `settings` | `docs/reference/settings.md` |
+| `events` | `docs/reference/events.md` |
+| `profile` | `docs/reference/profile.md` |
 | `errors` | `docs/reference/errors.md` |
 | `lints` | `docs/reference/lints.md` |
 | `syntax-tree` | `docs/reference/syntax-tree.md` |
 | `builtins` | `docs/reference/builtins.md` |
 | `divergences` | `docs/reference/divergences.md` |
+| `fuzz` | `docs/reference/fuzz.md` |
 | `library` | `docs/reference/library.md` |
 
 The binary carries the reference pages only. The tutorial, the how-to

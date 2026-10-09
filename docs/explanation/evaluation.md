@@ -506,6 +506,26 @@ the ratio falls to 2.07× on minimal and 2.22× on desktop. Nix has no
 equivalent to turn off, so 2.7× is the honest product comparison and 2.1× is
 the honest evaluator comparison.
 
+### Searching
+
+`iets search` caches an index of the packages it finds.
+These numbers are wall time, median of three, on 2026-09-23. The machine was
+a 16-core EPYC shared with other work, and the build was a release build. The
+input was the pinned nixpkgs (30,000 packages), loaded as
+`{ legacyPackages.${builtins.currentSystem} = import <pin> {}; }`:
+
+| run | `^hello$` | all packages (`^`) |
+|---|---|---|
+| iets, no index yet | 6.5 s | 6.8 s |
+| iets, index cached | 0.15 s | 0.47 s |
+| `nix search`, the same installable | 21 s | 21 s |
+| `nix search`, the same tree as a flake, its cache warm | 1.8 s | 2.6 s |
+| `nix search`, the same tree as a flake, its cache cold | 37 s | — |
+
+Nix keeps its eval cache for a flake installable only. With `--expr` or
+`--file`, it evaluates every time. iets caches both the same way. The whole
+`^ --json` output, 18.8 MB, is the same byte for byte on both sides.
+
 ## What is not proven
 
 ThreadSanitizer needs a nightly compiler and has not been run. There is no

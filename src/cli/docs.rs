@@ -158,7 +158,11 @@ pub const PAGES: &[Page] = &[
         "dev-shells",
         "how print-dev-env makes a shell",
     ),
-    in_repo("explanation", "transports", "the build transports, measured"),
+    in_repo(
+        "explanation",
+        "transports",
+        "the build transports, measured",
+    ),
     in_repo("explanation", "lint-scope", "what iets lints, and why"),
     in_repo("explanation", "history", "how it got here"),
 ];
