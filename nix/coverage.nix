@@ -17,20 +17,7 @@ let
     iets = instrumented;
     coverage = true;
   } // args);
-  # the e2e checks of flake.nix, with their arguments
-  runs = [
-    (e2e "cachetest" { })
-    (e2e "classic-e2e" { })
-    (e2e "daemon-e2e" { packages = [ pkgs.jq ]; })
-    (e2e "evaljobs-flags" {
-      packages = [ pkgs.jq pkgs.nix-eval-jobs ];
-      env = "NEJ=${pkgs.nix-eval-jobs}/bin/nix-eval-jobs";
-    })
-    (e2e "build-e2e" { })
-    (e2e "flaketest" { })
-    (e2e "plumbing-e2e" { })
-    (e2e "prefetch-e2e" { })
-  ];
+  runs = lib.mapAttrsToList e2e (import ./e2e-cases.nix { inherit pkgs; });
 in
 pkgs.runCommand "iets-coverage-e2e" { nativeBuildInputs = [ llvm pkgs.gawk ]; } ''
   mkdir -p $out
