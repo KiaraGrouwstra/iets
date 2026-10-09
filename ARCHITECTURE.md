@@ -92,7 +92,12 @@ The evaluator:
   and the origin each source came from. `nar.rs` is the whole NAR
   codec. Its reader follows nix-community/go-nix PR #123: one buffered
   window per side, token groups matched as fixed byte strings, and no
-  allocation per entry.
+  allocation per entry. `hash_derivation_modulo` drops the `children` of
+  each input, as derivations.cc does, so a dependency on a dynamic
+  derivation's output is not in the modulo hash. No one can see this: the
+  producer's text-addressed output has no path, so it and every consumer
+  are `Deferred`, and two consumers that take different outputs differ in
+  the `env` that carries the placeholder.
 - `corepkgs/`: `derivation.nix` and `fetchurl.nix`, embedded from Nix
   2.34.8.
 - `print.rs`: the `nix-instantiate --eval` printer, and JSON.

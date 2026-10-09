@@ -1,18 +1,17 @@
 # Known divergences from Nix 2.34
 
-Every place where iets knowingly differs from Nix 2.34.8, and how to
-observe it.
+iets aims to give you exactly what Nix 2.34.8 gives. This page lists every
+place where it knowingly does not. Each entry says what differs, why, and
+how you can see it for yourself. The classic names add a few more, listed
+in `docs/reference/classic.md`.
 
-Each entry says what differs, why, and how to observe it. The classic
-names add a few more, listed in `docs/reference/classic.md`.
-
-`checks.conformance` runs the cases of nix-conformance, among them one
-case for each entry of the regex and TOML corpora (`lang/corpora/`: 272
-regex pattern/input pairs through both `builtins.match` and
-`builtins.split`, 46 patterns both sides must reject, 77 TOML documents
-and 46 rejected ones), against answers Nix 2.34.8 gave.
-`fuzz/conformance-known` lists the cases iets fails on purpose, each
-under its section of this page.
+You can check most entries yourself. `checks.conformance` runs the cases of
+nix-conformance against the answers Nix 2.34.8 gave. Among them is one case
+for each entry of the regex and TOML corpora (`lang/corpora/`): 272 regex
+pattern and input pairs through both `builtins.match` and `builtins.split`,
+46 patterns both must reject, 77 TOML documents and 46 rejected ones.
+`fuzz/conformance-known` lists the cases iets fails on purpose, each under
+its section of this page.
 
 ## Regular expressions (`builtins.match`, `builtins.split`)
 
@@ -25,14 +24,12 @@ accept/reject set and both error messages agree, including the
 
 ## `builtins.fromTOML`
 
-Nix uses toml11 with `toml::spec::v(1, 0, 0)`; iets uses the `toml`
-crate, which implements TOML 1.1 and has no switch for the older spec. A
-scanning pass refuses
-the 1.1-only syntax first: a newline or a trailing comma inside an inline
-table, and the `\e` and `\xHH` escapes. Omitted seconds are caught on the
-parsed value, which the crate reports as `second: None`. Only the error
-messages differ. Datetime rendering under `parse-toml-timestamps` follows
-Nix (`T` separator, 3/6/9 fractional digits).
+Only the error messages differ. Nix reads TOML 1.0 (toml11 with
+`toml::spec::v(1, 0, 0)`). iets uses a parser for TOML 1.1, and first
+refuses what only 1.1 allows: a newline or a trailing comma inside an
+inline table, the `\e` and `\xHH` escapes, and a time with no seconds.
+Under `parse-toml-timestamps`, datetimes print as Nix prints them (`T`
+separator, 3, 6 or 9 fractional digits).
 
 ## `builtins.fromJSON`
 
@@ -112,10 +109,9 @@ names them.
 
 ## `builtins.genericClosure`
 
-The key set is a sorted vector with binary search instead of a
-`std::map`, so which pair of elements triggers a `cannot compare` error
-(and the error's trace lines) can differ. The result list and its order
-match.
+The result list and its order match. When two keys cannot be compared,
+the error can name another pair, with other trace lines, because iets
+keeps the keys in its own structure, not in a `std::map`.
 
 ## `builtins.break`
 
@@ -135,10 +131,9 @@ the operators to their own operations and gives 4.
 
 A `with` does not reach them in Nix either, because the four names are in
 the base environment. Only a `let`, a `rec` set or a lambda parameter can
-shadow them, and no file of the pinned nixpkgs binds any of the four.
-Matching this would cost a scope lookup for every arithmetic and
-comparison operator at compile time, which the evaluator does not pay
-today.
+shadow them, and no file of the pinned nixpkgs binds any of the four. To
+match Nix, iets would have to look up the scope for every arithmetic and
+comparison operator when it compiles, and it does not.
 
 ## Nesting depth of a file
 
@@ -207,35 +202,41 @@ printer that stops at thunks can see it. `nix-instantiate --eval` without
 speed shortcuts, kept on purpose; `--strict`, `--json` and `nix eval`
 print the same.
 
-`==` can see them too. Nix's `eqValues` forces both sides, then takes two
-elements from one slot as equal without looking inside, and a function
-equals only its own slot; the two operands of `==` are fresh copies, so
-that shortcut never applies to them. iets keeps its faster rule, equal
-forced words are equal, at every level, and makes one exception: a
-function is equal only when the words before forcing are the same, so
-`[ (id id) ] == [ (id id) ]` and `with foo; [ bar ] == [ bar ]` are false,
-as in Nix. What stays different: `let x = { a = throw "a"; }; in x == x`
-is true where Nix throws, and a function reached through a shortcut above
-still equals itself (`[ builtins.add ] == [ builtins.add ]`, `{ inherit
-(builtins) import; } == { inherit (builtins) import; }`, `builtins.elem
-builtins.map [ builtins.map ]`). A cell the demand path forces holds its
-value over the thunk, so two thunks that give the same function and are
-both demanded in place look like one slot; a helper fiber does not write,
-so the answer is the same at every worker count. Nix's exact rules cost
-about 1% of the instructions of a NixOS evaluation, for no difference in
-nixpkgs.
+`==` can see them too. In Nix, two elements that come from one slot are
+equal without a look inside, and a function equals only the function in
+its own slot. The two operands of `==` are fresh copies, so that shortcut
+never applies to them. iets uses a faster rule at every level: two values
+that are the same after forcing are equal. It makes one exception: two
+functions are equal only when they were the same before forcing. So
+`[ (id id) ] == [ (id id) ]` and `with foo; [ bar ] == [ bar ]` are
+false, as in Nix.
+
+What stays different:
+
+- `let x = { a = throw "a"; }; in x == x` is true, where Nix throws.
+- A function reached through one of the shortcuts above still equals
+  itself: `[ builtins.add ] == [ builtins.add ]`,
+  `{ inherit (builtins) import; } == { inherit (builtins) import; }` and
+  `builtins.elem builtins.map [ builtins.map ]`.
+- Two thunks that give the same function, and that are both forced in
+  place, count as one slot.
+
+The answer is the same at every worker count. Nix's exact rules would cost
+about 1% of the instructions of a NixOS evaluation, and make no difference
+on nixpkgs.
 
 ## `«repeated»` for a list
 
-Nix keys a repeated attribute set on the set and a repeated list on the
-`Value` that holds it (`print-ambiguous.cc`), because a small list lives
-inside its `Value`. iets has no `Value` between a slot and a list, so the
-slot, which is the cell, stands for it. Two cells that name one list are
-then printed twice where Nix prints `«repeated»`: `let l = [ 1 2 ]; in {
-a = l; b = l; }` gives `{ a = [ 1 2 ]; b = [ 1 2 ]; }`, Nix `{ a = [ 1 2
-]; b = «repeated»; }`. Keying on the list object instead would invert the
-difference, because Nix prints `let x = [ x ]; in x` as `[ [ «repeated» ]
-]` and that needs two slots for one list. Sets match Nix exactly.
+Sets match Nix exactly. A list can print twice where Nix prints
+`«repeated»`: `let l = [ 1 2 ]; in { a = l; b = l; }` gives
+`{ a = [ 1 2 ]; b = [ 1 2 ]; }` in iets and `{ a = [ 1 2 ]; b = «repeated»;
+}` in Nix.
+
+Nix spots a repeated list by the `Value` that holds it
+(`print-ambiguous.cc`), because a small list lives inside its `Value`.
+iets has no such `Value`, so it uses the slot. Using the list itself would
+only turn the difference around, because Nix prints `let x = [ x ]; in x`
+as `[ [ «repeated» ] ]`, which needs two slots for one list.
 
 ## The digits of a float in `toJSON`
 
@@ -243,9 +244,9 @@ difference, because Nix prints `let x = [ x ]; in x` as `[ [ «repeated» ]
 the same double. Nix writes it with nlohmann's JSON library, whose Grisu2
 algorithm gives that shortest form for most doubles but not for all:
 `builtins.toJSON 4.200000000001e17` is `"4.2000000000009997e+17"` in Nix
-and `"4.200000000001e+17"` in iets. Both read back to the same double. The bytes differ, so a JSON file
-that holds such a float has another hash. Matching Nix would mean
-carrying a port of Grisu2.
+and `"4.200000000001e+17"` in iets. Both read back to the same double, but
+the bytes differ, so a JSON file that holds such a float has another hash.
+To match Nix, iets would need a port of Grisu2.
 
 `fuzz/divergences.toml` holds this case as `json-float-digits`.
 
@@ -279,30 +280,18 @@ feature on says false, and code that branches on it (flake-compat) takes
 the `fetchTree` branch. `builtins.fetchClosure` is unsupported either way,
 so classic mode falls back when it is called.
 
-`builtins.outputOf` is implemented. What a run cannot do is read back a
-producer it did not make itself and that is not in the store: nix writes
-each `.drv` as it evaluates, so `readDerivation` always finds one, while
-iets writes nothing. A producer this run made is kept in memory when its
-output is text addressed, which is every dynamic derivation; one that is
-neither is read from `/nix/store` and fails there if it is absent.
+`builtins.outputOf` works. The one thing a run cannot do is read back a
+producer that it did not make and that is not in the store. Nix writes
+each `.drv` as it evaluates, so it always finds one. iets writes nothing.
+It keeps a producer this run made in memory when its output is text
+addressed, which every dynamic derivation is. Any other producer is read
+from `/nix/store`, and the call fails if it is not there.
 
-That keep buys more than parity. Because iets answers from the ATerm it
-holds, `outputOf` works with nothing written at all, and
-`nix-eval-jobs --no-instantiate` over a jobset that uses it succeeds where
-the real one cannot: without the producer's `.drv` in the store it reports
-`path '…-cargo-vendor.drv.drv' is not a valid store path` for every such
-attribute. On repkgs that is 33 of 199 jobs.
-
-`hash_derivation_modulo` drops the `children` of each input, so a
-dependency on the output of a dynamic derivation is not in the modulo
-hash. That is what derivations.cc does and iets mirrors it. It is not
-observable: the producer is a key of `input_drvs` whatever its children
-are, its own modulo kind is `Deferred` because a text-addressed output has
-no path, and that makes every consumer `Deferred` too, so no output path
-is computed from the hash in the first place. Two consumers that differ
-only in which dynamic output they take also differ in the `env` that
-carries the placeholder, which the modulo ATerm includes. Both evaluators
-give the same two drvPaths and the same two placeholders for that pair.
+Because iets answers from the derivation it holds in memory, `outputOf`
+works even when nothing is written. `nix-eval-jobs --no-instantiate` over
+a jobset that uses it succeeds in iets. Nix, without the producer's `.drv`
+in the store, reports `path '…-cargo-vendor.drv.drv' is not a valid store
+path` for each such attribute: 33 of 199 jobs on repkgs.
 
 `builtins.getContext` of a string whose context is a dynamic derivation
 output is an error. Nix resolves the derived path first, which means
@@ -337,8 +326,8 @@ Nix fails:
   a `path` whose URL starts with `///` (Nix aborts on it);
 - a string that is not UTF-8 or decodes to a NUL byte (read lossily).
 
-Where iets still errors, the wording is its own. These are
-`ErrorKind::Unsupported`, so classic mode falls back:
+Where iets still errors, the wording is its own. Classic mode falls back
+to Nix for each of these:
 
 - `sourcehut:`, `hg+…` and any other scheme or type;
 - a URL authority with a character that is not unreserved (an IP literal
