@@ -36,10 +36,12 @@ let
     };
     nar-gen = { flags = "-max_len=4096"; seeds = _: ""; };
     nar-tree = { flags = "-max_len=4096"; seeds = _: ""; };
+    wire = { flags = "-max_len=4096"; seeds = _: ""; };
   };
   env = ''
     export IETS_PARSE_ORACLE=${oracles}/bin/parse-oracle
     export IETS_NAR_ORACLE=${oracles}/bin/nar-oracle
+    export IETS_WIRE_ORACLE=${oracles}/bin/wire-oracle
   '';
   # the replay tool, built plain: it is fast and needs no libFuzzer
   fuzz-diff = pkgs.rustPlatform.buildRustPackage (common // {
@@ -117,6 +119,11 @@ in
         exec ${fuzz-diff}/bin/conformance-adapter "$@"
       ''}";
       flags = [ "--tree" "--known" "${./conformance-known}" ];
+    };
+    # half a minute of iets's daemon client against Nix's, on scripted daemons
+    fuzz-wire = check {
+      name = "wire";
+      script = run "wire" 30;
     };
     # twenty seconds of each NAR target
     fuzz-nar = check {

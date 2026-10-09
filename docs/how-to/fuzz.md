@@ -10,6 +10,7 @@ page shows how to run it and how to read what it reports.
 | `nar-read` | a NAR | accept or refuse, bytes consumed, the tree written out again |
 | `nar-gen` | bytes that choose a NAR token by token | as `nar-read` |
 | `nar-tree` | bytes that choose a file tree on disk | the NAR of the tree, then as `nar-read` |
+| `wire` | bytes that choose a daemon's side of a conversation | the answer of iets's daemon client and of Nix's to one operation |
 
 Two oracle processes stay running while a target runs, so a comparison
 costs a pipe round trip and not a process start.
@@ -85,11 +86,42 @@ a name may hold, and chains across the depth limit. Both sides dump it.
 | `iets-panic` | iets panicked |
 | `nix-crash` | the oracle process died on the input |
 
+## The wire target
+
+`wire` tests iets's client of the Nix daemon protocol. The input chooses
+a script: the daemon's side of the handshake at protocol 1.35 to 1.40,
+stderr frames (log lines, activities, results, errors) after the
+handshake, after `SetOptions` and after the operation, then the reply of
+one operation: `connect`, `path-info`, `valid-paths`, `missing`,
+`output-map` or `substitutable`. Store paths, hashes, signatures and
+content addresses in the reply are wrong now and then, and the script
+can stop at any byte.
+
+A thread serves the script on a Unix socket. iets's `Connection` and
+Nix 2.34.8's `RemoteStore` (`wire-oracle`) each connect and run the
+operation, and their answers must be the same line (SPEC.md of
+nix-conformance). `IETS_WIRE_SCRIPT=FILE` writes the script of the last
+input, to serve it to a client by hand, for example with
+`socat UNIX-LISTEN:SOCK,fork SYSTEM:'cat FILE'`.
+
+The script never holds two replies that crash Nix's own client
+(nix-bugs/daemon-client/ of nix-conformance), and never a protocol below
+1.35, which iets refuses on purpose.
+
+| Kind | Meaning |
+|:---|:---|
+| `nix-only` | Nix's client accepts the reply, iets's refuses it |
+| `iets-only` | iets's client accepts the reply, Nix's refuses it |
+| `answer` | both accept it, with different answers |
+| `iets-panic` | iets panicked |
+| `nix-crash` | the oracle process died on the reply |
+
 ## Run the checks
 
 ```sh
 nix build .#checks.x86_64-linux.fuzz-parse -L
 nix build .#checks.x86_64-linux.fuzz-nar -L
+nix build .#checks.x86_64-linux.fuzz-wire -L
 nix build .#checks.x86_64-linux.conformance -L
 ```
 
@@ -97,7 +129,8 @@ nix build .#checks.x86_64-linux.conformance -L
 parsers, then runs libFuzzer for 60 seconds from an eighth of those files
 and the parse cases and corpus of nix-conformance. `fuzz-nar` runs each
 NAR target for 20
-seconds. A check fails on a difference that `fuzz/divergences.toml` does
+seconds, and `fuzz-wire` runs `wire` for 30. A check fails on a
+difference that `fuzz/divergences.toml` does
 not list, and prints the input in base64. `conformance` runs every case
 of nix-conformance through `conformance-adapter`, iets behind the suite's
 adapter protocol; `fuzz/conformance-known` lists the cases iets fails on

@@ -46,7 +46,7 @@ impl Parse {
     pub fn iets(&mut self, src: &[u8]) -> Result<Side, String> {
         let interner = &mut self.interner;
         no_panic(|| match syntax::parse(src, FileId(0), interner) {
-            Ok(ast) => Side::Parsed(sx::normalise(canon::tree(&ast, src, interner))),
+            Ok(ast) => Side::Parsed(sx::normalise(canon::tree(&ast, interner))),
             Err(e) => {
                 let (line, col) = syntax::line_col(src, e.span.start);
                 Side::Error {

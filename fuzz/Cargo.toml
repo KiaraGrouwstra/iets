@@ -17,6 +17,13 @@ sha2 = "0.10"
 libc = "0.2"
 
 [[bin]]
+name = "wire"
+path = "fuzz_targets/wire.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "nar-read"
 path = "fuzz_targets/nar_read.rs"
 test = false
