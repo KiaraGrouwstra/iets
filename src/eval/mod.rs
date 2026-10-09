@@ -32,6 +32,8 @@ use crate::lint::{self, Diag, Lints, purity};
 use crate::parallel::shared::{ArenaUse, Counts, Files, SharedMap, SymWords, Totals};
 use crate::profile::{self, Stack};
 use crate::runtime::arena::{self, STAT_NAMES, Stat};
+#[cfg(feature = "stats2")]
+use crate::runtime::census;
 use crate::runtime::{
     Arena, AttrsObj, Cell, Ctx, EnvObj, Kind, LambdaObj, ListObj, MAX_LEAVES, StringObj, ThunkObj,
     UNION_MIN, Value, ValueType, Word, ctx_to_arena, leaf_count,
@@ -79,7 +81,7 @@ pub struct FileInfo {
 impl FileInfo {
     pub(crate) fn new(path: Vec<u8>, src: &[u8], base: u32) -> FileInfo {
         let line_starts = if src.contains(&b'\r') {
-            crate::syntax::line_starts(src)
+            syntax::line_starts(src)
         } else {
             newline_starts(src)
         };
@@ -1831,7 +1833,7 @@ impl Evaluator {
                     self.force_attrs(a, *pos, "in the left operand of the update (//) operator")?;
                 #[cfg(feature = "stats2")]
                 let before = (
-                    crate::runtime::census::upd_path(a, b),
+                    census::upd_path(a, b),
                     a.flags,
                     b.flags,
                     self.arena.bytes_allocated,

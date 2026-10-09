@@ -624,7 +624,14 @@ def run-tests [iets: string, work: string]: nothing -> int {
   mkdir $"($wc)/inputs"
   cp $"($work)/waitsrc/inputs/version" $"($wc)/inputs/"
   let lockf = $"($wc)/inputs/.($entry5 | path basename).fetching.tmp"
-  let script = $"flock '($lockf)' sh -c 'sleep 1; cp -r ($work)/waitsrc/inputs/packs ($wc)/inputs/; cp ($entry5) ($wc)/inputs/' & sleep 0.3; '($iets)' eval --raw --no-tracing-cache '($wf)#v'; wait"
+  # a handshake, not a sleep: under load, iets started after the sibling had
+  # stored the entry and never waited
+  let script = r#'
+    flock '@LOCK@' sh -c 'touch @WC@/held; for _ in $(seq 600); do grep -qs "waiting for another" @WC@/w.err && break; sleep 0.05; done; cp -r @WORK@/waitsrc/inputs/packs @WC@/inputs/; cp @ENTRY@ @WC@/inputs/' &
+    until [ -e @WC@/held ]; do sleep 0.05; done
+    '@IETS@' eval --raw --no-tracing-cache '@WF@#v' 2> @WC@/w.err; s=$?
+    cat @WC@/w.err >&2; wait; exit $s
+  '# | str replace -a "@LOCK@" $lockf | str replace -a "@WC@" $wc | str replace -a "@WORK@" $work | str replace -a "@ENTRY@" $entry5 | str replace -a "@IETS@" $iets | str replace -a "@WF@" $wf
   let w = (with-env ($no_daemon | merge {IETS_CACHE_DIR: $wc, IETS_OFFLINE: "1"}) { ^bash -c $script | complete })
   let w_ok = ($first.exit_code == 0 and $w.exit_code == 0 and $w.stdout == $"hello5 ($work)\n" and ($w.stderr | str contains "waiting for another process to fetch input 'tb'"))
   $res ++= [(verdict $w_ok "tarball: a second process waits for the first one's download and reads its entry" $"fetch lock \(exit ($first.exit_code)/($w.exit_code)\): ($w.stdout) ($w.stderr | lines | last 2 | str join ' | ')")]

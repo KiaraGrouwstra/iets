@@ -220,9 +220,10 @@ impl Arena {
         };
         if self.mapped > 0 {
             let thp = self.thp;
-            self.next = thread::Builder::new()
+            let next = thread::Builder::new()
                 .spawn(move || map_chunk(CHUNK, thp))
                 .ok();
+            self.next = next;
         }
         self.mapped += chunk;
         self.ptr = base;

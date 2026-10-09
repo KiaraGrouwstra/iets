@@ -3,7 +3,9 @@
 //! (Nix 2.34.8), applied to the raw tree iets's parser keeps.
 
 use crate::sx::{Sx, atom, float, node};
-use iets::syntax::ast::*;
+use iets::syntax::ast::{
+    Ast, AttrElem, BinOp, BindKind, Expr, ExprId, Param, PathExpr, PathKind, Range, StrPart, UnOp,
+};
 use iets::syntax::symbol::{Interner, Sym};
 
 /// Relative paths resolve against this, as the oracle's base path

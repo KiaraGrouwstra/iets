@@ -2,7 +2,8 @@
 //! costs a pipe round trip and not a process start. Each target defines its
 //! frames (`parse.rs`, `nar.rs`).
 
-use std::io::{BufReader, Write};
+use std::env;
+use std::io::{self, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 pub type Out = BufReader<ChildStdout>;
@@ -16,7 +17,7 @@ impl Oracle {
     /// The program `$var` names, else `default` on `PATH`.
     pub fn from_env(var: &str, default: &str) -> Oracle {
         Oracle {
-            program: std::env::var(var).unwrap_or_else(|_| default.into()),
+            program: env::var(var).unwrap_or_else(|_| default.into()),
             child: None,
         }
     }
@@ -34,7 +35,7 @@ impl Oracle {
     pub fn ask<T>(
         &mut self,
         frame: &[u8],
-        read: impl FnOnce(&mut Out) -> std::io::Result<T>,
+        read: impl FnOnce(&mut Out) -> io::Result<T>,
     ) -> Result<T, String> {
         let r = self.start().and_then(|()| {
             let (_, stdin, stdout) = self.child.as_mut().unwrap();
@@ -54,7 +55,7 @@ impl Oracle {
         })
     }
 
-    fn start(&mut self) -> std::io::Result<()> {
+    fn start(&mut self) -> io::Result<()> {
         if self.child.is_some() {
             return Ok(());
         }
@@ -64,21 +65,21 @@ impl Oracle {
             // warnings: the reply carries what counts
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|e| std::io::Error::other(format!("cannot start {}: {e}", self.program)))?;
+            .map_err(|e| io::Error::other(format!("cannot start {}: {e}", self.program)))?;
         let (i, o) = (c.stdin.take().unwrap(), c.stdout.take().unwrap());
         self.child = Some((c, i, BufReader::new(o)));
         Ok(())
     }
 }
 
-pub fn u32_le(out: &mut Out) -> std::io::Result<u32> {
+pub fn u32_le(out: &mut Out) -> io::Result<u32> {
     let mut b = [0u8; 4];
-    std::io::Read::read_exact(out, &mut b)?;
+    Read::read_exact(out, &mut b)?;
     Ok(u32::from_le_bytes(b))
 }
 
-pub fn bytes(out: &mut Out, n: usize) -> std::io::Result<Vec<u8>> {
+pub fn bytes(out: &mut Out, n: usize) -> io::Result<Vec<u8>> {
     let mut b = vec![0u8; n];
-    std::io::Read::read_exact(out, &mut b)?;
+    Read::read_exact(out, &mut b)?;
     Ok(b)
 }

@@ -16,7 +16,7 @@ use super::lexer::{IndPart, Lexer, PathPart, StrEnd, Tok, Token};
 use super::symbol::{FxHashMap, Interner, Sym};
 use super::{ParseError, line_col};
 
-use std::str;
+use std::{ops, str};
 
 use crate::lint::allow;
 
@@ -1104,7 +1104,7 @@ impl<'a> Parser<'a> {
 
     /// The text of `e` when Nix parses it to one `ExprString`: a plain
     /// string, or a `''` string that `stripIndentation` leaves as one piece.
-    fn nix_string(&self, e: ExprId) -> Option<std::ops::Range<usize>> {
+    fn nix_string(&self, e: ExprId) -> Option<ops::Range<usize>> {
         let Expr::Str(parts) = *self.ast.expr(e) else {
             return None;
         };

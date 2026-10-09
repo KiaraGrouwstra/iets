@@ -14,16 +14,19 @@
 //! `SOCKET OP ARG...`, reply u32 length and the answer.
 
 use crate::oracle::{self, Oracle};
-use crate::{Divergence, Target, Verdict, known, no_panic};
+use crate::{Divergence, Target, Verdict, classify, known, no_panic};
 use iets::remote::worker::{Connection, Options, Transport};
 use iets::store::hash::{HashAlgo, hash_bytes};
 use iets::store::nar;
 use libfuzzer_sys::arbitrary::Unstructured;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
+use std::net::Shutdown;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+use std::{env, fs, iter, thread};
 
 pub const KINDS: &[&str] = &[
     // Nix's client accepts the reply, iets's refuses it
@@ -70,8 +73,8 @@ struct Op {
 
 impl Wire {
     pub fn new(known: Vec<known::Entry>) -> Wire {
-        let dir = std::env::temp_dir().join(format!("iets-fuzz-wire-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("a scratch directory for the wire target");
+        let dir = env::temp_dir().join(format!("iets-fuzz-wire-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("a scratch directory for the wire target");
         Wire {
             oracle: Oracle::from_env("IETS_WIRE_ORACLE", "wire-oracle"),
             known,
@@ -83,8 +86,8 @@ impl Wire {
     fn compare(&mut self, input: &[u8]) -> Option<Divergence> {
         let (op, script, split) = generate(&mut Unstructured::new(input));
         // the daemon's bytes, to replay a case against a client by hand
-        if let Ok(f) = std::env::var("IETS_WIRE_SCRIPT") {
-            let _ = std::fs::write(f, &script);
+        if let Ok(f) = env::var("IETS_WIRE_SCRIPT") {
+            let _ = fs::write(f, &script);
         }
         self.seq += 1;
         let sock = self.dir.join(format!("{}.sock", self.seq));
@@ -102,13 +105,13 @@ impl Wire {
             Ok(String::from_utf8_lossy(&oracle::bytes(out, n)?).into_owned())
         });
         stop.store(true, Ordering::SeqCst);
-        let _ = std::fs::remove_file(&sock);
+        let _ = fs::remove_file(&sock);
         let d = |kind, nix: String, iets: String| {
             Some(Divergence {
                 kind,
                 nix,
                 iets,
-                at: std::iter::once(op.name.to_string())
+                at: iter::once(op.name.to_string())
                     .chain(op.args.iter().cloned())
                     .collect::<Vec<_>>()
                     .join(" "),
@@ -136,13 +139,13 @@ impl Wire {
 impl Target for Wire {
     fn check(&mut self, input: &[u8]) -> Verdict {
         let d = self.compare(input);
-        crate::classify(&self.known, d, input)
+        classify(&self.known, d, input)
     }
 }
 
 impl Drop for Wire {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
+        let _ = fs::remove_dir_all(&self.dir);
     }
 }
 
@@ -166,12 +169,12 @@ fn serve(sock: &Path, script: Vec<u8>, split: usize) -> Arc<AtomicBool> {
     let stop = Arc::new(AtomicBool::new(false));
     let done = stop.clone();
     let script = Arc::new(script);
-    std::thread::spawn(move || {
+    thread::spawn(move || {
         while !done.load(Ordering::SeqCst) {
             match listener.accept() {
                 Ok((mut s, _)) => {
                     let script = script.clone();
-                    std::thread::spawn(move || {
+                    thread::spawn(move || {
                         let _ = s.set_nonblocking(false);
                         let split = split.min(script.len());
                         let _ = s.write_all(&script[..split]);
@@ -186,11 +189,11 @@ fn serve(sock: &Path, script: Vec<u8>, split: usize) -> Arc<AtomicBool> {
                             }
                             let _ = s.write_all(&script[split..]);
                         }
-                        let _ = s.shutdown(std::net::Shutdown::Write);
+                        let _ = s.shutdown(Shutdown::Write);
                         while matches!(s.read(&mut sink), Ok(n) if n > 0) {}
                     });
                 }
-                Err(_) => std::thread::sleep(std::time::Duration::from_micros(200)),
+                Err(_) => thread::sleep(Duration::from_micros(200)),
             }
         }
     });
@@ -297,7 +300,7 @@ fn run_iets(sock: &Path, op: &Op) -> Result<String, String> {
 struct Tee<'a>(&'a mut dyn Read, Vec<u8>);
 
 impl Read for Tee<'_> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let n = self.0.read(buf)?;
         self.1.extend_from_slice(&buf[..n]);
         Ok(n)

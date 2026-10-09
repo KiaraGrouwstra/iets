@@ -6,14 +6,15 @@ use iets::store::nar;
 use iets::syntax::{self, ast::FileId, symbol::Interner};
 use iets_fuzz::{canon, sx};
 use sha2::{Digest, Sha256};
-use std::path::Path;
+use std::path::{self, Path};
 use std::process::{Command, exit};
+use std::{env, fs};
 
 /// "This implementation does not do that": the runner skips the case.
 const UNSUPPORTED: i32 = 3;
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args: Vec<String> = env::args().skip(1).collect();
     let (op, file, flags) = match args.as_slice() {
         [op, file, flags @ ..] => (op.as_str(), file.as_str(), flags),
         _ => {
@@ -42,7 +43,7 @@ fn main() {
 }
 
 fn parse(file: &str) -> i32 {
-    let Ok(src) = std::fs::read(file) else {
+    let Ok(src) = fs::read(file) else {
         return 2;
     };
     let mut interner = Interner::new();
@@ -60,14 +61,14 @@ fn parse(file: &str) -> i32 {
 }
 
 fn read_nar(file: &str) -> i32 {
-    let Ok(input) = std::fs::read(file) else {
+    let Ok(input) = fs::read(file) else {
         return 2;
     };
-    let dir = std::env::temp_dir().join(format!("iets-conformance-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = env::temp_dir().join(format!("iets-conformance-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
     let out = dir.join("t");
     let answer = (|| {
-        std::fs::create_dir_all(&dir).ok()?;
+        fs::create_dir_all(&dir).ok()?;
         let consumed = nar::parse_length(&mut &input[..]).ok()?;
         nar::restore_path(&mut &input[..], &out).ok()?;
         let mut dump = Vec::new();
@@ -78,19 +79,19 @@ fn read_nar(file: &str) -> i32 {
             .collect();
         Some(format!("ok {consumed} {hash}"))
     })();
-    let _ = std::fs::remove_dir_all(&dir);
+    let _ = fs::remove_dir_all(&dir);
     println!("{}", answer.unwrap_or_else(|| "error".into()));
     0
 }
 
 fn absolute(file: &str) -> String {
-    std::path::absolute(Path::new(file))
+    path::absolute(Path::new(file))
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| file.to_string())
 }
 
 fn iets(args: &[&str]) -> i32 {
-    let bin = std::env::var("IETS").unwrap_or_else(|_| "iets".into());
+    let bin = env::var("IETS").unwrap_or_else(|_| "iets".into());
     match Command::new(&bin).args(args).status() {
         Ok(s) => s.code().unwrap_or(1),
         Err(e) => {
