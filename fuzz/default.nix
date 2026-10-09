@@ -96,7 +96,7 @@ let
   # a long run of one target on every core: the grown corpus, minimised, and
   # every input that diverged, replayed and classified in triage.jsonl
   campaign = { target ? "parse", seconds ? 3600, corpus ? null }: pkgs.runCommand "iets-fuzz-${target}-campaign" {
-    nativeBuildInputs = [ fuzz-diff fuzzers oracles ];
+    nativeBuildInputs = [ fuzz-diff fuzzers oracles pkgs.jq ];
   } ''
     ${env}
     mkdir seeds grown $out $out/corpus $out/artifacts
@@ -105,7 +105,20 @@ let
     fuzz-${target} -fork=$NIX_BUILD_CORES -ignore_crashes=1 -max_total_time=${toString seconds} \
       ${targets.${target}.flags} -artifact_prefix=$out/artifacts/ grown 2> $out/fuzz.log || true
     fuzz-${target} -merge=1 ${targets.${target}.flags} $out/corpus grown 2> $out/merge.log
-    fuzz-diff --json ${target} $out/artifacts > $out/triage.jsonl || true
+    # one process per artifact: iets's arena is never freed, and an artifact
+    # can be one that ran out of memory; each writes its own file, as a
+    # divergence line can be longer than a pipe writes at once
+    mkdir triage
+    find $out/artifacts -type f -printf '%f\n' | xargs -r -P $NIX_BUILD_CORES -I{} \
+      sh -c 'fuzz-diff --json ${target} "$1/$2" > "triage/$2" 2> /dev/null || true' _ $out/artifacts {}
+    find triage -type f | sort | xargs -r cat > triage.all
+    { grep -v '^{"summary":' triage.all || true; } > $out/triage.jsonl
+    { grep '^{"summary":' triage.all || true; } | jq -s -c -S '{summary: {
+      inputs: (map(.summary.inputs) | add // 0),
+      same: (map(.summary.same) | add // 0),
+      bugs: (map(.summary.bugs) | add // 0),
+      expected: (reduce (.[].summary.expected | to_entries[]) as $e ({}; .[$e.key] += $e.value)),
+      seconds: (map(.summary.seconds) | add // 0)}}' >> $out/triage.jsonl
   '';
 in
 {
