@@ -22,6 +22,11 @@ The same binary also answers to the classic names `nix`, `nix-build`,
 command, and runs the real `nix` for what it does not implement (see
 [reference/classic.md](../reference/classic.md)).
 
+The examples use `$nixpkgs` from step 3 of the
+[tutorial](../tutorial/getting-started.md). By default, iets evaluates
+purely, with no `<nixpkgs>` search path and no `builtins.currentSystem`. An
+expression that reads either needs `--impure`.
+
 ## `nix search`
 
 ```sh
@@ -60,13 +65,31 @@ Without an installable, `iets search` searches `<nixpkgs>` from `-I` or
 ```sh
 iets search ./pkgs.nix '^'
 iets search path:/some/flake ripgrep
-iets search --expr 'import <nixpkgs> {}' git gui
+iets search --impure --expr 'import <nixpkgs> {}' git gui
 ```
 
 `iets search` has no flake registry, so `nix search nixpkgs ^` under the
 classic name falls back to the real `nix`.
 
 ## `nix-diff`
+
+The examples from here on use this `demo.nix`:
+
+```nix
+let
+  mk = word: greeting: derivation {
+    name = "demo";
+    system = "x86_64-linux";
+    builder = "/bin/sh";
+    args = [ "-c" "echo ${word} > $out" ];
+    GREETING = greeting;
+  };
+in
+{
+  a = mk "one" "hello";
+  b = mk "two" "goodbye";
+}
+```
 
 ```sh
 iets diff -A a -A b demo.nix
@@ -140,7 +163,8 @@ changed hello 2.12 -> 2.12.1
 ```
 
 Both outputs must be in the store, because iets asks the daemon about
-them. If one is missing, the error tells you which `iets build` makes it.
+them. If one is missing, iets stops with an error that names the missing
+path.
 `--builder URL` picks the store to read.
 
 ## `nurl`, `nix-prefetch`, `nix-prefetch-url`
@@ -177,8 +201,8 @@ For anything a `fetch*` function makes, give an expression, a file with
 `-A`, or a flake fragment in place of a URL:
 
 ```sh
-iets prefetch -E '(import <nixpkgs> {}).hello.src'
-iets prefetch -E 'with import <nixpkgs> {}; fetchzip {
+iets prefetch --impure -E '(import <nixpkgs> {}).hello.src'
+iets prefetch --impure -E 'with import <nixpkgs> {}; fetchzip {
     url = "https://github.com/numtide/treefmt/archive/v2.0.0.tar.gz";
     hash = ""; }'
 iets prefetch default.nix -A mypkg.cargoDeps
@@ -253,7 +277,8 @@ For Hydra and nixpkgs CI, the flags you already pass work:
 
 Three things to know before you swap it in:
 
-- `--workers N` means worker *processes* here, and the default is 4, not 1.
+- `--workers N` means worker *processes* here. The default is the CPU
+  count, at most 4, not 1.
   With `--max-memory-size 0` it means fibers of one process instead.
 - Line order is completion order, as it is for nix-eval-jobs. Sort by
   `attrPath` when you compare two runs.
