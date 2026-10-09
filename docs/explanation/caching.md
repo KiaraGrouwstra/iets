@@ -33,11 +33,12 @@ temporary name, then renames it into place. A rename is atomic, so one
 rename publishes the whole entry. A reader sees either the whole old entry
 or the whole new one, never a torn file and never two generations mixed.
 
-**Readers never lock.** Thanks to the rename, the read path, which is the
-hot one, needs no lock. A reader opens the entry once and reads every part
-it needs through that one descriptor. So the bytes it uses are the
-generation it validated, whatever a sibling publishes in the meantime. The old file stays alive for as long
-as that descriptor does, even after a publish or a sweep unlinked its name.
+**Readers never lock.** Thanks to the rename, the read path, which is
+the hot one, needs no lock. A reader opens the entry once and reads
+every part it needs through that one descriptor. So the bytes it uses
+are the generation it validated, whatever a sibling publishes in the
+meantime. The old file stays alive for as long as that descriptor does,
+even after a publish or a sweep unlinked its name.
 
 **A writer holds the store's `flock` for exactly one entry, and gives up
 after 50 ms.** A skipped write is a miss on a later run. It is never a
@@ -465,20 +466,20 @@ changed in place, under an index that still fits, is read as it stands.
 Hashing it again on every open would read every input of every evaluation,
 and the index exists to avoid exactly that.
 
-An entry is one file, `inputs/<store path base name>`: the NAR hash and size
-the fetch verified, and an index of every member's name, mode, symlink
-target, size and the id of its bytes, the blake3 of them. The bytes
+An entry is one file, `inputs/<store path base name>`: the NAR hash
+and size the fetch verified, and an index of every member's name, mode,
+symlink target, size and the id of its bytes, the blake3 of them. The bytes
 themselves are objects in `inputs/packs/`, LZ4-compressed when that shrinks
-them, and an object two inputs share is stored once. The design comes from nix-tarmac: a store of tarball contents keyed by
-their hash. So a second revision of nixpkgs costs only the files that
-changed. For revisions 200 commits apart, that is 4 to 5 MiB, index
-included, where a spool cost 247 MiB each. The first revision costs 96 MiB.
-tarmac indexes its one pack in LMDB. Here, every pack is written once under
-a temporary name, indexes itself in a footer, and is renamed into place,
-which is the rule the rest of this page follows. No tree is ever unpacked.
-A full nixpkgs revision costs 19 MB of index over the evaluator's own
-75 MB, where unpacking a tree cost 307 MB: 13.5 s and 382 MB peak before,
-7.7 s and 94 MB after.
+them, and an object two inputs share is stored once. The design comes from
+nix-tarmac: a store of tarball contents keyed by their hash. So a second
+revision of nixpkgs costs only the files that changed. For revisions 200
+commits apart, that is 4 to 5 MiB, index included, where a spool cost 247
+MiB each. The first revision costs 96 MiB.  tarmac indexes its one pack
+in LMDB. Here, every pack is written once under a temporary name, indexes
+itself in a footer, and is renamed into place, which is the rule the rest
+of this page follows. No tree is ever unpacked.  A full nixpkgs revision
+costs 19 MB of index over the evaluator's own 75 MB, where unpacking a
+tree cost 307 MB: 13.5 s and 382 MB peak before, 7.7 s and 94 MB after.
 
 The entries name the objects; the sweep removes entries. After a sweep, a
 collection under the store's lock marks every object some entry names,
@@ -488,11 +489,12 @@ keeps reading it after the unlink. A fetch that relied on a pack the
 collection removed sees it under the same lock before it publishes, and
 writes those objects itself, from the download it still holds.
 
-One place in the evaluator maps a store path to its bytes, and it serves
-`import`, `readFile`, `readDir`, `pathExists`, `readFileType`, `hashFile`,
-`builtins.path`, `filterSource` and a path interpolation alike, from a real
-file system, from an input-store entry's objects, or from memory. `/nix/store` is checked first and wins when it has
-the tree; an input that appears there later, because a build registered it,
+One place in the evaluator maps a store path to its bytes, and it
+serves `import`, `readFile`, `readDir`, `pathExists`, `readFileType`,
+`hashFile`, `builtins.path`, `filterSource` and a path interpolation
+alike, from a real file system, from an input-store entry's objects,
+or from memory. `/nix/store` is checked first and wins when it has the
+tree; an input that appears there later, because a build registered it,
 changes nothing, since the two hold the same bytes by construction.
 
 This also gives the read set a cheap shape. An input-store entry is one
