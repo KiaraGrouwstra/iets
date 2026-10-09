@@ -125,8 +125,26 @@ The reason is measurement, not taste. On outpaths, `//` copied 5.12 GB, of
 which 3.94 GB was left sides, and 80 % of the results were never iterated
 at all. The union took the arena from 13,253 MB to 8,936 MB. An earlier
 version that kept recursive `(a, b)` pointers instead of inline leaves cost
-3.8 % of wall time; inline leaves cost nothing. The sizes, uses and lookups
-that `//` sees are in `attrset-updates.md`.
+3.8 % of wall time; inline leaves cost nothing.
+
+A census of every `//` in three runs at one worker (nixos-desktop, the
+`drvPath` of `hello`, and outpaths chunk 0 of 8) still supports the union.
+The right side is small: 74 % of outpaths updates have four entries or
+fewer, and 78 % add keys without overwriting any. A quarter of left sides
+have 33 entries or more, which a copy would copy each time. `//` itself is
+below 1 % of cycles. The cost has moved to lookups: in outpaths, 47 % of
+lookups go to a union, half of those miss, and a miss probes every leaf.
+
+That rules out three alternatives. A persistent tree makes each lookup a
+chain of pointer reads, and lookups are 10 to 15 times more frequent than
+updates. In-place update of a left side with one owner helps little,
+because only 13 % of results are used once as a left operand. More than
+eight leaves makes the misses dearer. The change worth a prototype is a
+bit mask per leaf of the symbols it holds, tested before each leaf search;
+its ceiling is about 2.7 % of the outpaths cycles. Folding an
+`a // b // c` chain from one queue, as Nix does, removes the inner results,
+but its ceiling is a part of the 0.8 % that `//` costs. The census is a
+`--features stats2` build run with `IETS_STATS=2`, at commit 22d599d4.
 
 ## Strings shared by content
 
