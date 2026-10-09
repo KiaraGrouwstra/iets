@@ -88,10 +88,12 @@
         in {
           # the tests that need a live /nix/store are #[ignore]d; run them
           # with `cargo test -- --ignored` in the dev shell.
-          test = pkg.overrideAttrs { pname = "iets-test"; doCheck = true; };
+          # the dev profile, as `cargo test` in the dev shell: the release
+          # profile is fat LTO, minutes for no extra coverage
+          test = lint "test" pkgs.cargo "test";
           clippy = lint "clippy" pkgs.clippy "clippy --all-targets -- -D warnings";
           # the library facade: every example links the library only (docs/reference/library.md)
-          examples = lint "examples" pkgs.cargo "build --examples --release";
+          examples = lint "examples" pkgs.cargo "build --examples";
           fmt = lint "fmt" pkgs.rustfmt "fmt --check";
           # nix/ast-grep, through sgconfig.yml
           ast-grep = pkgs.runCommand "iets-ast-grep" { nativeBuildInputs = [ pkgs.ast-grep ]; } "cd ${self} && ast-grep scan && touch $out";
