@@ -23,6 +23,7 @@ use tonic::metadata::{MetadataMap, MetadataValue};
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity};
 
 use crate::error::{Error, Result};
+use crate::fetch::roots::roots;
 
 use proto::nix_remote_client::NixRemoteClient;
 use proto::scheduler_client::SchedulerClient;
@@ -182,8 +183,8 @@ impl GrpcConfig {
             .initial_connection_window_size(32 << 20);
         if !self.insecure {
             // store.cc:sslOptions. The balancer's own certificate is public, so
-            // the platform roots verify it unless `ca-cert` names another CA.
-            let mut tls = ClientTlsConfig::new().with_native_roots();
+            // the shared roots verify it; `ca-cert` adds another CA.
+            let mut tls = ClientTlsConfig::new().trust_anchors(roots()?.iter().cloned());
             if let Some(ca) = &self.ca_cert {
                 tls = tls.ca_certificate(Certificate::from_pem(read(ca)?));
             }

@@ -15,7 +15,7 @@ md-5 = "0.10"
 libc = "0.2"
 toml = "1"
 serde_json = "1"
-tonic = { version = "0.14", default-features = false, features = ["codegen", "channel", "transport", "tls-ring", "tls-native-roots"] }
+tonic = { version = "0.14", default-features = false, features = ["codegen", "channel", "transport", "tls-ring"] }
 tonic-prost = "0.14"
 prost = "0.14"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
@@ -30,10 +30,14 @@ http-body-util = "0.1"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"
+# the CA roots when the machine has none (src/fetch/roots.rs)
+webpki-roots = "1"
 tar = { version = "0.4", default-features = false }
 flate2 = "1"
 lzma-rust2 = { version = "0.16", default-features = false, features = ["std", "xz"] }
 bzip2 = "0.6"
+mimalloc = "0.1"
+libmimalloc-sys = { version = "0.1", features = ["extended"] }
 
 [features]
 # Memory census behind IETS_STATS=2 (docs/reference/settings.md); off the hot path when unset.

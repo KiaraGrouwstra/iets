@@ -58,7 +58,7 @@ arena, and was always the whole run.
 | `IETS_HANDOFF` | | usize | 8 | Queued tasks per awake worker that justify waking a sleeper. |
 | `IETS_FANOUT` | | u32 bitmask | 7 | Strict-demand fan-out: 1 deep walks, 2 coercions, 4 list builtins. |
 | `IETS_PAR_STATS` | | level | 0 | 1 prints the scheduler summary, 2 adds the sample timeline and the file table. |
-| `IETS_STATS` | | level | 0 | 1 prints allocation counts and bytes per object kind, RSS and glibc's `malloc_stats`; 2 adds the memory census — histograms, duplicates, objects never read — on a binary built with `--features stats2`. The hooks are compiled out otherwise. Each worker allocates from its own arena, so `arena_bytes`, `arena_mapped` and the per-kind table are the sum over every arena, folded on each fiber switch. Setting this is what turns the fold on, at ~0.1% of instructions. `store_adds` counts the source trees and `toFile` texts the evaluation turned into a store path; `IETS_EVENTS=store` names each one. |
+| `IETS_STATS` | | level | 0 | 1 prints allocation counts and bytes per object kind, RSS and mimalloc's `mi_stats_print`; 2 adds the memory census — histograms, duplicates, objects never read — on a binary built with `--features stats2`. The hooks are compiled out otherwise. Each worker allocates from its own arena, so `arena_bytes`, `arena_mapped` and the per-kind table are the sum over every arena, folded on each fiber switch. Setting this is what turns the fold on, at ~0.1% of instructions. `store_adds` counts the source trees and `toFile` texts the evaluation turned into a store path; `IETS_EVENTS=store` names each one. |
 | `IETS_EVENTS` | | group list | | The parts of the run to watch, comma-separated, or `all` for every cold group: `store`, `fetch`, `cache`, … A name that is not a group is an error. `docs/reference/events.md` has the table and the schema. |
 | `IETS_EVENTS_TO` | | path | `-` | Where those records go. `-` is stderr, a unix socket is connected to, any other path is appended to. It acts only when `IETS_EVENTS` names a group. |
 | `IETS_PROFILE` | | `eval` or `alloc` | | Collects a sampled flame graph of the evaluation: `eval` weighs a sample by the time it stood for, `alloc` by the arena bytes since the sample before it. Any other word is an error. A profile is read per fiber, so it pins the run to one worker and refuses an explicit `--workers` or `workers` that is not 1 (`docs/reference/profile.md`). |
@@ -66,6 +66,7 @@ arena, and was always the whole run.
 | `IETS_PROFILE_HZ` | | number | 99 | Samples a second the tick thread asks for. |
 | `IETS_CACHE` | `cache` | Boolean | on | The tracing cache and the IR cache. Same as `--no-cache`. |
 | `IETS_CACHE_DIR` | `cache-dir` | path | `$XDG_CACHE_HOME/iets` | Cache root. The three stores live in its `trace/`, `ir/` and `inputs/` subdirectories, so the directory you name is never itself a removal target. A store subdirectory that already exists, holds something, and is not iets's is refused with an error, not wiped. `--cache-dir DIR` overrides it. |
+| `NIX_SSL_CERT_FILE`, `SSL_CERT_FILE` | | path | unset | CA bundle for the fetcher and `grpc://`. The first one set wins, even when empty, as in Nix. An unreadable file, or one with no certificate, is an error. Unset: the platform store, else the Mozilla roots compiled into iets. |
 | `IETS_IR_STATS` | | set = on | off | One line per compiled file on stderr. |
 | `IETS_IR_MIN` | | usize (bytes) | 1024 | Sources smaller than this compile faster than their cache entry loads, so they are not cached. |
 | `IETS_PROVENANCE` | `provenance` | Boolean | on | Rewrites store paths and positions back to local trees (`docs/explanation/provenance.md`). |
@@ -510,7 +511,8 @@ classic name.
 
 Two limits. A setting of the system `nix.conf` that is both a client and a
 store setting (`netrc-file`, `ssl-cert-file`, `http2`, the `download-*`
-group) acts in the daemon only: iets's own fetcher does not read it. The
+group) acts in the daemon only: iets's own fetcher does not read it. Use
+`NIX_SSL_CERT_FILE` for the CA bundle. The
 fetcher still retries a transient HTTP status the way Nix does, with the
 defaults `download-attempts` and `RETRY_TIME_MS_DEFAULT` have: five
 attempts, from 250 ms, doubled each time, and from a minute for a 429. A

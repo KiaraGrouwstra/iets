@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::str::from_utf8;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
-use std::{fs, mem};
+use std::{fs, mem, ptr};
 
 pub use error::{Error, ErrorKind, EvalResult, Pos};
 
@@ -2771,8 +2771,8 @@ impl Evaluator {
             self.import_cache.len(),
             crate::builtins::text::regex_cache_len()
         );
-        // SAFETY: prints glibc heap statistics to stderr; no arguments.
-        unsafe { libc::malloc_stats() };
+        // SAFETY: a null argument prints to stderr.
+        unsafe { libmimalloc_sys::mi_stats_print(ptr::null_mut()) };
         if self.session.settings().stats >= 2 {
             #[cfg(feature = "stats2")]
             {

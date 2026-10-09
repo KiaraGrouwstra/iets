@@ -3,5 +3,6 @@
 //! (`crate::source`), `iets prefetch` is another (docs/explanation/plumbing-and-porcelain.md).
 
 pub mod http;
+pub mod roots;
 pub mod spool;
 pub mod unpack;

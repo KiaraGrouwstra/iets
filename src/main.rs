@@ -5,6 +5,10 @@ use std::thread::Builder;
 
 use iets::cli::{self, help};
 
+// musl's malloc costs up to 30% (docs/explanation/static-build.md)
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// The demand path has this stack whether it runs here or on a fiber.
 const STACK_SIZE: usize = iets::parallel::fiber::MAIN_STACK;
 
