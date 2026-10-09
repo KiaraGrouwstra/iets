@@ -1,109 +1,105 @@
 # What iets lints, and what it does not
 
-The rule that decides if a lint is in iets, the reason for the rule, and
-how a project makes its own rules with the data that iets gives.
+Why some lints are in iets and others never will be, and how you can write
+your own rules with the data iets gives you.
 
 ## The rule
 
 > iets reports what only an evaluator can know. It has no opinion about
 > how code looks.
 
-A lint is in the registry only if these two conditions are true:
+A lint belongs in the registry when both of these hold:
 
-1. The lint needs evaluation to decide. Its stage in `iets lint list` is
+1. It needs evaluation to decide. Its stage in `iets lint list` is
    `evaluator`.
-2. The lint tells you something about what the code does: correctness,
-   performance or purity. It does not tell you how the code reads.
+2. It tells you about what the code does (correctness, performance or
+   purity), not about how the code reads.
 
-`eq-type-mismatch` is an example. `x == "a"` is correct syntax. The
-comparison is always false only if `x` is a number, and only the
-evaluator has the value of `x`. `git-in-source` is a second example: only
-the evaluator knows which directory a coercion copies to the store.
+Take `eq-type-mismatch`. `x == "a"` is fine syntax. The comparison is
+always false only when `x` is a number, and only the evaluator knows the
+value of `x`. Or take `git-in-source`: only the evaluator knows which
+directory a coercion copies to the store.
 
-`docs/reference/lints.md` has the list of the lints.
+The full list is in `docs/reference/lints.md`.
 
 ## Why
 
-Style is a decision of the project, not of the tool. nixpkgs has its own
-style, and that style is not the same for each type of file or for each
-path. A lint about `with`, about a binding that is not used, or about
-`a = a;` makes a person change code that is correct. iets must not do
-that.
+Style is the project's call, not the tool's. nixpkgs has its own style, and
+it changes with the kind of file and the path. A lint about `with`, an
+unused binding or `a = a;` asks you to change code that is correct. iets
+should not do that.
 
-Tools that read only the syntax are available: statix and deadnix. A
-second copy of their rules in iets makes the binary larger and gives no
-new data. The mission of iets is to make the Nix stack smaller with good
-abstractions and good defaults. One large binary that does all things is
-the opposite.
+Tools that read only the syntax already exist: statix and deadnix. Copying
+their rules into iets makes the binary bigger and tells you nothing new.
+iets wants to make the Nix stack smaller, with good abstractions and good
+defaults. One big binary that does everything is the opposite.
 
-## The lints that the rule does not explain
+## The lints the rule does not explain
 
 Four lints do not need evaluation. They stay for other reasons.
 
 | Lint | Reason |
 |---|---|
-| `absolute-path-literal`, `short-path-literal`, `url-literal` | Nix 2.34 has a setting for each of them (`lint-absolute-path-literals`, `lint-short-path-literals`, `lint-url-literals`). They are the behaviour of Nix, not an opinion of iets. |
-| `unknown-allow` | It makes sure that a `# iets: allow` comment names a lint that is in the registry. Without it, an incorrect name silences nothing and tells nobody. |
+| `absolute-path-literal`, `short-path-literal`, `url-literal` | Nix 2.34 has a setting for each (`lint-absolute-path-literals`, `lint-short-path-literals`, `lint-url-literals`). They are Nix's behaviour, not iets's opinion. |
+| `unknown-allow` | It checks that a `# iets: allow` comment names a lint in the registry. Without it, a typo silences nothing and tells nobody. |
 
-`impure-builtin` has two parts. The evaluator reports a `getEnv` call.
-The compiler reports a reference to `currentTime`, because the value is
-in the table of the globals and has no position of its own.
+`impure-builtin` comes in two parts. The evaluator reports a `getEnv`
+call. The compiler reports a reference to `currentTime`, because that
+value sits in the table of globals and has no position of its own.
 
 ## Where a finding is reported
 
-A lint finds a site. The location of the site tells iets if the finding
-is yours: a site in your repository is reported, and a site in an input
-is silent. `docs/reference/lints.md` ("Scope") has the rule.
+A lint finds a site, and the site's location tells iets whether the
+finding is yours. A site in your repository is reported. A site in an
+input stays quiet. `docs/reference/lints.md` ("Scope") has the rule.
 
-Two lints do not obey this rule: `tree-meta-in-drv` and `rev-count`.
+Two lints break it: `tree-meta-in-drv` and `rev-count`.
 
-`tree-meta-in-drv` does not obey this rule, and that is a decision. The
-lint reports the metadata of a source tree (`self.rev`,
-`self.lastModifiedDate`) that goes into a derivation. The value changes
-with each commit, so each commit builds the derivation and all that
-depend on it again.
+`tree-meta-in-drv` breaks it on purpose. It reports source tree metadata
+(`self.rev`, `self.lastModifiedDate`) that ends up in a derivation. That
+value changes with every commit, so every commit rebuilds the derivation
+and everything that depends on it.
 
-For this lint, the location of the site does not tell iets if the
-finding is yours. These two examples show why:
+Here the site's location does not say whose finding it is. Two examples
+show why:
 
 - You set `system.configurationRevision = self.rev`. nixpkgs writes the
-  value into the derivation `nixos-version`. The site is in nixpkgs, but
+  value into the `nixos-version` derivation. The site is in nixpkgs, but
   the value is yours, and your commits cause the rebuild.
-- nixpkgs writes its own `lastModifiedDate` and `shortRev` into the
-  version of NixOS. The value changes only when you update the lock
-  file. A rebuild is then correct.
+- nixpkgs writes its own `lastModifiedDate` and `shortRev` into the NixOS
+  version. That value changes only when you update the lock file, and then
+  a rebuild is right.
 
-Thus the tree that the value comes from gives the level. The root tree
-has the level of the lint, which is `warn` by default. A locked input is
-silent, unless `[lint.inputs.<node>]` gives it a level.
+So the tree the value comes from sets the level. The root tree gets the
+lint's level, `warn` by default. A locked input stays quiet unless
+`[lint.inputs.<node>]` gives it a level.
 
-`rev-count` has the same partition for the same reason. It reports a read
-of `revCount`, which is deprecated. The count of the root tree changes
-with each commit and iets must compute it. The count of a locked input
-is a number in the lock file. iets knows the tree because `revCount` is
-a lazy value that has the name of its tree.
+`rev-count` splits the same way, for the same reason. It reports a read of
+`revCount`, which is deprecated. The root tree's count changes with every
+commit, and iets has to compute it. A locked input's count is a number in
+the lock file. iets knows the tree because `revCount` is a lazy value that
+carries its tree's name.
 
-The finding of `rev-count` goes to the selection that reads the
-attribute, in your repository or in an input. The compiler marks each
-selection that has the name `revCount`. The evaluator then looks at the
-value that such a selection reads. A read that is not a selection has no
-site, and the finding names only the tree. `docs/reference/lints.md` has
-the list ("The tree that a value comes from").
+A `rev-count` finding points at the selection that reads the attribute,
+in your repository or in an input. The compiler marks every selection
+named `revCount`, and the evaluator then looks at the value it reads. A
+read that is not a selection has no site, so the finding names only the
+tree. `docs/reference/lints.md` has the list ("The tree that a value comes
+from").
 
-iets knows the tree because each metadata string has a mark. The mark
-is a string context element that Nix does not have. It moves with the
-string through `+`, interpolation, `substring` and `concatStringsSep`, as
-a store path reference does. Nix cannot see it: `getContext`,
-`hasContext`, `==`, `toJSON` and the `.drv` files do not change.
+iets knows the tree because each metadata string carries a mark. The mark
+is a string context element that Nix does not have. It travels with the
+string through `+`, interpolation, `substring` and `concatStringsSep`, just
+like a store path reference. Nix never sees it: `getContext`,
+`hasContext`, `==`, `toJSON` and the `.drv` files stay the same.
 
 ## Make your own rules
 
-iets gives the data. A rule is an external program that reads the data.
+iets gives you the data. A rule is a program you write that reads it.
 
-`iets parse --json FILE...` prints the syntax tree of each file as one
-line of JSON. Each node has its kind and its byte span in the file
-(`docs/reference/syntax-tree.md`). This command finds each `with` in a
-file:
+`iets parse --json FILE...` prints each file's syntax tree as one line of
+JSON. Every node has its kind and its byte span in the file
+(`docs/reference/syntax-tree.md`). This finds every `with`:
 
 ```
 $ iets parse --json rule.nix |
@@ -112,7 +108,7 @@ $ iets parse --json rule.nix |
 rule.nix: with at bytes 10 to 37
 ```
 
-This command finds each `let` that has no binding:
+And this finds every `let` with no bindings:
 
 ```
 $ iets parse --json rule.nix |
@@ -122,37 +118,36 @@ $ iets parse --json rule.nix |
 {"file":"rule.nix","start":21,"end":37}
 ```
 
-A project can have one set of rules for `pkgs/by-name` and a different
-set for `nixos/modules`. The program selects the files, and iets does
-not know the difference.
+You can have one set of rules for `pkgs/by-name` and another for
+`nixos/modules`. Your program picks the files. iets does not need to know.
 
-The spans are byte offsets, so a program can change the file. It replaces
-the bytes `start` to `end - 1` with new text. If a program changes more
-than one span of a file, it must start with the span that has the largest
-`start`. Then the offsets of the other spans stay correct.
+The spans are byte offsets, so your program can also edit the file:
+replace bytes `start` to `end - 1` with new text. When you change more than
+one span in a file, start with the largest `start`. That way the other
+offsets stay correct.
 
 ## Findings as data
 
-A finding of iets has the same form. With `--log-format internal-json`,
-each finding is a record with the byte span of its site (`start`, `end`).
-A record has the text that corrects the finding (`replacement`) when the
-lint has one (`docs/reference/errors.md`, "A finding and its edit"). The
-`hash-fixed` record of `fix-hashes` has the same keys.
+iets's own findings have the same shape. With `--log-format
+internal-json`, each finding is a record with its site's byte span
+(`start`, `end`). When the lint has a fix, the record also has the text
+that fixes it (`replacement`; see `docs/reference/errors.md`, "A finding
+and its edit"). The `hash-fixed` record of `fix-hashes` uses the same keys.
 
-iets does not apply the edit of a finding. The program that reads the
-record decides.
+iets does not apply the edit itself. The program that reads the record
+decides.
 
 ## What iets does not have
 
 - A language for rules.
-- A loader for plug-ins.
-- A syntax tree that keeps each byte of the file. Comments and
+- A plug-in loader.
+- A syntax tree that keeps every byte of the file. Comments and
   parentheses are not in the tree.
 - A command that applies the edits of the findings.
 
 ## A name that is not in the registry
 
-An `iets.toml` can name a lint that iets does not have, for example
-after an update of iets. iets gives one warning for each name, with the
-code `unknown-lint`, and continues. `--lint` on the command line gives an
-error. `docs/reference/lints.md` has the reason.
+Your `iets.toml` can name a lint that iets does not have, for example after
+you update iets. iets warns once for each such name, with the code
+`unknown-lint`, and carries on. `--lint` on the command line gives an
+error instead. `docs/reference/lints.md` says why.
