@@ -94,6 +94,16 @@ fn get_regex(re: &[u8]) -> Rc<CompiledRegex> {
     })
 }
 
+/// Refuses an invalid regex before the string is forced, as prim_match and
+/// prim_split do: a bad pattern is an error even where forcing the string
+/// would throw one `tryEval` catches. The `Rc` is not held across that force.
+fn check_regex(re: &[u8], pos: Pos) -> EvalResult<()> {
+    match get_regex(re).as_ref() {
+        Ok(_) => Ok(()),
+        Err(e) => Err(invalid_regex(re, *e, pos)),
+    }
+}
+
 fn group_list(
     ev: &mut Evaluator,
     groups: &[Option<(usize, usize)>],
@@ -115,6 +125,7 @@ fn match_(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the first argument passed to builtins.match",
     )?;
+    check_regex(re, pos)?;
     let s = ev.force_string(
         args[1],
         pos,
@@ -140,6 +151,7 @@ fn split(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the first argument passed to builtins.split",
     )?;
+    check_regex(re, pos)?;
     let s = ev.force_string(
         args[1],
         pos,

@@ -311,3 +311,13 @@ fn update_forces_the_right_operand_first() {
     );
     assert!(eval_err("builtins.tryEval (throw \"x\" // 1)").starts_with("expected a set"));
 }
+
+#[test]
+fn an_invalid_regex_fails_before_the_string_is_forced() {
+    for f in ["match", "split"] {
+        let e = eval_err(&format!(
+            "builtins.tryEval (builtins.{f} \"(\" (throw \"x\"))"
+        ));
+        assert!(e.starts_with("invalid regular expression"), "{f}: {e}");
+    }
+}
