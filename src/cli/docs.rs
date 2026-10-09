@@ -135,6 +135,7 @@ pub const PAGES: &[Page] = &[
     ),
     in_repo("how-to", "fix-hashes", "let a build write the hash it got"),
     in_repo("how-to", "script-iets", "drive it from a program"),
+    in_repo("how-to", "write-lint-rules", "your own lint rules"),
     in_repo("how-to", "embed-the-evaluator", "link the library"),
     in_repo("explanation", "evaluation", "how the evaluator works"),
     in_repo("explanation", "caching", "what the caches hold and key on"),
