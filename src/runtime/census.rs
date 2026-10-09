@@ -4,11 +4,15 @@
 //! default build carries none of it (docs/explanation/evaluation.md).
 
 use std::cmp::Reverse;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use super::value::{AttrsObj, Ctx, EnvObj, ListObj, StringObj};
+use super::value::{
+    AttrsObj, Ctx, EnvObj, Kind, ListObj, MAX_LEAVES, StringObj, UNION_MIN, leaf_count,
+};
+use super::word::Word;
 use crate::syntax::symbol::fx_bytes;
 use std::fmt::Write;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const SIZE_BUCKETS: [&str; 11] = [
     "0", "1", "2", "3-4", "5-8", "9-16", "17-32", "33-64", "65-128", "129-256", "257+",
@@ -44,20 +48,88 @@ pub const ORIGINS: [&str; 10] = [
     "pos",
 ];
 
+/// How `update_attrs` built a result, in its order of tests.
+pub const UPD_PATHS: [&str; 5] = [
+    "empty side",
+    "flat copy",
+    "union",
+    "flatten a, union",
+    "flat, over leaves",
+];
+
+/// Uses of one `//` result by the end of the run.
+pub const UPD_USES: [&str; 7] = [
+    "never used",
+    "once: select",
+    "once: iterated",
+    "once: left of //",
+    "once: right of //",
+    "2-3 uses",
+    "4+ uses",
+];
+
 #[derive(Default)]
 pub struct Upd {
     pub n: u64,
+    pub paths: [u64; 5],
+    pub a: [u64; 11],
+    pub b: [u64; 11],
+    pub out: [u64; 11],
+    /// Right-hand keys the left side already has, and the ones it adds.
+    pub over: [u64; 11],
+    pub add: [u64; 11],
+    /// Overwritten share of the right side: none, under half, half or
+    /// more, all.
+    pub over_share: [u64; 4],
     pub sum_a: u64,
     pub sum_b: u64,
     pub sum_out: u64,
-    /// Results more than four times the size of the right operand.
-    pub big_a: u64,
-    /// Bytes spent copying entries of the left operand.
-    pub a_bytes: u64,
-    pub a_was_upd: u64,
-    pub b_was_upd: u64,
+    /// Arena bytes the update allocated: copies, flattens, union headers.
+    pub bytes: u64,
+    /// Updates whose right operand is itself a `//` expression: the
+    /// inner result is built only to be merged again.
+    pub nested_right: u64,
+    /// Length of the left-nested `//` chain each result ends.
+    pub chain: [u64; 11],
     /// (a bucket, b bucket) counts.
     pub shape: [[u64; 11]; 11],
+    /// Each new result: chain length, uses as left and as right operand.
+    pub results: HashMap<*const AttrsObj, (u32, u32, u32)>,
+    /// By the file of the `//`: path, count, bytes.
+    pub by_file: HashMap<usize, (&'static [u8], u64, u64)>,
+}
+
+/// The branch `update_attrs` takes; read before the update, which may
+/// cache a flat copy of `a`.
+pub(crate) fn upd_path(a: &'static AttrsObj, b: &'static AttrsObj) -> usize {
+    if a.is_empty() || b.is_empty() {
+        return 0;
+    }
+    if a.kind == Kind::Attrs && a.len() < UNION_MIN {
+        return 1;
+    }
+    let (la, lb) = (leaf_count(a), leaf_count(b));
+    if la + lb <= MAX_LEAVES as usize {
+        2
+    } else if lb < MAX_LEAVES as usize {
+        3
+    } else {
+        4
+    }
+}
+
+/// Lookups on a flat set, on a union through its flat copy, on a union
+/// over its leaves that hit, the leaves all union lookups probed, and the
+/// union lookups that missed. `get` has no arena at hand, hence statics;
+/// a census run has one worker.
+pub static GETS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+
+#[inline]
+pub(crate) fn note_get(kind: usize, probes: u64) {
+    GETS[kind].fetch_add(1, Ordering::Relaxed);
+    if probes != 0 {
+        GETS[3].fetch_add(probes, Ordering::Relaxed);
+    }
 }
 
 #[derive(Default)]
@@ -207,24 +279,58 @@ impl Census {
         }
     }
 
-    pub(crate) fn note_upd(&mut self, a: &AttrsObj, b: &AttrsObj) {
+    /// One `a // b` that gave `out`; `bytes` is what it allocated and
+    /// `file` the source file of the operator.
+    pub(crate) fn note_upd(
+        &mut self,
+        path: usize,
+        a: &'static AttrsObj,
+        b: &'static AttrsObj,
+        out: Word,
+        bytes: u64,
+        file: Option<(usize, &'static [u8])>,
+    ) {
         let u = &mut self.upd;
-        let out = a.len() + b.len();
+        let (la, lb) = (a.len_unmarked(), b.len_unmarked());
+        // SAFETY: `//` only ever returns a set.
+        let o = unsafe { &*out.ptr::<AttrsObj>() };
+        let lo = o.len_unmarked();
+        let over = la + lb - lo;
         u.n += 1;
-        u.sum_a += a.len() as u64;
-        u.sum_b += b.len() as u64;
-        u.sum_out += out as u64;
-        if out > 4 * b.len() {
-            u.big_a += 1;
+        u.paths[path] += 1;
+        u.a[size_bucket(la)] += 1;
+        u.b[size_bucket(lb)] += 1;
+        u.out[size_bucket(lo)] += 1;
+        u.over[size_bucket(over)] += 1;
+        u.add[size_bucket(lb - over)] += 1;
+        u.over_share[match over {
+            0 => 0,
+            _ if over == lb => 3,
+            _ if 2 * over < lb => 1,
+            _ => 2,
+        }] += 1;
+        u.sum_a += la as u64;
+        u.sum_b += lb as u64;
+        u.sum_out += lo as u64;
+        u.bytes += bytes;
+        u.shape[size_bucket(la)][size_bucket(lb)] += 1;
+        let mut chain = 1;
+        if let Some(r) = u.results.get_mut(&(a as *const AttrsObj)) {
+            r.1 += 1;
+            chain += r.0;
         }
-        u.a_bytes += (a.len() * 16) as u64;
-        if a.origin == 2 {
-            u.a_was_upd += 1;
+        if let Some(r) = u.results.get_mut(&(b as *const AttrsObj)) {
+            r.2 += 1;
         }
-        if b.origin == 2 {
-            u.b_was_upd += 1;
+        if path != 0 {
+            u.chain[size_bucket(chain as usize)] += 1;
+            u.results.insert(o, (chain, 0, 0));
         }
-        u.shape[size_bucket(a.len())][size_bucket(b.len())] += 1;
+        if let Some((key, name)) = file {
+            let f = u.by_file.entry(key).or_insert((name, 0, 0));
+            f.1 += 1;
+            f.2 += bytes;
+        }
     }
 
     pub(crate) fn report(&self, out: &mut String) {
@@ -322,16 +428,81 @@ impl Census {
         let u = &self.upd;
         let _ = writeln!(
             out,
-            "update (//): n={} avg a={:.1} b={:.1} out={:.1}; out>4*b: {}; bytes copying a: {}; a was upd: {}; b was upd: {}",
+            "update (//): n={} allocated={} bytes; right operand a // expression: {}; mean a={:.1} b={:.1} out={:.1}",
             u.n,
+            u.bytes,
+            u.nested_right,
             u.sum_a as f64 / u.n.max(1) as f64,
             u.sum_b as f64 / u.n.max(1) as f64,
-            u.sum_out as f64 / u.n.max(1) as f64,
-            u.big_a,
-            u.a_bytes,
-            u.a_was_upd,
-            u.b_was_upd
+            u.sum_out as f64 / u.n.max(1) as f64
         );
+        let _ = write!(out, "update paths:");
+        for (name, c) in UPD_PATHS.iter().zip(u.paths) {
+            let _ = write!(out, " {name}={c}");
+        }
+        let _ = writeln!(out);
+        let _ = writeln!(out, "update sizes (counts):");
+        let _ = write!(out, "  {:>12}", "");
+        for b in SIZE_BUCKETS {
+            let _ = write!(out, " {b:>8}");
+        }
+        let _ = writeln!(out);
+        for (name, row) in [
+            ("left", &u.a),
+            ("right", &u.b),
+            ("result", &u.out),
+            ("overwritten", &u.over),
+            ("added", &u.add),
+            ("chain", &u.chain),
+        ] {
+            let _ = write!(out, "  {name:>12}");
+            for c in row {
+                let _ = write!(out, " {c:>8}");
+            }
+            let _ = writeln!(out);
+        }
+        let [none, under, half, all] = u.over_share;
+        let _ = writeln!(
+            out,
+            "update right side overwritten: none={none} under half={under} half or more={half} all={all}"
+        );
+        let mut uses = [0u64; 7];
+        for (r, (_, left, right)) in &u.results {
+            // SAFETY: results are arena sets, alive until exit.
+            let flags = unsafe { (**r).flags };
+            let sel = (flags & 0x7f) as u32;
+            let iter = (flags >> 7) as u32;
+            uses[match (sel + iter + left + right, sel, iter, left) {
+                (0, ..) => 0,
+                (1, 1, ..) => 1,
+                (1, _, 1, _) => 2,
+                (1, .., 1) => 3,
+                (1, ..) => 4,
+                (2..=3, ..) => 5,
+                _ => 6,
+            }] += 1;
+        }
+        let _ = write!(out, "update results by use ({}):", u.results.len());
+        for (name, c) in UPD_USES.iter().zip(uses) {
+            let _ = write!(out, " {name}={c}");
+        }
+        let _ = writeln!(out);
+        let g: [u64; 5] = std::array::from_fn(|i| GETS[i].load(Ordering::Relaxed));
+        let _ = writeln!(
+            out,
+            "attrset lookups: flat={} union via flat copy={} union over leaves: hit={} miss={} (leaves probed {})",
+            g[0], g[1], g[2], g[4], g[3]
+        );
+        let mut files: Vec<_> = u.by_file.values().collect();
+        files.sort_by_key(|f| Reverse(f.1));
+        let _ = writeln!(out, "update by file of the // (count, bytes):");
+        for (name, n, bytes) in files.iter().take(20) {
+            let _ = writeln!(
+                out,
+                "  {n:>9} {bytes:>11} {}",
+                String::from_utf8_lossy(name)
+            );
+        }
         let _ = writeln!(out, "update shape (rows: a size, cols: b size):");
         let _ = write!(out, "  {:>8}", "");
         for b in SIZE_BUCKETS {

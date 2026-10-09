@@ -479,6 +479,20 @@ impl AttrsObj {
         n
     }
 
+    /// `len` for the census, which must not count as a use.
+    #[cfg(feature = "stats2")]
+    pub(crate) fn len_unmarked(&self) -> usize {
+        let f = self.flags;
+        let n = self.len();
+        self.set_flags(f);
+        n
+    }
+
+    #[cfg(feature = "stats2")]
+    pub(crate) fn set_flags(&self, f: u8) {
+        mark_byte(&self.flags, |_| f);
+    }
+
     #[inline]
     pub(crate) fn is_empty(&self) -> bool {
         // a union never holds two empty sides
@@ -493,10 +507,19 @@ impl AttrsObj {
         #[cfg(feature = "stats2")]
         mark_byte(&self.flags, |f| if f & 0x7f < 0x7f { f + 1 } else { f });
         if self.kind == Kind::Attrs {
+            #[cfg(feature = "stats2")]
+            super::census::note_get(0, 0);
             return self.get_flat(sym);
         }
         if let Some(flat) = self.flattened() {
+            #[cfg(feature = "stats2")]
+            super::census::note_get(1, 0);
             return flat.get_flat(sym);
+        }
+        #[cfg(feature = "stats2")]
+        {
+            let (probes, hit) = self.probes(sym);
+            super::census::note_get(if hit { 2 } else { 4 }, probes);
         }
         for leaf in self.leaf_sets().iter().rev() {
             if let Some(a) = leaf.get_flat(sym) {
@@ -504,6 +527,16 @@ impl AttrsObj {
             }
         }
         None
+    }
+
+    /// Leaves a lookup of `sym` on this union probes, and whether it hits.
+    #[cfg(feature = "stats2")]
+    fn probes(&self, sym: Sym) -> (u64, bool) {
+        let leaves = self.leaf_sets().iter().rev();
+        match leaves.clone().position(|l| l.get_flat(sym).is_some()) {
+            Some(i) => (i as u64 + 1, true),
+            None => (leaves.len() as u64, false),
+        }
     }
 
     #[inline]
@@ -1185,9 +1218,11 @@ impl Arena {
                 });
             }
             #[cfg(feature = "stats2")]
-            self.stats
-                .census
-                .note_attrs(p, Stat::AttrsUpd.attrs_origin(), a.len() + b.len());
+            self.stats.census.note_attrs(
+                p,
+                Stat::AttrsUpd.attrs_origin(),
+                a.len_unmarked() + b.len_unmarked(),
+            );
             Word::from_ref(&*p)
         }
     }
