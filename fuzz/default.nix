@@ -37,11 +37,14 @@ let
     nar-gen = { flags = "-max_len=4096"; seeds = _: ""; };
     nar-tree = { flags = "-max_len=4096"; seeds = _: ""; };
     wire = { flags = "-max_len=4096"; seeds = _: ""; };
+    # a hang is a bug of its own: the expressions end (fuzz/src/eval.rs)
+    eval = { flags = "-max_len=4096 -timeout=10"; seeds = _: ""; };
   };
   env = ''
     export IETS_PARSE_ORACLE=${oracles}/bin/parse-oracle
     export IETS_NAR_ORACLE=${oracles}/bin/nar-oracle
     export IETS_WIRE_ORACLE=${oracles}/bin/wire-oracle
+    export IETS_EVAL_ORACLE=${oracles}/bin/eval-oracle
   '';
   # the replay tool, built plain: it is fast and needs no libFuzzer
   fuzz-diff = pkgs.rustPlatform.buildRustPackage (common // {
@@ -124,6 +127,11 @@ in
     fuzz-wire = check {
       name = "wire";
       script = run "wire" 30;
+    };
+    # a minute of generated expressions through both evaluators
+    fuzz-eval = check {
+      name = "eval";
+      script = run "eval" 60;
     };
     # twenty seconds of each NAR target
     fuzz-nar = check {

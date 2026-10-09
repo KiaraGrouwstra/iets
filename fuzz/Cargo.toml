@@ -22,6 +22,12 @@ path = "fuzz_targets/wire.rs"
 test = false
 doc = false
 bench = false
+[[bin]]
+name = "eval"
+path = "fuzz_targets/eval.rs"
+test = false
+doc = false
+bench = false
 
 [[bin]]
 name = "nar-read"

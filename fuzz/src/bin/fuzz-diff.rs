@@ -10,7 +10,7 @@ use std::time::Instant;
 
 const USAGE: &str = "usage: fuzz-diff [--json] [--nix-only] TARGET PATH...
 
-Gives each file under PATH to TARGET (parse, nar-read, nar-gen, wire,
+Gives each file under PATH to TARGET (parse, eval, nar-read, nar-gen, wire,
 nar-tree), which
 compares iets with Nix 2.34.8.
 A directory is walked; with --nix-only only its *.nix files are read.
