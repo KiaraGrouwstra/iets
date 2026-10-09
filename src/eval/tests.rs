@@ -345,3 +345,14 @@ fn nix_eq_forces_what_the_shortcut_skips() {
     );
     assert_eq!(eq("[ 1 2 ] == [ 1 2 ]"), Ok("true".into()));
 }
+#[test]
+fn sets_compare_in_the_symbol_order_of_nix() {
+    let first = |n: &str| {
+        eval_str(&format!(
+            "builtins.tryEval ({{ a = 1; \"{n}\" = throw \"t\"; }} == {{ a = 2; \"{n}\" = 1; }})"
+        ))
+    };
+    assert_eq!(first("meta"), "{ success = false; value = false; }");
+    assert_eq!(first(""), "{ success = false; value = false; }");
+    assert_eq!(first("y"), "{ success = true; value = false; }");
+}
