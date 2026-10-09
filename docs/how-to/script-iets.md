@@ -1,9 +1,15 @@
 # How to drive iets from a script or an agent
 
-Every command speaks JSON, returns a stable exit code, and can write all of
-its stderr as records a program can read. This page shows you the four
-things a script needs: JSON output, exit codes, a log stream, and the
-plumbing operations.
+iets prints JSON, returns stable exit codes, and can write all of its
+stderr as records a program can read. This page shows you the four things a
+script needs: JSON output, exit codes, a log stream, and the plumbing
+operations.
+
+The files `hello.nix` and `greeting.nix` come from the
+[tutorial](../tutorial/getting-started.md), `demo.nix` from
+[replace-nix-tools.md](replace-nix-tools.md), and `src.nix` from
+[fix-hashes.md](fix-hashes.md). All but `demo.nix` read `<nixpkgs>` or
+`builtins.currentSystem`, so their commands add `--impure`.
 
 The record shapes are in [reference/errors.md](../reference/errors.md), and
 every plumbing operation's contract is in
@@ -11,11 +17,11 @@ every plumbing operation's contract is in
 
 ## Get JSON instead of text
 
-`--json` is on `eval`, `build --dry-run`, `diff`, `search`, `prefetch` and
-`print-dev-env`:
+`--json` is on `eval`, `build`, `diff`, `search`, `prefetch`,
+`print-dev-env`, `parse` and `cache paths`:
 
 ```sh
-iets eval --strict --json -I nixpkgs=$nixpkgs hello.nix
+iets eval --impure --strict --json -I nixpkgs=$nixpkgs hello.nix
 ```
 
 ```json
@@ -28,7 +34,8 @@ iets diff --json -A a -A b demo.nix
 
 ```json
 {"a":"/nix/store/623k…-demo.drv","b":"/nix/store/sx7z…-demo.drv",
- "changes":[{"a":"hello","b":"goodbye","key":"GREETING","what":"env"}],
+ "changes":[{"a":"\"-c\"\n\"echo one > $out\"\n","b":"\"-c\"\n\"echo two > $out\"\n","key":"","what":"args"},
+            {"a":"hello","b":"goodbye","key":"GREETING","what":"env"}],
  "equal":false}
 ```
 
@@ -37,7 +44,13 @@ iets diff --json -A a -A b demo.nix
 ## Branch on the exit code
 
 ```sh
-iets build --builder daemon fail.nix; echo $?
+iets build --builder daemon -E 'derivation {
+  name = "fail"; system = "x86_64-linux"; builder = "/bin/sh";
+  args = [ "-c" "exit 1" ]; }'; echo $?
+```
+
+```
+100
 ```
 
 | code | meaning |
@@ -74,8 +87,13 @@ iets eval --log-format internal-json -E '{a=1;}.b'
 ```
 
 ```
-@nix {"action":"msg","code":"missing-attr","column":1,"file":"«string»:1:1","level":0,"line":1,"msg":"error: attribute 'b' missing\n       at «string»:1:1","raw_msg":"attribute 'b' missing","sid":"01a0d7d6-f649-78fc-b0a9-70261702a3f8"}
+@nix {"action":"start","id":10831246095548416,"level":4,"parent":0,"sid":"01a1225c-a53a-7873-8635-0fc0dd34ee39","text":"evaluating the expression","type":0}
+@nix {"action":"msg","code":"missing-attr","column":1,"file":"«string»:1:1","level":0,"line":1,"msg":"error: attribute 'b' missing\n       at «string»:1:1","raw_msg":"attribute 'b' missing","sid":"01a1225c-a53a-7873-8635-0fc0dd34ee39"}
+@nix {"action":"stop","id":10831246095548416,"sid":"01a1225c-a53a-7873-8635-0fc0dd34ee39"}
 ```
+
+`start` and `stop` bracket an activity, as in Nix. The `msg` record is the
+error.
 
 Three keys are iets's own, and they are the ones you want:
 
@@ -102,7 +120,9 @@ cat log.json
 ```
 
 ```json
-{"action":"msg","code":"missing-attr","column":1,"file":"«string»:1:1","level":0,"line":1,"msg":"error: attribute 'b' missing\n       at «string»:1:1","raw_msg":"attribute 'b' missing","sid":"01a0d7d7-0a1b-764c-9fa8-1deb8983bdb7"}
+{"action":"start","id":10831301930123264,"level":4,"parent":0,"sid":"01a1225c-a547-7d12-82bf-d706defe431e","text":"evaluating the expression","type":0}
+{"action":"msg","code":"missing-attr","column":1,"file":"«string»:1:1","level":0,"line":1,"msg":"error: attribute 'b' missing\n       at «string»:1:1","raw_msg":"attribute 'b' missing","sid":"01a1225c-a547-7d12-82bf-d706defe431e"}
+{"action":"stop","id":10831301930123264,"sid":"01a1225c-a547-7d12-82bf-d706defe431e"}
 ```
 
 `--option json-log-path PATH` and the `nix.conf` key of the same name do
@@ -116,7 +136,7 @@ Two things change when there is no terminal. Set them yourself instead of
 relying on the detection:
 
 ```sh
-iets --iets-option fix-hashes always build --builder daemon src.nix
+iets --iets-option fix-hashes always build --impure --builder daemon src.nix
 ```
 
 `fix-hashes` defaults to `ask`, which asks only on a terminal and otherwise
@@ -137,45 +157,46 @@ Every operation that takes roots accepts `--roots -` and reads the stdout
 of the one before it, so you can pipe them:
 
 ```sh
-iets plumbing resolve greeting.nix
+iets plumbing resolve --impure greeting.nix
 ```
 
 ```json
-{"attrPaths":[],"roots":[{"attr":null,"drv":"/nix/store/zr5q…-greeting.drv","output":null}]}
+{"attrPaths":[],"roots":[{"attr":null,"drv":"/nix/store/6jq7…-greeting.drv","output":null}]}
 ```
 
 ```sh
-iets plumbing resolve greeting.nix | iets plumbing plan --roots -
+iets plumbing resolve --impure greeting.nix | iets plumbing plan --roots -
 ```
 
 ```json
-{"drvs":["/nix/store/zr5q…-greeting.drv"],"sources":[],"storeDrvs":1}
+{"drvs":["/nix/store/6jq7…-greeting.drv"],"sources":[],"storeDrvs":1}
 ```
 
 ```sh
-iets plumbing resolve greeting.nix \
+iets plumbing resolve --impure greeting.nix \
   | iets plumbing missing --builder daemon --check-cache-status --roots -
 ```
 
 ```json
 {"downloadSize":0,"narSize":0,
- "roots":[{"cacheStatus":"local","drv":"/nix/store/zr5q…-greeting.drv",
+ "roots":[{"cacheStatus":"local","drv":"/nix/store/6jq7…-greeting.drv",
            "neededBuilds":[],"neededSubstitutes":[]}],
  "unknown":[],"willBuild":[],"willSubstitute":[]}
 ```
 
 ```sh
-iets plumbing resolve greeting.nix | iets plumbing build --builder daemon --roots -
+iets plumbing resolve --impure greeting.nix | iets plumbing build --builder daemon --roots -
 ```
 
 ```json
-{"outcomes":[{"attr":"greeting","drv":"/nix/store/zr5q…-greeting.drv",
+{"outcomes":[{"attr":"greeting.drv","drv":"/nix/store/6jq7…-greeting.drv",
               "logTail":[],
-              "outputs":{"out":"/nix/store/vwp4…-greeting"},
+              "outputs":{"out":"/nix/store/hl2d…-greeting"},
               "reason":null,"success":true}]}
 ```
 
-`missing` prints byte for byte what `iets build --dry-run --json` prints. A
+Without `--check-cache-status`, `missing` prints byte for byte what
+`iets build --dry-run --json` prints. A
 test checks that.
 
 One thing to know when you pipe: by default, the next operation reads the
