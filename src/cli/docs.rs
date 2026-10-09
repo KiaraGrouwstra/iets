@@ -108,6 +108,11 @@ pub const PAGES: &[Page] = &[
         include_str!("../../docs/reference/divergences.md"),
     ),
     embedded(
+        "fuzz",
+        "what each fuzz target compares",
+        include_str!("../../docs/reference/fuzz.md"),
+    ),
+    embedded(
         "library",
         "the crate's entry points, for a frontend",
         include_str!("../../docs/reference/library.md"),
