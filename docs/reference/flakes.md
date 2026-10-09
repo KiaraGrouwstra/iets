@@ -1,51 +1,60 @@
 # Flakes
 
-What a flake reference may be, what `builtins.getFlake` accepts, how a
-locked input becomes readable, the URL each forge is asked for, and how
+Which flake references iets takes, what `builtins.getFlake` accepts, how a
+locked input becomes readable, which URL each forge is asked for, and how
 `access-tokens` is matched.
 
-Why it is built this way: `docs/explanation/flakes-and-sources.md`.
+For the reasons behind all this, see
+`docs/explanation/flakes-and-sources.md`.
 
 ## Scope
 
-`iets eval --raw DIR#attr.path` evaluates a locked flake and prints what
-`nix eval --raw --option eval-cache false DIR#attr.path` prints.
+You can evaluate a locked flake that lives on your disk:
 
-- `DIR` goes through the parser `builtins.parseFlakeRef` uses, with cwd as
-  the base directory. **Only a local path is taken**: `.`, `./x`, `/abs`,
-  `~/x`, or a `path:` URL (`path:/abs`, `path:./x`, percent-escapes
-  decoded). The fragment is percent-decoded, as in Nix.
-- iets does not support these, so classic mode falls back on them:
+```sh
+iets eval --raw .#packages.x86_64-linux.hello.name
+```
+
+This prints what
+`nix eval --raw --option eval-cache false .#packages.x86_64-linux.hello.name`
+prints.
+
+- **The reference must be a local path**: `.`, `./x`, `/abs`, `~/x`, or a
+  `path:` URL (`path:/abs`, `path:./x`, percent-escapes decoded). It is
+  parsed as `builtins.parseFlakeRef` parses it, with the current directory
+  as the base. The fragment is percent-decoded, as in Nix.
+- iets does not take these, so classic mode falls back to Nix on them:
   - registry references (`nixpkgs#hello`, and `x#y` even where `./x`
     exists, as in Nix);
   - remote references (`github:`, `gitlab:`, `git+https:`, `git+file:`,
     `https://….tar.gz`): iets cannot fetch a root flake;
   - `?query` parameters on a path (`?dir=`, `?rev=`, `?narHash=`);
-  - what the parser itself leaves out (`hg+…`, `sourcehut:`).
+  - the schemes the parser does not take (`hg+…`, `sourcehut:`).
 
   Some invalid references are accepted, and an unknown scheme
-  (`foo:bar#x`) is unsupported. Both lists are in
-  `docs/reference/divergences.md`.
-- `#attr.path` selects from the flake's outputs; elements may be quoted
-  like Nix (`"x86_64-linux"`). No `#`, or a bare `#`, gives the outputs
-  attribute set. There is no `packages.<system>.` defaulting.
+  (`foo:bar#x`) is unsupported. `docs/reference/divergences.md` lists
+  both.
+- `#attr.path` selects from the flake's outputs. You can quote an element
+  as in Nix (`"x86_64-linux"`). No `#`, or a bare `#`, gives you the whole
+  outputs attribute set. iets does not fill in `packages.<system>.` for
+  you.
 - `flake.lock` must exist and be complete: every node reachable from the
-  root has a `narHash`, or is a relative `path:` input, and every input
-  `flake.nix` declares has a lock entry. Otherwise:
-  `iets: flake.lock missing or incomplete, run nix flake lock`. A
-  `flake.nix` input whose URL changed without re-locking is not detected;
-  the lock wins. `--reference-lock-file PATH` reads the root flake's lock
-  from `PATH` instead, under the same completeness rule.
-- `--strict`, `--json` and `--raw` work as with a file. `--raw` mirrors
-  `nix eval --raw`: the value is coerced to a string without copying paths
-  to the store, and printed without a newline.
+  root has a `narHash` or is a relative `path:` input, and every input
+  `flake.nix` declares has a lock entry. If not, you get
+  `iets: flake.lock missing or incomplete, run nix flake lock`. If you
+  change an input's URL in `flake.nix` without locking again, iets does
+  not notice: the lock wins. `--reference-lock-file PATH` reads the root
+  flake's lock from `PATH` instead, under the same rule.
+- `--strict`, `--json` and `--raw` work as they do with a file. `--raw`
+  behaves like `nix eval --raw`: the value becomes a string without copying
+  paths to the store, and is printed without a newline.
 
 ## Flake references
 
-`builtins.parseFlakeRef`, `builtins.flakeRefToString`,
-`builtins.getFlake`, the command line and the unlocked-input message of
-`fetchTree` share one parser. Like Nix's, it tries a flake id first, then
-a URL, then a path. These schemes are parsed and rendered as Nix does:
+The command line, `builtins.parseFlakeRef`, `builtins.flakeRefToString`,
+`builtins.getFlake` and the unlocked-input message of `fetchTree` all use
+the same parser. Like Nix's, it tries a flake id first, then a URL, then a
+path.
 
 | Scheme | Parsed and rendered |
 |:---|:---|
@@ -61,72 +70,75 @@ a URL, then a path. These schemes are parsed and rendered as Nix does:
 | `hg+…`, any other scheme or type | no: unsupported |
 
 Each scheme keeps the query parameters Nix keeps for it. As in Nix,
-`parseFlakeRef` has no base directory, so a relative path is an error.
-For valid input the output is Nix's; the corners where iets is looser or
+`parseFlakeRef` has no base directory, so a relative path is an error. For
+valid input you get Nix's output. The few places where iets is looser or
 stricter are in `docs/reference/divergences.md`.
 
 ## `builtins.getFlake`
 
-`builtins.getFlake REF` takes an absolute `/abs` or `path:/abs`, parsed
-like `parseFlakeRef`, and returns what `callFlake` returns.
+`builtins.getFlake REF` takes an absolute path, `/abs` or `path:/abs`, and
+returns what `callFlake` returns.
 
-- It is **impure only**: every reference iets resolves is unlocked, which
-  pure evaluation refuses (`docs/reference/settings.md`, "pure-eval").
-- `REF` is always a `path:` input, also inside a git repository, because
-  Nix looks for `.git` only when it has a base directory, and `getFlake`
-  gives none.
+```nix
+(builtins.getFlake "/home/you/project").outputs
+```
+
+- It works **only in impure evaluation**. Every reference iets resolves is
+  unlocked, and pure evaluation refuses that
+  (`docs/reference/settings.md`, "pure-eval").
+- `REF` is always a `path:` input, even inside a git repository. Nix looks
+  for `.git` only when it has a base directory, and `getFlake` gives it
+  none.
 - A relative `REF` and a `#fragment` are errors, as in Nix.
 - A virtual copy (`"${./.}"` without its context) stands for its local
   tree.
 - The lock rule above holds. Nix locks a missing input in memory; iets
-  falls back.
-- Remote references (`github:`, `git+https:`) and a fetched input's tree
-  are unsupported.
+  falls back to Nix.
+- Remote references (`github:`, `git+https:`) and the tree of a fetched
+  input are unsupported.
 
 ## Getting a locked input readable
 
-A remote input whose locked tree is not in `/nix/store` must become
-readable first. iets tries four steps, in order; from the second on it
-prints `iets: input '<name>' is not in the store (<path>), fetching it`.
-The root tree and `path:` inputs never reach them.
+A remote input whose locked tree is not in `/nix/store` has to become
+readable first. iets tries four things, in order. From the second on, it
+tells you: `iets: input '<name>' is not in the store (<path>), fetching it`.
+The root tree and `path:` inputs never need this.
 
-0. **The input store**, iets's own (below). An entry that is there costs
-   two `open` calls and no network, no daemon and no store.
-1. **Substitution, as one daemon op.** `QueryValidPaths` with the
-   substitute flag (protocol >= 1.27) makes the daemon substitute the
-   paths and answer with the ones it now has. Nothing is evaluated and no
-   derivation is built. The connection goes to the eval store (nix.conf's
-   `store`, never the `builder` setting), is opened on the first missing
-   input, and is reused for the rest of the evaluation. A `grpc://` store
-   is not a worker-protocol daemon, so there is nothing to substitute with
-   and step 2 decides. When no daemon answers, the step is skipped without
-   a word.
-2. **The archive types, fetched by iets**: `github`, `gitlab`,
-   `sourcehut` and `tarball` are one download and one index, so iets does
-   them itself, into the input store.
-3. **`git` and `hg`, the last shell-out**:
+0. **The input store**, iets's own cache (below). An input that is already
+   there costs two `open` calls: no network, no daemon, no store.
+1. **Substitution.** iets asks the daemon to substitute the paths, in one
+   request (`QueryValidPaths` with the substitute flag, protocol >= 1.27).
+   Nothing is evaluated and nothing is built. iets asks the eval store
+   (nix.conf's `store`, never the `builder` setting). It connects on the
+   first missing input and keeps the connection for the rest of the
+   evaluation. A `grpc://` store is not a worker-protocol daemon, so it
+   cannot substitute, and step 2 decides. When no daemon answers, iets
+   skips this step without a word.
+2. **iets downloads it.** `github`, `gitlab`, `sourcehut` and `tarball`
+   inputs are one download each, so iets fetches them itself, into the
+   input store.
+3. **iets asks Nix.** For `git` and `hg`, iets runs
    `nix eval --raw --impure --expr '(builtins.fetchTree <locked
-   attrs>).outPath'`, then a check that the path nix reports is the one
-   the lock implies, so a difference in the file set is an error and not a
-   silent divergence. When no nix other than iets itself is on `PATH`,
-   the error is `iets: input '<name>' is not in the store and nix is not
-   on PATH; fetch it with nix (...) first`.
+   attrs>).outPath'`. Then it checks that the path Nix reports is the one
+   the lock implies, so a different file set is an error, never a silent
+   difference. If no `nix` other than iets itself is on `PATH`, you get
+   `iets: input '<name>' is not in the store and nix is not on PATH; fetch
+   it with nix (...) first`.
 
-`file` is not in this set. Its store path is the flat hash of the bytes
-under the input's name, which the lock's `narHash` does not give, so the
-type stays unsupported.
+`file` inputs are not supported. Their store path is the flat hash of the
+bytes, which the lock's `narHash` does not give.
 
-`IETS_OFFLINE=1` makes any download an error that names the URL. A flake
-whose inputs the input store already holds still evaluates.
+With `IETS_OFFLINE=1`, any download is an error that names the URL. A flake
+whose inputs are all in the input store still evaluates.
 
 ### The archive URL, per type
 
-iets downloads with its own HTTP client, not libcurl. Like Nix, it
-follows up to 10 redirects. It retries a transient status
-(`docs/reference/settings.md`), sends a `user:password` in the URL as
-Basic credentials, reads `file:/p`, `file:///p` and `file://localhost/p`
-from disk, and undoes the four compressions Nix detects: gzip, xz, zstd
-and bzip2. The URL is the one Nix builds:
+iets downloads with its own HTTP client. Like Nix, it follows up to 10
+redirects. It retries a transient status (`docs/reference/settings.md`),
+sends a `user:password` in the URL as Basic credentials, reads `file:/p`,
+`file:///p` and `file://localhost/p` from disk, and undoes the four
+compressions Nix detects: gzip, xz, zstd and bzip2. The URL is the one Nix
+builds:
 
 | type | URL |
 |---|---|
@@ -139,11 +151,13 @@ and bzip2. The URL is the one Nix builds:
 
 ### `access-tokens`
 
-The token comes from nix.conf's `access-tokens`, matched as Nix matches
+The token comes from `access-tokens` in nix.conf, matched as Nix matches
 it: **the longest key that is a prefix of `<host>/<owner>/<repo>` and ends
-on a path segment**, else the entry for the host alone.
+on a path segment**, else the entry for the host alone. For example, with
+`access-tokens = github.com=A github.com/acme=B`, a `github:acme/app`
+input gets `B`, and `github:other/app` gets `A`.
 
-Its header is the one each forge wants:
+Each forge gets the header it wants:
 
 | Forge | Token value | Header |
 |:---|:---|:---|
@@ -155,122 +169,122 @@ Its header is the one each forge wants:
 
 ### What the tree keeps
 
-iets unpacks an archive the way Nix does, and keeps exactly what the git
+iets unpacks an archive the way Nix does. It keeps exactly what the git
 tree behind a locked input keeps, because that tree is what the lock's
 `narHash` hashes:
 
 - directories, empty ones included;
-- regular files with one bit of mode, executable or not; everything else
-  about the mode is dropped;
+- regular files with one bit of mode, executable or not; the rest of the
+  mode is dropped;
 - symlinks, as the target string;
-- hard links, resolved to a second entry with the target's contents and
-  mode;
+- hard links, as a second entry with the target's contents and mode;
 - the last copy of a member listed twice;
 - one leading directory stripped, but only when it is the only entry at
   the top;
-- the pax global header GitHub's tarballs start with is archive metadata,
-  not a member.
+- the pax global header that GitHub's tarballs start with is metadata, not
+  a member.
 
-A member name is normalised: any root is stripped and a `..` removes the
-component before it, with nothing to remove at the top, so no member
-names anything outside the tree. A member below a symlink replaces that
-symlink with a directory; nothing is ever written through it. A device, a
-socket and a fifo are an error; every other type flag is a regular file.
-These three rules match the git tree behind a locked input. `nix store
-prefetch-file --unpack` is Nix's other archive path and refuses all three.
+Member names are cleaned up, so no member can name anything outside the
+tree. Any root is stripped, and a `..` removes the component before it,
+with nothing to remove at the top. A member below a symlink replaces that
+symlink with a directory: iets never writes through a symlink. A device, a
+socket and a fifo are errors; every other type flag is a regular file.
+These three rules match the git tree behind a locked input. Nix's other
+archive path, `nix store prefetch-file --unpack`, refuses all three.
 
-Two limits are iets's own. `fetch-max-size` covers the spool and
-everything a sparse member expands to together
-(`docs/reference/settings.md`). A stream with over eight layers of
-compression is refused, where Nix stacks filters without a bound.
+Two limits are iets's own. `fetch-max-size` covers the download and
+everything a sparse member expands to, together
+(`docs/reference/settings.md`). A stream with more than eight layers of
+compression is refused; Nix stacks filters without a bound.
 
-The NAR hash of the result is compared with the lock's `narHash`. A
+Then iets compares the NAR hash of the result with the lock's `narHash`. A
 mismatch names both hashes and keeps nothing, so a wrong tree is never
-named, never read and never uploaded. A match is written into the input
-store. Nothing is registered in any store.
+read and never uploaded. A match goes into the input store. Nothing is
+registered in any store.
 
-This is also the tree `iets prefetch --unpack` hashes
+`iets prefetch --unpack` hashes the same tree
 (`docs/reference/commands.md`).
 
 ## The input store
 
-`$XDG_CACHE_HOME/iets/inputs/` (`--cache-dir DIR` or `IETS_CACHE_DIR`
-moves it to `DIR/inputs`) holds one file per fetched input, named by the
-store-path base name the lock implies, and the packs that hold the inputs'
-bytes. An entry is only written under the hash its content has.
+The input store is where iets keeps the inputs it fetched. It lives in
+`$XDG_CACHE_HOME/iets/inputs/`. `--cache-dir DIR` or `IETS_CACHE_DIR`
+moves it to `DIR/inputs`.
 
 | path | what |
 |---|---|
-| `<base name>` | the index of one input: a version byte, the entry's NAR hash (with its algorithm) and size, then the tree as names, modes, symlink targets, and each file's size and object id (the blake3 of its bytes) |
-| `packs/<hex>.pack` | objects by id, LZ4 when that shrinks them, then a footer that indexes them; written once and renamed into place |
+| `<base name>` | one input: its NAR hash and size, and its file tree; the name is the store-path base name the lock implies |
+| `packs/<hex>.pack` | the contents of the files, each stored once, compressed when that helps; a pack is written once and never changed |
 
-An object two inputs share is stored once, so a second revision of nixpkgs
-costs the files that changed and its own index. A reader checks the index's
-checksum and version byte, and each pack's footer checksum; anything else
-wipes the entry or the pack, which costs one fetch. The store-level rules
-are the ones the two caches follow (`docs/explanation/caching.md`): a
-`version` file, one writer at a time through the store's `flock`, an atomic
-`rename` into place, and a TTL sweep, after which a collection removes the
-objects no entry names.
+A file that two inputs share is stored once, so a second revision of
+nixpkgs costs only the files that changed. An entry is written only under
+the hash of its content. A damaged entry or pack is wiped, and that costs
+you one fetch. The input store follows the same rules as the other two
+caches (`docs/explanation/caching.md`): a `version` file, one writer at a
+time, an atomic rename into place, and a sweep of old entries, after which
+the contents no entry uses are removed.
 
 **Reads.** `import`, `readFile`, `readDir`, `pathExists`, `readFileType`,
 `hashFile`, `findFile`, `storePath`, `fetchTree { type = "path"; }`,
 `builtins.path`, `filterSource`, `"${path}"` and the `sourceInfo`
-attributes read a fetched input straight out of the input store. So a
-fetched input needs no `/nix/store` entry and no daemon. `/nix/store` is
-checked first and wins when it has the tree. Symlinks inside an entry are
-followed the way the kernel follows them; a target that leaves the tree is
-not resolved, because the entry holds no bytes for it.
+attributes read a fetched input straight from the input store. So a
+fetched input needs no `/nix/store` entry and no daemon. iets checks
+`/nix/store` first, and uses it when it has the tree. Symlinks inside an
+entry are followed the way the kernel follows them. A target outside the
+tree is not resolved, because the entry holds no bytes for it.
 
 **Uploads.** Nothing is registered during evaluation. A build reads the
-entry only when it sends the NAR, and writes it out of the packs straight
-into whichever builder the build targets (`docs/reference/builders.md`).
+entry only when it sends the NAR, straight to whichever builder the build
+targets (`docs/reference/builders.md`).
 
 **What still needs a daemon.** `git` and `hg` inputs go through
-`nix eval (builtins.fetchTree ...)`, which writes `/nix/store`.
-`builtins.storePath` on a path that is not on disk hands the path to the
-daemon to substitute; there is no entry for it, because its content
-address is not a flake `narHash`. Substitution of a locked input is an
-optimisation and is skipped when no daemon answers.
+`nix eval (builtins.fetchTree ...)`, which writes to `/nix/store`.
+`builtins.storePath` on a path that is not on disk asks the daemon to
+substitute it. It has no input store entry, because its content address is
+not a flake `narHash`. Substituting a locked input only saves time, and
+iets skips it when no daemon answers.
 
 ## What `fetchTree` returns
 
-`builtins.fetchTree` on a locked node derives the store path from
-`narHash` and returns the attributes Nix returns: `outPath`, `narHash`,
-`rev` and `shortRev` when `rev` is present, `revCount`, `dirtyRev` and
-`dirtyShortRev`, `lastModified` and `lastModifiedDate` (`%Y%m%d%H%M%S`,
-UTC), and `submodules` for `git`.
+`builtins.fetchTree` on a locked node gets the store path from `narHash`.
+It returns the attributes Nix returns:
 
-`revCount` is deprecated (`docs/reference/lints.md`, `rev-count`). Its
-value is that of Nix.
+- `outPath` and `narHash`;
+- `rev` and `shortRev`, when `rev` is there;
+- `revCount`;
+- `dirtyRev` and `dirtyShortRev`;
+- `lastModified` and `lastModifiedDate` (`%Y%m%d%H%M%S`, UTC);
+- `submodules`, for `git`.
+
+`revCount` has Nix's value, but it is deprecated
+(`docs/reference/lints.md`, `rev-count`).
 
 A `path` input is NAR-hashed, checked against `narHash` when the lock has
-one, and is a virtual copy like the root. A relative `path:` input
-(`path:./sub`) never reaches `fetchTree`: `nix flake lock` writes it as
+one, and is a virtual copy, like the root. A relative `path:` input
+(`path:./sub`) never reaches `fetchTree`. `nix flake lock` writes it as
 `{ path = "./sub"; type = "path"; }` with no `narHash`, iets accepts that,
-and `call-flake.nix` resolves it under the parent's `outPath`. Unlocked
-remote inputs (no `narHash`) and URL arguments are errors.
+and `call-flake.nix` finds it under the parent's `outPath`. An unlocked
+remote input (no `narHash`) and a URL argument are errors.
 
 ## The root tree
 
-The root's `sourceInfo` is built like Nix's fetcher for the reference the
-command line would produce: a directory inside a git working tree is
-`git+file://<root>?dir=<subdir>`, anything else is `path:`. Git is the one
-source control system iets reads
-(`docs/explanation/flakes-and-sources.md`).
+The root's `sourceInfo` is what Nix's fetcher gives for the reference the
+command line would make. A directory inside a git working tree is
+`git+file://<root>?dir=<subdir>`. Anything else is `path:`. Git is the one
+source control system iets reads (`docs/explanation/flakes-and-sources.md`).
 
 | Source | What the tree is, and its metadata |
 |:---|:---|
-| git | the set of index entries that still exist in the working tree, with the working-tree contents and modes; untracked files, `.git` and submodules excluded. `git ls-files --stage` and `git status --porcelain -uno` give the set and the dirty flag, `rev-parse HEAD` and `log -1 --format=%ct` the revision and its date. `rev-list --count` runs when the evaluation reads `revCount`, and the tracing store keeps the count by revision. Clean: `rev`, `shortRev`, `revCount` (not when `.git/shallow` exists; deprecated, lint `rev-count`). Dirty: `dirtyRev`, `dirtyShortRev`. `submodules = false` always; `lastModified` is the HEAD commit time |
+| git | the files in git's index that still exist in the working tree, with their working-tree contents and modes; untracked files, `.git` and submodules are left out. Clean: `rev`, `shortRev`, `revCount` (not in a shallow clone; deprecated, lint `rev-count`). Dirty: `dirtyRev`, `dirtyShortRev`. `submodules = false` always. `lastModified` is the time of the HEAD commit. iets counts `revCount` only when the evaluation reads it, and the tracing cache keeps the count per revision |
 | path | the whole directory; `lastModified` is the newest `lstat` mtime in it |
 
 The store path is the fixed-output path of the tree's NAR hash, named
 `source`. The copy is virtual: nothing is written or fetched. Every read
-under it goes to the working tree, with the tracked-file set as filter:
-reading an untracked file fails with Nix's `Path '...' in the repository
-... is not tracked by Git` error, while `pathExists` says `false` and
+under it goes to your working tree, and only the files git tracks are
+there. Reading an untracked file fails with Nix's `Path '...' in the
+repository ... is not tracked by Git` error, `pathExists` says `false`, and
 `readDir` does not list it.
 
-`call-flake.nix` from Nix 2.34.8 is embedded verbatim and called with the
+iets embeds `call-flake.nix` from Nix 2.34.8 as it is. It calls it with the
 lock file text, `{ root = { sourceInfo; dir; }; }` and
 `builtins.fetchTree`.
