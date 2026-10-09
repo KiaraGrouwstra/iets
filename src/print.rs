@@ -109,10 +109,14 @@ pub fn print_attr_name(out: &mut Vec<u8>, name: &[u8]) {
 }
 
 /// Attr names in the order Nix prints them: by name bytes.
-pub fn lexicographic_order(ev: &Evaluator, a: &'static AttrsObj) -> Vec<&'static Attr> {
-    let mut v: Vec<&'static Attr> = a.iter().collect();
-    v.sort_by(|x, y| ev.interner.name(x.sym).cmp(ev.interner.name(y.sym)));
-    v
+pub fn lexicographic_order(
+    ev: &Evaluator,
+    a: &'static AttrsObj,
+) -> impl ExactSizeIterator<Item = &'static Attr> + use<> {
+    let mut v: Vec<(&'static [u8], &'static Attr)> =
+        a.iter().map(|x| (ev.interner.name(x.sym), x)).collect();
+    v.sort_unstable_by(|x, y| x.0.cmp(y.0));
+    v.into_iter().map(|(_, x)| x)
 }
 
 /// `nix-instantiate --eval` output. Does not force; `--strict` forces first.
@@ -223,7 +227,7 @@ fn show_short(ev: &Evaluator, w: Word, out: &mut String, depth: usize) {
                 return;
             }
             out.push('{');
-            for (n, attr) in lexicographic_order(ev, a).iter().enumerate() {
+            for (n, attr) in lexicographic_order(ev, a).enumerate() {
                 if n >= 8 {
                     out.push_str(" «more attributes elided»");
                     break;

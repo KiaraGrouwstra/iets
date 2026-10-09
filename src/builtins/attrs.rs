@@ -43,7 +43,7 @@ fn attr_values(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> 
         "while evaluating the argument passed to builtins.attrValues",
     )?;
     let sorted = print::lexicographic_order(ev, a);
-    let items: Vec<Word> = sorted.iter().map(|a| a.cell.get()).collect();
+    let items: Vec<Word> = sorted.map(|a| a.cell.get()).collect();
     Ok(ev.mk_list(&items))
 }
 
