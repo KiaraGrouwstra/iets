@@ -118,13 +118,15 @@ impl Wire {
             Ok(n) => n,
             Err(why) => return d("nix-crash", why, String::new()),
         };
-        let iets = match iets {
-            Ok(i) => i,
+        let (iets, why) = match iets {
+            Ok(Ok(i)) => (i, String::new()),
+            Ok(Err(why)) => ("error".to_string(), why),
             Err(msg) => return d("iets-panic", nix, msg),
         };
         match (nix == "error", iets == "error") {
             _ if nix == iets => None,
-            (false, true) => d("nix-only", nix, iets),
+            // iets's reason, for divergences.toml to tell the cases apart
+            (false, true) => d("nix-only", nix, format!("error: {why}")),
             (true, false) => d("iets-only", nix, iets),
             _ => d("answer", nix, iets),
         }
@@ -195,7 +197,8 @@ fn serve(sock: &Path, script: Vec<u8>, split: usize) -> Arc<AtomicBool> {
     stop
 }
 
-fn run_iets(sock: &Path, op: &Op) -> String {
+/// The answer, or why iets refused the reply.
+fn run_iets(sock: &Path, op: &Op) -> Result<String, String> {
     let answer = || -> iets::error::Result<String> {
         let mut quiet = |_| {};
         let mut c = Connection::open_with(
@@ -287,7 +290,7 @@ fn run_iets(sock: &Path, op: &Op) -> String {
             _ => "unsupported".into(),
         })
     };
-    answer().unwrap_or_else(|_| "error".into())
+    answer().map_err(|e| e.to_string())
 }
 
 /// What a NAR reader took from the connection.
@@ -644,7 +647,7 @@ fn reply(u: &mut Unstructured, w: &mut W, op: &Op, proto: u64) {
 /// worker-protocol.cc:Serialise<KeyedBuildResult>, now and then wrong.
 fn build_result(u: &mut Unstructured, w: &mut W, proto: u64) {
     let d = PATHS[2];
-    let path: Vec<u8> = match r(u.int_in_range(0u8..=11), 0) {
+    let mut path: Vec<u8> = match r(u.int_in_range(0u8..=11), 0) {
         0 => format!("{d}!out,dev,out").into_bytes(),
         1 => format!("{d}!*").into_bytes(),
         2 => PATHS[0].as_bytes().to_vec(),
@@ -655,6 +658,11 @@ fn build_result(u: &mut Unstructured, w: &mut W, proto: u64) {
         7 => r(u.arbitrary::<&[u8]>(), b"x").to_vec(),
         _ => format!("{d}!out").into_bytes(),
     };
+    // Nix parses what comes before the first `!` as a store path, and an
+    // empty one makes canonPath assert (nix-conformance nix-bugs/)
+    if path.first().is_none_or(|&c| c == b'!') {
+        path.insert(0, b'x');
+    }
     w.str(&path);
     w.u64(match r(u.int_in_range(0u8..=7), 0) {
         0 => r(u.int_in_range(0..=14), 0),

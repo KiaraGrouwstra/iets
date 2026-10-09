@@ -395,6 +395,25 @@ Older daemons lack the trust flag and some reply shapes this client
 relies on. The wire fuzz target (`docs/how-to/fuzz.md`) therefore makes
 daemons of 1.35 and newer only.
 
+## Padding in a NAR from the daemon
+
+For `NarFromPath`, Nix 2.34.8's client copies the NAR with `copyNAR`
+(src/libutil/archive.cc). It parses into a `NullFileSystemObjectSink`,
+which skips the contents of a file with their padding and does not check
+that the padding is zero. iets reads the NAR in full and refuses
+`bad NAR: non-zero padding`, as Nix does when it unpacks the same NAR
+(`restorePath`). The wire fuzz target lists the case as
+`nar-content-padding`.
+
+## A store path without a dash
+
+Nix 2.34.8 takes the name of a store path from the bytes after the 32
+characters of the hash part, and does not check that the byte between them
+is `-` (path.cc:StorePath::StorePath). So `/nix/store/<hash>6n-` is a
+valid store path to Nix, with the name `n-`. iets refuses it with
+`missing dash`. The wire fuzz target lists the case as
+`store-path-without-a-dash`.
+
 ## Classic mode
 
 `nix-instantiate`, `nix-build` and `nix-eval-jobs` under Nix's own names

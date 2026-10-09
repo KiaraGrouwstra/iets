@@ -56,3 +56,15 @@ doc = "docs/reference/divergences.md#bytes-that-are-not-utf-8-in-a-derivation"
 kind = "answer"
 iets = "outputs "
 nix = "�"
+
+[[wire]]
+id = "nar-content-padding"
+doc = "docs/reference/divergences.md#padding-in-a-nar-from-the-daemon"
+kind = "nix-only"
+iets = "bad NAR: non-zero padding"
+
+[[wire]]
+id = "store-path-without-a-dash"
+doc = "docs/reference/divergences.md#a-store-path-without-a-dash"
+kind = "nix-only"
+iets = "is not a valid store path: missing dash"
