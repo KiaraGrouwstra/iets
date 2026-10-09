@@ -57,6 +57,7 @@
         fuzz-nar-campaign = (fuzz pkgs).campaign { target = "nar-gen"; };
         fuzz-wire-campaign = (fuzz pkgs).campaign { target = "wire"; };
         fuzz-eval-campaign = (fuzz pkgs).campaign { target = "eval"; };
+        fuzz-drv-campaign = (fuzz pkgs).campaign { target = "drv-gen"; };
       } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
         # line coverage of the e2e tests in NixOS containers (nix/coverage.nix)
         coverage-e2e = import ./nix/coverage.nix { inherit self nixpkgs pkgs; iets = iets pkgs; };
@@ -97,7 +98,7 @@
           diff-e2e = nuScript "diff-e2e";
           langtests = nuScript "langtests";
           # the differential fuzzers against Nix (fuzz/default.nix)
-          inherit ((fuzz pkgs).checks) fuzz-parse fuzz-nar fuzz-wire fuzz-eval conformance;
+          inherit ((fuzz pkgs).checks) fuzz-parse fuzz-nar fuzz-wire fuzz-eval fuzz-drv conformance;
           linttest = nuScript "linttest";
           partest = nuScript "partest";
           static = iets pkgs.pkgsStatic;

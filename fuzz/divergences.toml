@@ -3,8 +3,8 @@
 # when every field the entry gives matches. Format and meaning:
 # docs/how-to/fuzz.md.
 #
-#   [[parse]]       # or [[nar]] for the nar-* targets, [[wire]] for wire,
-#                   # [[eval]] for eval
+#   [[parse]]       # or [[nar]] for the nar-* targets, [[drv]] for drv-*,
+#                   # [[wire]] for wire, [[eval]] for eval
 #   id = "..."      # names the case; reports count hits per id
 #   doc = "..."     # the section of docs/reference/divergences.md
 #   kind = "..."    # optional: one of the target's kinds
@@ -110,3 +110,33 @@ id = "eq-shortcut-elem"
 doc = "docs/reference/divergences.md#unforced-values-in-lazy-positions"
 kind = "iets-only"
 input = "builtins.elem "
+
+[[drv]]
+id = "drv-string-not-utf8"
+doc = "docs/reference/divergences.md#reading-a-drv-file"
+kind = "nix-only"
+iets = "non-UTF-8 string in derivation"
+
+[[drv]]
+id = "drv-json-not-checked"
+doc = "docs/reference/divergences.md#reading-a-drv-file"
+kind = "iets-only"
+nix = "cannot process __json attribute"
+
+[[drv]]
+id = "drv-blake3-without-feature"
+doc = "docs/reference/divergences.md#reading-a-drv-file"
+kind = "iets-only"
+nix = "experimental Nix feature 'blake3-hashes' is disabled"
+
+[[drv]]
+id = "store-path-without-dash"
+doc = "docs/reference/divergences.md#reading-a-drv-file"
+kind = "nix-only"
+iets = "is not a valid store path: missing dash"
+
+[[drv]]
+id = "store-path-not-canonical"
+doc = "docs/reference/divergences.md#reading-a-drv-file"
+kind = "nix-only"
+iets = "is not in the Nix store"
