@@ -918,29 +918,51 @@ impl Connection {
         let n = read_u64(self.r())?;
         let mut results = Vec::new();
         for _ in 0..n {
-            let path = read_str(self.r())?;
-            // a status the protocol does not define is a failure, never the 0
-            // that a truncation to eight bits would make of it
-            let status = read_u64(self.r())?;
-            let msg = read_str(self.r())?;
-            for _ in 0..4 {
-                read_u64(self.r())?;
-            }
-            if self.minor >= 37 {
-                for _ in 0..2 {
-                    if read_u64(self.r())? == 1 {
-                        read_u64(self.r())?;
+            results.push(self.read_build_result()?);
+        }
+        Ok(results)
+    }
+
+    /// worker-protocol.cc:Serialise<KeyedBuildResult> (protocol >= 1.29), the
+    /// checks of Nix's client included.
+    fn read_build_result(&mut self) -> Result<BuildResult> {
+        let r = self.r();
+        let path = wire::derived_path(&read_str(r)?).map_err(conn)?;
+        // common-protocol.cc:buildResultStatusTable
+        let status = wire::read_num(r, u8::MAX.into()).map_err(conn)?;
+        if status > 14 {
+            return Err(Error::Protocol(format!(
+                "invalid BuildResult status {status} from the Nix daemon"
+            )));
+        }
+        let msg = read_str(r)?;
+        wire::read_num(r, u32::MAX.into()).map_err(conn)?; // times built
+        wire::read_bool(r).map_err(conn)?; // non-deterministic
+        wire::read_time(r).map_err(conn)?; // start
+        wire::read_time(r).map_err(conn)?; // stop
+        if self.minor >= 37 {
+            // CPU time of user and system: an optional microseconds
+            for _ in 0..2 {
+                match wire::read_num(self.r(), u8::MAX.into()).map_err(conn)? {
+                    0 => {}
+                    1 => {
+                        wire::read_num(self.r(), i64::MAX as u64).map_err(conn)?;
+                    }
+                    _ => {
+                        return Err(Error::Protocol(
+                            "invalid optional tag from the Nix daemon".into(),
+                        ));
                     }
                 }
             }
-            let outputs = read_u64(self.r())?;
-            for _ in 0..outputs {
-                read_str(self.r())?;
-                read_str(self.r())?;
-            }
-            results.push(BuildResult { path, status, msg });
         }
-        Ok(results)
+        let r = self.r();
+        let outputs = read_u64(r)?;
+        for _ in 0..outputs {
+            wire::drv_output(&read_str(r)?).map_err(conn)?;
+            wire::realisation(&wire::read_bytes(r, wire::MAX_STRING)?).map_err(conn)?;
+        }
+        Ok(BuildResult { path, status, msg })
     }
 
     /// `QueryMissing`; `paths` are derived paths, as for `BuildPathsWithResults`.
@@ -998,7 +1020,8 @@ impl Connection {
         self.op(Op::AddIndirectRoot)?;
         write_str(self.w(), path.as_bytes())?;
         self.process_stderr(on_event)?;
-        read_u64(self.r())?;
+        // uds-remote-store.cc:addIndirectRoot: readInt
+        wire::read_num(self.r(), u32::MAX.into()).map_err(conn)?;
         Ok(())
     }
 

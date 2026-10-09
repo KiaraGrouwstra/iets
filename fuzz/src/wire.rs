@@ -16,6 +16,8 @@
 use crate::oracle::{self, Oracle};
 use crate::{Divergence, Target, Verdict, known, no_panic};
 use iets::remote::worker::{Connection, Options, Transport};
+use iets::store::hash::{HashAlgo, hash_bytes};
+use iets::store::nar;
 use libfuzzer_sys::arbitrary::Unstructured;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixListener;
@@ -79,14 +81,14 @@ impl Wire {
     }
 
     fn compare(&mut self, input: &[u8]) -> Option<Divergence> {
-        let (op, script) = generate(&mut Unstructured::new(input));
+        let (op, script, split) = generate(&mut Unstructured::new(input));
         // the daemon's bytes, to replay a case against a client by hand
         if let Ok(f) = std::env::var("IETS_WIRE_SCRIPT") {
             let _ = std::fs::write(f, &script);
         }
         self.seq += 1;
         let sock = self.dir.join(format!("{}.sock", self.seq));
-        let stop = serve(&sock, script);
+        let stop = serve(&sock, script, split);
         let iets = no_panic(|| run_iets(&sock, &op));
         let mut line = format!("{} {}", sock.display(), op.name);
         for a in &op.args {
@@ -116,13 +118,15 @@ impl Wire {
             Ok(n) => n,
             Err(why) => return d("nix-crash", why, String::new()),
         };
-        let iets = match iets {
-            Ok(i) => i,
+        let (iets, why) = match iets {
+            Ok(Ok(i)) => (i, String::new()),
+            Ok(Err(why)) => ("error".to_string(), why),
             Err(msg) => return d("iets-panic", nix, msg),
         };
         match (nix == "error", iets == "error") {
             _ if nix == iets => None,
-            (false, true) => d("nix-only", nix, iets),
+            // iets's reason, for divergences.toml to tell the cases apart
+            (false, true) => d("nix-only", nix, format!("error: {why}")),
             (true, false) => d("iets-only", nix, iets),
             _ => d("answer", nix, iets),
         }
@@ -142,9 +146,19 @@ impl Drop for Wire {
     }
 }
 
+/// The end of the one upload both clients make: a frame of the count 0 of
+/// AddMultipleToStore, then the empty frame.
+const UPLOAD_END: [u8; 24] = {
+    let mut b = [0; 24];
+    b[0] = 8;
+    b
+};
+
 /// Serves `script` to every connection until `stop`: write it, close the
-/// write side, read until the client goes.
-fn serve(sock: &Path, script: Vec<u8>) -> Arc<AtomicBool> {
+/// write side, read until the client goes. Bytes from `split` on wait for
+/// the end of an upload, as a daemon reads it all before it answers; Nix's
+/// client asserts when the answer comes first (nix-conformance nix-bugs/).
+fn serve(sock: &Path, script: Vec<u8>, split: usize) -> Arc<AtomicBool> {
     let listener = UnixListener::bind(sock).expect("a socket for the scripted daemon");
     listener
         .set_nonblocking(true)
@@ -159,9 +173,20 @@ fn serve(sock: &Path, script: Vec<u8>) -> Arc<AtomicBool> {
                     let script = script.clone();
                     std::thread::spawn(move || {
                         let _ = s.set_nonblocking(false);
-                        let _ = s.write_all(&script);
-                        let _ = s.shutdown(std::net::Shutdown::Write);
+                        let split = split.min(script.len());
+                        let _ = s.write_all(&script[..split]);
+                        let mut got = Vec::new();
                         let mut sink = [0u8; 4096];
+                        if split < script.len() {
+                            while !got.ends_with(&UPLOAD_END) {
+                                match s.read(&mut sink) {
+                                    Ok(n) if n > 0 => got.extend_from_slice(&sink[..n]),
+                                    _ => break,
+                                }
+                            }
+                            let _ = s.write_all(&script[split..]);
+                        }
+                        let _ = s.shutdown(std::net::Shutdown::Write);
                         while matches!(s.read(&mut sink), Ok(n) if n > 0) {}
                     });
                 }
@@ -172,7 +197,8 @@ fn serve(sock: &Path, script: Vec<u8>) -> Arc<AtomicBool> {
     stop
 }
 
-fn run_iets(sock: &Path, op: &Op) -> String {
+/// The answer, or why iets refused the reply.
+fn run_iets(sock: &Path, op: &Op) -> Result<String, String> {
     let answer = || -> iets::error::Result<String> {
         let mut quiet = |_| {};
         let mut c = Connection::open_with(
@@ -230,10 +256,52 @@ fn run_iets(sock: &Path, op: &Op) -> String {
                 "subst {}",
                 set(c.query_substitutable_path_infos(args, &mut quiet)?)
             ),
+            "substitute" => format!("paths {}", set(c.substitute_paths(args, &mut quiet)?)),
+            "build" => {
+                let mut o = String::from("built");
+                for b in c.build_paths_with_results(args, &mut quiet)? {
+                    o += &format!("\n{} status={}", b.path, b.status);
+                    // Nix keeps the message of a failure only
+                    if !b.success() {
+                        o += &format!(" msg={}", b.msg);
+                    }
+                }
+                o
+            }
+            "indirect-root" => {
+                c.add_indirect_root(&args[0], &mut quiet)?;
+                "ok".into()
+            }
+            "nar" => {
+                let mut got = String::new();
+                c.nar_from_path(&args[0], &mut quiet, &mut |r| {
+                    let mut tee = Tee(r, Vec::new());
+                    let n = nar::parse_length(&mut tee)?;
+                    let h = hash_bytes(HashAlgo::Sha256, &tee.1[..n as usize]);
+                    got = format!("nar {n} {}", h.to_base16());
+                    Ok(())
+                })?;
+                got
+            }
+            "add-multiple" => {
+                c.add_multiple_to_store(false, &mut |w| w.write_all(&[0; 8]), &mut quiet)?;
+                "ok".into()
+            }
             _ => "unsupported".into(),
         })
     };
-    answer().unwrap_or_else(|_| "error".into())
+    answer().map_err(|e| e.to_string())
+}
+
+/// What a NAR reader took from the connection.
+struct Tee<'a>(&'a mut dyn Read, Vec<u8>);
+
+impl Read for Tee<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.0.read(buf)?;
+        self.1.extend_from_slice(&buf[..n]);
+        Ok(n)
+    }
 }
 
 /// A set on Nix's side: sorted and without duplicates.
@@ -266,10 +334,22 @@ fn r<T>(x: Result<T, libfuzzer_sys::arbitrary::Error>, d: T) -> T {
     x.unwrap_or(d)
 }
 
-/// The operation and the daemon's whole side of the conversation.
-fn generate(u: &mut Unstructured) -> (Op, Vec<u8>) {
+/// The operation, the daemon's whole side of the conversation, and where
+/// the daemon waits for an upload (`serve`).
+fn generate(u: &mut Unstructured) -> (Op, Vec<u8>, usize) {
     let pick = |u: &mut Unstructured| PATHS[r(u.choose_index(PATHS.len()), 0)].to_string();
-    let op = match r(u.int_in_range(0u8..=5), 0) {
+    let drv = |u: &mut Unstructured| {
+        r(
+            u.choose(&[
+                format!("{}!out", PATHS[2]),
+                format!("{}!*", PATHS[2]),
+                PATHS[0].to_string(),
+            ]),
+            &String::new(),
+        )
+        .clone()
+    };
+    let op = match r(u.int_in_range(0u8..=10), 0) {
         0 => Op {
             name: "connect",
             args: vec![],
@@ -290,9 +370,29 @@ fn generate(u: &mut Unstructured) -> (Op, Vec<u8>) {
             name: "output-map",
             args: vec![PATHS[2].to_string()],
         },
-        _ => Op {
+        5 => Op {
             name: "substitutable",
             args: vec![pick(u)],
+        },
+        6 => Op {
+            name: "substitute",
+            args: vec![pick(u), pick(u)],
+        },
+        7 => Op {
+            name: "build",
+            args: vec![drv(u)],
+        },
+        8 => Op {
+            name: "indirect-root",
+            args: vec!["/tmp/iets-fuzz-wire-root".into()],
+        },
+        9 => Op {
+            name: "nar",
+            args: vec![pick(u)],
+        },
+        _ => Op {
+            name: "add-multiple",
+            args: vec![],
         },
     };
     let mut w = W(Vec::new());
@@ -325,15 +425,20 @@ fn generate(u: &mut Unstructured) -> (Op, Vec<u8>) {
     // then after the operation
     stderr(u, &mut w, proto);
     stderr(u, &mut w, proto);
+    let split = if op.name == "add-multiple" {
+        w.0.len()
+    } else {
+        usize::MAX
+    };
     if op.name != "connect" {
         stderr(u, &mut w, proto);
-        reply(u, &mut w, &op);
+        reply(u, &mut w, &op, proto);
     }
     if r(u.ratio(1u8, 16), false) {
         let cut = r(u.int_in_range(0..=w.0.len()), w.0.len());
         w.0.truncate(cut);
     }
-    (op, w.0)
+    (op, w.0, split)
 }
 
 fn bytes(u: &mut Unstructured, default: &[u8]) -> Vec<u8> {
@@ -444,7 +549,7 @@ fn fields(u: &mut Unstructured, w: &mut W, min: u8) {
     }
 }
 
-fn reply(u: &mut Unstructured, w: &mut W, op: &Op) {
+fn reply(u: &mut Unstructured, w: &mut W, op: &Op, proto: u64) {
     match op.name {
         "path-info" => {
             w.u64(r(u.choose(&[1, 1, 1, 0, 2]), &1).to_owned());
@@ -480,7 +585,27 @@ fn reply(u: &mut Unstructured, w: &mut W, op: &Op) {
             };
             w.str(&ca);
         }
-        "valid-paths" => w.strs(&paths(u)),
+        "valid-paths" | "substitute" => w.strs(&paths(u)),
+        "build" => {
+            let n = r(u.int_in_range(0u8..=2), 1);
+            w.u64(n.into());
+            for _ in 0..n {
+                build_result(u, w, proto);
+            }
+        }
+        "indirect-root" => w.u64(r(u.choose(&[1, 1, 0, 1 << 32, u64::MAX]), &1).to_owned()),
+        "nar" => {
+            let mut nar = Vec::new();
+            nar::dump_string(&bytes(u, b"hello"), &mut nar).expect("a NAR in memory");
+            if r(u.ratio(1u8, 8), false) && !nar.is_empty() {
+                let i = r(u.choose_index(nar.len()), 0);
+                nar[i] ^= r(u.arbitrary::<u8>(), 1) | 1;
+            }
+            if r(u.ratio(1u8, 8), false) {
+                nar.extend_from_slice(r(u.arbitrary::<&[u8]>(), b"x"));
+            }
+            w.0.extend_from_slice(&nar);
+        }
         "missing" => {
             for _ in 0..3 {
                 w.strs(&paths(u));
@@ -517,4 +642,88 @@ fn reply(u: &mut Unstructured, w: &mut W, op: &Op) {
         }
         _ => {}
     }
+}
+
+/// worker-protocol.cc:Serialise<KeyedBuildResult>, now and then wrong.
+fn build_result(u: &mut Unstructured, w: &mut W, proto: u64) {
+    let d = PATHS[2];
+    let mut path: Vec<u8> = match r(u.int_in_range(0u8..=11), 0) {
+        0 => format!("{d}!out,dev,out").into_bytes(),
+        1 => format!("{d}!*").into_bytes(),
+        2 => PATHS[0].as_bytes().to_vec(),
+        3 => format!("{d}!out!bin").into_bytes(),
+        4 => format!("{d}!").into_bytes(),
+        5 => format!("{d}!.").into_bytes(),
+        6 => path(u),
+        7 => r(u.arbitrary::<&[u8]>(), b"x").to_vec(),
+        _ => format!("{d}!out").into_bytes(),
+    };
+    // Nix parses what comes before the first `!` as a store path, and an
+    // empty one makes canonPath assert (nix-conformance nix-bugs/)
+    if path.first().is_none_or(|&c| c == b'!') {
+        path.insert(0, b'x');
+    }
+    w.str(&path);
+    w.u64(match r(u.int_in_range(0u8..=7), 0) {
+        0 => r(u.int_in_range(0..=14), 0),
+        1 => r(u.choose(&[15, 255, 256]), &15).to_owned(),
+        2 => r(u.arbitrary::<u64>(), 0),
+        _ => r(u.choose(&[0, 1, 2, 3, 9, 13]), &0).to_owned(),
+    });
+    w.str(&bytes(u, b"builder for '/nix/store/x.drv' failed"));
+    w.u64(r(u.choose(&[1, 1, 0, 1 << 32]), &1).to_owned());
+    w.u64(r(u.choose(&[0, 0, 1, 2]), &0).to_owned());
+    for _ in 0..2 {
+        w.u64(num(u));
+    }
+    if proto >= 37 {
+        for _ in 0..2 {
+            let tag = r(u.choose(&[0, 1, 1, 2, 256]), &0).to_owned();
+            w.u64(tag);
+            if tag == 1 {
+                w.u64(num(u));
+            }
+        }
+    }
+    let n = r(u.int_in_range(0u8..=2), 0);
+    w.u64(n.into());
+    for _ in 0..n {
+        w.str(&match r(u.int_in_range(0u8..=5), 0) {
+            0 => format!("{HASH}!out").into_bytes(),
+            1 => b"no-separator".to_vec(),
+            2 => r(u.arbitrary::<&[u8]>(), b"").to_vec(),
+            _ => format!("sha256:{HASH}!out").into_bytes(),
+        });
+        w.str(&realisation(u));
+    }
+}
+
+/// A time or a count: small, now and then above i64::MAX.
+fn num(u: &mut Unstructured) -> u64 {
+    match r(u.int_in_range(0u8..=7), 0) {
+        0 => r(u.arbitrary::<u64>(), 0),
+        1 => 1 << 63,
+        _ => r(u.int_in_range(0..=1_800_000_000), 0),
+    }
+}
+
+/// The JSON of realisation.cc, now and then wrong.
+fn realisation(u: &mut Unstructured) -> Vec<u8> {
+    let out = &PATHS[0]["/nix/store/".len()..];
+    let id = format!("sha256:{HASH}!out");
+    let sig = "cache.nixos.org-1:dGVzdA==";
+    match r(u.int_in_range(0u8..=11), 0) {
+        0 => format!(r#"{{"id":"{id}","outPath":"{out}"}}"#),
+        1 => format!(r#"{{"id":"{id}","outPath":"{out}","signatures":null}}"#),
+        2 => format!(r#"{{"id":"{id}","outPath":"{}"}}"#, PATHS[0]),
+        3 => format!(r#"{{"outPath":"{out}"}}"#),
+        4 => "[]".into(),
+        5 => format!(r#"{{"id":"{id}","outPath":"{out}","signatures":["no-colon"]}}"#),
+        6 => format!(r#"{{"id":"{HASH}!out","outPath":"{out}"}}"#),
+        7 => return r(u.arbitrary::<&[u8]>(), b"").to_vec(),
+        _ => format!(
+            r#"{{"id":"{id}","outPath":"{out}","signatures":["{sig}"],"dependentRealisations":{{}}}}"#
+        ),
+    }
+    .into_bytes()
 }
