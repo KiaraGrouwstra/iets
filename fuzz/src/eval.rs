@@ -248,7 +248,8 @@ const REGEXES: &[&str] = &[
 /// Names every field first. `==` on two sets compares their attributes in
 /// the evaluator's symbol order, which follows the order it first saw the
 /// names. Parsed first, the fields have the same order on both sides, for
-/// every input.
+/// every input (`docs/reference/divergences.md`, "Which attribute's error
+/// comes first").
 const ORDER: &str =
     "let _order = { \"1\" = 0; a = 0; \"a b\" = 0; b = 0; c = 0; p = 0; q = 0; }; in ";
 
