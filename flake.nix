@@ -49,6 +49,8 @@
       packages = forAll (pkgs: {
         default = iets pkgs;
         classic = classic pkgs (iets pkgs) pkgs.nix;
+        # one musl file that needs nothing on the machine (docs/explanation/static-build.md)
+        static = iets pkgs.pkgsStatic;
         fuzz-oracles = (fuzz pkgs).oracles;
         inherit (fuzz pkgs) fuzz-diff fuzzers;
         fuzz-parse-campaign = (fuzz pkgs).campaign { target = "parse"; };
@@ -97,6 +99,7 @@
           inherit ((fuzz pkgs).checks) fuzz-parse fuzz-nar fuzz-wire conformance;
           linttest = nuScript "linttest";
           partest = nuScript "partest";
+          static = iets pkgs.pkgsStatic;
         } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") (
           pkgs.lib.mapAttrs e2e (import ./nix/e2e-cases.nix { inherit pkgs; })
         ));
