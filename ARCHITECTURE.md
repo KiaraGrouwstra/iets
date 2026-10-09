@@ -270,8 +270,39 @@ in an `iets` output.
 | `evaljobs-flags.nu` | `iets eval-jobs` against the pinned `nix-eval-jobs` 2.35.2, flag by flag, on `tests/evaljobs/`; a newer pin changes three things (`docs/reference/commands.md`) | check, container |
 | `evaljobs-cmp.nu` | two `eval-jobs` outputs, attribute by attribute | by hand |
 
-`bench/` holds the workloads and the runners (`bench/run.nu`, `ab.nu`,
-`perf.nu`, `eval-jobs.nu`, `nar.nu`, `cache-growth.nu`).
+`bench/` holds the workloads and the runners. Each one runs from the
+repository root, in the dev shell, with `NP` the nixpkgs tree to measure
+against. The `IETS_STATS` and `IETS_PAR_STATS` knobs
+(`docs/reference/settings.md`) feed them.
+
+| script | what it measures |
+|---|---|
+| `bench/run.nu [workload...]` | `nix-instantiate` against iets with hyperfine, on `nixos-desktop` by default |
+| `bench/perf.nu` | wall, user, sys and peak RSS for one binary |
+| `bench/ab.nu` | the same, comparing two binaries; `--runs N`, `--skip-outpaths` |
+| `bench/nar.nu` | the NAR writer, reader and hashes; `--nix` adds the real-nix reference rows |
+| `bench/eval-jobs.nu [rounds]` | `iets eval-jobs` against `nix-eval-jobs` on `nixos/release-small.nix`, 4 workers, cold and warm cache runs interleaved; `--no-parity` skips the `--force-recurse` job-set comparison |
+| `bench/cache-growth.nu` | evaluates `bench/workloads/nixos-desktop.nix` at two nixpkgs revisions and reports what the second adds to each cache |
+
+The two standard workloads:
+
+```
+iets eval --impure --strict --no-tracing-cache --workers 1 -I nixpkgs=$NP bench/workloads/nixos-desktop.nix
+iets eval-jobs --impure --no-instantiate --workers 1 --chunks 8 --chunk 0   # ci/eval/outpaths.nix
+```
+
+Both reach nixpkgs through `<nixpkgs>`, which a pure evaluation does not
+have, so they run with `--impure`. They always measured impure
+evaluation: the native default was impure until the project root arrived
+(`docs/explanation/flakes-and-sources.md`).
+
+The evaluation counters (thunks, calls, derivations, compile time) are
+per fiber, and so are the arena figures. A fiber adds its own to the run
+total whenever it parks or finishes, so the printed numbers cover every
+worker, and a workload's derivation count is the same at one worker and
+at four. The arena sum grows with workers because each arena interns its
+own strings: on nixos-desktop, ~630 MB at one worker and ~645 MB at four.
+`rss_kb` is always the whole process.
 
 ## Conventions
 
