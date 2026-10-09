@@ -147,15 +147,19 @@ pub fn check_sig(s: &str) -> io::Result<()> {
 }
 
 /// content-address.cc:ContentAddress::parseOpt: empty, `text:ALGO:HASH`, or
-/// `fixed:[r:]ALGO:HASH`. `fixed:git:` needs the git-hashing experimental
-/// feature, which a client has not got by default.
-pub fn check_ca(s: &str) -> io::Result<()> {
+/// `fixed:[r:]ALGO:HASH`, held as renderContentAddress writes it (the hash
+/// in nix32). `fixed:git:` needs the git-hashing experimental feature, which
+/// a client has not got by default.
+pub fn content_address(s: &str) -> io::Result<String> {
     if s.is_empty() {
-        return Ok(());
+        return Ok(String::new());
     }
-    let rest = match s.split_once(':') {
-        Some(("text", rest)) => rest,
-        Some(("fixed", rest)) => rest.strip_prefix("r:").unwrap_or(rest),
+    let (method, rest) = match s.split_once(':') {
+        Some(("text", rest)) => ("text:", rest),
+        Some(("fixed", rest)) => match rest.strip_prefix("r:") {
+            Some(rest) => ("fixed:r:", rest),
+            None => ("fixed:", rest),
+        },
         _ => return Err(bad(&format!("'{s}' is not a content address"))),
     };
     let (algo, hash) = rest
@@ -163,8 +167,8 @@ pub fn check_ca(s: &str) -> io::Result<()> {
         .ok_or_else(|| bad(&format!("'{s}' is not a content address")))?;
     let algo =
         HashAlgo::parse(algo).ok_or_else(|| bad(&format!("unknown hash algorithm '{algo}'")))?;
-    Hash::parse_non_sri_unprefixed(hash, algo).map_err(|e| bad(&e.to_string()))?;
-    Ok(())
+    let h = Hash::parse_non_sri_unprefixed(hash, algo).map_err(|e| bad(&e.to_string()))?;
+    Ok(format!("{method}{}:{}", algo.name(), h.to_nix32()))
 }
 
 /// Mirrors serialise.hh:FramedSink: the payload of `AddMultipleToStore` goes out as
@@ -379,8 +383,12 @@ mod tests {
         assert!(check_sig("cache.nixos.org-1:dGVzdA==").is_ok());
         assert!(check_sig("no-colon").is_err());
         assert!(check_sig(":dGVzdA==").is_err());
-        assert!(check_ca(&format!("fixed:r:sha256:{hex}")).is_ok());
-        assert!(check_ca(&format!("fixed:git:sha1:{hex}")).is_err());
-        assert!(check_ca("nonsense").is_err());
+        assert_eq!(
+            content_address(&format!("text:sha256:{hex}")).unwrap(),
+            "text:sha256:0g9bbwd4ph78svlw94iwlzisbhzqx2h0svmz3qz3x7zxw4rrrcja"
+        );
+        assert!(content_address(&format!("fixed:r:sha256:{hex}")).is_ok());
+        assert!(content_address(&format!("fixed:git:sha1:{hex}")).is_err());
+        assert!(content_address("nonsense").is_err());
     }
 }

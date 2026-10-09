@@ -189,8 +189,7 @@ impl PathInfo {
         for s in &sigs {
             wire::check_sig(s)?;
         }
-        let ca = read_str(r)?;
-        wire::check_ca(&ca)?;
+        let ca = wire::content_address(&read_str(r)?)?;
         Ok(PathInfo {
             path,
             deriver,
