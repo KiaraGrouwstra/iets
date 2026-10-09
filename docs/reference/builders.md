@@ -250,7 +250,7 @@ defaults (`src/client/store.hh`):
 | `system` | the `system` setting | `x-nix-system` on every call: which worker cluster the balancer routes to |
 | `token-file` | none | file with a Keycloak/OIDC bearer token, re-read for every call. Needs TLS |
 | `client-cert`, `client-key` | none | PEM client identity for mTLS. Both or neither |
-| `ca-cert` | platform roots | PEM CA that verifies the server |
+| `ca-cert` | none | PEM CA trusted in addition to the usual roots (`NIX_SSL_CERT_FILE` in reference/settings.md) |
 | `insecure` | `false` | plaintext instead of TLS. Local testing only |
 | `connect-timeout` | 30 | seconds the first call waits for the service |
 | `reschedule-retries` | 8 | how often a build a worker bounced goes back to the scheduler |

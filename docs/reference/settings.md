@@ -66,6 +66,7 @@ arena, and was always the whole run.
 | `IETS_PROFILE_HZ` | | number | 99 | Samples a second the tick thread asks for. |
 | `IETS_CACHE` | `cache` | Boolean | on | The tracing cache and the IR cache. Same as `--no-cache`. |
 | `IETS_CACHE_DIR` | `cache-dir` | path | `$XDG_CACHE_HOME/iets` | Cache root. The three stores live in its `trace/`, `ir/` and `inputs/` subdirectories, so the directory you name is never itself a removal target. A store subdirectory that already exists, holds something, and is not iets's is refused with an error, not wiped. `--cache-dir DIR` overrides it. |
+| `NIX_SSL_CERT_FILE`, `SSL_CERT_FILE` | | path | unset | CA bundle for the fetcher and `grpc://`. The first one set wins, even when empty, as in Nix. An unreadable file, or one with no certificate, is an error. Unset: the platform store, else the Mozilla roots compiled into iets. |
 | `IETS_IR_STATS` | | set = on | off | One line per compiled file on stderr. |
 | `IETS_IR_MIN` | | usize (bytes) | 1024 | Sources smaller than this compile faster than their cache entry loads, so they are not cached. |
 | `IETS_PROVENANCE` | `provenance` | Boolean | on | Rewrites store paths and positions back to local trees (`docs/explanation/provenance.md`). |
@@ -510,7 +511,8 @@ classic name.
 
 Two limits. A setting of the system `nix.conf` that is both a client and a
 store setting (`netrc-file`, `ssl-cert-file`, `http2`, the `download-*`
-group) acts in the daemon only: iets's own fetcher does not read it. The
+group) acts in the daemon only: iets's own fetcher does not read it. Use
+`NIX_SSL_CERT_FILE` for the CA bundle. The
 fetcher still retries a transient HTTP status the way Nix does, with the
 defaults `download-attempts` and `RETRY_TIME_MS_DEFAULT` have: five
 attempts, from 250 ms, doubled each time, and from a minute for a 429. A

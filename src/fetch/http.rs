@@ -23,6 +23,7 @@ use std::{mem, result, thread};
 
 use crate::config;
 use crate::error::{Error, Result};
+use crate::fetch::roots;
 use crate::log::{self, ACT_FILE_TRANSFER, Activity, LVL_TALKATIVE, RES_PROGRESS};
 use crate::remote::worker;
 use crate::session::Session;
@@ -252,36 +253,19 @@ fn resolve(base: &str, location: &str) -> String {
     format!("{scheme}://{authority}{}{tail}", normalise(path))
 }
 
-/// One rustls client config for the process: the platform's CA store, which is
-/// what curl uses too. Process-wide on purpose: it is immutable, costly to
-/// build, and holds no run state, so two sessions may share it.
+/// Process-wide on purpose: it is immutable, costly to build, and holds no
+/// run state, so two sessions may share it.
 fn tls() -> Result<Arc<rustls::ClientConfig>> {
-    static TLS: OnceLock<result::Result<Arc<rustls::ClientConfig>, String>> = OnceLock::new();
-    TLS.get_or_init(|| {
-        let mut roots = rustls::RootCertStore::empty();
-        let found = rustls_native_certs::load_native_certs();
-        if found.certs.is_empty() {
-            return Err(format!(
-                "no trusted CA certificates found: {}",
-                found
-                    .errors
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            ));
-        }
-        for c in found.certs {
-            let _ = roots.add(c);
-        }
-        let mut cfg = rustls::ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth();
-        cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
-        Ok(Arc::new(cfg))
-    })
-    .clone()
-    .map_err(Error::Config)
+    static TLS: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
+    if let Some(cfg) = TLS.get() {
+        return Ok(cfg.clone());
+    }
+    let roots = rustls::RootCertStore::from_iter(roots::roots()?.iter().cloned());
+    let mut cfg = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
+    Ok(TLS.get_or_init(|| Arc::new(cfg)).clone())
 }
 
 /// `GET url` with `headers`, following redirects, with the body decompressed
