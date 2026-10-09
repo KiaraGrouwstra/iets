@@ -146,12 +146,13 @@ none, and each commit changes it. iets plans to remove the attribute. A
 read gives the warning `rev-count` (`docs/reference/lints.md`). Use
 `lastModifiedDate` and `shortRev` for a version string.
 
-iets then computes the store path from the NAR hash of that tree, and
-**nothing is written or fetched**. The copy is virtual. The store path gets
-a note that says "the bytes of this path are in that local directory,
-filtered by that file set". Every read under it goes to your working tree: `import`, `readFile`, `readDir`, `pathExists`, `hashFile`, a
-path interpolation, `builtins.path`. The store is never consulted for the
-root tree.
+iets then computes the store path from the NAR hash of that tree,
+and **nothing is written or fetched**. The copy is virtual. The store
+path gets a note that says "the bytes of this path are in that local
+directory, filtered by that file set". Every read under it goes to your
+working tree: `import`, `readFile`, `readDir`, `pathExists`, `hashFile`,
+a path interpolation, `builtins.path`. The store is never consulted for
+the root tree.
 
 Two things follow from that, and both are the point:
 
