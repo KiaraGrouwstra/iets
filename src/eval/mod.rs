@@ -1815,12 +1815,14 @@ impl Evaluator {
                 Ok(Word::from_bool(b))
             }
             Ir::Update(l, r, pos) => {
-                let a = self.eval(env, l)?;
-                let a =
-                    self.force_attrs(a, *pos, "in the left operand of the update (//) operator")?;
+                // the right operand first, as ExprOpUpdate::evalForUpdate
+                // (eval.cc): `tryEval (1 // throw "x")` catches the throw
                 let b = self.eval(env, r)?;
                 let b =
                     self.force_attrs(b, *pos, "in the right operand of the update (//) operator")?;
+                let a = self.eval(env, l)?;
+                let a =
+                    self.force_attrs(a, *pos, "in the left operand of the update (//) operator")?;
                 #[cfg(feature = "stats2")]
                 let before = (
                     crate::runtime::census::upd_path(a, b),

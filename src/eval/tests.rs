@@ -298,3 +298,16 @@ fn a_second_pseudo_file_keeps_its_own_positions() {
     let e = ev.eval_string("  throw \"b\"", b"/").unwrap_err();
     assert_eq!(ev.describe_pos(e.pos), "«string»:1:3");
 }
+
+#[test]
+fn update_forces_the_right_operand_first() {
+    assert_eq!(
+        eval_str("builtins.tryEval (1 // throw \"x\")"),
+        "{ success = false; value = false; }"
+    );
+    assert_eq!(
+        eval_str("builtins.tryEval ({ } // { } // (assert false; { }))"),
+        "{ success = false; value = false; }"
+    );
+    assert!(eval_err("builtins.tryEval (throw \"x\" // 1)").starts_with("expected a set"));
+}
