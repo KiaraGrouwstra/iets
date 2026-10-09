@@ -11,6 +11,8 @@
 //! in each hash format, several outputs, structured attributes, and
 //! references to other derivations in strings.
 
+use std::collections::HashSet;
+
 use libfuzzer_sys::arbitrary::Unstructured;
 
 const SHOW: &str =
@@ -196,7 +198,7 @@ impl Gen<'_, '_> {
             let v = self.value(i, 2, structured);
             attrs.push((k, v));
         }
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
         attrs.retain(|(k, _)| seen.insert(k.clone()));
         let n = attrs.len();
         for k in (1..n).rev() {
