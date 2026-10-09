@@ -115,16 +115,16 @@ flat copy is sized at the sum of the leaf lengths and filled in one merge
 pass. Then the tail the duplicates left is handed back to the bump pointer.
 Sizing it exactly would mean merging twice.
 
-On nixos-desktop the merge ran 8.4 million
-times, 4.9 million of them over six to eight leaves, where a rescan cost 16
-head checks per attribute. The tree took the run from 10.03 G to 9.74 G
-instructions, and the merge itself from 7.1 % to 4.5 % of it.
+On nixos-desktop the merge ran 8.4 million times, 4.9 million of them over
+six to eight leaves, where a rescan cost 16 head checks per attribute. The
+tree took the run from 10.03 G to 9.74 G instructions, and the merge
+itself from 7.1 % to 4.5 % of it.
 
-Why a union? Because we measured, not because we liked it. On outpaths, `//` copied 5.12 GB, of
-which 3.94 GB was left sides, and 80 % of the results were never iterated
-at all. The union took the arena from 13,253 MB to 8,936 MB. An earlier
-version that kept recursive `(a, b)` pointers instead of inline leaves cost
-3.8 % of wall time; inline leaves cost nothing.
+Why a union? Because we measured, not because we liked it. On outpaths, `//`
+copied 5.12 GB, of which 3.94 GB was left sides, and 80 % of the results
+were never iterated at all. The union took the arena from 13,253 MB to
+8,936 MB. An earlier version that kept recursive `(a, b)` pointers instead
+of inline leaves cost 3.8 % of wall time; inline leaves cost nothing.
 
 A census of every `//` in three runs at one worker (nixos-desktop, the
 `drvPath` of `hello`, and outpaths chunk 0 of 8) still supports the union.
@@ -402,16 +402,17 @@ case. Unboxing both makes their cells hold the same word, and `==` then
 answers true where the sequential run answers false.
 
 A mark would also have to be set wherever a thunk word reaches a second
-cell. Those routes are most of the evaluator: a variable and a selection
-in `maybe_thunk`, an argument bound into an env slot, `++`, `tail`,
-`filter`, `attrValues`, `catAttrs`, `listToAttrs`, `removeAttrs`,
-`intersectAttrs`, `zipAttrsWith`, the argument of a `map` or `mapAttrs`
-thunk, the flat copy of a `//`, a `rec` set built from its env, `inherit
-(e)`, and `with`. The mark is one bit in the thunk state, set by a
-compare-and-exchange at each of those routes. With nothing reading it, it
-costs 3.1 % of the instructions on nixos-desktop at four workers, and 1.2 % at one worker, where no mark is ever set and only the
-branch at each route remains. `scripts/partest.nu` keeps a case per
-route, so the routes stay covered whatever reads the box next.
+cell. Those routes are most of the evaluator: a variable and a selection in
+`maybe_thunk`, an argument bound into an env slot, `++`, `tail`, `filter`,
+`attrValues`, `catAttrs`, `listToAttrs`, `removeAttrs`, `intersectAttrs`,
+`zipAttrsWith`, the argument of a `map` or `mapAttrs` thunk, the flat copy
+of a `//`, a `rec` set built from its env, `inherit (e)`, and `with`. The
+mark is one bit in the thunk state, set by a compare-and-exchange at each
+of those routes. With nothing reading it, it costs 3.1 % of the instructions
+on nixos-desktop at four workers, and 1.2 % at one worker, where no mark is
+ever set and only the branch at each route remains. `scripts/partest.nu`
+keeps a case per route, so the routes stay covered whatever reads the
+box next.
 
 Only a `Thunk` can carry that bit. A `ThunkApp` and a `ThunkApp2` keep the
 argument as their unforced state. An argument is any value word: the tag
