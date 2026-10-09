@@ -104,6 +104,9 @@ Around it:
 - `fetch/`: the HTTP client, the tarball spool and the unpack rules.
 - `treestore/`: the input store, where a fetched input lives.
 - `trace/`: the tracing evaluation cache.
+- `events.rs`: the `IETS_EVENTS` stream. A group that is off costs one
+  relaxed load and a branch. A record allocates nothing: it is built in a
+  buffer the thread keeps and written with one `write`.
 - `pure-eval`: `EvalConfig::pure`, read with `Evaluator::pure()`, checked in
   `builtins::store_hooks`.
 - `cachefs.rs`: the on-disk hygiene all three stores share.

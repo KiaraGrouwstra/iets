@@ -56,8 +56,10 @@ $ IETS_EVENTS=stor iets eval -f . -A x
 error: IETS_EVENTS: 'stor' is not an event group (all, syntax, ir, import, …)
 ```
 
-`docs/events-proposal.md` has the plan the rest of the table follows, and
-why evaluation itself is a sampled flame graph instead of a group.
+Evaluation itself has no group. A `hello` evaluation makes 48 million
+calls, and nobody reads a line for each. The `IETS_STATS` counters count
+that work, and `IETS_PROFILE=eval` samples where its time went
+(`docs/reference/profile.md`).
 
 ## `store-add`
 
