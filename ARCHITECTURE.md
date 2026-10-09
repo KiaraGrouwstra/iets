@@ -163,10 +163,12 @@ allow-list whose length is asserted.
 What the rule does *not* ban is porcelain-side libraries for presentation,
 argv compatibility and interactive flows, however large.
 
-What each command is written against. An entry that is not an
-`iets plumbing` op (`index`, `jobs`, `dev-env`, `drv-show`, `drv-diff`,
-`closure-diff`, `flake-info`) is a capability the command calls directly:
-`api::installable`, `api::flake`, `crate::jobs`.
+What each command is written against. The operation layer is
+`crate::api`. Five of its operations are also `iets plumbing` commands:
+`resolve`, `plan`, `missing`, `build` and `fetch`. The other entries
+(`eval`, `index`, `jobs`, `dev-env`, `drv-show`, `drv-diff`,
+`closure-diff`, `flake-info`) are calls the command makes directly:
+`api::evaluate`, `api::installable`, `api::flake`, `crate::jobs`.
 
 | Command | Operations | The command's own part |
 |:---|:---|:---|
@@ -201,8 +203,10 @@ Gaps in the operation layer, where a command still reaches past it:
    `build` should report it as structured output.
 3. `eval-jobs --eval-store` instantiates on one store and builds on
    another. `plan` and `build` take one builder.
-4. `nix-shell` and `print-dev-env` drive `PlanUpload` on their own
-   connection; see the explanation page below.
+4. `nix-shell` and `print-dev-env` upload a plan, then speak the worker
+   protocol themselves: they build the derivation's inputs, run the shell
+   and read the env back. They drive `PlanUpload` on that connection,
+   because going through `Dispatch` would open a second one.
 5. There is no `flake-info` or `flake-tree` op, because no caller needs the
    process boundary.
 
@@ -271,9 +275,9 @@ in an `iets` output.
 | `evaljobs-cmp.nu` | two `eval-jobs` outputs, attribute by attribute | by hand |
 
 `bench/` holds the workloads and the runners. Each one runs from the
-repository root, in the dev shell, with `NP` the nixpkgs tree to measure
-against. The `IETS_STATS` and `IETS_PAR_STATS` knobs
-(`docs/reference/settings.md`) feed them.
+repository root, in the dev shell. `NIXPKGS` names the nixpkgs tree to
+measure against, and defaults to the pinned source in the scripts;
+`nar.nu` always uses the pinned one.
 
 | script | what it measures |
 |---|---|
@@ -287,7 +291,7 @@ against. The `IETS_STATS` and `IETS_PAR_STATS` knobs
 The two standard workloads:
 
 ```
-iets eval --impure --strict --no-tracing-cache --workers 1 -I nixpkgs=$NP bench/workloads/nixos-desktop.nix
+iets eval --impure --strict --no-tracing-cache --workers 1 -I nixpkgs=$NIXPKGS bench/workloads/nixos-desktop.nix
 iets eval-jobs --impure --no-instantiate --workers 1 --chunks 8 --chunk 0   # ci/eval/outpaths.nix
 ```
 
