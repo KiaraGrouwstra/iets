@@ -75,6 +75,10 @@ cargo run --release --example eval -- -E '{ a = 1; b = [1 2]; }'
 `Run::new` copies the settings from the arguments onto an
 `eval::EvalConfig`: the lints, the IR cache, the search path. `Run::go`
 builds the evaluator from it and starts the worker threads.
+
+`Run::new` evaluates purely, as the `iets` commands do, unless `EvalArgs::pure`
+is `Some(false)` or the user's `pure` setting is off. A pure run has no
+`<nixpkgs>` search path and no `builtins.currentSystem`.
 `api::evaluate` applies no setting, and an evaluator has no setters. So put
 any setting you want on the `EvalConfig`:
 
@@ -171,14 +175,17 @@ item to its `nix_api_value.h` name.
 through the dispatcher:
 
 ```sh
-cargo run --release --example build -- --builder daemon ./greeting.nix
+cargo run --release --example build -- --builder daemon -E 'derivation {
+  name = "greeting"; system = "x86_64-linux"; builder = "/bin/sh";
+  args = [ "-c" "echo hello from iets > $out" ]; }'
 ```
 
 ```
 /nix/store/hl2d12ai352g88ad47fh8844g939iyrd-greeting
 ```
 
-The output path depends on your system. This one is for `x86_64-linux`.
+The example evaluates purely, so it has no `builtins.currentSystem`. Put
+your own system in place of `x86_64-linux`. The output path depends on it.
 
 The example drives the lower-level `Dispatcher` itself. In your own program,
 `api::build::Dispatch` does the same in fewer steps:
@@ -218,7 +225,7 @@ output path per root.
 
 ```sh
 cargo run --release --example drv_info -- \
-  -E 'derivation { name="x"; system=builtins.currentSystem; builder="/bin/sh"; args=["-c" "true"]; }'
+  -E 'derivation { name="x"; system="x86_64-linux"; builder="/bin/sh"; args=["-c" "true"]; }'
 ```
 
 ```
