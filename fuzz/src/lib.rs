@@ -6,6 +6,7 @@ pub mod nar;
 pub mod oracle;
 pub mod parse;
 pub mod sx;
+pub mod wire;
 
 /// One input that the two sides answer differently.
 pub struct Divergence {
@@ -59,9 +60,10 @@ pub fn target(name: &str) -> Result<Box<dyn Target + Send>, String> {
             };
             Box::new(nar::Nar::new(known::from_env("nar", nar::KINDS)?, mode))
         }
+        "wire" => Box::new(wire::Wire::new(known::from_env("wire", wire::KINDS)?)),
         _ => {
             return Err(format!(
-                "unknown target `{name}`: parse, nar-read, nar-gen or nar-tree"
+                "unknown target `{name}`: parse, nar-read, nar-gen, nar-tree or wire"
             ));
         }
     })

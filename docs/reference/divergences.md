@@ -53,31 +53,28 @@ writes back unchanged. Only a hand-written `__json` can hold one:
 
 ## Bytes that are not UTF-8 in a derivation
 
-A Nix string is bytes. An env value and an argument keep them, and the
-`.drv` path is the one Nix gives. Two places still differ:
+A Nix string is bytes. Nix writes a derivation's strings into the `.drv`
+as they are. In iets, an `env` value and an argument keep their bytes,
+and the `.drv` path is the one Nix gives. Three places still differ:
 
-- `builder` and `system` must be UTF-8. Nix takes any bytes there; iets
-  stops with `string is not valid UTF-8`.
+- The name of an `env` entry, `builder` and `system` must be UTF-8. Nix
+  takes any bytes there; iets's `derivationStrict` stops with `string is
+  not valid UTF-8`. iets holds these three as text.
 - `nix derivation show` writes each such byte as U+FFFD. Nix fails with
   `[json.exception.type_error.316]`.
+- iets's daemon client reads the strings of a reply as UTF-8 and writes
+  each byte that is not as U+FFFD. Two output names that differ only in
+  such bytes are then one name. A daemon sends only valid output names
+  (`[A-Za-z0-9+._?=-]`), so this happens only with a broken daemon, as in
+  the wire fuzz target (`fuzz/divergences.toml`, `output-name-not-utf8`).
 
 Observe it with `builtins.substring 0 1 "é"`, which is one byte that is not
 UTF-8: as `builder = "/bin/sh" + …` the evaluation fails, as `v = …` it
 gives `/nix/store/vhkdfhp7f0qfk8j0kx9b54hpn6cyg8m1-x.drv` like Nix.
-
-## Bytes that are not UTF-8 in a derivation
-
-Nix keeps a derivation's strings as bytes and writes them into the `.drv`
-as they are. iets does the same for the values of `env` and for `args`.
-It refuses bytes that are not UTF-8 in the name of an `env` entry, in
-`builder` and in `system`: `derivationStrict` stops with `string is not
-valid UTF-8`, where Nix gives a drvPath. iets holds these three as text.
-
-Observe it: `lang/eval-okay-derivation-non-utf8.nix` of nix-conformance
-makes one derivation for each field; Nix 2.34.8 gives five drvPaths, iets
-the first two and then the error. Such derivations exist in real stores:
-`drv/` of nix-conformance holds six. `fuzz/conformance-known` lists the
-case.
+`lang/eval-okay-derivation-non-utf8.nix` of nix-conformance makes one
+derivation for each field; Nix 2.34.8 gives five drvPaths, iets the first
+two and then the error. Such derivations exist in real stores: `drv/` of
+nix-conformance holds six. `fuzz/conformance-known` lists the case.
 
 ## `builtins.genericClosure`
 
@@ -386,6 +383,17 @@ is the case that does not survive another checkout location, so
 The user setting `pure = false` restores Nix's defaults for the native
 commands. A project `iets.toml` may not set it
 (`docs/reference/settings.md`).
+
+## Daemon protocol versions
+
+Nix 2.34.8's client talks to a daemon of protocol 1.18 or newer
+(`WorkerProto::minimum`, worker-protocol.cc). iets needs 1.35
+(`MIN_MINOR`, src/remote/worker/mod.rs) and refuses an older daemon at
+the handshake with
+`the Nix daemon speaks protocol 1.N; this client needs 1.35 or newer`.
+Older daemons lack the trust flag and some reply shapes this client
+relies on. The wire fuzz target (`docs/how-to/fuzz.md`) therefore makes
+daemons of 1.35 and newer only.
 
 ## Classic mode
 
