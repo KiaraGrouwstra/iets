@@ -779,6 +779,22 @@ pub fn hash_derivation_modulo(
         }));
     }
 
+    let inputs = modulo_inputs(drv, cache, loader)?;
+    hash_derivation_modulo_with(drv, mask_outputs, &inputs)
+}
+
+/// The part of `hash_derivation_modulo` that only depends on the inputs, so
+/// the masked and the plain hash can share it.
+pub struct ModuloInputs {
+    inputs2: BTreeMap<String, InputNode>,
+    kind: DrvHashKind,
+}
+
+pub fn modulo_inputs(
+    drv: &Derivation,
+    cache: &mut DrvHashCache,
+    loader: &mut DrvLoader<'_>,
+) -> Result<ModuloInputs, DrvError> {
     let mut kind = if drv
         .outputs
         .values()
@@ -819,12 +835,23 @@ pub fn hash_derivation_modulo(
         }
     }
 
+    Ok(ModuloInputs { inputs2, kind })
+}
+
+pub fn hash_derivation_modulo_with(
+    drv: &Derivation,
+    mask_outputs: bool,
+    inputs: &ModuloInputs,
+) -> Result<Arc<DrvHash>, DrvError> {
     let hash = with_aterm_buf(|s| {
-        drv.unparse_into(s, mask_outputs, Some(&inputs2))?;
+        drv.unparse_into(s, mask_outputs, Some(&inputs.inputs2))?;
         Ok::<_, DrvError>(hash_bytes(HashAlgo::Sha256, s))
     })?;
     let hashes = drv.outputs.keys().map(|k| (k.clone(), hash)).collect();
-    Ok(Arc::new(DrvHash { hashes, kind }))
+    Ok(Arc::new(DrvHash {
+        hashes,
+        kind: inputs.kind,
+    }))
 }
 
 /// Mirrors derivations.cc:pathDerivationModulo (memoized by .drv path).
@@ -860,6 +887,16 @@ pub fn finalize_input_addressed_outputs(
     cache: &mut DrvHashCache,
     loader: &mut DrvLoader<'_>,
 ) -> Result<(), DrvError> {
+    finalize_with_inputs(drv, cache, loader).map(|_| ())
+}
+
+/// `finalize_input_addressed_outputs`, returning the `ModuloInputs` it computed.
+pub fn finalize_with_inputs(
+    drv: &mut Derivation,
+    cache: &mut DrvHashCache,
+    loader: &mut DrvLoader<'_>,
+) -> Result<Option<ModuloInputs>, DrvError> {
+    let mut modulo: Option<ModuloInputs> = None;
     let mut hashes_modulo: Option<Arc<DrvHash>> = None;
     let names: Vec<String> = drv.outputs.keys().cloned().collect();
     for name in names {
@@ -869,7 +906,12 @@ pub fn finalize_input_addressed_outputs(
             DerivationOutput::InputAddressed(_) | DerivationOutput::Deferred => {
                 let hm = match hashes_modulo {
                     Some(ref h) => h,
-                    None => hashes_modulo.insert(hash_derivation_modulo(drv, true, cache, loader)?),
+                    None => {
+                        let inputs = modulo_inputs(drv, cache, loader)?;
+                        let h = hash_derivation_modulo_with(drv, true, &inputs)?;
+                        modulo = Some(inputs);
+                        hashes_modulo.insert(h)
+                    }
                 };
                 match hm.kind {
                     DrvHashKind::Deferred => {
@@ -912,7 +954,7 @@ pub fn finalize_input_addressed_outputs(
             Some(_) => {}
         }
     }
-    Ok(())
+    Ok(modulo)
 }
 
 #[cfg(test)]
