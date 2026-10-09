@@ -99,7 +99,7 @@ def run-tests [iets: string, nixpkgs: string, work: string] {
 
   print "== 2. hello cold, --no-build"
   let hello = (^nix-instantiate -I $"nixpkgs=($nixpkgs)" '<nixpkgs>' -A hello err> /dev/null | chomp)
-  let r = (^$iets build --builder $url --timings --no-tracing-cache --no-build -I $"nixpkgs=($nixpkgs)" -E '(import <nixpkgs> {}).hello' | complete)
+  let r = (^$iets build --builder $url --timings --no-tracing-cache --no-build --impure -I $"nixpkgs=($nixpkgs)" -E '(import <nixpkgs> {}).hello' | complete)
   $r.stderr | save -f $"($work)/client2.log"
   if $r.exit_code != 0 { print ($r.stderr | chomp); fail "client exited non-zero" }
   show-matching '^(eval|plan|connect|query|add|grpc):' $"($work)/client2.log"
@@ -111,7 +111,7 @@ def run-tests [iets: string, nixpkgs: string, work: string] {
   print $"ok: ($missing)"
 
   print "== 3. hello warm, --no-build"
-  let r = (^$iets build --builder $url --timings --no-tracing-cache --no-build -I $"nixpkgs=($nixpkgs)" -E '(import <nixpkgs> {}).hello' | complete)
+  let r = (^$iets build --builder $url --timings --no-tracing-cache --no-build --impure -I $"nixpkgs=($nixpkgs)" -E '(import <nixpkgs> {}).hello' | complete)
   $r.stderr | save -f $"($work)/client3.log"
   if $r.exit_code != 0 { print ($r.stderr | chomp); fail "client exited non-zero" }
   show-matching '^(query|add|grpc):' $"($work)/client3.log"
@@ -201,7 +201,7 @@ def run-tests [iets: string, nixpkgs: string, work: string] {
   make-case $"($work)/c7a" iets-grpc-e2e-multi-a $system
   make-case $"($work)/c7b" iets-grpc-e2e-multi-b $system
   let expr = $"[ \(import ($work)/c7a/case.nix\) \(import ($work)/c7b/case.nix\) ]"
-  let r = (^$iets build --builder $url --no-tracing-cache -E $expr | complete)
+  let r = (^$iets build --builder $url --no-tracing-cache --impure -E $expr | complete)
   if $r.exit_code != 0 { print ($r.stderr | chomp); print (open --raw $"($work)/grpc.log" | chomp); fail "multi-root build exited non-zero" }
   for n in [iets-grpc-e2e-multi-a iets-grpc-e2e-multi-b] {
     if not ($r.stderr | str contains $"building ($n)") { print ($r.stderr | chomp); fail $"no progress line for ($n)" }
