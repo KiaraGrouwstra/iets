@@ -1,10 +1,10 @@
 # Caching, and why the input store is safe
 
-iets keeps three things on disk. Two are caches — they hold the result of
-work that can be done again. One is not a cache at all: it is where a
-fetched flake input *lives*. All three follow the same discipline, and this
-page explains what that discipline is and why the third one is safe to keep
-in a user's home directory with no daemon and no signature.
+iets keeps three things on disk. Two are caches: they hold the result of
+work iets can do again. The third is not a cache at all. It is where a
+fetched flake input *lives*. All three follow the same rules. This page
+explains those rules, and why the third store is safe in your home
+directory with no daemon and no signature.
 
 | store | default root | entry | keyed on |
 |---|---|---|---|
@@ -28,24 +28,22 @@ once a day, and poison-and-wipe instead of repair.
 
 ## One discipline, four rules
 
-**Stage and rename.** An entry is one file. It is written under a temporary
-name with everything the entry holds in it, and renamed into place. A
-rename is atomic, so one rename publishes the whole entry: a reader sees
-either the whole old entry or the whole new one, never a torn file and never
-two generations mixed.
+**Stage and rename.** An entry is one file. iets writes it in full under a
+temporary name, then renames it into place. A rename is atomic, so one
+rename publishes the whole entry. A reader sees either the whole old entry
+or the whole new one, never a torn file and never two generations mixed.
 
-**Readers never lock.** The rename makes the lock unnecessary on the read
-path, and the read path is the hot one. A
-reader opens the entry once and reads every part it needs through that one
-descriptor, so the bytes it goes on to use are the generation it validated,
-whatever a sibling publishes meanwhile. The old file stays alive for as long
+**Readers never lock.** Thanks to the rename, the read path, which is the
+hot one, needs no lock. A reader opens the entry once and reads every part
+it needs through that one descriptor. So the bytes it uses are the
+generation it validated, whatever a sibling publishes in the meantime. The old file stays alive for as long
 as that descriptor does, even after a publish or a sweep unlinked its name.
 
 **A writer holds the store's `flock` for exactly one entry, and gives up
 after 50 ms.** A skipped write is a miss on a later run. It is never a
-stall and never an error. The lock exists so that two writers of one key
-cannot cross inside one temporary file; it is not a critical section around
-a run. The temporary name also carries the process id and a per-write
+stall and never an error. The lock only stops two writers of one key from
+crossing inside one temporary file. It is not a critical section around a
+run. The temporary name also carries the process id and a per-write
 counter, so two threads writing one key in one process cannot cross either.
 A killed writer leaves a temporary file that no reader looks at and that the
 sweep removes after a day; the entry it was replacing stays whole and
@@ -54,12 +52,12 @@ usable.
 Measured: four `iets eval` processes filling one cold store in parallel
 wrote 97 IR entries and skipped none.
 
-Two things the rename does not promise, and does not have to. Nothing is
-fsynced, so a power loss can leave the name pointing at a file whose bytes
-were never written; those bytes are then read as any other bad bytes are,
-and the entry goes. And atomicity is per entry, not across entries: a run
-that published two keys can be interrupted between them. No reader joins two
-entries, so nothing depends on that.
+The rename does not promise two things, and it does not have to. First,
+nothing is fsynced. A power loss can leave the name pointing at a file
+whose bytes were never written. Those bytes are then read like any other
+bad bytes, and the entry goes. Second, atomicity is per entry, not across
+entries. A run that published two keys can be interrupted between them. No
+reader joins two entries, so nothing depends on that.
 
 **Poison and wipe; never repair.** An entry that does not decode is
 deleted and the run continues as a miss. A store whose version file is of
@@ -68,17 +66,18 @@ whose lock is not a file, is emptied and starts again.
 
 **An entry carries a checksum over its own key.** Every entry of the IR
 cache and of the tracing cache holds 16 bytes of blake3 over the key it
-answers and the whole of its content, and a reader verifies it before it
-decodes anything. A changed byte, a truncated entry and an entry copied to
-another key are all a mismatch, and a mismatch is a miss that poisons the
-entry. Without it a single changed byte gave a different answer with exit 0.
+answers and the whole of its content. A reader checks it before it decodes
+anything. A changed byte, a truncated entry and an entry copied to another
+key are all a mismatch, and a mismatch is a miss that poisons the entry.
+Without the checksum, a single changed byte gave a different answer with
+exit 0.
 
-The check is also the only thing the two stores trust. A reader opens an
-entry with `O_NOFOLLOW` and `O_NONBLOCK`, accepts a regular file alone, and
-refuses a length above 512 MiB — a hundred times the largest entry nixpkgs
-makes — before it allocates anything, so a name replaced by a symbolic link,
-a FIFO or a sparse file of a terabyte is a miss and not a hang or an
-out-of-memory abort.
+The checksum is also the only thing the two stores trust. A reader opens an
+entry with `O_NOFOLLOW` and `O_NONBLOCK` and accepts only a regular file.
+Before it allocates anything, it refuses a length above 512 MiB, which is a
+hundred times the largest entry nixpkgs makes. So a name replaced by a
+symbolic link, a FIFO or a one-terabyte sparse file is a miss, not a hang or
+an out-of-memory abort.
 
 **Nothing in an entry names a program.** An observation of a working tree
 holds which query of which SCM was asked, and the validator builds the
@@ -95,30 +94,33 @@ iets is tightened on the next run. What is still in clear is what an entry
 is for: the paths a run read, the bytes it printed, and the content hash of
 every file it read.
 
-That holds for *any* bytes, not only for bytes iets wrote: a cache
-directory is writable by whoever runs iets, so a truncated, corrupt or
-crafted entry must be a miss and never a crash. The IR decoder therefore
-checks every stored constant against the immediate encodings the writer can
-produce — a word is never a raw bit pattern the evaluator would follow as a
-pointer — checks every index against what it has already decoded (a local
-slot against its frame, a `with` depth against a `with` scope and the depth
-before it, a symbol against the entry's name table, a position against the
-file's length), checks every invariant the evaluator reads without one of its
-own (a `with` depth list rises, an `inherit (e)` binding has a `from` list,
-an allow table is in the order the writer wrote it), and bounds both its
-nesting and the items its counted runs may ask for by the entry's own
-length.
+All of this holds for *any* bytes, not only bytes iets wrote. Whoever runs
+iets can write to the cache directory. So a truncated, corrupt or crafted
+entry must be a miss, never a crash. That is why the IR decoder checks so
+much:
 
-**iets removes only what iets put there.** A wipe is scoped to the names
-that store's own layout makes — the version file, the lock, the stamp, the
+- Every stored constant must be one of the immediate encodings the writer
+  can produce. A word is never a raw bit pattern that the evaluator would
+  follow as a pointer.
+- Every index must fit what it has already decoded: a local slot its
+  frame, a `with` depth a `with` scope and the depth before it, a symbol
+  the entry's name table, a position the file's length.
+- Every invariant the evaluator trusts without checking must hold: a
+  `with` depth list rises, an `inherit (e)` binding has a `from` list, an
+  allow table is in the order the writer wrote it.
+- The entry's own length bounds both its nesting and the items its counted
+  runs may ask for.
+
+**iets removes only what iets put there.** A wipe touches only the names
+that store's own layout makes: the version file, the lock, the stamp, the
 temporary files, the entries and, for the IR cache, its shard directories.
 Anything else in the directory survives, and the directory itself is never
 removed. The three stores are subdirectories (`trace/`, `ir/`, `inputs/`)
 of the cache root, so `--cache-dir DIR` and `IETS_CACHE_DIR` never make
-`DIR` itself a removal target. A store subdirectory that exists, holds
-something, and carries no name from that layout is not iets's: iets
-refuses it with an error naming it and runs without that cache, rather than
-writing into it or removing anything from it.
+`DIR` itself a removal target. If a store subdirectory exists, holds
+something, and has no name from that layout, it is not iets's. iets names
+it in an error and runs without that cache. It does not write into it or
+remove anything from it.
 
 The sweep removes entries not read for 30 days. It runs on a write path, at
 most once a day per store, and never on the read path. The stamp is claimed
@@ -133,7 +135,7 @@ sizes every entry, 0.57 s when all 10,000 go. The once-a-day sweep of a
 real store is the first row.
 
 A warm hit writes nothing at all. The tracing cache rewrites its read set
-only when validation refreshed a stat field, and otherwise touches the
+only when validation refreshed a stat field. Otherwise it touches the
 entry's mtime only when that mtime is over a day old. The IR cache takes
 the mtime from the same `fstat` that sizes its read, and touches through
 that open descriptor. So a hot cache on a busy machine does no disk writes.
@@ -160,13 +162,13 @@ costs what the compile costs.
 
 The key holds the build id, so a new binary never reads an old entry.
 
-It also holds everything the compiler folds out of the evaluator's
-configuration, because a folded constant is stored by content and not by
-name. That is the system (`builtins.currentSystem`), the store directory
+The key also holds everything the compiler folds out of the evaluator's
+configuration, because a folded constant is stored by content, not by name.
+That means the system (`builtins.currentSystem`), the store directory
 (`builtins.storeDir`), the compile-time lint levels whose warnings the entry
-carries, and `pure-eval`, which removes the impure names altogether: without
-the flag in the key an impure run's entry answered a pure one and
-`builtins.currentSystem or "fallback"` gave the system. Every other constant
+carries, and `pure-eval`, which removes the impure names altogether.
+Without that flag in the key, an impure run's entry once answered a pure
+run, and `builtins.currentSystem or "fallback"` gave the system. Every other constant
 is stored by name and looked up in the live tables on load, so the search
 path follows the run, and a file with a `~/` path literal is never cached.
 
@@ -183,12 +185,11 @@ see. On `nixos/release-small.nix` with four workers, 16-core EPYC:
 nix-eval-jobs keeps no on-disk evaluation cache for a file argument, so its
 two rows differ only in page cache.
 
-What a second nixpkgs costs on disk, measured by evaluating the
-nixos-desktop workload at the pinned nixpkgs and then at a nixpkgs two
-releases older: the second added one tracing entry
-(0.9 MiB) and 56 IR entries (0.5 MiB). Ten of the 66 IR entries carried
-over — 15 % — and the tracing entry shares nothing at all, because its key
-holds the nixpkgs path.
+What does a second nixpkgs cost on disk? We evaluated the nixos-desktop
+workload at the pinned nixpkgs, then at a nixpkgs two releases older. The
+second run added one tracing entry (0.9 MiB) and 56 IR entries (0.5 MiB).
+Ten of the 66 IR entries carried over, or 15 %. The tracing entry shares
+nothing, because its key holds the nixpkgs path.
 
 ## The tracing cache: keyed on what a run read
 
@@ -214,20 +215,20 @@ Every primop that looks at the world records one observation.
 | an environment variable, as a keyed hash | `getEnv`; `HOME` when a `~/` literal is compiled | read it again and hash it again |
 | which query of which SCM was asked in which directory, and its exit status and output | the queries of the SCM that read a flake working tree; for git, `ls-files`, `status` and `rev-parse HEAD` | ask the same query again, rehash |
 
-What follows from an observation is no observation. The date and the
-count of a revision follow from the revision: a commit is named by the
-hash of its content, its date and its parents, so they cannot change while
-the name stays. `rev-parse HEAD` is the observation, and a validation
+What follows from an observation is not itself an observation. The date
+and the count of a revision follow from the revision. A commit is named by
+the hash of its content, its date and its parents, so they cannot change
+while the name stays the same. `rev-parse HEAD` is the observation, and a validation
 starts no `git log` and no `git rev-list`. That took 1 s from each hit on
 a nixpkgs checkout. A tree has a count only when it is clean and has its
 full history, and those two facts stay observations: `git status` gives
 the dirty flag, and the marker `.git/shallow` is a path observation.
 
-Detection is an observation too, and not only the tree it found. A flake
-directory with no working tree above it is a `path:` input *because* every
-ancestor lacked a marker, so each probe is recorded. A `git init` in a
-parent directory then misses, as it must: the flake becomes a git tree
-whose files are the tracked ones.
+Detection is an observation too, not only the tree it found. A flake
+directory with no working tree above it is a `path:` input *because* no
+ancestor had a marker, so iets records each probe. Run `git init` in a
+parent directory and the next run misses, as it must: the flake is now a
+git tree, and its files are the tracked ones.
 
 One limit: a replace ref (`git replace`) or a graft changes the history
 that `git` shows, and the revision stays. iets does not observe them, so
@@ -258,26 +259,28 @@ A hit still reads the state of each of the 54,000 files of the tree
 (`lstat`) and starts `git ls-files`, `git status` and `git rev-parse`.
 
 One tree is not walked. A `path:` input that names a store path, such as
-`path:/nix/store/…-source`, is hashed like any other, and when the
+`path:/nix/store/…-source`, is hashed like any other. When the
 fixed-output path of that hash is the directory itself, its name is its NAR
-hash. It is then recorded as a path's kind: still a directory, still the
-same bytes, by the argument that makes an input store entry one observation
-(below). A nixpkgs pinned that way cost 0.51 s to validate, one `lstat` per
-file, and costs two system calls now. A store path whose name is not the
-hash of its content — a build output, say — keeps its tree observation.
+hash. Then iets records only the path's kind: still a directory, so still
+the same bytes. The argument is the same one that makes an input store
+entry one observation (below). A nixpkgs pinned that way used to cost
+0.51 s to validate, one `lstat` per file. Now it costs two system calls. A
+store path whose name is not the hash of its content, such as a build
+output, keeps its tree observation.
 
 The read set has a second reader. `iets cache paths ENTRY` prints the paths
-in it that a watcher can use, NUL-separated, or `--json` with the kind of
-each. The cache owns that answer, because it owns the read set; saying it in
-a watcher's own words is the consumer's part, and `nix/direnvrc` turns these
-into direnv `watch_file` calls (`docs/how-to/use-with-direnv.md`). A command
+in it that a file watcher can use, NUL-separated, or as `--json` with the
+kind of each. The cache owns that answer, because it owns the read set.
+Turning it into a watcher's own words is the consumer's job. For example,
+`nix/direnvrc` turns these paths into direnv `watch_file` calls
+(`docs/how-to/use-with-direnv.md`). A command
 names the entry it read with `--entry-to FILE`, so no caller has to derive
 the key a second time.
 
-The selection is for a watcher that compares modification times. A `Stat`
-observation is left out when its path exists: it recorded existence and kind,
-and an mtime is not that — a git index refresh moves `.git` without changing
-what was observed. A path observed `Missing` stays, because it has no mtime
+The selection suits a watcher that compares modification times. A `Stat`
+observation is left out when its path exists. It recorded existence and
+kind, and an mtime says nothing about those: a git index refresh moves
+`.git` without changing what was observed. A path observed `Missing` stays, because it has no mtime
 to churn and its creation is the change it looks like.
 
 A run that had an entry and lost it says why, in one line:
@@ -287,15 +290,16 @@ $ iets eval --strict ./flake-attrs.nix
 re-evaluating: /home/u/repo/flake.nix changed
 ```
 
-The line names the one observation that no longer holds and what about it
-changed — a file's contents, a directory's entries, an environment variable,
-a working tree. The file the command names is one of those files, so
-editing it reads the same as editing anything it imports. Under `--log-format internal-json` it is a level-3
-record with code `cache-invalidated` (docs/reference/errors.md). Validation
-runs on four threads, so the read set's own order decides which observation
-is named: the lowest-indexed failure wins, and one change therefore always
-names the same thing. A run with no entry prints nothing: a first run
-invalidated nothing. Under a classic name the line stays off stderr, because
+The line names the one observation that no longer holds, and what changed
+about it: a file's contents, a directory's entries, an environment
+variable, a working tree. The file you named on the command line is one of
+those files, so editing it looks the same as editing anything it imports.
+Under `--log-format internal-json` it is a level-3 record with code
+`cache-invalidated` (docs/reference/errors.md). Validation runs on four
+threads, so the read set's own order decides which observation is named.
+The lowest-indexed failure wins, so one change always names the same thing.
+A run with no entry prints nothing, because a first run invalidated
+nothing. Under a classic name the line stays off stderr, because
 Nix prints nothing there, and the record goes to `json-log-path` alone
 (`docs/reference/divergences.md`).
 
@@ -306,15 +310,15 @@ search path, `builtins.currentSystem`, and the working directory only when a
 relative path literal can reach it. `--workers`, `--builder`, `--timings`
 and `--dry-run` are not in the key: they do not change the answer.
 
-The key names the file by path and never by content, and the same holds for
-a flake's `flake.nix` and `flake.lock`. The run reads all of them like any
-other file it reads, so the read set holds them, and one command therefore
-keeps one entry however often the file is edited. Content in the key would
-make an edit a *different question* instead of a stale answer: the run would
-miss with no entry, say nothing about why, and leave the entry of every
-earlier version of the file behind until the sweep. One command, one entry,
-and an edit of any file the run read — the one named on the command line
-included — is an invalidation that names it.
+The key names the file by path, never by content. The same goes for a
+flake's `flake.nix` and `flake.lock`. The run reads them like any other
+file, so they are in the read set. That way one command keeps one entry,
+however often you edit the file. With content in the key, an edit would be
+a *different question* instead of a stale answer. The run would miss with
+no entry, say nothing about why, and leave an entry for every earlier
+version of the file until the sweep. Instead: one command, one entry, and
+an edit of any file the run read (including the one on the command line)
+is an invalidation that names it.
 
 Some things make a run uncacheable rather than wrong: `builtins.currentTime`
 and every network fetcher without a hash. `currentTime` is a lazy thunk over
@@ -322,8 +326,8 @@ an internal primop, so the mark happens only if the program forces it.
 
 An entry is one file, `entry`, in a directory named by the key. The file
 starts with a version byte, the number of parts, the checksum over the key
-and the rest of the file, and a table of the parts — where each one is and
-how long it is — and which parts exist depends on the subcommand.
+and the rest of the file, and a table that says where each part is and how
+long it is. Which parts exist depends on the subcommand.
 `readset` holds the observations. `result` holds the exact
 stdout bytes for `eval`, `nix eval` and `nix derivation show`, the root
 derivation paths and the wanted outputs for `build` and `nix build`, and a
@@ -333,17 +337,17 @@ evaluation produced) and `sources` (where each source's bytes were), so a
 hit can still upload the closure, and any entry whose run printed lint
 warnings adds `warnings`, which a hit replays.
 
-An `eval` entry omits `drvs` and `sources` deliberately: the subcommand is
-in the key, so nothing would read them back, and writing the 16 MB `drvs` of
-nixos-desktop cost 40 ms — 3 % — on every miss.
+An `eval` entry leaves out `drvs` and `sources` on purpose. The subcommand
+is in the key, so nothing would read them back, and writing the 16 MB
+`drvs` of nixos-desktop cost 40 ms (3 %) on every miss.
 
 One file is what makes the entry atomic. A lookup opens it, reads the table,
 and then reads only the parts it wants out of that open file: the read set
 first, and the result, tables and warnings after validation. A write the
 lock cut short, or a writer that was killed, leaves the previous entry
 untouched, because nothing was renamed. Two writers of one key each publish
-a whole entry, so the loser's bytes are replaced, never woven in. The one
-thing the file costs: a hit that refreshed a stat field has to publish the
+a whole entry, so the loser's bytes are replaced, never woven in. One file
+does have a cost: a hit that refreshed a stat field has to publish the
 whole entry again, not just the read set. For an `eval` entry that is the
 read set plus a few kilobytes. For a `build` entry of nixos-desktop it is
 17 MB, on a path that runs only when a file's mtime moved and its content
@@ -365,9 +369,9 @@ environment variables. The read-set file is 1.1 MB. A hit is 4-5 ms to read
 and decode it, 23-40 ms to validate it on four threads, and the rest is
 process start.
 
-The classic `nix` subcommands have the same cache, and there the comparison
-is with Nix's own evaluation cache, which is an sqlite file of attribute
-values keyed on the locked flake's fingerprint. A `path:` flake with a
+The classic `nix` subcommands have the same cache. There it competes with
+Nix's own evaluation cache, an sqlite file of attribute values keyed on the
+locked flake's fingerprint. A `path:` flake with a
 `github:` nixpkgs that is already in the store, a local daemon, every output
 already valid, medians on a 16-core EPYC that was busy with other work:
 
@@ -382,33 +386,33 @@ already valid, medians on a 16-core EPYC that was busy with other work:
 
 Nix never answers `nix eval` from its cache, so its two `nix eval` rows are
 full evaluations. Where it does answer, the two warm paths are within a few
-tens of milliseconds of each other. The difference is in when each one has
-a warm path at all: Nix's is off for a dirty git tree, for `-f` and for
-`--expr`, which is the state a tree is in while somebody works on it. A git
+tens of milliseconds of each other. The real difference is *when* each one
+has a warm path at all. Nix's is off for a dirty git tree, for `-f` and for
+`--expr`, and a dirty tree is exactly what you have while you work. A git
 tree also costs Nix a copy on every run, clean or dirty. In this repository
 `nix develop -c true` is 0.04 s on an iets hit and 0.20 s in Nix either
 way, `nix derivation show .#default` 0.03 s against 0.08 s, and
 `nix eval --raw .#default.drvPath` 0.03 s against 1.1 s.
 
 What a hit costs is the read set: 1,200 to 1,600 observations for the rows
-above, validated in 9 to 18 ms. The one case that was slow is gone — a
-`path:` input that is a store path used to be walked file by file (above).
+above, validated in 9 to 18 ms. The one slow case is gone: a `path:` input that is
+a store path used to be walked file by file (above).
 `nix build` also waited up to 250 ms for its heartbeat thread to notice the
 build was over, on a hit and on a miss alike.
 
-Two properties are worth naming. Errors are never cached: an entry is
-written only after the result was printed without error. `nix eval` prints
-`«error: …»` in place of a value it could not force and still exits 0, as
-Nix does, and that too is an error: the read that failed left no observation
-of the absence, so a run that printed one writes nothing. And the read set
-over-approximates rather than under-approximates — a cancelled helper fiber
-still leaves its observations in it, which costs a rare extra miss and never
-a wrong hit. A file that changes mid-run may be recorded twice with two
+Two properties are worth naming. First, errors are never cached. An entry
+is written only after the result was printed without error. `nix eval`
+prints `«error: …»` in place of a value it could not force and still exits
+0, as Nix does. That counts as an error too: the read that failed left no
+observation of the absence, so a run that printed one writes nothing.
+Second, the read set errs on the side of too much. A cancelled helper fiber
+still leaves its observations in it. That costs a rare extra miss, and
+never a wrong hit. A file that changes mid-run may be recorded twice with two
 hashes, and validation then fails on one of them, which is a miss.
 
-One consequence surprises people: `builtins.trace` and `builtins.warn` write
-to stderr *during evaluation*, and a hit does not evaluate, so a hit prints
-none of them. Lint warnings are different — the entry records them and a hit
+One thing may surprise you. `builtins.trace` and `builtins.warn` write to
+stderr *during evaluation*. A hit does not evaluate, so a hit prints none of
+them. Lint warnings are different: the entry records them, and a hit
 replays them.
 
 ## The input store, and why FOD-only makes it safe
@@ -455,26 +459,26 @@ So the content verifies itself. Follow what that removes:
 What a reader *does* check on open is small: the index's own checksum and
 its version byte, and, for each pack, the checksum of the pack's own index
 and that every object it names lies inside it. Anything else wipes the
-entry or the pack, which costs one fetch. It never re-hashes the tree,
-because the name already is the hash: an object whose *bytes* were changed
-in place, under an index that still fits, is therefore read as it stands.
-Rehashing it on every open would read every input of every evaluation,
-which is what the index exists to avoid.
+entry or the pack, which costs one fetch. It never hashes the tree again,
+because the name already is the hash. So an object whose *bytes* were
+changed in place, under an index that still fits, is read as it stands.
+Hashing it again on every open would read every input of every evaluation,
+and the index exists to avoid exactly that.
 
 An entry is one file, `inputs/<store path base name>`: the NAR hash and size
 the fetch verified, and an index of every member's name, mode, symlink
 target, size and the id of its bytes, the blake3 of them. The bytes
 themselves are objects in `inputs/packs/`, LZ4-compressed when that shrinks
-them, and an object two inputs share is stored once. The design is
-nix-tarmac's: a store of tarball contents keyed by their hash, so a second
-revision of nixpkgs costs only the files that changed — 4 to 5 MiB, index
-included, for revisions 200 commits apart, where a spool cost 247 MiB each.
-The first revision costs 96 MiB. Where tarmac indexes
-its one pack in LMDB, here every pack is written once under a temporary name,
-indexes itself in a footer, and is renamed into place, which is the rule the
-rest of this page follows. No tree is ever unpacked: a full nixpkgs revision
-costs 19 MB of index over the evaluator's own 75 MB, where unpacking a tree
-cost 307 MB — 13.5 s and 382 MB peak before, 7.7 s and 94 MB after.
+them, and an object two inputs share is stored once. The design comes from nix-tarmac: a store of tarball contents keyed by
+their hash. So a second revision of nixpkgs costs only the files that
+changed. For revisions 200 commits apart, that is 4 to 5 MiB, index
+included, where a spool cost 247 MiB each. The first revision costs 96 MiB.
+tarmac indexes its one pack in LMDB. Here, every pack is written once under
+a temporary name, indexes itself in a footer, and is renamed into place,
+which is the rule the rest of this page follows. No tree is ever unpacked.
+A full nixpkgs revision costs 19 MB of index over the evaluator's own
+75 MB, where unpacking a tree cost 307 MB: 13.5 s and 382 MB peak before,
+7.7 s and 94 MB after.
 
 The entries name the objects; the sweep removes entries. After a sweep, a
 collection under the store's lock marks every object some entry names,
@@ -510,10 +514,10 @@ is per tree, so different inputs still download in parallel.
 ## The roots store: what iets keeps alive
 
 `~/.cache/iets/roots` is where iets keeps the GC roots it owns. Every
-other root mechanism takes a path from the caller — `print-dev-env
---gc-root PATH`, `eval-jobs --gc-roots-dir DIR`, `plumbing build --gc-root
-DIR`, `nix-instantiate --add-root PATH`, `nix-build -o` — and this is the
-one iets decides for itself. Its users:
+other root mechanism takes a path from you: `print-dev-env --gc-root PATH`,
+`eval-jobs --gc-roots-dir DIR`, `plumbing build --gc-root DIR`,
+`nix-instantiate --add-root PATH`, `nix-build -o`. This is the one place
+where iets decides for itself. Its users:
 
 | Who | What the root holds | Key | Switch |
 |:---|:---|:---|:---|
@@ -538,8 +542,8 @@ own link (and owns the failure, where a root iets chose is best effort),
 `nix-build -o result` keeps `result`, and `iets build --fetch-to DIR`
 already has the bytes outside the store.
 
-A shell with no single store path to hold — `nix-shell` realises the
-derivation's inputs and not the derivation — takes one link per path. It is
+`nix-shell` realises the derivation's inputs, not the derivation, so it has
+no single store path to hold. It takes one link per path. It is
 what nix-direnv has to spell out with `nix-instantiate --add-root` and
 `nix-store --add-root` for the same reason. The links are numbered by the
 sorted path list, so re-entering the same project replaces them in place; a
@@ -556,10 +560,10 @@ Three of the four rules above do not apply. A root holds nothing that can be
 recomputed, so there is no format version, nothing to stage and rename, and
 nothing to poison and wipe: a symlink is either right or absent. Its only
 writer is `replaceSymlink`, which is already atomic. The TTL sweep is the
-rule that does apply, and it fits better here than anywhere else — "keep
-alive what somebody used recently" is exactly what a root should mean — so
-every run touches its link (`utimensat` on the link, not on the store path
-it names, whose mtime is the store's epoch) and `iets cache gc` walks this
+rule that does apply, and it fits here better than anywhere: "keep alive
+what somebody used recently" is exactly what a root should mean. So every
+run touches its link (`utimensat` on the link, not on the store path it
+names, whose mtime is the store's epoch), and `iets cache gc` walks this
 store with the other three. A swept root frees nothing by itself; it lets
 the next `nix collect-garbage` decide.
 
@@ -571,9 +575,9 @@ a failure: the command it belongs to still answers.
 ### Why `nix fmt` wanted one
 
 `nix fmt` has two things it must not redo. The first is the evaluation of
-`formatter.<system>`. The second is the build of what that names — and a
-formatter nothing points at is garbage, so the next `nix collect-garbage`
-takes it and the run after that builds it again.
+`formatter.<system>`. The second is the build of what that names. A formatter
+that nothing points at is garbage, so the next `nix collect-garbage` takes
+it, and the run after that builds it again.
 
 Mic92's flake-fmt exists because stock `nix fmt` does both every time. It
 answers the first with an `LD_PRELOAD` shim that records the mtime of every
@@ -585,9 +589,9 @@ the tracing cache, keyed on the flake and the system, so a second run with
 nothing changed revalidates its read set and evaluates nothing. The read set
 holds content hashes, not mtimes, and that is exactly the difference a
 formatter creates: a formatter rewrites files, and a file rewritten to the
-same bytes is still a hit. An mtime says it changed. So the steady state of
-`nix fmt` — run it, it reformats nothing, run it again — is a hit, and only
-a run that really changed a file the evaluation read costs an evaluation.
+same bytes is still a hit. An mtime says it changed. So the usual `nix fmt` loop (run
+it, it reformats nothing, run it again) is a hit. Only a run that really
+changed a file the evaluation read costs an evaluation.
 The one exception is a `path:` flake, a directory outside any git
 repository: its `lastModified` is the newest mtime in the tree, the
 evaluation can see it, and so a rewrite to the same bytes is a new date and
