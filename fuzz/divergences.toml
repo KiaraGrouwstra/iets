@@ -3,7 +3,8 @@
 # when every field the entry gives matches. Format and meaning:
 # docs/how-to/fuzz.md.
 #
-#   [[parse]]       # or [[nar]] for the nar-* targets, [[wire]] for wire
+#   [[parse]]       # or [[nar]] for the nar-* targets, [[wire]] for wire,
+#                   # [[eval]] for eval
 #   id = "..."      # names the case; reports count hits per id
 #   doc = "..."     # the section of docs/reference/divergences.md
 #   kind = "..."    # optional: one of the target's kinds
@@ -11,6 +12,8 @@
 #   input = "..."   # optional: the input contains these bytes
 #   nix = "..."     # optional: Nix's side of the report contains this
 #   iets = "..."    # optional: iets's side of the report contains this
+#   float_digits = true  # optional: the two differ only in how they write
+#                        # numbers that are one double
 #   names_differ = true  # optional: the two errors name different things
 #                        # (the first '...' of each message)
 
@@ -68,3 +71,42 @@ id = "store-path-without-a-dash"
 doc = "docs/reference/divergences.md#a-store-path-without-a-dash"
 kind = "nix-only"
 iets = "is not a valid store path: missing dash"
+
+[[eval]]
+id = "repeated-list"
+doc = "docs/reference/divergences.md#repeated-for-a-list"
+kind = "value"
+nix = "«repeated»"
+
+[[eval]]
+id = "stack-depth"
+doc = "docs/reference/divergences.md#the-limits-of-a-run"
+kind = "iets-only"
+nix = "stack overflow"
+
+[[eval]]
+id = "json-float-digits"
+doc = "docs/reference/divergences.md#the-digits-of-a-float-in-tojson"
+kind = "value"
+float_digits = true
+
+# `==`, `!=` and `elem` take equal words as equal without forcing what is
+# inside, where Nix compares and throws
+
+[[eval]]
+id = "eq-shortcut"
+doc = "docs/reference/divergences.md#unforced-values-in-lazy-positions"
+kind = "iets-only"
+input = " == "
+
+[[eval]]
+id = "eq-shortcut-ne"
+doc = "docs/reference/divergences.md#unforced-values-in-lazy-positions"
+kind = "iets-only"
+input = " != "
+
+[[eval]]
+id = "eq-shortcut-elem"
+doc = "docs/reference/divergences.md#unforced-values-in-lazy-positions"
+kind = "iets-only"
+input = "builtins.elem "

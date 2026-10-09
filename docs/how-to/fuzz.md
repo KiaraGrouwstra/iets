@@ -11,6 +11,7 @@ page shows how to run it and how to read what it reports.
 | `nar-gen` | bytes that choose a NAR token by token | as `nar-read` |
 | `nar-tree` | bytes that choose a file tree on disk | the NAR of the tree, then as `nar-read` |
 | `wire` | bytes that choose a daemon's side of a conversation | the answer of iets's daemon client and of Nix's to one operation |
+| `eval` | bytes that choose an expression of a known type | the deeply forced value as `nix-instantiate --eval --strict` prints it, or an error on both sides |
 
 Two oracle processes stay running while a target runs, so a comparison
 costs a pipe round trip and not a process start.
@@ -18,7 +19,8 @@ costs a pipe round trip and not a process start.
 The oracles, the regression cases and the grown corpora live in
 [nix-conformance](https://github.com/numtide/nix-conformance), a flake
 input: a test suite any Nix implementation can run. `parse-oracle` links
-libnixexpr 2.34.8 and `nar-oracle` links libnixutil 2.34.8.
+libnixexpr 2.34.8, `nar-oracle` links libnixutil 2.34.8 and `eval-oracle`
+links libnixexpr 2.34.8 in pure mode with no store.
 
 ## The parse target
 
@@ -119,20 +121,63 @@ does: Nix's client aborts on an answer that comes first.
 | `iets-panic` | iets panicked |
 | `nix-crash` | the oracle process died on the reply |
 
+## The eval target
+
+`eval` tests the evaluator. The input chooses an expression of a known
+type (`fuzz/src/eval.rs`):
+
+- numbers with their edges: the largest and smallest integers, overflow,
+  division by zero, floats that print in exponent form;
+- strings with escapes, `''` strings and interpolation;
+- lists, sets with `rec`, `inherit`, nested and dynamic names, `//`;
+- lambdas with patterns, defaults and `@`; `let`, `with`, `if`,
+  `assert`;
+- `seq`, `deepSeq`, `tryEval`, and errors that are never forced;
+- a set of pure builtins: arithmetic, comparison, list, set and string
+  builtins, `toJSON`, `fromJSON`, `toXML`, `hashString`, `match`, `split`,
+  `genericClosure`, `unsafeGetAttrPos` and others.
+
+The expressions are simply typed and no binding refers to itself, so each
+evaluation ends. Now and then a value of the wrong type takes the place of
+a correct one, to compare the type errors.
+
+iets evaluates the expression in the fuzzer's process, in pure mode.
+`eval-oracle` evaluates it with Nix 2.34.8 in pure mode with no store.
+Both force the value deeply. The two must print the same value, or both
+must fail; error messages are not compared. `IETS_EVAL_SOURCE=FILE`
+writes the expression of the last input.
+
+`==` on two sets compares their attributes in each evaluator's symbol
+order and stops at the first difference. Which of a different and a
+failing attribute it reaches first is therefore not the same on both
+sides. Each expression names the generator's field names first, in one
+order, so that both sides reach the same attribute first. A difference
+is checked again with a fresh oracle and, if it holds, a fresh evaluator,
+as a fresh `nix-instantiate` and a fresh `iets eval` would see it.
+
+| Kind | Meaning |
+|:---|:---|
+| `nix-only` | Nix gives a value, iets an error |
+| `iets-only` | iets gives a value, Nix an error |
+| `value` | both give a value, and the values differ |
+| `iets-panic` | iets panicked |
+| `nix-crash` | the oracle process died on the expression |
+
 ## Run the checks
 
 ```sh
 nix build .#checks.x86_64-linux.fuzz-parse -L
 nix build .#checks.x86_64-linux.fuzz-nar -L
 nix build .#checks.x86_64-linux.fuzz-wire -L
+nix build .#checks.x86_64-linux.fuzz-eval -L
 nix build .#checks.x86_64-linux.conformance -L
 ```
 
 `fuzz-parse` gives every `.nix` file of the pinned nixpkgs to both
 parsers, then runs libFuzzer for 60 seconds from an eighth of those files
 and the parse cases and corpus of nix-conformance. `fuzz-nar` runs each
-NAR target for 20
-seconds, and `fuzz-wire` runs `wire` for 30. A check fails on a
+NAR target for 20 seconds, `fuzz-wire` runs `wire` for 30 and
+`fuzz-eval` runs `eval` for 60 seconds. A check fails on a
 difference that `fuzz/divergences.toml` does
 not list, and prints the input in base64. `conformance` runs every case
 of nix-conformance through `conformance-adapter`, iets behind the suite's
@@ -212,7 +257,7 @@ A NAR is shown as its length and its first 64 bytes in hexadecimal.
 ## Known divergences
 
 `fuzz/divergences.toml` lists the differences that are not bugs, in one
-array of tables per target family: `[[parse]]` and `[[nar]]`. A
+array of tables per target family: `[[parse]]`, `[[nar]]` and `[[eval]]`. A
 difference that matches an entry is counted as expected and is not added
 to the corpus, so the fuzzer does not find it again and again.
 
@@ -229,10 +274,11 @@ iets = "unexpected invalid token"
 | `id` | (required) the name the reports count hits under |
 | `doc` | (required) the section that explains the divergence |
 | `kind` | the difference has this kind |
-| `input` | the input contains these bytes |
+| `input` | the input contains these bytes (for `eval`, the generated expression) |
 | `nix` | Nix's side of the report contains this text |
 | `iets` | iets's side of the report contains this text |
 | `names_differ` | `true`: the first `'...'` of the two messages differ |
+| `float_digits` | `true`: the two sides differ only in the digits of numbers, and each such pair reads back to the same double |
 
 An entry matches when every field it gives matches. Keep entries narrow:
 a broad entry hides bugs. `IETS_FUZZ_DIVERGENCES=FILE` reads another
@@ -243,6 +289,7 @@ list; otherwise the binaries carry the list they were built with.
 ```sh
 nix-farm '.#packages.x86_64-linux.fuzz-parse-campaign' --fetch-to campaign
 nix-farm '.#packages.x86_64-linux.fuzz-nar-campaign' --fetch-to campaign
+nix-farm '.#packages.x86_64-linux.fuzz-eval-campaign' --fetch-to campaign
 ```
 
 A campaign minimises its seeds, fuzzes on every core of the builder for

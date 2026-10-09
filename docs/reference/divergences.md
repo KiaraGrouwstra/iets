@@ -204,6 +204,18 @@ a = l; b = l; }` gives `{ a = [ 1 2 ]; b = [ 1 2 ]; }`, Nix `{ a = [ 1 2
 difference, because Nix prints `let x = [ x ]; in x` as `[ [ «repeated» ]
 ]` and that needs two slots for one list. Sets match Nix exactly.
 
+## The digits of a float in `toJSON`
+
+`builtins.toJSON` writes a float with the fewest digits that read back to
+the same double. Nix writes it with nlohmann's JSON library, whose Grisu2
+algorithm gives that shortest form for most doubles but not for all:
+`builtins.toJSON 4.200000000001e17` is `"4.2000000000009997e+17"` in Nix
+and `"4.200000000001e+17"` in iets. Both read back to the same double. The bytes differ, so a JSON file
+that holds such a float has another hash. Matching Nix would mean
+carrying a port of Grisu2.
+
+`fuzz/divergences.toml` holds this case as `json-float-digits`.
+
 ## The limits of a run
 
 Both evaluators stop on a program that asks for too much, with the same

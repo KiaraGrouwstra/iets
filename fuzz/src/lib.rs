@@ -1,6 +1,7 @@
 //! Differential fuzzing of iets against Nix 2.34.8 (docs/how-to/fuzz.md).
 
 pub mod canon;
+pub mod eval;
 pub mod known;
 pub mod nar;
 pub mod oracle;
@@ -52,6 +53,7 @@ pub fn no_panic<T>(f: impl FnOnce() -> T) -> Result<T, String> {
 pub fn target(name: &str) -> Result<Box<dyn Target + Send>, String> {
     Ok(match name {
         "parse" => Box::new(parse::Parse::new(known::from_env("parse", parse::KINDS)?)),
+        "eval" => Box::new(eval::Eval::new(known::from_env("eval", eval::KINDS)?)),
         "nar-read" | "nar-gen" | "nar-tree" => {
             let mode = match name {
                 "nar-read" => nar::Mode::Read,
@@ -63,7 +65,7 @@ pub fn target(name: &str) -> Result<Box<dyn Target + Send>, String> {
         "wire" => Box::new(wire::Wire::new(known::from_env("wire", wire::KINDS)?)),
         _ => {
             return Err(format!(
-                "unknown target `{name}`: parse, nar-read, nar-gen, nar-tree or wire"
+                "unknown target `{name}`: parse, eval, nar-read, nar-gen, nar-tree or wire"
             ));
         }
     })

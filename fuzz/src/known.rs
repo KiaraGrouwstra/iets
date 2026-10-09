@@ -10,6 +10,7 @@ pub struct Entry {
     nix: Option<String>,
     iets: Option<String>,
     names_differ: bool,
+    float_digits: bool,
 }
 
 pub fn load(text: &str, target: &str, kinds: &[&str]) -> Result<Vec<Entry>, String> {
@@ -45,6 +46,10 @@ pub fn load(text: &str, target: &str, kinds: &[&str]) -> Result<Vec<Entry>, Stri
                     .get("names_differ")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false),
+                float_digits: e
+                    .get("float_digits")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
             })
         })
         .collect()
@@ -57,6 +62,7 @@ impl Entry {
             && self.nix.as_deref().is_none_or(|n| d.nix.contains(n))
             && self.iets.as_deref().is_none_or(|n| d.iets.contains(n))
             && (!self.names_differ || quoted(&d.nix) != quoted(&d.iets))
+            && (!self.float_digits || same_numbers(&d.nix, &d.iets))
     }
 }
 
@@ -81,4 +87,77 @@ pub fn from_env(target: &str, kinds: &[&str]) -> Result<Vec<Entry>, String> {
 fn quoted(msg: &str) -> Option<&str> {
     let (_, rest) = msg.split_once('\'')?;
     Some(rest.split_once('\'')?.0)
+}
+
+/// Whether `a` and `b` differ only in the digits of numbers, each pair of
+/// which reads back to the same double.
+fn same_numbers(a: &str, b: &str) -> bool {
+    let (ta, tb) = (tokens(a), tokens(b));
+    ta.len() == tb.len()
+        && ta.iter().zip(&tb).all(|(x, y)| match (x, y) {
+            (Tok::Num(x), Tok::Num(y)) => x.parse::<f64>().ok() == y.parse::<f64>().ok(),
+            (x, y) => x == y,
+        })
+}
+
+#[derive(PartialEq)]
+enum Tok<'a> {
+    Num(&'a str),
+    Text(char),
+}
+
+fn tokens(s: &str) -> Vec<Tok<'_>> {
+    let b = s.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        let start = i;
+        let digits = |i: &mut usize| {
+            let s = *i;
+            while *i < b.len() && b[*i].is_ascii_digit() {
+                *i += 1;
+            }
+            *i > s
+        };
+        if b[i] == b'-' {
+            i += 1;
+        }
+        if digits(&mut i) {
+            if i + 1 < b.len() && b[i] == b'.' && b[i + 1].is_ascii_digit() {
+                i += 1;
+                digits(&mut i);
+            }
+            if i < b.len() && matches!(b[i], b'e' | b'E') {
+                let mut j = i + 1;
+                if j < b.len() && matches!(b[j], b'+' | b'-') {
+                    j += 1;
+                }
+                if digits(&mut j) {
+                    i = j;
+                }
+            }
+            out.push(Tok::Num(&s[start..i]));
+        } else {
+            let c = s[start..].chars().next().unwrap();
+            i = start + c.len_utf8();
+            out.push(Tok::Text(c));
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::same_numbers;
+
+    #[test]
+    fn numbers_of_one_double() {
+        assert!(same_numbers(
+            "\"[4.2000000000009997e+17,1e+300]\"",
+            "\"[4.200000000001e+17,1e+300]\""
+        ));
+        assert!(!same_numbers("[0.1]", "[0.2]"));
+        assert!(!same_numbers("[0.1,1]", "[0.1,2]"));
+        assert!(!same_numbers("a0.1", "b0.1"));
+    }
 }
