@@ -3,7 +3,9 @@
 iets can stand in for Nix's own commands. Install it under the names
 `nix-instantiate`, `nix-build`, `nix-shell`, `nix-eval-jobs` and `nix`, and
 each name handles what iets implements. For everything else, it runs the
-real Nix for you. So the real `nix` must also be on your `PATH`.
+real Nix for you. So a real Nix must be installed too. The farm below
+records the one it was built with, and **Fallback rules** says how iets
+finds it.
 
 This page lists the flags each name handles, and what makes it fall back.
 
@@ -520,9 +522,11 @@ iets: falling back to nix-instantiate: '--parse' is not implemented
 iets looks for the real binary in this order:
 
 1. `IETS_NIX_BIN_DIR/<name>`, when it exists;
-2. the directory named in `share/iets/real-nix-bin`, next to the farm entry
-   on `PATH` that leads to iets;
-3. the first `<name>` on `PATH` that is not iets.
+2. the first `<name>` on `PATH` that is not iets. When an entry is one of
+   iets's classic names, iets uses the Nix that the farm was built for,
+   which the farm names in `share/iets/real-nix-bin`;
+3. the `<name>` next to the first `nix-store` on `PATH`. The farm has no
+   `nix-store`, so this finds the Nix installation even without that file.
 
 If it finds nothing, you get
 `iets: cannot fall back to <name>: not found on PATH`, and exit code 1.
