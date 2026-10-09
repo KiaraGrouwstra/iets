@@ -1,10 +1,9 @@
 # How iets evaluates
 
-iets is a tree-walking evaluator over a compiled intermediate
-representation. It is lazy, like Nix, and it forces thunks on several
-threads at once. This page explains why those two properties can hold
-together, and why the memory layout is the thing that decides how large a
-run gets.
+iets walks a tree, but not the syntax tree: it first compiles your code to
+an intermediate representation. It is lazy, like Nix, and it forces thunks
+on several threads at once. This page explains how both can be true, and
+why the memory layout decides how big a run gets.
 
 ## The pipeline
 
@@ -26,15 +25,15 @@ one per node.
 ## Laziness, and what a thunk costs
 
 Every argument, attribute value, list element and `let` binding that is
-not cheap becomes a thunk. A cheap expression — a literal, a variable —
-reuses the existing word or cell, so a variable that holds a thunk shares
-that thunk pointer instead of allocating a second one.
+not cheap becomes a thunk. A cheap expression, like a literal or a
+variable, reuses the existing word or cell. So a variable that holds a
+thunk shares that thunk pointer instead of allocating a second one.
 
-Forcing overwrites the thunk object in place. A thunk is two words: `code`
-holds the IR or the function and becomes the value; `state` holds the
-environment or the argument and becomes empty. Cells that still point at
-the thunk are rewritten with the value as they are read. That is graph
-reduction, and it is why a shared subexpression is evaluated once.
+Forcing overwrites the thunk object in place. A thunk is two words. `code`
+holds the IR or the function, and becomes the value. `state` holds the
+environment or the argument, and becomes empty. Cells that still point at
+the thunk get the value written over them as they are read. That is graph
+reduction, and it is why a shared subexpression is evaluated only once.
 
 `mapAttrs` is the case where even two words were too many. On the outpaths
 workload there were 22 million `mapAttrs` thunks and 93 % of them were
@@ -65,24 +64,24 @@ The heap kinds behind a `PTR` are `Float`, `BigInt`,
 `Thunk { code, state }`.
 
 A `Cell` is an `AtomicU64` holding a `Word`. Environment slots, list
-elements and attribute values are all cells. That decision lets the
-sequential path and the parallel path share one shape: there is no
-"parallel value" and no "sequential value", only a cell that happens to be
-read by one thread or by four. Cells that a value is read from never hold a
+elements and attribute values are all cells. Because of that, the
+sequential path and the parallel path share one shape. There is no
+"parallel value" and no "sequential value". There is only a cell, read by
+one thread or by four. Cells that a value is read from never hold a
 blackhole; only a thunk's own state cell does.
 
-Attributes are sorted by symbol id, as they are in Nix. Name order — what
-`attrNames`, printing, JSON and a derivation environment need — is computed
+Attributes are sorted by symbol id, as they are in Nix. Name order, which
+`attrNames`, printing, JSON and a derivation environment need, is computed
 on demand.
 
 ### Strings carry context
 
 A string value carries a context: `Opaque(store path)`, `DrvDeep(drv path)`
 or `Built { drv path, output name }`. Context flows through `+`, through
-interpolation and through `concatStringsSep`. `derivationStrict` is where it
-is cashed in: it turns the context of every attribute into the derivation's
+interpolation and through `concatStringsSep`. `derivationStrict` is where
+it pays off: it turns the context of every attribute into the derivation's
 `inputDrvs` and `inputSrcs`. That is how a derivation learns its
-dependencies without anyone declaring them.
+dependencies without you declaring them.
 
 ## Scopes and errors
 
@@ -93,11 +92,11 @@ which is why `WithVar` is emitted only when no lexical binder exists at
 all.
 
 An evaluation result is `Result<Word, Box<Error>>`. `tryEval` catches
-`Throw` and `Assert` and nothing else: a lint raised at level `error` is a
-different kind and escapes it, and so does the cancellation a bailed helper
-fiber gets. An error carries a message, a span and a trace, and position
-information is kept per IR node — for `unsafeGetAttrPos`, for lambda
-positions and for error messages.
+`Throw` and `Assert` and nothing else. A lint raised at level `error` is a
+different kind, so it escapes, and so does the cancellation a bailed helper
+fiber gets. An error carries a message, a span and a trace. Each IR node
+keeps its position, for `unsafeGetAttrPos`, lambda positions and error
+messages.
 
 ## `//` builds a union, not a copy
 
@@ -107,21 +106,21 @@ most eight, lowest priority first. A lookup probes the leaves from the
 last. An iteration merges them as it goes. A consumer that needs one
 contiguous slice asks for a flat copy, which is made once and cached.
 
-The merge runs a loser tree over the leaf heads, so emitting one attribute
-costs one root path — three comparisons at eight leaves — instead of a scan
-of every head to pick the minimum and a second scan to advance it. Equal
-syms are ordered by leaf, last leaf first, so the winner is the entry the
-`//` gives and the duplicates behind it are dropped as they surface. The
-flat copy is sized at the sum of the leaf lengths, filled in one merge pass
-and then handed the tail the duplicates left back at the bump pointer;
-sizing it exactly would mean merging twice.
+The merge runs a loser tree over the leaf heads. Emitting one attribute
+costs one root path, three comparisons at eight leaves. Without the tree,
+it would scan every head to pick the minimum and scan again to advance it.
+Equal syms are ordered by leaf, last leaf first. So the winner is the entry
+`//` gives, and the duplicates behind it are dropped as they surface. The
+flat copy is sized at the sum of the leaf lengths and filled in one merge
+pass. Then the tail the duplicates left is handed back to the bump pointer.
+Sizing it exactly would mean merging twice.
 
 On nixos-desktop the merge ran 8.4 million
 times, 4.9 million of them over six to eight leaves, where a rescan cost 16
 head checks per attribute. The tree took the run from 10.03 G to 9.74 G
 instructions, and the merge itself from 7.1 % to 4.5 % of it.
 
-The reason is measurement, not taste. On outpaths, `//` copied 5.12 GB, of
+Why a union? Because we measured, not because we liked it. On outpaths, `//` copied 5.12 GB, of
 which 3.94 GB was left sides, and 80 % of the results were never iterated
 at all. The union took the arena from 13,253 MB to 8,936 MB. An earlier
 version that kept recursive `(a, b)` pointers instead of inline leaves cost
@@ -150,12 +149,12 @@ but its ceiling is a part of the 0.8 % that `//` costs. The census is a
 
 The arena keeps a table of string bytes by 64-bit content hash, the
 context-free string object over them, and a set of context slices. A string
-without context shares the whole object; a string with context shares the
+without context shares the whole object. A string with context shares the
 bytes. Interpolation joins its pieces in the arena and gives them back when
 the content already exists.
 
 On outpaths, 5.93 million of 7.31 million strings repeated bytes that were
-already there — 662 MB. Sharing them took the arena from 7,981 MB to
+already there. That is 662 MB. Sharing them took the arena from 7,981 MB to
 7,106 MB, for +3 % wall at one worker and −7 % at four. Keying the table by
 the bytes instead of by their hash cost 6 % and 12 %, so the hash stayed.
 
@@ -167,13 +166,13 @@ else handles a derivation with no ATerm, which is also the state of a
 derivation read from `/nix/store`. It was 331 MB of heap on outpaths, and
 dropping it took peak RSS from 7,680 MB to 7,219 MB.
 
-Building it is on the other side of the same argument. Each derivation is
-unparsed three times — masked for the output paths, plain for the drvPath,
-and again against the input hashes — so a nixos-desktop run writes about
-20,000 ATerms. They are written into one buffer per thread that keeps the
-capacity it grew to, so only the first few pay for growing it, and the
-store paths, hashes and method names go into that buffer directly instead
-of through a `String` each. The evaluator's own values live in the arena,
+Building the text is the other side of the same story. Each derivation is
+unparsed three times: masked for the output paths, plain for the drvPath,
+and again against the input hashes. So a nixos-desktop run writes about
+20,000 ATerms. They go into one buffer per thread that keeps the capacity
+it grew to, so only the first few pay for growing it. The store paths,
+hashes and method names go into that buffer directly, not through a
+`String` each. The evaluator's own values live in the arena,
 but this pipeline is ordinary `String` and `BTreeMap` work, and it was
 9.3 % of a warm run in glibc `malloc` and `free` alone.
 
@@ -212,33 +211,34 @@ package set the next unit reuses.
 
 ## The fiber scheduler
 
-Parallel evaluation is implicit. Worker threads force thunks ahead of and
-beside the demand path. Four units make it up:
+You do not ask for parallel evaluation. It just happens: worker threads
+force thunks ahead of the demand path and beside it. Four parts make it
+up:
 
-- a **fiber** is a stackful coroutine with its own stack and its own
-  evaluator. It is the unit of blocking, and it migrates: a fiber that
-  parks on worker A can resume on worker B;
-- a **worker** is an OS thread running a drain loop. It owns a bump arena,
-  a fiber pool and work-stealing deques;
-- a **task** is work not yet started — force a range of list cells or
-  attribute cells. It runs in a pooled fiber;
-- the **main fiber** runs the command's own closure. When it returns,
+- A **fiber** is a stackful coroutine with its own stack and its own
+  evaluator. It is the unit of blocking, and it moves: a fiber that parks
+  on worker A can resume on worker B.
+- A **worker** is an OS thread running a drain loop. It owns a bump arena,
+  a fiber pool and work-stealing deques.
+- A **task** is work not yet started, such as forcing a range of list or
+  attribute cells. It runs in a pooled fiber.
+- The **main fiber** runs the command's own closure. When it returns,
   evaluation is done.
 
 Each fiber's evaluator is a clone of the root one. Per-fiber state is
-private. Shared state — the interner, the file table, the import cache, the
-derivation table — sits behind handles that clone by reference. A fiber's
-arena field is swapped with the worker's arena on every resume and swapped
-back on every yield, so N workers own N arenas and no fiber ever allocates
+private. Shared state (the interner, the file table, the import cache, the
+derivation table) sits behind handles that clone by reference. A fiber's
+arena field is swapped with the worker's arena on every resume, and swapped
+back on every yield. So N workers own N arenas, and no fiber ever allocates
 from an arena another thread is using. Pointers are global, and cross-arena
 references are fine, because no arena is ever freed.
 
 The clone is a deadline. `parallel::try_run` clones the evaluator as the
-template before it starts the workers. A setting that is written after that
-clone is on the main fiber only. Each symptom is silent: partial output, a
+template before it starts the workers. A setting written after that clone
+reaches the main fiber only, and the symptoms are silent: partial output, a
 cache that no worker reads, a search path that resolves to nothing.
 
-The evaluator therefore has no setter. `eval::EvalConfig` is a builder. It
+That is why the evaluator has no setter. `eval::EvalConfig` is a builder. It
 holds each setting that is fixed before evaluation: the system, `pure-eval`,
 the project root, the session, the search path, the lints, the IR cache,
 `keep_aterm`, `keep_site`, the `--dump-drvs` directory and the trace switch. `build()`
@@ -269,22 +269,23 @@ payload ──CAS──> BLACKHOLE(claimer, waiters bit) ──store──> EMPT
    └────────── reset ─────────┘   (error, cancel, or traced-in-helper)
 ```
 
-A force loads the word first and only attempts the compare-exchange on a
-payload word. That ordering is deliberate: a failed compare-exchange still
-takes the cache line exclusive, and most forces hit a thunk another fiber
-has already evaluated — everything in `lib`, everything in `pkgs` — so the
-plain load keeps hot shared lines shared.
+A force loads the word first, and tries the compare-exchange only on a
+payload word. The order matters. A failed compare-exchange still takes the
+cache line exclusive, and most forces hit a thunk another fiber already
+evaluated: everything in `lib`, everything in `pkgs`. The plain load keeps
+those hot shared lines shared.
 
 The winner gets the payload back and evaluates. A loser reads the current
 word. If it is done, it returns the value. If it is a blackhole holding its
-*own* claimer id, that is infinite recursion; the id is per fiber, not per
-thread, so it follows a computation that migrated. If another fiber holds
+*own* claimer id, that is infinite recursion. The id is per fiber, not per
+thread, so it follows a computation that moved. If another fiber holds
 it, the loser parks on a side table sharded by thunk address, so thunk
 objects never grow.
 
 ### Why more workers stop helping
 
-The default is four. The reason is the critical chain, not contention:
+The default is four workers. What limits it is the critical chain, not
+contention:
 
 | workload | workers | wall | user | sys |
 |---|---|---|---|---|
@@ -307,10 +308,11 @@ no IR cache of their own, so a warm run now loads that file instead of
 compiling it ([history](history.md)).
 
 The wake policy is where the scheduler's own cost showed. Waking a sleeper
-on every push cost the critical path a futex call per fan-out task and
-handed cache-warm work to cold cores: 26,000 parks per run at sixteen
-workers and 0.9 s of system time. Waking only on a handoff — a ready fiber
-always, queued tasks only past a threshold — brought that to about 2,000.
+on every push cost the critical path a futex call per fan-out task, and
+handed cache-warm work to cold cores. At sixteen workers that was 26,000
+parks per run and 0.9 s of system time. Now a sleeper wakes only on a
+handoff: always for a ready fiber, and for queued tasks only past a
+threshold. That brought it to about 2,000.
 
 ## Why the answer is identical
 
@@ -341,13 +343,13 @@ closed:
   the demand path's mark makes the value printable. The first demand of a
   speculated thunk upgrades the mark.
 
-This is the price of the guarantee, and it is paid on the demand path. A
-helper leaves its value inside the thunk, so the demand path reads the
-cell, the thunk state and the value, writes the value into the cell, and
-writes `EMPTY` over a helper's mark; a run that let helpers unbox finds
-the value in the cell with one load. `force_thunk` answers a forced thunk
+The guarantee has a price, and the demand path pays it. A helper leaves its
+value inside the thunk. So the demand path reads the cell, the thunk state
+and the value, writes the value into the cell, and writes `EMPTY` over the
+helper's mark. If helpers could unbox, the demand path would find the value
+in the cell with one load. `force_thunk` answers a forced thunk
 inline for that reason, and `take` does the whole cell in one read of the
-thunk. Measured on bld1, nixos-desktop at four workers, against the same
+thunk. Measured on nixos-desktop at four workers, against the same
 tree with helper unboxing put back: 3.2 % of the instructions, of which
 about 1 point is the store that upgrades the mark. At one worker there is
 no helper and no boxed cell, so the same run costs nothing.
@@ -407,8 +409,7 @@ in `maybe_thunk`, an argument bound into an env slot, `++`, `tail`,
 thunk, the flat copy of a `//`, a `rec` set built from its env, `inherit
 (e)`, and `with`. The mark is one bit in the thunk state, set by a
 compare-and-exchange at each of those routes. With nothing reading it, it
-costs 3.1 % of the instructions on bld1, on nixos-desktop at four
-workers, and 1.2 % at one worker, where no mark is ever set and only the
+costs 3.1 % of the instructions on nixos-desktop at four workers, and 1.2 % at one worker, where no mark is ever set and only the
 branch at each route remains. `scripts/partest.nu` keeps a case per
 route, so the routes stay covered whatever reads the box next.
 
@@ -444,11 +445,11 @@ page. The check reads the stack pointer with one instruction
 (`fiber::sp`), because it runs on every force: a helper that returned the
 address of its own frame could not be inlined and cost a call each time.
 A helper drops its task in silence and the demand path computes the
-value, the demand fiber reports what Nix reports. A guard page that is hit
-anyway — the compiler recurses over a deeply nested expression without
-forcing — is caught by a handler on an alternate signal stack, which
-prints Nix's `stack overflow (possible infinite recursion)` and exits 1
-instead of dying without a word. `sigaltstack` is per thread and the
+value, the demand fiber reports what Nix reports. A guard page can still be hit,
+for example when the compiler recurses over a deeply nested expression
+without forcing. A handler on an alternate signal stack catches it, prints
+Nix's `stack overflow (possible infinite recursion)` and exits 1, instead
+of dying without a word. `sigaltstack` is per thread and the
 alternate stack is not a fiber stack, so a fiber switch keeps it valid.
 
 Two effects would break purity, and both are handled by giving them back to
@@ -475,8 +476,9 @@ succeed in parallel.
 
 Fan-out can claim the two halves of a cycle on two fibers, which then wait
 on each other. Sequential evaluation would have reported infinite recursion
-instead. The last worker to go to sleep — when every worker sleeps, nothing
-is pending and main is not done — cancels every parked helper fiber. Each
+instead. So the last worker to go to sleep cancels every parked helper
+fiber. (That is the moment when every worker sleeps, nothing is pending and
+main is not done.) Each
 one unwinds, every thunk it claimed is reset, its waiters wake, and the main
 fiber re-evaluates the cycle sequentially and reports the error the
 sequential path would have reported.
@@ -493,9 +495,9 @@ the same nixpkgs, with identical derivation paths:
 | nixos-desktop, wall, 1 worker | 0.92 s | 2.20 s |
 | nixos-desktop, wall, 4 workers | 0.45 s | 2.20 s |
 
-About 2.7× fewer instructions, and 2.4× to 4.9× faster in wall time. The
-instruction ratio is the durable number; the wall ratio depends on how many
-workers the critical chain can use.
+That is about 2.7× fewer instructions, and 2.4× to 4.9× faster in wall
+time. The instruction ratio is the number that lasts. The wall ratio
+depends on how many workers the critical chain can use.
 
 The iets column is a warm compiled-file cache, which is how this benchmark
 has always been run and what a second evaluation of a tree gets. That cache is
