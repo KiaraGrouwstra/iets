@@ -6,15 +6,13 @@ observe it.
 Each entry says what differs, why, and how to observe it. The classic
 names add a few more, listed in `docs/reference/classic.md`.
 
-`scripts/parity.nu` runs the differential corpora under `tests/parity/`
-(272 regex pattern/input pairs through both `builtins.match` and
+`checks.conformance` runs the cases of nix-conformance, among them one
+case for each entry of the regex and TOML corpora (`lang/corpora/`: 272
+regex pattern/input pairs through both `builtins.match` and
 `builtins.split`, 46 patterns both sides must reject, 77 TOML documents
-and 46 rejected ones) against the real `nix-instantiate` and requires
-byte-equal `--strict --json` output. It needs a nix binary, so it is not
-a flake check; run it by hand in the dev shell. `NIX=` and `IETS=`
-override either side. Like every script here that compares against the
-real nix, it aborts when that nix is the classic farm, and warns when it
-is not 2.34.8.
+and 46 rejected ones), against answers Nix 2.34.8 gave.
+`fuzz/conformance-known` lists the cases iets fails on purpose, each
+under its section of this page.
 
 ## Regular expressions (`builtins.match`, `builtins.split`)
 
@@ -66,6 +64,20 @@ A Nix string is bytes. An env value and an argument keep them, and the
 Observe it with `builtins.substring 0 1 "é"`, which is one byte that is not
 UTF-8: as `builder = "/bin/sh" + …` the evaluation fails, as `v = …` it
 gives `/nix/store/vhkdfhp7f0qfk8j0kx9b54hpn6cyg8m1-x.drv` like Nix.
+
+## Bytes that are not UTF-8 in a derivation
+
+Nix keeps a derivation's strings as bytes and writes them into the `.drv`
+as they are. iets does the same for the values of `env` and for `args`.
+It refuses bytes that are not UTF-8 in the name of an `env` entry, in
+`builder` and in `system`: `derivationStrict` stops with `string is not
+valid UTF-8`, where Nix gives a drvPath. iets holds these three as text.
+
+Observe it: `lang/eval-okay-derivation-non-utf8.nix` of nix-conformance
+makes one derivation for each field; Nix 2.34.8 gives five drvPaths, iets
+the first two and then the error. Such derivations exist in real stores:
+`drv/` of nix-conformance holds six. `fuzz/conformance-known` lists the
+case.
 
 ## `builtins.genericClosure`
 

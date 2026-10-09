@@ -12,9 +12,12 @@ page shows how to run it and how to read what it reports.
 | `nar-tree` | bytes that choose a file tree on disk | the NAR of the tree, then as `nar-read` |
 
 Two oracle processes stay running while a target runs, so a comparison
-costs a pipe round trip and not a process start:
-`fuzz/oracle/parse-oracle.cc` links libnixexpr 2.34.8 and
-`fuzz/oracle/nar-oracle.cc` links libnixutil 2.34.8.
+costs a pipe round trip and not a process start.
+
+The oracles, the regression cases and the grown corpora live in
+[nix-conformance](https://github.com/numtide/nix-conformance), a flake
+input: a test suite any Nix implementation can run. `parse-oracle` links
+libnixexpr 2.34.8 and `nar-oracle` links libnixutil 2.34.8.
 
 ## The parse target
 
@@ -87,13 +90,18 @@ a name may hold, and chains across the depth limit. Both sides dump it.
 ```sh
 nix build .#checks.x86_64-linux.fuzz-parse -L
 nix build .#checks.x86_64-linux.fuzz-nar -L
+nix build .#checks.x86_64-linux.conformance -L
 ```
 
 `fuzz-parse` gives every `.nix` file of the pinned nixpkgs to both
 parsers, then runs libFuzzer for 60 seconds from an eighth of those files
-and `fuzz/regressions/parse/`. `fuzz-nar` runs each NAR target for 20
+and the parse cases and corpus of nix-conformance. `fuzz-nar` runs each
+NAR target for 20
 seconds. A check fails on a difference that `fuzz/divergences.toml` does
-not list, and prints the input in base64.
+not list, and prints the input in base64. `conformance` runs every case
+of nix-conformance through `conformance-adapter`, iets behind the suite's
+adapter protocol; `fuzz/conformance-known` lists the cases iets fails on
+purpose.
 
 ## Run a fuzzer by hand
 
@@ -106,7 +114,7 @@ nix build .#fuzzers -o fuzzers
 export IETS_PARSE_ORACLE=$PWD/oracles/bin/parse-oracle
 export IETS_NAR_ORACLE=$PWD/oracles/bin/nar-oracle
 mkdir -p corpus && cp tests/lang/*.nix corpus/
-fuzzers/bin/fuzz-parse -dict=fuzz/parse.dict -max_len=4096 corpus fuzz/regressions/parse
+fuzzers/bin/fuzz-parse -dict=fuzz/parse.dict -max_len=4096 corpus
 fuzzers/bin/fuzz-nar-gen -max_len=4096 nar-corpus
 ```
 
@@ -158,7 +166,8 @@ A NAR is shown as its length and its first 64 bytes in hexadecimal.
 3. Find the rule in the Nix source (`src/libexpr/parser.y`, `lexer.l`,
    `parser-state.hh`, `src/libutil/archive.cc`) and decide:
    - iets is wrong: fix it, add a test next to the code, and put the
-     small input in `fuzz/regressions/TARGET/`, named by its sha1;
+     small input in `parse/` or `nar/` of nix-conformance, named by its
+     sha1, with the answer `./expect` writes;
    - iets differs on purpose: add a section to
      `docs/reference/divergences.md` and an entry to
      `fuzz/divergences.toml`;

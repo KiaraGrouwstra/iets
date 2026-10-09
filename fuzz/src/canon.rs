@@ -6,10 +6,11 @@ use crate::sx::{Sx, atom, float, node};
 use iets::syntax::ast::*;
 use iets::syntax::symbol::{Interner, Sym};
 
-/// Relative paths resolve against this, as the oracle's base path.
-pub const BASE: &str = "/fuzz";
+/// Relative paths resolve against this, as the oracle's base path
+/// (SPEC.md of nix-conformance).
+pub const BASE: &str = "/case";
 /// `~` is this, as the oracle's `$HOME`.
-pub const HOME: &str = "/home/fuzz";
+pub const HOME: &str = "/home/case";
 
 pub fn tree(ast: &Ast, src: &[u8], interner: &Interner) -> Sx {
     Canon { ast, src, interner }.expr(ast.root)

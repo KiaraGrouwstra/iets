@@ -1,6 +1,40 @@
 {
   "nodes": {
+    "nix-conformance": {
+      "inputs": {
+        "nixpkgs": "nixpkgs"
+      },
+      "locked": {
+        "lastModified": 1791500580,
+        "narHash": "sha256-+VMOsWUB0tTui0in7kSZRx3PIIRKvH2xODVzjeF9Uag=",
+        "ref": "refs/heads/main",
+        "rev": "ca1135eb9bde8ca6285d17eb1c7b58740c144078",
+        "revCount": 4,
+        "type": "git",
+        "url": "ssh://git@github.com/numtide/nix-conformance"
+      },
+      "original": {
+        "type": "git",
+        "url": "ssh://git@github.com/numtide/nix-conformance"
+      }
+    },
     "nixpkgs": {
+      "locked": {
+        "lastModified": 1789286504,
+        "narHash": "sha256-eiEK7cKZORNEvX0GeF3RtNEF/JXhgf2RqSp3230q13E=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "ef34387ddd751e1ab8857adf4676492d32eb24ec",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "ef34387ddd751e1ab8857adf4676492d32eb24ec",
+        "type": "github"
+      }
+    },
+    "nixpkgs_2": {
       "locked": {
         "lastModified": 1789286504,
         "narHash": "sha256-eiEK7cKZORNEvX0GeF3RtNEF/JXhgf2RqSp3230q13E=",
@@ -18,7 +52,8 @@
     },
     "root": {
       "inputs": {
-        "nixpkgs": "nixpkgs"
+        "nix-conformance": "nix-conformance",
+        "nixpkgs": "nixpkgs_2"
       }
     }
   },
