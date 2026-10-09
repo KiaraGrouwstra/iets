@@ -6,7 +6,7 @@ use std::io::{self, Read, Write};
 use crate::remote::plan::{DrvHashes, Object};
 use crate::store::hash::{Hash, HashAlgo, base64_decode, base64_encode, hash_bytes};
 use crate::store::nar::{dump_string, flat_hash};
-use crate::store::path::StorePath;
+use crate::store::path::{StorePath, check_name};
 use crate::store::source::{SourceKind, Src};
 
 pub fn write_u64(w: &mut dyn Write, n: u64) -> io::Result<()> {
@@ -170,6 +170,78 @@ pub fn content_address(s: &str) -> io::Result<String> {
         HashAlgo::parse(algo).ok_or_else(|| bad(&format!("unknown hash algorithm '{algo}'")))?;
     let h = Hash::parse_non_sri_unprefixed(hash, algo).map_err(|e| bad(&e.to_string()))?;
     Ok(format!("{method}{}:{}", algo.name(), h.to_nix32()))
+}
+
+/// serialise.hh:readNum<T>: a number no larger than `T` holds.
+pub fn read_num(r: &mut dyn Read, max: u64) -> io::Result<u64> {
+    let n = read_u64(r)?;
+    if n > max {
+        return Err(bad(&format!("serialised integer {n} is too large")));
+    }
+    Ok(n)
+}
+
+/// derived-path.cc:DerivedPath::parseLegacy without dynamic derivations:
+/// `PATH`, `PATH!*` or `PATH!NAME,...`, held as to_string_legacy writes it,
+/// with the names sorted and each once.
+pub fn derived_path(s: &str) -> io::Result<String> {
+    let Some((drv, outputs)) = s.rsplit_once('!') else {
+        StorePath::parse(s).map_err(|e| bad(&e.to_string()))?;
+        return Ok(s.to_string());
+    };
+    if drv.contains('!') {
+        return Err(bad(&format!(
+            "'{s}' builds an output of a derivation output, which needs dynamic-derivations"
+        )));
+    }
+    StorePath::parse(drv).map_err(|e| bad(&e.to_string()))?;
+    if outputs == "*" {
+        return Ok(s.to_string());
+    }
+    let mut names: Vec<&str> = outputs.split(',').collect();
+    for n in &names {
+        check_name(n).map_err(|e| bad(&e.to_string()))?;
+    }
+    names.sort_unstable();
+    names.dedup();
+    Ok(format!("{drv}!{}", names.join(",")))
+}
+
+/// realisation.cc:DrvOutput::parse: a prefixed hash, `!`, an output name
+/// that is not checked.
+pub fn drv_output(s: &str) -> io::Result<()> {
+    let (hash, _) = s
+        .split_once('!')
+        .ok_or_else(|| bad(&format!("invalid derivation output id {s}")))?;
+    Hash::parse_any(hash, None).map_err(|e| bad(&e.to_string()))?;
+    Ok(())
+}
+
+/// common-protocol.cc:Serialise<Realisation>: the JSON of realisation.cc,
+/// `outPath` a store path's base name, `signatures` if there, and `id`.
+pub fn realisation(raw: &[u8]) -> io::Result<()> {
+    let bad_json = |why: &str| bad(&format!("while parsing a realisation object: {why}"));
+    let v: serde_json::Value = serde_json::from_slice(raw).map_err(|e| bad_json(&e.to_string()))?;
+    let o = v.as_object().ok_or_else(|| bad_json("not an object"))?;
+    let string = |key: &str| {
+        o.get(key)
+            .ok_or_else(|| bad_json(&format!("no key '{key}'")))?
+            .as_str()
+            .ok_or_else(|| bad_json(&format!("'{key}' is not a string")))
+    };
+    StorePath::from_base_name(string("outPath")?).map_err(|e| bad(&e.to_string()))?;
+    if let Some(sigs) = o.get("signatures") {
+        for s in sigs
+            .as_array()
+            .ok_or_else(|| bad_json("'signatures' is not a list"))?
+        {
+            signature(
+                s.as_str()
+                    .ok_or_else(|| bad_json("a signature is not a string"))?,
+            )?;
+        }
+    }
+    drv_output(string("id")?)
 }
 
 /// Mirrors serialise.hh:FramedSink: the payload of `AddMultipleToStore` goes out as
@@ -394,5 +466,32 @@ mod tests {
         assert!(content_address(&format!("fixed:r:sha256:{hex}")).is_ok());
         assert!(content_address(&format!("fixed:git:sha1:{hex}")).is_err());
         assert!(content_address("nonsense").is_err());
+    }
+
+    #[test]
+    fn build_results_are_read_as_nix_reads_them() {
+        let d = "/nix/store/7q6r5bxprr5bzxqyhjmzjvcg9c0sfbyk-a.drv";
+        assert_eq!(
+            derived_path(&format!("{d}!out,dev,out")).unwrap(),
+            format!("{d}!dev,out")
+        );
+        assert_eq!(derived_path(&format!("{d}!*")).unwrap(), format!("{d}!*"));
+        assert!(derived_path(d).is_ok());
+        assert!(derived_path(&format!("{d}!out!bin")).is_err());
+        assert!(derived_path(&format!("{d}!")).is_err());
+        assert!(derived_path("/etc/passwd!out").is_err());
+        let hex = "4ab29c33e1fd9f3e3e1ebf6e0da0e8f8c3a5e3a73c92c4e9d6e8c04b1a5f2b3d";
+        assert!(drv_output(&format!("sha256:{hex}!out")).is_ok());
+        assert!(drv_output(&format!("{hex}!out")).is_err());
+        let out = "0c6ld7f4z8xbwgaz1mqk5c5bkwlhypzb-hello-2.12.3";
+        let id = format!("sha256:{hex}!out");
+        let ok = format!(r#"{{"id":"{id}","outPath":"{out}","signatures":["k:dGVzdA=="]}}"#);
+        assert!(realisation(ok.as_bytes()).is_ok());
+        let null_sigs = format!(r#"{{"id":"{id}","outPath":"{out}","signatures":null}}"#);
+        assert!(realisation(null_sigs.as_bytes()).is_err());
+        let full = format!(r#"{{"id":"{id}","outPath":"/nix/store/{out}"}}"#);
+        assert!(realisation(full.as_bytes()).is_err());
+        assert!(realisation(b"[]").is_err());
+        assert!(read_num(&mut &256u64.to_le_bytes()[..], u8::MAX.into()).is_err());
     }
 }
