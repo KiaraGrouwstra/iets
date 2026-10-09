@@ -408,7 +408,7 @@ mod tests {
         all.insert(1, task(ACT_SUBSTITUTE, "", 0, 3));
         all.insert(2, task(ACT_COPY_PATH, "copying path 'a'", 1, 3));
         all.insert(3, task(ACT_FILE_TRANSFER, "downloading 'u'", 2, 3));
-        let s = summary(&all, Instant::now(), true).unwrap();
+        let s = summary(&all, all[&2].started + Duration::from_secs(3), true).unwrap();
         assert_eq!(s, "⏵ copying path 'a' (3s)");
     }
 
@@ -442,7 +442,7 @@ mod tests {
         k.measured = true;
         all.insert(1, k);
         assert_eq!(
-            summary(&all, Instant::now(), false).unwrap(),
+            summary(&all, all[&1].started + Duration::from_secs(45), false).unwrap(),
             "⏵ downloading 'u', 2.0 KiB (45s, no data for 45s)"
         );
     }
@@ -455,7 +455,7 @@ mod tests {
             .all
             .insert(1, task(ACT_FETCH_TREE, "fetching 'x'", 0, 1));
         b.lock().ticking = true;
-        let now = Instant::now();
+        let now = b.lock().all[&1].started + Duration::from_secs(1);
         assert!(matches!(b.tick(now), Some(Tick::Quiet)));
         let later = now + FIRST;
         let mut young = task(ACT_FILE_TRANSFER, "downloading 'y'", 0, 0);
