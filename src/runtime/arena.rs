@@ -3,7 +3,7 @@
 //! That is what makes graph sharing between cells trivially sound.
 
 use std::time::{Duration, Instant};
-use std::{process, ptr, slice};
+use std::{process, ptr, slice, thread};
 
 #[cfg(feature = "stats2")]
 use super::census::Census;
@@ -17,6 +17,31 @@ const CHUNK: usize = 32 << 20;
 /// pages; anything slower than this is a compaction stall.
 const THP_STALL: Duration = Duration::from_millis(6);
 
+fn map_chunk(chunk: usize, thp: bool) -> (usize, bool) {
+    unsafe {
+        let p = libc::mmap(
+            ptr::null_mut(),
+            chunk,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            -1,
+            0,
+        );
+        if p == libc::MAP_FAILED {
+            // no unwinding from here: other fibers hold arena pointers,
+            // and Nix ends the same way on a heap it cannot grow
+            errln!("error: out of memory");
+            process::exit(1);
+        }
+        let t0 = Instant::now();
+        if thp {
+            libc::madvise(p, chunk, libc::MADV_HUGEPAGE);
+        }
+        libc::madvise(p, chunk, libc::MADV_POPULATE_WRITE);
+        (p as usize, thp && t0.elapsed() > THP_STALL)
+    }
+}
+
 pub struct Arena {
     ptr: *mut u8,
     end: *mut u8,
@@ -29,6 +54,7 @@ pub struct Arena {
     folded: Box<Folded>,
     /// Advise huge pages until a chunk populate stalls in compaction.
     thp: bool,
+    next: Option<thread::JoinHandle<(usize, bool)>>,
     /// String bytes by content, and the context-free string object over
     /// them once one was made (EMPTY until then). nixpkgs builds the same
     /// text millions of times (docs/explanation/evaluation.md).
@@ -70,6 +96,7 @@ impl Arena {
             stats: Stats::default(),
             folded: Box::default(),
             thp: true,
+            next: None,
             strings: FxHashMap::default(),
             ctxs: FxHashSet::default(),
         }
@@ -172,31 +199,31 @@ impl Arena {
         // to 4 KiB pages anyway, which cost ~1 s of system time per GiB.
         // MADV_POPULATE_WRITE zeroes the chunk inside the kernel without one
         // trap per page. The chunk is intentionally leaked.
-        let base = unsafe {
-            let p = libc::mmap(
-                ptr::null_mut(),
-                chunk,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-                -1,
-                0,
-            );
-            if p == libc::MAP_FAILED {
-                // no unwinding from here: other fibers hold arena pointers,
-                // and Nix ends the same way on a heap it cannot grow
-                errln!("error: out of memory");
-                process::exit(1);
-            }
-            let t0 = Instant::now();
-            if self.thp {
-                libc::madvise(p, chunk, libc::MADV_HUGEPAGE);
-            }
-            libc::madvise(p, chunk, libc::MADV_POPULATE_WRITE);
-            if self.thp && t0.elapsed() > THP_STALL {
-                self.thp = false;
-            }
-            p as *mut u8
+        let ready = match self.next.take() {
+            Some(h) if chunk == CHUNK => h.join().ok(),
+            _ => None,
         };
+        let base = match ready {
+            Some((p, stalled)) => {
+                if stalled {
+                    self.thp = false;
+                }
+                p as *mut u8
+            }
+            None => {
+                let (p, stalled) = map_chunk(chunk, self.thp);
+                if stalled {
+                    self.thp = false;
+                }
+                p as *mut u8
+            }
+        };
+        if self.mapped > 0 {
+            let thp = self.thp;
+            self.next = thread::Builder::new()
+                .spawn(move || map_chunk(CHUNK, thp))
+                .ok();
+        }
         self.mapped += chunk;
         self.ptr = base;
         self.end = unsafe { base.add(chunk) };
