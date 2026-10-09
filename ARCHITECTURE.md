@@ -104,6 +104,10 @@ Around it:
 - `source/`: a reference resolves to a tree and a lock. The fetchers, the
   input store and the source control system of a local working tree
   (`scm.rs`, with git as its one implementation) are behind it.
+  `source::tree` is the one call that `builtins.fetchTree`, the flake root
+  and `nix flake prefetch-inputs` share. Parsing a flake reference stays
+  in `flake/`, reading one `flake.lock` is `api::flake::info`, and reading
+  bytes out of a tree goes through `treestore::StoredTree`.
 - `fetch/`: the HTTP client, the tarball spool and the unpack rules.
 - `treestore/`: the input store, where a fetched input lives.
 - `trace/`: the tracing evaluation cache.
@@ -153,6 +157,49 @@ allow-list whose length is asserted.
 
 What the rule does *not* ban is porcelain-side libraries for presentation,
 argv compatibility and interactive flows, however large.
+
+What each command is written against. An entry that is not an
+`iets plumbing` op (`index`, `jobs`, `dev-env`, `drv-show`, `drv-diff`,
+`closure-diff`, `flake-info`) is a capability the command calls directly:
+`api::installable`, `api::flake`, `crate::jobs`.
+
+| Command | Operations | The command's own part |
+|:---|:---|:---|
+| `iets eval` | `eval` | the human value printer, `--timings` |
+| `iets build` | `resolve` (the get-drvs walk for a set), `plan`, `missing`, `build`, through `api::build::Dispatch` | the closing line, the `--dry-run` text, `render_size`, the `fix-hashes` prompts, the `.drv` legacy input |
+| `iets search` | `index` | regex compile and match, `--exclude`, colour, `--pretty`, the no-results hint |
+| `iets diff` | `resolve`, `drv-diff`, `closure-diff` | the text rendering, the `diff(1)` exit codes |
+| `iets eval-jobs` | `jobs` | the worker/collector process model, `--max-memory-size`, the summary line |
+| `iets print-dev-env` | `resolve`, `dev-env` | the bash rendering, the direnv cache, the GC root |
+| `iets prefetch` | `fetch` | the `--json` shape choice |
+| `iets lint`, `iets parse`, `iets cache` | none | already thin over the library |
+| `nix-instantiate` | `resolve` (get-drvs walk), `plan` | Nix argv parsing, `--add-root`, out-links, the exec fallback |
+| `nix-build` | `resolve`, `plan`, `build` | `result` symlinks, `--add-root`, Nix's exit codes, the fallback |
+| `nix-shell` | `resolve`, `plan`, `build` | the env, `execve` of the shell, `--run`, `--pure` |
+| `nix-eval-jobs` | `jobs` | argv compatibility |
+| `nix eval` | `eval` | Nix's printer and argv |
+| `nix build` | `resolve`, `plan`, `build` | `result` symlinks, the `--json` Nix shape, the fallback |
+| `nix derivation show` | `resolve`, `drv-show` | Nix's argv, `--pretty`, the fallback |
+| `nix search` | `index` | Nix's output format and argv |
+| `nix develop` | `resolve`, `dev-env` | the shell it execs |
+| `nix print-dev-env` | `dev-env` | the bash rendering |
+| `nix flake prefetch-inputs` | `flake-info` | Nix's argv, the fetch threads |
+
+Gaps in the operation layer, where a command still reaches past it:
+
+1. `resolve --dump-drvs` writes derivations, not sources. The shape it
+   wants is a batch form of `build --source STOREPATH=LOCAL`. `iets diff`
+   keeps its in-memory table, because it evaluates and compares in one
+   process.
+2. `iets prefetch` and the `fix-hashes` path of `iets build` read a hash
+   mismatch out of the log (`log::want_mismatch`, `log::take_mismatches`).
+   `build` should report it as structured output.
+3. `eval-jobs --eval-store` instantiates on one store and builds on
+   another. `plan` and `build` take one builder.
+4. `nix-shell` and `print-dev-env` drive `PlanUpload` on their own
+   connection; see the explanation page below.
+5. There is no `flake-info` or `flake-tree` op, because no caller needs the
+   process boundary.
 
 Why, and what the migration to it measured:
 `docs/explanation/plumbing-and-porcelain.md`.

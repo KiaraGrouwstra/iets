@@ -1,18 +1,21 @@
 # Plumbing operations
 
-Every `iets plumbing` operation: its contract, its flags, the exact JSON
-it writes, its exit codes, and how the operations compose.
+`iets plumbing` gives you the steps of `iets build` one at a time, as JSON,
+so you can script them. This page lists every operation: its flags, the
+exact JSON it writes, and its exit codes.
+
+```console
+$ iets plumbing resolve nixpkgs#hello | iets plumbing missing --roots -
+```
 
 ```
 iets plumbing OP [FLAGS] ...
 ```
 
-Each op reads flags, and optionally JSON on stdin, and writes one JSON
-object on stdout. Nothing else reaches stdout. Errors go to stderr as
-`log::Report` records and set the exit code
-(`docs/reference/errors.md`). Why the operations exist and where the
-boundary between them and the user-facing commands runs:
-`docs/explanation/plumbing-and-porcelain.md`.
+Each op reads flags, and maybe JSON on stdin, and writes one JSON object
+on stdout. Nothing else goes to stdout. Errors go to stderr and set the
+exit code (`docs/reference/errors.md`). To learn why these operations
+exist, read `docs/explanation/plumbing-and-porcelain.md`.
 
 ## The operations
 
@@ -24,54 +27,55 @@ boundary between them and the user-facing commands runs:
 | `build` | derivation roots are built; outcomes come back |
 | `fetch` | a URL or a fixed-output derivation becomes a hash |
 
-These five exist. `iets plumbing --help` lists them, and an unknown op
-is the usage error `unknown subcommand 'X'`, with a suggestion when it is
-close to one of the five.
+`iets plumbing --help` lists these five. An unknown op is the usage error
+`unknown subcommand 'X'`, with a suggestion when the name is close to one
+of the five.
+
+The JSON shapes on this page are the contract. An end-to-end test checks
+each one, so a change to a shape is a change to this page.
 
 ## Shared input
 
-Every op that evaluates — `resolve`, and `fetch` in its expression form —
-takes the shared evaluation flags of `docs/reference/commands.md`: `-E
-EXPR`, `FILE` (or `-f FILE`, the same thing), `FLAKEREF[#FRAGMENT]`,
-`-A PATH`, `--arg`, `--argstr`,
-`-I`, `--impure`/`--pure-eval`, `--option`, `--workers`,
-`--no-tracing-cache`, `--no-ir-cache`, `--no-cache`,
-`--cache-dir`, `--log-format`, `--show-trace`, `--dump-drvs`. One parser
-serves all of them (`api::EvalArgs`).
+The ops that evaluate (`resolve`, and `fetch` with an expression) take the
+same evaluation flags as the other commands (`docs/reference/commands.md`):
+`-E EXPR`, `FILE` (or `-f FILE`, the same thing), `FLAKEREF[#FRAGMENT]`,
+`-A PATH`, `--arg`, `--argstr`, `-I`, `--impure`/`--pure-eval`,
+`--option`, `--workers`, `--no-tracing-cache`, `--no-ir-cache`,
+`--no-cache`, `--cache-dir`, `--log-format`, `--show-trace`,
+`--dump-drvs`.
 
-`-A PATH` and a flake fragment walk the value through
-`api::installable::find_along_attr_path`, the port of
-`attr-path.cc:findAlongAttrPath`: every step auto-calls what it is
-standing on, so a file whose top level is a function (nixpkgs'
-`default.nix`) is called with the `--arg`/`--argstr` set before an
-attribute is taken from it. A formal with a default that is not supplied
-is fine; a required formal that is not supplied is the error; formals
-that end in `...` are handed every argument, named or not
-(`eval.cc:autoCallFunction`). The classic names, `search` and every
-native command share that one walk.
+`-A PATH` and a flake fragment walk the value as Nix does
+(`attr-path.cc:findAlongAttrPath`). Each step calls the function it stands
+on, so a file whose top level is a function (nixpkgs' `default.nix`) is
+called with the `--arg`/`--argstr` set before an attribute is taken from
+it. A formal with a default may be left out. A required formal that is
+left out is an error. A function whose formals end in `...` gets every
+argument, named or not (`eval.cc:autoCallFunction`). The classic names,
+`search` and every native command walk the same way.
 
 ## Naming roots
 
-`plan`, `missing` and `build` take derivation paths. An argument is `DRV`
-or `DRV!OUT[,OUT]`; naming no output means every output, as `!*` does in
-the worker protocol. `--roots -` reads a previous op's stdout instead:
-the `roots` of a `resolve`, or the `drvs` of a `plan`. Stdin with neither
-key is the usage error `--roots -: no "roots" and no "drvs" on stdin`.
+`plan`, `missing` and `build` take derivation paths. Write each one as
+`DRV` or `DRV!OUT[,OUT]`. With no output named, you get every output, as
+`!*` does in the worker protocol. `--roots -` reads the stdout of an
+earlier op instead: the `roots` of a `resolve`, or the `drvs` of a `plan`.
+Stdin with neither key is the usage error
+`--roots -: no "roots" and no "drvs" on stdin`.
 
-The three read the closure from `/nix/store` by default, so a root must
-be there. `resolve` alone does not put it there — it evaluates and keeps
-the derivations in memory, which is what lets `iets build` ship a
-closure that was never written to disk. A root that is in no store is the
-error `cannot read derivation 'PATH': No such file or directory`, exit 1.
+By default, these three read the closure from `/nix/store`, so each root
+must be there. `resolve` does not put it there: it keeps the derivations
+in memory, which is how `iets build` can ship a closure that was never
+written to disk. A root that is in no store is the error
+`cannot read derivation 'PATH': No such file or directory`, exit 1.
 
-`resolve --dump-drvs DIR` is how that closure crosses a process boundary.
-`plan`, `missing` and `build` read the derivations from `DIR` when
+To carry that closure to another process, use `resolve --dump-drvs DIR`.
+`plan`, `missing` and `build` then read the derivations from `DIR` when
 `--drvs DIR` names it, or when `--roots -` reads a `resolve` whose output
-carries `drvDir`.
+has `drvDir`.
 
-The dump carries derivations only. An input **source** that evaluation
-produced and never wrote to the store is still read from the local store,
-so a closure with such sources needs `iets build --no-build` or
+The dump holds derivations only. An input **source** that evaluation made
+and never wrote to the store is still read from the local store. For a
+closure with such sources, run `iets build --no-build` or
 `iets plumbing build --no-build` first.
 
 ## `resolve`
@@ -96,8 +100,8 @@ iets plumbing resolve [EVAL FLAGS]
 `--prefixes package` is the default: `#hello` is tried at
 `packages.<system>.hello`, then `legacyPackages.<system>.hello`, then
 `hello`, as `nix build` tries it. `dev-shell` and `package-set` are the
-other two `getActualAttrPaths` tables, and `none` makes the fragment the
-attribute path itself.
+other two `getActualAttrPaths` tables of Nix. `none` uses the fragment as
+the attribute path itself.
 
 `--walk` picks one of the three walks Nix has:
 
@@ -108,8 +112,8 @@ attribute path itself.
 | `to-install` | get-drvs.cc:queryOutputs: `outputSpecified`, else `meta.outputsToInstall`, else every output (`out` for a flake) | `nix build` |
 
 `get-drvs` walks an attribute set in lexicographic name order, takes a
-derivation whole, and descends only where `recurseForDerivations = true`
-is set; a list is always walked.
+derivation whole, and goes deeper only where `recurseForDerivations = true`
+is set. It always walks a list.
 
 **Output.**
 
@@ -181,9 +185,9 @@ iets plumbing missing [--builder URL] [--check-cache-status]
 The names are the fields of Nix's `MissingPaths`. This object is byte for
 byte what `iets build --dry-run --json` prints.
 
-`--check-cache-status` adds one object per root, from the
-cache-status-resolver.cc algorithm — the same keys `iets eval-jobs
---check-cache-status` reports:
+`--check-cache-status` adds one object per root. It follows Nix's
+cache-status-resolver.cc, and has the same keys that
+`iets eval-jobs --check-cache-status` reports:
 
 ```json
 {"roots":[{"cacheStatus":"notBuilt","drv":"/nix/store/…-top.drv",
@@ -198,7 +202,7 @@ cache-status-resolver.cc algorithm — the same keys `iets eval-jobs
 | `neededBuilds` | the derivations that would be built, in post-order |
 | `neededSubstitutes` | the paths that would be substituted, sorted by name then path |
 
-It reads the roots' derivations from `/nix/store`, as `missing` does.
+Like `missing`, it reads the roots' derivations from `/nix/store`.
 
 Exit: 0; 1 when the builder cannot be reached or a derivation cannot be
 read; 2 on a usage error. A `grpc://` builder has no `QueryMissing`, so
@@ -206,7 +210,7 @@ it is the usage error `--dry-run needs a worker-protocol builder`.
 
 ## `build`
 
-Derivation roots are built; the outcomes come back.
+Derivation roots are built, and the outcomes come back.
 
 ```
 iets plumbing build [--builder URL] [--out NAME]... [--fetch-to DIR]
@@ -239,14 +243,16 @@ iets plumbing build [--builder URL] [--out NAME]... [--fetch-to DIR]
 | `outcomes[].logTail` | the last lines of the failed build's log; `[]` on success |
 | `gcRoots` | with `--gc-root DIR` only: the links that were made |
 
-Build progress goes to stderr through the reporter: one line per state
-change and the log block of a failure. Under `--log-format internal-json`
-the activity records carry the build instead
-(`docs/reference/errors.md`).
+Build progress goes to stderr: one line per state change, and the log of a
+failed build. Under `--log-format internal-json`, activity records carry
+the build instead (`docs/reference/errors.md`).
 
-Exit: 0; 100, 101, 102 or 104 when a build failed, following
-`failingExitStatus`; 1 on any other error; 2 on a usage error. The codes
-are in `docs/reference/errors.md`.
+A hash mismatch shows up only in the build log, not as a field of the
+JSON.
+
+Exit: 0; 100, 101, 102 or 104 when a build failed, as Nix's
+`failingExitStatus` gives them; 1 on any other error; 2 on a usage error.
+`docs/reference/errors.md` lists the codes.
 
 ## `fetch`
 
@@ -269,13 +275,13 @@ iets plumbing fetch [EVAL FLAGS] (-E EXPR | FILE | FLAKEREF[#FRAGMENT])
 ```
 
 `drvPath` is the rewritten derivation that was built, not the one the
-expression evaluated to. `iets prefetch` is this op plus the choice
-between the object and the bare hash; how the rewrite works is under
-`prefetch` in `docs/reference/commands.md`.
+expression evaluated to. `iets prefetch` is this op, plus the choice
+between the object and the bare hash. `prefetch` in
+`docs/reference/commands.md` says how the rewrite works.
 
 Exit: 0 with a hash; 1 when the download or the build failed; 2 on a
-usage error, which includes no argument at all
-(`nothing to fetch: give a URL, -E EXPR, FILE or FLAKEREF#ATTR`) and
+usage error. These are usage errors: no argument at all
+(`nothing to fetch: give a URL, -E EXPR, FILE or FLAKEREF#ATTR`), and
 `--unpack` with an installable
 (`--unpack applies to a URL; a derivation says how it is hashed`).
 
@@ -290,8 +296,8 @@ A closure that is in `/nix/store` already:
 $ iets plumbing resolve nixpkgs#hello | iets plumbing missing --roots -
 ```
 
-A closure that is in no store at all, carried across the process boundary
-by the ATerm dump:
+A closure that is in no store at all, carried to the next process by the
+ATerm dump:
 
 ```console
 $ iets plumbing resolve --dump-drvs d ./chain.nix
@@ -302,7 +308,7 @@ $ iets plumbing resolve --dump-drvs d ./chain.nix | iets plumbing plan --roots -
 ```
 
 `storeDrvs` is 0: no derivation was read from `/nix/store`. Without the
-dump the same pipe fails, because the root is in no store:
+dump, the same pipe fails, because the root is in no store:
 
 ```console
 $ iets plumbing resolve ./chain.nix | iets plumbing plan --roots -
@@ -325,99 +331,10 @@ $ iets plumbing plan --drvs d /nix/store/…-ok.drv
 {"drvs":["/nix/store/…-ok.drv"],"sources":[],"storeDrvs":0}
 ```
 
-## What each command is written against
+## Limits
 
-The operation layer is `crate::api`. A row naming an op that has no
-command — `index`, `jobs`, `dev-env`, `drv-show`, `drv-diff`,
-`closure-diff`, `flake-info`, `flake-tree` — means the command calls the
-**capability** (`api::installable`, `api::flake`, `crate::jobs`) with no
-op in between.
-
-| Command | The operations it uses | What is the command's own |
-|:---|:---|:---|
-| `iets eval` | `eval` | the human value printer, `--timings` |
-| `iets build` | `resolve` (the get-drvs walk for a set), `plan`, `missing`, `build`, through `api::build::Dispatch` | the closing line, the `--dry-run` text, `render_size`, the `fix-hashes` prompts, the `.drv` legacy input |
-| `iets search` | `index` | regex compile and match, `--exclude`, colour, `--pretty`, the no-results hint |
-| `iets diff` | `resolve`, `drv-diff`, `closure-diff` | the text rendering, the `diff(1)` exit codes |
-| `iets eval-jobs` | `jobs` | the worker/collector process model, `--max-memory-size`, the summary line |
-| `iets print-dev-env` | `resolve`, `dev-env` | the bash rendering, the direnv cache, the GC root |
-| `iets prefetch` | `fetch` | the `--json` shape choice |
-| `iets lint`, `iets parse`, `iets cache` | none | they are already thin over the library |
-| `nix-instantiate` | `resolve` (get-drvs walk), `plan` | Nix argv parsing, `--add-root`, out-links, the exec fallback |
-| `nix-build` | `resolve`, `plan`, `build` | `result` symlinks, `--add-root`, Nix's exit codes, the fallback |
-| `nix-shell` | `resolve`, `plan`, `build` | the env, `execve` of the shell, `--run`, `--pure` |
-| `nix-eval-jobs` | `jobs` | argv compatibility |
-| `nix eval` | `eval` | Nix's printer and argv |
-| `nix build` | `resolve`, `plan`, `build` | `result` symlinks, the `--json` Nix shape, the fallback |
-| `nix derivation show` | `resolve`, `drv-show` | Nix's argv, `--pretty`, the fallback |
-| `nix search` | `index` | Nix's output format and argv |
-| `nix develop` | `resolve`, `dev-env` | the shell it execs |
-| `nix print-dev-env` | `dev-env` | the bash rendering |
-| `nix flake metadata` | `flake-info` | Nix's output format |
-
-## What the operation layer does not expose
-
-Five capabilities a command still reaches for itself. Each is a gap, not
-a design.
-
-1. **The sources of an ATerm dump.** `resolve --dump-drvs DIR` writes the
-   run's derivations, not its sources, so a closure whose sources are not
-   in the local store still needs an instantiation first. The shape it
-   wants is the batch form of `build --source STOREPATH=LOCAL`.
-   `iets diff` keeps its in-memory table, because it evaluates and
-   compares in one process.
-2. **Hash mismatch capture.** `iets prefetch` drives a build that is
-   meant to fail and reads the mismatch out of the log
-   (`log::want_mismatch`, `log::take_mismatches`); `iets build`'s
-   `fix-hashes` reads the same channel. `build` should report a mismatch
-   as structured output, not as a log line the caller greps.
-3. **The eval-store split.** `eval-jobs --eval-store` instantiates on one
-   store while building on another. `plan` and `build` take one builder.
-4. **A second connection for a shell.** `nix-shell` and `print-dev-env`
-   upload a plan and then speak the worker protocol themselves — build the
-   derivation's *inputs*, `execve` a shell, read the env output back. They
-   use `api::build::plan` and `api::build::locate_store` and drive
-   `PlanUpload` on that connection, because routing them through
-   `Dispatch` would open a second one.
-5. **Flake metadata as an op.** `api::flake::info` and `api::flake::tree`
-   are the capability; there is no `flake-info` or `flake-tree` op,
-   because no caller needs the process boundary.
-
-## The source resolver
-
-`crate::source` is what turns a reference into a tree; the fetchers and
-the input store are behind it, and `crate::flake` is `pub(crate)`.
-
-```rust
-/// Where a tree comes from: a directory, the working tree of an SCM, or a
-/// locked input.
-pub enum SourceRef { … }
-
-/// A tree that is there: a readable path, and the input attributes it
-/// resolved to (`nar_hash`, `last_modified`, `rev` are accessors over them).
-pub struct Tree { pub path: PathBuf, … }
-
-/// What a flake locked, as data. No evaluator, no fetching.
-pub struct Lock { pub root: NodeId, pub nodes: BTreeMap<NodeId, LockedInput> }
-
-pub fn tree(ev: &mut Evaluator, r: &SourceRef) -> Result<Tree>;
-```
-
-`source::tree` is the one call `builtins.fetchTree`, the flake root and
-`nix flake prefetch-inputs` share. Three neighbouring jobs are **not** on
-it: parsing a flake reference is flake syntax and stays in
-`crate::flake`; reading one `flake.lock` is `api::flake::info`; and
-reading bytes out of a tree goes through `treestore::StoredTree`.
-
-`api::flake` is what a command calls: `is_flake_ref`, `parse_attr_path`,
-`select`, `outputs`, `info` and `tree`.
-
-## Tests
-
-`scripts/plumbing-e2e.nu` has one case per op, checked against the JSON
-shapes on this page. The shape is the contract; a change to it is a
-change to this page.
-
-`tests/layering.rs` checks that no file under `src/cli` reaches past
-`crate::api` into a layer below it, outside an explicit allow-list
-(`docs/explanation/plumbing-and-porcelain.md`).
+- `resolve --dump-drvs` writes derivations, not sources (see
+  [Naming roots](#naming-roots)).
+- `plan` and `build` take one builder. There is no way to instantiate on
+  one store and build on another, as `iets eval-jobs --eval-store` does.
+- There is no op for flake metadata.
