@@ -5,7 +5,7 @@ so you can script them. This page lists every operation: its flags, the
 exact JSON it writes, and its exit codes.
 
 ```console
-$ iets plumbing resolve nixpkgs#hello | iets plumbing missing --roots -
+$ iets plumbing resolve -A hello ./nixpkgs | iets plumbing missing --roots -
 ```
 
 ```
@@ -247,8 +247,9 @@ Build progress goes to stderr: one line per state change, and the log of a
 failed build. Under `--log-format internal-json`, activity records carry
 the build instead (`docs/reference/errors.md`).
 
-A hash mismatch shows up only in the build log, not as a field of the
-JSON.
+A hash mismatch has no field of its own. It is a failure like any other,
+with the daemon's status and message in `reason`, and the hash the build
+got is in the build log.
 
 Exit: 0; 100, 101, 102 or 104 when a build failed, as Nix's
 `failingExitStatus` gives them; 1 on any other error; 2 on a usage error.
@@ -293,7 +294,7 @@ usage error. These are usage errors: no argument at all
 A closure that is in `/nix/store` already:
 
 ```console
-$ iets plumbing resolve nixpkgs#hello | iets plumbing missing --roots -
+$ iets plumbing resolve -A hello ./nixpkgs | iets plumbing missing --roots -
 ```
 
 A closure that is in no store at all, carried to the next process by the
