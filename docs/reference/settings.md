@@ -152,7 +152,7 @@ These files used to be `iets.conf`, in nix.conf's line syntax, before
 2026-09. iets no longer reads that file. On NixOS, the module below writes
 `iets.toml`, and the old file leaves `/etc` at the same switch.
 
-## Files and order
+## `iets.toml` files and order
 
 Later wins.
 
@@ -299,7 +299,7 @@ iets reads Nix's settings files as Nix 2.34.8 does:
 `globals.cc:loadConfFile` for finding them,
 `configuration.cc:parseConfigFiles` for the line syntax.
 
-## Files and order
+## `nix.conf` files and order
 
 iets applies these in order. Later wins.
 
