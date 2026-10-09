@@ -7,8 +7,9 @@ end.
 `iets build` evaluates in memory, works out the closure of the root
 derivations, and sends only what the store lacks. iets has no local store
 of its own: it reads `/nix/store` only for an input derivation that came
-from there. For why it works this way, see `docs/how-to/build-remotely.md`.
-For the measured numbers, see `docs/explanation/transports.md`.
+from there. For why it works this way, and for the measured numbers, see
+`docs/explanation/transports.md`. For the steps, see
+`docs/how-to/build-remotely.md`.
 
 ## The builder URL
 
