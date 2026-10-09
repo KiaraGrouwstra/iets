@@ -222,6 +222,11 @@ pub struct Evaluator {
     /// The eval store, opened on the first flake input that is missing from it
     /// (`crate::source`).
     pub store: LazyStore,
+    /// `==` by Nix's exact rules, not by the shortcut that two equal forced
+    /// values are equal. Only the eval fuzz target turns it on, to tell that
+    /// known divergence from others (docs/reference/divergences.md).
+    #[doc(hidden)]
+    pub nix_eq: bool,
     /// `pure-eval` (docs/reference/settings.md).
     pure: bool,
     /// The project this run's sources belong to (`crate::project`). A pure
@@ -541,6 +546,7 @@ impl EvalConfig {
             },
             ir_cache: self.ir_cache,
             store: Default::default(),
+            nix_eq: false,
             pure: self.pure,
             project_root: self.project_root,
             session: self.session,

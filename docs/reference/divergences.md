@@ -225,7 +225,9 @@ value over the thunk, so two thunks that give the same function and are
 both demanded in place look like one slot; a helper fiber does not write,
 so the answer is the same at every worker count. Nix's exact rules cost
 about 1% of the instructions of a NixOS evaluation, for no difference in
-nixpkgs.
+nixpkgs. `Evaluator::nix_eq` turns them on; only the eval fuzz target uses
+it, to tell this divergence from other differences (`eq-rule`,
+`docs/how-to/fuzz.md`).
 
 ## `«repeated»` for a list
 

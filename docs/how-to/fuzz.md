@@ -165,6 +165,7 @@ as a fresh `nix-instantiate` and a fresh `iets eval` would see it.
 | `value` | both give a value, and the values differ |
 | `iets-panic` | iets panicked |
 | `nix-crash` | the oracle process died on the expression |
+| `eq-rule` | `iets-only` or `value`, and iets with Nix's exact `==` rules (`Evaluator::nix_eq`) gives Nix's answer: the `==` shortcut of docs/reference/divergences.md |
 
 ## The derivation targets
 

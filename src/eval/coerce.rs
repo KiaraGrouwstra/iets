@@ -196,7 +196,9 @@ impl Evaluator {
         }
         // the operands are fresh copies in Nix, so its slot shortcut never
         // applies here: a function is unequal and a NaN is unequal to itself
-        if a == b && matches!(a.value_type(), ValueType::Function | ValueType::Float) {
+        if a == b
+            && (self.nix_eq || matches!(a.value_type(), ValueType::Function | ValueType::Float))
+        {
             return self.eq_forced(a, b, pos);
         }
         self.eq_values(a, a, b, b, pos)
@@ -214,7 +216,7 @@ impl Evaluator {
         fb: Word,
         pos: Pos,
     ) -> EvalResult<bool> {
-        if fa == fb && (a == b || fa.value_type() != ValueType::Function) {
+        if fa == fb && (a == b || (!self.nix_eq && fa.value_type() != ValueType::Function)) {
             return Ok(true);
         }
         self.eq_forced(fa, fb, pos)
