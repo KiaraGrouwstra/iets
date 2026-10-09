@@ -1,8 +1,8 @@
 //! Differential fuzzing of iets against Nix 2.34.8 (docs/how-to/fuzz.md).
 
 pub mod canon;
-pub mod eval;
 pub mod drv;
+pub mod eval;
 pub mod known;
 pub mod nar;
 pub mod oracle;
