@@ -10,7 +10,7 @@ Here is a missing attribute, as a program sees it with
 ```json
 {"action":"msg","code":"missing-attr","column":12,"file":"«string»:1:12",
  "level":0,"line":1,"msg":"error: attribute 'b' missing\n       at «string»:1:12",
- "raw_msg":"attribute 'b' missing"}
+ "raw_msg":"attribute 'b' missing","sid":"019e037b-f603-7443-8071-cfd8585ec8c6"}
 ```
 
 Without the flag, you get Nix's plain text on stderr. Either way, iets sets
@@ -198,20 +198,21 @@ gives an ordinary `PATH changed`.
 
 ### Activity records
 
-A command that talks to a store also writes Nix's activity records, the
-ones `nix-output-monitor` (`nom --json`) reads:
+iets also writes Nix's activity records, the ones `nix-output-monitor`
+(`nom --json`) reads:
 
 ```json
-{"action":"start","fields":["/nix/store/…-hello.drv","",1,1],"id":…,"level":3,"parent":0,"text":"building '/nix/store/…-hello.drv'","type":105}
-{"action":"result","fields":["hello"],"id":…,"type":101}
-{"action":"stop","id":…}
+{"action":"start","fields":["/nix/store/…-hello.drv","",1,1],"id":…,"level":3,"parent":0,"sid":…,"text":"building '/nix/store/…-hello.drv'","type":105}
+{"action":"result","fields":["hello"],"id":…,"sid":…,"type":101}
+{"action":"stop","id":…,"sid":…}
 ```
 
 The type numbers are Nix's `ActivityType` and `ResultType`
 (`src/libutil/include/nix/util/logging.hh`):
 
-- activities: 100 copy path, 101 file transfer, 102 realise, 103 copy
-  paths, 104 builds, 105 build, 108 substitute, 109 query path info;
+- activities: 0 unknown, 100 copy path, 101 file transfer, 102 realise,
+  103 copy paths, 104 builds, 105 build, 108 substitute, 109 query path
+  info;
 - results: 101 build log line, 104 set phase, 105 progress, 106 set
   expected.
 
@@ -230,7 +231,12 @@ Where they come from:
   copy-paths activities around a batch, and one `building 'DRV' on 'URL'`
   activity per derivation. The build's log lines and phases are its
   results. The builds activity gets progress results `[done, expected,
-  running, failed]`.
+  running, failed]`. A substitution on the builder is one type 0
+  activity, `substituting N paths on 'URL'`.
+- **The evaluation.** `iets eval` and `iets build` wrap the evaluation in
+  one type 0 activity at level 4: `evaluating 'FILE' -A ATTR`, or
+  `evaluating the expression` for `-E`. Nix has no activity type for
+  evaluation.
 
 An id has Nix's form: the pid in the high 32 bits and a counter below.
 These records go out only under `internal-json` or with a `json-log-path`.
