@@ -242,11 +242,9 @@ subsequent reads of that tree are silent, with a site or without. A site
 that a `# iets: allow` comment covers is not a finding, so the next read
 of that tree reports.
 
-A read that is not a selection has no site. `fetchTree` and the root tree
-of a flake make `revCount` as a lazy value, and the evaluator computes a
-lazy value of native code without the position of the expression that
-reads it. The evaluator keeps no call trace. Thus the message names the
-tree, and the finding has no position:
+A read that is not a selection has no site, because iets cannot tell which
+expression asked for the value. The message names the tree, and the
+finding has no position:
 
 ```
 $ iets eval --raw .#scoped              # scoped = with self; "1.${toString revCount}";
@@ -364,9 +362,9 @@ it, `unsafeDiscardStringContext` removes it, and it never reaches a
 derivation. The project root of a path is the one that
 `docs/explanation/flakes-and-sources.md` defines.
 
-Both are **errors** by default. A pure evaluation in iets reads your
-checkout, not a copy of it (`docs/explanation/flakes-and-sources.md`), so
-your paths stay your own. The one place that breaks when the checkout
+`impure-path-in-drv` and `absolute-path-in-drv` are **errors** by default.
+A pure evaluation in iets reads your checkout, not a copy of it
+(`docs/explanation/flakes-and-sources.md`), so your paths stay your own. The one place that breaks when the checkout
 moves is a derivation attribute that holds such a path. The message tells
 you the fix: interpolate the path, and it is copied to the store. If you
 want the finding without the failure, set `impure-path-in-drv = "warn"`
@@ -618,32 +616,21 @@ cache (3 runs for each binary, each file compiles): 12.1825 G before and
 
 ## Caches and parallelism
 
-- A lint warning is an effect. `Cache::write` stores the record of each
-  warning in the entry, and a hit puts them out again before the
-  result (docs/explanation/caching.md). The lint configuration, scope and
-  roots included, is part of the cache key. A lint at `error` fails the
-  run, and failed runs are never cached.
-- The IR cache keys an entry on the compile-time lint levels the file
-  gets after the scope rule and stores the warnings the compile
-  produced, so a file loaded from the cache reports them again, and the
-  file's `# iets: allow` table, so a runtime lint on a loaded file is
-  silenced like on a compiled one. With every compile-time lint `off`
-  for that file (every store file under `scope = "root"`) the key is
-  the same as before the registry existed.
-- A site the scope silences enters the shared site set like a reported
-  one, so it is classified once per fiber; the classification of a file
-  is cached per fiber.
-- Warnings are buffered; the buffer is written before `builtins.trace`
-  and `builtins.warn` print, before an error report, at the end of every
-  command, and when the last evaluator handle drops.
-- Any fiber reports a site it reaches first; the shared site set keeps
-  each to one line. The parallel demand walk forces list elements a
-  sequential `any`, `all` or `elem` would skip, so the set of sites at N
-  workers can be a superset of the sequential one, and when two values
-  share one site (an attribute position that several derivations reuse)
-  the message shows the value that arrived first.
-- Embedded sources (`derivation.nix`, `fetchurl.nix`, `call-flake.nix`,
-  the imported-drv wrapper) are never linted.
+- A cache hit prints the same warnings as the run that wrote the entry,
+  before the result (`docs/explanation/caching.md`). The lint levels, the
+  scope and the roots are part of the cache key, so another configuration
+  is another entry. A lint at `error` fails the run, and a failed run is
+  never cached.
+- A file loaded from the compiled-file cache reports its compile-time
+  warnings again, and its `# iets: allow` comments still apply.
+- A warning comes out before any `builtins.trace` or `builtins.warn` line
+  and any error that follows it, and at the latest when the command ends.
+- With more than one worker, iets can force list elements that a
+  sequential `any`, `all` or `elem` would skip. So a run with several
+  workers can report more sites than a run with one. When several values
+  share one site, the message shows the value that got there first.
+- The sources iets carries inside itself (`derivation.nix`,
+  `fetchurl.nix`, `call-flake.nix`) are never linted.
 
 ## Limits
 
@@ -659,8 +646,6 @@ cache (3 runs for each binary, each file compiles): 12.1825 G before and
   so a wrapper in the user's repository is the user's contract and is
   reported, and a list passed through such a wrapper from a file out of
   scope is reported at the wrapper's `builder` binding.
-- `dir-copy-flake` needs a flake evaluation, so its fixture is the
-  scratch flake of `scripts/linttest.nu`, not a `tests/lint/*.nix` file.
 - `read-through-copy` only knows the copies this evaluation made through
   a coercion, `builtins.path` or `filterSource`; a flake root or input is
   a tracked tree and reading through it is the normal way.
@@ -680,16 +665,12 @@ cache (3 runs for each binary, each file compiles): 12.1825 G before and
   (`nixos/modules/config/nix-flakes.nix`), and the same attribute holds
   `rev` and `narHash`, which have the mark.
 - `rev-count` has a site only for a selection, `inherit (e) revCount;` and
-  `builtins.getAttr`. The other reads force the lazy value, and the
-  evaluator does not know the position of the read when it computes the
-  value. Thus a `# iets: allow` comment cannot silence such a read, and
-  its record has no byte span.
+  `builtins.getAttr`. For any other read, iets cannot tell which
+  expression asked for the value. So a `# iets: allow` comment cannot
+  silence such a read, and its record has no byte span.
 - `rev-count` gives one finding for each tree in a run, not one for each
   read. When the first read has no site, a subsequent selection of that
   tree is silent.
-- `rev-count` needs a tree that has a count. Its cases are in
-  `scripts/flaketest.nu` (a git working tree, a locked git input) and in
-  the unit tests, not in a `tests/lint/*.nix` file.
 - `tree-meta-in-drv` sees a value only through the mark. The builtins
   that drop the store context drop the mark too: `match`, `split`,
   `hashString`, `fromJSON`, an attribute name. `builtins.toFile` writes
