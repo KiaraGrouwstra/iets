@@ -109,15 +109,18 @@ it was built with.
 
 ## Run a long campaign
 
+There is one campaign for each family: `fuzz-parse-campaign`,
+`fuzz-nar-campaign`, `fuzz-wire-campaign`, `fuzz-eval-campaign` and
+`fuzz-drv-campaign`. Build one on a machine with many cores:
+
 ```sh
-nix-farm '.#packages.x86_64-linux.fuzz-parse-campaign' --fetch-to campaign
-nix-farm '.#packages.x86_64-linux.fuzz-nar-campaign' --fetch-to campaign
-nix-farm '.#packages.x86_64-linux.fuzz-eval-campaign' --fetch-to campaign
+nix build '.#fuzz-parse-campaign' -o campaign
 ```
 
 A campaign fuzzes on every core of the builder for an hour. Look in
 `campaign/artifacts/` for the inputs that differed, and in
-`campaign/triage.jsonl` for them replayed. To run another target, for
+`campaign/triage.jsonl` for them replayed. `campaign/corpus/` holds the
+corpus it grew. To run another target, for
 another time, or from an earlier corpus, use
 `(import ./fuzz { ... }).campaign { target; seconds; corpus; }`.
 
