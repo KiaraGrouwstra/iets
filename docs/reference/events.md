@@ -21,7 +21,7 @@ of the promise, and `event` is first only as a courtesy to `grep`.
 Nothing is written when no group is named, and no hook builds a record, so
 an unwatched run pays nothing. A watched one pays about 0.4% of its
 instructions, and one line is one `write`: 337 events of a `hello`
-evaluation cost 0.42% on bld1.
+evaluation cost 0.42%.
 
 ## The groups
 

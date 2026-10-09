@@ -1,7 +1,7 @@
 # How to embed the evaluator in your own program
 
 > **Not ready for long-lived hosts.** The evaluator's arena does not free
-> memory until the process exits (`src/runtime/arena.rs`). A program that
+> memory until the process exits. A program that
 > evaluates again and again, such as an editor server or a build service,
 > grows without limit. Use the library for a run-once frontend: another
 > command line, a test harness, a one-shot tool. The API can change.

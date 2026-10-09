@@ -17,9 +17,8 @@ under its section of this page.
 ## Regular expressions (`builtins.match`, `builtins.split`)
 
 Nix compiles patterns with libstdc++ `std::regex` in `extended` (POSIX ERE)
-mode. iets has its own engine (`src/builtins/text/regex.rs`), written from
-the behaviour Nix shows and the POSIX spec. Its header lists the observed
-rules. No divergence is known: the matches, the capture groups, the
+mode. iets has its own engine, written from the behaviour Nix shows and
+the POSIX spec. No divergence is known: the matches, the capture groups, the
 accept/reject set and both error messages agree, including the
 `memory limit exceeded by regular expression` limit (`a{99993}` compiles,
 `a{99994}` does not).
@@ -28,7 +27,7 @@ accept/reject set and both error messages agree, including the
 
 Nix uses toml11 with `toml::spec::v(1, 0, 0)`; iets uses the `toml`
 crate, which implements TOML 1.1 and has no switch for the older spec. A
-scanning pass (`reject_1_1` in `src/builtins/text/fromtoml.rs`) refuses
+scanning pass refuses
 the 1.1-only syntax first: a newline or a trailing comma inside an inline
 table, and the `\e` and `\xHH` escapes. Omitted seconds are caught on the
 parsed value, which the crate reports as `second: None`. Only the error
@@ -201,8 +200,7 @@ argument, Nix makes a thunk of every expression except a literal and an
 already evaluated variable (`Expr::maybeThunk`). iets keeps a value there
 instead of a thunk when it costs nothing to have it: a lambda, a folded
 `builtins.x`, an attribute of an attrset that is already forced, and `+`
-or `-` on ints that are already forced (`Evaluator::maybe_thunk`,
-`Compiler::fold_builtins_select`). The results are the same; only a
+or `-` on ints that are already forced. The results are the same; only a
 printer that stops at thunks can see it. `nix-instantiate --eval` without
 `--strict` prints `[ builtins.nixPath (1 + 1) (x: x) ]` as
 `[ <CODE> <CODE> <CODE> ]`, iets as `[ [ ] 2 <LAMBDA> ]`. These are
@@ -274,7 +272,7 @@ Nix leaves `fetchTree` out of `builtins` unless `fetch-tree` or `flakes`
 is on, `fetchClosure` unless `fetch-closure` is, and `outputOf` unless
 `dynamic-derivations` is (`experimental-features` in nix.conf or
 `--extra-experimental-features`). Under one of Nix's own names iets does
-the same (`builtins::exposed`), so `builtins.attrNames builtins` is the
+the same, so `builtins.attrNames builtins` is the
 same list on both sides whatever the features are. Its own commands have
 every feature, so `builtins ? fetchTree` is true there where nix with no
 feature on says false, and code that branches on it (flake-compat) takes
@@ -312,7 +310,7 @@ building the producer, and evaluation does not build.
 
 ## Flake references (`parseFlakeRef`, `flakeRefToString`, the command line)
 
-`src/flake/flakeref.rs` parses and renders the common schemes like Nix
+iets parses and renders the common schemes like Nix
 2.34.8 (flakeref.cc, url.cc and the libfetchers schemes): indirect ids,
 `flake:`, `github:`, `gitlab:`, `path:` and absolute paths, `git:` and
 `git+…`, `tarball+…`, `file+…` and plain `http(s)`/`file` URLs, with the
@@ -435,7 +433,7 @@ commands. A project `iets.toml` may not set it
 
 Nix 2.34.8's client talks to a daemon of protocol 1.18 or newer
 (`WorkerProto::minimum`, worker-protocol.cc). iets needs 1.35
-(`MIN_MINOR`, src/remote/worker/mod.rs) and refuses an older daemon at
+and refuses an older daemon at
 the handshake with
 `the Nix daemon speaks protocol 1.N; this client needs 1.35 or newer`.
 Older daemons lack the trust flag and some reply shapes this client
@@ -525,7 +523,7 @@ effect falls into one of four classes:
    can come before a fallback: the run had read the flag before it found
    the reason to fall back.
 
-`src/ignored.rs` holds the reporter. The flags of class 4:
+The flags of class 4:
 
 | Flag | Where | The reason in the warning |
 |:---|:---|:---|
@@ -568,8 +566,8 @@ Two flags moved from "ignored" to class 2 or 3:
 - A setting that acts in the Nix client and that iets has nothing for
   counts when its value is not Nix's default: `restrict-eval`,
   `allowed-uris`, `eval-system`, `max-call-depth`, `allow-dirty`,
-  `trace-verbose`, `abort-on-warn` and the rest of `UNIMPLEMENTED` in
-  `src/config.rs`. `nix-instantiate`, `nix-build`, `nix-shell` and `nix`
+  `trace-verbose`, `abort-on-warn` and the rest of class 4 in
+  `docs/reference/settings.md`. `nix-instantiate`, `nix-build`, `nix-shell` and `nix`
   fall back, so the real nix applies it. iets's own commands and
   `nix-eval-jobs` cannot, and give one `ignored-setting` warning. `accept-flake-config` and `log-lines` give the warning
   everywhere.

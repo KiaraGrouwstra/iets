@@ -1,7 +1,7 @@
 # The syntax tree as JSON
 
 The output of `iets parse --json`: the kinds of node, their fields and
-their spans. Code: `src/syntax/dump.rs`.
+their spans.
 
 `iets parse --json FILE...` prints one line for each file that parses.
 The line is one JSON object:
