@@ -111,7 +111,7 @@ us five rules.
 
 ### 1. A shared module costs 100-175 lines before it saves one
 
-`api::installable` started at 175 lines; `api::run` is 102. A stage that
+`api::installable` started at 175 lines, and `api::run` at 102. A stage that
 removes N copies of a K-line sequence nets `N*K − 150`, not `N*K`.
 
 ### 2. The saving comes from deleting a repeated *type*, not a repeated line
@@ -207,17 +207,18 @@ being a thing four command files each knew a different piece of.
 ## Two gaps stay open
 
 `nix-shell` and `print-dev-env` each open a connection of their own. They
-upload a plan and then speak the worker protocol themselves: they build the
-derivation's *inputs* and exec a shell, or read the environment output
-back. So they use the plan and the store lookup, but drive the upload
-directly. Going through the dispatcher would open a second connection. Stage 9's `plumbing dev-env` was to close this, and stage 9 is
-cancelled. It is recorded as a gap, not as a plan.
+upload a plan and then speak the worker protocol themselves: they build
+the derivation's *inputs* and exec a shell, or read the environment
+output back. So they use the plan and the store lookup, but drive
+the upload directly. Going through the dispatcher would open a second
+connection. Stage 9's `plumbing dev-env` was to close this, and stage 9
+is cancelled. It is recorded as a gap, not as a plan.
 
 `drv-show` was to be the reader of a dumped-derivation directory, which
 `api::build::drvs_in_dir` already is. `nix derivation show` later needed the
 other half, drv paths to the JSON Nix prints, and got it as a capability:
 `api::drvshow::show`, with no op and no `iets plumbing drv-show`. The
-porcelain is 80 lines of argv and printing over it, which is what the
+porcelain was 80 lines of argv and printing over it, which is what the
 cancelled op would have cost on its own.
 
 ## What the line count says about the next refactor
