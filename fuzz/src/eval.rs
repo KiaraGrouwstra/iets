@@ -29,6 +29,9 @@ pub const KINDS: &[&str] = &[
     "iets-panic",
     // the oracle died: Nix itself crashes on the input
     "nix-crash",
+    // iets-only or value, and iets with Nix's `==` rules (`nix_eq`) gives
+    // Nix's answer
+    "eq-rule",
 ];
 
 /// The reply kind of an error after which the oracle exits: a stack
@@ -141,7 +144,30 @@ impl Target for Eval {
             return v;
         }
         EV.set(EvalConfig::new().pure(true).build());
-        self.verdict(&src)
+        let v = self.verdict(&src);
+        let Verdict::Bug(mut d) = v else { return v };
+        if !matches!(d.kind, "iets-only" | "value") {
+            return Verdict::Bug(d);
+        }
+        // the `==` shortcut gives a value where Nix forces and fails, or
+        // equals what Nix does not; with Nix's rules the answer is Nix's
+        let exact = no_panic(|| {
+            EV.with_borrow_mut(|ev| {
+                ev.nix_eq = true;
+                let a = iets(ev, &src);
+                ev.nix_eq = false;
+                a
+            })
+        });
+        let agrees = match exact {
+            Ok(Ok(i)) => d.kind == "value" && i == d.nix,
+            Ok(Err(_)) => d.kind == "iets-only",
+            Err(_) => false,
+        };
+        if agrees {
+            d.kind = "eq-rule";
+        }
+        crate::classify(&self.known, Some(d), src.as_bytes())
     }
 }
 

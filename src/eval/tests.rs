@@ -321,3 +321,27 @@ fn an_invalid_regex_fails_before_the_string_is_forced() {
         assert!(e.starts_with("invalid regular expression"), "{f}: {e}");
     }
 }
+
+#[test]
+fn nix_eq_forces_what_the_shortcut_skips() {
+    let eq = |src: &str| {
+        let mut ev = Evaluator::new();
+        ev.nix_eq = true;
+        let v = ev
+            .eval_string(src, b"/")
+            .and_then(|v| ev.force_deep(v))
+            .map_err(|e| e.msg)?;
+        let mut out = Vec::new();
+        print::print_ambiguous(&mut ev, v, 1, &mut out, &mut HashSet::new(), 0).unwrap();
+        Ok::<_, String>(String::from_utf8(out).unwrap())
+    };
+    let x = "let x = { a = throw \"a\"; }; in";
+    assert_eq!(eval_str(&format!("{x} x == x")), "true");
+    assert_eq!(eq(&format!("{x} x == x")), Err("a".into()));
+    // the attribute is one slot: forced, then equal without a look inside
+    assert_eq!(
+        eq("let x = { a = { b = throw \"b\"; }; }; in x == x"),
+        Ok("true".into())
+    );
+    assert_eq!(eq("[ 1 2 ] == [ 1 2 ]"), Ok("true".into()));
+}
