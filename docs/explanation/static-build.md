@@ -1,24 +1,25 @@
 # The static build
 
-`nix build .#static` builds a musl binary with no runtime dependencies: no
-`/nix/store`, no daemon, no shared libraries, no CA bundle. It can
-evaluate, fetch `github:`, `gitlab:`, `sourcehut:` and `tarball` inputs,
-and build on a `grpc://` builder. Stripped and compressed with `xz -9`, it
-is 3.1 MB.
+Run `nix build .#static` and you get a musl binary with no runtime
+dependencies. It needs no `/nix/store`, no daemon, no shared libraries and
+no CA bundle. It can evaluate, fetch `github:`, `gitlab:`, `sourcehut:` and
+`tarball` inputs, and build on a `grpc://` builder. Stripped and compressed
+with `xz -9`, it is 3.1 MB.
 
-It still runs `git` for a project that is a git checkout, and `nix` for a
-locked `git` or `hg` input.
+It still runs `git` for a project that is a git checkout. It runs `nix` for
+a locked `git` or `hg` input.
 
-With no CA bundle on the machine, it trusts the Mozilla roots compiled in
-(`NIX_SSL_CERT_FILE` in [reference/settings.md](../reference/settings.md)).
+If the machine has no CA bundle, the binary trusts the Mozilla roots built
+into it (`NIX_SSL_CERT_FILE` in [reference/settings.md](../reference/settings.md)).
 
 ## The allocator
 
-Outside the evaluator's arena, heap memory comes from the global
-allocator. musl's malloc made the static build 24–30% slower than the
-glibc build, and 79% slower on desktop w4.
+The evaluator keeps its values in its own arena. Everything else comes
+from the global allocator, and that choice matters. With musl's malloc,
+the static build was 24–30% slower than the glibc build, and 79% slower on
+desktop w4.
 
-Each allocator was timed with hyperfine (1 warmup, 5 runs, median) on the
+We timed each allocator with hyperfine (1 warmup, 5 runs, median) on the
 `bench/ab.nu` workloads, on an idle Ryzen 9 7950X3D pinned to cores 0–7.
 The baseline is glibc's malloc.
 
@@ -44,6 +45,6 @@ and scudo link only as non-PIE, and were not faster than mimalloc.
 
 mimalloc is the fastest on both libcs, so iets uses it on every target.
 
-The static build is still 9–13% slower than the glibc build. Most of the
-difference is in musl's `memcpy`, `memmove`, `memcmp` and `memset`. They
+Even so, the static build is 9–13% slower than the glibc build. Most of
+the gap is in musl's `memcpy`, `memmove`, `memcmp` and `memset`. They
 take 13.8% of the cycles on desktop w1; glibc's take 2.9%.
