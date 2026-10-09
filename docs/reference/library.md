@@ -158,8 +158,8 @@ Notes:
   and returns `None`. It never panics and never forces. Force first.
 - `as_bytes`, `as_path` and the attribute names borrow the arena, with no
   copy. The constructors do copy: `string` and `path` copy their bytes in,
-  and `list` and `attrs` gather a temporary first. Reading a value never
-  allocates.
+  and `list` and `attrs` gather a temporary first. The getters on `Value`
+  never allocate.
 - `attr_at` uses the evaluator's internal order, not alphabetical order,
   just as `nix_get_attr_byidx` warns. Sort the names yourself when the
   order must be reproducible. On the result of `//`, the first `attr_at`
