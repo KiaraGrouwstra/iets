@@ -26,9 +26,9 @@ helps you predict when a run will be slow.
    directory that it deletes on exit.
 
 A cache hit skips all five. iets checks the read set, looks at the output,
-reads the link of the garbage-collection root, and prints. It talks to the daemon only when the root must be made again. If
-the environment was garbage collected, the run goes through all five
-steps and builds it again.
+reads the link of the garbage-collection root, and prints. It talks to the
+daemon only when the root must be made again. If the environment was
+garbage collected, the run goes through all five steps and builds it again.
 
 To set it up with direnv, see
 [how-to/use-with-direnv.md](../how-to/use-with-direnv.md).
