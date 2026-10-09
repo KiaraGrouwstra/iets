@@ -153,6 +153,7 @@ pub const PAGES: &[Page] = &[
         "provenance",
         "store paths back to local trees",
     ),
+    in_repo("explanation", "dev-shells", "how print-dev-env makes a shell"),
     in_repo("explanation", "lint-scope", "what iets lints, and why"),
     in_repo("explanation", "history", "how it got here"),
 ];
