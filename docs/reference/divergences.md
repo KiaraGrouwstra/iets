@@ -174,6 +174,26 @@ same attribute at the same place.
 `fuzz/divergences.toml` holds this case as `which-duplicate-formal`
 and `which-duplicate-attribute`.
 
+## Which attribute's error comes first
+
+When two attributes of a set both fail, `==`, `builtins.deepSeq` and
+`--strict` report the one they force first. Both evaluators go through a
+set in symbol order, as in the entry above. Nix creates many symbols when
+it starts, and iets creates others, so a name one of them has seen
+already comes first there and not on the other side:
+
+```nix
+{ zz = throw "zz"; key = throw "key"; } == { zz = 1; key = 1; }
+```
+
+Nix 2.34.8 reports `key`, and iets reports `zz`. `success` goes the other
+way. Other names that differ this way include `system`, `builder`, `args`,
+`meta`, `self`, `description` and `__structuredAttrs`. When neither
+evaluator knew any of the names in advance, both report the same
+attribute. `builtins.toJSON` and
+`builtins.attrValues` go through the names in sorted order, so they agree.
+Matching Nix would mean creating iets's symbols in Nix's order.
+
 ## A `%` in an `or` argument
 
 Nix warns when `or` is an argument (`f "x" or`: `or` will become an
@@ -273,8 +293,8 @@ Nix leaves `fetchTree` out of `builtins` unless `fetch-tree` or `flakes`
 is on, `fetchClosure` unless `fetch-closure` is, and `outputOf` unless
 `dynamic-derivations` is (`experimental-features` in nix.conf or
 `--extra-experimental-features`). Under one of Nix's own names iets does
-the same, so `builtins.attrNames builtins` is the
-same list on both sides whatever the features are. Its own commands have
+the same, so `builtins.attrNames builtins` is the same list on both sides
+whatever the features are. Its own commands have
 every feature, so `builtins ? fetchTree` is true there where nix with no
 feature on says false, and code that branches on it (flake-compat) takes
 the `fetchTree` branch. `builtins.fetchClosure` is unsupported either way,
@@ -299,8 +319,8 @@ building the producer, and evaluation does not build.
 
 ## Flake references (`parseFlakeRef`, `flakeRefToString`, the command line)
 
-iets parses and renders the common schemes like Nix
-2.34.8 (flakeref.cc, url.cc and the libfetchers schemes): indirect ids,
+iets parses and renders the common schemes like Nix 2.34.8 (flakeref.cc,
+url.cc and the libfetchers schemes): indirect ids,
 `flake:`, `github:`, `gitlab:`, `path:` and absolute paths, `git:` and
 `git+…`, `tarball+…`, `file+…` and plain `http(s)`/`file` URLs, with the
 query parameters each scheme keeps. For valid input the output is Nix's.
@@ -421,12 +441,11 @@ commands. A project `iets.toml` may not set it
 ## Daemon protocol versions
 
 Nix 2.34.8's client talks to a daemon of protocol 1.18 or newer
-(`WorkerProto::minimum`, worker-protocol.cc). iets needs 1.35
-and refuses an older daemon at
-the handshake with
+(`WorkerProto::minimum`, worker-protocol.cc). iets needs 1.35 and refuses
+an older daemon at the handshake with
 `the Nix daemon speaks protocol 1.N; this client needs 1.35 or newer`.
 Older daemons lack the trust flag and some reply shapes this client
-relies on. The wire fuzz target (`docs/how-to/fuzz.md`) therefore makes
+relies on. The `wire` fuzz target (`docs/reference/fuzz.md`) therefore makes
 daemons of 1.35 and newer only.
 
 ## Padding in a NAR from the daemon
@@ -555,11 +574,12 @@ Two flags moved from "ignored" to class 2 or 3:
 - A setting that acts in the Nix client and that iets has nothing for
   counts when its value is not Nix's default: `restrict-eval`,
   `allowed-uris`, `eval-system`, `max-call-depth`, `allow-dirty`,
-  `trace-verbose`, `abort-on-warn` and the rest of class 4 in
-  `docs/reference/settings.md`. `nix-instantiate`, `nix-build`, `nix-shell` and `nix`
-  fall back, so the real nix applies it. iets's own commands and
-  `nix-eval-jobs` cannot, and give one `ignored-setting` warning. `accept-flake-config` and `log-lines` give the warning
-  everywhere.
+  `trace-verbose`, `abort-on-warn` and the rest of class 4 under "What is
+  applied" in `docs/reference/settings.md`. `nix-instantiate`,
+  `nix-build`, `nix-shell` and `nix` fall back, so the real nix applies
+  it. iets's own commands and `nix-eval-jobs` cannot, and give one
+  `ignored-setting` warning. `accept-flake-config` and `log-lines` give
+  the warning everywhere.
 - iets's own commands (`iets eval`, `build`, `eval-jobs`,
   `print-dev-env`, `diff`) send a daemon no settings. A store setting given
   to them with `--option` is one `ignored-setting` warning. A `grpc://`
