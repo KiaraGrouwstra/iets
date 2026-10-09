@@ -9,15 +9,20 @@ why the upload works the way it does, read
 [explanation/transports.md](../explanation/transports.md). Why a fetched
 input needs no trust is in [explanation/caching.md](../explanation/caching.md).
 
+The examples build `greeting.nix` from the
+[tutorial](../tutorial/getting-started.md). It reads
+`builtins.currentSystem`, which a pure evaluation does not have, so the
+commands add `--impure`.
+
 ## Pick a builder
 
 `--builder URL` takes four forms:
 
 ```sh
-iets build --builder daemon greeting.nix
-iets build --builder unix:///nix/var/nix/daemon-socket/socket greeting.nix
-iets build --builder ssh-ng://builder.example.org greeting.nix
-iets build --builder grpc://farm.example.org:50051 greeting.nix
+iets build --impure --builder daemon greeting.nix
+iets build --impure --builder unix:///nix/var/nix/daemon-socket/socket greeting.nix
+iets build --impure --builder ssh-ng://builder.example.org greeting.nix
+iets build --impure --builder grpc://farm.example.org:50051 greeting.nix
 ```
 
 - `daemon` is this machine's socket, `/nix/var/nix/daemon-socket/socket`.
@@ -32,7 +37,7 @@ If you leave out the flag, iets uses the `builder` setting in your user
 it for one run without the flag:
 
 ```sh
-iets --iets-option builder ssh-ng://builder.example.org build greeting.nix
+iets --iets-option builder ssh-ng://builder.example.org build --impure greeting.nix
 ```
 
 iets refuses a daemon older than protocol 1.35.
@@ -43,7 +48,7 @@ A `grpc://` URL takes nix-grpc-store's own query parameters. These are the
 ones you will most likely need:
 
 ```sh
-iets build --builder 'grpc://farm.example.org:50051?token-file=/run/secrets/farm-token' greeting.nix
+iets build --impure --builder 'grpc://farm.example.org:50051?token-file=/run/secrets/farm-token' greeting.nix
 ```
 
 | parameter | default | what it does |
@@ -110,8 +115,10 @@ path. If the tree changed since the evaluation, the build fails.
 Watch it with `--timings`:
 
 ```sh
-iets build --builder daemon --no-build --timings greeting.nix
+iets build --impure --builder daemon --no-build --timings greeting.nix
 ```
+
+After the `cache:` and `eval:` lines, you see the upload:
 
 ```
 plan: 0 sources, 1 drvs, 0.000s
@@ -133,7 +140,7 @@ whole upload: two operations, not one per path.
 `--no-build` plans, asks and uploads, then stops before the build:
 
 ```sh
-iets build --builder daemon --no-build greeting.nix
+iets build --impure --builder daemon --no-build greeting.nix
 ```
 
 It prints nothing when it succeeds. Add `--timings` to see the phases. Use
@@ -143,7 +150,7 @@ you start the build.
 `--dry-run` stops even earlier, and tells you what *would* happen:
 
 ```sh
-iets build --builder daemon --dry-run --json greeting.nix
+iets build --impure --builder daemon --dry-run --json greeting.nix
 ```
 
 ```json
@@ -163,7 +170,7 @@ A remote builder keeps its outputs where it built them. `--fetch-to DIR`
 streams each wanted output back into `DIR`:
 
 ```sh
-iets build --builder daemon --fetch-to out greeting.nix
+iets build --impure --builder daemon --fetch-to out greeting.nix
 ls out/
 ```
 
@@ -178,7 +185,7 @@ To build only one output, use `--out NAME`. Repeat it for a derivation
 with several outputs:
 
 ```sh
-iets build --builder daemon --out out -I nixpkgs=$nixpkgs -E '(import <nixpkgs> {}).hello'
+iets build --impure --builder daemon --out out -I nixpkgs=$nixpkgs -E '(import <nixpkgs> {}).hello'
 ```
 
 ```
