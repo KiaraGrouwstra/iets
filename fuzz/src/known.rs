@@ -2,6 +2,7 @@
 //! per target, `[[parse]]`, `[[nar]]`.
 
 use crate::Divergence;
+use std::{env, fs};
 
 pub struct Entry {
     pub id: String,
@@ -73,9 +74,9 @@ fn contains(hay: &[u8], needle: &[u8]) -> bool {
 /// The `target` entries of `$IETS_FUZZ_DIVERGENCES`, else of the list next
 /// to this crate, compiled in so a fuzz binary needs no path.
 pub fn from_env(target: &str, kinds: &[&str]) -> Result<Vec<Entry>, String> {
-    match std::env::var("IETS_FUZZ_DIVERGENCES") {
+    match env::var("IETS_FUZZ_DIVERGENCES") {
         Ok(p) => load(
-            &std::fs::read_to_string(&p).map_err(|e| format!("{p}: {e}"))?,
+            &fs::read_to_string(&p).map_err(|e| format!("{p}: {e}"))?,
             target,
             kinds,
         ),

@@ -20,15 +20,15 @@
 //! and the tree as a NAR, for op 1 the NAR, for an error the message.
 
 use crate::oracle::{self, Oracle};
-use crate::{Divergence, Target, Verdict, known, no_panic};
+use crate::{Divergence, Target, Verdict, classify, known, no_panic};
 use iets::store::nar;
 use libfuzzer_sys::arbitrary::Unstructured;
 use sha2::{Digest, Sha256};
-use std::ffi::OsStr;
-use std::fs;
+use std::ffi::{CString, OsStr};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
+use std::{env, fs, io};
 
 pub const KINDS: &[&str] = &[
     // Nix accepts the input, iets refuses it
@@ -74,7 +74,7 @@ pub enum Mode {
 impl Nar {
     /// The target `mode` names.
     pub fn new(known: Vec<known::Entry>, mode: Mode) -> Nar {
-        let dir = std::env::temp_dir().join(format!("iets-fuzz-nar-{}", std::process::id()));
+        let dir = env::temp_dir().join(format!("iets-fuzz-nar-{}", std::process::id()));
         fs::create_dir_all(&dir).expect("a scratch directory for the nar targets");
         Nar {
             oracle: Oracle::from_env("IETS_NAR_ORACLE", "nar-oracle"),
@@ -230,7 +230,7 @@ impl Target for Nar {
             }
             Mode::Tree => self.tree(input),
         };
-        crate::classify(&self.known, d, input)
+        classify(&self.known, d, input)
     }
 }
 
@@ -286,8 +286,8 @@ fn clear(p: &Path) {
 /// Makes at `path` the tree the bytes choose: files with any mode the owner
 /// can read, large files past the writer's 64 KiB buffer, symlinks to any
 /// target, FIFOs, and directories of names in any bytes a name may hold.
-fn build(u: &mut Unstructured, path: &Path, depth: usize) -> std::io::Result<()> {
-    let bad = |_| std::io::Error::other("input exhausted");
+fn build(u: &mut Unstructured, path: &Path, depth: usize) -> io::Result<()> {
+    let bad = |_| io::Error::other("input exhausted");
     // a chain across the depth limit both dumps share (archive.cc: 64)
     if depth == 0 && u.ratio(1u8, 32).map_err(bad)? {
         let mut p = path.to_path_buf();
@@ -314,11 +314,10 @@ fn build(u: &mut Unstructured, path: &Path, depth: usize) -> std::io::Result<()>
             symlink(OsStr::from_bytes(target), path).or_else(|_| symlink("x", path))
         }
         6 => {
-            let c = std::ffi::CString::new(path.as_os_str().as_bytes())
-                .map_err(std::io::Error::other)?;
+            let c = CString::new(path.as_os_str().as_bytes()).map_err(io::Error::other)?;
             // SAFETY: a valid C string for the duration of the call.
             if unsafe { libc::mkfifo(c.as_ptr(), 0o644) } != 0 {
-                return Err(std::io::Error::last_os_error());
+                return Err(io::Error::last_os_error());
             }
             Ok(())
         }

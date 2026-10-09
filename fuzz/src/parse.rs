@@ -6,7 +6,7 @@
 //! then the tree or the message.
 
 use crate::oracle::{self, Oracle};
-use crate::{Divergence, Target, Verdict, canon, known, no_panic, sx, sx::Sx};
+use crate::{Divergence, Target, Verdict, canon, classify, known, no_panic, sx, sx::Sx};
 use iets::syntax::{self, ast::FileId, symbol::Interner};
 
 pub const KINDS: &[&str] = &[
@@ -124,7 +124,7 @@ impl Parse {
 impl Target for Parse {
     fn check(&mut self, src: &[u8]) -> Verdict {
         let d = self.compare(src);
-        let v = crate::classify(&self.known, d, src);
+        let v = classify(&self.known, d, src);
         if !matches!(v, Verdict::Bug(_)) {
             return v;
         }
@@ -136,7 +136,7 @@ impl Target for Parse {
         self.oracle.restart();
         self.interner = Interner::new();
         let d = self.compare(src);
-        crate::classify(&self.known, d, src)
+        classify(&self.known, d, src)
     }
 }
 

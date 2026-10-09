@@ -3,6 +3,7 @@
 //! in this form and `canon` builds iets's.
 
 use std::fmt::Write;
+use std::str;
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Sx {
@@ -88,7 +89,7 @@ impl Reader<'_> {
                         Some(b'\\') => match self.s.get(self.i + 1) {
                             Some(b'x') => {
                                 let h = self.s.get(self.i + 2..self.i + 4).ok_or("short escape")?;
-                                let h = std::str::from_utf8(h).map_err(|e| e.to_string())?;
+                                let h = str::from_utf8(h).map_err(|e| e.to_string())?;
                                 out.push(u8::from_str_radix(h, 16).map_err(|e| e.to_string())?);
                                 self.i += 4;
                             }

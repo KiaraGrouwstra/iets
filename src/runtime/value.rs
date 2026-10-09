@@ -3,6 +3,8 @@
 //! (lists, attrs, envs) keep their elements inline after a fixed header.
 
 use super::arena::{Arena, Interned, Stat, StrEntry};
+#[cfg(feature = "stats2")]
+use super::census;
 use super::word::{
     Cell, FORCED_BITS, Obj, TAG_IMM, TAG_INT, TAG_LAMBDA, TAG_THUNK, TAG_THUNK_APP, TAG_THUNK_APP2,
     TAG_THUNK_MAP, Word,
@@ -508,18 +510,18 @@ impl AttrsObj {
         mark_byte(&self.flags, |f| if f & 0x7f < 0x7f { f + 1 } else { f });
         if self.kind == Kind::Attrs {
             #[cfg(feature = "stats2")]
-            super::census::note_get(0, 0);
+            census::note_get(0, 0);
             return self.get_flat(sym);
         }
         if let Some(flat) = self.flattened() {
             #[cfg(feature = "stats2")]
-            super::census::note_get(1, 0);
+            census::note_get(1, 0);
             return flat.get_flat(sym);
         }
         #[cfg(feature = "stats2")]
         {
             let (probes, hit) = self.probes(sym);
-            super::census::note_get(if hit { 2 } else { 4 }, probes);
+            census::note_get(if hit { 2 } else { 4 }, probes);
         }
         for leaf in self.leaf_sets().iter().rev() {
             if let Some(a) = leaf.get_flat(sym) {

@@ -7,6 +7,7 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+use std::{env, fs, process};
 
 const USAGE: &str = "usage: fuzz-diff [--json] [--nix-only] TARGET PATH...
 
@@ -18,7 +19,7 @@ A directory is walked; with --nix-only only its *.nix files are read.
 --json prints one JSON object per divergence and a summary object.";
 
 fn main() {
-    std::process::exit(run());
+    process::exit(run());
 }
 
 fn run() -> i32 {
@@ -26,7 +27,7 @@ fn run() -> i32 {
     let mut nix_only = false;
     let mut target = None;
     let mut roots = Vec::new();
-    for a in std::env::args().skip(1) {
+    for a in env::args().skip(1) {
         match a.as_str() {
             "--json" => json = true,
             "--nix-only" => nix_only = true,
@@ -61,7 +62,7 @@ fn run() -> i32 {
     let mut expected: BTreeMap<String, usize> = BTreeMap::new();
     let start = Instant::now();
     for f in &files {
-        let Ok(src) = std::fs::read(f) else { continue };
+        let Ok(src) = fs::read(f) else { continue };
         match checker.check(&src) {
             Verdict::Same => same += 1,
             Verdict::Expected(id) => *expected.entry(id).or_default() += 1,
@@ -111,7 +112,7 @@ fn run() -> i32 {
 
 fn walk(p: &Path, nix_only: bool, out: &mut Vec<PathBuf>) {
     if p.is_dir() {
-        let Ok(rd) = std::fs::read_dir(p) else { return };
+        let Ok(rd) = fs::read_dir(p) else { return };
         let mut entries: Vec<PathBuf> = rd.filter_map(|e| e.ok().map(|e| e.path())).collect();
         entries.sort();
         for e in entries {

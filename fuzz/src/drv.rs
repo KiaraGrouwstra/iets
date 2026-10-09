@@ -13,9 +13,11 @@
 //! drvPath, a NUL and the ATerm written again, or the message.
 
 use crate::oracle::{self, Oracle};
-use crate::{Divergence, Target, Verdict, known, no_panic};
+use crate::{Divergence, Target, Verdict, classify, known, no_panic};
 use iets::store::drv::Derivation;
 use libfuzzer_sys::arbitrary::Unstructured;
+use std::collections::HashSet;
+use std::{env, fs};
 
 pub const KINDS: &[&str] = &[
     // Nix accepts the input, iets refuses it
@@ -125,13 +127,13 @@ impl Target for Drv {
             Mode::Read => self.read(input),
             Mode::Gen => {
                 let aterm = generate(&mut Unstructured::new(input));
-                if let Some(f) = std::env::var_os("IETS_DRV_WRITE") {
-                    let _ = std::fs::write(f, &aterm);
+                if let Some(f) = env::var_os("IETS_DRV_WRITE") {
+                    let _ = fs::write(f, &aterm);
                 }
                 self.read(&aterm)
             }
         };
-        crate::classify(&self.known, d, input)
+        classify(&self.known, d, input)
     }
 }
 
@@ -303,7 +305,7 @@ pub fn generate(u: &mut Unstructured) -> Vec<u8> {
     // iets bug that would otherwise fill every campaign (divergences.md,
     // "Reading a .drv file")
     let mut names = keys(u, 3, NAMES);
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     names.retain(|n| seen.insert(n.clone()));
     for (i, name) in names.iter().enumerate() {
         if i > 0 {

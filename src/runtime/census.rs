@@ -3,6 +3,7 @@
 //! and which objects were never read. Every hook is `cfg(feature)` so the
 //! default build carries none of it (docs/explanation/evaluation.md).
 
+use std::array;
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
@@ -487,7 +488,7 @@ impl Census {
             let _ = write!(out, " {name}={c}");
         }
         let _ = writeln!(out);
-        let g: [u64; 5] = std::array::from_fn(|i| GETS[i].load(Ordering::Relaxed));
+        let g: [u64; 5] = array::from_fn(|i| GETS[i].load(Ordering::Relaxed));
         let _ = writeln!(
             out,
             "attrset lookups: flat={} union via flat copy={} union over leaves: hit={} miss={} (leaves probed {})",

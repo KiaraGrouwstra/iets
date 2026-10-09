@@ -10,6 +10,8 @@ pub mod parse;
 pub mod sx;
 pub mod wire;
 
+use std::panic::{self, AssertUnwindSafe};
+
 /// One input that the two sides answer differently.
 pub struct Divergence {
     /// What differs; one of the target's `KINDS`. A known divergence
@@ -42,7 +44,7 @@ pub fn classify(known: &[known::Entry], d: Option<Divergence>, input: &[u8]) -> 
 
 /// Runs `f`, turning a panic into its message.
 pub fn no_panic<T>(f: impl FnOnce() -> T) -> Result<T, String> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|p| {
+    panic::catch_unwind(AssertUnwindSafe(f)).map_err(|p| {
         p.downcast_ref::<String>()
             .cloned()
             .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))

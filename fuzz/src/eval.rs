@@ -13,11 +13,12 @@
 //! the value or the message.
 
 use crate::oracle::{self, Oracle};
-use crate::{Divergence, Target, Verdict, known, no_panic};
+use crate::{Divergence, Target, Verdict, classify, known, no_panic};
 use iets::eval::{EvalConfig, Evaluator};
 use iets::print;
 use libfuzzer_sys::arbitrary::Unstructured;
 use std::collections::HashSet;
+use std::{env, fs};
 
 pub const KINDS: &[&str] = &[
     // Nix gives a value, iets an error
@@ -80,7 +81,7 @@ impl Eval {
 
     fn verdict(&mut self, src: &str) -> Verdict {
         let d = self.compare(src);
-        crate::classify(&self.known, d, src.as_bytes())
+        classify(&self.known, d, src.as_bytes())
     }
 
     /// Evaluates `src` on both sides and compares.
@@ -125,8 +126,8 @@ fn iets(ev: &mut Evaluator, src: &str) -> Answer {
 impl Target for Eval {
     fn check(&mut self, input: &[u8]) -> Verdict {
         let src = generate(&mut Unstructured::new(input));
-        if let Ok(p) = std::env::var("IETS_EVAL_SOURCE") {
-            let _ = std::fs::write(p, &src);
+        if let Ok(p) = env::var("IETS_EVAL_SOURCE") {
+            let _ = fs::write(p, &src);
         }
         let v = self.verdict(&src);
         if !matches!(v, Verdict::Bug(_)) {
@@ -167,7 +168,7 @@ impl Target for Eval {
         if agrees {
             d.kind = "eq-rule";
         }
-        crate::classify(&self.known, Some(d), src.as_bytes())
+        classify(&self.known, Some(d), src.as_bytes())
     }
 }
 
