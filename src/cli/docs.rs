@@ -99,7 +99,7 @@ pub const PAGES: &[Page] = &[
     ),
     embedded(
         "builtins",
-        "every builtin, and how to add one",
+        "every builtin and how well it works",
         include_str!("../../docs/reference/builtins.md"),
     ),
     embedded(
