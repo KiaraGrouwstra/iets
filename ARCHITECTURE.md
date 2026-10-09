@@ -136,7 +136,9 @@ Around it:
 - `nixbin.rs`: the real Nix binaries behind the classic fallback.
 - `error.rs`: the error type outside the evaluator.
 - `api.rs`: the library facade. Frontends use this and never reach into
-  `cli`; `examples/` holds four of them.
+  `cli`; `examples/` holds four of them. When a frontend needs something
+  that lives only in `cli`, move it into `api` or the module it belongs
+  to, and let `cli` call it there.
 - `main.rs` and `cli/`: the command line on top of `api`, including the
   classic names in `cli/classic/`.
 
