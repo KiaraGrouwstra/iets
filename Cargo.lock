@@ -522,6 +522,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "bzip2",
+ "crc32fast",
  "flate2",
  "http-body-util",
  "hyper",

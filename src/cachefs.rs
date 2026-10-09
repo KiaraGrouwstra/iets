@@ -36,7 +36,7 @@ use crate::treestore::{self, pack};
 
 /// The store layout. A mismatch wipes the store; bump it when an entry
 /// encoding changes in a way the keys do not already cover.
-pub const FORMAT: &[u8] = b"1";
+pub const FORMAT: &[u8] = b"3";
 
 /// The layout of a store of `shape`. The input store has its own, so a change
 /// to its entries wipes it alone.
@@ -275,7 +275,7 @@ pub fn write_atomic(dir: &Path, name: &str, tag: u64, chunks: &[&[u8]]) -> io::R
 }
 
 /// Bytes of the integrity check an entry of a hashed store carries.
-pub const SUM: usize = 16;
+pub const SUM: usize = 8;
 
 /// The largest entry a hashed store will read. An entry is the compiled form
 /// of one source file, or the record of one run; the largest of either in
@@ -284,20 +284,18 @@ pub const SUM: usize = 16;
 /// before anything is allocated.
 pub const MAX_ENTRY: u64 = 512 << 20;
 
-/// The integrity check an entry carries: blake3 over the key the entry
-/// answers and the whole of its content. A changed byte, a truncated entry
-/// and an entry copied under another key are all a mismatch, and a mismatch
-/// is a miss. blake3 is the hash the IR key already uses, so this adds no
-/// dependency and runs at about a gigabyte per second per core.
 pub fn checksum(key: &str, parts: &[&[u8]]) -> [u8; SUM] {
-    let mut h = blake3::Hasher::new();
+    let mut h = crc32fast::Hasher::new();
     h.update(&(key.len() as u64).to_le_bytes());
     h.update(key.as_bytes());
+    let mut len = 0usize;
     for p in parts {
         h.update(p);
+        len += p.len();
     }
     let mut out = [0u8; SUM];
-    out.copy_from_slice(&h.finalize().as_bytes()[..SUM]);
+    out[..4].copy_from_slice(&h.finalize().to_le_bytes());
+    out[4..].copy_from_slice(&(len as u32).to_le_bytes());
     out
 }
 
