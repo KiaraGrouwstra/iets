@@ -92,10 +92,11 @@ a name may hold, and chains across the depth limit. Both sides dump it.
 a script: the daemon's side of the handshake at protocol 1.35 to 1.40,
 stderr frames (log lines, activities, results, errors) after the
 handshake, after `SetOptions` and after the operation, then the reply of
-one operation: `connect`, `path-info`, `valid-paths`, `missing`,
-`output-map` or `substitutable`. Store paths, hashes, signatures and
-content addresses in the reply are wrong now and then, and the script
-can stop at any byte.
+one operation: `connect`, `path-info`, `valid-paths`, `substitute`,
+`missing`, `output-map`, `substitutable`, `build`, `indirect-root`, `nar`
+or `add-multiple`. Store paths, hashes, signatures, content addresses,
+build results, realisations and NARs in the reply are wrong now and then,
+and the script can stop at any byte.
 
 A thread serves the script on a Unix socket. iets's `Connection` and
 Nix 2.34.8's `RemoteStore` (`wire-oracle`) each connect and run the
@@ -104,9 +105,11 @@ nix-conformance). `IETS_WIRE_SCRIPT=FILE` writes the script of the last
 input, to serve it to a client by hand, for example with
 `socat UNIX-LISTEN:SOCK,fork SYSTEM:'cat FILE'`.
 
-The script never holds two replies that crash Nix's own client
+The script never holds the replies that crash Nix's own client
 (nix-bugs/daemon-client/ of nix-conformance), and never a protocol below
-1.35, which iets refuses on purpose.
+1.35, which iets refuses on purpose. For `add-multiple`, the daemon sends
+its answer only after it has read the whole upload, as a real daemon
+does: Nix's client aborts on an answer that comes first.
 
 | Kind | Meaning |
 |:---|:---|

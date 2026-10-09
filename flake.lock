@@ -5,11 +5,11 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1791551296,
-        "narHash": "sha256-H+qO8MZVBRVz3xHZ1XFK53THTi3+R3yu0YcG2bhqpug=",
+        "lastModified": 1791554058,
+        "narHash": "sha256-xt3MmE+iNJHtKM8U4jZloI3Pp2nOV72WdFM1SL406Ok=",
         "ref": "refs/heads/main",
-        "rev": "5cab15adcf82c2a2a7e4cc17431ee7e433f2d551",
-        "revCount": 7,
+        "rev": "75d90babcb65f99456a1e282cca4b2a4959fc5b7",
+        "revCount": 9,
         "type": "git",
         "url": "ssh://git@github.com/numtide/nix-conformance"
       },
