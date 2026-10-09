@@ -58,7 +58,7 @@ stdout and exit 0.
 ### The shared evaluation flags
 
 `iets eval`, `iets build`, `iets prefetch` and every `iets plumbing`
-op that evaluates share one parser (`src/cli/mod.rs:parse_eval_args`).
+op that evaluates share one parser.
 `iets diff`, `iets search`, `iets eval-jobs` and
 `iets print-dev-env` take the subset each one lists below.
 
@@ -358,8 +358,6 @@ Real nix keeps its own eval cache for a flake installable only; with
 The whole `^ --json` output, 18.8 MB, is byte for byte the same on both
 sides.
 
-Code: `src/cli/search.rs`.
-
 ## `diff`
 
 ```
@@ -495,8 +493,6 @@ changed hello 2.12 -> 2.12.1
 `removed` or `changed`, and `a` and `b` the versions of that name on each
 side.
 
-Code: `src/cli/diff.rs`, `src/store/drvdiff.rs`.
-
 ## `prefetch`
 
 ```
@@ -605,8 +601,6 @@ prefetch-file --json`, in SRI, and for the expression form it is the
 `iets plumbing fetch` is the same operation with the object always on
 stdout. This command is that op plus the `--json` choice.
 
-Code: `src/cli/prefetch.rs`.
-
 ## `eval-jobs`
 
 ```
@@ -688,86 +682,65 @@ also printed to stderr.
 
 ### Instantiation
 
-`src/jobs/instantiate.rs`. The walk hands every job or error line to a
-thread that holds one daemon connection. Every 256 jobs, or at the end, it
-computes the closure of the batch's `drvPath`s from the evaluator's
-derivation table (ATerm and references; an imported `.drv` is read from
-`/nix/store`) and the sources they reference (origins in `ev.known`: local
-trees and `toFile` texts, hashed on the way), stops at paths already known
-valid, asks `QueryValidPaths` once, sends what is missing in one
-`AddMultipleToStore` (sources first, derivations in post-order, the same
-`ValidPathInfo` and NAR framing as `iets build`), registers the GC roots,
-and only then passes the batch's lines on. So a printed `drvPath` is
-always valid in the store, as after nix-eval-jobs, and the daemon round
-trips overlap the evaluation. The stderr summary gets an `instantiate:`
-line with batches, paths queried and added, bytes, roots and thread time.
+Each job's `.drv` and its input closure go into the store through the
+daemon in batches of 256 jobs. A batch's lines are printed only after the
+batch is registered and its GC roots are made. So a printed `drvPath` is
+always valid in the store, as after nix-eval-jobs. Registration runs
+beside the evaluation, so the daemon round trips overlap it. The stderr
+summary has an `instantiate:` line: batches, paths queried and added,
+bytes, roots and time.
 
 ### Cache status
 
-`src/jobs/cache.rs` mirrors cache-status-resolver.cc. Nix 2.35 no longer
-calls `queryMissing`: it probes with `queryValidPaths` and
-`querySubstitutablePathInfos` and walks the input derivations itself.
+`--check-cache-status` follows nix-eval-jobs 2.35's cache-status-resolver.cc:
 
-1. Every output of the job is probed for validity. All valid is `local`.
-2. The missing ones all substitutable is `cached`, with them as
+1. All outputs of the job valid is `local`.
+2. All missing outputs substitutable is `cached`, with them as
    `neededSubstitutes`.
-3. Otherwise the input graph is walked from the job's `.drv`, read back
-   from `/nix/store` and cached. A derivation whose wanted outputs are
-   missing and not all substitutable is a needed build (post-order,
-   `inputDrvs` in store-path order) and its inputs are visited; one whose
-   missing outputs are substitutable contributes them to
-   `neededSubstitutes` and is not descended.
+3. Else `notBuilt`. The input derivations are walked from the job's
+   `.drv`. A derivation with a missing output that cannot be substituted
+   is a needed build (post-order, `inputDrvs` in store-path order), and
+   its inputs are walked too. A derivation whose missing outputs can be
+   substituted adds them to `neededSubstitutes`, and its inputs are not
+   walked.
 
-Probes are batched: one `QueryValidPaths` and one
-`QuerySubstitutablePathInfos` (worker op 30) per pass over the batch of
-jobs that is still unresolved; a failing substituter query counts as a
-miss. `neededSubstitutes` is sorted by name then path, like the C++. In
-one process the resolver runs on the instantiation thread after each
-batch; with `--max-memory-size` it runs on its own thread, fed by the
-collectors.
+A substituter query that fails counts as a miss. `neededSubstitutes` is
+sorted by name, then by path, as in nix-eval-jobs.
 
 ### Constituents
 
-`src/jobs/constituents.rs` mirrors constituents.cc. At job time, with the
-flag, `_hydraAggregate = true` jobs yield `constituents` (the `.drv`s in
-the string context of `constituents`, sorted) and `namedConstituents` (its
-strings); an aggregate with names is withheld by the emitter. After the
-walk every withheld aggregate is resolved against the job table:
+`--constituents` follows constituents.cc. A job with
+`_hydraAggregate = true` gets `constituents` (the `.drv`s in the string
+context of its `constituents` attribute, sorted) and `namedConstituents`
+(its strings). An aggregate with names is printed after the walk, resolved
+against the other jobs:
 
-- a missing name is `does not exist`, or, with `_hydraGlobConstituents`,
+- A missing name is `does not exist`. With `_hydraGlobConstituents` it is
   an fnmatch pattern over every other job, and
-  `constituent glob pattern had no matches` when nothing matches;
-- a constituent that errored contributes its error text;
-- aggregates are topologically sorted on the names that are aggregates
-  themselves; a cycle prints the two jobs with `Dependency cycle: a <-> b`
-  and the rest with `Skipping aggregate because of a dependency cycle`.
+  `constituent glob pattern had no matches` when nothing matches.
+- A constituent that failed adds its error text.
+- Aggregates that name other aggregates are sorted on those names. A cycle
+  prints the two jobs with `Dependency cycle: a <-> b` and the rest with
+  `Skipping aggregate because of a dependency cycle`.
 
-An aggregate with no broken constituent gets each constituent's `.drv` as
-an `inputDrvs` entry with the child's first output, its input-addressed
-outputs reset to deferred and recomputed
-(`finalize_input_addressed_outputs`, hashes read from `/nix/store`), the
-new `.drv` written through the daemon and rooted, and `drvPath` and
-`outputs` replaced. `namedConstituents` is erased, and a broken one
-becomes `error: "name: why\n..."` on the job line.
+An aggregate with no broken constituent gets a new `.drv`: each
+constituent's `.drv` becomes an `inputDrvs` entry with its first output,
+and the input-addressed output paths are computed again. The new `.drv` is
+written through the daemon and rooted, and `drvPath` and `outputs` change
+to match. `namedConstituents` is emptied. A broken constituent makes the
+line `error: "name: why\n..."`.
 
 ### The memory limit
 
-`src/jobs/collector.rs`. iets has one arena and no garbage collector, so
-a process cannot shed what it has evaluated; the only ceiling is a process
-boundary. `--max-memory-size MB` is therefore 4096 by default, like
+iets cannot free what a process has evaluated, so the only limit is a
+process boundary. `--max-memory-size MB` is 4096 by default, like
 nix-eval-jobs (`eval-args.hh:18`).
 
-The main process runs `--workers` collector threads, each with a worker
-process (`iets eval-jobs --worker` and the same arguments, one fiber
-thread, its own instantiation thread) and the shared `todo` set of
-attribute paths starting at `[]`. A worker gets `do ["a","b"]`, finds the
-value along the path — auto-calling at every step — and answers
-`{"attrs":[...]}` for a set to recurse into, `ok` for a skipped node or a
-job (the job line follows once its instantiation batch is registered, so
-lines arrive at any time), or an error line. After every answer it
-compares `VmHWM` with the limit and, above it, flushes its batch, says
-`restart` and exits, and the collector spawns a new one. A worker that
-dies is reported like nix-eval-jobs's `handleBrokenWorkerPipe`.
+The main process runs `--workers` worker processes and shares the
+attribute paths among them. A worker whose peak memory goes above the
+limit registers its open batch, exits, and a new worker takes its place.
+A worker that dies is reported like nix-eval-jobs's
+`handleBrokenWorkerPipe`.
 
 Cache status and constituents run in the main process from the lines, as
 the `.drv`s are in the store by then. Output order is completion order.
