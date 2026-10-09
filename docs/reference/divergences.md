@@ -107,7 +107,8 @@ names them.
   not in the Nix store`. (`store-path-not-canonical`)
 - **Two outputs with one name:** Nix keeps the first
   (`drv.outputs.emplace`, `derivations.cc`), iets keeps the last. This is
-  an iets bug, not a choice. Until it is fixed, the entry
+  an iets bug, not a choice. `drv-gen` gives each output its own name.
+  Until the bug is fixed, the entry
   `drv-duplicate-output` hides every difference in the outputs.
 
 ## `builtins.genericClosure`

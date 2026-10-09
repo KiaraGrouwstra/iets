@@ -179,7 +179,8 @@ addressed, fixed, floating, impure, deferred), input derivations (with
 child outputs in the `DrvWithVersion` form), sources, `system`,
 `builder`, arguments and `env`. Paths, algorithms, hashes, orders and
 escapes are wrong now and then, and the file can be cut short or have one
-byte changed.
+byte changed. `IETS_DRV_WRITE=FILE` writes the `.drv` of the last input,
+to read it or give it to `drv-oracle` by hand.
 
 | Kind | Meaning |
 |:---|:---|

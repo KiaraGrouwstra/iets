@@ -125,6 +125,9 @@ impl Target for Drv {
             Mode::Read => self.read(input),
             Mode::Gen => {
                 let aterm = generate(&mut Unstructured::new(input));
+                if let Some(f) = std::env::var_os("IETS_DRV_WRITE") {
+                    let _ = std::fs::write(f, &aterm);
+                }
                 self.read(&aterm)
             }
         };
@@ -296,7 +299,12 @@ pub fn generate(u: &mut Unstructured) -> Vec<u8> {
     } else {
         out.extend_from_slice(b"Derive([");
     }
-    let names = keys(u, 3, NAMES);
+    // one name per output: iets keeps the last of two and Nix the first, an
+    // iets bug that would otherwise fill every campaign (divergences.md,
+    // "Reading a .drv file")
+    let mut names = keys(u, 3, NAMES);
+    let mut seen = std::collections::HashSet::new();
+    names.retain(|n| seen.insert(n.clone()));
     for (i, name) in names.iter().enumerate() {
         if i > 0 {
             out.push(b',');
