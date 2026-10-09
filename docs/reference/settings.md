@@ -60,7 +60,7 @@ prints cover every worker.
 | `IETS_IR_STATS` | | set = on | off | One line per compiled file on stderr. |
 | `IETS_IR_MIN` | | usize (bytes) | 1024 | Sources smaller than this compile faster than their cache entry loads, so they are not cached. |
 | `IETS_PROVENANCE` | `provenance` | Boolean | on | Rewrites store paths and positions back to local trees (`docs/explanation/provenance.md`). |
-| `IETS_NIX_BIN_DIR` | `nix-bin-dir` | path | unset | Where the real Nix binaries live. Unset searches `PATH`, skipping every iets. |
+| `IETS_NIX_BIN_DIR` | `nix-bin-dir` | path | unset | Where the real Nix binaries live. Unset: the first one on `PATH` that is not iets, where a classic name stands for the Nix it was built with (`docs/reference/classic.md`, **Fallback rules**). |
 | `IETS_NO_FALLBACK` | `no-fallback` | Boolean | off | A classic command fails instead of running the real Nix (`docs/reference/classic.md`). |
 | `IETS_FETCHING` | | set = on | off | Set on the Nix subprocess that fetches a flake input, so a recursive fetch is an error, not a loop. |
 | `IETS_OFFLINE` | | set = on | off | Any download is an error. A flake whose inputs the input store already holds still evaluates. |
