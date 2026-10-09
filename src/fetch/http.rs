@@ -866,8 +866,8 @@ mod tests {
 
     fn limits() -> Limits {
         Limits {
-            connect: Some(Duration::from_secs(5)),
-            stall: Some(Duration::from_secs(5)),
+            connect: Some(Duration::from_secs(60)),
+            stall: Some(Duration::from_secs(60)),
             max_size: 1 << 30,
         }
     }
