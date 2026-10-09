@@ -6,7 +6,8 @@ missing, in one go. iets keeps no local store, so nothing needs to go into
 
 Every flag is in [reference/commands.md](../reference/commands.md). To see
 why the upload works the way it does, read
-[explanation/caching.md](../explanation/caching.md).
+[explanation/transports.md](../explanation/transports.md). Why a fetched
+input needs no trust is in [explanation/caching.md](../explanation/caching.md).
 
 ## Pick a builder
 
@@ -167,7 +168,7 @@ ls out/
 ```
 
 ```
-vwp4kv8mzqx77xsf8x4dff531r5bcxkz-greeting
+hl2d12ai352g88ad47fh8844g939iyrd-greeting
 ```
 
 Each output lands under the base name of its store path. Nothing is
@@ -190,7 +191,7 @@ iets build --builder daemon --out out -I nixpkgs=$nixpkgs -E '(import <nixpkgs> 
 `/nix/store`, not from an evaluation:
 
 ```sh
-iets build --builder daemon /nix/store/zr5qd58hj1cxwncj6z0ra1qlp09g8h07-greeting.drv
+iets build --builder daemon /nix/store/6jq7mz1b1n11y522nzjdqyvr3gwb69zz-greeting.drv
 ```
 
 If an input source came from a local tree that the store no longer has,

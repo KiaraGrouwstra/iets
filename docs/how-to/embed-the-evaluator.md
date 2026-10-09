@@ -83,7 +83,7 @@ let config = iets::eval::EvalConfig::new().system("aarch64-linux").pure(true);
 let run = api::run::Run::over(config, &a)?;
 ```
 
-Every command in the binary goes through `Run`.
+Every command in the binary that evaluates goes through `Run`.
 `parallel::try_run(workers, config.build(), f)` does the same without the
 tracing cache.
 
@@ -175,22 +175,44 @@ cargo run --release --example build -- --builder daemon ./greeting.nix
 ```
 
 ```
-/nix/store/vwp4kv8mzqx77xsf8x4dff531r5bcxkz-greeting
+/nix/store/hl2d12ai352g88ad47fh8844g939iyrd-greeting
 ```
 
-The four calls it makes:
+The output path depends on your system. This one is for `x86_64-linux`.
+
+The example drives the lower-level `Dispatcher` itself. In your own program,
+`api::build::Dispatch` does the same in fewer steps:
 
 ```rust
-let roots = api::installable::drv_roots(ev, value)?;
+use iets::api;
+use iets::build::{render::Style, Target};
+
+let mut found = Vec::new();
+if let Err(e) = api::installable::drv_roots(ev, value, &mut found) {
+    api::report(ev, &e);
+    return Err("evaluation failed".into());
+}
+let (roots, outputs) = api::build_targets(&[], &found);
 let plan = api::build::plan(ev, &roots)?;
-let transport = api::build::transport(flag, &api::build::config())?;
-let built = api::build::Dispatch::open(&transport, &options, plan, prov, style)?
-    .realise(&roots, &name)?;
+let transport = api::build::transport(Some("daemon"), &api::build::config())?;
+let prov = iets::provenance::Provenance::snapshot(ev);
+let options = api::build::Options::default();
+let mut d = api::build::Dispatch::open(&transport, &options, plan, prov, Style::detect())?;
+let targets = roots
+    .iter()
+    .map(|r| Target::new(r.name(), r.clone(), outputs.clone()))
+    .collect();
+for o in d.submit(targets)? {
+    for path in o.outputs.values() {
+        println!("{path}");
+    }
+}
 ```
 
 `Dispatch` holds the plan, the source overrides and the dispatcher, so you
-never build an upload yourself. `Built::paths(roots)` gives you one output
-path per root.
+never build an upload yourself. If you have `api::build::Root` values,
+`Dispatch::realise` builds them all, and `Built::paths(roots)` gives you one
+output path per root.
 
 ## Read the derivations an evaluation made
 
