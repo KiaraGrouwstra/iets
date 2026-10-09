@@ -1,16 +1,23 @@
 # Lints
 
-Every lint: its name, family, hook, default level and trigger, plus the
-level resolution, the scope rules and the `# iets: allow` comment.
+A lint tells you about something in your Nix code that only an evaluator
+can see, such as a read of a value that changes with every commit:
 
-iets reports what only an evaluator can know. It has no opinion about
-how code looks. `docs/explanation/lint-scope.md` has the rule, and it
-tells you how to make rules of your own with `iets parse --json`.
+```
+$ iets eval --raw .#version             # version = "1.${toString self.revCount}";
+warning: [rev-count] 'self.revCount' is deprecated: the count of all revisions is expensive to compute and absent on a shallow clone, and iets plans to remove it; use 'lastModifiedDate' and 'shortRev' for a version
+  at /repo/app/flake.nix:4:29
+```
 
-iets has a registry of named lints for language corner cases. Each lint
-is `off`, `warn` or `error`. Code: `src/lint/` (`mod.rs` holds the
-registry and the emission, one file per family holds the triggers);
-fixtures: `tests/lint/<name>.nix`, checked by `scripts/linttest.nu`.
+This page lists every lint, with its family, when it runs, its default
+level and what triggers it. It also says how a level is chosen, which
+files a lint looks at, and how to silence one line with `# iets: allow`.
+
+iets has no opinion about how code looks. `docs/explanation/lint-scope.md`
+says why, and shows you how to write rules of your own with
+`iets parse --json`.
+
+Each lint is `off`, `warn` or `error`.
 
 ## Levels and resolution
 
@@ -124,13 +131,11 @@ copies to the local tree it stands for, lies under a root directory. So
 the flake directory is (containment wins). A relative `path:` input lives
 under its parent's tree and follows it.
 
-The scope resolves with the levels (default, `iets.toml`, `IETS_LINT`,
-`--lint`); `--lint-scope` and `--lint-root` come last. It is part of
-both cache keys: a file is compiled under the levels its location gets,
-so a store file under `scope = "root"` keys the IR cache like an unlinted
-one and its entry holds no warnings, and the tracing-cache key holds the
-scope, the roots and the input tables, because another scope is another
-warning set.
+The scope is chosen like the levels (default, `iets.toml`, `IETS_LINT`,
+`--lint`), and `--lint-scope` and `--lint-root` come last. Both caches
+take the scope, the roots and the input tables into account, so a run with
+another scope gets its own warnings and never the cached ones of another
+scope.
 
 For a compile-time lint the site is the node's position; for a runtime
 lint it is the call's position. The derivation-attribute lints are the
@@ -284,12 +289,8 @@ x == "a" # iets: allow eq-type-mismatch
   only when the value is computed, so an unused allow on one run may be
   the one that matters on the next.
 
-The lexer notes the `# iets:` comments (other comments cost nothing
-more), the parser resolves the names into a per-file table of covered
-lines, and the compiler and the evaluator check that table before a
-site's level. The table travels in the IR cache entry with the
-warnings, and it is part of the file's bytes, so both cache keys cover
-it: a run whose comment changed misses.
+A comment is part of the file, so when you change one, both caches miss
+and the next run reports again.
 
 ## Configuration file
 
@@ -353,37 +354,35 @@ are part of the IR cache key and their warnings are stored in the entry;
 | `rev-count` | purity | evaluator | **warn** | the evaluation reads `revCount` of a source tree that has a name (`self.revCount`, `inputs.<node>.revCount`). The attribute is deprecated: the count of all revisions is expensive to compute, a shallow clone has none, and each commit changes it. `self ? revCount` and `builtins.attrNames self` are not a read. The tree gives the level (Scope): the root tree by default, a locked input only with `[lint.inputs.<node>]`. The site is the selection that reads the attribute; a read that is not a selection has no site (Scope) |
 | `unknown-allow` | meta | parser | **warn** | a word of a `# iets: allow` comment that is not a lint name, a family or `all`, or a `# iets:` directive other than `allow` (Silencing one site) |
 
-`impure-path-in-drv` works like Nix's store references: a coercion that
-keeps the text of a path outside the store (`toString ./x`, `"/x" +
-./y`) marks the string with an `Impure` context element that travels
-through concatenation, interpolation, `concatStringsSep`,
-`replaceStrings` and attrset coercion like the store elements do. It is
-invisible to `getContext` and `hasContext`, `unsafeDiscardStringContext`
-strips it, and it never reaches an ATerm. `derivationStrict` reads it per
-attribute. The project root of a path is the one
-`docs/explanation/flakes-and-sources.md` defines, found by the same walk;
-the probes are `Stat` observations of the tracing cache.
+`impure-path-in-drv` follows a path the way Nix follows store references.
+When you turn a path outside the store into text (`toString ./x`,
+`"/x" + ./y`), the string carries a hidden mark. The mark survives
+concatenation, interpolation, `concatStringsSep`, `replaceStrings` and the
+coercion of an attribute set. `getContext` and `hasContext` do not show
+it, `unsafeDiscardStringContext` removes it, and it never reaches a
+`.drv` file. The lint looks for the mark in each attribute of a
+derivation. The project root of a path is the one that
+`docs/explanation/flakes-and-sources.md` defines.
 
-Both are **errors** by default, and they are the price of a pure
-evaluation that reads the checkout instead of a copy of a tree
-(`docs/explanation/flakes-and-sources.md`): the paths stay the user's, so
-the one case that does not survive another checkout location is the
-attribute that carries one into a `.drv`. The message names the fix —
-interpolate the path, and the copy goes to the store. A repository that
-wants the finding without the failure sets `impure-path-in-drv = "warn"`
-in its own `iets.toml`, which is the one table a project file may hold.
-`dir-copy-unfiltered` is `warn` for the other half of that trade: outside
-a flake no tracked file set filters a directory copy, so a `"${./.}"`
-takes the untracked and ignored files with it.
+Both are **errors** by default. A pure evaluation in iets reads your
+checkout, not a copy of it (`docs/explanation/flakes-and-sources.md`), so
+your paths stay your own. The one place that breaks when the checkout
+moves is a derivation attribute that holds such a path. The message tells
+you the fix: interpolate the path, and it is copied to the store. If you
+want the finding without the failure, set `impure-path-in-drv = "warn"`
+in your project's `iets.toml`.
 
-`tree-meta-in-drv` uses the same context element with a different
-payload. `fetchTree` and the root tree of a flake put it on each metadata
-string of a tree, with the name of the value: `self.rev` for the root
-tree, `inputs.<node>.rev` for a locked input. iets makes the mark only
-when the lint is on for that tree, so an input without a level has none.
-The mark changes nothing that Nix sees: the `.drv` files, `getContext`,
-`hasContext`, `==` and `toJSON` give the same result with and without
-it. `scripts/flaketest.nu` compares them with Nix.
+`dir-copy-unfiltered` is `warn` for the other side of that trade. Outside a
+flake, nothing filters a directory copy by the files git tracks, so
+`"${./.}"` takes your untracked and ignored files with it.
+
+`tree-meta-in-drv` uses the same kind of mark. `fetchTree` and the root
+tree of a flake put it on each metadata string of a tree, with the name of
+the value: `self.rev` for the root tree, `inputs.<node>.rev` for a locked
+input. iets makes the mark only when the lint is on for that tree, so an
+input without a level has none. The mark changes nothing that Nix sees:
+the `.drv` files, `getContext`, `hasContext`, `==` and `toJSON` give the
+same result with and without it.
 
 ```nix
 {
