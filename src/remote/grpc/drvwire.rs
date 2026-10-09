@@ -10,7 +10,10 @@ use crate::error::{Error, Result};
 use crate::store::drv::{Derivation, DerivationOutput, STRUCTURED_ATTRS_ENV};
 use crate::store::path::StorePath;
 
-use super::super::worker::wire::{read_str, read_strs, read_u64, write_str, write_strs, write_u64};
+use super::super::worker::wire::{
+    self, read_bool, read_opt_path, read_paths, read_str, read_strs, read_time, read_u64,
+    write_str, write_strs, write_u64,
+};
 
 /// nix-compat.hh:`kBuildProtocolWire` — `major << 8 | minor`. The daemon
 /// rejects anything else with `INVALID_ARGUMENT`.
@@ -176,14 +179,18 @@ impl PathInfo {
     }
 
     fn fields(path: StorePath, r: &mut dyn Read) -> Result<PathInfo> {
-        let deriver = read_str(r)?;
-        let nar_hash = read_str(r)?;
-        let references = read_strs(r)?;
-        let registration_time = read_u64(r)?;
+        let deriver = read_opt_path(r)?;
+        let nar_hash = wire::nar_hash(&read_str(r)?)?;
+        let references = read_paths(r)?;
+        let registration_time = read_time(r)?;
         let nar_size = read_u64(r)?;
-        let ultimate = read_u64(r)? != 0;
+        let ultimate = read_bool(r)?;
         let sigs = read_strs(r)?;
+        for s in &sigs {
+            wire::check_sig(s)?;
+        }
         let ca = read_str(r)?;
+        wire::check_ca(&ca)?;
         Ok(PathInfo {
             path,
             deriver,

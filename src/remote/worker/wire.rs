@@ -4,8 +4,9 @@
 use std::io::{self, Read, Write};
 
 use crate::remote::plan::{DrvHashes, Object};
-use crate::store::hash::{HashAlgo, hash_bytes};
+use crate::store::hash::{Hash, HashAlgo, base64_decode, hash_bytes};
 use crate::store::nar::{dump_string, flat_hash};
+use crate::store::path::StorePath;
 use crate::store::source::{SourceKind, Src};
 
 pub fn write_u64(w: &mut dyn Write, n: u64) -> io::Result<()> {
@@ -75,6 +76,95 @@ pub fn read_strs(r: &mut dyn Read) -> io::Result<Vec<String>> {
         return Err(bad("string list too long"));
     }
     (0..n).map(|_| read_str(r)).collect()
+}
+
+/// serialise.hh:readNum<bool>: 0 or 1, nothing else.
+pub fn read_bool(r: &mut dyn Read) -> io::Result<bool> {
+    match read_u64(r)? {
+        0 => Ok(false),
+        1 => Ok(true),
+        n => Err(bad(&format!(
+            "serialised integer {n} is too large for a boolean"
+        ))),
+    }
+}
+
+/// serialise.hh:readNum<time_t>: a signed 64-bit integer.
+pub fn read_time(r: &mut dyn Read) -> io::Result<u64> {
+    let n = read_u64(r)?;
+    if n > i64::MAX as u64 {
+        return Err(bad(&format!(
+            "serialised integer {n} is too large for a time"
+        )));
+    }
+    Ok(n)
+}
+
+/// worker-protocol.cc:Serialise<StorePath>: the daemon names a store path, and
+/// what is not one is an error, not a path for this client to act on.
+pub fn read_path(r: &mut dyn Read) -> io::Result<String> {
+    let s = read_str(r)?;
+    StorePath::parse(&s).map_err(|e| bad(&e.to_string()))?;
+    Ok(s)
+}
+
+/// Serialise<std::optional<StorePath>>: the empty string is none.
+pub fn read_opt_path(r: &mut dyn Read) -> io::Result<String> {
+    let s = read_str(r)?;
+    if !s.is_empty() {
+        StorePath::parse(&s).map_err(|e| bad(&e.to_string()))?;
+    }
+    Ok(s)
+}
+
+/// Serialise<StorePathSet>.
+pub fn read_paths(r: &mut dyn Read) -> io::Result<Vec<String>> {
+    let v = read_strs(r)?;
+    for s in &v {
+        StorePath::parse(s).map_err(|e| bad(&e.to_string()))?;
+    }
+    Ok(v)
+}
+
+/// Serialise<UnkeyedValidPathInfo>'s NAR hash: Hash::parseAny for SHA-256,
+/// in any of its forms, held as the base16 the protocol writes.
+pub fn nar_hash(s: &str) -> io::Result<String> {
+    Hash::parse_any(s, Some(HashAlgo::Sha256))
+        .map(|h| h.to_base16())
+        .map_err(|e| bad(&e.to_string()))
+}
+
+/// local-keys.cc:parseColonBase64: a key name, a colon and non-empty base64.
+pub fn check_sig(s: &str) -> io::Result<()> {
+    match s.split_once(':') {
+        Some((name, data))
+            if !name.is_empty() && base64_decode(data).is_ok_and(|d| !d.is_empty()) =>
+        {
+            Ok(())
+        }
+        _ => Err(bad("signature is corrupt")),
+    }
+}
+
+/// content-address.cc:ContentAddress::parseOpt: empty, `text:ALGO:HASH`, or
+/// `fixed:[r:]ALGO:HASH`. `fixed:git:` needs the git-hashing experimental
+/// feature, which a client has not got by default.
+pub fn check_ca(s: &str) -> io::Result<()> {
+    if s.is_empty() {
+        return Ok(());
+    }
+    let rest = match s.split_once(':') {
+        Some(("text", rest)) => rest,
+        Some(("fixed", rest)) => rest.strip_prefix("r:").unwrap_or(rest),
+        _ => return Err(bad(&format!("'{s}' is not a content address"))),
+    };
+    let (algo, hash) = rest
+        .split_once(':')
+        .ok_or_else(|| bad(&format!("'{s}' is not a content address")))?;
+    let algo =
+        HashAlgo::parse(algo).ok_or_else(|| bad(&format!("unknown hash algorithm '{algo}'")))?;
+    Hash::parse_non_sri_unprefixed(hash, algo).map_err(|e| bad(&e.to_string()))?;
+    Ok(())
 }
 
 /// Mirrors serialise.hh:FramedSink: the payload of `AddMultipleToStore` goes out as
@@ -267,5 +357,30 @@ mod tests {
         expect.extend_from_slice(b"abcde");
         write_u64(&mut expect, 0).unwrap();
         assert_eq!(out, expect);
+    }
+
+    // what Nix 2.34.8's client refuses in a reply, found by fuzz/ (wire)
+    #[test]
+    fn replies_are_read_as_nix_reads_them() {
+        let enc = |s: &str| {
+            let mut v = Vec::new();
+            write_str(&mut v, s.as_bytes()).unwrap();
+            v
+        };
+        let num = |n: u64| n.to_le_bytes().to_vec();
+        assert!(read_path(&mut &enc("/etc/passwd")[..]).is_err());
+        assert!(read_path(&mut &enc("/nix/store/not-a-store-path")[..]).is_err());
+        assert!(read_opt_path(&mut &enc("")[..]).is_ok());
+        assert!(read_bool(&mut &num(2)[..]).is_err());
+        assert!(read_time(&mut &num(u64::MAX)[..]).is_err());
+        let hex = "4ab29c33e1fd9f3e3e1ebf6e0da0e8f8c3a5e3a73c92c4e9d6e8c04b1a5f2b3d";
+        assert_eq!(nar_hash(&format!("sha256:{hex}")).unwrap(), hex);
+        assert!(nar_hash("abc").is_err());
+        assert!(check_sig("cache.nixos.org-1:dGVzdA==").is_ok());
+        assert!(check_sig("no-colon").is_err());
+        assert!(check_sig(":dGVzdA==").is_err());
+        assert!(check_ca(&format!("fixed:r:sha256:{hex}")).is_ok());
+        assert!(check_ca(&format!("fixed:git:sha1:{hex}")).is_err());
+        assert!(check_ca("nonsense").is_err());
     }
 }

@@ -425,6 +425,10 @@ fn read_str(r: &mut dyn Read) -> Result<String> {
     wire::read_str(r).map_err(conn)
 }
 
+fn read_paths(r: &mut dyn Read) -> Result<Vec<String>> {
+    wire::read_paths(r).map_err(conn)
+}
+
 fn read_strs(r: &mut dyn Read) -> Result<Vec<String>> {
     wire::read_strs(r).map_err(conn)
 }
@@ -622,10 +626,16 @@ impl Connection {
         write_u64(self.w(), 0)?;
         self.flush()?;
         self.daemon_nix_version = read_str(self.r())?;
+        // worker-protocol.cc:Serialise<std::optional<TrustedFlag>>
         self.trusted = match read_u64(self.r())? {
+            0 => None,
             1 => Some(true),
             2 => Some(false),
-            _ => None,
+            n => {
+                return Err(Error::Protocol(format!(
+                    "invalid trusted status {n} from the Nix daemon"
+                )));
+            }
         };
         self.stats.round_trips += 1;
         Ok(())
@@ -850,7 +860,7 @@ impl Connection {
         write_strs(self.w(), paths)?;
         write_u64(self.w(), u64::from(substitute))?;
         self.process_stderr(on_event)?;
-        read_strs(self.r())
+        read_paths(self.r())
     }
 
     /// `QueryPathInfo`: the path's `UnkeyedValidPathInfo`, `None` when the store
@@ -862,8 +872,13 @@ impl Connection {
     ) -> Result<Option<PathInfo>> {
         self.op(Op::QueryPathInfo)?;
         write_str(self.w(), path.as_bytes())?;
-        self.process_stderr(on_event)?;
-        if read_u64(self.r())? == 0 {
+        match self.process_stderr(on_event) {
+            // worker-protocol-connection.cc:queryPathInfo: an old daemon says so
+            // with an error, and Nix's client still reads it that way
+            Err(Error::Protocol(m)) if m.contains("is not valid") => return Ok(None),
+            r => r?,
+        }
+        if !wire::read_bool(self.r()).map_err(conn)? {
             return Ok(None);
         }
         Ok(Some(PathInfo::read(path, self.r())?))
@@ -938,9 +953,9 @@ impl Connection {
         write_strs(self.w(), paths)?;
         self.process_stderr(on_event)?;
         Ok(Missing {
-            will_build: read_strs(self.r())?,
-            will_substitute: read_strs(self.r())?,
-            unknown: read_strs(self.r())?,
+            will_build: read_paths(self.r())?,
+            will_substitute: read_paths(self.r())?,
+            unknown: read_paths(self.r())?,
             download_size: read_u64(self.r())?,
             nar_size: read_u64(self.r())?,
         })
@@ -1004,9 +1019,9 @@ impl Connection {
         let n = read_u64(self.r())?;
         let mut out = Vec::with_capacity(n.min(1 << 16) as usize);
         for _ in 0..n {
-            let path = read_str(self.r())?;
-            read_str(self.r())?; // deriver
-            read_strs(self.r())?; // references
+            let path = wire::read_path(self.r()).map_err(conn)?;
+            wire::read_opt_path(self.r()).map_err(conn)?; // deriver
+            read_paths(self.r())?; // references
             read_u64(self.r())?; // download size
             read_u64(self.r())?; // NAR size
             out.push(path);
