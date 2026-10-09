@@ -213,7 +213,7 @@ in an `iets` output.
 | `prefetch-e2e.nu` | `iets prefetch` against `nix store prefetch-file` and `nix hash` | check, container |
 | `devenv-test.nu` | `print-dev-env` against `nix print-dev-env` | by hand |
 | `provenance-e2e.nu` | the rewritten paths and positions | by hand |
-| `evaljobs-flags.nu` | `iets eval-jobs` against `nix-eval-jobs`, flag by flag | check, container |
+| `evaljobs-flags.nu` | `iets eval-jobs` against the pinned `nix-eval-jobs` 2.35.2, flag by flag, on `tests/evaljobs/`; a newer pin changes three things (`docs/reference/commands.md`) | check, container |
 | `evaljobs-cmp.nu` | two `eval-jobs` outputs, attribute by attribute | by hand |
 
 `bench/` holds the workloads and the runners (`bench/run.nu`, `ab.nu`,
