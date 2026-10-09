@@ -463,6 +463,29 @@ one unwinds, every thunk it claimed is reset, its waiters wake, and the main
 fiber re-evaluates the cycle sequentially and reports the error the
 sequential path would have reported.
 
+## How fast it is
+
+Measured on 2026-09-26 on an idle 32-core machine, against Nix 2.34.8 on
+the same nixpkgs, with identical derivation paths:
+
+| workload | iets | nix 2.34.8 |
+|---|---:|---:|
+| nixos-minimal, instructions | 7.2 G | 19.4 G |
+| nixos-desktop, instructions | 9.4 G | 25.8 G |
+| nixos-desktop, wall, 1 worker | 0.92 s | 2.20 s |
+| nixos-desktop, wall, 4 workers | 0.45 s | 2.20 s |
+
+About 2.7× fewer instructions, and 2.4× to 4.9× faster in wall time. The
+instruction ratio is the durable number; the wall ratio depends on how many
+workers the critical chain can use.
+
+The iets column is a warm compiled-file cache, which is how this benchmark
+has always been run and what a second evaluation of a tree gets. That cache is
+worth 2.23 G instructions on desktop, 19% of the run, so with `--no-ir-cache`
+the ratio falls to 2.07× on minimal and 2.22× on desktop. Nix has no
+equivalent to turn off, so 2.7× is the honest product comparison and 2.1× is
+the honest evaluator comparison.
+
 ## What is not proven
 
 ThreadSanitizer needs a nightly compiler and has not been run. There is no

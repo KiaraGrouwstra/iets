@@ -64,21 +64,15 @@ fails on an entry *wider* than the code needs as well as on a missing one.
 So a reach that goes cannot come back unnoticed, and the lists cannot stay
 ahead of the code.
 
-The lists started at:
-
-| list | length | what is on it |
-|---|---|---|
-| reaches below `api` | 17 files | `build.rs`, `cache_dump.rs`, `classic/{build,develop,instantiate,mod,nix,shell}.rs`, `devenv.rs`, `diff.rs`, `eval.rs`, `jobs.rs`, `mod.rs`, `plumbing.rs`, `render/text.rs`, `search.rs`, and one command that is gone since |
-| evaluator value in a signature | 7 files | `classic/{instantiate,mod,nix,shell}.rs`, `jobs.rs`, `mod.rs`, `search.rs` |
-
+The reach list started at 17 files and the signature list at 7.
 `crate::flake` is on neither, because the flake migration took it. The
-layer named most often is `crate::eval` (13 files) — the evaluator type
-itself, and the last one that will go. `crate::remote` (11) is the
-transport a command still names to open a connection.
+layer named most often is `crate::eval` — the evaluator type itself, and
+the last one that will go. `crate::remote` comes next: the transport a
+command still names to open a connection.
 
 **What the test does not ban is the point of it.** A porcelain-side library
-may be as large as it needs to be: the render module is 264 lines of
-presentation and passes; the classic module is 2,254 lines of Nix argv
+may be as large as it needs to be: the render module is presentation and
+passes; the classic module, the largest under `src/cli`, is Nix argv
 compatibility and passes. The one question is whether a file holds a second
 implementation of something the operation layer owns. Both failure messages
 say so, and both name the two ways out: close the gap in `crate::api`, or
@@ -191,9 +185,7 @@ turns a string into derivations, `api::build` dispatches a build,
 `api::run` runs an evaluation, `api::fetch` fetches, `api::flake` resolves
 a flake, `api::render` says what a value's JSON is. Before the first stage
 there were three attribute-path tables, eight build-dispatch sequences,
-sixteen evaluation scaffolds and two NAR framings. There is one of each. Ten
-porcelain files call `api::installable`; five no longer reach into
-`crate::store`.
+sixteen evaluation scaffolds and two NAR framings. There is one of each.
 
 **A contract.** `iets plumbing resolve | iets plumbing plan` composes
 across processes, `missing` is byte-for-byte `build --dry-run --json`, and

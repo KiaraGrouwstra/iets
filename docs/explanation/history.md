@@ -9,29 +9,6 @@ A page of failed experiments is worth keeping for two reasons. It stops the
 same idea being tried a third time, and it shows what the measuring bar
 was.
 
-## Where iets stands today
-
-On an idle 32-core machine, against Nix 2.34.8 on the same nixpkgs, with
-identical derivation paths:
-
-| workload | iets | nix 2.34.8 |
-|---|---:|---:|
-| nixos-minimal, instructions | 7.2 G | 19.4 G |
-| nixos-desktop, instructions | 9.4 G | 25.8 G |
-| nixos-desktop, wall, 1 worker | 0.92 s | 2.20 s |
-| nixos-desktop, wall, 4 workers | 0.45 s | 2.20 s |
-
-About 2.7× fewer instructions, and 2.4× to 4.9× faster in wall time. The
-instruction ratio is the durable number; the wall ratio depends on how many
-workers the critical chain can use.
-
-The iets column is a warm compiled-file cache, which is how this benchmark
-has always been run and what a second evaluation of a tree gets. That cache is
-worth 2.23 G instructions on desktop, 19% of the run, so with `--no-ir-cache`
-the ratio falls to 2.07× on minimal and 2.22× on desktop. Nix has no
-equivalent to turn off, so 2.7× is the honest product comparison and 2.1× is
-the honest evaluator comparison.
-
 ## 2026-09-27: the machine settings file
 
 iets read `/etc/iets/iets.toml` (or `$IETS_CONF_DIR/iets.toml`) below
