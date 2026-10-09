@@ -41,14 +41,14 @@ names_differ = true
 
 [[parse]]
 id = "percent-in-a-cursed-or"
-doc = "docs/reference/divergences.md#a-in-an-or-argument"
+doc = "docs/reference/divergences.md#a--in-an-or-argument"
 kind = "iets-only"
 input = "%"
 nix = "boost::"
 
 [[parse]]
 id = "percent-in-a-cursed-or-abort"
-doc = "docs/reference/divergences.md#a-in-an-or-argument"
+doc = "docs/reference/divergences.md#a--in-an-or-argument"
 kind = "nix-crash"
 input = "%"
 nix = "SIGABRT"

@@ -1,5 +1,5 @@
 //! Primop registration. Each family lives in its own file and exposes
-//! `pub fn register(r: &mut Registry)`. See `docs/reference/builtins.md`.
+//! `pub fn register(r: &mut Registry)`. See `docs/how-to/add-a-builtin.md`.
 
 pub mod attrs;
 pub mod context;
