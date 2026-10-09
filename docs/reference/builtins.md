@@ -1,30 +1,30 @@
 # Builtins
 
-Every builtin of Nix 2.34.8, what it does in iets, and how to add one.
+iets has every builtin that Nix 2.34.8 has. This page tells you how well
+each one works, and where it differs from Nix.
 
-## Status
+Each row has one of three statuses:
 
-iets has every name that `builtins` has in Nix 2.34.8. The status column
-says how much of each one works:
+- `works`: you get what Nix gives you, apart from what the notes say.
+- `partial`: it works for the inputs in the notes, and fails for the rest.
+- `fails`: it always stops with an error.
 
-- `works`: gives what Nix gives, apart from the differences in the notes.
-- `partial`: works for the inputs the notes give, and fails for the rest.
-- `fails`: always stops with an error.
+A few rules hold for every builtin:
 
-These rules apply to every builtin:
-
-- **No import from derivation.** A builtin that reads a path fails when the
-  path is the output of a derivation, because evaluation builds nothing.
-  `import` of a `.drv` file works.
-- **Classic mode falls back.** When a builtin fails because iets does not
-  support the call, a classic name (`nix-instantiate`, `nix`, ...) runs the
-  real Nix instead (`docs/reference/classic.md`).
-- **Pure evaluation reads the project.** A pure run of a native command can
-  read files below the project root, where Nix forbids them
+- **No import from derivation.** If a path is the output of a derivation,
+  reading it fails, because evaluation never builds anything. You can still
+  `import` a `.drv` file.
+- **Classic mode falls back.** When iets does not support a call, a classic
+  name such as `nix-instantiate` or `nix` runs the real Nix for you
+  (`docs/reference/classic.md`).
+- **Pure evaluation reads your project.** A pure run of a native command can
+  read files below the project root. Nix does not allow that
   (`docs/reference/divergences.md`).
 
-Each note that names a difference has a section in
-`docs/reference/divergences.md`.
+When a note mentions a difference, `docs/reference/divergences.md` has the
+details. To add a builtin, see `docs/how-to/add-a-builtin.md`.
+
+## Status
 
 | name | status | notes |
 |---|---|---|
@@ -64,7 +64,7 @@ Each note that names a difference has a section in
 | `fetchGit` | fails | |
 | `fetchMercurial` | fails | |
 | `fetchTarball` | partial | Needs a `sha256`. |
-| `fetchTree` | partial | Type `path` works for an absolute path. Types `github`, `gitlab`, `sourcehut`, `git`, `tarball` and `hg` need a `narHash`. Other types fail. Under a classic name, there only with the `fetch-tree` or `flakes` feature, as in Nix. |
+| `fetchTree` | partial | Type `path` works for an absolute path. Types `github`, `gitlab`, `sourcehut`, `git`, `tarball` and `hg` need a `narHash`. Other types fail. In pure evaluation, `path` also needs a `narHash`, and every type but `path` and `tarball` needs a `rev`. Under a classic name, there only with the `fetch-tree` or `flakes` feature, as in Nix. |
 | `fetchurl` | fails | |
 | `filter` | works | |
 | `filterSource` | works | |
@@ -148,109 +148,3 @@ Each note that names a difference has a section in
 | `unsafeGetAttrPos` | works | |
 | `warn` | works | |
 | `zipAttrsWith` | works | |
-
-## Adding a builtin
-
-Primops live in `src/builtins/<family>.rs`. Each file has one entry point:
-
-```rust
-pub fn register(r: &mut Registry) {
-    r.op("__stringLength", 1, string_length);   // global `__stringLength`, `builtins.stringLength`
-    r.op("baseNameOf", 1, base_name_of);        // global `baseNameOf`, `builtins.baseNameOf`
-    r.constant("__langVersion", Word::imm_int(6));
-}
-```
-
-Add the file to `src/builtins/mod.rs` and call its `register` from `install`.
-Names follow Nix: a `__` prefix means the unprefixed name appears in
-`builtins` and the prefixed one is a global.
-
-### Signature
-
-```rust
-pub type PrimFn = fn(&mut Evaluator, &[Word], Pos) -> Result<Word, Box<Error>>;
-```
-
-`args` has exactly `arity` words and they are **not forced**. `pos` is the
-call site. Return a forced value (never a thunk) unless you deliberately
-return a lazy application built with `ev.arena.mk_thunk_app(f, x)`, which
-is how `map`, `mapAttrs`, `genList` and `zipAttrsWith` stay lazy.
-
-### Forcing helpers (all on `Evaluator`)
-
-| helper | returns | error when |
-|---|---|---|
-| `force(w)` | forced `Word` | evaluation fails |
-| `force_cell(&cell)` | forced `Word`, written back to the cell | |
-| `force_int(w, pos, ctx)` | `i64` | not an int |
-| `force_float(w, pos, ctx)` | `f64` (ints convert) | |
-| `force_bool(w, pos, ctx)` | `bool` | |
-| `force_string(w, pos, ctx)` | `&StringObj` (bytes + context) | not a string |
-| `force_string_no_ctx(w, pos, ctx)` | `&[u8]` | string has context |
-| `force_list(w, pos, ctx)` | `&ListObj` (`.cells()`) | |
-| `force_attrs(w, pos, ctx)` | `&AttrsObj` (`.get(sym)`, `.attrs()`) | |
-| `force_function(w, pos, ctx)` | the function word (lambda, primop, or functor set) | |
-| `force_deep(w)` | recursively forced | |
-| `coerce_to_string(w, &mut ctx, pos, err_ctx, coerce_more, copy_to_store, canonicalize)` | `Cow<[u8]>`, contexts appended to `ctx` | not coercible |
-| `eq_values(a, b, pos)` / `less_than(a, b, pos)` | `bool` | |
-| `call1(f, a, pos)`, `call2(f, a, b, pos)`, `apply(f, &args, pos)` | forced result | |
-
-`ctx` is `&str`; pass the Nix error context ("while evaluating the first
-argument passed to builtins.foo") so traces match.
-
-### Constructing values
-
-| constructor | notes |
-|---|---|
-| `ev.mk_int(i)`, `ev.mk_float(f)`, `Word::from_bool(b)`, `Word::NULL`, `Word::TRUE`, `Word::FALSE` | ints are immediates when they fit 61 bits |
-| `ev.mk_string(&bytes)` | no context |
-| `ev.arena.mk_string_ctx(&bytes, &ctx)` | `ctx: &[Ctx]`; use `ctx_to_arena(&mut ev.arena, vec)` to sort and dedup |
-| `ev.arena.mk_string_static(bytes, ctx)` | when bytes already live in the arena (e.g. a substring of an existing string) |
-| `ev.arena.mk_path(&bytes)` | path value |
-| `ev.mk_list(&words)` | or `ev.arena.alloc_list(n)` and fill `.cells()` |
-| `ev.mk_attrs(&mut entries, pos)` | `entries: Vec<(Sym, Pos, Word)>`; sorts, errors on duplicates |
-| `ev.arena.mk_attrs_sorted(&entries)` | entries already sorted by `Sym` id and unique |
-| `ev.empty_attrs()` | |
-| `ev.sym(b"name")` | intern a symbol; `ev.interner.name(sym)` reads it back |
-| `ev.mk_pos_attrs(pos)` | `{ file, line, column }` or null |
-| `ev.arena.mk_thunk_app(f, x)` | lazy application |
-
-Well-known symbols are on `ev.s` (`out_path`, `drv_path`, `type_`, `name`,
-`value`, `functor`, `to_string`, ...).
-
-### Errors
-
-```rust
-use crate::eval::{ErrorKind, bail};
-bail!(ErrorKind::Eval, pos, "cannot create list of size {}", n);
-```
-
-`ErrorKind` is in `src/eval/error.rs`. `tryEval` catches `Throw` and
-`Assert` only. Use `Unsupported` for a call iets does not implement, so
-that classic mode runs the real Nix. Add trace lines with
-`e.add_trace(pos, msg)`.
-
-### Worked example
-
-```rust
-fn concat_map(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
-    let f = ev.force_function(args[0], pos, "while evaluating the first argument passed to builtins.concatMap")?;
-    let l = ev.force_list(args[1], pos, "while evaluating the second argument passed to builtins.concatMap")?;
-    let mut lists = Vec::with_capacity(l.len as usize);
-    for c in l.cells() {
-        let r = ev.call1(f, c.get(), pos)?;
-        lists.push(ev.force_list(r, pos, "while evaluating the return value of the function passed to builtins.concatMap")?);
-    }
-    Ok(ev.concat_lists(&lists))
-}
-```
-
-A builtin that reads a store path gets its bytes through
-`src/builtins/store_hooks.rs`. Its module comment says how.
-
-### Tests
-
-Put a case in `tests/corpus/<name>.nix`, with an optional `<name>.flags`.
-`scripts/corpus.nu --update <name>` writes `<name>.exp` from
-`nix-instantiate --eval --strict`. `scripts/corpus.nu` checks every case
-against iets.

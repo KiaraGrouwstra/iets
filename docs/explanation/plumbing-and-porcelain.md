@@ -1,14 +1,13 @@
 # Plumbing and porcelain
 
-iets has one code path. Every capability is an operation in the library,
-with a machine-first contract. A plumbing command exposes that operation
-with JSON in and JSON out. A user-facing command — the porcelain — is
-written against the same operation. This is git's split.
+If you know git, you know this split. iets has one code path. Every
+capability is an operation in the library, with a contract made for
+programs first. A plumbing command exposes that operation, with JSON in and
+JSON out. The commands you type, the porcelain, use the same operation.
 
 The operation contracts and the JSON shapes are in
-[reference/plumbing.md](../reference/plumbing.md). This page is the rule,
-how it is enforced, and the honest record of what the migration to it
-cost.
+[reference/plumbing.md](../reference/plumbing.md). This page explains the
+rule, how it is enforced, and what the move to it really cost.
 
 ## The rule
 
@@ -26,10 +25,10 @@ command reaches past `crate::api` into `crate::eval`, `crate::store`,
 `crate::build`, `crate::remote`, `crate::flake` or `crate::jobs`, the
 plumbing has a gap. Close the gap in the operation layer first.
 
-The split test is one question: **would a plumbing operation emit this
-too?** If yes, it is a value and it belongs below the command line. If it
-only ever reaches a terminal, it is presentation and it belongs in the
-porcelain.
+To decide where something goes, ask one question: **would a plumbing
+operation emit this too?** If yes, it is a value, and it belongs below the
+command line. If it only ever reaches a terminal, it is presentation, and
+it belongs in the porcelain.
 
 ### Why a namespace and not a second binary
 
@@ -64,31 +63,29 @@ fails on an entry *wider* than the code needs as well as on a missing one.
 So a reach that goes cannot come back unnoticed, and the lists cannot stay
 ahead of the code.
 
-The lists started at:
-
-| list | length | what is on it |
-|---|---|---|
-| reaches below `api` | 17 files | `build.rs`, `cache_dump.rs`, `classic/{build,develop,instantiate,mod,nix,shell}.rs`, `devenv.rs`, `diff.rs`, `eval.rs`, `jobs.rs`, `mod.rs`, `plumbing.rs`, `render/text.rs`, `search.rs`, and one command that is gone since |
-| evaluator value in a signature | 7 files | `classic/{instantiate,mod,nix,shell}.rs`, `jobs.rs`, `mod.rs`, `search.rs` |
-
+The reach list started at 17 files and the signature list at 7.
 `crate::flake` is on neither, because the flake migration took it. The
-layer named most often is `crate::eval` (13 files) — the evaluator type
-itself, and the last one that will go. `crate::remote` (11) is the
-transport a command still names to open a connection.
+layer named most often is `crate::eval`. That is the evaluator type itself,
+and it will be the last to go. `crate::remote` comes next: the transport a
+command still names to open a connection.
 
 **What the test does not ban is the point of it.** A porcelain-side library
-may be as large as it needs to be: the render module is 264 lines of
-presentation and passes; the classic module is 2,254 lines of Nix argv
-compatibility and passes. The one question is whether a file holds a second
+can be as large as it needs to be. The render module is presentation, so it
+passes. The classic module, the largest under `src/cli`, is Nix argv
+compatibility, so it passes too. The one question is whether a file holds a second
 implementation of something the operation layer owns. Both failure messages
 say so, and both name the two ways out: close the gap in `crate::api`, or
 say why the entry belongs on the list and move the constant.
 
-Beyond the test there is a review checklist. Before merging a change under
-`src/cli`: does it call anything below `crate::api`, and if so, is it
-presentation, compatibility or interaction? Does it do something an
-operation already does, in its own way? Does a new operation have a JSON
-shape in the reference and an end-to-end case? Did the allow-list grow?
+The test cannot catch everything, so reviewers ask four questions before
+they merge a change under `src/cli`:
+
+- Does it call anything below `crate::api`? If so, is that presentation,
+  compatibility or interaction?
+- Does it do, in its own way, something an operation already does?
+- Does a new operation have a JSON shape in the reference and an
+  end-to-end case?
+- Did the allow-list grow?
 
 ## What the migration cost
 
@@ -109,12 +106,12 @@ useful thing on this page.
 | 9 | six more operations | cancelled |
 | 10 | `tests/layering.rs` and the two allow-lists | 0 in `src`, +304 in tests |
 
-Every estimate was negative. Every estimate was wrong. Five rules came out
-of finding out why.
+Every estimate was negative. Every estimate was wrong. Working out why gave
+us five rules.
 
 ### 1. A shared module costs 100-175 lines before it saves one
 
-`api::installable` started at 175 lines; `api::run` is 102. A stage that
+`api::installable` started at 175 lines, and `api::run` at 102. A stage that
 removes N copies of a K-line sequence nets `N*K − 150`, not `N*K`.
 
 ### 2. The saving comes from deleting a repeated *type*, not a repeated line
@@ -125,11 +122,11 @@ Deleting four per-command `enum Run { Failed, Unsupported, … }` and the
 match that fed each one saved as much again, from five sites. Look for the
 type, not for the line.
 
-Stage 4 is the same lesson positively. The collapse worked: the per-command
-types went with the sequence, the merge-into-targets loop and its
+Stage 4 shows the same lesson from the good side. The collapse worked. The
+per-command types went with the sequence. The merge-into-targets loop, its
 `HashMap<String, BTreeMap<String, Option<String>>>` and its "derivation has
-no output" match — written out twice at about 45 lines each — became one
-call. That turned a predicted −80 into −220. The module still cost 187, so
+no output" match were written out twice, at about 45 lines each. They
+became one call. That turned a predicted −80 into −220. The module still cost 187, so
 the refactor was +33 and the stage was +417 because of the three operations
 on top.
 
@@ -143,8 +140,8 @@ is deleted in the same stage.
 
 This rule is why stage 9 was cancelled. `index`, `jobs`, `dev-env`,
 `drv-show`, `drv-diff` and `closure-diff` were charged +150 for six on the
-same arithmetic that cost 384 for three, so about +720 — and every one of
-them exposes something a caller can already reach. `iets eval-jobs` and
+same arithmetic that cost 384 for three, so the real cost was about +720.
+And every one of them exposes something a caller can already reach. `iets eval-jobs` and
 `iets print-dev-env` are the JSON contract already. `iets diff` composes
 `resolve` with its own comparison. `api::installable` and `api::build` own
 the rest. Six operations at that price buys capability that already exists.
@@ -159,8 +156,8 @@ command would otherwise reach past `crate::api`. Neither was true.
 ### 4. Count the copies, not the call sites
 
 Nine renderers, sixteen evaluation scaffolds and eight dispatch sequences
-are three different numbers of copies: sixteen and eight were copies, nine
-were not. Stage 2's nine renderers were nine different *outputs*. What
+sound alike, but they are not. The sixteen and the eight were copies. The
+nine were not. Stage 2's nine renderers were nine different *outputs*. What
 repeated across them was one byte writer, one JSON dump and four
 `if json { … } else { … }` branches — about 60 lines. Only one per-command
 output type existed to delete.
@@ -191,9 +188,7 @@ turns a string into derivations, `api::build` dispatches a build,
 `api::run` runs an evaluation, `api::fetch` fetches, `api::flake` resolves
 a flake, `api::render` says what a value's JSON is. Before the first stage
 there were three attribute-path tables, eight build-dispatch sequences,
-sixteen evaluation scaffolds and two NAR framings. There is one of each. Ten
-porcelain files call `api::installable`; five no longer reach into
-`crate::store`.
+sixteen evaluation scaffolds and two NAR framings. There is one of each.
 
 **A contract.** `iets plumbing resolve | iets plumbing plan` composes
 across processes, `missing` is byte-for-byte `build --dry-run --json`, and
@@ -204,33 +199,33 @@ did not exist before.
 Several stages were worth it for reasons the ledger cannot show. Stage 5
 moved a capability that had been reachable only by the command that
 happened to hold it. Stage 7 gave a name to a content-addressed store
-nobody had named, and made the only way in a function that hashes what it
-is given and refuses anything else — which is what let stage 8 put a
+nobody had named. It also made the only way in a function that hashes what
+it is given and refuses anything else. That is what let stage 8 put a
 resolver over it. Stage 8 made `crate::flake` private, so "flakes" stopped
 being a thing four command files each knew a different piece of.
 
 ## Two gaps stay open
 
 `nix-shell` and `print-dev-env` each open a connection of their own. They
-upload a plan and then speak the worker protocol themselves — build the
-derivation's *inputs* and exec a shell, or read the environment output
-back — so they use the plan and the store lookup but drive the upload
-directly, because routing them through the dispatcher would open a second
-connection. Stage 9's `plumbing dev-env` was to close this, and stage 9 is
-cancelled. It is recorded as a gap, not as a plan.
+upload a plan and then speak the worker protocol themselves: they build
+the derivation's *inputs* and exec a shell, or read the environment
+output back. So they use the plan and the store lookup, but drive
+the upload directly. Going through the dispatcher would open a second
+connection. Stage 9's `plumbing dev-env` was to close this, and stage 9
+is cancelled. It is recorded as a gap, not as a plan.
 
 `drv-show` was to be the reader of a dumped-derivation directory, which
 `api::build::drvs_in_dir` already is. `nix derivation show` later needed the
-other half — drv paths to the JSON Nix prints — and got it as a capability,
+other half, drv paths to the JSON Nix prints, and got it as a capability:
 `api::drvshow::show`, with no op and no `iets plumbing drv-show`. The
-porcelain is 80 lines of argv and printing over it, which is what the
+porcelain was 80 lines of argv and printing over it, which is what the
 cancelled op would have cost on its own.
 
 ## What the line count says about the next refactor
 
 Not "do not refactor". Say what the second copy is before starting, and
 expect the number to be positive when there is not one. Every stage that
-named a real second copy — stage 1, stage 3, stage 4's collapse, stage 5's
-attribute readers, stage 7's NAR framing — got a real deletion out of it.
+named a real second copy got a real deletion out of it: stage 1, stage 3,
+stage 4's collapse, stage 5's attribute readers and stage 7's NAR framing.
 Every stage that moved a module got +0 for the move and paid for the
 interface.

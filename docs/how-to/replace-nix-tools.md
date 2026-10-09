@@ -1,7 +1,7 @@
 # How to replace your Nix tools with iets
 
-One binary covers seven separate tools, and they share one evaluator and
-one cache. This page gives a worked example of each replacement.
+One binary does the job of seven separate tools, with one evaluator and one
+cache. This page shows you an example of each.
 
 | you used | use instead |
 |---|---|
@@ -14,13 +14,18 @@ one cache. This page gives a worked example of each replacement.
 | nix-direnv's `use flake` | `iets print-dev-env` |
 
 Every flag is in [reference/commands.md](../reference/commands.md). Where
-behaviour differs from the tool being replaced on purpose, it is recorded
-in [reference/divergences.md](../reference/divergences.md).
+iets differs from the old tool on purpose, you find it in
+[reference/divergences.md](../reference/divergences.md).
 
-Under the classic names — `nix`, `nix-build`, `nix-instantiate`,
-`nix-shell`, `nix-eval-jobs` — the same binary answers
-as that command and runs the real `nix` for what it does not implement.
-See [reference/classic.md](../reference/classic.md).
+The same binary also answers to the classic names `nix`, `nix-build`,
+`nix-instantiate`, `nix-shell` and `nix-eval-jobs`. It acts like that
+command, and runs the real `nix` for what it does not implement (see
+[reference/classic.md](../reference/classic.md)).
+
+The examples use `$nixpkgs` from step 3 of the
+[tutorial](../tutorial/getting-started.md). By default, iets evaluates
+purely, with no `<nixpkgs>` search path and no `builtins.currentSystem`. An
+expression that reads either needs `--impure`.
 
 ## `nix search`
 
@@ -34,12 +39,12 @@ iets search -I nixpkgs=$nixpkgs '^ripgrep$'
 ```
 
 The output is Nix 2.34.8's, byte for byte, escape sequences included. The
-matched substrings are highlighted, and — as in Nix — the colours are
-written whether or not stdout is a terminal. Use `--json` for a program.
+matches are highlighted, and, as in Nix, the colours are written even when
+stdout is not a terminal. Use `--json` for a program.
 
-The first search over a package set evaluates it. The *index* that the walk
-produced then goes into the cache, keyed on the installable and not on the
-regular expressions, so any later search over the same set is a hit:
+The first search over a package set evaluates it. iets then caches the
+index of packages, not your search terms. So any later search over the
+same set is a hit, whatever you search for:
 
 ```sh
 iets search --timings -I nixpkgs=$nixpkgs fd find
@@ -49,24 +54,42 @@ iets search --timings -I nixpkgs=$nixpkgs fd find
 cache: hit, 56568 entries validated, 0 rehashed, load 0.017s, validate 0.038s
 ```
 
-For the pinned nixpkgs: 6.5 s the first time, 0.15 s thereafter, against
-21 s for real `nix search` on the same installable. Real Nix keeps an
-evaluation cache for a flake installable only; with `--file` or `--expr` it
+For the pinned nixpkgs, that is 6.5 s the first time and 0.15 s after
+that. Real `nix search` takes 21 s on the same installable. Nix caches the
+evaluation of a flake installable only; with `--file` or `--expr` it
 evaluates every time.
 
 Without an installable, `iets search` searches `<nixpkgs>` from `-I` or
-`NIX_PATH`. Give one explicitly when you want another:
+`NIX_PATH`. To search something else, name it:
 
 ```sh
 iets search ./pkgs.nix '^'
 iets search path:/some/flake ripgrep
-iets search --expr 'import <nixpkgs> {}' git gui
+iets search --impure --expr 'import <nixpkgs> {}' git gui
 ```
 
 `iets search` has no flake registry, so `nix search nixpkgs ^` under the
 classic name falls back to the real `nix`.
 
 ## `nix-diff`
+
+The examples from here on use this `demo.nix`:
+
+```nix
+let
+  mk = word: greeting: derivation {
+    name = "demo";
+    system = "x86_64-linux";
+    builder = "/bin/sh";
+    args = [ "-c" "echo ${word} > $out" ];
+    GREETING = greeting;
+  };
+in
+{
+  a = mk "one" "hello";
+  b = mk "two" "goodbye";
+}
+```
 
 ```sh
 iets diff -A a -A b demo.nix
@@ -84,10 +107,10 @@ iets diff -A a -A b demo.nix
     + goodbye
 ```
 
-`-` is the first side and `+` the second. The `-A X -A Y FILE` form
-evaluates one file twice and selects a different attribute each time. The
-other form takes two installables — a `.drv` path, a flake reference or a
-Nix file — each of which must evaluate to exactly one derivation:
+`-` is the first side and `+` the second. `-A X -A Y FILE` compares two
+attributes of one file. You can also give two installables (a `.drv` path,
+a flake reference or a Nix file), as long as each one evaluates to exactly
+one derivation:
 
 ```sh
 iets diff /nix/store/…-a.drv /nix/store/…-b.drv
@@ -97,16 +120,15 @@ Exit codes follow `diff(1)`: 0 when the two are equal, 1 when they differ,
 2 for a usage error or any other failure.
 
 Nothing is built and nothing is written to the store. A derivation this
-evaluation produced is read from memory; any other is read from
-`/nix/store`.
+evaluation made is read from memory; any other is read from `/nix/store`.
 
-The walk descends two levels of input derivations by default. Use
-`--depth N` for more, or `--all` for every level. A stop is always printed,
-so nothing goes missing silently.
+By default, iets looks two levels deep into input derivations. Use
+`--depth N` for more, or `--all` for every level. Where it stops, it says
+so, so nothing goes missing silently.
 
-`--json` prints one object in which every difference is an entry of
-`changes`, whatever part of the derivation it came from, so a program
-filters on one key and never needs a shape per part:
+`--json` prints one object. Every difference is an entry of `changes`,
+whatever part of the derivation it came from, so a program can filter on
+one key:
 
 ```sh
 iets diff --json -A a -A b demo.nix
@@ -121,8 +143,8 @@ iets diff --json -A a -A b demo.nix
 
 ## `nvd`
 
-`--closure` compares the two derivations' output closures by package and
-version instead of comparing the derivations:
+`--closure` compares the packages and versions in the two output closures,
+not the derivations:
 
 ```sh
 iets diff --closure -A a -A b demo.nix
@@ -140,14 +162,16 @@ added   libbar 0.9
 changed hello 2.12 -> 2.12.1
 ```
 
-Both outputs must be in the store, because the daemon answers with
-`QueryPathInfo`. A path it has not got is an error that names the
-`iets build` which makes it. `--builder URL` picks the store to read.
+Both outputs must be in the store, because iets asks the daemon about
+them. If one is missing, iets stops with an error that names the missing
+path.
+`--builder URL` picks the store to read.
 
 ## `nurl`, `nix-prefetch`, `nix-prefetch-url`
 
-The hash of something not fetched yet, on one line of stdout and nothing
-else, so `$(iets prefetch …)` is usable directly.
+`iets prefetch` prints the hash of something you have not fetched yet. It
+prints one line on stdout and nothing else, so `$(iets prefetch …)` just
+works.
 
 A URL, hashed flat, as `nix store prefetch-file` hashes it:
 
@@ -174,33 +198,32 @@ gzip, xz, zstd and bzip2 are handled. Zip files are not. `--hash-type ALGO`
 picks `md5`, `sha1`, `sha256` (the default) or `sha512`.
 
 For anything a `fetch*` function makes, give an expression, a file with
-`-A`, or a flake fragment instead of a URL:
+`-A`, or a flake fragment in place of a URL:
 
 ```sh
-iets prefetch -E '(import <nixpkgs> {}).hello.src'
-iets prefetch -E 'with import <nixpkgs> {}; fetchzip {
+iets prefetch --impure -E '(import <nixpkgs> {}).hello.src'
+iets prefetch --impure -E 'with import <nixpkgs> {}; fetchzip {
     url = "https://github.com/numtide/treefmt/archive/v2.0.0.tar.gz";
     hash = ""; }'
 iets prefetch default.nix -A mypkg.cargoDeps
 ```
 
-The hash the expression names is ignored, so `hash = ""`, `lib.fakeHash`
-and last month's hash all work. Nothing in your files is edited: iets
-rewrites the *derivation* — the fixed output hash becomes the all-zero hash
-of the same algorithm and the paths are recomputed — builds it, and reads
-the hash out of the daemon's mismatch report. The fetcher runs exactly as
-it would have.
+iets ignores the hash in the expression, so `hash = ""`, `lib.fakeHash`
+and last month's hash all work. Your files are not edited. iets sets the
+derivation's output hash to all zeros, builds it, and reads the real hash
+from the daemon's mismatch report. The fetcher runs exactly as it would
+have.
 
-There is no `-f FILE`. The file is a positional, as it is for `iets eval`
-and `iets build`.
+There is no `-f FILE`. Give the file as an argument, as for `iets eval` and
+`iets build`.
 
-Unlike `nix store prefetch-file`, nothing is added to any store, which is
+Unlike `nix store prefetch-file`, nothing is added to any store. That is
 also why there is no `--name`, `--executable` or `--expected-hash`.
 
 ## `nix-fast-build`
 
-There is no separate command. `iets build` takes a set of derivations,
-so the checks of a flake are one installable:
+You need no separate command. `iets build` takes a whole set of
+derivations, so you can give it the checks of a flake:
 
 ```sh
 iets build .#checks
@@ -216,10 +239,10 @@ iets build .#checks
 /nix/store/…-two
 ```
 
-It evaluates in this process and builds on one connection. The checks of
-the current system are selected, every check gets a verdict, and what the
-builder already has is not built again. None of that needs a flag. The
-exit code is Nix's: 100 when a build failed.
+It evaluates in this process and builds over one connection. It picks the
+checks of the current system, gives every check its own result, and skips
+what the builder already has. None of that needs a flag. The exit code is
+Nix's: 100 when a build failed.
 
 ```sh
 iets build --builder ssh-ng://builder .#checks
@@ -227,11 +250,11 @@ iets build release.nix -A ci --argstr system x86_64-linux
 iets build --json .#checks > outcomes.json
 ```
 
-`--json` is the report: `{"outcomes":[{attr, drv, success, outputs,
-reason, logTail}]}`. There is no JUnit file; convert the JSON where a
-consumer needs one. Outputs stay where they were built, and nothing is
-pushed to a binary cache: that is the builder's job.
-[How to build on a remote builder](build-remotely.md) has the details.
+`--json` gives you the report: `{"outcomes":[{attr, drv, success, outputs,
+reason, logTail}]}`. There is no JUnit file; convert the JSON if you need
+one. Outputs stay where they were built, and nothing is pushed to a binary
+cache: that is the builder's job. See
+[How to build on a remote builder](build-remotely.md) for more.
 
 ## `nix-eval-jobs`
 
@@ -244,9 +267,9 @@ iets eval-jobs --no-instantiate demo.nix
 {"attr":"b","attrPath":["b"],…}
 ```
 
-These are the JSON lines nix-eval-jobs 2.35 prints. The comparison suite
-runs both tools over 41 flag combinations and diffs the sorted output; all
-41 are identical, exit codes included.
+These are the JSON lines nix-eval-jobs 2.35 prints. The test suite runs
+both tools with 41 sets of flags and compares the sorted output. All 41
+match, exit codes included.
 
 For Hydra and nixpkgs CI, the flags you already pass work:
 `--force-recurse`, `--meta`, `--constituents`, `--check-cache-status`,
@@ -254,7 +277,8 @@ For Hydra and nixpkgs CI, the flags you already pass work:
 
 Three things to know before you swap it in:
 
-- `--workers N` means worker *processes* here, and the default is 4, not 1.
+- `--workers N` means worker *processes* here. The default is the CPU
+  count, at most 4, not 1.
   With `--max-memory-size 0` it means fibers of one process instead.
 - Line order is completion order, as it is for nix-eval-jobs. Sort by
   `attrPath` when you compare two runs.
@@ -262,10 +286,10 @@ Three things to know before you swap it in:
   evaluates a flake from a complete lock file only. `--reference-lock-file`
   works: that file is the lock, and it must be complete too.
 
-Two flags are iets's own. `--provenance` adds a `pos` key per job, naming
-the file, line and column where the derivation was defined; it is off by
-default so the output stays identical to nix-eval-jobs. `--chunks M --chunk
-N` splits a jobset, which is how nixpkgs CI shards its evaluation.
+Two flags are iets's own. `--provenance` adds a `pos` key to each job,
+with the file, line and column where the derivation was defined. It is off
+by default, so the output stays the same as nix-eval-jobs. `--chunks M
+--chunk N` splits a jobset, which is how nixpkgs CI shards its evaluation.
 
 ## nix-direnv
 

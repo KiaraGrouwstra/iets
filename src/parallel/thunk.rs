@@ -1,5 +1,5 @@
 //! Claim / park / publish protocol on a thunk's result `Cell`, and the
-//! side table of parked fibers. See docs/explanation/evaluation.md "Thunk claim
+//! side table of parked fibers. See docs/explanation/evaluation.md "The claim
 //! protocol".
 
 use std::collections::HashMap;

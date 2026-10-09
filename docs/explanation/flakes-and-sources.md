@@ -12,15 +12,15 @@ leaves out are in
 
 ## A project with no flake
 
-A native command evaluates purely, whether or not a flake is involved
-(`reference/settings.md`). Pure evaluation reads a file only under a store
-path the evaluation allowed, so an entry file that is not a flake would have
-nothing to read, its own text included. iets therefore gives such a run a
-**project**, found by walking up from the entry file (`src/project.rs`). A
-pure evaluation reads below it.
+A native command evaluates purely, flake or not (`reference/settings.md`).
+Pure evaluation reads a file only under a store path the evaluation
+allowed. So an entry file that is not a flake would have nothing to read,
+not even its own text. That is why iets gives such a run a **project**. It
+finds the project by walking up from the entry file, and a pure evaluation
+can read anything below it.
 
-Three markers answer, and each says something different, so each is weighed
-differently:
+Three markers can mark a project. Each one means something different, so
+each one counts differently:
 
 | marker | weight | why |
 |:---|:---|:---|
@@ -31,17 +31,17 @@ differently:
 With no marker at all, the entry file's own directory is the project, so a
 one-off expression in a scratch directory still evaluates.
 
-A working tree is the one `source::scm` knows, the same detection the root
-flake of a flake reference goes through ("The root flake is your working
-tree"), so git is the one SCM that marks a root today and iets gains the
-next one in one place.
+A working tree is found the same way as for the root flake of a flake
+reference ("The root flake is your working tree"). Today git is the only
+SCM that marks a root. When iets learns a second one, it learns it in one
+place.
 
-The project is an **allow list, not a copy of a tree**. Nothing is hashed,
-nothing is staged, and a path keeps naming the checkout: `toString ./x` is
+The project is an **allow list, not a copy of a tree**. Nothing is hashed
+and nothing is staged. A path keeps naming your checkout: `toString ./x` is
 `/home/me/repo/x`, and so are the positions in an error. The file set is
-not filtered either, so an untracked or ignored file reads like any other —
-the thing a flake refuses, and the reason a scratch file in a repository is
-not a special case here.
+not filtered either, so an untracked or ignored file reads like any other.
+A flake refuses that file, but here a scratch file in your repository is
+nothing special.
 
 Two consequences, both deliberate, both in
 [reference/divergences.md](../reference/divergences.md):
@@ -51,16 +51,17 @@ Two consequences, both deliberate, both in
 - `"${./x}"` copies that one path, not a slice of a tree copy, so the store
   path it gives differs from the one the same tree gives as a flake.
 
-What the checkout location can really break is a derivation, and that is
-where the check sits: a string that carries the text of a non-store path
-reaches `derivationStrict` marked, and `impure-path-in-drv` (outside a
-project) or `absolute-path-in-drv` (inside one) reports the attribute that
-holds it. Both are errors by default (`reference/lints.md`). A read cannot
-make a `.drv` depend on where the repository lives; only an attribute can.
+The one thing the checkout location can really break is a derivation, so
+that is where the check sits. A string that holds the text of a path
+outside the store reaches `derivationStrict` with a mark on it. Then
+`impure-path-in-drv` (outside a project) or `absolute-path-in-drv` (inside
+one) reports the attribute that holds it. Both are errors by default
+(`reference/lints.md`). A read cannot make a `.drv` depend on where your
+repository lives. Only an attribute can.
 
-A flake reference gets no project. Its root tree is already a virtual copy
-whose filter is the tracked file set, and a second, unfiltered root would
-let the evaluation read an untracked file by its absolute path. The classic
+A flake reference gets no project. Its root tree is already a virtual copy,
+filtered by the tracked file set. A second root with no filter would let
+the evaluation read an untracked file by its absolute path. The classic
 names get none either: each one answers like the real nix, `--pure-eval`
 included (`reference/classic.md`).
 
@@ -72,9 +73,9 @@ reference goes through the same parser `builtins.parseFlakeRef` uses, which
 follows Nix's `parseFlakeRefWithFragment`: a flake id first, then a URL,
 then a path.
 
-Only a local path is taken: `.`, `./x`, `/abs`, `~/x`, or a `path:` URL.
-Everything else is reported as unsupported, which is what makes the classic
-names fall back cleanly to the real `nix` on it:
+iets takes only a local path: `.`, `./x`, `/abs`, `~/x`, or a `path:` URL.
+Anything else is reported as unsupported. That is what lets the classic
+names hand it cleanly to the real `nix`:
 
 - a registry reference (`nixpkgs#hello`, and `x#y` even where `./x` exists,
   because that is what Nix's parser does);
@@ -85,11 +86,10 @@ names fall back cleanly to the real `nix` on it:
 **The lock file must exist and be complete.** Every node reachable from the
 root needs a `narHash`, or must be a relative `path:` input, and every
 input the `flake.nix` declares needs a lock entry. Otherwise the run says
-`flake.lock missing or incomplete, run nix flake lock`. There is no
-registry, no in-memory locking and no `nix flake lock` of its own: iets
-evaluates what a lock file already decided. As a consequence, a
-`flake.nix` input whose URL changed without re-locking is not detected. The
-lock wins.
+`flake.lock missing or incomplete, run nix flake lock`. iets has no
+registry, no locking in memory and no `nix flake lock` of its own. It
+evaluates what a lock file already decided. So if you change an input's URL
+in `flake.nix` and do not lock again, iets does not notice. The lock wins.
 
 ## The root flake is your working tree
 
@@ -126,10 +126,10 @@ supply it before the evaluation starts: `ls-files --stage -v` and
 A clean tree gets `rev`, `shortRev` and `revCount`; a dirty one gets
 `dirtyRev` and `dirtyShortRev`.
 
-An index entry that is not in the working tree makes the tree dirty, and
-`git status` does not report every one of them: it never reports an entry
-that git checks no more, which is what a sparse checkout and
-`update-index --skip-worktree` make. `-v` tags such an entry, and iets
+An index entry that is not in the working tree makes the tree dirty. But
+`git status` does not report all of them. It never reports an entry that
+git no longer checks, and a sparse checkout or
+`update-index --skip-worktree` makes exactly that. `-v` tags such an entry, and iets
 looks for it on disk. Nix reads the same rule out of libgit2's status.
 
 `revCount` is a lazy value. The attribute is in the set when Nix gives
@@ -146,13 +146,13 @@ none, and each commit changes it. iets plans to remove the attribute. A
 read gives the warning `rev-count` (`docs/reference/lints.md`). Use
 `lastModifiedDate` and `shortRev` for a version string.
 
-The store path is then computed from the NAR hash of that tree — and
-**nothing is written or fetched**. The copy is virtual. The store path is
-registered with a note saying "the bytes of this path are in that local
-directory, filtered by that file set", and every read under it goes to your
-working tree: `import`, `readFile`, `readDir`, `pathExists`, `hashFile`, a
-path interpolation, `builtins.path`. The store is never consulted for the
-root tree.
+iets then computes the store path from the NAR hash of that tree,
+and **nothing is written or fetched**. The copy is virtual. The store
+path gets a note that says "the bytes of this path are in that local
+directory, filtered by that file set". Every read under it goes to your
+working tree: `import`, `readFile`, `readDir`, `pathExists`, `hashFile`,
+a path interpolation, `builtins.path`. The store is never consulted for
+the root tree.
 
 Two things follow from that, and both are the point:
 
@@ -168,13 +168,13 @@ The flake's own `flake.nix` is imported under its store path, so positions,
 
 ### A symlink resolves in the store copy
 
-A virtual copy costs one rule. In a real store copy, a relative symlink
-resolves inside the copy and an absolute one points out of it. On your disk
-the same link resolves in the working tree, where a relative target can
-leave the tree and the filter hides nothing from the kernel. A read that
-let the kernel resolve the link would therefore see files the store copy
-does not hold: a file the SCM does not track, `.git/config`, or any file
-the absolute target names.
+A virtual copy has one catch. In a real store copy, a relative symlink
+resolves inside the copy, and an absolute one points out of it. On your
+disk, the same link resolves in the working tree. There a relative target
+can leave the tree, and the filter hides nothing from the kernel. If iets
+let the kernel resolve the link, a read could see files the store copy does
+not hold: a file the SCM does not track, `.git/config`, or any file the
+absolute target names.
 
 So a path under a store path this evaluation made is resolved on the text
 of the path, component by component, exactly as Nix's
@@ -202,9 +202,9 @@ Nix does.
 
 ## Getting an input readable
 
-An input is locked, so its store path is known before anything happens. It
-still has to become readable. Four steps run in order, and the first that
-works wins.
+An input is locked, so iets knows its store path before anything happens.
+But the bytes still have to be somewhere iets can read them. Four steps run
+in order, and the first one that works wins.
 
 **0. The input store.** If iets has fetched this tree before, it is
 already in `~/.cache/iets/inputs`, keyed by the store path the lock
@@ -223,55 +223,54 @@ from `builtins`. So iets substitutes the tree itself. A local copy beats a
 download, which is why this comes before the fetcher. When no daemon
 answers, the step is skipped silently.
 
-This step is also what makes iets agree with `nix eval` on a locked `git`
-input that a substituter holds but the fetcher cannot reach. Nix's git
-fetcher raises `Cannot find Git revision '<rev>' in ref '<ref>'` whenever
-the fetch of the rev fails and a stale local ref swallows the failure; the
-flake path never gets there, because the tree came from the substituter. The
+This step also makes iets agree with `nix eval` on a locked `git` input
+that a substituter holds but the fetcher cannot reach. Nix's git fetcher
+raises `Cannot find Git revision '<rev>' in ref '<ref>'` when the fetch of
+the rev fails and a stale local ref hides the failure. The flake path never
+gets there, because the tree came from the substituter. The
 operation costs 0.002 s, against 0.13 s for the warm `nix build --no-link`
 it replaced (0.49 s cold), plus 0.05 s once for the connection.
 
-The connection goes to the *eval* store — `nix.conf`'s `store`, never the
+The connection goes to the *eval* store: `nix.conf`'s `store`, never the
 `builder` setting. A remote builder has no say in what `import` reads.
 
 **2. The archive types, fetched by iets.** `github`, `gitlab`, `sourcehut`
 and `tarball` are one download and one index, so iets does them itself.
-The URLs and headers are the ones Nix builds, the access token comes from
-`nix.conf`'s `access-tokens` matched the way Nix matches it, and the four
-compressions libarchive would autodetect — gzip, xz, zstd, bzip2 — are
-undone.
+The URLs and headers are the ones Nix builds. The access token comes from
+`nix.conf`'s `access-tokens`, matched the way Nix matches it. iets undoes
+the four compressions libarchive would detect: gzip, xz, zstd and bzip2.
 
-The download streams. No tree is ever unpacked: the decompressed tar goes
-into a spool inside a staged directory, a second pass records where every
-member's bytes are, and the NAR is written straight out of that index by
-reading each file back at its offset. Peak memory is therefore the queue
-plus the index — a few hundred bytes per member and nothing per byte. A full
+The download streams, and no tree is ever unpacked. The decompressed tar
+goes into a spool inside a staged directory. A second pass records where
+each member's bytes are. Then iets writes the NAR straight from that index,
+reading each file back at its offset. So peak memory is the queue plus the
+index: a few hundred bytes per member, and nothing per byte. A full
 nixpkgs revision costs 19 MB of index over the evaluator's own 75 MB, where
 unpacking a tree cost 307 MB: 13.5 s and 382 MB peak before, 7.7 s and
 94 MB after. Once the NAR hash matches, every file goes into the input
 store's packs as an object named by the blake3 of its bytes, unless a pack
 already holds it, and the spool is deleted.
 
-The unpacking rules are not the tar's rules; they are the rules of the git
-tree behind a locked input, because that tree is what the lock's `narHash`
-hashes. Directories survive, empty ones included. A regular file keeps one
+The unpacking rules are not the tar's rules. They are the rules of the git
+tree behind a locked input, because the lock's `narHash` is the hash of
+that tree. Directories survive, empty ones included. A regular file keeps one
 bit of its mode. A hard link resolves to a second entry with the target's
 blob. A member listed twice keeps its last copy. One leading directory is
-stripped, but only when it is the only entry at the top. Anything else — a
-device node, a `..` in a name, a member under a symlink — is an error.
+stripped, but only when it is the only entry at the top. Anything else is
+an error: a device node, a `..` in a name, or a member under a symlink.
 
 **3. `git` and `hg`, the last shell-out.** These need a repository, which
 iets cannot clone. It runs
 `nix eval --raw --impure --expr '(builtins.fetchTree <locked attrs>).outPath'`
-and then checks that the path `nix` reports is the one the lock implies, so
-a difference in the file set is an error rather than a silent divergence.
+and then checks that the path `nix` reports is the one the lock implies.
+So a difference in the file set is an error, not a silent divergence.
 When no `nix` other than iets itself is on `PATH`, the error says so and
 names the command to run first.
 
-`file` inputs are not in this set, for a specific reason: a `file` input's
-store path is the *flat* hash of the bytes under the input's name, which
-the lock's `narHash` does not give. iets cannot say where the file belongs
-before it has it, so the type stays unsupported.
+`file` inputs are not in this set, and here is why. A `file` input's store
+path is the *flat* hash of the bytes under the input's name, and the lock's
+`narHash` does not give that. iets cannot say where the file belongs before
+it has it, so the type stays unsupported.
 
 ## What a remote root flake would need
 
@@ -305,15 +304,15 @@ a warm page cache, timing the evaluation alone:
 | `nixpkgs.lib.version` | 0.271 s | 0.238 s |
 | `(import nixpkgs {}).hello.drvPath` | 0.573 s | 0.619 s |
 
-Reading a member is not the cost: it is one `pread`, plus an LZ4
-decompression when the object was stored compressed, against an `open`, an
-`fstat` and a growing buffer for a file under `/nix/store`. The table was
-measured when an entry was a spool; with the packs, the heavier evaluation
-from three nixpkgs revisions in one store takes the time it took from the
-spool, 0.12–0.22 s either way with `--no-cache`. What the input store
-charges is opening the entry — 3.2 MB of index for a full nixpkgs, read and
-decoded in 24–40 ms, where the spool's 1.7 MB index took 12–32 ms on the
-same machine.
+Reading a member is not where the time goes. It is one `pread`, plus an
+LZ4 decompression when the object was stored compressed. A file under
+`/nix/store` needs an `open`, an `fstat` and a growing buffer. The table
+was measured when an entry was a spool. With the packs, the heavier
+evaluation from three nixpkgs revisions in one store takes the same time as
+from the spool: 0.12–0.22 s either way with `--no-cache`. What the input
+store does cost is opening the entry. For a full nixpkgs that is 3.2 MB of
+index, read and decoded in 24–40 ms. The spool's 1.7 MB index took 12–32 ms
+on the same machine.
 
 Against real Nix, on a NixOS flake with 31 locked inputs and a devShell:
 
@@ -329,21 +328,27 @@ The same flake's whole NixOS system configuration: `nix` 7.21 s, iets
 
 ## What the cache records
 
-Everything above is recorded in the tracing cache. The SCM records its own
-observations: the `git` queries that read the working tree (`ls-files`,
-`status`, `rev-parse HEAD`) become command observations. The date and the
-count of the revision are no observations. They follow from the revision,
-and a commit cannot change while its name stays: the name is the hash of
-its date and of its parents. Thus a validation starts three `git`
-processes, not five. The marker `.git/shallow` is an observation, because
-it decides if the tree has a count. The marker each ancestor was asked for
-during detection is an observation too, so a working tree that appears
-above a `path:` flake misses. The working
-tree's file set becomes a filtered tree observation with no seen-set,
-because the SCM names the file set and an unlisted entry cannot change the
-result. Every file read under the root is a file
-observation on its *local* path. A remote input that `/nix/store` holds is
-one stat; one the input store serves is one observation for the whole entry.
+The tracing cache records everything above. The SCM records its own
+observations. The `git` queries that read the working tree (`ls-files`,
+`status`, `rev-parse HEAD`) become command observations.
+
+The date and the count of the revision are not observations. They follow
+from the revision, and a commit cannot change while its name stays the
+same, because the name is the hash of its date and its parents. So a
+validation starts three `git` processes, not five.
+
+- `.git/shallow` is an observation, because it decides whether the tree has
+  a count.
+- The marker each ancestor was asked for during detection is an
+  observation too. So a working tree that appears above a `path:` flake
+  misses.
+- The working tree's file set becomes a filtered tree observation with no
+  seen-set. The SCM names the file set, so an entry that is not listed
+  cannot change the result.
+- Every file read under the root is a file observation on its *local*
+  path.
+- A remote input that `/nix/store` holds is one stat. One the input store
+  serves is one observation for the whole entry.
 
 So a commit, an edit of a tracked file, a `git add`, a garbage-collected
 input or a swept input-store entry all miss. An untracked file does not.

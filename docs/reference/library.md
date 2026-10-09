@@ -1,32 +1,26 @@
 # Using iets as a library
 
-> **Not ready for long-lived hosts.** The evaluator's arena does not free
-> memory until the process exits (`src/runtime/arena.rs`). A program that
-> evaluates again and again, such as an editor server or a build service,
-> grows without limit. Use the library for a run-once frontend: another
-> command line, a test harness, a one-shot tool. The API can change.
+> **Not ready for long-lived hosts.** The evaluator does not free memory
+> until the process exits. A program that evaluates again and again, such
+> as an editor server or a build service, grows without limit. Use the
+> library for a run-once frontend: another command line, a test harness, a
+> one-shot tool. The API can change.
 
-Every public entry point of the crate: what a frontend calls, what a
-`Session` owns, and the value API with its mapping to Nix's C API.
+iets is a library with a thin `iets` binary on top. Your frontend links
+the library and calls the entry points on this page. This page also says
+what a `Session` owns, and how the value API maps to Nix's C API.
 
-The crate is a library with a thin `iets` binary on top. A frontend —
-another CLI, a test harness, a one-shot tool — links the library and
-calls the entry points below. `examples/eval.rs`, `examples/build.rs`,
-`examples/drv_info.rs` and `examples/value.rs` are working frontends; they
-use `pub` items only and never touch `iets::cli`.
+Four working frontends come with the crate: `examples/eval.rs`,
+`examples/build.rs`, `examples/drv_info.rs` and `examples/value.rs`. They
+use `pub` items only, and never touch `iets::cli`. Yours should do the
+same: use no `cli` module, no private field and no copied helper.
 
-**Rule: frontends never reach into evaluator internals.** No `cli`
-module, no private field, no copied helper. When something a frontend
-needs lives only in `cli`, move it into the library (`crate::api`, or the
-module it belongs to) and let `cli` call it there.
-
-**Rule: the value representation is closed.** `crate::runtime` names the
-evaluator's types — `Word`, `Arena`, the heap objects — but every operation
-on them is `pub(crate)`. A frontend takes a `Word` from `api::evaluate`,
-hands it back to the library, and reads it through `api::value`; it cannot
-build one, dereference one or allocate in the arena. This is a soundness
-rule, not a taste one: a word invented from bits makes a safe call
-dereference an address of the caller's choosing.
+You cannot look inside a value directly. `crate::runtime` names the
+evaluator's types (`Word`, `Arena`, the heap objects), but every operation
+on them is `pub(crate)`. You take a `Word` from `api::evaluate`, give it
+back to the library, and read it through `api::value`. You cannot build
+one, dereference one or allocate in the arena. This keeps safe code safe:
+a word made up from bits would let a safe call read any address.
 
 ## Entry points
 
@@ -72,22 +66,20 @@ dereference an address of the caller's choosing.
 
 ## What the host owns
 
-A `Session` holds everything a run used to keep in process-wide statics:
-the settings, where messages go, the tree store, the nix.conf it read,
-the eval-jobs walk, the hash mismatches a build reported. Two sessions in
-one process are independent — different settings, different log
-destination, different mismatch list — so a host may run two evaluators
-side by side.
+A `Session` holds the state of a run: the settings, where messages go,
+the tree store, the nix.conf it read, the eval-jobs walk, and the hash
+mismatches a build reported. Two sessions in one process do not share any
+of it, so you can run two evaluators side by side.
 
-The library never writes to stdout or stderr on its own. A session's log
-sink starts as nothing; `Session::log.write_to_stderr()` is what `iets`
-itself does. A host that renders its own errors uses `api::report_of` and
-leaves the sink unset. The library never exits either: it returns errors,
-and the frontend decides the exit code.
+The library never writes to stdout or stderr by itself. A session's log
+starts with nowhere to go. `iets` calls `Session::log.write_to_stderr()`.
+If you render your own errors, use `api::report_of` and leave the log
+unset. The library never exits either: it returns errors, and your
+frontend picks the exit code.
 
-An `Evaluator` keeps a handle to its session, so the code that has an
-evaluator reads `ev.session()` — no lookup. The rest reaches
-`Session::current()`, the session this thread entered:
+An `Evaluator` keeps a handle to its session, so code that has an
+evaluator reads `ev.session()`. Other code calls `Session::current()`,
+the session this thread entered:
 
 ```rust
 let session = iets::session::Session::new();
@@ -96,43 +88,36 @@ let _entered = session.enter();         // for this thread
 let mut ev = Evaluator::new();          // adopts the session
 ```
 
-`EvalConfig::new().session(session)` skips the thread-local altogether.
-An evaluator has no setter: each setting goes to the `EvalConfig` before
-`build()`. Two defaults differ from the command line, because a host has
-neither a command line nor an entry file: evaluation is impure, and there
-is no project root. `api::run::Run::new` is what reads the `pure` setting
-and finds the root from the arguments, so a frontend built that way gets
-the behaviour `docs/reference/settings.md` describes; a host that builds
-its own `EvalConfig` sets `pure(true)` and `project_root(…)` itself. Threads the library starts inherit the session of the thread
-that started them; a host that starts its own calls `Session::enter` on
-each, or `session::bind(f)`. A thread that entered none uses a fallback
-session that writes nowhere.
+To skip the thread-local, use `EvalConfig::new().session(session)`.
 
-## Shape of a frontend
+An evaluator has no setters. Put each setting on the `EvalConfig` before
+`build()`. Two defaults differ from the command line, because a host has no
+command line and no entry file: evaluation is impure, and there is no
+project root. `api::run::Run::new` reads the `pure` setting and finds the
+root from the arguments, so a frontend built on `Run` behaves as
+`docs/reference/settings.md` says. If you build your own `EvalConfig`,
+set `pure(true)` and `project_root(…)` yourself.
 
-1. Make a `Session`, enter it, and build an `EvalArgs`.
-2. `api::run::Run::new(&args)`, then `.go(move |ev, cache| …)`:
-   everything inside runs as the main fiber, so `force` may park while
-   helpers work. `Run` puts the settings of the arguments on the evaluator
-   and opens the tracing cache. `parallel::try_run` takes an evaluator that
-   you built, and does neither.
-3. `api::evaluate(ev, args)` for the value, then force and print it, or
-   `drv_roots` + `plan` + `build` for a build.
-4. Report errors with `api::report`, which rewrites store paths and
-   positions to the local trees they came from, or let `Run::eval` do it.
+Threads that the library starts inherit the session of the thread that
+started them. If you start your own threads, call `Session::enter` on each,
+or use `session::bind(f)`. A thread that entered no session uses a
+fallback session that writes nowhere.
+
+For the steps of a frontend in order, with code, see
+`docs/how-to/embed-the-evaluator.md`.
 
 ## The value API
 
 `api::value` is the safe way to look at what an evaluation produced.
-`examples/value.rs` is a working frontend on it.
+`examples/value.rs` is a working frontend that uses it.
 
 `value::Eval<'e>` wraps a `&'e mut Evaluator`. `value::Value<'e>` is one
-value of that evaluator: a `Copy` machine word with no methods that reach
-into the arena on their own. The shared `'e` is the safety story — a
-`Value<'e>` only exists while the evaluator is borrowed, so it cannot
+value of that evaluator: a `Copy` machine word whose methods never reach
+into the arena by themselves. The shared `'e` keeps it safe: a
+`Value<'e>` exists only while the evaluator is borrowed, so it cannot
 outlive the arena it points into. `Value` is invariant in `'e`, so it
-never widens to another borrow. Nothing in the surface exposes
-`runtime::Word`, an arena pointer or a tag.
+never widens to another borrow. You never see a `runtime::Word`, an arena
+pointer or a tag.
 
 Methods on `Value` read an already-forced value and need nothing else.
 Methods on `Eval` may evaluate, intern a name or allocate.
@@ -159,28 +144,27 @@ Methods on `Eval` may evaluate, intern a name or allocate.
 
 Notes:
 
-- A getter on an unforced value reports `ValueKind::Thunk` and returns
-  `None`; it never panics and never forces. Force first.
-- `as_bytes`, `as_path` and the attribute names borrow the arena: no copy.
-  The constructors do copy — `string` and `path` copy their bytes in, and
-  `list` and `attrs` gather a temporary before the arena copy. Construction
-  is the cold path; nothing on a walk allocates.
-- `attr_at` index order is the evaluator's internal symbol order, not
-  alphabetical, exactly as `nix_get_attr_byidx` warns. Sort the names
-  yourself when the order must be reproducible. On a `//` result the first
-  `attr_at` flattens the union, which copies it once.
-- An evaluator's arena is never freed, so a value of one evaluator passed
-  to a *different* `Eval` does not dangle; it reads names through the wrong
-  symbol table. The lifetime does not rule that out (two borrows can share
-  one region). Keep one `Eval` per evaluator.
+- A getter on a value that is not forced yet reports `ValueKind::Thunk`
+  and returns `None`. It never panics and never forces. Force first.
+- `as_bytes`, `as_path` and the attribute names borrow the arena, with no
+  copy. The constructors do copy: `string` and `path` copy their bytes in,
+  and `list` and `attrs` gather a temporary first. The getters on `Value`
+  never allocate.
+- `attr_at` uses the evaluator's internal order, not alphabetical order,
+  just as `nix_get_attr_byidx` warns. Sort the names yourself when the
+  order must be reproducible. On the result of `//`, the first `attr_at`
+  flattens the union, which copies it once.
+- Keep one `Eval` per evaluator. If you pass a value of one evaluator to a
+  different `Eval`, it does not dangle, because the arena is never freed.
+  But it reads names through the wrong symbol table, and the lifetime
+  cannot stop you, since two borrows can share one region.
 - External values (`NIX_TYPE_EXTERNAL`) do not exist in iets, so
   `ValueKind` has no `External`.
 
 ### Mapping to Nix's C API
 
-This surface is modelled on Nix's own C API, so a binding for another
-language has a shape to follow. These are the `nix_api_value.h` names each
-item corresponds to.
+The value API follows Nix's own C API, so a binding for another language
+has a shape to copy. Each `nix_api_value.h` name maps to:
 
 | `nix_api_value.h` | `api::value` |
 |:---|:---|
@@ -205,8 +189,8 @@ item corresponds to.
 | `nix_get_external`, `nix_init_external` | nothing: no external values |
 | `nix_string_realise`, `nix_alloc_primop`, `nix_register_primop` | not yet |
 
-The string context has no C counterpart in that header beyond
-`nix_string_realise`; `ContextElem` carries the four element kinds iets
-keeps (`Opaque`, `DrvDeep`, `Built`, and the `Impure` marker that a path
-coercion or the metadata of a source tree leaves, which
-`builtins.getContext` does not show).
+The header has nothing for the string context except
+`nix_string_realise`. `ContextElem` holds the four kinds of element iets
+keeps: `Opaque`, `DrvDeep`, `Built`, and `Impure`. `Impure` is the marker
+that a path coercion or the metadata of a source tree leaves, and
+`builtins.getContext` does not show it.

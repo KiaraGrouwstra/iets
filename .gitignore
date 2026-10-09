@@ -2,6 +2,5 @@ target/
 result
 result-*
 .direnv/
-bench/fix-cache/
 bench/results/
 *.profraw

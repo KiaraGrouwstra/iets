@@ -1,16 +1,23 @@
 # Lints
 
-Every lint: its name, family, hook, default level and trigger, plus the
-level resolution, the scope rules and the `# iets: allow` comment.
+A lint tells you about something in your Nix code that only an evaluator
+can see, such as a read of a value that changes with every commit:
 
-iets reports what only an evaluator can know. It has no opinion about
-how code looks. `docs/explanation/lint-scope.md` has the rule, and it
-tells you how to make rules of your own with `iets parse --json`.
+```
+$ iets eval --raw .#version             # version = "1.${toString self.revCount}";
+warning: [rev-count] 'self.revCount' is deprecated: the count of all revisions is expensive to compute and absent on a shallow clone, and iets plans to remove it; use 'lastModifiedDate' and 'shortRev' for a version
+  at /repo/app/flake.nix:4:29
+```
 
-iets has a registry of named lints for language corner cases. Each lint
-is `off`, `warn` or `error`. Code: `src/lint/` (`mod.rs` holds the
-registry and the emission, one file per family holds the triggers);
-fixtures: `tests/lint/<name>.nix`, checked by `scripts/linttest.nu`.
+This page lists every lint, with its family, when it runs, its default
+level and what triggers it. It also says how a level is chosen, which
+files a lint looks at, and how to silence one line with `# iets: allow`.
+
+iets has no opinion about how code looks. `docs/explanation/lint-scope.md`
+says why, and shows you how to write rules of your own with
+`iets parse --json`.
+
+Each lint is `off`, `warn` or `error`.
 
 ## Levels and resolution
 
@@ -124,13 +131,11 @@ copies to the local tree it stands for, lies under a root directory. So
 the flake directory is (containment wins). A relative `path:` input lives
 under its parent's tree and follows it.
 
-The scope resolves with the levels (default, `iets.toml`, `IETS_LINT`,
-`--lint`); `--lint-scope` and `--lint-root` come last. It is part of
-both cache keys: a file is compiled under the levels its location gets,
-so a store file under `scope = "root"` keys the IR cache like an unlinted
-one and its entry holds no warnings, and the tracing-cache key holds the
-scope, the roots and the input tables, because another scope is another
-warning set.
+The scope is chosen like the levels (default, `iets.toml`, `IETS_LINT`,
+`--lint`), and `--lint-scope` and `--lint-root` come last. Both caches
+take the scope, the roots and the input tables into account, so a run with
+another scope gets its own warnings and never the cached ones of another
+scope.
 
 For a compile-time lint the site is the node's position; for a runtime
 lint it is the call's position. The derivation-attribute lints are the
@@ -237,11 +242,9 @@ subsequent reads of that tree are silent, with a site or without. A site
 that a `# iets: allow` comment covers is not a finding, so the next read
 of that tree reports.
 
-A read that is not a selection has no site. `fetchTree` and the root tree
-of a flake make `revCount` as a lazy value, and the evaluator computes a
-lazy value of native code without the position of the expression that
-reads it. The evaluator keeps no call trace. Thus the message names the
-tree, and the finding has no position:
+A read that is not a selection has no site, because iets cannot tell which
+expression asked for the value. The message names the tree, and the
+finding has no position:
 
 ```
 $ iets eval --raw .#scoped              # scoped = with self; "1.${toString revCount}";
@@ -284,12 +287,8 @@ x == "a" # iets: allow eq-type-mismatch
   only when the value is computed, so an unused allow on one run may be
   the one that matters on the next.
 
-The lexer notes the `# iets:` comments (other comments cost nothing
-more), the parser resolves the names into a per-file table of covered
-lines, and the compiler and the evaluator check that table before a
-site's level. The table travels in the IR cache entry with the
-warnings, and it is part of the file's bytes, so both cache keys cover
-it: a run whose comment changed misses.
+A comment is part of the file, so when you change one, both caches miss
+and the next run reports again.
 
 ## Configuration file
 
@@ -353,37 +352,35 @@ are part of the IR cache key and their warnings are stored in the entry;
 | `rev-count` | purity | evaluator | **warn** | the evaluation reads `revCount` of a source tree that has a name (`self.revCount`, `inputs.<node>.revCount`). The attribute is deprecated: the count of all revisions is expensive to compute, a shallow clone has none, and each commit changes it. `self ? revCount` and `builtins.attrNames self` are not a read. The tree gives the level (Scope): the root tree by default, a locked input only with `[lint.inputs.<node>]`. The site is the selection that reads the attribute; a read that is not a selection has no site (Scope) |
 | `unknown-allow` | meta | parser | **warn** | a word of a `# iets: allow` comment that is not a lint name, a family or `all`, or a `# iets:` directive other than `allow` (Silencing one site) |
 
-`impure-path-in-drv` works like Nix's store references: a coercion that
-keeps the text of a path outside the store (`toString ./x`, `"/x" +
-./y`) marks the string with an `Impure` context element that travels
-through concatenation, interpolation, `concatStringsSep`,
-`replaceStrings` and attrset coercion like the store elements do. It is
-invisible to `getContext` and `hasContext`, `unsafeDiscardStringContext`
-strips it, and it never reaches an ATerm. `derivationStrict` reads it per
-attribute. The project root of a path is the one
-`docs/explanation/flakes-and-sources.md` defines, found by the same walk;
-the probes are `Stat` observations of the tracing cache.
+`impure-path-in-drv` follows a path the way Nix follows store references.
+When you turn a path outside the store into text (`toString ./x`,
+`"/x" + ./y`), the string carries a hidden mark. The mark survives
+concatenation, interpolation, `concatStringsSep`, `replaceStrings` and the
+coercion of an attribute set. `getContext` and `hasContext` do not show
+it, `unsafeDiscardStringContext` removes it, and it never reaches a
+`.drv` file. The lint looks for the mark in each attribute of a
+derivation. The project root of a path is the one that
+`docs/explanation/flakes-and-sources.md` defines.
 
-Both are **errors** by default, and they are the price of a pure
-evaluation that reads the checkout instead of a copy of a tree
-(`docs/explanation/flakes-and-sources.md`): the paths stay the user's, so
-the one case that does not survive another checkout location is the
-attribute that carries one into a `.drv`. The message names the fix —
-interpolate the path, and the copy goes to the store. A repository that
-wants the finding without the failure sets `impure-path-in-drv = "warn"`
-in its own `iets.toml`, which is the one table a project file may hold.
-`dir-copy-unfiltered` is `warn` for the other half of that trade: outside
-a flake no tracked file set filters a directory copy, so a `"${./.}"`
-takes the untracked and ignored files with it.
+`impure-path-in-drv` and `absolute-path-in-drv` are **errors** by default.
+A pure evaluation in iets reads your checkout, not a copy of it
+(`docs/explanation/flakes-and-sources.md`), so your paths stay your own. The one place that breaks when the checkout
+moves is a derivation attribute that holds such a path. The message tells
+you the fix: interpolate the path, and it is copied to the store. If you
+want the finding without the failure, set `impure-path-in-drv = "warn"`
+in your project's `iets.toml`.
 
-`tree-meta-in-drv` uses the same context element with a different
-payload. `fetchTree` and the root tree of a flake put it on each metadata
-string of a tree, with the name of the value: `self.rev` for the root
-tree, `inputs.<node>.rev` for a locked input. iets makes the mark only
-when the lint is on for that tree, so an input without a level has none.
-The mark changes nothing that Nix sees: the `.drv` files, `getContext`,
-`hasContext`, `==` and `toJSON` give the same result with and without
-it. `scripts/flaketest.nu` compares them with Nix.
+`dir-copy-unfiltered` is `warn` for the other side of that trade. Outside a
+flake, nothing filters a directory copy by the files git tracks, so
+`"${./.}"` takes your untracked and ignored files with it.
+
+`tree-meta-in-drv` uses the same kind of mark. `fetchTree` and the root
+tree of a flake put it on each metadata string of a tree, with the name of
+the value: `self.rev` for the root tree, `inputs.<node>.rev` for a locked
+input. iets makes the mark only when the lint is on for that tree, so an
+input without a level has none. The mark changes nothing that Nix sees:
+the `.drv` files, `getContext`, `hasContext`, `==` and `toJSON` give the
+same result with and without it.
 
 ```nix
 {
@@ -449,202 +446,34 @@ iets computes the count only when the evaluation reads it, and keeps it
 by revision (`docs/explanation/flakes-and-sources.md`). Thus the lint
 adds no cost to a flake that does not read the attribute.
 
-## Defaults and parity
+## Defaults
 
-The byte-exact gates (`scripts/difftest.nu` on nixos-desktop,
-`scripts/langtests.nu`, `scripts/corpus.nu`, `scripts/evaljobs-flags.nu`)
-compare stdout, and a lint at `off` or `warn` never changes stdout. The
-defaults follow a stricter rule: a lint that fires on nixpkgs or on the
-language tests defaults to `off`; only lints that fire nowhere may default
-to `warn`. `url-literal`, `absolute-path-literal` and `short-path-literal`
-keep Nix's default (`off`).
+A lint at `off` or `warn` never changes stdout. A lint that fires on
+nixpkgs or on the language tests defaults to `off`. Only a lint that fires
+nowhere may default to `warn`. `url-literal`, `absolute-path-literal` and
+`short-path-literal` keep Nix's default, `off`.
 
-Warnings printed per lint with `--lint all=warn --lint-scope all`
-(the default scope reports nothing from a store tree), pinned nixpkgs
-(`/nix/store/ah3pxz4x…-source`), release build, 2026-09-19. Desktop is
-`bench/workloads/nixos-desktop.nix` at `--workers 1`; outpaths is
-`eval-jobs --no-instantiate --workers 4 --max-memory-size 0 --chunks 8
---chunk 0` of `ci/eval/outpaths.nix` (9,411 lines, 167 errors like
-without lints; with worker processes each process deduplicates on its
-own, so the counts multiply); lang is every `tests/lang/eval-*.nix` and
-`tests/corpus/*.nix`. Stdout was identical with and without lints, and
-at 1 and 4 workers. `eq-type-mismatch` (null exempt), `drv-bool-null`
-(Nix's Boolean attributes exempt) and `drv-list` were counted again on
-the build with those exemptions (outpaths then had 168 errors);
-`--lint-scope all` does not apply the `derivation`-call rule, and
-`dir-copy-flake` needs a flake entry, which none of these workloads is.
-
-| lint | desktop | outpaths 0/8 | lang + corpus |
-|---|---:|---:|---:|
-| `path-copy` | 133 | 381 | 12 |
-| `dir-copy-flake` | 0 | 0 | 0 |
-| `store-path-recopy` | 142 | 395 | 0 |
-| `read-through-copy` | 0 | 580 | 0 |
-| `drv-bool-null` | 195 | 1515 | 0 |
-| `drv-list` | 533 | 9767 | 0 |
-| `eq-type-mismatch` | 26 | 30 | 0 |
-| `eq-function` | 4 | 5 | 3 |
-| `or-non-attrs` | 25 | 42 | 2 |
-| `url-literal` | 0 | 0 | 3 |
-| `impure-builtin` | 3 | 7 | 5 |
-| `unhashed-fetch` | 0 | 0 | 5 |
-| `ifd` | 0 | 0 | 0 |
-| `fod` | 4 | 4 | 6 |
-| `large-source-copy` | 1 | 2 | 0 |
-| `git-in-source` | 0 | 0 | 0 |
-| `dir-copy-unfiltered` | 0 | 0 | 3 |
-| `impure-path-in-drv` | 0 | 0 | 0 |
-| `absolute-path-in-drv` | 0 | 0 | 0 |
-| `tree-meta-in-drv` | 0 | 0 | 0 |
-| `rev-count` | 0 | 0 | 0 |
-| `absolute-path-literal` | 2 | 9 | 26 |
-| `short-path-literal` | 0 | 1 | 6 |
-| `unknown-allow` | 0 | 0 | 0 |
-
-The pinned nixpkgs lives in the store, so every copy of a nixpkgs path is
-a `store-path-recopy` and never a `dir-copy-unfiltered`; the latter needs
-a checkout outside the store. `ifd` never fires on these workloads
-because iets cannot build (an IFD is an `Unsupported` error), `git-in-
-source` because a git flake root is a filtered tree.
-
-`impure-path-in-drv` and `absolute-path-in-drv` are zero above for the
-same reason: the text of a store path is not a checkout path. Measured
-on a plain copy of the pinned tree under `~/tmp` (`cp -r`, so no `.git`),
-with `-I nixpkgs=<copy> --lint-scope all --lint impure-path-in-drv=warn
---lint absolute-path-in-drv=warn`, same workloads, 2026-09-19:
-
-| lint | desktop | outpaths 0/8 |
-|---|---:|---:|
-| `impure-path-in-drv` | 0 | 0 |
-| `absolute-path-in-drv` | 3 | 3 |
-
-`tree-meta-in-drv` and `rev-count` are zero above because none of these
-workloads is a flake: no tree has a name, so iets makes no mark and no
-lazy count. The row of `rev-count` is not measured; it follows from that.
-The pinned nixpkgs reads `revCount` of no flake tree. The count for the
-outpaths column is not measured; it follows from that. Measured on a
-scratch git flake with the pinned tree as a `path:` input, the `minimal`
-profile of NixOS and `system.configurationRevision = self.rev`,
-2026-09-27:
-
-| configuration | findings | derivations that hold the value |
-|---|---:|---|
-| default | 1 | `nixos-version` (`self.rev`) |
-| `[lint.inputs.nixpkgs] tree-meta-in-drv = "warn"` | 3 | `nixos-version`, `etc-os-release`, `nixos-system-scratch-…` (`inputs.nixpkgs.lastModifiedDate`) |
-
-The copy holds nixpkgs's `flake.nix`, so every path under it is under a
-flake root and the sites are all `absolute-path-in-drv`; the three, on
-both workloads:
-
-- `pkgs/tools/package-management/nix/modular/packaging/components.nix:97:7`
-- `pkgs/build-support/trivial-builders/default.nix:84:17`
-- `nixos/modules/misc/documentation.nix:139:11`
-
-## Cost
-
-At the defaults the lints cost nothing measurable: `bench/ab.nu` on the
-commit before the registry against this one gave −3.4 % (desktop, 1
-worker), +2.3 % (desktop, 4 workers) and −0.9 % (minimal), inside the
-run-to-run noise of that box. An `off` lint is one byte compare at the
-site.
-
-The numbers below are from 2026-09-19. The registry then held 18 more
-lints, which the parser and the compiler reported
-(docs/explanation/lint-scope.md). The cost of the present registry is
-not higher.
-
-`IETS_LINT=all=warn` against the defaults, same box (16-core EPYC with
-other builds running), `bench/ab.nu --runs 9 --skip-outpaths`, IR and
-tracing caches as the benchmark uses them (`--no-tracing-cache` keeps the IR
-cache):
-
-| workload | default | all=warn | change |
-|---|---|---|---|
-| nixos-desktop, 1 worker | 1.686 s | 1.667 s | −1.1 % |
-| nixos-desktop, 4 workers | 1.302 s | 1.383 s | +6 % (σ 0.14 s) |
-| nixos-minimal, 1 worker | 1.209 s | 1.234 s | +2.1 % |
-
-The 4-worker row is a four-way hyperfine run: `all=off` 1.302 s, the
-compile-time families only 1.342 s, the evaluator families only 1.250 s,
-`all=warn` 1.383 s; the spread between runs of one configuration is as
-large as the differences. What kept the warn path cheap, in the order it
-was measured:
-
-- compile-time warnings travel in the IR cache entry (a bypass of the IR
-  cache cost 9 %);
-- a helper fiber reports a site itself instead of bailing like `trace`
-  (bails cost 15 % at 4 workers: every import that compiled in a helper
-  was compiled again on the demand path);
-- each fiber keeps its own set of sites it saw reported, so a site that
-  fires a million times takes the shared lock once per fiber;
-- warnings are buffered and written in 16 KiB chunks (one syscall per
-  line cost 7 % at 4 workers);
-- the position of a site inside a store copy is resolved through the
-  source table directly; rebuilding `provenance::SourceMap` per warning
-  cost 10 %, and `provenance::describe_pos` cannot be used because it
-  freezes its map on first use and an error report needs the map of the
-  whole run.
-
-The `# iets: allow` table costs the parse nothing measurable: `iets
-parse -q` over the 44,303 files of the pinned nixpkgs (hyperfine, 30
-runs, 2026-09-19) took 1.128 s ± 0.034 before and 1.122 s ± 0.025 after;
-the instruction count (`perf stat`) rose 0.5 %, from 6.728 G to 6.763 G.
-The `#` arm of the lexer's trivia loop is a function of its own: inlined,
-it grew `next_token` past what its callers inline, which cost 1.5 % of
-the instructions. At a site the check is one branch on an empty table.
-
-`tree-meta-in-drv` is `warn` by default. Thus `derivationStrict` examines
-the context of each attribute for a mark in each run, and the context
-element has one more level in its type. Measured with `perf stat -e
-instructions:u` on nixos-desktop (one worker, `--no-tracing-cache`, a
-warm compiled-file cache, 7 runs for each binary, 2026-09-27): 9.3915 G
-instructions before and 9.3942 G after, which is +0.03 %. Two runs of
-one binary are up to 0.02 % apart. nixos-desktop is not a flake, so it
-has no mark and the number is the cost of the test alone.
-
-`rev-count` adds nothing to an evaluation that has no source tree.
-Measured in the same way (5 runs for each binary, 2026-09-28): 9.3940 G
-instructions before and 9.3941 G after, which is +0.001 %. Two runs of
-one binary were up to 0.03 % apart.
-
-The site of `rev-count` costs nothing on that workload. The compiler
-gives a selection that has the name `revCount` an operation of its own,
-so no other selection tests the name. The pinned nixpkgs has 5 such
-selections, and none is in a file that nixos-desktop reads. Measured in
-the same way (7 runs for each binary, 2026-09-28): 9.3944 G instructions
-before and 9.3930 G after, which is -0.015 %. With an empty compiled-file
-cache (3 runs for each binary, each file compiles): 12.1825 G before and
-12.1842 G after, which is +0.014 %. Two runs of one binary were up to
-0.03 % apart.
+At the defaults, the lints cost nothing you can measure. An `off` lint is
+one byte compare at the site. The counts on nixpkgs and the measured costs
+are in `docs/explanation/lint-scope.md`.
 
 ## Caches and parallelism
 
-- A lint warning is an effect. `Cache::write` stores the record of each
-  warning in the entry, and a hit puts them out again before the
-  result (docs/explanation/caching.md). The lint configuration, scope and
-  roots included, is part of the cache key. A lint at `error` fails the
-  run, and failed runs are never cached.
-- The IR cache keys an entry on the compile-time lint levels the file
-  gets after the scope rule and stores the warnings the compile
-  produced, so a file loaded from the cache reports them again, and the
-  file's `# iets: allow` table, so a runtime lint on a loaded file is
-  silenced like on a compiled one. With every compile-time lint `off`
-  for that file (every store file under `scope = "root"`) the key is
-  the same as before the registry existed.
-- A site the scope silences enters the shared site set like a reported
-  one, so it is classified once per fiber; the classification of a file
-  is cached per fiber.
-- Warnings are buffered; the buffer is written before `builtins.trace`
-  and `builtins.warn` print, before an error report, at the end of every
-  command, and when the last evaluator handle drops.
-- Any fiber reports a site it reaches first; the shared site set keeps
-  each to one line. The parallel demand walk forces list elements a
-  sequential `any`, `all` or `elem` would skip, so the set of sites at N
-  workers can be a superset of the sequential one, and when two values
-  share one site (an attribute position that several derivations reuse)
-  the message shows the value that arrived first.
-- Embedded sources (`derivation.nix`, `fetchurl.nix`, `call-flake.nix`,
-  the imported-drv wrapper) are never linted.
+- A cache hit prints the same warnings as the run that wrote the entry,
+  before the result (`docs/explanation/caching.md`). The lint levels, the
+  scope and the roots are part of the cache key, so another configuration
+  is another entry. A lint at `error` fails the run, and a failed run is
+  never cached.
+- A file loaded from the compiled-file cache reports its compile-time
+  warnings again, and its `# iets: allow` comments still apply.
+- A warning comes out before any `builtins.trace` or `builtins.warn` line
+  and any error that follows it, and at the latest when the command ends.
+- With more than one worker, iets can force list elements that a
+  sequential `any`, `all` or `elem` would skip. So a run with several
+  workers can report more sites than a run with one. When several values
+  share one site, the message shows the value that got there first.
+- The sources iets carries inside itself (`derivation.nix`,
+  `fetchurl.nix`, `call-flake.nix`) are never linted.
 
 ## Limits
 
@@ -660,8 +489,6 @@ cache (3 runs for each binary, each file compiles): 12.1825 G before and
   so a wrapper in the user's repository is the user's contract and is
   reported, and a list passed through such a wrapper from a file out of
   scope is reported at the wrapper's `builder` binding.
-- `dir-copy-flake` needs a flake evaluation, so its fixture is the
-  scratch flake of `scripts/linttest.nu`, not a `tests/lint/*.nix` file.
 - `read-through-copy` only knows the copies this evaluation made through
   a coercion, `builtins.path` or `filterSource`; a flake root or input is
   a tracked tree and reading through it is the normal way.
@@ -681,16 +508,12 @@ cache (3 runs for each binary, each file compiles): 12.1825 G before and
   (`nixos/modules/config/nix-flakes.nix`), and the same attribute holds
   `rev` and `narHash`, which have the mark.
 - `rev-count` has a site only for a selection, `inherit (e) revCount;` and
-  `builtins.getAttr`. The other reads force the lazy value, and the
-  evaluator does not know the position of the read when it computes the
-  value. Thus a `# iets: allow` comment cannot silence such a read, and
-  its record has no byte span.
+  `builtins.getAttr`. For any other read, iets cannot tell which
+  expression asked for the value. So a `# iets: allow` comment cannot
+  silence such a read, and its record has no byte span.
 - `rev-count` gives one finding for each tree in a run, not one for each
   read. When the first read has no site, a subsequent selection of that
   tree is silent.
-- `rev-count` needs a tree that has a count. Its cases are in
-  `scripts/flaketest.nu` (a git working tree, a locked git input) and in
-  the unit tests, not in a `tests/lint/*.nix` file.
 - `tree-meta-in-drv` sees a value only through the mark. The builtins
   that drop the store context drop the mark too: `match`, `split`,
   `hashString`, `fromJSON`, an attribute name. `builtins.toFile` writes

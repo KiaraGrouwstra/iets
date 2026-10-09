@@ -99,13 +99,18 @@ pub const PAGES: &[Page] = &[
     ),
     embedded(
         "builtins",
-        "every builtin, and how to add one",
+        "every builtin and how well it works",
         include_str!("../../docs/reference/builtins.md"),
     ),
     embedded(
         "divergences",
         "where iets differs from Nix 2.34.8",
         include_str!("../../docs/reference/divergences.md"),
+    ),
+    embedded(
+        "fuzz",
+        "what each fuzz target compares",
+        include_str!("../../docs/reference/fuzz.md"),
     ),
     embedded(
         "library",
@@ -130,6 +135,7 @@ pub const PAGES: &[Page] = &[
     ),
     in_repo("how-to", "fix-hashes", "let a build write the hash it got"),
     in_repo("how-to", "script-iets", "drive it from a program"),
+    in_repo("how-to", "write-lint-rules", "your own lint rules"),
     in_repo("how-to", "embed-the-evaluator", "link the library"),
     in_repo("explanation", "evaluation", "how the evaluator works"),
     in_repo("explanation", "caching", "what the caches hold and key on"),
@@ -147,6 +153,16 @@ pub const PAGES: &[Page] = &[
         "explanation",
         "provenance",
         "store paths back to local trees",
+    ),
+    in_repo(
+        "explanation",
+        "dev-shells",
+        "how print-dev-env makes a shell",
+    ),
+    in_repo(
+        "explanation",
+        "transports",
+        "the build transports, measured",
     ),
     in_repo("explanation", "lint-scope", "what iets lints, and why"),
     in_repo("explanation", "history", "how it got here"),

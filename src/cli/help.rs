@@ -150,7 +150,7 @@ Walk a jobset and print one JSON line per derivation, like nix-eval-jobs
   --arg-from-file N F, --arg-from-stdin N  --argstr N from F or stdin
   -I, --include P=PATH  make <P> resolve to PATH
   --impure              turn off the pure evaluation --flake implies
-  --workers N           worker processes (default 4)
+  --workers N           worker processes (default: the cores, at most 4)
   --max-memory-size MB  restart a worker above MB (4096; 0: one process)
   --force-recurse       walk every attribute set, not only marked ones
   --meta, --show-input-drvs  add each job's meta, inputDrvs

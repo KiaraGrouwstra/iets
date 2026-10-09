@@ -1,20 +1,30 @@
 # Errors, exit codes and log records
 
-The stable error codes, the exit codes, the `--log-format internal-json`
-record shape, the activity records and the `json-log-path` setting.
+What iets tells you when something goes wrong, and how a program can read
+it: error codes, exit codes, the `--log-format internal-json` records, the
+activity records and the `json-log-path` setting.
 
-Every error goes through one reporter (`src/log.rs`). It prints Nix's
-plain text, or with `--log-format internal-json` one `@nix` JSON record.
-It also sets the exit code. The `iets` command sends it to stderr; a
-library host sets its own sink, or none, on its `Session`
-(docs/reference/library.md). Humans read the text. Programs read the
-record and the exit code. Agents read the `hint`.
+Here is a missing attribute, as a program sees it with
+`--log-format internal-json`:
+
+```json
+{"action":"msg","code":"missing-attr","column":12,"file":"«string»:1:12",
+ "level":0,"line":1,"msg":"error: attribute 'b' missing\n       at «string»:1:12",
+ "raw_msg":"attribute 'b' missing","sid":"019e037b-f603-7443-8071-cfd8585ec8c6"}
+```
+
+Without the flag, you get Nix's plain text on stderr. Either way, iets sets
+the exit code. People read the text. Programs read the record and the exit
+code. Agents read the `hint`, when there is one. A library host chooses its
+own sink, or none, on its `Session` (`docs/reference/library.md`).
 
 ## Error codes
 
-Each error has a stable kebab-case `code`. The code comes from the error
-kind: `ErrorKind` in `src/eval/error.rs` for evaluation errors, `Error`
-in `src/error.rs` for the rest, and the daemon's build status for builds.
+Each error has a stable kebab-case `code`, and the code comes from the
+error's kind. If you embed iets as a library, the Kind column tells you what
+to match on: a variant of `eval::ErrorKind` for evaluation errors, of
+`error::Error` for the rest (`docs/reference/library.md`), or the daemon's
+build status for builds. A dash means the code has no kind of its own.
 
 | Code | Kind | What went wrong |
 | --- | --- | --- |
@@ -30,12 +40,12 @@ in `src/error.rs` for the rest, and the daemon's build status for builds.
 | `parse` | `ErrorKind::Parse` | a syntax error |
 | `lint` | `ErrorKind::Lint` | a lint at level `error`; at `warn`, a level-1 record |
 | `hash-mismatch` | `ErrorKind::HashMismatch`, build status | a fetched tree or a fixed-output build whose hash is not the one given |
-| `hash-fixed` | `fix-hashes` | a level-3 record: the hash `fix-hashes` wrote, at the file, line and column it changed, with the byte span and the new text |
-| `ignored-flag` | `src/ignored.rs` | a level-1 record: a flag that has no effect, and why (docs/reference/divergences.md) |
-| `ignored-setting` | `src/config.rs` | a level-1 record: a Nix setting that has no effect, and why (docs/reference/settings.md) |
-| `unknown-setting` | `src/config.rs` | a level-1 record: a setting Nix 2.34.8 does not know either, with Nix's text |
-| `unknown-lint` | `src/lint/mod.rs` | a level-1 record: a lint name in an `iets.toml` or in `IETS_LINT` that the registry does not have (docs/reference/lints.md) |
-| `cache-invalidated` | `src/trace/run.rs` | a level-3 record: what changed under a tracing cache entry, so the run evaluates again |
+| `hash-fixed` | — | a level-3 record: the hash `fix-hashes` wrote, at the file, line and column it changed, with the byte span and the new text |
+| `ignored-flag` | — | a level-1 record: a flag that has no effect, and why (docs/reference/divergences.md) |
+| `ignored-setting` | — | a level-1 record: a Nix setting that has no effect, and why (docs/reference/settings.md) |
+| `unknown-setting` | — | a level-1 record: a setting Nix 2.34.8 does not know either, with Nix's text |
+| `unknown-lint` | — | a level-1 record: a lint name in an `iets.toml` or in `IETS_LINT` that the registry does not have (docs/reference/lints.md) |
+| `cache-invalidated` | — | a level-3 record: what changed under a tracing cache entry, so the run evaluates again |
 | `io` | `ErrorKind::Io`, `Error::Io` | a file that cannot be read or written |
 | `unsupported` | `ErrorKind::Unsupported`, `Error::Unsupported` | a feature iets does not have; classic mode falls back to Nix |
 | `cancelled` | `ErrorKind::Cancelled` | a parallel helper was stopped; never reaches the user |
@@ -46,9 +56,40 @@ in `src/error.rs` for the rest, and the daemon's build status for builds.
 | `protocol` | `Error::Protocol` | bad data from another process (daemon, worker) |
 | `cache` | `Error::Cache` | the tracing cache |
 | `plan` | `Error::Plan` | a derivation closure that cannot be built |
-| `no-results` | `iets search` | no package matched every regex (docs/reference/commands.md) |
-| `no-output` | `iets build` | a root put no store path on stdout: nothing to build, no build result, or no such output (docs/reference/commands.md) |
+| `no-results` | — | `iets search`: no package matched every regex (docs/reference/commands.md) |
+| `no-output` | — | `iets build`: a root put no store path on stdout: nothing to build, no build result, or no such output (docs/reference/commands.md) |
 | `build-failed` | build status | a build that failed |
+
+## Hints
+
+You get a `hint` only when iets is sure of the fix:
+
+- A hash mismatch of a fixed-output build names the hash the build got.
+- A NAR hash mismatch of a fetched tree names the hash of the tree and,
+  for a `fetchTree` call, the position of its `narHash` attribute.
+- A usage error repeats the text's own `did you mean` and `--help` lines.
+- A `flake.lock` entry without a `narHash` names the input by its path
+  from the root (`a/nixpkgs`) and the `nix flake update` that locks it
+  again.
+- A `git` input whose tree is not the one the lock names has code
+  `hash-mismatch` (Nix reports a NAR hash mismatch). The hint names the
+  usual causes: a `.gitattributes` filter such as git-lfs, `export-subst`,
+  or a submodule.
+- A file in the working tree of a git flake that git does not track gives
+  Nix's error (`Path 'F' in the repository "R" is not tracked by Git.`),
+  and the hint is the `git -C "R" add "F"` that makes it visible.
+- A `fetchTree` call on an input with no `narHash` says to pass one, or
+  to run `nix flake update`.
+- `iets diff --closure` on an output that is not in the store names the
+  `iets build` that makes it.
+- `iets search` with no results says to use fewer or shorter regexes.
+
+The text on stderr shows the hint only for a usage error. For every other
+error, the hint is only in the record's `hint` field
+(`--log-format internal-json`).
+
+A missing attribute or an undefined variable has no hint yet: iets has no
+did-you-mean suggestion for them.
 
 ## Exit codes
 
@@ -63,42 +104,38 @@ in `src/error.rs` for the rest, and the daemon's build status for builds.
 | 102 | A fixed-output build had a hash mismatch. |
 | 104 | A build was not deterministic. |
 
-The build codes follow `ExitStatusFlags::failingExitStatus` in Nix's
-`src/libstore/build-result.cc`. The value is `0b1100000` plus one bit
-per kind of failure: 4 build failed, 1 timeout, 2 hash mismatch, 8 not
-deterministic. Several failures combine their bits: a timeout and a
-failed build give 101. `iets build` uses them. Nix computes them only
-when it builds in its own store; as a client of a daemon it exits 1,
-because the worker protocol does not carry the exit status. iets is
-always a client, but it reads the status of each `BuildResult`. A root
-whose dependency failed reports `DependencyFailed`, so it exits 100, and
-102 as well when the daemon reported a hash mismatch in the same run,
-because Nix's flags combine over all its goals. The
-classic names (`nix-build`, `nix build`, `nix-shell`) exit 1, as Nix
-does through a daemon. `iets eval-jobs` exits 0 when only jobs fail;
-their errors are in the job lines.
+`iets build` uses the build codes. They are Nix's: `0b1100000` plus one bit
+per kind of failure (4 build failed, 1 timeout, 2 hash mismatch, 8 not
+deterministic), from `ExitStatusFlags::failingExitStatus` in Nix's
+`src/libstore/build-result.cc`. Several failures add up their bits, so a
+timeout and a failed build give 101. The bits add up over the whole run: a
+root whose dependency failed exits 100, or 102 as well when the daemon also
+reported a hash mismatch.
 
-A NAR hash mismatch of a fetched tree has code `hash-mismatch` but exits
-1, as the same error does in Nix.
+Nix itself exits 1 when it builds through a daemon, because the worker
+protocol does not carry the exit status. iets reads the status of each
+`BuildResult`, so it can give you the real code. The classic names
+(`nix-build`, `nix build`, `nix-shell`) still exit 1, as Nix does.
+
+Two more cases:
+
+- `iets eval-jobs` exits 0 when only jobs fail. Their errors are in the job
+  lines.
+- A NAR hash mismatch of a fetched tree has code `hash-mismatch` but exits
+  1, as the same error does in Nix.
 
 ## `--log-format internal-json`
 
 The native commands (`eval`, `build`, `diff`, `eval-jobs`,
 `print-dev-env`) and the classic names take `--log-format FORMAT` and
-`--show-trace`. `internal-json` is the format; `raw`, `raw-with-logs`,
+`--show-trace`. `internal-json` gives you records. `raw`, `raw-with-logs`,
 `bar` and `bar-with-logs` give the plain text. Any other value is a usage
 error with Nix's message.
 
-Every stderr line is then `@nix ` and one JSON object, the format of
-`JSONLogger` in Nix's `src/libutil/logging.cc`. The keys are sorted, as
-Nix sorts them. An error is `logEI`'s record plus `code` and, when iets
-knows the fix, `hint`:
-
-```json
-{"action":"msg","code":"missing-attr","column":12,"file":"«string»:1:12",
- "level":0,"line":1,"msg":"error: attribute 'b' missing\n       at «string»:1:12",
- "raw_msg":"attribute 'b' missing"}
-```
+With `internal-json`, every stderr line is `@nix ` and one JSON object, as
+Nix's `JSONLogger` writes it. The keys are sorted, as Nix sorts them. An
+error record is Nix's, plus `code` and, when iets knows the fix, `hint`.
+You saw one at the top of this page.
 
 | Key | Value |
 | --- | --- |
@@ -115,14 +152,21 @@ knows the fix, `hint`:
 | `sid` | the session: one id for every record of one run (iets only) |
 | `trace` | with `--show-trace` only: `[{raw_msg, line, column, file}]`, innermost first |
 
-A lint warning is a level-1 record with code `lint`; its `raw_msg` starts
+A lint warning is a level-1 record with code `lint`. Its `raw_msg` starts
 with `[NAME]`. A failed build is a record with code `build-failed` or
-`hash-mismatch`: `raw_msg` is the daemon's message, and the position is
+`hash-mismatch`. Its `raw_msg` is the daemon's message, and the position is
 where the derivation was defined.
 
-A tracing cache entry that no longer holds is a level-3 record with code
-`cache-invalidated`. The text is `re-evaluating: RAW`, and `raw_msg` names
-the one observation that changed:
+Any other line is `{"action":"msg","level":N,"msg":TEXT}`: level 0 for
+`error:` and `trace:` lines, 1 for warnings, 3 for the rest (build
+progress, summaries, classic fallback notes). The lines that `--timings`
+and `IETS_STATS` add stay plain text.
+
+### A cache entry that no longer holds
+
+When a tracing cache entry no longer holds, you get a level-3 record with
+code `cache-invalidated`. The text is `re-evaluating: RAW`, and `raw_msg`
+names the one thing that changed:
 
 ```json
 {"action":"msg","code":"cache-invalidated","column":null,"file":null,"level":3,
@@ -130,81 +174,102 @@ the one observation that changed:
  "raw_msg":"/home/u/repo/flake.nix changed"}
 ```
 
-The level is 3, not 1: nothing went wrong. An edit invalidates the entry of
-every command that read the file, so the line is part of a normal run, as
-`hash-fixed` is. Under a classic name the record goes to `json-log-path`
-only and stderr stays as Nix leaves it (`docs/reference/divergences.md`).
-Only a real invalidation prints it — an entry existed, was
-validated, and something had changed. A run with no entry prints nothing,
-because it invalidated nothing.
+The level is 3, not 1, because nothing went wrong. An edit invalidates the
+entry of every command that read the file, so this line is part of a normal
+run, like `hash-fixed`. You see it only when an entry existed, was checked,
+and something had changed. A run with no entry prints nothing. Under a
+classic name the record goes to `json-log-path` only, and stderr stays as
+Nix leaves it (`docs/reference/divergences.md`).
 
-The `raw_msg` is one observation of docs/explanation/caching.md's table, and
-says what about it changed: `PATH changed` (contents), `PATH is gone`,
-`PATH cannot be read`, `PATH is now a directory, not a regular file`,
-`PATH now exists`, `directory PATH has different entries`, `source tree PATH
-changed`, `source tree PATH has another modification time` (a `path:` input
-with the same bytes and another `lastModified`),
-`PATH resolves to a different path`, `environment variable $NAME
-changed` (or `is now set`, `is no longer set`), `the SCM working tree in DIR
-changed` (SCM is the name of the source control system, `git`),
-``the output of `CMD` in DIR changed``, or `input store entry NAME
-is gone`. The read set has one order, and the lowest-indexed observation
-that fails is the one reported, so one change always names the same thing.
+`raw_msg` is one of these:
 
-The file or flake a command names is in the read set like every other file
-the run reads, and not in the key (docs/explanation/caching.md), so editing
-it is an ordinary invalidation and the line names it.
+- `PATH changed` (its contents)
+- `PATH is gone`
+- `PATH cannot be read`
+- `PATH is now a directory, not a regular file`
+- `PATH now exists`
+- `directory PATH has different entries`
+- `source tree PATH changed`
+- `source tree PATH has another modification time` (a `path:` input with
+  the same bytes and another `lastModified`)
+- `PATH resolves to a different path`
+- `environment variable $NAME changed`, `is now set` or `is no longer set`
+- `the SCM working tree in DIR changed` (SCM is the source control system,
+  `git`)
+- ``the output of `CMD` in DIR changed``
+- `input store entry NAME is gone`
 
-Any other line is `{"action":"msg","level":N,"msg":TEXT}`: level 0 for
-`error:` and `trace:` lines, 1 for warnings, 3 for the rest (build
-progress, summaries, classic fallback notes). The lines that `--timings`
-and `IETS_STATS` add stay plain text.
+Each one is a row of the table in `docs/explanation/caching.md`. When
+several things changed, iets always reports the same one first, so one
+change always gives the same line. The file or flake you name on the
+command line is checked like every other file the run reads, so editing it
+gives an ordinary `PATH changed`.
 
 ### Activity records
 
-A command that talks to a store also puts out Nix's activity records,
-the ones `nix-output-monitor` (`nom --json`) reads. These are `startActivity`,
-`stopActivity` and `result` of `JSONLogger` in `src/libutil/logging.cc`:
+iets also writes Nix's activity records, the ones `nix-output-monitor`
+(`nom --json`) reads:
 
 ```json
-{"action":"start","fields":["/nix/store/…-hello.drv","",1,1],"id":…,"level":3,"parent":0,"text":"building '/nix/store/…-hello.drv'","type":105}
-{"action":"result","fields":["hello"],"id":…,"type":101}
-{"action":"stop","id":…}
+{"action":"start","fields":["/nix/store/…-hello.drv","",1,1],"id":…,"level":3,"parent":0,"sid":…,"text":"building '/nix/store/…-hello.drv'","type":105}
+{"action":"result","fields":["hello"],"id":…,"sid":…,"type":101}
+{"action":"stop","id":…,"sid":…}
 ```
 
-The type numbers are `ActivityType` and `ResultType` of
-`src/libutil/include/nix/util/logging.hh`: activities 100 copy path, 101
-file transfer, 102 realise, 103 copy paths, 104 builds, 105 build, 108
-substitute, 109 query path info; results 101 build log line, 104 set
-phase, 105 progress, 106 set expected.
+The type numbers are Nix's `ActivityType` and `ResultType`
+(`src/libutil/include/nix/util/logging.hh`):
 
-- **From the daemon.** A worker-protocol daemon (`daemon`, `unix://`,
-  `ssh-ng://`) sends its activities during a build or a substitution.
-  iets forwards each one, as `worker-protocol-connection.cc:processStderr`
-  does. Each forwarded activity gets an id of this process, and its
-  `parent` follows.
-- **iets's own uploads.** The derivations and sources iets sends with
-  `AddMultipleToStore`, and a remote builder's outputs copied back to the
-  local daemon, are one `copying N paths` activity (type 103) with
-  progress results and one `copying path` activity (type 100) per path,
-  as `nix copy` shows them (`store-api.cc:copyPaths`).
-- **`grpc://`.** There is no daemon stream, so iets makes the records of
-  `build/worker.cc` itself. They are the realise, builds and copy-paths
-  activities around a batch, and one `building 'DRV' on 'URL'` activity
-  per derivation. The build's log lines and phases are its results. The
-  builds activity gets progress results `[done, expected, running,
-  failed]`.
+- activities: 0 unknown, 100 copy path, 101 file transfer, 102 realise,
+  103 copy paths, 104 builds, 105 build, 108 substitute, 109 query path
+  info;
+- results: 101 build log line, 104 set phase, 105 progress, 106 set
+  expected.
 
-An id is Nix's form: the pid in the high 32 bits and a counter below.
-Records go out only under `internal-json` or with a `json-log-path`.
-Under `internal-json` the build renderer leaves the builds to these
-records: it puts out no start, phase, log or verdict lines. The failed
-build's error record, notes and daemon messages outside a build still go
-out. The text output does not change.
+Where they come from:
+
+- **The daemon.** A worker-protocol daemon (`daemon`, `unix://`,
+  `ssh-ng://`) sends its activities during a build or a substitution, and
+  iets passes each one on, as Nix does. Each one gets an id of this
+  process, and its `parent` follows.
+- **iets's own uploads.** The derivations and sources iets sends, and a
+  remote builder's outputs copied back to the local daemon, are one
+  `copying N paths` activity (type 103) with progress results, and one
+  `copying path` activity (type 100) per path, as `nix copy` shows them.
+- **`grpc://`.** There is no daemon stream, so iets writes the records
+  itself, the ones Nix's own builder writes: the realise, builds and
+  copy-paths activities around a batch, and one `building 'DRV' on 'URL'`
+  activity per derivation. The build's log lines and phases are its
+  results. The builds activity gets progress results `[done, expected,
+  running, failed]`. A substitution on the builder is one type 0
+  activity, `substituting N paths on 'URL'`.
+- **The evaluation.** `iets eval` and `iets build` wrap the evaluation in
+  one type 0 activity at level 4: `evaluating 'FILE' -A ATTR`, or
+  `evaluating the expression` for `-E`. Nix has no activity type for
+  evaluation.
+
+An id has Nix's form: the pid in the high 32 bits and a counter below.
+These records go out only under `internal-json` or with a `json-log-path`.
+Under `internal-json` the build renderer leaves the builds to them: you get
+no start, phase, log or verdict lines. The failed build's error record,
+notes and daemon messages outside a build still go out. The text output
+does not change.
+
+## `sid`: the session
+
+Every record carries a `sid`, activity records too, on stderr and in the
+`json-log-path` file. If your program reads several streams, use it to
+group the records of one run. Nix 2.34.8 has no such field.
+
+- By default each run makes a new UUIDv7, for example
+  `019e037b-f603-7443-8071-cfd8585ec8c6`. It starts with the time in
+  milliseconds, so ids sort by start time.
+- `IETS_SESSION_ID=ID` sets it. Use this to give several runs one session.
+- `eval-jobs` starts its workers with `IETS_SESSION_ID` set to its own id,
+  so their records carry the id of the run that started them.
 
 ## A finding and its edit
 
-Two records name a place to edit. They have one shape: the keys of a
+Two kinds of record point at a place to edit. Both have the keys of a
 message, plus `start`, `end` and `replacement`.
 
 | Record | `start` and `end` | `replacement` |
@@ -212,7 +277,7 @@ message, plus `start`, `end` and `replacement`.
 | a lint finding, code `lint`, at level 1 (`warn`) or 0 (`error`) | the site of the finding | the text that corrects the finding; only `url-literal` and `short-path-literal` have one |
 | `hash-fixed`, at level 3 | the hash in the file, before the edit | the hash that `fix-hashes` wrote |
 
-A lint finding is a proposal: iets does not change the file. A
+A lint finding is a proposal: iets does not change your file. A
 `hash-fixed` record is a report: iets made the edit.
 
 ```json
@@ -223,13 +288,10 @@ A lint finding is a proposal: iets does not change the file. A
  "replacement":"./data/hello.txt","start":16}
 ```
 
-The offsets are those of `iets parse --json` (`docs/reference/syntax-tree.md`).
-Thus a program finds the node of a finding in the tree of the file.
-
-The evaluator keeps the position where a node starts. It does not keep
-the end. For the first finding in a file, iets reads the file again and
-parses it. Then the span is that of the smallest node that starts at the
-site and has a kind that the lint reports:
+The offsets are the ones `iets parse --json` gives
+(`docs/reference/syntax-tree.md`), so you can find the node of a finding in
+the tree of the file. The span is the smallest node that starts at the
+site and has the kind the lint reports:
 
 | Lint | Kind of node |
 |---|---|
@@ -243,26 +305,25 @@ site and has a kind that the lint reports:
 | `unknown-allow` | no node: the word in the comment |
 | all other lints | a `bind` or a `name`; if there is none, a `string` with an interpolation, a `binary` with `+`, or an `apply` |
 
-Limits:
+Some findings have no span:
 
 - A finding in an expression that is not in a file (`-E`, `--arg`) has
   no `start` and no `end`.
-- Two nodes of the same kind can start at the same offset: `(a == b) ==
-  c`, or `"${a}" + b` for a lint that reports a copy. The record then has
-  the span of the smaller node.
-- A site without a node of those kinds has no `start` and no `end`.
+- A site with no node of those kinds has no `start` and no `end`.
 - A finding of `rev-count` has no site when the read is not a selection
   (`docs/reference/lints.md`, "The tree that a value comes from"). The
   record then has no `start` and no `end`, and `file`, `line` and `column`
   are null. `raw_msg` names the tree.
 
+Two nodes of the same kind can start at the same offset: `(a == b) == c`,
+or `"${a}" + b` for a lint that reports a copy. The record then has the
+span of the smaller node.
+
 ## The build plan: `iets build --dry-run`
 
-`iets build --dry-run` registers the closure, as `--no-build` does, and
-asks the daemon what a build would do (`QueryMissing`,
-`remote-store.cc:queryMissing`). It builds nothing. It prints what
-`nix build --dry-run` prints (`printMissing` in `src/libmain/shared.cc`),
-at level 0:
+`iets build --dry-run` asks the daemon what a build would do, and builds
+nothing. Like `--no-build`, it registers the closure first. It prints what
+`nix build --dry-run` prints, at level 0:
 
 ```
 these 2 derivations will be built:
@@ -275,13 +336,13 @@ don't know how to build these paths:
 ```
 
 The derivations come references first. The fetched paths are sorted by
-name. The sizes are Nix's `renderSize`: at least KiB, one decimal. A
-`grpc://` builder has no `QueryMissing`, so `--dry-run` is a usage error
-there.
+name. The sizes are written as Nix writes them: at least KiB, one decimal.
+A `grpc://` builder cannot answer the question, so `--dry-run` is a usage
+error there.
 
-With `--json`, stdout also gets the plan as one JSON object. This is an
-iets extension: `nix build --dry-run --json` prints the installables'
-derived paths, not the plan.
+Add `--json` and stdout also gets the plan as one JSON object. Nix does not
+do this: `nix build --dry-run --json` prints the installables' derived
+paths, not the plan.
 
 ```json
 {"downloadSize":1553696,"narSize":6180152,"unknown":[],
@@ -297,59 +358,20 @@ derived paths, not the plan.
 | `downloadSize` | bytes to download for `willSubstitute` |
 | `narSize` | bytes of those paths unpacked |
 
-The names are the fields of Nix's `MissingPaths`.
-
-`iets plumbing missing` prints the same object, and
-`iets plumbing build` the outcomes of the same dispatch, from derivation
-paths instead of an installable (docs/reference/plumbing.md). Both, and
-`iets build`, go through one call, `api::build::Dispatch`.
-
-### `sid`: the session
-
-Every record carries `sid`, activity records included, on stderr and in the
-`json-log-path` file. It lets a program that reads several streams group
-the records of one run.
-This is an iets extension: Nix 2.34.8 has no such field. The key and the
-default value have the shape Determinate Nix uses (`sid`, a UUIDv7).
-
-- By default each session makes a new UUIDv7, for example
-  `019e037b-f603-7443-8071-cfd8585ec8c6`. It starts with the time in
-  milliseconds, so ids sort by start time.
-- `IETS_SESSION_ID=ID` sets it. Use this to give several invocations one
-  session.
-- `eval-jobs` starts its worker processes with `IETS_SESSION_ID` set to its
-  own id, so the workers' records have the id of the run that started them.
+The names are the fields of Nix's `MissingPaths`. `iets plumbing missing`
+prints the same object from derivation paths instead of an installable, and
+`iets plumbing build` prints the outcomes of the same build
+(docs/reference/plumbing.md).
 
 ## `json-log-path`
 
-The `json-log-path` setting (nix.conf, `--option json-log-path PATH` or
-`--json-log-path PATH`) names a file or a unix socket. Every record above,
-activity records too, also goes there, without the `@nix ` prefix, whatever `--log-format` says;
-stderr does not change. A file is opened for append and created with mode
-0644. A path that does not open gives one `error (ignored): opening log
-file` line, and the run goes on. This is `applyJSONLogger` in Nix's
-`src/libutil/logging.cc`. As in Nix, two processes that write the same file
-can interleave their records.
+The `json-log-path` setting names a file or a unix socket. Set it in
+nix.conf, with `--option json-log-path PATH`, or with
+`--json-log-path PATH`. Every record on this page goes there too, activity
+records included, without the `@nix ` prefix, whatever `--log-format`
+says. stderr does not change.
 
-### Hints
-
-A hint is there only when it is certain:
-
-- A hash mismatch of a fixed-output build names the hash the build got.
-- A NAR hash mismatch of a fetched tree names the hash of the tree and,
-  for a `fetchTree` call, the position of its `narHash` attribute.
-- A usage error repeats the text's own `did you mean` and `--help` lines.
-- A `flake.lock` entry without a `narHash` names the input by its path
-  from the root (`a/nixpkgs`) and the `nix flake update` that locks it
-  again.
-- A `git` input whose tree is not the one the lock names (nix reports a
-  NAR hash mismatch, fetchers.cc:`Input::checkLocks`) has code
-  `hash-mismatch`, and the hint names the usual causes: a `.gitattributes`
-  filter such as git-lfs, `export-subst`, or a submodule.
-- A file that is in the working tree of a git flake but that git does not
-  track is Nix's error (git.cc:`makeNotAllowedError`, `Path 'F' in the
-  repository "R" is not tracked by Git.`), and the hint is the
-  `git -C "R" add "F"` that makes it visible.
-
-A missing attribute or an undefined variable has no hint: iets has no
-did-you-mean suggestion for them yet.
+A file is opened for append and created with mode 0644. If the path does
+not open, you get one `error (ignored): opening log file` line, and the run
+goes on. This is how Nix's `applyJSONLogger` behaves. As in Nix, two
+processes that write the same file can interleave their records.

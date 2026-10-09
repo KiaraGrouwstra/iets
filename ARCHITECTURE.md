@@ -89,7 +89,15 @@ The evaluator:
   serialization and hashing, store paths, ATerm derivations,
   `hashDerivationModulo`, `drvdiff.rs`; `locate.rs` finds derivation roots
   and local-store sources, `source.rs` holds where the bytes of a path are
-  and the origin each source came from.
+  and the origin each source came from. `nar.rs` is the whole NAR
+  codec. Its reader follows nix-community/go-nix PR #123: one buffered
+  window per side, token groups matched as fixed byte strings, and no
+  allocation per entry. `hash_derivation_modulo` drops the `children` of
+  each input, as derivations.cc does, so a dependency on a dynamic
+  derivation's output is not in the modulo hash. No one can see this: the
+  producer's text-addressed output has no path, so it and every consumer
+  are `Deferred`, and two consumers that take different outputs differ in
+  the `env` that carries the placeholder.
 - `corepkgs/`: `derivation.nix` and `fetchurl.nix`, embedded from Nix
   2.34.8.
 - `print.rs`: the `nix-instantiate --eval` printer, and JSON.
@@ -101,9 +109,16 @@ Around it:
 - `source/`: a reference resolves to a tree and a lock. The fetchers, the
   input store and the source control system of a local working tree
   (`scm.rs`, with git as its one implementation) are behind it.
+  `source::tree` is the one call that `builtins.fetchTree`, the flake root
+  and `nix flake prefetch-inputs` share. Parsing a flake reference stays
+  in `flake/`, reading one `flake.lock` is `api::flake::info`, and reading
+  bytes out of a tree goes through `treestore::StoredTree`.
 - `fetch/`: the HTTP client, the tarball spool and the unpack rules.
 - `treestore/`: the input store, where a fetched input lives.
 - `trace/`: the tracing evaluation cache.
+- `events.rs`: the `IETS_EVENTS` stream. A group that is off costs one
+  relaxed load and a branch. A record allocates nothing: it is built in a
+  buffer the thread keeps and written with one `write`.
 - `pure-eval`: `EvalConfig::pure`, read with `Evaluator::pure()`, checked in
   `builtins::store_hooks`.
 - `cachefs.rs`: the on-disk hygiene all three stores share.
@@ -121,13 +136,18 @@ Around it:
 - `devenv/`: `print-dev-env`.
 - `provenance.rs`: store paths and derivations back to local trees and
   source positions.
-- `config.rs`: `nix.conf`. `settings.rs`: `iets.toml` and every `IETS_*`
+- `config.rs`: `nix.conf`. Its lists `KNOWN`, `ALIASES`, `CLIENT` and
+  `UNIMPLEMENTED` put each Nix setting in a class of
+  `docs/reference/settings.md`; `BOOLS`, `INTS` and `NARROW` type the
+  values. `settings.rs`: `iets.toml` and every `IETS_*`
   variable. `ignored.rs`: the warning for a flag or a setting that has no
   effect.
 - `nixbin.rs`: the real Nix binaries behind the classic fallback.
 - `error.rs`: the error type outside the evaluator.
 - `api.rs`: the library facade. Frontends use this and never reach into
-  `cli`; `examples/` holds four of them.
+  `cli`; `examples/` holds four of them. When a frontend needs something
+  that lives only in `cli`, move it into `api` or the module it belongs
+  to, and let `cli` call it there.
 - `main.rs` and `cli/`: the command line on top of `api`, including the
   classic names in `cli/classic/`.
 
@@ -142,6 +162,53 @@ allow-list whose length is asserted.
 
 What the rule does *not* ban is porcelain-side libraries for presentation,
 argv compatibility and interactive flows, however large.
+
+What each command is written against. The operation layer is
+`crate::api`. Five of its operations are also `iets plumbing` commands:
+`resolve`, `plan`, `missing`, `build` and `fetch`. The other entries
+(`eval`, `index`, `jobs`, `dev-env`, `drv-show`, `drv-diff`,
+`closure-diff`, `flake-info`) are calls the command makes directly:
+`api::evaluate`, `api::installable`, `api::flake`, `crate::jobs`.
+
+| Command | Operations | The command's own part |
+|:---|:---|:---|
+| `iets eval` | `eval` | the human value printer, `--timings` |
+| `iets build` | `resolve` (the get-drvs walk for a set), `plan`, `missing`, `build`, through `api::build::Dispatch` | the closing line, the `--dry-run` text, `render_size`, the `fix-hashes` prompts, the `.drv` legacy input |
+| `iets search` | `index` | regex compile and match, `--exclude`, colour, `--pretty`, the no-results hint |
+| `iets diff` | `resolve`, `drv-diff`, `closure-diff` | the text rendering, the `diff(1)` exit codes |
+| `iets eval-jobs` | `jobs` | the worker/collector process model, `--max-memory-size`, the summary line |
+| `iets print-dev-env` | `resolve`, `dev-env` | the bash rendering, the direnv cache, the GC root |
+| `iets prefetch` | `fetch` | the `--json` shape choice |
+| `iets lint`, `iets parse`, `iets cache` | none | already thin over the library |
+| `nix-instantiate` | `resolve` (get-drvs walk), `plan` | Nix argv parsing, `--add-root`, out-links, the exec fallback |
+| `nix-build` | `resolve`, `plan`, `build` | `result` symlinks, `--add-root`, Nix's exit codes, the fallback |
+| `nix-shell` | `resolve`, `plan`, `build` | the env, `execve` of the shell, `--run`, `--pure` |
+| `nix-eval-jobs` | `jobs` | argv compatibility |
+| `nix eval` | `eval` | Nix's printer and argv |
+| `nix build` | `resolve`, `plan`, `build` | `result` symlinks, the `--json` Nix shape, the fallback |
+| `nix derivation show` | `resolve`, `drv-show` | Nix's argv, `--pretty`, the fallback |
+| `nix search` | `index` | Nix's output format and argv |
+| `nix develop` | `resolve`, `dev-env` | the shell it execs |
+| `nix print-dev-env` | `dev-env` | the bash rendering |
+| `nix flake prefetch-inputs` | `flake-info` | Nix's argv, the fetch threads |
+
+Gaps in the operation layer, where a command still reaches past it:
+
+1. `resolve --dump-drvs` writes derivations, not sources. The shape it
+   wants is a batch form of `build --source STOREPATH=LOCAL`. `iets diff`
+   keeps its in-memory table, because it evaluates and compares in one
+   process.
+2. `iets prefetch` and the `fix-hashes` path of `iets build` read a hash
+   mismatch out of the log (`log::want_mismatch`, `log::take_mismatches`).
+   `build` should report it as structured output.
+3. `eval-jobs --eval-store` instantiates on one store and builds on
+   another. `plan` and `build` take one builder.
+4. `nix-shell` and `print-dev-env` upload a plan, then speak the worker
+   protocol themselves: they build the derivation's inputs, run the shell
+   and read the env back. They drive `PlanUpload` on that connection,
+   because going through `Dispatch` would open a second one.
+5. There is no `flake-info` or `flake-tree` op, because no caller needs the
+   process boundary.
 
 Why, and what the migration to it measured:
 `docs/explanation/plumbing-and-porcelain.md`.
@@ -182,6 +249,9 @@ aborts when it ends in `iets`, the same test the fallback uses
 the farm execs the real nix for whatever it does not implement,
 `--version` included. The same guard warns when the reference nix is not
 2.34.8. The iets-only scripts do not call it and still run anywhere.
+A comparison typed by hand has no guard: name the reference by its store
+path, and check that `readlink -f $(command -v nix-eval-jobs)` does not end
+in an `iets` output.
 
 | script | what it compares | runs |
 |---|---|---|
@@ -201,11 +271,42 @@ the farm execs the real nix for whatever it does not implement,
 | `prefetch-e2e.nu` | `iets prefetch` against `nix store prefetch-file` and `nix hash` | check, container |
 | `devenv-test.nu` | `print-dev-env` against `nix print-dev-env` | by hand |
 | `provenance-e2e.nu` | the rewritten paths and positions | by hand |
-| `evaljobs-flags.nu` | `iets eval-jobs` against `nix-eval-jobs`, flag by flag | check, container |
+| `evaljobs-flags.nu` | `iets eval-jobs` against the pinned `nix-eval-jobs` 2.35.2, flag by flag, on `tests/evaljobs/`; a newer pin changes three things (`docs/reference/commands.md`) | check, container |
 | `evaljobs-cmp.nu` | two `eval-jobs` outputs, attribute by attribute | by hand |
 
-`bench/` holds the workloads and the runners (`bench/run.nu`, `ab.nu`,
-`perf.nu`, `eval-jobs.nu`, `nar.nu`, `cache-growth.nu`).
+`bench/` holds the workloads and the runners. Each one runs from the
+repository root, in the dev shell. `NIXPKGS` names the nixpkgs tree to
+measure against, and defaults to the pinned source in the scripts;
+`nar.nu` always uses the pinned one.
+
+| script | what it measures |
+|---|---|
+| `bench/run.nu [workload...]` | `nix-instantiate` against iets with hyperfine, on `nixos-desktop` by default |
+| `bench/perf.nu` | wall, user, sys and peak RSS for one binary |
+| `bench/ab.nu` | the same, comparing two binaries; `--runs N`, `--skip-outpaths` |
+| `bench/nar.nu` | the NAR writer, reader and hashes; `--nix` adds the real-nix reference rows |
+| `bench/eval-jobs.nu [rounds]` | `iets eval-jobs` against `nix-eval-jobs` on `nixos/release-small.nix`, 4 workers, cold and warm cache runs interleaved; `--no-parity` skips the `--force-recurse` job-set comparison |
+| `bench/cache-growth.nu` | evaluates `bench/workloads/nixos-desktop.nix` at two nixpkgs revisions and reports what the second adds to each cache |
+
+The two standard workloads:
+
+```
+iets eval --impure --strict --no-tracing-cache --workers 1 -I nixpkgs=$NIXPKGS bench/workloads/nixos-desktop.nix
+iets eval-jobs --impure --no-instantiate --workers 1 --chunks 8 --chunk 0   # ci/eval/outpaths.nix
+```
+
+Both reach nixpkgs through `<nixpkgs>`, which a pure evaluation does not
+have, so they run with `--impure`. They always measured impure
+evaluation: the native default was impure until the project root arrived
+(`docs/explanation/flakes-and-sources.md`).
+
+The evaluation counters (thunks, calls, derivations, compile time) are
+per fiber, and so are the arena figures. A fiber adds its own to the run
+total whenever it parks or finishes, so the printed numbers cover every
+worker, and a workload's derivation count is the same at one worker and
+at four. The arena sum grows with workers because each arena interns its
+own strings: on nixos-desktop, ~630 MB at one worker and ~645 MB at four.
+`rss_kb` is always the whole process.
 
 ## Conventions
 

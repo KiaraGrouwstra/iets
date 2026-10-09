@@ -1,11 +1,16 @@
 # Events
 
-`IETS_EVENTS` names the parts of a run to watch, and `IETS_EVENTS_TO` says
-where the records go: a file, a unix socket, or `-` for stderr, which is the
-default. Each record is one JSON object on one line. The stream says what an
-evaluation did; the `IETS_STATS` counters say how much of it
-(`docs/reference/settings.md`); `IETS_PROFILE=eval` says where the time
-went (`docs/reference/profile.md`).
+Set `IETS_EVENTS` to watch parts of a run. Each thing that happens becomes
+one JSON object on one line:
+
+```
+$ IETS_EVENTS=store iets eval --no-cache --expr 'builtins.toFile "x" "y"'
+{"event":"store-add","path":"/nix/store/lfngsssysp6h1v4ccqg23c52s9sjl779-x","kind":"text","size":1,"from":"text","at":"«string»:1:1"}
+"/nix/store/lfngsssysp6h1v4ccqg23c52s9sjl779-x"
+```
+
+`IETS_EVENTS` takes one or more groups. `IETS_EVENTS_TO` says where the
+records go: a file, a unix socket, or `-` for stderr, which is the default.
 
 ```
 IETS_EVENTS=store                       # one group, to stderr
@@ -13,25 +18,28 @@ IETS_EVENTS=store,fetch                 # two
 IETS_EVENTS=all IETS_EVENTS_TO=/tmp/e.jsonl
 ```
 
-A reader matches on the `event` field and reads the fields it knows. A new
-field, and a new event name, are not changes a reader must follow. A field
-that is there keeps its meaning. The order the fields appear in is not part
-of the promise, and `event` is first only as a courtesy to `grep`.
+Events tell you what an evaluation did. The `IETS_STATS` counters tell you
+how much of it (`docs/reference/settings.md`), and `IETS_PROFILE=eval`
+tells you where the time went (`docs/reference/profile.md`).
 
-Nothing is written when no group is named, and no hook builds a record, so
-an unwatched run pays nothing. A watched one pays about 0.4% of its
-instructions, and one line is one `write`: 337 events of a `hello`
-evaluation cost 0.42% on bld1.
+Match on the `event` field and read the fields you know. A new field or a
+new event name may appear at any time, so ignore what you do not know. A
+field that is there keeps its meaning. The order of the fields is not
+fixed; `event` comes first only to help `grep`.
+
+When you name no group, nothing is written and no record is built, so the
+run costs nothing extra. A watched run costs about 0.4% of its
+instructions, and each line is one `write`: the 337 events of a `hello`
+evaluation cost 0.42%.
 
 ## The groups
 
-A group is the unit that is turned on, and its class is what it costs. A
-cold group may be on in any run, and `all` takes every one of them. A warm
-group runs often enough to be worth naming, so `all` leaves it out and it
-is asked for by name.
+You turn events on one group at a time. A cold group is cheap, and `all`
+turns on every cold group. A warm group fires often, so `all` leaves it out
+and you must name it.
 
-A group that is not yet instrumented is still a name this binary accepts,
-and it writes nothing. The **Events** column is what exists today.
+Every group below is a name you can use today. Some groups have no events
+yet and write nothing. The **Events** column shows what each one writes.
 
 | Group | Covers | Class | Events |
 |:---|:---|:---|:---|
@@ -48,22 +56,24 @@ and it writes nothing. The **Events** column is what exists today.
 | `lint` | each warning | cold | — |
 | `error` | each error raised | cold | — |
 
-A name that is not a group is an error, not a silence: a mistyped group
-would otherwise watch nothing and look like a quiet run.
+A name that is not a group is an error. Otherwise a typo would watch
+nothing and look like a quiet run:
 
 ```
 $ IETS_EVENTS=stor iets eval -f . -A x
 error: IETS_EVENTS: 'stor' is not an event group (all, syntax, ir, import, …)
 ```
 
-`docs/events-proposal.md` has the plan the rest of the table follows, and
-why evaluation itself is a sampled flame graph instead of a group.
+Evaluation itself has no group. A `hello` evaluation makes 48 million
+calls, and nobody wants a line for each. Use the `IETS_STATS` counters to
+count that work, and `IETS_PROFILE=eval` to see where its time went
+(`docs/reference/profile.md`).
 
 ## `store-add`
 
-One store path the evaluation made from a source: the `addToStore` and
-`addTextToStore` calls Nix makes. iets writes no store, so the path names
-content that only an upload or a build puts there
+One store path that the evaluation made from a source. These are the
+`addToStore` and `addTextToStore` calls of Nix. iets writes nothing to the
+store, so the path names content that only an upload or a build puts there
 (`docs/explanation/evaluation.md`).
 
 | Field | Meaning |
@@ -74,23 +84,23 @@ content that only an upload or a build puts there
 | `from` | the local tree or input store entry the bytes came from, with `(filtered)` when a filter keeps part of it out of the copy; `text` for a `toFile` |
 | `at` | the expression that made it, as `file:line:column` |
 
-One line per call, in the order the calls finished. A path appears once per
-call: two derivations that name the same patch add it twice, as they do
-under Nix. A locked flake input is already in the store and is no add.
+You get one line per call, in the order the calls finished. A path shows
+up once per call: two derivations that name the same patch add it twice,
+as they do in Nix. A locked flake input is already in the store, so it is
+not an add.
 
-The `store_adds` counter in the `IETS_STATS` line counts the same calls, but
-a worker that has not folded its last task is missing from it. The stream is
-the exact record.
+The `store_adds` counter of `IETS_STATS` counts the same calls, but it can
+miss the last task of a worker. The events are the exact record.
 
 ```
-$ IETS_EVENTS=- iets eval --no-cache --raw -f ./nixpkgs -A hello.drvPath
+$ IETS_EVENTS=store iets eval --no-cache --raw -f ./nixpkgs -A hello.drvPath
 {"event":"store-add","path":"/nix/store/d0h3b1fj9hahy3lvh2kpny75w47la15s-builder.sh","kind":"tree","size":5288,"from":"/tmp/nixpkgs/pkgs/build-support/fetchurl/builder.sh","at":"/tmp/nixpkgs/pkgs/stdenv/generic/make-derivation.nix:693:11"}
 ```
 
-Totals, biggest first:
+To get the total size, and the five biggest adds:
 
 ```
-$ IETS_EVENTS=/tmp/e.json iets eval --no-cache --raw -f ./nixpkgs -A hello.drvPath
+$ IETS_EVENTS=store IETS_EVENTS_TO=/tmp/e.json iets eval --no-cache --raw -f ./nixpkgs -A hello.drvPath
 $ jq -s 'map(.size) | add' /tmp/e.json
 $ jq -s -r 'sort_by(-.size)[:5][] | "\(.size)\t\(.from)"' /tmp/e.json
 ```
