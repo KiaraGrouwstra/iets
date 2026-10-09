@@ -160,7 +160,8 @@ fail. Error messages are not compared.
 
 `==` on two sets compares their attributes in each evaluator's symbol
 order and stops at the first difference. So which of a different and a
-failing attribute it reaches first is not the same on both sides. Each
+failing attribute it reaches first is not the same on both sides
+(`docs/reference/divergences.md`, "Which attribute's error comes first"). Each
 expression names the generator's field names first, in one order, so that
 both sides reach the same attribute first. A difference is checked again
 with a fresh oracle and, if it holds, a fresh evaluator, as a fresh
@@ -270,8 +271,10 @@ list, and prints the input in base64.
 ## Campaigns
 
 A campaign (`fuzz-parse-campaign`, `fuzz-nar-campaign`,
-`fuzz-eval-campaign`) minimises its seeds, fuzzes on every core of the
-builder for an hour, and minimises the result again. Its output holds:
+`fuzz-wire-campaign`, `fuzz-eval-campaign`, `fuzz-drv-campaign`) minimises
+its seeds, fuzzes on every core of the builder for an hour, and minimises
+the result again. The `nar` campaign runs `nar-gen`, and the `drv` campaign
+runs `drv-gen`. The output of a campaign holds:
 
 | Path | Content |
 |:---|:---|
