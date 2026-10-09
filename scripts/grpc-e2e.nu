@@ -15,7 +15,7 @@
 # 7. a multi-root `iets build` over grpc: one progress line per attribute.
 #
 # A real farm (balancer, niks3, several workers) is not covered here; see
-# docs/how-to/build-remotely.md for the run against farm.numtide.com.
+# docs/explanation/transports.md for the run against farm.numtide.com.
 #
 # usage: nu scripts/grpc-e2e.nu            # uses target/release
 #        BIN=target/debug nu scripts/grpc-e2e.nu

@@ -10,7 +10,7 @@
 //!   hands over batches as the walk finishes attributes
 //!   (`upload::StreamUpload`). See docs/reference/commands.md.
 //! - **How to reach the store.** `backend::Backend`: the worker protocol
-//!   sends one `BuildPathsWithResults` per ready set (docs/reference/builders.md: one
+//!   sends one `BuildPathsWithResults` per ready set (docs/explanation/history.md: one
 //!   op per ready set beats one op per derivation by 7-10x, and the protocol
 //!   is serial per connection); `grpc://` fans the set out instead.
 //! - **What to say about it.** `render`, from one event stream.
