@@ -1,22 +1,21 @@
 # How to embed the evaluator in your own program
 
-> **Not ready for long-lived hosts.** The evaluator's arena does not free
-> memory until the process exits. A program that
-> evaluates again and again, such as an editor server or a build service,
-> grows without limit. Use the library for a run-once frontend: another
-> command line, a test harness, a one-shot tool. The API can change.
+> **Not ready for long-lived hosts.** The evaluator does not free memory
+> until the process exits. A program that evaluates again and again, such
+> as an editor server or a build service, grows without limit. Use the
+> library for a run-once frontend: another command line, a test harness, a
+> one-shot tool. The API can change.
 
-The crate is a library with a thin `iets` binary on top. Another command
-line or a one-shot tool links the library and calls the
-entry points. Nothing is process-global, so two evaluators can run side by
-side in one process.
+The crate is a library with a thin `iets` binary on top. Your program links
+the library and calls its entry points. Nothing is process-global, so two
+evaluators can run side by side in one process.
 
-The full entry-point table is in
-[reference/library.md](../reference/library.md).
+Every entry point is in [reference/library.md](../reference/library.md).
 
-**One rule: a frontend never reaches into evaluator internals.** No `cli`
-module, no private field, no copied helper. If something you need lives
-only in `cli`, move it into `crate::api` and let `cli` call it there.
+**One rule: your frontend never reaches into evaluator internals.** No
+`cli` module, no private field, no copied helper. If you need something
+that lives only in `cli`, move it into `crate::api` and let `cli` call it
+there.
 
 ## Set up a session
 
@@ -32,10 +31,10 @@ let _entered = session.enter();         // for this thread
 let mut ev = iets::eval::Evaluator::new();   // adopts the session
 ```
 
-The library never writes to stdout or stderr on its own: a session's log
-sink starts as nothing, and `write_to_stderr()` is what the `iets` binary
-itself does. The library never exits either. It returns errors and your
-program decides the exit code.
+The library never writes to stdout or stderr on its own. A session's log
+sink starts empty; the `iets` binary calls `write_to_stderr()` itself. The
+library never exits either. It returns errors, and your program picks the
+exit code.
 
 Threads the library starts inherit the session of the thread that started
 them. For a thread you start yourself, call `Session::enter` on it, or use
@@ -73,36 +72,35 @@ cargo run --release --example eval -- -E '{ a = 1; b = [1 2]; }'
 {"a":1,"b":[1,2]}
 ```
 
-`Run::new` puts the settings of the arguments on an `eval::EvalConfig`: the
-lints, the IR cache, the search path. `Run::go` builds the evaluator from
-it and starts the worker threads. `api::evaluate` applies no setting. An
-evaluator has no setter, so a setting that you want goes to the
-`EvalConfig`:
+`Run::new` copies the settings from the arguments onto an
+`eval::EvalConfig`: the lints, the IR cache, the search path. `Run::go`
+builds the evaluator from it and starts the worker threads.
+`api::evaluate` applies no setting, and an evaluator has no setters. So put
+any setting you want on the `EvalConfig`:
 
 ```rust
 let config = iets::eval::EvalConfig::new().system("aarch64-linux").pure(true);
 let run = api::run::Run::over(config, &a)?;
 ```
 
-`Run` is the one scaffold that each command in the binary goes through.
-`parallel::try_run(workers, config.build(), f)` is the same step without
-the tracing cache.
+Every command in the binary goes through `Run`.
+`parallel::try_run(workers, config.build(), f)` does the same without the
+tracing cache.
 
 ## Walk a value safely
 
-`api::value` is the safe surface. `Eval<'e>` wraps a `&'e mut Evaluator`.
-`Value<'e>` is one value of that evaluator: a `Copy` machine word with no
-methods that reach into the arena on their own.
+`api::value` is the safe way to read values. `Eval<'e>` wraps a
+`&'e mut Evaluator`. `Value<'e>` is one value of that evaluator: a `Copy`
+machine word whose methods never reach into the arena on their own.
 
-The shared `'e` is the safety story. A `Value<'e>` only exists while the
-evaluator is borrowed, so it cannot outlive the arena it points into.
+The shared `'e` is what keeps you safe. A `Value<'e>` exists only while the
+evaluator is borrowed, so it cannot outlive the memory it points into.
 `Value` is invariant in `'e`, so it never widens to another borrow. Nothing
-in the surface exposes an arena pointer or a tag.
+here exposes an arena pointer or a tag.
 
-It is also the only way in. `runtime::Word` — the word `api::evaluate`
-returns — is opaque outside the crate: its bits, its constructors and every
-getter that dereferences it are `pub(crate)`, so no safe call can invent
-one. Pass a `Word` back to the library, or read it through `api::value`.
+It is also the only way in. The `runtime::Word` that `api::evaluate`
+returns is opaque outside the crate, so no safe call can make one up. Pass
+a `Word` back to the library, or read it through `api::value`.
 
 ```rust
 use iets::api::value::Eval;
@@ -154,19 +152,18 @@ Four things to remember:
 - **`attr_at` index order is the evaluator's internal symbol order**, not
   alphabetical, exactly as Nix's `nix_get_attr_byidx` warns. Sort the names
   yourself when the order must be reproducible.
-- **Reading borrows, constructing copies.** `as_bytes`, `as_path` and the
+- **Reading borrows; building copies.** `as_bytes`, `as_path` and the
   attribute names borrow the arena with no copy. `string` and `path` copy
-  their bytes in, and `list` and `attrs` gather a temporary first.
-  Construction is the cold path; nothing on a walk allocates.
-- **Keep one `Eval` per evaluator.** A value from one evaluator handed to a
-  different `Eval` does not dangle, because no arena is ever freed, but it
-  reads names through the wrong symbol table. The lifetime does not rule
-  that out.
+  their bytes in, and `list` and `attrs` gather a temporary first. Walking
+  a value never allocates.
+- **Keep one `Eval` per evaluator.** If you hand a value from one evaluator
+  to another `Eval`, it does not dangle, because no arena is ever freed. But
+  it reads names through the wrong symbol table, and the lifetime does not
+  stop you.
 
-This surface is modelled on Nix's own C API, so a binding for another
-language has a shape to follow;
-[reference/library.md](../reference/library.md) maps each item to its
-`nix_api_value.h` name.
+This API follows Nix's own C API, so a binding for another language has a
+shape to follow. [reference/library.md](../reference/library.md) maps each
+item to its `nix_api_value.h` name.
 
 ## Build what you evaluated
 
@@ -191,9 +188,9 @@ let built = api::build::Dispatch::open(&transport, &options, plan, prov, style)?
     .realise(&roots, &name)?;
 ```
 
-`Dispatch` owns the plan, the source overrides and the dispatcher, so you
-never build an upload object yourself. `Built::paths(roots)` gives one
-output path per root.
+`Dispatch` holds the plan, the source overrides and the dispatcher, so you
+never build an upload yourself. `Built::paths(roots)` gives you one output
+path per root.
 
 ## Read the derivations an evaluation made
 
@@ -221,6 +218,6 @@ api::report(ev, &err);          // to the session log; returns the exit code
 let record = api::report_of(ev, &err);   // to render yourself
 ```
 
-`report` rewrites store paths and positions back to the local trees they
-came from. Use `report_of` and leave the session's sink unset when you want
-to render the record yourself.
+`report` maps store paths and positions back to the local trees they came
+from. To render the record yourself, use `report_of` and leave the
+session's sink unset.
