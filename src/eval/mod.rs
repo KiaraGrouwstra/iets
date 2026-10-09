@@ -1821,7 +1821,18 @@ impl Evaluator {
                 let b = self.eval(env, r)?;
                 let b =
                     self.force_attrs(b, *pos, "in the right operand of the update (//) operator")?;
-                Ok(self.update_attrs(a, b))
+                #[cfg(feature = "stats2")]
+                let before = (
+                    crate::runtime::census::upd_path(a, b),
+                    a.flags,
+                    b.flags,
+                    self.arena.bytes_allocated,
+                    matches!(r, Ir::Update(..)),
+                );
+                let out = self.update_attrs(a, b);
+                #[cfg(feature = "stats2")]
+                self.note_upd(a, b, out, *pos, before);
+                Ok(out)
             }
             Ir::ConcatLists(l, r, pos) => {
                 let a = self.eval(env, l)?;
@@ -2339,8 +2350,6 @@ impl Evaluator {
         if b.is_empty() {
             return Word::from_ref(a);
         }
-        #[cfg(feature = "stats2")]
-        self.arena.stats.census.note_upd(a, b);
         let a_small = a.kind == Kind::Attrs && a.len() < UNION_MIN;
         if !a_small {
             let a = if leaf_count(a) + leaf_count(b) > MAX_LEAVES as usize {
@@ -2399,6 +2408,29 @@ impl Evaluator {
             k += 1;
         }
         Word::from_ref(out)
+    }
+
+    /// Census of one `//`. The update flattens union operands, which marks
+    /// them iterated; their marks are put back so a use counts once, as
+    /// an operand.
+    #[cfg(feature = "stats2")]
+    fn note_upd(
+        &mut self,
+        a: &'static AttrsObj,
+        b: &'static AttrsObj,
+        out: Word,
+        pos: Pos,
+        (path, fa, fb, bytes, nested): (usize, u8, u8, usize, bool),
+    ) {
+        a.set_flags(fa);
+        b.set_flags(fb);
+        let file = self
+            .file_of(pos)
+            .map(|(f, _)| (f as *const FileInfo as usize, &f.path[..]));
+        let bytes = (self.arena.bytes_allocated - bytes) as u64;
+        let census = &mut self.arena.stats.census;
+        census.upd.nested_right += nested as u64;
+        census.note_upd(path, a, b, out, bytes, file);
     }
 
     pub fn concat_lists(&mut self, lists: &[&'static ListObj]) -> Word {
