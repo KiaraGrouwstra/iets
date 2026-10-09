@@ -64,7 +64,7 @@ details. To add a builtin, see `docs/how-to/add-a-builtin.md`.
 | `fetchGit` | fails | |
 | `fetchMercurial` | fails | |
 | `fetchTarball` | partial | Needs a `sha256`. |
-| `fetchTree` | partial | Type `path` works for an absolute path. Types `github`, `gitlab`, `sourcehut`, `git`, `tarball` and `hg` need a `narHash`. Other types fail. Under a classic name, there only with the `fetch-tree` or `flakes` feature, as in Nix. |
+| `fetchTree` | partial | Type `path` works for an absolute path. Types `github`, `gitlab`, `sourcehut`, `git`, `tarball` and `hg` need a `narHash`. Other types fail. In pure evaluation, `path` also needs a `narHash`, and every type but `path` and `tarball` needs a `rev`. Under a classic name, there only with the `fetch-tree` or `flakes` feature, as in Nix. |
 | `fetchurl` | fails | |
 | `filter` | works | |
 | `filterSource` | works | |
