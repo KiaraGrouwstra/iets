@@ -103,18 +103,8 @@ started them. If you start your own threads, call `Session::enter` on each,
 or use `session::bind(f)`. A thread that entered no session uses a
 fallback session that writes nowhere.
 
-## Shape of a frontend
-
-1. Make a `Session`, enter it, and build an `EvalArgs`.
-2. `api::run::Run::new(&args)`, then `.go(move |ev, cache| …)`:
-   everything inside runs as the main fiber, so `force` may park while
-   helpers work. `Run` puts the settings of the arguments on the evaluator
-   and opens the tracing cache. `parallel::try_run` takes an evaluator that
-   you built, and does neither.
-3. `api::evaluate(ev, args)` for the value, then force and print it, or
-   `drv_roots` + `plan` + `build` for a build.
-4. Report errors with `api::report`, which rewrites store paths and
-   positions to the local trees they came from, or let `Run::eval` do it.
+For the steps of a frontend in order, with code, see
+`docs/how-to/embed-the-evaluator.md`.
 
 ## The value API
 
