@@ -113,12 +113,14 @@ pub fn drv_fallback(ev: &mut Evaluator, attrs: &'static AttrsObj, pos: Pos, name
             return p;
         }
     }
-    for a in attrs.iter() {
-        if ev.where_of(a.pos) == Where::Root {
-            return a.pos;
-        }
-    }
-    Pos::NONE
+    // by source position: the attribute order is the symbols', which says
+    // nothing about the file
+    attrs
+        .iter()
+        .map(|a| a.pos)
+        .filter(|&p| ev.where_of(p) == Where::Root)
+        .min_by_key(|p| p.0)
+        .unwrap_or(Pos::NONE)
 }
 
 /// The site of the derivation itself, for the encoding lints (`drv-bool-null`,
