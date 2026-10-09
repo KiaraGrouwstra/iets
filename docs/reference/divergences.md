@@ -76,6 +76,41 @@ derivation for each field; Nix 2.34.8 gives five drvPaths, iets the first
 two and then the error. Such derivations exist in real stores: `drv/` of
 nix-conformance holds six. `fuzz/conformance-known` lists the case.
 
+## Reading a `.drv` file
+
+iets reads a `.drv` as Nix 2.34.8 does, with these exceptions. The
+`drv-read` and `drv-gen` fuzz targets find each one; `fuzz/divergences.toml`
+names them.
+
+- **Bytes that are not UTF-8** in an output name, in `system`, in
+  `builder` or in the name of an `env` entry: iets stops with `non-UTF-8
+  string in derivation`, Nix reads the file. This is the same limit as
+  in the section above. Three of the six real files in `drv/` of
+  nix-conformance (`u4`, `u5`, `u6`) hit it.
+  (`drv-string-not-utf8`)
+- **`__json`:** Nix reads the value as JSON and writes it again, with
+  the keys sorted; a value that is not JSON stops it with `cannot process
+  __json attribute`. iets keeps the text as it is. A `.drv` that Nix
+  wrote holds the sorted form already, so only a `.drv` written by hand
+  shows this. (`drv-json-not-checked`, `drv-json-kept-as-text`)
+- **A `blake3` hash:** Nix needs the experimental feature
+  `blake3-hashes`; in iets every feature is on (**Experimental-feature
+  builtins** below). (`drv-blake3-without-feature`)
+- **A store path with no dash after the hash**, such as
+  `/nix/store/<hash>Xname`: Nix's `StorePath` checks the length, the hash
+  characters and the name, but not the byte between them (`path.cc`).
+  iets refuses the path with `missing dash`. (`store-path-without-dash`)
+- **A store path that is not in canonical form**, such as
+  `/nix/store/<hash>-name/` or `/nix/store//<hash>-name`: Nix's
+  `parseStorePath` makes it canonical first (`canonPath`,
+  `store-dir-config.cc`), so it reads the path. iets refuses it with `is
+  not in the Nix store`. (`store-path-not-canonical`)
+- **Two outputs with one name:** Nix keeps the first
+  (`drv.outputs.emplace`, `derivations.cc`), iets keeps the last. This is
+  an iets bug, not a choice. `drv-gen` gives each output its own name.
+  Until the bug is fixed, the entry
+  `drv-duplicate-output` hides every difference in the outputs.
+
 ## `builtins.genericClosure`
 
 The key set is a sorted vector with binary search instead of a

@@ -73,3 +73,17 @@ bench = false
 
 # not a member of the iets workspace: cargo-fuzz builds it with its own flags
 [workspace]
+
+[[bin]]
+name = "drv-read"
+path = "fuzz_targets/drv_read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "drv-gen"
+path = "fuzz_targets/drv_gen.rs"
+test = false
+doc = false
+bench = false

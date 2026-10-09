@@ -12,6 +12,8 @@ page shows how to run it and how to read what it reports.
 | `nar-tree` | bytes that choose a file tree on disk | the NAR of the tree, then as `nar-read` |
 | `wire` | bytes that choose a daemon's side of a conversation | the answer of iets's daemon client and of Nix's to one operation |
 | `eval` | bytes that choose an expression of a known type | the deeply forced value as `nix-instantiate --eval --strict` prints it, or an error on both sides |
+| `drv-read` | a `.drv` file | accept or refuse, the ATerm written again, the drvPath |
+| `drv-gen` | bytes that choose a `.drv` part by part | as `drv-read` |
 
 Two oracle processes stay running while a target runs, so a comparison
 costs a pipe round trip and not a process start.
@@ -19,8 +21,9 @@ costs a pipe round trip and not a process start.
 The oracles, the regression cases and the grown corpora live in
 [nix-conformance](https://github.com/numtide/nix-conformance), a flake
 input: a test suite any Nix implementation can run. `parse-oracle` links
-libnixexpr 2.34.8, `nar-oracle` links libnixutil 2.34.8 and `eval-oracle`
-links libnixexpr 2.34.8 in pure mode with no store.
+libnixexpr 2.34.8, `nar-oracle` links libnixutil 2.34.8, `eval-oracle`
+links libnixexpr 2.34.8 in pure mode with no store, and `drv-oracle`
+links libnixstore 2.34.8.
 
 ## The parse target
 
@@ -163,6 +166,32 @@ as a fresh `nix-instantiate` and a fresh `iets eval` would see it.
 | `iets-panic` | iets panicked |
 | `nix-crash` | the oracle process died on the expression |
 
+## The derivation targets
+
+`drv-read` gives a `.drv` file to `Derivation::parse` and to Nix's
+`parseDerivation`, both with the name `x`. The two must agree on accept or
+refuse. When both accept, each side writes the ATerm again, and the bytes
+and the drvPath must be the same. The seeds are the real files in `drv/`
+of nix-conformance; `fuzz/drv.dict` holds the ATerm tokens.
+
+`drv-gen` makes the `.drv` from the input: outputs of each kind (input
+addressed, fixed, floating, impure, deferred), input derivations (with
+child outputs in the `DrvWithVersion` form), sources, `system`,
+`builder`, arguments and `env`. Paths, algorithms, hashes, orders and
+escapes are wrong now and then, and the file can be cut short or have one
+byte changed. `IETS_DRV_WRITE=FILE` writes the `.drv` of the last input,
+to read it or give it to `drv-oracle` by hand.
+
+| Kind | Meaning |
+|:---|:---|
+| `nix-only` | Nix reads the file, iets refuses it |
+| `iets-only` | iets reads the file, Nix refuses it |
+| `aterm-FIELD` | both read it and write different ATerms. Read back, the two derivations first differ in FIELD: `outputs`, `inputs`, `sources`, `system`, `builder`, `args`, `env` or `json` (`__json`). `at` is the first byte that differs |
+| `aterm` | as `aterm-FIELD`, but an ATerm does not read back, or the fields are the same |
+| `path` | the ATerms are the same, the drvPaths are not |
+| `iets-panic` | iets panicked |
+| `nix-crash` | the oracle process died on the input |
+
 ## Run the checks
 
 ```sh
@@ -170,15 +199,16 @@ nix build .#checks.x86_64-linux.fuzz-parse -L
 nix build .#checks.x86_64-linux.fuzz-nar -L
 nix build .#checks.x86_64-linux.fuzz-wire -L
 nix build .#checks.x86_64-linux.fuzz-eval -L
+nix build .#checks.x86_64-linux.fuzz-drv -L
 nix build .#checks.x86_64-linux.conformance -L
 ```
 
 `fuzz-parse` gives every `.nix` file of the pinned nixpkgs to both
 parsers, then runs libFuzzer for 60 seconds from an eighth of those files
 and the parse cases and corpus of nix-conformance. `fuzz-nar` runs each
-NAR target for 20 seconds, `fuzz-wire` runs `wire` for 30 and
-`fuzz-eval` runs `eval` for 60 seconds. A check fails on a
-difference that `fuzz/divergences.toml` does
+NAR target for 20 seconds, `fuzz-wire` runs `wire` for 30, `fuzz-eval`
+runs `eval` for 60 and `fuzz-drv` runs each derivation target for 20. A
+check fails on a difference that `fuzz/divergences.toml` does
 not list, and prints the input in base64. `conformance` runs every case
 of nix-conformance through `conformance-adapter`, iets behind the suite's
 adapter protocol; `fuzz/conformance-known` lists the cases iets fails on
