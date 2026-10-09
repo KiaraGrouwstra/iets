@@ -114,9 +114,7 @@ pub fn run_worker(
                     v.extend_from_slice(b",\"attrPath\":");
                     v.extend(json_str_list(path.iter()));
                     v.extend_from_slice(b",\"attrs\":");
-                    v.extend(json_str_list(
-                        names.iter().map(|a| ev.interner.name_str(a.sym)),
-                    ));
+                    v.extend(json_str_list(names.map(|a| ev.interner.name_str(a.sym))));
                     v.push(b'}');
                     v
                 }

@@ -178,7 +178,7 @@ fn walk(
         Ok(Node::Job(job)) => sink(Line::Job(job)),
         Ok(Node::Recurse(attrs)) => {
             remember_set(attrs, hash, depth);
-            let ordered = lexicographic_order(ev, attrs);
+            let ordered: Vec<&Attr> = lexicographic_order(ev, attrs).collect();
             let cells = attrs.attrs();
             let index: Vec<usize> = ordered
                 .iter()
