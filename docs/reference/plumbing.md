@@ -13,9 +13,9 @@ iets plumbing OP [FLAGS] ...
 ```
 
 Each op reads flags, and maybe JSON on stdin, and writes one JSON object
-on stdout. Nothing else goes to stdout. Errors go to stderr and set the
-exit code (`docs/reference/errors.md`). To learn why these operations
-exist, read `docs/explanation/plumbing-and-porcelain.md`.
+on stdout and nothing else. Errors go to stderr and set the exit code
+(`docs/reference/errors.md`). `docs/explanation/plumbing-and-porcelain.md`
+says why these operations exist.
 
 ## The operations
 
@@ -27,9 +27,9 @@ exist, read `docs/explanation/plumbing-and-porcelain.md`.
 | `build` | derivation roots are built; outcomes come back |
 | `fetch` | a URL or a fixed-output derivation becomes a hash |
 
-`iets plumbing --help` lists these five. An unknown op is the usage error
+`iets plumbing --help` lists them. An unknown op is the usage error
 `unknown subcommand 'X'`, with a suggestion when the name is close to one
-of the five.
+of them.
 
 The JSON shapes on this page are the contract. An end-to-end test checks
 each one, so a change to a shape is a change to this page.
@@ -45,13 +45,10 @@ same evaluation flags as the other commands (`docs/reference/commands.md`):
 `--dump-drvs`.
 
 `-A PATH` and a flake fragment walk the value as Nix does
-(`attr-path.cc:findAlongAttrPath`). Each step calls the function it stands
-on, so a file whose top level is a function (nixpkgs' `default.nix`) is
-called with the `--arg`/`--argstr` set before an attribute is taken from
-it. A formal with a default may be left out. A required formal that is
-left out is an error. A function whose formals end in `...` gets every
-argument, named or not (`eval.cc:autoCallFunction`). The classic names,
-`search` and every native command walk the same way.
+(`attr-path.cc:findAlongAttrPath`), calling each function they stand on, so
+a file whose top level is a function (nixpkgs' `default.nix`) gets the
+`--arg`/`--argstr` set before an attribute is taken
+(`docs/reference/commands.md` has the rules).
 
 ## Naming roots
 
@@ -62,10 +59,9 @@ earlier op instead: the `roots` of a `resolve`, or the `drvs` of a `plan`.
 Stdin with neither key is the usage error
 `--roots -: no "roots" and no "drvs" on stdin`.
 
-By default, these three read the closure from `/nix/store`, so each root
-must be there. `resolve` does not put it there: it keeps the derivations
-in memory, which is how `iets build` can ship a closure that was never
-written to disk. A root that is in no store is the error
+By default, these ops read the closure from `/nix/store`, so each root must
+be there. `resolve` doesn't put it there: it keeps the derivations in
+memory. A root that is in no store is the error
 `cannot read derivation 'PATH': No such file or directory`, exit 1.
 
 To carry that closure to another process, use `resolve --dump-drvs DIR`.
@@ -73,9 +69,8 @@ To carry that closure to another process, use `resolve --dump-drvs DIR`.
 `--drvs DIR` names it, or when `--roots -` reads a `resolve` whose output
 has `drvDir`.
 
-The dump holds derivations only. An input **source** that evaluation made
-and never wrote to the store is still read from the local store. For a
-closure with such sources, run `iets build --no-build` or
+The dump holds derivations only. For a closure with an input **source** that
+evaluation made and never wrote to the store, run `iets build --no-build` or
 `iets plumbing build --no-build` first.
 
 ## `resolve`
@@ -103,7 +98,7 @@ iets plumbing resolve [EVAL FLAGS]
 other two `getActualAttrPaths` tables of Nix. `none` uses the fragment as
 the attribute path itself.
 
-`--walk` picks one of the three walks Nix has:
+`--walk` picks one of the walks Nix has:
 
 | `--walk` | Nix | Used by |
 |:---|:---|:---|
@@ -174,19 +169,14 @@ iets plumbing missing [--builder URL] [--check-cache-status]
  "willSubstitute":["/nix/store/…-figlet-2.2.5"]}
 ```
 
-| Key | Value |
-|:---|:---|
-| `willBuild` | the derivations to build, references first |
-| `willSubstitute` | the paths to fetch from a substituter, sorted by store-path name |
-| `unknown` | the paths nothing can build or fetch |
-| `downloadSize` | bytes to download for `willSubstitute` |
-| `narSize` | bytes of those paths unpacked |
+The keys are the fields of Nix's `MissingPaths`: `willBuild` (references
+first), `willSubstitute` (sorted by store-path name), `unknown` (paths
+nothing can build or fetch), and the byte counts `downloadSize` and
+`narSize`. The object is byte for byte what `iets build --dry-run --json`
+prints.
 
-The names are the fields of Nix's `MissingPaths`. This object is byte for
-byte what `iets build --dry-run --json` prints.
-
-`--check-cache-status` adds one object per root. It follows Nix's
-cache-status-resolver.cc, and has the same keys that
+`--check-cache-status` adds a `roots` array with one object per root. It
+follows Nix's cache-status-resolver.cc and has the keys that
 `iets eval-jobs --check-cache-status` reports:
 
 ```json
@@ -195,14 +185,9 @@ cache-status-resolver.cc, and has the same keys that
   "neededSubstitutes":[]}]}
 ```
 
-| Key | Value |
-|:---|:---|
-| `drv` | the root's derivation path |
-| `cacheStatus` | `local`, `cached` or `notBuilt` |
-| `neededBuilds` | the derivations that would be built, in post-order |
-| `neededSubstitutes` | the paths that would be substituted, sorted by name then path |
-
-Like `missing`, it reads the roots' derivations from `/nix/store`.
+Each entry has `drv`, `cacheStatus` (`local`, `cached` or `notBuilt`),
+`neededBuilds` (in post-order) and `neededSubstitutes` (sorted by name, then
+path).
 
 Exit: 0; 1 when the builder cannot be reached or a derivation cannot be
 read; 2 on a usage error. A `grpc://` builder has no `QueryMissing`, so
@@ -235,7 +220,7 @@ iets plumbing build [--builder URL] [--out NAME]... [--fetch-to DIR]
 | Key | Value |
 |:---|:---|
 | `outcomes` | one object per root |
-| `outcomes[].attr` | what the root is called: the derivation name here, the attribute path in `iets build --json` |
+| `outcomes[].attr` | what the root is called: the derivation's file name here, the attribute path in `iets build --json` |
 | `outcomes[].drv` | the derivation path |
 | `outcomes[].success` | true when the build produced its outputs |
 | `outcomes[].outputs` | output name to store path; `{}` on a failure |
@@ -243,13 +228,10 @@ iets plumbing build [--builder URL] [--out NAME]... [--fetch-to DIR]
 | `outcomes[].logTail` | the last lines of the failed build's log; `[]` on success |
 | `gcRoots` | with `--gc-root DIR` only: the links that were made |
 
-Build progress goes to stderr: one line per state change, and the log of a
-failed build. Under `--log-format internal-json`, activity records carry
-the build instead (`docs/reference/errors.md`).
-
-A hash mismatch has no field of its own. It is a failure like any other,
-with the daemon's status and message in `reason`, and the hash the build
-got is in the build log.
+Build progress goes to stderr, and under `--log-format internal-json`
+activity records carry it instead (`docs/reference/errors.md`). A hash
+mismatch has no field of its own: it is a failure with the daemon's status
+and message in `reason`, and the hash the build got is in the build log.
 
 Exit: 0; 100, 101, 102 or 104 when a build failed, as Nix's
 `failingExitStatus` gives them; 1 on any other error; 2 on a usage error.
@@ -288,54 +270,32 @@ usage error. These are usage errors: no argument at all
 
 ## Composition
 
-`resolve` feeds `plan`, `missing` and `build`. `plan` feeds `missing` and
-`build`. Every op that takes roots accepts `--roots -`.
-
-A closure that is in `/nix/store` already:
-
-```console
-$ iets plumbing resolve -A hello ./nixpkgs | iets plumbing missing --roots -
-```
+`resolve` feeds `plan`, `missing` and `build`, and `plan` feeds `missing`
+and `build`. Every op that takes roots accepts `--roots -`.
 
 A closure that is in no store at all, carried to the next process by the
 ATerm dump:
 
 ```console
-$ iets plumbing resolve --dump-drvs d ./chain.nix
-{"attrPaths":[],"drvDir":"d","roots":[{"attr":null,"drv":"/nix/store/…-top.drv","output":null}]}
-
 $ iets plumbing resolve --dump-drvs d ./chain.nix | iets plumbing plan --roots -
 {"drvs":["/nix/store/…-dep.drv","/nix/store/…-top.drv"],"sources":[],"storeDrvs":0}
 ```
 
 `storeDrvs` is 0: no derivation was read from `/nix/store`. Without the
-dump, the same pipe fails, because the root is in no store:
-
-```console
-$ iets plumbing resolve ./chain.nix | iets plumbing plan --roots -
-error: cannot read derivation '/nix/store/…-top.drv': No such file or directory
-```
+dump, the same pipe fails with `cannot read derivation`.
 
 Resolve, build and root the outputs in one pipeline:
 
 ```console
 $ iets plumbing resolve --dump-drvs d ./ok.nix \
     | iets plumbing build --gc-root gcr --roots -
-{"gcRoots":["gcr/…-ok"],"outcomes":[{"drv":"/nix/store/…-ok.drv","logTail":[],
- "outputs":{"out":"/nix/store/…-ok"},"reason":null,"success":true}]}
-```
-
-Read a plan back with `--drvs`, without a pipe:
-
-```console
-$ iets plumbing plan --drvs d /nix/store/…-ok.drv
-{"drvs":["/nix/store/…-ok.drv"],"sources":[],"storeDrvs":0}
+{"gcRoots":["gcr/…-ok"],"outcomes":[{"attr":"…-ok.drv","drv":"/nix/store/…-ok.drv",
+ "logTail":[],"outputs":{"out":"/nix/store/…-ok"},"reason":null,"success":true}]}
 ```
 
 ## Limits
 
-- `resolve --dump-drvs` writes derivations, not sources (see
-  [Naming roots](#naming-roots)).
+- `resolve --dump-drvs` writes derivations only ("Naming roots").
 - `plan` and `build` take one builder. There is no way to instantiate on
   one store and build on another, as `iets eval-jobs --eval-store` does.
 - There is no op for flake metadata.

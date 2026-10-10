@@ -1,24 +1,24 @@
 # Plumbing and porcelain
 
 If you know git, you know this split. iets has one code path. Every
-capability is an operation in the library, with a contract made for
-programs first. A plumbing command exposes that operation, with JSON in and
-JSON out. The commands you type, the porcelain, use the same operation.
+capability is an operation in the library, with a contract made for programs
+first. A plumbing command exposes that operation, with JSON in and JSON out.
+The commands you type, the porcelain, use the same operation.
 
 The operation contracts and the JSON shapes are in
-[reference/plumbing.md](../reference/plumbing.md). This page explains the
-rule, how it is enforced, and what the move to it really cost.
+[Plumbing operations](../reference/plumbing.md). This page is for people who
+change iets: it says what the split requires and how a test enforces it.
 
-## The rule
+## One implementation, below the command line
 
 **A capability is implemented once, below the command line.** Evaluation,
 store access, build dispatch, fetching and flakes live in the library. No
 command re-implements one.
 
-**Porcelain may have its own libraries.** Presentation logic, interactive
-flows, Nix argv compatibility, colour, tables, progress and UI caches are
-porcelain-side code. They may be large. They may be shared between
-commands. They are not a second implementation of a plumbing capability.
+**Porcelain may have its own libraries.** Presentation, interactive flows,
+Nix argv compatibility, color, tables, progress and UI caches are
+porcelain-side code. It may be large, and commands may share it. It is not
+a second implementation of a plumbing capability.
 
 **The plumbing must expose what the porcelain needs.** If a porcelain
 command reaches past `crate::api` into `crate::eval`, `crate::store`,
@@ -32,7 +32,7 @@ it belongs in the porcelain.
 
 ### Why a namespace and not a second binary
 
-`iets plumbing OP`, not `iets-plumbing`:
+The contract is `iets plumbing OP`, a subcommand of the one binary:
 
 - A second binary doubles a large static binary and the Nix package, for no
   gain.
@@ -41,11 +41,11 @@ it belongs in the porcelain.
 - A hidden prefix hides a contract that must be stable, and a contract
   nobody can find gets copied instead of called.
 
-`iets plumbing` stays out of the top-level overview, because that help is
-for people and the operations are for programs. It is discoverable through
-`iets plumbing --help` and through the reference page.
+The top-level help lists `plumbing` as a topic and in the scripting line,
+but not each operation: the operations are for programs. `iets plumbing
+--help` lists them, and the reference page has the contracts.
 
-## How the rule is enforced
+## How a test enforces it
 
 **A module boundary, checked by a test.** `tests/layering.rs` reads every
 file under `src/cli/` and fails when one names `crate::eval`,
@@ -53,31 +53,30 @@ file under `src/cli/` and fails when one names `crate::eval`,
 `crate::jobs`, `crate::devenv`, `crate::trace`, `crate::compile` or
 `crate::parallel`, outside a per-file allow-list.
 
-**Types.** The end state is that an evaluator value does not appear in a
-porcelain signature: a command that cannot name a value cannot evaluate
-one. The same test checks it against a second list, so the rule is adopted
+**Types.** An evaluator value should not appear in a porcelain signature:
+a command that cannot name a value cannot evaluate one. A second list in
+the same test tracks `runtime::Word` in signatures, so the rule is adopted
 file by file.
 
-Both lists have their length asserted against a constant, and the test
-fails on an entry *wider* than the code needs as well as on a missing one.
-So a reach that goes cannot come back unnoticed, and the lists cannot stay
-ahead of the code.
+Both lists have their length asserted against a constant, and the test fails
+on an entry *wider* than the code needs as well as on a missing one. A reach
+that goes can't come back unnoticed, and the lists can't stay ahead of the
+code.
 
-The reach list started at 17 files and the signature list at 7.
-`crate::flake` is on neither, because the flake migration took it. The
-layer named most often is `crate::eval`. That is the evaluator type itself,
-and it will be the last to go. `crate::remote` comes next: the transport a
-command still names to open a connection.
+The reach list holds 17 files and the signature list 7. `crate::flake` is
+on neither. `crate::eval` is the layer named most often, because it is the
+evaluator type itself. `crate::remote` comes next: the transport a command
+names to open a connection.
 
 **What the test does not ban is the point of it.** A porcelain-side library
 can be as large as it needs to be. The render module is presentation, so it
 passes. The classic module, the largest under `src/cli`, is Nix argv
-compatibility, so it passes too. The one question is whether a file holds a second
-implementation of something the operation layer owns. Both failure messages
-say so, and both name the two ways out: close the gap in `crate::api`, or
+compatibility, so it passes too. What matters is whether a file holds a
+second implementation of something the operation layer owns. Both failure
+messages say so and name the ways out: close the gap in `crate::api`, or
 say why the entry belongs on the list and move the constant.
 
-The test cannot catch everything, so reviewers ask four questions before
+The test cannot catch everything, so reviewers ask these questions before
 they merge a change under `src/cli`:
 
 - Does it call anything below `crate::api`? If so, is that presentation,
@@ -87,145 +86,33 @@ they merge a change under `src/cli`:
   end-to-end case?
 - Did the allow-list grow?
 
-## What the migration cost
+## When an operation is warranted
 
-Nine stages ran, one was cancelled, and the measured net is **+1,262 lines**
-in `src`, against a plan that promised **−450**. That record is the most
-useful thing on this page.
+A plumbing operation costs more than the operation it exposes. Flag parsing,
+the root vocabulary, the help text and the JSON shaping are the operation;
+the capability is already there. So an operation is warranted when a program
+outside iets needs the contract, or when a porcelain command would otherwise
+reach past `crate::api`. `index`, `jobs`, `dev-env`, `drv-show`, `drv-diff`
+and `closure-diff` have no such caller, so they are calls.
 
-| # | stage | measured |
-|--:|---|---:|
-| 1 | `api::installable` and `plumbing resolve`; move four commands onto it | +220 |
-| 2 | `api::render` and the porcelain render module: one JSON writer, one size and table formatter | +178 |
-| 3 | `api::run::Run`: the evaluation scaffold as one call | −7 |
-| 4 | `api::build`: one dispatch path; `plumbing plan`, `missing`, `build` | +417 |
-| 5 | `api::installable` grows the get-drvs walk and `outputsToInstall` | +113 |
-| 6 | `src/fetch` split out of `src/flake`; `plumbing fetch` | +68 |
-| 7 | `src/treestore` on the shared cache layer; the input store collapses into it | +117 |
-| 8 | `src/source`: a reference resolves to a tree; `api::flake`; `crate::flake` private | +156 |
-| 9 | six more operations | cancelled |
-| 10 | `tests/layering.rs` and the two allow-lists | 0 in `src`, +304 in tests |
+Before a refactor, say what the second copy is. A shared module costs 100 to
+175 lines before it saves one, and the saving is in the repeated type, not
+the repeated line. A move is not a deletion: count only what no longer
+exists anywhere.
 
-Every estimate was negative. Every estimate was wrong. Working out why gave
-us five rules.
-
-### 1. A shared module costs 100-175 lines before it saves one
-
-`api::installable` started at 175 lines, and `api::run` at 102. A stage that
-removes N copies of a K-line sequence nets `N*K − 150`, not `N*K`.
-
-### 2. The saving comes from deleting a repeated *type*, not a repeated line
-
-Folding the cache lookup, the trace switch, the lint call and the parallel
-run into one call saved about 100 lines over sixteen sites — six lines each.
-Deleting four per-command `enum Run { Failed, Unsupported, … }` and the
-match that fed each one saved as much again, from five sites. Look for the
-type, not for the line.
-
-Stage 4 shows the same lesson from the good side. The collapse worked. The
-per-command types went with the sequence. The merge-into-targets loop, its
-`HashMap<String, BTreeMap<String, Option<String>>>` and its "derivation has
-no output" match were written out twice, at about 45 lines each. They
-became one call. That turned a predicted −80 into −220. The module still cost 187, so
-the refactor was +33 and the stage was +417 because of the three operations
-on top.
-
-### 3. A plumbing operation costs more than the operation it exposes
-
-Stage 4's three operations are 384 lines against a dispatch layer they call
-in four lines each. Flag parsing, the root vocabulary, the help text and
-the JSON shaping *are* the operation; the capability was already there. A
-stage that adds operations nets positive unless the porcelain it replaces
-is deleted in the same stage.
-
-This rule is why stage 9 was cancelled. `index`, `jobs`, `dev-env`,
-`drv-show`, `drv-diff` and `closure-diff` were charged +150 for six on the
-same arithmetic that cost 384 for three, so the real cost was about +720.
-And every one of them exposes something a caller can already reach. `iets eval-jobs` and
-`iets print-dev-env` are the JSON contract already. `iets diff` composes
-`resolve` with its own comparison. `api::installable` and `api::build` own
-the rest. Six operations at that price buys capability that already exists.
-
-The same arithmetic stopped two more. `flake-info` and `flake-tree` would
-have been about +240, and nothing needed them: the layering rule asks that
-a porcelain command reach a capability through `crate::api`, and
-`api::flake` *is* that, as a library surface. An operation is warranted
-when a program *outside* iets needs the contract, or when a porcelain
-command would otherwise reach past `crate::api`. Neither was true.
-
-### 4. Count the copies, not the call sites
-
-Nine renderers, sixteen evaluation scaffolds and eight dispatch sequences
-sound alike, but they are not. The sixteen and the eight were copies. The
-nine were not. Stage 2's nine renderers were nine different *outputs*. What
-repeated across them was one byte writer, one JSON dump and four
-`if json { … } else { … }` branches — about 60 lines. Only one per-command
-output type existed to delete.
-
-Before estimating a stage, say what the second copy is. If the answer is
-"they all do the same *kind* of thing", the saving is the kind, not the
-thing. Stage 5 had no second copy at all, and this rule said so in advance:
-the plan charged −180 to "two functions lose their callers", and losing a
-caller deletes nothing.
-
-### 5. A move is not a deletion
-
-Stage 7 was estimated at −300 and measured +117. The counts were right
-about the modules and wrong about what a module count means: −372 for one
-file and −190 for another were the same lines the table charged +380 for
-under their new home. Netting a move against its destination is how −0
-turns into −562 on paper. Count only what no longer exists anywhere.
-
-Stage 8's move was +3, exactly as this rule predicts: 712 lines left one
-file to arrive in two others.
-
-## What it bought
-
-Not a line count. Two things:
+## What the split gives you
 
 **One implementation and one name per capability.** `api::installable`
 turns a string into derivations, `api::build` dispatches a build,
 `api::run` runs an evaluation, `api::fetch` fetches, `api::flake` resolves
-a flake, `api::render` says what a value's JSON is. Before the first stage
-there were three attribute-path tables, eight build-dispatch sequences,
-sixteen evaluation scaffolds and two NAR framings. There is one of each.
+a flake, `api::render` says what a value's JSON is.
 
 **A contract.** `iets plumbing resolve | iets plumbing plan` composes
 across processes, `missing` is byte-for-byte `build --dry-run --json`, and
 every operation's JSON shape is in the reference with an end-to-end case
-that checks it. That is the part a program outside iets can use, and it
-did not exist before.
+that checks it.
 
-Several stages were worth it for reasons the ledger cannot show. Stage 5
-moved a capability that had been reachable only by the command that
-happened to hold it. Stage 7 gave a name to a content-addressed store
-nobody had named. It also made the only way in a function that hashes what
-it is given and refuses anything else. That is what let stage 8 put a
-resolver over it. Stage 8 made `crate::flake` private, so "flakes" stopped
-being a thing four command files each knew a different piece of.
-
-## Two gaps stay open
-
-`nix-shell` and `print-dev-env` each open a connection of their own. They
-upload a plan and then speak the worker protocol themselves: they build
-the derivation's *inputs* and exec a shell, or read the environment
-output back. So they use the plan and the store lookup, but drive
-the upload directly. Going through the dispatcher would open a second
-connection. Stage 9's `plumbing dev-env` was to close this, and stage 9
-is cancelled. It is recorded as a gap, not as a plan.
-
-`drv-show` was to be the reader of a dumped-derivation directory, which
-`api::build::drvs_in_dir` already is. `nix derivation show` later needed the
-other half, drv paths to the JSON Nix prints, and got it as a capability:
-`api::drvshow::show`, with no op and no `iets plumbing drv-show`. The
-porcelain was 80 lines of argv and printing over it, which is what the
-cancelled op would have cost on its own.
-
-## What the line count says about the next refactor
-
-Not "do not refactor". Say what the second copy is before starting, and
-expect the number to be positive when there is not one. Every stage that
-named a real second copy got a real deletion out of it: stage 1, stage 3,
-stage 4's collapse, stage 5's attribute readers and stage 7's NAR framing.
-Every stage that moved a module got +0 for the move and paid for the
-interface.
+`nix-shell` and `print-dev-env` are the exception. They upload a plan and
+then speak the worker protocol themselves, to build the derivation's inputs
+and read the environment back. Going through the dispatcher would open a
+second connection.

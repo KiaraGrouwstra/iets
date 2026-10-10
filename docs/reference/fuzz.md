@@ -1,11 +1,9 @@
 # Fuzz targets
 
-What each fuzz target compares, the kinds of difference it reports, and
-the format of the list of known divergences. To run them, see
-[how-to/fuzz.md](../how-to/fuzz.md).
-
-`fuzz/` is a differential fuzzer. It gives the same input to iets and to
-Nix 2.34.8, compares the two answers, and reports each difference.
+`fuzz/` gives the same input to iets and to Nix 2.34.8, compares the two
+answers, and reports each difference. This page says what each target
+compares, which kinds of difference it reports, and how the list of known
+divergences is written. `docs/how-to/fuzz.md` shows how to run the targets.
 
 | Target | The input | Compared |
 |:---|:---|:---|
@@ -20,13 +18,10 @@ Nix 2.34.8, compares the two answers, and reports each difference.
 
 ## Oracles
 
-Nix's side of each comparison is an oracle process. Two stay running while
-a target runs, so a comparison costs a pipe round trip, not a process
-start.
-
-The oracles, the regression cases and the grown corpora live in
-[nix-conformance](https://github.com/numtide/nix-conformance), a flake
-input. It is a test suite any Nix implementation can run.
+Nix's side of each comparison is an oracle process that stays running while
+a target runs. The oracles, the regression cases and the grown corpora live
+in [nix-conformance](https://github.com/numtide/nix-conformance), a flake
+input and a test suite any Nix implementation can run.
 
 | Oracle | Links | Mode |
 |:---|:---|:---|
@@ -43,7 +38,7 @@ at a line and a column.
 
 iets's tree is built in Nix's form, with the desugaring of Nix's
 `parser.y`: `a - b` is a call of `__sub`, `a.b = 1;` makes a nested set,
-`{ x } @ y` sorts its formals. Both trees are then normalised to drop what
+`{ x } @ y` sorts its formals. Both trees are then normalized to drop what
 is not structure: the order Nix stores bindings in, where a lexer splits a
 string into tokens, and iets folding `-1` into a literal.
 
@@ -55,11 +50,10 @@ Not compared:
   after parsing;
 - warnings, lints and doc comments.
 
-Both sides keep one symbol table across inputs, for speed. Symbol order
-decides which of several clashing names an error reports, and a file is
-normally parsed in a fresh process. So an unknown difference is checked
-again with a fresh oracle and a fresh table, and only that second answer
-counts.
+Both sides keep one symbol table across inputs, and symbol order decides
+which of several clashing names an error reports. So an unknown difference is
+checked again with a fresh oracle and a fresh table, and only that second
+answer counts.
 
 | Kind | Meaning |
 |:---|:---|
@@ -82,13 +76,10 @@ the same bytes. Nix also dumps that directory, and iets's `nar_hash` and
 `nar_size` of it must describe those bytes.
 
 Random bytes are rarely a NAR, so `nar-gen` builds one from the input:
-mostly well formed, with names and symlink targets of any bytes, entries in
-any order, a wrong tag now and then, a cut at any point, and now and then a
-chain of directories across the depth limit of 64.
-
-`nar-tree` makes a tree on disk: files with any mode the owner can read,
-files past the writer's 64 KiB buffer, symlinks, FIFOs, names in any bytes
-a name may hold, and chains across the depth limit. Both sides dump it.
+mostly well formed, sometimes with a wrong tag, a cut, or a chain of
+directories across the depth limit of 64. `nar-tree` makes a tree on disk
+(odd modes, large files, symlinks, FIFOs, names of any bytes) and both sides
+dump it.
 
 A NAR is shown as its length and its first 64 bytes in hexadecimal.
 
@@ -108,13 +99,10 @@ A NAR is shown as its length and its first 64 bytes in hexadecimal.
 
 `wire` tests iets's client of the Nix daemon protocol. The input chooses a
 script: the daemon's side of the handshake at protocol 1.35 to 1.40, stderr
-frames (log lines, activities, results, errors) after the handshake, after
-`SetOptions` and after the operation, then the reply of one operation:
-`connect`, `path-info`, `valid-paths`, `substitute`, `missing`,
-`output-map`, `substitutable`, `build`, `indirect-root`, `nar` or
-`add-multiple`. Store paths, hashes, signatures, content addresses, build
-results, realisations and NARs in the reply are wrong now and then, and the
-script can stop at any byte.
+frames, and the reply of one operation (`connect`, `path-info`,
+`valid-paths`, `substitute`, `missing`, `output-map`, `substitutable`,
+`build`, `indirect-root`, `nar` or `add-multiple`). Parts of the reply are
+sometimes wrong, and the script can stop at any byte.
 
 A thread serves the script on a Unix socket. iets's client and Nix
 2.34.8's `RemoteStore` each connect and run the operation, and their
@@ -136,22 +124,13 @@ Nix's client aborts on an answer that comes first.
 
 ## eval
 
-`eval` tests the evaluator. The input chooses an expression of a known
-type:
-
-- numbers with their edges: the largest and smallest integers, overflow,
-  division by zero, floats that print in exponent form;
-- strings with escapes, `''` strings and interpolation;
-- lists, sets with `rec`, `inherit`, nested and dynamic names, `//`;
-- lambdas with patterns, defaults and `@`; `let`, `with`, `if`, `assert`;
-- `seq`, `deepSeq`, `tryEval`, and errors that are never forced;
-- a set of pure builtins: arithmetic, comparison, list, set and string
-  builtins, `toJSON`, `fromJSON`, `toXML`, `hashString`, `match`, `split`,
-  `genericClosure`, `unsafeGetAttrPos` and others.
-
-The expressions are simply typed and no binding refers to itself, so each
-evaluation ends. Now and then a value of the wrong type takes the place of
-a correct one, to compare the type errors.
+`eval` tests the evaluator. The input chooses an expression of a known type,
+from numbers with their edges, strings, lists, sets, lambdas with patterns,
+`let`, `with`, `assert`, `seq`, `tryEval`, and a set of pure builtins
+(`toJSON`, `fromJSON`, `toXML`, `hashString`, `match`, `split`,
+`genericClosure` and others). Every expression is well typed and no binding
+refers to itself, so each evaluation ends. Sometimes a value of the wrong
+type takes the place of a correct one, to compare the type errors.
 
 iets evaluates the expression in the fuzzer's process, in pure mode.
 `eval-oracle` evaluates it with Nix 2.34.8 in pure mode with no store. Both
@@ -161,11 +140,10 @@ fail. Error messages are not compared.
 `==` on two sets compares their attributes in each evaluator's symbol
 order and stops at the first difference. So which of a different and a
 failing attribute it reaches first is not the same on both sides
-(`docs/reference/divergences.md`, "Which attribute's error comes first"). Each
-expression names the generator's field names first, in one order, so that
-both sides reach the same attribute first. A difference is checked again
-with a fresh oracle and, if it holds, a fresh evaluator, as a fresh
-`nix-instantiate` and a fresh `iets eval` would see it.
+(`docs/reference/divergences.md`, section "Which attribute's error comes
+first"). Each expression names the generator's field names first, in one order, so
+both sides reach the same attribute first. A difference is checked again with
+a fresh oracle and a fresh evaluator.
 
 | Kind | Meaning |
 |:---|:---|
@@ -184,12 +162,9 @@ refuse. When both accept, each side writes the ATerm again, and the bytes
 and the drvPath must be the same. The seeds are the real files in `drv/` of
 nix-conformance; `fuzz/drv.dict` holds the ATerm tokens.
 
-`drv-gen` makes the `.drv` from the input: outputs of each kind (input
-addressed, fixed, floating, impure, deferred), input derivations (with
-child outputs in the `DrvWithVersion` form), sources, `system`, `builder`,
-arguments and `env`. Paths, algorithms, hashes, orders and escapes are
-wrong now and then, and the file can be cut short or have one byte
-changed.
+`drv-gen` makes the `.drv` from the input: outputs of each kind, input
+derivations, sources, `system`, `builder`, arguments and `env`. Parts are
+sometimes wrong, and the file can be cut short or have one byte changed.
 
 | Kind | Meaning |
 |:---|:---|
@@ -231,8 +206,8 @@ With `--json`, each unexpected difference is one line
 
 The differences that are not bugs. It has one array of tables per target
 family: `[[parse]]`, `[[nar]]` for the `nar-*` targets, `[[wire]]`,
-`[[eval]]`, and `[[drv]]` for the `drv-*` targets. A difference that
-matches an entry is counted as expected and is not added to the corpus.
+`[[eval]]` and `[[drv]]` for the `drv-*` targets. A difference that matches
+an entry counts as expected and is not added to the corpus.
 
 ```toml
 [[parse]]
@@ -272,14 +247,9 @@ list, and prints the input in base64.
 ## Campaigns
 
 A campaign (`fuzz-parse-campaign`, `fuzz-nar-campaign`,
-`fuzz-wire-campaign`, `fuzz-eval-campaign`, `fuzz-drv-campaign`) minimises
-its seeds, fuzzes on every core of the builder for an hour, and minimises
-the result again. The `nar` campaign runs `nar-gen`, and the `drv` campaign
-runs `drv-gen`. The output of a campaign holds:
-
-| Path | Content |
-|:---|:---|
-| `corpus/` | the grown corpus |
-| `artifacts/` | every input that differed |
-| `triage.jsonl` | the artifacts replayed by `fuzz-diff --json` |
-| the libFuzzer logs | |
+`fuzz-wire-campaign`, `fuzz-eval-campaign`, `fuzz-drv-campaign`) minimizes
+its seeds, fuzzes on every core of the builder for an hour, and minimizes
+the result again. The `nar` campaign runs `nar-gen` and the `drv` campaign
+runs `drv-gen`. It leaves `corpus/` (the grown corpus), `artifacts/` (every
+input that differed), `triage.jsonl` (the artifacts replayed by
+`fuzz-diff --json`) and the libFuzzer logs.

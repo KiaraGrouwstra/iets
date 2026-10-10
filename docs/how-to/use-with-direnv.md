@@ -1,11 +1,12 @@
-# How to use iets with direnv
+# Use iets with direnv
 
-`iets print-dev-env` prints the bash that `nix print-dev-env` prints, byte
-for byte. It replaces nix-direnv's `use flake` in your `.envrc`, and a
-cached run takes tens of milliseconds instead of seconds.
+If you use nix-direnv, you know the wait after every `flake.nix` edit and the
+cold start in a fresh checkout. `iets print-dev-env` prints the same bash as
+`nix print-dev-env`, byte for byte, so you can put it in your `.envrc` in
+place of `use flake`. A cached run takes tens of milliseconds.
 
-The flags are in [reference/commands.md](../reference/commands.md). How it
-makes the shell is in [explanation/dev-shells.md](../explanation/dev-shells.md).
+The flags are in [Commands](../reference/commands.md). How iets makes the
+shell is in [How `print-dev-env` makes a shell](../explanation/dev-shells.md).
 
 ## Write the `.envrc`
 
@@ -17,6 +18,7 @@ use_iets() {
   local -a paths
   root="$(direnv_layout_dir)/iets-env"
   entry="$(direnv_layout_dir)/iets-entry"
+  mkdir -p "$(direnv_layout_dir)"
   watch_file flake.nix flake.lock
   script="$(iets print-dev-env --builder daemon --gc-root "$root" --entry-to "$entry" "${1:-.}")" || true
   if [[ -s $entry && -e $(<"$entry") ]]; then
@@ -30,41 +32,39 @@ use_iets
 
 Then run `direnv allow`.
 
-Here is what each part does:
+What each part does:
 
+- `mkdir -p` creates direnv's layout directory. A new project doesn't have
+  one, and `--gc-root` and `--entry-to` can't write there.
 - `--builder daemon` builds or substitutes the shell's inputs on your local
   daemon. The shell runs here, so its inputs belong in the local store.
 - `--gc-root PATH` makes `PATH` a symlink to the environment and registers
   it as a garbage-collection root, like nix-direnv's `--profile`. Without
-  it, the next `nix-collect-garbage` deletes the environment, and the next
+  it, the next `nix-collect-garbage` deletes the environment and the next
   `direnv reload` builds it again.
 - `watch_file flake.nix flake.lock` is the minimum. nix-direnv watches the
-  same two files, and it is all direnv has before the first cache entry.
+  same two files, and until the first cache entry exists they are all direnv
+  has.
 - `--entry-to FILE` writes the name of the cache entry the run used.
   `iets cache paths ENTRY` prints the paths to watch, separated by NUL
-  bytes. `mapfile` turns them into one `watch_file` call. Do this before
-  `eval "$script"`, so a failing shell hook does not lose the watches.
-- **Use one `watch_file` call, not one per path.** Each call starts the
-  direnv binary again, and one call takes as many paths as you give it. For
-  500 paths, that is 25 ms in one call against 7.3 s one at a time. The NUL
-  separator lets `mapfile` keep a path with spaces in one piece.
-- Passing the entry name, rather than working it out again, means the two
-  calls can use different flags without silently finding nothing.
+  bytes, and `mapfile` turns them into one `watch_file` call. Passing the
+  entry name means the two commands never need matching flags. Do this
+  before `eval "$script"`, so a failing shell hook can't lose the watches.
+- **Call `watch_file` once for all paths.** Each call
+  starts the direnv binary again. For 500 paths that's 25 ms in one call
+  against 7.3 s one at a time. The NUL separator lets `mapfile` keep a path
+  with spaces in one piece.
 
-The printed bash is what `nix develop` sources: variable assignments,
-exports, `declare -a` and `declare -A`, function definitions, the `PATH`
-and `XDG_DATA_DIRS` prepend, `NIX_BUILD_TOP` from `mktemp`, and
-`eval "${shellHook:-}"`. There is no `exit`, no `set -e` and no `exec`. On
-an error, nothing goes to stdout and the status is non-zero, so `eval` of
-the empty string leaves your environment alone.
+If evaluation or the build fails, nothing goes to stdout and the status is
+non-zero, so `eval` gets an empty string and your environment stays as it was.
 
-## What direnv reloads on
+## What makes direnv reload
 
-nix-direnv watches `flake.nix` and `flake.lock`, and leaves the rest to
-`direnv reload`. iets does not have to guess. Its cache records everything
+nix-direnv watches `flake.nix` and `flake.lock` and leaves the rest to you
+and `direnv reload`. iets can do better, because its cache records everything
 the evaluation looked at
-([explanation/caching.md](../explanation/caching.md)), and
-`iets cache paths` turns that into direnv watches:
+([How caching works](../explanation/caching.md)).
+`iets cache paths` turns that record into direnv watches:
 
 | the evaluation | direnv watches |
 |---|---|
@@ -78,96 +78,72 @@ the evaluation looked at
 In a git flake, an untracked file is not part of the flake. `git add` makes
 it one, the index changes, and direnv reloads.
 
-Some things are left out on purpose:
+iets leaves some things out on purpose:
 
 - Everything under `/nix/store` and in iets's own stores. Those paths never
   change.
-- The flake's source tree as a whole. Every edit of any file changes it,
-  and few shells depend on it, so watching it would cost an evaluation for
-  every file you save. direnv watches the files the evaluation read and the
-  paths the shell copied, and no more. If your shell uses `self` or `./.`,
-  run `direnv reload` yourself, or add your own `watch_file`.
-- Environment variables (`getEnv` under `--impure`). direnv cannot watch a
-  variable. The cache still checks them, so the next reload for any other
+- The flake's source tree as a whole. Any edit to any file changes it, and
+  few shells depend on it, so watching it would cost an evaluation on every
+  save. direnv watches the files the evaluation read and the paths the shell
+  copied, and no more. If your shell uses `self` or `./.`, run
+  `direnv reload` yourself or add your own `watch_file`.
+- Environment variables (`getEnv` under `--impure`). direnv can't watch a
+  variable. The cache does check them, so the next reload for any other
   reason evaluates again.
-- More than 500 paths. direnv checks every watched path at every prompt,
-  so 500 watches add about 3 ms to a prompt. iets keeps the first 500, in
-  the order the evaluation read them, and tells you on stderr. A usual
-  flake shell has 10 to 20.
+- Paths beyond the first 500. direnv checks every watched path at every
+  prompt, and 500 watches add about 3 ms. iets keeps the first 500, in the
+  order the evaluation read them, and tells you on stderr. A typical flake
+  shell has 10 to 20.
 
-`iets cache paths` checks nothing and evaluates nothing: it reads one cache
-entry and prints. If the evaluation fails, the entry of the last good run
-is still there, so direnv still watches the file you need to fix.
+`iets cache paths` evaluates nothing: it reads one cache entry and prints. If
+a later evaluation fails, the entry of the last good run is still there, so
+direnv keeps watching the file you need to fix.
 
-If the very first load fails, there is no entry yet. `--entry-to` leaves
-the file empty, and the `[[ -s $entry ]]` check skips the loop. direnv then
-watches only `flake.nix` and `flake.lock`, which is right: iets knows
-nothing yet about a shell that never evaluated. Fix the error on stderr.
+If the very first load fails, there is no entry. `--entry-to` leaves the
+file empty, and the `[[ -s $entry ]]` check skips the watches. direnv then
+watches only `flake.nix` and `flake.lock`, because iets knows nothing about
+a shell that never evaluated. Fix the error on stderr and reload.
 
 ## Use the NixOS module instead
 
-On NixOS, import `nixosModules.default`. It installs iets, and replaces
-nix-direnv's `use flake` with this repository's own `direnvrc`, for local
-flake references with an optional `#attr`. Keep `use flake` in your
-`.envrc` and change nothing else.
+On NixOS you can skip `use_iets`: import `nixosModules.default` instead. The
+module installs iets and swaps nix-direnv's `use flake` for this
+repository's own `direnvrc`, so your `.envrc` keeps saying `use flake`. It
+takes a local flake reference with an optional `#attr`, and the flake needs
+a `flake.lock`.
 
 ## Pick a different shell
 
-Without a fragment, `print-dev-env` takes the first of
-`devShells.<system>.default`, `devShell.<system>`,
-`packages.<system>.default` and `defaultPackage.<system>`:
-
-```sh
-iets print-dev-env .
-```
-
-With `#x`, it takes the first of `devShells.<system>.x`,
-`packages.<system>.x`, `legacyPackages.<system>.x` and `x`:
-
-```sh
-iets print-dev-env .#ci
-```
+Without a fragment, `print-dev-env` takes `devShells.<system>.default` and a
+few older names. With `#x`, as in `iets print-dev-env .#ci`, it looks for `x`
+under `devShells`, `packages` and `legacyPackages`
+([Commands](../reference/commands.md#print-dev-env) has the order).
 
 ## Check what it costs
 
-`--timings` shows the cache and the total time on stderr, and leaves stdout
-for the bash:
+`--timings` prints the cache result and the total time on stderr, and leaves
+stdout for the bash:
 
 ```sh
 iets print-dev-env --timings . > /dev/null
 ```
 
-A cold run on this repository:
-
-```
-total: 0.703s
-```
-
-The same command again:
-
-```
-cache: hit, 2106 entries validated, 0 rehashed, load 0.001s, validate 0.017s
-total: 0.027s
-```
-
-For a larger example, on a NixOS flake with 31 locked inputs and a
-devShell: `nix print-dev-env --option eval-cache false` took 3.48 s, a cold
-`iets print-dev-env` took 0.67-0.83 s, and a cached one 21-35 ms.
+Measured numbers are in
+[How `print-dev-env` makes a shell](../explanation/dev-shells.md#what-it-costs).
 
 ## Inspect the environment as JSON
+
+To see what the shell would set without loading it:
 
 ```sh
 iets print-dev-env --json .
 ```
 
-This prints what `nix print-dev-env --json` prints.
+The output is what `nix print-dev-env --json` prints.
 
-## What is not supported
+## What doesn't work
 
-- A shell whose builder is not `bash`, and a content-addressed shell. Both
-  are errors.
-- `--gc-root` together with `ssh-ng://`: the root would name a path this
-  machine does not have.
-- `nix develop`'s `--redirect`, `--profile`, `--command` and `--phase`.
-- The `nix develop` interactive extras (`bashInteractive`, prompt
-  settings).
+iets can't make a shell whose builder isn't `bash`, a content-addressed
+shell, or `--gc-root` together with `ssh-ng://`. It doesn't implement
+`--redirect`, `--profile`, `--command` or `--phase` of `nix develop`. The
+details are in [Commands](../reference/commands.md#print-dev-env).

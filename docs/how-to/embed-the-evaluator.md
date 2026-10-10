@@ -1,45 +1,37 @@
-# How to embed the evaluator in your own program
+# Embed the evaluator in your own program
 
-> **Not ready for long-lived hosts.** The evaluator does not free memory
-> until the process exits. A program that evaluates again and again, such
-> as an editor server or a build service, grows without limit. Use the
-> library for a run-once frontend: another command line, a test harness, a
-> one-shot tool. The API can change.
+> **Don't use this for a long-lived host.** The evaluator doesn't free memory
+> until the process exits, so an editor server or a build service that
+> evaluates again and again grows without limit. The library fits a run-once
+> frontend: another command line, a test harness, a one-shot tool. The API
+> can change.
 
 The crate is a library with a thin `iets` binary on top. Your program links
-the library and calls its entry points. Nothing is process-global, so two
-evaluators can run side by side in one process.
+the library and calls its entry points, which
+[Using iets as a library](../reference/library.md) lists. Nothing is
+process-global, so evaluators can run side by side in one process.
 
-Every entry point is in [reference/library.md](../reference/library.md).
-
-**One rule: your frontend never reaches into evaluator internals.** No
-`cli` module, no private field, no copied helper. If you need something
-that lives only in `cli`, move it into `crate::api` and let `cli` call it
-there.
+Keep your frontend out of evaluator internals: no `cli` module, no private
+field, no copied helper. If you need something that lives only in `cli`, move
+it into `crate::api` and let `cli` call it there.
 
 ## Set up a session
 
-A `Session` holds what a run used to keep in statics: the settings, where
-messages go, the tree store, the `nix.conf` that was read, the hash
-mismatches a build reported.
+A `Session` holds what would otherwise be statics: the settings, where
+messages go, the tree store and the `nix.conf` that was read.
 
 ```rust
 let session = iets::session::Session::new();
-session.load_settings(&[])?;            // iets.toml, optional
+session.load_settings(&[])?;            // reads iets.toml; optional
 session.log.write_to_stderr();          // or leave the sink unset
 let _entered = session.enter();         // for this thread
 let mut ev = iets::eval::Evaluator::new();   // adopts the session
 ```
 
-The library never writes to stdout or stderr on its own. A session's log
-sink starts empty; the `iets` binary calls `write_to_stderr()` itself. The
-library never exits either. It returns errors, and your program picks the
-exit code.
-
-Threads the library starts inherit the session of the thread that started
-them. For a thread you start yourself, call `Session::enter` on it, or use
-`session::bind(f)`. `EvalConfig::new().session(session)` skips the
-thread-local altogether.
+The library never writes to stdout or stderr on its own, and never exits.
+It returns errors and your program picks the exit code. A thread you start
+yourself needs `Session::enter` or `session::bind(f)`
+([Using iets as a library](../reference/library.md#what-the-host-owns)).
 
 ## Evaluate and print
 
@@ -51,9 +43,9 @@ use iets::api::{self, EvalArgs, Input};
 let mut a = EvalArgs { strict: true, json: true, ..EvalArgs::new() };
 a.input = Some(Input::Expr("{ a = 1; b = [1 2]; }".into()));
 
+// `Err` is the exit code; the error is already in the session log
+let Ok(run) = api::run::Run::new(&a) else { return ExitCode::from(1) };
 // the closure runs as the main fiber, so `force` may park while helpers work
-// `Err` is the exit code; the error is in the session log
-let run = api::run::Run::new(&a)?;
 let code = run.go(move |ev, _cache| {
     match api::evaluate(ev, a) {
         Ok(v) => { /* force and print */ 0 }
@@ -76,35 +68,27 @@ cargo run --release --example eval -- -E '{ a = 1; b = [1 2]; }'
 `eval::EvalConfig`: the lints, the IR cache, the search path. `Run::go`
 builds the evaluator from it and starts the worker threads.
 
-`Run::new` evaluates purely, as the `iets` commands do, unless `EvalArgs::pure`
-is `Some(false)` or the user's `pure` setting is off. A pure run has no
-`<nixpkgs>` search path and no `builtins.currentSystem`.
-`api::evaluate` applies no setting, and an evaluator has no setters. So put
-any setting you want on the `EvalConfig`:
+`Run::new` evaluates purely, as the `iets` commands do, unless
+`EvalArgs::pure` is `Some(false)` or the user's `pure` setting is off. A pure
+run has no `<nixpkgs>` search path and no `builtins.currentSystem`.
+`api::evaluate` applies no setting, and an evaluator has no setters, so
+anything you want has to go on the `EvalConfig`:
 
 ```rust
 let config = iets::eval::EvalConfig::new().system("aarch64-linux").pure(true);
 let run = api::run::Run::over(config, &a)?;
 ```
 
-Every command in the binary that evaluates goes through `Run`.
-`parallel::try_run(workers, config.build(), f)` does the same without the
-tracing cache.
+The native commands that evaluate go through `Run`, and the classic names
+use `Run::on`. `parallel::try_run(workers, config.build(), f)` does the same
+without the tracing cache.
 
 ## Walk a value safely
 
-`api::value` is the safe way to read values. `Eval<'e>` wraps a
-`&'e mut Evaluator`. `Value<'e>` is one value of that evaluator: a `Copy`
-machine word whose methods never reach into the arena on their own.
-
-The shared `'e` is what keeps you safe. A `Value<'e>` exists only while the
-evaluator is borrowed, so it cannot outlive the memory it points into.
-`Value` is invariant in `'e`, so it never widens to another borrow. Nothing
-here exposes an arena pointer or a tag.
-
-It is also the only way in. The `runtime::Word` that `api::evaluate`
-returns is opaque outside the crate, so no safe call can make one up. Pass
-a `Word` back to the library, or read it through `api::value`.
+`api::value` is the safe way to read values: `Eval<'e>` wraps the evaluator,
+and `Value<'e>` can't outlive the memory it points into. It's also the only
+way in, because the `runtime::Word` that `api::evaluate` returns is opaque
+outside the crate.
 
 ```rust
 use iets::api::value::Eval;
@@ -147,27 +131,9 @@ version + 0 = Some(3)
 greet "world" = "hello world"
 ```
 
-Four things to remember:
-
-- **A getter on an unforced value reports `ValueKind::Thunk` and returns
-  `None`.** It never panics and never forces. Force first. Methods on
-  `Value` read an already-forced value; methods on `Eval` may evaluate,
-  intern a name or allocate.
-- **`attr_at` index order is the evaluator's internal symbol order**, not
-  alphabetical, exactly as Nix's `nix_get_attr_byidx` warns. Sort the names
-  yourself when the order must be reproducible.
-- **Reading borrows; building copies.** `as_bytes`, `as_path` and the
-  attribute names borrow the arena with no copy. `string` and `path` copy
-  their bytes in, and `list` and `attrs` gather a temporary first. Walking
-  a value never allocates.
-- **Keep one `Eval` per evaluator.** If you hand a value from one evaluator
-  to another `Eval`, it does not dangle, because no arena is ever freed. But
-  it reads names through the wrong symbol table, and the lifetime does not
-  stop you.
-
-This API follows Nix's own C API, so a binding for another language has a
-shape to follow. [reference/library.md](../reference/library.md) maps each
-item to its `nix_api_value.h` name.
+A getter on an unforced value returns `None`, so force first. Attribute
+order, allocation and the `nix_api_value.h` mapping are in
+[Using iets as a library](../reference/library.md#the-value-api).
 
 ## Build what you evaluated
 
@@ -184,7 +150,7 @@ cargo run --release --example build -- --builder daemon -E 'derivation {
 /nix/store/hl2d12ai352g88ad47fh8844g939iyrd-greeting
 ```
 
-The example evaluates purely, so it has no `builtins.currentSystem`. Put
+The example evaluates purely, so there's no `builtins.currentSystem`. Put
 your own system in place of `x86_64-linux`. The output path depends on it.
 
 The example drives the lower-level `Dispatcher` itself. In your own program,
@@ -217,11 +183,13 @@ for o in d.submit(targets)? {
 ```
 
 `Dispatch` holds the plan, the source overrides and the dispatcher, so you
-never build an upload yourself. If you have `api::build::Root` values,
-`Dispatch::realise` builds them all, and `Built::paths(roots)` gives you one
-output path per root.
+never assemble an upload yourself. Given `api::build::Root` values,
+`Dispatch::realise` builds them and `Built::paths(roots)` returns the output
+paths.
 
 ## Read the derivations an evaluation made
+
+`examples/drv_info.rs` lists every derivation a run created:
 
 ```sh
 cargo run --release --example drv_info -- \
@@ -234,11 +202,11 @@ drv	attr	position	outputs
 1 derivations
 ```
 
-Every derivation the run created is in `Evaluator::drv.drvs`, keyed by
-store path. Each `DrvInfo` carries `attr` and `pos`, and
-`provenance::Provenance::snapshot(ev)` maps store paths back to the local
-trees they were copied from. See
-[explanation/provenance.md](../explanation/provenance.md).
+The derivations are in `Evaluator::drv.drvs`, keyed by store path, and each
+`DrvInfo` carries `attr` and `pos`. `provenance::Provenance::snapshot(ev)`
+maps store paths back to the local trees they were copied from. How that
+works is in
+[Trace a store path back to its source](../explanation/provenance.md).
 
 ## Report errors the way iets does
 
@@ -248,5 +216,5 @@ let record = api::report_of(ev, &err);   // to render yourself
 ```
 
 `report` maps store paths and positions back to the local trees they came
-from. To render the record yourself, use `report_of` and leave the
-session's sink unset.
+from. To render the record yourself, call `report_of` and leave the session's
+sink unset.

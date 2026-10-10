@@ -15,7 +15,7 @@ Compress the Nix stack. A Nix user today assembles a working setup from a
 dozen helper tools, and most of them exist because Nix lacks one
 capability or one good default. iets supplies the capability or the
 default, so the tool is no longer needed and Nix feels good to use with no
-configuration. Evaluation speed is the first result of this, not the last.
+configuration. Evaluation speed is the first result of this.
 
 The way to get there is good abstractions and good defaults, not more
 code. iets is not a jumbo binary that bundles every tool. A feature
@@ -51,8 +51,7 @@ VM.
 
 nix-grpc-store (github.com/Mic92/nix-grpc-store) is the supported gRPC
 transport, spoken natively from its vendored `proto/nix_remote.proto`. Its
-daemon is somebody else's daemon, which is the point: iets is a client of
-it, not a replacement for it.
+daemon is somebody else's daemon, which is the point: iets is a client of it.
 
 ## Pipeline
 
@@ -192,25 +191,12 @@ What each command is written against. The operation layer is
 | `nix print-dev-env` | `dev-env` | the bash rendering |
 | `nix flake prefetch-inputs` | `flake-info` | Nix's argv, the fetch threads |
 
-Gaps in the operation layer, where a command still reaches past it:
+`nix-shell` and `print-dev-env` upload a plan and then speak the worker
+protocol themselves, because going through `Dispatch` would open a second
+connection. `iets diff` keeps derivations in an in-memory table, because it
+evaluates and compares in one process.
 
-1. `resolve --dump-drvs` writes derivations, not sources. The shape it
-   wants is a batch form of `build --source STOREPATH=LOCAL`. `iets diff`
-   keeps its in-memory table, because it evaluates and compares in one
-   process.
-2. `iets prefetch` and the `fix-hashes` path of `iets build` read a hash
-   mismatch out of the log (`log::want_mismatch`, `log::take_mismatches`).
-   `build` should report it as structured output.
-3. `eval-jobs --eval-store` instantiates on one store and builds on
-   another. `plan` and `build` take one builder.
-4. `nix-shell` and `print-dev-env` upload a plan, then speak the worker
-   protocol themselves: they build the derivation's inputs, run the shell
-   and read the env back. They drive `PlanUpload` on that connection,
-   because going through `Dispatch` would open a second one.
-5. There is no `flake-info` or `flake-tree` op, because no caller needs the
-   process boundary.
-
-Why, and what the migration to it measured:
+Why the layer exists, and when an operation is warranted:
 `docs/explanation/plumbing-and-porcelain.md`.
 
 ## Where the explanations are
@@ -227,10 +213,65 @@ Why, and what the migration to it measured:
 Reference material — every command, setting, error code, lint, builtin,
 divergence and library entry point — is under `docs/reference/`.
 
+## Builtin helpers
+
+### Forcing (all on `Evaluator`)
+
+| helper | returns | error when |
+|---|---|---|
+| `force(w)` | forced `Word` | evaluation fails |
+| `force_cell(&cell)` | forced `Word`, written back to the cell | |
+| `force_int(w, pos, ctx)` | `i64` | not an int |
+| `force_float(w, pos, ctx)` | `f64` (ints convert) | |
+| `force_bool(w, pos, ctx)` | `bool` | |
+| `force_string(w, pos, ctx)` | `&StringObj` (bytes + context) | not a string |
+| `force_string_no_ctx(w, pos, ctx)` | `&[u8]` | string has context |
+| `force_list(w, pos, ctx)` | `&ListObj` (`.cells()`) | |
+| `force_attrs(w, pos, ctx)` | `&AttrsObj` (`.get(sym)`, `.attrs()`) | |
+| `force_function(w, pos, ctx)` | the function word (lambda, primop, or functor set) | |
+| `force_deep(w)` | recursively forced | |
+| `coerce_to_string(w, &mut ctx, pos, err_ctx, coerce_more, copy_to_store, canonicalize)` | `Cow<[u8]>`, contexts appended to `ctx` | not coercible |
+| `eq_values(a, b, pos)` / `less_than(a, b, pos)` | `bool` | |
+| `call1(f, a, pos)`, `call2(f, a, b, pos)`, `apply(f, &args, pos)` | forced result | |
+
+`ctx` is a `&str`: the error context of the builtin.
+
+### Making values
+
+| constructor | notes |
+|---|---|
+| `ev.mk_int(i)`, `ev.mk_float(f)`, `Word::from_bool(b)`, `Word::NULL`, `Word::TRUE`, `Word::FALSE` | ints are immediates when they fit 61 bits |
+| `ev.mk_string(&bytes)` | no context |
+| `ev.arena.mk_string_ctx(&bytes, &ctx)` | `ctx: &[Ctx]`; use `ctx_to_arena(&mut ev.arena, vec)` to sort and dedup |
+| `ev.arena.mk_string_static(bytes, ctx)` | when bytes already live in the arena (e.g. a substring of an existing string) |
+| `ev.arena.mk_path(&bytes)` | path value |
+| `ev.mk_list(&words)` | or `ev.arena.alloc_list(n)` and fill `.cells()` |
+| `ev.mk_attrs(&mut entries, pos)` | `entries: Vec<(Sym, Pos, Word)>`; sorts, errors on duplicates |
+| `ev.arena.mk_attrs_sorted(&entries)` | entries already sorted by `Sym` id and unique |
+| `ev.empty_attrs()` | |
+| `ev.sym(b"name")` | intern a symbol; `ev.interner.name(sym)` reads it back |
+| `ev.mk_pos_attrs(pos)` | `{ file, line, column }` or null |
+| `ev.arena.mk_thunk_app(f, x)` | lazy application |
+
+Common symbols are ready on `ev.s`: `out_path`, `drv_path`, `type_`,
+`name`, `value`, `functor`, `to_string` and more.
+
+### Errors
+
+```rust
+use crate::eval::{ErrorKind, bail};
+bail!(ErrorKind::Eval, pos, "cannot create list of size {}", n);
+```
+
+The kinds are in `src/eval/error.rs`. `tryEval` catches only `Throw` and
+`Assert`. When iets does not support a call, use `Unsupported`. Then a
+classic command name runs the real Nix instead. To add a trace line, call
+`e.add_trace(pos, msg)`.
+
 ## Testing
 
-`cargo test` for the units. `nix flake check` adds clippy, fmt, ast-grep, the examples,
-the NixOS module and the scripts, in two ways. The scripts that need no
+`cargo test` for the units. `nix flake check` adds clippy, fmt, ast-grep, the
+examples, the NixOS module and the scripts. The scripts that need no
 `nix-daemon` run in the build sandbox. The scripts that need a daemon and a
 store to write to run in a NixOS test container (`nix/e2e-test.nix`,
 x86_64-linux only): systemd-nspawn, so no KVM; the real Nix 2.34.8 on `PATH`, a
@@ -296,9 +337,7 @@ iets eval-jobs --impure --no-instantiate --workers 1 --chunks 8 --chunk 0   # ci
 ```
 
 Both reach nixpkgs through `<nixpkgs>`, which a pure evaluation does not
-have, so they run with `--impure`. They always measured impure
-evaluation: the native default was impure until the project root arrived
-(`docs/explanation/flakes-and-sources.md`).
+have, so they run with `--impure`.
 
 The evaluation counters (thunks, calls, derivations, compile time) are
 per fiber, and so are the arena figures. A fiber adds its own to the run
@@ -317,7 +356,7 @@ own strings: on nixos-desktop, ~630 MB at one worker and ~645 MB at four.
 
 ## Constraints on evaluator changes
 
-Fibers migrate between threads and share every value, so six rules hold
+Fibers migrate between threads and share every value, so these rules hold
 inside and around `src/eval` and `src/parallel`:
 
 - `Evaluator` derives `Clone`. A new field must be `Clone`, and per-fiber

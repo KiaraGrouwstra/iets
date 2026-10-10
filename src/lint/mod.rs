@@ -878,7 +878,7 @@ impl Evaluator {
     }
 
     /// Any fiber reports: the site set keeps a warning to one line, and bailing
-    /// like `trace` (docs/explanation/evaluation.md, "Speculation is invisible")
+    /// like `trace` (docs/explanation/evaluation.md, "Speculation can't change the result")
     /// cost 15 % of the wall on nixos-desktop at 4 workers. A site the scope
     /// silences enters the set too; an `error` site never does, so every fiber
     /// that reaches it fails. A `level` is that of the tree a value comes from,
