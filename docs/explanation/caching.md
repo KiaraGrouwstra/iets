@@ -18,7 +18,7 @@ turns off the input store, because a run needs the input's bytes.
 `--cache-dir DIR` moves the three stores and the roots directory.
 
 `~/.cache/iets/roots` holds the GC roots iets owns
-([The roots store](#the-roots-store-what-iets-keeps-alive)). The design
+([The roots store](#the-roots-store-gc-roots-iets-owns)). The design
 comes from Mic92's nix-tarmac.
 
 ## Rules every store follows
@@ -131,7 +131,7 @@ A second nixpkgs costs little on disk. Evaluating the nixos-desktop
 workload at a nixpkgs two releases older than the pinned one added one
 tracing entry (0.9 MiB) and 56 IR entries (0.5 MiB).
 
-## The tracing cache: remember what a run read
+## The tracing cache: skip evaluation when nothing changed
 
 `iets eval` and `iets build` remember what a run printed, together with
 every observation of the outside world the run made. A later run with the
@@ -370,7 +370,7 @@ process that needs the same tree prints one line, blocks, and then reads the
 entry the first one stored. If the first fetch failed, the second downloads
 it itself. Different inputs still download in parallel.
 
-## The roots store: what iets keeps alive
+## The roots store: GC roots iets owns
 
 `~/.cache/iets/roots` is where iets keeps the GC roots it owns. Every
 other root mechanism takes a path from you (`print-dev-env --gc-root PATH`,

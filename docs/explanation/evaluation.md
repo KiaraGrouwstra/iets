@@ -43,7 +43,7 @@ never forced. A `mapAttrs` entry has no thunk object at all: a
 entries fall back to an ordinary two-argument thunk. That change alone took
 the arena from 8,936 MB to 7,981 MB, with the run time inside the noise.
 
-## How values are stored
+## A value is one tagged word
 
 A `Word` is one 8-byte word with a 3-bit tag in the low bits.
 
@@ -110,7 +110,7 @@ costs a few comparisons instead of a scan of every head. Measurement decided
 on a union: on outpaths, `//` copied 5.12 GB, and 80 % of the results were
 never iterated at all. The union took the arena from 13,253 MB to 8,936 MB.
 
-## Strings shared by content
+## Equal strings share their bytes
 
 The arena keeps a table of string bytes by 64-bit content hash, the
 context-free string object over them, and a set of context slices. A string
@@ -324,7 +324,7 @@ fails only by exceeding the maximum call depth sequentially may succeed in
 parallel. Both are listed in
 [Known divergences from Nix 2.34](../reference/divergences.md#parallel-evaluation).
 
-### Deadlock recovery
+### Deadlocks
 
 Fan-out can claim the two halves of a cycle on two fibers, which then wait
 on each other. Sequential evaluation would have reported infinite recursion
@@ -334,7 +334,7 @@ Each one unwinds, every thunk it claimed is reset, its waiters wake, and the
 main fiber re-evaluates the cycle sequentially and reports the error the
 sequential path would have reported.
 
-## How fast it is
+## Speed against Nix
 
 Measured on 2026-09-26 on an idle 32-core machine, against Nix 2.34.8 on
 the same nixpkgs, with identical derivation paths:
@@ -356,7 +356,7 @@ desktop, 19 % of the run, so with `--no-ir-cache` the ratio falls to 2.07×
 on minimal and 2.22× on desktop. Nix has no equivalent to turn off, so 2.7×
 compares the products and 2.1× compares the evaluators.
 
-### Searching
+### Speed of `iets search`
 
 `iets search` caches an index of the packages it finds. These numbers are
 wall time, median of three, on 2026-09-23, on a 16-core EPYC shared with

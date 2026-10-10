@@ -12,7 +12,7 @@ The worker protocol is serial per connection, and every
 would leave the daemon idle between derivations, so iets sends one request
 for each set that is ready to build.
 
-## The worker protocol
+## Worker protocol timings
 
 The figures come from `scripts/daemon-e2e.nu` on a release build.
 
