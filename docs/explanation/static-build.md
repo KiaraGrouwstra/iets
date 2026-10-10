@@ -1,6 +1,8 @@
 # The static build
 
-`nix build .#static` gives you a musl binary with no runtime dependencies.
+`nix build .#static` gives you a musl binary with no runtime dependencies,
+for x86_64-linux or aarch64-linux. Like every build of iets, it's Linux
+only: the evaluator uses futexes, `/proc/self` and Linux `madvise` flags.
 It needs no `/nix/store`, no daemon, no shared libraries and no CA bundle.
 It evaluates, fetches `github:`, `gitlab:`, `sourcehut:` and `tarball`
 inputs, and builds on a `grpc://` builder. Stripped and compressed with
