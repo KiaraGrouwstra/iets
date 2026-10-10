@@ -150,7 +150,7 @@ Around it:
 - `main.rs` and `cli/`: the command line on top of `api`, including the
   classic names in `cli/classic/`.
 
-## The layer rule
+## Layering
 
 A capability is implemented once, below the command line, and a porcelain
 command is written against it. `tests/layering.rs` enforces it: no file
@@ -159,8 +159,7 @@ under `src/cli/` may name `crate::eval`, `crate::store`, `crate::build`,
 `crate::trace`, `crate::compile` or `crate::parallel` outside a per-file
 allow-list whose length is asserted.
 
-What the rule does *not* ban is porcelain-side libraries for presentation,
-argv compatibility and interactive flows, however large.
+Porcelain-side libraries for presentation, argv compatibility and interactive flows are fine, however large.
 
 What each command is written against. The operation layer is
 `crate::api`. Five of its operations are also `iets plumbing` commands:
@@ -354,10 +353,9 @@ own strings: on nixos-desktop, ~630 MB at one worker and ~645 MB at four.
 - `cargo clippy` clean, `cargo fmt`, `ast-grep scan` clean (`nix/ast-grep`).
 - Commit small, descriptive messages.
 
-## Constraints on evaluator changes
+## Changing the evaluator
 
-Fibers migrate between threads and share every value, so these rules hold
-inside and around `src/eval` and `src/parallel`:
+Fibers migrate between threads and share every value, so these hold inside and around `src/eval` and `src/parallel`:
 
 - `Evaluator` derives `Clone`. A new field must be `Clone`, and per-fiber
   state must be cheap to clone; a shared table goes behind a handle in
@@ -377,8 +375,7 @@ inside and around `src/eval` and `src/parallel`:
   cancelled helper could leak a value built from a bailed sub-computation,
   and a cell that holds a value would no longer mean the program asked for
   it, which `==` and the printers read.
-- A new user-visible effect — a warning, a file, a line on stderr — needs a
-  rule for a helper that reaches it before demand: cancel the task
+- A new user-visible effect — a warning, a file, a line on stderr — must say what a helper does when it reaches it before demand: cancel the task
   (`parallel::journal`) or hold it back (`parallel::defer`).
 - `Cell::get` is `Acquire` and `Cell::set` is `Release`. An object is fully
   written before the word that points at it is stored into a cell or pushed

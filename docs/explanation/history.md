@@ -35,7 +35,7 @@ compiler and were about how code looks: `with`, `with-non-literal`,
 `eq-bool`, `manual-inherit`, `empty-let` and `ellipsis-without-bind`. They
 went, along with the families `scope` and `style`.
 
-The reason is the scope rule: iets reports what only an evaluator can
+The reason is scope: iets reports what only an evaluator can
 know, and has no opinion about how code looks. See
 [What iets lints](lint-scope.md). Style is the project's call, and nixpkgs
 has its own style for each kind of file. statix and deadnix read the syntax, so copying
@@ -297,7 +297,7 @@ benchmark script went.
 
 *2026-09-18*
 
-The keep rule: wall time better by more than 2 % on one of the two
+To keep an idea, wall time had to be better by more than 2 % on one of the two
 one-worker workloads, with no regression above 1 % elsewhere.
 
 Kept: the compiled-IR cache.

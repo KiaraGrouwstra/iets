@@ -3,7 +3,7 @@
 iets writes three things under `~/.cache/iets`. The compiled IR and the
 tracing runs are caches: they hold the result of work iets can do again.
 Fetched inputs aren't a cache. They're where a fetched flake input *lives*.
-All three follow the same rules, and the input store is safe in your home
+All three work the same way, and the input store is safe in your home
 directory with no daemon and no signature.
 
 | store | default root | entry | keyed on |
@@ -21,7 +21,7 @@ turns off the input store, because a run needs the input's bytes.
 ([The roots store](#the-roots-store-gc-roots-iets-owns)). The design
 comes from Mic92's nix-tarmac.
 
-## Rules every store follows
+## How every store stays safe
 
 **Stage and rename.** An entry is one file. iets writes it in full under a
 temporary name, then renames it into place. A rename is atomic, so one
@@ -405,7 +405,7 @@ classic names it diverges from Nix on purpose
 ([Known divergences from Nix 2.34](../reference/divergences.md)), which is
 reason enough to turn it off there.
 
-Most of the rules in "Rules every store follows" don't apply to roots. A
+Most of "How every store stays safe" doesn't apply to roots. A
 root holds nothing that can be recomputed, so there is no format version and
 nothing to stage, rename, poison or wipe: a symlink is either right or
 absent. The TTL sweep does apply: every run touches its link (`utimensat` on the link itself), and `iets cache gc` walks this

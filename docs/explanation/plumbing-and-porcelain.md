@@ -55,8 +55,7 @@ file under `src/cli/` and fails when one names `crate::eval`,
 
 **Types.** An evaluator value should not appear in a porcelain signature:
 a command that cannot name a value cannot evaluate one. A second list in
-the same test tracks `runtime::Word` in signatures, so the rule is adopted
-file by file.
+the same test tracks `runtime::Word` in signatures, so the check is adopted file by file.
 
 Both lists have their length asserted against a constant, and the test fails
 on an entry *wider* than the code needs as well as on a missing one. A reach
