@@ -100,8 +100,8 @@ daemon's `nix_version` and its trust flag, then one `STDERR_LAST`.
 
 ### `SetOptions`
 
-iets sends the fields Nix's `RemoteStore::setOptions` sends, with these
-values:
+Over `daemon` and `unix://`, iets sends the fields Nix's
+`RemoteStore::setOptions` sends, with these values:
 
 | Option | Value |
 |:---|:---|
@@ -116,6 +116,10 @@ Under a classic name, these come from nix.conf instead: `keep-failed`,
 `keep-going`, `fallback`, `max-jobs`, `max-silent-time`, `cores` and
 `substitute`. The override map then holds every other store setting you
 set outside the system nix.conf (`docs/reference/settings.md`).
+
+Over `ssh-ng://`, iets sends no `SetOptions`, as Nix's `SSHStore` does
+(ssh-store.cc). The remote daemon's own settings apply. nixbuild.net
+rejects the op.
 
 ### Requests
 
@@ -286,10 +290,11 @@ when its metadata changed (`docs/explanation/caching.md`).
 
 ## Known limits
 
-- `ssh-ng://` is tested only through a local `ssh` shim. There is no
-  `--ssh-option` passthrough.
-- `iets build` sends `max-jobs` equal to the CPU count. It has no flag for
-  that or for substituters. A `grpc://` builder always keeps going, so `-k`
+- `ssh-ng://` is tested through a local `ssh` shim, and by hand against
+  nixbuild.net. There is no `--ssh-option` passthrough: use
+  `NIX_SSHOPTS` or `~/.ssh/config`.
+- Over `daemon` and `unix://`, `iets build` sends `max-jobs` equal to the
+  CPU count. It has no flag for that or for substituters. A `grpc://` builder always keeps going, so `-k`
   changes nothing there.
 - iets asks for the output paths of the roots only. A dependency that built
   gets no line of its own beyond its result.
