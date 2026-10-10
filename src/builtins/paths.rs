@@ -1,9 +1,9 @@
 //! File system primops (primops.cc): readFile, readDir, readFileType,
 //! pathExists, toPath, storePath, filterSource, path, toFile. The network
-//! fetchers and flake primops are registered so `builtins ? fetchGit`
+//! fetchers and flake primops are registered so `builtins ? fetchMercurial`
 //! holds, but they fail when called; only `fetchurl`, `fetchTree` on a
-//! locked input, `fetchTarball` with a `sha256`, `getFlake`, `parseFlakeRef`
-//! and `flakeRefToString` work (`flake`).
+//! locked input, `fetchTarball` with a `sha256`, `fetchGit`, `getFlake`,
+//! `parseFlakeRef` and `flakeRefToString` work (`flake`).
 
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashSet};
@@ -15,8 +15,8 @@ use std::sync::Arc;
 use std::{fs, io};
 
 use super::Registry;
-use super::fetch;
 use super::store_hooks::{self, At, Follow};
+use super::{fetch, fetch_git};
 use crate::compile::canon_path;
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
 use crate::flake::{self, flakeref};
@@ -44,7 +44,7 @@ pub fn register(r: &mut Registry) {
     r.op("__toFile", 2, to_file);
     r.op("__fetchurl", 1, fetch::fetchurl_builtin);
     r.op("fetchTarball", 1, fetch::fetch_tarball_builtin);
-    r.op("fetchGit", 1, fetch_git);
+    r.op("fetchGit", 1, fetch_git::fetch_git);
     r.op("fetchTree", 1, fetch::fetch_tree);
     r.op("fetchMercurial", 1, fetch_mercurial);
     r.op("__fetchClosure", 1, fetch_closure);
@@ -77,11 +77,6 @@ macro_rules! unsupported {
     };
 }
 
-unsupported!(
-    fetch_git,
-    "fetchGit",
-    "iets: network fetchers are not supported (builtins.fetchGit)"
-);
 unsupported!(
     fetch_mercurial,
     "builtins.fetchMercurial is not supported",

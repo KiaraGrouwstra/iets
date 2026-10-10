@@ -7,9 +7,11 @@
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs;
+use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::thread;
 
 use super::{Scm, Snapshot};
 use crate::trace::{Kind, Obs, Query, Trace};
@@ -49,6 +51,45 @@ fn git(trace: &Trace, root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
 fn of_rev(root: &Path, args: &[&str]) -> Result<u64, String> {
     let out = git(&Trace::default(), root, args)?;
     Ok(String::from_utf8_lossy(&out).trim().parse().unwrap_or(0))
+}
+
+/// The entries of `paths` that `export-ignore` drops, after the
+/// `.gitattributes` in the index (git-utils.cc:GitExportIgnoreSourceAccessor
+/// on a working tree). The index is what `ls-files` observes, so this query
+/// is none.
+fn export_ignored(root: &Path, paths: &HashSet<PathBuf>) -> Result<HashSet<PathBuf>, String> {
+    let mut stdin = Vec::new();
+    for p in paths.iter().filter_map(|p| p.strip_prefix(root).ok()) {
+        stdin.extend_from_slice(p.as_os_str().as_bytes());
+        stdin.push(0);
+    }
+    let fail = |e: String| format!("iets: `git check-attr` failed in '{}': {e}", root.display());
+    let mut child = Command::new("git")
+        .arg("--no-optional-locks")
+        .arg("-C")
+        .arg(root)
+        .args(["check-attr", "--cached", "-z", "--stdin", "export-ignore"])
+        .env("GIT_ATTR_NOSYSTEM", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|e| fail(e.to_string()))?;
+    let mut input = child.stdin.take().expect("piped");
+    let writer = thread::spawn(move || input.write_all(&stdin));
+    let out = child.wait_with_output().map_err(|e| fail(e.to_string()))?;
+    let _ = writer.join();
+    if !out.status.success() {
+        return Err(fail(format!("exit {}", out.status.code().unwrap_or(-1))));
+    }
+    let fields: Vec<&[u8]> = out.stdout.split(|&b| b == 0).collect();
+    Ok(fields
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .filter(|[_, _, info]| *info == b"set")
+        .map(|[path, _, _]| root.join(OsStr::from_bytes(path)))
+        .collect())
 }
 
 impl Scm for Git {
@@ -113,6 +154,14 @@ impl Scm for Git {
             last_modified,
             countable: !shallow,
         })
+    }
+
+    fn export_ignored(
+        &self,
+        root: &Path,
+        paths: &HashSet<PathBuf>,
+    ) -> Result<HashSet<PathBuf>, String> {
+        export_ignored(root, paths)
     }
 
     fn rev_count(&self, root: &Path, rev: &str) -> Result<u64, String> {

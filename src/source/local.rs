@@ -128,10 +128,35 @@ pub fn tracked_source(
     subdir: &str,
     pos: Pos,
 ) -> EvalResult<Tree> {
+    let (mut tree, _) = workdir(ev, scm, root, "source", false, pos)?;
+    tree.subdir = subdir.to_string();
+    Ok(tree)
+}
+
+/// The working tree of an SCM under the store name `name`, without what
+/// `Scm::export_ignored` drops when `export` is set, and whether it is dirty.
+pub fn workdir(
+    ev: &mut Evaluator,
+    scm: &'static dyn Scm,
+    root: &Path,
+    name: &str,
+    export: bool,
+    pos: Pos,
+) -> EvalResult<(Tree, bool)> {
     let at = scm
         .snapshot(ev.trace(), root)
         .map_err(|e| Error::boxed(ErrorKind::Io, e, pos))?;
-    let accepted = accepted_set(root, &at.files);
+    let mut accepted = accepted_set(root, &at.files);
+    if export {
+        let dropped = scm
+            .export_ignored(root, &accepted)
+            .map_err(|e| Error::boxed(ErrorKind::Io, e, pos))?;
+        accepted.retain(|p| {
+            !p.ancestors()
+                .take_while(|a| *a != root)
+                .any(|a| dropped.contains(a))
+        });
+    }
     let mut fp = ev.trace().fp(root);
     let mut filter = |p: &Path, t: nar::FileType| {
         let keep = accepted.contains(p);
@@ -150,7 +175,7 @@ pub fn tracked_source(
         })?;
     ev.trace()
         .tree_external(root, trace::hash_to_digest(&hash), &accepted, fp);
-    let path = treestore::store_path("source", &hash)
+    let path = treestore::store_path(name, &hash)
         .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
     ev.known.add(
         path.clone(),
@@ -179,12 +204,13 @@ pub fn tracked_source(
         }
         None => {}
     }
-    Ok(Tree {
+    let tree = Tree {
         path,
         attrs,
-        subdir: subdir.to_string(),
+        subdir: String::new(),
         counter: counts.then(|| (scm, root.to_path_buf())),
-    })
+    };
+    Ok((tree, at.dirty))
 }
 
 #[cfg(test)]

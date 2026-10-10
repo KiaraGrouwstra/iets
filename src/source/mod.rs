@@ -25,10 +25,10 @@ use crate::eval::{EvalResult, Evaluator, Pos};
 use crate::store::hash::{Hash, HashAlgo};
 use crate::store::path::StorePath;
 
-pub(crate) use local::path_tree;
+pub(crate) use local::{path_tree, workdir};
 pub use lock::Lock;
 pub use remote::LazyStore;
-pub(crate) use remote::{ensure_readable, fetch_file};
+pub(crate) use remote::{ensure_readable, fetch_file, fetch_git_with_nix};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AttrVal {

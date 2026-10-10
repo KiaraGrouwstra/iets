@@ -59,6 +59,16 @@ pub trait Scm: Sync {
     /// is no observation, and the caller can keep it by `rev`.
     fn rev_count(&self, root: &Path, rev: &str) -> Result<u64, String>;
 
+    /// The entries of `paths`, files and directories below `root`, that an
+    /// export of the working tree leaves out: `export-ignore` in git.
+    fn export_ignored(
+        &self,
+        _root: &Path,
+        _paths: &HashSet<PathBuf>,
+    ) -> Result<HashSet<PathBuf>, String> {
+        Ok(HashSet::new())
+    }
+
     /// For `rel`, a file on disk below `root` that the SCM does not track:
     /// the command that makes the SCM track it. `None` when the SCM tracks
     /// `rel` or gives no answer.
