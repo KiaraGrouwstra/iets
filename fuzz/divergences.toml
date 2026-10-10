@@ -4,7 +4,8 @@
 # docs/reference/fuzz.md.
 #
 #   [[parse]]       # or [[nar]] for the nar-* targets, [[drv]] for drv-*,
-#                   # [[wire]] for wire, [[eval]] for eval
+#                   # [[wire]] for wire, [[eval]] for eval, [[drv-eval]]
+#                   # for drv-eval
 #   id = "..."      # names the case; reports count hits per id
 #   doc = "..."     # the section of docs/reference/divergences.md
 #   kind = "..."    # optional: one of the target's kinds
@@ -139,3 +140,38 @@ kind = "aterm-json"
 id = "drv-duplicate-output"
 doc = "docs/reference/divergences.md#reading-a-drv-file"
 kind = "aterm-outputs"
+
+[[drv-eval]]
+id = "drv-eval-builder-not-utf8"
+doc = "docs/reference/divergences.md#bytes-that-are-not-utf-8-in-a-derivation"
+kind = "nix-only"
+input = "\"builder\" = (builtins.substring 0 1 \"é\")"
+iets = "string is not valid UTF-8"
+
+[[drv-eval]]
+id = "drv-eval-system-not-utf8"
+doc = "docs/reference/divergences.md#bytes-that-are-not-utf-8-in-a-derivation"
+kind = "nix-only"
+input = "\"system\" = (builtins.substring 0 1 \"é\")"
+iets = "string is not valid UTF-8"
+
+[[drv-eval]]
+id = "drv-eval-env-name-not-utf8"
+doc = "docs/reference/divergences.md#bytes-that-are-not-utf-8-in-a-derivation"
+kind = "nix-only"
+input = "${builtins.substring 0 1 \"é\"} ="
+iets = "string is not valid UTF-8"
+
+[[drv-eval]]
+id = "drv-eval-text-mode-without-feature"
+doc = "docs/reference/divergences.md#experimental-feature-builtins"
+kind = "iets-only"
+input = "\"outputHashMode\" = \"text\""
+nix = "dynamic-derivations"
+
+[[drv-eval]]
+id = "drv-eval-blake3-without-feature"
+doc = "docs/reference/divergences.md#experimental-feature-builtins"
+kind = "iets-only"
+input = "\"outputHashAlgo\" = \"blake3\""
+nix = "blake3-hashes"

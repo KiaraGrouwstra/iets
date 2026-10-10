@@ -2,6 +2,7 @@
 
 pub mod canon;
 pub mod drv;
+pub mod drveval;
 pub mod eval;
 pub mod known;
 pub mod nar;
@@ -57,6 +58,10 @@ pub fn target(name: &str) -> Result<Box<dyn Target + Send>, String> {
     Ok(match name {
         "parse" => Box::new(parse::Parse::new(known::from_env("parse", parse::KINDS)?)),
         "eval" => Box::new(eval::Eval::new(known::from_env("eval", eval::KINDS)?)),
+        "drv-eval" => Box::new(eval::Eval::with(
+            known::from_env("drv-eval", eval::KINDS)?,
+            drveval::generate,
+        )),
         "nar-read" | "nar-gen" | "nar-tree" => {
             let mode = match name {
                 "nar-read" => nar::Mode::Read,
@@ -75,7 +80,7 @@ pub fn target(name: &str) -> Result<Box<dyn Target + Send>, String> {
         }
         _ => {
             return Err(format!(
-                "unknown target `{name}`: parse, eval, nar-read, nar-gen, nar-tree, wire, drv-read or drv-gen"
+                "unknown target `{name}`: parse, eval, drv-eval, nar-read, nar-gen, nar-tree, wire, drv-read or drv-gen"
             ));
         }
     })
