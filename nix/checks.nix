@@ -20,7 +20,10 @@ in
 {
   # the tests that need a live /nix/store are #[ignore]d; run them
   # with `cargo test -- --ignored` in the dev shell.
-  test = craneLib.cargoTest withDev;
+  test = craneLib.cargoNextest withDev;
+  # nextest runs no doctests
+  doctest = craneLib.cargoDocTest withDev;
+  doc = craneLib.cargoDoc (withDev // { RUSTDOCFLAGS = "-D warnings"; });
   clippy = craneLib.cargoClippy (withDev // { cargoClippyExtraArgs = "--all-targets -- -D warnings"; });
   # the library facade: every example links the library only (docs/reference/library.md)
   examples = craneLib.mkCargoDerivation (withDev // {

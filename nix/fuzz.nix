@@ -1,8 +1,9 @@
 # The fuzz targets as packages, checks and campaigns (docs/how-to/fuzz.md).
-{ pkgs, sources, nixpkgs, nix-conformance, iets }:
+{ pkgs, craneLib, sources, nixpkgs, nix-conformance, iets }:
 let
   inherit (pkgs) lib;
   oracles = nix-conformance.packages.${pkgs.stdenv.hostPlatform.system}.oracles;
+  # for the libFuzzer binaries, which cargo-fuzz builds
   common = {
     version = "0.0.0";
     src = sources.fuzz;
@@ -54,10 +55,24 @@ let
     export IETS_DRV_ORACLE=${oracles}/bin/drv-oracle
   '';
   # the replay tool, built plain: it is fast and needs no libFuzzer
-  fuzz-diff = pkgs.rustPlatform.buildRustPackage (common // {
-    pname = "iets-fuzz-diff";
-    cargoBuildFlags = [ "--bin" "fuzz-diff" "--bin" "conformance-adapter" ];
-  });
+  fuzz-diff =
+    let
+      args = {
+        pname = "iets-fuzz-diff";
+        version = "0.0.0";
+        strictDeps = true;
+        src = sources.fuzz;
+        cargoLock = ../fuzz/Cargo.lock;
+        cargoToml = ../fuzz/Cargo.toml;
+        postUnpack = "cd $sourceRoot/fuzz; sourceRoot=.";
+        cargoExtraArgs = "--locked --bin fuzz-diff --bin conformance-adapter";
+        doCheck = false;
+      };
+    in
+    craneLib.buildPackage (args // {
+      cargoArtifacts = craneLib.buildDepsOnly args;
+      meta.license = lib.licenses.lgpl21Plus;
+    });
   # the libFuzzer binaries, instrumented by cargo-fuzz on the stable compiler
   fuzzers = pkgs.rustPlatform.buildRustPackage (common // {
     pname = "iets-fuzzers";

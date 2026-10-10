@@ -6,11 +6,13 @@
 let
   # the LLVM that rustc was built with reads its profiles
   llvm = rustc.llvmPackages.llvm;
-  instrumented = iets.overrideAttrs (old: {
-    pname = "iets-instrumented";
-    env = (old.env or { }) // { RUSTFLAGS = "-Cinstrument-coverage"; };
-    dontStrip = true;
-  });
+  instrumented = iets.override {
+    extraArgs = {
+      pname = "iets-instrumented";
+      RUSTFLAGS = "-Cinstrument-coverage";
+      dontStrip = true;
+    };
+  };
   e2e = name: args: e2eTest ({
     inherit name;
     iets = instrumented;
