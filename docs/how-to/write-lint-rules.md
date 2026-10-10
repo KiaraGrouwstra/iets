@@ -7,7 +7,7 @@ syntax tree. A rule is a small program that reads it.
 
 The examples use `jq`, but any language that reads JSON works.
 
-## Find the nodes you care about
+## Finding nodes
 
 `iets parse --json FILE...` prints the syntax tree of each file as one line
 of JSON. Every node has a kind and a byte span in the file
@@ -39,12 +39,12 @@ $ iets parse --json rule.nix |
 {"file":"rule.nix","start":21,"end":37}
 ```
 
-## Use different rules for different directories
+## Per-directory rules
 
 Your program chooses the files, so run one set of rules over
 `pkgs/by-name` and another over `nixos/modules`.
 
-## Fix what you find
+## Fixes
 
 A span is a pair of byte offsets, and `end` is one past the last byte. To
 fix a finding, replace bytes `start` through `end - 1` with the new text.
@@ -63,7 +63,7 @@ pkgs: x:
 If you change more than one span in a file, start with the one that has the
 largest `start`. The offsets of the spans before it stay correct.
 
-## Read iets's own findings the same way
+## iets's own findings
 
 iets's own findings use the same fields. Run a command with
 `--log-format internal-json` and each finding is a record with the byte span

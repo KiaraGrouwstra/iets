@@ -93,7 +93,7 @@ returns what `callFlake` returns.
 - Remote references (`github:`, `git+https:`) and the tree of a fetched
   input are unsupported.
 
-## Getting a locked input readable
+## Locked inputs
 
 A remote input whose locked tree is not in `/nix/store` has to become
 readable first. iets tries these steps, in order. From the second on, it
@@ -124,7 +124,7 @@ bytes, which the lock's `narHash` does not give.
 With `IETS_OFFLINE=1`, any download is an error that names the URL. A flake
 whose inputs are all in the input store still evaluates.
 
-### The archive URL, per type
+### Archive URLs
 
 iets downloads with its own HTTP client. Like Nix, it follows up to 10
 redirects, retries a transient status (`docs/reference/settings.md`), sends
@@ -215,7 +215,7 @@ targets (`docs/reference/builders.md`).
 substitute it, and it has no input store entry, because its content address
 is not a flake `narHash`.
 
-## What `fetchTree` returns
+## `fetchTree` result
 
 `builtins.fetchTree` on a locked node gets the store path from `narHash`.
 It returns the attributes Nix returns:

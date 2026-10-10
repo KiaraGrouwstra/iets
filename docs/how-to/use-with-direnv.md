@@ -8,7 +8,7 @@ place of `use flake`. A cached run takes tens of milliseconds.
 The flags are in [Commands](../reference/commands.md). How iets makes the
 shell is in [How `print-dev-env` makes a shell](../explanation/dev-shells.md).
 
-## Write the `.envrc`
+## The `.envrc`
 
 Add this to your `.envrc`:
 
@@ -58,7 +58,7 @@ What each part does:
 If evaluation or the build fails, nothing goes to stdout and the status is
 non-zero, so `eval` gets an empty string and your environment stays as it was.
 
-## What makes direnv reload
+## Reloading
 
 nix-direnv watches `flake.nix` and `flake.lock` and leaves the rest to you
 and `direnv reload`. iets can do better, because its cache records everything
@@ -104,7 +104,7 @@ file empty, and the `[[ -s $entry ]]` check skips the watches. direnv then
 watches only `flake.nix` and `flake.lock`, because iets knows nothing about
 a shell that never evaluated. Fix the error on stderr and reload.
 
-## Use the NixOS module instead
+## NixOS module
 
 On NixOS you can skip `use_iets`: import `nixosModules.default` instead. The
 module installs iets and swaps nix-direnv's `use flake` for this
@@ -112,14 +112,14 @@ repository's own `direnvrc`, so your `.envrc` keeps saying `use flake`. It
 takes a local flake reference with an optional `#attr`, and the flake needs
 a `flake.lock`.
 
-## Pick a different shell
+## Other shells
 
 Without a fragment, `print-dev-env` takes `devShells.<system>.default` and a
 few older names. With `#x`, as in `iets print-dev-env .#ci`, it looks for `x`
 under `devShells`, `packages` and `legacyPackages`
 ([Commands](../reference/commands.md#print-dev-env) has the order).
 
-## Check what it costs
+## Cost
 
 `--timings` prints the cache result and the total time on stderr, and leaves
 stdout for the bash:
@@ -131,7 +131,7 @@ iets print-dev-env --timings . > /dev/null
 Measured numbers are in
 [How `print-dev-env` makes a shell](../explanation/dev-shells.md#what-it-costs).
 
-## Inspect the environment as JSON
+## JSON environment
 
 To see what the shell would set without loading it:
 
@@ -141,7 +141,7 @@ iets print-dev-env --json .
 
 The output is what `nix print-dev-env --json` prints.
 
-## What doesn't work
+## Limits
 
 iets can't make a shell whose builder isn't `bash`, a content-addressed
 shell, or `--gc-root` together with `ssh-ng://`. It doesn't implement

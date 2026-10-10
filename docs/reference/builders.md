@@ -68,7 +68,7 @@ The root comes from that file, and its closure from `/nix/store`.
 `--source STOREPATH=LOCAL` names the original local tree of an input
 source.
 
-## The two transports compared
+## Transports
 
 `iets build`, classic `nix-build` and `nix build` build the same way over
 every transport. `nix-instantiate`, `nix-shell` and `print-dev-env` upload
@@ -117,7 +117,7 @@ Under a classic name, these come from nix.conf instead: `keep-failed`,
 `substitute`. The override map then holds every other store setting you
 set outside the system nix.conf (`docs/reference/settings.md`).
 
-### Requests, in order
+### Requests
 
 1. **`QueryValidPaths`** on every planned path (sources, text paths,
    derivations) in one call, with the substitute flag off. Then, off the
@@ -202,7 +202,7 @@ For example:
 --builder 'grpc://farm.example.com:443?token-file=/run/secrets/token&max-builds=128'
 ```
 
-### Auth and headers
+### Authentication
 
 | Header | Value |
 |:---|:---|
@@ -240,7 +240,7 @@ iets never opens the worker-protocol tunnel (`Connect`), which a farm
 endpoint refuses with `UNIMPLEMENTED`. That is why `nix` needs
 `--eval-store auto` there and iets doesn't.
 
-### What a `write` token can do
+### `write` tokens
 
 `write`, the role an OIDC token usually gets, may request builds and
 import **signed** paths. Everything iets uploads is content-addressed, so

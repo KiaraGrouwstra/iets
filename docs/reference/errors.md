@@ -158,7 +158,7 @@ Any other line is `{"action":"msg","level":N,"msg":TEXT}`: level 0 for
 progress, summaries, classic fallback notes). The lines that `--timings`
 and `IETS_STATS` add stay plain text.
 
-### A cache entry that is out of date
+### Stale cache entries
 
 When a tracing cache entry is out of date, you get a level-3 record with
 code `cache-invalidated`. The text is `re-evaluating: RAW`, and `raw_msg`

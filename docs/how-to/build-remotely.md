@@ -15,7 +15,7 @@ The examples build `greeting.nix` from
 `builtins.currentSystem`, which a pure evaluation doesn't have, so the
 commands add `--impure`.
 
-## Pick a builder
+## Builders
 
 `--builder URL` takes these forms:
 
@@ -45,7 +45,7 @@ iets --iets-option builder ssh-ng://builder.example.org build --impure greeting.
 
 iets refuses a daemon older than protocol 1.35.
 
-## Set the parameters of a gRPC builder
+## gRPC parameters
 
 A `grpc://` URL takes nix-grpc-store's own query parameters. These are the
 ones you'll most likely need. The rest are in
@@ -77,7 +77,7 @@ content-addressed: a source tree, a `builtins.toFile` text, a `.drv`. The
 service computes the address itself and accepts the upload without a
 signature, so you never need the `trusted` role.
 
-## Build all the checks of a flake
+## Flake checks
 
 Name the whole set. `iets build` builds every derivation in
 it and picks the set for the current system itself:
@@ -95,7 +95,7 @@ checks.x86_64-linux.clippy`. The exit code is Nix's: 100 for a failed build.
 For a program, `--json` puts `{"outcomes":[…]}` on stdout, one object per
 check, with the end of the log for each failure.
 
-## See what gets uploaded
+## Uploads
 
 iets writes nothing to a local store on the way out. It builds the closure
 from what the evaluation holds in memory: the derivations, and the sources
@@ -128,7 +128,7 @@ worker: 2 ops, 5 round trips, 240 bytes sent
 `AddMultipleToStore` of whatever that answer said was missing. That's the
 whole upload: two operations.
 
-## Upload without building
+## Upload only
 
 `--no-build` plans, asks and uploads, then stops before the build:
 
@@ -166,7 +166,7 @@ every output, as it does for `greeting.nix`, all the lists are empty.
 Even with `--dry-run` or `--no-build`, the daemon may substitute a source it
 needs, because it can't register the derivations without it.
 
-## Get the outputs back
+## Outputs
 
 A remote builder keeps its outputs where it built them. To get them,
 `--fetch-to DIR` streams each wanted output back into `DIR`:
@@ -194,7 +194,7 @@ iets build --impure --builder daemon --out out -I nixpkgs=$nixpkgs -E '(import <
 /nix/store/xl1h9i29pgq2q5cszjhm5wpfxfbbqwyi-hello-2.12.3
 ```
 
-## Build a .drv you already have
+## Build a `.drv`
 
 `iets build` also takes a `.drv` path. The closure then comes from
 `/nix/store` instead of an evaluation:

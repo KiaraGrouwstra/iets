@@ -21,7 +21,7 @@ turns off the input store, because a run needs the input's bytes.
 ([The roots store](#the-roots-store-gc-roots-iets-owns)). The design
 comes from Mic92's nix-tarmac.
 
-## How every store stays safe
+## Store safety
 
 **Stage and rename.** An entry is one file. iets writes it in full under a
 temporary name, then renames it into place. A rename is atomic, so one
@@ -405,7 +405,7 @@ classic names it diverges from Nix on purpose
 ([Known divergences from Nix 2.34](../reference/divergences.md)), which is
 reason enough to turn it off there.
 
-Most of "How every store stays safe" doesn't apply to roots. A
+Most of "Store safety" doesn't apply to roots. A
 root holds nothing that can be recomputed, so there is no format version and
 nothing to stage, rename, poison or wipe: a symlink is either right or
 absent. The TTL sweep does apply: every run touches its link (`utimensat` on the link itself), and `iets cache gc` walks this
@@ -413,7 +413,7 @@ store with the other three. A swept root frees nothing by itself; it lets
 the next `nix collect-garbage` decide. A root iets cannot register (no local
 daemon, or a store that refuses) is a warning.
 
-### Why `nix fmt` needs a root
+### Roots for `nix fmt`
 
 `nix fmt` must not redo the evaluation of `formatter.<system>` or the build
 of what that names. A formatter that nothing points at is garbage, so the
@@ -429,7 +429,7 @@ exception is a `path:` flake, a directory outside any git repository: its
 `lastModified` is the newest mtime in the tree, so a rewrite to the same
 bytes is a new date.
 
-## What caching doesn't cover
+## Limits
 
 The input store holds trees whose content address is a flake `narHash`. It
 doesn't hold a substitutable-but-absent `/nix/store` path: `builtins.storePath`

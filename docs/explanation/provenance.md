@@ -14,7 +14,7 @@ So when `iets build .#packages.x86_64-linux.boom` fails, you see this:
 And a line in the build log says `tree is /home/u/repo` where it would have
 said `tree is /nix/store/3nma1…-source`.
 
-## Why iets records it
+## Recording
 
 A store path is a hash of everything that went into it, so it hides where it
 came from. That's a problem when a build fails and names a `.drv` among
@@ -43,7 +43,7 @@ The map is filled from these sources:
 3. **A revision**, for display only, when the root flake is a git working
    tree: the `HEAD` commit, with `-dirty` added when the tree is dirty.
 
-## Which position is "where it was defined"
+## Positions
 
 iets records **the position of the `name` attribute's value**. `derivation` is
 a wrapper, written in Nix, around the `derivationStrict` primop, so for a

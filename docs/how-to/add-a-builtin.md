@@ -3,7 +3,7 @@
 This guide is for contributors. You'll write a Rust function, register it
 under its Nix name, and add a test that compares it with Nix.
 
-## Write the function
+## The function
 
 Here's `concatMap` from `src/builtins/lists.rs`. It shows most of what a
 builtin does:
@@ -59,7 +59,7 @@ Nix's.
 If your builtin reads a store path, get the bytes through
 `src/builtins/store_hooks.rs`. Its module comment explains how.
 
-## Register it
+## Registration
 
 Builtins live in `src/builtins/<family>.rs`. Each file has one `register`
 function:
@@ -79,7 +79,7 @@ prefix, the name is both. A value that isn't a function, such as
 For a new family file, declare it in `src/builtins/mod.rs` and call its
 `register` from `install`.
 
-## Add a test
+## Tests
 
 Put a case in `tests/corpus/<name>.nix`. If it needs flags, put them in
 `<name>.flags`. Then record what Nix says. You need a real `nix-instantiate`

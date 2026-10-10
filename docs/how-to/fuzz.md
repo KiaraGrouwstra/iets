@@ -4,7 +4,7 @@
 their answers differ. Each target, its kinds of difference and the file
 formats are in [Fuzz targets](../reference/fuzz.md).
 
-## Run the checks
+## Checks
 
 The flake has one check for each family of targets, and one for the
 nix-conformance cases:
@@ -21,7 +21,7 @@ nix build .#checks.x86_64-linux.conformance -L
 A check fails when it finds a difference that `fuzz/divergences.toml` does
 not list, and it prints the input in base64.
 
-## Run a fuzzer by hand
+## Manual fuzzing
 
 To run a fuzzer yourself you need only the flake's stable Rust. `cargo fuzz`
 runs on it with `--sanitizer none`, because AddressSanitizer needs nightly.
@@ -43,7 +43,7 @@ saved as a file named `crash-<sha1>`.
 While you work on iets, build a single target with
 `cargo fuzz build -s none -O TARGET` in `fuzz/`.
 
-## Replay inputs
+## Replays
 
 `fuzz-diff` runs files through a target without libFuzzer. Give it a crash
 file, a corpus, or a tree of `.nix` files (`--nix-only` reads only the
@@ -56,7 +56,7 @@ fuzz-diff/bin/fuzz-diff --nix-only parse ~/src/nixpkgs
 fuzz-diff/bin/fuzz-diff --json nar-gen corpus/ > triage.jsonl
 ```
 
-## Investigate a difference
+## Differences
 
 A difference looks like this:
 
@@ -95,7 +95,7 @@ or `IETS_DRV_WRITE` to a file name and the target writes the input there. To
 serve a `wire` script to a client by hand, use for example
 `socat UNIX-LISTEN:SOCK,fork SYSTEM:'cat FILE'`.
 
-## Record a known divergence
+## Known divergences
 
 Add an entry to `fuzz/divergences.toml`, under the table of the target's
 family, with an `id`, a `doc` link to the section of
@@ -107,7 +107,7 @@ corpus. Keep entries narrow, because a broad one hides bugs. Each binary
 uses the list it was built with. To try another list, set
 `IETS_FUZZ_DIVERGENCES=FILE`.
 
-## Run a long campaign
+## Campaigns
 
 A campaign is a long run of one family on every core. The flake has one
 for each family: `fuzz-parse-campaign`, `fuzz-nar-campaign`,

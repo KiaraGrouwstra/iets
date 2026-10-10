@@ -6,7 +6,7 @@ what we measured and why it came out again, newest first, so nobody has to
 try the same idea a third time. The code and the full tables are in git. The
 numbers behind a *current* default live on that feature's page.
 
-## Why there is no machine-wide settings file
+## No machine-wide settings file
 
 *2026-09-27*
 
@@ -23,7 +23,7 @@ user file, `$IETS_CONFIG`, `--iets-option` and the `IETS_*` variables.
 
 iets ignores a leftover `/etc/iets/iets.toml`, without an error.
 
-## Why iets has no style lints
+## No style lints
 
 *2026-09-27*
 
@@ -50,7 +50,7 @@ In place of the lints, iets gives you the data. `iets parse --json` prints
 the syntax tree with each node's byte span, and a finding is a record with
 a span and an edit. A rule is a program you write.
 
-## Why a late write to a setting doesn't compile
+## Late writes to settings
 
 *2026-09-27*
 
@@ -69,7 +69,7 @@ fields, and `api::configure` wrote them after construction.
 setting fields are private, so a late write does not compile. See
 [How iets evaluates](evaluation.md).
 
-## Why there is no `fast-build`
+## No `fast-build`
 
 *2026-09-26*
 
@@ -93,7 +93,7 @@ whole tree evaluates in 0.8 s with the parallel walk and 1.1 s with
 `nix-build`'s sequential one, while the builds take minutes. The tracing
 cache, which the streaming walk could not use, makes the second run 0.03 s.
 
-## Why the settings file is TOML
+## TOML settings
 
 *2026-09-26*
 
@@ -104,7 +104,7 @@ iets does not read `iets.conf`, and nothing checks for a leftover one: the
 NixOS module wrote the new file and removed the old one in the same switch.
 `include` and `extra-<name>` went with the format.
 
-## One buffer for every derivation's ATerm
+## The ATerm buffer
 
 *2026-09-25*
 
@@ -138,7 +138,7 @@ profile, so the work went away instead of moving. What is left is
 `BTreeSet<StorePath>` clones and the `String` per store path that the
 reference sets are made of.
 
-## A loser tree for the union merge
+## The loser tree
 
 *2026-09-25*
 
@@ -175,7 +175,7 @@ keep. A real head must never tie with the sentinel that fills the tree
 while it is built, so keys start at 1, not 0. The tie-break must prefer the
 *last* leaf, or `//` returns the wrong side.
 
-## The IR cache that helper fibers never had
+## The IR cache in helper fibers
 
 *2026-09-25*
 
@@ -200,7 +200,7 @@ empty `__nixPath`. The fix installs both before `try_run`, and
 configuration, and a warm run reads one entry per file whatever the worker
 count.
 
-## Following nix-grpc-store off `BuildPaths`
+## `BuildPaths` in nix-grpc-store
 
 *2026-09-20*
 
@@ -212,7 +212,7 @@ salting that worked around an unavailable worker went too, and a bounced
 build goes back to the scheduler. Until iets followed, every build against
 the farm failed with an empty `UNIMPLEMENTED`.
 
-## Folding the last build flow into the dispatcher
+## Build flows
 
 *2026-09-19*
 
@@ -229,7 +229,7 @@ test fixtures of the removed object store. Kept on purpose: the parse cases
 of the vendored Nix language suite, which no script runs, because
 `iets parse` dumps its own AST format and not Nix's.
 
-## What a `pub(crate)` sweep found
+## The `pub(crate)` sweep
 
 *2026-09-19*
 
@@ -259,7 +259,7 @@ We proposed and did *not* cut:
 
 `src/` went from 50,315 to 49,397 lines.
 
-## Why thunks aren't evaluated at creation
+## Creation-time speculation
 
 *2026-09-19*
 
@@ -271,7 +271,7 @@ It burned CPU on work nobody asked for, and with no collector the results
 stayed in memory. It also needed a third deque lane, a backlog cap and a
 creation budget. Removed.
 
-## Why `iets build` has no scheduling flags
+## Scheduling flags
 
 *2026-09-18*
 
@@ -293,7 +293,7 @@ connections paid only as extra `max-jobs`, which the existing options
 message already sets. The existing flow stayed; the flags, the shim and the
 benchmark script went.
 
-## Single-thread ideas that missed the bar
+## Single-thread ideas
 
 *2026-09-18*
 
@@ -313,7 +313,7 @@ Rejected:
   outpaths: under the bar, because the derivation path is only about 6 % of
   a run.
 
-## Memory ideas that were priced and not built
+## Memory ideas
 
 *2026-09-18*
 
@@ -334,7 +334,7 @@ scopes held 1.28 MB and not one was free of escapes. Per-unit scopes in
 eval-jobs are 0.9 % of the arena, and the rest is the package set the next
 unit reuses. Only a collector or a process restart bounds a long run.
 
-## Why iets has no builder daemon of its own
+## A builder daemon
 
 *2026-09-18*
 
@@ -343,7 +343,7 @@ object store were both removed. The `grpc://` transport is a *client* of
 nix-grpc-store, added the same day: somebody else's daemon, with iets as
 its client.
 
-## An eval cache on the binary cache, measured and not built
+## An eval cache
 
 *2026-09-17*
 
@@ -357,7 +357,7 @@ competes with a 1.0 s local evaluation of a NixOS system and a 0.03 s
 tracing-cache hit. The first milestone would have been a publisher in
 `eval-jobs` and a consumer flag in `build`.
 
-## Parallel evaluation tweaks that went nowhere
+## Parallel tweaks
 
 *2026-09-16*
 

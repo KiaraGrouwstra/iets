@@ -20,7 +20,7 @@ number, and only the evaluator knows the value of `x`. Likewise only the
 evaluator knows which directory a coercion copies to the store, for
 `git-in-source`.
 
-## Why not style lints?
+## Existing tools
 
 Style is the project's call. nixpkgs has its own style, and it changes with
 the kind of file and the path. A lint about `with`, an unused binding or
@@ -29,7 +29,7 @@ the kind of file and the path. A lint about `with`, an unused binding or
 Tools that read only the syntax already exist: statix and deadnix. Copying
 their rules into iets makes the binary bigger and tells you nothing new.
 
-## Lints that don't need evaluation
+## Syntactic lints
 
 A few lints don't need evaluation. Each stays for its own reason.
 
@@ -38,7 +38,7 @@ A few lints don't need evaluation. Each stays for its own reason.
 | `absolute-path-literal`, `short-path-literal`, `url-literal` | Nix 2.34 has a setting for each (`lint-absolute-path-literals`, `lint-short-path-literals`, `lint-url-literals`). iets follows Nix here. |
 | `unknown-allow` | It checks that a `# iets: allow` comment names a lint in the registry. Without it, a typo silences nothing and tells nobody. |
 
-## Where a finding is reported
+## Finding sites
 
 A site in your repository is reported, and a site in an input stays quiet
 ([Lints](../reference/lints.md#scope), under "Scope").
@@ -79,7 +79,7 @@ with the byte span of every node, and iets's own findings carry the same
 spans. iets never applies an edit itself
 ([Write your own lint rules](../how-to/write-lint-rules.md)).
 
-## What iets leaves out
+## Left out
 
 - A language for rules.
 - A plug-in loader.
@@ -94,7 +94,7 @@ you downgrade iets. iets warns once for each such name, with the code
 `unknown-lint`, and carries on. `--lint` on the command line gives an error
 instead. [Lints](../reference/lints.md) says why.
 
-## What the lints find on nixpkgs
+## Results on nixpkgs
 
 A lint that fires on nixpkgs or on the language tests defaults to `off`, and
 only a lint that fires nowhere may default to `warn`. `dir-copy-unfiltered`
@@ -183,7 +183,7 @@ both workloads:
 - `pkgs/build-support/trivial-builders/default.nix:84:17`
 - `nixos/modules/misc/documentation.nix:139:11`
 
-## What the lints cost
+## Cost
 
 At the defaults the lints cost nothing measurable: `bench/ab.nu` on the
 commit before the registry against this one gave −3.4 % (desktop, 1
