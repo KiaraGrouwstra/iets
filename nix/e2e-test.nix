@@ -2,10 +2,10 @@
 # store, the real nix on PATH and no network.
 # With `coverage`, `iets` is an instrumented build: each process writes its
 # profile, and $out/cov holds them all after the run.
-{ self, src, nixpkgs, pkgs, iets, name, packages ? [ ], env ? "", coverage ? false }:
+{ lib, pkgs, nixpkgs, sources, devShell }:
+{ iets, name, packages ? [ ], env ? "", coverage ? false }:
 let
-  inherit (pkgs) lib;
-  system = pkgs.stdenv.hostPlatform.system;
+  src = sources.e2e;
   profile = lib.optionalString coverage "LLVM_PROFILE_FILE=/tmp/cov/%p-%m.profraw";
   prepare = lib.optionalString coverage ''machine.succeed("mkdir -m 1777 /tmp/cov")'';
   collect = lib.optionalString coverage ''machine.copy_from_machine("/tmp/cov", "cov")'';
@@ -25,7 +25,7 @@ let
     pkgs.bashInteractive
     pkgs.coreutils
     pkgs.nix-output-monitor
-    self.devShells.${system}.default.inputDerivation
+    devShell.inputDerivation
   ];
   # The container gets the build's store as one read-only bind mount per
   # path, which no overlay can see through. So the writable store is a fresh

@@ -37,7 +37,7 @@ fuzzers/bin/fuzz-parse -dict=fuzz/parse.dict -max_len=4096 corpus
 fuzzers/bin/fuzz-nar-gen -max_len=4096 nar-corpus
 ```
 
-`fuzz/default.nix` has the flags of each target. To use N cores and keep
+`nix/fuzz.nix` has the flags of each target. To use N cores and keep
 going after a difference, add `-fork=N -ignore_crashes=1`. Each difference is
 saved as a file named `crash-<sha1>`.
 

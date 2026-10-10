@@ -6,122 +6,34 @@
   outputs = { self, nixpkgs, crane, nix-conformance }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
-      forAll = f: nixpkgs.lib.genAttrs systems (s: f nixpkgs.legacyPackages.${s});
-      # One source per consumer, so an edit rebuilds only what reads it. The
-      # binary embeds docs/reference (src/cli/docs.rs) and no other page.
-      fs = nixpkgs.lib.fileset;
-      sourceOf = files: fs.toSource { root = ./.; fileset = fs.unions files; };
-      binFiles = [ ./Cargo.toml ./Cargo.lock ./build.rs ./proto ./src ./docs/reference ];
-      binSrc = sourceOf binFiles;
-      testSrc = sourceOf (binFiles ++ [ ./tests ./examples ]);
-      fuzzSrc = sourceOf (binFiles ++ [ ./fuzz ]);
-      scriptsSrc = sourceOf [ ./scripts ./tests ];
-      astGrepSrc = sourceOf [ ./sgconfig.yml ./nix/ast-grep (fs.fileFilter (f: f.hasExt "rs") ./.) ];
-      # the e2e containers evaluate this flake as a git checkout
-      e2eSrc = sourceOf (binFiles ++ [ ./flake.nix ./flake.lock ./tests ./examples ./scripts ./nix ./fuzz ./sgconfig.yml ]);
-      # Crane builds the dependencies as a derivation of their own, from the
-      # manifests alone, so a source edit rebuilds only the workspace crate.
-      # The release and dev profiles have separate dependency builds.
-      craneArgs = { pname = "iets"; version = "0.1.0"; strictDeps = true; };
-      iets = pkgs:
-        let
-          craneLib = crane.mkLib pkgs;
-          args = craneArgs // { src = binSrc; };
-        in craneLib.buildPackage (args // {
-          cargoArtifacts = craneLib.buildDepsOnly args;
-          meta.license = pkgs.lib.licenses.lgpl21Plus;
-          # checks.test runs the suite; the package build stays a build.
-          doCheck = false;
-        });
-      # `classic`: the same binary under Nix's own command names. Each one
-      # handles the subset iets implements and execs the real nix for the
-      # rest; `share/iets/real-nix-bin` names that nix, so the fallback works
-      # even when the farm shadows it out of PATH (docs/reference/classic.md).
-      classic = pkgs: ietsPkg: nix: pkgs.runCommand "iets-classic" { } ''
-        mkdir -p $out/bin
-        mkdir -p $out/share/iets
-        echo -n "${nix}/bin" > $out/share/iets/real-nix-bin
-        for n in nix-instantiate nix-build nix-eval-jobs nix-shell nix; do
-          ln -s ${ietsPkg}/bin/iets $out/bin/$n
-        done
-      '';
-      # the differential fuzzer against Nix (docs/how-to/fuzz.md)
-      fuzz = pkgs: import ./fuzz {
-        inherit pkgs;
-        src = fuzzSrc;
-        nixpkgsSrc = nixpkgs;
-        conformance = nix-conformance;
-        iets = iets pkgs;
-      };
+      # Every file in nix/ is a function of what it needs; callPackage fills
+      # it from this scope or from nixpkgs.
+      scopeFor = pkgs: pkgs.lib.makeScope pkgs.newScope (final: {
+        inherit pkgs nixpkgs nix-conformance;
+        craneLib = crane.mkLib pkgs;
+        commonArgs = { pname = "iets"; version = "0.1.0"; strictDeps = true; };
+        sources = final.callPackage ./nix/sources.nix { };
+        iets = final.callPackage ./nix/iets.nix { };
+        ietsStatic = (scopeFor pkgs.pkgsStatic).iets;
+        classic = final.callPackage ./nix/classic.nix { };
+        devShell = final.callPackage
+          ({ mkShell, cargo, rustc, clippy, rustfmt, hyperfine, nix, perf, jq, nushell, direnv, ast-grep }:
+            mkShell { packages = [ cargo rustc clippy rustfmt hyperfine nix perf jq nushell direnv ast-grep ]; })
+          { };
+        e2eCases = import ./nix/e2e-cases.nix { inherit pkgs; };
+        e2eTest = final.callPackage ./nix/e2e-test.nix { };
+        coverage = final.callPackage ./nix/coverage.nix { };
+        # the differential fuzzer against Nix (docs/how-to/fuzz.md)
+        fuzz = final.callPackage ./nix/fuzz.nix { };
+        # for files that return a set of packages
+        callPackages = pkgs.lib.callPackagesWith (pkgs // final);
+      });
+      forAll = f: nixpkgs.lib.genAttrs systems (s: f (scopeFor nixpkgs.legacyPackages.${s}));
     in {
-      devShells = forAll (pkgs: {
-        default = pkgs.mkShell {
-          packages = [ pkgs.cargo pkgs.rustc pkgs.clippy pkgs.rustfmt pkgs.hyperfine pkgs.nix pkgs.perf pkgs.jq pkgs.nushell pkgs.direnv pkgs.ast-grep ];
-        };
-      });
+      devShells = forAll (scope: { default = scope.devShell; });
       nixosModules.default = import ./nix/module.nix self;
-      lib.mkClassic = classic;
-      packages = forAll (pkgs: {
-        default = iets pkgs;
-        classic = classic pkgs (iets pkgs) pkgs.nix;
-        # one musl file that needs nothing on the machine (docs/explanation/static-build.md)
-        static = iets pkgs.pkgsStatic;
-        fuzz-oracles = (fuzz pkgs).oracles;
-        inherit (fuzz pkgs) fuzz-diff fuzzers;
-        fuzz-parse-campaign = (fuzz pkgs).campaign { target = "parse"; };
-        fuzz-nar-campaign = (fuzz pkgs).campaign { target = "nar-gen"; };
-        fuzz-wire-campaign = (fuzz pkgs).campaign { target = "wire"; };
-        fuzz-eval-campaign = (fuzz pkgs).campaign { target = "eval"; };
-        fuzz-drv-campaign = (fuzz pkgs).campaign { target = "drv-gen"; };
-        fuzz-drv-eval-campaign = (fuzz pkgs).campaign { target = "drv-eval"; };
-      } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
-        # line coverage of the e2e tests in NixOS containers (nix/coverage.nix)
-        coverage-e2e = import ./nix/coverage.nix { inherit self nixpkgs pkgs; src = e2eSrc; iets = iets pkgs; };
-      });
-      checks = forAll (pkgs:
-        let
-          pkg = iets pkgs;
-          craneLib = crane.mkLib pkgs;
-          # the dev profile, as `cargo test` in the dev shell: the release
-          # profile is fat LTO, minutes for no extra coverage
-          dev = craneArgs // { src = testSrc; CARGO_PROFILE = "dev"; };
-          devArtifacts = craneLib.buildDepsOnly (dev // { cargoCheckExtraArgs = "--all-targets"; });
-          withDev = dev // { cargoArtifacts = devArtifacts; doInstallCargoArtifacts = false; };
-          # scripts/<name>.nu against the built binary, in the build sandbox: the
-          # scripts that need no nix-daemon and no live /nix/store.
-          nuScript = name: pkgs.runCommand "iets-${name}" { nativeBuildInputs = [ pkgs.nushell ]; } ''
-            cp -r ${scriptsSrc}/scripts ${scriptsSrc}/tests .
-            chmod -R u+w scripts tests
-            export IETS=${pkg}/bin/iets
-            nu scripts/${name}.nu
-            touch $out
-          '';
-          # The scripts that need a nix-daemon and a writable store, in a NixOS test
-          # container (nix/e2e-test.nix). Their derivations name x86_64-linux.
-          e2e = name: args: import ./nix/e2e-test.nix ({ inherit self nixpkgs pkgs name; src = e2eSrc; iets = pkg; } // args);
-        in {
-          # the tests that need a live /nix/store are #[ignore]d; run them
-          # with `cargo test -- --ignored` in the dev shell.
-          test = craneLib.cargoTest withDev;
-          clippy = craneLib.cargoClippy (withDev // { cargoClippyExtraArgs = "--all-targets -- -D warnings"; });
-          # the library facade: every example links the library only (docs/reference/library.md)
-          examples = craneLib.mkCargoDerivation (withDev // {
-            pnameSuffix = "-examples";
-            buildPhaseCargoCommand = "cargoWithProfile build --examples";
-            installPhaseCommand = "touch $out";
-          });
-          fmt = craneLib.cargoFmt (craneArgs // { src = testSrc; });
-          # nix/ast-grep, through sgconfig.yml
-          ast-grep = pkgs.runCommand "iets-ast-grep" { nativeBuildInputs = [ pkgs.ast-grep ]; } "cd ${astGrepSrc} && ast-grep scan && touch $out";
-          diff-e2e = nuScript "diff-e2e";
-          langtests = nuScript "langtests";
-          # the differential fuzzers against Nix (fuzz/default.nix)
-          inherit ((fuzz pkgs).checks) fuzz-parse fuzz-nar fuzz-wire fuzz-eval fuzz-drv fuzz-drv-eval conformance;
-          linttest = nuScript "linttest";
-          partest = nuScript "partest";
-          static = iets pkgs.pkgsStatic;
-        } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") (
-          pkgs.lib.mapAttrs e2e (import ./nix/e2e-cases.nix { inherit pkgs; })
-        ));
+      lib.mkClassic = pkgs: iets: nix: pkgs.callPackage ./nix/classic.nix { inherit iets nix; };
+      packages = forAll (scope: scope.callPackages ./nix/packages.nix { });
+      checks = forAll (scope: scope.callPackages ./nix/checks.nix { });
     };
 }

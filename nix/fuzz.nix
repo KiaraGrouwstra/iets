@@ -1,14 +1,14 @@
 # The fuzz targets as packages, checks and campaigns (docs/how-to/fuzz.md).
-{ pkgs, src, nixpkgsSrc, conformance, iets }:
+{ pkgs, sources, nixpkgs, nix-conformance, iets }:
 let
   inherit (pkgs) lib;
-  oracles = conformance.packages.${pkgs.stdenv.hostPlatform.system}.oracles;
+  oracles = nix-conformance.packages.${pkgs.stdenv.hostPlatform.system}.oracles;
   common = {
     version = "0.0.0";
-    inherit src;
+    src = sources.fuzz;
     cargoRoot = "fuzz";
     buildAndTestSubdir = "fuzz";
-    cargoLock.lockFile = ./Cargo.lock;
+    cargoLock.lockFile = ../fuzz/Cargo.lock;
     doCheck = false;
     meta.license = lib.licenses.lgpl21Plus;
   };
@@ -21,18 +21,18 @@ let
   # what each libFuzzer binary is run with; the seeds go to a directory `seeds`
   targets = {
     parse = {
-      flags = "-max_len=4096 -dict=${./parse.dict}";
+      flags = "-max_len=4096 -dict=${../fuzz/parse.dict}";
       # an eighth of nixpkgs in a check: the time budget includes reading them
       seeds = every: ''
-        find ${nixpkgsSrc} -name '*.nix' -size -32k | awk 'NR % ${toString every} == 0' | while read -r f; do
+        find ${nixpkgs} -name '*.nix' -size -32k | awk 'NR % ${toString every} == 0' | while read -r f; do
           ln -s "$f" "seeds/$(echo "$f" | sha1sum | cut -c1-40)"
         done
-        ${link [ "${conformance}/parse" "${conformance}/corpus/parse" ] "*.nix"}
+        ${link [ "${nix-conformance}/parse" "${nix-conformance}/corpus/parse" ] "*.nix"}
       '';
     };
     nar-read = {
-      flags = "-max_len=65536 -dict=${./nar.dict}";
-      seeds = _: link [ "${conformance}/nar" "${conformance}/corpus/nar" ] "*.nar";
+      flags = "-max_len=65536 -dict=${../fuzz/nar.dict}";
+      seeds = _: link [ "${nix-conformance}/nar" "${nix-conformance}/corpus/nar" ] "*.nar";
     };
     nar-gen = { flags = "-max_len=4096"; seeds = _: ""; };
     nar-tree = { flags = "-max_len=4096"; seeds = _: ""; };
@@ -41,8 +41,8 @@ let
     eval = { flags = "-max_len=4096 -timeout=10"; seeds = _: ""; };
     drv-eval = { flags = "-max_len=4096 -timeout=10"; seeds = _: ""; };
     drv-read = {
-      flags = "-max_len=16384 -dict=${./drv.dict}";
-      seeds = _: link [ "${conformance}/drv" ] "*.drv";
+      flags = "-max_len=16384 -dict=${../fuzz/drv.dict}";
+      seeds = _: link [ "${nix-conformance}/drv" ] "*.drv";
     };
     drv-gen = { flags = "-max_len=4096"; seeds = _: ""; };
   };
@@ -132,19 +132,19 @@ in
     fuzz-parse = check {
       name = "parse";
       script = ''
-        fuzz-diff --nix-only parse ${nixpkgsSrc}
+        fuzz-diff --nix-only parse ${nixpkgs}
         ${run "parse" 60}
       '';
     };
     # every case of nix-conformance through iets, with the trees; the cases
     # in conformance-known fail on purpose
-    conformance = conformance.lib.${pkgs.stdenv.hostPlatform.system}.check {
+    conformance = nix-conformance.lib.${pkgs.stdenv.hostPlatform.system}.check {
       name = "iets";
       adapter = "${pkgs.writeShellScript "iets-conformance-adapter" ''
         export IETS=${iets}/bin/iets
         exec ${fuzz-diff}/bin/conformance-adapter "$@"
       ''}";
-      flags = [ "--tree" "--known" "${./conformance-known}" ];
+      flags = [ "--tree" "--known" "${../fuzz/conformance-known}" ];
     };
     # half a minute of iets's daemon client against Nix's, on scripted daemons
     fuzz-wire = check {

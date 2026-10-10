@@ -2,24 +2,23 @@
 # instrumented iets runs each script, and the profiles of every process are
 # merged into one report ($out/report.txt, by directory and by file).
 # `nix build .#coverage-e2e`, on x86_64-linux.
-{ self, src, nixpkgs, pkgs, iets }:
+{ lib, rustc, gawk, runCommand, iets, e2eTest, e2eCases }:
 let
-  inherit (pkgs) lib;
   # the LLVM that rustc was built with reads its profiles
-  llvm = pkgs.rustc.llvmPackages.llvm;
+  llvm = rustc.llvmPackages.llvm;
   instrumented = iets.overrideAttrs (old: {
     pname = "iets-instrumented";
     env = (old.env or { }) // { RUSTFLAGS = "-Cinstrument-coverage"; };
     dontStrip = true;
   });
-  e2e = name: args: import ./e2e-test.nix ({
-    inherit self src nixpkgs pkgs name;
+  e2e = name: args: e2eTest ({
+    inherit name;
     iets = instrumented;
     coverage = true;
   } // args);
-  runs = lib.mapAttrsToList e2e (import ./e2e-cases.nix { inherit pkgs; });
+  runs = lib.mapAttrsToList e2e e2eCases;
 in
-pkgs.runCommand "iets-coverage-e2e" { nativeBuildInputs = [ llvm pkgs.gawk ]; } ''
+runCommand "iets-coverage-e2e" { nativeBuildInputs = [ llvm gawk ]; } ''
   mkdir -p $out
   find ${lib.concatMapStringsSep " " (r: "${r}/cov") runs} -name '*.profraw' > profiles
   echo "$(wc -l < profiles) profiles from ${toString (builtins.length runs)} e2e runs" | tee $out/report.txt
