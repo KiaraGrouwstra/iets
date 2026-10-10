@@ -382,8 +382,10 @@ nix. `fetchTarball` and `fetchTree` work for some inputs;
 
 `builtins.fetchurl` differs from Nix in these ways:
 
-- Without a `sha256`, it downloads on every call. Nix keeps the file for
-  `tarball-ttl`.
+- It needs a `sha256` in every mode. Nix needs one only in pure
+  evaluation, and keeps a file without one for `tarball-ttl`. Under a
+  classic name, an impure call without a `sha256` falls back to the real
+  nix. `iets prefetch URL` prints the hash.
 - A hash mismatch exits with 1. Nix exits with 102.
 - A download error has iets's own text, not curl's.
 
