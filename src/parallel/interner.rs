@@ -10,7 +10,8 @@ use std::sync::{Arc, RwLock};
 use std::{process, ptr};
 
 use rustix::mm::{MapFlags, ProtFlags, mmap_anonymous};
-
+use crate::runtime::heap::Heap;
+use crate::session::Session;
 use crate::syntax::symbol::{FxHasher, Sym};
 
 const SHARDS: usize = 64;
@@ -63,10 +64,19 @@ fn hash_bytes(b: &[u8]) -> u64 {
 
 struct Inner {
     shards: Vec<RwLock<HashMap<&'static [u8], Sym, MixBuild>>>,
-    /// `names[id]` points at a leaked `&'static [u8]`. Written once,
+    /// `names[id]` points at a name in `heap`. Written once,
     /// before the id is published through a shard.
     names: *mut AtomicPtr<&'static [u8]>,
     next: AtomicU32,
+    /// The session memory the names live in: a `Sym`'s name outlives this
+    /// table and lives as long as the session's values.
+    heap: Arc<Heap>,
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        unmap_per_sym(self.names);
+    }
 }
 
 // SAFETY: the name table is append-only; each entry is written once with
@@ -119,7 +129,13 @@ impl Default for Interner {
     }
 }
 
-/// `MAX_SYMS` zeroed `T`s, paged in on demand and never unmapped.
+/// The mapping of [`per_sym`].
+pub(super) fn unmap_per_sym<T>(p: *mut T) {
+    // SAFETY: the owner's last handle is gone, so nothing reads the table.
+    unsafe { libc::munmap(p as *mut _, MAX_SYMS * size_of::<T>()) };
+}
+
+/// `MAX_SYMS` zeroed `T`s, paged in on demand, unmapped by the owner's drop.
 pub(super) fn per_sym<T>() -> *mut T {
     // SAFETY: an anonymous mapping aliases nothing.
     let p = unsafe {
@@ -134,7 +150,12 @@ pub(super) fn per_sym<T>() -> *mut T {
 }
 
 impl Interner {
+    /// An interner whose names live in the session this thread entered.
     pub fn new() -> Interner {
+        Interner::in_heap(Session::current().heap.clone())
+    }
+
+    pub fn in_heap(heap: Arc<Heap>) -> Interner {
         let names = per_sym();
         Interner {
             shared: Arc::new(Inner {
@@ -143,6 +164,7 @@ impl Interner {
                     .collect(),
                 names,
                 next: AtomicU32::new(0),
+                heap,
             }),
             cache: empty_cache(),
         }
@@ -178,7 +200,7 @@ impl Interner {
         if let Some((&k, &s)) = w.get_key_value(name) {
             return (k, s);
         }
-        let leaked: &'static [u8] = Box::leak(name.to_vec().into_boxed_slice());
+        let leaked = self.shared.heap.alloc_bytes(name);
         let id = self.shared.next.fetch_add(1, Ordering::Relaxed);
         if (id as usize) >= MAX_SYMS {
             // no way back from here: the id is already handed out, and the
@@ -186,7 +208,9 @@ impl Interner {
             errln!("error: too many symbols (more than {MAX_SYMS})");
             process::exit(1);
         }
-        let entry: *mut &'static [u8] = Box::into_raw(Box::new(leaked));
+        let entry = self.shared.heap.alloc(size_of::<&[u8]>()) as *mut &'static [u8];
+        // SAFETY: fresh, aligned and sized for one slice reference.
+        unsafe { entry.write(leaked) };
         // SAFETY: id < MAX_SYMS indexes the mapping.
         unsafe { (*self.shared.names.add(id as usize)).store(entry, Ordering::Release) };
         w.insert(leaked, Sym(id));

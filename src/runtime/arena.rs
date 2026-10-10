@@ -1,7 +1,9 @@
-//! Bump allocator. Memory is never freed: the evaluator's whole heap lives
-//! until process exit, so every allocation hands out a `'static` reference.
-//! That is what makes graph sharing between cells trivially sound.
+//! Bump allocator. Memory is never freed while its session lives: every
+//! allocation hands out a `'static` reference, and the chunks go only when
+//! the session's `Heap` drops. That is what makes graph sharing between
+//! cells trivially sound.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{process, ptr, slice, thread};
 
@@ -9,9 +11,11 @@ use rustix::mm::{Advice, MapFlags, ProtFlags, madvise, mmap_anonymous};
 
 #[cfg(feature = "stats2")]
 use super::census::Census;
+use super::heap::Heap;
 use super::value::Ctx;
 use super::word::Word;
 use crate::parallel::shared::ArenaUse;
+use crate::session::Session;
 use crate::syntax::symbol::{FxHashMap, FxHashSet};
 
 const CHUNK: usize = 32 << 20;
@@ -62,6 +66,9 @@ pub struct Arena {
     pub(crate) strings: FxHashMap<u64, StrEntry>,
     /// Context slices by content.
     pub(crate) ctxs: FxHashSet<&'static [Ctx]>,
+    /// The session memory the chunks belong to; `None` for a placeholder
+    /// until it first allocates.
+    heap: Option<Arc<Heap>>,
 }
 
 /// Position of the bump pointer, to give back the last allocation.
@@ -78,8 +85,8 @@ impl Default for Arena {
     }
 }
 
-/// The chunks this arena handed out stay mapped: the graph points into
-/// them. The chunk mapped ahead was never handed out.
+/// The chunks this arena handed out belong to the session's heap: the
+/// graph points into them. The chunk mapped ahead was never handed out.
 impl Drop for Arena {
     fn drop(&mut self) {
         if let Some(h) = self.next.take()
@@ -92,9 +99,15 @@ impl Drop for Arena {
 }
 
 impl Arena {
+    /// An arena in the memory of the session this thread entered.
     pub(crate) fn new() -> Self {
+        Arena::in_heap(Session::current().heap.clone())
+    }
+
+    pub(crate) fn in_heap(heap: Arc<Heap>) -> Self {
         let mut a = Arena::placeholder();
         a.strings = FxHashMap::with_capacity_and_hasher(1 << 16, Default::default());
+        a.heap = Some(heap);
         a
     }
 
@@ -112,6 +125,7 @@ impl Arena {
             next: None,
             strings: FxHashMap::default(),
             ctxs: FxHashSet::default(),
+            heap: None,
         }
     }
 
@@ -211,7 +225,7 @@ impl Arena {
         // a free 2 MiB block stalls in direct compaction and then falls back
         // to 4 KiB pages anyway, which cost ~1 s of system time per GiB.
         // MADV_POPULATE_WRITE zeroes the chunk inside the kernel without one
-        // trap per page. The chunk is intentionally leaked.
+        // trap per page. The chunk goes with the session's heap.
         let ready = match self.next.take() {
             Some(h) if chunk == CHUNK => h.join().ok(),
             _ => None,
@@ -238,6 +252,9 @@ impl Arena {
                 .ok();
             self.next = next;
         }
+        self.heap
+            .get_or_insert_with(|| Session::current().heap.clone())
+            .adopt(base as usize, chunk);
         self.mapped += chunk;
         self.ptr = base;
         self.end = unsafe { base.add(chunk) };

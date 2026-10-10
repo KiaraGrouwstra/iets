@@ -1,9 +1,10 @@
 # Using iets as a library
 
-> **Not ready for long-lived hosts.** The evaluator does not free memory
-> until the process exits, so a program that evaluates again and again, such
-> as an editor server, grows without limit. Use the library for a run-once
-> frontend. The API can change.
+> **Memory goes with the session.** The evaluator frees nothing while a
+> session lives, and frees all of it when you drop the session. A program
+> that evaluates again and again, such as an editor server, makes one
+> session per evaluation and stays flat ("Sessions and memory"). One very
+> large evaluation still needs all its memory at once. The API can change.
 
 iets is a library with a thin `iets` binary on top. This page lists the entry
 points, says what a `Session` owns and maps the value API to Nix's C API.
@@ -86,6 +87,44 @@ started them. For your own threads, call `Session::enter` on each, or use
 `session::bind(f)`. A thread that entered no session uses a fallback session
 that writes nowhere. `docs/how-to/embed-the-evaluator.md` has the steps with
 code.
+
+## Sessions and memory
+
+Every value an evaluator makes lives in its session's memory
+(`Session::heap`): the arena chunks of the evaluator and of its worker
+threads, and the names of its symbols. Nothing in it is freed while the
+session lives, so values share structure freely and nothing is copied.
+
+The memory goes when the last of these lets go:
+
+- your `Arc<Session>`,
+- every `Evaluator` made in the session (each keeps a handle),
+- the worker threads of a `parallel::try_run` in it.
+
+A `Value<'e>` borrows its evaluator, so the compiler stops you from keeping
+one too long. A `runtime::Word` from `api::evaluate`, and an error that
+carries one, are plain data: keep them only while the session lives. If you
+use one later, the process stops at once with
+
+```
+error: a value was used after its session was released
+```
+
+It never reads another session's data. Released memory stays reserved and
+inaccessible, so its addresses are never reused. That costs no memory, but
+it costs address space and kernel mappings. A NixOS system evaluation
+leaves about 600 MB of reserved addresses and, on four workers, about five
+mappings. The address space holds about 200,000 of them. The default
+`vm.max_map_count` of 65530 holds about 10,000 four-worker evaluations, or
+far more on one worker. Raise that limit, or restart the host process
+before it. The handler that prints the message replaces the `SIGSEGV`
+handler of Rust's runtime, as the fiber stacks' overflow check already does.
+
+Interned data follows the same rule. Each evaluator has its own string and
+context tables and its own symbol table, and their contents are in the
+session's memory, so nothing of one session is visible in the next. The
+fallback session lives as long as the process, so a host that never makes a
+session keeps everything, as before.
 
 ## The value API
 

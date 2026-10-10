@@ -536,8 +536,8 @@ impl EvalConfig {
     /// `system` and `pure-eval` shape the builtins, so they are fixed
     /// before `builtins::install` (docs/reference/settings.md).
     pub fn build(self) -> Evaluator {
-        let mut arena = Arena::new();
-        let mut interner = Interner::new();
+        let mut arena = Arena::in_heap(self.session.heap.clone());
+        let mut interner = Interner::in_heap(self.session.heap.clone());
         for name in NIX_STATIC_SYMBOLS {
             interner.intern(name);
         }
@@ -564,7 +564,7 @@ impl EvalConfig {
         let mut ev = Evaluator {
             arena,
             interner,
-            files: Default::default(),
+            files: Files::in_heap(self.session.heap.clone()),
             globals: Globals {
                 table: FxHashMap::default(),
                 builtins: None,
