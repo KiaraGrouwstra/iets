@@ -7,13 +7,14 @@
 //! The `narHash` is known before the fetch, so the tree names itself and the
 //! input store refuses anything that does not hash to it.
 
-use std::collections::HashMap;
-use std::io::{self, BufReader, Read};
+use std::collections::{BTreeMap, HashMap};
+use std::io::{self, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::{result, slice, thread};
 
+use super::scm::{Commit, Entry};
 use super::{AttrVal, Attrs, Tree, parse_nar_hash, str_attr, to_url};
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
 use crate::fetch::http::{self, Limits};
@@ -23,7 +24,7 @@ use crate::progress::Mode;
 use crate::remote::event;
 use crate::remote::worker::{Connection, Transport};
 use crate::session::Session;
-use crate::store::hash::{Hash, HashFormat};
+use crate::store::hash::{Hash, HashAlgo, HashFormat, Hasher};
 use crate::store::path::{IngestionMethod, StorePath};
 use crate::store::source::{SourceOrigin, SrcPath};
 use crate::treestore::{self, Rejected, StoredTree};
@@ -227,6 +228,106 @@ fn adopt(ev: &mut Evaluator, sp: &StorePath, entry: &StoredTree) {
         ),
     );
     treestore::record(ev, entry, sp.base_name());
+}
+
+/// A directory being built from a revision's entries.
+#[derive(Default)]
+struct Building(BTreeMap<Vec<u8>, Built>);
+
+enum Built {
+    Dir(Building),
+    Leaf(spool::Node),
+}
+
+impl Building {
+    fn dir(&mut self, parts: &[&[u8]]) -> &mut Building {
+        let Some((first, rest)) = parts.split_first() else {
+            return self;
+        };
+        let next = self
+            .0
+            .entry(first.to_vec())
+            .or_insert_with(|| Built::Dir(Building::default()));
+        if let Built::Leaf(_) = next {
+            *next = Built::Dir(Building::default());
+        }
+        let Built::Dir(d) = next else { unreachable!() };
+        d.dir(rest)
+    }
+
+    fn node(self) -> spool::Node {
+        let entries = self.0.into_iter().map(|(name, b)| match b {
+            Built::Dir(d) => (name, d.node()),
+            Built::Leaf(n) => (name, n),
+        });
+        spool::Node::Dir(entries.collect())
+    }
+}
+
+/// The tree of a revision as the store path `name` gives it, readable there
+/// when this returns: `/nix/store` when it holds the tree, else the input
+/// store, which takes it in when it does not have it. The tree is hashed
+/// first, since nothing names it before.
+pub fn store_commit(
+    ev: &mut Evaluator,
+    name: &str,
+    commit: Commit,
+    pos: Pos,
+) -> EvalResult<(StorePath, Hash)> {
+    let fail = |e: String| Error::boxed(ErrorKind::Io, e, pos);
+    let mut file = spool::scratch("commit").map_err(|e| fail(e.to_string()))?;
+    let mut offset = 0;
+    let mut root = Building::default();
+    for (path, entry) in commit.entries {
+        let parts: Vec<&[u8]> = path.split(|&b| b == b'/').collect();
+        let (last, dirs) = parts.split_last().expect("a path has a part");
+        let node = match entry {
+            Entry::Empty => {
+                root.dir(&parts);
+                continue;
+            }
+            Entry::Symlink(target) => spool::Node::Symlink(target),
+            Entry::File { bytes, exec } => {
+                file.write_all(&bytes).map_err(|e| fail(e.to_string()))?;
+                let size = bytes.len() as u64;
+                let at = spool::Blob::Spool {
+                    offset,
+                    size,
+                    sparse: false,
+                };
+                offset += size;
+                spool::Node::File { at, exec }
+            }
+        };
+        root.dir(dirs).0.insert(last.to_vec(), Built::Leaf(node));
+    }
+    let tree = spool::Tree::spooled(file, root.node());
+    let mut h = Hasher::new(HashAlgo::Sha256);
+    tree.dump(&mut h).map_err(|e| fail(e.to_string()))?;
+    let hash = h.finish();
+    let sp = treestore::store_path(name, &hash).map_err(|e| fail(e.to_string()))?;
+    ev.known.lock().entry(sp.clone()).or_default();
+    let full = sp.to_full_string();
+    let on_disk = trace::stat_kind(Path::new(&full), true);
+    if on_disk != trace::Kind::Missing {
+        ev.trace().stat(full.as_bytes(), true, on_disk);
+        return Ok((sp, hash));
+    }
+    let entry = match treestore::get(sp.base_name()) {
+        Some(entry) => entry,
+        None => {
+            let staged = treestore::stage(sp.base_name())
+                .ok_or_else(|| fail("iets has no cache directory to hold a Git tree".into()))?;
+            treestore::put(name, IngestionMethod::Recursive, &hash, staged, tree).map_err(|e| {
+                match e {
+                    Rejected::Io(e) => fail(e.to_string()),
+                    _ => fail("iets cannot keep a Git tree in the input store".into()),
+                }
+            })?
+        }
+    };
+    adopt(ev, &sp, &entry);
+    Ok((sp, hash))
 }
 
 /// tarball.cc:downloadFile for `builtins.fetchurl`: the bytes `url` serves, as

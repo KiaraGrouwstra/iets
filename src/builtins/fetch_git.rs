@@ -1,7 +1,9 @@
 //! `builtins.fetchGit` (fetchTree.cc with `isFetchGit`, git.cc). A local
 //! working tree without a `ref` or a `rev` is copied the way the flake's own
 //! tree is (git.cc:getAccessorFromWorkdir), so the tracing cache follows its
-//! files. A commit goes to Nix's own `fetchGit`, as a git flake input does.
+//! files. A commit of a local repository, by `rev` or by `ref`, is read
+//! from the repository (git.cc:getAccessorFromCommit). Any other fetch goes
+//! to Nix's own `fetchGit`, as a git flake input does.
 
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
@@ -61,6 +63,9 @@ const FROM_WORKDIR: &[&str] = &[
     "allRefs",
 ];
 
+/// The attributes the read of a commit takes; any other goes to Nix.
+const FROM_COMMIT: &[&str] = &["url", "name", "rev", "ref", "submodules", "exportIgnore"];
+
 pub fn fetch_git(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     purity::unhashed_fetch(ev, "fetchGit", args[0], pos)?;
     let mut args = call_attrs(ev, args[0], pos)?;
@@ -82,9 +87,13 @@ pub fn fetch_git(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word
         check_locked(&args, fixed.as_deref().unwrap_or(&url), pos)?;
     }
     let root = fixed.as_deref().and_then(workdir_root);
-    if let Some(root) = root.filter(|_| args.keys().all(|k| FROM_WORKDIR.contains(&k.as_str())))
-        && let Some(tree) = from_workdir(ev, &args, Path::new(&root), pos)?
-    {
+    let only = |keys: &[&str]| args.keys().all(|k| keys.contains(&k.as_str()));
+    let tree = match root.as_deref().map(Path::new) {
+        Some(root) if only(FROM_WORKDIR) => from_workdir(ev, &args, root, pos)?,
+        Some(root) if only(FROM_COMMIT) => from_commit(ev, &args, root, pos)?,
+        _ => None,
+    };
+    if let Some(tree) = tree {
         return emit_tree_attrs(ev, &tree, None, pos);
     }
     let shown = input_string(&args, fixed.as_deref().unwrap_or(&url)).unwrap_or(url);
@@ -218,6 +227,80 @@ fn from_workdir(
     Ok(Some(tree))
 }
 
+/// git.cc:getAccessorFromCommit on a local repository: the tree of `rev`, or
+/// of the commit that `ref` names, which iets reads itself. `None` when Nix
+/// must answer: the repository has no working tree or is shallow, it has
+/// submodules to copy, it lacks the revision, or `ref` names none.
+fn from_commit(
+    ev: &mut Evaluator,
+    args: &Attrs,
+    root: &Path,
+    pos: Pos,
+) -> EvalResult<Option<Tree>> {
+    if bool_attr(args, "submodules").unwrap_or(false) {
+        return Ok(None);
+    }
+    let git = scm::named("git").expect("iets knows git");
+    let marker = git.root_marker(root);
+    let shallow = marker.join("shallow");
+    for (p, want) in [(&marker, false), (&shallow, true)] {
+        let missing = ev.trace().stat_now(p.as_os_str().as_bytes(), true) == Kind::Missing;
+        if missing != want {
+            return Ok(None);
+        }
+    }
+    let io = |e: String| Error::boxed(ErrorKind::Io, e, pos);
+    let rev = match (str_attr(args, "rev"), str_attr(args, "ref")) {
+        (Some(r), _) if is_rev(r) => r.to_string(),
+        (None, Some(name)) if is_ref_name(name) => {
+            match git.resolve(ev.trace(), root, name).map_err(io)? {
+                Some(r) => r,
+                None => return Ok(None),
+            }
+        }
+        _ => return Ok(None),
+    };
+    let export = bool_attr(args, "exportIgnore").unwrap_or(false);
+    let Some(commit) = git.tree_at(ev.trace(), root, &rev, export).map_err(io)? else {
+        return Ok(None);
+    };
+    let last_modified = commit.last_modified;
+    let name = str_attr(args, "name").unwrap_or("source");
+    let (path, hash) = source::store_commit(ev, name, commit, pos)?;
+    let url = format!("file://{}", root.to_string_lossy());
+    let attrs = Attrs::from([
+        ("type".into(), AttrVal::Str("git".into())),
+        ("url".into(), AttrVal::Str(url)),
+        ("narHash".into(), AttrVal::Str(hash.to_sri())),
+        ("rev".into(), AttrVal::Str(rev)),
+        ("lastModified".into(), AttrVal::Int(last_modified)),
+        ("submodules".into(), AttrVal::Bool(false)),
+    ]);
+    Ok(Some(Tree {
+        path,
+        attrs,
+        subdir: String::new(),
+        counter: Some((git, root.to_path_buf())),
+    }))
+}
+
+/// A full revision that is not the null one; any other spelling goes to Nix,
+/// which checks it.
+fn is_rev(r: &str) -> bool {
+    r.len() == 40 && r != NULL_REV && r.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// A plain branch or tag name; any other goes to Nix, which checks it.
+fn is_ref_name(r: &str) -> bool {
+    let plain = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'/' | b'+');
+    !r.is_empty()
+        && !r.starts_with(['-', '/', '.'])
+        && !r.ends_with(['/', '.'])
+        && !r.contains("..")
+        && !r.contains("//")
+        && r.bytes().all(plain)
+}
+
 /// Nix's `fetchGit` with the call's own attributes. A result with a `rev`
 /// asked for follows from it, so only the store path is an observation;
 /// any other depends on the repository now, and the run is uncacheable.
@@ -261,6 +344,23 @@ fn from_nix(ev: &mut Evaluator, args: &Attrs, shown: &str, pos: Pos) -> EvalResu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_plain_rev_or_ref_is_read_by_iets() {
+        let rev = "61c2d57b4c40383bc42bf989900543aaba01d24f";
+        assert!(is_rev(rev));
+        assert!(!is_rev(NULL_REV));
+        assert!(!is_rev(&rev.to_uppercase()));
+        assert!(!is_rev(&rev[..7]));
+        for r in ["main", "HEAD", "v1.0", "refs/tags/v1", "a_b+c"] {
+            assert!(is_ref_name(r), "{r}");
+        }
+        for r in [
+            "", "-x", "/a", "a/", "a..b", "a//b", "a b", "a~1", "a^", "x.", ".x",
+        ] {
+            assert!(!is_ref_name(r), "{r}");
+        }
+    }
 
     #[test]
     fn a_working_tree_is_a_file_url_of_an_absolute_path() {

@@ -149,7 +149,7 @@ pub fn workdir(
     let mut accepted = accepted_set(root, &at.files);
     if export {
         let dropped = scm
-            .export_ignored(root, &accepted)
+            .export_ignored(ev.trace(), root, &accepted)
             .map_err(|e| Error::boxed(ErrorKind::Io, e, pos))?;
         accepted.retain(|p| {
             !p.ancestors()

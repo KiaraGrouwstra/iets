@@ -36,6 +36,30 @@ pub struct Snapshot {
     pub countable: bool,
 }
 
+/// One entry of a revision's tree.
+pub enum Entry {
+    File {
+        bytes: Vec<u8>,
+        exec: bool,
+    },
+    Symlink(Vec<u8>),
+    /// A directory with nothing in it: what a submodule is when its
+    /// contents are not copied.
+    Empty,
+}
+
+/// A revision of a repository as its SCM reports it. Every answer follows
+/// from the revision, which never changes.
+pub struct Commit {
+    /// The revision in full, as the SCM spells it.
+    pub rev: String,
+    /// The date of the revision in seconds since the epoch.
+    pub last_modified: u64,
+    /// The entries of the tree, by their paths below the root with `/`
+    /// between the parts. A directory is implied by the entries below it.
+    pub entries: Vec<(Vec<u8>, Entry)>,
+}
+
 pub trait Scm: Sync {
     /// The `type` of the tree as an input and the scheme of its URL: `git`
     /// in `git+file://`.
@@ -60,13 +84,38 @@ pub trait Scm: Sync {
     fn rev_count(&self, root: &Path, rev: &str) -> Result<u64, String>;
 
     /// The entries of `paths`, files and directories below `root`, that an
-    /// export of the working tree leaves out: `export-ignore` in git.
+    /// export of the working tree leaves out: `export-ignore` in git. Each
+    /// file the answer reads that is not tracked is recorded in `trace`.
     fn export_ignored(
         &self,
+        _trace: &Trace,
         _root: &Path,
         _paths: &HashSet<PathBuf>,
     ) -> Result<HashSet<PathBuf>, String> {
         Ok(HashSet::new())
+    }
+
+    /// The revision that `name`, a branch or a tag, points to in the
+    /// repository at `root`. The answer changes when the refs change, so it
+    /// is recorded in `trace`. `None` when there is no such name or the SCM
+    /// cannot tell; the caller then asks Nix.
+    fn resolve(&self, _trace: &Trace, _root: &Path, _name: &str) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+
+    /// The tree of the revision `rev` in the repository at `root`, without
+    /// the entries an export leaves out when `export` is set. The tree
+    /// follows from `rev`; each file outside it that the answer reads is
+    /// recorded in `trace`. `None` when the repository does not have `rev`
+    /// or the SCM cannot read it the way Nix does; the caller then asks Nix.
+    fn tree_at(
+        &self,
+        _trace: &Trace,
+        _root: &Path,
+        _rev: &str,
+        _export: bool,
+    ) -> Result<Option<Commit>, String> {
+        Ok(None)
     }
 
     /// For `rel`, a file on disk below `root` that the SCM does not track:
