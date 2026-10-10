@@ -22,6 +22,7 @@ use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
 use crate::flake::{self, flakeref};
 use crate::lint::{LintId, coerce, purity};
 use crate::runtime::{self, Ctx, Value, Word, ctx_to_arena};
+use crate::source;
 use crate::store::hash::{Hash, HashAlgo, Hasher, hash_bytes};
 use crate::store::locate;
 use crate::store::nar::FileType;
@@ -512,8 +513,8 @@ fn add_path_inner(
         .map(|h| make_fixed_output_path(method, &h, name, &refs))
         .transpose()
         .map_err(store_err)?;
-    if let Some(sp) = &expected_sp
-        && ev.trace().stat_now(sp.to_full_string().as_bytes(), true) != trace::Kind::Missing
+    if let (Some(sp), Some(h)) = (&expected_sp, &expected)
+        && source::valid_in_store(ev, sp, method, h)
     {
         ev.known.lock().entry(sp.clone()).or_default();
         return Ok(sp.clone());

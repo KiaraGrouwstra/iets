@@ -256,7 +256,7 @@ pub fn fetch_tarball_builtin(ev: &mut Evaluator, args: &[Word], pos: Pos) -> Eva
         ("url".into(), AttrVal::Str(url)),
         ("narHash".into(), AttrVal::Str(hash.to_sri())),
     ]);
-    source::ensure_readable(ev, &sp, &attrs, pos)?;
+    source::ensure_readable(ev, &sp, &hash, &attrs, pos)?;
     let full = ev.arena.alloc_bytes(sp.to_full_string().as_bytes());
     let ctx = ev.arena.alloc_slice(&[Ctx::Opaque(full)]);
     Ok(ev.arena.mk_string_static(full, ctx))

@@ -326,12 +326,15 @@ fn from_nix(ev: &mut Evaluator, args: &Attrs, shown: &str, pos: Pos) -> EvalResu
     let bad = || Error::boxed(ErrorKind::Eval, "iets: nix gave no store path", pos);
     let out = str_attr(&attrs, "outPath").ok_or_else(bad)?;
     let path = StorePath::parse(out).map_err(|_| bad())?;
+    let nar_hash = str_attr(&attrs, "narHash")
+        .and_then(|h| source::parse_nar_hash(h).ok())
+        .ok_or_else(|| Error::boxed(ErrorKind::Eval, "iets: nix gave no narHash", pos))?;
     let mut input = Attrs::new();
     for k in ["type", "rev", "narHash"] {
         input.extend(attrs.get(k).map(|v| (k.to_string(), v.clone())));
     }
     input.extend(args.get("url").map(|v| ("url".to_string(), v.clone())));
-    source::ensure_readable(ev, &path, &input, pos)?;
+    source::ensure_readable(ev, &path, &nar_hash, &input, pos)?;
     let tree = Tree {
         path,
         attrs,

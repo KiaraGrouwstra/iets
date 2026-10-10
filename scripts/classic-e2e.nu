@@ -712,6 +712,19 @@ in { aDrv = a.drvPath; bDrv = b.drvPath; aOut = a.outPath; bOut = b.outPath; }
   $ok = ($ok | append (cmp-case "fetchurl without a hash in a pure evaluation"
     (run-both $farm nix eval --raw --expr $"builtins.fetchurl \"($fu)\"")))
 
+  # the `leftover` paths are on disk and not valid (nix/e2e-cases.nix), so
+  # both download, and a wrong hash fails
+  $ok = ($ok | append (cmp-case "fetchurl does not take an invalid path"
+    (run-both $farm nix eval --raw --expr $"builtins.readFile \(builtins.fetchurl { url = \"($fu)\"; sha256 = \"($sha)\"; name = \"leftover\"; }\)")))
+  # a mismatch exits with 1, where nix exits with 102 (docs/reference/builtins.md)
+  let r = (run-both $farm nix eval --raw --expr $"builtins.fetchurl { url = \"($fu)\"; sha256 = \"(0..51 | each { '0' } | str join)\"; name = \"leftover\"; }")
+  $ok = ($ok | append (verdict ($r.ours.exit_code == 1 and $r.real.exit_code == 102 and ($r.ours.stdout | is-empty) and ($r.ours.stderr | str contains "hash mismatch"))
+    "fetchurl with a wrong hash does not take an invalid path"
+    $"exit ours=($r.ours.exit_code) real=($r.real.exit_code), ours stdout '($r.ours.stdout)', stderr ($r.ours.stderr | str substring 0..300)"))
+  let tb_hash = (^nix-hash --type sha256 --base32 $"($tmp)/tb" | str trim)
+  $ok = ($ok | append (cmp-case "fetchTarball does not take an invalid path"
+    (run-both $farm nix eval --raw --expr $"builtins.readFile \(builtins.fetchTarball { url = \"file://($tmp)/x.tar.gz\"; sha256 = \"($tb_hash)\"; name = \"leftover-tree\"; } + \"/f\"\)")))
+
   let ifd = $"import \(derivation { name = \"x\"; system = builtins.currentSystem; builder = \"/bin/sh\"; args = [\"-c\" \"echo 42 > $out\"]; })"
   $ok = ($ok | append (cmp-case "import from derivation falls back"
     (run-both $farm nix-instantiate --eval -E $ifd)))

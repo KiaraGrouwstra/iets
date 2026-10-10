@@ -7,11 +7,12 @@
 //! The `narHash` is known before the fetch, so the tree names itself and the
 //! input store refuses anything that does not hash to it.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs;
 use std::io::{self, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::{result, slice, thread};
 
 use super::scm::{Commit, Entry};
@@ -25,6 +26,7 @@ use crate::remote::event;
 use crate::remote::worker::{Connection, Transport};
 use crate::session::Session;
 use crate::store::hash::{Hash, HashAlgo, HashFormat, Hasher};
+use crate::store::nar;
 use crate::store::path::{IngestionMethod, StorePath};
 use crate::store::source::{SourceOrigin, SrcPath};
 use crate::treestore::{self, Rejected, StoredTree};
@@ -54,7 +56,7 @@ pub fn locked(ev: &mut Evaluator, attrs: &Attrs, pos: Pos) -> EvalResult<Tree> {
     attrs.insert("narHash".into(), AttrVal::Str(hash.to_sri()));
     let path = treestore::store_path("source", &hash)
         .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
-    ensure_readable(ev, &path, &attrs, pos)?;
+    ensure_readable(ev, &path, &hash, &attrs, pos)?;
     Ok(Tree {
         path,
         attrs,
@@ -112,13 +114,19 @@ fn nix_string_literal(s: &str) -> String {
 pub struct LazyStore {
     conn: Option<Connection>,
     tried: bool,
+    validity: Arc<Mutex<Validity>>,
 }
 
 impl Clone for LazyStore {
     /// A fiber's evaluator starts without one: the worker protocol is one
-    /// request at a time, so a connection is never shared.
+    /// request at a time, so a connection is never shared. The fibers share
+    /// the one that answers `valid_in_store`, since each open costs the
+    /// daemon a fork (7-9 ms) and each query 60 µs.
     fn clone(&self) -> LazyStore {
-        LazyStore::default()
+        LazyStore {
+            validity: self.validity.clone(),
+            ..LazyStore::default()
+        }
     }
 }
 
@@ -140,6 +148,122 @@ impl LazyStore {
         }
         self.conn.as_mut()
     }
+}
+
+/// The eval store's answers about what in `/nix/store` is valid, when it is a
+/// daemon on this machine: a remote store's database says nothing about the
+/// files here.
+#[derive(Default)]
+struct Validity {
+    conn: Option<Connection>,
+    tried: bool,
+    valid: HashSet<String>,
+}
+
+impl Validity {
+    /// `None` when there is no local daemon to ask. The first query also asks
+    /// about `more`, which the evaluation is likely to ask about next.
+    fn registered(&mut self, path: &str, more: impl FnOnce() -> Vec<String>) -> Option<bool> {
+        if self.valid.contains(path) {
+            return Some(true);
+        }
+        let mut ask = vec![path.to_string()];
+        if !self.tried {
+            self.tried = true;
+            let session = Session::current();
+            if let Some(t @ Transport::Unix(_)) = Transport::parse(&nix_conf(&session).store())
+                && let Ok(c) = Connection::open(&t, &mut |_| {})
+            {
+                self.conn = Some(c);
+            }
+            if self.conn.is_some() {
+                ask.extend(more());
+            }
+        }
+        match self.conn.as_mut()?.query_valid_paths(&ask, &mut |_| {}) {
+            Ok(v) => {
+                self.valid.extend(v);
+                Some(self.valid.contains(path))
+            }
+            Err(_) => {
+                self.conn = None;
+                None
+            }
+        }
+    }
+}
+
+/// store-api.cc:isValidPath for a store path whose content `method` and `hash`
+/// name. A file or directory there may be what an interrupted build or copy
+/// left, which the store never registered. The local daemon answers; without
+/// one the bytes must hash to `hash`. Only a valid path's kind is recorded:
+/// it cannot change while the path stays valid, and the garbage collector
+/// removes what it invalidates.
+pub fn valid_in_store(
+    ev: &mut Evaluator,
+    sp: &StorePath,
+    method: IngestionMethod,
+    hash: &Hash,
+) -> bool {
+    let full = sp.to_full_string();
+    let validity = ev.store.validity.clone();
+    let names = ev.input_names.clone();
+    // the lock's other inputs that are on disk, in the same query
+    let locked = || {
+        names
+            .iter()
+            .filter_map(|(h, _)| treestore::store_path("source", &parse_nar_hash(&h).ok()?).ok())
+            .map(|sp| sp.to_full_string())
+            .filter(|p| trace::stat_kind(Path::new(p), true) != trace::Kind::Missing)
+            .collect()
+    };
+    let registered = || {
+        validity
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .registered(&full, locked)
+    };
+    match valid_kind(Path::new(&full), method, hash, registered) {
+        Some(kind) => {
+            ev.trace().stat(full.as_bytes(), true, kind);
+            true
+        }
+        None => false,
+    }
+}
+
+/// The kind of `path` when it holds a valid store path. `registered` is the
+/// store's answer, `None` when there is no store to ask.
+fn valid_kind(
+    path: &Path,
+    method: IngestionMethod,
+    hash: &Hash,
+    registered: impl FnOnce() -> Option<bool>,
+) -> Option<trace::Kind> {
+    let kind = trace::stat_kind(path, true);
+    if kind == trace::Kind::Missing {
+        return None;
+    }
+    let valid = match registered() {
+        Some(v) => v,
+        None => hashes_to(path, method, hash),
+    };
+    valid.then_some(kind)
+}
+
+fn hashes_to(path: &Path, method: IngestionMethod, hash: &Hash) -> bool {
+    let got = match method {
+        IngestionMethod::Recursive => {
+            nar::nar_hash_filtered(path, hash.algo, &mut |_, _| true).map(|(h, _)| h)
+        }
+        IngestionMethod::Flat | IngestionMethod::Text => {
+            if !fs::symlink_metadata(path).is_ok_and(|m| m.is_file()) {
+                return false;
+            }
+            nar::flat_hash(path, hash.algo)
+        }
+    };
+    got.is_ok_and(|g| g == *hash)
 }
 
 /// fetchers.cc:getAccessorUnchecked: a locked input carries `__final`, so Nix
@@ -177,14 +301,13 @@ fn substitute(ev: &mut Evaluator, store_path: &str) -> bool {
 pub fn ensure_readable(
     ev: &mut Evaluator,
     sp: &StorePath,
+    nar_hash: &Hash,
     attrs: &Attrs,
     pos: Pos,
 ) -> EvalResult<()> {
     ev.known.lock().entry(sp.clone()).or_default();
     let full = sp.to_full_string();
-    let on_disk = trace::stat_kind(Path::new(&full), true);
-    if on_disk != trace::Kind::Missing {
-        ev.trace().stat(full.as_bytes(), true, on_disk);
+    if valid_in_store(ev, sp, IngestionMethod::Recursive, nar_hash) {
         return Ok(());
     }
     if let Some(entry) = treestore::get(sp.base_name()) {
@@ -307,10 +430,7 @@ pub fn store_commit(
     let hash = h.finish();
     let sp = treestore::store_path(name, &hash).map_err(|e| fail(e.to_string()))?;
     ev.known.lock().entry(sp.clone()).or_default();
-    let full = sp.to_full_string();
-    let on_disk = trace::stat_kind(Path::new(&full), true);
-    if on_disk != trace::Kind::Missing {
-        ev.trace().stat(full.as_bytes(), true, on_disk);
+    if valid_in_store(ev, &sp, IngestionMethod::Recursive, &hash) {
         return Ok((sp, hash));
     }
     let entry = match treestore::get(sp.base_name()) {
@@ -345,10 +465,7 @@ pub fn fetch_file(
     let fail = |e: String| Error::boxed(ErrorKind::Eval, e, pos);
     let sp = treestore::file_path(name, &expected).map_err(|e| fail(e.to_string()))?;
     ev.known.lock().entry(sp.clone()).or_default();
-    let full = sp.to_full_string();
-    let on_disk = trace::stat_kind(Path::new(&full), true);
-    if on_disk != trace::Kind::Missing {
-        ev.trace().stat(full.as_bytes(), true, on_disk);
+    if valid_in_store(ev, &sp, IngestionMethod::Flat, &expected) {
         return Ok(sp);
     }
     if let Some(entry) = treestore::get(sp.base_name()) {
@@ -807,6 +924,10 @@ mod tests {
     use super::*;
 
     use std::time::Instant;
+    use std::{env, process};
+
+    use IngestionMethod::{Flat, Recursive};
+    use trace::Kind::{Directory, Regular};
 
     #[test]
     fn nix_literal_escapes() {
@@ -989,5 +1110,52 @@ mod tests {
         for ty in ["git", "hg", "path", "file"] {
             assert!(!is_tarball_type(&attrs(&[("type", ty)])), "{ty}");
         }
+    }
+
+    #[test]
+    fn a_leftover_is_not_a_valid_path() {
+        let d = env::temp_dir().join(format!("iets-valid-{}", process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(d.join("tree")).unwrap();
+        fs::write(d.join("tree/f"), b"hi\n").unwrap();
+        fs::write(d.join("file"), b"hi\n").unwrap();
+        let mut h = Hasher::new(HashAlgo::Sha256);
+        h.update(b"hi\n");
+        let flat = h.finish();
+        let tree = nar::nar_hash(&d.join("tree")).unwrap();
+        let no_store = || None;
+
+        assert_eq!(
+            valid_kind(&d.join("file"), Flat, &flat, no_store),
+            Some(Regular)
+        );
+        assert_eq!(
+            valid_kind(&d.join("tree"), Recursive, &tree, no_store),
+            Some(Directory)
+        );
+        assert_eq!(valid_kind(&d.join("tree"), Flat, &flat, no_store), None);
+        assert_eq!(
+            valid_kind(&d.join("file"), Recursive, &tree, no_store),
+            None
+        );
+        assert_eq!(
+            valid_kind(&d.join("file"), Flat, &flat, || Some(false)),
+            None
+        );
+        assert_eq!(
+            valid_kind(&d.join("file"), Flat, &tree, || Some(true)),
+            Some(Regular)
+        );
+        let asked = || -> Option<bool> { panic!("a missing path needs no store") };
+        assert_eq!(valid_kind(&d.join("gone"), Flat, &flat, asked), None);
+
+        fs::write(d.join("file"), b"half").unwrap();
+        fs::write(d.join("tree/f"), b"half").unwrap();
+        assert_eq!(valid_kind(&d.join("file"), Flat, &flat, no_store), None);
+        assert_eq!(
+            valid_kind(&d.join("tree"), Recursive, &tree, no_store),
+            None
+        );
+        fs::remove_dir_all(&d).unwrap();
     }
 }
