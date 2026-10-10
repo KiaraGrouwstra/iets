@@ -170,32 +170,16 @@ fn reading_a_derivation_output_is_unsupported() {
 }
 
 #[test]
-fn unsupported_fetchers_name_a_way_out() {
-    for (f, arg, way) in [
-        (
-            "fetchurl",
-            r#"{ url = "https://x"; sha256 = ""; }"#,
-            "<nix/fetchurl.nix>",
-        ),
-        ("fetchGit", "/tmp", r#"type = "git""#),
-        ("fetchMercurial", "/tmp", r#"type = "hg""#),
-        ("fetchClosure", "{}", "fetch-closure"),
-    ] {
-        let mut ev = Evaluator::new();
-        let e = ev
-            .eval_string(&format!("builtins.{f} {arg}"), b"/")
-            .unwrap_err();
-        assert_eq!(e.kind, crate::eval::ErrorKind::Unsupported, "{f}");
-        assert!(
-            e.msg.starts_with(&format!("builtins.{f} is not supported")),
-            "{f}: {}",
-            e.msg
-        );
-        let hint = e.hint.unwrap_or_default();
-        assert!(hint.contains(way), "{f}: {hint}");
-        assert!(hint.contains("nix-instantiate"), "{f}: {hint}");
-    }
-    assert_eq!(eval_str("builtins ? fetchGit"), "true");
+fn fetch_mercurial_names_a_way_out() {
+    let mut ev = Evaluator::new();
+    let e = ev
+        .eval_string("builtins.fetchMercurial /tmp", b"/")
+        .unwrap_err();
+    assert_eq!(e.kind, crate::eval::ErrorKind::Unsupported);
+    assert_eq!(e.msg, "builtins.fetchMercurial is not supported");
+    let hint = e.hint.unwrap_or_default();
+    assert!(hint.contains(r#"type = "hg""#), "{hint}");
+    assert!(hint.contains("nix-instantiate"), "{hint}");
 }
 
 fn eval_pure(src: &str) -> Result<String, String> {

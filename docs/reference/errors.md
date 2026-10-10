@@ -85,11 +85,8 @@ You get a `hint` only when iets is sure of the fix:
 - `iets diff --closure` on an output that is not in the store names the
   `iets build` that makes it.
 - `iets search` with no results says to use fewer or shorter regexes.
-- `fetchurl`, `fetchGit`, `fetchMercurial` and `fetchClosure` name what
-  works instead: `import <nix/fetchurl.nix>` or `fetchTarball` for
-  `fetchurl`, a `fetchTree` with a `narHash` for `fetchGit` and
-  `fetchMercurial`, and a classic name, which falls back to Nix, for all
-  four.
+- `fetchMercurial` names what works instead: a `fetchTree` with a
+  `narHash`, an hg flake input, or a classic name, which falls back to Nix.
 
 The text on stderr shows the hint only for a usage error and an
 `unsupported` error. For every other error, the hint is only in the

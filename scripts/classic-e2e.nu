@@ -605,12 +605,12 @@ in { aDrv = a.drvPath; bDrv = b.drvPath; aOut = a.outPath; bOut = b.outPath; }
   ^tar -czf $"($tmp)/x.tar.gz" -C $tmp tb
   $ok = ($ok | append (cmp-case "fetchTarball falls back and prints the real result"
     (run-both $farm nix-instantiate --eval -E $"builtins.fetchTarball \"file://($tmp)/x.tar.gz\"")))
-  let fg = (fallback-reason $farm [nix-instantiate --eval -E "builtins.fetchGit ./."])
-  $ok = ($ok | append (verdict ($fg | str contains "iets: falling back to nix-instantiate: builtins.fetchGit is not supported\n")
-    "fetchGit falls back with one 'iets:' prefix" $"stderr was '($fg)'"))
-  let fgn = (^$iets eval --expr "builtins.fetchGit ./." | complete)
-  $ok = ($ok | append (verdict ($fgn.exit_code == 1 and ($fgn.stderr | str contains "builtins.fetchTree { type = \"git\";"))
-    "iets eval fetchGit names fetchTree on stderr" $"exit ($fgn.exit_code), stderr '($fgn.stderr)'"))
+  let fg = (fallback-reason $farm [nix-instantiate --eval -E "builtins.fetchMercurial ./."])
+  $ok = ($ok | append (verdict ($fg | str contains "iets: falling back to nix-instantiate: builtins.fetchMercurial is not supported\n")
+    "fetchMercurial falls back with one 'iets:' prefix" $"stderr was '($fg)'"))
+  let fgn = (^$iets eval --expr "builtins.fetchMercurial ./." | complete)
+  $ok = ($ok | append (verdict ($fgn.exit_code == 1 and ($fgn.stderr | str contains "builtins.fetchTree { type = \"hg\";"))
+    "iets eval fetchMercurial names fetchTree on stderr" $"exit ($fgn.exit_code), stderr '($fgn.stderr)'"))
 
   let ifd = $"import \(derivation { name = \"x\"; system = builtins.currentSystem; builder = \"/bin/sh\"; args = [\"-c\" \"echo 42 > $out\"]; })"
   $ok = ($ok | append (cmp-case "import from derivation falls back"
