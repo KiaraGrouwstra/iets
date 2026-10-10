@@ -345,8 +345,7 @@ is on, `fetchClosure` unless `fetch-closure` is, and `outputOf` unless
 the same, so `builtins.attrNames builtins` is the same list on both sides
 whatever the features are. Its own commands have every feature, so
 `builtins ? fetchTree` is true there, and code that branches on it
-(flake-compat) takes the `fetchTree` branch. `builtins.fetchClosure` is
-unsupported either way, so classic mode falls back when it is called.
+(flake-compat) takes the `fetchTree` branch.
 
 The same holds for a derivation: `outputHashMode = "text"` needs
 `dynamic-derivations` in Nix, and `outputHashAlgo = "blake3"` needs
@@ -373,17 +372,50 @@ building the producer, and evaluation does not build.
 
 ## Network fetchers
 
-`builtins.fetchurl`, `builtins.fetchGit`, `builtins.fetchMercurial` and
-`builtins.fetchClosure` always fail with an error in iets's own commands.
-They are still in `builtins`, so `builtins ? fetchGit` is true, and code
-that checks for the builtin before it calls it gets the error. Under a
-classic name the call falls back to the real nix, which fetches.
-`fetchTarball` and `fetchTree` work for some inputs;
+`builtins.fetchurl`, `builtins.fetchGit` and `builtins.fetchClosure` work,
+with the differences in this section. `builtins.fetchMercurial` always fails
+in iets's own commands. It is still in `builtins`, so
+`builtins ? fetchMercurial` is true, and code that checks for it before it
+calls it gets the error. Under a classic name the call falls back to the real
+nix. `fetchTarball` and `fetchTree` work for some inputs;
 `docs/reference/builtins.md` lists which.
 
-Observe it: `iets eval -E 'builtins.fetchGit ./.'` fails, and
-`iets nix-instantiate --eval -E '(builtins.fetchGit ./.).shortRev'`
-in a clean git checkout prints the revision through the real nix.
+`builtins.fetchurl` differs from Nix in these ways:
+
+- Without a `sha256`, it downloads on every call. Nix keeps the file for
+  `tarball-ttl`.
+- A hash mismatch exits with 1. Nix exits with 102.
+- A download error has iets's own text, not curl's.
+
+`builtins.fetchGit` copies a local working tree without a `ref` or a `rev`
+itself. Every other fetch runs the real `nix`, which must be on `PATH`. It
+differs from Nix in these ways:
+
+- The tracing cache does not watch `$GIT_DIR/info/attributes` or the global
+  attributes file, although `export-ignore` reads them.
+- On a cache hit, the `Git tree '…' is dirty` warning is not printed again.
+- When a fetch through nix fails, you see only nix's innermost error.
+- A shallow working tree with `shallow = false` goes to nix.
+- In pure evaluation, an SCP-like URL (`user@host:path`) without a `rev`
+  fails.
+
+`builtins.fetchClosure` reads the `.narinfo` files and NARs from
+`fromStore` and sends them to the eval store's nix-daemon, which checks the
+signatures. Under a classic name it needs the `fetch-closure` feature, as in
+Nix 2.34.8. It fails when the eval store is not a nix-daemon (`local`,
+`grpc://`), when a NAR is compressed with other than `xz`, `zstd`, `bzip2`,
+`gzip` or `none`, and when the cache needs a netrc file. It differs from Nix
+in these ways:
+
+- It contacts the cache only when a path is missing from the eval store.
+- It checks each NAR's hash and size before it rewrites the NAR.
+- A `file://` cache without `nix-cache-info` is an error.
+- It downloads every missing NAR before it sends any to the daemon.
+- It keeps no disk cache of `.narinfo` files.
+
+Observe it: `iets eval -E 'builtins.fetchMercurial ./.'` fails, and
+`iets eval -E '(builtins.fetchGit ./.).rev'` in a clean git checkout prints
+the revision without the real nix.
 
 ## Import from derivation
 
