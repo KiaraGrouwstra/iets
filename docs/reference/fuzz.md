@@ -275,6 +275,12 @@ An entry matches when every field it gives matches.
 | `fuzz-drv-eval` | `drv-eval` for 30 s |
 | `conformance` | every case of nix-conformance through `conformance-adapter`; `fuzz/conformance-known` lists the cases iets fails on purpose |
 
+The `conformance` check skips the cases whose answer is XML
+(`lang/*.exp.xml`): `eval-okay-closure`, `eval-okay-functionargs` and
+`eval-okay-xml`. iets has no `--xml` output, so `conformance-adapter`
+answers "unsupported" for them, and `nix-instantiate --xml` falls back to
+the real Nix (`docs/reference/classic.md`).
+
 A fuzz check fails on a difference that `fuzz/divergences.toml` does not
 list, and prints the input in base64.
 

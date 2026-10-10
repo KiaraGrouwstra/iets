@@ -45,9 +45,9 @@ abstraction is wrong or the feature belongs elsewhere.
 ## Non-goals
 
 Local store writes, local builds, a builder daemon of our own, unlocked
-flakes (registries, `nix flake lock`), fetchers that hit the network (a
-locked flake input is the one exception), a REPL, a debugger, a bytecode
-VM.
+flakes (registries, `nix flake lock`), a git or Mercurial fetcher of our own
+(`fetchGit` of anything but a local working tree runs the real nix), a REPL,
+a debugger, a bytecode VM.
 
 nix-grpc-store (github.com/Mic92/nix-grpc-store) is the supported gRPC
 transport, spoken natively from its vendored `proto/nix_remote.proto`. Its
@@ -306,6 +306,7 @@ in an `iets` output.
 | `daemon-e2e.nu` | `iets build` over the worker protocol | check, container; not by hand on a host whose store refuses `nix-store --delete` |
 | `build-e2e.nu` | `iets build` over an attribute tree: the verdicts, the exit code, `--json` | check, container |
 | `grpc-e2e.nu` | `iets build` over `grpc://` | by hand |
+| `fetchclosure-e2e.nu` | `builtins.fetchClosure` against the real nix, through two scratch daemons and `file://` caches | check, container |
 | `flaketest.nu` | flake evaluation and the input store against `nix eval` | check, container, less the 3 cases that need the network (`online` in `lib.nu`); all 39 by hand |
 | `plumbing-e2e.nu` | `iets plumbing`, one case per op | check, container |
 | `prefetch-e2e.nu` | `iets prefetch` against `nix store prefetch-file` and `nix hash` | check, container |

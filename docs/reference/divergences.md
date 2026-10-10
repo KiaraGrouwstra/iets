@@ -5,10 +5,44 @@ place where it knowingly doesn't. Each entry says what differs, why, and how
 you can see it for yourself. The classic names add more, listed in
 `docs/reference/classic.md`.
 
+The reference is Nix 2.34.8, the `nixVersions.stable` of the nixpkgs in
+`flake.lock`. iets is not tested against a newer Nix: where Nix 2.35 or
+later changed a behavior, iets keeps the 2.34.8 one unless this page says
+otherwise.
+
+iets builds and runs on x86_64-linux and aarch64-linux only. It does not
+build on macOS.
+
+## How parity is checked
+
 `checks.conformance` runs the cases of nix-conformance against the answers
 Nix 2.34.8 gave, including every entry of the regex and TOML corpora
 (`lang/corpora/`). `fuzz/conformance-known` lists the cases iets fails on
-purpose, each under its section of this page.
+purpose, each under its section of this page. The cases that need `--xml`
+output are skipped (`docs/reference/fuzz.md`).
+
+[repkgs](https://github.com/Mic92/repkgs), a package set apart from
+nixpkgs, checks whole-set parity. On
+2026-10-10, at iets c7766f63 and repkgs 06a70b5, `iets eval-jobs` and
+nix-eval-jobs 2.35.2 gave the same `drvPath` for every package:
+
+| system | packages | same `drvPath` | fail on both, with the same error |
+|:---|---:|---:|---:|
+| `x86_64-linux` | 199 | 198 | 1 (`libiconv`, not for Linux) |
+| `aarch64-linux` | 199 | 196 | 3 |
+| `riscv64-linux` | 199 | 186 | 13 |
+
+To reproduce it, with a repkgs checkout next to this repository:
+
+```sh
+nix-eval-jobs --impure -I repkgs=../repkgs bench/workloads/repkgs.nix > nej.jsonl
+iets eval-jobs --impure --no-instantiate -I repkgs=../repkgs bench/workloads/repkgs.nix > iets.jsonl
+scripts/evaljobs-cmp.nu nej.jsonl iets.jsonl
+```
+
+For another system, give both tools
+`-E 'import <repkgs> { system = "aarch64-linux"; }'` (`--expr` for
+nix-eval-jobs) in place of the file.
 
 ## Regular expressions (`builtins.match`, `builtins.split`)
 
@@ -311,8 +345,7 @@ is on, `fetchClosure` unless `fetch-closure` is, and `outputOf` unless
 the same, so `builtins.attrNames builtins` is the same list on both sides
 whatever the features are. Its own commands have every feature, so
 `builtins ? fetchTree` is true there, and code that branches on it
-(flake-compat) takes the `fetchTree` branch. `builtins.fetchClosure` is
-unsupported either way, so classic mode falls back when it is called.
+(flake-compat) takes the `fetchTree` branch.
 
 The same holds for a derivation: `outputHashMode = "text"` needs
 `dynamic-derivations` in Nix, and `outputHashAlgo = "blake3"` needs
@@ -336,6 +369,77 @@ not a valid store path` for each such attribute.
 `builtins.getContext` of a string whose context is a dynamic derivation
 output is an error. Nix resolves the derived path first, which means
 building the producer, and evaluation does not build.
+
+## Network fetchers
+
+`builtins.fetchurl`, `builtins.fetchGit` and `builtins.fetchClosure` work,
+with the differences in this section. `builtins.fetchMercurial` always fails
+in iets's own commands. It is still in `builtins`, so
+`builtins ? fetchMercurial` is true, and code that checks for it before it
+calls it gets the error. Under a classic name the call falls back to the real
+nix. `fetchTarball` and `fetchTree` work for some inputs;
+`docs/reference/builtins.md` lists which.
+
+`builtins.fetchurl` differs from Nix in these ways:
+
+- It needs a `sha256` in every mode. Nix needs one only in pure
+  evaluation, and keeps a file without one for `tarball-ttl`. Under a
+  classic name, an impure call without a `sha256` falls back to the real
+  nix. `iets prefetch URL` prints the hash.
+- A hash mismatch exits with 1. Nix exits with 102.
+- A download error has iets's own text, not curl's.
+
+`builtins.fetchGit` copies a local working tree without a `ref` or a `rev`
+itself. Every other fetch runs the real `nix`, which must be on `PATH`. It
+differs from Nix in these ways:
+
+- The tracing cache does not watch `$GIT_DIR/info/attributes` or the global
+  attributes file, although `export-ignore` reads them.
+- On a cache hit, the `Git tree '…' is dirty` warning is not printed again.
+- When a fetch through nix fails, you see only nix's innermost error.
+- A shallow working tree with `shallow = false` goes to nix.
+- In pure evaluation, an SCP-like URL (`user@host:path`) without a `rev`
+  fails.
+
+`builtins.fetchClosure` reads the `.narinfo` files and NARs from
+`fromStore` and sends them to the eval store's nix-daemon, which checks the
+signatures. Under a classic name it needs the `fetch-closure` feature, as in
+Nix 2.34.8. It fails when the eval store is not a nix-daemon (`local`,
+`grpc://`), when a NAR is compressed with other than `xz`, `zstd`, `bzip2`,
+`gzip` or `none`, and when the cache needs a netrc file. It differs from Nix
+in these ways:
+
+- It contacts the cache only when a path is missing from the eval store.
+- It checks each NAR's hash and size before it rewrites the NAR.
+- A `file://` cache without `nix-cache-info` is an error.
+- It downloads every missing NAR before it sends any to the daemon.
+- It keeps no disk cache of `.narinfo` files.
+
+Observe it: `iets eval -E 'builtins.fetchMercurial ./.'` fails, and
+`iets eval -E '(builtins.fetchGit ./.).rev'` in a clean git checkout prints
+the revision without the real nix.
+
+## Import from derivation
+
+iets never builds during evaluation. Reading a path whose string context
+names a derivation output (`import`, `readFile`, `pathExists` and the other
+builtins that read a file) fails, even when the output is already in the
+store. Nix builds the derivation first, unless
+`allow-import-from-derivation` is off. Under a classic name iets falls back
+to the real nix, which applies that setting (`docs/reference/settings.md`).
+You can still `import` a `.drv` file.
+
+## An all-digit name in an `eval-jobs` attribute path
+
+Nix reads an all-digit part of an attribute path as a list index
+(attr-path.cc). nix-eval-jobs finds a job by that path, so a job under an
+attribute named `"1"` gives `the expression selected by the selection path
+'1' should be a list but is a set`. `iets eval-jobs` reads the part as an
+attribute name when the value is an attrset, and gives the job. A jobset
+made with `listToAttrs` from numbers builds.
+
+Observe it with `{ "1" = derivation { name = "a"; system = "x86_64-linux";
+builder = "/bin/sh"; }; }` as the file of both tools.
 
 ## Flake references (`parseFlakeRef`, `flakeRefToString`, the command line)
 
@@ -620,6 +724,28 @@ the same exit code as Nix, with no symlink on either side. Then
 `nix-store --query --roots <path>` names a link under `~/.cache/iets/roots`
 for iets's run and nothing for Nix's. `scripts/classic-e2e.nu` compares
 both runs byte for byte and checks the root in the same case.
+
+## Error text on stderr
+
+iets's error messages usually give Nix's first line and a position, but less
+around them. Nix prints the source lines at the position with a caret, and
+for a missing attribute it suggests the closest name. iets prints neither:
+
+```
+$ nix-instantiate --eval -E '{abc=1;}.abd'
+error: attribute 'abd' missing
+       at «string»:1:1:
+            1| {abc=1;}.abd
+             | ^
+       Did you mean abc?
+
+$ iets eval -E '{abc=1;}.abd'
+error: attribute 'abd' missing
+       at «string»:1:1
+```
+
+The trace lines (`… while calling …`) can differ in number, order and wording.
+stdout and the exit code are the same.
 
 ## Errors, exit codes and `--log-format internal-json`
 
