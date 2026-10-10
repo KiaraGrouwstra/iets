@@ -605,6 +605,12 @@ in { aDrv = a.drvPath; bDrv = b.drvPath; aOut = a.outPath; bOut = b.outPath; }
   ^tar -czf $"($tmp)/x.tar.gz" -C $tmp tb
   $ok = ($ok | append (cmp-case "fetchTarball falls back and prints the real result"
     (run-both $farm nix-instantiate --eval -E $"builtins.fetchTarball \"file://($tmp)/x.tar.gz\"")))
+  let fg = (fallback-reason $farm [nix-instantiate --eval -E "builtins.fetchGit ./."])
+  $ok = ($ok | append (verdict ($fg | str contains "iets: falling back to nix-instantiate: builtins.fetchGit is not supported\n")
+    "fetchGit falls back with one 'iets:' prefix" $"stderr was '($fg)'"))
+  let fgn = (^$iets eval --expr "builtins.fetchGit ./." | complete)
+  $ok = ($ok | append (verdict ($fgn.exit_code == 1 and ($fgn.stderr | str contains "builtins.fetchTree { type = \"git\";"))
+    "iets eval fetchGit names fetchTree on stderr" $"exit ($fgn.exit_code), stderr '($fgn.stderr)'"))
 
   let ifd = $"import \(derivation { name = \"x\"; system = builtins.currentSystem; builder = \"/bin/sh\"; args = [\"-c\" \"echo 42 > $out\"]; })"
   $ok = ($ok | append (cmp-case "import from derivation falls back"
@@ -1438,7 +1444,7 @@ in derivation {
     {ref: "github:NixOS/nixpkgs#lib.version", want: "only local paths are supported"}
   ] {
     let err = (fallback-reason $farm [nix eval $case.ref])
-    $ok = ($ok | append (verdict (($err | str contains "falling back to nix: iets: ") and ($err | str contains $case.want))
+    $ok = ($ok | append (verdict (($err | str contains "iets: falling back to nix: ") and ($err | str contains $case.want) and (not ($err | str contains "nix: iets: ")))
       $"nix eval ($case.ref) falls back" $"stderr was '($err)'"))
     let r = (^$iets eval $case.ref | complete)
     $ok = ($ok | append (verdict ($r.exit_code == 1 and ($r.stderr | str contains $case.want))

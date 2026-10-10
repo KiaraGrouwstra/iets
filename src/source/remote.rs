@@ -35,7 +35,7 @@ use serde_json::Value;
 pub fn locked(ev: &mut Evaluator, attrs: &Attrs, pos: Pos) -> EvalResult<Tree> {
     let Some(nar_hash) = str_attr(attrs, "narHash") else {
         let msg = format!(
-            "iets: cannot fetch unlocked input '{}' (no narHash); run nix flake lock",
+            "cannot fetch unlocked input '{}' (no narHash); run nix flake lock",
             to_url(attrs)
         );
         let mut e = Error::new(ErrorKind::Unsupported, msg, pos);

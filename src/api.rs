@@ -179,7 +179,7 @@ pub fn report_of(ev: &Evaluator, e: &Error) -> log::Report {
     } else {
         rewrite_msg(ev, &e.msg)
     };
-    // "iets: " marks what classic mode falls back on; here it only doubles "error: "
+    // input fetch errors open with "iets: " (source/remote.rs); after "error: " that only doubles
     let msg = msg.strip_prefix("iets: ").unwrap_or(&msg);
     let mut r = log::Report::eval(e, msg, &at, &|m| rewrite_msg(ev, m));
     if e.kind == ErrorKind::Lint {

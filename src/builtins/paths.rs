@@ -53,38 +53,56 @@ pub fn register(r: &mut Registry) {
 }
 
 macro_rules! unsupported {
-    ($fn:ident, $msg:expr) => {
+    ($fn:ident, $msg:expr, $hint:expr) => {
         fn $fn(ev: &mut Evaluator, _args: &[Word], pos: Pos) -> EvalResult<Word> {
             ev.trace().mark_uncacheable();
-            bail!(ErrorKind::Unsupported, pos, "{}", $msg)
+            Err(unsupported(pos, $msg, $hint))
         }
     };
-    ($fn:ident, $name:literal, $msg:expr) => {
+    ($fn:ident, $name:literal, $msg:expr, $hint:expr) => {
         fn $fn(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
             ev.trace().mark_uncacheable();
             crate::lint::purity::unhashed_fetch(ev, $name, args[0], pos)?;
-            bail!(ErrorKind::Unsupported, pos, "{}", $msg)
+            Err(unsupported(pos, $msg, $hint))
         }
     };
+}
+
+fn unsupported(pos: Pos, msg: &str, hint: &str) -> Box<Error> {
+    let mut e = Error::new(ErrorKind::Unsupported, msg.into(), pos);
+    e.hint = Some(hint.into());
+    Box::new(e)
 }
 
 unsupported!(
     fetchurl,
     "fetchurl",
-    "iets: network fetchers are not supported (builtins.fetchurl)"
+    "builtins.fetchurl is not supported: iets does not download files during evaluation",
+    "download at build time with `import <nix/fetchurl.nix> { url = \"…\"; hash = \"…\"; }`, \
+     use `builtins.fetchTarball { url = \"…\"; sha256 = \"…\"; }` for an archive, \
+     or run it as nix-instantiate, nix-build or nix-shell, which fall back to Nix"
 );
 unsupported!(
     fetch_git,
     "fetchGit",
-    "iets: network fetchers are not supported (builtins.fetchGit)"
+    "builtins.fetchGit is not supported",
+    "use `builtins.fetchTree { type = \"git\"; url = \"…\"; rev = \"…\"; narHash = \"…\"; }` \
+     or a git flake input, or run it as nix-instantiate, nix-build or nix-shell, \
+     which fall back to Nix"
 );
 unsupported!(
     fetch_mercurial,
-    "iets: network fetchers are not supported (builtins.fetchMercurial)"
+    "builtins.fetchMercurial is not supported",
+    "use `builtins.fetchTree { type = \"hg\"; url = \"…\"; rev = \"…\"; narHash = \"…\"; }` \
+     or an hg flake input, or run it as nix-instantiate, nix-build or nix-shell, \
+     which fall back to Nix"
 );
 unsupported!(
     fetch_closure,
-    "iets: network fetchers are not supported (builtins.fetchClosure)"
+    "builtins.fetchClosure is not supported: iets does not copy store paths \
+     from a binary cache during evaluation",
+    "run it as nix-instantiate, nix-build or nix-shell with the fetch-closure \
+     feature on; they fall back to Nix"
 );
 
 fn lossy(b: &[u8]) -> Cow<'_, str> {
@@ -202,7 +220,7 @@ pub fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>
                 {
                     kind = ErrorKind::Unsupported;
                     format!(
-                        "iets: '{}' is not in the store and this run did not keep its text (--no-tracing-cache)",
+                        "'{}' is not in the store and this run did not keep its text (--no-tracing-cache)",
                         lossy(sp)
                     )
                 } else {
@@ -212,7 +230,7 @@ pub fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>
             Ctx::Built { drv: d, .. } => {
                 kind = ErrorKind::Unsupported;
                 format!(
-                    "iets: import from derivation is not supported: '{}' is not built",
+                    "import from derivation is not supported: '{}' is not built",
                     lossy(d)
                 )
             }

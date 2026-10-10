@@ -587,7 +587,7 @@ pub struct Report {
     pub pos: Option<String>,
     /// Innermost first, each with its position.
     pub trace: Vec<(String, Option<String>)>,
-    /// What to do about it. The text shows it for a usage error only.
+    /// What to do about it. The text shows it for a usage or unsupported error only.
     pub hint: Option<String>,
     /// Where it is in the file as bytes, and the edit, when they are known.
     pub site: Option<Site>,
@@ -635,7 +635,11 @@ impl Report {
                 None => s.push_str(&format!("\n       … {m}")),
             }
         }
-        if let Some(h) = self.hint.as_ref().filter(|_| self.code == "usage") {
+        if let Some(h) = self
+            .hint
+            .as_ref()
+            .filter(|_| matches!(self.code, "usage" | "unsupported"))
+        {
             s.push('\n');
             s.push_str(h);
         }
@@ -1057,6 +1061,18 @@ mod tests {
         let v = r.record(&text);
         let t = r#"[{"column":9,"file":"«string»:1:9","line":1,"raw_msg":"while calling 'f'"}]"#;
         assert_eq!(v["trace"].to_string(), t);
+    }
+
+    #[test]
+    fn text_shows_the_hint_of_an_unsupported_error() {
+        let r = Report {
+            hint: Some("use builtins.fetchTree".into()),
+            ..Report::new("unsupported", "builtins.fetchGit is not supported")
+        };
+        assert_eq!(
+            r.text(),
+            "error: builtins.fetchGit is not supported\nuse builtins.fetchTree"
+        );
     }
 
     #[test]
