@@ -242,6 +242,89 @@ def cache-cases [farm: string, tmp: string, np: string, sys: string]: nothing ->
   $res
 }
 
+# builtins.fetchGit against Nix's on a scratch repository: a working tree,
+# clean and dirty, with `export-ignore`, and a commit by `rev` and by `ref`
+# (a branch, a tag), which iets reads itself. Then `lib.fileset.gitTracked`,
+# which calls it.
+def --wrapped git-at [repo: string, ...args: string] {
+  ^git -c user.name=e2e -c user.email=e2e@example.com -c init.defaultBranch=main -C $repo ...$args
+}
+
+def fetchgit-cases [farm: string, tmp: string, np: string]: nothing -> list<bool> {
+  let repo = $"($tmp)/fetchgit repo"
+  mkdir $"($repo)/sub"
+  git-at $repo init -q
+  "a\n" | save $"($repo)/a"
+  "b\n" | save $"($repo)/sub/b"
+  "i\n" | save $"($repo)/sub/ign"
+  "sub/ign export-ignore\n" | save $"($repo)/.gitattributes"
+  git-at $repo add -A
+  with-env {GIT_COMMITTER_DATE: "1700000000 +0000"} { git-at $repo commit -q -m one }
+  let rev = (git-at $repo rev-parse HEAD | str trim)
+  git-at $repo tag light
+  git-at $repo tag -a -m ann ann
+  # a branch the working tree is not on, so the cases of the working tree
+  # stay as they were
+  git-at $repo checkout -q -b more
+  "a2\n" | save -f $"($repo)/a"
+  "x\n" | save $"($repo)/x"
+  chmod +x $"($repo)/x"
+  ^ln -s a $"($repo)/l"
+  git-at $repo add -A
+  git-at $repo update-index --add --cacheinfo $"160000,($rev),m"
+  with-env {GIT_COMMITTER_DATE: "1700000100 +0000"} { git-at $repo commit -q -m two }
+  let more = (git-at $repo rev-parse HEAD | str trim)
+  git-at $repo checkout -q main
+  let show = {|arg| $"let r = builtins.fetchGit ($arg); in builtins.removeAttrs r [ \"outPath\" ] // { out = r.outPath; ls = builtins.attrNames \(builtins.readDir r\); a = builtins.readFile \(r + \"/a\"\); }" }
+  let one = {|label, arg, mode|
+    cmp-case $"fetchGit ($label)" (run-both $farm nix eval $mode --json --expr (do $show $arg))
+  }
+  let path = $"\"($repo)\""
+  mut ok = [
+    (do $one "of a clean working tree" $path "--impure")
+    (do $one "of a file URL" $"\"file://($repo | str replace -a ' ' '%20')\"" "--impure")
+    (do $one "with name, shallow and exportIgnore = false" $"{ url = ($path); name = \"x\"; shallow = true; exportIgnore = false; }" "--impure")
+    (do $one "of a rev" $"{ url = ($path); rev = \"($rev)\"; }" "--impure")
+    (do $one "of a rev in pure mode" $"{ url = ($path); rev = \"($rev)\"; }" "--pure-eval")
+    (do $one "of a ref" $"{ url = ($path); ref = \"main\"; }" "--impure")
+    (do $one "of an unlocked tree in pure mode" $path "--pure-eval")
+    (do $one "of a ref that is a tag" $"{ url = ($path); ref = \"light\"; }" "--impure")
+    (do $one "of a ref that is an annotated tag" $"{ url = ($path); ref = \"refs/tags/ann\"; }" "--impure")
+    (do $one "of a branch with an executable, a symlink and a submodule" $"{ url = ($path); ref = \"more\"; }" "--impure")
+    (do $one "of a rev and a ref" $"{ url = ($path); rev = \"($rev)\"; ref = \"more\"; }" "--impure")
+    (do $one "of a rev with exportIgnore = false" $"{ url = ($path); rev = \"($rev)\"; exportIgnore = false; }" "--impure")
+    (do $one "of a ref that names nothing" $"{ url = ($path); ref = \"nope\"; }" "--impure")
+  ]
+  # a rev and a ref of a local repository are read without the real nix
+  let nonix = $"($tmp)/fetchgit-nonix"
+  mkdir $nonix
+  "#!/bin/sh\nexit 1\n" | save $"($nonix)/nix"
+  chmod +x $"($nonix)/nix"
+  for arg in [$"{ url = ($path); rev = \"($more)\"; }" $"{ url = ($path); ref = \"ann\"; }"] {
+    let got = (with-env {IETS_NIX_BIN_DIR: $nonix} {
+      ^$"($farm)/nix" eval --impure --raw --expr $"\(builtins.fetchGit ($arg)\).narHash" | complete
+    })
+    $ok = ($ok | append (verdict ($got.exit_code == 0 and ($got.stdout | str starts-with "sha256-"))
+      $"fetchGit ($arg) runs no nix" $"exit ($got.exit_code), stderr ($got.stderr | str substring 0..300)"))
+  }
+  "changed\n" | save -f $"($repo)/a"
+  "new\n" | save $"($repo)/untracked"
+  "sub/b export-ignore\n" | save -f $"($repo)/.gitattributes"
+  git-at $repo add .gitattributes
+  $ok = ($ok | append (do $one "of a dirty working tree" $path "--impure"))
+  let warned = (^$"($farm)/nix" eval --impure --raw --expr $"\(builtins.fetchGit ($path)\).outPath" | complete)
+  $ok = ($ok | append (verdict ($warned.stderr | str contains $"warning: Git tree '($repo)' is dirty")
+    "fetchGit of a dirty working tree warns as Nix does" $"stderr was '($warned.stderr)'"))
+  let root = $"\(/. + \"($repo)\"\)"
+  let tracked = $"let lib = import ($np)/lib; fs = lib.fileset; s = fs.toSource { root = ($root); fileset = fs.gitTracked ($root); }; in [ s.outPath \(builtins.attrNames \(builtins.readDir s\)\) ]"
+  $ok = ($ok | append (cmp-case "lib.fileset.gitTracked of a dirty working tree"
+    (run-both $farm nix eval --impure --json --expr $tracked)))
+  git-at $repo checkout -q HEAD -- a .gitattributes
+  rm $"($repo)/untracked"
+  $ok | append (cmp-case "lib.fileset.gitTracked of a clean working tree"
+    (run-both $farm nix eval --impure --json --expr $tracked))
+}
+
 def main [] {
   require-real-nix nix nix-instantiate nix-build nix-shell
   let iets = (iets-bin)
@@ -535,6 +618,10 @@ in { aDrv = a.drvPath; bDrv = b.drvPath; aOut = a.outPath; bOut = b.outPath; }
     print $"  stderr: ($r.stderr | str substring 0..600)"
   }
   $ok = ($ok | append (verdict $builder_ok "builder = unix://SCRATCH builds there and registers here" "see above"))
+  cd $tmp
+
+  # --- builtins.fetchGit
+  $ok = ($ok | append (fetchgit-cases $farm $tmp $np))
   cd $tmp
 
   # --- fallbacks

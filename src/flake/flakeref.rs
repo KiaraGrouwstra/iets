@@ -337,6 +337,40 @@ fn to_url(a: &Attrs) -> R<Url> {
     Ok(u)
 }
 
+/// url.cc:fixGitURL: a path becomes a `file:` URL and `git+` goes. An
+/// SCP-like `user@host:path` is unsupported.
+pub(crate) fn fix_git_url(s: &str) -> R<String> {
+    let before_slash = &s[..s.find('/').unwrap_or(s.len())];
+    let scp = before_slash
+        .match_indices('@')
+        .any(|(i, _)| s[i + 1..].contains(':'));
+    if !s.starts_with('/') && scp {
+        return unsupported(format_args!("SCP-like Git URL '{s}'"));
+    }
+    if !s.starts_with("file:") && !s.starts_with("git+file:") && !s.contains("://") {
+        let path: Vec<String> = s.split('/').map(String::from).collect();
+        if path[0].contains(':') {
+            return fail(format!(
+                "SCP-like URL '{s}' is not supported; use SSH URL syntax instead (ssh://...)"
+            ));
+        }
+        let mut u = url("file", path);
+        u.authority = s.starts_with('/').then(String::new);
+        return Ok(u.to_string());
+    }
+    let mut u = parse_url(s)?;
+    if let (Some("git"), t) = split_scheme(&u.scheme) {
+        u.scheme = t.to_string();
+    }
+    Ok(u.to_string())
+}
+
+/// The path of a `file:` URL, as git.cc:getRepoInfo reads it.
+pub(crate) fn file_url_path(s: &str) -> Option<String> {
+    let u = parse_url(s).ok()?;
+    (u.scheme == "file").then(|| u.path.join("/"))
+}
+
 /// A parsed flake reference; `bare` is a path without a scheme.
 pub struct Parsed {
     pub input: Attrs,
@@ -389,7 +423,7 @@ pub fn parse_absolute(s: &str) -> R<Parsed> {
 }
 
 /// flakeref.cc:FlakeRef::to_string, also fetchers.cc:Input::to_string.
-pub(super) fn attrs_to_string(mut a: Attrs) -> R<String> {
+pub(crate) fn attrs_to_string(mut a: Attrs) -> R<String> {
     let dir = a.remove("dir").filter(|d| *d != st(""));
     let mut url = to_url(&a)?;
     if let Some(AttrVal::Str(d)) = dir {
@@ -550,6 +584,28 @@ mod tests {
         ] {
             assert_eq!(shown(s), want, "{s}");
         }
+    }
+
+    #[test]
+    fn git_urls_are_fixed_like_nix() {
+        for (url, want) in [
+            ("/a b/c", "file:///a%20b/c"),
+            ("rel/x", "file:rel/x"),
+            ("file:///a/b", "file:///a/b"),
+            ("git+file:///a/b", "file:///a/b"),
+            ("git+https://x.org/a.git", "https://x.org/a.git"),
+            ("ssh://git@x.org/a", "ssh://git@x.org/a"),
+        ] {
+            assert_eq!(fix_git_url(url).unwrap(), want, "{url}");
+        }
+        assert!(matches!(
+            fix_git_url("git@github.com:a/b.git"),
+            Err(Error::Unsupported(_))
+        ));
+        assert!(matches!(fix_git_url("x.org:a/b"), Err(Error::Flake(_))));
+        assert_eq!(file_url_path("file:///a%20b/c").as_deref(), Some("/a b/c"));
+        assert_eq!(file_url_path("file:rel/x").as_deref(), Some("rel/x"));
+        assert_eq!(file_url_path("https://x.org/a"), None);
     }
 
     #[test]

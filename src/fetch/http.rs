@@ -1,5 +1,5 @@
-//! The one HTTP client iets has: a streaming GET, for flake inputs
-//! (`flake::fetch`). hyper over tokio-rustls, the stack tonic already
+//! The one HTTP client iets has: a streaming GET, for the fetch builtins
+//! (`builtins::fetch`). hyper over tokio-rustls, the stack tonic already
 //! brings; no libcurl. Redirects are followed like
 //! filetransfer.cc (`CURLOPT_FOLLOWLOCATION`, `CURLOPT_MAXREDIRS` 10) and
 //! `file://` reads the local file, as libcurl does for the `tarball` inputs

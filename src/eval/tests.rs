@@ -248,6 +248,51 @@ fn pure_eval_answers_like_nix() {
         r#"builtins.fetchTree { type = "gitlab"; owner = "o"; repo = "r"; host = "x.org"; }"#,
         "in pure evaluation mode, 'fetchTree' doesn't fetch unlocked input 'gitlab:o/r?host=x.org'",
     );
+    for (src, want) in [
+        (
+            r#"builtins.fetchGit "/a b""#,
+            "in pure evaluation mode, 'fetchGit' doesn't fetch unlocked input 'git+file:///a%20b?exportIgnore=1'",
+        ),
+        (
+            r#"builtins.fetchGit { url = "https://x.org/a.git"; ref = "main"; }"#,
+            "in pure evaluation mode, 'fetchGit' doesn't fetch unlocked input 'git+https://x.org/a.git?exportIgnore=1&ref=main'",
+        ),
+        (
+            r#"builtins.fetchGit { url = "git+ssh://git@x.org/a"; submodules = true; shallow = true; }"#,
+            "in pure evaluation mode, 'fetchGit' doesn't fetch unlocked input 'git+ssh://git@x.org/a?shallow=1&submodules=1'",
+        ),
+        (
+            r#"builtins.fetchGit "rel/x""#,
+            "in pure evaluation mode, 'fetchGit' doesn't fetch unlocked input 'git+file:rel/x?exportIgnore=1'",
+        ),
+        (
+            r#"builtins.fetchGit "github.com:a/b""#,
+            "SCP-like URL 'github.com:a/b' is not supported; use SSH URL syntax instead (ssh://...)",
+        ),
+        (
+            r#"builtins.fetchGit { url = "/a"; type = "git"; }"#,
+            "unexpected argument 'type'",
+        ),
+        (
+            r#"builtins.fetchGit { url = "/a"; foo = 1; }"#,
+            "input attribute 'foo' not supported by scheme 'git'",
+        ),
+        ("builtins.fetchGit { }", "input attribute 'url' is missing"),
+        (
+            r#"builtins.fetchGit { url = "/a"; shallow = 1; }"#,
+            "input attribute 'shallow' is not a Boolean",
+        ),
+        (
+            r#"builtins.fetchGit { url = "/a"; x = []; }"#,
+            "argument 'x' to 'fetchGit' is a list while a string, Boolean or integer is expected",
+        ),
+        (
+            "builtins.fetchGit 1",
+            "cannot coerce an integer to a string: 1",
+        ),
+    ] {
+        err(src, want);
+    }
     err(
         r#"builtins.getFlake "/tmp""#,
         "cannot call 'getFlake' on unlocked flake reference '/tmp', at «none»:0 (use --impure to override)",

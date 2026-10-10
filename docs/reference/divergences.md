@@ -390,11 +390,10 @@ nix. `fetchTarball` and `fetchTree` work for some inputs;
 - A download error has iets's own text, not curl's.
 
 `builtins.fetchGit` copies a local working tree without a `ref` or a `rev`
-itself. Every other fetch runs the real `nix`, which must be on `PATH`. It
-differs from Nix in these ways:
+itself. It also reads a commit of a local repository by `rev` or `ref`
+itself, without `submodules`. Every other fetch runs the real `nix`, which
+must be on `PATH`. It differs from Nix in these ways:
 
-- The tracing cache does not watch `$GIT_DIR/info/attributes` or the global
-  attributes file, although `export-ignore` reads them.
 - On a cache hit, the `Git tree '…' is dirty` warning is not printed again.
 - When a fetch through nix fails, you see only nix's innermost error.
 - A shallow working tree with `shallow = false` goes to nix.

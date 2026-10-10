@@ -5,8 +5,8 @@
 //! the reference.
 
 use super::{Level, LintId, Where};
+use crate::builtins::fetch;
 use crate::eval::{EvalResult, Evaluator, Pos};
-use crate::flake::fetch;
 use crate::runtime::{self, Cell, Ctx, Kind, Taint, Value, Word};
 use crate::{compile, project, trace};
 use std::borrow::Cow;

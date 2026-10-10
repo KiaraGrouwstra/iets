@@ -189,16 +189,30 @@ pub enum Query {
     GitLsFiles,
     GitStatus,
     GitHead,
+    /// Every ref and `HEAD`: what resolving a branch or a tag depends on.
+    GitRefs,
+    /// The file `core.attributesFile` names, which the export of a tree reads.
+    GitAttributesFile,
 }
 
 impl Query {
     /// Every permitted query, in the order that numbers their tags.
-    pub const ALL: [Query; 3] = [Query::GitLsFiles, Query::GitStatus, Query::GitHead];
+    pub const ALL: [Query; 5] = [
+        Query::GitLsFiles,
+        Query::GitStatus,
+        Query::GitHead,
+        Query::GitRefs,
+        Query::GitAttributesFile,
+    ];
 
     /// The `Scm::name` of the system this query belongs to.
     pub fn scm(self) -> &'static str {
         match self {
-            Query::GitLsFiles | Query::GitStatus | Query::GitHead => "git",
+            Query::GitLsFiles
+            | Query::GitStatus
+            | Query::GitHead
+            | Query::GitRefs
+            | Query::GitAttributesFile => "git",
         }
     }
 
@@ -237,6 +251,15 @@ impl Query {
                 "-q",
                 "HEAD",
             ],
+            Query::GitRefs => &["git", "--no-optional-locks", "show-ref", "--head"],
+            Query::GitAttributesFile => &[
+                "git",
+                "--no-optional-locks",
+                "config",
+                "--path",
+                "--get",
+                "core.attributesFile",
+            ],
         }
     }
 
@@ -245,6 +268,8 @@ impl Query {
             Query::GitLsFiles => 0,
             Query::GitStatus => 1,
             Query::GitHead => 2,
+            Query::GitRefs => 3,
+            Query::GitAttributesFile => 4,
         }
     }
 

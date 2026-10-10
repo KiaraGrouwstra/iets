@@ -3,14 +3,16 @@
 //! marker is the directory `.ledger`, `tracked` lists the files as text,
 //! `head` holds `r<count> <date>` and is absent before the first revision,
 //! the entry `dirty` is the dirty flag, a revision always has a count, and
-//! no answer comes from a command.
+//! no answer comes from a command. `refs` holds `<name> <rev>` lines, and
+//! `revs/<rev>` holds the date of a revision, then one `<path>=<text>` line
+//! for each of its files.
 
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
-use super::{Scm, Snapshot};
+use super::{Commit, Entry, Scm, Snapshot};
 use crate::trace::{Kind, Obs, Trace};
 
 pub struct Ledger;
@@ -67,6 +69,44 @@ impl Scm for Ledger {
         count.ok_or_else(|| format!("ledger: '{rev}' is no revision"))
     }
 
+    fn resolve(&self, trace: &Trace, root: &Path, name: &str) -> Result<Option<String>, String> {
+        let refs = root.join(".ledger/refs");
+        if !there(trace, &refs) {
+            return Ok(None);
+        }
+        let refs = read(trace, &refs)?;
+        let rev = refs
+            .lines()
+            .find_map(|l| l.strip_prefix(name)?.strip_prefix(' '));
+        Ok(rev.map(str::to_string))
+    }
+
+    /// A revision's text follows from its name, so it is no observation.
+    fn tree_at(
+        &self,
+        _trace: &Trace,
+        root: &Path,
+        rev: &str,
+        _export: bool,
+    ) -> Result<Option<Commit>, String> {
+        let Ok(text) = fs::read_to_string(root.join(".ledger/revs").join(rev)) else {
+            return Ok(None);
+        };
+        let mut lines = text.lines();
+        let date = lines.next().and_then(|d| d.parse().ok());
+        let date = date.ok_or_else(|| format!("ledger: '{rev}' has no date"))?;
+        let entries = lines.filter_map(|l| {
+            let (path, text) = l.split_once('=')?;
+            let bytes = format!("{text}\n").into_bytes();
+            Some((path.as_bytes().to_vec(), Entry::File { bytes, exec: false }))
+        });
+        Ok(Some(Commit {
+            rev: rev.to_string(),
+            last_modified: date,
+            entries: entries.collect(),
+        }))
+    }
+
     fn untracked(&self, root: &Path, rel: &OsStr) -> Option<String> {
         let tracked = fs::read_to_string(root.join(".ledger/tracked")).ok()?;
         (!tracked.lines().any(|l| OsStr::new(l) == rel))
@@ -87,9 +127,9 @@ impl Scm for Ledger {
 
 mod tests {
     use super::*;
+    use crate::builtins::fetch::emit_tree_attrs;
     use crate::builtins::store_hooks::open;
     use crate::eval::{EvalConfig, Evaluator, Pos};
-    use crate::flake::fetch::emit_tree_attrs;
     use crate::flake::parse_flake_ref;
     use crate::runtime::{Ctx, Taint, Word};
     use crate::source::scm::{count_key, rev_count};
@@ -257,6 +297,39 @@ mod tests {
         let kept = ev.trace().kept(&count_key(&Ledger, "r12"));
         assert_eq!(kept.as_deref(), Some(b"12".as_slice()));
         assert_eq!(rev_count(&Trace::default(), &Ledger, &root, "r13"), Ok(13));
+    }
+
+    #[test]
+    fn a_name_resolves_to_a_revision_and_a_revision_has_a_tree() {
+        let (root, _) = fixture("commit");
+        fs::create_dir_all(root.join(".ledger/revs")).unwrap();
+        fs::write(root.join(".ledger/refs"), "main r12\nv1 r3\n").unwrap();
+        fs::write(root.join(".ledger/revs/r3"), "1600000000\na=1\nsub/b=2\n").unwrap();
+        let trace = EvalConfig::new().trace(true).build().trace().clone();
+        let at = |name| Ledger.resolve(&trace, &root, name).unwrap();
+        assert_eq!(
+            (at("v1"), at("main"), at("v")),
+            (Some("r3".into()), Some("r12".into()), None)
+        );
+        assert_eq!(trace.take().len(), 2);
+        assert!(
+            Ledger
+                .tree_at(&trace, &root, "r12", true)
+                .unwrap()
+                .is_none()
+        );
+        let c = Ledger.tree_at(&trace, &root, "r3", true).unwrap().unwrap();
+        assert_eq!((c.rev.as_str(), c.last_modified), ("r3", 1600000000));
+        let files: Vec<(&[u8], &[u8])> = c
+            .entries
+            .iter()
+            .map(|(p, e)| match e {
+                Entry::File { bytes, .. } => (p.as_slice(), bytes.as_slice()),
+                _ => panic!("ledger has files only"),
+            })
+            .collect();
+        assert_eq!(files, [(&b"a"[..], &b"1\n"[..]), (b"sub/b", b"2\n")]);
+        assert!(trace.take().is_empty());
     }
 
     #[test]

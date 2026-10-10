@@ -401,6 +401,17 @@ impl Tree {
         Ok(Some(h.finish()))
     }
 
+    /// A tree whose files' bytes are in `spool` where `root` says.
+    pub fn spooled(spool: File, root: Node) -> Tree {
+        Tree {
+            src: Source::Spool {
+                spool,
+                sparse: None,
+            },
+            root,
+        }
+    }
+
     pub fn stored(root: Node, packs: Arc<Packs>) -> Tree {
         Tree {
             src: Source::Packs(packs),

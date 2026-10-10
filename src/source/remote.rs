@@ -7,13 +7,14 @@
 //! The `narHash` is known before the fetch, so the tree names itself and the
 //! input store refuses anything that does not hash to it.
 
-use std::collections::HashMap;
-use std::io::{self, BufReader, Read};
+use std::collections::{BTreeMap, HashMap};
+use std::io::{self, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::{result, slice, thread};
 
+use super::scm::{Commit, Entry};
 use super::{AttrVal, Attrs, Tree, parse_nar_hash, str_attr, to_url};
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
 use crate::fetch::http::{self, Limits};
@@ -23,7 +24,7 @@ use crate::progress::Mode;
 use crate::remote::event;
 use crate::remote::worker::{Connection, Transport};
 use crate::session::Session;
-use crate::store::hash::{Hash, HashFormat};
+use crate::store::hash::{Hash, HashAlgo, HashFormat, Hasher};
 use crate::store::path::{IngestionMethod, StorePath};
 use crate::store::source::{SourceOrigin, SrcPath};
 use crate::treestore::{self, Rejected, StoredTree};
@@ -227,6 +228,106 @@ fn adopt(ev: &mut Evaluator, sp: &StorePath, entry: &StoredTree) {
         ),
     );
     treestore::record(ev, entry, sp.base_name());
+}
+
+/// A directory being built from a revision's entries.
+#[derive(Default)]
+struct Building(BTreeMap<Vec<u8>, Built>);
+
+enum Built {
+    Dir(Building),
+    Leaf(spool::Node),
+}
+
+impl Building {
+    fn dir(&mut self, parts: &[&[u8]]) -> &mut Building {
+        let Some((first, rest)) = parts.split_first() else {
+            return self;
+        };
+        let next = self
+            .0
+            .entry(first.to_vec())
+            .or_insert_with(|| Built::Dir(Building::default()));
+        if let Built::Leaf(_) = next {
+            *next = Built::Dir(Building::default());
+        }
+        let Built::Dir(d) = next else { unreachable!() };
+        d.dir(rest)
+    }
+
+    fn node(self) -> spool::Node {
+        let entries = self.0.into_iter().map(|(name, b)| match b {
+            Built::Dir(d) => (name, d.node()),
+            Built::Leaf(n) => (name, n),
+        });
+        spool::Node::Dir(entries.collect())
+    }
+}
+
+/// The tree of a revision as the store path `name` gives it, readable there
+/// when this returns: `/nix/store` when it holds the tree, else the input
+/// store, which takes it in when it does not have it. The tree is hashed
+/// first, since nothing names it before.
+pub fn store_commit(
+    ev: &mut Evaluator,
+    name: &str,
+    commit: Commit,
+    pos: Pos,
+) -> EvalResult<(StorePath, Hash)> {
+    let fail = |e: String| Error::boxed(ErrorKind::Io, e, pos);
+    let mut file = spool::scratch("commit").map_err(|e| fail(e.to_string()))?;
+    let mut offset = 0;
+    let mut root = Building::default();
+    for (path, entry) in commit.entries {
+        let parts: Vec<&[u8]> = path.split(|&b| b == b'/').collect();
+        let (last, dirs) = parts.split_last().expect("a path has a part");
+        let node = match entry {
+            Entry::Empty => {
+                root.dir(&parts);
+                continue;
+            }
+            Entry::Symlink(target) => spool::Node::Symlink(target),
+            Entry::File { bytes, exec } => {
+                file.write_all(&bytes).map_err(|e| fail(e.to_string()))?;
+                let size = bytes.len() as u64;
+                let at = spool::Blob::Spool {
+                    offset,
+                    size,
+                    sparse: false,
+                };
+                offset += size;
+                spool::Node::File { at, exec }
+            }
+        };
+        root.dir(dirs).0.insert(last.to_vec(), Built::Leaf(node));
+    }
+    let tree = spool::Tree::spooled(file, root.node());
+    let mut h = Hasher::new(HashAlgo::Sha256);
+    tree.dump(&mut h).map_err(|e| fail(e.to_string()))?;
+    let hash = h.finish();
+    let sp = treestore::store_path(name, &hash).map_err(|e| fail(e.to_string()))?;
+    ev.known.lock().entry(sp.clone()).or_default();
+    let full = sp.to_full_string();
+    let on_disk = trace::stat_kind(Path::new(&full), true);
+    if on_disk != trace::Kind::Missing {
+        ev.trace().stat(full.as_bytes(), true, on_disk);
+        return Ok((sp, hash));
+    }
+    let entry = match treestore::get(sp.base_name()) {
+        Some(entry) => entry,
+        None => {
+            let staged = treestore::stage(sp.base_name())
+                .ok_or_else(|| fail("iets has no cache directory to hold a Git tree".into()))?;
+            treestore::put(name, IngestionMethod::Recursive, &hash, staged, tree).map_err(|e| {
+                match e {
+                    Rejected::Io(e) => fail(e.to_string()),
+                    _ => fail("iets cannot keep a Git tree in the input store".into()),
+                }
+            })?
+        }
+    };
+    adopt(ev, &sp, &entry);
+    Ok((sp, hash))
 }
 
 /// tarball.cc:downloadFile for `builtins.fetchurl`: the bytes `url` serves, as
@@ -483,72 +584,19 @@ fn fetch_tarball(
 /// cannot clone yet, so its locked attrs go to Nix's own `fetchTree` and the
 /// store path Nix reports must be the one the lock implies.
 fn fetch_with_nix(full: &str, name: &str, attrs: &Attrs, pos: Pos) -> EvalResult<()> {
-    if Session::current().settings().fetching {
-        bail!(
-            ErrorKind::Eval,
-            pos,
-            "iets: recursive fetch of input '{name}': the nix on PATH is iets itself"
-        );
-    }
-    let Some(nix) = nixbin::real("nix") else {
-        bail!(
-            ErrorKind::Eval,
-            pos,
-            "iets: input '{name}' is not in the store and nix is not on PATH; \
-             fetch it with nix ({}) first",
-            to_url(attrs)
-        );
-    };
     let expr = format!(
         "(builtins.fetchTree (builtins.fromJSON {})).outPath",
         nix_string_literal(&attrs_to_json(attrs))
     );
-    let act = Activity::new(
-        log::LVL_TALKATIVE,
-        log::ACT_FETCH_TREE,
-        &format!("fetching input '{name}' with nix"),
-        vec![],
-    );
-    let cannot = |e: io::Error| {
-        Error::boxed(
-            ErrorKind::Io,
-            format!("iets: cannot run nix to fetch input '{name}': {e}"),
-            pos,
+    let missing = || {
+        format!(
+            "iets: input '{name}' is not in the store and nix is not on PATH; \
+             fetch it with nix ({}) first",
+            to_url(attrs)
         )
     };
-    // git may ask for credentials on the terminal, as under Nix
-    let suspended = log::suspend();
-    let mut child = Command::new(&nix)
-        .env("IETS_FETCHING", "1")
-        .args([
-            "--extra-experimental-features",
-            "nix-command flakes",
-            "--log-format",
-            "internal-json",
-            "eval",
-            "--raw",
-            "--impure",
-            "--expr",
-            &expr,
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(cannot)?;
-    let mut stdout = child.stdout.take().expect("piped");
-    let read_out = thread::spawn(move || {
-        let mut v = Vec::new();
-        stdout.read_to_end(&mut v).map(|_| v)
-    });
-    let said = relay(child.stderr.take().expect("piped"), &act);
-    let status = child.wait().map_err(cannot)?;
-    let stdout = read_out
-        .join()
-        .unwrap_or_else(|_| Err(io::Error::other("the reader panicked")))
-        .map_err(cannot)?;
-    drop((act, suspended));
-    if !status.success() {
+    let (ok, stdout, said) = nix_eval(&format!("input '{name}'"), &expr, missing, false, pos)?;
+    if !ok {
         let msg = format!(
             "iets: nix could not fetch input '{name}' ({})",
             to_url(attrs)
@@ -577,10 +625,110 @@ fn fetch_with_nix(full: &str, name: &str, attrs: &Attrs, pos: Pos) -> EvalResult
     Ok(())
 }
 
+/// `builtins.fetchGit` of a commit, run by Nix: `args` are the call's
+/// attributes, `shown` is the input as Nix names it. Returns the result's
+/// attributes, with the store path as `outPath`.
+pub fn fetch_git_with_nix(
+    args: &Attrs,
+    shown: &str,
+    pos: Pos,
+) -> EvalResult<serde_json::Map<String, Value>> {
+    let expr = format!(
+        "let r = builtins.fetchGit (builtins.fromJSON {}); \
+         in builtins.toJSON (builtins.removeAttrs r [ \"outPath\" ] // {{ path = r.outPath; }})",
+        nix_string_literal(&attrs_to_json(args))
+    );
+    let missing = || format!("iets: builtins.fetchGit of '{shown}' needs nix on PATH");
+    let what = format!("the Git repository '{shown}'");
+    let (ok, stdout, said) = nix_eval(&what, &expr, missing, true, pos)?;
+    if !ok {
+        let last = said.rfind("error: ").map(|i| said[i + 7..].trim());
+        match last {
+            Some(m) => bail!(ErrorKind::Eval, pos, "{m}"),
+            None => bail!(ErrorKind::Eval, pos, "iets: nix could not fetch {what}"),
+        }
+    }
+    let mut out: serde_json::Map<String, Value> = serde_json::from_slice(&stdout)
+        .map_err(|e| Error::boxed(ErrorKind::Eval, format!("iets: nix said: {e}"), pos))?;
+    if let Some(p) = out.remove("path") {
+        out.insert("outPath".into(), p);
+    }
+    Ok(out)
+}
+
+/// `nix eval --raw --impure --expr EXPR` for a fetch of `what`, its records
+/// relayed, its errors only into what it said when `keep_errors` is set:
+/// whether it succeeded, its stdout and what it said.
+fn nix_eval(
+    what: &str,
+    expr: &str,
+    missing: impl FnOnce() -> String,
+    keep_errors: bool,
+    pos: Pos,
+) -> EvalResult<(bool, Vec<u8>, String)> {
+    if Session::current().settings().fetching {
+        bail!(
+            ErrorKind::Eval,
+            pos,
+            "iets: recursive fetch of {what}: the nix on PATH is iets itself"
+        );
+    }
+    let Some(nix) = nixbin::real("nix") else {
+        bail!(ErrorKind::Eval, pos, "{}", missing());
+    };
+    let act = Activity::new(
+        log::LVL_TALKATIVE,
+        log::ACT_FETCH_TREE,
+        &format!("fetching {what} with nix"),
+        vec![],
+    );
+    let cannot = |e: io::Error| {
+        Error::boxed(
+            ErrorKind::Io,
+            format!("iets: cannot run nix to fetch {what}: {e}"),
+            pos,
+        )
+    };
+    // git may ask for credentials on the terminal, as under Nix
+    let suspended = log::suspend();
+    let mut child = Command::new(&nix)
+        .env("IETS_FETCHING", "1")
+        .args([
+            "--extra-experimental-features",
+            "nix-command flakes",
+            "--log-format",
+            "internal-json",
+            "eval",
+            "--raw",
+            "--impure",
+            "--expr",
+            expr,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(cannot)?;
+    let mut stdout = child.stdout.take().expect("piped");
+    let read_out = thread::spawn(move || {
+        let mut v = Vec::new();
+        stdout.read_to_end(&mut v).map(|_| v)
+    });
+    let said = relay(child.stderr.take().expect("piped"), &act, keep_errors);
+    let status = child.wait().map_err(cannot)?;
+    let stdout = read_out
+        .join()
+        .unwrap_or_else(|_| Err(io::Error::other("the reader panicked")))
+        .map_err(cannot)?;
+    drop((act, suspended));
+    Ok((status.success(), stdout, said))
+}
+
 /// Nix's records go under `act`; git's `\r` redraws go to a terminal as they
-/// are, as under Nix, or into `act`'s detail. Returns the text, for the
-/// hash mismatch check.
-fn relay(from: impl Read, act: &Activity) -> String {
+/// are, as under Nix, or into `act`'s detail. With `keep_errors` an error
+/// is not printed: its innermost message goes into the text, after
+/// `error: `. Returns the text.
+fn relay(from: impl Read, act: &Activity, keep_errors: bool) -> String {
     let session = Session::current();
     let terminal = session.log.progress.mode() == Mode::Bar && !log::json();
     let mut said = String::new();
@@ -634,6 +782,13 @@ fn relay(from: impl Read, act: &Activity) -> String {
             }
             Some("msg") => {
                 let msg = v["msg"].as_str().unwrap_or("");
+                if keep_errors && n("level") == 0 {
+                    let raw = v["raw_msg"].as_str().unwrap_or(msg);
+                    said.push_str("error: ");
+                    said.push_str(&log::strip_ansi(raw));
+                    said.push('\n');
+                    continue;
+                }
                 log::line(msg);
                 said.push_str(msg);
                 said.push('\n');

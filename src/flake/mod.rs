@@ -5,17 +5,16 @@
 //! complete `flake.lock` is accepted; nothing is locked or looked up in a
 //! registry. See docs/reference/flakes.md.
 
-pub mod fetch;
 pub mod flakeref;
 
 use std::path::{Path, PathBuf};
 use std::{fs, io, mem};
 
+use crate::builtins::fetch::{self, fetch_tree};
 use crate::builtins::store_hooks::locate;
 use crate::compile;
 use crate::error::{Error, Result};
 use crate::eval::{Error as EvalError, ErrorKind, EvalResult, Evaluator, Pos};
-use crate::flake::fetch::fetch_tree;
 use crate::runtime::Word;
 use crate::source::{self, SourceRef, lock};
 use crate::store::path::StorePath;

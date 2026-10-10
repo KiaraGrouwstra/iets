@@ -8,9 +8,10 @@ use std::path::Path;
 
 use crate::builtins::{paths, store_hooks};
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
+use crate::flake::flakeref;
 use crate::lint::purity::{self, tree_level};
 use crate::lint::{Level, LintId};
-use crate::runtime::{Ctx, Taint, Value, Word};
+use crate::runtime::{AttrsObj, Ctx, Taint, Value, Word};
 use crate::source::{
     self, AttrVal, Attrs, SourceRef, Tree, bool_attr, int_attr, last_modified_date, parse_nar_hash,
     scm, str_attr, to_url,
@@ -19,8 +20,6 @@ use crate::store::hash::{Hash, HashAlgo};
 use crate::store::path::{IngestionMethod, check_name};
 use crate::syntax::symbol::Sym;
 use crate::{provenance, treestore};
-
-use super::flakeref;
 
 /// The attrs `fetchTree` accepts: strings and paths, booleans, non-negative
 /// integers (fetchTree.cc).
@@ -33,32 +32,7 @@ fn collect_attrs(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Attrs> {
             "'fetchTree' with a URL argument is not supported; pass the locked attribute set"
         );
     };
-    let mut out = Attrs::new();
-    for attr in a.iter() {
-        let name = String::from_utf8_lossy(ev.interner.name(attr.sym)).into_owned();
-        if name == "__final" {
-            continue;
-        }
-        let v = ev.force(attr.cell.get())?;
-        let val = match v.view() {
-            Value::String(s) => AttrVal::Str(String::from_utf8_lossy(s.bytes).into_owned()),
-            Value::Path(p) => AttrVal::Str(String::from_utf8_lossy(p.path).into_owned()),
-            Value::Bool(b) => AttrVal::Bool(b),
-            Value::Int(n) if n >= 0 => AttrVal::Int(n as u64),
-            Value::Int(n) => bail!(
-                ErrorKind::Eval,
-                pos,
-                "negative value given for 'fetchTree' argument '{name}': {n}"
-            ),
-            _ => bail!(
-                ErrorKind::Type,
-                pos,
-                "argument '{name}' to 'fetchTree' is {} while a string, Boolean or integer is expected",
-                v.value_type().type_of()
-            ),
-        };
-        out.insert(name, val);
-    }
+    let out = input_attrs(ev, a, "fetchTree", pos)?;
     // fetchTree.cc:158 (`allowNameArgument` is false for fetchTree), before the
     // attrs reach `Input::fromAttrs`, which is where the missing `type` is seen
     if out.contains_key("name") {
@@ -74,6 +48,42 @@ fn collect_attrs(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Attrs> {
             pos,
             "argument 'type' is missing in call to 'fetchTree'"
         );
+    }
+    Ok(out)
+}
+
+/// The attribute set of a call to `fetcher` as input attributes.
+pub(super) fn input_attrs(
+    ev: &mut Evaluator,
+    a: &AttrsObj,
+    fetcher: &str,
+    pos: Pos,
+) -> EvalResult<Attrs> {
+    let mut out = Attrs::new();
+    for attr in a.iter() {
+        let name = String::from_utf8_lossy(ev.interner.name(attr.sym)).into_owned();
+        if name == "__final" {
+            continue;
+        }
+        let v = ev.force(attr.cell.get())?;
+        let val = match v.view() {
+            Value::String(s) => AttrVal::Str(String::from_utf8_lossy(s.bytes).into_owned()),
+            Value::Path(p) => AttrVal::Str(String::from_utf8_lossy(p.path).into_owned()),
+            Value::Bool(b) => AttrVal::Bool(b),
+            Value::Int(n) if n >= 0 => AttrVal::Int(n as u64),
+            Value::Int(n) => bail!(
+                ErrorKind::Eval,
+                pos,
+                "negative value given for '{fetcher}' argument '{name}': {n}"
+            ),
+            _ => bail!(
+                ErrorKind::Type,
+                pos,
+                "argument '{name}' to '{fetcher}' is {} while a string, Boolean or integer is expected",
+                v.value_type().name()
+            ),
+        };
+        out.insert(name, val);
     }
     Ok(out)
 }
