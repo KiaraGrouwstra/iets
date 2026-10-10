@@ -375,6 +375,15 @@ impl SharedMap<StorePath, Known> {
         }
     }
 
+    /// The locked trees no local directory stands for, by lock node name.
+    pub fn inputs(&self) -> Vec<(StorePath, String)> {
+        self.lock()
+            .iter()
+            .filter(|(_, k)| k.origin.as_ref().and_then(|o| o.at.local()).is_none())
+            .filter_map(|(p, k)| Some((p.clone(), k.flake.clone()?)))
+            .collect()
+    }
+
     /// Every source this evaluation added to the (virtual) store and where its content is.
     pub fn origins(&self) -> HashMap<StorePath, SourceOrigin> {
         self.lock()

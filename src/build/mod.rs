@@ -471,10 +471,11 @@ impl Names<'_> {
             .unwrap_or_else(|| strip_hash(drv).to_string())
     }
 
-    /// `<attr> (<file>:<line>:<col>)` when the position is known.
+    /// `<attr> (<file>:<line>:<col>)` when the position is known and names
+    /// this derivation alone.
     fn label(&self, drv: &str) -> String {
         let attr = self.attr(drv);
-        match self.pos(drv) {
+        match self.prov.site(drv).and_then(|s| s.own_pos()) {
             Some(pos) => format!("{attr} ({pos})"),
             None => attr,
         }

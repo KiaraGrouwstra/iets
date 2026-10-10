@@ -59,8 +59,21 @@ sets `pname` points at its own file.
 A package that sets only `name` through a nixpkgs builder, like `runCommand`,
 loses that binding to `make-derivation.nix`. Then iets falls back to the first
 attribute the set still holds from a lint root, usually `src`. The value lints
-use the same fallback. A bare `runCommand "x" { } "…"` holds none and points
-into nixpkgs, because there's nothing better to point at.
+use the same fallback.
+
+A `runCommand` or `writeText` call holds none of these, and points into
+nixpkgs. That's true when you call it yourself, and for most NixOS units,
+which the `systemd` module makes from your options. The call stack can't
+help: `derivationStrict` runs when something reads `drvPath`, and by then
+the call that made the attribute set has returned. That position is the
+same for every such derivation, so it can't tell them apart. iets doesn't put a position on the `building` line when another
+derivation of the evaluation has the same position. The failure line
+always has the position.
+
+A position in a locked input that no local directory stands for shows the
+lock node name in place of the store path:
+`nixpkgs/pkgs/stdenv/generic/make-derivation.nix:651:11`. The build log
+keeps the store path, because the node name isn't a path.
 
 **The attribute path comes from the command line walk.** Classic mode records
 the path it walked, and `iets build` uses `-A` or the flake fragment.
@@ -69,7 +82,7 @@ the path it walked, and `iets build` uses `-A` or the flake fragment.
 
 | place | with provenance | without |
 |---|---|---|
-| build started (`iets build`) | `▶ building <attr> (<file>:<line>:<col>)` | `▶ building <attr>` |
+| build started (`iets build`) | `▶ building <attr> (<file>:<line>:<col>)`, the position only when no other derivation shares it | `▶ building <attr>` |
 | build failed (`iets build`) | `✘  <attr> failed after <time> (<reason>), defined at <file>:<line>:<col>` | `✘  <attr> failed after <time> (<reason>)` |
 | build failed (`print-dev-env`) | `build of <attr> failed (<drv basename>), defined at <file>:<line>:<col>: <reason>` | `build of <drv path> failed: <reason>` |
 | build log | every mapped store path replaced | the store path |
