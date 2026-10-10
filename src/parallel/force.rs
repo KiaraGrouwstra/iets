@@ -2,10 +2,10 @@
 //! fiber an `Evaluator`, the parallel `force_thunk`, strict-demand fan-out,
 //! and the range tasks helpers run.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::mem;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 use super::sched::{self, Driver, Runtime, Slot, Task, Worker};
@@ -48,6 +48,12 @@ unsafe impl Send for SyncEv {}
 impl Driver for SyncEv {
     fn new_user(&self, _rt: &Runtime) -> *mut () {
         Box::into_raw(Box::new(self.0.clone())) as *mut ()
+    }
+
+    fn drop_user(&self, user: *mut ()) {
+        // SAFETY: `user` is a `Box<Evaluator>` from `new_user` or `try_run`,
+        // dropped once by the teardown.
+        drop(unsafe { Box::from_raw(user as *mut Evaluator) });
     }
 
     fn run_task(&self, _rt: &Runtime, slot: &mut Slot) {
@@ -140,7 +146,7 @@ unsafe fn slot_mut(ev: &Evaluator) -> &'static mut Slot {
 /// Shared view of the slot: its atomics and its runtime handle.
 #[inline]
 fn slot_ref(ev: &Evaluator) -> &'static Slot {
-    // SAFETY: the pointer `init_ctx` stored; slots are never freed, and no
+    // SAFETY: the pointer `init_ctx` stored; a slot outlives its fiber, and no
     // exclusive borrow of the slot is live inside the callers below.
     unsafe { &*ev.par.slot }
 }
@@ -295,7 +301,7 @@ fn claim_and_run(ev: &mut Evaluator, w: Word, cell: &'static Cell) -> EvalResult
             debug_assert!(!v.is_thunk());
             if ev.par.cancelled {
                 // Bailed (or hit an effect) somewhere below: transient.
-                discard(outer, key);
+                discard(ev, outer, key);
                 thunk::publish(unsafe { slot_mut(ev) }, cell, payload);
                 Err(cancelled())
             } else {
@@ -308,7 +314,7 @@ fn claim_and_run(ev: &mut Evaluator, w: Word, cell: &'static Cell) -> EvalResult
             if !ev.par.is_main && e.kind != ErrorKind::Cancelled {
                 slot_ref(ev).runtime().note_failed(key);
             }
-            discard(outer, key);
+            discard(ev, outer, key);
             thunk::publish(unsafe { slot_mut(ev) }, cell, payload);
             Err(e)
         }
@@ -333,16 +339,21 @@ pub fn journal(ev: &mut Evaluator, _msg: String) -> bool {
 
 pub static EFFECT_BAILS: AtomicUsize = AtomicUsize::new(0);
 
-type Deferred = Box<dyn FnOnce(&mut Evaluator) + Send>;
+pub(crate) type Deferred = Box<dyn FnOnce(&mut Evaluator) + Send>;
 
-/// Effects a helper produced, by the thunk whose value carries them. The
-/// demand path runs them when it takes that value and drops them
-/// otherwise, so a warning from work the program never asks for is never
-/// seen. Only for an effect the program may lose without losing anything
-/// it returns. The counter keeps the demand path off the lock while the
-/// map is empty, which is every run without lints.
-static PENDING: Mutex<Option<HashMap<u64, Vec<Deferred>>>> = Mutex::new(None);
+/// Effects a helper produced, by the thunk whose value carries them
+/// (`Runtime::pending`). The demand path runs them when it takes that
+/// value and drops them otherwise, so a warning from work the program never
+/// asks for is never seen. Only for an effect the program may lose without
+/// losing anything it returns. This counter, over every runtime in the
+/// process, keeps the demand path off the lock while the maps are empty,
+/// which is every run without lints.
 static NPENDING: AtomicUsize = AtomicUsize::new(0);
+
+/// The effects of a runtime that ended, which nothing will take.
+pub(crate) fn forget_pending(n: usize) {
+    NPENDING.fetch_sub(n, Ordering::Relaxed);
+}
 
 /// Run an effect, or hold it back when a helper produced it. The demand
 /// path runs it at once.
@@ -351,10 +362,11 @@ pub fn defer(ev: &mut Evaluator, f: impl FnOnce(&mut Evaluator) + Send + 'static
         f(ev);
         return;
     }
-    PENDING
+    slot_ref(ev)
+        .runtime()
+        .pending
         .lock()
         .unwrap()
-        .get_or_insert_with(Default::default)
         .entry(ev.par.root)
         .or_default()
         .push(Box::new(f));
@@ -363,13 +375,9 @@ pub fn defer(ev: &mut Evaluator, f: impl FnOnce(&mut Evaluator) + Send + 'static
 
 /// The thunk was reset, so nothing carries its effects.
 #[inline]
-fn discard(outer: bool, key: u64) {
+fn discard(ev: &Evaluator, outer: bool, key: u64) {
     if outer && NPENDING.load(Ordering::Relaxed) != 0 {
-        let held = PENDING
-            .lock()
-            .unwrap()
-            .as_mut()
-            .and_then(|m| m.remove(&key));
+        let held = slot_ref(ev).runtime().pending.lock().unwrap().remove(&key);
         NPENDING.fetch_sub(held.map_or(0, |v| v.len()), Ordering::Relaxed);
     }
 }
@@ -378,10 +386,10 @@ fn discard(outer: bool, key: u64) {
 /// now the program's.
 #[cold]
 fn release(ev: &mut Evaluator, key: u64) {
-    let held = {
-        let mut g = PENDING.lock().unwrap();
-        g.as_mut().and_then(|m| m.remove(&key))
-    };
+    if !ev.par.on {
+        return;
+    }
+    let held = slot_ref(ev).runtime().pending.lock().unwrap().remove(&key);
     for f in held.into_iter().flatten() {
         NPENDING.fetch_sub(1, Ordering::Relaxed);
         f(ev);

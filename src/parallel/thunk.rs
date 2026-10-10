@@ -86,7 +86,7 @@ pub fn publish(slot: &mut Slot, cell: &Cell, v: Word) {
         let list = rt.waiters.take(cell);
         let w = slot.worker();
         for f in list {
-            // SAFETY: entries come from `wait`, whose slots live forever;
+            // SAFETY: entries come from `wait`, whose slots live until the teardown;
             // the demand fiber, if it parked here, is the first of them.
             unsafe { rt.wake(w, f) };
         }
@@ -207,6 +207,8 @@ mod tests {
         nodes: Vec<Node>,
         done: AtomicUsize,
         parks: AtomicUsize,
+        deadlocks: AtomicUsize,
+        fibers: AtomicUsize,
     }
 
     // SAFETY: cells are atomic; deps are immutable.
@@ -264,6 +266,7 @@ mod tests {
         cells: [Cell; 2],
         cancelled: AtomicUsize,
         done: AtomicUsize,
+        deadlocks: AtomicUsize,
     }
 
     // SAFETY: cells are atomic.
@@ -323,6 +326,7 @@ mod tests {
         let p: &'static Pair = Box::leak(Box::new(Pair {
             cells: [Cell::new(Word::EMPTY), Cell::new(Word::EMPTY)],
             cancelled: AtomicUsize::new(0),
+            deadlocks: AtomicUsize::new(0),
             done: AtomicUsize::new(0),
         }));
         let rt = Runtime::start(3, Box::new(PairDriver(p)), 1 << 20).expect("runtime");
@@ -366,11 +370,13 @@ mod tests {
                     assert!(t0.elapsed().as_secs() < HANG, "timeout");
                     thread::yield_now();
                 }
+                p.deadlocks
+                    .store(rt.deadlocks.load(Ordering::Relaxed), Ordering::Relaxed);
             }),
         );
         r.expect("main fiber");
         assert!(
-            rt.deadlocks.load(Ordering::Relaxed) >= 1,
+            p.deadlocks.load(Ordering::Relaxed) >= 1,
             "resolver did not run"
         );
         assert!(p.cancelled.load(Ordering::Relaxed) >= 1);
@@ -429,6 +435,8 @@ mod tests {
             nodes,
             done: AtomicUsize::new(0),
             parks: AtomicUsize::new(0),
+            deadlocks: AtomicUsize::new(0),
+            fibers: AtomicUsize::new(0),
         }));
         let rt = Runtime::start(8, Box::new(GraphDriver(g)), 1 << 20).expect("runtime");
         rt.set_eager_wakes();
@@ -456,6 +464,9 @@ mod tests {
                     force(g, slot, N - 1);
                     thread::yield_now();
                 }
+                g.deadlocks
+                    .store(rt.deadlocks.load(Ordering::Relaxed), Ordering::Relaxed);
+                g.fibers.store(rt.stats_fibers(), Ordering::Relaxed);
             }),
         );
         r.expect("main fiber");
@@ -469,11 +480,11 @@ mod tests {
             );
             assert_eq!(got.imm_int_value(), want, "node {i}");
         }
-        assert_eq!(rt.deadlocks.load(Ordering::Relaxed), 0);
+        assert_eq!(g.deadlocks.load(Ordering::Relaxed), 0);
         eprintln!(
             "parks={} fibers={}",
             g.parks.load(Ordering::Relaxed),
-            rt.stats_fibers()
+            g.fibers.load(Ordering::Relaxed)
         );
     }
 }

@@ -77,12 +77,24 @@ impl Default for Arena {
     }
 }
 
+/// The chunks this arena handed out stay mapped: the graph points into
+/// them. The chunk mapped ahead was never handed out.
+impl Drop for Arena {
+    fn drop(&mut self) {
+        if let Some(h) = self.next.take()
+            && let Ok((p, _)) = h.join()
+        {
+            // SAFETY: a whole `CHUNK` mapping from `map_chunk`, never used.
+            unsafe { libc::munmap(p as *mut _, CHUNK) };
+        }
+    }
+}
+
 impl Arena {
     pub(crate) fn new() -> Self {
-        Arena {
-            strings: FxHashMap::with_capacity_and_hasher(1 << 16, Default::default()),
-            ..Arena::placeholder()
-        }
+        let mut a = Arena::placeholder();
+        a.strings = FxHashMap::with_capacity_and_hasher(1 << 16, Default::default());
+        a
     }
 
     /// An arena that reserves nothing, for a slot that a real arena is

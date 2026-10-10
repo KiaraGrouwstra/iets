@@ -2,9 +2,11 @@
 //! handshake. Evaluator-agnostic: the `Driver` supplies the per-fiber
 //! payload and runs tasks.
 
+use std::collections::HashMap;
+use std::ops::Deref;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering, fence};
-use std::thread::{self, Builder};
+use std::thread::{self, Builder, JoinHandle};
 use std::time::{Duration, Instant};
 use std::{hint, process, ptr};
 
@@ -117,6 +119,9 @@ impl Task {
 pub trait Driver: Sync {
     /// Payload for a new fiber slot (an `Evaluator`).
     fn new_user(&self, rt: &Runtime) -> *mut ();
+    /// Frees a payload `new_user` made, at teardown. Its fiber never runs
+    /// again, but may be parked in the middle of a task.
+    fn drop_user(&self, _user: *mut ()) {}
     /// Run `slot.task`. Called on the fiber's own stack.
     fn run_task(&self, rt: &Runtime, slot: &mut Slot);
     /// Called on the worker's stack right before switching into `slot`
@@ -191,6 +196,10 @@ pub struct Runtime {
     pub suppress: AtomicBool,
     next_id: AtomicU32,
     all: Mutex<Vec<*mut Slot>>,
+    threads: Mutex<Vec<JoinHandle<()>>>,
+    /// Effects held back by `force::defer`, by thunk address. Per runtime,
+    /// so a run that ends drops the effects nothing took.
+    pub(crate) pending: Mutex<HashMap<u64, Vec<force::Deferred>>>,
     driver: Box<dyn Driver>,
     stack_size: usize,
     tune: Tuning,
@@ -224,7 +233,7 @@ impl Runtime {
         n: usize,
         driver: Box<dyn Driver>,
         stack_size: usize,
-    ) -> Result<&'static Runtime, fiber::StackError> {
+    ) -> Result<Handle, fiber::StackError> {
         assert!(n >= 1);
         fiber::check_reservation(n, stack_size)?;
         let rt: &'static Runtime = Box::leak(Box::new(Runtime {
@@ -250,6 +259,8 @@ impl Runtime {
             suppress: AtomicBool::new(false),
             next_id: AtomicU32::new(1),
             all: Mutex::new(Vec::new()),
+            threads: Mutex::new(Vec::new()),
+            pending: Mutex::new(HashMap::new()),
             driver,
             stack_size,
             tune: Tuning::read(n),
@@ -262,8 +273,9 @@ impl Runtime {
             stat_main_wait_ns: AtomicUsize::new(0),
             stat_fiber_parks: AtomicUsize::new(0),
         }));
+        let mut threads = rt.threads.lock().unwrap();
         for i in 1..n {
-            Builder::new()
+            let t = Builder::new()
                 .name(format!("iets-w{i}"))
                 .stack_size(4 << 20)
                 .spawn(session::bind(move || {
@@ -273,18 +285,16 @@ impl Runtime {
                     rt.drain_loop(&mut w, || rt.shutdown.load(Ordering::Acquire));
                 }))
                 .expect("spawn worker");
+            threads.push(t);
         }
-        Ok(rt)
+        drop(threads);
+        Ok(Handle(rt))
     }
 
     /// Run `entry` in the main fiber on this thread (worker 0), draining
     /// other work while it is parked. Returns when `entry` has returned.
     /// Fails only when the main fiber's own stack cannot be reserved.
-    pub fn run_main(
-        &'static self,
-        user: *mut (),
-        entry: MainEntry,
-    ) -> Result<(), fiber::StackError> {
+    fn run_main(&'static self, user: *mut (), entry: MainEntry) -> Result<(), fiber::StackError> {
         if Session::current().settings().par_stats >= 2 {
             force::SAMPLE_POS.store(true, Ordering::Relaxed);
             let _ = force::START.set(Instant::now());
@@ -293,7 +303,13 @@ impl Runtime {
         fiber::install_overflow_handler();
         let mut w = Worker::new(0);
         // the demand path keeps the stack it has at one worker
-        let slot = self.new_slot_sized(&mut w, user, fiber::MAIN_STACK)?;
+        let slot = match self.new_slot_sized(&mut w, user, fiber::MAIN_STACK) {
+            Ok(s) => s,
+            Err(e) => {
+                self.driver.drop_user(user);
+                return Err(e);
+            }
+        };
         // SAFETY: fresh slot, owned by this thread.
         unsafe {
             (*slot).is_main = true;
@@ -303,6 +319,49 @@ impl Runtime {
         self.run_slot(&mut w, slot);
         self.drain_loop(&mut w, || self.main_done.load(Ordering::Acquire));
         Ok(())
+    }
+
+    /// Stops the helpers and frees every slot: its fiber stack and its
+    /// payload. Returns the number of fibers that were parked in the middle
+    /// of a task; whatever their frames own on the Rust heap is lost.
+    ///
+    /// # Safety
+    /// The main fiber has returned, or never started, and nothing holds a
+    /// slot pointer or a reference to this runtime past this call.
+    unsafe fn teardown(&'static self) -> usize {
+        for &s in self.all.lock().unwrap().iter() {
+            // SAFETY: slots live until the loop below; atomics only.
+            unsafe { (*s).cancel.store(true, Ordering::Release) };
+        }
+        self.shutdown.store(true, Ordering::Release);
+        self.wake_all();
+        for t in self.threads.lock().unwrap().drain(..) {
+            let _ = t.join();
+        }
+        let mut parked = 0;
+        for s in self.all.lock().unwrap().drain(..) {
+            // SAFETY: every thread that ran a fiber has been joined, so
+            // this thread owns every slot, and no fiber resumes again.
+            let slot = unsafe { Box::from_raw(s) };
+            if !matches!(
+                slot.fiber.state.load(Ordering::Acquire),
+                fiber::NEW | fiber::FINISHED
+            ) {
+                parked += 1;
+            }
+            if !slot.user.is_null() {
+                self.driver.drop_user(slot.user);
+            }
+        }
+        let held: usize = self
+            .pending
+            .lock()
+            .unwrap()
+            .drain()
+            .map(|(_, v)| v.len())
+            .sum();
+        force::forget_pending(held);
+        parked
     }
 
     fn drain_loop(&self, w: &mut Worker, done: impl Fn() -> bool) {
@@ -505,7 +564,7 @@ impl Runtime {
     /// a spurious wake just makes the fiber re-check its wait.
     ///
     /// # Safety
-    /// `slot` must point at a live slot (slots are never freed).
+    /// `slot` must point at a live slot (slots live until the teardown, after every fiber stopped).
     pub unsafe fn wake(&self, w: &mut Worker, slot: *mut Slot) {
         // SAFETY: per the contract; only the atomic state is touched.
         let st = unsafe { &(*slot).fiber.state };
@@ -715,7 +774,7 @@ impl Runtime {
         let all = self.all.lock().unwrap();
         let mut woken = 0;
         for &s in all.iter() {
-            // SAFETY: slots live forever; only atomics are read here.
+            // SAFETY: slots live until the teardown; only atomics are read here.
             let slot = unsafe { &*s };
             if slot.is_main || slot.fiber.state.load(Ordering::Acquire) != fiber::SUSPENDED {
                 continue;
@@ -792,7 +851,7 @@ impl Runtime {
     /// Print, every 20 ms, how many workers are inside fibers, how much
     /// work is queued and whether main is parked.
     fn spawn_timeline(&'static self) {
-        thread::spawn(session::bind(move || {
+        let t = thread::spawn(session::bind(move || {
             let t0 = Instant::now();
             let mut last_busy = 0;
             let mut last_tasks = 0;
@@ -818,6 +877,37 @@ impl Runtime {
                 last_tasks = tasks;
             }
         }));
+        self.threads.lock().unwrap().push(t);
+    }
+}
+
+/// The runtime `Runtime::start` made. `run_main` consumes it and frees it.
+pub struct Handle(&'static Runtime);
+
+impl Deref for Handle {
+    type Target = Runtime;
+    fn deref(&self) -> &Runtime {
+        self.0
+    }
+}
+
+impl Handle {
+    /// [`Runtime::run_main`], then the teardown: when this returns, every
+    /// helper thread has exited and the runtime, its fibers and their
+    /// payloads are freed.
+    pub fn run_main(self, user: *mut (), entry: MainEntry) -> Result<(), fiber::StackError> {
+        let rt = self.0;
+        let r = rt.run_main(user, entry);
+        // SAFETY: the main fiber returned or never started; `Handle` was the
+        // last reference outside the runtime's own threads and slots.
+        let parked = unsafe { rt.teardown() };
+        if Session::current().settings().par_stats >= 1 && parked > 0 {
+            errln!("parallel: teardown dropped {parked} parked fibers");
+        }
+        // SAFETY: from `Box::leak` in `start`; the teardown joined every
+        // thread that held `rt` and freed every slot that pointed at it.
+        drop(unsafe { Box::from_raw(rt as *const Runtime as *mut Runtime) });
+        r
     }
 }
 
@@ -863,7 +953,7 @@ impl Slot {
 
     #[inline]
     pub fn runtime(&self) -> &'static Runtime {
-        // SAFETY: the runtime is leaked and outlives every slot.
+        // SAFETY: the teardown frees the runtime after every slot.
         unsafe { &*self.rt }
     }
 }

@@ -6,6 +6,7 @@
 //! swaps stack pointers. Nothing else is saved: the compiler treats the
 //! switch as an ordinary call, so caller-saved registers are already dead.
 
+use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::{error, io, mem, ptr};
@@ -77,16 +78,35 @@ pub fn check_reservation(workers: usize, stack_size: usize) -> Result<(), StackE
 }
 
 /// Base addresses of the fiber stacks, for the SIGSEGV handler. A fixed
-/// table because the handler may not lock; a run with more fibers than
-/// this loses only the message, not the exit code.
+/// table because the handler may not lock; more live fibers than this lose
+/// only the message, not the exit code. A freed stack frees its entry, so
+/// a process that runs again and again does not fill the table.
 const MAX_GUARDS: usize = 8192;
 static GUARDS: [AtomicUsize; MAX_GUARDS] = [const { AtomicUsize::new(0) }; MAX_GUARDS];
 static NGUARDS: AtomicUsize = AtomicUsize::new(0);
 
 fn register_guard(base: usize) {
-    let i = NGUARDS.fetch_add(1, Ordering::Relaxed);
+    let n = NGUARDS.load(Ordering::Acquire).min(MAX_GUARDS);
+    for g in &GUARDS[..n] {
+        if g.compare_exchange(0, base, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+        {
+            return;
+        }
+    }
+    let i = NGUARDS.fetch_add(1, Ordering::AcqRel);
     if i < MAX_GUARDS {
         GUARDS[i].store(base, Ordering::Release);
+    }
+}
+
+fn unregister_guard(base: usize) {
+    let n = NGUARDS.load(Ordering::Acquire).min(MAX_GUARDS);
+    if let Some(g) = GUARDS[..n]
+        .iter()
+        .find(|g| g.load(Ordering::Acquire) == base)
+    {
+        g.store(0, Ordering::Release);
     }
 }
 
@@ -118,28 +138,60 @@ extern "C" fn on_segv(sig: i32, info: *mut libc::siginfo_t, _ctx: *mut libc::c_v
     }
 }
 
+/// This thread's alternate signal stack. The thread-local destructor turns
+/// `sigaltstack` off before the memory goes, so a thread that exits frees
+/// it, and a thread that installs again keeps the one it has.
+struct AltStack {
+    _mem: Box<[u8]>,
+}
+
+impl Drop for AltStack {
+    fn drop(&mut self) {
+        let ss = libc::stack_t {
+            ss_sp: ptr::null_mut(),
+            ss_flags: libc::SS_DISABLE,
+            ss_size: 0,
+        };
+        // SAFETY: disables this thread's alternate stack; no handler can
+        // run on it after this returns.
+        unsafe { libc::sigaltstack(&ss, ptr::null_mut()) };
+    }
+}
+
+thread_local! {
+    static ALT_STACK: RefCell<Option<AltStack>> = const { RefCell::new(None) };
+}
+
 /// Install the guard-page handler on this thread. `sigaltstack` is per
 /// thread, and the alternate stack is separate from every fiber stack, so
 /// it stays valid across a fiber switch.
 pub fn install_overflow_handler() {
     const ALT: usize = 64 << 10;
-    // SAFETY: a leaked alternate stack, and a handler that only writes to
-    // fd 2 and exits. Both calls are the documented use of the API.
-    unsafe {
-        let mem = Box::leak(vec![0u8; ALT].into_boxed_slice());
-        let ss = libc::stack_t {
-            ss_sp: mem.as_mut_ptr() as *mut _,
-            ss_flags: 0,
-            ss_size: ALT,
-        };
-        libc::sigaltstack(&ss, ptr::null_mut());
-        let mut sa: libc::sigaction = mem::zeroed();
-        sa.sa_sigaction = on_segv as *const () as usize;
-        sa.sa_flags = libc::SA_ONSTACK | libc::SA_SIGINFO;
-        libc::sigemptyset(&mut sa.sa_mask);
-        libc::sigaction(libc::SIGSEGV, &sa, ptr::null_mut());
-        libc::sigaction(libc::SIGBUS, &sa, ptr::null_mut());
-    }
+    ALT_STACK.with(|a| {
+        let mut a = a.borrow_mut();
+        if a.is_some() {
+            return;
+        }
+        let mut mem = vec![0u8; ALT].into_boxed_slice();
+        // SAFETY: the alternate stack lives in this thread's `ALT_STACK`
+        // until the thread exits, and the handler only writes to fd 2 and
+        // exits. Both calls are the documented use of the API.
+        unsafe {
+            let ss = libc::stack_t {
+                ss_sp: mem.as_mut_ptr() as *mut _,
+                ss_flags: 0,
+                ss_size: ALT,
+            };
+            libc::sigaltstack(&ss, ptr::null_mut());
+            let mut sa: libc::sigaction = mem::zeroed();
+            sa.sa_sigaction = on_segv as *const () as usize;
+            sa.sa_flags = libc::SA_ONSTACK | libc::SA_SIGINFO;
+            libc::sigemptyset(&mut sa.sa_mask);
+            libc::sigaction(libc::SIGSEGV, &sa, ptr::null_mut());
+            libc::sigaction(libc::SIGBUS, &sa, ptr::null_mut());
+        }
+        *a = Some(AltStack { _mem: mem });
+    });
 }
 
 /// Fiber lifecycle. Transitions are documented in docs/explanation/evaluation.md.
@@ -214,7 +266,14 @@ impl Stack {
     }
 }
 
-// Stacks are leaked with their fiber; nothing to drop.
+impl Drop for Stack {
+    fn drop(&mut self) {
+        unregister_guard(self.base as usize);
+        // SAFETY: the whole mapping `new` made; the fiber on it never runs
+        // again.
+        unsafe { libc::munmap(self.base as *mut _, self.size) };
+    }
+}
 
 pub type Entry = unsafe fn(*mut ());
 
@@ -566,5 +625,14 @@ mod tests {
         assert!(f.stack.resident() > 20000 * 512);
         f.stack.release(64 << 10);
         assert!(f.stack.resident() <= 64 << 10);
+    }
+
+    #[test]
+    fn a_freed_stack_frees_its_guard_entry() {
+        for _ in 0..MAX_GUARDS + 16 {
+            drop(Stack::new(1 << 20).expect("stack"));
+        }
+        let s = Stack::new(1 << 20).expect("stack");
+        assert!(is_guard(s.base as usize));
     }
 }
