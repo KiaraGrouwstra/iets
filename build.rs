@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::process::Command;
 use std::{env, error, fs};
 
 use sha2::{Digest, Sha256};
@@ -44,29 +43,6 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     let id: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
     println!("cargo:rustc-env=IETS_BUILD_ID={id}");
     let version = env::var("CARGO_PKG_VERSION")?;
-    println!(
-        "cargo:rustc-env=IETS_VERSION=iets {version} ({})",
-        git_rev()
-    );
+    println!("cargo:rustc-env=IETS_VERSION=iets {version}");
     Ok(())
-}
-
-/// For `iets --version`: the flake sets IETS_GIT_REV, because its source
-/// tree has no .git; a cargo build in a checkout asks git.
-fn git_rev() -> String {
-    println!("cargo:rerun-if-env-changed=IETS_GIT_REV");
-    if let Ok(rev) = env::var("IETS_GIT_REV") {
-        return rev;
-    }
-    let git = |args: &[&str]| {
-        let out = Command::new("git").args(args).output().ok()?;
-        let s = String::from_utf8(out.stdout).ok()?;
-        (out.status.success() && !s.trim().is_empty()).then(|| s.trim().to_string())
-    };
-    if let Some(log) = git(&["rev-parse", "--git-path", "logs/HEAD"])
-        && Path::new(&log).exists()
-    {
-        println!("cargo:rerun-if-changed={log}");
-    }
-    git(&["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "unknown".into())
 }
