@@ -892,7 +892,7 @@ impl Deref for Handle {
 }
 
 impl Handle {
-    /// [`Runtime::run_main`], then the teardown: when this returns, every
+    /// Runs the main fiber, then the teardown: when this returns, every
     /// helper thread has exited and the runtime, its fibers and their
     /// payloads are freed.
     pub fn run_main(self, user: *mut (), entry: MainEntry) -> Result<(), fiber::StackError> {
