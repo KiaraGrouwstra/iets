@@ -30,39 +30,44 @@ Code tours, file paths and struct names are for contributors. They go in
 
 ## Voice and style
 
-Write the way you'd explain it to a colleague at their desk: plain,
-friendly and short. The mechanics follow the Google developer documentation
-style guide, applied with judgment.
+Write the way you'd explain it to a colleague at their desk. The mechanics
+follow the Google developer documentation style guide, applied with
+judgment.
 
-- Open a page with the reader's situation, not with a description of the
-  page. "You have a derivation and a machine that should build it" beats
-  "This page describes remote builds".
-- Make a heading say what you can do or learn. On task pages it's a bare
-  verb. On explanation pages it's a question or a plain claim, never a
-  lone noun like "Scope" or "Why". Reference pages name the thing itself,
-  in code font when it is a name.
-- Contractions are fine, and so is an opinion, when it's true.
-- Talk to the reader as "you".
-- Show an example early. A good example often says more than a paragraph.
-- Use the plain word. Do not invent a name for an idea the reader has
-  never seen.
-- One idea per sentence. Keep sentences short.
-- Do not announce counts. Write "A getter on an unforced value returns
-  `None`", not "Two rules keep a walk safe". List the items and let the
-  reader see how many there are. Count only when the number is the fact:
-  exit code 100, a limit of 500 paths.
-- Say what is so, flatly. Name the mechanism, give the reason in one
-  clause, and stop. No "it is worth noting", no "importantly", no tour
-  of what the page will do.
-- Say what iets does, and say plainly where it differs from Nix.
-- Every fact must be true. If something is not built yet, say so, or
-  leave it out. Avoid time words ("now", "today", "used to", "no longer")
-  and put the history on the history page.
-- Use sentence case in headings, without numbers. A task title is a bare
-  verb ("Build on a remote builder"), not "How to …".
-- Make link text the title of the page you link to, never a file path. The
-  `reference/` pages are embedded in the binary (`iets help`), so they name
-  other pages with a plain `docs/…` path in code font.
-- Use American spelling, except Nix's own terms ("realise").
-- Do not say "above" or "below" for a place on the page. Name the section.
-- Introduce a list or a procedure with a full sentence.
+**Prose**
+
+- Open with the reader's situation: "You have a derivation and a machine
+  that should build it", not "This page describes remote builds".
+- Say you, use contractions, and give an opinion when it's true.
+- Say what is so. Name the mechanism, give the reason in one clause, and
+  stop. No "it is worth noting", no tour of the page.
+- State the positive. Cut a trailing "not y" that restates the point, and
+  keep a contrast only when the reader would otherwise guess wrong.
+- One idea per sentence, in the plain word. Don't invent a name for an idea
+  the reader has never seen.
+- Show an example early.
+- Say plainly where iets differs from Nix.
+- Don't announce counts ("Two rules keep a walk safe"). Count only when the
+  number is the fact: exit code 100, a limit of 500 paths.
+- Leave out what isn't built. Avoid time words ("now", "today", "no longer")
+  and put history on the history page.
+
+**Headings**
+
+- Sentence case, no numbers, no "X and Y".
+- Say what the section holds. A short noun is enough when it does
+  ("Deadlocks", "Stack limits"). A label that could head any page
+  ("Searching", "Scope") needs a clause: "Speed of `iets search`".
+- Don't write a sentence where a noun will do.
+- Task pages use a bare verb ("Build on a remote builder"). Reference pages
+  name the thing, in code font when it is a name.
+- Introduce a list or procedure with a sentence that names its items. "Each
+  part does one job:" names nothing.
+
+**Links and spelling**
+
+- Link text is the target page's title. `reference/` pages are embedded in
+  the binary (`iets help`), so they name other pages with a plain `docs/…`
+  path in code font.
+- American spelling, except Nix's own terms ("realise").
+- Name a section instead of saying "above" or "below".

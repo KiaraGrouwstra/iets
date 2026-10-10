@@ -45,7 +45,7 @@ The top-level help lists `plumbing` as a topic and in the scripting line,
 but not each operation: the operations are for programs. `iets plumbing
 --help` lists them, and the reference page has the contracts.
 
-## How a test enforces it
+## The layering test
 
 **A module boundary, checked by a test.** `tests/layering.rs` reads every
 file under `src/cli/` and fails when one names `crate::eval`,
