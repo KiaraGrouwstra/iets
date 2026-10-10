@@ -46,6 +46,8 @@ judgment.
 - One idea per sentence, in the plain word. Don't invent a name for an idea
   the reader has never seen.
 - Show an example early.
+- Describe what the code does. Skip courtroom words ("rule", "law", "must
+  obey") for design properties. "Rule" is fine for a lint rule or a grammar rule.
 - Say plainly where iets differs from Nix.
 - Don't announce counts ("Two rules keep a walk safe"). Count only when the
   number is the fact: exit code 100, a limit of 500 paths.

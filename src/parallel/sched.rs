@@ -40,7 +40,7 @@ const LEN_MAX: u32 = u16::MAX as u32;
 
 /// The three scheduler tunables, read once on the starting thread. A
 /// fiber migrates between threads, so the scheduler reads no thread-local
-/// (ARCHITECTURE.md, "Constraints on evaluator changes").
+/// (ARCHITECTURE.md, "Changing the evaluator").
 struct Tuning {
     /// Scans of 64 polls an idle searcher makes before it parks (~2 ms). A
     /// shorter spin (64 scans) saved no user time once searchers were capped,
