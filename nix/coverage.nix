@@ -2,7 +2,7 @@
 # instrumented iets runs each script, and the profiles of every process are
 # merged into one report ($out/report.txt, by directory and by file).
 # `nix build .#coverage-e2e`, on x86_64-linux.
-{ self, nixpkgs, pkgs, iets }:
+{ self, src, nixpkgs, pkgs, iets }:
 let
   inherit (pkgs) lib;
   # the LLVM that rustc was built with reads its profiles
@@ -13,7 +13,7 @@ let
     dontStrip = true;
   });
   e2e = name: args: import ./e2e-test.nix ({
-    inherit self nixpkgs pkgs name;
+    inherit self src nixpkgs pkgs name;
     iets = instrumented;
     coverage = true;
   } // args);

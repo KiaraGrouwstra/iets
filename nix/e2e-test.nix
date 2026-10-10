@@ -2,7 +2,7 @@
 # store, the real nix on PATH and no network.
 # With `coverage`, `iets` is an instrumented build: each process writes its
 # profile, and $out/cov holds them all after the run.
-{ self, nixpkgs, pkgs, iets, name, packages ? [ ], env ? "", coverage ? false }:
+{ self, src, nixpkgs, pkgs, iets, name, packages ? [ ], env ? "", coverage ? false }:
 let
   inherit (pkgs) lib;
   system = pkgs.stdenv.hostPlatform.system;
@@ -17,7 +17,7 @@ let
   # here gets built, and only the scripts' own /bin/sh derivations can be.
   offline = [
     "${nixpkgs}"
-    "${self}"
+    "${src}"
     pinned
     iets
     pkgs.hello
@@ -86,7 +86,7 @@ pkgs.testers.runNixOSTest {
       machine.succeed("${writableStore} ${registration}")
       machine.succeed("systemctl start nix-daemon.socket")
       # a git checkout, as in the dev shell: the scripts read this flake as git+file
-      machine.succeed("cp -r ${self} /home/alice/iets && chmod -R u+w /home/alice/iets && chown -R alice /home/alice/iets")
+      machine.succeed("cp -r ${src} /home/alice/iets && chmod -R u+w /home/alice/iets && chown -R alice /home/alice/iets")
       machine.succeed("runuser -l alice -c 'cd iets && git init -q && git add -A && git -c user.name=e2e -c user.email=e2e@example.com commit -q -m e2e'")
       ${prepare}
       machine.succeed("runuser -l alice -c 'cd iets && IETS=${iets}/bin/iets NIXPKGS=${nixpkgs} E2E_OFFLINE=1 ${profile} ${env} nu scripts/${name}.nu' >&2")

@@ -33,8 +33,8 @@ iets COMMAND [ARGS...]
 | `plumbing` | the machine-first operations (`docs/reference/plumbing.md`) |
 | `help`, `version` | the help of a command or a topic; the version |
 
-`iets version` and `iets --version` print `iets VERSION (COMMIT)` on
-stdout and exit 0.
+`iets version` and `iets --version` print `iets VERSION` on stdout
+and exit 0.
 
 ## Conventions
 

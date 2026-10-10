@@ -40,10 +40,7 @@ fn help_and_version_go_to_stdout() {
     assert!(text(&o.stdout).starts_with("usage: iets eval "));
     assert!(text(&o.stdout).contains("--strict"));
     let v = text(&iets(&["--version"]).stdout);
-    assert!(
-        v.starts_with(&format!("iets {} (", env!("CARGO_PKG_VERSION"))),
-        "{v}"
-    );
+    assert_eq!(v.trim_end(), format!("iets {}", env!("CARGO_PKG_VERSION")));
 }
 
 #[test]
