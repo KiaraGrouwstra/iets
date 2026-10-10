@@ -130,7 +130,7 @@ mod tests {
     fn two_sessions_share_no_state() {
         let line = format!(
             "{}:\n  specified: sha256-A=\n     got:    sha256-B=",
-            log::MISMATCH
+            crate::log::MISMATCH
         );
         let (a, b) = (Session::new(), Session::new());
         {
@@ -140,10 +140,10 @@ mod tests {
         }
         {
             let _entered = b.enter();
-            assert!(log::take_mismatches().is_empty());
+            assert!(crate::log::take_mismatches().is_empty());
         }
         let _entered = a.enter();
-        assert_eq!(log::take_mismatches().len(), 1);
+        assert_eq!(crate::log::take_mismatches().len(), 1);
     }
 
     fn eval_in(s: &Arc<Session>, expr: &str) -> (Evaluator, Word) {

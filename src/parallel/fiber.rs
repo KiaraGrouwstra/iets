@@ -129,9 +129,13 @@ const RELEASED_MSG: &[u8] = b"error: a value was used after its session was rele
 /// the handler Rust's runtime installs, as `install_overflow_handler` does.
 pub(crate) fn install_fault_handler() {
     static ONCE: Once = Once::new();
+    ONCE.call_once(set_handler);
+}
+
+fn set_handler() {
     // SAFETY: the documented use of `sigaction`, with a handler that only
     // writes to fd 2 and ends the process.
-    ONCE.call_once(|| unsafe {
+    unsafe {
         for sig in [libc::SIGSEGV, libc::SIGBUS] {
             let mut sa: libc::sigaction = mem::zeroed();
             sa.sa_sigaction = on_segv as *const () as usize;
@@ -139,7 +143,7 @@ pub(crate) fn install_fault_handler() {
             libc::sigemptyset(&mut sa.sa_mask);
             libc::sigaction(sig, &sa, ptr::null_mut());
         }
-    });
+    }
 }
 
 extern "C" fn on_segv(sig: i32, info: *mut libc::siginfo_t, _ctx: *mut libc::c_void) {
@@ -201,23 +205,15 @@ pub fn install_overflow_handler() {
             return;
         }
         let mut mem = vec![0u8; ALT].into_boxed_slice();
+        let ss = libc::stack_t {
+            ss_sp: mem.as_mut_ptr() as *mut _,
+            ss_flags: 0,
+            ss_size: ALT,
+        };
         // SAFETY: the alternate stack lives in this thread's `ALT_STACK`
-        // until the thread exits, and the handler only writes to fd 2 and
-        // exits. Both calls are the documented use of the API.
-        unsafe {
-            let ss = libc::stack_t {
-                ss_sp: mem.as_mut_ptr() as *mut _,
-                ss_flags: 0,
-                ss_size: ALT,
-            };
-            libc::sigaltstack(&ss, ptr::null_mut());
-            let mut sa: libc::sigaction = mem::zeroed();
-            sa.sa_sigaction = on_segv as *const () as usize;
-            sa.sa_flags = libc::SA_ONSTACK | libc::SA_SIGINFO;
-            libc::sigemptyset(&mut sa.sa_mask);
-            libc::sigaction(libc::SIGSEGV, &sa, ptr::null_mut());
-            libc::sigaction(libc::SIGBUS, &sa, ptr::null_mut());
-        }
+        // until the thread exits.
+        unsafe { libc::sigaltstack(&ss, ptr::null_mut()) };
+        set_handler();
         *a = Some(AltStack { _mem: mem });
     });
 }

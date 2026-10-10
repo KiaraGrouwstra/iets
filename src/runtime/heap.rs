@@ -6,11 +6,11 @@
 //! inaccessible reservation, so a `Word` kept past its session faults on
 //! first use instead of reading whatever the next session put there.
 
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicPtr, Ordering};
 use std::{mem, process, ptr, slice};
 
 use crate::parallel::fiber;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicPtr, Ordering};
 
 /// Name bytes come from blocks of this size; a longer name gets its own.
 const NAME_BLOCK: usize = 1 << 20;
@@ -37,7 +37,8 @@ impl Heap {
     }
 
     /// Bytes mapped for this session so far.
-    pub fn mapped(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn mapped(&self) -> usize {
         self.inner.lock().unwrap().chunks.iter().map(|c| c.1).sum()
     }
 
@@ -118,7 +119,7 @@ impl Drop for Heap {
 /// Gives the pages of `[base, base + len)` back and keeps the range
 /// reserved and inaccessible. NORESERVE and PROT_NONE cost no commit
 /// charge, and adjacent tombstones merge into one mapping.
-pub(crate) fn tombstone(base: usize, len: usize) {
+fn tombstone(base: usize, len: usize) {
     // SAFETY: the range is a mapping this heap owns; nothing may touch it
     // after release, and what does faults, which is the point.
     let p = unsafe {

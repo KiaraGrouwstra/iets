@@ -1,8 +1,7 @@
 # Embed the evaluator in your own program
 
-> **One session per evaluation in a long-lived host.** The evaluator frees
-> memory only when you drop the session it was made in. An editor server or a
-> build service that evaluates again and again makes a new session each time
+> **One session per evaluation in a long-lived host.** Memory is freed when
+> the session goes
 > ([Sessions and memory](../reference/library.md#sessions-and-memory)). The
 > API can change.
 
@@ -33,20 +32,17 @@ It returns errors and your program picks the exit code. A thread you start
 yourself needs `Session::enter` or `session::bind(f)`
 ([Using iets as a library](../reference/library.md#what-the-host-owns)).
 
-To evaluate again and again, give each evaluation its own session and drop
-it when you are done with the result:
+To evaluate again and again, give each evaluation its own session:
 
 ```rust
 for request in requests {
     let session = iets::session::Session::new();
-    let mut ev = iets::eval::EvalConfig::new().session(session.clone()).build();
+    let mut ev = iets::eval::EvalConfig::new().session(session).build();
     answer(&mut ev, request);
-    // the evaluator and the session go here, and their memory with them
-}
+}   // the evaluator drops here, and the session's memory with it
 ```
 
-Keep no value of an evaluation after its session is gone. The process stops
-with a message if you use one.
+Keep no value after its session is gone. The process stops if you use one.
 
 ## Evaluation
 

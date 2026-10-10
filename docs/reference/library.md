@@ -1,10 +1,8 @@
 # Using iets as a library
 
-> **Memory goes with the session.** The evaluator frees nothing while a
-> session lives, and frees all of it when you drop the session. A program
-> that evaluates again and again, such as an editor server, makes one
-> session per evaluation and stays flat ("Sessions and memory"). One very
-> large evaluation still needs all its memory at once. The API can change.
+> **Memory goes with the session.** A program that evaluates again and
+> again, such as an editor server, makes one session per evaluation
+> ("Sessions and memory"). The API can change.
 
 iets is a library with a thin `iets` binary on top. This page lists the entry
 points, says what a `Session` owns and maps the value API to Nix's C API.
@@ -90,41 +88,24 @@ code.
 
 ## Sessions and memory
 
-Every value an evaluator makes lives in its session's memory
-(`Session::heap`): the arena chunks of the evaluator and of its worker
-threads, and the names of its symbols. Nothing in it is freed while the
-session lives, so values share structure freely and nothing is copied.
-
-The memory goes when the last of these lets go:
-
-- your `Arc<Session>`,
-- every `Evaluator` made in the session (each keeps a handle),
-- the worker threads of a `parallel::try_run` in it.
+Every value an evaluator makes, and every name it interns, lives in its
+session's memory (`Session::heap`). Nothing in it is freed while the session
+lives. All of it is freed when the last handle goes: your `Arc<Session>`,
+and each `Evaluator` made in the session. A `parallel::try_run` holds the
+session only until it returns. The fallback session lives as long as the
+process.
 
 A `Value<'e>` borrows its evaluator, so the compiler stops you from keeping
 one too long. A `runtime::Word` from `api::evaluate`, and an error that
 carries one, are plain data: keep them only while the session lives. If you
-use one later, the process stops at once with
+use one later, the process stops with
+`error: a value was used after its session was released`.
 
-```
-error: a value was used after its session was released
-```
-
-It never reads another session's data. Released memory stays reserved and
-inaccessible, so its addresses are never reused. That costs no memory, but
-it costs address space and kernel mappings. A NixOS system evaluation
-leaves about 600 MB of reserved addresses and, on four workers, about five
-mappings. The address space holds about 200,000 of them. The default
-`vm.max_map_count` of 65530 holds about 10,000 four-worker evaluations, or
-far more on one worker. Raise that limit, or restart the host process
-before it. The handler that prints the message replaces the `SIGSEGV`
-handler of Rust's runtime, as the fiber stacks' overflow check already does.
-
-Interned data follows the same rule. Each evaluator has its own string and
-context tables and its own symbol table, and their contents are in the
-session's memory, so nothing of one session is visible in the next. The
-fallback session lives as long as the process, so a host that never makes a
-session keeps everything, as before.
+Released memory stays reserved and inaccessible, so its addresses are never
+reused and a stale value never reads another session's data. That costs
+address space and kernel mappings, not memory: a host that releases many
+thousands of large sessions can reach `vm.max_map_count`. The handler that
+prints the message replaces Rust's `SIGSEGV` handler.
 
 ## The value API
 
