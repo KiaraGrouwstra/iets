@@ -16,7 +16,7 @@ use crate::source::{
     scm, str_attr, to_url,
 };
 use crate::store::hash::{Hash, HashAlgo};
-use crate::store::path::IngestionMethod;
+use crate::store::path::{IngestionMethod, check_name};
 use crate::syntax::symbol::Sym;
 use crate::{provenance, treestore};
 
@@ -211,36 +211,10 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
 /// `tarball` input. Without one it is not, and the call is unsupported.
 pub fn fetch_tarball_builtin(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     purity::unhashed_fetch(ev, "fetchTarball", args[0], pos)?;
-    let w = ev.force(args[0])?;
-    let (mut url, mut sha256, mut name) = (None, None, "source".to_string());
-    if let Some(a) = w.as_attrs() {
-        for attr in a.iter() {
-            let n = String::from_utf8_lossy(ev.interner.name(attr.sym)).into_owned();
-            let what = match n.as_str() {
-                "url" => "while evaluating the url we should fetch",
-                "sha256" => "while evaluating the sha256 of the content we should fetch",
-                "name" => "while evaluating the name of the content we should fetch",
-                _ => bail!(
-                    ErrorKind::Eval,
-                    pos,
-                    "unsupported argument '{n}' to 'fetchTarball'"
-                ),
-            };
-            let v = ev.force_string_no_ctx(attr.cell.get(), pos, what)?;
-            let v = String::from_utf8_lossy(v).into_owned();
-            match n.as_str() {
-                "url" => url = Some(v),
-                "sha256" => sha256 = Some(v),
-                _ => name = v,
-            }
-        }
-    } else {
-        let v = ev.force_string_no_ctx(w, pos, "while evaluating the url we should fetch")?;
-        url = Some(String::from_utf8_lossy(v).into_owned());
-    }
-    let Some(url) = url else {
-        bail!(ErrorKind::Eval, pos, "'url' argument required");
-    };
+    let FetchArgs {
+        url, sha256, name, ..
+    } = fetch_args(ev, args[0], "fetchTarball", pos)?;
+    let name = name.unwrap_or_else(|| "source".into());
     let url = match url.strip_prefix("channel:") {
         Some(c) => format!("https://channels.nixos.org/{c}/nixexprs.tar.xz"),
         None => url,
@@ -276,6 +250,120 @@ pub fn fetch_tarball_builtin(ev: &mut Evaluator, args: &[Word], pos: Pos) -> Eva
     let full = ev.arena.alloc_bytes(sp.to_full_string().as_bytes());
     let ctx = ev.arena.alloc_slice(&[Ctx::Opaque(full)]);
     Ok(ev.arena.mk_string_static(full, ctx))
+}
+
+/// What primops/fetchTree.cc:fetch reads from its argument: a URL string, or
+/// a set of `url`, `sha256` and `name`.
+struct FetchArgs {
+    url: String,
+    sha256: Option<String>,
+    /// `Some` when the set has a `name`, even an empty one.
+    name: Option<String>,
+    /// The argument was a set, not a URL string.
+    attrs: bool,
+}
+
+fn fetch_args(ev: &mut Evaluator, arg: Word, who: &str, pos: Pos) -> EvalResult<FetchArgs> {
+    let w = ev.force(arg)?;
+    let (mut url, mut sha256, mut name) = (None, None, None);
+    let Some(a) = w.as_attrs() else {
+        let v = ev.force_string_no_ctx(w, pos, "while evaluating the url we should fetch")?;
+        return Ok(FetchArgs {
+            url: String::from_utf8_lossy(v).into_owned(),
+            sha256,
+            name,
+            attrs: false,
+        });
+    };
+    for attr in a.iter() {
+        let n = String::from_utf8_lossy(ev.interner.name(attr.sym)).into_owned();
+        let what = match n.as_str() {
+            "url" => "while evaluating the url we should fetch",
+            "sha256" => "while evaluating the sha256 of the content we should fetch",
+            "name" => "while evaluating the name of the content we should fetch",
+            _ => bail!(
+                ErrorKind::Eval,
+                pos,
+                "unsupported argument '{n}' to '{who}'"
+            ),
+        };
+        let v = ev.force_string_no_ctx(attr.cell.get(), pos, what)?;
+        let v = String::from_utf8_lossy(v).into_owned();
+        match n.as_str() {
+            "url" => url = Some(v),
+            "sha256" => sha256 = Some(v),
+            _ => name = Some(v),
+        }
+    }
+    let Some(url) = url else {
+        bail!(ErrorKind::Eval, pos, "'url' argument required");
+    };
+    Ok(FetchArgs {
+        url,
+        sha256,
+        name,
+        attrs: true,
+    })
+}
+
+/// primops/fetchTree.cc:fetch for `builtins.fetchurl`: the file at the URL as
+/// a flat fixed output (`source::fetch_file`). The `sha256` is required in
+/// every mode, where Nix requires it only in pure evaluation. In impure
+/// evaluation its absence is unsupported, as for `fetchTarball`.
+pub fn fetchurl_builtin(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
+    purity::unhashed_fetch(ev, "fetchurl", args[0], pos)?;
+    let a = fetch_args(ev, args[0], "fetchurl", pos)?;
+    let name = match a.name.as_deref() {
+        Some(n) if !n.is_empty() => n.to_string(),
+        _ => url_base_name(&a.url).to_string(),
+    };
+    if let Err(e) = check_name(&name) {
+        let fix = if a.name.is_some() {
+            "Please change the value for the 'name' attribute passed to 'fetchurl', so that it can create a valid store path."
+        } else if a.attrs {
+            "Please add a valid 'name' attribute to the argument for 'fetchurl', so that it can create a valid store path."
+        } else {
+            // the two spaces are Nix's
+            "Please pass an attribute set with 'url' and 'name' attributes to 'fetchurl',  so that it can create a valid store path."
+        };
+        bail!(
+            ErrorKind::Eval,
+            pos,
+            "invalid store path name when fetching URL '{}': {}. {fix}",
+            a.url,
+            e.0
+        );
+    }
+    let Some(sha256) = a.sha256 else {
+        let kind = if ev.pure() {
+            ErrorKind::Eval
+        } else {
+            ev.trace().mark_uncacheable();
+            ErrorKind::Unsupported
+        };
+        let fix = format!(
+            "run 'iets prefetch {}' and pass the hash as 'sha256'",
+            a.url
+        );
+        let mut e = Error::new(
+            kind,
+            format!("'fetchurl' requires a 'sha256' argument: {fix}"),
+            pos,
+        );
+        e.hint = Some(fix);
+        return Err(Box::new(e));
+    };
+    let expected = paths::parse_sha256_allow_empty(sha256.as_bytes(), pos)?;
+    let sp = source::fetch_file(ev, &a.url, &name, expected, pos)?;
+    let full = ev.arena.alloc_bytes(sp.to_full_string().as_bytes());
+    let ctx = ev.arena.alloc_slice(&[Ctx::Opaque(full)]);
+    Ok(ev.arena.mk_string_static(full, ctx))
+}
+
+/// util.cc:baseNameOf: the last component, past one trailing `/`.
+fn url_base_name(url: &str) -> &str {
+    let url = url.strip_suffix('/').unwrap_or(url);
+    url.rsplit('/').next().unwrap_or(url)
 }
 
 const COUNT: &str = "revCountRaw";

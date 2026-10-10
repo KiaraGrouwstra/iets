@@ -13,14 +13,15 @@
 //!
 //! **The store is fixed-output only, and that is what makes it safe in user
 //! space.** [`put`] takes the hash the caller already knows — a lock entry's
-//! `narHash` — and has no form without it, so the content verifies itself:
-//! no signature, no trusted builder, no daemon. An entry's name *is* its
-//! content address, which is why a reader never re-hashes and why two
-//! processes can share one entry.
+//! `narHash`, or the `sha256` of a `fetchurl` — and has no form without it, so
+//! the content verifies itself: no signature, no trusted builder, no daemon. An
+//! entry's name *is* its content address, which is why a reader never re-hashes
+//! and why two processes can share one entry.
 //!
-//! The only user is `crate::source`, which fetches a
+//! `crate::source` fetches a
 //! `github`/`gitlab`/`sourcehut`/`tarball` input as one decompressed tar and
-//! indexes it (`crate::fetch::spool`). The store keeps the index as
+//! indexes it (`crate::fetch::spool`); `builtins.fetchurl` downloads one file
+//! and stores it as a tree of one regular file. The store keeps the index as
 //! `$XDG_CACHE_HOME/iets/inputs/<store path base name>`, with every file named
 //! by the blake3 of its bytes, and the bytes themselves in `inputs/packs/`
 //! (`pack`), where a file that two inputs share is stored once. Evaluation
@@ -45,7 +46,7 @@ use crate::error::Result;
 use crate::eval::Evaluator;
 use crate::fetch::spool::{self, Blob, Node, Tree};
 use crate::session::Session;
-use crate::store::hash::{Hash, Hasher};
+use crate::store::hash::{Hash, HashAlgo, Hasher};
 use crate::store::nar::{FileType, PathFilter};
 use crate::store::path::{IngestionMethod, StorePath, make_fixed_output_path};
 use crate::trace::Obs;
@@ -58,6 +59,12 @@ use std::sync::atomic::Ordering::{self, Relaxed};
 pub fn store_path(name: &str, nar_hash: &Hash) -> Result<StorePath> {
     make_fixed_output_path(IngestionMethod::Recursive, nar_hash, name, &BTreeSet::new())
         .map_err(Into::into)
+}
+
+/// The store path a flat file whose bytes hash to `hash` has: the naming site
+/// for a `fetchurl` download, as [`store_path`] is for a tree.
+pub fn file_path(name: &str, hash: &Hash) -> Result<StorePath> {
+    make_fixed_output_path(IngestionMethod::Flat, hash, name, &BTreeSet::new()).map_err(Into::into)
 }
 
 /// One tree the store holds: its content, and the NAR hash and size that were
@@ -334,22 +341,21 @@ pub enum Rejected {
     Unstorable,
 }
 
-/// Puts a tree in, under the store path `name` and `expect` name together.
-/// `expect` is a hash the caller already knows, a lock entry's `narHash` or a
-/// derivation's `outputHash`. The tree is hashed here and refused unless it
-/// matches, so an entry's name is always its content address. That is the whole
-/// trust model: no signature, no trusted builder, no daemon. New bytes go into
-/// a new pack; the pack and then the index are renamed into place, so a reader
-/// sees no entry or a whole one, and a sibling that got there first wins.
+/// Puts a tree in, under the store path `name`, `method` and `expect` name.
+/// `expect` is known before: a `narHash` (`Recursive`) or the hash of the
+/// bytes of one file (`Flat`, `fetchurl`). A tree that does not hash to it is
+/// refused, so an entry's name is its content address: the whole trust model.
+/// The pack, then the index, is renamed into place; a sibling first wins.
 pub fn put(
     name: &str,
+    method: IngestionMethod,
     expect: &Hash,
     staged: Staged,
     tree: Tree,
 ) -> result::Result<Arc<StoredTree>, Rejected> {
     let root = root().ok_or(Rejected::Unstorable)?;
     let packs = packs().ok_or(Rejected::Unstorable)?;
-    let (name, stored) = store(&root, packs, name, expect, tree)?;
+    let (name, stored) = store(&root, packs, name, method, expect, tree)?;
     drop(staged);
     cachefs::maybe_sweep(&root, cachefs::Shape::StoreEntries, false);
     let stored = Arc::new(stored);
@@ -427,27 +433,48 @@ fn store(
     root: &Path,
     packs: Arc<pack::Packs>,
     name: &str,
+    method: IngestionMethod,
     expect: &Hash,
     tree: Tree,
 ) -> result::Result<(String, StoredTree), Rejected> {
+    // the index and an upload carry a sha256 NAR hash, whatever algorithm
+    // names a flat file
+    let nar_algo = match method {
+        IngestionMethod::Recursive => expect.algo,
+        IngestionMethod::Flat => HashAlgo::Sha256,
+        IngestionMethod::Text => return Err(Rejected::Unstorable),
+    };
     let mut writer = pack::PackWriter::new(packs.dir()).map_err(Rejected::Io)?;
     // the objects go into a pack that is still a temporary, so they can be
     // made while the NAR is hashed: a mismatch drops the pack unnamed
     let (nar, objects) = thread::scope(|s| {
-        let nar = s.spawn(|| -> io::Result<(u64, Hash)> {
-            let mut h = Hasher::new(expect.algo);
+        let nar = s.spawn(|| -> io::Result<(u64, Hash, Option<Hash>)> {
+            let flat = match method {
+                IngestionMethod::Flat => {
+                    Some(tree.file_hash(expect.algo)?.ok_or_else(|| {
+                        io::Error::other("a flat fixed output is one regular file")
+                    })?)
+                }
+                _ => None,
+            };
+            let mut h = Hasher::new(nar_algo);
             tree.dump(&mut h)?;
-            Ok((h.bytes_written(), h.finish()))
+            Ok((h.bytes_written(), h.finish(), flat))
         });
         let objects = objects(&tree, &packs, &mut writer);
         (nar.join().expect("the NAR hasher panicked"), objects)
     });
-    let (nar_size, nar_hash) = nar.map_err(Rejected::Io)?;
-    if nar_hash != *expect {
-        return Err(Rejected::Mismatch(nar_hash));
+    let (nar_size, nar_hash, flat) = nar.map_err(Rejected::Io)?;
+    let got = flat.unwrap_or(nar_hash);
+    if got != *expect {
+        return Err(Rejected::Mismatch(got));
     }
     let (ids, elsewhere) = objects.map_err(Rejected::Io)?;
-    let sp = store_path(name, &nar_hash).map_err(|_| Rejected::Unstorable)?;
+    let sp = match method {
+        IngestionMethod::Flat => file_path(name, &got),
+        _ => store_path(name, &got),
+    }
+    .map_err(|_| Rejected::Unstorable)?;
     let name = sp.base_name();
     let stored_root = tree.with_ids(&ids);
     let index = spool::encode_index(&stored_root, (&nar_hash, nar_size));
@@ -526,7 +553,8 @@ mod tests {
 
     use std::env;
 
-    use crate::store::hash::HashAlgo;
+    use crate::store::hash::{HashAlgo, hash_bytes};
+    use crate::store::nar::dump_string;
 
     #[test]
     fn a_staged_directory_goes_when_it_is_dropped() {
@@ -581,7 +609,16 @@ mod tests {
     fn put_in(root: &Path, files: &[(&str, &[u8])]) -> String {
         let (tree, hash) = tree_of(files);
         let packs = Arc::new(pack::Packs::open(&root.join(pack::PACKS)));
-        store(root, packs, "source", &hash, tree).unwrap().0
+        store(
+            root,
+            packs,
+            "source",
+            IngestionMethod::Recursive,
+            &hash,
+            tree,
+        )
+        .unwrap()
+        .0
     }
 
     fn read(root: &Path, name: &str, file: &str) -> io::Result<Vec<u8>> {
@@ -610,7 +647,14 @@ mod tests {
         let (_, other) = tree_of(&[("a", b"other")]);
         let packs = Arc::new(pack::Packs::open(&root.join(pack::PACKS)));
         assert!(matches!(
-            store(&root, packs, "source", &other, tree),
+            store(
+                &root,
+                packs,
+                "source",
+                IngestionMethod::Recursive,
+                &other,
+                tree
+            ),
             Err(Rejected::Mismatch(_))
         ));
         fs::remove_dir_all(&root).unwrap();
@@ -666,8 +710,68 @@ mod tests {
         assert_eq!(objects(&root), 0);
 
         let (tree, hash) = tree_of(&[("shared", &shared), ("new", b"n")]);
-        let (b, _) = store(&root, stale, "source", &hash, tree).unwrap();
+        let (b, _) = store(
+            &root,
+            stale,
+            "source",
+            IngestionMethod::Recursive,
+            &hash,
+            tree,
+        )
+        .unwrap();
         assert_eq!(read(&root, &b, "shared").unwrap(), shared);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn file_of(bytes: &[u8]) -> Tree {
+        let mut spool = spool::scratch("test").unwrap();
+        io::Write::write_all(&mut spool, bytes).unwrap();
+        Tree::file(spool).unwrap()
+    }
+
+    /// A download is named by the hash of its bytes, as `nix eval` names
+    /// `builtins.fetchurl` of the same file (Nix 2.34.8), and reads back
+    /// whole; any other hash is refused with the one the bytes have.
+    #[test]
+    fn a_flat_file_is_named_by_the_hash_of_its_bytes() {
+        let root = store_dir("flat");
+        let hash = Hash::parse_any(
+            "113a52l57f2jv9fh9igj2xh2mi0is40flxbkqi69wbh7nlybkcbm",
+            Some(HashAlgo::Sha256),
+        )
+        .unwrap();
+        let packs = Arc::new(pack::Packs::open(&root.join(pack::PACKS)));
+        let tree = file_of(b"hello fetchurl\n");
+        let (name, stored) = store(
+            &root,
+            packs.clone(),
+            "hello.txt",
+            IngestionMethod::Flat,
+            &hash,
+            tree,
+        )
+        .unwrap();
+        assert_eq!(name, "3ay25cl2lpykmx07i7m22qxz7zwzqmvy-hello.txt");
+        assert_eq!(read(&root, &name, "").unwrap(), b"hello fetchurl\n");
+        assert_eq!(stored.stat(b"", true), Some(FileType::Regular));
+        let mut nar = Hasher::new(HashAlgo::Sha256);
+        dump_string(b"hello fetchurl\n", &mut nar).unwrap();
+        assert_eq!(stored.nar_hash(), nar.finish());
+
+        let other = file_of(b"other\n");
+        match store(
+            &root,
+            packs,
+            "hello.txt",
+            IngestionMethod::Flat,
+            &hash,
+            other,
+        ) {
+            Err(Rejected::Mismatch(got)) => {
+                assert_eq!(got, hash_bytes(HashAlgo::Sha256, b"other\n"))
+            }
+            r => panic!("{:?}", r.map(|(n, _)| n)),
+        }
         fs::remove_dir_all(&root).unwrap();
     }
 }

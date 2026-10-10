@@ -332,6 +332,10 @@ pub fn write_object(w: &mut dyn Write, o: &Object) -> io::Result<()> {
         } => {
             let (ca, references): (String, Vec<String>) = match kind {
                 SourceKind::Source => (format!("fixed:r:sha256:{}", nar_hash.to_nix32()), vec![]),
+                SourceKind::Flat { hash } => (
+                    format!("fixed:{}:{}", hash.algo.name(), hash.to_nix32()),
+                    vec![],
+                ),
                 SourceKind::Text { references } => {
                     let flat = match (&at.src, at.local()) {
                         (Src::Mem(contents), _) => hash_bytes(HashAlgo::Sha256, contents),

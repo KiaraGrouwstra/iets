@@ -1,9 +1,9 @@
 //! File system primops (primops.cc): readFile, readDir, readFileType,
 //! pathExists, toPath, storePath, filterSource, path, toFile. The network
 //! fetchers and flake primops are registered so `builtins ? fetchGit`
-//! holds, but they fail when called; only `fetchTree` on a locked input,
-//! `fetchTarball` with a `sha256`, `getFlake`, `parseFlakeRef` and
-//! `flakeRefToString` work (`flake`).
+//! holds, but they fail when called; only `fetchurl`, `fetchTree` on a
+//! locked input, `fetchTarball` with a `sha256`, `getFlake`, `parseFlakeRef`
+//! and `flakeRefToString` work (`flake`).
 
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashSet};
@@ -41,7 +41,7 @@ pub fn register(r: &mut Registry) {
     r.op("__filterSource", 2, filter_source);
     r.op("__path", 1, path);
     r.op("__toFile", 2, to_file);
-    r.op("__fetchurl", 1, fetchurl);
+    r.op("__fetchurl", 1, fetch::fetchurl_builtin);
     r.op("fetchTarball", 1, fetch::fetch_tarball_builtin);
     r.op("fetchGit", 1, fetch_git);
     r.op("fetchTree", 1, fetch::fetch_tree);
@@ -68,11 +68,6 @@ macro_rules! unsupported {
     };
 }
 
-unsupported!(
-    fetchurl,
-    "fetchurl",
-    "iets: network fetchers are not supported (builtins.fetchurl)"
-);
 unsupported!(
     fetch_git,
     "fetchGit",
@@ -708,7 +703,7 @@ fn filter_source(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word
 }
 
 /// Mirrors `newHashAllowEmpty`: an empty hash string means all zeros.
-fn parse_sha256_allow_empty(s: &[u8], pos: Pos) -> EvalResult<Hash> {
+pub(crate) fn parse_sha256_allow_empty(s: &[u8], pos: Pos) -> EvalResult<Hash> {
     let s = utf8(s, pos)?;
     if s.is_empty() {
         let zero = Hash::from_bytes(HashAlgo::Sha256, &[0u8; 32]).expect("32 bytes");

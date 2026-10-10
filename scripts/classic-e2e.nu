@@ -606,6 +606,19 @@ in { aDrv = a.drvPath; bDrv = b.drvPath; aOut = a.outPath; bOut = b.outPath; }
   $ok = ($ok | append (cmp-case "fetchTarball falls back and prints the real result"
     (run-both $farm nix-instantiate --eval -E $"builtins.fetchTarball \"file://($tmp)/x.tar.gz\"")))
 
+  # ours runs first, so the file is not in the store yet and iets downloads it
+  "hello fetchurl\n" | save $"($tmp)/hello.txt"
+  let fu = $"file://($tmp)/hello.txt"
+  let sha = "113a52l57f2jv9fh9igj2xh2mi0is40flxbkqi69wbh7nlybkcbm"
+  $ok = ($ok | append (cmp-case "fetchurl with a sha256 has nix's store path"
+    (run-both $farm nix-instantiate --eval -E $"builtins.fetchurl { url = \"($fu)\"; sha256 = \"($sha)\"; name = \"fu\"; }")))
+  $ok = ($ok | append (cmp-case "nix eval reads what fetchurl got"
+    (run-both $farm nix eval --raw --expr $"builtins.readFile \(builtins.fetchurl { url = \"($fu)\"; sha256 = \"($sha)\"; }\)")))
+  $ok = ($ok | append (cmp-case "fetchurl without a hash falls back in an impure evaluation"
+    (run-both $farm nix-instantiate --eval -E $"builtins.fetchurl \"($fu)\"")))
+  $ok = ($ok | append (cmp-case "fetchurl without a hash in a pure evaluation"
+    (run-both $farm nix eval --raw --expr $"builtins.fetchurl \"($fu)\"")))
+
   let ifd = $"import \(derivation { name = \"x\"; system = builtins.currentSystem; builder = \"/bin/sh\"; args = [\"-c\" \"echo 42 > $out\"]; })"
   $ok = ($ok | append (cmp-case "import from derivation falls back"
     (run-both $farm nix-instantiate --eval -E $ifd)))
