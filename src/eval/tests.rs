@@ -345,6 +345,15 @@ fn nix_eq_forces_what_the_shortcut_skips() {
     );
     assert_eq!(eq("[ 1 2 ] == [ 1 2 ]"), Ok("true".into()));
 }
+
+#[test]
+fn a_function_select_is_a_fresh_slot_when_its_subject_is_forced() {
+    // `f` forces `foo` in its slot, as the main fiber does when a helper
+    // still has the `==` element
+    let src = "let g = x: x; foo = { a = x: x; b = g g; }; f = foo.a; in builtins.seq f \
+        [ ([ foo.a ] == [ foo.a ]) ([ foo.b ] == [ foo.b ]) ([ (foo.c or g) ] == [ (foo.c or g) ]) ]";
+    assert_eq!(eval_str(src), "[ false false false ]");
+}
 #[test]
 fn sets_compare_in_the_symbol_order_of_nix() {
     let first = |n: &str| {

@@ -1162,9 +1162,9 @@ impl Evaluator {
                 _ => self.mk_thunk_counted(env, ir),
             },
             // `x.y` on an attrset that is already forced: the attr's cell
-            // holds the value or the thunk that a fresh thunk would only
-            // look up, so share it. Missing attrs and unforced subjects
-            // keep the lazy path and its error position.
+            // holds the value that a fresh thunk would only look up, so
+            // share it. Missing attrs and unforced subjects keep the lazy
+            // path and its error position.
             Ir::Select(s) => match self.shared_select(env, s.subject, s.path, s.default) {
                 Some(w) => w,
                 None => self.mk_thunk_counted(env, ir),
@@ -1210,10 +1210,15 @@ impl Evaluator {
                         return None;
                     }
                 }
-                None => return default.map(|d| self.maybe_thunk(env, d)),
+                None => {
+                    w = self.maybe_thunk(env, default?);
+                    break;
+                }
             }
         }
-        Some(w)
+        // the subject may be forced or not here depending on which fiber got
+        // to it first, so share only what `==` cannot tell from a fresh thunk
+        (!w.is_thunk() && w.value_type() != ValueType::Function).then_some(w)
     }
 
     /// What a constant or a local holds, without evaluating anything.

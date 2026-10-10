@@ -221,8 +221,9 @@ In a list element, an attribute value, a `let` binding or a function
 argument, Nix makes a thunk of every expression except a literal and an
 already evaluated variable (`Expr::maybeThunk`). iets keeps a value there
 instead of a thunk when it costs nothing to have it: a lambda, a folded
-`builtins.x`, an attribute of an attrset that is already forced, and `+`
-or `-` on ints that are already forced. The results are the same; only a
+`builtins.x`, a forced attribute of an attrset that is already forced
+(but not a function, see below), and `+` or `-` on ints that are
+already forced. The results are the same; only a
 printer that stops at thunks can see it. `nix-instantiate --eval` without
 `--strict` prints `[ builtins.nixPath (1 + 1) (x: x) ]` as
 `[ <CODE> <CODE> <CODE> ]`, and iets prints `[ [ ] 2 <LAMBDA> ]`. These are
@@ -236,14 +237,16 @@ never applies to them. iets uses a faster rule at every level: two values
 that are the same after forcing are equal. It makes one exception: two
 functions are equal only when they were the same before forcing. So
 `[ (id id) ] == [ (id id) ]` and `with foo; [ bar ] == [ bar ]` are
-false, as in Nix.
+false, as in Nix. An attribute that is a function, or that is not
+forced yet, gets a thunk. Whether its attrset is forced at that point
+depends on which worker got to it first. Sharing it would make
+`[ foo.bar ] == [ foo.bar ]` true on some runs only.
 
 What stays different:
 
 - `let x = { a = throw "a"; }; in x == x` is true, where Nix throws.
 - A function reached through one of the shortcuts equals itself:
-  `[ builtins.add ] == [ builtins.add ]`,
-  `{ inherit (builtins) import; } == { inherit (builtins) import; }` and
+  `[ builtins.add ] == [ builtins.add ]` and
   `builtins.elem builtins.map [ builtins.map ]`.
 - Two thunks that give the same function, and that are both forced in
   place, count as one slot.
