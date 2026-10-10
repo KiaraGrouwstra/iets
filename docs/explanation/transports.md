@@ -21,8 +21,8 @@ GC-rooted, so a cold run is impossible. "Scratch daemon" is
 `nix-daemon --store local?root=DIR` on its own socket: an empty chroot
 store, so the cold numbers are real uploads and no build is attempted
 (`--no-build`). `ssh-ng://` is the same code over a child's stdio, tested
-with an `ssh` shim that runs `nix-daemon --stdio` locally, and by hand
-against nixbuild.net.
+with an `ssh` shim that runs `nix-daemon --stdio` locally, and against
+nixbuild.net ("Against nixbuild.net" below).
 
 | case | eval | plan | connect | QueryValidPaths | AddMultipleToStore | build (realise) | ops / round trips | bytes sent |
 |---|---|---|---|---|---|---|---|---|
@@ -47,6 +47,32 @@ copied yet.
 The upload is bound by the daemon: 0.3 to 0.5 ms per path for the sequential
 `addToStore`. Nothing on the client side changes that
 ([What was tried and removed](history.md)).
+
+### Against nixbuild.net
+
+`bench/nixbuild.nu` compares `nix build --store ssh-ng://` (Nix 2.34.8)
+with `iets build --builder ssh-ng://` against eu.nixbuild.net. Each
+derivation is a few seconds of bash. "New marker" means a derivation that
+no one built before, so the builder really builds it. "Fetch" copies the
+output back: `nix copy --from` into the local store for Nix, `--fetch-to`
+for iets. Seconds over 10 runs, 2026-10-10, from a shared 16-core VM at
+load 13 to 21:
+
+| case | Nix mean ± σ | Nix min–max | iets mean ± σ | iets min–max |
+|---|---|---|---|---|
+| small, new marker | 2.02 ± 0.06 | 1.96–2.12 | 2.04 ± 0.18 | 1.76–2.37 |
+| small, new marker, fetch | 2.39 ± 0.14 | 2.25–2.59 | 1.95 ± 0.11 | 1.83–2.19 |
+| small, built before (cache hit) | 1.35 ± 0.07 | 1.27–1.44 | 0.97 ± 0.04 | 0.90–1.02 |
+| python3 drv closure, 16 MiB output | 2.60 ± 0.05 | 2.49–2.66 | 2.29 ± 0.07 | 2.19–2.37 |
+| the same, fetch | 3.21 ± 0.10 | 3.12–3.40 | 2.56 ± 0.26 | 2.36–3.22 |
+
+iets evaluates in about 0.5 s where Nix takes 1.0 s, and that is most of
+the gap. On a real build, iets gives the gain back: its `build` step is
+about 0.4 s longer than Nix's build activity, for a reason not yet known.
+`bench/results/nixbuild-phases.json` has the split.
+
+iets needs no local store here. With no `nix` on `PATH` and no daemon
+socket, it runs only `ssh` and writes the output to `--fetch-to`.
 
 ### Upload integrity
 

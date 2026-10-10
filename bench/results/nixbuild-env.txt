@@ -1,0 +1,10 @@
+date: 2026-10-10T21:03:27Z
+host: agents, 16 cores, AMD EPYC-Genoa Processor, kernel 6.18.45
+builder: ssh-ng://eu.nixbuild.net
+nix: nix (Nix) 2.34.8
+iets: ad47185f, sha256 e4884f827cc9cba9
+nixpkgs: a831408e6378bc02ebf8cc09b52c96ca86f6bab4
+hyperfine: hyperfine 1.20.0, 10 runs, 3 phase runs
+load: 21.06 13.90 8.76 22/1014 399042
+account before: Free build time left: 24:58:40 (hh:mm:ss); Build count       65; CPU time          01:20 (mm:ss)
+account after: Free build time left: 24:56:41 (hh:mm:ss); Build count       177; CPU time          03:19 (mm:ss)

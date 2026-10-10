@@ -306,8 +306,8 @@ when its metadata changed (`docs/explanation/caching.md`).
 
 ## Known limits
 
-- `ssh-ng://` is tested through a local `ssh` shim, and by hand against
-  nixbuild.net. There is no `--ssh-option` passthrough: use
+- `ssh-ng://` is tested through a local `ssh` shim, and against
+  nixbuild.net with `bench/nixbuild.nu`. There is no `--ssh-option` passthrough: use
   `NIX_SSHOPTS` or `~/.ssh/config`.
 - Over `daemon` and `unix://`, `iets build` sends `max-jobs` equal to the
   CPU count. It has no flag for that or for substituters. A `grpc://` builder always keeps going, so `-k`
