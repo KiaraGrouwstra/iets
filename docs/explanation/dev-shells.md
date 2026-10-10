@@ -28,21 +28,7 @@ a run will be slow.
 A cache hit skips every step: iets checks the read set, looks at the output,
 reads the link of the garbage-collection root, and prints. It talks to the
 daemon only when the root must be made again. If the environment was garbage
-collected, the run goes through all the steps.
-
-## What it costs
-
-A cold run on this repository took 0.703 s, and the same command again is a
-cache hit. Another run here took 1.04 s cold and 0.011 s cached, so read
-these as orders of magnitude:
-
-```
-cache: hit, 2106 entries validated, 0 rehashed, load 0.001s, validate 0.017s
-total: 0.027s
-```
-
-On a NixOS flake with 31 locked inputs and a devShell,
-`nix print-dev-env --option eval-cache false` took 3.48 s, a cold
-`iets print-dev-env` 0.67–0.83 s, and a cached one 21–35 ms.
+collected, the run goes through all the steps. A cached run takes tens of
+milliseconds, where `nix print-dev-env` takes seconds.
 
 [Use iets with direnv](../how-to/use-with-direnv.md) sets it up.
