@@ -124,9 +124,10 @@ add: 0 paths, 0 bytes, 0.000s
 worker: 2 ops, 5 round trips, 240 bytes sent
 ```
 
-`query` is one `QueryValidPaths` over every planned path. `add` is one
-`AddMultipleToStore` of whatever that answer said was missing. That's the
-whole upload: two operations.
+`query` counts the paths iets asked about. It asks about the roots first,
+and goes down the graph only below a missing one, because a daemon that
+holds a path holds all it references. `add` is one `AddMultipleToStore` of
+what the answers said was missing.
 
 ## Upload only
 

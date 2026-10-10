@@ -123,20 +123,29 @@ rejects the op.
 
 ### Requests
 
-1. **`QueryValidPaths`** on every planned path (sources, text paths,
-   derivations) in one call, with the substitute flag off. Then, off the
-   wire, iets finds and hashes the missing sources: what the evaluation
+1. **`QueryValidPaths`** on the roots, with the substitute flag off. When
+   every root's wanted outputs have a static path (input-addressed or
+   fixed), and the daemon holds every root, a second `QueryValidPaths`
+   asks about those outputs. If the daemon holds them all, the root is
+   built: iets skips steps 2 to 6 and reports the paths.
+2. **`QueryValidPaths`** on the rest of the plan, top-down, with the
+   substitute flag off. A daemon holds the closure of every path it holds,
+   so a held derivation answers for everything under it. iets asks about
+   the references of the missing roots in one call, then about whatever is
+   still open in one last call. A warm daemon answers in one or two small
+   calls; a cold one costs two more round trips than one call over the whole
+   plan. Then, off the wire, iets finds and hashes the missing sources: what the evaluation
    read and the `--source` overrides first, then one
    `nix path-info --json` batch for the rest. The flake fetcher uses the
    same request with the substitute flag on, for a locked input missing
    from the eval store (`docs/reference/flakes.md`).
-2. **`BuildPathsWithResults`** on the missing sources iets cannot produce
+3. **`BuildPathsWithResults`** on the missing sources iets cannot produce
    (plain store paths, which the daemon substitutes), before any upload.
    The daemon rejects a path whose reference is not valid, so it must
    hold these before the derivations that name them. Skipped when there
    are none. A failed substitution ends the run with the daemon's message.
    `nix build` does the same for an `inputSrcs` entry it does not own.
-3. **`AddMultipleToStore`** of the missing paths, in one framed stream, in
+4. **`AddMultipleToStore`** of the missing paths, in one framed stream, in
    plan order. Each entry is a `ValidPathInfo` in the 1.16 layout the
    daemon expects for this request, followed by the NAR: no deriver, the
    NAR hash and size of iets's own dump, registration time 0,
@@ -151,15 +160,15 @@ rejects the op.
 
    The daemon accepts a content-addressed path from an untrusted client,
    because it needs no signature.
-4. **`BuildPathsWithResults`** in normal mode on `<root drv>!<out1,out2>`
+5. **`BuildPathsWithResults`** in normal mode on `<root drv>!<out1,out2>`
    (`!*` without `--out`), the `DerivedPath` string that protocol >= 1.30
    reads, one entry per root in the same request. A failed status is that
    root's verdict. `--no-build` and `--dry-run` stop before this step. The
-   substitution of step 2 still runs, or the derivations could not
+   substitution of step 3 still runs, or the derivations could not
    register.
-5. **`QueryDerivationOutputMap`** for each root that built: its output
-   paths.
-6. **`NarFromPath`** for each wanted output with `--fetch-to DIR`,
+6. **`QueryDerivationOutputMap`** for each root that built and has an
+   output with no static path: its output paths.
+7. **`NarFromPath`** for each wanted output with `--fetch-to DIR`,
    restored into `DIR`.
 
 ### Events and timings
@@ -219,9 +228,9 @@ For example:
 
 First, one `StoreInfo` call, for the trust flag. Then:
 
-1. `QueryValidPaths` with the base name of every planned path, in one
-   call. Then iets finds and hashes the missing sources, as on the worker
-   protocol.
+1. `QueryValidPaths` with base names, top-down from the roots as on the
+   worker protocol. Then iets finds and hashes the missing sources, as on
+   the worker protocol.
 2. The sources iets cannot produce stay with the store. A worker
    substitutes an input when the build asks for it, so iets only checks
    that some substituter has them, which `QueryValidPaths` with

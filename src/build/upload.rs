@@ -65,6 +65,9 @@ pub trait Uploader {
     /// itself, or schedules the builds itself, drives. The worker backend never
     /// asks, so neither walk costs anything there.
     fn drvs(&self, roots: &[StorePath], deep: bool) -> Result<Vec<Drv>>;
+
+    /// The store was asked about `roots` already and holds `valid` of them.
+    fn roots_answered(&mut self, roots: &[StorePath], valid: &HashSet<String>);
 }
 
 /// A closure planned once, shipped on the first call.
@@ -72,6 +75,7 @@ pub struct PlanUpload<'a> {
     pub plan: &'a Plan,
     pub locate: &'a Locator<'a>,
     done: bool,
+    answered: Option<HashSet<String>>,
 }
 
 impl<'a> PlanUpload<'a> {
@@ -80,6 +84,7 @@ impl<'a> PlanUpload<'a> {
             plan,
             locate,
             done: false,
+            answered: None,
         }
     }
 }
@@ -97,13 +102,11 @@ impl Uploader for PlanUpload<'_> {
         self.done = true;
         let t0 = Instant::now();
         let plan = self.plan;
-        let paths: Vec<&StorePath> = plan
-            .sources
-            .iter()
-            .chain(plan.drvs.iter().map(Object::store_path))
-            .collect();
-        let queried = paths.len();
-        let valid = b.query_valid(&paths, on_event)?;
+        let mut queried = 0;
+        let valid = plan.query_valid(roots, self.answered.as_ref(), &mut |paths| {
+            queried += paths.len();
+            b.query_valid(paths, on_event)
+        })?;
         let missing_sources: Vec<StorePath> = plan
             .sources
             .iter()
@@ -137,6 +140,10 @@ impl Uploader for PlanUpload<'_> {
             substituted: resolved.substitute.len(),
             time: t0.elapsed(),
         })
+    }
+
+    fn roots_answered(&mut self, _roots: &[StorePath], valid: &HashSet<String>) {
+        self.answered = Some(valid.clone());
     }
 
     /// The plan is the closure of every root, in post-order already.
@@ -267,6 +274,12 @@ impl Uploader for StreamUpload {
         self.valid.extend(drvs.into_iter().map(|d| d.0));
         st.time = t0.elapsed();
         Ok(st)
+    }
+
+    /// A held root prunes the walk at it, as a registered one does.
+    fn roots_answered(&mut self, roots: &[StorePath], valid: &HashSet<String>) {
+        let held = roots.iter().filter(|r| valid.contains(r.base_name()));
+        self.valid.extend(held.cloned());
     }
 
     fn drvs(&self, roots: &[StorePath], deep: bool) -> Result<Vec<Drv>> {

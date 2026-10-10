@@ -158,7 +158,82 @@ pub struct Resolved {
     pub store_sources: usize,
 }
 
+/// Levels of the graph `Plan::query_valid` asks about one call at a time
+/// before it asks about everything left in one call.
+const TOP_DOWN_LEVELS: usize = 2;
+
 impl Plan {
+    /// The base names of the plan's paths that the store holds. A store
+    /// holds the closure of every valid path, so a valid drv answers for all
+    /// it references: the roots are asked first, then the references of the
+    /// missing ones, then the rest in one call. A warm store answers in one
+    /// or two small calls, and a cold one costs two extra round trips.
+    /// `answered`: what the store said about the roots, when the caller
+    /// already asked.
+    pub fn query_valid(
+        &self,
+        roots: &[StorePath],
+        answered: Option<&HashSet<String>>,
+        query: &mut dyn FnMut(&[&StorePath]) -> Result<HashSet<String>>,
+    ) -> Result<HashSet<String>> {
+        let refs: HashMap<&StorePath, &BTreeSet<StorePath>> = self
+            .drvs
+            .iter()
+            .filter_map(|o| match o {
+                Object::Drv {
+                    path, references, ..
+                } => Some((path, references)),
+                Object::Source { .. } => None,
+            })
+            .collect();
+        let all: Vec<&StorePath> = self
+            .sources
+            .iter()
+            .chain(self.drvs.iter().map(Object::store_path))
+            .collect();
+        let planned: HashSet<&StorePath> = all.iter().copied().collect();
+        let mut valid: HashSet<String> = HashSet::new();
+        let mut asked: HashSet<&StorePath> = HashSet::new();
+        let mut level: Vec<&StorePath> = roots
+            .iter()
+            .filter_map(|r| planned.get(r).copied())
+            .collect();
+        for depth in 0..TOP_DOWN_LEVELS {
+            level.retain(|p| !valid.contains(p.base_name()) && asked.insert(p));
+            if level.is_empty() {
+                break;
+            }
+            let got = match answered {
+                Some(a) if depth == 0 => a.clone(),
+                _ => query(&level)?,
+            };
+            let mut next = Vec::new();
+            for &p in &level {
+                if got.contains(p.base_name()) {
+                    let mut stack = vec![p];
+                    while let Some(q) = stack.pop() {
+                        if valid.insert(q.base_name().to_string())
+                            && let Some(rs) = refs.get(q)
+                        {
+                            stack.extend(rs.iter().filter_map(|r| planned.get(r).copied()));
+                        }
+                    }
+                } else if let Some(rs) = refs.get(p) {
+                    next.extend(rs.iter().filter_map(|r| planned.get(r).copied()));
+                }
+            }
+            level = next;
+        }
+        let rest: Vec<&StorePath> = all
+            .into_iter()
+            .filter(|p| !valid.contains(p.base_name()) && !asked.contains(p))
+            .collect();
+        if !rest.is_empty() {
+            valid.extend(query(&rest)?);
+        }
+        Ok(valid)
+    }
+
     /// Locates and hashes `missing`, a subset of `sources` in plan order: eval-time origins
     /// first, the rest through `locate` in one batch, hashed on a thread pool.
     pub fn resolve(&self, missing: &[StorePath], locate: &Locator<'_>) -> Result<Resolved> {
@@ -414,6 +489,78 @@ mod tests {
         let (h, size) = hash_source(&SrcPath::fs(tree.clone(), None)).unwrap();
         assert_eq!(h, nar_hash(&tree).unwrap());
         assert_eq!(size, nar_size(&tree).unwrap());
+    }
+
+    fn sp(name: &str) -> StorePath {
+        StorePath::parse(&format!("/nix/store/{:0>32}-{name}", name.len())).unwrap()
+    }
+
+    fn node(name: &str, refs: &[&StorePath]) -> Object {
+        Object::Drv {
+            path: sp(name),
+            aterm: Arc::new(Vec::new()),
+            references: refs.iter().map(|&r| r.clone()).collect(),
+            hashes: OnceLock::new(),
+        }
+    }
+
+    /// root -> a -> b -> src_b, root -> src
+    fn chain() -> Plan {
+        let (src, src_b) = (sp("src"), sp("src-b"));
+        let b = node("b.drv", &[&src_b]);
+        let a = node("a.drv", &[b.store_path()]);
+        let root = node("root.drv", &[a.store_path(), &src]);
+        Plan {
+            sources: vec![src_b, src],
+            origins: HashMap::new(),
+            drvs: vec![b, a, root],
+            store_drvs: 0,
+        }
+    }
+
+    fn calls(plan: &Plan, held: &[&str]) -> (Vec<Vec<String>>, HashSet<String>) {
+        let held: HashSet<String> = held.iter().map(|n| sp(n).base_name().to_string()).collect();
+        let mut seen = Vec::new();
+        let valid = plan
+            .query_valid(&[sp("root.drv")], None, &mut |ps| {
+                seen.push(ps.iter().map(|p| p.name().to_string()).collect());
+                Ok(ps
+                    .iter()
+                    .map(|p| p.base_name().to_string())
+                    .filter(|b| held.contains(b))
+                    .collect())
+            })
+            .unwrap();
+        (seen, valid)
+    }
+
+    #[test]
+    fn a_held_root_answers_for_its_closure() {
+        let (seen, valid) = calls(&chain(), &["root.drv"]);
+        assert_eq!(seen, [["root.drv"]]);
+        assert_eq!(valid.len(), 5);
+    }
+
+    #[test]
+    fn a_held_input_answers_for_its_closure() {
+        let (seen, valid) = calls(&chain(), &["a.drv", "src"]);
+        assert_eq!(seen, vec![vec!["root.drv"], vec!["src", "a.drv"]]);
+        assert_eq!(valid.len(), 4);
+        assert!(!valid.contains(sp("root.drv").base_name()));
+    }
+
+    #[test]
+    fn a_cold_store_is_asked_the_rest_in_one_call() {
+        let (seen, valid) = calls(&chain(), &[]);
+        assert_eq!(
+            seen,
+            vec![
+                vec!["root.drv"],
+                vec!["src", "a.drv"],
+                vec!["src-b", "b.drv"]
+            ]
+        );
+        assert!(valid.is_empty());
     }
 
     #[test]
