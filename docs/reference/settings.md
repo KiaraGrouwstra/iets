@@ -460,17 +460,17 @@ with `pure-eval`.
   in pure evaluation mode`. `<nix/fetchurl.nix>` still works.
 - A file is readable only under a store path this evaluation allowed: one it
   copied (`"${./x}"` of an allowed path, `builtins.path`, `filterSource`), a
-  `toFile` text, the flake's own tree and its inputs, or a tree a fetch
-  produced (`fetchTree`, `fetchTarball`). Everything else is `access to
-  absolute path '...' is forbidden in pure evaluation mode (use '--impure' to
-  override)`: `import` (the file on the command line too), `readFile`,
+  `toFile` text, the flake's own tree and its inputs, or what a fetch
+  produced (`fetchTree`, `fetchTarball`, `fetchurl`). Everything else is
+  `access to absolute path '...' is forbidden in pure evaluation mode (use
+  '--impure' to override)`: `import` (the file on the command line too), `readFile`,
   `readDir`, `readFileType`, `hashFile`, `findFile` entries, string coercion
   and `builtins.path` of a local path. `pathExists` answers `false` instead. A
   `.drv` this evaluation wrote is not readable either, but `import
   drv.drvPath` works: Nix reads it through the store.
 - `builtins.storePath` is refused.
-- `fetchTarball` needs a `sha256`. `fetchTree` refuses an unlocked input
-  (no `narHash` for `path` and `tarball`, no `rev` for the rest).
+- `fetchTarball` and `fetchurl` need a `sha256`. `fetchTree` refuses an
+  unlocked input (no `narHash` for `path` and `tarball`, no `rev` for the rest).
   `getFlake` refuses an unlocked reference, and prints `at «none»:0`
   because Nix does.
 

@@ -28,7 +28,7 @@ use crate::store::path::StorePath;
 pub(crate) use local::path_tree;
 pub use lock::Lock;
 pub use remote::LazyStore;
-pub(crate) use remote::ensure_readable;
+pub(crate) use remote::{ensure_readable, fetch_file};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AttrVal {

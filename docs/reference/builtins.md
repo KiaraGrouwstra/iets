@@ -41,7 +41,7 @@ Every builtin that is not in this table works as it does in Nix.
 | `fetchMercurial` | fails | |
 | `fetchTarball` | partial | Needs a `sha256`. |
 | `fetchTree` | partial | Type `path` works for an absolute path. Types `github`, `gitlab`, `sourcehut`, `git`, `tarball` and `hg` need a `narHash`. Other types fail. In pure evaluation, `path` also needs a `narHash`, and every type but `path` and `tarball` needs a `rev`. Under a classic name it needs the `fetch-tree` or `flakes` feature, as in Nix. |
-| `fetchurl` | fails | |
+| `fetchurl` | partial | Needs a `sha256` in every mode. Nix needs one only in pure evaluation. `iets prefetch URL` prints it. A hash mismatch exits with 1. Nix exits with 102. |
 | `flakeRefToString` | works | Accepts some references that Nix refuses. A `git` input that is not a URL fails. |
 | `fromJSON` | works | Error text differs. Refuses nesting deeper than 100,000 levels. |
 | `fromTOML` | works | TOML 1.0, as in Nix. Datetimes need the `parse-toml-timestamps` feature. Error text differs. |

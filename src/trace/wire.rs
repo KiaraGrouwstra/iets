@@ -444,15 +444,20 @@ pub fn encode_sources(sources: &HashMap<StorePath, SourceOrigin>) -> Vec<u8> {
             }
         }
         e.bytes(&o.at.rel);
-        match o.text_refs() {
-            None => e.u8(0),
-            Some(refs) => {
+        match &o.kind {
+            SourceKind::Source => e.u8(0),
+            SourceKind::Text { references } => {
                 e.u8(1);
-                let refs: Vec<Vec<u8>> = refs
+                let refs: Vec<Vec<u8>> = references
                     .iter()
                     .map(|r| r.base_name().as_bytes().to_vec())
                     .collect();
                 e.list(&refs);
+            }
+            SourceKind::Flat { hash } => {
+                e.u8(2);
+                e.bytes(hash.algo.name().as_bytes());
+                e.bytes(hash.bytes());
             }
         }
         match &o.nar {
@@ -528,6 +533,12 @@ pub fn decode_sources(b: &[u8]) -> Option<HashMap<StorePath, SourceOrigin>> {
                     .map(|r| store_path(r).ok())
                     .collect::<Option<_>>()?,
             },
+            2 => {
+                let algo = HashAlgo::parse(str::from_utf8(d.bytes().ok()?).ok()?)?;
+                SourceKind::Flat {
+                    hash: Hash::from_bytes(algo, d.bytes().ok()?).ok()?,
+                }
+            }
             _ => return None,
         };
         let nar = match d.u8().ok()? {
@@ -678,7 +689,21 @@ mod tests {
                 7,
             ),
         );
+        let f = StorePath::from_base_name("3ay25cl2lpykmx07i7m22qxz7zwzqmvy-hello.txt").unwrap();
+        let flat = Hash::parse_any(
+            "113a52l57f2jv9fh9igj2xh2mi0is40flxbkqi69wbh7nlybkcbm",
+            Some(HashAlgo::Sha256),
+        )
+        .unwrap();
+        sources.insert(
+            f.clone(),
+            SourceOrigin::flat(SrcPath::spool(f.base_name(), b""), flat, hash, 9),
+        );
         let back = decode_sources(&encode_sources(&sources)).unwrap();
+        assert_eq!(
+            (back[&f].kind.clone(), back[&f].nar),
+            (SourceKind::Flat { hash: flat }, Some((hash, 9)))
+        );
         let o = &back[&s];
         assert_eq!(o.at.local(), Some(PathBuf::from("/tmp/x")));
         assert!(!o.at.accepts(Path::new("/tmp/x/b")) && o.at.accepts(Path::new("/tmp/x/a")));

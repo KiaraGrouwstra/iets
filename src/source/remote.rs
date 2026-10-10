@@ -23,7 +23,8 @@ use crate::progress::Mode;
 use crate::remote::event;
 use crate::remote::worker::{Connection, Transport};
 use crate::session::Session;
-use crate::store::path::StorePath;
+use crate::store::hash::{Hash, HashFormat};
+use crate::store::path::{IngestionMethod, StorePath};
 use crate::store::source::{SourceOrigin, SrcPath};
 use crate::treestore::{self, Rejected, StoredTree};
 use crate::{config, nixbin, trace};
@@ -228,6 +229,84 @@ fn adopt(ev: &mut Evaluator, sp: &StorePath, entry: &StoredTree) {
     treestore::record(ev, entry, sp.base_name());
 }
 
+/// tarball.cc:downloadFile for `builtins.fetchurl`: the bytes `url` serves, as
+/// the flat fixed output `name` whose bytes hash to `expected`. The path is
+/// known before the download, so `/nix/store` or the input store may hold it
+/// already, as primops/fetchTree.cc:fetch checks first. Not substituted, as in
+/// Nix (NixOS/nix#4313).
+pub fn fetch_file(
+    ev: &mut Evaluator,
+    url: &str,
+    name: &str,
+    expected: Hash,
+    pos: Pos,
+) -> EvalResult<StorePath> {
+    let fail = |e: String| Error::boxed(ErrorKind::Eval, e, pos);
+    let sp = treestore::file_path(name, &expected).map_err(|e| fail(e.to_string()))?;
+    ev.known.lock().entry(sp.clone()).or_default();
+    let full = sp.to_full_string();
+    let on_disk = trace::stat_kind(Path::new(&full), true);
+    if on_disk != trace::Kind::Missing {
+        ev.trace().stat(full.as_bytes(), true, on_disk);
+        return Ok(sp);
+    }
+    if let Some(entry) = treestore::get(sp.base_name()) {
+        adopt_file(ev, &sp, &entry, expected);
+        return Ok(sp);
+    }
+    let shown = http::shown(url);
+    let _fetching = treestore::fetch_lock(sp.base_name(), || {
+        log::line(&format!(
+            "iets: waiting for another process to download '{shown}'"
+        ))
+    });
+    if let Some(entry) = treestore::reopen(sp.base_name()) {
+        adopt_file(ev, &sp, &entry, expected);
+        return Ok(sp);
+    }
+    let cannot = |e: String| fail(format!("unable to download '{shown}': {e}"));
+    let staged = treestore::stage(sp.base_name())
+        .ok_or_else(|| cannot("iets has no cache directory to hold it".into()))?;
+    let mut spool = spool::spool_file(staged.dir()).map_err(|e| cannot(e.to_string()))?;
+    let limits = Limits::new(nix_conf(ev.session())).map_err(|e| cannot(e.to_string()))?;
+    http::get(url, &[], limits, false, &mut spool).map_err(|e| cannot(e.to_string()))?;
+    let tree = spool::Tree::file(spool).map_err(|e| cannot(e.to_string()))?;
+    let entry = treestore::put(name, IngestionMethod::Flat, &expected, staged, tree).map_err(
+        |e| match e {
+            Rejected::Mismatch(got) => {
+                // primops/fetchTree.cc:fetch
+                let msg = format!(
+                    "hash mismatch in file downloaded from '{shown}':\n  specified: {}\n  got:       {}",
+                    expected.to_string_with(HashFormat::Nix32, true),
+                    got.to_string_with(HashFormat::Nix32, true)
+                );
+                let mut e = Error::new(ErrorKind::HashMismatch, msg, pos);
+                e.hint = Some(format!("set sha256 to '{}'", got.to_sri()));
+                Box::new(e)
+            }
+            Rejected::Io(e) => cannot(e.to_string()),
+            Rejected::Unstorable => cannot("iets cannot keep it in the input store".into()),
+        },
+    )?;
+    adopt_file(ev, &sp, &entry, expected);
+    Ok(sp)
+}
+
+/// [`adopt`] for a flat file, which is addressed by the hash of its bytes and
+/// not by its NAR hash.
+fn adopt_file(ev: &mut Evaluator, sp: &StorePath, entry: &StoredTree, flat: Hash) {
+    ev.known.add(
+        sp.clone(),
+        SourceOrigin::flat(
+            SrcPath::spool(sp.base_name(), b""),
+            flat,
+            entry.nar_hash(),
+            entry.nar_size(),
+        ),
+    );
+    treestore::record(ev, entry, sp.base_name());
+}
+
 /// nix.conf, read once: `store` for the eval store and `access-tokens` for the
 /// forge headers. The file cannot change under a running evaluation.
 fn nix_conf(s: &Session) -> &config::Config {
@@ -371,7 +450,14 @@ fn fetch_tarball(
 
     // the store verifies the tree against the lock's hash and names it by
     // what it hashes to, so a wrong tree is never named, read or uploaded
-    treestore::put(sp.name(), &expected, staged, tree).map_err(|e| match e {
+    treestore::put(
+        sp.name(),
+        IngestionMethod::Recursive,
+        &expected,
+        staged,
+        tree,
+    )
+    .map_err(|e| match e {
         Rejected::Mismatch(got) => {
             let msg = format!(
                 "iets: NAR hash mismatch in input '{name}' ({}): expected '{}' \

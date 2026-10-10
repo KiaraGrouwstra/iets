@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use super::{EvalConfig, Evaluator};
+use super::{ErrorKind, EvalConfig, Evaluator};
 
 use crate::print;
 
@@ -238,6 +238,81 @@ fn pure_eval_answers_like_nix() {
     err(
         r#"builtins.getFlake "/tmp""#,
         "cannot call 'getFlake' on unlocked flake reference '/tmp', at «none»:0 (use --impure to override)",
+    );
+}
+
+/// Nix fetches without a `sha256` in impure evaluation; iets refuses in every
+/// mode, as unsupported where Nix would fetch.
+#[test]
+fn fetchurl_needs_a_sha256_in_every_mode() {
+    let want = "'fetchurl' requires a 'sha256' argument: run 'iets prefetch https://example.com/x' and pass the hash as 'sha256'";
+    for pure in [true, false] {
+        for src in [
+            r#"builtins.fetchurl "https://example.com/x""#,
+            r#"builtins.fetchurl { url = "https://example.com/x"; name = "y"; }"#,
+        ] {
+            let mut ev = EvalConfig::new().pure(pure).build();
+            let e = ev.eval_string(src, b"/").unwrap_err();
+            let kind = if pure {
+                ErrorKind::Eval
+            } else {
+                ErrorKind::Unsupported
+            };
+            assert_eq!((e.kind, e.msg.as_str()), (kind, want), "{src}");
+        }
+    }
+}
+
+/// The errors `nix-instantiate --eval` gives before `fetchurl` downloads
+/// anything (Nix 2.34.8, primops/fetchTree.cc:fetch).
+#[test]
+fn fetchurl_checks_its_argument_like_nix() {
+    let h = "113a52l57f2jv9fh9igj2xh2mi0is40flxbkqi69wbh7nlybkcbm";
+    let name_err = |url: &str, fix: &str| {
+        format!(
+            "invalid store path name when fetching URL '{url}': name '~wiggle~' contains illegal character '~'. {fix}"
+        )
+    };
+    assert_eq!(
+        eval_err(r#"builtins.fetchurl "https://example.com/~wiggle~""#),
+        name_err(
+            "https://example.com/~wiggle~",
+            "Please pass an attribute set with 'url' and 'name' attributes to 'fetchurl',  so that it can create a valid store path."
+        )
+    );
+    assert_eq!(
+        eval_err(r#"builtins.fetchurl { url = "https://example.com/~wiggle~/"; }"#),
+        name_err(
+            "https://example.com/~wiggle~/",
+            "Please add a valid 'name' attribute to the argument for 'fetchurl', so that it can create a valid store path."
+        )
+    );
+    assert_eq!(
+        eval_err(r#"builtins.fetchurl { url = "https://example.com/x"; name = "~wiggle~"; }"#),
+        name_err(
+            "https://example.com/x",
+            "Please change the value for the 'name' attribute passed to 'fetchurl', so that it can create a valid store path."
+        )
+    );
+    assert_eq!(
+        eval_err(&format!(r#"builtins.fetchurl {{ sha256 = "{h}"; }}"#)),
+        "'url' argument required"
+    );
+    assert_eq!(
+        eval_err(&format!(
+            r#"builtins.fetchurl {{ url = "https://example.com/x"; hash = "{h}"; }}"#
+        )),
+        "unsupported argument 'hash' to 'fetchurl'"
+    );
+    assert_eq!(
+        eval_err(
+            r#"builtins.fetchurl { url = "https://example.com/x"; sha256 = "sha1-AAAAAAAAAAAAAAAAAAAAAAAAAAA="; }"#
+        ),
+        "hash 'sha1-AAAAAAAAAAAAAAAAAAAAAAAAAAA=' should have type 'sha256'"
+    );
+    assert_eq!(
+        eval_err("builtins.fetchurl 1"),
+        "expected a string but found an integer: 1"
     );
 }
 

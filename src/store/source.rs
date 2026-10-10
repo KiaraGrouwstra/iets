@@ -111,7 +111,7 @@ impl SrcPath {
     }
 }
 
-/// How an input source was content-addressed (store-api.hh:ContentAddress, the two kinds
+/// How an input source was content-addressed (store-api.hh:ContentAddress, the three kinds
 /// eval produces).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SourceKind {
@@ -119,6 +119,8 @@ pub enum SourceKind {
     Source,
     /// Flat sha256 of one regular file plus references: `builtins.toFile`.
     Text { references: BTreeSet<StorePath> },
+    /// Flat hash of one regular file, no references: `builtins.fetchurl`.
+    Flat { hash: Hash },
 }
 
 /// Where an input source's bytes are and how it was addressed. Reads under its
@@ -151,6 +153,16 @@ impl SourceOrigin {
         }
     }
 
+    /// A flat fixed output named by `hash`, the hash of the one regular file at
+    /// `at`, with the NAR hash and size of that file.
+    pub fn flat(at: SrcPath, hash: Hash, nar_hash: Hash, nar_size: u64) -> SourceOrigin {
+        SourceOrigin {
+            at,
+            kind: SourceKind::Flat { hash },
+            nar: Some((nar_hash, nar_size)),
+        }
+    }
+
     pub fn text(contents: Vec<u8>, references: BTreeSet<StorePath>) -> SourceOrigin {
         SourceOrigin {
             at: SrcPath {
@@ -166,7 +178,7 @@ impl SourceOrigin {
     pub fn text_refs(&self) -> Option<&BTreeSet<StorePath>> {
         match &self.kind {
             SourceKind::Text { references } => Some(references),
-            SourceKind::Source => None,
+            SourceKind::Source | SourceKind::Flat { .. } => None,
         }
     }
 }

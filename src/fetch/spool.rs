@@ -32,7 +32,7 @@ use std::sync::Arc;
 use std::{env, result, str};
 
 use crate::error::{Error, Result};
-use crate::store::hash::{Hash, HashAlgo};
+use crate::store::hash::{Hash, HashAlgo, Hasher};
 use crate::store::nar::{FileType, NAR_MAX_DEPTH, PathFilter, TreeWriter};
 use crate::treestore::pack::{Id, Packs};
 
@@ -365,6 +365,40 @@ impl Tree {
             src: Source::Spool { spool, sparse },
             root: Node::Dir(dereference(root)),
         })
+    }
+
+    /// The spool as one regular file, not executable: what `builtins.fetchurl`
+    /// downloads (tarball.cc:downloadFile).
+    pub fn file(spool: File) -> Result<Tree> {
+        let size = spool
+            .metadata()
+            .map_err(|e| Error::io("cannot read the spooled download", e))?
+            .len();
+        Ok(Tree {
+            src: Source::Spool {
+                spool,
+                sparse: None,
+            },
+            root: Node::File {
+                at: Blob::Spool {
+                    offset: 0,
+                    size,
+                    sparse: false,
+                },
+                exec: false,
+            },
+        })
+    }
+
+    /// The `algo` hash of the bytes of a tree that is one regular file, which
+    /// is what names it as a flat fixed output. `None` for any other tree.
+    pub fn file_hash(&self, algo: HashAlgo) -> io::Result<Option<Hash>> {
+        let Node::File { at, .. } = &self.root else {
+            return Ok(None);
+        };
+        let mut h = Hasher::new(algo);
+        io::copy(&mut self.blob(at)?, &mut h)?;
+        Ok(Some(h.finish()))
     }
 
     pub fn stored(root: Node, packs: Arc<Packs>) -> Tree {
