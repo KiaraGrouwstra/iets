@@ -66,10 +66,26 @@ load 13 to 21:
 | python3 drv closure, 16 MiB output | 2.60 ± 0.05 | 2.49–2.66 | 2.29 ± 0.07 | 2.19–2.37 |
 | the same, fetch | 3.21 ± 0.10 | 3.12–3.40 | 2.56 ± 0.26 | 2.36–3.22 |
 
-iets evaluates in about 0.5 s where Nix takes 1.0 s, and that is most of
-the gap. On a real build, iets gives the gain back: its `build` step is
-about 0.4 s longer than Nix's build activity, for a reason not yet known.
-`bench/results/nixbuild-phases.json` has the split.
+On the wire the two clients are the same. A recording with
+[nix-wire](https://github.com/numtide/nix-wire), through an `ssh` on `PATH`
+that runs `nix-wire-record -- ssh "$@"`, shows that both send
+`QueryValidPaths` on 818 paths, one `AddMultipleToStore` and one
+`BuildPathsWithResults`, and that neither sends `SetOptions`. Nix also sends
+`QueryMissing` and `QueryPathInfo`, and iets sends
+`QueryDerivationOutputMap`. The session takes 1.5 to 1.6 s for both, and
+`BuildPathsWithResults` takes 1.1 s for both.
+
+The difference is before the session. Nix starts ssh 0.5 to 0.7 s after it
+starts. iets with `--workers 4` starts it 0.8 to 1.2 s after it starts:
+four workers cost about 0.4 s of system time on this small evaluation, and
+one worker does not. On the cache hit (seconds, 10 runs):
+
+| client | mean ± σ |
+|---|---|
+| Nix | 1.31 ± 0.05 |
+| iets, 1 worker, `--no-cache` | 0.90 ± 0.05 |
+| iets, 4 workers, `--no-cache` | 1.14 ± 0.05 |
+| iets, 4 workers, eval cache on | 0.73 ± 0.01 |
 
 iets needs no local store here. With no `nix` on `PATH` and no daemon
 socket, it runs only `ssh` and writes the output to `--fetch-to`.

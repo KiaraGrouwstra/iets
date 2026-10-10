@@ -16,6 +16,8 @@
 # `--fetch-to DIR` for iets, which has no local store.
 # nixbuild-phases.json holds PHASE_RUNS (default 3) instrumented runs per
 # client and case: nix's from internal-json timestamps, iets's from --timings.
+# The boundaries differ: nix's eval ends at its first copy, so it includes
+# the ssh connect and the first queries. Compare totals across clients.
 # RUNS (default 10) sets the hyperfine runs. Each run writes the account
 # usage before and after to bench/results/nixbuild-env.txt.
 use ../scripts/lib.nu [require-real-nix]
