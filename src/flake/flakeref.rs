@@ -389,7 +389,7 @@ pub fn parse_absolute(s: &str) -> R<Parsed> {
 }
 
 /// flakeref.cc:FlakeRef::to_string, also fetchers.cc:Input::to_string.
-pub(super) fn attrs_to_string(mut a: Attrs) -> R<String> {
+pub(crate) fn attrs_to_string(mut a: Attrs) -> R<String> {
     let dir = a.remove("dir").filter(|d| *d != st(""));
     let mut url = to_url(&a)?;
     if let Some(AttrVal::Str(d)) = dir {

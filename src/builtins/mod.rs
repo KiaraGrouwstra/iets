@@ -5,6 +5,7 @@ pub mod attrs;
 pub mod context;
 pub mod core;
 pub mod derivation;
+pub mod fetch;
 pub mod lists;
 pub mod math;
 pub mod paths;

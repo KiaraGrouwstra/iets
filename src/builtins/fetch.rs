@@ -8,6 +8,7 @@ use std::path::Path;
 
 use crate::builtins::{paths, store_hooks};
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
+use crate::flake::flakeref;
 use crate::lint::purity::{self, tree_level};
 use crate::lint::{Level, LintId};
 use crate::runtime::{Ctx, Taint, Value, Word};
@@ -19,8 +20,6 @@ use crate::store::hash::{Hash, HashAlgo};
 use crate::store::path::{IngestionMethod, check_name};
 use crate::syntax::symbol::Sym;
 use crate::{provenance, treestore};
-
-use super::flakeref;
 
 /// The attrs `fetchTree` accepts: strings and paths, booleans, non-negative
 /// integers (fetchTree.cc).

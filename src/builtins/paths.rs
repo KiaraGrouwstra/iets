@@ -15,10 +15,11 @@ use std::sync::Arc;
 use std::{fs, io};
 
 use super::Registry;
+use super::fetch;
 use super::store_hooks::{self, At, Follow};
 use crate::compile::canon_path;
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos, bail};
-use crate::flake::{self, fetch, flakeref};
+use crate::flake::{self, flakeref};
 use crate::lint::{LintId, coerce, purity};
 use crate::runtime::{self, Ctx, Value, Word, ctx_to_arena};
 use crate::store::hash::{Hash, HashAlgo, Hasher, hash_bytes};

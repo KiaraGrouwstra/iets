@@ -87,9 +87,9 @@ impl Scm for Ledger {
 
 mod tests {
     use super::*;
+    use crate::builtins::fetch::emit_tree_attrs;
     use crate::builtins::store_hooks::open;
     use crate::eval::{EvalConfig, Evaluator, Pos};
-    use crate::flake::fetch::emit_tree_attrs;
     use crate::flake::parse_flake_ref;
     use crate::runtime::{Ctx, Taint, Word};
     use crate::source::scm::{count_key, rev_count};
