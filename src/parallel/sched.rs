@@ -564,7 +564,7 @@ impl Runtime {
     /// a spurious wake just makes the fiber re-check its wait.
     ///
     /// # Safety
-    /// `slot` must point at a live slot (slots live until the teardown, after every fiber stopped).
+    /// `slot` must point at a live slot (slots live until the teardown).
     pub unsafe fn wake(&self, w: &mut Worker, slot: *mut Slot) {
         // SAFETY: per the contract; only the atomic state is touched.
         let st = unsafe { &(*slot).fiber.state };

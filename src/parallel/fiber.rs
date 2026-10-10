@@ -79,8 +79,7 @@ pub fn check_reservation(workers: usize, stack_size: usize) -> Result<(), StackE
 
 /// Base addresses of the fiber stacks, for the SIGSEGV handler. A fixed
 /// table because the handler may not lock; more live fibers than this lose
-/// only the message, not the exit code. A freed stack frees its entry, so
-/// a process that runs again and again does not fill the table.
+/// only the message, not the exit code. A freed stack frees its entry.
 const MAX_GUARDS: usize = 8192;
 static GUARDS: [AtomicUsize; MAX_GUARDS] = [const { AtomicUsize::new(0) }; MAX_GUARDS];
 static NGUARDS: AtomicUsize = AtomicUsize::new(0);
@@ -138,9 +137,8 @@ extern "C" fn on_segv(sig: i32, info: *mut libc::siginfo_t, _ctx: *mut libc::c_v
     }
 }
 
-/// This thread's alternate signal stack. The thread-local destructor turns
-/// `sigaltstack` off before the memory goes, so a thread that exits frees
-/// it, and a thread that installs again keeps the one it has.
+/// This thread's alternate signal stack. The destructor turns `sigaltstack`
+/// off before the memory goes.
 struct AltStack {
     _mem: Box<[u8]>,
 }
