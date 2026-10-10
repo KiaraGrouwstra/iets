@@ -1,19 +1,14 @@
-# Getting started with iets
+# Get started with iets
 
-This tutorial takes about ten minutes. You will:
-
-- build iets;
-- evaluate an expression, then a file that reads nixpkgs;
-- build a small derivation;
-- watch the cache make a second run instant;
-- see iets answer to a classic Nix command name.
+iets is a Nix evaluator that gives the same answers as Nix, only faster. In
+about ten minutes you'll build it, point it at nixpkgs, build something, and
+see why the second run of anything is nearly free.
 
 You need a checkout of this repository, a working `nix` with flakes, and a
-running `nix-daemon`.
+running `nix-daemon`. Stay in one terminal and run the commands in order,
+because later steps use files and variables from earlier ones.
 
-Type each command exactly as written. Run them in order, in one terminal.
-
-## 1. Build iets
+## Build iets
 
 From the repository root:
 
@@ -21,26 +16,27 @@ From the repository root:
 nix develop -c cargo build --release
 ```
 
-The first build takes a few minutes. When it finishes, put the binary on
-your path for this shell:
+Go get a coffee: the first build takes a few minutes. When it's done, put
+the binary on your path for this shell:
 
 ```sh
 export PATH="$PWD/target/release:$PATH"
 ```
 
-Check it:
+Check that it works:
 
 ```sh
 iets version
 ```
 
-You see a version and the commit it was built from. Your commit differs:
+You get the version and the commit it was built from. Your commit will
+differ:
 
 ```
 iets 0.1.0 (037e49d)
 ```
 
-## 2. Evaluate an expression
+## Evaluate an expression
 
 ```sh
 iets eval --strict -E '1 + 1'
@@ -50,13 +46,13 @@ iets eval --strict -E '1 + 1'
 2
 ```
 
-`-E` gives an expression on the command line. `--strict` evaluates the
-whole value instead of only its top level.
+`-E` takes the expression from the command line. `--strict` evaluates the
+whole value instead of stopping at its top level.
 
-## 3. Get the nixpkgs this repository pins
+## Grab the pinned nixpkgs
 
-The next steps read nixpkgs. Ask iets for the exact tree this repository's
-`flake.lock` names, so your results match the ones printed here:
+The next steps read nixpkgs. Ask iets for the tree that this repository's
+`flake.lock` names, so your output matches what's printed here:
 
 ```sh
 nixpkgs=$(iets eval --raw --impure -E "(builtins.getFlake \"path:$PWD\").inputs.nixpkgs.outPath")
@@ -67,12 +63,12 @@ echo "$nixpkgs"
 /nix/store/hhfnpma32czw4h3bqpag8dciax0bcmar-source
 ```
 
-Your hash differs if the lock file has moved on. That is fine; the rest of
-the tutorial uses the variable.
+If the lock file has moved on, your hash will differ. That's fine, because
+the rest of the tutorial uses the variable.
 
-## 4. Evaluate a file
+## Evaluate a file
 
-Make a working directory and write a file in it:
+Make a working directory and write a small file that uses nixpkgs:
 
 ```sh
 mkdir -p ~/iets-tour && cd ~/iets-tour
@@ -90,11 +86,11 @@ in
 EOF
 ```
 
-By default, iets evaluates purely: it reads only your project, and it has no
-`<nixpkgs>` search path and no `builtins.currentSystem`. nixpkgs needs both,
-so the commands in this tutorial add `--impure`.
+iets evaluates purely by default: it reads only your project, and it has
+neither a `<nixpkgs>` search path nor `builtins.currentSystem`. nixpkgs
+needs both, so every command from here on adds `--impure`.
 
-Evaluate the file. `-I` says where `<nixpkgs>` is:
+Now evaluate the file. `-I` tells iets where `<nixpkgs>` is:
 
 ```sh
 iets eval --impure --strict --json -I nixpkgs=$nixpkgs hello.nix
@@ -104,8 +100,8 @@ iets eval --impure --strict --json -I nixpkgs=$nixpkgs hello.nix
 {"drv":"/nix/store/2bkip97lh6y3dws9inyhjssyayh9vfhq-hello-2.12.3.drv","name":"hello-2.12.3"}
 ```
 
-Nix 2.34.8 gives the same derivation path for the same tree. iets always
-aims for that: same input, same `.drv`.
+Nix 2.34.8 prints the same derivation path for the same tree. That's the
+point: same input, same `.drv`.
 
 Select one attribute with `-A`:
 
@@ -117,8 +113,7 @@ iets eval --impure --raw -I nixpkgs=$nixpkgs hello.nix -A name
 hello-2.12.3
 ```
 
-`-A` also works straight on the nixpkgs tree. You do not need to wrap it in
-a file:
+You can also point `-A` at the nixpkgs tree and skip the wrapper file:
 
 ```sh
 iets eval --impure --raw $nixpkgs -A hello.name
@@ -128,9 +123,9 @@ iets eval --impure --raw $nixpkgs -A hello.name
 hello-2.12.3
 ```
 
-## 5. Build a derivation
+## Build a derivation
 
-Write a derivation that makes one file:
+Write the smallest derivation you can: it writes one line to one file.
 
 ```sh
 cat > greeting.nix <<'EOF'
@@ -155,15 +150,17 @@ iets build --impure --builder daemon greeting.nix
 /nix/store/hl2d12ai352g88ad47fh8844g939iyrd-greeting
 ```
 
-The store path depends on your system. The paths on this page are for
-`x86_64-linux`.
+Store paths depend on your system. The ones on this page are for
+`x86_64-linux`. The daemon's own log lines may show up between the two
+progress lines.
 
 iets evaluated the derivation in memory, sent it to the daemon, and asked
-the daemon to build it. iets itself wrote nothing to `/nix/store`. Run it
-again and you see only the output path, because the daemon already has it.
+the daemon to build it, writing nothing to `/nix/store` itself. Run the
+command again and you get only the output path, because the daemon already
+has it.
 
-Look at the two progress lines. They show the file and line that defined
-the derivation, not only a store path. Now read the output:
+The progress lines name the file and line that defined the derivation. When
+a build fails, that's the line you want. Read the output:
 
 ```sh
 cat /nix/store/hl2d12ai352g88ad47fh8844g939iyrd-greeting
@@ -173,10 +170,11 @@ cat /nix/store/hl2d12ai352g88ad47fh8844g939iyrd-greeting
 hello from iets
 ```
 
-## 6. Watch the cache
+## Watch the cache answer
 
-`--timings` reports what each phase cost and whether the run came from the
-cache. Use a cache directory of your own so this step starts cold:
+`--timings` shows what each phase cost and whether the cache answered. Give
+it a cache directory of your own so this step starts cold. Your counts and
+times will differ a little from the ones here:
 
 ```sh
 iets eval --impure --timings --cache-dir ~/iets-tour/cache \
@@ -191,10 +189,10 @@ cache: wrote 1218 entries, 0.001s
 cache: swept 0 of 1 entries (0 KiB) from /home/you/iets-tour/cache/trace
 ```
 
-The run took half a second. It recorded 1,218 things it looked at: every
-file it read, every directory it listed, every path it checked.
+The run wrote down 1,218 things it looked at: every file it read, every
+directory it listed, every path it checked.
 
-Run exactly the same command again:
+Run the same command again:
 
 ```sh
 iets eval --impure --timings --cache-dir ~/iets-tour/cache \
@@ -206,11 +204,12 @@ cache: hit, 1218 entries validated, 0 rehashed, load 0.000s, validate 0.005s
 {"drv":"/nix/store/2bkip97lh6y3dws9inyhjssyayh9vfhq-hello-2.12.3.drv","name":"hello-2.12.3"}
 ```
 
-There is no `eval:` line, because nothing was evaluated. iets checked the
-1,218 entries in 5 milliseconds, saw that nothing had changed, and gave you
-the saved answer.
+There's no `eval:` line, because nothing was evaluated. iets checked those
+1,218 entries in a few milliseconds, saw that nothing had changed, and
+handed back the saved answer.
 
-Now change the file and run the same command a third time:
+Now touch the file and run it a third time. The modification time changes
+but the contents don't:
 
 ```sh
 touch hello.nix
@@ -223,14 +222,14 @@ cache: hit, 1218 entries validated, 1 rehashed, load 0.002s, validate 0.012s
 {"drv":"/nix/store/2bkip97lh6y3dws9inyhjssyayh9vfhq-hello-2.12.3.drv","name":"hello-2.12.3"}
 ```
 
-`1 rehashed`: the modification time of `hello.nix` changed, so iets hashed
-the file again, found the same contents, and still hit. Change what the
-file says and the next run misses.
+`1 rehashed` means iets noticed the new modification time and hashed
+`hello.nix` again. The contents were the same, so it was still a hit. Change
+the contents and the next run misses.
 
-## 7. Use a classic Nix command name
+## Run iets as nix-instantiate
 
-The same binary answers to Nix's own command names. Ask it to instantiate
-your derivation:
+The same binary answers to Nix's own command names, so your scripts don't
+have to change. Instantiate your derivation with one:
 
 ```sh
 iets nix-instantiate greeting.nix
@@ -241,7 +240,7 @@ warning: you did not specify '--add-root'; the result might be removed by the ga
 /nix/store/6jq7mz1b1n11y522nzjdqyvr3gwb69zz-greeting.drv
 ```
 
-Now ask the real Nix the same thing:
+Ask the real Nix the same thing:
 
 ```sh
 nix-instantiate greeting.nix
@@ -252,18 +251,14 @@ warning: you did not specify '--add-root'; the result might be removed by the ga
 /nix/store/6jq7mz1b1n11y522nzjdqyvr3gwb69zz-greeting.drv
 ```
 
-Same warning, same path, byte for byte. Under those names, iets handles
-what it can and runs the real `nix` for the rest.
+Same warning, same path, byte for byte. Under those names iets does what it
+can and hands everything else to the real `nix`.
 
-## What you have seen
+## What to try next
 
-You evaluated an expression and a file. You built a derivation through a
-daemon. You saw a second run answered from the cache in milliseconds, and a
-classic Nix name give Nix's own output.
-
-Where to go next:
-
-- [How to build on a remote builder](../how-to/build-remotely.md)
-- [How to replace nix-diff, nvd, nurl and the rest](../how-to/replace-nix-tools.md)
-- [How iets evaluates](../explanation/evaluation.md)
-- [Every command and flag](../reference/commands.md)
+- Send builds to another machine:
+  [Build on a remote builder](../how-to/build-remotely.md).
+- Swap iets in for the Nix tools you use:
+  [Replace your Nix tools with iets](../how-to/replace-nix-tools.md).
+- Find out why it's fast: [How iets evaluates](../explanation/evaluation.md).
+- Look up a flag: [Commands](../reference/commands.md).

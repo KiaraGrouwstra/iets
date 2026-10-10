@@ -1,15 +1,13 @@
-# How to fuzz iets against Nix
+# Fuzz iets against Nix
 
-`fuzz/` gives the same input to iets and to Nix 2.34.8, and tells you
-when their answers differ. This page shows you how to run it and what to
-do with a difference.
-
-Each target, its kinds of difference and the file formats are in
-[reference/fuzz.md](../reference/fuzz.md).
+`fuzz/` feeds the same input to iets and to Nix 2.34.8 and tells you when
+their answers differ. Each target, its kinds of difference and the file
+formats are in [Fuzz targets](../reference/fuzz.md).
 
 ## Run the checks
 
-The quickest start is the flake checks:
+The flake has one check for each family of targets, and one for the
+nix-conformance cases:
 
 ```sh
 nix build .#checks.x86_64-linux.fuzz-parse -L
@@ -20,13 +18,13 @@ nix build .#checks.x86_64-linux.fuzz-drv -L
 nix build .#checks.x86_64-linux.conformance -L
 ```
 
-A check fails when it finds a difference that `fuzz/divergences.toml`
-does not list, and it prints the input in base64.
+A check fails when it finds a difference that `fuzz/divergences.toml` does
+not list, and it prints the input in base64.
 
 ## Run a fuzzer by hand
 
-The flake's stable Rust is enough. `cargo fuzz` runs on it with
-`--sanitizer none`; AddressSanitizer would need nightly.
+To run a fuzzer yourself you need only the flake's stable Rust. `cargo fuzz`
+runs on it with `--sanitizer none`, because AddressSanitizer needs nightly.
 
 ```sh
 nix build .#fuzz-oracles -o oracles
@@ -39,16 +37,17 @@ fuzzers/bin/fuzz-nar-gen -max_len=4096 nar-corpus
 ```
 
 `fuzz/default.nix` has the flags of each target. To use N cores and keep
-going after a difference, add `-fork=N -ignore_crashes=1`. Each difference
-is then saved as a file `crash-<sha1>`.
+going after a difference, add `-fork=N -ignore_crashes=1`. Each difference is
+saved as a file named `crash-<sha1>`.
 
-While you change iets, build one target with
+While you work on iets, build a single target with
 `cargo fuzz build -s none -O TARGET` in `fuzz/`.
 
 ## Replay inputs
 
 `fuzz-diff` runs files through a target without libFuzzer. Give it a crash
-file, a corpus, or a tree of `.nix` files:
+file, a corpus, or a tree of `.nix` files (`--nix-only` reads only the
+`*.nix` files of a tree):
 
 ```sh
 nix build .#fuzz-diff -o fuzz-diff
@@ -57,7 +56,7 @@ fuzz-diff/bin/fuzz-diff --nix-only parse ~/src/nixpkgs
 fuzz-diff/bin/fuzz-diff --json nar-gen corpus/ > triage.jsonl
 ```
 
-## Deal with a difference
+## Investigate a difference
 
 A difference looks like this:
 
@@ -68,79 +67,63 @@ parse divergence (position)
 ```
 
 1. Make the input small:
-   `fuzz-parse -minimize_crash=1 -runs=10000 crash-0123abcd`.
-2. Check it with the real Nix. For the parser, write the input to a file
-   and run `nix-instantiate --parse FILE`. Do not use `-E` or standard
-   input: there Nix finds lines only in the text before the first NUL byte
-   (`Pos::getSource`, position.cc). For a NAR, use
-   `nix-store --restore DIR < FILE` and `nix-store --dump DIR`.
+   `fuzzers/bin/fuzz-parse -minimize_crash=1 -runs=10000 crash-0123abcd`.
+2. Check it with the real Nix.
+   - For the parser, write the input to a file and run
+     `nix-instantiate --parse FILE`. Don't use `-E` or standard input: with
+     those, Nix finds lines only in the text before the first NUL byte
+     (`Pos::getSource`, `position.cc`).
+   - For a NAR, run `nix-store --restore DIR < FILE` and
+     `nix-store --dump DIR`.
 3. Find the rule in the Nix source (`src/libexpr/parser.y`, `lexer.l`,
    `parser-state.hh`, `src/libutil/archive.cc`). Then decide:
-   - **iets is wrong.** Fix it, and add a test next to the code. Put the
-     small input in `parse/` or `nar/` of nix-conformance, named by its
-     sha1, with the answer `./expect` writes.
+   - **iets is wrong.** Fix it, and add a test next to the code. Also add
+     the small input to `parse/` or `nar/` of
+     [nix-conformance](https://github.com/numtide/nix-conformance), named
+     by its sha1 (`NAME.nix` or `NAME.nar`). Then write its expected answer
+     from the reference adapter:
+     `./expect "$(nix build .#adapter --print-out-paths)/bin/nix-conformance-adapter"`.
+     If Nix itself fails on the input, it isn't a case: put it in
+     `nix-bugs/` with a note.
    - **iets differs on purpose.** Add a section to
      `docs/reference/divergences.md` and an entry to
-     `fuzz/divergences.toml` (see below).
+     `fuzz/divergences.toml` (see **Record a known divergence**).
    - **The oracle or the target is wrong.** Fix it there.
 
-To look at the input of the last run, set `IETS_WIRE_SCRIPT`,
-`IETS_EVAL_SOURCE` or `IETS_DRV_WRITE` to a file name. To serve a `wire`
-script to a client by hand, use for example
+To see the input of the last run, set `IETS_WIRE_SCRIPT`, `IETS_EVAL_SOURCE`
+or `IETS_DRV_WRITE` to a file name and the target writes the input there. To
+serve a `wire` script to a client by hand, use for example
 `socat UNIX-LISTEN:SOCK,fork SYSTEM:'cat FILE'`.
 
 ## Record a known divergence
 
 Add an entry to `fuzz/divergences.toml`, under the table of the target's
-family:
+family, with an `id`, a `doc` link to the section of
+`docs/reference/divergences.md`, and the fields that make it match
+([Fuzz targets](../reference/fuzz.md#fuzzdivergencestoml)).
 
-```toml
-[[parse]]
-id = "nul-outside-a-string"
-doc = "docs/reference/divergences.md#a-nul-byte-outside-a-string"
-input = "\u0000"
-iets = "unexpected invalid token"
-```
-
-The fuzzer then counts that difference as expected and stops adding it to
-the corpus. Keep entries narrow: a broad entry hides bugs. To try another
-list, set `IETS_FUZZ_DIVERGENCES=FILE`; otherwise each binary uses the list
-it was built with.
+The fuzzer counts that difference as expected and stops adding it to the
+corpus. Keep entries narrow, because a broad one hides bugs. Each binary
+uses the list it was built with. To try another list, set
+`IETS_FUZZ_DIVERGENCES=FILE`.
 
 ## Run a long campaign
 
-There is one campaign for each family: `fuzz-parse-campaign`,
-`fuzz-nar-campaign`, `fuzz-wire-campaign`, `fuzz-eval-campaign` and
-`fuzz-drv-campaign`. Build one on a machine with many cores:
+A campaign is a long run of one family on every core. The flake has one
+for each family: `fuzz-parse-campaign`, `fuzz-nar-campaign`,
+`fuzz-wire-campaign`, `fuzz-eval-campaign` and `fuzz-drv-campaign`. Build
+one on a machine with many cores:
 
 ```sh
 nix build '.#fuzz-parse-campaign' -o campaign
 ```
 
-A campaign fuzzes on every core of the builder for an hour. Look in
-`campaign/artifacts/` for the inputs that differed, and in
-`campaign/triage.jsonl` for them replayed. `campaign/corpus/` holds the
-corpus it grew. To run another target, for
-another time, or from an earlier corpus, use
+A campaign fuzzes for an hour. `campaign/artifacts/` holds the inputs that
+differed, `campaign/triage.jsonl` holds those inputs replayed and classified,
+and `campaign/corpus/` holds the corpus it grew. To choose the target, the
+duration or a starting corpus, call
 `(import ./fuzz { ... }).campaign { target; seconds; corpus; }`.
 
-The grown corpora are not in the repository. The parse seeds come from the
-pinned nixpkgs on each run, so only the growth needs a home.
-
-## Measure coverage
-
-```sh
-nix shell nixpkgs#cargo-fuzz nixpkgs#llvmPackages_21.llvm -c \
-  cargo fuzz coverage -s none parse CORPUS
-llvm-profdata merge -sparse fuzz/coverage/parse/raw \
-  -o fuzz/coverage/parse/coverage.profdata
-llvm-cov report \
-  target/x86_64-unknown-linux-gnu/coverage/x86_64-unknown-linux-gnu/release/parse \
-  -instr-profile=fuzz/coverage/parse/coverage.profdata src/syntax/*.rs
-```
-
-`cargo fuzz coverage` looks for `llvm-profdata` in the Rust sysroot, and
-the flake's Rust has none there, so you merge in a separate step. The LLVM
-major version must match the one `rustc -vV` names. For several targets,
-merge their `raw` directories into one profile, and give `llvm-cov` one
-binary plus the others with `-object`.
+The grown corpora aren't in the repository, so keep the ones you want. The
+parse seeds need no storage, because each run takes them from the pinned
+nixpkgs.

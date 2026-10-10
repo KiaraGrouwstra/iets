@@ -1,27 +1,27 @@
 # The transports, measured
 
-How fast `iets build` ships a closure over each transport, why it is shaped
-the way it is, and how we know the bytes are right. The facts about each
-transport are in `docs/reference/builders.md`. This page holds the numbers
-and the reasons behind them. Every number here was measured on a given day
-and will drift.
+How fast does `iets build` ship a closure, and how do you know the bytes
+arrive intact? [Builders and the wire](../reference/builders.md) has the
+facts about each transport. The numbers here come from one machine and drift
+with the nixpkgs pin and the hardware, but the ratios and the op counts hold.
 
 ## Why one request per ready set
 
 The worker protocol is serial per connection, and every
-`BuildPathsWithResults` starts a new daemon worker. If the client sent one
-request per derivation, the daemon would sit idle between derivations. So
-iets sends one request for each set of derivations that is ready to build.
+`BuildPathsWithResults` starts a new daemon worker. A request per derivation
+would leave the daemon idle between derivations, so iets sends one request
+for each set that is ready to build.
 
-## The worker protocol (`scripts/daemon-e2e.nu`, release build)
+## The worker protocol
 
-"Local daemon" is this machine's `nix-daemon` on its socket. The hello
-closure is GC-rooted there, so every path is valid and a cold run is
-impossible. "Scratch daemon" is `nix-daemon --store local?root=DIR` on its
-own socket: an empty chroot store, so the cold numbers are real uploads and
-no build is attempted (`--no-build`). `ssh-ng://` is the same code over a
-child's stdio. The script tests it with an `ssh` shim that runs
-`nix-daemon --stdio` locally, not against a real host.
+The figures come from `scripts/daemon-e2e.nu` on a release build.
+
+"Local daemon" is this machine's `nix-daemon`, where the hello closure is
+GC-rooted, so a cold run is impossible. "Scratch daemon" is
+`nix-daemon --store local?root=DIR` on its own socket: an empty chroot
+store, so the cold numbers are real uploads and no build is attempted
+(`--no-build`). `ssh-ng://` is the same code over a child's stdio, tested
+with an `ssh` shim that runs `nix-daemon --stdio` locally.
 
 | case | eval | plan | connect | QueryValidPaths | AddMultipleToStore | build (realise) | ops / round trips | bytes sent |
 |---|---|---|---|---|---|---|---|---|
@@ -37,13 +37,13 @@ The 62 KB of a warm hello run is the `QueryValidPaths` request: 776 full
 store paths as padded strings, and the 776 answers back. The custom drv's
 0.87 s "build" is the sandbox build itself. The 413 paths the local daemon
 lacked for nixos-desktop are nixpkgs subtrees that no local evaluation had
-copied yet. The run registered them, as `nix-instantiate` would have.
+copied yet.
 
-The upload is bound by the daemon: 0.3 to 0.5 ms per path for the
-sequential `addToStore`. No change on the client side changes that
-(`docs/explanation/history.md`).
+The upload is bound by the daemon: 0.3 to 0.5 ms per path for the sequential
+`addToStore`. Nothing on the client side changes that
+([What was tried and removed](history.md)).
 
-### Byte identity
+### The upload changes no bytes
 
 After an upload, `scripts/daemon-e2e.nu` checks that:
 
@@ -55,11 +55,13 @@ After an upload, `scripts/daemon-e2e.nu` checks that:
 - in the scratch store, the hello derivation has the same hash as in the
   local store, and every input source has the same `ca`.
 
-## `grpc://` (`scripts/grpc-e2e.nu`, release build)
+## The `grpc://` transport
 
-`nix-grpc-daemon` runs in plaintext standalone mode (it schedules onto
-itself) in front of a scratch chroot store on this machine. So these are
-the transport's own figures, not a farm's.
+The figures come from `scripts/grpc-e2e.nu` on a release build.
+
+`nix-grpc-daemon` runs in plaintext standalone mode, scheduling onto itself,
+in front of a scratch chroot store. These are the transport's own figures,
+not a farm's.
 
 | case | connect | QueryValidPaths | AddMultipleToStore | build | RPCs |
 |---|---|---|---|---|---|
@@ -82,37 +84,30 @@ The script also checks that:
 - a multi-root `iets build` over `grpc://` names every attribute on
   stderr.
 
-Against `farm.numtide.com` with a Keycloak `write` token (2026-09-20), a
-`runCommand` with 572 cached inputs went `Want`, `Assigned`,
+Against `farm.numtide.com` with a Keycloak `write` token (measured
+2026-09-20), a `runCommand` with 572 cached inputs went `Want`, `Assigned`,
 `BuildDerivation` on a farm worker in 2.6 s and 5 RPCs. A classic
-`nix-build` out-link then came from cache.numtide.com through the local
+`nix-build` out-link came from cache.numtide.com through the local
 daemon.
 
 ### Why bounced addresses are shared
 
 A worker that crashed stays placeable until the scheduler notices. On
-farm.numtide.com that took 42 s (2026-09-22), and every bounce off the
-dead worker was instant. A client that only retried would burn its
-retries in a second. So all builds of one run share what they learn about
-an address: two bounces in a row close it for a while, and a result on it
-opens it again (`docs/reference/builders.md`, "Retries").
+farm.numtide.com that took 42 s (measured 2026-09-22), and every bounce off
+the dead worker was instant, so a client that only retried would burn its
+retries in a second. All builds of one run therefore share what they learn
+about an address ("Retries" in
+[Builders and the wire](../reference/builders.md)).
 
-## NAR
+## NAR parity
+
 
 `tests/nar_parity.rs` checks that the NAR iets writes is byte-identical to
-`nix-store --dump`, on a tree of unicode and awkward names, empty files,
-empty directories, symlinks (dangling, and pointing out of the tree),
-executables, contents on and off the 8-byte boundary, deep nesting and a
-large file:
-
-- the whole NAR matches `nix-store --dump` byte for byte;
-- every subtree on its own hashes like `nix-store --dump | sha256sum`;
-- a dump restored by iets dumps back to the same bytes;
-- the reader agrees with the writer on the size, and rejects a truncated
-  archive, a misspelled keyword and non-zero padding;
-- the reader refuses a name longer than `NAME_MAX`.
-
-Each test skips itself when `nix` is absent; `nix develop` has it.
+`nix-store --dump` on a tree of awkward names, empty files and directories,
+symlinks, executables, odd alignment, deep nesting and a large file. It also
+checks that a restored dump dumps back to the same bytes, and that the reader
+rejects a truncated archive, a misspelled keyword and non-zero padding. Each
+test skips itself when `nix` is absent.
 
 On an AMD EPYC Genoa with a warm page cache, the pinned nixpkgs tree (40k
 entries, 212 MB of NAR) and one 500 MB file (`bench/nar.nu --nix`):
@@ -123,6 +118,3 @@ entries, 212 MB of NAR) and one 500 MB file (`bench/nar.nu --nix`):
 | dump of the tree, no hash | 545-567 ms | `nix-store --dump \| sha256sum` 2034 ms |
 | NAR hash of a 500 MB file | 353-359 ms | `nix hash path` 386 ms |
 | restore of the tree from a pipe | 1744-1804 ms | `nix-store --restore` 2019 ms |
-
-The tracing cache keeps the NAR hash of each copied tree, and dumps the
-tree again only when its metadata changed (`docs/explanation/caching.md`).

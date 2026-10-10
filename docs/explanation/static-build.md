@@ -1,26 +1,25 @@
 # The static build
 
-Run `nix build .#static` and you get a musl binary with no runtime
-dependencies. It needs no `/nix/store`, no daemon, no shared libraries and
-no CA bundle. It can evaluate, fetch `github:`, `gitlab:`, `sourcehut:` and
-`tarball` inputs, and build on a `grpc://` builder. Stripped and compressed
-with `xz -9`, it is 3.1 MB.
+`nix build .#static` gives you a musl binary with no runtime dependencies.
+It needs no `/nix/store`, no daemon, no shared libraries and no CA bundle.
+It evaluates, fetches `github:`, `gitlab:`, `sourcehut:` and `tarball`
+inputs, and builds on a `grpc://` builder. Stripped and compressed with
+`xz -9`, it was 3.1 MB when last measured.
 
-It still runs `git` for a project that is a git checkout. It runs `nix` for
-a locked `git` or `hg` input.
+It runs `git` for a project that is a git checkout, and `nix` for a locked
+`git` or `hg` input. If the machine has no CA bundle, the binary trusts the
+Mozilla roots built into it, and `NIX_SSL_CERT_FILE` overrides them
+([Settings](../reference/settings.md)).
 
-If the machine has no CA bundle, the binary trusts the Mozilla roots built
-into it (`NIX_SSL_CERT_FILE` in [reference/settings.md](../reference/settings.md)).
+## Why it uses mimalloc
 
-## The allocator
+The evaluator keeps its values in its own arena, and everything else comes
+from the global allocator. With musl's malloc the static build ran 24–30%
+slower than the glibc build, and 79% slower on desktop w4 (the nixos-desktop
+workload at four workers; `w1` is one worker).
 
-The evaluator keeps its values in its own arena. Everything else comes
-from the global allocator, and that choice matters. With musl's malloc,
-the static build was 24–30% slower than the glibc build, and 79% slower on
-desktop w4.
-
-We timed each allocator with hyperfine (1 warmup, 5 runs, median) on the
-`bench/ab.nu` workloads, on an idle Ryzen 9 7950X3D pinned to cores 0–7.
+The table times each allocator with hyperfine (1 warmup, 5 runs, median) on
+the `bench/ab.nu` workloads, on an idle Ryzen 9 7950X3D pinned to cores 0–7.
 The baseline is glibc's malloc.
 
 | variant | desktop w1 | desktop w4 | minimal w1 | outpaths 0/8 w1 | outpaths 0/8 w4 |
@@ -40,11 +39,10 @@ The baseline is glibc's malloc.
 | musl, rlsf | +12% | +78% | +10% | +11% | +10% |
 | musl, system | +26% | +79% | +24% | +30% | +29% |
 
-On musl, rpmalloc crashes at start and snmalloc does not link. tcmalloc
-and scudo link only as non-PIE, and were not faster than mimalloc.
+On musl, rpmalloc crashes at start and snmalloc does not link. tcmalloc and
+scudo link only as non-PIE, and were not faster than mimalloc. mimalloc is
+the fastest on both libcs, so iets uses it on every target.
 
-mimalloc is the fastest on both libcs, so iets uses it on every target.
-
-Even so, the static build is 9–13% slower than the glibc build. Most of
-the gap is in musl's `memcpy`, `memmove`, `memcmp` and `memset`. They
-take 13.8% of the cycles on desktop w1; glibc's take 2.9%.
+Even with mimalloc the static build is 9–13% slower than the glibc build.
+Most of the gap is in musl's `memcpy`, `memmove`, `memcmp` and `memset`,
+which take 13.8% of the cycles on desktop w1, where glibc's take 2.9%.

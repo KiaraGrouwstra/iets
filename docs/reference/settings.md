@@ -1,23 +1,12 @@
 # Settings
 
-Every `IETS_*` environment variable, every `iets.toml` setting, the
-`--iets-option` flag, and how iets reads Nix's own `nix.conf`.
+Where iets takes its settings from: `IETS_*` environment variables,
+`iets.toml`, the `--iets-option` flag, and Nix's own `nix.conf`.
 
-iets reads two settings files:
-
-- `nix.conf` is Nix's. The real nix behind the classic fallback reads it
-  too.
-- `iets.toml` is iets's own, in TOML. No nix ever sees it.
-
-```toml
-# ~/.config/iets/iets.toml
-builder = "ssh-ng://buildhost"
-workers = 4
-```
-
-iets reads every `IETS_*` variable, the `iets.toml` files and the
-`--iets-option` flag once, at startup. Changing the environment during a
-run has no effect.
+iets reads two settings files: `nix.conf` is Nix's, and the real nix behind
+the classic fallback reads it too. `iets.toml` is iets's own, in TOML, and
+no nix ever sees it. iets reads every `IETS_*` variable, the `iets.toml`
+files and the `--iets-option` flag once, at startup.
 
 ## Environment variables
 
@@ -27,8 +16,7 @@ configuration, the environment is the override. The tuning knobs
 (`IETS_SPIN`, `IETS_SPINNERS`, `IETS_HANDOFF`, `IETS_FANOUT`) and the
 statistics knobs exist only as variables.
 
-The **Type** column is the variable's. In the file, the same setting has
-its TOML type: `cache = false`, `no-fallback = true`, `workers = 4`,
+In the file, a setting has its TOML type: `cache = false`, `workers = 4`,
 `cache-dir = "/var/cache/iets"`.
 
 A Boolean variable takes a nix.conf Boolean: `true`, `yes` or `1`, and
@@ -48,7 +36,7 @@ prints cover every worker.
 | `IETS_HANDOFF` | | usize | 8 | Queued tasks per awake worker that justify waking a sleeper. |
 | `IETS_FANOUT` | | u32 bitmask | 7 | Strict-demand fan-out: 1 deep walks, 2 coercions, 4 list builtins. |
 | `IETS_PAR_STATS` | | level | 0 | 1 prints the scheduler summary, 2 adds the sample timeline and the file table. |
-| `IETS_STATS` | | level | 0 | 1 prints allocation counts and bytes per object kind, RSS and mimalloc's `mi_stats_print`; 2 adds the memory census — histograms, duplicates, objects never read — on a binary built with `--features stats2`. The hooks are compiled out otherwise. Each worker allocates from its own arena, so `arena_bytes`, `arena_mapped` and the per-kind table are the sum over every arena, folded on each fiber switch. Setting this is what turns the fold on, at ~0.1% of instructions. `store_adds` counts the source trees and `toFile` texts the evaluation turned into a store path; `IETS_EVENTS=store` names each one. |
+| `IETS_STATS` | | level | 0 | 1 prints allocation counts and bytes per object kind, RSS and mimalloc's `mi_stats_print`; 2 adds the memory census — histograms, duplicates, objects never read — on a binary built with `--features stats2`. The hooks are compiled out otherwise. The counters are the sum over every worker's arena. Setting this turns the fold on, at about 0.1 % of instructions. |
 | `IETS_EVENTS` | | group list | | The parts of the run to watch, comma-separated, or `all` for every cold group: `store`, `fetch`, `cache`, … A name that is not a group is an error. `docs/reference/events.md` has the table and the schema. |
 | `IETS_EVENTS_TO` | | path | `-` | Where those records go. `-` is stderr, a unix socket is connected to, any other path is appended to. It acts only when `IETS_EVENTS` names a group. |
 | `IETS_PROFILE` | | `eval` or `alloc` | | Collects a sampled flame graph of the evaluation: `eval` weighs a sample by the time it stood for, `alloc` by the arena bytes since the sample before it. Any other word is an error. A profile is read per fiber, so it pins the run to one worker and refuses an explicit `--workers` or `workers` that is not 1 (`docs/reference/profile.md`). |
@@ -62,41 +50,35 @@ prints cover every worker.
 | `IETS_PROVENANCE` | `provenance` | Boolean | on | Rewrites store paths and positions back to local trees (`docs/explanation/provenance.md`). |
 | `IETS_NIX_BIN_DIR` | `nix-bin-dir` | path | unset | Where the real Nix binaries live. Unset: the first one on `PATH` that is not iets, where a classic name stands for the Nix it was built with (`docs/reference/classic.md`, **Fallback rules**). |
 | `IETS_NO_FALLBACK` | `no-fallback` | Boolean | off | A classic command fails instead of running the real Nix (`docs/reference/classic.md`). |
-| `IETS_FETCHING` | | set = on | off | Set on the Nix subprocess that fetches a flake input, so a recursive fetch is an error, not a loop. |
+| `IETS_FETCHING` | | set = on | off | Set on the Nix subprocess that fetches a flake input, so a recursive fetch is an error. |
 | `IETS_OFFLINE` | | set = on | off | Any download is an error. A flake whose inputs the input store already holds still evaluates. |
 | `IETS_SESSION_ID` | | string | a new UUIDv7 | The `sid` of every JSON log record (`docs/reference/errors.md`). `eval-jobs` sets it on its workers. A settings error carries it too. |
-| | `fix-hashes` | `ask`, `always`, `never` | `ask` | See **fix-hashes** below. |
+| | `fix-hashes` | `ask`, `always`, `never` | `ask` | See **fix-hashes**. |
 
 `IETS_BUILD_ID` is not a setting. It is fixed when iets is built, and it
-ties the caches to the binary.
-
-The benchmark scripts that read the statistics knobs are listed in
-`ARCHITECTURE.md`, under "Testing".
+ties the caches to the binary. `ARCHITECTURE.md`, under "Testing", lists the
+benchmark scripts that read the statistics knobs.
 
 ### fix-hashes
 
 - `ask` asks `[y/n/a]` for each fix when stdin and stderr are terminals and
   the log format is not `internal-json`. `a` takes this fix and every fix
-  after it in the run. Anywhere else, `ask` only prints the hint.
+  after it in the run. Anywhere else, `ask` behaves like `never`.
 - `always` fixes without asking, for CI and agents.
 - `never` never fixes.
 
 When it may fix, `iets build` rewrites the hash of a fixed-output build
 that failed on it, and builds again. The old hash must appear once, in any
-spelling, in the local files the evaluation parsed. Store paths are never
-edited. A derivation with inputs is built as a resolved copy of itself,
-and the daemon reports that copy's mismatch on a line of its own; iets
-fixes that one too. iets stops when a hash it wrote mismatches again,
-because then the build is not reproducible.
+spelling, in the local files the evaluation parsed. Store paths and files
+read with `readFile` or `importJSON` are never edited. iets stops when a
+hash it wrote mismatches again, because then the build is not reproducible.
 
 Only a mismatch the daemon reports counts, and only for a fixed-output
-derivation of the closure the run is building, whose output hash is the
-hash the message names. A build log, a `builtins.trace` or any other text
-with the same words is ignored: a derivation must never be able to make
-iets rewrite a hash in your files. Each fix is a `hash-fixed` record
-(`docs/reference/errors.md`). After a mismatch, iets evaluates once more
-without the tracing cache, to list the files. Files read with `readFile`
-or `importJSON` are not searched.
+derivation of the closure the run is building. A build log, a
+`builtins.trace` or any other text with the same words is ignored, so a
+derivation can't make iets rewrite a hash in your files. Each fix is a
+`hash-fixed` record (`docs/reference/errors.md`), and
+`docs/how-to/fix-hashes.md` walks through one.
 
 ## `--iets-option`
 
@@ -113,16 +95,13 @@ iets build --iets-option fix-hashes always .#hello
 iets build --iets-option builder ssh-ng://buildhost .#hello
 ```
 
-Text for `source-map` is a whitespace-separated list.
+Text for `source-map` is a whitespace-separated list. `eval-jobs` passes the
+pairs on to every worker process.
 
-A command that starts a second iets passes the pairs on. `eval-jobs` puts
-them on the argv of every worker process, so a setting you gave the
-collector holds in the workers too.
+## `iets.toml`
 
-# `iets.toml`
-
-The settings are top-level keys with the names below, and `[lint]` is a
-table (`docs/reference/lints.md`).
+The settings are top-level keys with the names on this page, and `[lint]` is
+a table (`docs/reference/lints.md`).
 
 ```toml
 builder = "ssh-ng://buildhost"
@@ -135,26 +114,20 @@ source-map = ["/nix/store/…-source=/home/me/nixpkgs"]
 path-copy = "warn"
 ```
 
-The keys are flat, because there are only fourteen of them, and because
-they keep the names `--iets-option` takes. A value has its TOML type: a
-switch is `true` or `false`, a number is an integer, a path or a URL is a
-string, and `source-map` is an array of strings. A wrong type is an error
-that names the key and the file: `workers = "4"` is not read as 4.
+The keys are flat, because they keep the names `--iets-option` takes. A
+value has its TOML type: a switch is `true` or `false`, a number is an
+integer, a path or a URL is a string, and `source-map` is an array of
+strings. A wrong type is an error that names the key and the file:
+`workers = "4"` is not read as 4.
 
-Only iets reads this file. So you can send iets's builds somewhere else
-without touching `nix.conf`, which the real nix behind the classic
-fallback also reads.
+Because only iets reads this file, you can send iets's builds somewhere else
+without touching `nix.conf`. There is no machine-wide file: where iets builds
+and which token it uses belong to each user (`docs/explanation/history.md`
+says why). On NixOS, the NixOS module writes `iets.toml`.
 
-There is no machine-wide file. Where iets builds and which token it uses
-belong to each user (`docs/explanation/history.md` says why).
+### `iets.toml` files and order
 
-These files used to be `iets.conf`, in nix.conf's line syntax, before
-2026-09. iets no longer reads that file. On NixOS, the module below writes
-`iets.toml`, and the old file leaves `/etc` at the same switch.
-
-## `iets.toml` files and order
-
-Later wins.
+Each source overrides the ones before it.
 
 1. `$XDG_CONFIG_HOME/iets/iets.toml`, by default
    `~/.config/iets/iets.toml`: yours.
@@ -170,14 +143,13 @@ set lower down. A stale one costs a warning that its directory is gone.
 
 A missing file is skipped. A file that is there but cannot be read is an
 error. An **unknown key is an error** that names the file: this file is
-iets's own, so a name it does not know is a mistake, not a setting for some
-other tool.
+iets's own, so a name it does not know is a mistake.
 
 A `[lint]` table in your user file sets lint levels for every evaluation,
 below the project's (`docs/reference/lints.md`). `$IETS_CONFIG` and
 `--iets-option` refuse it; use `IETS_LINT` and `--lint` there.
 
-## The project file, and why it holds only `[lint]`
+### The project file, and why it holds only `[lint]`
 
 A project can have its own `iets.toml`: the nearest one found by walking up
 from the entry file or the flake directory (`docs/reference/lints.md`).
@@ -192,9 +164,9 @@ your account. A project file is not. It arrives with whatever repository
 you cloned, and running `iets` in a clone must never run its author's code
 or send your data to its author. So a project file may hold one thing, the
 `[lint]` table, which only selects diagnostics. Any other key is an
-**error** that names the key and the two files where you may set it. Not a
-warning: a repository that tries to set `nix-bin-dir` is worth stopping
-for.
+**error** that names the key and the two files where you may set it. It is
+not a warning, because a repository that tries to set `nix-bin-dir` is
+worth stopping for.
 
 | Key | What a repository could do with it |
 |:---|:---|
@@ -213,10 +185,10 @@ for.
 A project file that is also one of the two settings files (an evaluation
 started below `~/.config/iets`) is read as the settings file it is.
 
-## Keys
+### Keys
 
-Every key in the **File** column above, with the type and default given
-there, plus six keys that have no environment variable:
+The keys are those in the **File** column, with the type and default
+given there, and these, which have no environment variable:
 
 | Key | Type | Default |
 |:---|:---|:---|
@@ -228,31 +200,26 @@ there, plus six keys that have no environment variable:
 | `pure` | bool | `true` |
 
 **`pure`** is `pure-eval` for the native commands. Set it to `false` to
-get the old impure default back for every run. The classic names do not
-read it: each one keeps Nix's own rule, so a command line gives the same
-answer whichever binary `PATH` found. `--impure` is the per-run form.
-**`pure` is a user setting only** (see the project file above).
+make every run impure. The classic names don't read it: each keeps Nix's own
+rule, so a command line gives the same answer whichever binary `PATH` found.
+`--impure` is the per-run form. `pure` is a user setting only (see the
+project file).
 
 **`shell-gc-root`** controls the roots `nix-shell` and `nix develop` keep
 for themselves. When it is on, a shell links what it realised in
-`~/.cache/iets/roots`, so the next `nix collect-garbage` keeps it and the
-next shell builds nothing (`docs/explanation/caching.md`). When it is off,
-no root is made and no link is touched. Turn it off on a small disk: a dev
-shell's closure is large, and a root you did not ask for still pins it for
-the 30 days of the roots TTL.
+`~/.cache/iets/roots`, so the next `nix collect-garbage` keeps it
+(`docs/explanation/caching.md`). Turn it off on a small disk: a dev shell's
+closure is large, and the root pins it for the 30 days of the roots TTL.
 
-**`build-gc-root`** is the same switch for build outputs. `iets build`
-roots every path it prints, because you read those paths and use them
-after the run. `nix-build --no-out-link` and `nix build --no-link` keep a
-root in place of the symlink they were told not to make. That second part
-differs from Nix, which lets the output go
-(`docs/reference/divergences.md`), so `build-gc-root = false` gives you
-Nix's behaviour back.
+**`build-gc-root`** is the same switch for build outputs. `iets build` roots
+every path it prints, and `nix-build --no-out-link` and `nix build --no-link`
+keep a root in place of the symlink they were told not to make. Nix lets
+the output go (`docs/reference/divergences.md`), so `build-gc-root = false`
+gives you Nix's behavior back.
 
 Neither switch touches the roots you name yourself: `nix-instantiate
 --add-root`, `nix-build -o`, `eval-jobs --gc-roots-dir`, `plumbing build
---gc-root`, `print-dev-env --gc-root` and `iets build --fetch-to`. One
-root per thing.
+--gc-root`, `print-dev-env --gc-root` and `iets build --fetch-to`.
 
 **`fetch-max-size`** caps the decompressed bytes of one flake input
 download, together with what a sparse member of the archive expands to. A
@@ -260,15 +227,10 @@ stream that decompresses to more than 1000 times its size, past its first
 16 MiB, is refused too.
 
 **`builder`** is where derivations are built. iets has no local store of
-its own, so `auto` and an empty value both mean the local daemon. Every
-command reads it. `iets build --builder` and `iets print-dev-env --builder`
-win over it, and so does a classic `--store` or `--option store`.
-`nix-build`, `nix build`, `nix-shell` and `nix develop` have no flag of
-their own, and use it as it is. Registration is not affected: drvs and
-sources for `nix-instantiate --add-root`, its GC roots, and the
-`nix-build`/`nix build` out-links always go to the local daemon, and a
-remote `builder`'s outputs are copied back first
-(`docs/reference/classic.md`).
+its own, so `auto` and an empty value both mean the local daemon.
+`iets build --builder`, `iets print-dev-env --builder`, a classic `--store`
+and `--option store` win over it. Registration always goes to the local
+daemon (`docs/reference/classic.md`, "Where the builds go").
 
 `builder` may name several places. Each one says what it accepts, and a
 derivation goes to the first place that accepts it. The order is the
@@ -281,11 +243,10 @@ builder = [
 ]
 ```
 
-A place that leaves out `systems` or `features` accepts anything. So one
-entry that sets neither takes every derivation, which is what a single
-`builder` has always done: the store itself refuses what it cannot build,
-and only the store knows. A derivation that no place accepts is an error
-that names every place and what it accepts, before anything is uploaded.
+A place that leaves out `systems` or `features` accepts anything, as a
+single `builder` does: only the store knows what it can't build. A
+derivation that no place accepts is an error that names every place and what
+it accepts, before anything is uploaded.
 
 `--builder` takes one string, so it separates places with `;`
 (`--builder 'daemon; ssh-ng://buildhost'`), as nix.conf's `builders`
@@ -293,20 +254,19 @@ separates machines. A URL's own query string uses `&`, never `;`. A
 classic name talks to one store, like the tool it stands in for, so it
 takes the first place and warns about the rest.
 
-# `nix.conf`
+## `nix.conf`
 
 iets reads Nix's settings files as Nix 2.34.8 does:
 `globals.cc:loadConfFile` for finding them,
 `configuration.cc:parseConfigFiles` for the line syntax.
 
-## `nix.conf` files and order
+### `nix.conf` files and order
 
-iets applies these in order. Later wins.
+iets applies these in order, and each overrides the ones before it.
 
 1. `$NIX_CONF_DIR/nix.conf`, by default `/etc/nix/nix.conf`.
-2. The user files, lowest precedence first. Nix walks this list backwards
-   (`globals.cc:143`), so the **first** entry below has the highest
-   precedence:
+2. The user files. Nix loads this list from the end (`globals.cc:143`), so
+   the **first** entry has the highest precedence:
    - `$NIX_USER_CONF_FILES`, colon-separated, replaces the whole list;
      else
    - `$NIX_CONFIG_HOME/nix.conf` or `$XDG_CONFIG_HOME/nix/nix.conf`
@@ -316,23 +276,17 @@ iets applies these in order. Later wins.
 3. `$NIX_CONFIG`, read as the text of one more file.
 4. The `--option name value` pairs from the command line.
 
-A file that is missing or unreadable is skipped, not an error.
+A file that is missing or unreadable is skipped.
 
-## Line syntax
+### Line syntax
 
-- `#` starts a comment; the rest of the line is dropped.
-- `name = value`. The value is the rest of the line, with runs of
-  whitespace collapsed to one space.
-- `include path` and `!include path`, relative to the including file. A
-  missing `include` is an error (`file '...' included from '...' not
-  found`); a missing `!include` is silent.
-- `extra-<name> = value` appends to a list setting. For a setting that is
-  not a list, the pair is kept under its literal name, as Nix keeps it in
-  `unknownSettings`.
-- An unknown setting is kept. Nix warns about it, and so does iets, with
-  the same text (**What is applied**, class 5).
+The syntax is Nix's: `#` comments, `name = value`, `include path` (an error
+when missing) and `!include path` (silent when missing), and
+`extra-<name> = value` to append to a list setting. An unknown setting is
+kept, and iets warns about it with Nix's text (**How each setting is
+handled**, class 5).
 
-## Values
+### Values
 
 A Boolean is `true`/`yes`/`1` or `false`/`no`/`0`. A list is
 whitespace-separated. The defaults are Nix's: `store` is `auto`, `system`
@@ -352,28 +306,13 @@ with exit 1. iets gives the same text at the same place:
 | `max-jobs` | an integer, and `auto` | `configuration setting 'max-jobs' should be 'auto' or an integer` |
 | an integer | digits, with a `K`, `M`, `G` or `T` suffix for 2^10, 2^20, 2^30 or 2^40 | `setting 'NAME' has invalid value 'V'` |
 
-Nix holds some integer settings in 32 bits, so a value above 4294967295 is
-an error for them:
+Nix holds some integer settings in 32 bits (`cores`, `max-jobs`,
+`max-call-depth`, `download-attempts`, the `narinfo-cache-*` TTLs and a few
+more), so a value above 4294967295 is an error for them.
 
-- `build-poll-interval`
-- `cores`
-- `download-attempts`
-- `download-speed`
-- `eval-attrset-update-layer-rhs-threshold`
-- `eval-profiler-frequency`
-- `id-count`
-- `max-call-depth`
-- `max-jobs`
-- `max-substitution-jobs`
-- `narinfo-cache-meta-ttl`
-- `narinfo-cache-negative-ttl`
-- `narinfo-cache-positive-ttl`
-- `start-id`
-- `tarball-ttl`
+### How each setting is handled
 
-## What is applied
-
-Nix has about 130 settings. For iets, each one is in one of five classes.
+Each Nix setting falls in a class for iets. Other pages refer to the numbers.
 
 **1. iets reads it.**
 
@@ -381,7 +320,7 @@ Nix has about 130 settings. For iets, each one is in one of five classes.
 |:---|:---|
 | `store` | the last fallback for `builder` |
 | `system` | `builtins.currentSystem` under the classic names; the `system=` default of a `grpc://` URL. iets's own commands use the system iets was built for |
-| `pure-eval` | see **`pure-eval`** below |
+| `pure-eval` | see **`pure-eval`** |
 | `nix-path` | the search path after `-I`, when `NIX_PATH` is not in the environment. `--option nix-path` replaces `NIX_PATH`, and `--option extra-nix-path` adds to it, as in Nix (`configuration.cc:192`). Nix's channel defaults are not applied |
 | `show-trace` | the same as `--show-trace` |
 | `json-log-path` | `docs/reference/errors.md` |
@@ -390,7 +329,7 @@ Nix has about 130 settings. For iets, each one is in one of five classes.
 | `experimental-features` | under a classic name, whether `builtins` has `fetchTree`, `fetchClosure` and `outputOf`, as in Nix; iets's own commands have every feature (`docs/reference/divergences.md`). `parse-toml-timestamps` needs the flag everywhere |
 
 An old name is its setting: `build-cores` is `cores`, `binary-caches` is
-`substituters`, and so on for the 23 aliases of Nix 2.34.8.
+`substituters`, and so on for every alias in Nix 2.34.8.
 
 **2. It goes to the daemon.** `max-jobs`, `cores`, `keep-going`,
 `keep-failed`, `substitute`, `fallback` and `max-silent-time` go as the
@@ -422,7 +361,7 @@ A `grpc://` builder has no `SetOptions`. For it, the classic names give
 the same warning, with the reason `a grpc:// builder takes no settings;
 its URL has 'max-builds'`. `store` and `system` still apply.
 
-**3. It holds already.** iets says nothing.
+**3. It holds by construction.** iets says nothing.
 
 | Setting | Why it holds |
 |:---|:---|
@@ -438,8 +377,8 @@ its URL has 'max-builds'`. `store` and `system` still apply.
 Nix's default, from any file or from `--option`. Then `nix-instantiate`,
 `nix-build`, `nix-shell` and the `nix` subcommands fall back to the real
 nix, which applies it (`iets: falling back to nix-build: the setting
-'restrict-eval' is not implemented`). Two settings give the warning below
-instead of a fallback: `accept-flake-config`, because a flake seldom has a
+'restrict-eval' is not implemented`). Two settings give a warning instead
+of a fallback: `accept-flake-config`, because a flake seldom has a
 `nixConfig`, and `log-lines`, which changes no result. The commands that
 cannot fall back, iets's own and `nix-eval-jobs`, give one warning per
 setting and process, with the reason:
@@ -459,7 +398,7 @@ warning: setting 'restrict-eval' is ignored: iets has no restricted mode, so eve
 | `abort-on-warn` | `false` | `builtins.warn` never stops an evaluation |
 | `trace-verbose` | `false` | `builtins.traceVerbose` never prints |
 | `trace-function-calls` | `false` | iets has no function-call trace |
-| `eval-profiler` | `disabled` | iets has an evaluation profiler, under `IETS_PROFILE` (`docs/reference/profile.md`). This setting is not wired to it: it arrives through nix.conf, which no evaluator-wide knob reads yet. |
+| `eval-profiler` | `disabled` | iets has an evaluation profiler, under `IETS_PROFILE` (`docs/reference/profile.md`). This setting is not wired to it: it arrives through nix.conf, which no evaluator-wide knob reads. |
 | `debugger-on-trace`, `debugger-on-warn`, `ignore-try` | `false` | iets has no debugger |
 | `allow-unsafe-native-code-during-evaluation` | `false` | iets has no `builtins.exec` and no `builtins.importNative` |
 | `plugin-files` | empty | iets loads no plugins |
@@ -471,32 +410,32 @@ The record has the code `ignored-setting` (`docs/reference/errors.md`).
 Nix prints nothing for these, so the warning is a difference on stderr
 (`docs/reference/divergences.md`).
 
-**5. Nix does not know it either.** You get
-`warning: unknown setting 'NAME'`, Nix's own text, once per name, with the
-code `unknown-setting`. The value is kept, but it never reaches a daemon:
-the override map takes only the settings of Nix 2.34.8. So a `nix.conf`
-written for a fork of Nix, with settings of its own, gives these warnings
-and changes no result. Such a setting as a flag (`--NAME`) is an unknown
-flag: a usage error, or a fallback under a classic name.
+**5. Nix does not know it either.** You get `warning: unknown setting 'NAME'`,
+Nix's own text, once per name, with the code `unknown-setting`. The value is
+kept, but it never reaches a daemon: the override map takes only the settings
+of Nix 2.34.8. So a `nix.conf` written for a fork of Nix, with settings of its
+own, gives these warnings and changes no result. As a flag, such a setting
+(`--NAME`) is an unknown flag: a usage error, or a fallback under a classic
+name.
 
-Two limits:
+Some settings are out of reach:
 
 - A setting of the system `nix.conf` that is both a client and a store
   setting (`netrc-file`, `ssl-cert-file`, `http2`, the `download-*`
   group) acts in the daemon only. iets's own fetcher does not read it. Use
-  `NIX_SSL_CERT_FILE` for the CA bundle. The fetcher still retries a
+  `NIX_SSL_CERT_FILE` for the CA bundle. The fetcher retries a
   transient HTTP status as Nix does, with Nix's defaults: five attempts,
   from 250 ms, doubled each time, and from a minute for a 429. A 404, a
   410 and an authorisation failure are final.
 - `extra-platforms`, `system-features` and the other store settings change
-  what the *daemon* builds, not what iets evaluates.
+  what the *daemon* builds.
 
-# `pure-eval`
+## `pure-eval`
 
-`pure-eval` works as in Nix 2.34.8. An evaluation in this mode depends
-only on its locked inputs, and the answers and error messages are Nix's.
+`pure-eval` works as in Nix 2.34.8: the evaluation depends only on its
+locked inputs, and the answers and error messages are Nix's.
 
-## When it is on
+### When it is on
 
 The rules are Nix's, per command:
 
@@ -507,9 +446,10 @@ The rules are Nix's, per command:
 | `nix-eval-jobs` | `--flake`: on. Otherwise nix.conf, else off | `--impure` beats `--flake`; without `--flake`, `--pure-eval` and `--option pure-eval` |
 | the native commands (`iets eval`, `iets build`, …) | **on**, and the `pure` key in the user `iets.toml` changes it | `--pure-eval`, `--no-pure-eval`, `--impure`, `--option pure-eval`; `eval-jobs --flake` as nix-eval-jobs. nix.conf is read by `eval-jobs` only |
 
-`nix-shell --impure` is the shell's environment flag, not `pure-eval`.
+`nix-shell --impure` is the shell's environment flag and has nothing to do
+with `pure-eval`.
 
-## What it changes
+### What it changes
 
 - `builtins.currentSystem` and `builtins.currentTime` do not exist:
   `builtins ? currentSystem` is false, and `__currentSystem` is an
@@ -518,39 +458,34 @@ The rules are Nix's, per command:
 - The search path is empty, `-I` and `NIX_PATH` included, so
   `builtins.nixPath` is `[ ]` and `<x>` fails with `cannot look up '<x>'
   in pure evaluation mode`. `<nix/fetchurl.nix>` still works.
-- A file is readable only under a store path this evaluation allowed: one
-  it copied (`"${./x}"` of an allowed path, `builtins.path`,
-  `filterSource`), a `toFile` text, the flake's own tree and its inputs,
-  or a tree a fetch produced (`fetchTree`, `fetchTarball`). Everything
-  else is `access to absolute path '...' is forbidden in pure evaluation
-  mode (use '--impure' to override)`: `import` (the file on the command
-  line too), `readFile`, `readDir`, `readFileType`, `hashFile`,
-  `findFile` entries, string coercion and `builtins.path` of a local
-  path. `pathExists` answers `false` instead. A `.drv` this evaluation
-  wrote is not readable either, but `import drv.drvPath` works: Nix reads
-  it through the store, not the file accessor.
+- A file is readable only under a store path this evaluation allowed: one it
+  copied (`"${./x}"` of an allowed path, `builtins.path`, `filterSource`), a
+  `toFile` text, the flake's own tree and its inputs, or a tree a fetch
+  produced (`fetchTree`, `fetchTarball`). Everything else is `access to
+  absolute path '...' is forbidden in pure evaluation mode (use '--impure' to
+  override)`: `import` (the file on the command line too), `readFile`,
+  `readDir`, `readFileType`, `hashFile`, `findFile` entries, string coercion
+  and `builtins.path` of a local path. `pathExists` answers `false` instead. A
+  `.drv` this evaluation wrote is not readable either, but `import
+  drv.drvPath` works: Nix reads it through the store.
 - `builtins.storePath` is refused.
 - `fetchTarball` needs a `sha256`. `fetchTree` refuses an unlocked input
   (no `narHash` for `path` and `tarball`, no `rev` for the rest).
   `getFlake` refuses an unlocked reference, and prints `at «none»:0`
   because Nix does.
 
-`builtins.path` with a `sha256` whose store path already exists is allowed
-without reading the source, as in Nix.
+### What stays unsupported
 
-## What stays unsupported
-
-Classic mode falls back to the real nix on these, so the answer is still
-Nix's:
+Classic mode falls back to the real nix on these, so the answer is Nix's:
 
 - an unlocked `git` or `hg` input: Nix names it with query parameters
   (`?shallow=1`) that iets does not reproduce;
 - `getFlake` on a reference that may be locked, one with a `rev` or a
   `narHash`;
-- `restrict-eval`, which is a separate setting. It has no effect, and
-  gives one `ignored-setting` warning (**What is applied**, class 4).
+- `restrict-eval`, which is a separate setting. It has no effect, and gives
+  one `ignored-setting` warning (**How each setting is handled**, class 4).
 
-## Caches
+### Caches
 
 `pure-eval` is part of the tracing-cache key. The IR cache gives the right
 answer in both modes without it (`docs/explanation/caching.md`).

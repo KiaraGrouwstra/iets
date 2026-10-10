@@ -1,9 +1,9 @@
 # Commands
 
-This page covers every `iets` command: what you type, the flags, what it
-prints on stdout and stderr, and the exit codes.
+Every `iets` command: what you type, the flags, what it prints on stdout and
+stderr, and how it exits.
 
-Other pages cover the rest:
+Other things have their own pages:
 
 - the classic Nix names (`nix-instantiate`, `nix-build`, `nix-shell`,
   `nix-eval-jobs`, `nix`): `docs/reference/classic.md`;
@@ -44,8 +44,8 @@ stdout and exit 0.
   progress, the `--timings` lines, the `IETS_STATS` lines, a classic
   fallback note. With `--log-format internal-json`, every stderr line is
   one `@nix ` JSON record (`docs/reference/errors.md`).
-- **Progress.** On a terminal you get a status line that shows what runs
-  now: eval, fetches, substitutions, uploads, builds. On a pipe you get a
+- **Progress.** On a terminal you get a status line that shows what is
+  running: eval, fetches, substitutions, uploads, builds. On a pipe you get a
   `⏵` line after 5 s and then every 30 s. A transfer with no new bytes for
   10 s says `no data for N`. `--log-format bar` and `raw` let you choose.
   Under a Nix name, a pipe gets Nix's `copying path …...` lines instead.
@@ -84,7 +84,7 @@ section lists.
 | `--no-ir-cache` | do not read or write the compiled-file cache |
 | `--no-cache` | do not read or write either of them, as `IETS_CACHE=0` |
 | `--cache-dir DIR` | keep the caches in `DIR/trace`, `DIR/ir` and `DIR/inputs` |
-| `--strict` | evaluate the whole value, not the top level only |
+| `--strict` | evaluate the whole value |
 | `--json` | print the value as JSON |
 | `--raw` | print a string as it is |
 | `--dump-drvs DIR` | write the ATerm of each derivation this run made to `DIR` |
@@ -95,10 +95,9 @@ section lists.
 | `--readonly-mode` | holds for `eval`, which writes to no store; one `ignored-flag` warning on a command that writes to the store |
 | `--experimental-features F`, `--extra-experimental-features F` | every feature is always on but `parse-toml-timestamps`, which this turns on |
 
-You cannot use `-E` and a `FILE` together: that is the usage error
-`-E and FILE cannot be combined`. Otherwise the last input wins.
-`-f`/`--file` works exactly like the positional argument. It is a native
-flag only: under a classic name the arguments stay Nix's, and there
+`-E` and a `FILE` together are the usage error
+`-E and FILE cannot be combined`. Otherwise the last input wins. Under a
+classic name the arguments stay Nix's, so `-f` is native only:
 `nix-eval-jobs -f` is an unknown flag.
 
 `-A PATH` and a flake fragment call functions as they walk, the way Nix
@@ -107,7 +106,7 @@ does. So if a file's top level is a function, as nixpkgs' own
 attribute:
 
 ```
-$ iets eval $nixpkgs -A hello.name
+$ iets eval --impure $nixpkgs -A hello.name
 "hello-2.12.3"
 ```
 
@@ -138,9 +137,11 @@ Evaluate and print the value. It takes the shared flags.
 - `--raw` turns the value into a string and prints the bytes with no
   quotes and no newline at the end.
 
-stdout: the value, with one newline at the end except under `--raw`.
-stderr: warnings, lint lines, `--timings`.
-Exit: 0, 1 on an evaluation error, 2 on a usage error.
+Streams and exit codes:
+
+- stdout: the value, with one newline at the end except under `--raw`.
+- stderr: warnings, lint lines, `--timings`.
+- Exit: 0, 1 on an evaluation error, 2 on a usage error.
 
 ## `build`
 
@@ -158,8 +159,8 @@ every derivation in it gets built. So `iets build .#checks` builds all the
 checks. The walk is `nix-build`'s: names in order, a nested set only with
 `recurseForDerivations = true`, and a list always.
 
-One rule comes first: in a set that has a member named after your system,
-iets goes into that member. That is how a flake lays out `checks`,
+In a set that has a member named after your system, iets goes into that
+member first. That is how a flake lays out `checks`,
 `packages` and `devShells`. To build for another system, name it in full:
 `.#checks.aarch64-linux`. Evaluation is strict, so an attribute that fails
 to evaluate stops the run before anything builds.
@@ -177,13 +178,13 @@ to evaluate stops the run before anything builds.
 
 It also takes the shared evaluation flags.
 
-stdout: one output path per line, in root order. With `--json`, the
-outcomes as one JSON object instead. With `--dry-run --json`, the plan.
-stderr: `building '<drv>'…` for each build, the daemon's log lines, the
-`--dry-run` plan text, and after several roots one last line,
-`N built, M failed: ATTR, …`. Nothing the daemon sends reaches stdout.
-Exit: 0; 1 on an evaluation or daemon error; 100, 101, 102 or 104 on a
-failed build (`docs/reference/errors.md`); 2 on a usage error.
+- stdout: one output path per line, in root order. With `--json`, the
+  outcomes as one JSON object instead. With `--dry-run --json`, the plan.
+- stderr: `building '<drv>'…` for each build, the daemon's log lines, the
+  `--dry-run` plan text, and after several roots one last line,
+  `N built, M failed: ATTR, …`. Nothing the daemon sends reaches stdout.
+- Exit: 0; 1 on an evaluation or daemon error; 100, 101, 102 or 104 on a
+  failed build (`docs/reference/errors.md`); 2 on a usage error.
 
 **Several roots.** Each root gets its own verdict. The build keeps going
 past a failure, and the exit code combines the failures the way Nix does.
@@ -207,26 +208,26 @@ is the error code `no-output` on stderr and a non-zero exit. That covers:
 - a build the builder calls a success but has no output path for;
 - an `--out NAME` the derivation does not have.
 
-So a script that captures stdout, such as a deploy script, gets a path or a
-failure. Never silence and success.
+A script that captures stdout gets a path or a failure, never an empty
+success.
 
 The `--dry-run` text is the same as Nix's. The `--dry-run --json` object is
 `{willBuild, willSubstitute, unknown, downloadSize, narSize}`, and
 `iets plumbing missing` prints the same object. A `grpc://` builder cannot
 answer this question, so `--dry-run` is a usage error there.
 
-**The paths outlive the run.** You will use the printed paths after the
-run, so a `nix collect-garbage` in between must not delete them. Every
-printed output gets a link in iets's roots store, keyed on the working
-directory, the installable and the output. The same command replaces its
-own roots (`docs/explanation/caching.md`). `build-gc-root = false` keeps
-none. Two cases never keep a root: `--fetch-to DIR`, which already has the
+**The paths outlive the run.** A `nix collect-garbage` between the run and
+your use of the printed paths must not delete them, so every printed
+output gets a link in iets's roots store, keyed on the working directory,
+the installable and the output. The same command replaces its own roots
+(`docs/explanation/caching.md`). `build-gc-root = false` keeps none. Two
+cases never keep a root: `--fetch-to DIR`, which already has the
 bytes outside the store, and a remote builder, whose outputs are not in the
 local store.
 
 The `fix-hashes` setting rewrites the hash of a fixed-output build that
-failed on it (`docs/reference/settings.md`). For where builds go and how
-the closure travels, see `docs/how-to/build-remotely.md`.
+failed on it (`docs/reference/settings.md`). Where builds go and how the
+closure travels is in `docs/how-to/build-remotely.md`.
 
 ## `search`
 
@@ -252,15 +253,10 @@ iets search --expr 'import <nixpkgs> {}' git gui
 | `--pretty`, `--no-pretty` | indent the JSON, or do not; default: a terminal on stdout |
 | `-f FILE`, `--file FILE` | search a file instead |
 | `--expr EXPR` | search an expression instead |
-| `--arg N EXPR`, `--argstr N STR`, `-I P=PATH` | as above |
-| `--impure`, `--pure-eval`, `--option N V` | as above |
-| `--timings` | report the index cache on stderr; native name only |
-| `--workers N` | evaluator threads; native name only |
-| `--no-tracing-cache` | do not use the index, which the tracing cache holds; native name only |
-| `--no-ir-cache` | do not use the compiled-file cache; native name only |
-| `--no-cache` | do not use either of them; native name only |
-| `--cache-dir DIR` | keep the stores in `DIR`; native name only |
-| `--log-format F`, `--show-trace` | as above |
+| `--arg N EXPR`, `--argstr N STR`, `-I P=PATH` | as for `eval` |
+| `--impure`, `--pure-eval`, `--option N V` | as for `eval` |
+| `--timings`, `--workers N`, `--no-tracing-cache`, `--no-ir-cache`, `--no-cache`, `--cache-dir DIR` | as for `eval`; native name only |
+| `--log-format F`, `--show-trace` | as for `eval` |
 
 The regular expressions are POSIX extended and ignore case, as in Nix. With
 no regex at all you get the usage error `Must provide at least one regex! To
@@ -295,56 +291,46 @@ installable, as in Nix.
   that is a function, such as nixpkgs' own `default.nix`, works as it is.
   `nix search` does not do that.
 
-Over the pinned nixpkgs, both find the same 112,215 packages, with the same
-pnames, versions and descriptions.
-
 A flake installable searches `packages.<system>` and
 `legacyPackages.<system>`. A fragment (`FLAKE#gnome3`) searches
 `packages.<system>.gnome3`, `legacyPackages.<system>.gnome3` and `gnome3`,
 each one that exists.
 
-**Output.** Text, one block per result, with an empty line between blocks:
+**Output.** One block per result, with an empty line between blocks:
 
 ```
 * legacyPackages.x86_64-linux.hello (2.12.3)
   Program that produces a familiar, friendly greeting
 ```
 
-The matched text is highlighted. Nix writes the colour codes to stdout
+The matched text is highlighted. Nix writes the color codes to stdout
 even when stdout is not a terminal, so iets does too: a pipe keeps the
-colours. `--json` prints one object per result, keyed by attribute path,
+colors. `--json` prints one object per result, keyed by attribute path,
 with `pname`, `version` and `description`. The keys are sorted, indented
 with `--pretty`, and on one line with `--no-pretty`.
 
-Nix prints each result as it finds it, with an `evaluating '<attr>'` line
-on stderr as it goes. iets builds the whole index first, because the cache
-needs it, and prints after. It has no progress lines.
+iets builds the whole index first, because the cache needs it, and prints
+after. Nix prints each result as it finds it.
 
-stdout: the blocks, or the JSON object.
-stderr: warnings; the `--timings` line.
-Exit: 0; 1 when nothing matches and there is no `--json` (error code
-`no-results`, hint `use fewer or shorter regexes`); with `--json`, no
-match is `{}` and exit 0; 2 on a usage error.
+- stdout: the blocks, or the JSON object.
+- stderr: warnings; the `--timings` line.
+- Exit: 0; 1 when nothing matches and there is no `--json` (error code
+  `no-results`, hint `use fewer or shorter regexes`); with `--json`, no
+  match is `{}` and exit 0; 2 on a usage error.
 
 **The index cache.** The index is the list of `(attribute path, pname,
 version, description)` that the walk found. The tracing cache keeps it,
 keyed on the installable, the `--arg`s, the search path, `pure-eval` and
 the build id. The regexes are not in the key, so any search over a package
-set that did not change is a hit. For the pinned nixpkgs, a hit takes
-0.08 s where an evaluation takes 6.5 s, and the index is 4 MB.
+set that did not change is a hit. When last measured on a pinned nixpkgs,
+a hit took 0.08 s where an evaluation took 6.5 s, and the index was 4 MB.
 
-`iets search` takes the same cache and worker flags as `iets eval`:
-`--no-tracing-cache` evaluates again, `--no-ir-cache` compiles every import
-from source, `--no-cache` does both, `--cache-dir DIR` moves the stores,
-`--workers N` sets the evaluator threads, and `--timings` reports the hit
-or the miss. `IETS_CACHE=0` and `IETS_CACHE_DIR`
-(`docs/reference/settings.md`) do the same as settings. The classic
-`nix search` takes none of these flags, because its command line is Nix's,
-but the environment variables work under both names.
+`--timings` reports the hit or the miss. `IETS_CACHE=0` and
+`IETS_CACHE_DIR` (`docs/reference/settings.md`) work under both names. The
+classic `nix search` takes none of the cache flags.
 
-Nix keeps its own evaluation cache only for a flake installable. With
-`--expr` or `--file` it evaluates every time. iets caches both. The whole
-`^ --json` output, 18.8 MB, is the same on both sides, byte for byte.
+Nix caches only a flake installable. iets caches `--expr` and `--file` too.
+The `^ --json` output is the same on both sides, byte for byte.
 
 ## `diff`
 
@@ -358,9 +344,9 @@ It builds nothing and writes nothing to the store. A derivation that an
 evaluation made is read from memory. Any other derivation is read from
 `/nix/store`.
 
-The first form takes two installables. Each is a `.drv` store path, a
-local flake reference (`.#hello`) or a Nix file, and each must
-evaluate to exactly one derivation. The second form evaluates one
+The first form takes two installables. Each is a `.drv` store path, a local
+flake reference (`.#hello`) or a Nix file, and each must evaluate to exactly
+one derivation. The second form evaluates one
 expression, file or flake twice, and takes a different attribute each
 time.
 
@@ -369,7 +355,7 @@ time.
 | `--depth N` | walk `N` levels of input derivations; default 2 |
 | `--all` | walk every level |
 | `--json` | print one JSON object instead of text |
-| `--closure` | compare the output closures, not the derivations |
+| `--closure` | compare the output closures |
 | `--builder URL` | the store `--closure` reads; default `daemon` |
 | `-f FILE`, `--file FILE` | the same as the positional side |
 | `-I P=PATH`, `--arg N E`, `--argstr N S`, `--option N V`, `--impure` | as for `eval`; they apply to both sides |
@@ -377,7 +363,7 @@ time.
 
 **Exit codes.** 0 when the two are equal, 1 when they differ, and 2 for a
 usage error, a failed evaluation, a derivation that cannot be read, or any
-other failure. This follows `diff(1)`. Every error still has its code from
+other failure. This follows `diff(1)`. Every error has its code from
 `docs/reference/errors.md`, and its record under
 `--log-format internal-json`.
 
@@ -392,7 +378,7 @@ other failure. This follows `diff(1)`. Every error still has its code from
   the value of each variable both sides set. A value of several lines,
   such as a build script, shows as a short line diff without the common
   start and end. The variables named after an output (they hold that
-  output's path) and `name` repeat what the lines above already say, so
+  output's path) and `name` repeat what the other lines already say, so
   they are left out. `name` still shows when either side sets it to
   something other than the derivation name;
 - the structured attributes (`__json`), as one value;
@@ -403,8 +389,8 @@ other failure. This follows `diff(1)`. Every error still has its code from
   left over is added or removed. When both sides have the same input but
   want different outputs of it, the pair gets a `wanted` field.
 
-The walk stops after `--depth` levels, and at a pair it has already shown.
-Each stop prints the input's name and `(stopped: …; use --all)`.
+The walk stops after `--depth` levels, and at a pair it has already shown,
+printing `(stopped: …; use --all)`.
 
 **The text.** `-` is the first side and `+` the second. The lines under a
 pair are its own differences. An indented `- …`/`+ …` pair is an input
@@ -431,8 +417,7 @@ $ iets diff -A a -A b ./demo.nix
 Two equal derivations print `A and B are the same derivation`.
 
 **The JSON.** `--json` prints one object. Every difference is one entry in
-`changes`, whatever part it is in. So a program filters on `what`, and does
-not need to know a shape for each part.
+`changes`, so a program filters on `what`.
 
 | Key | Value |
 | --- | --- |
@@ -440,7 +425,7 @@ not need to know a shape for each part.
 | `equal` | top level only: true when nothing differs |
 | `changes` | every local difference, in order |
 | `inputDrvs` | the input derivations that differ, each the same object again, one level deeper; absent when none differs |
-| `cut` | why the walk stopped here: `depth` or `shown above`; absent when it did not stop |
+| `cut` | why the walk stopped here: `depth` or `shown earlier`; absent when it did not stop |
 
 An entry of `changes` is `{what, key, a, b}`:
 
@@ -510,7 +495,7 @@ $ iets prefetch default.nix -A mypkg.cargoDeps   # a cargoHash or vendorHash
 
 The expression form also takes the shared evaluation flags.
 
-**The two forms.** An argument that starts with `https://`, `http://` or
+**The forms.** An argument that starts with `https://`, `http://` or
 `file://` is a URL. Anything else is an installable.
 
 - `iets prefetch URL` downloads the URL and hashes it. Without `--unpack`,
@@ -522,11 +507,10 @@ The expression form also takes the shared evaluation flags.
 - `iets prefetch -E EXPR`, `iets prefetch FILE -A ATTR` and
   `iets prefetch FLAKEREF#ATTR` evaluate to one fixed-output derivation and
   build it. The hash in the expression does not matter, so `hash = ""`,
-  `lib.fakeHash` and last month's hash all work. There is no `-f FILE`: the
+  `lib.fakeHash` and an out-of-date hash all work. There is no `-f FILE`: the
   file is a positional argument, as for `iets eval` and `iets build`.
 
-**How the expression form works.** iets changes the derivation, not your
-file. It replaces the derivation's fixed output hash with the all-zero
+**How the expression form works.** iets leaves your file alone. It replaces the derivation's fixed output hash with the all-zero
 hash of the same algorithm, and builds that on the `builder` setting
 (`docs/reference/settings.md`). The build then fails with:
 
@@ -536,11 +520,10 @@ hash mismatch in fixed-output derivation '…':
      got:    sha256-GzabkpW8…
 ```
 
-The `got` hash is the answer. The fetcher runs exactly as it would, so this
-is the hash the real build will check. iets expects the mismatch, so it
-never reports it as an error, on stderr or in the `internal-json` stream.
-An `outputHash` that the builder reads itself keeps the value from your
-expression. `__structuredAttrs` works too.
+The `got` hash is the answer. The fetcher runs as it would, so this is the
+hash the real build will check. iets expects the mismatch and never reports
+it as an error. An `outputHash` that the builder reads itself keeps the
+value from your expression. `__structuredAttrs` works too.
 
 **Output.** Without `--json`, the SRI hash, as one line on stdout. With
 `--json`, one object:
@@ -551,26 +534,19 @@ expression. `__structuredAttrs` works too.
 | expression | `{"hash": "sha256-…", "drvPath": "/nix/store/….drv"}` |
 
 `drvPath` is the changed derivation, the one that was built. The one your
-expression evaluates to still has the hash your file names.
+expression evaluates to has the hash your file names.
 
-Exit: 0 with a hash, 1 when the download or the build failed, 2 for a bad
-command line.
+- Exit: 0 with a hash, 1 when the download or the build failed, 2 for a bad
+  command line.
 
 **How it differs from Nix.** `nix store prefetch-file` and
-`nix-prefetch-url` add the file to the store and print its path. iets has
-no store of its own, so it prints the hash and writes nothing. That is why
-it has no `--name`, `--executable` or `--expected-hash`, and why the
-classic names still fall back to the real Nix
-(`docs/reference/classic.md`). The hash is the one Nix gives: for a URL,
-the `hash` field of `nix store prefetch-file --json`, in SRI; for an
-expression, the `got` hash of the build. `--unpack` differs in two more
-ways:
-
-- For a tarball that holds a single file, Nix hashes that file, and iets
-  hashes the directory that holds it. Both look inside a single directory.
-- iets builds the tree from the archive with git's rules (directories,
-  symlinks, and files with one mode bit). That is the tree `fetchTarball`
-  hashes (`docs/explanation/flakes-and-sources.md`).
+`nix-prefetch-url` add the file to the store and print its path. iets has no
+store of its own, so it prints the hash and writes nothing, and the classic
+names fall back to the real Nix (`docs/reference/classic.md`). The hash is
+the one Nix gives. With `--unpack`, a tarball that holds a single file is
+hashed by Nix as that file, and by iets as the directory that holds it. iets
+builds the tree with git's rules, which is what `fetchTarball` hashes
+(`docs/explanation/flakes-and-sources.md`).
 
 `iets plumbing fetch` is the same operation, and always prints the object.
 
@@ -607,7 +583,7 @@ element that is not an identifier (`names."7zip"`, where 2.35.2 writes
 | `--chunks M --chunk N`, `--chunk-depth D` | iets only | Evaluate part `N` (0 to M-1) of `M` parts of the tree, split at depth `D` (default 2). |
 | `--impure` | identical | Turns off the pure evaluation that `--flake` implies. |
 | `--show-trace` | accepted | The trace is always in the error text. With `--log-format internal-json` it also goes into the error records, as in Nix. |
-| `--option k v` | as for `eval` | `allow-import-from-derivation` and `eval-cache` hold already: iets never builds during evaluation and has no Nix evaluation cache. `restrict-eval`, the other client settings iets has nothing for, and every store setting (substituters) give one `ignored-setting` warning. |
+| `--option k v` | as for `eval` | `allow-import-from-derivation` and `eval-cache` hold on their own: iets never builds during evaluation and has no Nix evaluation cache. `restrict-eval`, the other client settings iets has nothing for, and every store setting (substituters) give one `ignored-setting` warning. |
 | `--quiet`, `--verbose`, `--debug` | `--quiet` only | `--quiet` drops the stderr summary. `--verbose` and `--debug` give one `ignored-flag` warning: iets has one log level. |
 | `--log-format F` | accepted | `internal-json`: stderr is Nix's `@nix {...}` records, with a `code` and a `hint` on each error. `raw`, `raw-with-logs`, `bar`, `bar-with-logs`: plain lines. |
 | `--max-jobs N` | holds | It limits the builds of an import from derivation, and iets never builds during evaluation. |
@@ -616,10 +592,10 @@ element that is not an identifier (`names."7zip"`, where 2.35.2 writes
 | `--override-input`, `--override-flake` | error | iets evaluates a flake from a complete lock file only. |
 | `--repair` | error | iets never repairs store paths. |
 
-stdout: one JSON line per job or error.
-stderr: the summary line, unless `--quiet`.
-Exit: 0 when only jobs fail (their errors are in the job lines); 1 on a
-fatal error, such as a stack overflow.
+- stdout: one JSON line per job or error.
+- stderr: the summary line, unless `--quiet`.
+- Exit: 0 when only jobs fail (their errors are in the job lines); 1 on a
+  fatal error, such as a stack overflow.
 
 ### The line schema
 
@@ -654,7 +630,7 @@ An error line:
 {"attr":"d","attrPath":["d"],"error":"error:\n       … while calling the 'throw' builtin\n ...","fatal":false}
 ```
 
-The error text has no colour codes. It is also printed on stderr.
+The error text has no color codes. It is also printed on stderr.
 
 ### Instantiation
 
@@ -670,18 +646,11 @@ time.
 
 `--check-cache-status` works as in nix-eval-jobs 2.35:
 
-1. If all outputs of the job are valid, the status is `local`.
-2. If all missing outputs can be substituted, it is `cached`, and they are
-   in `neededSubstitutes`.
-3. Else it is `notBuilt`. iets walks the input derivations from the job's
-   `.drv`. A derivation with a missing output that cannot be substituted is
-   a needed build (in post-order, `inputDrvs` in store-path order), and its
-   inputs are walked too. A derivation whose missing outputs can be
-   substituted adds them to `neededSubstitutes`, and its inputs are not
-   walked.
-
-A substituter query that fails counts as a miss. `neededSubstitutes` is
-sorted by name, then by path, as in nix-eval-jobs.
+The status is `local` when all outputs are valid, `cached` when the missing
+ones can be substituted (they are in `neededSubstitutes`), and `notBuilt`
+otherwise. For `notBuilt`, iets walks the input derivations and lists each
+one with an unsubstitutable missing output in `neededBuilds`. A failed
+substituter query counts as a miss.
 
 ### Constituents
 
@@ -699,12 +668,10 @@ against the other jobs:
   prints the two jobs with `Dependency cycle: a <-> b`, and the rest with
   `Skipping aggregate because of a dependency cycle`.
 
-An aggregate with no broken constituent gets a new `.drv`. Each
-constituent's `.drv` becomes an `inputDrvs` entry with its first output, and
-the input-addressed output paths are computed again. iets writes the new
-`.drv` through the daemon and roots it, and `drvPath` and `outputs` change
-to match. `namedConstituents` is emptied. A broken constituent makes the
-line `error: "name: why\n..."`.
+An aggregate with no broken constituent gets a new `.drv`, with each
+constituent as an input. iets writes it through the daemon and roots it, and
+`drvPath` and `outputs` change to match. A broken constituent makes the line
+`error: "name: why\n..."`.
 
 ### The memory limit
 
@@ -717,17 +684,16 @@ attribute paths among them. When a worker's peak memory goes above the
 limit, it registers its open batch and exits, and a new worker takes its
 place. A worker that dies is reported as nix-eval-jobs reports it.
 
-Cache status and constituents run in the main process, from the lines,
-because the `.drv`s are in the store by then. `--chunks` and
-`--max-memory-size` work together. `--max-memory-size 0` is one process
-with no limit, which cannot finish a jobset larger than the machine.
+Cache status and constituents run in the main process, from the lines.
+`--max-memory-size 0` is one process with no limit, which cannot finish a
+jobset larger than the machine.
 
-Three differences stay:
+iets differs from nix-eval-jobs in these ways:
 
 - **Order** is completion order, as in nix-eval-jobs, and depth-first in
   name order with `--max-memory-size 0`. Sort by `attrPath` to compare.
-- **Error text** is iets's (`error: msg`, `at file:line:col`, `… trace`
-  lines), not Nix's. The same attributes fail; the text differs.
+- **Error text** is iets's own (`error: msg`, `at file:line:col`, `… trace`
+  lines). The same attributes fail as in Nix; the text differs.
 - **`system`** comes from the `.drv` in memory, or from `/nix/store` for an
   imported `.drv`. nix-eval-jobs reads it back from the store after it
   writes it.
@@ -746,7 +712,7 @@ prints, byte for byte.
 | `--builder URL` | the Nix daemon: `daemon` (default), `unix:///path`, `ssh-ng://[user@]host` |
 | `--gc-root PATH` | link `PATH` to the environment's store path and register it as an indirect GC root |
 | `--json` | print what `nix print-dev-env --json` prints |
-| `--entry-to FILE` | write the path of this run's cache entry to FILE; see below |
+| `--entry-to FILE` | write the path of this run's cache entry to FILE (described after this table) |
 | `--workers N`, `--timings`, `--cache-dir DIR` | as for `eval` |
 | `--no-tracing-cache`, `--no-ir-cache`, `--no-cache` | as for `eval` |
 | `--log-format F`, `--show-trace` | as for `eval` |
@@ -763,29 +729,23 @@ Without `--gc-root`, this command keeps no root: you choose the path here.
 `nix develop` has no such flag, so it keeps a link in iets's roots store
 instead (`docs/explanation/caching.md`).
 
-stdout: the bash. Variable assignments, `export`s, `declare -a` and
-`declare -A`, function definitions, the `PATH` and `XDG_DATA_DIRS`
-prepends, `NIX_BUILD_TOP` from `mktemp`, and `eval "${shellHook:-}"`. No
-`exit`, no `set -e`, no `exec`.
-stderr: errors, and the build log lines with an `iets: ` prefix on a
-failure, or as they come with `--timings`.
-Exit: 0, or non-zero on any error. Then stdout is empty, so an `eval` of
-the output leaves your environment alone.
+- stdout: the bash. Variable assignments, `export`s, `declare -a` and
+  `declare -A`, function definitions, the `PATH` and `XDG_DATA_DIRS`
+  prepends, `NIX_BUILD_TOP` from `mktemp`, and `eval "${shellHook:-}"`. No
+  `exit`, no `set -e`, no `exec`.
+- stderr: errors, and the build log lines with an `iets: ` prefix on a
+  failure, or as they come with `--timings`.
+- Exit: 0, or non-zero on any error. Then stdout is empty, so an `eval` of
+  the output leaves your environment alone.
 
 `--entry-to FILE` writes the path of the tracing-cache entry this run
 reads to `FILE`, whether the run hit it or wrote it. Pass that path to
-`iets cache paths` to get the paths a watcher must watch. You do not need
-to work out the key again from the same flags.
-`docs/how-to/use-with-direnv.md` has the `.envrc`.
-
-A `__structuredAttrs` shell gets its `.attrs.sh` and `.attrs.json` written
-next to the GC root (`PATH-attrs/`), or under
-`$TMPDIR/iets-dev-env-<pid>/` without one.
+`iets cache paths` to get the paths a watcher must watch
+(`docs/how-to/use-with-direnv.md`).
 
 Not supported: a shell whose builder is not `bash`, a content-addressed
 shell, and the `--redirect`, `--profile`, `--command` and `--phase` flags
-of `nix develop`. To set it up for direnv, see
-`docs/how-to/use-with-direnv.md`.
+of `nix develop`.
 
 ## `lint`
 
@@ -802,12 +762,11 @@ current directory) would use, then the scope and its roots.
 | `--lint-root DIR` | add a lint root |
 | `--lint-scope root\|all` | report sites in the lint roots only, or everywhere |
 
-stdout: one line per lint (name, level, family, hook, trigger), then one
-`scope: …` line.
-Exit: 0, 2 on a usage error. `list` is the only subcommand.
+- stdout: one line per lint (name, level, family, hook, trigger), then one
+  `scope: …` line.
+- Exit: 0, 2 on a usage error. `list` is the only subcommand.
 
-The registry, the levels and the scope rules are in
-`docs/reference/lints.md`.
+The registry and the scope rules are in `docs/reference/lints.md`.
 
 ## `parse`
 
@@ -824,11 +783,11 @@ the list of files from stdin.
 | `--json` | print each tree as one line of JSON (`docs/reference/syntax-tree.md`) |
 | `--log-format F` | `internal-json`: stderr is Nix's `@nix {...}` records |
 
-stdout: the tree of each file as S-expressions. With `--json`, one line of
-JSON for each file, with the kind and the byte span of each node. With
-`-q`, nothing; stderr gets one summary line,
-`N files, N bytes, N errors, T s`.
-Exit: 0, 1 when a file failed to parse, 2 on a usage error.
+- stdout: the tree of each file as S-expressions. With `--json`, one line of
+  JSON for each file, with the kind and the byte span of each node. With
+  `-q`, nothing; stderr gets one summary line,
+  `N files, N bytes, N errors, T s`.
+- Exit: 0, 1 when a file failed to parse, 2 on a usage error.
 
 ## `cache`
 
@@ -872,10 +831,10 @@ existed, and an mtime cannot answer that. The list stops at 500 paths,
 with a note on stderr. A command names its own entry with
 `--entry-to FILE`.
 
-Exit: 0, 2 on a usage error, 1 when `ENTRY` is not a cache entry. `gc`,
-`dump` and `paths` are the only subcommands.
+- Exit: 0, 2 on a usage error, 1 when `ENTRY` is not a cache entry. `gc`,
+  `dump` and `paths` are the only subcommands.
 
-The caches are explained in `docs/explanation/caching.md`.
+`docs/explanation/caching.md` explains the caches.
 
 ## `help` and the topics
 
@@ -884,10 +843,8 @@ iets help [COMMAND | TOPIC]
 iets COMMAND --help
 ```
 
-`iets help` alone prints the overview: the commands, and the topics below.
-`iets help COMMAND` prints that command's flags. `iets help TOPIC` prints a
-documentation page. The binary carries the pages, so you do not need a
-`docs/` directory.
+`iets help` alone prints the commands, then the topics. `iets help COMMAND`
+prints that command's flags. `iets help TOPIC` prints a documentation page.
 
 If a name is both a command and a topic, you get the command's help and a
 note that the page exists. Ask for `reference/NAME` to get the page.
@@ -910,10 +867,10 @@ note that the page exists. Ask for `reference/NAME` to get the page.
 | `fuzz` | `docs/reference/fuzz.md` |
 | `library` | `docs/reference/library.md` |
 
-The binary carries the reference pages only. The tutorial, the how-to
-guides and the explanations are in the repository, under `docs/`.
-`iets help` names each one and its path.
+The binary carries the reference pages only. `iets help` names the
+tutorial, the how-to guides and the explanations, which are under `docs/`.
 
-stdout: the overview, the command's help, or the page.
-Exit: 0; 2 for a name that is neither a command nor a topic, with a
-suggestion when it is close to one.
+- stdout: the overview, the command's help, or the page.
+- Exit: 0; 2 for a name that is neither a command nor a topic, with a
+  suggestion when it is close to one.
+  

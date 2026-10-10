@@ -1,7 +1,7 @@
 # The syntax tree as JSON
 
 `iets parse --json` prints the syntax tree of a Nix file as JSON. This page
-lists the kinds of node, their keys and their spans.
+lists the node kinds, their keys and their spans.
 
 ```
 $ printf 'a: a.b or 1' > t.nix
@@ -9,7 +9,7 @@ $ iets parse --json t.nix
 {"file":"t.nix","root":{"kind":"lambda","start":0,"end":11,"arg":"a","formals":null,"ellipsis":false,"body":{"kind":"select","start":3,"end":11,"subject":{"kind":"var","start":3,"end":4,"name":"a"},"path":["b"],"default":{"kind":"int","start":10,"end":11,"value":1}}}}
 ```
 
-You get one line for each file that parses. The line is one JSON object:
+Each file that parses gives one line, a JSON object with these keys:
 
 | Key | Value |
 |---|---|
@@ -19,16 +19,14 @@ You get one line for each file that parses. The line is one JSON object:
 A file that does not parse gives no line. Its error goes to stderr, and the
 exit code is 1 (`docs/reference/commands.md`).
 
-The text form of `iets parse` shows the same nodes as the JSON form.
-
 ## Nodes
 
-A node is a JSON object with a `kind`. Every node starts with these three
-keys, then has the keys of its kind:
+A node is a JSON object with a `kind`. Every node starts with these keys,
+followed by the keys of its kind:
 
 | Key | Value |
 |---|---|
-| `kind` | the name of the kind, from the table below |
+| `kind` | the name of the kind, from the next table |
 | `start` | the byte offset of the first byte of the node in the file |
 | `end` | the byte offset after the last byte of the node |
 
@@ -77,9 +75,9 @@ the name after `@`, or `null`.
 
 ## Stability
 
-The names of the kinds and the keys do not change. A later version can add
-a key to a kind, or a kind for new syntax, so your program must ignore a
-key it does not know.
+The names of the kinds and the keys do not change. A new version can add a
+key to a kind, or a kind for new syntax, so your program must ignore a key
+or kind it does not know.
 
 ## Limits
 
@@ -88,14 +86,13 @@ key it does not know.
 - Parentheses make no node. The span of `(a)` is the span of `a`.
 - The text in `parts`, a name in an attribute path and the `arg` of a
   `lambda` have no span of their own. Their node has one.
-- Two forms of the source give the kind of another form. `let { body =
-  a; }` is a `select` of `body` on an `attrs` node with `rec` `true`. A
+- Some forms of the source give the kind of another form. `let { body =
+  a; }` is a `select` of `body` on an `attrs` node with `rec` `true`, and a
   URL without quotation marks is a `string`. The first bytes of the span
   show which form the source has.
-- The parser makes one number from a minus sign and a number. `-1` is an
-  `int` with the value -1, not a `unary` node.
+- `-1` is an `int` with the value -1, because the parser makes one number
+  from a minus sign and a number.
 - The span of a `binary`, `select`, `has-attr` or `apply` node starts where
   its first operand starts, so some nodes share a `start`.
 - Text that is not UTF-8 has the replacement character U+FFFD for each bad
   sequence. The text form of `iets parse` shows the bytes.
-- A `float` that JSON cannot show (infinity) has the value `null`.
