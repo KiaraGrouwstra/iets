@@ -53,6 +53,14 @@ pub fn register(r: &mut Registry) {
 }
 
 macro_rules! unsupported {
+    ($fn:ident, $msg:expr, hint: $hint:expr) => {
+        fn $fn(ev: &mut Evaluator, _args: &[Word], pos: Pos) -> EvalResult<Word> {
+            ev.trace().mark_uncacheable();
+            let mut e = Error::new(ErrorKind::Unsupported, $msg.into(), pos);
+            e.hint = Some($hint.into());
+            Err(Box::new(e))
+        }
+    };
     ($fn:ident, $msg:expr) => {
         fn $fn(ev: &mut Evaluator, _args: &[Word], pos: Pos) -> EvalResult<Word> {
             ev.trace().mark_uncacheable();
@@ -75,7 +83,10 @@ unsupported!(
 );
 unsupported!(
     fetch_mercurial,
-    "iets: network fetchers are not supported (builtins.fetchMercurial)"
+    "builtins.fetchMercurial is not supported",
+    hint: "use `builtins.fetchTree { type = \"hg\"; url = \"…\"; rev = \"…\"; narHash = \"…\"; }` \
+     or an hg flake input, or run it as nix-instantiate, nix-build or nix-shell, \
+     which fall back to Nix"
 );
 unsupported!(
     fetch_closure,
@@ -197,7 +208,7 @@ pub fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>
                 {
                     kind = ErrorKind::Unsupported;
                     format!(
-                        "iets: '{}' is not in the store and this run did not keep its text (--no-tracing-cache)",
+                        "'{}' is not in the store and this run did not keep its text (--no-tracing-cache)",
                         lossy(sp)
                     )
                 } else {
@@ -207,7 +218,7 @@ pub fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>
             Ctx::Built { drv: d, .. } => {
                 kind = ErrorKind::Unsupported;
                 format!(
-                    "iets: import from derivation is not supported: '{}' is not built",
+                    "import from derivation is not supported: '{}' is not built",
                     lossy(d)
                 )
             }

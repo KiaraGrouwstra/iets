@@ -246,7 +246,7 @@ pub fn recopy_unsupported(path: &[u8], pos: Pos) -> Box<Error> {
     Error::boxed(
         ErrorKind::Unsupported,
         format!(
-            "iets: copying '{}' to the store again is not supported",
+            "copying '{}' to the store again is not supported",
             String::from_utf8_lossy(path)
         ),
         pos,

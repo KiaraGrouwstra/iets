@@ -72,7 +72,8 @@ pub struct Error {
     pub msg: String,
     pub pos: Pos,
     pub trace: Vec<(Pos, String)>,
-    /// The fix, when it is certain; only a record shows it (docs/reference/errors.md).
+    /// The fix, when it is certain; the text shows it only for a usage or
+    /// unsupported error (docs/reference/errors.md).
     pub hint: Option<String>,
 }
 

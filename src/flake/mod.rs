@@ -21,7 +21,7 @@ use crate::source::{self, SourceRef, lock};
 use crate::store::path::StorePath;
 
 pub const CALL_FLAKE: &str = include_str!("call-flake.nix");
-pub const LOCK_ERROR: &str = "iets: flake.lock missing or incomplete, run nix flake lock";
+pub const LOCK_ERROR: &str = "flake.lock missing or incomplete, run nix flake lock";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FlakeRef {
@@ -85,11 +85,11 @@ pub fn parse_flake_ref(arg: &str, cwd: &[u8], home: Option<&[u8]>) -> Result<Fla
         )),
     };
     if let Some(why) = why {
-        return Err(Error::Unsupported(format!("iets: {why}")));
+        return Err(Error::Unsupported(why));
     }
     if p.input.len() > 2 || !p.dir.is_empty() {
         return Err(Error::Unsupported(format!(
-            "iets: query parameters in flake reference '{arg}' are not supported"
+            "query parameters in flake reference '{arg}' are not supported"
         )));
     }
     let loc = source::str_attr(&p.input, "path").unwrap_or("");
@@ -196,7 +196,7 @@ pub fn eval_flake_value(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
     let lock_path = fr.lock.clone().unwrap_or_else(|| fr.dir.join("flake.lock"));
     let lock_bytes = read_traced(ev, &lock_path).map_err(|_| {
         let msg = match &fr.lock {
-            Some(p) => format!("iets: cannot read the lock file '{}'", p.display()),
+            Some(p) => format!("cannot read the lock file '{}'", p.display()),
             None => LOCK_ERROR.to_string(),
         };
         EvalError::boxed(ErrorKind::Unsupported, msg, pos)
@@ -286,7 +286,7 @@ pub fn get_flake(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word
     let s = String::from_utf8_lossy(s).into_owned();
     let p = flakeref::parse_absolute(&s).map_err(|e| eval_error(e, pos))?;
     let unsupported = |why: &str| {
-        let msg = format!("iets: builtins.getFlake on '{s}' {why} is not supported");
+        let msg = format!("builtins.getFlake on '{s}' {why} is not supported");
         EvalError::boxed(ErrorKind::Unsupported, msg, pos)
     };
     if ev.pure() {

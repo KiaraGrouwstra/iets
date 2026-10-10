@@ -30,7 +30,7 @@ fn collect_attrs(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Attrs> {
         bail!(
             ErrorKind::Unsupported,
             pos,
-            "iets: 'fetchTree' with a URL argument is not supported; pass the locked attribute set"
+            "'fetchTree' with a URL argument is not supported; pass the locked attribute set"
         );
     };
     let mut out = Attrs::new();
@@ -107,7 +107,7 @@ fn check_locked(attrs: &Attrs, pos: Pos) -> EvalResult<()> {
         None => bail!(
             ErrorKind::Unsupported,
             pos,
-            "iets: an unlocked '{ty}' input in pure evaluation mode is not supported"
+            "an unlocked '{ty}' input in pure evaluation mode is not supported"
         ),
     }
 }
@@ -195,7 +195,7 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
         other => bail!(
             ErrorKind::Unsupported,
             pos,
-            "iets: fetchTree input type '{other}' is not supported"
+            "fetchTree input type '{other}' is not supported"
         ),
     };
     let name = str_attr(&tree.attrs, "narHash").and_then(|h| ev.input_names.get(h));
@@ -234,7 +234,7 @@ pub fn fetch_tarball_builtin(ev: &mut Evaluator, args: &[Word], pos: Pos) -> Eva
         bail!(
             ErrorKind::Unsupported,
             pos,
-            "iets: builtins.fetchTarball without a sha256 is not supported"
+            "builtins.fetchTarball without a sha256 is not supported"
         );
     };
     // not `source::tree`: `fetchTarball` names the entry itself, and the
