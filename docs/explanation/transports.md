@@ -76,9 +76,10 @@ that runs `nix-wire-record -- ssh "$@"`, shows that both send
 `BuildPathsWithResults` takes 1.1 s for both.
 
 The difference is before the session. Nix starts ssh 0.5 to 0.7 s after it
-starts. iets with `--workers 4` starts it 0.8 to 1.2 s after it starts:
-four workers cost about 0.4 s of system time on this small evaluation, and
-one worker does not. On the cache hit (seconds, 10 runs):
+starts. iets with `--workers 4` started it 0.8 to 1.2 s after it started,
+at load 13 to 21. At load 2, iets evaluates this file in 0.115 s with one
+worker or four, and Nix in 0.51 s; the extra system time of four workers
+was contention. On the cache hit, at load 13 to 21 (seconds, 10 runs):
 
 | client | mean ± σ |
 |---|---|
