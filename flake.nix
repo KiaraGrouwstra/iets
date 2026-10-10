@@ -1,8 +1,9 @@
 {
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.crane.url = "github:ipetkov/crane";
   # the reference stays on its own nixpkgs, where nix is 2.34.8
   inputs.nix-conformance.url = "git+ssh://git@github.com/numtide/nix-conformance";
-  outputs = { self, nixpkgs, nix-conformance }:
+  outputs = { self, nixpkgs, crane, nix-conformance }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAll = f: nixpkgs.lib.genAttrs systems (s: f nixpkgs.legacyPackages.${s});
@@ -18,15 +19,20 @@
       astGrepSrc = sourceOf [ ./sgconfig.yml ./nix/ast-grep (fs.fileFilter (f: f.hasExt "rs") ./.) ];
       # the e2e containers evaluate this flake as a git checkout
       e2eSrc = sourceOf (binFiles ++ [ ./flake.nix ./flake.lock ./tests ./examples ./scripts ./nix ./fuzz ./sgconfig.yml ]);
-      iets = pkgs: pkgs.rustPlatform.buildRustPackage {
-        pname = "iets";
-        version = "0.1.0";
-        src = binSrc;
-        cargoLock.lockFile = ./Cargo.lock;
-        meta.license = pkgs.lib.licenses.lgpl21Plus;
-        # checks.test runs the suite; the package build stays a build.
-        doCheck = false;
-      };
+      # Crane builds the dependencies as a derivation of their own, from the
+      # manifests alone, so a source edit rebuilds only the workspace crate.
+      # The release and dev profiles have separate dependency builds.
+      craneArgs = { pname = "iets"; version = "0.1.0"; strictDeps = true; };
+      iets = pkgs:
+        let
+          craneLib = crane.mkLib pkgs;
+          args = craneArgs // { src = binSrc; };
+        in craneLib.buildPackage (args // {
+          cargoArtifacts = craneLib.buildDepsOnly args;
+          meta.license = pkgs.lib.licenses.lgpl21Plus;
+          # checks.test runs the suite; the package build stays a build.
+          doCheck = false;
+        });
       # `classic`: the same binary under Nix's own command names. Each one
       # handles the subset iets implements and execs the real nix for the
       # rest; `share/iets/real-nix-bin` names that nix, so the fallback works
@@ -75,15 +81,12 @@
       checks = forAll (pkgs:
         let
           pkg = iets pkgs;
-          lint = name: tool: args: pkg.overrideAttrs (old: {
-            pname = "iets-${name}";
-            src = testSrc;
-            nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ tool ];
-            buildPhase = "cargo ${args}";
-            installPhase = "touch $out";
-            doCheck = false;
-            dontFixup = true;
-          });
+          craneLib = crane.mkLib pkgs;
+          # the dev profile, as `cargo test` in the dev shell: the release
+          # profile is fat LTO, minutes for no extra coverage
+          dev = craneArgs // { src = testSrc; CARGO_PROFILE = "dev"; };
+          devArtifacts = craneLib.buildDepsOnly (dev // { cargoCheckExtraArgs = "--all-targets"; });
+          withDev = dev // { cargoArtifacts = devArtifacts; doInstallCargoArtifacts = false; };
           # scripts/<name>.nu against the built binary, in the build sandbox: the
           # scripts that need no nix-daemon and no live /nix/store.
           nuScript = name: pkgs.runCommand "iets-${name}" { nativeBuildInputs = [ pkgs.nushell ]; } ''
@@ -99,13 +102,15 @@
         in {
           # the tests that need a live /nix/store are #[ignore]d; run them
           # with `cargo test -- --ignored` in the dev shell.
-          # the dev profile, as `cargo test` in the dev shell: the release
-          # profile is fat LTO, minutes for no extra coverage
-          test = lint "test" pkgs.cargo "test";
-          clippy = lint "clippy" pkgs.clippy "clippy --all-targets -- -D warnings";
+          test = craneLib.cargoTest withDev;
+          clippy = craneLib.cargoClippy (withDev // { cargoClippyExtraArgs = "--all-targets -- -D warnings"; });
           # the library facade: every example links the library only (docs/reference/library.md)
-          examples = lint "examples" pkgs.cargo "build --examples";
-          fmt = lint "fmt" pkgs.rustfmt "fmt --check";
+          examples = craneLib.mkCargoDerivation (withDev // {
+            pnameSuffix = "-examples";
+            buildPhaseCargoCommand = "cargoWithProfile build --examples";
+            installPhaseCommand = "touch $out";
+          });
+          fmt = craneLib.cargoFmt (craneArgs // { src = testSrc; });
           # nix/ast-grep, through sgconfig.yml
           ast-grep = pkgs.runCommand "iets-ast-grep" { nativeBuildInputs = [ pkgs.ast-grep ]; } "cd ${astGrepSrc} && ast-grep scan && touch $out";
           diff-e2e = nuScript "diff-e2e";
