@@ -758,6 +758,23 @@ in { aDrv = a.drvPath; bDrv = b.drvPath; aOut = a.outPath; bOut = b.outPath; }
   $ok = ($ok | append ((cmp-case "nix flake prefetch-inputs, no inputs" $pf) and (verdict (not ($pf.ours.stderr | str contains "falling back"))
     "nix flake prefetch-inputs is iets's own" $"stderr '($pf.ours.stderr)'")))
 
+  # the same flake without flake.lock: nix locks it in memory to an empty
+  # lock and writes nothing, and iets must not fall back
+  let nldir = $"($tmp)/flake-nolock"
+  mkdir $nldir
+  cp $"($fdir)/flake.nix" $nldir
+  for case in [
+    [label args];
+    ["nix eval .#x, no flake.lock" [eval --json $"path:($nldir)#x"]]
+    ["nix eval .#pkg.drvPath, no flake.lock" [eval --raw $"path:($nldir)#packages.x86_64-linux.pkg.drvPath"]]
+    ["nix build .#pkg, no flake.lock" [build --no-link --print-out-paths $"path:($nldir)#pkg"]]
+  ] {
+    let r = (run-both $farm nix ...$case.args)
+    $ok = ($ok | append ((cmp-case $case.label $r) and (verdict (not ($r.ours.stderr | str contains "falling back"))
+      $"($case.label) is iets's own" $"stderr '($r.ours.stderr)'")))
+  }
+  $ok = ($ok | append (verdict (not ($"($nldir)/flake.lock" | path exists)) "no flake.lock: neither side writes one" "a flake.lock appeared"))
+
   # the farm first on PATH: copying a fresh tree must spawn the real nix, not us
   let fdir2 = $"($tmp)/flake-fresh"
   mkdir $fdir2

@@ -7,6 +7,10 @@ use serde_json::Value;
 
 use crate::error::{Error, Result};
 
+/// lockfile.cc:LockFile::to_string of a lock without inputs, which Nix
+/// uses for a flake that declares none and has no `flake.lock`.
+pub const EMPTY: &str = r#"{"nodes":{"root":{}},"root":"root","version":7}"#;
+
 #[derive(Debug)]
 pub struct Lock {
     pub root: String,
@@ -186,6 +190,14 @@ mod tests {
             r#""nodes": { "x": { "locked": { "type": "github", "narHash": "sha256-C" } },"#,
         );
         assert_eq!(check(stale.as_bytes()).unwrap().reached_inputs().count(), 3);
+    }
+
+    #[test]
+    fn empty_lock_has_no_inputs() {
+        let l = check(EMPTY.as_bytes()).unwrap();
+        assert_eq!(l.root, "root");
+        assert_eq!(l.root_inputs().count(), 0);
+        assert_eq!(l.reached_inputs().count(), 0);
     }
 
     #[test]

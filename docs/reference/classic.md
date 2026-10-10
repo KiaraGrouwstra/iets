@@ -444,7 +444,8 @@ A name falls back in these cases:
      output;
    - a second copy of a `toFile` text or `.drv`;
    - a read of a `.drv` this run made under `--no-tracing-cache`;
-   - a flake whose `flake.lock` is missing or incomplete.
+   - a flake that declares inputs and whose `flake.lock` is missing or
+     incomplete.
 
    Any other evaluation error is reported, with exit code 1. The real Nix
    would fail the same way.

@@ -2,8 +2,9 @@
 //! `builtins.getFlake`, evaluated through
 //! Nix 2.34.8's `call-flake.nix` (embedded verbatim) with `fetchTree` for
 //! the locked inputs and the root tree copied like Nix copies it. Only a
-//! complete `flake.lock` is accepted; nothing is locked or looked up in a
-//! registry. See docs/reference/flakes.md.
+//! complete `flake.lock` is accepted, or none for a flake without inputs;
+//! nothing is locked or looked up in a registry. See
+//! docs/reference/flakes.md.
 
 pub mod flakeref;
 
@@ -13,9 +14,10 @@ use std::{fs, io, mem};
 use crate::builtins::fetch::{self, fetch_tree};
 use crate::builtins::store_hooks::locate;
 use crate::compile;
+use crate::compile::ir::ParamIr;
 use crate::error::{Error, Result};
 use crate::eval::{Error as EvalError, ErrorKind, EvalResult, Evaluator, Pos};
-use crate::runtime::Word;
+use crate::runtime::{Value, Word};
 use crate::source::{self, SourceRef, lock};
 use crate::store::path::StorePath;
 
@@ -193,13 +195,23 @@ fn read_traced(ev: &Evaluator, p: &Path) -> io::Result<Vec<u8>> {
 pub fn eval_flake_value(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
     let pos = Pos::NONE;
     let lock_path = fr.lock.clone().unwrap_or_else(|| fr.dir.join("flake.lock"));
-    let lock_bytes = read_traced(ev, &lock_path).map_err(|_| {
-        let msg = match &fr.lock {
-            Some(p) => format!("cannot read the lock file '{}'", p.display()),
-            None => LOCK_ERROR.to_string(),
-        };
-        EvalError::boxed(ErrorKind::Unsupported, msg, pos)
-    })?;
+    let lock_bytes = match read_traced(ev, &lock_path) {
+        Ok(b) => b,
+        // flake.cc locks a flake without inputs to an empty lock and writes
+        // no file; one that declares inputs fails check_declared_inputs
+        Err(e) if e.kind() == io::ErrorKind::NotFound && fr.lock.is_none() => {
+            ev.trace()
+                .stat_now(lock_path.as_os_str().as_encoded_bytes(), true);
+            lock::EMPTY.as_bytes().to_vec()
+        }
+        Err(_) => {
+            let msg = match &fr.lock {
+                Some(p) => format!("cannot read the lock file '{}'", p.display()),
+                None => LOCK_ERROR.to_string(),
+            };
+            return Err(EvalError::boxed(ErrorKind::Unsupported, msg, pos));
+        }
+    };
     let lock = lock::check(&lock_bytes).map_err(|why| {
         let mut e = EvalError::boxed(ErrorKind::Unsupported, format!("{LOCK_ERROR} ({why})"), pos);
         e.hint = why.to_report().hint;
@@ -271,11 +283,10 @@ pub fn eval_flake_value(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
 
 /// flake-primops.cc:prim_getFlake on a local path, parsed by
 /// `flakeref::parse_absolute`. Impure only: every reference iets resolves
-/// is unlocked, which a pure evaluation refuses. The flake still needs a
-/// complete `flake.lock`, because nothing is locked here. A directory is
-/// always a `path:` input, even inside a git repository: flakeref.cc looks
-/// for `.git` only when it has a base directory, and getFlake passes none.
-/// A virtual copy stands for its local tree.
+/// is unlocked, which a pure evaluation refuses. Nothing is locked here. A
+/// directory is always a `path:` input, even inside a git repository:
+/// flakeref.cc looks for `.git` only when it has a base directory, and
+/// getFlake passes none. A virtual copy stands for its local tree.
 pub fn get_flake(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let s = ev.force_string_no_ctx(
         args[0],
@@ -379,7 +390,8 @@ pub fn select(ev: &mut Evaluator, mut v: Word, path: &[String]) -> EvalResult<Op
 }
 
 /// Every input `flake.nix` declares must have a lock entry; Nix would
-/// otherwise fetch and lock it.
+/// otherwise fetch and lock it. flake.cc:getFlake declares one for each
+/// name in `inputs`, and one for each formal of `outputs` but `self`.
 fn check_declared_inputs(
     ev: &mut Evaluator,
     flake_dir: &[u8],
@@ -390,22 +402,37 @@ fn check_declared_inputs(
     p.extend_from_slice(b"/flake.nix");
     let v = ev.eval_file(&p, pos)?;
     let attrs = ev.force_attrs(v, pos, "while evaluating flake.nix")?;
-    let inputs_sym = ev.sym(b"inputs");
-    let Some(inputs) = attrs.get(inputs_sym) else {
-        return Ok(());
-    };
-    let inputs = ev.force_attrs(
-        inputs.cell.get(),
-        pos,
-        "while evaluating the 'inputs' attribute of flake.nix",
-    )?;
-    for a in inputs.iter() {
-        let name = ev.interner.name(a.sym).to_vec();
+    let mut declared = Vec::new();
+    if let Some(inputs) = attrs.get(ev.sym(b"inputs")) {
+        let inputs = ev.force_attrs(
+            inputs.cell.get(),
+            pos,
+            "while evaluating the 'inputs' attribute of flake.nix",
+        )?;
+        declared.extend(inputs.iter().map(|a| (a.sym, "")));
+    }
+    if let Some(outputs) = attrs.get(ev.sym(b"outputs")) {
+        let outputs = ev.force(outputs.cell.get())?;
+        if let Value::Lambda(l) = outputs.view()
+            && let ParamIr::Formals { formals, .. } = &l.lam.param
+        {
+            let self_sym = ev.sym(b"self");
+            let implicit = ", an argument of 'outputs' that Nix looks up in the flake registry,";
+            declared.extend(
+                formals
+                    .iter()
+                    .filter(|f| f.sym != self_sym)
+                    .map(|f| (f.sym, implicit)),
+            );
+        }
+    }
+    for (sym, how) in declared {
+        let name = ev.interner.name(sym).to_vec();
         if !lock.root_inputs().any(|k| k.as_bytes() == name) {
             return Err(EvalError::boxed(
                 ErrorKind::Unsupported,
                 format!(
-                    "{LOCK_ERROR} (input '{}' has no lock entry)",
+                    "{LOCK_ERROR} (input '{}'{how} has no lock entry)",
                     String::from_utf8_lossy(&name)
                 ),
                 pos,

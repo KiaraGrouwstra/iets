@@ -756,6 +756,47 @@ def run-tests [iets: string, work: string]: nothing -> int {
   let err = (^$iets eval --raw --no-tracing-cache $"($scratch).drvPath" | complete | get stderr)
   $res ++= [(verdict ($err | str contains "flake.lock missing or incomplete, run nix flake lock") "missing flake.lock is an error" $"missing flake.lock is an error \(($err)\)")]
 
+  # ---- no flake.lock -----------------------------------------------------------
+  # without inputs, nix locks to an empty lock in memory and writes no file
+  let nl = $"($work)/nolock"
+  mkdir $nl
+  r#'{
+  outputs = { self }: {
+    v = builtins.toJSON { inherit (self) narHash lastModified lastModifiedDate outPath; };
+    d = (derivation { name = "nolock"; system = "x86_64-linux"; builder = "/bin/sh"; args = [ "-c" "echo ${self} > $out" ]; }).drvPath;
+  };
+}
+'# | save $"($nl)/flake.nix"
+  $res ++= [(check $iets "no lock, no inputs: sourceInfo" $"path:($nl)#v")]
+  $res ++= [(check $iets "no lock, no inputs: drvPath" $"path:($nl)#d")]
+  $res ++= [(verdict (not ($"($nl)/flake.lock" | path exists)) "no lock, no inputs: neither side writes flake.lock" "a flake.lock appeared")]
+  ^$iets eval --raw $"path:($nl)#d" | complete | ignore
+  let st = (cache-lines $iets $"path:($nl)#d" | str join "\n")
+  $res ++= [(verdict ($st | str contains "cache: hit") "no lock, no inputs: second run hits" $"no lock, second run \(($st)\)")]
+  "{\n" | save $"($nl)/flake.lock"
+  let bad = (^$iets eval --raw $"path:($nl)#d" | complete)
+  $res ++= [(verdict ($bad.exit_code != 0 and ($bad.stderr | str contains "flake.lock missing or incomplete")) "no lock, no inputs: a flake.lock that appears misses the cache" $"no lock, lock appears \(exit ($bad.exit_code)\): ($bad.stderr | lines | last 2 | str join ' | ')")]
+
+  # a declared input needs a lock entry; `nix flake lock` writes one
+  let dl = $"($work)/declared"
+  mkdir $dl
+  r#'{
+  inputs.sub.url = "path:@WORK@/sub";
+  outputs = { self, sub }: { v = sub.value; };
+}
+'# | str replace -a "@WORK@" $work | save $"($dl)/flake.nix"
+  let de = (^$iets eval --raw --no-tracing-cache $"path:($dl)#v" | complete)
+  $res ++= [(verdict ($de.exit_code != 0 and ($de.stderr | str contains "flake.lock missing or incomplete, run nix flake lock (input 'sub' has no lock entry)")) "no lock, a declared input: an error that names it" $"no lock, declared \(exit ($de.exit_code)\): ($de.stderr | lines | last 2 | str join ' | ')")]
+  let dlk = (do { cd $dl; nixf flake lock } | complete)
+  $res ++= [(verdict ($dlk.exit_code == 0 and ($"($dl)/flake.lock" | path exists)) "no lock, a declared input: nix flake lock writes flake.lock" $"nix flake lock \(exit ($dlk.exit_code)\): ($dlk.stderr | lines | last 2 | str join ' | ')")]
+  $res ++= [(check $iets "no lock, a declared input: evaluates after nix flake lock" $"path:($dl)#v")]
+  # a formal of `outputs` that `inputs` does not name is a registry input to nix
+  let il = $"($work)/implicit"
+  mkdir $il
+  '{ outputs = { self, nixpkgs }: { v = "x"; }; }' + "\n" | save $"($il)/flake.nix"
+  let ie = (^$iets eval --raw --no-tracing-cache $"path:($il)#v" | complete)
+  $res ++= [(verdict ($ie.exit_code != 0 and ($ie.stderr | str contains "(input 'nixpkgs', an argument of 'outputs' that Nix looks up in the flake registry, has no lock entry)")) "no lock, an argument of outputs: an error that names it" $"no lock, implicit \(exit ($ie.exit_code)\): ($ie.stderr | lines | last 2 | str join ' | ')")]
+
   # a locked remote input that no substituter has and no forge serves: the two
   # messages name the input, exit is non-zero, stdout stays empty
   let ghost = $"($work)/ghost"

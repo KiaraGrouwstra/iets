@@ -37,12 +37,14 @@ prints.
   as in Nix (`"x86_64-linux"`). No `#`, or a bare `#`, selects the whole
   outputs attribute set; use `--strict` to print it. iets does not fill in
   `packages.<system>.` for you.
-- `flake.lock` must exist and be complete: every node reachable from the
-  root has a `narHash` or is a relative `path:` input, and every input
-  `flake.nix` declares has a lock entry. If not, you get
+- `flake.lock` must be complete: every node reachable from the root has a
+  `narHash` or is a relative `path:` input, and every declared input has a
+  lock entry. The declared inputs are the names in `inputs` and the
+  arguments of `outputs` other than `self`. If not, you get
   `flake.lock missing or incomplete, run nix flake lock`. The lock wins over
   `flake.nix`. `--reference-lock-file PATH` reads the root flake's lock from
-  `PATH` instead, under the same rule.
+  `PATH` instead, under the same rule, and `PATH` must exist.
+- A flake that declares no inputs needs no `flake.lock`, as in Nix.
 - `--strict`, `--json` and `--raw` work as they do with a file. `--raw`
   behaves like `nix eval --raw`: the value becomes a string without copying
   paths to the store.
