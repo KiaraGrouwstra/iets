@@ -21,7 +21,8 @@ GC-rooted, so a cold run is impossible. "Scratch daemon" is
 `nix-daemon --store local?root=DIR` on its own socket: an empty chroot
 store, so the cold numbers are real uploads and no build is attempted
 (`--no-build`). `ssh-ng://` is the same code over a child's stdio, tested
-with an `ssh` shim that runs `nix-daemon --stdio` locally.
+with an `ssh` shim that runs `nix-daemon --stdio` locally, and by hand
+against nixbuild.net.
 
 | case | eval | plan | connect | QueryValidPaths | AddMultipleToStore | build (realise) | ops / round trips | bytes sent |
 |---|---|---|---|---|---|---|---|---|

@@ -487,8 +487,9 @@ pub struct Connection {
 }
 
 impl Drop for Connection {
-    /// The ssh child exits on EOF of its stdin, which lives inside `to`; swap it out before
-    /// waiting, or the wait never returns.
+    /// A local ssh child exits on EOF of its stdin, which lives inside `to`; swap it out before
+    /// waiting, or the wait never returns. nixbuild.net keeps the session open for minutes
+    /// after EOF, so kill the child too, as Nix's `Pid::~Pid` does.
     fn drop(&mut self) {
         // a daemon that went away mid-op never stopped these
         for (_, id) in self.ids.drain() {
@@ -504,6 +505,7 @@ impl Drop for Connection {
                     bytes: 0,
                 }),
             ));
+            let _ = c.kill();
             let _ = c.wait();
         }
     }
@@ -570,7 +572,10 @@ impl Connection {
         };
         conn.handshake()?;
         conn.process_stderr(on_event)?;
-        conn.set_options(options, on_event)?;
+        // ssh-store.cc:setOptions sends nothing, and nixbuild.net rejects the op.
+        if !matches!(transport, Transport::Ssh { .. }) {
+            conn.set_options(options, on_event)?;
+        }
         Ok(conn)
     }
 
