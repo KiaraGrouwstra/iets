@@ -119,7 +119,7 @@ few older names. With `#x`, as in `iets print-dev-env .#ci`, it looks for `x`
 under `devShells`, `packages` and `legacyPackages`
 ([Commands](../reference/commands.md#print-dev-env) has the order).
 
-## Cost
+## Timings
 
 `--timings` prints the cache result and the total time on stderr, and leaves
 stdout for the bash:
@@ -127,9 +127,6 @@ stdout for the bash:
 ```sh
 iets print-dev-env --timings . > /dev/null
 ```
-
-Measured numbers are in
-[How `print-dev-env` makes a shell](../explanation/dev-shells.md#what-it-costs).
 
 ## JSON environment
 

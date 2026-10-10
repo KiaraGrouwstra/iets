@@ -412,9 +412,7 @@ doesn't read the attribute nothing.
 A lint at `off` or `warn` never changes stdout. A lint that fires on
 nixpkgs or on the language tests defaults to `off`, so only a lint that
 fires nowhere may default to `warn`. `url-literal`, `absolute-path-literal`
-and `short-path-literal` keep Nix's default, `off`. An `off` lint is one
-byte compare at the site. `docs/explanation/lint-scope.md` has the counts on
-nixpkgs and the measured costs.
+and `short-path-literal` keep Nix's default, `off`. An `off` lint is one byte compare at the site.
 
 ## Caches and parallelism
 
