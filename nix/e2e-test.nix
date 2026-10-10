@@ -2,7 +2,7 @@
 # store, the real nix on PATH and no network.
 # With `coverage`, `iets` is an instrumented build: each process writes its
 # profile, and $out/cov holds them all after the run.
-{ lib, pkgs, nixpkgs, sources, devShell }:
+{ lib, pkgs, nixpkgs, craneSrc, sources, devShell }:
 { iets, name, packages ? [ ], env ? "", coverage ? false }:
 let
   src = sources.e2e;
@@ -17,6 +17,7 @@ let
   # here gets built, and only the scripts' own /bin/sh derivations can be.
   offline = [
     "${nixpkgs}"
+    "${craneSrc}"
     "${src}"
     pinned
     iets

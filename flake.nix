@@ -10,6 +10,7 @@
       # it from this scope or from nixpkgs.
       scopeFor = pkgs: pkgs.lib.makeScope pkgs.newScope (final: {
         inherit pkgs nixpkgs nix-conformance;
+        craneSrc = crane;
         craneLib = crane.mkLib pkgs;
         commonArgs = { pname = "iets"; version = "0.1.0"; strictDeps = true; };
         sources = final.callPackage ./nix/sources.nix { };
