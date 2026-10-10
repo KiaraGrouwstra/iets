@@ -32,7 +32,7 @@ pub const NAMES: &[&str] = &[
     "nix",
 ];
 
-/// Runs the classic command `name`. `argv` is everything after argv[0].
+/// Runs the classic command `name`. `argv` is everything after `argv[0]`.
 pub fn dispatch(name: &str, argv: &[String]) -> i32 {
     log::set_classic();
     match name {

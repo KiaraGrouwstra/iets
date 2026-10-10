@@ -53,7 +53,7 @@ pub enum DerivationOutput {
 /// The env var that carries structured attrs (parsed-derivations.hh:StructuredAttrs::envVarName).
 pub const STRUCTURED_ATTRS_ENV: &str = "__json";
 
-/// Mirrors derived-path-map.hh:DerivedPathMap<StringSet>::ChildNode, the value of
+/// Mirrors `derived-path-map.hh:DerivedPathMap<StringSet>::ChildNode`, the value of
 /// `input_drvs`. `outputs` are the outputs of that `.drv` this derivation uses.
 /// `children` names the outputs that are themselves `.drv`s, and what is used of
 /// them: a dependency on the output of a dynamic derivation. It is empty for every

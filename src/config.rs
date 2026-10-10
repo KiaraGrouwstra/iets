@@ -318,7 +318,7 @@ pub fn xp_on(feature: &str) -> bool {
         .is_some_and(|c| (c.list("experimental-features").iter()).any(|f| f == feature))
 }
 
-/// configuration.cc:BaseSetting<bool>::parse.
+/// `configuration.cc:BaseSetting<bool>::parse`.
 pub fn parse_bool(name: &str, s: &str) -> Result<bool> {
     match s {
         "true" | "yes" | "1" => Ok(true),

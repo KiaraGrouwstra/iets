@@ -10,7 +10,7 @@ message Chunk {
   bytes data = 1;
 }
 
-// Batched validity query. Paths are store path base names ("<hash>-<name>").
+// Batched validity query. Paths are store path base names (`<hash>-<name>`).
 message QueryValidPathsRequest {
   repeated string paths = 1;
   // If true, the server may try to substitute missing paths.
@@ -145,7 +145,7 @@ service NixRemote {
 
 message Want {
   string drv_path = 1;
-  // "<hash>.narinfo" of every output; all present in the cache => Cached.
+  // `<hash>.narinfo` of every output; all present in the cache => Cached.
   repeated string out_keys = 2;
   // Store paths of all inputs (sources and input drv outputs), for locality.
   repeated string inputs = 3;

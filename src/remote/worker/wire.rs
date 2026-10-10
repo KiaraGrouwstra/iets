@@ -78,7 +78,7 @@ pub fn read_strs(r: &mut dyn Read) -> io::Result<Vec<String>> {
     (0..n).map(|_| read_str(r)).collect()
 }
 
-/// serialise.hh:readNum<bool>: 0 or 1, nothing else.
+/// `serialise.hh:readNum<bool>`: 0 or 1, nothing else.
 pub fn read_bool(r: &mut dyn Read) -> io::Result<bool> {
     match read_u64(r)? {
         0 => Ok(false),
@@ -100,7 +100,7 @@ pub fn read_time(r: &mut dyn Read) -> io::Result<u64> {
     Ok(n)
 }
 
-/// worker-protocol.cc:Serialise<StorePath>: the daemon names a store path, and
+/// `worker-protocol.cc:Serialise<StorePath>`: the daemon names a store path, and
 /// what is not one is an error, not a path for this client to act on.
 pub fn read_path(r: &mut dyn Read) -> io::Result<String> {
     let s = read_str(r)?;
@@ -108,7 +108,7 @@ pub fn read_path(r: &mut dyn Read) -> io::Result<String> {
     Ok(s)
 }
 
-/// Serialise<std::optional<StorePath>>: the empty string is none.
+/// `Serialise<std::optional<StorePath>>`: the empty string is none.
 pub fn read_opt_path(r: &mut dyn Read) -> io::Result<String> {
     let s = read_str(r)?;
     if !s.is_empty() {
@@ -117,7 +117,7 @@ pub fn read_opt_path(r: &mut dyn Read) -> io::Result<String> {
     Ok(s)
 }
 
-/// Serialise<StorePathSet>.
+/// `Serialise<StorePathSet>`.
 pub fn read_paths(r: &mut dyn Read) -> io::Result<Vec<String>> {
     let v = read_strs(r)?;
     for s in &v {
@@ -126,7 +126,7 @@ pub fn read_paths(r: &mut dyn Read) -> io::Result<Vec<String>> {
     Ok(v)
 }
 
-/// Serialise<UnkeyedValidPathInfo>'s NAR hash: Hash::parseAny for SHA-256,
+/// `Serialise<UnkeyedValidPathInfo>`'s NAR hash: `Hash::parseAny` for SHA-256,
 /// in any of its forms, held as the base16 the protocol writes.
 pub fn nar_hash(s: &str) -> io::Result<String> {
     Hash::parse_any(s, Some(HashAlgo::Sha256))
@@ -172,7 +172,7 @@ pub fn content_address(s: &str) -> io::Result<String> {
     Ok(format!("{method}{}:{}", algo.name(), h.to_nix32()))
 }
 
-/// serialise.hh:readNum<T>: a number no larger than `T` holds.
+/// `serialise.hh:readNum<T>`: a number no larger than `T` holds.
 pub fn read_num(r: &mut dyn Read, max: u64) -> io::Result<u64> {
     let n = read_u64(r)?;
     if n > max {
@@ -217,7 +217,7 @@ pub fn drv_output(s: &str) -> io::Result<()> {
     Ok(())
 }
 
-/// common-protocol.cc:Serialise<Realisation>: the JSON of realisation.cc,
+/// `common-protocol.cc:Serialise<Realisation>`: the JSON of realisation.cc,
 /// `outPath` a store path's base name, `signatures` if there, and `id`.
 pub fn realisation(raw: &[u8]) -> io::Result<()> {
     let bad_json = |why: &str| bad(&format!("while parsing a realisation object: {why}"));

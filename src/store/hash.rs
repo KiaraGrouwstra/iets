@@ -328,7 +328,7 @@ const NIX32_DIGITS: [u8; 256] = {
     t
 };
 
-/// Whether `c` is one of [`NIX32_CHARS`], which is what nix tests a store
+/// Whether `c` is one of `NIX32_CHARS`, which is what nix tests a store
 /// path's hash part against (path.cc:StorePath::StorePath).
 pub fn is_nix32_char(c: u8) -> bool {
     NIX32_DIGITS[c as usize] != 0xff

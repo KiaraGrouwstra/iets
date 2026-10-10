@@ -71,7 +71,7 @@ const PACKS: &str = pack::PACKS;
 const DIR_MODE: u32 = 0o700;
 const FILE_MODE: u32 = 0o600;
 
-/// `create_dir_all` with [`DIR_MODE`] on every component it makes.
+/// `create_dir_all` with `DIR_MODE` on every component it makes.
 pub fn create_dir(path: &Path) -> io::Result<()> {
     fs::DirBuilder::new()
         .recursive(true)

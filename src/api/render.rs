@@ -158,7 +158,7 @@ impl Report for Fetched {
 }
 
 /// `plumbing drv-diff`, and `iets diff --json`. Only the root carries
-/// `equal`; an input derivation under it is [`node`]'s shape.
+/// `equal`; an input derivation under it is `node`'s shape.
 impl Report for Diff {
     fn json(&self) -> Value {
         let mut v = node(self);

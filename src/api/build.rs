@@ -70,7 +70,7 @@ pub fn plan(ev: &Evaluator, roots: &[StorePath]) -> Result<Plan> {
     plan_with(roots, &drvs, &sources)
 }
 
-/// [`plan`] over a derivation table the caller holds: a cache hit, a rewritten
+/// [`plan()`] over a derivation table the caller holds: a cache hit, a rewritten
 /// fixed-output derivation, or nothing at all, in which case every input drv
 /// is read from `/nix/store`.
 pub fn plan_with(

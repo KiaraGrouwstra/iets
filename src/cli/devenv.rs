@@ -42,12 +42,12 @@ struct DevEnvArgs {
 /// Where the root of a shell's environment goes. A caller that named a path
 /// owns it: the path is a contract and a failure is the command's. Where
 /// nothing was named, `nix develop` takes a link in iets's roots store, and
-/// that one is best effort — see [`keep_root`].
+/// that one is best effort — see `keep_root`.
 pub enum GcRoot {
     None,
     /// `print-dev-env --gc-root PATH`, absolute.
     Given(PathBuf),
-    /// A link in iets's roots store, from [`shell_root`].
+    /// A link in iets's roots store, from `shell_root`.
     Store(PathBuf),
 }
 

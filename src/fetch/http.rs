@@ -4,7 +4,7 @@
 //! filetransfer.cc (`CURLOPT_FOLLOWLOCATION`, `CURLOPT_MAXREDIRS` 10) and
 //! `file://` reads the local file, as libcurl does for the `tarball` inputs
 //! `nix flake lock` writes with that scheme. Credentials follow a redirect only
-//! as libcurl lets them: see [`redirect`].
+//! as libcurl lets them: see `redirect`.
 //!
 //! The body is never held whole: hyper runs on a thread of its own and hands
 //! its frames to a bounded queue, the caller's thread reads that queue through
@@ -271,7 +271,7 @@ fn tls() -> Result<Arc<rustls::ClientConfig>> {
 /// `GET url` with `headers`, following redirects, with the body decompressed
 /// into `sink` as it arrives; the number of bytes written. A `file://` URL is
 /// read from the file system instead. Nothing buffers the whole body.
-/// `headers` are credentials: they go only where [`redirect`] lets them.
+/// `headers` are credentials: they go only where `redirect` lets them.
 /// `IETS_OFFLINE=1` makes any download an error that names the URL.
 pub fn get_decompressed(
     url: &str,

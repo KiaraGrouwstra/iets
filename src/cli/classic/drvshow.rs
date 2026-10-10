@@ -30,7 +30,7 @@ fn parse(argv: &[String]) -> Result<Nix, String> {
     Ok(n)
 }
 
-/// Runs `nix derivation show`. `argv` is everything after argv[0], for the
+/// Runs `nix derivation show`. `argv` is everything after `argv[0]`, for the
 /// fallback; `rest` is everything after the subcommand.
 pub fn main(argv: &[String], rest: &[String]) -> i32 {
     let mut n = match parse(rest) {
