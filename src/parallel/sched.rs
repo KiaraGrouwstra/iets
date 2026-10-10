@@ -710,6 +710,8 @@ impl Runtime {
     }
 
     fn resolve_deadlock(&self, w: &mut Worker) {
+        // before the wake-ups: a woken fiber can finish main first
+        self.deadlocks.fetch_add(1, Ordering::Relaxed);
         let all = self.all.lock().unwrap();
         let mut woken = 0;
         for &s in all.iter() {
@@ -724,7 +726,6 @@ impl Runtime {
             woken += 1;
         }
         drop(all);
-        self.deadlocks.fetch_add(1, Ordering::Relaxed);
         if woken == 0 {
             if self.has_work() {
                 return;
