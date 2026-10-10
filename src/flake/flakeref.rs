@@ -365,10 +365,12 @@ pub(crate) fn fix_git_url(s: &str) -> R<String> {
     Ok(u.to_string())
 }
 
-/// The path of a `file:` URL, as git.cc:getRepoInfo reads it.
+/// The path of a `file:` URL, as git.cc:getRepoInfo reads it. An authority
+/// (`file://host/p`) names no path on this machine, so it has none.
 pub(crate) fn file_url_path(s: &str) -> Option<String> {
     let u = parse_url(s).ok()?;
-    (u.scheme == "file").then(|| u.path.join("/"))
+    let local = u.scheme == "file" && u.authority.as_deref().unwrap_or("").is_empty();
+    local.then(|| u.path.join("/"))
 }
 
 /// A parsed flake reference; `bare` is a path without a scheme.
@@ -606,6 +608,8 @@ mod tests {
         assert_eq!(file_url_path("file:///a%20b/c").as_deref(), Some("/a b/c"));
         assert_eq!(file_url_path("file:rel/x").as_deref(), Some("rel/x"));
         assert_eq!(file_url_path("https://x.org/a"), None);
+        // an authority is another machine's path, not this one's
+        assert_eq!(file_url_path("file://host/a"), None);
     }
 
     #[test]

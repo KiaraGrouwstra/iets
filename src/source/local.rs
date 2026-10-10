@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::{fs, io};
 
 use super::scm::Scm;
-use super::{AttrVal, Attrs, Tree};
+use super::{AttrVal, Attrs, Tree, store_commit};
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::store::hash::{Hash, HashAlgo};
 use crate::store::nar;
@@ -129,6 +129,71 @@ pub fn tracked_source(
     pos: Pos,
 ) -> EvalResult<Tree> {
     let (mut tree, _) = workdir(ev, scm, root, "source", false, pos)?;
+    tree.subdir = subdir.to_string();
+    Ok(tree)
+}
+
+/// The tree of `rev` in the repository at `root`
+/// (git.cc:getAccessorFromCommit), under the store `name`, without what
+/// `Scm::export_ignored` drops when `export` is set. `None` when the
+/// repository has not got the revision.
+pub fn commit_tree(
+    ev: &mut Evaluator,
+    scm: &'static dyn Scm,
+    root: &Path,
+    rev: &str,
+    name: &str,
+    export: bool,
+    pos: Pos,
+) -> EvalResult<Option<Tree>> {
+    let commit = scm
+        .tree_at(ev.trace(), root, rev, export)
+        .map_err(|e| Error::boxed(ErrorKind::Io, e, pos))?;
+    let Some(commit) = commit else {
+        return Ok(None);
+    };
+    let last_modified = commit.last_modified;
+    let (path, hash) = store_commit(ev, name, commit, pos)?;
+    Ok(Some(Tree {
+        path,
+        attrs: Attrs::from([
+            ("type".into(), AttrVal::Str(scm.name().into())),
+            (
+                "url".into(),
+                AttrVal::Str(format!("file://{}", root.to_string_lossy())),
+            ),
+            ("narHash".into(), AttrVal::Str(hash.to_sri())),
+            ("rev".into(), AttrVal::Str(rev.to_string())),
+            ("lastModified".into(), AttrVal::Int(last_modified)),
+            ("submodules".into(), AttrVal::Bool(false)),
+        ]),
+        subdir: String::new(),
+        counter: Some((scm, root.to_path_buf())),
+    }))
+}
+
+/// [`commit_tree`] for a flake root, with its `subdir`. The revision has to
+/// be there: a root flake is never fetched.
+pub fn commit_source(
+    ev: &mut Evaluator,
+    scm: &'static dyn Scm,
+    root: &Path,
+    rev: &str,
+    subdir: &str,
+    pos: Pos,
+) -> EvalResult<Tree> {
+    let Some(mut tree) = commit_tree(ev, scm, root, rev, "source", false, pos)? else {
+        return Err(Error::boxed(
+            ErrorKind::Io,
+            format!(
+                "iets: the {} repository at '{}' has no revision {rev}; \
+                 check it out and name the directory instead",
+                scm.title(),
+                root.display()
+            ),
+            pos,
+        ));
+    };
     tree.subdir = subdir.to_string();
     Ok(tree)
 }

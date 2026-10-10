@@ -25,7 +25,7 @@ use crate::eval::{EvalResult, Evaluator, Pos};
 use crate::store::hash::{Hash, HashAlgo};
 use crate::store::path::StorePath;
 
-pub(crate) use local::{path_tree, workdir};
+pub(crate) use local::{commit_tree, path_tree, workdir};
 pub use lock::Lock;
 pub use remote::LazyStore;
 pub(crate) use remote::{ensure_readable, fetch_file, fetch_git_with_nix, store_commit};
@@ -113,6 +113,15 @@ pub enum SourceRef {
         root: PathBuf,
         subdir: String,
     },
+    /// One revision of a local repository, which the SCM reads out of it
+    /// (git.cc:getAccessorFromCommit). `git+file:///path?rev=…` names this,
+    /// and it is the tree of the commit, not of the working tree beside it.
+    Commit {
+        scm: &'static dyn scm::Scm,
+        root: PathBuf,
+        rev: String,
+        subdir: String,
+    },
     /// A locked input: a `narHash` is known before anything is fetched, so
     /// the tree names itself and verifies itself.
     Locked(Attrs),
@@ -163,6 +172,12 @@ pub fn tree(ev: &mut Evaluator, r: &SourceRef, pos: Pos) -> EvalResult<Tree> {
         SourceRef::Tracked { scm, root, subdir } => {
             local::tracked_source(ev, *scm, root, subdir, pos)
         }
+        SourceRef::Commit {
+            scm,
+            root,
+            rev,
+            subdir,
+        } => local::commit_source(ev, *scm, root, rev, subdir, pos),
         SourceRef::Locked(attrs) => remote::locked(ev, attrs, pos),
     }
 }

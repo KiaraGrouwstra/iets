@@ -261,27 +261,8 @@ fn from_commit(
         _ => return Ok(None),
     };
     let export = bool_attr(args, "exportIgnore").unwrap_or(false);
-    let Some(commit) = git.tree_at(ev.trace(), root, &rev, export).map_err(io)? else {
-        return Ok(None);
-    };
-    let last_modified = commit.last_modified;
     let name = str_attr(args, "name").unwrap_or("source");
-    let (path, hash) = source::store_commit(ev, name, commit, pos)?;
-    let url = format!("file://{}", root.to_string_lossy());
-    let attrs = Attrs::from([
-        ("type".into(), AttrVal::Str("git".into())),
-        ("url".into(), AttrVal::Str(url)),
-        ("narHash".into(), AttrVal::Str(hash.to_sri())),
-        ("rev".into(), AttrVal::Str(rev)),
-        ("lastModified".into(), AttrVal::Int(last_modified)),
-        ("submodules".into(), AttrVal::Bool(false)),
-    ]);
-    Ok(Some(Tree {
-        path,
-        attrs,
-        subdir: String::new(),
-        counter: Some((git, root.to_path_buf())),
-    }))
+    source::commit_tree(ev, git, root, &rev, name, export, pos)
 }
 
 /// A full revision that is not the null one; any other spelling goes to Nix,

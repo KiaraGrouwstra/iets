@@ -278,8 +278,16 @@ def run-tests [iets: string, work: string]: nothing -> int {
   git-in $repo worktree add -q $fresh HEAD
   "untracked\n" | save $"($fresh)/untracked"
   $res ++= [(check-fresh $iets "worktree: clean tree nix never saw, nothing fetched" $"($fresh)#packages.x86_64-linux.default.drvPath")]
+  # the same worktree as CI names it: pinned by rev, so the source is the
+  # commit and `self.rev` is there (docs/reference/flakes.md)
+  let rev = (git-in $fresh rev-parse HEAD | chomp)
+  let pinned = $"git+file://($fresh)?ref=HEAD&rev=($rev)"
+  # the drv bakes in narHash, rev, shortRev, lastModified and revCount
+  $res ++= [(check $iets "worktree: pinned by rev, drvPath" $"($pinned)#packages.x86_64-linux.default.drvPath")]
   "changed\n" | save -f $"($fresh)/file"
   $res ++= [(check-fresh $iets "worktree: dirty tree nix never saw, nothing fetched" $"($fresh)#packages.x86_64-linux.default.drvPath")]
+  # a dirty tree changes nothing for a pinned rev: both read the commit
+  $res ++= [(check $iets "worktree: dirty tree, pinned rev is still the commit" $"($pinned)#packages.x86_64-linux.default.drvPath")]
   git-in $repo worktree remove --force $fresh
 
   # this repo's own flake from a fresh worktree

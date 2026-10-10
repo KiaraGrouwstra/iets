@@ -22,12 +22,24 @@ prints.
   `path:` URL (`path:/abs`, `path:./x`, percent-escapes decoded). It is
   parsed as `builtins.parseFlakeRef` parses it, with the current directory
   as the base. The fragment is percent-decoded, as in Nix.
+- **A local checkout an SCM names is also taken**:
+  `git+file:///path[?ref=NAME&rev=SHA][&dir=SUB]`, which is how CI pins the
+  tree it evaluates. With a `rev` the source is that revision, read out of
+  the repository beside the checkout, so `self.rev`, `self.revCount` and
+  `self.lastModified` are the commit's, as they are in Nix; a dirty working
+  tree changes nothing. Without a `rev` the working tree is the source, as
+  the plain path would be. A `ref` beside a `rev` is advisory. A `ref`
+  without a `rev` is an error: iets resolves no reference of a root flake.
+  Other query parameters, `submodules` included, are errors.
 - iets does not take these, so classic mode falls back to Nix on them:
   - registry references (`nixpkgs#hello`, and `x#y` even where `./x`
     exists, as in Nix);
-  - remote references (`github:`, `gitlab:`, `git+https:`, `git+file:`,
-    `https://….tar.gz`): iets cannot fetch a root flake;
-  - `?query` parameters on a path (`?dir=`, `?rev=`, `?narHash=`);
+  - remote references (`github:`, `gitlab:`, `git+https:`, `git+ssh:`,
+    `git:`, `https://….tar.gz`, and a `file:` URL that names no absolute
+    path on this machine, `file://host/p` included): iets cannot fetch a
+    root flake;
+  - `?query` parameters on a path (`?dir=`, `?rev=`, `?narHash=`), which
+    only a `git+file:` reference takes;
   - the schemes the parser does not take (`hg+…`, `sourcehut:`).
 
   Some invalid references are accepted, and an unknown scheme
