@@ -174,6 +174,7 @@ to evaluate stops the run before anything builds.
 | `-k`, `--keep-going` | with one root: build everything a failure does not block |
 | `--out NAME` | build the output `NAME` only; repeatable |
 | `--fetch-to DIR` | copy the outputs from the builder into `DIR` |
+| `-o`, `--out-link PATH` | bring the outputs into the local store and link them at `PATH`, `PATH-1`, ... |
 | `--source SP=LOCAL` | with a `DRV` argument: the local tree of the input source `SP` |
 
 It also takes the shared evaluation flags.
@@ -224,6 +225,14 @@ the installable and the output. The same command replaces its own roots
 cases never keep a root: `--fetch-to DIR`, which already has the
 bytes outside the store, and a remote builder, whose outputs are not in the
 local store.
+
+**Outputs from a remote builder.** Without `-o`, the outputs stay on the
+builder, and the printed paths are not valid locally. This suits CI, which
+needs only the verdict. At a terminal, use `-o result`. iets then brings
+the closure into the local store and links each output, as `nix build`
+does. The local daemon first substitutes what its caches have. The rest
+comes from the builder (`docs/reference/builders.md`). Each link is a GC
+root, so no roots-store link is kept.
 
 The `fix-hashes` setting rewrites the hash of a fixed-output build that
 failed on it (`docs/reference/settings.md`). Where builds go and how the
