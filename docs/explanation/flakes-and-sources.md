@@ -9,7 +9,7 @@ The reference syntax is in [Commands](../reference/commands.md). The corners
 the parser leaves out are in
 [Known divergences from Nix 2.34](../reference/divergences.md).
 
-## A project with no flake
+## Projects
 
 A native command evaluates purely, flake or not
 ([Settings](../reference/settings.md)). Pure evaluation reads a file only
@@ -30,7 +30,7 @@ With no marker at all, the entry file's own directory is the project, so a
 one-off expression in a scratch directory still evaluates.
 
 A working tree is found the same way as for the root flake of a flake
-reference ("The root flake is your working tree"), and git is the only SCM
+reference ("The root flake"), and git is the only SCM
 that marks a root.
 
 The project is an **allow list**. Nothing is hashed
@@ -58,7 +58,7 @@ the evaluation read an untracked file by its absolute path. The classic names
 get none either: each one answers like the real nix, `--pure-eval` included
 ([Classic mode](../reference/classic.md)).
 
-## Which references iets accepts
+## Accepted references
 
 `iets eval --raw DIR#attr.path` prints what
 `nix eval --raw --option eval-cache false DIR#attr.path` prints. The
@@ -84,7 +84,7 @@ no locking in memory and no `nix flake lock` of its own, so if you change an
 input's URL in `flake.nix` and don't lock again, iets doesn't notice. The
 lock wins.
 
-## The root flake is your working tree
+## The root flake
 
 Nix's `callFlake` is embedded verbatim and called with the lock file text
 and `builtins.fetchTree`. The root's `sourceInfo` is built as Nix's fetcher
@@ -140,7 +140,7 @@ In practice:
 The flake's own `flake.nix` is imported under its store path, so positions,
 `./x` path literals and `readDir` see exactly what Nix sees.
 
-### A symlink resolves in the store copy
+### Symlinks
 
 In a real store copy, a relative symlink resolves inside the copy, and an
 absolute one points out of it. On your disk, the same link resolves in the
@@ -172,7 +172,7 @@ working tree: `git.cc` opens the repository, which resolves the path. An
 explicit `path:` reference keeps the link and copies the link object, as
 Nix does.
 
-## How a locked input becomes readable
+## Locked inputs
 
 An input is locked, so iets knows its store path before anything happens.
 It tries these sources in order, and the first one that works wins.
@@ -227,7 +227,7 @@ names the command to run first.
 hash of the bytes under the input's name, and the lock's `narHash` does not
 give that, so iets cannot say where the file belongs before it has it.
 
-## What a remote root flake would need
+## Remote root flakes
 
 The command line parses `github:NixOS/nixpkgs/<rev>#hello` and refuses it.
 The download works, but these are missing:
@@ -249,7 +249,7 @@ The download works, but these are missing:
 The first three would make a locked `github:`, `gitlab:` or tarball root
 work. The last is what most command lines need, and it's the hard one.
 
-## What the input store costs
+## Input store cost
 
 A flake whose only input is `github:NixOS/nixpkgs/e554fab`, five runs with
 a warm page cache, timing the evaluation alone:

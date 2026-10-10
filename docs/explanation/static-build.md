@@ -11,7 +11,7 @@ It runs `git` for a project that is a git checkout, and `nix` for a locked
 Mozilla roots built into it, and `NIX_SSL_CERT_FILE` overrides them
 ([Settings](../reference/settings.md)).
 
-## Why it uses mimalloc
+## The allocator
 
 The evaluator keeps its values in its own arena, and everything else comes
 from the global allocator. With musl's malloc the static build ran 24–30%

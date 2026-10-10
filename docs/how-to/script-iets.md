@@ -16,7 +16,7 @@ The record shapes are in
 of every plumbing operation is in
 [Plumbing operations](../reference/plumbing.md).
 
-## Get JSON instead of text
+## JSON output
 
 `--json` is on `eval`, `build`, `diff`, `search`, `prefetch`,
 `print-dev-env`, `parse` and `cache paths`:
@@ -42,7 +42,7 @@ iets diff --json -A a -A b demo.nix
 
 `iets eval-jobs` writes JSON lines by default, one object per job.
 
-## Branch on the exit code
+## Exit codes
 
 Save this as `dep.nix`. It depends on a derivation that always fails:
 
@@ -81,7 +81,7 @@ does. `iets eval-jobs` exits 0 when only jobs fail, and their errors are in
 the job lines. [Errors, exit codes and log records](../reference/errors.md)
 has the full table.
 
-## Read the log as records
+## Log records
 
 `--log-format internal-json` turns every stderr line into `@nix ` followed by
 one JSON object. It's the format of Nix's own JSON logger, so
@@ -113,7 +113,7 @@ These keys exist only in iets, and they're the ones to build on:
 printed. `level` is 0 for an error and 1 for a warning. With `--show-trace`
 you also get a `trace` array, innermost first.
 
-## Send the records somewhere else
+## Log destinations
 
 Say you want the records in a file but still want to watch the run.
 `json-log-path` writes every record to a file or a unix socket, without the
@@ -135,7 +135,7 @@ same. iets appends to a file and creates it with mode 0644. If the path can't
 be opened, you get one `error (ignored)` line on stderr and the run goes on.
 As in Nix, two processes that write one file can mix their records.
 
-## Stop iets from asking questions
+## Non-interactive runs
 
 Without a terminal, two behaviors change. Set them yourself instead of
 trusting detection. The first is `fix-hashes`:
@@ -152,7 +152,7 @@ The second is color in `iets search`. Nix writes its escape sequences to
 stdout even when stdout isn't a terminal, and iets does the same, byte for
 byte. Use `--json` when a program reads the output.
 
-## Chain plumbing operations
+## Plumbing chains
 
 `iets plumbing` is the layer under the everyday commands. Each operation
 takes JSON and gives JSON, with nothing else on stdout. The operations are

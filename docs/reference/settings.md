@@ -149,7 +149,7 @@ A `[lint]` table in your user file sets lint levels for every evaluation,
 below the project's (`docs/reference/lints.md`). `$IETS_CONFIG` and
 `--iets-option` refuse it; use `IETS_LINT` and `--lint` there.
 
-### The project file, and why it holds only `[lint]`
+### The project file
 
 A project can have its own `iets.toml`: the nearest one found by walking up
 from the entry file or the flake directory (`docs/reference/lints.md`).

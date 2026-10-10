@@ -49,7 +49,7 @@ iets eval --strict -E '1 + 1'
 `-E` takes the expression from the command line. `--strict` evaluates the
 whole value instead of stopping at its top level.
 
-## Grab the pinned nixpkgs
+## Get nixpkgs
 
 The next steps read nixpkgs. Ask iets for the tree that this repository's
 `flake.lock` names, so your output matches what's printed here:
@@ -170,7 +170,7 @@ cat /nix/store/hl2d12ai352g88ad47fh8844g939iyrd-greeting
 hello from iets
 ```
 
-## Watch the cache answer
+## The cache
 
 `--timings` shows what each phase cost and whether the cache answered. Give
 it a cache directory of your own so this step starts cold. Your counts and
@@ -226,7 +226,7 @@ cache: hit, 1218 entries validated, 1 rehashed, load 0.002s, validate 0.012s
 `hello.nix` again. The contents were the same, so it was still a hit. Change
 the contents and the next run misses.
 
-## Run iets as nix-instantiate
+## Classic names
 
 The same binary answers to Nix's own command names, so your scripts don't
 have to change. Instantiate your derivation with one:
@@ -254,7 +254,7 @@ warning: you did not specify '--add-root'; the result might be removed by the ga
 Same warning, same path, byte for byte. Under those names iets does what it
 can and hands everything else to the real `nix`.
 
-## What to try next
+## Next steps
 
 - Send builds to another machine:
   [Build on a remote builder](../how-to/build-remotely.md).

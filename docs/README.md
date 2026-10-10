@@ -59,10 +59,11 @@ judgment.
 - Sentence case, no numbers, no "X and Y".
 - Say what the section holds. A short noun is enough when it does
   ("Deadlocks", "Stack limits"). A label that could head any page
-  ("Searching", "Scope") needs a clause: "Speed of `iets search`".
+  ("Searching", "Scope") needs a clause: "Search speed".
 - Don't write a sentence where a noun will do.
-- Task pages use a bare verb ("Build on a remote builder"). Reference pages
-  name the thing, in code font when it is a name.
+- Section headings are short nouns ("Error handling", "Build derivations").
+  Page titles and tutorial steps use a bare verb ("Build on a remote
+  builder"). Reference pages name the thing, in code font when it is a name.
 - Introduce a list or procedure with a sentence that names its items. "Each
   part does one job:" names nothing.
 

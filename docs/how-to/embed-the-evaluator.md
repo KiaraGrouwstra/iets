@@ -15,7 +15,7 @@ Keep your frontend out of evaluator internals: no `cli` module, no private
 field, no copied helper. If you need something that lives only in `cli`, move
 it into `crate::api` and let `cli` call it there.
 
-## Set up a session
+## Sessions
 
 A `Session` holds what would otherwise be statics: the settings, where
 messages go, the tree store and the `nix.conf` that was read.
@@ -33,7 +33,7 @@ It returns errors and your program picks the exit code. A thread you start
 yourself needs `Session::enter` or `session::bind(f)`
 ([Using iets as a library](../reference/library.md#what-the-host-owns)).
 
-## Evaluate and print
+## Evaluation
 
 `examples/eval.rs` is a complete frontend. Its core:
 
@@ -83,7 +83,7 @@ The native commands that evaluate go through `Run`, and the classic names
 use `Run::on`. `parallel::try_run(workers, config.build(), f)` does the same
 without the tracing cache.
 
-## Walk a value safely
+## Walking values
 
 `api::value` is the safe way to read values: `Eval<'e>` wraps the evaluator,
 and `Value<'e>` can't outlive the memory it points into. It's also the only
@@ -135,7 +135,7 @@ A getter on an unforced value returns `None`, so force first. Attribute
 order, allocation and the `nix_api_value.h` mapping are in
 [Using iets as a library](../reference/library.md#the-value-api).
 
-## Build what you evaluated
+## Build derivations
 
 `examples/build.rs` evaluates to derivations, plans the upload and builds
 through the dispatcher:
@@ -187,7 +187,7 @@ never assemble an upload yourself. Given `api::build::Root` values,
 `Dispatch::realise` builds them and `Built::paths(roots)` returns the output
 paths.
 
-## Read the derivations an evaluation made
+## Read derivations
 
 `examples/drv_info.rs` lists every derivation a run created:
 
@@ -208,7 +208,7 @@ maps store paths back to the local trees they were copied from. How that
 works is in
 [Trace a store path back to its source](../explanation/provenance.md).
 
-## Report errors the way iets does
+## Error handling
 
 ```rust
 api::report(ev, &err);          // to the session log; returns the exit code

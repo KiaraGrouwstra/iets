@@ -21,7 +21,7 @@ habits, iets also answers to `nix`, `nix-build`, `nix-instantiate`,
 `nix-shell` and `nix-eval-jobs`, and runs the real `nix` for the rest
 ([Classic mode](../reference/classic.md)).
 
-The examples use `$nixpkgs` from "Grab the pinned nixpkgs" in
+The examples use `$nixpkgs` from "Get nixpkgs" in
 [Get started with iets](../tutorial/getting-started.md). iets evaluates
 purely by default, so it has no `<nixpkgs>` search path and no
 `builtins.currentSystem`. An expression that reads either needs

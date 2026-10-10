@@ -9,7 +9,7 @@ The operation contracts and the JSON shapes are in
 [Plumbing operations](../reference/plumbing.md). This page is for people who
 change iets: it says what the split requires and how a test enforces it.
 
-## One implementation, below the command line
+## One implementation
 
 **A capability is implemented once, below the command line.** Evaluation,
 store access, build dispatch, fetching and flakes live in the library. No
@@ -30,7 +30,7 @@ operation emit this too?** If yes, it is a value, and it belongs below the
 command line. If it only ever reaches a terminal, it is presentation, and
 it belongs in the porcelain.
 
-### Why a namespace and not a second binary
+### The namespace
 
 The contract is `iets plumbing OP`, a subcommand of the one binary:
 
@@ -85,7 +85,7 @@ they merge a change under `src/cli`:
   end-to-end case?
 - Did the allow-list grow?
 
-## When an operation is warranted
+## New operations
 
 A plumbing operation costs more than the operation it exposes. Flag parsing,
 the root vocabulary, the help text and the JSON shaping are the operation;
@@ -99,7 +99,7 @@ Before a refactor, say what the second copy is. A shared module costs 100 to
 the repeated line. A move is not a deletion: count only what no longer
 exists anywhere.
 
-## What the split gives you
+## Benefits
 
 **One implementation and one name per capability.** `api::installable`
 turns a string into derivations, `api::build` dispatches a build,

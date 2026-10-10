@@ -5,7 +5,7 @@ arrive intact? [Builders and the wire](../reference/builders.md) has the
 facts about each transport. The numbers here come from one machine and drift
 with the nixpkgs pin and the hardware, but the ratios and the op counts hold.
 
-## Why one request per ready set
+## Requests
 
 The worker protocol is serial per connection, and every
 `BuildPathsWithResults` starts a new daemon worker. A request per derivation
@@ -43,7 +43,7 @@ The upload is bound by the daemon: 0.3 to 0.5 ms per path for the sequential
 `addToStore`. Nothing on the client side changes that
 ([What was tried and removed](history.md)).
 
-### The upload changes no bytes
+### Upload integrity
 
 After an upload, `scripts/daemon-e2e.nu` checks that:
 
@@ -90,7 +90,7 @@ Against `farm.numtide.com` with a Keycloak `write` token (measured
 `nix-build` out-link came from cache.numtide.com through the local
 daemon.
 
-### Why bounced addresses are shared
+### Bounced addresses
 
 A worker that crashed stays placeable until the scheduler notices. On
 farm.numtide.com that took 42 s (measured 2026-09-22), and every bounce off

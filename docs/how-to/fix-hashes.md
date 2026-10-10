@@ -8,7 +8,7 @@ You bumped a version, the `fetchurl` hash is stale, and the build fails.
 The examples build a file that reads `<nixpkgs>`, so they need `--impure` and
 a search path, either `NIX_PATH` or `-I nixpkgs=PATH`.
 
-## Fix hashes in a terminal
+## Terminal
 
 With `ask`, iets stops at each fix and asks, as long as stdin and stderr are
 both terminals and the log format isn't `internal-json`:
@@ -22,7 +22,7 @@ every later fix in the run. Anywhere else (a pipe, a CI job, a JSON log)
 `ask` acts like `never`: the build fails with the mismatch and iets changes
 nothing.
 
-## Fix hashes in CI or for an agent
+## Automation
 
 With `always`, iets rewrites the file without asking, which is what a CI job
 or an agent needs. Take this `src.nix`, whose hash is wrong:
@@ -63,7 +63,7 @@ To make `always` the default, put this in `~/.config/iets/iets.toml`:
 fix-hashes = "always"
 ```
 
-## Turn fixing off
+## Turning it off
 
 With `never`, the build reports the mismatch and fails. No file is edited:
 
@@ -71,7 +71,7 @@ With `never`, the build reports the mismatch and fails. No file is edited:
 iets --iets-option fix-hashes never build --impure --builder daemon src.nix
 ```
 
-## How iets finds the place to edit
+## Finding the edit
 
 After a mismatch, iets evaluates once more without the tracing cache, to list
 the files the evaluation read, and looks for the old hash in them in any
@@ -82,7 +82,7 @@ and reports the mismatch as a line in the build log, which iets reads when
 the log names a derivation with the same name. `__structuredAttrs` works
 too.
 
-## Hashes iets won't rewrite
+## Limits
 
 **The hash isn't in exactly one place.** If you wrote the old hash out
 twice, iets can't tell which one to change. It says so and edits nothing:

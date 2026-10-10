@@ -5,7 +5,7 @@ representation first, and it evaluates that lazily, as Nix does, but with
 several threads forcing thunks at once. This page explains how both work, and
 why the memory layout decides how big a run gets.
 
-## From source to value
+## The pipeline
 
 ```
 source bytes
@@ -22,7 +22,7 @@ when no lexical binder exists. Variable-length node payloads live in side
 tables addressed by a range, so a file costs a handful of allocations
 instead of one per node.
 
-## Laziness and thunks
+## Thunks
 
 Every argument, attribute value, list element and `let` binding that is
 not cheap becomes a thunk. A cheap expression, like a literal or a
@@ -43,7 +43,7 @@ never forced. A `mapAttrs` entry has no thunk object at all: a
 entries fall back to an ordinary two-argument thunk. That change alone took
 the arena from 8,936 MB to 7,981 MB, with the run time inside the noise.
 
-## A value is one tagged word
+## Values
 
 A `Word` is one 8-byte word with a 3-bit tag in the low bits.
 
@@ -73,7 +73,7 @@ Attributes are sorted by symbol id, as they are in Nix. Name order, which
 `attrNames`, printing, JSON and a derivation environment need, is computed
 on demand.
 
-### Strings carry context
+### String context
 
 A string value carries a context: `Opaque(store path)`, `DrvDeep(drv path)`
 or `Built { drv path, output name }`. Context flows through `+`, through
@@ -82,7 +82,7 @@ it pays off: it turns the context of every attribute into the derivation's
 `inputDrvs` and `inputSrcs`. That is how a derivation learns its
 dependencies without you declaring them.
 
-## `with` scopes and errors
+## `with` scopes
 
 `with` is the one construct the compiler cannot resolve statically. The
 evaluator keeps a chain of `with` scopes in the environment, and a
@@ -97,7 +97,7 @@ fiber gets. An error carries a message, a span and a trace. Each IR node
 keeps its position, for `unsafeGetAttrPos`, lambda positions and error
 messages.
 
-## `//` builds a union
+## The `//` operator
 
 When the left side has at least eight entries, `a // b` is not a merged
 copy. It is a union object: a tail with the flat leaves of both sides, at
@@ -110,7 +110,7 @@ costs a few comparisons instead of a scan of every head. Measurement decided
 on a union: on outpaths, `//` copied 5.12 GB, and 80 % of the results were
 never iterated at all. The union took the arena from 13,253 MB to 8,936 MB.
 
-## Equal strings share their bytes
+## Shared strings
 
 The arena keeps a table of string bytes by 64-bit content hash, the
 context-free string object over them, and a set of context slices. A string
@@ -123,7 +123,7 @@ already there. That is 662 MB. Sharing them took the arena from 7,981 MB to
 7,106 MB, for +3 % wall at one worker and −7 % at four. Keying the table by
 the bytes instead of by their hash cost 6 % and 12 %, so the hash stayed.
 
-## ATerm text is kept only when something reads it
+## ATerm text
 
 A derivation's ATerm text is kept only for the runs that read it back:
 instantiation, the tracing cache, `build` and `print-dev-env`. Everything
@@ -131,7 +131,7 @@ else handles a derivation with no ATerm, which is also the state of a
 derivation read from `/nix/store`. It was 331 MB of heap on outpaths, and
 dropping it took peak RSS from 7,680 MB to 7,219 MB.
 
-## Why there is no garbage collector
+## Memory
 
 There is one bump arena per worker and nothing is ever freed. Every object
 lives until the process exits, so object layout, not allocation speed,
@@ -186,7 +186,7 @@ output, a cache that no worker reads, a search path that resolves to
 nothing. So the evaluator has no setter: `eval::EvalConfig` holds each
 setting fixed, and `build()` makes the evaluator.
 
-### How workers claim a thunk
+### Claiming thunks
 
 The thunk's *state* cell is the synchronisation word. Its three states are
 disjoint: a payload, a blackhole, or empty.
@@ -210,7 +210,7 @@ thread, so it follows a computation that moved. If another fiber holds
 it, the loser parks on a side table sharded by thunk address, so thunk
 objects never grow.
 
-### Why more workers stop helping
+### Scaling limits
 
 The default is four workers. What limits it is the critical chain, not
 contention:
@@ -233,7 +233,7 @@ everyone else waits. Only parse and compile speed move that phase, which is
 what the IR cache does on a warm run (see
 [How caching works](caching.md)).
 
-## Why the answer doesn't depend on the workers
+## Determinism
 
 These properties give the same answer:
 
@@ -280,7 +280,7 @@ is dropped, which is a lost warning and never a wrong one.
 A `--dump-drvs` file is written where the derivation is made. A parked dump goes missing while the `drvPath` that names it is
 returned.
 
-### Failures stop speculation
+### Failed thunks
 
 Nix evaluates a failed thunk again at every force, and so does iets: a
 failure resets the thunk. Under fan-out that turned one failing thunk into
@@ -302,7 +302,7 @@ be hit, for example when the compiler recurses over a deeply nested
 expression without forcing. A handler on an alternate signal stack catches
 it, prints Nix's `stack overflow (possible infinite recursion)` and exits 1.
 
-### `trace` and `warn` in a helper fiber
+### `trace` and `warn`
 
 `builtins.trace` and `builtins.warn` would break purity in a helper, so
 the helper gives them back to the demand path. In a helper fiber they
@@ -334,7 +334,7 @@ Each one unwinds, every thunk it claimed is reset, its waiters wake, and the
 main fiber re-evaluates the cycle sequentially and reports the error the
 sequential path would have reported.
 
-## Speed against Nix
+## Speed
 
 Measured on 2026-09-26 on an idle 32-core machine, against Nix 2.34.8 on
 the same nixpkgs, with identical derivation paths:
@@ -356,7 +356,7 @@ desktop, 19 % of the run, so with `--no-ir-cache` the ratio falls to 2.07×
 on minimal and 2.22× on desktop. Nix has no equivalent to turn off, so 2.7×
 compares the products and 2.1× compares the evaluators.
 
-### Speed of `iets search`
+### Search speed
 
 `iets search` caches an index of the packages it finds. These numbers are
 wall time, median of three, on 2026-09-23, on a 16-core EPYC shared with
@@ -375,7 +375,7 @@ as
 Nix caches a flake installable only, and evaluates `--expr` and `--file`
 every time. The `^ --json` output is the same byte for byte on both sides.
 
-## What isn't proven
+## Unproven claims
 
 ThreadSanitizer needs a nightly compiler and hasn't been run, and there is no
 model checker. The invariants above are the argument, and the tests
