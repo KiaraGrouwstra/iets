@@ -5,11 +5,11 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1791579156,
-        "narHash": "sha256-kt5VwaYSHSYV5ea8XXiB8KdGmMLFwFPVcP0Wt5j2ShQ=",
-        "ref": "refs/heads/lang/nan-portable",
-        "rev": "39de0d6fe604b7e65b120e7f9f6358111c38d32f",
-        "revCount": 16,
+        "lastModified": 1791583640,
+        "narHash": "sha256-ybsywis04rckuPGo31BUoUIw766s1dVHgg5QJzyIV34=",
+        "ref": "refs/heads/main",
+        "rev": "4cd33a49e6b7f2a2c33c8a5ed90aa1799c7988d5",
+        "revCount": 17,
         "type": "git",
         "url": "ssh://git@github.com/numtide/nix-conformance"
       },
