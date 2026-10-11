@@ -17,6 +17,10 @@ use std::sync::atomic::{AtomicU8, AtomicUsize};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::{ptr, slice};
 
+/// Most contents the `strings` table records: the capacity of 2^20 buckets,
+/// about 34 MiB. A NixOS eval records about 240,000.
+const STRINGS_CAP: usize = (1 << 20) / 8 * 7;
+
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
@@ -1008,11 +1012,31 @@ impl Arena {
         symbol::fx_bytes(bytes)
     }
 
-    /// Record freshly copied `b` under `hash`; the entry it collides with,
-    /// if any, keeps its own content.
+    /// The recorded content equal to `bytes`, if any.
+    #[inline]
+    fn str_lookup(&self, hash: u64, bytes: &[u8]) -> Option<Interned> {
+        self.strings
+            .get(&hash)
+            .filter(|e| e.bytes == bytes)
+            .map(|e| Interned {
+                bytes: e.bytes,
+                word: e.word,
+                hash,
+            })
+    }
+
+    /// Record `b` under `hash`; the entry it collides with, if any, keeps
+    /// its own content. A full table records nothing more, so a fold that
+    /// makes a million unique strings cannot grow it without bound.
     #[inline]
     fn str_record(&mut self, hash: u64, b: &'static [u8]) -> Interned {
-        self.stats.note(Stat::Bytes, b.len());
+        if self.strings.len() >= STRINGS_CAP {
+            return Interned {
+                bytes: b,
+                word: Word::EMPTY,
+                hash: 0,
+            };
+        }
         let e = self.strings.entry(hash).or_insert(StrEntry {
             bytes: b,
             word: Word::EMPTY,
@@ -1033,17 +1057,22 @@ impl Arena {
     #[inline]
     pub(crate) fn intern_bytes(&mut self, bytes: &[u8]) -> Interned {
         let hash = Self::str_hash(bytes);
-        if let Some(e) = self.strings.get(&hash)
-            && e.bytes == bytes
-        {
-            return Interned {
-                bytes: e.bytes,
-                word: e.word,
-                hash,
-            };
+        if let Some(i) = self.str_lookup(hash, bytes) {
+            return i;
         }
+        self.stats.note(Stat::Bytes, bytes.len());
         let b = self.alloc_bytes(bytes);
         self.str_record(hash, b)
+    }
+
+    /// Like `intern_bytes` for bytes that live as long as the session
+    /// already, such as a slice of another string: recorded without a copy.
+    pub(crate) fn intern_static(&mut self, bytes: &'static [u8]) -> Interned {
+        let hash = Self::str_hash(bytes);
+        if let Some(i) = self.str_lookup(hash, bytes) {
+            return i;
+        }
+        self.str_record(hash, bytes)
     }
 
     /// Like `intern_bytes` for the concatenation of `parts`: the pieces are
@@ -1052,18 +1081,13 @@ impl Arena {
         let m = self.mark();
         let b = self.alloc_concat(parts);
         let hash = Self::str_hash(b);
-        if let Some(e) = self.strings.get(&hash).copied()
-            && e.bytes == b
-        {
+        if let Some(i) = self.str_lookup(hash, b) {
             // SAFETY: the content was already interned, so `b` is dead from
             // here on and nothing else was allocated since `m`.
             unsafe { self.release(m) };
-            return Interned {
-                bytes: e.bytes,
-                word: e.word,
-                hash,
-            };
+            return i;
         }
+        self.stats.note(Stat::Bytes, b.len());
         self.str_record(hash, b)
     }
 
@@ -1591,6 +1615,32 @@ mod alloc_tests {
         );
         assert_eq!(Arena::list_bytes(u32::MAX as usize + 1), None);
         assert_eq!(Arena::list_bytes(i64::MAX as usize), None);
+    }
+
+    #[test]
+    fn a_full_string_table_records_no_more_but_still_shares() {
+        let mut arena = Arena::new();
+        let first = arena.mk_string(b"s0");
+        for i in 1..STRINGS_CAP + 10 {
+            arena.mk_string(format!("s{i}").as_bytes());
+        }
+        assert_eq!(arena.strings.len(), STRINGS_CAP);
+        assert_eq!(arena.mk_string(b"s0"), first);
+        let late = format!("s{}", STRINGS_CAP + 5);
+        let w = arena.mk_string(late.as_bytes());
+        assert_eq!(w.as_string().unwrap().bytes, late.as_bytes());
+    }
+
+    #[test]
+    fn a_static_slice_is_interned_without_a_copy() {
+        let mut arena = Arena::new();
+        let whole = arena.intern_bytes(b"hello world").bytes;
+        let i = arena.intern_static(&whole[6..]);
+        assert_eq!(i.bytes.as_ptr(), whole[6..].as_ptr());
+        assert_eq!(
+            arena.intern_bytes(b"world").bytes.as_ptr(),
+            i.bytes.as_ptr()
+        );
     }
 
     #[test]
