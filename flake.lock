@@ -20,11 +20,11 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1791583640,
-        "narHash": "sha256-ybsywis04rckuPGo31BUoUIw766s1dVHgg5QJzyIV34=",
+        "lastModified": 1791748019,
+        "narHash": "sha256-0i78O8e0oYH9PotzVnoIJ9rgdEjBJTFzMDE4x7+rvAs=",
         "owner": "numtide",
         "repo": "nix-conformance",
-        "rev": "4cd33a49e6b7f2a2c33c8a5ed90aa1799c7988d5",
+        "rev": "bd2de5ff36ce49f47b32abb77909613def70af57",
         "type": "github"
       },
       "original": {

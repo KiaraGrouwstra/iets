@@ -136,6 +136,7 @@ names them.
   `git-hashing` and `impure-derivations`, which `drv-oracle` turns on.
   `drv/shape/fixed-git-sha1.drv` and `drv/shape/impure.drv` of
   nix-conformance hit it, and `fuzz/conformance-known` lists them.
+  (`drv-impure-output`, `drv-git-hash-method`)
 - **A store path with no dash after the hash**, such as
   `/nix/store/<hash>Xname`: Nix's `StorePath` checks the length, the hash
   characters and the name, but not the byte between them (`path.cc`).
