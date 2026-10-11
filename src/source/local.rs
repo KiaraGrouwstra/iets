@@ -8,8 +8,8 @@
 //! consulted. The SCM records its own observations and the copied file set
 //! is a `Tree` observation, so the tracing cache follows the tree.
 
-use crate::sys::OsStrExt;
 use crate::sys::fs::mtime_secs;
+use crate::sys::{self, OsStrExt};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -160,7 +160,10 @@ pub fn commit_tree(
             ("type".into(), AttrVal::Str(scm.name().into())),
             (
                 "url".into(),
-                AttrVal::Str(format!("file://{}", root.to_string_lossy())),
+                AttrVal::Str(format!(
+                    "file://{}",
+                    String::from_utf8_lossy(&sys::path_to_internal(root))
+                )),
             ),
             ("narHash".into(), AttrVal::Str(hash.to_sri())),
             ("rev".into(), AttrVal::Str(rev.to_string())),
@@ -250,7 +253,10 @@ pub fn workdir(
     attrs.insert("type".into(), AttrVal::Str(scm.name().into()));
     attrs.insert(
         "url".into(),
-        AttrVal::Str(format!("file://{}", root.to_string_lossy())),
+        AttrVal::Str(format!(
+            "file://{}",
+            String::from_utf8_lossy(&sys::path_to_internal(root))
+        )),
     );
     attrs.insert("narHash".into(), AttrVal::Str(hash.to_sri()));
     attrs.insert("lastModified".into(), AttrVal::Int(at.last_modified));

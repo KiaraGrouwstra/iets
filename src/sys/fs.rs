@@ -7,7 +7,7 @@ use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt,
 
 use std::fs::{self, DirBuilder, File, Metadata, OpenOptions, Permissions};
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rustix::fs::{
     AtFlags, CWD, FlockOperation, OFlags, Timespec, Timestamps, UTIME_NOW, flock, futimens,
@@ -17,7 +17,7 @@ use rustix::io::Errno;
 
 /// Fills `buf` from `offset`, without moving the file's cursor.
 /// The resolved path. Unix has nothing to strip.
-pub fn canonicalize(p: &Path) -> io::Result<std::path::PathBuf> {
+pub fn canonicalize(p: &Path) -> io::Result<PathBuf> {
     fs::canonicalize(p)
 }
 

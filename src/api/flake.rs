@@ -3,13 +3,14 @@
 //! and nothing above this line reaches into it (docs/explanation/plumbing-and-porcelain.md).
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 use crate::eval::{EvalResult, Evaluator, Pos};
 use crate::flake;
 use crate::runtime::Word;
 use crate::source::{self, AttrVal, Attrs, Lock, SourceRef, lock};
+use crate::sys;
 
 pub use crate::flake::FlakeRef;
 pub use crate::source::Tree;
@@ -36,6 +37,11 @@ pub fn outputs(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
     flake::eval_flake(ev, fr)
 }
 
+/// A local path as a URL carries it: `/C:/x` for a Windows drive.
+fn url_path(p: &Path) -> String {
+    String::from_utf8_lossy(&sys::path_to_internal(p)).into_owned()
+}
+
 /// flakeref.cc:FlakeRef::to_string for the references iets parses: how a
 /// local flake names itself in a message.
 pub fn url(fr: &FlakeRef) -> String {
@@ -45,7 +51,7 @@ pub fn url(fr: &FlakeRef) -> String {
                 "" => String::new(),
                 d => format!("?dir={d}"),
             };
-            format!("{}+file://{}{dir}", scm.name(), root.display())
+            format!("{}+file://{}{dir}", scm.name(), url_path(root))
         }
         _ => format!("path:{}", fr.dir.display()),
     }
