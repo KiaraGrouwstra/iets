@@ -10,9 +10,6 @@ The reference is Nix 2.34.8, the `nixVersions.stable` of the nixpkgs in
 later changed a behavior, iets keeps the 2.34.8 one unless this page says
 otherwise.
 
-iets builds and runs on x86_64-linux and aarch64-linux only. It does not
-build on macOS.
-
 ## How parity is checked
 
 `checks.conformance` runs the cases of nix-conformance against the answers

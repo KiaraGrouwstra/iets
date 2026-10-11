@@ -4,10 +4,8 @@ iets is a Nix evaluator that gives the same answers as Nix, only faster. In
 about ten minutes you'll build it, point it at nixpkgs, build something, and
 see why the second run of anything is nearly free.
 
-You need Linux on x86_64 or aarch64, a checkout of this repository, a
-working `nix` with flakes, and a running `nix-daemon`. iets doesn't build
-on macOS. Stay in one terminal and run the commands in order, because later
-steps use files and variables from earlier ones.
+You need a working `nix` with flakes, and a running `nix-daemon`.
+Stay in one terminal and run the commands in order, because later steps use files and variables from earlier ones.
 
 iets is tested against Nix 2.34.8, and "the same answers" means the answers
 of that release. Newer releases, such as Nix 2.35, aren't tested. The places
@@ -42,12 +40,12 @@ iets 0.1.0
 ```
 
 Later, when you want iets without a checkout, Nix can build it from the
-flake. These work on Linux only, like the build in this section:
+flake. `nix run` and `nix profile`.
 
 ```sh
 nix run github:numtide/iets -- version    # run it once
 nix profile add github:numtide/iets       # keep it on your PATH
-nix build github:numtide/iets#static      # one static binary, with no runtime dependencies
+nix build github:numtide/iets#static      # one static binary, with no runtime dependencies (only on Linux)
 ```
 
 The static binary is described in
