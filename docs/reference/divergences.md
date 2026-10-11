@@ -120,6 +120,12 @@ names them.
 - **A `blake3` hash:** Nix needs the experimental feature
   `blake3-hashes`; in iets every feature is on (see "Experimental-feature
   builtins"). (`drv-blake3-without-feature`)
+- **A `git:` output hash or an `impure` output:** iets stops with
+  `unsupported output hash method` or `impure derivations are not
+  supported`. Nix reads both with the experimental features
+  `git-hashing` and `impure-derivations`, which `drv-oracle` turns on.
+  `drv/shape/fixed-git-sha1.drv` and `drv/shape/impure.drv` of
+  nix-conformance hit it, and `fuzz/conformance-known` lists them.
 - **A store path with no dash after the hash**, such as
   `/nix/store/<hash>Xname`: Nix's `StorePath` checks the length, the hash
   characters and the name, but not the byte between them (`path.cc`).
