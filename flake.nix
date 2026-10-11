@@ -3,8 +3,13 @@
   inputs.crane.url = "github:ipetkov/crane";
   # the reference stays on its own nixpkgs, where nix is 2.34.8
   inputs.nix-conformance.url = "github:numtide/nix-conformance";
-  outputs = { self, nixpkgs, crane, nix-conformance }:
+  inputs.hercules-ci-effects.url = "github:hercules-ci/hercules-ci-effects";
+  inputs.hercules-ci-effects.inputs.nixpkgs.follows = "nixpkgs";
+  outputs = { self, nixpkgs, crane, nix-conformance, hercules-ci-effects }:
     let
+      lib = nixpkgs.lib;
+      # Cargo.toml must agree: checks.version fails when it does not
+      version = lib.fileContents ./VERSION;
       systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
       # Every file in nix/ is a function of what it needs; callPackage fills
       # it from this scope or from nixpkgs.
@@ -12,7 +17,7 @@
         inherit pkgs nixpkgs nix-conformance;
         craneSrc = crane;
         craneLib = crane.mkLib pkgs;
-        commonArgs = { pname = "iets"; version = "0.1.0"; strictDeps = true; };
+        commonArgs = { pname = "iets"; inherit version; strictDeps = true; };
         sources = final.callPackage ./nix/sources.nix { };
         iets = final.callPackage ./nix/iets.nix { };
         ietsStatic = (scopeFor pkgs.pkgsStatic).iets;
@@ -37,15 +42,37 @@
       onLinux = scope: linux: other:
         if scope.pkgs.stdenv.hostPlatform.isLinux then linux else other;
       forAll = f: nixpkgs.lib.genAttrs systems (s: f (scopeFor nixpkgs.legacyPackages.${s}));
+      x86 = nixpkgs.legacyPackages.x86_64-linux;
+      release = x86.callPackage ./nix/release.nix {
+        inherit version;
+        static = lib.genAttrs [ "x86_64-linux" "aarch64-linux" ]
+          (s: (scopeFor nixpkgs.legacyPackages.${s}).ietsStatic);
+      };
+      notes = ./release-notes + "/v${version}.md";
     in {
       devShells = forAll (scope: { default = scope.devShell; });
       nixosModules.default = import ./nix/module.nix self;
       lib.mkClassic = pkgs: iets: nix: pkgs.callPackage ./nix/classic.nix { inherit iets nix; };
-      packages = forAll (scope: onLinux scope
-        (scope.callPackages ./nix/packages.nix { })
-        { default = scope.iets; });
+      packages = lib.recursiveUpdate
+        (forAll (scope: onLinux scope
+          (scope.callPackages ./nix/packages.nix { })
+          { default = scope.iets; }))
+        { x86_64-linux = { inherit release; }; };
       checks = forAll (scope: onLinux scope
         (scope.callPackages ./nix/checks.nix { })
         { build = scope.iets; devShell = scope.devShell; });
+      herculesCI = { primaryRepo, ... }: {
+        onPush.default.outputs = {
+          inherit release;
+          effects.release = import ./nix/release-effect.nix {
+            pkgs = x86;
+            hci-effects = hercules-ci-effects.lib.withPkgs x86;
+            inherit version release;
+            notes = if builtins.pathExists notes then notes else null;
+            inherit (primaryRepo) rev;
+            repo = "numtide/iets";
+          };
+        };
+      };
     };
 }
