@@ -38,6 +38,12 @@ in
   langtests = nuScript "langtests";
   linttest = nuScript "linttest";
   partest = nuScript "partest";
+  # VERSION is what the release effect publishes; cargo cannot read it
+  version = let cargo = (lib.importTOML ../Cargo.toml).package.version; in
+    runCommand "iets-version" { } (if cargo == commonArgs.version then "touch $out" else ''
+      echo "VERSION is ${commonArgs.version} but Cargo.toml is ${cargo}" >&2
+      exit 1
+    '');
   static = ietsStatic;
 }
 # catches a missing per-arch cfg

@@ -14,5 +14,5 @@ in
   scripts = sourceOf [ ../scripts ../tests ];
   astGrep = sourceOf [ ../sgconfig.yml ./ast-grep (fs.fileFilter (f: f.hasExt "rs") root) ];
   # the e2e containers evaluate this flake as a git checkout
-  e2e = sourceOf (bin ++ [ ../flake.nix ../flake.lock ../tests ../examples ../scripts ../nix ../fuzz ../sgconfig.yml ]);
+  e2e = sourceOf (bin ++ [ ../flake.nix ../flake.lock ../VERSION ../release-notes ../tests ../examples ../scripts ../nix ../fuzz ../sgconfig.yml ]);
 }
