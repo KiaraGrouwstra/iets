@@ -2,6 +2,7 @@
 //! hashed the way Nix addresses them.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::hash::Hash as Hashable;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::{fs, io, thread};
@@ -162,15 +163,11 @@ pub struct Resolved {
 /// before it asks about the closure of what is left in one call.
 const TOP_DOWN_LEVELS: usize = 2;
 
-/// The nodes reachable from `roots` through nodes the store lacks; a node is
-/// lacking when the store lacks any of its `keys`. A store holds the closure
-/// of every path it holds, so nothing below a held node is asked about: the
-/// roots first, then the children of the missing ones, and after
-/// `TOP_DOWN_LEVELS` levels the closure of what is left. A warm store answers
-/// in one or two small calls, and a cold one costs two extra round trips.
-/// `answered`: the base names the store holds of the roots' keys, when the
-/// caller already asked.
-pub fn missing_top_down<N: Copy + Eq + std::hash::Hash>(
+/// The nodes reachable from `roots` through nodes lacking any of their
+/// `keys`. A store holds the closure of every path it holds, so nothing below
+/// a held node is asked about; a warm store answers in one or two small calls.
+/// `answered`: what the store holds of the roots' keys, if already asked.
+pub fn missing_top_down<N: Copy + Eq + Hashable>(
     roots: Vec<N>,
     keys: &dyn Fn(N) -> Result<Vec<StorePath>>,
     children: &dyn Fn(N) -> Vec<N>,
