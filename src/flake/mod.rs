@@ -73,7 +73,14 @@ fn is_indirect(loc: &str) -> bool {
 pub fn parse_flake_ref(arg: &str, cwd: &[u8], home: Option<&[u8]>) -> Result<FlakeRef> {
     let p = flakeref::parse(arg)?;
     let loc = arg.split('#').next().unwrap_or(arg);
-    let why = match source::str_attr(&p.input, "type") {
+    let ty = source::str_attr(&p.input, "type");
+    // A checkout an SCM names: CI pins the tree it evaluates as
+    // `git+file:///path?ref=HEAD&rev=SHA`, which this process reads out of
+    // the repository beside it (docs/reference/flakes.md).
+    if let Some(scm) = ty.filter(|_| !p.bare).and_then(source::scm::named) {
+        return scm_flake(&p, scm, loc, parse_attr_path(&p.fragment)?);
+    }
+    let why = match ty {
         Some("path") => None,
         Some("indirect") => Some(format!(
             "flake registry references ({loc}#…) are not supported; use a path or a locked input"
@@ -103,6 +110,53 @@ pub fn parse_flake_ref(arg: &str, cwd: &[u8], home: Option<&[u8]>) -> Result<Fla
         _ => [cwd, b"/", loc.as_bytes()].concat(),
     };
     local_flake(&full, !p.bare, parse_attr_path(&p.fragment)?)
+}
+
+/// `git+file:///path[?ref=…&rev=…][&dir=…]`: the flake in `dir` of that
+/// tree. With a `rev` the source is that revision, read out of the
+/// repository; without one it is the working tree, as Nix reads it. A `ref`
+/// beside a `rev` is advisory, as it is for Nix: the rev names the tree. The
+/// `flake.lock` is the checked-out one either way
+/// (docs/reference/divergences.md).
+fn scm_flake(
+    p: &flakeref::Parsed,
+    scm: &'static dyn source::scm::Scm,
+    loc: &str,
+    attr: Vec<String>,
+) -> Result<FlakeRef> {
+    const KNOWN: [&str; 4] = ["type", "url", "ref", "rev"];
+    if let Some(k) = p.input.keys().find(|k| !KNOWN.contains(&k.as_str())) {
+        return Err(Error::Unsupported(format!(
+            "'{k}' in flake reference '{loc}' is not supported"
+        )));
+    }
+    let url = source::str_attr(&p.input, "url").unwrap_or("");
+    let Some(root) = flakeref::file_url_path(url).filter(|r| r.starts_with('/')) else {
+        return Err(Error::Unsupported(format!(
+            "flake reference '{loc}' is a '{}' input; only local paths are supported (iets cannot fetch a root flake)",
+            scm.name()
+        )));
+    };
+    let dir = Path::new(&root).join(&p.dir);
+    let bytes = <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::as_bytes(dir.as_os_str());
+    let mut fr = local_flake(bytes, false, attr)?;
+    let Some(rev) = source::str_attr(&p.input, "rev") else {
+        if p.input.contains_key("ref") {
+            return Err(Error::Unsupported(format!(
+                "flake reference '{loc}' names a '{}' but no 'rev'; iets resolves no reference of a root flake, so name the rev or the directory",
+                scm.name()
+            )));
+        }
+        return Ok(fr);
+    };
+    fr.source = source::SourceRef::Commit {
+        scm,
+        root: PathBuf::from(&root),
+        rev: rev.to_string(),
+        subdir: p.dir.clone(),
+    };
+    fr.probed = false;
+    Ok(fr)
 }
 
 /// The flake in directory `full`: a `path:` input, or unless `explicit_path`
@@ -419,6 +473,7 @@ fn check_declared_inputs(
 mod tests {
     use super::*;
 
+    use crate::source::scm;
     use crate::store::nar::tests::fixture_tree;
 
     #[test]
@@ -484,5 +539,62 @@ mod tests {
 
         assert!(is_flake_ref(&format!("{}/sub", d.display())));
         assert!(!is_flake_ref("x.nix"));
+    }
+
+    #[test]
+    fn a_pinned_checkout_is_its_revision() {
+        let d = fixture_tree("flakeref-git");
+        fs::write(d.join("flake.nix"), b"{ outputs = _: {}; }").unwrap();
+        fs::create_dir_all(d.join("sub")).unwrap();
+        fs::write(d.join("sub/flake.nix"), b"{ outputs = _: {}; }").unwrap();
+        fs::create_dir_all(d.join(".git")).unwrap();
+        let rev = "0".repeat(39) + "1";
+        let git = scm::named("git").unwrap();
+        let url = format!("git+file://{}", d.display());
+
+        let r = parse_flake_ref(&format!("{url}?ref=HEAD&rev={rev}#a"), b"/", None).unwrap();
+        assert_eq!(r.dir, d);
+        assert_eq!(r.attr, ["a"]);
+        assert_eq!(
+            r.source,
+            SourceRef::Commit {
+                scm: git,
+                root: d.clone(),
+                rev: rev.clone(),
+                subdir: String::new(),
+            }
+        );
+
+        // `dir` is the flake inside the tree, and the tree stays the root
+        let r = parse_flake_ref(&format!("{url}?rev={rev}&dir=sub"), b"/", None).unwrap();
+        assert_eq!(r.dir, d.join("sub"));
+        assert_eq!(
+            r.source,
+            SourceRef::Commit {
+                scm: git,
+                root: d.clone(),
+                rev,
+                subdir: "sub".to_string(),
+            }
+        );
+
+        // no rev: the working tree, as a plain path resolves to
+        let r = parse_flake_ref(&url, b"/", None).unwrap();
+        assert_eq!(
+            r.source,
+            SourceRef::Tracked {
+                scm: git,
+                root: d.clone(),
+                subdir: String::new(),
+            }
+        );
+
+        let unsupported = |r: &str| match parse_flake_ref(r, b"/", None) {
+            Err(Error::Unsupported(m)) => m,
+            other => panic!("{r}: {other:?}"),
+        };
+        assert!(unsupported(&format!("{url}?ref=main")).contains("no 'rev'"));
+        assert!(unsupported(&format!("{url}?submodules=1")).contains("'submodules'"));
+        assert!(unsupported("git+https://x.org/a").contains("only local paths"));
     }
 }
