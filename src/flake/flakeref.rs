@@ -266,11 +266,27 @@ fn input_from_url(mut url: Url) -> R<Attrs> {
                 let k = ["ref", "rev"][usize::from(p.len() == 3 && is_rev(p[2]))];
                 a.insert(k.into(), AttrVal::Str(p[2..].join("/")));
             }
-            let q = url
+            for (k, v) in url
                 .query
                 .iter()
-                .filter(|(k, _)| listed("rev ref host narHash", k));
-            a.extend(q.map(|(k, v)| (k.clone(), st(v))));
+                .filter(|(k, _)| listed("rev ref host narHash", k))
+            {
+                if a.contains_key(k) {
+                    let what = if k == "rev" {
+                        "commit hashes"
+                    } else {
+                        "branch/tag names"
+                    };
+                    return fail(format!("URL '{url}' contains multiple {what}"));
+                }
+                a.insert(k.clone(), st(v));
+            }
+            // github.cc:inputFromAttrs
+            if let (Some(AttrVal::Str(r)), Some(AttrVal::Str(v))) = (a.get("ref"), a.get("rev")) {
+                return fail(format!(
+                    "input '{url}' contains both a commit hash ('{v}') and a branch/tag name ('{r}')"
+                ));
+            }
             return Ok(a);
         }
         (_, "flake") => return indirect(&segments(&url.path), &url.to_string()),
@@ -296,7 +312,16 @@ fn to_url(a: &Attrs) -> R<Url> {
     let r#ref = str_attr(a, "ref");
     let mut u = match ty {
         "indirect" => url("flake", vec![get("id")?]),
-        "github" | "gitlab" => url(ty, vec![get("owner")?, get("repo")?]),
+        "github" | "gitlab" => {
+            // github.cc:inputFromAttrs; written as a path, the two would
+            // read back as one ref
+            if let (Some(r), Some(v)) = (r#ref, str_attr(a, "rev")) {
+                return fail(format!(
+                    "input contains both a commit hash ('{v}') and a branch/tag name ('{r}')"
+                ));
+            }
+            url(ty, vec![get("owner")?, get("repo")?])
+        }
         "path" => {
             let mut u = url("path", get("path")?.split('/').map(String::from).collect());
             for (k, v) in a.iter().filter(|(k, _)| !listed("path type __final", k)) {
@@ -556,6 +581,20 @@ mod tests {
             (p.get("type"), p.fragment.as_str()),
             (Some("indirect"), "hello")
         );
+    }
+
+    /// Nix refuses these; keeping one of the two would fetch another commit.
+    #[test]
+    fn refuses_a_github_ref_named_twice() {
+        for s in [
+            "github:a/b/c?ref=d",
+            "gitlab:a/b/c?ref=d",
+            &format!("github:a/b/{REV}?rev={REV}"),
+            "github:a/b?ref=d&rev=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "github:a/b/c?rev=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ] {
+            assert!(parse_absolute(s).is_err(), "{s}");
+        }
     }
 
     #[test]
