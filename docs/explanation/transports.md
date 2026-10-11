@@ -21,8 +21,8 @@ GC-rooted, so a cold run is impossible. "Scratch daemon" is
 `nix-daemon --store local?root=DIR` on its own socket: an empty chroot
 store, so the cold numbers are real uploads and no build is attempted
 (`--no-build`). `ssh-ng://` is the same code over a child's stdio, tested
-with an `ssh` shim that runs `nix-daemon --stdio` locally, and by hand
-against nixbuild.net.
+with an `ssh` shim that runs `nix-daemon --stdio` locally, and against
+nixbuild.net ("Against nixbuild.net" below).
 
 | case | eval | plan | connect | QueryValidPaths | AddMultipleToStore | build (realise) | ops / round trips | bytes sent |
 |---|---|---|---|---|---|---|---|---|
@@ -47,6 +47,44 @@ copied yet.
 The upload is bound by the daemon: 0.3 to 0.5 ms per path for the sequential
 `addToStore`. Nothing on the client side changes that
 ([What was tried and removed](history.md)).
+
+### Against nixbuild.net
+
+`bench/nixbuild.nu` times `nix build --store ssh-ng://` (Nix 2.34.8)
+against `iets build --builder ssh-ng://` on eu.nixbuild.net. Each
+derivation is a few seconds of bash, and a new marker forces a real build.
+
+Two kinds of row bring the output back. "Into the local store" is
+`nix copy --from` for Nix and `-o` for iets; both register the path.
+"Into a directory" is iets `--fetch-to`, which needs no local store and has
+no Nix counterpart.
+
+The figures are provisional: 10 runs on 2026-10-10 from a shared 16-core VM
+at load 13 to 21, with an iets that predates the top-down query. `-o` is not
+measured yet. Seconds:
+
+| case | Nix mean ± σ | Nix min–max | iets mean ± σ | iets min–max |
+|---|---|---|---|---|
+| small, new marker | 2.02 ± 0.06 | 1.96–2.12 | 2.04 ± 0.18 | 1.76–2.37 |
+| small, new marker, into the local store | 2.39 ± 0.14 | 2.25–2.59 | not measured | |
+| small, new marker, into a directory | | | 1.95 ± 0.11 | 1.83–2.19 |
+| small, built before (cache hit) | 1.35 ± 0.07 | 1.27–1.44 | 0.97 ± 0.04 | 0.90–1.02 |
+| python3 drv closure, 16 MiB output | 2.60 ± 0.05 | 2.49–2.66 | 2.29 ± 0.07 | 2.19–2.37 |
+| the same, into the local store | 3.21 ± 0.10 | 3.12–3.40 | not measured | |
+| the same, into a directory | | | 2.56 ± 0.26 | 2.36–3.22 |
+
+A [nix-wire](https://github.com/numtide/nix-wire) recording of that run
+shows the same session for both clients: `QueryValidPaths` on 818 paths,
+one `AddMultipleToStore`, one `BuildPathsWithResults` of 1.1 s, and no
+`SetOptions`. Nix adds `QueryMissing` and `QueryPathInfo`; iets adds
+`QueryDerivationOutputMap`. With the top-down query, an iets cache hit now
+sends two one-path queries: 232 bytes instead of 66 KB.
+
+The difference is evaluation. At load 2, iets evaluates the file in
+0.115 s and Nix in 0.51 s.
+
+iets needs no local store here: with no `nix` on `PATH` and no daemon
+socket, it runs only `ssh` and writes the output to `--fetch-to`.
 
 ### Upload integrity
 

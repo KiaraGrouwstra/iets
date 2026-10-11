@@ -7,4 +7,7 @@ bench/results/*
 !bench/results/env.txt
 !bench/results/nixos-*.json
 !bench/results/nixos-*.md
+!bench/results/nixbuild-*.json
+!bench/results/nixbuild-*.md
+!bench/results/nixbuild-env.txt
 *.profraw

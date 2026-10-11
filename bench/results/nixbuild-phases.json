@@ -1,0 +1,302 @@
+[
+  {
+    "case": "nixbuild-dispatch",
+    "client": "nix",
+    "run": 1,
+    "eval": 1.0587379932403564,
+    "upload": 0.4702482223510742,
+    "build": 0.6585137844085693,
+    "fetch": 0.012511014938354492,
+    "total": 2.2000110149383545
+  },
+  {
+    "case": "nixbuild-dispatch",
+    "client": "iets w4",
+    "run": 1,
+    "eval": 0.839,
+    "upload": 0.541,
+    "build": 1.112,
+    "fetch": 0.006,
+    "total": 2.5229711532592773
+  },
+  {
+    "case": "nixbuild-dispatch",
+    "client": "nix",
+    "run": 2,
+    "eval": 0.9765698909759521,
+    "upload": 0.45934510231018066,
+    "build": 0.6417100429534912,
+    "fetch": 0.015513896942138672,
+    "total": 2.0931389331817627
+  },
+  {
+    "case": "nixbuild-dispatch",
+    "client": "iets w4",
+    "run": 2,
+    "eval": 0.509,
+    "upload": 0.44500000000000006,
+    "build": 1.125,
+    "fetch": 0.007,
+    "total": 2.107072114944458
+  },
+  {
+    "case": "nixbuild-dispatch",
+    "client": "nix",
+    "run": 3,
+    "eval": 1.1000161170959473,
+    "upload": 0.46736693382263184,
+    "build": 0.6715691089630127,
+    "fetch": 0.017673969268798828,
+    "total": 2.2566261291503906
+  },
+  {
+    "case": "nixbuild-dispatch",
+    "client": "iets w4",
+    "run": 3,
+    "eval": 0.605,
+    "upload": 0.43900000000000006,
+    "build": 1.076,
+    "fetch": 0.006,
+    "total": 2.153278112411499
+  },
+  {
+    "case": "nixbuild-dispatch-fetch",
+    "client": "nix",
+    "run": 1,
+    "eval": 1.0440330505371094,
+    "upload": 0.4603691101074219,
+    "build": 0.6499600410461426,
+    "fetch": 0.2810925811678467,
+    "total": 2.4354547828585207
+  },
+  {
+    "case": "nixbuild-dispatch-fetchto",
+    "client": "iets w4",
+    "run": 1,
+    "eval": 0.522,
+    "upload": 0.609,
+    "build": 1.084,
+    "fetch": 0.013000000000000001,
+    "total": 2.255591869354248
+  },
+  {
+    "case": "nixbuild-dispatch-fetch",
+    "client": "nix",
+    "run": 2,
+    "eval": 1.075326919555664,
+    "upload": 0.47059011459350586,
+    "build": 0.6803388595581055,
+    "fetch": 0.2778109357484131,
+    "total": 2.5040668294556885
+  },
+  {
+    "case": "nixbuild-dispatch-fetchto",
+    "client": "iets w4",
+    "run": 2,
+    "eval": 0.526,
+    "upload": 0.42700000000000005,
+    "build": 1.089,
+    "fetch": 0.015,
+    "total": 2.0823888778686523
+  },
+  {
+    "case": "nixbuild-dispatch-fetch",
+    "client": "nix",
+    "run": 3,
+    "eval": 0.9742081165313721,
+    "upload": 0.45997190475463867,
+    "build": 0.6750030517578125,
+    "fetch": 0.29281256495263674,
+    "total": 2.40199563799646
+  },
+  {
+    "case": "nixbuild-dispatch-fetchto",
+    "client": "iets w4",
+    "run": 3,
+    "eval": 0.519,
+    "upload": 0.44100000000000006,
+    "build": 1.101,
+    "fetch": 0.012,
+    "total": 2.1027870178222656
+  },
+  {
+    "case": "nixbuild-cachehit",
+    "client": "nix",
+    "run": 1,
+    "eval": 0.8434200286865234,
+    "upload": 0.3085329532623291,
+    "build": 0.0,
+    "fetch": 0.0,
+    "total": 1.1519529819488525
+  },
+  {
+    "case": "nixbuild-cachehit",
+    "client": "iets w4",
+    "run": 1,
+    "eval": 0.359,
+    "upload": 0.42000000000000004,
+    "build": 0.276,
+    "fetch": 0.006,
+    "total": 1.0800869464874268
+  },
+  {
+    "case": "nixbuild-cachehit",
+    "client": "nix",
+    "run": 2,
+    "eval": 0.9909658432006836,
+    "upload": 0.32526612281799316,
+    "build": 0.0,
+    "fetch": 0.0,
+    "total": 1.3162319660186768
+  },
+  {
+    "case": "nixbuild-cachehit",
+    "client": "iets w4",
+    "run": 2,
+    "eval": 0.58,
+    "upload": 0.427,
+    "build": 0.278,
+    "fetch": 0.007,
+    "total": 1.324958086013794
+  },
+  {
+    "case": "nixbuild-cachehit",
+    "client": "nix",
+    "run": 3,
+    "eval": 1.1542539596557617,
+    "upload": 0.30812716484069824,
+    "build": 0.0,
+    "fetch": 0.0,
+    "total": 1.46238112449646
+  },
+  {
+    "case": "nixbuild-cachehit",
+    "client": "iets w4",
+    "run": 3,
+    "eval": 0.256,
+    "upload": 0.426,
+    "build": 0.278,
+    "fetch": 0.007,
+    "total": 0.9964168071746826
+  },
+  {
+    "case": "nixbuild-closure",
+    "client": "nix",
+    "run": 1,
+    "eval": 1.1507511138916016,
+    "upload": 0.49082088470458984,
+    "build": 0.9935779571533203,
+    "fetch": 0.01734018325805664,
+    "total": 2.6524901390075684
+  },
+  {
+    "case": "nixbuild-closure",
+    "client": "iets w4",
+    "run": 1,
+    "eval": 0.756,
+    "upload": 0.45300000000000007,
+    "build": 1.513,
+    "fetch": 0.006,
+    "total": 2.7559549808502197
+  },
+  {
+    "case": "nixbuild-closure",
+    "client": "nix",
+    "run": 2,
+    "eval": 1.0432219505310059,
+    "upload": 0.4912729263305664,
+    "build": 1.0239529609680176,
+    "fetch": 0.015993118286132813,
+    "total": 2.5744409561157227
+  },
+  {
+    "case": "nixbuild-closure",
+    "client": "iets w4",
+    "run": 2,
+    "eval": 0.595,
+    "upload": 0.44500000000000006,
+    "build": 1.475,
+    "fetch": 0.007,
+    "total": 2.5583930015563965
+  },
+  {
+    "case": "nixbuild-closure",
+    "client": "nix",
+    "run": 3,
+    "eval": 1.2398431301116943,
+    "upload": 0.48836493492126465,
+    "build": 1.0011298656463623,
+    "fetch": 0.01867818832397461,
+    "total": 2.748016119003296
+  },
+  {
+    "case": "nixbuild-closure",
+    "client": "iets w4",
+    "run": 3,
+    "eval": 0.785,
+    "upload": 0.47200000000000003,
+    "build": 1.441,
+    "fetch": 0.007,
+    "total": 2.7387819290161133
+  },
+  {
+    "case": "nixbuild-closure-fetch",
+    "client": "nix",
+    "run": 1,
+    "eval": 1.2331948280334473,
+    "upload": 0.49153614044189453,
+    "build": 0.9961938858032227,
+    "fetch": 0.6880160924810791,
+    "total": 3.4089409467596434
+  },
+  {
+    "case": "nixbuild-closure-fetchto",
+    "client": "iets w4",
+    "run": 1,
+    "eval": 0.952,
+    "upload": 0.45100000000000007,
+    "build": 1.475,
+    "fetch": 0.215,
+    "total": 3.1234848499298096
+  },
+  {
+    "case": "nixbuild-closure-fetch",
+    "client": "nix",
+    "run": 2,
+    "eval": 1.1908249855041504,
+    "upload": 0.5056040287017822,
+    "build": 0.993304967880249,
+    "fetch": 0.6485902255506591,
+    "total": 3.3383242076368407
+  },
+  {
+    "case": "nixbuild-closure-fetchto",
+    "client": "iets w4",
+    "run": 2,
+    "eval": 0.641,
+    "upload": 0.4610000000000001,
+    "build": 1.476,
+    "fetch": 0.242,
+    "total": 2.9086148738861084
+  },
+  {
+    "case": "nixbuild-closure-fetch",
+    "client": "nix",
+    "run": 3,
+    "eval": 1.0784411430358887,
+    "upload": 0.4844779968261719,
+    "build": 0.9748308658599854,
+    "fetch": 0.737889482744751,
+    "total": 3.2756394884667968
+  },
+  {
+    "case": "nixbuild-closure-fetchto",
+    "client": "iets w4",
+    "run": 3,
+    "eval": 0.396,
+    "upload": 0.43600000000000005,
+    "build": 1.486,
+    "fetch": 0.227,
+    "total": 2.663645029067993
+  }
+]
