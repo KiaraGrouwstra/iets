@@ -212,6 +212,8 @@ pub struct Timings {
     pub build: Duration,
     pub outputs: Duration,
     pub fetch: Duration,
+    /// `-o`: the copy into the local store and the GC roots.
+    pub link: Duration,
     pub trusted: Option<bool>,
     pub query_paths: usize,
     pub missing: usize,
@@ -224,6 +226,9 @@ pub struct Timings {
     pub add_paths: usize,
     pub add_bytes: u64,
     pub fetched: usize,
+    pub links: usize,
+    /// Paths `-o` copied into the local store; the rest it already held.
+    pub link_copied: usize,
 }
 
 impl Timings {
@@ -287,6 +292,14 @@ impl Timings {
                 "\nfetch: {} outputs, {:.3}s",
                 self.fetched,
                 self.fetch.as_secs_f64()
+            ));
+        }
+        if self.links > 0 {
+            s.push_str(&format!(
+                "\nlink: {} out-links, {} paths copied, {:.3}s",
+                self.links,
+                self.link_copied,
+                self.link.as_secs_f64()
             ));
         }
         s
@@ -454,16 +467,22 @@ impl Backend for Worker {
         if links.is_empty() {
             return Ok(());
         }
-        if self.transport == local() {
-            return add_roots(&mut self.conn, links);
-        }
-        // A symlink and its GC root are worth nothing without the path they
-        // name, so the closure comes back to the local daemon first.
-        let paths = link_targets(links)?;
-        let mut conn = Connection::open(&local(), &mut |_| {})?;
-        let from = self.transport.uri();
-        copy::closure(&mut self.conn, &from, &mut conn, &paths, &mut |_| {})?;
-        add_roots(&mut conn, links)
+        let t0 = Instant::now();
+        self.t.links += links.len();
+        let r = if self.transport == local() {
+            add_roots(&mut self.conn, links)
+        } else {
+            // A symlink and its GC root are worth nothing without the path they
+            // name, so the closure comes back to the local daemon first.
+            let paths = link_targets(links)?;
+            let mut conn = Connection::open(&local(), &mut |_| {})?;
+            let from = self.transport.uri();
+            self.t.link_copied +=
+                copy::closure(&mut self.conn, &from, &mut conn, &paths, &mut |_| {})?;
+            add_roots(&mut conn, links)
+        };
+        self.t.link += t0.elapsed();
+        r
     }
 
     fn note_connect(&mut self, d: Duration) {
@@ -528,6 +547,9 @@ pub(crate) mod tests {
             add_paths: 4,
             add_bytes: 3,
             fetched: 2,
+            link: Duration::from_millis(10),
+            links: 1,
+            link_copied: 3,
         }
     }
 
@@ -550,6 +572,7 @@ pub(crate) mod tests {
              build: 0.006s\n\
              outputs: 0.007s\n\
              fetch: 2 outputs, 0.008s\n\
+             link: 1 out-links, 3 paths copied, 0.010s\n\
              worker: 1 ops, 2 round trips, 3 bytes sent"
         );
     }
