@@ -265,9 +265,14 @@ impl Fiber {
     #[inline(never)]
     pub unsafe fn resume(&mut self) {
         if self.sp.is_null() {
-            // SAFETY: `top` ends the stack mapping, which has room for the frame.
+            // SAFETY: the stack mapping has room for the frame.
             self.sp = unsafe {
-                context::seed_stack(self.stack.top(), fiber_main, self as *mut Fiber as *mut ())
+                context::seed_stack(
+                    self.stack.base,
+                    self.stack.top(),
+                    fiber_main,
+                    self as *mut Fiber as *mut (),
+                )
             };
         }
         unsafe { context::switch(&mut self.caller_sp, self.sp) };
