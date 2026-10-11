@@ -12,7 +12,7 @@
 //! Outputs land in the farm's binary cache, not in a local store, so an
 //! out-link needs them registered locally first (docs/reference/builders.md).
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -207,78 +207,47 @@ fn build_batch(
     Ok(out)
 }
 
-/// The derivations of the roots' closure whose outputs the store lacks. Asked
-/// top-down like `Plan::query_valid`: a valid output's closure is valid, so
-/// nothing below a derivation the store has built is asked about or built.
+/// The derivations of the roots' closure whose outputs the store lacks
+/// (`plan::missing_top_down`): nothing below a derivation the store has
+/// built is asked about or built.
 fn missing_drvs<'a>(
     drvs: &'a BTreeMap<StorePath, Derivation>,
     roots: Vec<&'a StorePath>,
     query: &mut dyn FnMut(&[String]) -> Result<HashSet<String>>,
-) -> Result<BTreeSet<&'a StorePath>> {
-    let outputs = |p: &StorePath| -> Result<Vec<String>> {
-        let drv = &drvs[p];
-        let mut names = Vec::new();
-        for (name, o) in &drv.outputs {
-            let Some(out) = o.path(&drv.name, name)? else {
-                return Err(Error::Plan(format!(
-                    "'{p}': output '{name}' has no statically known path; the build \
-                     farm needs statically known input and output paths"
-                )));
-            };
-            names.push(out.base_name().to_string());
-        }
-        Ok(names)
-    };
-    let inputs = |p: &StorePath| {
-        drvs[p]
-            .input_drvs
-            .keys()
-            .filter_map(|d| drvs.get_key_value(d).map(|(k, _)| k))
-    };
-    let mut valid: HashSet<String> = HashSet::new();
-    let mut known: HashSet<&StorePath> = HashSet::new();
-    let mut seen: HashSet<&StorePath> = HashSet::new();
-    let mut needs = BTreeSet::new();
-    let mut level = roots;
-    for depth in 0.. {
-        level.retain(|p| seen.insert(*p));
-        if level.is_empty() {
-            break;
-        }
-        let mut ask: Vec<&StorePath> = level
-            .iter()
-            .copied()
-            .filter(|p| !known.contains(p))
-            .collect();
-        if depth >= plan::TOP_DOWN_LEVELS {
-            let mut stack = ask;
-            ask = Vec::new();
-            while let Some(p) = stack.pop() {
-                if known.insert(p) {
-                    ask.push(p);
-                    stack.extend(inputs(p));
-                }
+) -> Result<HashSet<&'a StorePath>> {
+    plan::missing_top_down(
+        roots,
+        &|p| {
+            let drv = &drvs[p];
+            let mut outs = Vec::new();
+            for (name, o) in &drv.outputs {
+                let Some(out) = o.path(&drv.name, name)? else {
+                    return Err(Error::Plan(format!(
+                        "'{p}': output '{name}' has no statically known path; the build \
+                         farm needs statically known input and output paths"
+                    )));
+                };
+                outs.push(out);
             }
-        } else {
-            known.extend(&ask);
-        }
-        if !ask.is_empty() {
-            let mut names = Vec::new();
-            for p in ask {
-                names.extend(outputs(p)?);
-            }
-            valid.extend(query(&names)?);
-        }
-        let mut next = Vec::new();
-        for p in level {
-            if outputs(p)?.iter().any(|o| !valid.contains(o)) {
-                needs.insert(p);
-                next.extend(inputs(p));
-            }
-        }
-        level = next;
-    }
-    Ok(needs)
+            Ok(outs)
+        },
+        &|p| {
+            drvs[p]
+                .input_drvs
+                .keys()
+                .filter_map(|d| drvs.get_key_value(d).map(|(k, _)| k))
+                .collect()
+        },
+        None,
+        &mut |paths| {
+            query(
+                &paths
+                    .iter()
+                    .map(|p| p.base_name().to_string())
+                    .collect::<Vec<_>>(),
+            )
+        },
+    )
 }
 
 impl Backend for Grpc {
@@ -481,7 +450,8 @@ mod tests {
                 .collect())
         })
         .unwrap();
-        let needs = needs.iter().map(|p| drvs[*p].name.clone()).collect();
+        let mut needs: Vec<String> = needs.iter().map(|p| drvs[*p].name.clone()).collect();
+        needs.sort();
         (needs, calls)
     }
 

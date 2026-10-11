@@ -158,80 +158,110 @@ pub struct Resolved {
     pub store_sources: usize,
 }
 
-/// Levels of the graph `Plan::query_valid` asks about one call at a time
-/// before it asks about everything left in one call.
-pub(crate) const TOP_DOWN_LEVELS: usize = 2;
+/// Levels of the graph `missing_top_down` asks about one call at a time
+/// before it asks about the closure of what is left in one call.
+const TOP_DOWN_LEVELS: usize = 2;
+
+/// The nodes reachable from `roots` through nodes the store lacks; a node is
+/// lacking when the store lacks any of its `keys`. A store holds the closure
+/// of every path it holds, so nothing below a held node is asked about: the
+/// roots first, then the children of the missing ones, and after
+/// `TOP_DOWN_LEVELS` levels the closure of what is left. A warm store answers
+/// in one or two small calls, and a cold one costs two extra round trips.
+/// `answered`: the base names the store holds of the roots' keys, when the
+/// caller already asked.
+pub fn missing_top_down<N: Copy + Eq + std::hash::Hash>(
+    roots: Vec<N>,
+    keys: &dyn Fn(N) -> Result<Vec<StorePath>>,
+    children: &dyn Fn(N) -> Vec<N>,
+    answered: Option<&HashSet<String>>,
+    query: &mut dyn FnMut(&[StorePath]) -> Result<HashSet<String>>,
+) -> Result<HashSet<N>> {
+    let mut valid: HashSet<String> = answered.cloned().unwrap_or_default();
+    let mut asked: HashSet<N> = HashSet::new();
+    if answered.is_some() {
+        asked.extend(&roots);
+    }
+    let mut seen: HashSet<N> = HashSet::new();
+    let mut missing: HashSet<N> = HashSet::new();
+    let mut level = roots;
+    for depth in 0.. {
+        level.retain(|n| seen.insert(*n));
+        if level.is_empty() {
+            break;
+        }
+        let mut ask: Vec<N> = level.iter().copied().filter(|n| asked.insert(*n)).collect();
+        if depth >= TOP_DOWN_LEVELS {
+            let mut stack = level.clone();
+            while let Some(n) = stack.pop() {
+                for c in children(n) {
+                    if asked.insert(c) {
+                        ask.push(c);
+                        stack.push(c);
+                    }
+                }
+            }
+        }
+        if !ask.is_empty() {
+            let mut paths = Vec::new();
+            for n in ask {
+                paths.extend(keys(n)?);
+            }
+            valid.extend(query(&paths)?);
+        }
+        let mut next = Vec::new();
+        for n in level {
+            if keys(n)?.iter().any(|k| !valid.contains(k.base_name())) {
+                missing.insert(n);
+                next.extend(children(n));
+            }
+        }
+        level = next;
+    }
+    Ok(missing)
+}
 
 impl Plan {
-    /// The base names of the plan's paths that the store holds. A store
-    /// holds the closure of every valid path, so a valid drv answers for all
-    /// it references: the roots are asked first, then the references of the
-    /// missing ones, then the rest in one call. A warm store answers in one
-    /// or two small calls, and a cold one costs two extra round trips.
-    /// `answered`: what the store said about the roots, when the caller
-    /// already asked.
-    pub fn query_valid(
+    /// The plan's paths in the closure of `roots` that the store lacks
+    /// (`missing_top_down`). A valid drv answers for all it references.
+    pub fn query_missing(
         &self,
         roots: &[StorePath],
         answered: Option<&HashSet<String>>,
-        query: &mut dyn FnMut(&[&StorePath]) -> Result<HashSet<String>>,
-    ) -> Result<HashSet<String>> {
-        let refs: HashMap<&StorePath, &BTreeSet<StorePath>> = self
+        query: &mut dyn FnMut(&[StorePath]) -> Result<HashSet<String>>,
+    ) -> Result<HashSet<&StorePath>> {
+        let planned: HashSet<&StorePath> = self
+            .sources
+            .iter()
+            .chain(self.drvs.iter().map(Object::store_path))
+            .collect();
+        let refs: HashMap<&StorePath, Vec<&StorePath>> = self
             .drvs
             .iter()
             .filter_map(|o| match o {
                 Object::Drv {
                     path, references, ..
-                } => Some((path, references)),
+                } => Some((
+                    path,
+                    references
+                        .iter()
+                        .filter_map(|r| planned.get(r).copied())
+                        .collect(),
+                )),
                 Object::Source { .. } => None,
             })
             .collect();
-        let all: Vec<&StorePath> = self
-            .sources
-            .iter()
-            .chain(self.drvs.iter().map(Object::store_path))
-            .collect();
-        let planned: HashSet<&StorePath> = all.iter().copied().collect();
-        let mut valid: HashSet<String> = HashSet::new();
-        let mut asked: HashSet<&StorePath> = HashSet::new();
-        let mut level: Vec<&StorePath> = roots
+        let roots = roots
             .iter()
             .filter_map(|r| planned.get(r).copied())
             .collect();
-        for depth in 0..TOP_DOWN_LEVELS {
-            level.retain(|p| !valid.contains(p.base_name()) && asked.insert(p));
-            if level.is_empty() {
-                break;
-            }
-            let got = match answered {
-                Some(a) if depth == 0 => a.clone(),
-                _ => query(&level)?,
-            };
-            let mut next = Vec::new();
-            for &p in &level {
-                if got.contains(p.base_name()) {
-                    let mut stack = vec![p];
-                    while let Some(q) = stack.pop() {
-                        if valid.insert(q.base_name().to_string())
-                            && let Some(rs) = refs.get(q)
-                        {
-                            stack.extend(rs.iter().filter_map(|r| planned.get(r).copied()));
-                        }
-                    }
-                } else if let Some(rs) = refs.get(p) {
-                    next.extend(rs.iter().filter_map(|r| planned.get(r).copied()));
-                }
-            }
-            level = next;
-        }
-        let rest: Vec<&StorePath> = all
-            .into_iter()
-            .filter(|p| !valid.contains(p.base_name()) && !asked.contains(p))
-            .collect();
-        if !rest.is_empty() {
-            valid.extend(query(&rest)?);
-        }
-        Ok(valid)
+        missing_top_down(
+            roots,
+            &|p| Ok(vec![p.clone()]),
+            &|p| refs.get(p).cloned().unwrap_or_default(),
+            answered,
+            query,
+        )
     }
 
     /// Locates and hashes `missing`, a subset of `sources` in plan order: eval-time origins
@@ -518,12 +548,19 @@ mod tests {
         }
     }
 
-    fn calls(plan: &Plan, held: &[&str]) -> (Vec<Vec<String>>, HashSet<String>) {
+    /// The calls made and the names found missing, both sorted per call.
+    fn calls(
+        plan: &Plan,
+        held: &[&str],
+        answered: Option<&HashSet<String>>,
+    ) -> (Vec<Vec<String>>, Vec<String>) {
         let held: HashSet<String> = held.iter().map(|n| sp(n).base_name().to_string()).collect();
         let mut seen = Vec::new();
-        let valid = plan
-            .query_valid(&[sp("root.drv")], None, &mut |ps| {
-                seen.push(ps.iter().map(|p| p.name().to_string()).collect());
+        let missing = plan
+            .query_missing(&[sp("root.drv")], answered, &mut |ps| {
+                let mut names: Vec<String> = ps.iter().map(|p| p.name().to_string()).collect();
+                names.sort();
+                seen.push(names);
                 Ok(ps
                     .iter()
                     .map(|p| p.base_name().to_string())
@@ -531,36 +568,44 @@ mod tests {
                     .collect())
             })
             .unwrap();
-        (seen, valid)
+        let mut missing: Vec<String> = missing.iter().map(|p| p.name().to_string()).collect();
+        missing.sort();
+        (seen, missing)
     }
 
     #[test]
     fn a_held_root_answers_for_its_closure() {
-        let (seen, valid) = calls(&chain(), &["root.drv"]);
+        let (seen, missing) = calls(&chain(), &["root.drv"], None);
         assert_eq!(seen, [["root.drv"]]);
-        assert_eq!(valid.len(), 5);
+        assert!(missing.is_empty());
     }
 
     #[test]
     fn a_held_input_answers_for_its_closure() {
-        let (seen, valid) = calls(&chain(), &["a.drv", "src"]);
-        assert_eq!(seen, vec![vec!["root.drv"], vec!["src", "a.drv"]]);
-        assert_eq!(valid.len(), 4);
-        assert!(!valid.contains(sp("root.drv").base_name()));
+        let (seen, missing) = calls(&chain(), &["a.drv", "src"], None);
+        assert_eq!(seen, vec![vec!["root.drv"], vec!["a.drv", "src"]]);
+        assert_eq!(missing, ["root.drv"]);
     }
 
     #[test]
     fn a_cold_store_is_asked_the_rest_in_one_call() {
-        let (seen, valid) = calls(&chain(), &[]);
+        let (seen, missing) = calls(&chain(), &[], None);
         assert_eq!(
             seen,
             vec![
                 vec!["root.drv"],
-                vec!["src", "a.drv"],
-                vec!["src-b", "b.drv"]
+                vec!["a.drv", "src"],
+                vec!["b.drv", "src-b"]
             ]
         );
-        assert!(valid.is_empty());
+        assert_eq!(missing, ["a.drv", "b.drv", "root.drv", "src", "src-b"]);
+    }
+
+    #[test]
+    fn an_answered_root_is_not_asked_again() {
+        let (seen, missing) = calls(&chain(), &["a.drv", "src"], Some(&HashSet::new()));
+        assert_eq!(seen, [["a.drv", "src"]]);
+        assert_eq!(missing, ["root.drv"]);
     }
 
     #[test]
