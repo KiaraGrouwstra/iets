@@ -5,11 +5,12 @@
 //! tests/{crash,concurrent,corrupt,gc}_test.cpp. See docs/explanation/caching.md.
 
 use std::collections::HashSet;
-use std::ffi::CString;
 use std::fs::{self, File, Permissions};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime};
+
+use rustix::fs::{CWD, Mode, mkfifoat};
 use std::{env, thread};
 
 use iets::cachefs;
@@ -291,8 +292,7 @@ fn an_entry_that_is_not_a_plain_file_is_refused() {
     assert!(cachefs::open_entry(&link).is_none(), "a symbolic link");
 
     let fifo = dir.join("fifo");
-    let c = CString::new(fifo.as_os_str().as_encoded_bytes()).expect("path");
-    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+    mkfifoat(CWD, &fifo, Mode::from_raw_mode(0o600)).expect("fifo");
     assert!(cachefs::open_entry(&fifo).is_none(), "a FIFO");
 
     let huge = dir.join("huge");

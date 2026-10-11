@@ -21,6 +21,8 @@ use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
+use rustix::fs::OFlags;
+
 use crate::cachefs;
 
 pub const PACKS: &str = "packs";
@@ -68,7 +70,7 @@ impl Pack {
     pub fn open(path: &Path) -> io::Result<Option<Pack>> {
         let file = File::options()
             .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .custom_flags((OFlags::NOFOLLOW | OFlags::NONBLOCK).bits() as i32)
             .open(path)?;
         let md = file.metadata()?;
         if !md.is_file() {

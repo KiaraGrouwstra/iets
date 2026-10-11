@@ -7,6 +7,7 @@
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ffi::{OsStr, OsString};
+use std::io::{self, IsTerminal};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -79,7 +80,7 @@ struct Shell {
 fn parse(argv: &[String]) -> Result<Shell, String> {
     let mut s = Shell {
         // Same condition as bash uses for interactive shells.
-        interactive: unsafe { libc::isatty(0) == 1 && libc::isatty(2) == 1 },
+        interactive: io::stdin().is_terminal() && io::stderr().is_terminal(),
         ..Shell::default()
     };
     let mut a = Argv { all: argv, i: 0 };
@@ -604,7 +605,7 @@ fn rc_script(s: &Shell, shell: &str, tmp: &str, structured_rc: &str) -> String {
     rc.push_str(&format!("BASH={}; ", esc(shell)));
     rc.push_str("set +e; ");
     rc.push_str("[ -n \"$PS1\" -a -z \"$NIX_SHELL_PRESERVE_PROMPT\" ] && ");
-    let colour = if unsafe { libc::getuid() } == 0 {
+    let colour = if rustix::process::getuid().is_root() {
         "1;31"
     } else {
         "1;32"

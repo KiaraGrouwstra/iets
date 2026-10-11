@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::api::render::Report;
 use crate::{error, log};
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::process;
 
 /// Everything a command writes on stdout goes through here. Nothing is
@@ -50,7 +50,7 @@ pub fn json(v: &Value, pretty: bool) -> Vec<u8> {
 
 /// `--pretty`'s default: a terminal on stdout.
 pub fn pretty() -> bool {
-    unsafe { libc::isatty(1) == 1 }
+    io::stdout().is_terminal()
 }
 
 /// util.cc:renderSize: KiB at least, one decimal.

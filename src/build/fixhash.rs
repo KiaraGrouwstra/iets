@@ -12,7 +12,7 @@ use crate::store::hash::{Hash, HashFormat};
 use crate::store::path;
 use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 
@@ -78,7 +78,7 @@ pub enum Answer {
 /// A person can answer: stdin and stderr are terminals, and stderr is not
 /// a program's `internal-json` stream.
 pub fn interactive() -> bool {
-    let tty = unsafe { libc::isatty(0) == 1 && libc::isatty(2) == 1 };
+    let tty = io::stdin().is_terminal() && io::stderr().is_terminal();
     tty && !log::json()
 }
 

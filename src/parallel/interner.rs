@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::{process, ptr};
 
+use rustix::mm::{MapFlags, ProtFlags, mmap_anonymous};
+
 use crate::syntax::symbol::{FxHasher, Sym};
 
 const SHARDS: usize = 64;
@@ -121,17 +123,14 @@ impl Default for Interner {
 pub(super) fn per_sym<T>() -> *mut T {
     // SAFETY: an anonymous mapping aliases nothing.
     let p = unsafe {
-        libc::mmap(
+        mmap_anonymous(
             ptr::null_mut(),
             MAX_SYMS * size_of::<T>(),
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
-            -1,
-            0,
+            ProtFlags::READ | ProtFlags::WRITE,
+            MapFlags::PRIVATE | MapFlags::NORESERVE,
         )
     };
-    assert!(p != libc::MAP_FAILED, "per-symbol table: mmap failed");
-    p as *mut T
+    p.expect("per-symbol table: mmap failed") as *mut T
 }
 
 impl Interner {

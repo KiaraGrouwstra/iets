@@ -5,6 +5,8 @@
 use std::time::{Duration, Instant};
 use std::{process, ptr, slice, thread};
 
+use rustix::mm::{Advice, MapFlags, ProtFlags, madvise, mmap_anonymous};
+
 #[cfg(feature = "stats2")]
 use super::census::Census;
 use super::value::Ctx;
@@ -18,26 +20,25 @@ const CHUNK: usize = 32 << 20;
 const THP_STALL: Duration = Duration::from_millis(6);
 
 fn map_chunk(chunk: usize, thp: bool) -> (usize, bool) {
+    // SAFETY: an anonymous mapping aliases nothing, and the advice only
+    // changes how its own pages are backed.
     unsafe {
-        let p = libc::mmap(
+        let Ok(p) = mmap_anonymous(
             ptr::null_mut(),
             chunk,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-            -1,
-            0,
-        );
-        if p == libc::MAP_FAILED {
+            ProtFlags::READ | ProtFlags::WRITE,
+            MapFlags::PRIVATE,
+        ) else {
             // no unwinding from here: other fibers hold arena pointers,
             // and Nix ends the same way on a heap it cannot grow
             errln!("error: out of memory");
             process::exit(1);
-        }
+        };
         let t0 = Instant::now();
         if thp {
-            libc::madvise(p, chunk, libc::MADV_HUGEPAGE);
+            let _ = madvise(p, chunk, Advice::LinuxHugepage);
         }
-        libc::madvise(p, chunk, libc::MADV_POPULATE_WRITE);
+        let _ = madvise(p, chunk, Advice::LinuxPopulateWrite);
         (p as usize, thp && t0.elapsed() > THP_STALL)
     }
 }

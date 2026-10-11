@@ -25,6 +25,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
+
+use rustix::fs::OFlags;
+use rustix::rand::{GetRandomFlags, getrandom};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -155,7 +158,7 @@ pub fn scratch(tag: &str) -> Result<File> {
             .read(true)
             .write(true)
             .create_new(true)
-            .custom_flags(libc::O_NOFOLLOW)
+            .custom_flags(OFlags::NOFOLLOW.bits() as i32)
             .open(&path)
         {
             Ok(file) => {
@@ -173,8 +176,7 @@ pub fn scratch(tag: &str) -> Result<File> {
 
 fn random_u64() -> u64 {
     let mut b = [0u8; 8];
-    // SAFETY: getrandom(2) writes at most `len` bytes into the buffer.
-    unsafe { libc::getrandom(b.as_mut_ptr().cast(), b.len(), 0) };
+    let _ = getrandom(&mut b, GetRandomFlags::empty());
     u64::from_ne_bytes(b)
 }
 

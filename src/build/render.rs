@@ -12,7 +12,7 @@
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
-use std::io::Write;
+use std::io::{self, IsTerminal, Write};
 use std::time::{Duration, Instant};
 
 use super::event::{BuildEvent, Kind, fmt_duration};
@@ -65,7 +65,7 @@ impl Style {
 }
 
 fn is_tty() -> bool {
-    unsafe { libc::isatty(libc::STDERR_FILENO) == 1 }
+    io::stderr().is_terminal()
 }
 
 /// The CIs whose logs understand `::group::` markers.
