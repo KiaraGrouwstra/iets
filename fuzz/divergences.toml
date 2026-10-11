@@ -118,6 +118,18 @@ kind = "iets-only"
 nix = "experimental Nix feature 'blake3-hashes' is disabled"
 
 [[drv]]
+id = "drv-impure-output"
+doc = "docs/reference/divergences.md#reading-a-drv-file"
+kind = "nix-only"
+iets = "impure derivations are not supported"
+
+[[drv]]
+id = "drv-git-hash-method"
+doc = "docs/reference/divergences.md#reading-a-drv-file"
+kind = "nix-only"
+iets = "unsupported output hash method"
+
+[[drv]]
 id = "store-path-without-dash"
 doc = "docs/reference/divergences.md#reading-a-drv-file"
 kind = "nix-only"
