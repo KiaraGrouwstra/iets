@@ -41,6 +41,9 @@ pub struct SourceMap {
     /// Sorted by prefix, descending: the longest match of any prefix of a
     /// path is the first entry that matches.
     entries: Vec<Entry>,
+    /// Locked input trees by lock node name, for positions only: the name
+    /// is not a path, so text rewrites never use it.
+    inputs: Vec<Entry>,
 }
 
 impl SourceMap {
@@ -90,6 +93,18 @@ impl SourceMap {
         Some(out)
     }
 
+    /// `<input>/<tail>` for a file inside a locked input no local
+    /// directory stands for.
+    pub fn label(&self, path: &[u8]) -> Option<Vec<u8>> {
+        let e = self.inputs.iter().find(|e| {
+            path.strip_prefix(&e.prefix[..])
+                .is_some_and(|rest| rest.is_empty() || rest[0] == b'/')
+        })?;
+        let mut out = e.local.clone();
+        out.extend_from_slice(&path[e.prefix.len()..]);
+        Some(out)
+    }
+
     /// Every store path this map knows, replaced by its local path. Only
     /// the `/nix/store/<base>` segments are looked at, so a long log line
     /// costs one search per store path in it.
@@ -126,7 +141,14 @@ impl SourceMap {
 
     /// The trees this evaluation copied, plus the `source-map` setting.
     pub fn from_eval(ev: &Evaluator) -> SourceMap {
-        SourceMap::from_sources(&ev.known.origins())
+        let mut m = SourceMap::from_sources(&ev.known.origins());
+        for (p, name) in ev.known.inputs() {
+            m.inputs.push(Entry {
+                prefix: p.to_string().into_bytes(),
+                local: name.into_bytes(),
+            });
+        }
+        m
     }
 
     /// The same map from a set of source records, for a run that replayed
@@ -171,7 +193,9 @@ pub fn describe_pos_with(ev: &Evaluator, map: &SourceMap, pos: Pos) -> Option<St
     }
     let (l, c) = f.line_col(off);
     let path = if enabled() {
-        map.locate(&f.path).unwrap_or_else(|| f.path.clone())
+        map.locate(&f.path)
+            .or_else(|| map.label(&f.path))
+            .unwrap_or_else(|| f.path.clone())
     } else {
         f.path.clone()
     };
@@ -211,6 +235,16 @@ pub struct Site {
     pub attr: Option<String>,
     /// `file:line:col` of the `derivation` call, already mapped.
     pub pos: Option<String>,
+    /// Another derivation of the evaluation has the same position, so it
+    /// tells them apart only on a failure line.
+    pub shared: bool,
+}
+
+impl Site {
+    /// The position when it names this derivation alone.
+    pub fn own_pos(&self) -> Option<&str> {
+        self.pos.as_deref().filter(|_| !self.shared)
+    }
 }
 
 /// Everything the build side needs after the evaluator is gone: the source
@@ -243,8 +277,15 @@ impl Provenance {
             return Provenance::off();
         }
         let map = SourceMap::from_eval(ev);
+        let drvs = ev.drv.drvs.lock();
+        let mut uses: HashMap<Pos, usize> = HashMap::new();
+        for info in drvs.values() {
+            if let Some(pos) = info.pos {
+                *uses.entry(pos).or_default() += 1;
+            }
+        }
         let mut sites = HashMap::new();
-        for (p, info) in ev.drv.drvs.iter() {
+        for (p, info) in drvs.iter() {
             if info.attr.is_none() && info.pos.is_none() {
                 continue;
             }
@@ -253,6 +294,7 @@ impl Provenance {
                 Site {
                     attr: info.attr.clone(),
                     pos: info.pos.and_then(|pos| describe_pos_with(ev, &map, pos)),
+                    shared: info.pos.is_some_and(|pos| uses[&pos] > 1),
                 },
             );
         }
@@ -294,7 +336,7 @@ impl Provenance {
     pub fn name_of(&self, drv_path: &str) -> Option<String> {
         let s = self.site(drv_path)?;
         let what = s.attr.clone().unwrap_or_else(|| drv_name(drv_path));
-        match &s.pos {
+        match s.own_pos() {
             Some(p) => Some(format!("{what} ({p})")),
             None => Some(what),
         }
@@ -435,6 +477,7 @@ mod tests {
             Site {
                 attr: Some("packages.x86_64-linux.hello".into()),
                 pos: Some("/home/u/repo/default.nix:3:5".into()),
+                shared: false,
             },
         );
         assert_eq!(
@@ -451,6 +494,50 @@ mod tests {
             Provenance::off()
                 .failed("/nix/store/dddd-x.drv", "x")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn an_input_file_is_labelled_by_its_lock_node() {
+        let mut m = map();
+        m.inputs.push(Entry {
+            prefix: b"/nix/store/cccc-source".to_vec(),
+            local: b"nixpkgs".to_vec(),
+        });
+        assert_eq!(
+            m.label(b"/nix/store/cccc-source/pkgs/a.nix").unwrap(),
+            b"nixpkgs/pkgs/a.nix".to_vec()
+        );
+        assert!(m.label(b"/nix/store/cccc-source-x/a.nix").is_none());
+        assert_eq!(
+            m.rewrite(b"/nix/store/cccc-source/a.nix"),
+            b"/nix/store/cccc-source/a.nix".to_vec()
+        );
+    }
+
+    #[test]
+    fn a_shared_position_is_left_off_the_started_line_only() {
+        let mut p = Provenance {
+            map: map(),
+            sites: HashMap::new(),
+            on: true,
+        };
+        p.sites.insert(
+            "/nix/store/dddd-unit-x.service.drv".into(),
+            Site {
+                attr: Some("unit-x.service".into()),
+                pos: Some("nixpkgs/pkgs/stdenv/generic/make-derivation.nix:651:11".into()),
+                shared: true,
+            },
+        );
+        assert_eq!(
+            p.started("/nix/store/dddd-unit-x.service.drv").unwrap(),
+            "building unit-x.service"
+        );
+        assert!(
+            p.failed("/nix/store/dddd-unit-x.service.drv", "")
+                .unwrap()
+                .ends_with("defined at nixpkgs/pkgs/stdenv/generic/make-derivation.nix:651:11")
         );
     }
 }
