@@ -22,8 +22,6 @@
 # client and case: nix's from internal-json timestamps, iets's from --timings.
 # The boundaries differ: nix's eval ends at its first copy, so it includes
 # the ssh connect and the first queries. Compare totals across clients.
-# --timings does not time the copy -o makes, so for -fetch iets's fetch is the
-# total minus its other phases, process start-up included.
 # RUNS (default 10) sets the hyperfine runs. Each run writes the account
 # usage before and after to bench/results/nixbuild-env.txt.
 use ../scripts/lib.nu [require-real-nix]
@@ -56,13 +54,12 @@ def nix-phases [rows: table, fetch_s: float]: nothing -> record {
   { eval: ($e - $t0), upload: ($b0 - $e), build: ($b1 - $b0), fetch: (($end - $b1) + $fetch_s), total: ($end - $t0 + $fetch_s) }
 }
 
-def iets-phases [rows: table, linked: bool]: nothing -> record {
+def iets-phases [rows: table]: nothing -> record {
   let t0 = ($rows | where l == START | first | get t)
   let end = ($rows | where l == EXIT | first | get t)
-  let ph = ($rows | get l | parse -r '^(?<k>eval|plan|connect|query|resolve|substitute|add|build|outputs|fetch): .*?(?<s>[0-9.]+)s$' | update s { into float } | reduce -f {} {|it, acc| $acc | upsert $it.k (($acc | get -o $it.k | default 0.0) + $it.s) })
+  let ph = ($rows | get l | parse -r '^(?<k>eval|plan|connect|query|resolve|substitute|add|build|outputs|fetch|link): .*?(?<s>[0-9.]+)s$' | update s { into float } | reduce -f {} {|it, acc| $acc | upsert $it.k (($acc | get -o $it.k | default 0.0) + $it.s) })
   let g = {|k| $ph | get -o $k | default 0.0 }
-  let r = { eval: (do $g eval), upload: ((do $g plan) + (do $g connect) + (do $g query) + (do $g resolve) + (do $g substitute) + (do $g add)), build: (do $g build), fetch: ((do $g outputs) + (do $g fetch)), total: ($end - $t0) }
-  if $linked { $r | update fetch ($r.total - $r.eval - $r.upload - $r.build) } else { $r }
+  { eval: (do $g eval), upload: ((do $g plan) + (do $g connect) + (do $g query) + (do $g resolve) + (do $g substitute) + (do $g add)), build: (do $g build), fetch: ((do $g outputs) + (do $g fetch) + (do $g link)), total: ($end - $t0) }
 }
 
 def main [] {
@@ -76,6 +73,7 @@ def main [] {
   let wd = $"($env.PWD)/bench/nixbuild"
   mkdir bench/results
   let before = (usage $host)
+  let load0 = (open --raw /proc/loadavg | str trim)
 
   let nixb = $"nix build --eval-store auto --store ($store) --no-link --print-out-paths --impure -I nixpkgs=($np)"
   let ietsb = $"($iets) build --builder ($store) --no-cache --workers 4 --impure -I nixpkgs=($np)"
@@ -129,7 +127,7 @@ def main [] {
       let d = (mktemp -d)
       let ie = (stamped $"($ietsb) --timings (do $iets_out $c.fetch $d) ($wd)/($c.file) ($marker)")
       rm -rf $d
-      $nix | append ({ case: $c.name, client: "iets w4", run: $i } | merge (iets-phases $ie ($c.fetch == store)))
+      $nix | append ({ case: $c.name, client: "iets w4", run: $i } | merge (iets-phases $ie))
     } | flatten
   } | flatten)
   $phases | save -f bench/results/nixbuild-phases.json
@@ -143,7 +141,8 @@ def main [] {
     $"iets: ($env.IETS_COMMIT? | default 'commit unknown'), sha256 (open --raw $iets | hash sha256 | str substring 0..15)"
     $"nixpkgs: (open --raw ([$np .git-revision] | path join) | str trim)"
     $"hyperfine: (ver hyperfine), ($runs) runs, ($pr) phase runs"
-    $"load: (open --raw /proc/loadavg | str trim)"
+    $"load before: ($load0)"
+    $"load after: (open --raw /proc/loadavg | str trim)"
     $"account before: ($before)"
     $"account after: ($after)"
   ] | str join "\n" | save -f bench/results/nixbuild-env.txt
