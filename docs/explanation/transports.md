@@ -34,8 +34,12 @@ against nixbuild.net.
 | nixos-desktop, scratch daemon, warm, `--no-build` | 1.65 s | 0.112 s | 0.055 s | 4,184 paths, 0 missing, 0.034 s | skipped | skipped | 2 / 5 | 333 KB |
 | nixos-desktop, local daemon, `--no-build` | 1.21 s | 0.121 s | 0.081 s | 4,184 paths, 413 missing, 0.201 s | 413 paths, 23.2 MB, 1.67 s | skipped | 3 / 6 | 23.5 MB |
 
-The 62 KB of a warm hello run is the `QueryValidPaths` request: 776 full
-store paths as padded strings, and the 776 answers back. The custom drv's
+These rows predate the top-down query. Then the 62 KB of a warm hello run
+was the `QueryValidPaths` request: 776 full store paths as padded strings,
+and the 776 answers back. Now a warm store answers with the root: the warm
+hello run against the scratch daemon asks about 1 path and sends 248 bytes,
+and the hello run against the local daemon asks about the root and its
+output, builds nothing, and sends 336 bytes (`scripts/daemon-e2e.nu`). The custom drv's
 0.87 s "build" is the sandbox build itself. The 413 paths the local daemon
 lacked for nixos-desktop are nixpkgs subtrees that no local evaluation had
 copied yet.

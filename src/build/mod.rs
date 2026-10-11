@@ -266,21 +266,36 @@ impl Dispatcher {
         // for one derivation, and neither says whether it succeeded.
         self.reporter.owns(by_drv.keys().cloned());
 
-        let stats = {
-            let mut on_event = event_sink(&mut self.reporter, &self.prov, &by_drv);
-            up.upload(&mut *self.backend, &roots, &mut on_event)?
+        let built = static_outputs(up, batch, &roots);
+        let held = match &built {
+            Some(o) => {
+                let mut on_event = event_sink(&mut self.reporter, &self.prov, &by_drv);
+                let (held, valid) = already_built(&mut *self.backend, &roots, o, &mut on_event)?;
+                up.roots_answered(&roots, &valid);
+                held
+            }
+            None => false,
         };
-        self.upload.merge(stats);
+        let status = match held {
+            true => (by_drv.keys())
+                .map(|d| (d.clone(), backend::Status::ok()))
+                .collect(),
+            false => {
+                let stats = {
+                    let mut on_event = event_sink(&mut self.reporter, &self.prov, &by_drv);
+                    up.upload(&mut *self.backend, &roots, &mut on_event)?
+                };
+                self.upload.merge(stats);
 
-        let jobs: Vec<backend::Job> = batch.iter().map(backend::Job::from).collect();
-        let status = {
-            let drvs = |deep: bool| up.drvs(&roots, deep);
-            let b = backend::Batch {
-                jobs: &jobs,
-                drvs: &drvs,
-            };
-            let mut on_event = event_sink(&mut self.reporter, &self.prov, &by_drv);
-            self.backend.submit(&b, &mut on_event)?
+                let jobs: Vec<backend::Job> = batch.iter().map(backend::Job::from).collect();
+                let drvs = |deep: bool| up.drvs(&roots, deep);
+                let b = backend::Batch {
+                    jobs: &jobs,
+                    drvs: &drvs,
+                };
+                let mut on_event = event_sink(&mut self.reporter, &self.prov, &by_drv);
+                self.backend.submit(&b, &mut on_event)?
+            }
         };
 
         let names = Names {
@@ -294,9 +309,12 @@ impl Dispatcher {
             let elapsed = self.reporter.duration(&drv);
             match status.get(&drv) {
                 Some(s) if s.ok => {
-                    let map = {
-                        let mut on_event = event_sink(&mut self.reporter, &self.prov, &by_drv);
-                        self.backend.outputs(&drv, &mut on_event)?
+                    let map = match built.as_ref().and_then(|b| b.get(&drv)) {
+                        Some(m) => m.clone(),
+                        None => {
+                            let mut on_event = event_sink(&mut self.reporter, &self.prov, &by_drv);
+                            self.backend.outputs(&drv, &mut on_event)?
+                        }
                     };
                     let outputs: BTreeMap<String, String> = map
                         .into_iter()
@@ -447,6 +465,64 @@ impl Dispatcher {
     pub fn report(&self, plan: &Plan, plan_time: Duration) -> String {
         self.backend.report(plan, plan_time)
     }
+}
+
+/// The wanted output paths of every target, when each one is known without
+/// building: input-addressed and fixed outputs. `None` when any is not, or a
+/// drv cannot be read; the batch then asks the store as usual.
+fn static_outputs(
+    up: &dyn Uploader,
+    batch: &[Target],
+    roots: &[StorePath],
+) -> Option<HashMap<String, BTreeMap<String, Option<String>>>> {
+    let drvs = up.drvs(roots, false).ok()?;
+    let mut all = HashMap::new();
+    for t in batch {
+        let d = drvs.iter().find(|d| d.path == t.drv)?;
+        let parsed = Derivation::parse(&d.aterm, Derivation::name_from_path(&t.drv).ok()?).ok()?;
+        if t.outputs.iter().any(|n| !parsed.outputs.contains_key(n)) {
+            return None;
+        }
+        let mut outs = BTreeMap::new();
+        for (n, o) in &parsed.outputs {
+            if t.outputs.is_empty() || t.outputs.contains(n) {
+                let p = o.path(&parsed.name, n).ok()??;
+                outs.insert(n.clone(), Some(p.to_string()));
+            }
+        }
+        all.insert(t.drv.to_string(), outs);
+    }
+    Some(all)
+}
+
+/// Whether the store holds every root and every wanted output, so nothing
+/// needs to go up or build, and which roots it holds. The daemon would
+/// answer the same, but nixbuild.net takes a quarter of a second to. The
+/// roots are asked first: a missing drv costs it 7 ms, a missing output
+/// 170 ms.
+fn already_built(
+    b: &mut dyn Backend,
+    roots: &[StorePath],
+    outputs: &HashMap<String, BTreeMap<String, Option<String>>>,
+    on_event: &mut dyn FnMut(Event),
+) -> Result<(bool, HashSet<String>)> {
+    let refs: Vec<&StorePath> = roots.iter().collect();
+    let roots_valid = b.query_valid(&refs, on_event)?;
+    if !roots.iter().all(|r| roots_valid.contains(r.base_name())) {
+        return Ok((false, roots_valid));
+    }
+    let Some(paths) = (outputs.values().flat_map(BTreeMap::values).flatten())
+        .map(|p| StorePath::parse(p).ok())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return Ok((false, roots_valid));
+    };
+    let refs: Vec<&StorePath> = paths.iter().collect();
+    let valid = b.query_valid(&refs, on_event)?;
+    Ok((
+        paths.iter().all(|p| valid.contains(p.base_name())),
+        roots_valid,
+    ))
 }
 
 /// What one derivation is called and where it was defined: the attribute the
@@ -724,6 +800,8 @@ mod tests {
         fn drvs(&self, _roots: &[StorePath], _deep: bool) -> Result<Vec<backend::Drv>> {
             Ok(Vec::new())
         }
+
+        fn roots_answered(&mut self, _roots: &[StorePath], _valid: &HashSet<String>) {}
     }
 
     /// Concurrent builds keep the cap, and every build's log comes out as one

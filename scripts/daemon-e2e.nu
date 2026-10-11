@@ -132,7 +132,8 @@ def run-tests [iets: string, nixpkgs: string, work: string] {
   # the size of hello's closure moves with the nixpkgs pin
   let q = ($r.stderr | parse -r 'query: (?<paths>\d+) paths, (?<missing>\d+) missing' | get -o 0 | default {paths: "0", missing: ""})
   if $q.paths != $q.missing or ($q.paths | into int) < 100 { fail "cold scratch store should miss every path" }
-  if not ($r.stderr | str contains "worker: 3 ops") { fail "expected SetOptions + QueryValidPaths + AddMultipleToStore" }
+  # the root, its inputs, then the rest: a cold store answers no for each
+  if not ($r.stderr | str contains "worker: 5 ops") { fail "expected SetOptions + 3 QueryValidPaths + AddMultipleToStore" }
   if (out-of nix-store --store $scratch -q --hash $hello) != (out-of nix-store -q --hash $hello) { fail "hello drv hash differs in the scratch store" }
   if not (same-file $"($work)/store($hello)" $hello) { fail "hello drv bytes differ in the scratch store" }
   let shown = (^nix derivation show --store $scratch $hello err> /dev/null | complete)
@@ -150,7 +151,7 @@ def run-tests [iets: string, nixpkgs: string, work: string] {
   $r.stderr | save -f $"($work)/client4.log"
   if $r.exit_code != 0 { print ($r.stderr | chomp); fail "client exited non-zero" }
   show-matching $timing_lines $"($work)/client4.log"
-  if not ($r.stderr | str contains $"query: ($q.paths) paths, 0 missing") { fail "warm run still had missing paths" }
+  if not ($r.stderr | str contains "query: 1 paths, 0 missing") { fail "a warm store should answer for the closure with the root" }
   print "ok"
 
   print "== 5. custom derivation, --builder unix:///nix/var/nix/daemon-socket/socket"
