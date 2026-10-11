@@ -38,6 +38,7 @@ struct BuildArgs {
     json: bool,
     keep_going: bool,
     fetch_to: Option<PathBuf>,
+    out_link: Option<String>,
     outputs: Vec<String>,
     sources: HashMap<String, PathBuf>,
     /// What names this run's roots in the roots store ([`keep_outputs`]).
@@ -107,6 +108,7 @@ fn parse(argv: &[String]) -> (BuildArgs, EvalArgs) {
         json: false,
         keep_going: false,
         fetch_to: None,
+        out_link: None,
         outputs: Vec::new(),
         sources: HashMap::new(),
         root_key: Vec::new(),
@@ -120,6 +122,7 @@ fn parse(argv: &[String]) -> (BuildArgs, EvalArgs) {
         "--json" => b.json = true,
         "-k" | "--keep-going" => b.keep_going = true,
         "--fetch-to" => b.fetch_to = Some(next().into()),
+        "-o" | "--out-link" => b.out_link = Some(next()),
         "--out" => b.outputs.push(next()),
         "--source" => {
             let spec = next();
@@ -379,6 +382,10 @@ fn build_roots(
                 }
             }
         }
+    } else if let Some(prefix) = &b.out_link {
+        if let Err(e) = d.d.out_links(&out_links(prefix, &outcomes)) {
+            return e.report();
+        }
     } else {
         // the caller reads these paths off stdout and uses them afterwards, so a
         // collection in between must not take them. `--fetch-to` already has
@@ -403,6 +410,27 @@ fn build_roots(
         Some(why) => log::combine_exit(d.d.exit, no_output(&why)),
         None => d.d.exit,
     }
+}
+
+/// `nix build`'s names (`createOutLinks`): `PREFIX`, `PREFIX-1`, ... per
+/// root, and `-OUTPUT` after it for an output other than `out`.
+fn out_links(prefix: &str, outcomes: &[Outcome]) -> Vec<(String, Option<String>)> {
+    let cwd = api::cwd();
+    let mut links = Vec::new();
+    for (i, o) in outcomes.iter().enumerate() {
+        for (name, path) in &o.outputs {
+            let mut link = prefix.to_string();
+            if i > 0 {
+                link.push_str(&format!("-{i}"));
+            }
+            if name != "out" {
+                link.push_str(&format!("-{name}"));
+            }
+            let link = api::abs_pathbuf(&link, &cwd);
+            links.push((path.clone(), Some(link.display().to_string())));
+        }
+    }
+    links
 }
 
 /// A run that printed no store path for a target it was asked to build.
@@ -518,5 +546,18 @@ mod tests {
     fn an_out_flag_that_matches_nothing_is_named() {
         let why = silence(&[outcome(true, false, &[])], &["dev".to_string()]).unwrap();
         assert!(why.contains("no output dev"), "{why}");
+    }
+
+    #[test]
+    fn out_links_are_named_as_nix_build_names_them() {
+        let roots = [
+            outcome(true, false, &["out"]),
+            outcome(true, false, &["dev", "out"]),
+        ];
+        let names: Vec<String> = out_links("/r/result", &roots)
+            .into_iter()
+            .map(|(_, l)| l.unwrap())
+            .collect();
+        assert_eq!(names, ["/r/result", "/r/result-1-dev", "/r/result-1"]);
     }
 }

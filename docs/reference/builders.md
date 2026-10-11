@@ -254,7 +254,8 @@ Only an unsigned, input-addressed path (an output built locally) needs the
 derivations.
 
 Outputs land in the farm's binary cache. `--fetch-to` restores them into a
-directory. An out-link first asks the local daemon to substitute the outputs
+directory. Without an out-link (`iets build -o`, or `result` under the
+classic names), nothing comes back. An out-link first asks the local daemon to substitute the outputs
 (`QueryValidPaths` with `substitute`), which fetches them from the farm's
 cache when `nix.conf` lists it. A worker's own path infos carry only the
 worker's key, which isn't the cache key. What the local daemon cannot

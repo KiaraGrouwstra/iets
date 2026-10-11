@@ -91,6 +91,8 @@ derivations is built whole, each member to its own verdict: 'iets build
   -k, --keep-going      one root: build what a failure does not block
   --out NAME            build the output NAME only (repeatable)
   --fetch-to DIR        copy the outputs from the builder to DIR
+  -o, --out-link PATH   bring the outputs into the local store and link
+                        them at PATH, PATH-1, ... (GC roots)
   --source SP=LOCAL     with DRV: the local tree of the input source SP
 ";
 

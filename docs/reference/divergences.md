@@ -724,6 +724,21 @@ the same exit code as Nix, with no symlink on either side. Then
 for iets's run and nothing for Nix's. `scripts/classic-e2e.nu` compares
 both runs byte for byte and checks the root in the same case.
 
+## The outputs of `iets build --builder`
+
+Nix has two ways to build elsewhere. With `--builders`, the build hook
+copies the outputs back (`src/nix/build-remote/build-remote.cc`), and
+`nix build` links `result`. With `--store URL`, the outputs stay on that
+store, and `nix build` makes no link (`createOutLinksMaybe` in
+`src/libcmd/command.cc`).
+
+`iets build --builder URL` acts like `--store`: without `-o`, the outputs
+stay on the builder. This is deliberate. A CI run needs the verdict, not
+the bytes. With `-o PATH`, it acts like `--builders`: the closure comes
+back, and `PATH` links each output with Nix's names. The classic names
+follow Nix: `nix build` and `nix-build` always bring the outputs back
+(`docs/reference/classic.md`).
+
 ## Error text on stderr
 
 iets's error messages usually give Nix's first line and a position, but less
