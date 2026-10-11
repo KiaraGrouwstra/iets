@@ -12,16 +12,21 @@ use std::sync::Once;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::{error, io, mem, ptr};
 
-use rustix::mm::{Advice, MapFlags, MprotectFlags, ProtFlags, madvise, mmap_anonymous, mprotect};
+use rustix::mm::{MapFlags, MprotectFlags, ProtFlags, mmap_anonymous, mprotect};
 
 use crate::runtime::heap;
+use crate::sys;
 
 pub const DEFAULT_STACK: usize = 256 << 20;
 /// Stack of the demand fiber and of the process main thread. The demand
 /// path must have the same room at every worker count, or a program that
 /// works with one worker crashes with four.
 pub const MAIN_STACK: usize = 4 << 30;
-const GUARD: usize = 4096;
+/// The inaccessible page at the low end of a stack: one page, whatever the
+/// platform's page size is.
+fn guard() -> usize {
+    rustix::param::page_size()
+}
 /// Bytes a fiber keeps in hand above its guard page. The force path
 /// refuses to go below it, so an overflow is reported instead of taken.
 pub const MARGIN: usize = 1 << 20;
@@ -118,7 +123,7 @@ fn is_guard(addr: usize) -> bool {
     let n = NGUARDS.load(Ordering::Acquire).min(MAX_GUARDS);
     (0..n).any(|i| {
         let b = GUARDS[i].load(Ordering::Acquire);
-        b != 0 && addr >= b && addr < b + GUARD
+        b != 0 && addr >= b && addr < b + guard()
     })
 }
 
@@ -248,7 +253,7 @@ impl Stack {
                 bytes: size,
                 why: Why::Mmap(e.into()),
             })?;
-            let _ = mprotect(p, GUARD, MprotectFlags::empty());
+            let _ = mprotect(p, guard(), MprotectFlags::empty());
             p as *mut u8
         };
         register_guard(base as usize);
@@ -258,7 +263,7 @@ impl Stack {
     /// Lowest address the fiber may use before it must stop.
     #[inline]
     pub fn limit(&self) -> usize {
-        self.base as usize + GUARD + MARGIN
+        self.base as usize + guard() + MARGIN
     }
 
     #[inline]
@@ -270,20 +275,16 @@ impl Stack {
     /// Return every page except the top `keep` bytes to the OS. Only valid
     /// while the fiber is not running (its frames are garbage).
     pub fn release(&self, keep: usize) {
-        let len = self.size - GUARD - keep;
+        let len = self.size - guard() - keep;
         // SAFETY: range is inside the mapping and above the guard page.
         unsafe {
-            let _ = madvise(self.base.add(GUARD) as *mut _, len, Advice::LinuxDontNeed);
+            sys::discard(self.base.add(guard()), len);
         }
     }
 
     /// Number of resident bytes, for diagnostics.
     pub fn resident(&self) -> usize {
-        let pages = self.size / 4096;
-        let mut v = vec![0u8; pages];
-        // SAFETY: vector has one byte per page of the mapping.
-        unsafe { libc::mincore(self.base as *mut _, self.size, v.as_mut_ptr()) };
-        v.iter().filter(|b| **b & 1 != 0).count() * 4096
+        sys::resident(self.base, self.size)
     }
 }
 

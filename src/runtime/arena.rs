@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{process, ptr, slice, thread};
 
-use rustix::mm::{Advice, MapFlags, ProtFlags, madvise, mmap_anonymous};
+use rustix::mm::{MapFlags, ProtFlags, mmap_anonymous};
 
 #[cfg(feature = "stats2")]
 use super::census::Census;
@@ -17,6 +17,7 @@ use super::word::Word;
 use crate::parallel::shared::ArenaUse;
 use crate::session::Session;
 use crate::syntax::symbol::{FxHashMap, FxHashSet};
+use crate::sys;
 
 const CHUNK: usize = 32 << 20;
 /// A 32 MiB chunk populates in ~1 ms with huge pages and ~16 ms with 4 KiB
@@ -24,7 +25,7 @@ const CHUNK: usize = 32 << 20;
 const THP_STALL: Duration = Duration::from_millis(6);
 
 fn map_chunk(chunk: usize, thp: bool) -> (usize, bool) {
-    // SAFETY: an anonymous mapping aliases nothing, and the advice only
+    // SAFETY: an anonymous mapping aliases nothing, and prefaulting only
     // changes how its own pages are backed.
     unsafe {
         let Ok(p) = mmap_anonymous(
@@ -39,10 +40,7 @@ fn map_chunk(chunk: usize, thp: bool) -> (usize, bool) {
             process::exit(1);
         };
         let t0 = Instant::now();
-        if thp {
-            let _ = madvise(p, chunk, Advice::LinuxHugepage);
-        }
-        let _ = madvise(p, chunk, Advice::LinuxPopulateWrite);
+        sys::prefault(p.cast(), chunk, thp);
         (p as usize, thp && t0.elapsed() > THP_STALL)
     }
 }

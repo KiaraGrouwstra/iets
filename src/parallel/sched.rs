@@ -10,14 +10,13 @@ use std::thread::{self, Builder, JoinHandle};
 use std::time::{Duration, Instant};
 use std::{hint, process, ptr};
 
-use rustix::thread::futex;
-
 use super::deque::Deque;
 use super::fiber::{self, Fiber};
 use super::force;
 use super::thunk::WaiterTable;
 use crate::runtime::{Arena, Word};
 use crate::session::{self, Session};
+use crate::sys;
 
 pub const READY_CAP: usize = 4096;
 pub const TASK_CAP: usize = 4096;
@@ -741,12 +740,12 @@ impl Runtime {
 
     fn wake_one(&self) {
         self.epoch.0.fetch_add(1, Ordering::Release);
-        futex_wake(&self.epoch.0, 1);
+        sys::futex_wake(&self.epoch.0, 1);
     }
 
     pub fn wake_all(&self) {
         self.epoch.0.fetch_add(1, Ordering::Release);
-        futex_wake(&self.epoch.0, i32::MAX as u32);
+        sys::futex_wake(&self.epoch.0, i32::MAX as u32);
     }
 
     fn park(&self, w: &mut Worker, done: &impl Fn() -> bool) {
@@ -766,7 +765,7 @@ impl Runtime {
             self.sleepers.0.fetch_sub(1, Ordering::SeqCst);
             return;
         }
-        futex_wait(&self.epoch.0, e);
+        sys::futex_wait(&self.epoch.0, e);
         self.sleepers.0.fetch_sub(1, Ordering::SeqCst);
     }
 
@@ -982,15 +981,6 @@ impl Worker {
         self.rng ^= self.rng << 17;
         (self.rng >> 32) as usize
     }
-}
-
-fn futex_wait(word: &AtomicU32, expected: u32) {
-    // EAGAIN (the word moved) and EINTR both mean "look again"
-    let _ = futex::wait(word, futex::Flags::PRIVATE, expected, None);
-}
-
-fn futex_wake(word: &AtomicU32, n: u32) {
-    let _ = futex::wake(word, futex::Flags::PRIVATE, n);
 }
 
 #[cfg(test)]

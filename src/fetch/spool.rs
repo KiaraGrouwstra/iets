@@ -27,7 +27,6 @@ use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 
 use rustix::fs::OFlags;
-use rustix::rand::{GetRandomFlags, getrandom};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -37,6 +36,7 @@ use std::{env, result, str};
 use crate::error::{Error, Result};
 use crate::store::hash::{Hash, HashAlgo, Hasher};
 use crate::store::nar::{FileType, NAR_MAX_DEPTH, PathFilter, TreeWriter};
+use crate::sys;
 use crate::treestore::pack::{Id, Packs};
 
 use super::unpack;
@@ -176,7 +176,7 @@ pub fn scratch(tag: &str) -> Result<File> {
 
 fn random_u64() -> u64 {
     let mut b = [0u8; 8];
-    let _ = getrandom(&mut b, GetRandomFlags::empty());
+    sys::random(&mut b);
     u64::from_ne_bytes(b)
 }
 

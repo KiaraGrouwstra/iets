@@ -1,0 +1,50 @@
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Condvar, Mutex};
+
+use rustix::mm::{MapFlags, ProtFlags, mmap_anonymous};
+
+/// One lock and one condition for every word. The scheduler sleeps on a
+/// single epoch, so there is nothing to tell apart.
+static SLEEP: (Mutex<()>, Condvar) = (Mutex::new(()), Condvar::new());
+
+/// Sleeps while `*word == expected`. May return early, so the caller looks
+/// again.
+pub fn futex_wait(word: &AtomicU32, expected: u32) {
+    let g = SLEEP.0.lock().unwrap_or_else(|e| e.into_inner());
+    if word.load(Ordering::Acquire) == expected {
+        drop(SLEEP.1.wait(g));
+    }
+}
+
+/// Wakes the sleepers. The lock orders this after a waiter's check, so a
+/// wake between the check and the sleep is not lost.
+pub fn futex_wake(_word: &AtomicU32, n: u32) {
+    let _g = SLEEP.0.lock().unwrap_or_else(|e| e.into_inner());
+    if n == 1 {
+        SLEEP.1.notify_one();
+    } else {
+        SLEEP.1.notify_all();
+    }
+}
+
+/// No prefault and no huge pages here: the pages come in on first touch.
+///
+/// # Safety
+/// The range is an anonymous mapping of the caller's.
+pub unsafe fn prefault(_p: *mut u8, _len: usize, _huge: bool) {}
+
+/// Gives the pages back by mapping fresh zero pages over them.
+///
+/// # Safety
+/// The range is an anonymous mapping of the caller's, and nothing in it is
+/// needed any more.
+pub unsafe fn discard(p: *mut u8, len: usize) {
+    let _ = unsafe {
+        mmap_anonymous(
+            p.cast(),
+            len,
+            ProtFlags::READ | ProtFlags::WRITE,
+            MapFlags::PRIVATE | MapFlags::FIXED,
+        )
+    };
+}
