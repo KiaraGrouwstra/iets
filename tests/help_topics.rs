@@ -1,14 +1,15 @@
 //! `iets help TOPIC` from outside the repository: the binary carries the
 //! reference pages, so no `docs/` directory has to be reachable.
 
-use std::process::{Command, Output};
+mod hermetic;
+
+use std::process::Output;
 
 /// The binary, run from `/`, where there is no `docs/`.
 fn run(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_iets"))
+    hermetic::iets()
         .args(args)
         .current_dir("/")
-        .env("XDG_CONFIG_HOME", "/nonexistent")
         .output()
         .expect("iets runs")
 }

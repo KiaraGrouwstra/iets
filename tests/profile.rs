@@ -1,13 +1,14 @@
 //! The sampled profile: what a run says when it cannot collect one, and the
 //! folded lines when it can.
 
-use std::process::{Command, Output};
+mod hermetic;
+
+use std::process::Output;
 use std::{env, fs};
 
 fn eval(expr: &str, env: &[(&str, &str)]) -> Output {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_iets"));
+    let mut c = hermetic::iets();
     c.args(["eval", "--no-cache", "--workers", "1", "-E", expr])
-        .env("XDG_CONFIG_HOME", "/nonexistent")
         .env_remove("IETS_PROFILE")
         .env_remove("IETS_PROFILE_TO")
         .env_remove("IETS_PROFILE_HZ");
@@ -130,10 +131,9 @@ fn an_allocation_profile_accounts_for_the_arena() {
 /// shape. Asking for both is refused rather than answered misleadingly.
 #[test]
 fn a_profile_refuses_more_than_one_worker() {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_iets"));
+    let mut c = hermetic::iets();
     let o = c
         .args(["eval", "--no-cache", "--workers", "4", "-E", "1"])
-        .env("XDG_CONFIG_HOME", "/nonexistent")
         .env("IETS_PROFILE", "eval")
         .output()
         .expect("run iets");
@@ -142,10 +142,9 @@ fn a_profile_refuses_more_than_one_worker() {
     assert!(err.contains("--workers must be 1, not 4"), "{err}");
 
     // the same through the setting rather than the flag
-    let mut c = Command::new(env!("CARGO_BIN_EXE_iets"));
+    let mut c = hermetic::iets();
     let o = c
         .args(["eval", "--no-cache", "-E", "1"])
-        .env("XDG_CONFIG_HOME", "/nonexistent")
         .env("IETS_PROFILE", "eval")
         .env("IETS_WORKERS", "4")
         .output()

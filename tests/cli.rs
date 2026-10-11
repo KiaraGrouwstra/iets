@@ -1,14 +1,12 @@
 //! The native command line: help and version on stdout with exit 0, a bad
 //! command line on stderr with exit 2 and never the whole usage.
 
-use std::process::{Command, Output};
+mod hermetic;
+
+use std::process::Output;
 
 fn iets(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_iets"))
-        .args(args)
-        .env("XDG_CONFIG_HOME", "/nonexistent")
-        .output()
-        .expect("run iets")
+    hermetic::iets().args(args).output().expect("run iets")
 }
 
 fn text(b: &[u8]) -> String {
