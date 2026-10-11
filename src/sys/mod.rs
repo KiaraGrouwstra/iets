@@ -30,8 +30,9 @@ pub mod process;
 pub mod tty;
 #[cfg_attr(windows, path = "vm_windows.rs")]
 pub mod vm;
+pub mod winpath;
 
-pub use ffi::{OsStrExt, OsStringExt};
+pub use ffi::{OsStrExt, OsStringExt, anchor_len};
 pub use imp::{discard, futex_wait, futex_wake, prefault};
 pub use vm::resident;
 

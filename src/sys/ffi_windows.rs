@@ -7,6 +7,13 @@
 use std::ffi::{OsStr, OsString};
 use std::str;
 
+use super::winpath;
+
+/// How many leading components of a path `..` cannot remove.
+pub fn anchor_len(comps: &[&[u8]]) -> usize {
+    winpath::anchor_len(comps)
+}
+
 const UNREPRESENTABLE: &str = "\0";
 
 pub trait OsStrExt {
