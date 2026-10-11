@@ -28,6 +28,14 @@ pub struct ErrorLine {
     pub attr_path: Vec<String>,
     pub error: String,
     pub fatal: bool,
+    /// `stats` as raw JSON, when a worker measured the request.
+    pub stats: Option<Vec<u8>>,
+}
+
+/// worker.cc:processJobRequest's `stats`: the request's wall time and the
+/// bytes it allocated, arena bytes here where nix counts Boehm's.
+pub fn stats_json(wall_ms: u64, alloc_bytes: u64) -> Vec<u8> {
+    format!("{{\"allocBytes\":{alloc_bytes},\"wallMs\":{wall_ms}}}").into_bytes()
 }
 
 pub enum Line {
@@ -97,7 +105,7 @@ impl Job {
 
 impl ErrorLine {
     pub fn render(&self) -> Vec<u8> {
-        let fields = [
+        let mut fields = vec![
             ("attr", json_str(&self.attr)),
             ("attrPath", json_str_list(self.attr_path.iter())),
             ("error", json_str(&self.error)),
@@ -110,6 +118,9 @@ impl ErrorLine {
                 },
             ),
         ];
+        if let Some(s) = &self.stats {
+            fields.push(("stats", s.clone()));
+        }
         render_fields(&fields)
     }
 }
@@ -153,11 +164,13 @@ impl Line {
         if !map.contains_key("drvPath") {
             let error = take_str(&mut map, "error")?;
             let fatal = map.remove("fatal") == Some(b"true".as_slice());
+            let stats = map.remove("stats").map(<[u8]>::to_vec);
             return Ok(Line::Error(ErrorLine {
                 attr,
                 attr_path,
                 error,
                 fatal,
+                stats,
             }));
         }
         let parse_path = |s: String| StorePath::parse(&s).map_err(Error::from);
@@ -336,5 +349,24 @@ mod tests {
         let parsed = Line::parse(line).unwrap();
         assert!(matches!(parsed, Line::Error(_)));
         assert_eq!(parsed.render(), line.to_vec());
+    }
+
+    #[test]
+    fn stats_survive_the_collector() {
+        let stats = String::from_utf8(stats_json(412, 7632)).unwrap();
+        assert_eq!(stats, r#"{"allocBytes":7632,"wallMs":412}"#);
+        let error =
+            format!(r#"{{"attr":"d","attrPath":["d"],"error":"x","fatal":false,"stats":{stats}}}"#);
+        assert_eq!(
+            Line::parse(error.as_bytes()).unwrap().render(),
+            error.into_bytes()
+        );
+        let job = format!(
+            r#"{{"attr":"a","attrPath":["a"],"constituents":[],"drvPath":"/nix/store/00000000000000000000000000000000-x.drv","globConstituents":false,"name":"x","outputs":{{}},"stats":{stats},"system":"x86_64-linux"}}"#
+        );
+        assert_eq!(
+            Line::parse(job.as_bytes()).unwrap().render(),
+            job.into_bytes()
+        );
     }
 }

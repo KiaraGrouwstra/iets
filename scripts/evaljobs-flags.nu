@@ -7,9 +7,9 @@
 # usage: scripts/evaljobs-flags.nu          # NEJ=~/tmp/nej/bin/nix-eval-jobs
 use lib.nu [ROOT diff-head iets-bin isolate nixpkgs require-real-nix run-in show]
 
-# `jq -S` per line, error text replaced by true, sorted.
+# `jq -S` per line, error text replaced by true, timings dropped, sorted.
 def norm []: string -> list<string> {
-  let out = ($in | ^jq -S -c 'del(.error) + (if has("error") then {error: true} else {} end)')
+  let out = ($in | ^jq -S -c 'del(.error, .stats) + (if has("error") then {error: true} else {} end)')
   $out | lines | sort
 }
 
@@ -107,6 +107,17 @@ def session [ctx: record]: nothing -> bool {
   $ok
 }
 
+# stats: every job and error line from a worker process carries the
+# per-attribute `stats` nixbot reads, which `norm` drops from the diff.
+def stats [ctx: record]: nothing -> bool {
+  let r = (^($ctx.iets) eval-jobs --workers 2 --no-instantiate ci.nix | complete)
+  let lines = ($r.stdout | lines | each { from json })
+  let bad = ($lines | where {|l| ($l.stats?.wallMs? | describe) != "int" or ($l.stats?.allocBytes? | describe) != "int" })
+  let ok = ($lines | length) > 0 and ($bad | is-empty) and ($lines | any {|l| $l.stats.allocBytes > 0 })
+  if $ok { print $"ok   stats \(($lines | length) lines\)" } else { print $"FAIL stats: ($r.stdout)" }
+  $ok
+}
+
 # ignored: `--verbose` and `--debug` change nothing, so each is one warning
 # with the reason, from the main process only; `--max-jobs` holds, since
 # nothing is built, and `--quiet` works (docs/reference/divergences.md).
@@ -183,6 +194,7 @@ def run-all [ctx: record, np: string]: nothing -> int {
     [expect-fail select-not-attrs [--select 'x: "str"' ci.nix]]
     [expect-fail no-expr []]
     [session session []]
+    [stats stats []]
     [ignored ignored []]
     [options options []]
   ]
@@ -197,6 +209,7 @@ def run-all [ctx: record, np: string]: nothing -> int {
         "chunks" => (chunks $ctx $c.1 $args)
         "expect-fail" => (expect-fail $ctx $c.1 $args)
         "session" => (session $ctx)
+        "stats" => (stats $ctx)
         "ignored" => (ignored $ctx)
         "options" => (options $ctx)
       }
