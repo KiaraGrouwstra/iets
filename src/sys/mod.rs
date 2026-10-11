@@ -6,6 +6,7 @@
 #[cfg_attr(not(target_os = "linux"), path = "portable.rs")]
 mod imp;
 
+pub mod errno;
 mod ffi;
 pub mod fs;
 pub mod net;

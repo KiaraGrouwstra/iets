@@ -18,8 +18,8 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, Read};
 
+use crate::sys::errno;
 use crate::sys::{OsStrExt, OsStringExt};
-use rustix::io::Errno;
 use std::path::{Path, PathBuf};
 use std::str::from_utf8;
 use std::sync::Arc;
@@ -278,7 +278,7 @@ fn os(p: &[u8]) -> &Path {
 }
 
 fn enoent() -> io::Error {
-    io::Error::from(Errno::NOENT)
+    errno::not_found()
 }
 
 /// `strerror(ENOENT)` alone, the text `import`'s stat has always carried (no
@@ -410,7 +410,7 @@ impl SrcPath {
                 let (meta, f) = if sized {
                     let meta = fs::metadata(os(&p)).map_err(|e| (STAT, e))?;
                     if !meta.is_file() {
-                        return Err((STAT, io::Error::from(Errno::ISDIR)));
+                        return Err((STAT, errno::is_a_directory()));
                     }
                     (meta, fs::File::open(os(&p)).map_err(|e| (READ, e))?)
                 } else {
@@ -426,7 +426,7 @@ impl SrcPath {
             }
             At::Spool(tree, name) => match tree.read(&self.rel) {
                 // the type of the member is what the stat would have said
-                Err(e) if matches!(Errno::from_io_error(&e), Some(Errno::NOENT | Errno::ISDIR)) => {
+                Err(e) if e.kind() == io::ErrorKind::NotFound || errno::is_directory(&e) => {
                     Err((STAT, e))
                 }
                 r => {
@@ -443,7 +443,7 @@ impl SrcPath {
     /// (untracked files of a git tree); the `Dir` observation keeps the full
     /// listing, the one validation can re-read.
     pub fn read_dir(&self, ev: &Evaluator) -> Result<Vec<(Vec<u8>, FileType)>, Failed> {
-        let notdir = || (STAT, io::Error::from(Errno::NOTDIR));
+        let notdir = || (STAT, errno::not_a_directory());
         match self.at().ok_or((STAT, enoent()))? {
             At::Disk(p) => {
                 let rd = fs::read_dir(os(&p)).map_err(|e| ("opening directory", e))?;
