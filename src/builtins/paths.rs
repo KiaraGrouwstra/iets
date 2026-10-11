@@ -14,6 +14,8 @@ use std::str::from_utf8;
 use std::sync::Arc;
 use std::{fs, io};
 
+use rustix::io::Errno;
+
 use super::Registry;
 use super::store_hooks::{self, At, Follow};
 use super::{fetch, fetch_git};
@@ -127,7 +129,7 @@ fn kind_name(k: Kind) -> &'static str {
 
 /// A failed [`SrcPath::read`] of a file, `readFile`'s way.
 fn read_error((verb, e): (&str, io::Error), p: &[u8], pos: Pos) -> Box<Error> {
-    if e.raw_os_error() == Some(libc::EISDIR) {
+    if Errno::from_io_error(&e) == Some(Errno::ISDIR) {
         Error::boxed(
             ErrorKind::Io,
             format!("file '{}' is not a regular file", lossy(p)),
@@ -250,7 +252,7 @@ fn realise_existing(
     let at = store_hooks::check(ev, at, &p, pos)?;
     if at.hidden() {
         return Err(io_error(
-            io::Error::from_raw_os_error(libc::ENOENT),
+            io::Error::from(Errno::NOENT),
             "getting status of",
             &p,
             pos,
@@ -280,7 +282,7 @@ fn read_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
 fn read_dir(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let (at, p) = realise_existing(ev, args[0], Some(Follow::Full), pos)?;
     let listing = at.read_dir(ev).map_err(|(verb, e)| {
-        if e.raw_os_error() == Some(libc::ENOTDIR) {
+        if Errno::from_io_error(&e) == Some(Errno::NOTDIR) {
             Error::boxed(
                 ErrorKind::Io,
                 format!("'{}' is not a directory", lossy(&p)),
@@ -332,7 +334,8 @@ fn path_exists(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> 
     match at.stat(ev, must_be_dir) {
         Ok(k) => Ok(Word::from_bool(k == Kind::Directory || !must_be_dir)),
         Err(e)
-            if e.kind() == io::ErrorKind::NotFound || e.raw_os_error() == Some(libc::ENOTDIR) =>
+            if e.kind() == io::ErrorKind::NotFound
+                || Errno::from_io_error(&e) == Some(Errno::NOTDIR) =>
         {
             Ok(Word::FALSE)
         }
@@ -527,14 +530,7 @@ fn add_path_inner(
     // that tree's filter applied before this call's `filter`, or the input's
     // spool; the filter function still sees the store path Nix would show it.
     let at = store_hooks::check(ev, located, path, pos)?;
-    let missing = |p: &[u8]| {
-        io_error(
-            io::Error::from_raw_os_error(libc::ENOENT),
-            "getting status of",
-            p,
-            pos,
-        )
-    };
+    let missing = |p: &[u8]| io_error(io::Error::from(Errno::NOENT), "getting status of", p, pos);
     let at = if virtual_tree {
         at
     } else {

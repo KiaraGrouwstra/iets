@@ -24,7 +24,7 @@ use crate::{Divergence, Target, Verdict, classify, known, no_panic};
 use iets::store::nar;
 use libfuzzer_sys::arbitrary::Unstructured;
 use sha2::{Digest, Sha256};
-use std::ffi::{CString, OsStr};
+use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
@@ -314,12 +314,8 @@ fn build(u: &mut Unstructured, path: &Path, depth: usize) -> io::Result<()> {
             symlink(OsStr::from_bytes(target), path).or_else(|_| symlink("x", path))
         }
         6 => {
-            let c = CString::new(path.as_os_str().as_bytes()).map_err(io::Error::other)?;
-            // SAFETY: a valid C string for the duration of the call.
-            if unsafe { libc::mkfifo(c.as_ptr(), 0o644) } != 0 {
-                return Err(io::Error::last_os_error());
-            }
-            Ok(())
+            rustix::fs::mkfifoat(rustix::fs::CWD, path, rustix::fs::Mode::from_raw_mode(0o644))
+                .map_err(io::Error::from)
         }
         _ => {
             fs::create_dir(path)?;

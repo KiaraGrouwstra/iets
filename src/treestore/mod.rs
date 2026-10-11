@@ -41,6 +41,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 use std::{fs, io, result, str, thread};
 
+use rustix::io::Errno;
+
 use crate::cachefs;
 use crate::error::Result;
 use crate::eval::Evaluator;
@@ -112,8 +114,8 @@ impl StoredTree {
                 .iter()
                 .map(|(n, child)| (n.clone(), child.file_type()))
                 .collect()),
-            Some(_) => Err(io::Error::from_raw_os_error(libc::ENOTDIR)),
-            None => Err(io::Error::from_raw_os_error(libc::ENOENT)),
+            Some(_) => Err(io::Error::from(Errno::NOTDIR)),
+            None => Err(io::Error::from(Errno::NOENT)),
         }
     }
 
@@ -124,8 +126,8 @@ impl StoredTree {
     pub fn read(&self, rel: &[u8]) -> io::Result<Vec<u8>> {
         match self.tree.resolve(rel, true) {
             Some(Node::File { at, .. }) => self.tree.read(at),
-            Some(_) => Err(io::Error::from_raw_os_error(libc::EISDIR)),
-            None => Err(io::Error::from_raw_os_error(libc::ENOENT)),
+            Some(_) => Err(io::Error::from(Errno::ISDIR)),
+            None => Err(io::Error::from(Errno::NOENT)),
         }
     }
 
@@ -139,8 +141,7 @@ impl StoredTree {
         sink: &mut dyn io::Write,
         filter: &mut PathFilter<'_>,
     ) -> io::Result<()> {
-        let node = (self.tree.resolve(rel, true))
-            .ok_or_else(|| io::Error::from_raw_os_error(libc::ENOENT))?;
+        let node = (self.tree.resolve(rel, true)).ok_or_else(|| io::Error::from(Errno::NOENT))?;
         self.tree.dump_filtered(node, shown, sink, filter)
     }
 }

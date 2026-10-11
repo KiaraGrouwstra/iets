@@ -8,7 +8,7 @@
 //! functions here act on the one this thread entered.
 
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -92,9 +92,8 @@ impl Out {
 /// `line` cut to the terminal's width: a status line that wraps cannot be
 /// taken down with one carriage return.
 fn fit(line: &str) -> String {
-    let mut ws: libc::winsize = unsafe { mem::zeroed() };
-    let cols = match unsafe { libc::ioctl(libc::STDERR_FILENO, libc::TIOCGWINSZ, &mut ws) } {
-        0 if ws.ws_col > 1 => usize::from(ws.ws_col),
+    let cols = match rustix::termios::tcgetwinsize(io::stderr()) {
+        Ok(ws) if ws.ws_col > 1 => usize::from(ws.ws_col),
         _ => 80,
     };
     line.chars().take(cols - 1).collect()
@@ -235,7 +234,7 @@ fn uuid_v7(now: SystemTime) -> String {
         .map_or(0, |d| d.as_millis() as u64);
     let mut b = [0u8; 16];
     b[..6].copy_from_slice(&ms.to_be_bytes()[2..]);
-    unsafe { libc::getrandom(b[6..].as_mut_ptr().cast(), 10, 0) };
+    let _ = rustix::rand::getrandom(&mut b[6..], rustix::rand::GetRandomFlags::empty());
     b[6] = 0x70 | (b[6] & 0x0f);
     b[8] = 0x80 | (b[8] & 0x3f);
     let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
@@ -517,7 +516,7 @@ pub fn line(text: &str) {
 }
 
 fn stderr_is_tty() -> bool {
-    unsafe { libc::isatty(libc::STDERR_FILENO) == 1 }
+    io::stderr().is_terminal()
 }
 
 /// logging.cc:SimpleLogger::log filters every line it writes; an

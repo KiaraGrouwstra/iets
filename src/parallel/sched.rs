@@ -8,6 +8,8 @@ use std::thread::{self, Builder};
 use std::time::{Duration, Instant};
 use std::{hint, process, ptr};
 
+use rustix::thread::futex;
+
 use super::deque::Deque;
 use super::fiber::{self, Fiber};
 use super::force;
@@ -685,7 +687,7 @@ impl Runtime {
 
     pub fn wake_all(&self) {
         self.epoch.0.fetch_add(1, Ordering::Release);
-        futex_wake(&self.epoch.0, i32::MAX);
+        futex_wake(&self.epoch.0, i32::MAX as u32);
     }
 
     fn park(&self, w: &mut Worker, done: &impl Fn() -> bool) {
@@ -893,28 +895,12 @@ impl Worker {
 }
 
 fn futex_wait(word: &AtomicU32, expected: u32) {
-    // SAFETY: plain futex wait on a word that lives forever.
-    unsafe {
-        libc::syscall(
-            libc::SYS_futex,
-            word as *const AtomicU32,
-            libc::FUTEX_WAIT | libc::FUTEX_PRIVATE_FLAG,
-            expected,
-            ptr::null::<libc::timespec>(),
-        );
-    }
+    // EAGAIN (the word moved) and EINTR both mean "look again"
+    let _ = futex::wait(word, futex::Flags::PRIVATE, expected, None);
 }
 
-fn futex_wake(word: &AtomicU32, n: i32) {
-    // SAFETY: plain futex wake.
-    unsafe {
-        libc::syscall(
-            libc::SYS_futex,
-            word as *const AtomicU32,
-            libc::FUTEX_WAKE | libc::FUTEX_PRIVATE_FLAG,
-            n,
-        );
-    }
+fn futex_wake(word: &AtomicU32, n: u32) {
+    let _ = futex::wake(word, futex::Flags::PRIVATE, n);
 }
 
 #[cfg(test)]

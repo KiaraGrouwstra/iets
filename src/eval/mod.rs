@@ -132,14 +132,7 @@ fn newline_starts(src: &[u8]) -> Vec<u32> {
     let mut rest = src;
     let mut off = 0usize;
     // SAFETY: memchr reads at most `rest.len()` bytes of `rest`.
-    while let Some(i) = unsafe {
-        let p = libc::memchr(
-            rest.as_ptr() as *const libc::c_void,
-            b'\n' as i32,
-            rest.len(),
-        );
-        (!p.is_null()).then(|| p as usize - rest.as_ptr() as usize)
-    } {
+    while let Some(i) = memchr::memchr(b'\n', rest) {
         off += i + 1;
         line_starts.push(off as u32);
         rest = &rest[i + 1..];

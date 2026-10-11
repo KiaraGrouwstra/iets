@@ -10,6 +10,8 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::{error, io, mem, ptr};
 
+use rustix::mm::{Advice, MapFlags, MprotectFlags, ProtFlags, madvise, mmap_anonymous, mprotect};
+
 pub const DEFAULT_STACK: usize = 256 << 20;
 /// Stack of the demand fiber and of the process main thread. The demand
 /// path must have the same room at every worker count, or a program that
@@ -161,21 +163,17 @@ impl Stack {
         // SAFETY: anonymous private mapping; the low page is made
         // inaccessible as a guard. NORESERVE keeps large reservations cheap.
         let base = unsafe {
-            let p = libc::mmap(
+            let p = mmap_anonymous(
                 ptr::null_mut(),
                 size,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
-                -1,
-                0,
-            );
-            if p == libc::MAP_FAILED {
-                return Err(StackError {
-                    bytes: size,
-                    why: Why::Mmap(io::Error::last_os_error()),
-                });
-            }
-            libc::mprotect(p, GUARD, libc::PROT_NONE);
+                ProtFlags::READ | ProtFlags::WRITE,
+                MapFlags::PRIVATE | MapFlags::NORESERVE,
+            )
+            .map_err(|e| StackError {
+                bytes: size,
+                why: Why::Mmap(e.into()),
+            })?;
+            let _ = mprotect(p, GUARD, MprotectFlags::empty());
             p as *mut u8
         };
         register_guard(base as usize);
@@ -200,7 +198,7 @@ impl Stack {
         let len = self.size - GUARD - keep;
         // SAFETY: range is inside the mapping and above the guard page.
         unsafe {
-            libc::madvise(self.base.add(GUARD) as *mut _, len, libc::MADV_DONTNEED);
+            let _ = madvise(self.base.add(GUARD) as *mut _, len, Advice::LinuxDontNeed);
         }
     }
 
