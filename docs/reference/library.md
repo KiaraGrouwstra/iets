@@ -1,9 +1,8 @@
 # Using iets as a library
 
-> **Not ready for long-lived hosts.** The evaluator does not free memory
-> until the process exits, so a program that evaluates again and again, such
-> as an editor server, grows without limit. Use the library for a run-once
-> frontend. The API can change.
+> **Memory goes with the session.** A program that evaluates again and
+> again, such as an editor server, makes one session per evaluation
+> ("Sessions and memory"). The API can change.
 
 iets is a library with a thin `iets` binary on top. This page lists the entry
 points, says what a `Session` owns and maps the value API to Nix's C API.
@@ -86,6 +85,27 @@ started them. For your own threads, call `Session::enter` on each, or use
 `session::bind(f)`. A thread that entered no session uses a fallback session
 that writes nowhere. `docs/how-to/embed-the-evaluator.md` has the steps with
 code.
+
+## Sessions and memory
+
+Every value an evaluator makes, and every name it interns, lives in its
+session's memory (`Session::heap`). Nothing in it is freed while the session
+lives. All of it is freed when the last handle goes: your `Arc<Session>`,
+and each `Evaluator` made in the session. A `parallel::try_run` holds the
+session only until it returns. The fallback session lives as long as the
+process.
+
+A `Value<'e>` borrows its evaluator, so the compiler stops you from keeping
+one too long. A `runtime::Word` from `api::evaluate`, and an error that
+carries one, are plain data: keep them only while the session lives. If you
+use one later, the process stops with
+`error: a value was used after its session was released`.
+
+Released memory stays reserved and inaccessible, so its addresses are never
+reused and a stale value never reads another session's data. That costs
+address space and kernel mappings, not memory: a host that releases many
+thousands of large sessions can reach `vm.max_map_count`. The handler that
+prints the message replaces Rust's `SIGSEGV` handler.
 
 ## The value API
 

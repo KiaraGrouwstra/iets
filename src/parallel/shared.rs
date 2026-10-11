@@ -15,6 +15,8 @@ use std::vec::IntoIter;
 use crate::eval::{FileInfo, Pos};
 use crate::runtime::Word;
 use crate::runtime::arena::NSTATS;
+use crate::runtime::heap::Heap;
+use crate::session::Session;
 use crate::syntax::ast::FileId;
 use crate::syntax::symbol::Sym;
 
@@ -84,6 +86,8 @@ struct FilesInner {
     ids: HashMap<Vec<u8>, FileId>,
     /// Global source offset the next file starts at (`Pos` space).
     next_base: u32,
+    /// Owns the entries, so references to them outlive every lock.
+    heap: Arc<Heap>,
 }
 
 impl FilesInner {
@@ -94,14 +98,14 @@ impl FilesInner {
             .checked_add(src.len() as u32 + 1)
             .expect("sources exceed 4 GiB");
         let info = FileInfo::new(path.to_vec(), src, base);
-        self.list.push(Box::leak(Box::new(info)));
+        self.list.push(self.heap.keep(info));
         id
     }
 }
 
 /// Append-only table of loaded files: path, global base offset and line
-/// table only, never the source text. Entries are leaked so references
-/// outlive every lock.
+/// table only, never the source text. The entries live as long as the
+/// session.
 #[derive(Clone)]
 pub struct Files(Arc<Mutex<FilesInner>>);
 
@@ -112,11 +116,17 @@ impl Default for Files {
 }
 
 impl Files {
+    /// A table whose entries live in the session this thread entered.
     pub fn new() -> Files {
+        Files::in_heap(Session::current().heap.clone())
+    }
+
+    pub fn in_heap(heap: Arc<Heap>) -> Files {
         Files(Arc::new(Mutex::new(FilesInner {
             list: Vec::new(),
             ids: HashMap::new(),
             next_base: 0,
+            heap,
         })))
     }
 
@@ -180,9 +190,15 @@ pub struct SymWords(Arc<SymWordsInner>);
 
 struct SymWordsInner(*mut AtomicU64);
 
-// SAFETY: the table holds atomics only; the mapping lives for the process.
+// SAFETY: the table holds atomics only; the mapping lives as long as this.
 unsafe impl Sync for SymWordsInner {}
 unsafe impl Send for SymWordsInner {}
+
+impl Drop for SymWordsInner {
+    fn drop(&mut self) {
+        interner::unmap_per_sym(self.0);
+    }
+}
 
 impl Default for SymWords {
     fn default() -> Self {

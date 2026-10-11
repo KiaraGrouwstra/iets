@@ -1,10 +1,9 @@
 # Embed the evaluator in your own program
 
-> **Don't use this for a long-lived host.** The evaluator doesn't free memory
-> until the process exits, so an editor server or a build service that
-> evaluates again and again grows without limit. The library fits a run-once
-> frontend: another command line, a test harness, a one-shot tool. The API
-> can change.
+> **One session per evaluation in a long-lived host.** Memory is freed when
+> the session goes
+> ([Sessions and memory](../reference/library.md#sessions-and-memory)). The
+> API can change.
 
 The crate is a library with a thin `iets` binary on top. Your program links
 the library and calls its entry points, which
@@ -32,6 +31,18 @@ The library never writes to stdout or stderr on its own, and never exits.
 It returns errors and your program picks the exit code. A thread you start
 yourself needs `Session::enter` or `session::bind(f)`
 ([Using iets as a library](../reference/library.md#what-the-host-owns)).
+
+To evaluate again and again, give each evaluation its own session:
+
+```rust
+for request in requests {
+    let session = iets::session::Session::new();
+    let mut ev = iets::eval::EvalConfig::new().session(session).build();
+    answer(&mut ev, request);
+}   // the evaluator drops here, and the session's memory with it
+```
+
+Keep no value after its session is gone. The process stops if you use one.
 
 ## Evaluation
 

@@ -8,10 +8,13 @@
 
 use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
+use std::sync::Once;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::{error, io, mem, ptr};
 
 use rustix::mm::{Advice, MapFlags, MprotectFlags, ProtFlags, madvise, mmap_anonymous, mprotect};
+
+use crate::runtime::heap;
 
 pub const DEFAULT_STACK: usize = 256 << 20;
 /// Stack of the demand fiber and of the process main thread. The demand
@@ -120,6 +123,29 @@ fn is_guard(addr: usize) -> bool {
 }
 
 const OVERFLOW_MSG: &[u8] = b"error: stack overflow (possible infinite recursion)\n";
+const RELEASED_MSG: &[u8] = b"error: a value was used after its session was released\n";
+
+/// The fault handler without an alternate stack, for a thread that runs no
+/// fiber: a released session's memory faults on any thread. It replaces
+/// the handler Rust's runtime installs, as `install_overflow_handler` does.
+pub(crate) fn install_fault_handler() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(set_handler);
+}
+
+fn set_handler() {
+    // SAFETY: the documented use of `sigaction`, with a handler that only
+    // writes to fd 2 and ends the process.
+    unsafe {
+        for sig in [libc::SIGSEGV, libc::SIGBUS] {
+            let mut sa: libc::sigaction = mem::zeroed();
+            sa.sa_sigaction = on_segv as *const () as usize;
+            sa.sa_flags = libc::SA_ONSTACK | libc::SA_SIGINFO;
+            libc::sigemptyset(&mut sa.sa_mask);
+            libc::sigaction(sig, &sa, ptr::null_mut());
+        }
+    }
+}
 
 extern "C" fn on_segv(sig: i32, info: *mut libc::siginfo_t, _ctx: *mut libc::c_void) {
     // SAFETY: the kernel passes a valid siginfo for SIGSEGV/SIGBUS.
@@ -129,6 +155,13 @@ extern "C" fn on_segv(sig: i32, info: *mut libc::siginfo_t, _ctx: *mut libc::c_v
         unsafe {
             libc::write(2, OVERFLOW_MSG.as_ptr() as *const _, OVERFLOW_MSG.len());
             libc::_exit(1);
+        }
+    }
+    if heap::is_released(addr) {
+        // SAFETY: write and abort are async-signal-safe.
+        unsafe {
+            libc::write(2, RELEASED_MSG.as_ptr() as *const _, RELEASED_MSG.len());
+            libc::abort();
         }
     }
     // not ours: let the default disposition produce the usual crash
@@ -173,23 +206,15 @@ pub fn install_overflow_handler() {
             return;
         }
         let mut mem = vec![0u8; ALT].into_boxed_slice();
+        let ss = libc::stack_t {
+            ss_sp: mem.as_mut_ptr() as *mut _,
+            ss_flags: 0,
+            ss_size: ALT,
+        };
         // SAFETY: the alternate stack lives in this thread's `ALT_STACK`
-        // until the thread exits, and the handler only writes to fd 2 and
-        // exits. Both calls are the documented use of the API.
-        unsafe {
-            let ss = libc::stack_t {
-                ss_sp: mem.as_mut_ptr() as *mut _,
-                ss_flags: 0,
-                ss_size: ALT,
-            };
-            libc::sigaltstack(&ss, ptr::null_mut());
-            let mut sa: libc::sigaction = mem::zeroed();
-            sa.sa_sigaction = on_segv as *const () as usize;
-            sa.sa_flags = libc::SA_ONSTACK | libc::SA_SIGINFO;
-            libc::sigemptyset(&mut sa.sa_mask);
-            libc::sigaction(libc::SIGSEGV, &sa, ptr::null_mut());
-            libc::sigaction(libc::SIGBUS, &sa, ptr::null_mut());
-        }
+        // until the thread exits.
+        unsafe { libc::sigaltstack(&ss, ptr::null_mut()) };
+        set_handler();
         *a = Some(AltStack { _mem: mem });
     });
 }

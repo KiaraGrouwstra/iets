@@ -97,6 +97,8 @@ pub fn try_run<R: Send + 'static>(
         ev.lints.flush();
         return Ok(r);
     }
+    // the workers inherit it, so their arenas map into this session's heap
+    let _entered = ev.session().clone().enter();
     let template = force::SyncEv(ev.clone());
     let rt = sched::Runtime::start(workers, Box::new(template), stack_size())?;
     let user = Box::into_raw(Box::new(ev)) as *mut ();

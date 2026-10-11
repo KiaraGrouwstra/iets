@@ -264,7 +264,7 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn resolve(&self, sym: Sym) -> Option<Ir> {
+    fn resolve(&mut self, sym: Sym) -> Option<Ir> {
         let mut withs: Vec<u32> = Vec::new();
         let n = self.scopes.len();
         for (d, scope) in self.scopes.iter().rev().enumerate() {
@@ -298,7 +298,7 @@ impl<'a> Compiler<'a> {
                 withs: &[],
                 pos: Pos::NONE,
             }
-            .with_withs(withs),
+            .with_withs(self.arena.alloc_slice(&withs)),
         )
     }
 
@@ -1225,13 +1225,9 @@ fn subject_pos_hack(_path: &[AttrElem]) -> ExprId {
 }
 
 impl Ir {
-    fn with_withs(self, withs: Vec<u32>) -> Ir {
+    fn with_withs(self, withs: &'static [u32]) -> Ir {
         match self {
-            Ir::WithVar { sym, pos, .. } => Ir::WithVar {
-                sym,
-                withs: Box::leak(withs.into_boxed_slice()),
-                pos,
-            },
+            Ir::WithVar { sym, pos, .. } => Ir::WithVar { sym, withs, pos },
             other => other,
         }
     }
