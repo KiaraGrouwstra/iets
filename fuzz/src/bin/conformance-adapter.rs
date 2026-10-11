@@ -1,7 +1,8 @@
 //! iets behind the adapter protocol of nix-conformance (its README.md):
-//! `conformance-adapter OP FILE [FLAG...]`. `parse` and `nar` call the
+//! `conformance-adapter OP FILE [FLAG...]`. `parse`, `nar` and `drv` call the
 //! library; `check` and `eval` run `$IETS`, else `iets` on `PATH`.
 
+use iets::store::drv::Derivation;
 use iets::store::nar;
 use iets::syntax::{self, ast::FileId, symbol::Interner};
 use iets_fuzz::{canon, sx};
@@ -25,6 +26,7 @@ fn main() {
     exit(match op {
         "parse" => parse(file),
         "nar" => read_nar(file),
+        "drv" => read_drv(file),
         // `import` resolves every variable of the file; a refusal is an error
         "check" => iets(&[
             "eval",
@@ -82,6 +84,38 @@ fn read_nar(file: &str) -> i32 {
     let _ = fs::remove_dir_all(&dir);
     println!("{}", answer.unwrap_or_else(|| "error".into()));
     0
+}
+
+fn read_drv(file: &str) -> i32 {
+    let Ok(input) = fs::read(file) else {
+        return 2;
+    };
+    let answer = (|| {
+        let drv = Derivation::parse(&input, &drv_name(file)).ok()?;
+        let out = drv.unparse().ok()?;
+        let path = drv.drv_path_for(&out).ok()?;
+        let hash: String = Sha256::digest(&out)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        Some(format!("ok {path} {hash}"))
+    })();
+    println!("{}", answer.unwrap_or_else(|| "error".into()));
+    0
+}
+
+/// The file name without `.drv`, and without a store path hash and its
+/// `-` when there is one (SPEC.md of nix-conformance).
+fn drv_name(file: &str) -> String {
+    let base = Path::new(file)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let name = base.strip_suffix(".drv").unwrap_or(&base);
+    match name.as_bytes().get(32) {
+        Some(b'-') if name.len() > 33 => name[33..].to_string(),
+        _ => name.to_string(),
+    }
 }
 
 fn absolute(file: &str) -> String {

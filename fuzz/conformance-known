@@ -13,3 +13,12 @@ parse/baba3aa312fa7c13d28c43faff8f81b99724e6a1.nix
 
 # Bytes that are not UTF-8 in a derivation
 lang/eval-okay-derivation-non-utf8.nix
+drv/39plwlav0h8nkykcm57cnwx1bdf3syls-u6.drv
+drv/whqiqnnb5s5m27k53kyvlikk579zfqch-u5.drv
+drv/wpfi80n4jpcw582zgv4694jnh40xd914-u4.drv
+drv/bytes/builder-all.drv
+drv/bytes/env-name-all.drv
+
+# Reading a `.drv` file: a git: output hash or an impure output
+drv/shape/fixed-git-sha1.drv
+drv/shape/impure.drv

@@ -553,6 +553,21 @@ fn derivation_strict_internal(
     if drv.platform.is_empty() {
         bail!(ErrorKind::Eval, pos, "required attribute 'system' missing");
     }
+    // Nix writes the system without escapes (printUnquotedString), so these
+    // give a .drv it cannot read back, or reads as another derivation; Nix
+    // fails on them only after writing it. nix-conformance:
+    // nix-bugs/drv-system-quote
+    if let Some(c) = drv
+        .platform
+        .chars()
+        .find(|c| matches!(c, '"' | '\\' | '\n' | '\r' | '\t'))
+    {
+        bail!(
+            ErrorKind::Eval,
+            pos,
+            "derivation '{drv_name}': the system holds {c:?}, which a .drv cannot hold"
+        );
+    }
     // a text-addressed single `out` is a derivation that produces a `.drv`
     if drv_name.ends_with(DRV_EXTENSION)
         && !(ingestion_method == Some(IngestionMethod::Text)

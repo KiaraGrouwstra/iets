@@ -85,7 +85,17 @@ and the `.drv` path is the one Nix gives. These places differ:
   takes any bytes there; iets's `derivationStrict` stops with `string is
   not valid UTF-8`. iets holds these three as text. The drv-eval fuzz
   target meets it in each of the three (`drv-eval-builder-not-utf8`,
-  `drv-eval-system-not-utf8`, `drv-eval-env-name-not-utf8`).
+  `drv-eval-system-not-utf8`, `drv-eval-env-name-not-utf8`). For
+  `system` this is the rule, not a limit: a system names a platform,
+  and a platform name is text.
+- `system` must also not hold `"`, `\`, a newline, a carriage return or a
+  tab. iets stops with `the system holds '"', which a .drv cannot hold`.
+  Nix writes the system into the `.drv` without escapes, so the file it
+  writes cannot be read back (`"`) or reads back as another derivation
+  (`\`); Nix fails too, but after it has written the file
+  (nix-conformance `nix-bugs/drv-system-quote`). With a `"`, the written
+  file can even parse with another builder, arguments and environment.
+  `tests/lang/eval-fail-derivation-system-escape.nix` holds the case.
 - `nix derivation show` writes each such byte as U+FFFD. Nix fails with
   `[json.exception.type_error.316]`.
 - iets's daemon client reads the strings of a reply as UTF-8 and writes
@@ -120,6 +130,12 @@ names them.
 - **A `blake3` hash:** Nix needs the experimental feature
   `blake3-hashes`; in iets every feature is on (see "Experimental-feature
   builtins"). (`drv-blake3-without-feature`)
+- **A `git:` output hash or an `impure` output:** iets stops with
+  `unsupported output hash method` or `impure derivations are not
+  supported`. Nix reads both with the experimental features
+  `git-hashing` and `impure-derivations`, which `drv-oracle` turns on.
+  `drv/shape/fixed-git-sha1.drv` and `drv/shape/impure.drv` of
+  nix-conformance hit it, and `fuzz/conformance-known` lists them.
 - **A store path with no dash after the hash**, such as
   `/nix/store/<hash>Xname`: Nix's `StorePath` checks the length, the hash
   characters and the name, but not the byte between them (`path.cc`).
