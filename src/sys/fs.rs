@@ -6,8 +6,8 @@ pub use std::os::unix::fs::symlink;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 
 use std::fs::{self, DirBuilder, File, Metadata, OpenOptions, Permissions};
+use std::io;
 use std::path::{Path, PathBuf};
-use std::{env, io};
 
 use rustix::fs::{
     AtFlags, CWD, FlockOperation, OFlags, Timespec, Timestamps, UTIME_NOW, flock, futimens,
@@ -16,13 +16,6 @@ use rustix::fs::{
 use rustix::io::Errno;
 
 /// Fills `buf` from `offset`, without moving the file's cursor.
-/// The temporary directory, resolved. Windows hands out the short `RUNNER~1`
-/// form, which a resolved path never matches.
-pub fn temp_dir() -> PathBuf {
-    let t = env::temp_dir();
-    canonicalize(&t).unwrap_or(t)
-}
-
 /// Removes a symbolic link, whatever it points at.
 pub fn remove_link(p: &Path) -> io::Result<()> {
     fs::remove_file(p)

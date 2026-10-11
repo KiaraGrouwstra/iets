@@ -878,7 +878,7 @@ pub fn nar_hash_of_string(contents: &[u8]) -> Hash {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::sys::fs as sysfs;
+    use crate::sys;
     use crate::sys::fs::set_executable;
     use std::env;
     use std::path::PathBuf;
@@ -888,7 +888,7 @@ pub(crate) mod tests {
     /// printf '#!/bin/sh\necho hi\n' > tree/run.sh; chmod +x tree/run.sh;
     /// ln -s a.txt tree/link; : > tree/sub/empty; printf zzz > tree/sub/z
     pub(crate) fn fixture_tree(tag: &str) -> PathBuf {
-        let dir = sysfs::temp_dir().join(format!("iets-nar-{}-{tag}", std::process::id()));
+        let dir = sys::temp_dir().join(format!("iets-nar-{}-{tag}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let tree = dir.join("tree");
         fs::create_dir_all(tree.join("sub")).unwrap();

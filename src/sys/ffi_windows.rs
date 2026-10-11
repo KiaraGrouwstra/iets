@@ -27,10 +27,7 @@ pub fn from_native(b: &[u8]) -> Cow<'_, [u8]> {
     Cow::Owned(winpath::to_internal(b))
 }
 
-/// How many leading components of a path `..` cannot remove.
-pub fn anchor_len(comps: &[&[u8]]) -> usize {
-    winpath::anchor_len(comps)
-}
+pub use super::winpath::anchor_len;
 
 const UNREPRESENTABLE: &str = "\0";
 

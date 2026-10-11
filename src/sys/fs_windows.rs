@@ -2,12 +2,12 @@
 //! inode numbers and no inode change time in `std::fs::Metadata`.
 
 use std::fs::{self, DirBuilder, File, Metadata, OpenOptions};
+use std::io;
 use std::mem;
 use std::os::windows::fs::{self as winfs, FileExt, MetadataExt, OpenOptionsExt};
 use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::{env, io};
 
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, FILE_BASIC_INFO, FILE_FLAG_BACKUP_SEMANTICS,
@@ -166,13 +166,6 @@ pub fn lock(f: &File) -> bool {
 
 pub fn unlock(f: &File) {
     let _ = f.unlock();
-}
-
-/// The temporary directory, resolved. Windows hands out the short `RUNNER~1`
-/// form, which a resolved path never matches.
-pub fn temp_dir() -> PathBuf {
-    let t = env::temp_dir();
-    canonicalize(&t).unwrap_or(t)
 }
 
 /// Removes a symbolic link. One to a directory goes with `remove_dir`.
