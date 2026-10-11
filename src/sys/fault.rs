@@ -4,12 +4,7 @@ use std::cell::RefCell;
 use std::sync::{Once, OnceLock};
 use std::{mem, ptr};
 
-/// What to do about a fault that belongs to this process.
-pub struct Fault {
-    pub message: &'static [u8],
-    /// Abort for a core dump, or exit with status 1.
-    pub abort: bool,
-}
+pub use super::Fault;
 
 static CLASSIFY: OnceLock<fn(usize) -> Option<Fault>> = OnceLock::new();
 

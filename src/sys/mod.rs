@@ -6,8 +6,16 @@
 #[cfg_attr(not(target_os = "linux"), path = "portable.rs")]
 mod imp;
 
+/// What to do about a fault that belongs to this process.
+pub struct Fault {
+    pub message: &'static [u8],
+    /// Abort for a core dump, or exit with status 1.
+    pub abort: bool,
+}
+
 #[cfg_attr(windows, path = "errno_windows.rs")]
 pub mod errno;
+#[cfg_attr(windows, path = "fault_windows.rs")]
 pub mod fault;
 #[cfg_attr(windows, path = "ffi_windows.rs")]
 mod ffi;
