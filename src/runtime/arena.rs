@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use std::{process, ptr, slice, thread};
+use std::{process, ptr, slice};
 
 #[cfg(feature = "stats2")]
 use super::census::Census;
@@ -22,6 +22,8 @@ const CHUNK: usize = 32 << 20;
 /// pages; anything slower than this is a compaction stall.
 const THP_STALL: Duration = Duration::from_millis(6);
 
+// Call it on the thread that fills the chunk: zeroing leaves the chunk in
+// that core's L3. On a helper thread on another CCD, one worker ran 20 % slower.
 fn map_chunk(chunk: usize, thp: bool) -> (usize, bool) {
     // SAFETY: prefaulting only changes how the chunk's own pages are backed.
     unsafe {
@@ -49,7 +51,6 @@ pub struct Arena {
     folded: Box<Folded>,
     /// Advise huge pages until a chunk populate stalls in compaction.
     thp: bool,
-    next: Option<thread::JoinHandle<(usize, bool)>>,
     /// String bytes by content, and the context-free string object over
     /// them once one was made (EMPTY until then). nixpkgs builds the same
     /// text millions of times (docs/explanation/evaluation.md).
@@ -72,19 +73,6 @@ pub struct Mark {
 impl Default for Arena {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// The chunks this arena handed out belong to the session's heap: the
-/// graph points into them. The chunk mapped ahead was never handed out.
-impl Drop for Arena {
-    fn drop(&mut self) {
-        if let Some(h) = self.next.take()
-            && let Ok((p, _)) = h.join()
-        {
-            // SAFETY: a whole `CHUNK` mapping from `map_chunk`, never used.
-            unsafe { vm::unmap(p as *mut u8, CHUNK) };
-        }
     }
 }
 
@@ -112,7 +100,6 @@ impl Arena {
             stats: Stats::default(),
             folded: Box::default(),
             thp: true,
-            next: None,
             strings: FxHashMap::default(),
             ctxs: FxHashSet::default(),
             heap: None,
@@ -216,32 +203,11 @@ impl Arena {
         // to 4 KiB pages anyway, which cost ~1 s of system time per GiB.
         // MADV_POPULATE_WRITE zeroes the chunk inside the kernel without one
         // trap per page. The chunk goes with the session's heap.
-        let ready = match self.next.take() {
-            Some(h) if chunk == CHUNK => h.join().ok(),
-            _ => None,
-        };
-        let base = match ready {
-            Some((p, stalled)) => {
-                if stalled {
-                    self.thp = false;
-                }
-                p as *mut u8
-            }
-            None => {
-                let (p, stalled) = map_chunk(chunk, self.thp);
-                if stalled {
-                    self.thp = false;
-                }
-                p as *mut u8
-            }
-        };
-        if self.mapped > 0 {
-            let thp = self.thp;
-            let next = thread::Builder::new()
-                .spawn(move || map_chunk(CHUNK, thp))
-                .ok();
-            self.next = next;
+        let (p, stalled) = map_chunk(chunk, self.thp);
+        if stalled {
+            self.thp = false;
         }
+        let base = p as *mut u8;
         self.heap
             .get_or_insert_with(|| Session::current().heap.clone())
             .adopt(base as usize, chunk);
