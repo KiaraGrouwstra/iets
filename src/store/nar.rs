@@ -888,13 +888,18 @@ pub(crate) mod tests {
     /// printf '#!/bin/sh\necho hi\n' > tree/run.sh; chmod +x tree/run.sh;
     /// ln -s a.txt tree/link; : > tree/sub/empty; printf zzz > tree/sub/z
     pub(crate) fn fixture_tree(tag: &str) -> PathBuf {
+        fixture_tree_with(tag, true)
+    }
+
+    /// `exec` is whether `run.sh` has the executable bit, which Windows cannot set.
+    fn fixture_tree_with(tag: &str, exec: bool) -> PathBuf {
         let dir = sys::temp_dir().join(format!("iets-nar-{}-{tag}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let tree = dir.join("tree");
         fs::create_dir_all(tree.join("sub")).unwrap();
         fs::write(tree.join("a.txt"), b"hello world\n").unwrap();
         fs::write(tree.join("run.sh"), b"#!/bin/sh\necho hi\n").unwrap();
-        set_executable(&tree.join("run.sh"), true).unwrap();
+        set_executable(&tree.join("run.sh"), exec).unwrap();
         symlink("a.txt", tree.join("link")).unwrap();
         fs::write(tree.join("sub/empty"), b"").unwrap();
         fs::write(tree.join("sub/z"), b"zzz").unwrap();
@@ -902,11 +907,21 @@ pub(crate) mod tests {
     }
 
     // nix-store --dump tree | sha256sum ; nix-store --dump tree | wc -c
-    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
-    #[cfg(unix)]
     #[test]
     fn directory_nar() {
-        let tree = fixture_tree("dir");
+        let tree = fixture_tree_with("dir", false);
+        assert_eq!(
+            nar_hash(&tree).unwrap().to_base16(),
+            "5bd341428326a5608117fb128d3114fc3fb6c76de99cd19c10397bdad728beae"
+        );
+        assert_eq!(nar_size(&tree).unwrap(), 1240);
+    }
+
+    // the same with `chmod +x tree/run.sh`
+    #[cfg(unix)]
+    #[test]
+    fn directory_nar_with_an_executable() {
+        let tree = fixture_tree("dir-x");
         assert_eq!(
             nar_hash(&tree).unwrap().to_base16(),
             "9db4d4d873838f1fbb8f363841597d61244beebb19bd10b606ae2a6d4b940ede"
@@ -915,19 +930,17 @@ pub(crate) mod tests {
     }
 
     // nix hash path tree ; nix hash path --base32 tree
-    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
-    #[cfg(unix)]
     #[test]
     fn directory_nar_hash_formats() {
-        let tree = fixture_tree("fmt");
+        let tree = fixture_tree_with("fmt", false);
         let h = nar_hash(&tree).unwrap();
         assert_eq!(
             h.to_sri(),
-            "sha256-nbTU2HODjx+7jzY4QVl9YSRL7rsZvRC2Bq4qbUuUDt4="
+            "sha256-W9NBQoMmpWCBF/sSjTEU/D+2x23pnNGcEDl72tcovq4="
         );
         assert_eq!(
             h.to_nix32(),
-            "1phfji5nsamf0sv11g8rpgp4n931gmcl2f1niyxiz3w3fgcd9d4x"
+            "1bmy53bxlyrr22fd3779dp3vcgzw2hqqs4pv2y0n1996hd143lsv"
         );
     }
 
@@ -941,7 +954,16 @@ pub(crate) mod tests {
     }
 
     // nix-store --dump tree/run.sh | sha256sum
-    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
+    #[test]
+    fn script_nar() {
+        let tree = fixture_tree_with("script", false);
+        assert_eq!(
+            nar_hash(&tree.join("run.sh")).unwrap().to_base16(),
+            "e519505edb9f77f7f02efefd3c9b29766fdd0f449e9bf932313d39ce249982e9"
+        );
+    }
+
+    // the same after `chmod +x tree/run.sh`
     #[cfg(unix)]
     #[test]
     fn executable_file_nar() {
@@ -1006,8 +1028,6 @@ pub(crate) mod tests {
     }
 
     // nix-store --dump tree | nix-store --restore out ; nix-store --dump out | sha256sum
-    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
-    #[cfg(unix)]
     #[test]
     fn restore_roundtrip() {
         let tree = fixture_tree("restore");
@@ -1020,7 +1040,11 @@ pub(crate) mod tests {
             fs::read_link(out.join("link")).unwrap().as_os_str(),
             "a.txt"
         );
-        assert!(is_executable(&fs::metadata(out.join("run.sh")).unwrap()));
+        // Windows has no executable bit to restore
+        assert_eq!(
+            is_executable(&fs::metadata(out.join("run.sh")).unwrap()),
+            cfg!(unix)
+        );
         assert!(!is_executable(&fs::metadata(out.join("a.txt")).unwrap()));
     }
 

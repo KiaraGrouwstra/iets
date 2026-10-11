@@ -412,7 +412,6 @@ mod tests {
     }
     use super::*;
     use crate::store::nar::nar_hash;
-    #[cfg(unix)]
     use crate::store::nar::nar_hash_filtered;
     use crate::store::nar::tests::fixture_tree;
 
@@ -456,18 +455,18 @@ mod tests {
     }
 
     // nix-instantiate --eval -E '"${./tree}"' (tree from nar.rs fixture_tree)
-    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
-    #[cfg(unix)]
     #[test]
     fn path_copy_directory() {
         let tree = fixture_tree("pathcopy");
         let h = nar_hash(&tree).unwrap();
         let p = make_fixed_output_path(IngestionMethod::Recursive, &h, "tree", &BTreeSet::new())
             .unwrap();
-        assert_eq!(
-            p.to_string(),
-            "/nix/store/7achjqw6z8fr92f66lxll1lr3yzpqvc3-tree"
-        );
+        // Windows has no executable bit, so `run.sh` archives as a plain file
+        let want = match cfg!(unix) {
+            true => "7achjqw6z8fr92f66lxll1lr3yzpqvc3-tree",
+            false => "g0cpk0ypckagh7pql7dvnwl5sjzyc9yi-tree",
+        };
+        assert_eq!(p.to_string(), format!("{}/{want}", store_dir()));
     }
 
     // nix-instantiate --eval -E '"${./tree/a.txt}"'
@@ -484,8 +483,6 @@ mod tests {
     }
 
     // nix-instantiate --eval -E '"${builtins.filterSource (p: t: baseNameOf p != "sub") ./tree}"'
-    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
-    #[cfg(unix)]
     #[test]
     fn filter_source() {
         let tree = fixture_tree("filtersrc");
@@ -495,25 +492,25 @@ mod tests {
         .unwrap();
         let p = make_fixed_output_path(IngestionMethod::Recursive, &h, "tree", &BTreeSet::new())
             .unwrap();
-        assert_eq!(
-            p.to_string(),
-            "/nix/store/1rmqvsn4swz7n7vkjyvj6cldipi3gp8b-tree"
-        );
+        let want = match cfg!(unix) {
+            true => "1rmqvsn4swz7n7vkjyvj6cldipi3gp8b-tree",
+            false => "cyq83schjm526jx9m6y2irwmr82abpx5-tree",
+        };
+        assert_eq!(p.to_string(), format!("{}/{want}", store_dir()));
     }
 
     // nix-instantiate --eval -E '"${builtins.path { path = ./tree; name = "mytree"; }}"'
-    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
-    #[cfg(unix)]
     #[test]
     fn path_with_name() {
         let tree = fixture_tree("pathname");
         let h = nar_hash(&tree).unwrap();
         let p = make_fixed_output_path(IngestionMethod::Recursive, &h, "mytree", &BTreeSet::new())
             .unwrap();
-        assert_eq!(
-            p.to_string(),
-            "/nix/store/ymkhbrxgqx2ii22w4kqj3jjfmcq5smzk-mytree"
-        );
+        let want = match cfg!(unix) {
+            true => "ymkhbrxgqx2ii22w4kqj3jjfmcq5smzk-mytree",
+            false => "pj1vdjq68vfa06isb6vvlibb3854wirg-mytree",
+        };
+        assert_eq!(p.to_string(), format!("{}/{want}", store_dir()));
     }
 
     // nix-instantiate --eval --strict -E 'let d = builtins.derivation { name = "fx"; system = "x86_64-linux";
