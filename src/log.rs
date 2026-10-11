@@ -7,9 +7,9 @@
 //! The state is a [`Log`], which a [`crate::session::Session`] owns: the
 //! functions here act on the one this thread entered.
 
+use crate::sys::net::UnixStream;
 use std::fs::{self, OpenOptions};
 use std::io::{self, IsTerminal, Write};
-use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};

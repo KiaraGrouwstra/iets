@@ -2,12 +2,12 @@
 //! bash. The rc script is `makeRcScript` plus the tail `CmdDevelop::run` adds.
 //! See `docs/reference/classic.md`.
 
+use crate::sys::process::CommandExt;
 use std::collections::BTreeMap;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, DirBuilder};
 use std::io::ErrorKind;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{self, SystemTime};

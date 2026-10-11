@@ -5,9 +5,9 @@
 pub mod wire;
 
 use crate::sys::fs::symlink;
+use crate::sys::net::UnixStream;
 use std::collections::{BTreeMap, HashMap};
 use std::io::{self, BufReader, BufWriter, Read, Write};
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::{env, fs, mem, str, thread};

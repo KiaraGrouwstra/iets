@@ -8,6 +8,8 @@ mod imp;
 
 mod ffi;
 pub mod fs;
+pub mod net;
+pub mod process;
 
 pub use ffi::{OsStrExt, OsStringExt};
 pub use imp::{discard, futex_wait, futex_wake, prefault};

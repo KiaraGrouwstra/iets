@@ -28,7 +28,7 @@ use crate::log;
 use crate::print::lexicographic_order;
 use crate::runtime::Word;
 use crate::session::{self, Session};
-use std::os::unix::process::ExitStatusExt;
+use crate::sys::process::ExitStatusExt;
 
 pub const MSG_NEXT: &str = "next";
 pub const MSG_RESTART: &str = "restart";

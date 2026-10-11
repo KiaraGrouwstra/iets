@@ -10,7 +10,7 @@ pub mod instantiate;
 pub mod nix;
 pub mod shell;
 
-use std::os::unix::process::CommandExt;
+use crate::sys::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, exit};
 

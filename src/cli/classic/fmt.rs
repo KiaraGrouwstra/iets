@@ -4,7 +4,7 @@
 //! `docs/reference/classic.md`.
 
 use crate::sys::OsStrExt;
-use std::os::unix::process::CommandExt;
+use crate::sys::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str;
