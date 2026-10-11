@@ -54,6 +54,12 @@ pub fn map(len: usize, lazy: bool) -> io::Result<*mut u8> {
     Ok(p?.cast())
 }
 
+/// `len` bytes for a stack. Unix reserves it lazily and the pages come in as
+/// the stack grows.
+pub fn map_stack(len: usize) -> io::Result<*mut u8> {
+    map(len, true)
+}
+
 /// # Safety
 /// `[p, p + len)` is a mapping of the caller's that nothing uses any more.
 pub unsafe fn unmap(p: *mut u8, len: usize) {

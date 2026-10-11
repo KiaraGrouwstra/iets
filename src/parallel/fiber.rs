@@ -172,8 +172,8 @@ pub struct Stack {
 impl Stack {
     pub fn new(size: usize) -> Result<Stack, StackError> {
         // The low page is made inaccessible as a guard. A lazy mapping keeps
-        // large reservations cheap.
-        let base = vm::map(size, true).map_err(|e| StackError {
+        // large reservations cheap, except on Windows where stacks are committed.
+        let base = vm::map_stack(size).map_err(|e| StackError {
             bytes: size,
             why: Why::Mmap(e),
         })?;
