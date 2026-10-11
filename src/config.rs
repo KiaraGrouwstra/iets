@@ -659,6 +659,8 @@ impl Config {
 pub const DEFAULT_SYSTEM: &str = "x86_64-linux";
 #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
 pub const DEFAULT_SYSTEM: &str = "aarch64-linux";
+#[cfg(all(target_arch = "riscv64", target_os = "linux"))]
+pub const DEFAULT_SYSTEM: &str = "riscv64-linux";
 #[cfg(all(target_arch = "x86_64", target_os = "macos"))]
 pub const DEFAULT_SYSTEM: &str = "x86_64-darwin";
 #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
