@@ -4,6 +4,8 @@
 //! removes only what the TTL says. Shapes follow nix-tarmac's
 //! tests/{crash,concurrent,corrupt,gc}_test.cpp. See docs/explanation/caching.md.
 
+mod hermetic;
+
 use std::collections::HashSet;
 use std::fs::{self, File, Permissions};
 use std::path::{Path, PathBuf};
@@ -399,11 +401,10 @@ fn cache_gc_removes_entries_past_the_ttl() {
     assert!(ir.join(&ir_key[2..]).exists(), "an IR entry to sweep");
 
     let gc = |args: &[&str]| {
-        let out = Command::new(env!("CARGO_BIN_EXE_iets"))
+        let out = hermetic::iets()
             .args(["cache", "gc", "--cache-dir"])
             .arg(&dir)
             .args(args)
-            .env("XDG_CONFIG_HOME", "/nonexistent")
             .output()
             .expect("run iets cache gc");
         assert!(out.status.success(), "cache gc exits 0");

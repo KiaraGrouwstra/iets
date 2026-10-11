@@ -1,15 +1,16 @@
 //! Pure evaluation is the native default, and a checkout with no flake is
 //! what a pure run may read (docs/explanation/flakes-and-sources.md).
 
+mod hermetic;
+
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 use std::{env, fs};
 
 fn iets(dir: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_iets"))
+    hermetic::iets()
         .args(args)
         .current_dir(dir)
-        .env("XDG_CONFIG_HOME", "/nonexistent")
         .env("IETS_CACHE", "0")
         .output()
         .expect("run iets")
@@ -98,7 +99,7 @@ fn the_pure_setting_is_the_users_alone() {
     fs::create_dir_all(&conf).unwrap();
     fs::write(conf.join("iets.toml"), "pure = false\n").unwrap();
 
-    let o = Command::new(env!("CARGO_BIN_EXE_iets"))
+    let o = hermetic::iets()
         .args(["eval", "--raw", "-f", "up.nix"])
         .current_dir(&repo)
         .env("XDG_CONFIG_HOME", d.join("config"))

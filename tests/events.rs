@@ -1,14 +1,15 @@
 //! The event stream: the groups a run names, one JSON object per store add,
 //! and silence when nobody asked for it.
 
-use std::process::{Command, Output};
+mod hermetic;
+
+use std::process::Output;
 use std::{env, fs};
 
 /// `groups` is `IETS_EVENTS`; the sink stays stderr, which is its default.
 fn eval(expr: &str, groups: Option<&str>) -> Output {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_iets"));
+    let mut c = hermetic::iets();
     c.args(["eval", "--no-cache", "--raw", "-E", expr])
-        .env("XDG_CONFIG_HOME", "/nonexistent")
         .env_remove("IETS_EVENTS_TO");
     match groups {
         Some(v) => c.env("IETS_EVENTS", v),
@@ -80,9 +81,8 @@ fn the_sink_is_its_own_knob() {
     let dir = env::temp_dir().join(format!("iets-events-{}", std::process::id()));
     fs::create_dir_all(&dir).expect("temp dir");
     let file = dir.join("e.jsonl");
-    let o = Command::new(env!("CARGO_BIN_EXE_iets"))
+    let o = hermetic::iets()
         .args(["eval", "--no-cache", "--raw", "-E", TO_FILE])
-        .env("XDG_CONFIG_HOME", "/nonexistent")
         .env("IETS_EVENTS", "store")
         .env("IETS_EVENTS_TO", &file)
         .output()
