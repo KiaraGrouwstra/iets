@@ -10,7 +10,7 @@ use lib.nu [show]
 # the whole sorted line with --meta.
 def keys [file: string, meta: bool]: nothing -> table {
   let out = if $meta {
-    open --raw $file | ^jq -S -c '[(.attrPath|join("\u0001")), (if .error then "error" else "job" end), (if .error then "" else (del(.error)|tojson) end)] | join("\t")' -r
+    open --raw $file | ^jq -S -c '[(.attrPath|join("\u0001")), (if .error then "error" else "job" end), (if .error then "" else (del(.error, .stats)|tojson) end)] | join("\t")' -r
   } else {
     open --raw $file | ^jq -c '[(.attrPath|join("\u0001")), (if .error then "error" else "job" end), (.drvPath // "")] | join("\t")' -r
   }

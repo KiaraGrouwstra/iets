@@ -15,10 +15,11 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::Instant;
 use std::{env, fs, thread};
 
 use super::instantiate::Instantiator;
-use super::line::{Line, json_str, json_str_list, split_object};
+use super::line::{Line, json_str, json_str_list, split_object, stats_json};
 use super::{
     FNV_BASIS, Node, admit, attr_join, config, error_line, find_along_attr_path, fnv_step, node,
 };
@@ -98,8 +99,15 @@ pub fn run_worker(
         let response: Vec<u8> = if depth == chunk_depth && !admit(hash, depth, false) {
             MSG_OK.into()
         } else {
-            match find_along_attr_path(ev, root, &path).and_then(|v| node(ev, v, &path, hash)) {
-                Ok(Node::Job(job)) => {
+            let (t, alloc) = (Instant::now(), ev.arena.bytes_allocated);
+            let r = find_along_attr_path(ev, root, &path).and_then(|v| node(ev, v, &path, hash));
+            let stats = stats_json(
+                t.elapsed().as_millis() as u64,
+                ev.arena.bytes_allocated.saturating_sub(alloc) as u64,
+            );
+            match r {
+                Ok(Node::Job(mut job)) => {
+                    job.extra.insert("stats".into(), stats);
                     let line = Line::Job(job);
                     match &inst {
                         Some(i) => i.push(line),
@@ -120,7 +128,11 @@ pub fn run_worker(
                 }
                 Ok(Node::Skip) => MSG_OK.into(),
                 Err(_) if !admit(hash, depth, true) => MSG_OK.into(),
-                Err(e) => error_line(ev, &path, &e).render(),
+                Err(e) => {
+                    let mut line = error_line(ev, &path, &e);
+                    line.stats = Some(stats);
+                    line.render()
+                }
             }
         };
         write_out(out, &response);

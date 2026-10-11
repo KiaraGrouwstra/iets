@@ -632,6 +632,7 @@ nix-eval-jobs. A job:
 | `isCached`, `cacheStatus`, `neededBuilds`, `neededSubstitutes` | with `--check-cache-status`; `cacheStatus` is `local`, `cached` or `notBuilt` |
 | `extraValue` | with `--apply` |
 | `pos` | with `--provenance`: `file:line:col` of the derivation. iets only |
+| `stats` | from worker processes, as nix-eval-jobs 2.35.3 and later write it: `wallMs`, the time to evaluate the attribute, and `allocBytes`, the arena bytes that took. Nix counts its garbage collector's bytes instead. Work that attributes share counts toward the first one that needs it. Not present with `--max-memory-size 0` |
 
 An error line:
 
@@ -639,7 +640,8 @@ An error line:
 {"attr":"d","attrPath":["d"],"error":"error:\n       … while calling the 'throw' builtin\n ...","fatal":false}
 ```
 
-The error text has no color codes. It is also printed on stderr.
+The error text has no color codes. It is also printed on stderr. An error
+line from a worker process has `stats` too.
 
 ### Instantiation
 

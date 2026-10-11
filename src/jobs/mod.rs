@@ -224,6 +224,7 @@ pub fn error_line(ev: &Evaluator, path: &[String], e: &Error) -> ErrorLine {
         attr_path: path.to_vec(),
         error: r.text(),
         fatal: e.kind == ErrorKind::StackOverflow,
+        stats: None,
     }
 }
 
