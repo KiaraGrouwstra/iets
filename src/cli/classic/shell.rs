@@ -4,6 +4,7 @@
 //! `print-dev-env`; nothing here builds the `-env` derivation.
 //! See `docs/reference/classic.md`.
 
+use crate::sys;
 use crate::sys::OsStrExt;
 use crate::sys::process::CommandExt;
 use std::cell::Cell;
@@ -605,11 +606,7 @@ fn rc_script(s: &Shell, shell: &str, tmp: &str, structured_rc: &str) -> String {
     rc.push_str(&format!("BASH={}; ", esc(shell)));
     rc.push_str("set +e; ");
     rc.push_str("[ -n \"$PS1\" -a -z \"$NIX_SHELL_PRESERVE_PROMPT\" ] && ");
-    let colour = if rustix::process::getuid().is_root() {
-        "1;31"
-    } else {
-        "1;32"
-    };
+    let colour = if sys::tty::is_root() { "1;31" } else { "1;32" };
     rc.push_str(&format!(
         "PS1='\\n\\[\\033[{colour}m\\][nix-shell:\\w]\\$\\[\\033[0m\\] '; "
     ));

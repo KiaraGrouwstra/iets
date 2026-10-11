@@ -93,10 +93,7 @@ impl Out {
 /// `line` cut to the terminal's width: a status line that wraps cannot be
 /// taken down with one carriage return.
 fn fit(line: &str) -> String {
-    let cols = match rustix::termios::tcgetwinsize(io::stderr()) {
-        Ok(ws) if ws.ws_col > 1 => usize::from(ws.ws_col),
-        _ => 80,
-    };
+    let cols = sys::tty::columns().unwrap_or(80);
     line.chars().take(cols - 1).collect()
 }
 

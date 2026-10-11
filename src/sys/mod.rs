@@ -11,6 +11,7 @@ mod ffi;
 pub mod fs;
 pub mod net;
 pub mod process;
+pub mod tty;
 pub mod vm;
 
 pub use ffi::{OsStrExt, OsStringExt};
