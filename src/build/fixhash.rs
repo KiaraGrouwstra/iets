@@ -11,7 +11,7 @@ use crate::session::Session;
 use crate::store::hash::{Hash, HashFormat};
 use crate::store::path;
 use crate::sys::OsStrExt;
-use crate::sys::fs::PermissionsExt;
+use crate::sys::fs::copy_mode;
 use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::io::{self, IsTerminal, Write};
@@ -42,9 +42,7 @@ impl Fix {
             return Err(format!("{} changed since it was read", self.file.display()));
         }
         text.splice(self.at..self.at + self.old.len(), self.new.bytes());
-        let mode = fs::metadata(&self.file)
-            .map(|m| PermissionsExt::mode(&m.permissions()))
-            .map_err(err)?;
+        let meta = fs::metadata(&self.file).map_err(err)?;
         let dir = self.file.parent().unwrap_or(Path::new("."));
         let name = self.file.file_name().unwrap_or_default().to_string_lossy();
         let tmp = dir.join(format!(".{}.{}", name, std::process::id()));
@@ -55,7 +53,7 @@ impl Fix {
                 .truncate(true)
                 .open(&tmp)?;
             f.write_all(&text)?;
-            f.set_permissions(PermissionsExt::from_mode(mode))?;
+            copy_mode(&meta, &f)?;
             f.sync_all()
         };
         if let Err(e) = write() {

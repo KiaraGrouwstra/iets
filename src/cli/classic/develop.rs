@@ -16,7 +16,7 @@ use super::{Argv, Common, eval_config, fallback, nix};
 use crate::cli::devenv::{self, DevEnv};
 use crate::cli::{self, Input, parse_eval_args};
 use crate::devenv::{escape_shell_arg_always as esc, make_rc_script};
-use crate::sys::fs::DirBuilderExt;
+use crate::sys::fs::dir_mode;
 use crate::{config, error};
 
 const NAME: &str = "nix";
@@ -179,7 +179,7 @@ fn private_dir() -> error::Result<PathBuf> {
             .duration_since(time::UNIX_EPOCH)
             .map_or(0, |d| d.subsec_nanos());
         let dir = tmp.join(format!("iets-develop-{}-{nanos}", std::process::id()));
-        match DirBuilder::new().mode(0o700).create(&dir) {
+        match dir_mode(&mut DirBuilder::new(), 0o700).create(&dir) {
             Ok(()) => return Ok(dir),
             Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
             Err(e) => {

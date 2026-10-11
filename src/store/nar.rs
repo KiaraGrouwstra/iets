@@ -1,5 +1,5 @@
 use crate::sys::OsStrExt;
-use crate::sys::fs::{PermissionsExt, symlink};
+use crate::sys::fs::{is_executable, make_executable, symlink};
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Read, Write};
@@ -392,7 +392,7 @@ impl Walk<'_> {
                 self.cur().display()
             )));
         }
-        let executable = st.permissions().mode() & 0o100 != 0;
+        let executable = is_executable(&st);
         let len = st.len();
         self.w.regular(executable, len, &mut f)
     }
@@ -736,7 +736,7 @@ impl Restorer<'_> {
             .open(self.cur())?;
         self.r.contents_to(&mut f, len)?;
         if executable {
-            f.set_permissions(fs::Permissions::from_mode(0o755))?;
+            make_executable(&f)?;
         }
         Ok(())
     }
@@ -878,6 +878,7 @@ pub fn nar_hash_of_string(contents: &[u8]) -> Hash {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::sys::fs::set_executable;
     use std::env;
     use std::path::PathBuf;
 
@@ -892,7 +893,7 @@ pub(crate) mod tests {
         fs::create_dir_all(tree.join("sub")).unwrap();
         fs::write(tree.join("a.txt"), b"hello world\n").unwrap();
         fs::write(tree.join("run.sh"), b"#!/bin/sh\necho hi\n").unwrap();
-        fs::set_permissions(tree.join("run.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+        set_executable(&tree.join("run.sh"), true).unwrap();
         symlink("a.txt", tree.join("link")).unwrap();
         fs::write(tree.join("sub/empty"), b"").unwrap();
         fs::write(tree.join("sub/z"), b"zzz").unwrap();
@@ -1010,22 +1011,8 @@ pub(crate) mod tests {
             fs::read_link(out.join("link")).unwrap().as_os_str(),
             "a.txt"
         );
-        assert_ne!(
-            fs::metadata(out.join("run.sh"))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o100,
-            0
-        );
-        assert_eq!(
-            fs::metadata(out.join("a.txt"))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o100,
-            0
-        );
+        assert!(is_executable(&fs::metadata(out.join("run.sh")).unwrap()));
+        assert!(!is_executable(&fs::metadata(out.join("a.txt")).unwrap()));
     }
 
     #[test]

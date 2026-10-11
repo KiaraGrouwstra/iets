@@ -13,7 +13,7 @@
 //! smaller. The checksum covers the index; a payload is trusted because the
 //! tree it belongs to was hashed against the lock before anything named it.
 
-use crate::sys::fs::{self as sysfs, FileExt, OpenOptionsExt};
+use crate::sys::fs as sysfs;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fs::{self, File};
@@ -79,12 +79,12 @@ impl Pack {
             return None;
         }
         let mut magic = [0u8; 8];
-        file.read_exact_at(&mut magic, 0).ok()?;
+        sysfs::read_exact_at(&file, &mut magic, 0).ok()?;
         if &magic != MAGIC {
             return None;
         }
         let mut tail = [0u8; TAIL];
-        file.read_exact_at(&mut tail, len - TAIL as u64).ok()?;
+        sysfs::read_exact_at(&file, &mut tail, len - TAIL as u64).ok()?;
         if &tail[TAIL - 8..] != TRAILER {
             return None;
         }
@@ -96,7 +96,7 @@ impl Pack {
             return None;
         }
         let mut index = vec![0u8; index_len as usize];
-        file.read_exact_at(&mut index, start).ok()?;
+        sysfs::read_exact_at(&file, &mut index, start).ok()?;
         let mut h = blake3::Hasher::new();
         h.update(&index);
         h.update(&tail[..1040]);
@@ -195,9 +195,7 @@ impl Pack {
 
     fn stored_bytes(&self, loc: Loc) -> io::Result<Vec<u8>> {
         let mut out = vec![0u8; loc.stored as usize];
-        self.file
-            .read_exact_at(&mut out, loc.offset)
-            .map_err(|_| corrupt("truncated"))?;
+        sysfs::read_exact_at(&self.file, &mut out, loc.offset).map_err(|_| corrupt("truncated"))?;
         Ok(out)
     }
 
@@ -271,11 +269,8 @@ impl PackWriter {
             std::process::id(),
             crate::cachefs::tag()
         ));
-        let f = File::options()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&tmp)?;
+        let f =
+            sysfs::create_mode(File::options().write(true).create_new(true), 0o600).open(&tmp)?;
         let mut file = io::BufWriter::with_capacity(1 << 20, f);
         file.write_all(MAGIC)?;
         Ok(PackWriter {

@@ -1,11 +1,11 @@
 //! File modes, inodes, symlinks and open flags, which `std::fs` only
 //! exposes per platform.
 
-pub use std::os::unix::fs::{
-    DirBuilderExt, FileExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt, symlink,
-};
+use std::os::unix::fs::FileExt;
+pub use std::os::unix::fs::symlink;
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 
-use std::fs::{File, OpenOptions};
+use std::fs::{self, DirBuilder, File, Metadata, OpenOptions, Permissions};
 use std::io;
 use std::path::Path;
 
@@ -14,6 +14,85 @@ use rustix::fs::{
     utimensat,
 };
 use rustix::io::Errno;
+
+/// Fills `buf` from `offset`, without moving the file's cursor.
+pub fn read_exact_at(f: &File, buf: &mut [u8], offset: u64) -> io::Result<()> {
+    f.read_exact_at(buf, offset)
+}
+
+/// Writes all of `buf` at `offset`, without moving the file's cursor.
+pub fn write_all_at(f: &File, buf: &[u8], offset: u64) -> io::Result<()> {
+    f.write_all_at(buf, offset)
+}
+
+/// Owner execute bit, which is what a NAR calls executable.
+pub fn is_executable(m: &Metadata) -> bool {
+    m.mode() & 0o100 != 0
+}
+
+/// Any execute bit, which is what a lookup in `PATH` needs.
+pub fn is_runnable(m: &Metadata) -> bool {
+    m.mode() & 0o111 != 0
+}
+
+pub fn is_socket(m: &Metadata) -> bool {
+    m.file_type().is_socket()
+}
+
+/// Which file this is on its device, so a rename or a swap shows.
+pub fn file_id(m: &Metadata) -> (u64, u64) {
+    (m.dev(), m.ino())
+}
+
+pub fn mtime_secs(m: &Metadata) -> i64 {
+    m.mtime()
+}
+
+pub fn mtime_ns(m: &Metadata) -> i64 {
+    m.mtime()
+        .wrapping_mul(1_000_000_000)
+        .wrapping_add(m.mtime_nsec())
+}
+
+/// The last change of the inode, which a copy or a rename cannot hide.
+pub fn ctime_ns(m: &Metadata) -> i64 {
+    m.ctime()
+        .wrapping_mul(1_000_000_000)
+        .wrapping_add(m.ctime_nsec())
+}
+
+/// Creates the file with `mode`, less what the umask takes away.
+pub fn create_mode(o: &mut OpenOptions, mode: u32) -> &mut OpenOptions {
+    o.mode(mode)
+}
+
+pub fn dir_mode(b: &mut DirBuilder, mode: u32) -> &mut DirBuilder {
+    b.mode(mode)
+}
+
+/// Narrows `path` to the owner alone when it is wider.
+pub fn restrict_to_owner(path: &Path) {
+    let Ok(m) = fs::metadata(path) else {
+        return;
+    };
+    if m.permissions().mode() & 0o077 != 0 {
+        let _ = fs::set_permissions(path, Permissions::from_mode(0o700));
+    }
+}
+
+pub fn make_executable(f: &File) -> io::Result<()> {
+    f.set_permissions(Permissions::from_mode(0o755))
+}
+
+pub fn set_executable(path: &Path, executable: bool) -> io::Result<()> {
+    let mode = if executable { 0o755 } else { 0o644 };
+    fs::set_permissions(path, Permissions::from_mode(mode))
+}
+
+/// Gives `f` the permissions `m` had.
+pub fn copy_mode(m: &Metadata, f: &File) -> io::Result<()> {
+    f.set_permissions(m.permissions())
+}
 
 /// Refuses a final symbolic link.
 pub fn no_follow(o: &mut OpenOptions) -> &mut OpenOptions {

@@ -1,7 +1,7 @@
 //! The real Nix binaries. Under the classic symlink farm, `nix` on `PATH` is
 //! iets itself, so every subprocess and the fallback resolve past it.
 
-use crate::sys::fs::MetadataExt;
+use crate::sys::fs::is_runnable;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::{env, fs};
@@ -13,7 +13,7 @@ use crate::session::Session;
 const REAL_DIR_FILE: &str = "share/iets/real-nix-bin";
 
 fn executable(p: &Path) -> bool {
-    fs::metadata(p).is_ok_and(|m| m.is_file() && m.mode() & 0o111 != 0)
+    fs::metadata(p).is_ok_and(|m| m.is_file() && is_runnable(&m))
 }
 
 /// The bin directory a farm entry points at: every hop of the symlink chain
@@ -111,8 +111,7 @@ pub fn nix() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sys::fs::{PermissionsExt, symlink};
-    use std::fs::Permissions;
+    use crate::sys::fs::{set_executable, symlink};
 
     #[test]
     fn farm_marker_is_found_through_two_hops() {
@@ -141,7 +140,7 @@ mod tests {
         let (x, y, real) = (tmp.join("x"), tmp.join("y"), tmp.join("real"));
         let exe = |p: &Path| {
             fs::write(p, "#!/bin/sh\nexit 0\n").unwrap();
-            fs::set_permissions(p, Permissions::from_mode(0o755)).unwrap();
+            set_executable(p, true).unwrap();
         };
         for d in [&x, &y, &real] {
             fs::create_dir_all(d).unwrap();

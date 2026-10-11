@@ -3,7 +3,7 @@
 //! changed is rehashed and accepted when its content did not.
 
 use crate::sys::OsStrExt;
-use crate::sys::fs::MetadataExt;
+use crate::sys::fs::file_id;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::io::{self, ErrorKind};
@@ -107,8 +107,7 @@ fn check(o: &Obs, rehashed: &AtomicUsize, dirs: &mut DirBuf) -> Outcome {
             if m.len() == *size
                 && mtime_ns(&m) == *mt
                 && ctime_ns(&m) == *ct
-                && m.dev() == *dev
-                && m.ino() == *ino
+                && file_id(&m) == (*dev, *ino)
             {
                 return Outcome::Same;
             }
@@ -363,8 +362,8 @@ mod tests {
         fs::File::open(&f).unwrap().set_modified(fixed).unwrap();
         let now = fs::metadata(&f).unwrap();
         assert_eq!(
-            (now.len(), mtime_ns(&now), now.ino()),
-            (m.len(), mtime_ns(&m), m.ino()),
+            (now.len(), mtime_ns(&now), file_id(&now).1),
+            (m.len(), mtime_ns(&m), file_id(&m).1),
             "size, mtime and inode are the ones the entry holds"
         );
         assert!(validate(&mut obs, 1).is_err(), "and the content changed");

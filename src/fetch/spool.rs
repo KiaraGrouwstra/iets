@@ -26,7 +26,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 
-use crate::sys::fs::{self as sysfs, FileExt};
+use crate::sys::fs as sysfs;
 use crate::sys::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -561,8 +561,7 @@ impl Tree {
             Blob::Object { id, size } => return self.object(&id, size),
         };
         let mut out = vec![0u8; size as usize];
-        self.spool_source(sparse)
-            .read_exact_at(&mut out, offset)
+        sysfs::read_exact_at(self.spool_source(sparse), &mut out, offset)
             .map_err(|_| io::Error::other("the spooled tarball is truncated"))?;
         Ok(out)
     }
@@ -935,7 +934,7 @@ pub(super) fn expand(
         while left > 0 {
             let n = left.min(buf.len() as u64) as usize;
             entry.read_exact(&mut buf[..n])?;
-            side.write_all_at(&buf[..n], to)?;
+            sysfs::write_all_at(side, &buf[..n], to)?;
             to += n as u64;
             left -= n as u64;
         }
@@ -1030,8 +1029,7 @@ impl Read for Bytes<'_> {
         if n == 0 {
             return Ok(0);
         }
-        self.src
-            .read_exact_at(&mut buf[..n], self.offset)
+        sysfs::read_exact_at(self.src, &mut buf[..n], self.offset)
             .map_err(|_| io::Error::other("the spooled tarball is truncated"))?;
         self.offset += n as u64;
         self.left -= n as u64;

@@ -18,11 +18,11 @@
 //! the oracle the spool's NAR is held to (`spool_matches_the_tree`).
 
 #[cfg(test)]
-use crate::sys::fs::{PermissionsExt, symlink};
+use crate::sys::fs::{is_executable, set_executable, symlink};
 #[cfg(test)]
 use std::collections::BTreeMap;
 #[cfg(test)]
-use std::fs::{self, File, Permissions};
+use std::fs::{self, File};
 #[cfg(test)]
 use std::io::Cursor;
 use std::path::{Component, Path, PathBuf};
@@ -166,11 +166,8 @@ pub fn unpack(bytes: Vec<u8>, dest: &Path) -> Result<PathBuf> {
                     e,
                 )
             })?;
-            fs::set_permissions(
-                &at,
-                Permissions::from_mode(if executable { 0o755 } else { 0o644 }),
-            )
-            .map_err(|e| Error::io(format!("cannot set the mode of {}", at.display()), e))?;
+            set_executable(&at, executable)
+                .map_err(|e| Error::io(format!("cannot set the mode of {}", at.display()), e))?;
         }
     }
     for (rel, target) in links {
@@ -246,11 +243,7 @@ mod tests {
                     out.insert(rel, "dir".into());
                     walk(root, &p, out);
                 } else {
-                    let x = if m.permissions().mode() & 0o100 != 0 {
-                        "x"
-                    } else {
-                        ""
-                    };
+                    let x = if is_executable(&m) { "x" } else { "" };
                     out.insert(
                         rel,
                         format!(

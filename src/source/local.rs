@@ -9,7 +9,7 @@
 //! is a `Tree` observation, so the tracing cache follows the tree.
 
 use crate::sys::OsStrExt;
-use crate::sys::fs::MetadataExt;
+use crate::sys::fs::mtime_secs;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -90,10 +90,10 @@ fn names_its_content(dir: &Path, hash: &Hash) -> bool {
 /// entry in the tree, so the newest `lstat` mtime comes from its filter callback instead of a
 /// second recursive `read_dir`.
 fn dump_and_max_mtime(dir: &Path, fp: &mut Option<TreeFp>) -> io::Result<(Hash, u64, i64)> {
-    let mut mtime = fs::symlink_metadata(dir)?.mtime();
+    let mut mtime = mtime_secs(&fs::symlink_metadata(dir)?);
     let mut filter = |p: &Path, t: nar::FileType| {
         if let Ok(st) = fs::symlink_metadata(p) {
-            mtime = mtime.max(st.mtime());
+            mtime = mtime.max(mtime_secs(&st));
         }
         if let Some(fp) = fp.as_mut() {
             fp.entry(p, t, true);
@@ -320,7 +320,7 @@ mod tests {
         fs::write(&f, b"x").unwrap();
         let later = SystemTime::now() + Duration::from_secs(1000);
         File::open(&f).unwrap().set_modified(later).unwrap();
-        let want = fs::metadata(&f).unwrap().mtime();
+        let want = mtime_secs(&fs::metadata(&f).unwrap());
         let (hash, size, mtime) = dump_and_max_mtime(&d, &mut None).unwrap();
         assert_eq!(mtime, want);
         assert_eq!(hash, nar::nar_hash(&d).unwrap());

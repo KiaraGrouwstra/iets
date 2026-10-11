@@ -17,7 +17,7 @@
 //! download a sibling is already doing.
 
 use crate::sys::OsStrExt;
-use crate::sys::fs::{self as sysfs, DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use crate::sys::fs as sysfs;
 use io::Write;
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
@@ -73,10 +73,7 @@ const FILE_MODE: u32 = 0o600;
 
 /// `create_dir_all` with `DIR_MODE` on every component it makes.
 pub fn create_dir(path: &Path) -> io::Result<()> {
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(DIR_MODE)
-        .create(path)
+    sysfs::dir_mode(fs::DirBuilder::new().recursive(true), DIR_MODE).create(path)
 }
 
 /// Narrows `path` to [`DIR_MODE`] when it is wider. A cache root a run of an
@@ -84,10 +81,7 @@ pub fn create_dir(path: &Path) -> io::Result<()> {
 /// it: tightening is the whole repair, and it costs the run nothing, where
 /// refusing the directory would cost every entry in it.
 fn tighten(path: &Path) {
-    let Ok(md) = fs::metadata(path) else { return };
-    if md.permissions().mode() & 0o077 != 0 {
-        let _ = fs::set_permissions(path, fs::Permissions::from_mode(DIR_MODE));
-    }
+    sysfs::restrict_to_owner(path);
 }
 
 /// The directory every cache store lives under: `--cache-dir DIR`, else
@@ -240,12 +234,14 @@ fn stamp_age(bytes: &[u8]) -> Option<Duration> {
 pub fn write_atomic(dir: &Path, name: &str, tag: u64, chunks: &[&[u8]]) -> io::Result<()> {
     let tmp = dir.join(format!(".{name}.{}.{tag}.tmp", std::process::id()));
     let write = || -> io::Result<()> {
-        let mut f = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(FILE_MODE)
-            .open(&tmp)?;
+        let mut f = sysfs::create_mode(
+            fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true),
+            FILE_MODE,
+        )
+        .open(&tmp)?;
         for c in chunks {
             f.write_all(c)?;
         }
@@ -491,12 +487,14 @@ pub fn write_lock(root: &Path) -> Option<WriteLock> {
 }
 
 fn open_lock(path: &Path) -> io::Result<fs::File> {
-    fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .mode(FILE_MODE)
-        .open(path)
+    sysfs::create_mode(
+        fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false),
+        FILE_MODE,
+    )
+    .open(path)
 }
 
 /// [`write_lock`] with the two failures apart: `Err` when the lock file
@@ -1008,7 +1006,10 @@ mod tests {
             "a sibling holds it"
         );
         drop(held);
-        fs::set_permissions(d.join(LOCK), fs::Permissions::from_mode(0o444)).expect("read-only");
+        let lock = d.join(LOCK);
+        let mut p = fs::metadata(&lock).unwrap().permissions();
+        p.set_readonly(true);
+        fs::set_permissions(&lock, p).expect("read-only");
         assert!(try_write_lock(&d).is_err(), "a lock this run cannot write");
     }
 }

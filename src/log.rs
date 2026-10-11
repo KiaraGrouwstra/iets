@@ -23,7 +23,7 @@ use crate::eval::{Error, Pos};
 use crate::progress::{Board, Mode};
 use crate::session::Session;
 use crate::sys;
-use crate::sys::fs::{FileTypeExt, OpenOptionsExt};
+use crate::sys::fs::{create_mode, is_socket};
 use crate::{config, error};
 
 /// Where one session's messages go and what it saw on the way.
@@ -290,14 +290,10 @@ impl Log {
 }
 
 pub(crate) fn open_sink(path: &Path) -> io::Result<Box<dyn Write + Send>> {
-    if fs::metadata(path).is_ok_and(|m| m.file_type().is_socket()) {
+    if fs::metadata(path).is_ok_and(|m| is_socket(&m)) {
         return Ok(Box::new(UnixStream::connect(path)?));
     }
-    let f = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .mode(0o644)
-        .open(path)?;
+    let f = create_mode(OpenOptions::new().create(true).append(true), 0o644).open(path)?;
     Ok(Box::new(f))
 }
 
