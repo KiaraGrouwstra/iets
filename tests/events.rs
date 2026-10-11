@@ -3,6 +3,7 @@
 
 mod hermetic;
 
+use std::path::Path;
 use std::process::Output;
 use std::{env, fs};
 
@@ -55,7 +56,10 @@ fn a_tree_add_names_the_local_path_it_copied() {
     // A path literal cannot hold the colon of a drive
     let err = stderr(&format!(r#""${{/. + "{src}"}}""#), Some("store"));
     assert!(err.contains(r#""kind":"tree""#), "{err}");
-    assert!(err.contains(&format!(r#""from":"{src}""#)), "{err}");
+    // `from` is where the file is on disk, written as a JSON string
+    let on_disk = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+    let on_disk = on_disk.display().to_string().replace('\\', "\\\\");
+    assert!(err.contains(&format!(r#""from":"{on_disk}""#)), "{err}");
 }
 
 #[test]

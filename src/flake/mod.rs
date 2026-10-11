@@ -579,7 +579,7 @@ mod tests {
             assert!(unsupported(r).contains("flake registry references"), "{r}");
         }
 
-        assert!(is_flake_ref(&format!("{}/sub", internal(&d))));
+        assert!(is_flake_ref(&format!("{}/sub", d.display())));
         assert!(!is_flake_ref("x.nix"));
     }
 

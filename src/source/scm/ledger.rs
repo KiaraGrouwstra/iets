@@ -117,7 +117,16 @@ impl Scm for Ledger {
         let (Obs::File { path, .. } | Obs::Stat { path, .. }) = obs else {
             return None;
         };
-        ENTRIES.iter().find_map(|e| path.strip_suffix(e.as_bytes()))
+        // the observation holds a native path, whose separator may be `\`
+        ENTRIES.iter().find_map(|e| {
+            let at = path.len().checked_sub(e.len())?;
+            let (root, tail) = path.split_at(at);
+            let same = tail
+                .iter()
+                .zip(e.bytes())
+                .all(|(a, b)| a == &b || (*a == b'\\' && b == b'/'));
+            same.then_some(root)
+        })
     }
 
     fn watch(&self, _root: &Path) -> Option<PathBuf> {
@@ -145,14 +154,12 @@ mod tests {
     use crate::trace::validate::validate;
     use crate::trace::watch::watched;
 
-    use std::env;
-
     const FLAKE: &str = "{ outputs = _: { }; }\n";
 
     /// A working tree with three tracked files, one untracked file and the
     /// revision `r12`; `plain` holds the tracked files and nothing else.
     fn fixture(tag: &str) -> (PathBuf, PathBuf) {
-        let d = env::temp_dir().join(format!("iets-ledger-{}-{tag}", std::process::id()));
+        let d = sys::fs::temp_dir().join(format!("iets-ledger-{}-{tag}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         let (root, plain) = (d.join("tree"), d.join("plain"));
         for top in [&root, &plain] {
@@ -374,7 +381,12 @@ mod tests {
         assert_eq!(kinds, ["file", "stat", "file", "stat", "tree"]);
         assert_eq!(validate(&mut obs, 2).unwrap().entries, 5);
         let watched: Vec<String> = watched(&obs, &[]).into_iter().map(|w| w.path).collect();
-        let want = ENTRIES.map(|e| format!("{}{e}", root.display()));
+        let want = ENTRIES.map(|e| {
+            let at = e.trim_start_matches('/').split('/');
+            at.fold(root.clone(), |acc, c| acc.join(c))
+                .display()
+                .to_string()
+        });
         assert_eq!(watched, want);
 
         fs::write(root.join(".ledger/head"), "r13 1700000001\n").unwrap();

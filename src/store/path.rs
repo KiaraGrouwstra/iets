@@ -319,8 +319,10 @@ pub fn hash_placeholder(output_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::nar::nar_hash;
+    #[cfg(unix)]
+    use crate::store::nar::nar_hash_filtered;
     use crate::store::nar::tests::fixture_tree;
-    use crate::store::nar::{nar_hash, nar_hash_filtered};
 
     fn set(paths: &[&str]) -> BTreeSet<StorePath> {
         paths.iter().map(|p| StorePath::parse(p).unwrap()).collect()

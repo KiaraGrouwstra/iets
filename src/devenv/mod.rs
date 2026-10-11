@@ -507,6 +507,7 @@ impl CachedResult {
 mod tests {
     use super::*;
     use crate::store::drv::load_derivation_from_store;
+    #[cfg(unix)]
     use crate::store::nar::tests::fixture_tree;
 
     fn fixture(name: &str) -> String {

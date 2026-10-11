@@ -143,6 +143,7 @@ mod tests {
     #[test]
     fn every_iets_build_is_skipped() {
         let tmp = env::temp_dir().join(format!("iets-nixbin-two-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
         let (x, y, real) = (tmp.join("x"), tmp.join("y"), tmp.join("real"));
         let exe = |p: &Path| {
             fs::write(p, "#!/bin/sh\nexit 0\n").unwrap();

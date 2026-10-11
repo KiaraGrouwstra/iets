@@ -581,7 +581,8 @@ fn entry_size(path: &Path, shape: Shape) -> u64 {
 
 fn drop_entry(path: &Path, shape: Shape) -> bool {
     match shape {
-        Shape::ShardedFiles | Shape::Links | Shape::StoreEntries => fs::remove_file(path).is_ok(),
+        Shape::Links => sysfs::remove_link(path).is_ok(),
+        Shape::ShardedFiles | Shape::StoreEntries => fs::remove_file(path).is_ok(),
         Shape::Dirs => fs::remove_dir_all(path).is_ok(),
     }
 }

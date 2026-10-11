@@ -423,7 +423,9 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+// TODO: the tree holds a non-UTF-8 name and a symlink, which Windows cannot make
+// without privileges.
+#[cfg(all(test, unix))]
 mod dir_hash_tests {
     use super::super::{DirBuf, dir_hash, dir_listing_hash, read_dir_kinds};
     use crate::sys::OsStrExt;
@@ -433,8 +435,6 @@ mod dir_hash_tests {
 
     /// The buffered hash must answer exactly what the allocating one does, or
     /// a cache entry written by one generation is unreadable by the next.
-    // TODO: the tree holds a non-UTF-8 name and a symlink, which Windows cannot make without privileges.
-    #[cfg(unix)]
     #[test]
     fn dir_hash_agrees_with_dir_listing_hash() {
         let d = env::temp_dir().join(format!("iets-dirhash-{}", std::process::id()));

@@ -107,11 +107,11 @@ mod tests {
     use super::*;
     use crate::trace::Filtered;
 
-    use std::env;
+    use crate::sys;
 
     #[test]
     fn only_the_paths_an_mtime_can_speak_for() {
-        let d = env::temp_dir().join(format!("iets-watch-{}", std::process::id()));
+        let d = sys::fs::temp_dir().join(format!("iets-watch-{}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         for sub in [".git", "src/keep", "src/drop"] {
             fs::create_dir_all(d.join(sub)).unwrap();
@@ -119,7 +119,9 @@ mod tests {
         for f in ["hook.sh", "src/keep/a", "src/drop/b"] {
             fs::write(d.join(f), "").unwrap();
         }
-        let b = |p: &str| d.join(p).into_os_string().into_encoded_bytes();
+        // one component at a time, as `read_dir` names them
+        let at = |p: &str| p.split('/').fold(d.clone(), |acc, c| acc.join(c));
+        let b = |p: &str| at(p).into_os_string().into_encoded_bytes();
         let file = |path: Vec<u8>| Obs::File {
             path,
             size: 0,
@@ -190,14 +192,7 @@ mod tests {
             "src/keep",
             "src/keep/a",
         ];
-        let join = |p: &str| {
-            p.split('/')
-                .fold(d.clone(), |acc, c| acc.join(c))
-                .to_str()
-                .unwrap()
-                .to_string()
-        };
-        assert_eq!(got, want.map(join));
+        assert_eq!(got, want.map(|p| at(p).to_str().unwrap().to_string()));
         let _ = fs::remove_dir_all(&d);
     }
 }
