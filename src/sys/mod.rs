@@ -13,6 +13,7 @@ pub struct Fault {
     pub abort: bool,
 }
 
+pub mod context;
 #[cfg_attr(windows, path = "errno_windows.rs")]
 pub mod errno;
 #[cfg_attr(windows, path = "fault_windows.rs")]
