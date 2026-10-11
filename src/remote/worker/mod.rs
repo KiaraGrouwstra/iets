@@ -1060,7 +1060,7 @@ impl Connection {
     /// indirect-root-store.cc:addPermRoot: a symlink at `root` to
     /// `store_path`, then `AddIndirectRoot`.
     pub fn add_perm_root(&mut self, store_path: &str, root: &Path) -> Result<()> {
-        if root.starts_with(path::STORE_DIR) {
+        if root.starts_with(path::store_dir()) {
             return Err(Error::Protocol(format!(
                 "creating a garbage collector root ({}) in the Nix store is forbidden",
                 root.display()
@@ -1099,7 +1099,7 @@ pub fn free_for_a_root(root: &Path) -> Result<()> {
     let into_store = m.file_type().is_symlink()
         && fs::read_link(root).is_ok_and(|t| {
             t.to_string_lossy()
-                .starts_with(&format!("{}/", super::super::store::path::STORE_DIR))
+                .starts_with(&format!("{}/", super::super::store::path::store_dir()))
         });
     if into_store {
         return Ok(());

@@ -39,7 +39,7 @@ use crate::runtime::{
 };
 use crate::session::Session;
 use crate::source::LazyStore;
-use crate::store::path::{STORE_DIR, StorePath};
+use crate::store::path::{StorePath, strip_store_dir};
 use crate::store::source::{SourceOrigin, SrcPath};
 use crate::syntax::ast::{Ast, FileId};
 use crate::syntax::symbol::{FxHashMap, Interner, Sym};
@@ -352,12 +352,10 @@ impl SharedMap<StorePath, Known> {
     /// The length of the `/nix/store/<base>` prefix of `path` and what the
     /// table has for that store path.
     pub fn under(&self, path: &[u8]) -> Option<(usize, Known)> {
-        let rest = path
-            .strip_prefix(STORE_DIR.as_bytes())?
-            .strip_prefix(b"/")?;
+        let rest = strip_store_dir(path)?;
         let end = rest.iter().position(|&b| b == b'/').unwrap_or(rest.len());
         let sp = StorePath::from_base_name(from_utf8(&rest[..end]).ok()?).ok()?;
-        Some((STORE_DIR.len() + 1 + end, self.get(&sp)?))
+        Some((path.len() - rest.len() + end, self.get(&sp)?))
     }
 
     /// The root is named before any input is fetched and keeps its name.

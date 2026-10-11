@@ -20,7 +20,7 @@ use crate::remote::worker::{self, Connection, Transport, failed_event};
 use crate::session::Session;
 use crate::store::drv::Derivation;
 use crate::store::nar;
-use crate::store::path::{STORE_DIR, StorePath};
+use crate::store::path::{StorePath, store_dir};
 use crate::store::source::SourceOrigin;
 use crate::sys::OsStrExt;
 use crate::trace::run::Cache;
@@ -349,7 +349,7 @@ pub(crate) fn ensure_gc_root(
     if fs::read_link(root).ok().as_deref() == Some(Path::new(out_path)) {
         return Ok(());
     }
-    if root.starts_with(STORE_DIR) {
+    if root.starts_with(store_dir()) {
         return Err(CrateError::Usage(format!(
             "creating a garbage collector root ({}) in the Nix store is forbidden",
             root.display()
@@ -358,7 +358,7 @@ pub(crate) fn ensure_gc_root(
     if let Ok(m) = fs::symlink_metadata(root)
         && (!m.file_type().is_symlink()
             || !fs::read_link(root)
-                .map(|t| t.starts_with(STORE_DIR))
+                .map(|t| t.starts_with(store_dir()))
                 .unwrap_or(false))
     {
         return Err(CrateError::Usage(format!(

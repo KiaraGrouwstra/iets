@@ -9,6 +9,10 @@ jobs:
   test:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    env:
+      # The tests spell store paths with /nix/store. The Windows default,
+      # %PROGRAMDATA%\nix\store, is covered by unit tests of the resolver.
+      NIX_STORE_DIR: /nix/store
     strategy:
       fail-fast: false
       matrix:

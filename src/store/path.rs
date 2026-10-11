@@ -1,11 +1,71 @@
 use std::collections::BTreeSet;
-use std::{error, fmt};
+use std::path::Path;
+use std::sync::OnceLock;
+use std::{env, error, fmt};
 
 use super::hash::{self, Hash, HashAlgo, HashFormat, compress_hash, hash_bytes, is_nix32_char};
 
 use crate::events::{self, Field};
+use crate::sys;
 
-pub const STORE_DIR: &str = "/nix/store";
+struct StoreDir {
+    /// As the hash and a derivation spell it
+    native: String,
+    /// As the evaluator spells a path
+    internal: Vec<u8>,
+}
+
+/// The store directory, which every store path hash takes as input. `NIX_STORE_DIR`
+/// or `NIX_STORE` name it, and the host decides otherwise: `/nix/store` on
+/// Unix and `%PROGRAMDATA%\nix\store` on Windows, as Nix does.
+pub fn store_dir() -> &'static str {
+    &store_dir_info().native
+}
+
+fn store_dir_info() -> &'static StoreDir {
+    static DIR: OnceLock<StoreDir> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let var = |n| env::var(n).ok().filter(|v| !v.is_empty());
+        let native = resolve_store_dir(
+            var("NIX_STORE_DIR").or_else(|| var("NIX_STORE")).as_deref(),
+            var("PROGRAMDATA").as_deref(),
+            cfg!(windows),
+        );
+        let internal = sys::path_to_internal(Path::new(&native));
+        StoreDir { native, internal }
+    })
+}
+
+/// A store directory is absolute and has no trailing separator. A Unix one
+/// stays valid on Windows, where it hashes like Linux does.
+fn resolve_store_dir(set: Option<&str>, program_data: Option<&str>, windows: bool) -> String {
+    let default = || match windows {
+        true => format!(r"{}\nix\store", program_data.unwrap_or(r"C:\ProgramData")),
+        false => "/nix/store".to_string(),
+    };
+    let Some(set) = set else {
+        return default();
+    };
+    let absolute = set.starts_with('/') || windows && (set.as_bytes().get(1) == Some(&b':'));
+    if !absolute {
+        eprintln!("warning: ignoring NIX_STORE_DIR '{set}', it is not an absolute path");
+        return default();
+    }
+    let trimmed = set.trim_end_matches(|c| c == '/' || windows && c == '\\');
+    match trimmed.is_empty() {
+        true => set[..1].to_string(),
+        false => trimmed.to_string(),
+    }
+}
+
+/// What follows `<store dir>/` in `p`, whether `p` spells the directory as a
+/// string does or as a path does.
+pub fn strip_store_dir(p: &[u8]) -> Option<&[u8]> {
+    let d = store_dir_info();
+    [d.native.as_bytes(), &d.internal]
+        .into_iter()
+        .find_map(|dir| p.strip_prefix(dir)?.strip_prefix(b"/"))
+}
 
 /// Mirrors path.hh:StorePath::HashLen (base32 characters).
 pub const HASH_PART_LEN: usize = 32;
@@ -40,7 +100,7 @@ impl fmt::Debug for StorePath {
 
 impl fmt::Display for StorePath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{STORE_DIR}/{}", self.base_name)
+        write!(f, "{}/{}", store_dir(), self.base_name)
     }
 }
 
@@ -131,7 +191,7 @@ impl StorePath {
     /// Mirrors store-api.cc:StoreDirConfig::parseStorePath: `/nix/store/<hash>-<name>`.
     pub fn parse(path: &str) -> Result<StorePath, StorePathError> {
         let bad = || StorePathError(format!("path '{path}' is not in the Nix store"));
-        let rest = path.strip_prefix(STORE_DIR).ok_or_else(bad)?;
+        let rest = path.strip_prefix(store_dir()).ok_or_else(bad)?;
         let rest = rest.strip_prefix('/').ok_or_else(bad)?;
         if rest.contains('/') {
             return Err(bad());
@@ -165,7 +225,7 @@ impl StorePath {
 impl Field for &StorePath {
     fn write(self, out: &mut Vec<u8>) {
         let start = out.len();
-        out.extend_from_slice(STORE_DIR.as_bytes());
+        out.extend_from_slice(store_dir().as_bytes());
         out.push(b'/');
         out.extend_from_slice(self.base_name().as_bytes());
         events::quote_in_place(out, start);
@@ -175,12 +235,12 @@ impl Field for &StorePath {
 /// Mirrors store-dir-config.cc:makeStorePath(type, const Hash &, name). The
 /// `<algo>:<base16>` of the hash goes straight into the payload.
 pub fn make_store_path(ty: &str, hash: &Hash, name: &str) -> Result<StorePath, StorePathError> {
-    let mut s = String::with_capacity(ty.len() + STORE_DIR.len() + name.len() + 80);
+    let mut s = String::with_capacity(ty.len() + store_dir().len() + name.len() + 80);
     s.push_str(ty);
     s.push(':');
     hash.write_string_with(&mut s, HashFormat::Base16, true);
     s.push(':');
-    s.push_str(STORE_DIR);
+    s.push_str(store_dir());
     s.push(':');
     s.push_str(name);
     from_payload(&s, name)
@@ -249,12 +309,12 @@ impl IngestionMethod {
 fn make_type(mut ty: String, references: &BTreeSet<StorePath>, self_ref: bool) -> String {
     let n: usize = references
         .iter()
-        .map(|r| r.base_name().len() + STORE_DIR.len() + 2)
+        .map(|r| r.base_name().len() + store_dir().len() + 2)
         .sum();
     ty.reserve(n + 5);
     for r in references {
         ty.push(':');
-        ty.push_str(STORE_DIR);
+        ty.push_str(store_dir());
         ty.push('/');
         ty.push_str(r.base_name());
     }
@@ -318,6 +378,38 @@ pub fn hash_placeholder(output_name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::resolve_store_dir as resolve;
+
+    #[test]
+    fn the_host_picks_the_store_directory() {
+        assert_eq!(resolve(None, None, false), "/nix/store");
+        assert_eq!(resolve(None, Some(r"D:\Data"), true), r"D:\Data\nix\store");
+        assert_eq!(resolve(None, None, true), r"C:\ProgramData\nix\store");
+    }
+
+    #[test]
+    fn the_directory_is_found_as_a_string_and_as_a_path() {
+        let dir = store_dir();
+        let internal = sys::path_to_internal(Path::new(dir));
+        for spelled in [dir.as_bytes(), &internal] {
+            let p = [spelled, b"/abc-x/sub"].concat();
+            assert_eq!(strip_store_dir(&p), Some(&b"abc-x/sub"[..]));
+            assert_eq!(strip_store_dir(spelled), None);
+        }
+        assert_eq!(strip_store_dir(b"/elsewhere/abc-x"), None);
+    }
+
+    #[test]
+    fn an_override_is_absolute_and_has_no_trailing_separator() {
+        assert_eq!(resolve(Some("/opt/store/"), None, false), "/opt/store");
+        assert_eq!(resolve(Some("/"), None, false), "/");
+        // a Unix directory stays usable on Windows, where it hashes like Linux
+        assert_eq!(resolve(Some("/nix/store"), None, true), "/nix/store");
+        assert_eq!(resolve(Some(r"E:\s\"), None, true), r"E:\s");
+        // a relative one is refused
+        assert_eq!(resolve(Some("store"), None, false), "/nix/store");
+        assert_eq!(resolve(Some(r"E:\s"), None, false), "/nix/store");
+    }
     use super::*;
     use crate::store::nar::nar_hash;
     #[cfg(unix)]

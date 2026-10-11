@@ -107,7 +107,7 @@ pub fn local_files(ev: &Evaluator) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = (0..)
         .map_while(|i| ev.files.get(i))
         .map(|f| map.locate(&f.path).unwrap_or_else(|| f.path.clone()))
-        .filter(|p| p.starts_with(b"/") && !p.starts_with(path::STORE_DIR.as_bytes()))
+        .filter(|p| p.starts_with(b"/") && path::strip_store_dir(p).is_none())
         .map(|p| PathBuf::from(OsStr::from_bytes(&p)))
         .collect();
     out.sort();

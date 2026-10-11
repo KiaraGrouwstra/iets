@@ -32,7 +32,7 @@ use crate::remote::plan::Plan;
 use crate::remote::worker::{Options, Transport};
 use crate::runtime::{Value, Word};
 use crate::store::drv::{Derivation, DerivationOutput};
-use crate::store::path::{STORE_DIR, StorePath, hash_placeholder};
+use crate::store::path::{StorePath, hash_placeholder, store_dir};
 use crate::syntax::symbol::Sym;
 use crate::{cachefs, log};
 use serde_json::Value as Json;
@@ -520,7 +520,7 @@ fn exec(s: &Shell, drv: &Derivation, shell: &str, cores: u64) -> error::Result<(
     for v in ["NIX_BUILD_TOP", "TMPDIR", "TEMPDIR", "TMP", "TEMP"] {
         env.insert(v.into(), tmp.clone().into());
     }
-    env.insert("NIX_STORE".into(), STORE_DIR.into());
+    env.insert("NIX_STORE".into(), store_dir().into());
     env.insert("NIX_BUILD_CORES".into(), cores.to_string().into());
 
     let pass_as_file: BTreeSet<&str> = match drv.structured_attrs {

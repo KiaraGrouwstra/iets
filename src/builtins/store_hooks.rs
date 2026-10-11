@@ -29,7 +29,7 @@ use crate::lint::{LintId, purity};
 use crate::source::scm;
 use crate::store::hash::{HashAlgo, Hasher};
 use crate::store::nar::{FileType, PathFilter, dump_path, dump_string, nar_hash_filtered};
-use crate::store::path::{STORE_DIR, StorePath};
+use crate::store::path::{StorePath, strip_store_dir};
 use crate::store::source::{SourceOrigin, Src, SrcPath};
 use crate::trace::{self, Kind, Obs};
 use crate::treestore::{self, StoredTree};
@@ -42,9 +42,7 @@ use crate::treestore::{self, StoredTree};
 /// hash of exactly those bytes. `None` when `path` is under no such store
 /// path.
 pub fn locate(ev: &Evaluator, path: &[u8]) -> Option<SrcPath> {
-    let rest = path
-        .strip_prefix(STORE_DIR.as_bytes())?
-        .strip_prefix(b"/")?;
+    let rest = strip_store_dir(path)?;
     let (base, sub) = match rest.iter().position(|&b| b == b'/') {
         Some(i) => (&rest[..i], &rest[i + 1..]),
         None => (rest, &b""[..]),

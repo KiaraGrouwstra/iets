@@ -27,7 +27,8 @@ use crate::store::hash::{Hash, HashAlgo, Hasher, hash_bytes};
 use crate::store::locate;
 use crate::store::nar::FileType;
 use crate::store::path::{
-    IngestionMethod, STORE_DIR, StorePath, StorePathError, make_fixed_output_path, make_text_path,
+    IngestionMethod, StorePath, StorePathError, make_fixed_output_path, make_text_path,
+    strip_store_dir,
 };
 use crate::store::source::{SourceOrigin, Src, SrcPath};
 use crate::trace::{self, Kind};
@@ -357,7 +358,7 @@ fn is_store_path(p: &[u8]) -> bool {
 
 /// Split `/nix/store/<base>/rest` into the store path and the rest.
 fn to_store_path(p: &[u8]) -> Option<(Result<StorePath, ()>, &[u8])> {
-    let rest = p.strip_prefix(STORE_DIR.as_bytes())?.strip_prefix(b"/")?;
+    let rest = strip_store_dir(p)?;
     let end = rest.iter().position(|&b| b == b'/').unwrap_or(rest.len());
     let base = from_utf8(&rest[..end]).ok()?;
     Some((
