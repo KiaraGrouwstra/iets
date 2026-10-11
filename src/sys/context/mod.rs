@@ -10,7 +10,8 @@ pub type Entry = unsafe extern "C" fn(*mut ()) -> !;
 
 #[cfg_attr(all(target_arch = "x86_64", not(windows)), path = "x86_64_sysv.rs")]
 #[cfg_attr(all(target_arch = "x86_64", windows), path = "x86_64_win64.rs")]
-#[cfg_attr(target_arch = "aarch64", path = "aarch64.rs")]
+#[cfg_attr(all(target_arch = "aarch64", not(windows)), path = "aarch64.rs")]
+#[cfg_attr(all(target_arch = "aarch64", windows), path = "aarch64_windows.rs")]
 #[cfg_attr(target_arch = "riscv64", path = "riscv64.rs")]
 mod imp;
 
