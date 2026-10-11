@@ -5,7 +5,7 @@
   inputs.nix-conformance.url = "github:numtide/nix-conformance";
   outputs = { self, nixpkgs, crane, nix-conformance }:
     let
-      systems = [ "x86_64-linux" "aarch64-linux" ];
+      systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
       # Every file in nix/ is a function of what it needs; callPackage fills
       # it from this scope or from nixpkgs.
       scopeFor = pkgs: pkgs.lib.makeScope pkgs.newScope (final: {
@@ -19,8 +19,11 @@
         ietsRiscv64 = (scopeFor pkgs.pkgsCross.riscv64).iets;
         classic = final.callPackage ./nix/classic.nix { };
         devShell = final.callPackage
-          ({ mkShell, cargo, rustc, clippy, rustfmt, hyperfine, nix, perf, jq, nushell, direnv, ast-grep }:
-            mkShell { packages = [ cargo rustc clippy rustfmt hyperfine nix perf jq nushell direnv ast-grep ]; })
+          ({ lib, stdenv, mkShell, cargo, rustc, clippy, rustfmt, hyperfine, nix, perf, jq, nushell, direnv, ast-grep }:
+            mkShell {
+              packages = [ cargo rustc clippy rustfmt hyperfine nix jq nushell direnv ast-grep ]
+                ++ lib.optional stdenv.hostPlatform.isLinux perf;
+            })
           { };
         e2eCases = import ./nix/e2e-cases.nix { inherit pkgs; };
         e2eTest = final.callPackage ./nix/e2e-test.nix { };
@@ -30,12 +33,19 @@
         # for files that return a set of packages
         callPackages = pkgs.lib.callPackagesWith (pkgs // final);
       });
+      # macOS gets the dev shell and the package, not the fuzzers or the suite
+      onLinux = scope: linux: other:
+        if scope.pkgs.stdenv.hostPlatform.isLinux then linux else other;
       forAll = f: nixpkgs.lib.genAttrs systems (s: f (scopeFor nixpkgs.legacyPackages.${s}));
     in {
       devShells = forAll (scope: { default = scope.devShell; });
       nixosModules.default = import ./nix/module.nix self;
       lib.mkClassic = pkgs: iets: nix: pkgs.callPackage ./nix/classic.nix { inherit iets nix; };
-      packages = forAll (scope: scope.callPackages ./nix/packages.nix { });
-      checks = forAll (scope: scope.callPackages ./nix/checks.nix { });
+      packages = forAll (scope: onLinux scope
+        (scope.callPackages ./nix/packages.nix { })
+        { default = scope.iets; });
+      checks = forAll (scope: onLinux scope
+        (scope.callPackages ./nix/checks.nix { })
+        { build = scope.iets; devShell = scope.devShell; });
     };
 }
