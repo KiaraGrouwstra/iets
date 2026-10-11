@@ -161,6 +161,11 @@ fn scm_flake(
         }
         return Ok(fr);
     };
+    if !flakeref::is_rev(rev) {
+        return Err(Error::Flake(format!(
+            "flake reference '{loc}': 'rev={rev}' is not a revision; name the 40 hex digits of a commit"
+        )));
+    }
     fr.source = source::SourceRef::Commit {
         scm,
         root,
@@ -638,5 +643,16 @@ mod tests {
         assert!(unsupported(&format!("{url}?ref=main")).contains("no 'rev'"));
         assert!(unsupported(&format!("{url}?submodules=1")).contains("'submodules'"));
         assert!(unsupported("git+https://x.org/a").contains("only local paths"));
+
+        // a rev that is not one says so, instead of the repository reporting
+        // that it has no revision ''
+        let bad = |r: &str| match parse_flake_ref(r, b"/", None) {
+            Err(Error::Flake(m)) => m,
+            other => panic!("{r}: {other:?}"),
+        };
+        for r in ["", "HEAD", "0123", &"z".repeat(40)] {
+            let m = bad(&format!("{url}?rev={r}"));
+            assert!(m.contains("is not a revision"), "{r}: {m}");
+        }
     }
 }

@@ -24,8 +24,9 @@ prints.
   as the base. The fragment is percent-decoded, as in Nix.
 - **A local checkout an SCM names is also taken**:
   `git+file:///path[?ref=NAME&rev=SHA][&dir=SUB]`, which is how CI pins the
-  tree it evaluates. With a `rev` the source is that revision, read out of
-  the repository beside the checkout, so `self.rev`, `self.revCount` and
+  tree it evaluates. With a `rev` — the 40 hex digits of a commit, and
+  nothing else — the source is that revision, read out of the repository
+  beside the checkout, so `self.rev`, `self.revCount` and
   `self.lastModified` are the commit's, as they are in Nix; a dirty working
   tree changes nothing. Without a `rev` the working tree is the source, as
   the plain path would be. A `ref` beside a `rev` is advisory. A `ref`
