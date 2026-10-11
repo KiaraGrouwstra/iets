@@ -39,8 +39,9 @@ pub fn is_socket(m: &Metadata) -> bool {
     m.file_type().is_socket()
 }
 
-/// Which file this is on its device, so a rename or a swap shows.
-pub fn file_id(m: &Metadata) -> (u64, u64) {
+/// Which file this is on its device, so a rename or a swap shows. `path` is
+/// where `m` came from, for platforms that need a handle to answer.
+pub fn file_id(_path: &Path, m: &Metadata) -> (u64, u64) {
     (m.dev(), m.ino())
 }
 
@@ -55,7 +56,7 @@ pub fn mtime_ns(m: &Metadata) -> i64 {
 }
 
 /// The last change of the inode, which a copy or a rename cannot hide.
-pub fn ctime_ns(m: &Metadata) -> i64 {
+pub fn ctime_ns(_path: &Path, m: &Metadata) -> i64 {
     m.ctime()
         .wrapping_mul(1_000_000_000)
         .wrapping_add(m.ctime_nsec())

@@ -566,13 +566,15 @@ fn exec_bit(st: &fs::Metadata) -> u32 {
 }
 
 pub fn file_obs(path: &[u8], meta: &fs::Metadata, hash: Digest32) -> Obs {
+    let at = Path::new(OsStr::from_bytes(path));
+    let (dev, ino) = file_id(at, meta);
     Obs::File {
         path: path.to_vec(),
         size: meta.len(),
         mtime_ns: mtime_ns(meta),
-        ctime_ns: ctime_ns(meta),
-        dev: file_id(meta).0,
-        ino: file_id(meta).1,
+        ctime_ns: ctime_ns(at, meta),
+        dev,
+        ino,
         hash,
     }
 }
@@ -716,9 +718,10 @@ impl TreeFp {
         self.stat_h.update([kind.to_u8()]);
         self.stat_h.update(st.len().to_le_bytes());
         self.stat_h.update(mtime_ns(&st).to_le_bytes());
-        self.stat_h.update(ctime_ns(&st).to_le_bytes());
-        self.stat_h.update(file_id(&st).0.to_le_bytes());
-        self.stat_h.update(file_id(&st).1.to_le_bytes());
+        let (dev, ino) = file_id(p, &st);
+        self.stat_h.update(ctime_ns(p, &st).to_le_bytes());
+        self.stat_h.update(dev.to_le_bytes());
+        self.stat_h.update(ino.to_le_bytes());
         self.stat_h.update(exec_bit(&st).to_le_bytes());
         if kind == Kind::Symlink {
             match fs::read_link(p) {
@@ -768,9 +771,10 @@ fn walk_fp(
     stat_h.update([kind.to_u8()]);
     stat_h.update(st.len().to_le_bytes());
     stat_h.update(mtime_ns(&st).to_le_bytes());
-    stat_h.update(ctime_ns(&st).to_le_bytes());
-    stat_h.update(file_id(&st).0.to_le_bytes());
-    stat_h.update(file_id(&st).1.to_le_bytes());
+    let (dev, ino) = file_id(path, &st);
+    stat_h.update(ctime_ns(path, &st).to_le_bytes());
+    stat_h.update(dev.to_le_bytes());
+    stat_h.update(ino.to_le_bytes());
     stat_h.update(exec_bit(&st).to_le_bytes());
     match kind {
         Kind::Symlink => {

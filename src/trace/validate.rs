@@ -106,8 +106,8 @@ fn check(o: &Obs, rehashed: &AtomicUsize, dirs: &mut DirBuf) -> Outcome {
             }
             if m.len() == *size
                 && mtime_ns(&m) == *mt
-                && ctime_ns(&m) == *ct
-                && file_id(&m) == (*dev, *ino)
+                && ctime_ns(os(path), &m) == *ct
+                && file_id(os(path), &m) == (*dev, *ino)
             {
                 return Outcome::Same;
             }
@@ -352,7 +352,7 @@ mod tests {
         // milliseconds, so wait until a write can get a new one
         while {
             fs::File::open(&other).unwrap().set_modified(fixed).unwrap();
-            ctime_ns(&fs::metadata(&other).unwrap()) == ctime_ns(&m)
+            ctime_ns(&other, &fs::metadata(&other).unwrap()) == ctime_ns(&f, &m)
         } {
             thread::sleep(Duration::from_millis(1));
         }
@@ -362,8 +362,8 @@ mod tests {
         fs::File::open(&f).unwrap().set_modified(fixed).unwrap();
         let now = fs::metadata(&f).unwrap();
         assert_eq!(
-            (now.len(), mtime_ns(&now), file_id(&now).1),
-            (m.len(), mtime_ns(&m), file_id(&m).1),
+            (now.len(), mtime_ns(&now), file_id(&f, &now).1),
+            (m.len(), mtime_ns(&m), file_id(&f, &m).1),
             "size, mtime and inode are the ones the entry holds"
         );
         assert!(validate(&mut obs, 1).is_err(), "and the content changed");
