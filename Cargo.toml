@@ -42,6 +42,9 @@ bzip2 = "0.6"
 mimalloc = "0.1"
 libmimalloc-sys = { version = "0.1", features = ["extended"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
 [features]
 # Memory census behind IETS_STATS=2 (docs/reference/settings.md); off the hot path when unset.
 stats2 = []
