@@ -2,6 +2,9 @@
 //! never test the platform. The Linux backend uses the kernel's own
 //! facilities. The portable one gives the same answers more slowly.
 
+use std::env;
+use std::path::PathBuf;
+
 #[cfg_attr(target_os = "linux", path = "linux.rs")]
 #[cfg_attr(not(target_os = "linux"), path = "portable.rs")]
 mod imp;
@@ -37,6 +40,13 @@ pub use ffi::{
 };
 pub use imp::{discard, futex_wait, futex_wake, prefault};
 pub use vm::resident;
+
+/// The temporary directory, resolved. Windows hands out the short `RUNNER~1`
+/// form, which a resolved path never matches.
+pub fn temp_dir() -> PathBuf {
+    let t = env::temp_dir();
+    fs::canonicalize(&t).unwrap_or(t)
+}
 
 /// Fills `buf` from the system's random source. A failure leaves zeros: the
 /// bytes are a cache key or a name suffix, and nothing here can act on it.

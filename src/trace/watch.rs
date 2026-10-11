@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn only_the_paths_an_mtime_can_speak_for() {
-        let d = sys::fs::temp_dir().join(format!("iets-watch-{}", std::process::id()));
+        let d = sys::temp_dir().join(format!("iets-watch-{}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         for sub in [".git", "src/keep", "src/drop"] {
             fs::create_dir_all(d.join(sub)).unwrap();
