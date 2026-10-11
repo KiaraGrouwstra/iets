@@ -177,6 +177,13 @@ Nix does.
 An input is locked, so iets knows its store path before anything happens.
 It tries these sources in order, and the first one that works wins.
 
+**`/nix/store`, if the store has the path as valid.** A file at the path is
+not enough: an interrupted build or copy can leave one that the store never
+registered. iets asks a local daemon, with one query for all the inputs of
+the lock. With no local daemon, iets hashes the path and compares it with
+the `narHash`. `builtins.fetchurl`, `builtins.fetchTarball` and
+`builtins.path` with a `sha256` do the same check.
+
 **The input store.** If iets has fetched this tree before, it's already in
 `~/.cache/iets/inputs`, keyed by the store path the lock implies: no
 network, no daemon, no store. [How caching works](caching.md) says why this

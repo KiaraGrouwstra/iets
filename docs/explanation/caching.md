@@ -147,7 +147,7 @@ Every primop that looks at the world records one observation.
 |---|---|---|
 | a file's size, mtime, ctime, device, inode and sha256 | `import`, `readFile`, `hashFile`, every `.drv` read | `lstat`; on a stat mismatch the file is rehashed and accepted if the hash matches |
 | a directory listing's hash | `readDir` | re-list and rehash |
-| a path's kind | `pathExists`, `readFileType`, the `default.nix` probe, every search-path candidate, every marker the SCM detection probed above a flake directory | re-stat |
+| a path's kind | `pathExists`, `readFileType`, the `default.nix` probe, every search-path candidate, every marker the SCM detection probed above a flake directory, a fetched store path that the store has as valid | re-stat |
 | a copied tree's NAR hash and stat hash | `./path` coerced to a string, `builtins.path`, `filterSource`, a flake's working tree, a `path:` input | recompute the stat hash with `lstat` only; on a mismatch re-dump the NAR with the recorded filter and compare. A `path:` input also records its newest mtime, which the evaluation sees as `lastModified`, and the same bytes with another date are a change |
 | a resolved symlink | `storePath`, `builtins.path` and `filterSource` when canonicalizing changed the path | canonicalize again |
 | an environment variable, as a keyed hash | `getEnv`; `HOME` when a `~/` literal is compiled | read it again and hash it again |
@@ -186,6 +186,11 @@ itself, records only the path's kind: still a directory, so still the same
 bytes. Validating a nixpkgs pinned that way costs two system calls, where one
 `lstat` per file would cost 0.51 s. A store path whose name is not the hash
 of its content, such as a build output, keeps its tree observation.
+
+A fetch records the kind of its store path only after it checked that the
+path is valid. A hit only stats the path again and asks no daemon: a valid
+path does not change, and the garbage collector deletes what it
+invalidates.
 
 The read set has a second reader. `iets cache paths ENTRY` prints the paths
 in it that a file watcher can use, and `nix/direnvrc` turns them into direnv

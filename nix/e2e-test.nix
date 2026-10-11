@@ -3,7 +3,7 @@
 # With `coverage`, `iets` is an instrumented build: each process writes its
 # profile, and $out/cov holds them all after the run.
 { lib, pkgs, nixpkgs, craneSrc, sources, devShell }:
-{ iets, name, packages ? [ ], env ? "", coverage ? false }:
+{ iets, name, packages ? [ ], env ? "", setup ? "", coverage ? false }:
 let
   src = sources.e2e;
   profile = lib.optionalString coverage "LLVM_PROFILE_FILE=/tmp/cov/%p-%m.profraw";
@@ -79,13 +79,15 @@ pkgs.testers.runNixOSTest {
   testScript = { containers, ... }:
     let
       registration = pkgs.closureInfo {
-        rootPaths = offline ++ [ containers.machine.system.build.toplevel writableStore ];
+        rootPaths = offline ++ [ containers.machine.system.build.toplevel writableStore ]
+          ++ lib.optional (setup != "") setup;
       };
     in
     ''
       machine.wait_for_unit("multi-user.target")
       machine.succeed("${writableStore} ${registration}")
       machine.succeed("systemctl start nix-daemon.socket")
+      ${lib.optionalString (setup != "") ''machine.succeed("${setup}")''}
       # a git checkout, as in the dev shell: the scripts read this flake as git+file
       machine.succeed("cp -r ${src} /home/alice/iets && chmod -R u+w /home/alice/iets && chown -R alice /home/alice/iets")
       machine.succeed("runuser -l alice -c 'cd iets && git init -q && git add -A && git -c user.name=e2e -c user.email=e2e@example.com commit -q -m e2e'")
