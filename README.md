@@ -141,7 +141,7 @@ for me. And I think the best way to find out is to lean into it.
 
 ## Installation
 
-Linux only (x86_64 and aarch64). From the flake:
+From the flake:
 
 ```sh
 nix run github:numtide/iets -- version    # run it once
