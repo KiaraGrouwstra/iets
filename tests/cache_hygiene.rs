@@ -7,12 +7,11 @@
 mod hermetic;
 
 use std::collections::HashSet;
-use std::fs::{self, File, Permissions};
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime};
 
-use rustix::fs::{CWD, Mode, mkfifoat};
 use std::{env, thread};
 
 use iets::cachefs;
@@ -21,7 +20,6 @@ use iets::trace::key::Key;
 use iets::trace::run::Cache;
 use iets::trace::store::{ENTRY, Opened, Part, Store};
 use iets::trace::{Obs, wire};
-use std::os::unix::fs::{PermissionsExt, symlink};
 
 const KEYS: usize = 4;
 const OBS: usize = 400;
@@ -289,14 +287,6 @@ fn an_entry_that_is_not_a_plain_file_is_refused() {
     fs::write(&good, b"x").expect("file");
     assert!(cachefs::open_entry(&good).is_some());
 
-    let link = dir.join("link");
-    symlink(&good, &link).expect("link");
-    assert!(cachefs::open_entry(&link).is_none(), "a symbolic link");
-
-    let fifo = dir.join("fifo");
-    mkfifoat(CWD, &fifo, Mode::from_raw_mode(0o600)).expect("fifo");
-    assert!(cachefs::open_entry(&fifo).is_none(), "a FIFO");
-
     let huge = dir.join("huge");
     let f = File::create(&huge).expect("file");
     f.set_len(cachefs::MAX_ENTRY + 1).expect("sparse length");
@@ -306,30 +296,6 @@ fn an_entry_that_is_not_a_plain_file_is_refused() {
         "a length no entry has"
     );
     assert!(dir.join("huge").exists(), "and nothing was allocated");
-}
-
-/// The cache holds what an evaluation read, so its directories and files are
-/// the user's whatever the umask, and an older cache root is tightened.
-#[test]
-fn a_cache_is_private_to_its_owner() {
-    let dir = tmp("modes");
-    let root = dir.join("trace");
-    fs::create_dir_all(&root).expect("root");
-    fs::set_permissions(&root, Permissions::from_mode(0o755)).expect("wide");
-    assert!(cachefs::prepare(&root, cachefs::Shape::Dirs, false));
-    let mode = |p: &Path| fs::metadata(p).expect("stat").permissions().mode() & 0o777;
-    assert_eq!(mode(&root), 0o700, "an older root is tightened");
-    assert_eq!(mode(&root.join("version")), 0o600);
-
-    let store = Store::locate(Some(dir.to_str().expect("utf-8 path"))).expect("store");
-    assert!(
-        store
-            .publish(&key_of(0), &[(Part::Readset, &hit_entry())])
-            .expect("publish")
-    );
-    assert_eq!(mode(&store.entry_dir(&key_of(0))), 0o700);
-    assert_eq!(mode(&store.entry_dir(&key_of(0)).join(ENTRY)), 0o600);
-    assert_eq!(mode(&root.join("lock")), 0o600);
 }
 
 /// The child of `an_input_observation_marks_its_entry_as_used`: the input
@@ -441,4 +407,59 @@ fn cache_gc_removes_entries_past_the_ttl() {
         store.root().join("version").exists(),
         "the store stays usable"
     );
+}
+
+// TODO: Windows has no FIFOs and no mode bits, and `restrict_to_owner` does
+// nothing there yet. Port these once the cache sets an ACL.
+#[cfg(unix)]
+mod unix_only {
+    use std::fs::{self, Permissions};
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::path::Path;
+
+    use iets::cachefs;
+    use iets::trace::store::{Part, Store};
+    use rustix::fs::{CWD, Mode, mkfifoat};
+
+    use super::{ENTRY, hit_entry, key_of, tmp};
+
+    /// Only a plain file is an entry, whatever else sits where one should.
+    #[test]
+    fn a_link_or_a_fifo_is_not_an_entry() {
+        let dir = tmp("openrules-unix");
+        let good = dir.join("good");
+        fs::write(&good, b"x").expect("file");
+
+        let link = dir.join("link");
+        symlink(&good, &link).expect("link");
+        assert!(cachefs::open_entry(&link).is_none(), "a symbolic link");
+
+        let fifo = dir.join("fifo");
+        mkfifoat(CWD, &fifo, Mode::from_raw_mode(0o600)).expect("fifo");
+        assert!(cachefs::open_entry(&fifo).is_none(), "a FIFO");
+    }
+
+    /// The cache holds what an evaluation read, so its directories and files are
+    /// the user's whatever the umask, and an older cache root is tightened.
+    #[test]
+    fn a_cache_is_private_to_its_owner() {
+        let dir = tmp("modes");
+        let root = dir.join("trace");
+        fs::create_dir_all(&root).expect("root");
+        fs::set_permissions(&root, Permissions::from_mode(0o755)).expect("wide");
+        assert!(cachefs::prepare(&root, cachefs::Shape::Dirs, false));
+        let mode = |p: &Path| fs::metadata(p).expect("stat").permissions().mode() & 0o777;
+        assert_eq!(mode(&root), 0o700, "an older root is tightened");
+        assert_eq!(mode(&root.join("version")), 0o600);
+
+        let store = Store::locate(Some(dir.to_str().expect("utf-8 path"))).expect("store");
+        assert!(
+            store
+                .publish(&key_of(0), &[(Part::Readset, &hit_entry())])
+                .expect("publish")
+        );
+        assert_eq!(mode(&store.entry_dir(&key_of(0))), 0o700);
+        assert_eq!(mode(&store.entry_dir(&key_of(0)).join(ENTRY)), 0o600);
+        assert_eq!(mode(&root.join("lock")), 0o600);
+    }
 }
