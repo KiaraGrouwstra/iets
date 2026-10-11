@@ -7,8 +7,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{process, ptr, slice, thread};
 
-use rustix::mm::{MapFlags, ProtFlags, mmap_anonymous};
-
 #[cfg(feature = "stats2")]
 use super::census::Census;
 use super::heap::Heap;
@@ -17,7 +15,7 @@ use super::word::Word;
 use crate::parallel::shared::ArenaUse;
 use crate::session::Session;
 use crate::syntax::symbol::{FxHashMap, FxHashSet};
-use crate::sys;
+use crate::sys::{self, vm};
 
 const CHUNK: usize = 32 << 20;
 /// A 32 MiB chunk populates in ~1 ms with huge pages and ~16 ms with 4 KiB
@@ -25,15 +23,9 @@ const CHUNK: usize = 32 << 20;
 const THP_STALL: Duration = Duration::from_millis(6);
 
 fn map_chunk(chunk: usize, thp: bool) -> (usize, bool) {
-    // SAFETY: an anonymous mapping aliases nothing, and prefaulting only
-    // changes how its own pages are backed.
+    // SAFETY: prefaulting only changes how the chunk's own pages are backed.
     unsafe {
-        let Ok(p) = mmap_anonymous(
-            ptr::null_mut(),
-            chunk,
-            ProtFlags::READ | ProtFlags::WRITE,
-            MapFlags::PRIVATE,
-        ) else {
+        let Ok(p) = vm::map(chunk, false) else {
             // no unwinding from here: other fibers hold arena pointers,
             // and Nix ends the same way on a heap it cannot grow
             errln!("error: out of memory");
@@ -91,7 +83,7 @@ impl Drop for Arena {
             && let Ok((p, _)) = h.join()
         {
             // SAFETY: a whole `CHUNK` mapping from `map_chunk`, never used.
-            unsafe { libc::munmap(p as *mut _, CHUNK) };
+            unsafe { vm::unmap(p as *mut u8, CHUNK) };
         }
     }
 }

@@ -4,12 +4,13 @@
 //! `print-dev-env`; nothing here builds the `-env` derivation.
 //! See `docs/reference/classic.md`.
 
+use crate::sys;
+use crate::sys::OsStrExt;
+use crate::sys::process;
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::io::{self, IsTerminal};
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -31,7 +32,7 @@ use crate::remote::plan::Plan;
 use crate::remote::worker::{Options, Transport};
 use crate::runtime::{Value, Word};
 use crate::store::drv::{Derivation, DerivationOutput};
-use crate::store::path::{STORE_DIR, StorePath, hash_placeholder};
+use crate::store::path::{StorePath, hash_placeholder, store_dir};
 use crate::syntax::symbol::Sym;
 use crate::{cachefs, log};
 use serde_json::Value as Json;
@@ -519,7 +520,7 @@ fn exec(s: &Shell, drv: &Derivation, shell: &str, cores: u64) -> error::Result<(
     for v in ["NIX_BUILD_TOP", "TMPDIR", "TEMPDIR", "TMP", "TEMP"] {
         env.insert(v.into(), tmp.clone().into());
     }
-    env.insert("NIX_STORE".into(), STORE_DIR.into());
+    env.insert("NIX_STORE".into(), store_dir().into());
     env.insert("NIX_BUILD_CORES".into(), cores.to_string().into());
 
     let pass_as_file: BTreeSet<&str> = match drv.structured_attrs {
@@ -558,13 +559,12 @@ fn exec(s: &Shell, drv: &Derivation, shell: &str, cores: u64) -> error::Result<(
     write(&rc_path, rc_script(s, shell, &tmp, &structured_rc))?;
 
     let mut cmd = Command::new(shell);
-    cmd.arg0("bash");
     if s.interactive {
         cmd.arg("--rcfile");
     }
     cmd.arg(&rc_path);
     cmd.env_clear().envs(env);
-    let e = cmd.exec();
+    let e = process::exec(&mut cmd, "bash");
     Err(CrateError::io(format!("executing shell '{shell}'"), e))
 }
 
@@ -605,11 +605,7 @@ fn rc_script(s: &Shell, shell: &str, tmp: &str, structured_rc: &str) -> String {
     rc.push_str(&format!("BASH={}; ", esc(shell)));
     rc.push_str("set +e; ");
     rc.push_str("[ -n \"$PS1\" -a -z \"$NIX_SHELL_PRESERVE_PROMPT\" ] && ");
-    let colour = if rustix::process::getuid().is_root() {
-        "1;31"
-    } else {
-        "1;32"
-    };
+    let colour = if sys::tty::is_root() { "1;31" } else { "1;32" };
     rc.push_str(&format!(
         "PS1='\\n\\[\\033[{colour}m\\][nix-shell:\\w]\\$\\[\\033[0m\\] '; "
     ));

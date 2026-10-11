@@ -7,8 +7,8 @@
 //! `revs/<rev>` holds the date of a revision, then one `<path>=<text>` line
 //! for each of its files.
 
+use crate::sys::OsStrExt;
 use std::ffi::OsStr;
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
@@ -117,7 +117,16 @@ impl Scm for Ledger {
         let (Obs::File { path, .. } | Obs::Stat { path, .. }) = obs else {
             return None;
         };
-        ENTRIES.iter().find_map(|e| path.strip_suffix(e.as_bytes()))
+        // the observation holds a native path, whose separator may be `\`
+        ENTRIES.iter().find_map(|e| {
+            let at = path.len().checked_sub(e.len())?;
+            let (root, tail) = path.split_at(at);
+            let same = tail
+                .iter()
+                .zip(e.bytes())
+                .all(|(a, b)| a == &b || (*a == b'\\' && b == b'/'));
+            same.then_some(root)
+        })
     }
 
     fn watch(&self, _root: &Path) -> Option<PathBuf> {
@@ -131,6 +140,12 @@ mod tests {
     use crate::builtins::store_hooks::open;
     use crate::eval::{EvalConfig, Evaluator, Pos};
     use crate::flake::parse_flake_ref;
+    use crate::sys;
+
+    /// A path as the evaluator and a flake URL name it: `/C:/x` on Windows.
+    fn internal(p: &Path) -> String {
+        String::from_utf8(sys::path_to_internal(p)).expect("utf-8 path")
+    }
     use crate::runtime::{Ctx, Taint, Word};
     use crate::source::scm::{count_key, rev_count};
     use crate::source::{AttrVal, Attrs, SourceRef, Tree, tree};
@@ -139,14 +154,12 @@ mod tests {
     use crate::trace::validate::validate;
     use crate::trace::watch::watched;
 
-    use std::env;
-
     const FLAKE: &str = "{ outputs = _: { }; }\n";
 
     /// A working tree with three tracked files, one untracked file and the
     /// revision `r12`; `plain` holds the tracked files and nothing else.
     fn fixture(tag: &str) -> (PathBuf, PathBuf) {
-        let d = env::temp_dir().join(format!("iets-ledger-{}-{tag}", std::process::id()));
+        let d = sys::fs::temp_dir().join(format!("iets-ledger-{}-{tag}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         let (root, plain) = (d.join("tree"), d.join("plain"));
         for top in [&root, &plain] {
@@ -164,7 +177,7 @@ mod tests {
     }
 
     fn source(root: &Path) -> SourceRef {
-        let arg = format!("{}/sub#x", root.display());
+        let arg = format!("{}/sub#x", internal(root));
         parse_flake_ref(&arg, b"/", None).unwrap().source
     }
 
@@ -173,7 +186,7 @@ mod tests {
     }
 
     fn attrs(pairs: &[(&str, AttrVal)], root: &Path, nar_hash: String) -> Attrs {
-        let url = format!("file://{}", root.display());
+        let url = format!("file://{}", internal(root));
         let mut a: Attrs = pairs
             .iter()
             .map(|(k, v)| (k.to_string(), v.clone()))
@@ -187,19 +200,19 @@ mod tests {
     #[test]
     fn a_directory_in_a_working_tree_is_found() {
         let (root, _) = fixture("detect");
-        let r = parse_flake_ref(&format!("{}/sub#x", root.display()), b"/", None).unwrap();
+        let r = parse_flake_ref(&format!("{}/sub#x", internal(&root)), b"/", None).unwrap();
         let tracked = SourceRef::Tracked {
             scm: &Ledger,
             root: root.clone(),
             subdir: "sub".into(),
         };
         assert_eq!(r.source, tracked);
-        let url = format!("ledger+file://{}?dir=sub", root.display());
+        let url = format!("ledger+file://{}?dir=sub", internal(&root));
         assert_eq!(crate::api::flake::url(&r), url);
-        let r = parse_flake_ref(&root.display().to_string(), b"/", None).unwrap();
-        let url = format!("ledger+file://{}", root.display());
+        let r = parse_flake_ref(&internal(&root), b"/", None).unwrap();
+        let url = format!("ledger+file://{}", internal(&root));
         assert_eq!(crate::api::flake::url(&r), url);
-        let r = parse_flake_ref(&format!("path:{}/sub", root.display()), b"/", None).unwrap();
+        let r = parse_flake_ref(&format!("path:{}/sub", internal(&root)), b"/", None).unwrap();
         assert_eq!(r.source, SourceRef::Path(root.join("sub")));
     }
 
@@ -368,7 +381,12 @@ mod tests {
         assert_eq!(kinds, ["file", "stat", "file", "stat", "tree"]);
         assert_eq!(validate(&mut obs, 2).unwrap().entries, 5);
         let watched: Vec<String> = watched(&obs, &[]).into_iter().map(|w| w.path).collect();
-        let want = ENTRIES.map(|e| format!("{}{e}", root.display()));
+        let want = ENTRIES.map(|e| {
+            let at = e.trim_start_matches('/').split('/');
+            at.fold(root.clone(), |acc, c| acc.join(c))
+                .display()
+                .to_string()
+        });
         assert_eq!(watched, want);
 
         fs::write(root.join(".ledger/head"), "r13 1700000001\n").unwrap();

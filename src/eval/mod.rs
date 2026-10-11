@@ -9,7 +9,6 @@ mod tests;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::str::from_utf8;
 use std::sync::{Arc, OnceLock};
@@ -40,7 +39,7 @@ use crate::runtime::{
 };
 use crate::session::Session;
 use crate::source::LazyStore;
-use crate::store::path::{STORE_DIR, StorePath};
+use crate::store::path::{StorePath, strip_store_dir};
 use crate::store::source::{SourceOrigin, SrcPath};
 use crate::syntax::ast::{Ast, FileId};
 use crate::syntax::symbol::{FxHashMap, Interner, Sym};
@@ -353,12 +352,10 @@ impl SharedMap<StorePath, Known> {
     /// The length of the `/nix/store/<base>` prefix of `path` and what the
     /// table has for that store path.
     pub fn under(&self, path: &[u8]) -> Option<(usize, Known)> {
-        let rest = path
-            .strip_prefix(STORE_DIR.as_bytes())?
-            .strip_prefix(b"/")?;
+        let rest = strip_store_dir(path)?;
         let end = rest.iter().position(|&b| b == b'/').unwrap_or(rest.len());
         let sp = StorePath::from_base_name(from_utf8(&rest[..end]).ok()?).ok()?;
-        Some((STORE_DIR.len() + 1 + end, self.get(&sp)?))
+        Some((path.len() - rest.len() + end, self.get(&sp)?))
     }
 
     /// The root is named before any input is fetched and keeps its name.
@@ -391,8 +388,8 @@ macro_rules! bail {
         return Err($crate::eval::Error::boxed($kind, format!($($arg)*), $pos))
     };
 }
+use crate::sys;
 pub(crate) use bail;
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
 pub const DEFAULT_SYSTEM: &str = "x86_64-linux";
 
@@ -915,10 +912,10 @@ impl Evaluator {
             && store_hooks::locate(self, &p).is_none()
         {
             for _ in 0..1024 {
-                let Ok(target) = fs::read_link(OsStr::from_bytes(&p)) else {
+                let Ok(target) = fs::read_link(sys::path_from_internal(&p)) else {
                     break;
                 };
-                let t = target.into_os_string().into_vec();
+                let t = sys::path_to_internal(&target);
                 let joined = if t.starts_with(b"/") {
                     t
                 } else {
@@ -931,7 +928,7 @@ impl Evaluator {
             }
             let full = fs::canonicalize(&local);
             self.trace()
-                .canon(local.as_os_str().as_bytes(), full.ok().as_deref());
+                .canon(&sys::path_to_internal(&local), full.ok().as_deref());
             at = store_hooks::open(self, &p, pos)?;
         }
         match at.is_dir(self) {

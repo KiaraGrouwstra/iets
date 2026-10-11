@@ -83,6 +83,13 @@ fn a_bad_command_line_names_the_problem() {
     }
 }
 
+/// What the system says for a path that is not there.
+const NO_SUCH_FILE: &str = if cfg!(windows) {
+    "The system cannot find the path specified."
+} else {
+    "No such file or directory"
+};
+
 /// `-f FILE` is the positional FILE in the native namespace; under a classic
 /// name the argv stays Nix's, where `nix-eval-jobs` has no `-f`.
 #[test]
@@ -95,7 +102,7 @@ fn dash_f_names_the_file_in_the_native_namespace() {
         &["eval-jobs", "-f", "/nonexistent/missing.nix"],
     ] {
         let err = text(&iets(args).stderr);
-        assert!(err.contains("No such file or directory"), "{args:?}: {err}");
+        assert!(err.contains(NO_SUCH_FILE), "{args:?}: {err}");
     }
     let o = iets(&["nix-eval-jobs", "-f", "/nonexistent/missing.nix"]);
     let err = text(&o.stderr);
@@ -107,6 +114,6 @@ fn dash_f_names_the_file_in_the_native_namespace() {
 fn io_errors_read_like_strerror() {
     let o = iets(&["eval", "/nonexistent/missing.nix"]);
     let err = text(&o.stderr);
-    assert!(err.contains("No such file or directory"), "{err}");
+    assert!(err.contains(NO_SUCH_FILE), "{err}");
     assert!(!err.contains("os error"), "{err}");
 }

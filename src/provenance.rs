@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use crate::eval::{Evaluator, Pos};
 use crate::session::Session;
-use crate::store::path::{STORE_DIR, StorePath};
+use crate::store::path::{StorePath, store_dir};
 use crate::store::source::SourceOrigin;
 
 pub fn enabled() -> bool {
@@ -112,7 +112,7 @@ impl SourceMap {
         if self.entries.is_empty() {
             return text.to_vec();
         }
-        let store = STORE_DIR.as_bytes();
+        let store = store_dir().as_bytes();
         let mut out = Vec::with_capacity(text.len());
         let mut i = 0;
         while i < text.len() {

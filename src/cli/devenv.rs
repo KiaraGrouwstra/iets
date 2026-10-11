@@ -20,14 +20,14 @@ use crate::remote::worker::{self, Connection, Transport, failed_event};
 use crate::session::Session;
 use crate::store::drv::Derivation;
 use crate::store::nar;
-use crate::store::path::{STORE_DIR, StorePath};
+use crate::store::path::{StorePath, store_dir};
 use crate::store::source::SourceOrigin;
+use crate::sys::OsStrExt;
 use crate::trace::run::Cache;
 use crate::trace::store::Part;
 use crate::{cachefs, config, log};
 use std::collections::BTreeSet;
 use std::io::{self, Write};
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use std::{env, fs, slice, str};
@@ -251,7 +251,7 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
     let cwd = cwd();
     let gc_root = match gc_root {
         Some(r) => GcRoot::Given(PathBuf::from(
-            <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&abs_path(&r, &cwd)),
+            <std::ffi::OsStr as crate::sys::OsStrExt>::from_bytes(&abs_path(&r, &cwd)),
         )),
         None => GcRoot::None,
     };
@@ -349,7 +349,7 @@ pub(crate) fn ensure_gc_root(
     if fs::read_link(root).ok().as_deref() == Some(Path::new(out_path)) {
         return Ok(());
     }
-    if root.starts_with(STORE_DIR) {
+    if root.starts_with(store_dir()) {
         return Err(CrateError::Usage(format!(
             "creating a garbage collector root ({}) in the Nix store is forbidden",
             root.display()
@@ -358,7 +358,7 @@ pub(crate) fn ensure_gc_root(
     if let Ok(m) = fs::symlink_metadata(root)
         && (!m.file_type().is_symlink()
             || !fs::read_link(root)
-                .map(|t| t.starts_with(STORE_DIR))
+                .map(|t| t.starts_with(store_dir()))
                 .unwrap_or(false))
     {
         return Err(CrateError::Usage(format!(
@@ -479,7 +479,7 @@ fn dev_env_full(
                 None => env::temp_dir().join(format!("iets-dev-env-{}", std::process::id())),
             };
             let outputs_dir =
-                Path::new(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&cwd))
+                Path::new(<std::ffi::OsStr as crate::sys::OsStrExt>::from_bytes(&cwd))
                     .join("outputs");
             let rc = devenv::make_rc_script(&built.env, &attrs_dir, &outputs_dir)?;
             (rc.script.into_bytes(), rc.files)

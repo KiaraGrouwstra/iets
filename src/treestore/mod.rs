@@ -41,8 +41,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 use std::{fs, io, result, str, thread};
 
-use rustix::io::Errno;
-
 use crate::cachefs;
 use crate::error::Result;
 use crate::eval::Evaluator;
@@ -51,6 +49,7 @@ use crate::session::Session;
 use crate::store::hash::{Hash, HashAlgo, Hasher};
 use crate::store::nar::{FileType, PathFilter};
 use crate::store::path::{IngestionMethod, StorePath, make_fixed_output_path};
+use crate::sys::errno;
 use crate::trace::Obs;
 use std::sync::atomic::Ordering::{self, Relaxed};
 
@@ -114,8 +113,8 @@ impl StoredTree {
                 .iter()
                 .map(|(n, child)| (n.clone(), child.file_type()))
                 .collect()),
-            Some(_) => Err(io::Error::from(Errno::NOTDIR)),
-            None => Err(io::Error::from(Errno::NOENT)),
+            Some(_) => Err(errno::not_a_directory()),
+            None => Err(errno::not_found()),
         }
     }
 
@@ -126,8 +125,8 @@ impl StoredTree {
     pub fn read(&self, rel: &[u8]) -> io::Result<Vec<u8>> {
         match self.tree.resolve(rel, true) {
             Some(Node::File { at, .. }) => self.tree.read(at),
-            Some(_) => Err(io::Error::from(Errno::ISDIR)),
-            None => Err(io::Error::from(Errno::NOENT)),
+            Some(_) => Err(errno::is_a_directory()),
+            None => Err(errno::not_found()),
         }
     }
 
@@ -141,7 +140,7 @@ impl StoredTree {
         sink: &mut dyn io::Write,
         filter: &mut PathFilter<'_>,
     ) -> io::Result<()> {
-        let node = (self.tree.resolve(rel, true)).ok_or_else(|| io::Error::from(Errno::NOENT))?;
+        let node = (self.tree.resolve(rel, true)).ok_or_else(errno::not_found)?;
         self.tree.dump_filtered(node, shown, sink, filter)
     }
 }

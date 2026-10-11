@@ -8,11 +8,9 @@ use super::{Level, LintId, Where};
 use crate::builtins::fetch;
 use crate::eval::{EvalResult, Evaluator, Pos};
 use crate::runtime::{self, Cell, Ctx, Kind, Taint, Value, Word};
+use crate::sys::{self, OsStrExt};
 use crate::{compile, project, trace};
 use std::borrow::Cow;
-use std::ffi::OsStr;
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::path::Path;
 
 /// The message for a reference to the global `name`, when it is `currentTime`.
 pub fn current_time(name: &[u8]) -> Option<String> {
@@ -113,11 +111,11 @@ pub fn dir_copy_unfiltered(ev: &mut Evaluator, path: &[u8], pos: Pos) -> EvalRes
 /// probe is a `Stat` observation, so a new marker is a cache miss.
 fn project_root_of(ev: &Evaluator, path: &[u8]) -> Option<Vec<u8>> {
     let dir = compile::canon_path(path);
-    let at = Path::new(OsStr::from_bytes(&dir));
-    let root = project::find_with(at, |m| {
+    let at = sys::path_from_internal(&dir);
+    let root = project::find_with(&at, |m| {
         ev.trace().stat_now(m.as_os_str().as_bytes(), true) != trace::Kind::Missing
     })?;
-    Some(root.into_os_string().into_vec())
+    Some(sys::path_to_internal(&root))
 }
 
 /// Derivation `drv_name` received attribute `key` whose value carries the

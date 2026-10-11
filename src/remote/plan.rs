@@ -12,7 +12,7 @@ use crate::session;
 use crate::store::drv::Derivation;
 use crate::store::hash::{self, Hash, HashAlgo, Hasher};
 use crate::store::nar::dump_string;
-use crate::store::path::{IngestionMethod, STORE_DIR, StorePath, make_fixed_output_path};
+use crate::store::path::{IngestionMethod, StorePath, make_fixed_output_path, store_dir};
 use crate::store::source::{SourceKind, SourceOrigin, SrcPath};
 
 /// One object the daemon must hold before it can build the root.
@@ -337,7 +337,7 @@ pub fn load_drv(
     {
         return Ok((aterm, info.references, false));
     }
-    let full = format!("{STORE_DIR}/{}", p.base_name());
+    let full = format!("{}/{}", store_dir(), p.base_name());
     let text =
         fs::read(&full).map_err(|e| Error::io(format!("cannot read derivation '{full}'"), e))?;
     let drv = Derivation::parse(&text, Derivation::name_from_path(p)?)?;

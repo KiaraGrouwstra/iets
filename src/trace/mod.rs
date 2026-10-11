@@ -9,12 +9,12 @@ pub mod validate;
 pub mod watch;
 pub mod wire;
 
+use crate::sys::OsStrExt;
+use crate::sys::fs::{ctime_ns, file_id, is_executable, mtime_ns, mtime_secs};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::env::var_os;
 use std::ffi::OsStr;
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -560,26 +560,21 @@ pub fn env_hash(name: &[u8]) -> Option<Digest32> {
     Some(*h.finalize().as_bytes())
 }
 
-pub fn mtime_ns(m: &fs::Metadata) -> i64 {
-    m.mtime()
-        .wrapping_mul(1_000_000_000)
-        .wrapping_add(m.mtime_nsec())
-}
-
-pub fn ctime_ns(m: &fs::Metadata) -> i64 {
-    m.ctime()
-        .wrapping_mul(1_000_000_000)
-        .wrapping_add(m.ctime_nsec())
+/// The owner execute bit as the stat hash has always held it: 0o100 or 0.
+fn exec_bit(st: &fs::Metadata) -> u32 {
+    if is_executable(st) { 0o100 } else { 0 }
 }
 
 pub fn file_obs(path: &[u8], meta: &fs::Metadata, hash: Digest32) -> Obs {
+    let at = Path::new(OsStr::from_bytes(path));
+    let (dev, ino) = file_id(at, meta);
     Obs::File {
         path: path.to_vec(),
         size: meta.len(),
         mtime_ns: mtime_ns(meta),
-        ctime_ns: ctime_ns(meta),
-        dev: meta.dev(),
-        ino: meta.ino(),
+        ctime_ns: ctime_ns(at, meta),
+        dev,
+        ino,
         hash,
     }
 }
@@ -717,16 +712,17 @@ impl TreeFp {
             return;
         };
         let kind = Kind::of(&Ok(st.clone()));
-        self.newest = self.newest.max(st.mtime());
+        self.newest = self.newest.max(mtime_secs(&st));
         self.stat_h.update((rel.len() as u64).to_le_bytes());
         self.stat_h.update(rel);
         self.stat_h.update([kind.to_u8()]);
         self.stat_h.update(st.len().to_le_bytes());
         self.stat_h.update(mtime_ns(&st).to_le_bytes());
-        self.stat_h.update(ctime_ns(&st).to_le_bytes());
-        self.stat_h.update(st.dev().to_le_bytes());
-        self.stat_h.update(st.ino().to_le_bytes());
-        self.stat_h.update((st.mode() & 0o100).to_le_bytes());
+        let (dev, ino) = file_id(p, &st);
+        self.stat_h.update(ctime_ns(p, &st).to_le_bytes());
+        self.stat_h.update(dev.to_le_bytes());
+        self.stat_h.update(ino.to_le_bytes());
+        self.stat_h.update(exec_bit(&st).to_le_bytes());
         if kind == Kind::Symlink {
             match fs::read_link(p) {
                 Ok(t) => self.stat_h.update(t.as_os_str().as_bytes()),
@@ -775,10 +771,11 @@ fn walk_fp(
     stat_h.update([kind.to_u8()]);
     stat_h.update(st.len().to_le_bytes());
     stat_h.update(mtime_ns(&st).to_le_bytes());
-    stat_h.update(ctime_ns(&st).to_le_bytes());
-    stat_h.update(st.dev().to_le_bytes());
-    stat_h.update(st.ino().to_le_bytes());
-    stat_h.update((st.mode() & 0o100).to_le_bytes());
+    let (dev, ino) = file_id(path, &st);
+    stat_h.update(ctime_ns(path, &st).to_le_bytes());
+    stat_h.update(dev.to_le_bytes());
+    stat_h.update(ino.to_le_bytes());
+    stat_h.update(exec_bit(&st).to_le_bytes());
     match kind {
         Kind::Symlink => {
             let t = fs::read_link(path)?;
@@ -949,7 +946,7 @@ mod tests {
         assert_ne!(sa, sc);
         let (nar, seen, stat, newest) = tree_rehash(&dir, None).unwrap();
         let written = fs::symlink_metadata(dir.join("new-file")).unwrap();
-        assert_eq!(newest, written.mtime());
+        assert_eq!(newest, mtime_secs(&written));
         assert_eq!(stat, c);
         assert_eq!(seen, sc);
         assert_eq!(

@@ -4,6 +4,7 @@ use std::process::exit;
 use std::thread::Builder;
 
 use iets::cli::{self, help};
+use iets::sys;
 
 // musl's malloc costs up to 30% (docs/explanation/static-build.md)
 #[global_allocator]
@@ -11,14 +12,6 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// The demand path has this stack whether it runs here or on a fiber.
 const STACK_SIZE: usize = iets::parallel::fiber::MAIN_STACK;
-
-/// Rust masks SIGPIPE, so a closed stdout (`iets eval-jobs | head`) surfaces
-/// as an EPIPE panic. The default disposition makes the process die quietly.
-fn restore_sigpipe() {
-    unsafe {
-        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
-    }
-}
 
 /// The classic Nix name this process was invoked under, if any.
 fn classic_name() -> Option<String> {
@@ -38,7 +31,7 @@ fn on_big_stack(f: impl FnOnce() -> i32 + Send + 'static) -> i32 {
 }
 
 fn main() {
-    restore_sigpipe();
+    sys::tty::restore_sigpipe();
     let session = iets::session::Session::new();
     // a command line says what it has to say on stderr; a library says it
     // to whatever sink its host set, or to none (docs/reference/library.md)

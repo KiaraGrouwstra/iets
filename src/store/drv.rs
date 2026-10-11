@@ -8,8 +8,8 @@ use super::hash::{
     Hash, HashAlgo, HashError, HashFormat, base16_encode_into, base16_encode_into_bytes, hash_bytes,
 };
 use super::path::{
-    DRV_EXTENSION, IngestionMethod, STORE_DIR, StorePath, StorePathError, make_fixed_output_path,
-    make_output_path, make_text_path, output_path_name,
+    DRV_EXTENSION, IngestionMethod, StorePath, StorePathError, make_fixed_output_path,
+    make_output_path, make_text_path, output_path_name, store_dir,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -170,11 +170,12 @@ fn print_unquoted(out: &mut Vec<u8>, s: &str) {
 
 /// `print_unquoted` of `p.to_string()`, without the string.
 fn print_store_path(out: &mut Vec<u8>, p: &StorePath) {
-    out.push(b'"');
-    out.push_str(STORE_DIR);
-    out.push(b'/');
-    out.push_str(p.base_name());
-    out.push(b'"');
+    // A Windows directory holds backslashes, which a string escapes
+    let mut full = Vec::new();
+    full.extend_from_slice(store_dir().as_bytes());
+    full.push(b'/');
+    full.extend_from_slice(p.base_name().as_bytes());
+    print_string(out, &full);
 }
 
 /// Mirrors content-address.cc:ContentAddress::printMethodAlgo quoted:
@@ -765,7 +766,7 @@ pub fn hash_derivation_modulo(
             payload.push(':');
             base16_encode_into(&mut payload, hash.bytes());
             payload.push(':');
-            payload.push_str(STORE_DIR);
+            payload.push_str(store_dir());
             payload.push('/');
             payload.push_str(drv.fixed_output_path(name)?.base_name());
             hashes.insert(
@@ -873,7 +874,7 @@ pub fn path_derivation_modulo(
 /// local store; the default `DrvLoader`.
 pub fn load_derivation_from_store(drv_path: &StorePath) -> Result<Derivation, DrvError> {
     let name = Derivation::name_from_path(drv_path)?;
-    let full = format!("{STORE_DIR}/{}", drv_path.base_name());
+    let full = format!("{}/{}", store_dir(), drv_path.base_name());
     let text =
         fs::read(&full).map_err(|e| DrvError(format!("cannot read derivation '{full}': {e}")))?;
     Derivation::parse(&text, name)

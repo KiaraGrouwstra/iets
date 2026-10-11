@@ -26,9 +26,8 @@ use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 
-use rustix::fs::OFlags;
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::os::unix::fs::{FileExt, OpenOptionsExt};
+use crate::sys::fs as sysfs;
+use crate::sys::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{env, result, str};
@@ -154,12 +153,7 @@ pub fn scratch(tag: &str) -> Result<File> {
     let mut last = None;
     for _ in 0..8 {
         let path = dir.join(format!("iets-spool-{tag}-{:016x}", random_u64()));
-        match File::options()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .custom_flags(OFlags::NOFOLLOW.bits() as i32)
-            .open(&path)
+        match sysfs::no_follow(File::options().read(true).write(true).create_new(true)).open(&path)
         {
             Ok(file) => {
                 fs::remove_file(&path)
@@ -567,8 +561,7 @@ impl Tree {
             Blob::Object { id, size } => return self.object(&id, size),
         };
         let mut out = vec![0u8; size as usize];
-        self.spool_source(sparse)
-            .read_exact_at(&mut out, offset)
+        sysfs::read_exact_at(self.spool_source(sparse), &mut out, offset)
             .map_err(|_| io::Error::other("the spooled tarball is truncated"))?;
         Ok(out)
     }
@@ -941,7 +934,7 @@ pub(super) fn expand(
         while left > 0 {
             let n = left.min(buf.len() as u64) as usize;
             entry.read_exact(&mut buf[..n])?;
-            side.write_all_at(&buf[..n], to)?;
+            sysfs::write_all_at(side, &buf[..n], to)?;
             to += n as u64;
             left -= n as u64;
         }
@@ -1036,8 +1029,7 @@ impl Read for Bytes<'_> {
         if n == 0 {
             return Ok(0);
         }
-        self.src
-            .read_exact_at(&mut buf[..n], self.offset)
+        sysfs::read_exact_at(self.src, &mut buf[..n], self.offset)
             .map_err(|_| io::Error::other("the spooled tarball is truncated"))?;
         self.offset += n as u64;
         self.left -= n as u64;
@@ -1049,7 +1041,7 @@ impl Read for Bytes<'_> {
 mod tests {
     use super::*;
 
-    use std::os::unix::fs::symlink;
+    use crate::sys::fs::symlink;
 
     use crate::fetch::http;
     use crate::store::hash::Hasher;
@@ -1120,6 +1112,8 @@ mod tests {
     }
 
     /// Every rule the git sink applies, both ways, byte for byte.
+    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
+    #[cfg(unix)]
     #[test]
     fn spool_matches_the_tree() {
         let big = vec![b'z'; 70 * 1024];
@@ -1532,6 +1526,8 @@ mod tests {
     }
 
     /// The fixture whose `narHash` a lock file records, hashed out of the spool.
+    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
+    #[cfg(unix)]
     #[test]
     fn nar_hash_of_the_fixture() {
         let bytes =

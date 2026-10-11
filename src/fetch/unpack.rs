@@ -18,13 +18,13 @@
 //! the oracle the spool's NAR is held to (`spool_matches_the_tree`).
 
 #[cfg(test)]
+use crate::sys::fs::{is_executable, set_executable, symlink};
+#[cfg(test)]
 use std::collections::BTreeMap;
 #[cfg(test)]
-use std::fs::{self, File, Permissions};
+use std::fs::{self, File};
 #[cfg(test)]
 use std::io::Cursor;
-#[cfg(test)]
-use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Component, Path, PathBuf};
 
 #[cfg(test)]
@@ -166,11 +166,8 @@ pub fn unpack(bytes: Vec<u8>, dest: &Path) -> Result<PathBuf> {
                     e,
                 )
             })?;
-            fs::set_permissions(
-                &at,
-                Permissions::from_mode(if executable { 0o755 } else { 0o644 }),
-            )
-            .map_err(|e| Error::io(format!("cannot set the mode of {}", at.display()), e))?;
+            set_executable(&at, executable)
+                .map_err(|e| Error::io(format!("cannot set the mode of {}", at.display()), e))?;
         }
     }
     for (rel, target) in links {
@@ -246,11 +243,7 @@ mod tests {
                     out.insert(rel, "dir".into());
                     walk(root, &p, out);
                 } else {
-                    let x = if m.permissions().mode() & 0o100 != 0 {
-                        "x"
-                    } else {
-                        ""
-                    };
+                    let x = if is_executable(&m) { "x" } else { "" };
                     out.insert(
                         rel,
                         format!(
@@ -345,6 +338,9 @@ mod tests {
         fs::remove_dir_all(&w).unwrap();
     }
 
+    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
+
+    #[cfg(unix)]
     #[test]
     fn modes_symlinks_and_empty_dirs() {
         let w = work("modes");
@@ -371,6 +367,8 @@ mod tests {
     }
 
     /// The last copy of a member wins, as the git sink's `id` ordering does.
+    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
+    #[cfg(unix)]
     #[test]
     fn a_repeated_member_keeps_the_last_copy() {
         let w = work("dup");
@@ -412,6 +410,8 @@ mod tests {
     /// The NAR hash of an unpacked tree is what `nix hash path` prints for it;
     /// the expected value comes from a tarball whose `narHash` a lock file
     /// records (`tests/data/tarball`).
+    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
+    #[cfg(unix)]
     #[test]
     fn nar_hash_of_the_fixture() {
         let w = work("golden");

@@ -17,11 +17,11 @@ use crate::cli::{self, help, render};
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::parallel::force::{T_ATTRS_WHNF, fanout};
 use crate::runtime::{AttrsObj, Value, Word};
+use crate::sys::{OsStrExt, OsStringExt};
 use crate::trace::run::Cache;
 use crate::trace::store::Part;
 use crate::{argv, error, log, print};
 use ErrorKind as K;
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
 const NAME: &str = "nix";
 const BOLD: &[u8] = b"\x1b[0;1m";

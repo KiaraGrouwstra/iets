@@ -20,6 +20,7 @@ use crate::eval::{Error as EvalError, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::runtime::{Value, Word};
 use crate::source::{self, SourceRef, lock};
 use crate::store::path::StorePath;
+use crate::sys;
 
 pub const CALL_FLAKE: &str = include_str!("call-flake.nix");
 pub const LOCK_ERROR: &str = "flake.lock missing or incomplete, run nix flake lock";
@@ -73,6 +74,15 @@ fn is_indirect(loc: &str) -> bool {
 /// directory. Only a local path is taken: `.`, `./x`, `/abs`, `~/x` or
 /// `path:…`.
 pub fn parse_flake_ref(arg: &str, cwd: &[u8], home: Option<&[u8]>) -> Result<FlakeRef> {
+    // `C:\x#a` is a path on Windows, and `flakeref` would read `C` as a scheme
+    let (head, fragment) = arg
+        .split_once('#')
+        .map_or((arg, None), |(h, f)| (h, Some(f)));
+    let native = String::from_utf8_lossy(&sys::from_native(head.as_bytes())).into_owned();
+    let arg = &match fragment {
+        Some(f) => format!("{native}#{f}"),
+        None => native,
+    };
     let p = flakeref::parse(arg)?;
     let loc = arg.split('#').next().unwrap_or(arg);
     let ty = source::str_attr(&p.input, "type");
@@ -139,9 +149,9 @@ fn scm_flake(
             scm.name()
         )));
     };
-    let dir = Path::new(&root).join(&p.dir);
-    let bytes = <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::as_bytes(dir.as_os_str());
-    let mut fr = local_flake(bytes, false, attr)?;
+    let root = sys::path_from_internal(root.as_bytes());
+    let dir = root.join(&p.dir);
+    let mut fr = local_flake(&sys::path_to_internal(&dir), false, attr)?;
     let Some(rev) = source::str_attr(&p.input, "rev") else {
         if p.input.contains_key("ref") {
             return Err(Error::Unsupported(format!(
@@ -153,7 +163,7 @@ fn scm_flake(
     };
     fr.source = source::SourceRef::Commit {
         scm,
-        root: PathBuf::from(&root),
+        root,
         rev: rev.to_string(),
         subdir: p.dir.clone(),
     };
@@ -165,7 +175,7 @@ fn scm_flake(
 /// the input of the working tree holding it (`git+file:`).
 fn local_flake(full: &[u8], explicit_path: bool, attr: Vec<String>) -> Result<FlakeRef> {
     let full = compile::canon_path(full);
-    let dir = PathBuf::from(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&full));
+    let dir = sys::path_from_internal(&full);
     if !dir.is_dir() {
         return Err(Error::Flake(format!(
             "path '{}' is not a flake (because it's not a directory)",
@@ -183,7 +193,7 @@ fn local_flake(full: &[u8], explicit_path: bool, attr: Vec<String>) -> Result<Fl
     } else {
         // git.cc opens the repository, which resolves the directory: a link to
         // a working tree is that tree, not a copy of the link object
-        let real = fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+        let real = sys::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
         source::scm::detect(&real).map_or_else(
             || SourceRef::Path(dir.clone()),
             |(scm, root)| SourceRef::Tracked {
@@ -237,7 +247,7 @@ fn read_traced(ev: &Evaluator, p: &Path) -> io::Result<Vec<u8>> {
     let meta = fs::metadata(p)?;
     let bytes = fs::read(p)?;
     ev.trace().file(
-        <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::as_bytes(p.as_os_str()),
+        <std::ffi::OsStr as crate::sys::OsStrExt>::as_bytes(p.as_os_str()),
         &meta,
         &bytes,
     );
@@ -373,7 +383,7 @@ pub fn get_flake(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word
     };
     let full = match locate(ev, path.as_bytes()) {
         Some(at) if !at.hidden() => match at.local() {
-            Some(local) => local.into_os_string().into_encoded_bytes(),
+            Some(local) => sys::path_to_internal(&local),
             None => return Err(unsupported("(a fetched input)")),
         },
         _ => path.as_bytes().to_vec(),
@@ -503,6 +513,11 @@ mod tests {
     use crate::source::scm;
     use crate::store::nar::tests::fixture_tree;
 
+    /// A path as the evaluator and a flake URL name it: `/C:/x` on Windows.
+    fn internal(p: &Path) -> String {
+        String::from_utf8(sys::path_to_internal(p)).expect("utf-8 path")
+    }
+
     #[test]
     fn attr_paths() {
         assert_eq!(
@@ -523,7 +538,7 @@ mod tests {
         fs::write(d.join("flake.nix"), b"{ outputs = _: {}; }").unwrap();
         fs::create_dir_all(d.join("sub")).unwrap();
         fs::write(d.join("sub/flake.nix"), b"{ outputs = _: {}; }").unwrap();
-        let cwd = d.as_os_str().as_encoded_bytes();
+        let cwd = &sys::path_to_internal(&d);
         let r = parse_flake_ref(".#a.b", cwd, None).unwrap();
         assert_eq!(r.dir, d);
         assert_eq!(r.source, SourceRef::Path(d.clone()));
@@ -577,7 +592,7 @@ mod tests {
         fs::create_dir_all(d.join(".git")).unwrap();
         let rev = "0".repeat(39) + "1";
         let git = scm::named("git").unwrap();
-        let url = format!("git+file://{}", d.display());
+        let url = format!("git+file://{}", internal(&d));
 
         let r = parse_flake_ref(&format!("{url}?ref=HEAD&rev={rev}#a"), b"/", None).unwrap();
         assert_eq!(r.dir, d);

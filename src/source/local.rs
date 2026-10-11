@@ -8,9 +8,9 @@
 //! consulted. The SCM records its own observations and the copied file set
 //! is a `Tree` observation, so the tracing cache follows the tree.
 
+use crate::sys::fs::mtime_secs;
+use crate::sys::{self, OsStrExt};
 use std::collections::HashSet;
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{fs, io};
@@ -90,10 +90,10 @@ fn names_its_content(dir: &Path, hash: &Hash) -> bool {
 /// entry in the tree, so the newest `lstat` mtime comes from its filter callback instead of a
 /// second recursive `read_dir`.
 fn dump_and_max_mtime(dir: &Path, fp: &mut Option<TreeFp>) -> io::Result<(Hash, u64, i64)> {
-    let mut mtime = fs::symlink_metadata(dir)?.mtime();
+    let mut mtime = mtime_secs(&fs::symlink_metadata(dir)?);
     let mut filter = |p: &Path, t: nar::FileType| {
         if let Ok(st) = fs::symlink_metadata(p) {
-            mtime = mtime.max(st.mtime());
+            mtime = mtime.max(mtime_secs(&st));
         }
         if let Some(fp) = fp.as_mut() {
             fp.entry(p, t, true);
@@ -160,7 +160,10 @@ pub fn commit_tree(
             ("type".into(), AttrVal::Str(scm.name().into())),
             (
                 "url".into(),
-                AttrVal::Str(format!("file://{}", root.to_string_lossy())),
+                AttrVal::Str(format!(
+                    "file://{}",
+                    String::from_utf8_lossy(&sys::path_to_internal(root))
+                )),
             ),
             ("narHash".into(), AttrVal::Str(hash.to_sri())),
             ("rev".into(), AttrVal::Str(rev.to_string())),
@@ -250,7 +253,10 @@ pub fn workdir(
     attrs.insert("type".into(), AttrVal::Str(scm.name().into()));
     attrs.insert(
         "url".into(),
-        AttrVal::Str(format!("file://{}", root.to_string_lossy())),
+        AttrVal::Str(format!(
+            "file://{}",
+            String::from_utf8_lossy(&sys::path_to_internal(root))
+        )),
     );
     attrs.insert("narHash".into(), AttrVal::Str(hash.to_sri()));
     attrs.insert("lastModified".into(), AttrVal::Int(at.last_modified));
@@ -282,7 +288,6 @@ pub fn workdir(
 mod tests {
     use super::*;
 
-    use std::fs::File;
     use std::time::{Duration, SystemTime};
 
     use crate::store::hash;
@@ -319,8 +324,13 @@ mod tests {
         let f = d.join("newest");
         fs::write(&f, b"x").unwrap();
         let later = SystemTime::now() + Duration::from_secs(1000);
-        File::open(&f).unwrap().set_modified(later).unwrap();
-        let want = fs::metadata(&f).unwrap().mtime();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&f)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        let want = mtime_secs(&fs::metadata(&f).unwrap());
         let (hash, size, mtime) = dump_and_max_mtime(&d, &mut None).unwrap();
         assert_eq!(mtime, want);
         assert_eq!(hash, nar::nar_hash(&d).unwrap());

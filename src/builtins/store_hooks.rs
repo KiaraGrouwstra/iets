@@ -14,12 +14,12 @@
 //! `toFile` text or `.drv` this evaluation holds in memory. Its readers below
 //! record what they saw in the tracing cache's read set.
 
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Read};
 
-use rustix::io::Errno;
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use crate::sys::errno;
+use crate::sys::{self, OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::str::from_utf8;
 use std::sync::Arc;
@@ -29,7 +29,7 @@ use crate::lint::{LintId, purity};
 use crate::source::scm;
 use crate::store::hash::{HashAlgo, Hasher};
 use crate::store::nar::{FileType, PathFilter, dump_path, dump_string, nar_hash_filtered};
-use crate::store::path::{STORE_DIR, StorePath};
+use crate::store::path::{StorePath, strip_store_dir};
 use crate::store::source::{SourceOrigin, Src, SrcPath};
 use crate::trace::{self, Kind, Obs};
 use crate::treestore::{self, StoredTree};
@@ -42,9 +42,7 @@ use crate::treestore::{self, StoredTree};
 /// hash of exactly those bytes. `None` when `path` is under no such store
 /// path.
 pub fn locate(ev: &Evaluator, path: &[u8]) -> Option<SrcPath> {
-    let rest = path
-        .strip_prefix(STORE_DIR.as_bytes())?
-        .strip_prefix(b"/")?;
+    let rest = strip_store_dir(path)?;
     let (base, sub) = match rest.iter().position(|&b| b == b'/') {
         Some(i) => (&rest[..i], &rest[i + 1..]),
         None => (rest, &b""[..]),
@@ -70,7 +68,7 @@ pub fn locate(ev: &Evaluator, path: &[u8]) -> Option<SrcPath> {
 
 /// [`locate`], else `path` itself on the real file system.
 pub fn resolve(ev: &Evaluator, path: &[u8]) -> SrcPath {
-    locate(ev, path).unwrap_or_else(|| SrcPath::fs(PathBuf::from(OsStr::from_bytes(path)), None))
+    locate(ev, path).unwrap_or_else(|| SrcPath::fs(sys::path_from_internal(path), None))
 }
 
 /// Whether a pure evaluation may read `path` (eval.cc: rootFS is the store
@@ -186,7 +184,7 @@ pub fn located(
 
 /// `path` on the real file system, for a path [`locate`] does not answer.
 pub fn fs_path(path: &[u8]) -> SrcPath {
-    SrcPath::fs(PathBuf::from(OsStr::from_bytes(path)), None)
+    SrcPath::fs(sys::path_from_internal(path), None)
 }
 
 /// A located path behind the pure-eval allow list, with the error Nix's
@@ -273,12 +271,12 @@ pub type Failed = (&'static str, io::Error);
 const STAT: &str = "getting status of";
 const READ: &str = "reading file";
 
-fn os(p: &[u8]) -> &Path {
-    Path::new(OsStr::from_bytes(p))
+fn os(p: &[u8]) -> PathBuf {
+    sys::path_from_internal(p)
 }
 
 fn enoent() -> io::Error {
-    io::Error::from(Errno::NOENT)
+    errno::not_found()
 }
 
 /// `strerror(ENOENT)` alone, the text `import`'s stat has always carried (no
@@ -339,7 +337,7 @@ impl SrcPath {
             Src::Fs { .. } => {
                 let p = self.local()?;
                 (self.rel.is_empty() || self.accepts(&p))
-                    .then(|| At::Disk(p.into_os_string().into_vec()))
+                    .then(|| At::Disk(sys::path_to_internal(&p)))
             }
             Src::Spool { name, .. } => {
                 if !self.accepts(&self.in_spool()) {
@@ -361,7 +359,7 @@ impl SrcPath {
     /// resolves its own links ([`crate::fetch::spool`]).
     pub fn read_link(&self) -> Option<Vec<u8>> {
         match self.at()? {
-            At::Disk(p) => Some(fs::read_link(os(&p)).ok()?.into_os_string().into_vec()),
+            At::Disk(p) => Some(sys::path_to_internal(&fs::read_link(os(&p)).ok()?)),
             At::Spool(..) | At::Mem(_) => None,
         }
     }
@@ -410,7 +408,7 @@ impl SrcPath {
                 let (meta, f) = if sized {
                     let meta = fs::metadata(os(&p)).map_err(|e| (STAT, e))?;
                     if !meta.is_file() {
-                        return Err((STAT, io::Error::from(Errno::ISDIR)));
+                        return Err((STAT, errno::is_a_directory()));
                     }
                     (meta, fs::File::open(os(&p)).map_err(|e| (READ, e))?)
                 } else {
@@ -426,7 +424,7 @@ impl SrcPath {
             }
             At::Spool(tree, name) => match tree.read(&self.rel) {
                 // the type of the member is what the stat would have said
-                Err(e) if matches!(Errno::from_io_error(&e), Some(Errno::NOENT | Errno::ISDIR)) => {
+                Err(e) if e.kind() == io::ErrorKind::NotFound || errno::is_directory(&e) => {
                     Err((STAT, e))
                 }
                 r => {
@@ -443,7 +441,7 @@ impl SrcPath {
     /// (untracked files of a git tree); the `Dir` observation keeps the full
     /// listing, the one validation can re-read.
     pub fn read_dir(&self, ev: &Evaluator) -> Result<Vec<(Vec<u8>, FileType)>, Failed> {
-        let notdir = || (STAT, io::Error::from(Errno::NOTDIR));
+        let notdir = || (STAT, errno::not_a_directory());
         match self.at().ok_or((STAT, enoent()))? {
             At::Disk(p) => {
                 let rd = fs::read_dir(os(&p)).map_err(|e| ("opening directory", e))?;
@@ -567,7 +565,7 @@ pub fn copy_path_to_store(
             (fixed(&hash)?, at.clone(), hash, size)
         }
         Some(At::Disk(local)) => {
-            let local = PathBuf::from(OsString::from_vec(local));
+            let local = os(&local);
             let accepted = match &at.src {
                 Src::Fs { accepted, .. } => accepted.clone(),
                 _ => None,

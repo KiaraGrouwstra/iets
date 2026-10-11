@@ -22,7 +22,7 @@ use crate::print::{json_escape, lexicographic_order, print_json};
 use crate::runtime::{self, Attr, AttrsObj, Ctx, Value, Word};
 use crate::session::Session;
 use crate::store::drv::{Derivation, DerivationOutput, load_derivation_from_store};
-use crate::store::path::{STORE_DIR, StorePath};
+use crate::store::path::{StorePath, store_dir};
 use crate::syntax::symbol::Sym;
 use crate::{log, provenance};
 
@@ -380,7 +380,7 @@ fn coerce_store_path(ev: &mut Evaluator, w: Word, pos: Pos, what: &str) -> EvalR
     let mut ctx = Vec::new();
     let s = ev.coerce_to_string(w, &mut ctx, pos, what, false, false, true)?;
     let s = String::from_utf8_lossy(&s).into_owned();
-    if !s.starts_with(STORE_DIR) {
+    if !s.starts_with(store_dir()) {
         return Err(Error::boxed(
             ErrorKind::Eval,
             format!("path '{s}' is not in the Nix store"),

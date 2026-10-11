@@ -540,10 +540,10 @@ fn get_env(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     if ev.pure() {
         return Ok(ev.mk_string(b""));
     }
-    let os = <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(name);
+    let os = <std::ffi::OsStr as crate::sys::OsStrExt>::from_bytes(name);
     ev.trace().env(name);
     let v = env::var_os(os).unwrap_or_default();
-    let bytes = <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::as_bytes(&v);
+    let bytes = <std::ffi::OsStr as crate::sys::OsStrExt>::as_bytes(&v);
     Ok(ev.mk_string(bytes))
 }
 

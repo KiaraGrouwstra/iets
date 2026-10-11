@@ -28,7 +28,7 @@ use crate::log;
 use crate::print::lexicographic_order;
 use crate::runtime::Word;
 use crate::session::{self, Session};
-use std::os::unix::process::ExitStatusExt;
+use crate::sys::process;
 
 pub const MSG_NEXT: &str = "next";
 pub const MSG_RESTART: &str = "restart";
@@ -200,10 +200,10 @@ impl Proc {
             Ok(st) if st.code() == Some(1) => format!(
                 "while {what}, evaluation worker exited with exit code 1, (possible infinite recursion)"
             ),
-            Ok(st) if st.signal() == Some(9) => format!(
+            Ok(st) if process::signal(&st) == Some(9) => format!(
                 "while {what}, evaluation worker got killed by SIGKILL, maybe memory limit reached?"
             ),
-            Ok(st) => match st.signal() {
+            Ok(st) => match process::signal(&st) {
                 Some(s) => format!("while {what}, evaluation worker crashed with signal {s}"),
                 None => format!(
                     "while {what}, evaluation worker exited with {}",

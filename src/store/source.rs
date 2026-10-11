@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use super::hash::Hash;
 use super::path::StorePath;
-use std::os::unix::ffi::OsStrExt;
+use crate::sys::OsStrExt;
 
 use crate::events::{self, Field};
 

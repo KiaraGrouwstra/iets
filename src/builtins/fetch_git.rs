@@ -5,7 +5,7 @@
 //! from the repository (git.cc:getAccessorFromCommit). Any other fetch goes
 //! to Nix's own `fetchGit`, as a git flake input does.
 
-use std::os::unix::ffi::OsStrExt;
+use crate::sys::OsStrExt;
 use std::path::Path;
 
 use super::fetch::{emit_tree_attrs, input_attrs};

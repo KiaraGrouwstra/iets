@@ -3,8 +3,8 @@
 //! store, then exec'd with the arguments the user gave. See
 //! `docs/reference/classic.md`.
 
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::process::CommandExt;
+use crate::sys::OsStrExt;
+use crate::sys::process;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str;
@@ -230,11 +230,10 @@ fn realise(
 /// formatter.cc: the program with the user's arguments after it, `PRJ_ROOT`
 /// set to the flake directory, and this process replaced by it.
 fn exec(program: &str, args: &[String], flake_dir: &Path) -> i32 {
-    let e = Command::new(program)
-        .arg0(program)
-        .args(args.iter().map(|a| argv::os(a)))
-        .env("PRJ_ROOT", flake_dir)
-        .exec();
+    let mut cmd = Command::new(program);
+    cmd.args(args.iter().map(|a| argv::os(a)))
+        .env("PRJ_ROOT", flake_dir);
+    let e = process::exec(&mut cmd, program);
     log::line(&format!("error: unable to execute '{program}': {e}"));
     1
 }

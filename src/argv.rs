@@ -5,8 +5,8 @@
 //! of a fallback. A U+10FF80..U+10FFFF typed on the command line also comes back
 //! as one byte: those are the last private-use code points and noncharacters.
 
+use crate::sys::OsStringExt;
 use std::ffi::OsString;
-use std::os::unix::ffi::OsStringExt;
 
 const BASE: u32 = 0x10FF00;
 
@@ -40,7 +40,8 @@ pub fn os(s: &str) -> OsString {
     OsString::from_vec(bytes(s))
 }
 
-#[cfg(test)]
+// TODO: Windows names are UTF-8 here, so arbitrary bytes do not round-trip.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

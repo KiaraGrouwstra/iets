@@ -1,8 +1,8 @@
+use crate::sys::OsStrExt;
+use crate::sys::fs::{is_executable, make_executable, symlink};
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::Path;
 
 use super::hash::{Hash, HashAlgo, Hasher};
@@ -392,7 +392,7 @@ impl Walk<'_> {
                 self.cur().display()
             )));
         }
-        let executable = st.permissions().mode() & 0o100 != 0;
+        let executable = is_executable(&st);
         let len = st.len();
         self.w.regular(executable, len, &mut f)
     }
@@ -736,7 +736,7 @@ impl Restorer<'_> {
             .open(self.cur())?;
         self.r.contents_to(&mut f, len)?;
         if executable {
-            f.set_permissions(fs::Permissions::from_mode(0o755))?;
+            make_executable(&f)?;
         }
         Ok(())
     }
@@ -878,6 +878,8 @@ pub fn nar_hash_of_string(contents: &[u8]) -> Hash {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::sys::fs as sysfs;
+    use crate::sys::fs::set_executable;
     use std::env;
     use std::path::PathBuf;
 
@@ -886,13 +888,13 @@ pub(crate) mod tests {
     /// printf '#!/bin/sh\necho hi\n' > tree/run.sh; chmod +x tree/run.sh;
     /// ln -s a.txt tree/link; : > tree/sub/empty; printf zzz > tree/sub/z
     pub(crate) fn fixture_tree(tag: &str) -> PathBuf {
-        let dir = env::temp_dir().join(format!("iets-nar-{}-{tag}", std::process::id()));
+        let dir = sysfs::temp_dir().join(format!("iets-nar-{}-{tag}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let tree = dir.join("tree");
         fs::create_dir_all(tree.join("sub")).unwrap();
         fs::write(tree.join("a.txt"), b"hello world\n").unwrap();
         fs::write(tree.join("run.sh"), b"#!/bin/sh\necho hi\n").unwrap();
-        fs::set_permissions(tree.join("run.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+        set_executable(&tree.join("run.sh"), true).unwrap();
         symlink("a.txt", tree.join("link")).unwrap();
         fs::write(tree.join("sub/empty"), b"").unwrap();
         fs::write(tree.join("sub/z"), b"zzz").unwrap();
@@ -900,6 +902,8 @@ pub(crate) mod tests {
     }
 
     // nix-store --dump tree | sha256sum ; nix-store --dump tree | wc -c
+    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
+    #[cfg(unix)]
     #[test]
     fn directory_nar() {
         let tree = fixture_tree("dir");
@@ -911,6 +915,8 @@ pub(crate) mod tests {
     }
 
     // nix hash path tree ; nix hash path --base32 tree
+    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
+    #[cfg(unix)]
     #[test]
     fn directory_nar_hash_formats() {
         let tree = fixture_tree("fmt");
@@ -935,6 +941,8 @@ pub(crate) mod tests {
     }
 
     // nix-store --dump tree/run.sh | sha256sum
+    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
+    #[cfg(unix)]
     #[test]
     fn executable_file_nar() {
         let tree = fixture_tree("exec");
@@ -998,6 +1006,8 @@ pub(crate) mod tests {
     }
 
     // nix-store --dump tree | nix-store --restore out ; nix-store --dump out | sha256sum
+    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
+    #[cfg(unix)]
     #[test]
     fn restore_roundtrip() {
         let tree = fixture_tree("restore");
@@ -1010,22 +1020,8 @@ pub(crate) mod tests {
             fs::read_link(out.join("link")).unwrap().as_os_str(),
             "a.txt"
         );
-        assert_ne!(
-            fs::metadata(out.join("run.sh"))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o100,
-            0
-        );
-        assert_eq!(
-            fs::metadata(out.join("a.txt"))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o100,
-            0
-        );
+        assert!(is_executable(&fs::metadata(out.join("run.sh")).unwrap()));
+        assert!(!is_executable(&fs::metadata(out.join("a.txt")).unwrap()));
     }
 
     #[test]

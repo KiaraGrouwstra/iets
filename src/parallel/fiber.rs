@@ -6,16 +6,14 @@
 //! swaps stack pointers. Nothing else is saved: the compiler treats the
 //! switch as an ordinary call, so caller-saved registers are already dead.
 
-use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
-use std::sync::Once;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
-use std::{error, io, mem, ptr};
-
-use rustix::mm::{MapFlags, MprotectFlags, ProtFlags, mmap_anonymous, mprotect};
+use std::{error, io, ptr};
 
 use crate::runtime::heap;
-use crate::sys;
+use crate::sys::context;
+use crate::sys::fault::{self, Fault};
+use crate::sys::{self, vm};
 
 pub const DEFAULT_STACK: usize = 256 << 20;
 /// Stack of the demand fiber and of the process main thread. The demand
@@ -25,7 +23,7 @@ pub const MAIN_STACK: usize = 4 << 30;
 /// The inaccessible page at the low end of a stack: one page, whatever the
 /// platform's page size is.
 fn guard() -> usize {
-    rustix::param::page_size()
+    vm::page_size()
 }
 /// Bytes a fiber keeps in hand above its guard page. The force path
 /// refuses to go below it, so an overflow is reported instead of taken.
@@ -134,94 +132,27 @@ const RELEASED_MSG: &[u8] = b"error: a value was used after its session was rele
 /// fiber: a released session's memory faults on any thread. It replaces
 /// the handler Rust's runtime installs, as `install_overflow_handler` does.
 pub(crate) fn install_fault_handler() {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(set_handler);
+    fault::install(classify);
 }
 
-fn set_handler() {
-    // SAFETY: the documented use of `sigaction`, with a handler that only
-    // writes to fd 2 and ends the process.
-    unsafe {
-        for sig in [libc::SIGSEGV, libc::SIGBUS] {
-            let mut sa: libc::sigaction = mem::zeroed();
-            sa.sa_sigaction = on_segv as *const () as usize;
-            sa.sa_flags = libc::SA_ONSTACK | libc::SA_SIGINFO;
-            libc::sigemptyset(&mut sa.sa_mask);
-            libc::sigaction(sig, &sa, ptr::null_mut());
-        }
-    }
-}
-
-extern "C" fn on_segv(sig: i32, info: *mut libc::siginfo_t, _ctx: *mut libc::c_void) {
-    // SAFETY: the kernel passes a valid siginfo for SIGSEGV/SIGBUS.
-    let addr = unsafe { (*info).si_addr() } as usize;
+fn classify(addr: usize) -> Option<Fault> {
     if is_guard(addr) {
-        // SAFETY: write and _exit are async-signal-safe.
-        unsafe {
-            libc::write(2, OVERFLOW_MSG.as_ptr() as *const _, OVERFLOW_MSG.len());
-            libc::_exit(1);
-        }
+        return Some(Fault {
+            message: OVERFLOW_MSG,
+            abort: false,
+        });
     }
-    if heap::is_released(addr) {
-        // SAFETY: write and abort are async-signal-safe.
-        unsafe {
-            libc::write(2, RELEASED_MSG.as_ptr() as *const _, RELEASED_MSG.len());
-            libc::abort();
-        }
-    }
-    // not ours: let the default disposition produce the usual crash
-    // SAFETY: restoring the default handler and re-raising is the standard
-    // way to report a fault we do not own.
-    unsafe {
-        libc::signal(sig, libc::SIG_DFL);
-    }
+    heap::is_released(addr).then_some(Fault {
+        message: RELEASED_MSG,
+        abort: true,
+    })
 }
 
-/// This thread's alternate signal stack. The destructor turns `sigaltstack`
-/// off before the memory goes.
-struct AltStack {
-    _mem: Box<[u8]>,
-}
-
-impl Drop for AltStack {
-    fn drop(&mut self) {
-        let ss = libc::stack_t {
-            ss_sp: ptr::null_mut(),
-            ss_flags: libc::SS_DISABLE,
-            ss_size: 0,
-        };
-        // SAFETY: disables this thread's alternate stack; no handler can
-        // run on it after this returns.
-        unsafe { libc::sigaltstack(&ss, ptr::null_mut()) };
-    }
-}
-
-thread_local! {
-    static ALT_STACK: RefCell<Option<AltStack>> = const { RefCell::new(None) };
-}
-
-/// Install the guard-page handler on this thread. `sigaltstack` is per
-/// thread, and the alternate stack is separate from every fiber stack, so
-/// it stays valid across a fiber switch.
+/// Install the guard-page handler on this thread, which also needs the
+/// alternate stack: `sigaltstack` is per thread.
 pub fn install_overflow_handler() {
-    const ALT: usize = 64 << 10;
-    ALT_STACK.with(|a| {
-        let mut a = a.borrow_mut();
-        if a.is_some() {
-            return;
-        }
-        let mut mem = vec![0u8; ALT].into_boxed_slice();
-        let ss = libc::stack_t {
-            ss_sp: mem.as_mut_ptr() as *mut _,
-            ss_flags: 0,
-            ss_size: ALT,
-        };
-        // SAFETY: the alternate stack lives in this thread's `ALT_STACK`
-        // until the thread exits.
-        unsafe { libc::sigaltstack(&ss, ptr::null_mut()) };
-        set_handler();
-        *a = Some(AltStack { _mem: mem });
-    });
+    fault::alt_stack();
+    install_fault_handler();
 }
 
 /// Fiber lifecycle. Transitions are documented in docs/explanation/evaluation.md.
@@ -240,22 +171,14 @@ pub struct Stack {
 
 impl Stack {
     pub fn new(size: usize) -> Result<Stack, StackError> {
-        // SAFETY: anonymous private mapping; the low page is made
-        // inaccessible as a guard. NORESERVE keeps large reservations cheap.
-        let base = unsafe {
-            let p = mmap_anonymous(
-                ptr::null_mut(),
-                size,
-                ProtFlags::READ | ProtFlags::WRITE,
-                MapFlags::PRIVATE | MapFlags::NORESERVE,
-            )
-            .map_err(|e| StackError {
-                bytes: size,
-                why: Why::Mmap(e.into()),
-            })?;
-            let _ = mprotect(p, guard(), MprotectFlags::empty());
-            p as *mut u8
-        };
+        // The low page is made inaccessible as a guard. A lazy mapping keeps
+        // large reservations cheap, except on Windows where stacks are committed.
+        let base = vm::map_stack(size).map_err(|e| StackError {
+            bytes: size,
+            why: Why::Mmap(e),
+        })?;
+        // SAFETY: the page is the bottom of the mapping just made.
+        unsafe { vm::fence(base, guard()) };
         register_guard(base as usize);
         Ok(Stack { base, size })
     }
@@ -293,7 +216,7 @@ impl Drop for Stack {
         unregister_guard(self.base as usize);
         // SAFETY: the whole mapping `new` made; the fiber on it never runs
         // again.
-        unsafe { libc::munmap(self.base as *mut _, self.size) };
+        unsafe { vm::unmap(self.base, self.size) };
     }
 }
 
@@ -342,9 +265,17 @@ impl Fiber {
     #[inline(never)]
     pub unsafe fn resume(&mut self) {
         if self.sp.is_null() {
-            self.sp = seed_stack(self.stack.top(), self as *mut Fiber);
+            // SAFETY: the stack mapping has room for the frame.
+            self.sp = unsafe {
+                context::seed_stack(
+                    self.stack.base,
+                    self.stack.top(),
+                    fiber_main,
+                    self as *mut Fiber as *mut (),
+                )
+            };
         }
-        unsafe { switch(&mut self.caller_sp, self.sp) };
+        unsafe { context::switch(&mut self.caller_sp, self.sp) };
     }
 
     /// Switch back to the resumer. Called on the fiber's own stack.
@@ -353,16 +284,16 @@ impl Fiber {
     /// Must be called from code running on this fiber's stack.
     #[inline(never)]
     pub unsafe fn yield_(&mut self) {
-        unsafe { switch(&mut self.sp, self.caller_sp) };
+        unsafe { context::switch(&mut self.sp, self.caller_sp) };
     }
 }
 
 /// First frame of every fiber: runs the entry, marks FINISHED, switches
 /// back for good. Never returns.
-unsafe extern "C" fn fiber_main(f: *mut Fiber) -> ! {
+unsafe extern "C" fn fiber_main(f: *mut ()) -> ! {
     // SAFETY: `f` is the fiber whose stack we are on; it outlives us.
     unsafe {
-        let fiber = &mut *f;
+        let fiber = &mut *f.cast::<Fiber>();
         (fiber.entry)(fiber.arg);
         fiber.state.store(FINISHED, Ordering::Release);
         fiber.yield_();
@@ -370,282 +301,13 @@ unsafe extern "C" fn fiber_main(f: *mut Fiber) -> ! {
     unreachable!("finished fiber resumed")
 }
 
-#[cfg(target_arch = "x86_64")]
-mod arch {
-    use super::Fiber;
-
-    use core::arch::{asm, naked_asm};
-
-    /// Saves rbx rbp r12-r15 mxcsr x87cw, stores rsp into `*save`, loads
-    /// `load` as rsp, restores, returns into the target's frame.
-    #[unsafe(naked)]
-    pub unsafe extern "C" fn switch(save: *mut *mut u8, load: *mut u8) {
-        naked_asm!(
-            "push rbp",
-            "push rbx",
-            "push r12",
-            "push r13",
-            "push r14",
-            "push r15",
-            "sub rsp, 8",
-            "stmxcsr [rsp]",
-            "fnstcw [rsp + 4]",
-            "mov [rdi], rsp",
-            "mov rsp, rsi",
-            "ldmxcsr [rsp]",
-            "fldcw [rsp + 4]",
-            "add rsp, 8",
-            "pop r15",
-            "pop r14",
-            "pop r13",
-            "pop r12",
-            "pop rbx",
-            "pop rbp",
-            "ret",
-        )
-    }
-
-    /// Entered by the first `ret` of a fresh fiber with the fiber pointer
-    /// in r12 and rsp 16-byte aligned.
-    #[unsafe(naked)]
-    unsafe extern "C" fn trampoline() {
-        naked_asm!(
-            "mov rdi, r12",
-            "call {main}",
-            "ud2",
-            main = sym super::fiber_main,
-        )
-    }
-
-    /// Lay out the frame `switch` will pop: fp control word, r15..rbp, then
-    /// the return address (the trampoline).
-    pub fn seed_stack(top: *mut u8, fiber: *mut Fiber) -> *mut u8 {
-        // SAFETY: writes the 64 bytes below `top`, inside the mapping.
-        unsafe {
-            let t = top as *mut u64;
-            *t.sub(1) = trampoline as *const () as usize as u64; // ret
-            *t.sub(2) = 0; // rbp
-            *t.sub(3) = 0; // rbx
-            *t.sub(4) = fiber as u64; // r12
-            *t.sub(5) = 0; // r13
-            *t.sub(6) = 0; // r14
-            *t.sub(7) = 0; // r15
-            *t.sub(8) = 0x1F80 | (0x037F << 32); // mxcsr, x87 cw
-            t.sub(8) as *mut u8
-        }
-    }
-
-    #[inline(always)]
-    pub fn sp() -> usize {
-        let sp: usize;
-        // SAFETY: reads a register into a local; touches no memory and
-        // leaves the stack and the flags alone.
-        unsafe {
-            asm!("mov {}, rsp", out(reg) sp, options(nomem, nostack, preserves_flags));
-        }
-        sp
-    }
-}
-
-#[cfg(target_arch = "aarch64")]
-mod arch {
-    use super::Fiber;
-
-    use core::arch::{asm, naked_asm};
-    use std::ptr;
-
-    /// Saves x19-x30, d8-d15, fpcr; swaps sp. Untested: no aarch64 box.
-    #[unsafe(naked)]
-    pub unsafe extern "C" fn switch(save: *mut *mut u8, load: *mut u8) {
-        naked_asm!(
-            "sub sp, sp, #176",
-            "stp x19, x20, [sp, #0]",
-            "stp x21, x22, [sp, #16]",
-            "stp x23, x24, [sp, #32]",
-            "stp x25, x26, [sp, #48]",
-            "stp x27, x28, [sp, #64]",
-            "stp x29, x30, [sp, #80]",
-            "stp d8, d9, [sp, #96]",
-            "stp d10, d11, [sp, #112]",
-            "stp d12, d13, [sp, #128]",
-            "stp d14, d15, [sp, #144]",
-            "mrs x9, fpcr",
-            "str x9, [sp, #160]",
-            "mov x9, sp",
-            "str x9, [x0]",
-            "mov sp, x1",
-            "ldr x9, [sp, #160]",
-            "msr fpcr, x9",
-            "ldp d14, d15, [sp, #144]",
-            "ldp d12, d13, [sp, #128]",
-            "ldp d10, d11, [sp, #112]",
-            "ldp d8, d9, [sp, #96]",
-            "ldp x29, x30, [sp, #80]",
-            "ldp x27, x28, [sp, #64]",
-            "ldp x25, x26, [sp, #48]",
-            "ldp x23, x24, [sp, #32]",
-            "ldp x21, x22, [sp, #16]",
-            "ldp x19, x20, [sp, #0]",
-            "add sp, sp, #176",
-            "ret",
-        )
-    }
-
-    #[unsafe(naked)]
-    unsafe extern "C" fn trampoline() {
-        naked_asm!(
-            "mov x0, x19",
-            "bl {main}",
-            "brk #1",
-            main = sym super::fiber_main,
-        )
-    }
-
-    pub fn seed_stack(top: *mut u8, fiber: *mut Fiber) -> *mut u8 {
-        // SAFETY: writes 176 bytes below `top`, inside the mapping.
-        unsafe {
-            let sp = top.sub(176);
-            ptr::write_bytes(sp, 0, 176);
-            let t = sp as *mut u64;
-            *t = fiber as u64; // x19
-            *t.add(11) = trampoline as *const () as usize as u64; // x30
-            sp
-        }
-    }
-
-    #[inline(always)]
-    pub fn sp() -> usize {
-        let sp: usize;
-        // SAFETY: reads a register into a local; touches no memory and
-        // leaves the stack and the flags alone.
-        unsafe {
-            asm!("mov {}, sp", out(reg) sp, options(nomem, nostack, preserves_flags));
-        }
-        sp
-    }
-}
-
-#[cfg(target_arch = "riscv64")]
-mod arch {
-    use super::Fiber;
-
-    use core::arch::{asm, naked_asm};
-    use std::ptr;
-
-    /// Saves ra, s0-s11, fs0-fs11 and fcsr; swaps sp. Untested on hardware.
-    #[unsafe(naked)]
-    pub unsafe extern "C" fn switch(save: *mut *mut u8, load: *mut u8) {
-        naked_asm!(
-            ".option push",
-            ".option arch, +d",
-            "addi sp, sp, -208",
-            "sd ra, 0(sp)",
-            "sd s0, 8(sp)",
-            "sd s1, 16(sp)",
-            "sd s2, 24(sp)",
-            "sd s3, 32(sp)",
-            "sd s4, 40(sp)",
-            "sd s5, 48(sp)",
-            "sd s6, 56(sp)",
-            "sd s7, 64(sp)",
-            "sd s8, 72(sp)",
-            "sd s9, 80(sp)",
-            "sd s10, 88(sp)",
-            "sd s11, 96(sp)",
-            "fsd fs0, 104(sp)",
-            "fsd fs1, 112(sp)",
-            "fsd fs2, 120(sp)",
-            "fsd fs3, 128(sp)",
-            "fsd fs4, 136(sp)",
-            "fsd fs5, 144(sp)",
-            "fsd fs6, 152(sp)",
-            "fsd fs7, 160(sp)",
-            "fsd fs8, 168(sp)",
-            "fsd fs9, 176(sp)",
-            "fsd fs10, 184(sp)",
-            "fsd fs11, 192(sp)",
-            "frcsr t0",
-            "sd t0, 200(sp)",
-            "sd sp, 0(a0)",
-            "mv sp, a1",
-            "ld t0, 200(sp)",
-            "fscsr t0",
-            "fld fs0, 104(sp)",
-            "fld fs1, 112(sp)",
-            "fld fs2, 120(sp)",
-            "fld fs3, 128(sp)",
-            "fld fs4, 136(sp)",
-            "fld fs5, 144(sp)",
-            "fld fs6, 152(sp)",
-            "fld fs7, 160(sp)",
-            "fld fs8, 168(sp)",
-            "fld fs9, 176(sp)",
-            "fld fs10, 184(sp)",
-            "fld fs11, 192(sp)",
-            "ld ra, 0(sp)",
-            "ld s0, 8(sp)",
-            "ld s1, 16(sp)",
-            "ld s2, 24(sp)",
-            "ld s3, 32(sp)",
-            "ld s4, 40(sp)",
-            "ld s5, 48(sp)",
-            "ld s6, 56(sp)",
-            "ld s7, 64(sp)",
-            "ld s8, 72(sp)",
-            "ld s9, 80(sp)",
-            "ld s10, 88(sp)",
-            "ld s11, 96(sp)",
-            "addi sp, sp, 208",
-            "ret",
-            ".option pop",
-        )
-    }
-
-    /// Entered by the first `ret` of a fresh fiber with the fiber pointer
-    /// in s0 and sp 16-byte aligned.
-    #[unsafe(naked)]
-    unsafe extern "C" fn trampoline() {
-        naked_asm!(
-            "mv a0, s0",
-            "call {main}",
-            "ebreak",
-            main = sym super::fiber_main,
-        )
-    }
-
-    pub fn seed_stack(top: *mut u8, fiber: *mut Fiber) -> *mut u8 {
-        // SAFETY: writes 208 bytes below `top`, inside the mapping.
-        unsafe {
-            let sp = top.sub(208);
-            ptr::write_bytes(sp, 0, 208);
-            let t = sp as *mut u64;
-            *t = trampoline as *const () as usize as u64; // ra
-            *t.add(1) = fiber as u64; // s0
-            sp
-        }
-    }
-
-    #[inline(always)]
-    pub fn sp() -> usize {
-        let sp: usize;
-        // SAFETY: reads a register into a local; touches no memory and
-        // leaves the stack alone.
-        unsafe {
-            asm!("mv {}, sp", out(reg) sp, options(nomem, nostack, preserves_flags));
-        }
-        sp
-    }
-}
-
-use arch::{seed_stack, switch};
-
 /// Stack pointer of the caller's frame, the force path's bound on how far
 /// the running fiber has gone. One instruction, inlined: a helper that
 /// returns the address of its own local costs a call and a frame slot on
 /// every force.
 #[inline(always)]
 pub fn sp() -> usize {
-    arch::sp()
+    context::sp()
 }
 
 #[cfg(test)]

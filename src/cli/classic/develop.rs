@@ -2,12 +2,12 @@
 //! bash. The rc script is `makeRcScript` plus the tail `CmdDevelop::run` adds.
 //! See `docs/reference/classic.md`.
 
+use crate::sys::process;
 use std::collections::BTreeMap;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, DirBuilder};
 use std::io::ErrorKind;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{self, SystemTime};
@@ -16,8 +16,8 @@ use super::{Argv, Common, eval_config, fallback, nix};
 use crate::cli::devenv::{self, DevEnv};
 use crate::cli::{self, Input, parse_eval_args};
 use crate::devenv::{escape_shell_arg_always as esc, make_rc_script};
+use crate::sys::fs::dir_mode;
 use crate::{config, error};
-use std::os::unix::fs::DirBuilderExt;
 
 const NAME: &str = "nix";
 
@@ -110,9 +110,10 @@ fn run(d: &Develop, cfg: &config::Config, dev: &DevEnv) -> error::Result<()> {
     // file and the attribute files go
     let dir = private_dir()?;
     let attrs_dir = dir.join("attrs");
-    let outputs_dir =
-        Path::new(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&cli::cwd()))
-            .join("outputs");
+    let outputs_dir = Path::new(<std::ffi::OsStr as crate::sys::OsStrExt>::from_bytes(
+        &cli::cwd(),
+    ))
+    .join("outputs");
     let rc_path = dir.join("rc");
     let mut script = make_rc_script(&dev.env, &attrs_dir, &outputs_dir)?.script;
     script.push_str(&format!("command rm -f '{}'\n", rc_path.display()));
@@ -159,13 +160,12 @@ fn run(d: &Develop, cfg: &config::Config, dev: &DevEnv) -> error::Result<()> {
         .map_err(|e| error::Error::io(format!("cannot write '{}'", rc_path.display()), e))?;
 
     let mut cmd = Command::new(&shell);
-    cmd.arg0("bash");
     if d.command.is_empty() {
         cmd.arg("--rcfile");
     }
     cmd.arg(&rc_path);
     cmd.env_clear().envs(environment(d, &dev.out_path, &shell));
-    let e = cmd.exec();
+    let e = process::exec(&mut cmd, "bash");
     Err(error::Error::io(format!("cannot execute '{shell}'"), e))
 }
 
@@ -178,7 +178,7 @@ fn private_dir() -> error::Result<PathBuf> {
             .duration_since(time::UNIX_EPOCH)
             .map_or(0, |d| d.subsec_nanos());
         let dir = tmp.join(format!("iets-develop-{}-{nanos}", std::process::id()));
-        match DirBuilder::new().mode(0o700).create(&dir) {
+        match dir_mode(&mut DirBuilder::new(), 0o700).create(&dir) {
             Ok(()) => return Ok(dir),
             Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
             Err(e) => {

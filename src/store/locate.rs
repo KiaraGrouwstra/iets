@@ -7,7 +7,7 @@ use std::sync::Mutex;
 
 use crate::error::{self, Error as CrateError};
 use crate::nixbin;
-use crate::store::path::{STORE_DIR, StorePath};
+use crate::store::path::{StorePath, store_dir};
 use crate::store::source::{SourceKind, SourceOrigin, SrcPath};
 
 /// What the store answered for a path, kept for the life of the process: the
@@ -121,7 +121,7 @@ pub fn locate_in_store(
                 return Ok(None);
             };
             Ok(Some(unhashed(
-                SrcPath::fs(format!("{STORE_DIR}/{}", p.base_name()), None),
+                SrcPath::fs(format!("{}/{}", store_dir(), p.base_name()), None),
                 kind,
             )))
         })

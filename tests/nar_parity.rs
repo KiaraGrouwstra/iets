@@ -3,6 +3,10 @@
 //!
 //! Every test skips itself when `nix` is not on `PATH`; `nix develop` has it.
 
+// TODO: Windows has no `nix` to compare with and the trees use symlinks and
+// the executable bit. Check in golden archives made on Linux, then port.
+#![cfg(unix)]
+
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::Command;

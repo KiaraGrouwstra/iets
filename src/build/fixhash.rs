@@ -10,11 +10,11 @@ use crate::provenance::SourceMap;
 use crate::session::Session;
 use crate::store::hash::{Hash, HashFormat};
 use crate::store::path;
+use crate::sys::OsStrExt;
+use crate::sys::fs::copy_mode;
 use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::io::{self, IsTerminal, Write};
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::PermissionsExt;
 
 /// One rewrite: `old` becomes `new` at byte `at` of `file`, which is
 /// `line:column`.
@@ -42,9 +42,7 @@ impl Fix {
             return Err(format!("{} changed since it was read", self.file.display()));
         }
         text.splice(self.at..self.at + self.old.len(), self.new.bytes());
-        let mode = fs::metadata(&self.file)
-            .map(|m| PermissionsExt::mode(&m.permissions()))
-            .map_err(err)?;
+        let meta = fs::metadata(&self.file).map_err(err)?;
         let dir = self.file.parent().unwrap_or(Path::new("."));
         let name = self.file.file_name().unwrap_or_default().to_string_lossy();
         let tmp = dir.join(format!(".{}.{}", name, std::process::id()));
@@ -55,7 +53,7 @@ impl Fix {
                 .truncate(true)
                 .open(&tmp)?;
             f.write_all(&text)?;
-            f.set_permissions(PermissionsExt::from_mode(mode))?;
+            copy_mode(&meta, &f)?;
             f.sync_all()
         };
         if let Err(e) = write() {
@@ -109,7 +107,7 @@ pub fn local_files(ev: &Evaluator) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = (0..)
         .map_while(|i| ev.files.get(i))
         .map(|f| map.locate(&f.path).unwrap_or_else(|| f.path.clone()))
-        .filter(|p| p.starts_with(b"/") && !p.starts_with(path::STORE_DIR.as_bytes()))
+        .filter(|p| p.starts_with(b"/") && path::strip_store_dir(p).is_none())
         .map(|p| PathBuf::from(OsStr::from_bytes(&p)))
         .collect();
     out.sort();

@@ -9,10 +9,10 @@ mod git;
 #[cfg(test)]
 mod ledger;
 
+use crate::sys::OsStrExt;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fmt::{self, Debug, Formatter};
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use crate::trace::key::Key;

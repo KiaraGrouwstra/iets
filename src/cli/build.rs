@@ -496,6 +496,7 @@ mod tests {
     use super::*;
     use crate::build::Outcome;
     use crate::store::path::StorePath;
+    use crate::sys;
     use std::collections::BTreeMap;
 
     fn outcome(success: bool, skipped: bool, outputs: &[&str]) -> Outcome {
@@ -558,6 +559,14 @@ mod tests {
             .into_iter()
             .map(|(_, l)| l.unwrap())
             .collect();
-        assert_eq!(names, ["/r/result", "/r/result-1-dev", "/r/result-1"]);
+        let native = |p: &str| sys::path_from_internal(p.as_bytes()).display().to_string();
+        assert_eq!(
+            names,
+            [
+                native("/r/result"),
+                native("/r/result-1-dev"),
+                native("/r/result-1")
+            ]
+        );
     }
 }

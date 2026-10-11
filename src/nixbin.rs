@@ -1,8 +1,8 @@
 //! The real Nix binaries. Under the classic symlink farm, `nix` on `PATH` is
 //! iets itself, so every subprocess and the fallback resolve past it.
 
+use crate::sys::fs::is_runnable;
 use std::ffi::OsStr;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 
@@ -13,7 +13,7 @@ use crate::session::Session;
 const REAL_DIR_FILE: &str = "share/iets/real-nix-bin";
 
 fn executable(p: &Path) -> bool {
-    fs::metadata(p).is_ok_and(|m| m.is_file() && m.mode() & 0o111 != 0)
+    fs::metadata(p).is_ok_and(|m| m.is_file() && is_runnable(&m))
 }
 
 /// The bin directory a farm entry points at: every hop of the symlink chain
@@ -74,7 +74,7 @@ fn on_path(name: &str, dirs: impl Iterator<Item = PathBuf>, me: Option<&Path>) -
 /// the bin directory the farm on `PATH` was built for, else the first
 /// `<name>` on `PATH` that is not iets.
 pub fn real(name: &str) -> Option<PathBuf> {
-    let me = fs::canonicalize("/proc/self/exe").ok();
+    let me = this_exe();
     if let Some(dir) = &Session::current().settings().nix_bin_dir
         && let Some(p) = candidate(dir, name, me.as_deref())
     {
@@ -84,10 +84,16 @@ pub fn real(name: &str) -> Option<PathBuf> {
     on_path(name, dirs.into_iter(), me.as_deref()).or_else(|| sibling(name))
 }
 
+/// This executable, resolved, so that it compares with what a candidate
+/// resolves to.
+fn this_exe() -> Option<PathBuf> {
+    fs::canonicalize(env::current_exe().ok()?).ok()
+}
+
 /// The farm never shadows `nix-store`, so its real location names the nix
 /// installation even on a system path built without the marker.
 fn sibling(name: &str) -> Option<PathBuf> {
-    let me = fs::canonicalize("/proc/self/exe").ok();
+    let me = this_exe();
     for dir in env::split_paths(&env::var_os("PATH")?) {
         let probe = dir.join("nix-store");
         if !executable(&probe) {
@@ -111,8 +117,7 @@ pub fn nix() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::Permissions;
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use crate::sys::fs::{set_executable, symlink};
 
     #[test]
     fn farm_marker_is_found_through_two_hops() {
@@ -138,10 +143,11 @@ mod tests {
     #[test]
     fn every_iets_build_is_skipped() {
         let tmp = env::temp_dir().join(format!("iets-nixbin-two-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
         let (x, y, real) = (tmp.join("x"), tmp.join("y"), tmp.join("real"));
         let exe = |p: &Path| {
             fs::write(p, "#!/bin/sh\nexit 0\n").unwrap();
-            fs::set_permissions(p, Permissions::from_mode(0o755)).unwrap();
+            set_executable(p, true).unwrap();
         };
         for d in [&x, &y, &real] {
             fs::create_dir_all(d).unwrap();
@@ -159,7 +165,8 @@ mod tests {
             Some(nix.clone())
         );
         assert_eq!(on_path("nix", dirs[..2].iter().cloned(), None), None);
-        assert_eq!(on_path("nix", dirs.iter().cloned(), Some(&nix)), None);
+        let resolved = fs::canonicalize(&nix).unwrap();
+        assert_eq!(on_path("nix", dirs.iter().cloned(), Some(&resolved)), None);
 
         // what `nix-bin-dir` points at goes through the same test, so a
         // directory of iets's own classic names cannot exec iets again

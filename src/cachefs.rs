@@ -16,22 +16,16 @@
 //! on a sibling worker or fails a run. The one exception is `wait_lock`, for a
 //! download a sibling is already doing.
 
+use crate::sys::OsStrExt;
+use crate::sys::fs as sysfs;
 use io::Write;
 use std::ffi::OsStr;
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::str::from_utf8;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{env, fs, io, thread};
-
-use rustix::fs::{
-    AtFlags, CWD, FlockOperation, OFlags, Timespec, Timestamps, UTIME_NOW, flock, futimens,
-    utimensat,
-};
-use rustix::io::Errno;
 
 use crate::compile::cache::IrCache;
 use crate::session::Session;
@@ -79,10 +73,7 @@ const FILE_MODE: u32 = 0o600;
 
 /// `create_dir_all` with `DIR_MODE` on every component it makes.
 pub fn create_dir(path: &Path) -> io::Result<()> {
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(DIR_MODE)
-        .create(path)
+    sysfs::dir_mode(fs::DirBuilder::new().recursive(true), DIR_MODE).create(path)
 }
 
 /// Narrows `path` to [`DIR_MODE`] when it is wider. A cache root a run of an
@@ -90,10 +81,7 @@ pub fn create_dir(path: &Path) -> io::Result<()> {
 /// it: tightening is the whole repair, and it costs the run nothing, where
 /// refusing the directory would cost every entry in it.
 fn tighten(path: &Path) {
-    let Ok(md) = fs::metadata(path) else { return };
-    if md.permissions().mode() & 0o077 != 0 {
-        let _ = fs::set_permissions(path, fs::Permissions::from_mode(DIR_MODE));
-    }
+    sysfs::restrict_to_owner(path);
 }
 
 /// The directory every cache store lives under: `--cache-dir DIR`, else
@@ -223,11 +211,9 @@ fn entry_age(path: &Path, shape: Shape) -> Option<Duration> {
 }
 
 /// Marks a link in the roots store as used now, so the TTL sweep keeps the
-/// roots of the flakes somebody still formats. `utimensat` with a null time
-/// sets both stamps to the current time, and `AT_SYMLINK_NOFOLLOW` sets them
-/// on the link itself.
+/// roots of the flakes somebody still formats. The stamps go on the link itself.
 pub fn touch_link(path: &Path) {
-    let _ = utimensat(CWD, path, &NOW, AtFlags::SYMLINK_NOFOLLOW);
+    sysfs::touch(path, false);
 }
 
 fn stamp_age(bytes: &[u8]) -> Option<Duration> {
@@ -248,12 +234,14 @@ fn stamp_age(bytes: &[u8]) -> Option<Duration> {
 pub fn write_atomic(dir: &Path, name: &str, tag: u64, chunks: &[&[u8]]) -> io::Result<()> {
     let tmp = dir.join(format!(".{name}.{}.{tag}.tmp", std::process::id()));
     let write = || -> io::Result<()> {
-        let mut f = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(FILE_MODE)
-            .open(&tmp)?;
+        let mut f = sysfs::create_mode(
+            fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true),
+            FILE_MODE,
+        )
+        .open(&tmp)?;
         for c in chunks {
             f.write_all(c)?;
         }
@@ -300,9 +288,7 @@ pub fn checksum(key: &str, parts: &[&[u8]]) -> [u8; SUM] {
 /// what it names must be a regular file, and its length must be one an entry
 /// can have. `O_NONBLOCK` keeps the open of a FIFO from waiting for a writer.
 pub fn open_entry(path: &Path) -> Option<(fs::File, fs::Metadata)> {
-    let f = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags((OFlags::NOFOLLOW | OFlags::NONBLOCK).bits() as i32)
+    let f = sysfs::no_follow_no_block(fs::OpenOptions::new().read(true))
         .open(path)
         .ok()?;
     let md = f.metadata().ok()?;
@@ -489,7 +475,7 @@ pub struct WriteLock(fs::File);
 
 impl Drop for WriteLock {
     fn drop(&mut self) {
-        let _ = flock(&self.0, FlockOperation::Unlock);
+        sysfs::unlock(&self.0);
     }
 }
 
@@ -501,12 +487,14 @@ pub fn write_lock(root: &Path) -> Option<WriteLock> {
 }
 
 fn open_lock(path: &Path) -> io::Result<fs::File> {
-    fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .mode(FILE_MODE)
-        .open(path)
+    sysfs::create_mode(
+        fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false),
+        FILE_MODE,
+    )
+    .open(path)
 }
 
 /// [`write_lock`] with the two failures apart: `Err` when the lock file
@@ -517,7 +505,7 @@ pub fn try_write_lock(root: &Path) -> io::Result<Option<WriteLock>> {
     let f = open_lock(&root.join(LOCK))?;
     let mut waited = Duration::ZERO;
     loop {
-        if flock(&f, FlockOperation::NonBlockingLockExclusive).is_ok() {
+        if sysfs::try_lock(&f) {
             return Ok(Some(WriteLock(f)));
         }
         if waited >= LOCK_TIMEOUT {
@@ -540,31 +528,15 @@ pub fn store_lock(root: &Path) -> Option<WriteLock> {
 /// touched, so a sweep never takes a lock file that is in use.
 pub fn wait_lock(path: &Path, on_wait: impl FnOnce()) -> Option<WriteLock> {
     let f = open_lock(path).ok()?;
-    if flock(&f, FlockOperation::NonBlockingLockExclusive).is_err() {
+    if !sysfs::try_lock(&f) {
         on_wait();
-        loop {
-            match flock(&f, FlockOperation::LockExclusive) {
-                Ok(()) => break,
-                Err(Errno::INTR) => {}
-                Err(_) => return None,
-            }
+        if !sysfs::lock(&f) {
+            return None;
         }
     }
-    let _ = futimens(&f, &NOW);
+    sysfs::touch_open(&f);
     Some(WriteLock(f))
 }
-
-/// Both stamps set to the current time.
-const NOW: Timestamps = Timestamps {
-    last_access: Timespec {
-        tv_sec: 0,
-        tv_nsec: UTIME_NOW,
-    },
-    last_modification: Timespec {
-        tv_sec: 0,
-        tv_nsec: UTIME_NOW,
-    },
-};
 
 /// Marks `path` as used, at most once per `TOUCH_INTERVAL`: a hot cache on a
 /// busy box does not churn the disk.
@@ -572,7 +544,7 @@ pub fn touch(path: &Path) {
     if age(path).is_some_and(|a| a < TOUCH_INTERVAL) {
         return;
     }
-    let _ = utimensat(CWD, path, &NOW, AtFlags::empty());
+    sysfs::touch(path, true);
 }
 
 /// `touch` for a file already open, with `modified` from its own `fstat`.
@@ -583,7 +555,7 @@ pub fn touch_open(f: &fs::File, modified: Option<SystemTime>) {
     {
         return;
     }
-    let _ = futimens(f, &NOW);
+    sysfs::touch_open(f);
 }
 
 #[derive(Default, Debug, PartialEq, Eq)]
@@ -609,7 +581,8 @@ fn entry_size(path: &Path, shape: Shape) -> u64 {
 
 fn drop_entry(path: &Path, shape: Shape) -> bool {
     match shape {
-        Shape::ShardedFiles | Shape::Links | Shape::StoreEntries => fs::remove_file(path).is_ok(),
+        Shape::Links => sysfs::remove_link(path).is_ok(),
+        Shape::ShardedFiles | Shape::StoreEntries => fs::remove_file(path).is_ok(),
         Shape::Dirs => fs::remove_dir_all(path).is_ok(),
     }
 }
@@ -740,7 +713,7 @@ pub fn stores(cache_dir: Option<&str>) -> Vec<(PathBuf, Shape)> {
 mod tests {
     use super::*;
 
-    use std::os::unix::fs::symlink;
+    use crate::sys::fs::symlink;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
 
@@ -752,29 +725,11 @@ mod tests {
     }
 
     fn back_date(path: &Path, secs: u64) {
-        let t = (now_secs() - secs) as i64;
-        let ts = Timespec {
-            tv_sec: t,
-            tv_nsec: 0,
-        };
-        let times = Timestamps {
-            last_access: ts,
-            last_modification: ts,
-        };
-        utimensat(CWD, path, &times, AtFlags::empty()).expect("utimensat");
+        sysfs::set_times(path, (now_secs() - secs) as i64, true).expect("utimensat");
     }
 
     fn back_date_link(path: &Path, secs: u64) {
-        let t = (now_secs() - secs) as i64;
-        let ts = Timespec {
-            tv_sec: t,
-            tv_nsec: 0,
-        };
-        let times = Timestamps {
-            last_access: ts,
-            last_modification: ts,
-        };
-        utimensat(CWD, path, &times, AtFlags::SYMLINK_NOFOLLOW).expect("utimensat");
+        sysfs::set_times(path, (now_secs() - secs) as i64, false).expect("utimensat");
     }
 
     fn ready(d: &Path) {
@@ -1052,7 +1007,10 @@ mod tests {
             "a sibling holds it"
         );
         drop(held);
-        fs::set_permissions(d.join(LOCK), fs::Permissions::from_mode(0o444)).expect("read-only");
+        let lock = d.join(LOCK);
+        let mut p = fs::metadata(&lock).unwrap().permissions();
+        p.set_readonly(true);
+        fs::set_permissions(&lock, p).expect("read-only");
         assert!(try_write_lock(&d).is_err(), "a lock this run cannot write");
     }
 }

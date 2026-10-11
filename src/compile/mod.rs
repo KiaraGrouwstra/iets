@@ -12,6 +12,7 @@ use crate::syntax::ast::{
     Ast, AttrElem, BinOp, Bind, BindKind, Expr, ExprId, Note, Param, PathKind, StrPart, UnOp,
 };
 use crate::syntax::symbol::{FxHashMap, Interner, Sym};
+use crate::sys;
 use ir::{
     AttrElemIr, AttrsIr, BindIr, BindScope, DynBindIr, FormalIr, Ir, IrRef, LambdaIr, LetIr,
     ParamIr, SelectIr,
@@ -1242,7 +1243,10 @@ pub fn canon_path(p: &[u8]) -> Vec<u8> {
         match c {
             b"" | b"." => {}
             b".." => {
-                comps.pop();
+                // Windows keeps a drive or a share under `..`
+                if comps.len() > sys::anchor_len(&comps) {
+                    comps.pop();
+                }
             }
             c => comps.push(c),
         }

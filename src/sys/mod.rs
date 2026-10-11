@@ -6,17 +6,37 @@
 #[cfg_attr(not(target_os = "linux"), path = "portable.rs")]
 mod imp;
 
-pub use imp::{discard, futex_wait, futex_wake, prefault};
-
-/// Bytes of `[base, base + len)` that are resident, in whole pages.
-pub fn resident(base: *mut u8, len: usize) -> usize {
-    let page = rustix::param::page_size();
-    let mut v = vec![0u8; len / page];
-    // SAFETY: one byte per page of the range, which the caller maps. The
-    // vector's element type is `c_char` or `u8` depending on the platform.
-    unsafe { libc::mincore(base.cast(), len, v.as_mut_ptr().cast()) };
-    v.iter().filter(|b| **b & 1 != 0).count() * page
+/// What to do about a fault that belongs to this process.
+pub struct Fault {
+    pub message: &'static [u8],
+    /// Abort for a core dump, or exit with status 1.
+    pub abort: bool,
 }
+
+pub mod context;
+#[cfg_attr(windows, path = "errno_windows.rs")]
+pub mod errno;
+#[cfg_attr(windows, path = "fault_windows.rs")]
+pub mod fault;
+#[cfg_attr(windows, path = "ffi_windows.rs")]
+mod ffi;
+#[cfg_attr(windows, path = "fs_windows.rs")]
+pub mod fs;
+#[cfg_attr(windows, path = "net_windows.rs")]
+pub mod net;
+#[cfg_attr(windows, path = "process_windows.rs")]
+pub mod process;
+#[cfg_attr(windows, path = "tty_windows.rs")]
+pub mod tty;
+#[cfg_attr(windows, path = "vm_windows.rs")]
+pub mod vm;
+pub mod winpath;
+
+pub use ffi::{
+    OsStrExt, OsStringExt, anchor_len, from_native, path_from_internal, path_to_internal,
+};
+pub use imp::{discard, futex_wait, futex_wake, prefault};
+pub use vm::resident;
 
 /// Fills `buf` from the system's random source. A failure leaves zeros: the
 /// bytes are a cache key or a name suffix, and nothing here can act on it.

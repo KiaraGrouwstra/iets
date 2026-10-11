@@ -2,11 +2,11 @@
 //! mismatch is a miss. Stat-only checks come first; a file whose stat
 //! changed is rehashed and accepted when its content did not.
 
+use crate::sys::OsStrExt;
+use crate::sys::fs::file_id;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::io::{self, ErrorKind};
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -106,9 +106,8 @@ fn check(o: &Obs, rehashed: &AtomicUsize, dirs: &mut DirBuf) -> Outcome {
             }
             if m.len() == *size
                 && mtime_ns(&m) == *mt
-                && ctime_ns(&m) == *ct
-                && m.dev() == *dev
-                && m.ino() == *ino
+                && ctime_ns(os(path), &m) == *ct
+                && file_id(os(path), &m) == (*dev, *ino)
             {
                 return Outcome::Same;
             }
@@ -307,6 +306,11 @@ mod tests {
         d
     }
 
+    /// Windows lets only a handle opened for writing change the times.
+    fn open_rw(p: &Path) -> fs::File {
+        fs::OpenOptions::new().write(true).open(p).unwrap()
+    }
+
     #[test]
     fn file_touch_refreshes_edit_misses() {
         let d = tmp("file");
@@ -320,7 +324,7 @@ mod tests {
 
         // same content, new mtime: rehash once, refresh
         let later = SystemTime::now() + Duration::from_secs(5);
-        fs::File::open(&f).unwrap().set_modified(later).unwrap();
+        open_rw(&f).set_modified(later).unwrap();
         let r = validate(&mut obs, 2).unwrap();
         assert_eq!((r.rehashed, r.refreshed), (1, 1));
         let r = validate(&mut obs, 2).unwrap();
@@ -342,7 +346,7 @@ mod tests {
         fs::write(&other, b"BBBB").unwrap();
         let fixed = time::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
         for p in [&f, &other] {
-            fs::File::open(p).unwrap().set_modified(fixed).unwrap();
+            open_rw(p).set_modified(fixed).unwrap();
         }
         let m = fs::metadata(&f).unwrap();
         let p = f.as_os_str().as_bytes().to_vec();
@@ -352,19 +356,19 @@ mod tests {
         // the kernel stamps ctime from a clock that ticks every few
         // milliseconds, so wait until a write can get a new one
         while {
-            fs::File::open(&other).unwrap().set_modified(fixed).unwrap();
-            ctime_ns(&fs::metadata(&other).unwrap()) == ctime_ns(&m)
+            open_rw(&other).set_modified(fixed).unwrap();
+            ctime_ns(&other, &fs::metadata(&other).unwrap()) == ctime_ns(&f, &m)
         } {
             thread::sleep(Duration::from_millis(1));
         }
         let mut bytes = fs::File::create(&f).unwrap();
         io::Write::write_all(&mut bytes, b"BBBB").unwrap();
         drop(bytes);
-        fs::File::open(&f).unwrap().set_modified(fixed).unwrap();
+        open_rw(&f).set_modified(fixed).unwrap();
         let now = fs::metadata(&f).unwrap();
         assert_eq!(
-            (now.len(), mtime_ns(&now), now.ino()),
-            (m.len(), mtime_ns(&m), m.ino()),
+            (now.len(), mtime_ns(&now), file_id(&f, &now).1),
+            (m.len(), mtime_ns(&m), file_id(&f, &m).1),
             "size, mtime and inode are the ones the entry holds"
         );
         assert!(validate(&mut obs, 1).is_err(), "and the content changed");
@@ -419,12 +423,14 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+// TODO: the tree holds a non-UTF-8 name and a symlink, which Windows cannot make
+// without privileges.
+#[cfg(all(test, unix))]
 mod dir_hash_tests {
     use super::super::{DirBuf, dir_hash, dir_listing_hash, read_dir_kinds};
+    use crate::sys::OsStrExt;
+    use crate::sys::fs::symlink;
     use std::ffi::OsStr;
-    use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::symlink;
     use std::{env, fs};
 
     /// The buffered hash must answer exactly what the allocating one does, or

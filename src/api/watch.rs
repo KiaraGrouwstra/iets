@@ -30,7 +30,7 @@ pub fn watch_paths(entry: &Path) -> error::Result<Vec<Watched>> {
         .parent()
         .and_then(|p| p.parent())
         .and_then(|p| p.parent());
-    let store = Path::new(path::STORE_DIR);
+    let store = Path::new(path::store_dir());
     let skip: Vec<&Path> = iter::once(store).chain(own).collect();
     let mut w = watch::watched(&obs, &skip);
     w.truncate(MAX);

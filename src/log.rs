@@ -7,9 +7,9 @@
 //! The state is a [`Log`], which a [`crate::session::Session`] owns: the
 //! functions here act on the one this thread entered.
 
+use crate::sys::net::UnixStream;
 use std::fs::{self, OpenOptions};
 use std::io::{self, IsTerminal, Write};
-use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -23,8 +23,8 @@ use crate::eval::{Error, Pos};
 use crate::progress::{Board, Mode};
 use crate::session::Session;
 use crate::sys;
+use crate::sys::fs::{create_mode, is_socket};
 use crate::{config, error};
-use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
 
 /// Where one session's messages go and what it saw on the way.
 #[derive(Default)]
@@ -93,10 +93,7 @@ impl Out {
 /// `line` cut to the terminal's width: a status line that wraps cannot be
 /// taken down with one carriage return.
 fn fit(line: &str) -> String {
-    let cols = match rustix::termios::tcgetwinsize(io::stderr()) {
-        Ok(ws) if ws.ws_col > 1 => usize::from(ws.ws_col),
-        _ => 80,
-    };
+    let cols = sys::tty::columns().unwrap_or(80);
     line.chars().take(cols - 1).collect()
 }
 
@@ -293,14 +290,10 @@ impl Log {
 }
 
 pub(crate) fn open_sink(path: &Path) -> io::Result<Box<dyn Write + Send>> {
-    if fs::metadata(path).is_ok_and(|m| m.file_type().is_socket()) {
+    if fs::metadata(path).is_ok_and(|m| is_socket(&m)) {
         return Ok(Box::new(UnixStream::connect(path)?));
     }
-    let f = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .mode(0o644)
-        .open(path)?;
+    let f = create_mode(OpenOptions::new().create(true).append(true), 0o644).open(path)?;
     Ok(Box::new(f))
 }
 

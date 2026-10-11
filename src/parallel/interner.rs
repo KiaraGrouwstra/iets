@@ -4,16 +4,15 @@
 
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
+use std::process;
 use std::str::from_utf8;
 use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
-use std::{process, ptr};
-
-use rustix::mm::{MapFlags, ProtFlags, mmap_anonymous, munmap};
 
 use crate::runtime::heap::Heap;
 use crate::session::Session;
 use crate::syntax::symbol::{FxHasher, Sym};
+use crate::sys::vm;
 
 const SHARDS: usize = 64;
 
@@ -133,21 +132,14 @@ impl Default for Interner {
 /// The mapping of [`per_sym`].
 pub(super) fn unmap_per_sym<T>(p: *mut T) {
     // SAFETY: the owner's last handle is gone, so nothing reads the table.
-    let _ = unsafe { munmap(p as *mut _, MAX_SYMS * size_of::<T>()) };
+    unsafe { vm::unmap(p.cast(), MAX_SYMS * size_of::<T>()) };
 }
 
 /// `MAX_SYMS` zeroed `T`s, paged in on demand, unmapped by the owner's drop.
 pub(super) fn per_sym<T>() -> *mut T {
-    // SAFETY: an anonymous mapping aliases nothing.
-    let p = unsafe {
-        mmap_anonymous(
-            ptr::null_mut(),
-            MAX_SYMS * size_of::<T>(),
-            ProtFlags::READ | ProtFlags::WRITE,
-            MapFlags::PRIVATE | MapFlags::NORESERVE,
-        )
-    };
-    p.expect("per-symbol table: mmap failed") as *mut T
+    vm::map(MAX_SYMS * size_of::<T>(), true)
+        .expect("per-symbol table: mmap failed")
+        .cast()
 }
 
 impl Interner {
