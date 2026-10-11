@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::{error, io, mem, ptr};
 
 use rustix::mm::{Advice, MapFlags, MprotectFlags, ProtFlags, madvise, mmap_anonymous, mprotect};
+
 use crate::runtime::heap;
 
 pub const DEFAULT_STACK: usize = 256 << 20;
