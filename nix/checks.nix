@@ -1,4 +1,4 @@
-{ lib, stdenv, runCommand, nushell, ast-grep, craneLib, commonArgs, sources, iets, ietsStatic, fuzz, e2eTest, e2eCases }:
+{ lib, stdenv, runCommand, nushell, ast-grep, craneLib, commonArgs, sources, iets, ietsStatic, ietsRiscv64, fuzz, e2eTest, e2eCases }:
 let
   # the dev profile, as `cargo test` in the dev shell: the release profile is
   # fat LTO, minutes for no extra coverage
@@ -39,6 +39,10 @@ in
   linttest = nuScript "linttest";
   partest = nuScript "partest";
   static = ietsStatic;
+}
+# catches a missing per-arch cfg
+// lib.optionalAttrs (stdenv.hostPlatform.system == "x86_64-linux") {
+  cross-riscv64 = ietsRiscv64;
 }
 # the differential fuzzers against Nix (nix/fuzz.nix)
 // fuzz.checks

@@ -16,6 +16,7 @@
         sources = final.callPackage ./nix/sources.nix { };
         iets = final.callPackage ./nix/iets.nix { };
         ietsStatic = (scopeFor pkgs.pkgsStatic).iets;
+        ietsRiscv64 = (scopeFor pkgs.pkgsCross.riscv64).iets;
         classic = final.callPackage ./nix/classic.nix { };
         devShell = final.callPackage
           ({ mkShell, cargo, rustc, clippy, rustfmt, hyperfine, nix, perf, jq, nushell, direnv, ast-grep }:
