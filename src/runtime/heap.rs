@@ -49,7 +49,7 @@ impl Heap {
         let len = len.max(1).next_multiple_of(8);
         let mut g = self.inner.lock().unwrap();
         if g.end - g.next < len {
-            let size = NAME_BLOCK.max(len.next_multiple_of(4096));
+            let size = NAME_BLOCK.max(len.next_multiple_of(rustix::param::page_size()));
             let p = map(size);
             g.chunks.push((p, size));
             if size > NAME_BLOCK {

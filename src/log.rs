@@ -22,6 +22,7 @@ use crate::cli::help;
 use crate::eval::{Error, Pos};
 use crate::progress::{Board, Mode};
 use crate::session::Session;
+use crate::sys;
 use crate::{config, error};
 use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
 
@@ -234,7 +235,7 @@ fn uuid_v7(now: SystemTime) -> String {
         .map_or(0, |d| d.as_millis() as u64);
     let mut b = [0u8; 16];
     b[..6].copy_from_slice(&ms.to_be_bytes()[2..]);
-    let _ = rustix::rand::getrandom(&mut b[6..], rustix::rand::GetRandomFlags::empty());
+    sys::random(&mut b[6..]);
     b[6] = 0x70 | (b[6] & 0x0f);
     b[8] = 0x80 | (b[8] & 0x3f);
     let h: String = b.iter().map(|x| format!("{x:02x}")).collect();

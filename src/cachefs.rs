@@ -32,11 +32,11 @@ use rustix::fs::{
     utimensat,
 };
 use rustix::io::Errno;
-use rustix::rand::{GetRandomFlags, getrandom};
 
 use crate::compile::cache::IrCache;
 use crate::session::Session;
 use crate::store::path::StorePath;
+use crate::sys;
 use crate::trace::{self, store};
 use crate::treestore::{self, pack};
 
@@ -468,7 +468,7 @@ pub fn use_env_key(root: &Path) {
             return k;
         }
         let mut k = [0u8; 32];
-        let _ = getrandom(&mut k, GetRandomFlags::empty());
+        sys::random(&mut k);
         let _ = write_atomic(root, ENV_KEY, tag(), &[&k]);
         k
     });

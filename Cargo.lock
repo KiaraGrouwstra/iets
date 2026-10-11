@@ -530,6 +530,7 @@ dependencies = [
  "bzip2",
  "crc32fast",
  "flate2",
+ "getrandom 0.4.3",
  "http-body-util",
  "hyper",
  "hyper-util",
