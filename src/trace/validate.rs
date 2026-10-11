@@ -2,10 +2,10 @@
 //! mismatch is a miss. Stat-only checks come first; a file whose stat
 //! changed is rehashed and accepted when its content did not.
 
+use crate::sys::OsStrExt;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::io::{self, ErrorKind};
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -422,8 +422,8 @@ mod tests {
 #[cfg(test)]
 mod dir_hash_tests {
     use super::super::{DirBuf, dir_hash, dir_listing_hash, read_dir_kinds};
+    use crate::sys::OsStrExt;
     use std::ffi::OsStr;
-    use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::symlink;
     use std::{env, fs};
 

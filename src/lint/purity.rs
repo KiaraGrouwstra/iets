@@ -8,10 +8,10 @@ use super::{Level, LintId, Where};
 use crate::builtins::fetch;
 use crate::eval::{EvalResult, Evaluator, Pos};
 use crate::runtime::{self, Cell, Ctx, Kind, Taint, Value, Word};
+use crate::sys::{OsStrExt, OsStringExt};
 use crate::{compile, project, trace};
 use std::borrow::Cow;
 use std::ffi::OsStr;
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
 
 /// The message for a reference to the global `name`, when it is `currentTime`.

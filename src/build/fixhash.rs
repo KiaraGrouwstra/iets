@@ -10,10 +10,10 @@ use crate::provenance::SourceMap;
 use crate::session::Session;
 use crate::store::hash::{Hash, HashFormat};
 use crate::store::path;
+use crate::sys::OsStrExt;
 use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::io::{self, IsTerminal, Write};
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 
 /// One rewrite: `old` becomes `new` at byte `at` of `file`, which is

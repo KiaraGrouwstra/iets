@@ -24,8 +24,8 @@ use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, FileInfo, Pos};
 use crate::log::{self, Site};
 use crate::session::Session;
 use crate::syntax::symbol::{FxHashMap, FxHasher};
+use crate::sys::OsStrExt;
 use crate::{compile, ignored, parallel, project, provenance, settings};
-use std::os::unix::ffi::OsStrExt;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub enum Level {

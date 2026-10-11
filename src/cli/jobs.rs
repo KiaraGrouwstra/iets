@@ -115,9 +115,7 @@ fn parse_jobs_args(argv: &[String]) -> (JobsArgs, Vec<String>) {
                 let d = arg(&mut i);
                 let cwd = cwd();
                 j.gc_roots_dir = Some(PathBuf::from(
-                    <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&abs_path(
-                        &d, &cwd,
-                    )),
+                    <std::ffi::OsStr as crate::sys::OsStrExt>::from_bytes(&abs_path(&d, &cwd)),
                 ));
             }
             "--eval-store" => j.eval_store = arg(&mut i),

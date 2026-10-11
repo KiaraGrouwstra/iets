@@ -391,8 +391,8 @@ macro_rules! bail {
         return Err($crate::eval::Error::boxed($kind, format!($($arg)*), $pos))
     };
 }
+use crate::sys::{OsStrExt, OsStringExt};
 pub(crate) use bail;
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
 pub const DEFAULT_SYSTEM: &str = "x86_64-linux";
 

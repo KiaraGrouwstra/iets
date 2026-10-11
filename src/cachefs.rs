@@ -16,9 +16,9 @@
 //! on a sibling worker or fails a run. The one exception is `wait_lock`, for a
 //! download a sibling is already doing.
 
+use crate::sys::OsStrExt;
 use io::Write;
 use std::ffi::OsStr;
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::str::from_utf8;

@@ -5,10 +5,10 @@
 //! locked input, `fetchTarball` with a `sha256`, `fetchGit`, `getFlake`,
 //! `parseFlakeRef` and `flakeRefToString` work (`flake`).
 
+use crate::sys::{OsStrExt, OsStringExt};
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashSet};
 use std::ffi::OsStr;
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::str::from_utf8;
 use std::sync::Arc;

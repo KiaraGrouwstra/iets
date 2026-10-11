@@ -4,11 +4,11 @@
 //! `print-dev-env`; nothing here builds the `-env` derivation.
 //! See `docs/reference/classic.md`.
 
+use crate::sys::OsStrExt;
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::io::{self, IsTerminal};
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;

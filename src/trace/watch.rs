@@ -4,10 +4,10 @@
 //! file watcher has. A consumer that can do better picks by `kind`.
 
 use super::{Filtered, Kind, Obs};
+use crate::sys::OsStrExt;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs;
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use crate::source::scm;

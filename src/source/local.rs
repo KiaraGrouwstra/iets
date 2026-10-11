@@ -8,8 +8,8 @@
 //! consulted. The SCM records its own observations and the copied file set
 //! is a `Tree` observation, so the tracing cache follows the tree.
 
+use crate::sys::OsStrExt;
 use std::collections::HashSet;
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

@@ -5,10 +5,10 @@
 //! getRevCount keep them by revision). The tree of a revision follows from
 //! it too; the name of a branch or a tag is a `Cmd` observation of the refs.
 
+use crate::sys::OsStrExt;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::io::Write;
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::{fs, iter, str, thread};

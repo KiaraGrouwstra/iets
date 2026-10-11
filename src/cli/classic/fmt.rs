@@ -3,7 +3,7 @@
 //! store, then exec'd with the arguments the user gave. See
 //! `docs/reference/classic.md`.
 
-use std::os::unix::ffi::OsStrExt;
+use crate::sys::OsStrExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;

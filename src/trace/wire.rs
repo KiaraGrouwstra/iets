@@ -473,7 +473,7 @@ pub fn encode_sources(sources: &HashMap<StorePath, SourceOrigin>) -> Vec<u8> {
 }
 
 fn path_buf(b: &[u8]) -> PathBuf {
-    PathBuf::from(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b))
+    PathBuf::from(<std::ffi::OsStr as crate::sys::OsStrExt>::from_bytes(b))
 }
 
 fn accepted_set(e: &mut Enc, accepted: &Accepted) {

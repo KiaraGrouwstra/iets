@@ -7,8 +7,8 @@
 //! `revs/<rev>` holds the date of a revision, then one `<path>=<text>` line
 //! for each of its files.
 
+use crate::sys::OsStrExt;
 use std::ffi::OsStr;
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 

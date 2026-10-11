@@ -22,12 +22,12 @@ use crate::store::drv::Derivation;
 use crate::store::nar;
 use crate::store::path::{STORE_DIR, StorePath};
 use crate::store::source::SourceOrigin;
+use crate::sys::OsStrExt;
 use crate::trace::run::Cache;
 use crate::trace::store::Part;
 use crate::{cachefs, config, log};
 use std::collections::BTreeSet;
 use std::io::{self, Write};
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use std::{env, fs, slice, str};
@@ -251,7 +251,7 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
     let cwd = cwd();
     let gc_root = match gc_root {
         Some(r) => GcRoot::Given(PathBuf::from(
-            <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&abs_path(&r, &cwd)),
+            <std::ffi::OsStr as crate::sys::OsStrExt>::from_bytes(&abs_path(&r, &cwd)),
         )),
         None => GcRoot::None,
     };
@@ -479,7 +479,7 @@ fn dev_env_full(
                 None => env::temp_dir().join(format!("iets-dev-env-{}", std::process::id())),
             };
             let outputs_dir =
-                Path::new(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&cwd))
+                Path::new(<std::ffi::OsStr as crate::sys::OsStrExt>::from_bytes(&cwd))
                     .join("outputs");
             let rc = devenv::make_rc_script(&built.env, &attrs_dir, &outputs_dir)?;
             (rc.script.into_bytes(), rc.files)

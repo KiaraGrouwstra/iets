@@ -6,6 +6,9 @@
 #[cfg_attr(not(target_os = "linux"), path = "portable.rs")]
 mod imp;
 
+mod ffi;
+
+pub use ffi::{OsStrExt, OsStringExt};
 pub use imp::{discard, futex_wait, futex_wake, prefault};
 
 /// Bytes of `[base, base + len)` that are resident, in whole pages.

@@ -140,7 +140,7 @@ fn scm_flake(
         )));
     };
     let dir = Path::new(&root).join(&p.dir);
-    let bytes = <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::as_bytes(dir.as_os_str());
+    let bytes = <std::ffi::OsStr as crate::sys::OsStrExt>::as_bytes(dir.as_os_str());
     let mut fr = local_flake(bytes, false, attr)?;
     let Some(rev) = source::str_attr(&p.input, "rev") else {
         if p.input.contains_key("ref") {
@@ -165,7 +165,7 @@ fn scm_flake(
 /// the input of the working tree holding it (`git+file:`).
 fn local_flake(full: &[u8], explicit_path: bool, attr: Vec<String>) -> Result<FlakeRef> {
     let full = compile::canon_path(full);
-    let dir = PathBuf::from(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&full));
+    let dir = PathBuf::from(<std::ffi::OsStr as crate::sys::OsStrExt>::from_bytes(&full));
     if !dir.is_dir() {
         return Err(Error::Flake(format!(
             "path '{}' is not a flake (because it's not a directory)",
@@ -237,7 +237,7 @@ fn read_traced(ev: &Evaluator, p: &Path) -> io::Result<Vec<u8>> {
     let meta = fs::metadata(p)?;
     let bytes = fs::read(p)?;
     ev.trace().file(
-        <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::as_bytes(p.as_os_str()),
+        <std::ffi::OsStr as crate::sys::OsStrExt>::as_bytes(p.as_os_str()),
         &meta,
         &bytes,
     );

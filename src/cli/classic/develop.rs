@@ -110,9 +110,10 @@ fn run(d: &Develop, cfg: &config::Config, dev: &DevEnv) -> error::Result<()> {
     // file and the attribute files go
     let dir = private_dir()?;
     let attrs_dir = dir.join("attrs");
-    let outputs_dir =
-        Path::new(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&cli::cwd()))
-            .join("outputs");
+    let outputs_dir = Path::new(<std::ffi::OsStr as crate::sys::OsStrExt>::from_bytes(
+        &cli::cwd(),
+    ))
+    .join("outputs");
     let rc_path = dir.join("rc");
     let mut script = make_rc_script(&dev.env, &attrs_dir, &outputs_dir)?.script;
     script.push_str(&format!("command rm -f '{}'\n", rc_path.display()));

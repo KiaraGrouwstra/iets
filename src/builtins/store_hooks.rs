@@ -18,8 +18,8 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, Read};
 
+use crate::sys::{OsStrExt, OsStringExt};
 use rustix::io::Errno;
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::str::from_utf8;
 use std::sync::Arc;
