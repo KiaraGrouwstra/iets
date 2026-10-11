@@ -5,6 +5,7 @@ use crate::eval::{self, ErrorKind, EvalResult, Evaluator, Pos, bail};
 use crate::parallel;
 use crate::runtime::{Ctx, Value, Word, ctx_to_arena};
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 
 pub fn register(r: &mut Registry) {
@@ -66,17 +67,18 @@ fn substring(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         true,
         true,
     )?;
-    let start = start as usize;
-    let out: &[u8] = if start >= s.len() {
-        b""
-    } else if len < 0 {
-        &s[start..]
+    let start = (start as usize).min(s.len());
+    let end = if len < 0 {
+        s.len()
     } else {
-        let end = (start + len as usize).min(s.len());
-        &s[start..end]
+        (start + len as usize).min(s.len())
     };
     let ctx = ctx_to_arena(&mut ev.arena, ctx);
-    Ok(ev.arena.mk_string_shared(out, ctx))
+    let i = match s {
+        Cow::Borrowed(b) => ev.arena.intern_static(&b[start..end]),
+        Cow::Owned(b) => ev.arena.intern_bytes(&b[start..end]),
+    };
+    Ok(ev.arena.mk_string_over(i, ctx))
 }
 
 fn concat_strings_sep(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
