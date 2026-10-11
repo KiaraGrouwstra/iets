@@ -26,9 +26,9 @@ use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 
+use crate::sys::fs::{FileExt, OpenOptionsExt};
 use crate::sys::{OsStrExt, OsStringExt};
 use rustix::fs::OFlags;
-use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{env, result, str};
@@ -1049,7 +1049,7 @@ impl Read for Bytes<'_> {
 mod tests {
     use super::*;
 
-    use std::os::unix::fs::symlink;
+    use crate::sys::fs::symlink;
 
     use crate::fetch::http;
     use crate::store::hash::Hasher;

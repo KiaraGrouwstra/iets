@@ -13,11 +13,11 @@
 //! smaller. The checksum covers the index; a payload is trusted because the
 //! tree it belongs to was hashed against the lock before anything named it.
 
+use crate::sys::fs::{FileExt, OpenOptionsExt};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{self, Write};
-use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 

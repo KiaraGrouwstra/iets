@@ -11,10 +11,10 @@ use crate::session::Session;
 use crate::store::hash::{Hash, HashFormat};
 use crate::store::path;
 use crate::sys::OsStrExt;
+use crate::sys::fs::PermissionsExt;
 use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::io::{self, IsTerminal, Write};
-use std::os::unix::fs::PermissionsExt;
 
 /// One rewrite: `old` becomes `new` at byte `at` of `file`, which is
 /// `line:column`.

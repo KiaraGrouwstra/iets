@@ -23,8 +23,8 @@ use crate::eval::{Error, Pos};
 use crate::progress::{Board, Mode};
 use crate::session::Session;
 use crate::sys;
+use crate::sys::fs::{FileTypeExt, OpenOptionsExt};
 use crate::{config, error};
-use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
 
 /// Where one session's messages go and what it saw on the way.
 #[derive(Default)]

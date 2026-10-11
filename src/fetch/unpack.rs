@@ -18,13 +18,13 @@
 //! the oracle the spool's NAR is held to (`spool_matches_the_tree`).
 
 #[cfg(test)]
+use crate::sys::fs::{PermissionsExt, symlink};
+#[cfg(test)]
 use std::collections::BTreeMap;
 #[cfg(test)]
 use std::fs::{self, File, Permissions};
 #[cfg(test)]
 use std::io::Cursor;
-#[cfg(test)]
-use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Component, Path, PathBuf};
 
 #[cfg(test)]

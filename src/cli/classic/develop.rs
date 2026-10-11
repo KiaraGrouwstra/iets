@@ -16,8 +16,8 @@ use super::{Argv, Common, eval_config, fallback, nix};
 use crate::cli::devenv::{self, DevEnv};
 use crate::cli::{self, Input, parse_eval_args};
 use crate::devenv::{escape_shell_arg_always as esc, make_rc_script};
+use crate::sys::fs::DirBuilderExt;
 use crate::{config, error};
-use std::os::unix::fs::DirBuilderExt;
 
 const NAME: &str = "nix";
 

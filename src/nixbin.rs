@@ -1,8 +1,8 @@
 //! The real Nix binaries. Under the classic symlink farm, `nix` on `PATH` is
 //! iets itself, so every subprocess and the fallback resolve past it.
 
+use crate::sys::fs::MetadataExt;
 use std::ffi::OsStr;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 
@@ -111,8 +111,8 @@ pub fn nix() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sys::fs::{PermissionsExt, symlink};
     use std::fs::Permissions;
-    use std::os::unix::fs::{PermissionsExt, symlink};
 
     #[test]
     fn farm_marker_is_found_through_two_hops() {

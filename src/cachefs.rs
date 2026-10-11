@@ -17,9 +17,9 @@
 //! download a sibling is already doing.
 
 use crate::sys::OsStrExt;
+use crate::sys::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use io::Write;
 use std::ffi::OsStr;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::str::from_utf8;
 use std::sync::OnceLock;
@@ -740,7 +740,7 @@ pub fn stores(cache_dir: Option<&str>) -> Vec<(PathBuf, Shape)> {
 mod tests {
     use super::*;
 
-    use std::os::unix::fs::symlink;
+    use crate::sys::fs::symlink;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
 

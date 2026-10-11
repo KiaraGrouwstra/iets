@@ -10,11 +10,11 @@ pub mod watch;
 pub mod wire;
 
 use crate::sys::OsStrExt;
+use crate::sys::fs::MetadataExt;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::env::var_os;
 use std::ffi::OsStr;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};

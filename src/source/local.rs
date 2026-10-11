@@ -9,8 +9,8 @@
 //! is a `Tree` observation, so the tracing cache follows the tree.
 
 use crate::sys::OsStrExt;
+use crate::sys::fs::MetadataExt;
 use std::collections::HashSet;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{fs, io};
