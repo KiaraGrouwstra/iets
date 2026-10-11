@@ -26,9 +26,8 @@ use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 
-use crate::sys::fs::{FileExt, OpenOptionsExt};
+use crate::sys::fs::{self as sysfs, FileExt};
 use crate::sys::{OsStrExt, OsStringExt};
-use rustix::fs::OFlags;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{env, result, str};
@@ -154,12 +153,7 @@ pub fn scratch(tag: &str) -> Result<File> {
     let mut last = None;
     for _ in 0..8 {
         let path = dir.join(format!("iets-spool-{tag}-{:016x}", random_u64()));
-        match File::options()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .custom_flags(OFlags::NOFOLLOW.bits() as i32)
-            .open(&path)
+        match sysfs::no_follow(File::options().read(true).write(true).create_new(true)).open(&path)
         {
             Ok(file) => {
                 fs::remove_file(&path)

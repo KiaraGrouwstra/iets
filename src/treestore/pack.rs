@@ -13,15 +13,13 @@
 //! smaller. The checksum covers the index; a payload is trusted because the
 //! tree it belongs to was hashed against the lock before anything named it.
 
-use crate::sys::fs::{FileExt, OpenOptionsExt};
+use crate::sys::fs::{self as sysfs, FileExt, OpenOptionsExt};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
-
-use rustix::fs::OFlags;
 
 use crate::cachefs;
 
@@ -68,10 +66,7 @@ impl Pack {
     /// `Ok(None)` when the file is not a whole, well-formed pack: the caller
     /// removes it rather than reading anything it says.
     pub fn open(path: &Path) -> io::Result<Option<Pack>> {
-        let file = File::options()
-            .read(true)
-            .custom_flags((OFlags::NOFOLLOW | OFlags::NONBLOCK).bits() as i32)
-            .open(path)?;
+        let file = sysfs::no_follow_no_block(File::options().read(true)).open(path)?;
         let md = file.metadata()?;
         if !md.is_file() {
             return Ok(None);

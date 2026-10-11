@@ -17,7 +17,7 @@
 //! download a sibling is already doing.
 
 use crate::sys::OsStrExt;
-use crate::sys::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use crate::sys::fs::{self as sysfs, DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use io::Write;
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
@@ -26,12 +26,6 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{env, fs, io, thread};
-
-use rustix::fs::{
-    AtFlags, CWD, FlockOperation, OFlags, Timespec, Timestamps, UTIME_NOW, flock, futimens,
-    utimensat,
-};
-use rustix::io::Errno;
 
 use crate::compile::cache::IrCache;
 use crate::session::Session;
@@ -223,11 +217,9 @@ fn entry_age(path: &Path, shape: Shape) -> Option<Duration> {
 }
 
 /// Marks a link in the roots store as used now, so the TTL sweep keeps the
-/// roots of the flakes somebody still formats. `utimensat` with a null time
-/// sets both stamps to the current time, and `AT_SYMLINK_NOFOLLOW` sets them
-/// on the link itself.
+/// roots of the flakes somebody still formats. The stamps go on the link itself.
 pub fn touch_link(path: &Path) {
-    let _ = utimensat(CWD, path, &NOW, AtFlags::SYMLINK_NOFOLLOW);
+    sysfs::touch(path, false);
 }
 
 fn stamp_age(bytes: &[u8]) -> Option<Duration> {
@@ -300,9 +292,7 @@ pub fn checksum(key: &str, parts: &[&[u8]]) -> [u8; SUM] {
 /// what it names must be a regular file, and its length must be one an entry
 /// can have. `O_NONBLOCK` keeps the open of a FIFO from waiting for a writer.
 pub fn open_entry(path: &Path) -> Option<(fs::File, fs::Metadata)> {
-    let f = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags((OFlags::NOFOLLOW | OFlags::NONBLOCK).bits() as i32)
+    let f = sysfs::no_follow_no_block(fs::OpenOptions::new().read(true))
         .open(path)
         .ok()?;
     let md = f.metadata().ok()?;
@@ -489,7 +479,7 @@ pub struct WriteLock(fs::File);
 
 impl Drop for WriteLock {
     fn drop(&mut self) {
-        let _ = flock(&self.0, FlockOperation::Unlock);
+        sysfs::unlock(&self.0);
     }
 }
 
@@ -517,7 +507,7 @@ pub fn try_write_lock(root: &Path) -> io::Result<Option<WriteLock>> {
     let f = open_lock(&root.join(LOCK))?;
     let mut waited = Duration::ZERO;
     loop {
-        if flock(&f, FlockOperation::NonBlockingLockExclusive).is_ok() {
+        if sysfs::try_lock(&f) {
             return Ok(Some(WriteLock(f)));
         }
         if waited >= LOCK_TIMEOUT {
@@ -540,31 +530,15 @@ pub fn store_lock(root: &Path) -> Option<WriteLock> {
 /// touched, so a sweep never takes a lock file that is in use.
 pub fn wait_lock(path: &Path, on_wait: impl FnOnce()) -> Option<WriteLock> {
     let f = open_lock(path).ok()?;
-    if flock(&f, FlockOperation::NonBlockingLockExclusive).is_err() {
+    if !sysfs::try_lock(&f) {
         on_wait();
-        loop {
-            match flock(&f, FlockOperation::LockExclusive) {
-                Ok(()) => break,
-                Err(Errno::INTR) => {}
-                Err(_) => return None,
-            }
+        if !sysfs::lock(&f) {
+            return None;
         }
     }
-    let _ = futimens(&f, &NOW);
+    sysfs::touch_open(&f);
     Some(WriteLock(f))
 }
-
-/// Both stamps set to the current time.
-const NOW: Timestamps = Timestamps {
-    last_access: Timespec {
-        tv_sec: 0,
-        tv_nsec: UTIME_NOW,
-    },
-    last_modification: Timespec {
-        tv_sec: 0,
-        tv_nsec: UTIME_NOW,
-    },
-};
 
 /// Marks `path` as used, at most once per `TOUCH_INTERVAL`: a hot cache on a
 /// busy box does not churn the disk.
@@ -572,7 +546,7 @@ pub fn touch(path: &Path) {
     if age(path).is_some_and(|a| a < TOUCH_INTERVAL) {
         return;
     }
-    let _ = utimensat(CWD, path, &NOW, AtFlags::empty());
+    sysfs::touch(path, true);
 }
 
 /// `touch` for a file already open, with `modified` from its own `fstat`.
@@ -583,7 +557,7 @@ pub fn touch_open(f: &fs::File, modified: Option<SystemTime>) {
     {
         return;
     }
-    let _ = futimens(f, &NOW);
+    sysfs::touch_open(f);
 }
 
 #[derive(Default, Debug, PartialEq, Eq)]
@@ -752,29 +726,11 @@ mod tests {
     }
 
     fn back_date(path: &Path, secs: u64) {
-        let t = (now_secs() - secs) as i64;
-        let ts = Timespec {
-            tv_sec: t,
-            tv_nsec: 0,
-        };
-        let times = Timestamps {
-            last_access: ts,
-            last_modification: ts,
-        };
-        utimensat(CWD, path, &times, AtFlags::empty()).expect("utimensat");
+        sysfs::set_times(path, (now_secs() - secs) as i64, true).expect("utimensat");
     }
 
     fn back_date_link(path: &Path, secs: u64) {
-        let t = (now_secs() - secs) as i64;
-        let ts = Timespec {
-            tv_sec: t,
-            tv_nsec: 0,
-        };
-        let times = Timestamps {
-            last_access: ts,
-            last_modification: ts,
-        };
-        utimensat(CWD, path, &times, AtFlags::SYMLINK_NOFOLLOW).expect("utimensat");
+        sysfs::set_times(path, (now_secs() - secs) as i64, false).expect("utimensat");
     }
 
     fn ready(d: &Path) {
