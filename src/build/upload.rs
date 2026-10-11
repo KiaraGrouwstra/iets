@@ -103,20 +103,20 @@ impl Uploader for PlanUpload<'_> {
         let t0 = Instant::now();
         let plan = self.plan;
         let mut queried = 0;
-        let valid = plan.query_valid(roots, self.answered.as_ref(), &mut |paths| {
+        let missing = plan.query_missing(roots, self.answered.as_ref(), &mut |paths| {
             queried += paths.len();
-            b.query_valid(paths, on_event)
+            b.query_valid(&paths.iter().collect::<Vec<_>>(), on_event)
         })?;
         let missing_sources: Vec<StorePath> = plan
             .sources
             .iter()
-            .filter(|p| !valid.contains(p.base_name()))
+            .filter(|p| missing.contains(p))
             .cloned()
             .collect();
         let missing_drvs: Vec<&Object> = plan
             .drvs
             .iter()
-            .filter(|o| !valid.contains(o.store_path().base_name()))
+            .filter(|o| missing.contains(o.store_path()))
             .collect();
 
         let t1 = Instant::now();

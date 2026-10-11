@@ -95,6 +95,27 @@ Against `farm.numtide.com` with a Keycloak `write` token (measured
 `nix-build` out-link came from cache.numtide.com through the local
 daemon.
 
+On 2026-10-11, a one-line derivation on nixpkgs bash, 10 runs
+after one warm-up, with the output already in the farm's cache:
+
+| client | mean ± σ |
+|---|---|
+| Nix 2.36 with its nix-grpc-store plugin | 14.5 ± 6.7 s |
+| iets, every path asked in one call | 34.6 ± 21.7 s |
+| iets, asked top-down | 0.246 ± 0.018 s |
+
+On this farm a large `QueryValidPaths` is slow: the node publishes each
+path it holds to niks3 before it replies. iets asked about the 818 planned
+paths and then about 700 output paths. Top-down, a cache hit is two
+calls about one path each.
+
+With a new marker, Nix took 46 s to 296 s and iets 20 s to 304 s, and
+the farm's own work was most of it. Uploading the one new `.drv` (533 bytes)
+took 6 s to 37 s, because the node fetches the `.drv` closure from the cache
+before it imports. A `.drv` with no references uploaded in 2 s to 3 s.
+Sending the closure in the stream was slower, and so was uploading only
+after a worker answered `NOT_FOUND`.
+
 ### Bounced addresses
 
 A worker that crashed stays placeable until the scheduler notices. On
