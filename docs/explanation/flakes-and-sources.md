@@ -76,10 +76,11 @@ Anything else is unsupported, and the classic names hand it to the real
   `https://….tar.gz`);
 - a `?query` parameter on a path (`?dir=`, `?rev=`, `?narHash=`).
 
-**The lock file must exist and be complete.** Every node reachable from the
+**The lock file must be complete.** Every node reachable from the
 root needs a `narHash`, or must be a relative `path:` input, and every input
 the `flake.nix` declares needs a lock entry. Otherwise the run says
-`flake.lock missing or incomplete, run nix flake lock`. iets has no registry,
+`flake.lock missing or incomplete, run nix flake lock`. A flake that declares
+no inputs needs no lock file, as in Nix. iets has no registry,
 no locking in memory and no `nix flake lock` of its own, so if you change an
 input's URL in `flake.nix` and don't lock again, iets doesn't notice. The
 lock wins.
