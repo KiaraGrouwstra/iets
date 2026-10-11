@@ -20,6 +20,17 @@ fn iets(cache: &Path, offline: bool, args: &[&str]) -> Output {
     c.output().expect("run iets")
 }
 
+/// The `file://` URL of a path. Windows drives come after a third slash and
+/// backslashes would read as escapes in the Nix string that carries it.
+fn file_url(p: &Path) -> String {
+    let p = p.display().to_string().replace('\\', "/");
+    if p.starts_with('/') {
+        format!("file://{p}")
+    } else {
+        format!("file:///{p}")
+    }
+}
+
 fn text(b: &[u8]) -> String {
     String::from_utf8_lossy(b).into_owned()
 }
@@ -44,7 +55,7 @@ fn eval(cache: &Path, offline: bool, flags: &[&str], expr: &str) -> Output {
 #[test]
 fn a_hashed_fetch_has_the_store_path_nix_gives() {
     let (d, cache) = scratch("hashed");
-    let url = format!("file://{}/hello.txt", d.display());
+    let url = format!("{}/hello.txt", file_url(&d));
     let call = format!(r#"builtins.fetchurl {{ url = "{url}"; sha256 = "{SHA256}"; }}"#);
 
     let o = eval(&cache, false, &[], &call);
@@ -75,7 +86,7 @@ fn a_hashed_fetch_has_the_store_path_nix_gives() {
 #[test]
 fn a_wrong_hash_is_refused_with_the_hash_the_file_has() {
     let (d, cache) = scratch("mismatch");
-    let url = format!("file://{}/hello.txt", d.display());
+    let url = format!("{}/hello.txt", file_url(&d));
     let zero = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
     let o = eval(
         &cache,
@@ -96,7 +107,7 @@ fn a_wrong_hash_is_refused_with_the_hash_the_file_has() {
 #[test]
 fn without_a_hash_no_evaluation_fetches_and_prefetch_gives_the_hash() {
     let (d, cache) = scratch("unhashed");
-    let url = format!("file://{}/hello.txt", d.display());
+    let url = format!("{}/hello.txt", file_url(&d));
     let call = format!(r#"builtins.fetchurl "{url}""#);
     let want = format!(
         "error: 'fetchurl' requires a 'sha256' argument: run 'iets prefetch {url}' and pass the hash as 'sha256'"

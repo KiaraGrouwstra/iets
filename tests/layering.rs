@@ -231,7 +231,7 @@ fn rel(p: &Path) -> String {
     p.strip_prefix(root())
         .unwrap()
         .to_string_lossy()
-        .into_owned()
+        .replace('\\', "/")
 }
 
 /// Line comments are prose: a doc comment that names a layer is not a reach.

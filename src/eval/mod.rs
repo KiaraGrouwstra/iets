@@ -9,7 +9,6 @@ mod tests;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::str::from_utf8;
 use std::sync::{Arc, OnceLock};
@@ -391,7 +390,7 @@ macro_rules! bail {
         return Err($crate::eval::Error::boxed($kind, format!($($arg)*), $pos))
     };
 }
-use crate::sys::{OsStrExt, OsStringExt};
+use crate::sys;
 pub(crate) use bail;
 
 pub const DEFAULT_SYSTEM: &str = "x86_64-linux";
@@ -915,10 +914,10 @@ impl Evaluator {
             && store_hooks::locate(self, &p).is_none()
         {
             for _ in 0..1024 {
-                let Ok(target) = fs::read_link(OsStr::from_bytes(&p)) else {
+                let Ok(target) = fs::read_link(sys::path_from_internal(&p)) else {
                     break;
                 };
-                let t = target.into_os_string().into_vec();
+                let t = sys::path_to_internal(&target);
                 let joined = if t.starts_with(b"/") {
                     t
                 } else {
@@ -931,7 +930,7 @@ impl Evaluator {
             }
             let full = fs::canonicalize(&local);
             self.trace()
-                .canon(local.as_os_str().as_bytes(), full.ok().as_deref());
+                .canon(&sys::path_to_internal(&local), full.ok().as_deref());
             at = store_hooks::open(self, &p, pos)?;
         }
         match at.is_dir(self) {

@@ -4,10 +4,28 @@
 //! anything, so they become a name with a NUL in it, which every file
 //! operation refuses with an `io::Error`.
 
+use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
 use std::str;
 
 use super::winpath;
+
+/// The file system path an evaluator path names.
+pub fn path_from_internal(b: &[u8]) -> PathBuf {
+    PathBuf::from(OsString::from_vec(winpath::to_native(b)))
+}
+
+/// The evaluator's name for a file system path.
+pub fn path_to_internal(p: &Path) -> Vec<u8> {
+    winpath::to_internal(p.as_os_str().as_bytes())
+}
+
+/// An evaluator path from bytes that came from the OS, such as an argument,
+/// the working directory or `$HOME`.
+pub fn from_native(b: &[u8]) -> Cow<'_, [u8]> {
+    Cow::Owned(winpath::to_internal(b))
+}
 
 /// How many leading components of a path `..` cannot remove.
 pub fn anchor_len(comps: &[&[u8]]) -> usize {

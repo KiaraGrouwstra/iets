@@ -22,12 +22,11 @@ use crate::provenance::{describe_pos, rewrite_msg};
 use crate::runtime::Word;
 use crate::session::Session;
 use crate::store::path::StorePath;
-use crate::sys::{OsStrExt, OsStringExt};
+use crate::sys::{self, OsStringExt};
 use crate::trace::key::{Key, has_relative_path};
 use crate::trace::run::Cache;
 use crate::{argv, compile, error, log, parallel, project};
 use std::collections::HashSet;
-use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::{env, fs};
@@ -160,7 +159,7 @@ pub fn parse_include(s: &str) -> (Vec<u8>, Vec<u8>) {
 }
 
 fn home() -> Option<Vec<u8>> {
-    env::var_os("HOME").map(|h| h.into_encoded_bytes())
+    env::var_os("HOME").map(|h| sys::from_native(&h.into_vec()).into_owned())
 }
 
 pub fn flake_ref(f: &str, cwd: &[u8]) -> error::Result<flake::FlakeRef> {
@@ -205,7 +204,7 @@ pub fn entry_dir(a: &EvalArgs) -> PathBuf {
         },
         _ => cwd,
     };
-    PathBuf::from(OsStr::from_bytes(&bytes))
+    sys::path_from_internal(&bytes)
 }
 
 /// The project this run's sources belong to: the root `crate::project` finds
@@ -220,7 +219,7 @@ pub fn project_root(a: &EvalArgs) -> Option<Vec<u8>> {
     }
     let dir = entry_dir(a);
     let root = project::find(&dir).unwrap_or(dir);
-    Some(root.into_os_string().into_vec())
+    Some(sys::path_to_internal(&root))
 }
 
 /// The lint configuration of a run (docs/reference/lints.md).
@@ -306,18 +305,18 @@ pub fn auto_args(
 
 pub fn cwd() -> Vec<u8> {
     env::current_dir()
-        .map(|p| p.into_os_string().into_encoded_bytes())
+        .map(|p| sys::path_to_internal(&p))
         .unwrap_or_else(|_| b"/".to_vec())
 }
 
 /// [`abs_path`] as a path.
 pub fn abs_pathbuf(f: &str, cwd: &[u8]) -> PathBuf {
-    PathBuf::from(OsStr::from_bytes(&abs_path(f, cwd)))
+    sys::path_from_internal(&abs_path(f, cwd))
 }
 
 /// `f` is in `crate::argv`'s encoding.
 pub fn abs_path(f: &str, cwd: &[u8]) -> Vec<u8> {
-    let p = argv::bytes(f);
+    let p = sys::from_native(&argv::bytes(f)).into_owned();
     if p.starts_with(b"/") {
         return p;
     }

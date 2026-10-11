@@ -20,6 +20,7 @@ use crate::eval::{Error as EvalError, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::runtime::{Value, Word};
 use crate::source::{self, SourceRef, lock};
 use crate::store::path::StorePath;
+use crate::sys;
 
 pub const CALL_FLAKE: &str = include_str!("call-flake.nix");
 pub const LOCK_ERROR: &str = "flake.lock missing or incomplete, run nix flake lock";
@@ -373,7 +374,7 @@ pub fn get_flake(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word
     };
     let full = match locate(ev, path.as_bytes()) {
         Some(at) if !at.hidden() => match at.local() {
-            Some(local) => local.into_os_string().into_encoded_bytes(),
+            Some(local) => sys::path_to_internal(&local),
             None => return Err(unsupported("(a fetched input)")),
         },
         _ => path.as_bytes().to_vec(),

@@ -28,6 +28,7 @@ use crate::log::{self, ACT_FILE_TRANSFER, Activity, LVL_TALKATIVE, RES_PROGRESS}
 use crate::remote::worker;
 use crate::session::Session;
 use crate::store::hash;
+use crate::sys;
 use http_body_util::BodyExt;
 
 /// filetransfer.cc:CURLOPT_MAXREDIRS.
@@ -306,7 +307,8 @@ pub fn get(
     let read_in = Rc::new(Cell::new(0));
     if let Some(path) = file_path(url) {
         let path = worker::percent_decode(path.split(['?', '#']).next().unwrap_or(path));
-        let file = File::open(&path).map_err(|e| Error::io(format!("cannot read '{path}'"), e))?;
+        let file = File::open(sys::path_from_internal(path.as_bytes()))
+            .map_err(|e| Error::io(format!("cannot read '{path}'"), e))?;
         let raw = Counted(Box::new(file), read_in.clone());
         return drain(url, undo(Box::new(raw))?, &read_in, limits, sink);
     }

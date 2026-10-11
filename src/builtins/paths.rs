@@ -6,10 +6,9 @@
 //! `parseFlakeRef` and `flakeRefToString` work (`flake`).
 
 use crate::sys::errno;
-use crate::sys::{OsStrExt, OsStringExt};
+use crate::sys::{self, OsStrExt};
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashSet};
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::str::from_utf8;
 use std::sync::Arc;
@@ -95,8 +94,8 @@ fn lossy(b: &[u8]) -> Cow<'_, str> {
     String::from_utf8_lossy(b)
 }
 
-fn os_path(p: &[u8]) -> &Path {
-    Path::new(OsStr::from_bytes(p))
+fn os_path(p: &[u8]) -> PathBuf {
+    sys::path_from_internal(p)
 }
 
 fn io_error(e: io::Error, verb: &str, p: &[u8], pos: Pos) -> Box<Error> {
@@ -254,7 +253,7 @@ fn realise_existing(
         return Err(io_error(errno::not_found(), "getting status of", &p, pos));
     }
     coerce::read_through_copy(ev, &p, pos)?;
-    let shown = at.local().map_or(p, |l| l.into_os_string().into_vec());
+    let shown = at.local().map_or(p, |l| sys::path_to_internal(&l));
     Ok((at, shown))
 }
 
@@ -332,7 +331,7 @@ fn path_exists(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> 
             Ok(Word::FALSE)
         }
         Err(e) => {
-            let shown = at.local().map_or(p, |l| l.into_os_string().into_vec());
+            let shown = at.local().map_or(p, |l| sys::path_to_internal(&l));
             Err(io_error(e, "getting status of", &shown, pos))
         }
     }
@@ -389,7 +388,7 @@ fn store_path(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
             let resolved = fs::canonicalize(os_path(&p));
             ev.trace().canon(&p, resolved.as_deref().ok());
             let resolved = resolved.map_err(|e| io_error(e, "getting status of", &p, pos))?;
-            p = resolved.into_os_string().into_vec();
+            p = sys::path_to_internal(&resolved);
         }
     }
     let sp = match to_store_path(&p) {

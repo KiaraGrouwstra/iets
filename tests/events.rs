@@ -45,8 +45,15 @@ fn a_text_add_names_its_size_and_its_position() {
 
 #[test]
 fn a_tree_add_names_the_local_path_it_copied() {
-    let src = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
-    let err = stderr(&format!(r#""${{{src}}}""#), Some("store"));
+    // A Nix path has forward slashes, and a drive is its first component
+    let native = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml").replace('\\', "/");
+    let src = if native.starts_with('/') {
+        native
+    } else {
+        format!("/{native}")
+    };
+    // A path literal cannot hold the colon of a drive
+    let err = stderr(&format!(r#""${{/. + "{src}"}}""#), Some("store"));
     assert!(err.contains(r#""kind":"tree""#), "{err}");
     assert!(err.contains(&format!(r#""from":"{src}""#)), "{err}");
 }

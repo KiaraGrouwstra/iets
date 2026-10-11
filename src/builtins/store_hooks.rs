@@ -14,12 +14,12 @@
 //! `toFile` text or `.drv` this evaluation holds in memory. Its readers below
 //! record what they saw in the tracing cache's read set.
 
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Read};
 
 use crate::sys::errno;
-use crate::sys::{OsStrExt, OsStringExt};
+use crate::sys::{self, OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::str::from_utf8;
 use std::sync::Arc;
@@ -70,7 +70,7 @@ pub fn locate(ev: &Evaluator, path: &[u8]) -> Option<SrcPath> {
 
 /// [`locate`], else `path` itself on the real file system.
 pub fn resolve(ev: &Evaluator, path: &[u8]) -> SrcPath {
-    locate(ev, path).unwrap_or_else(|| SrcPath::fs(PathBuf::from(OsStr::from_bytes(path)), None))
+    locate(ev, path).unwrap_or_else(|| SrcPath::fs(sys::path_from_internal(path), None))
 }
 
 /// Whether a pure evaluation may read `path` (eval.cc: rootFS is the store
@@ -186,7 +186,7 @@ pub fn located(
 
 /// `path` on the real file system, for a path [`locate`] does not answer.
 pub fn fs_path(path: &[u8]) -> SrcPath {
-    SrcPath::fs(PathBuf::from(OsStr::from_bytes(path)), None)
+    SrcPath::fs(sys::path_from_internal(path), None)
 }
 
 /// A located path behind the pure-eval allow list, with the error Nix's
@@ -273,8 +273,8 @@ pub type Failed = (&'static str, io::Error);
 const STAT: &str = "getting status of";
 const READ: &str = "reading file";
 
-fn os(p: &[u8]) -> &Path {
-    Path::new(OsStr::from_bytes(p))
+fn os(p: &[u8]) -> PathBuf {
+    sys::path_from_internal(p)
 }
 
 fn enoent() -> io::Error {
@@ -339,7 +339,7 @@ impl SrcPath {
             Src::Fs { .. } => {
                 let p = self.local()?;
                 (self.rel.is_empty() || self.accepts(&p))
-                    .then(|| At::Disk(p.into_os_string().into_vec()))
+                    .then(|| At::Disk(sys::path_to_internal(&p)))
             }
             Src::Spool { name, .. } => {
                 if !self.accepts(&self.in_spool()) {
@@ -361,7 +361,7 @@ impl SrcPath {
     /// resolves its own links ([`crate::fetch::spool`]).
     pub fn read_link(&self) -> Option<Vec<u8>> {
         match self.at()? {
-            At::Disk(p) => Some(fs::read_link(os(&p)).ok()?.into_os_string().into_vec()),
+            At::Disk(p) => Some(sys::path_to_internal(&fs::read_link(os(&p)).ok()?)),
             At::Spool(..) | At::Mem(_) => None,
         }
     }
@@ -567,7 +567,7 @@ pub fn copy_path_to_store(
             (fixed(&hash)?, at.clone(), hash, size)
         }
         Some(At::Disk(local)) => {
-            let local = PathBuf::from(OsString::from_vec(local));
+            let local = os(&local);
             let accepted = match &at.src {
                 Src::Fs { accepted, .. } => accepted.clone(),
                 _ => None,

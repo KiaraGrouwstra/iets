@@ -32,7 +32,9 @@ pub mod tty;
 pub mod vm;
 pub mod winpath;
 
-pub use ffi::{OsStrExt, OsStringExt, anchor_len};
+pub use ffi::{
+    OsStrExt, OsStringExt, anchor_len, from_native, path_from_internal, path_to_internal,
+};
 pub use imp::{discard, futex_wait, futex_wake, prefault};
 pub use vm::resident;
 
