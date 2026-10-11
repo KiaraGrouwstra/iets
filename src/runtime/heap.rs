@@ -10,6 +10,8 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::{mem, process, ptr, slice};
 
+use rustix::mm::{MapFlags, ProtFlags, mmap_anonymous};
+
 use crate::parallel::fiber;
 
 /// Name bytes come from blocks of this size; a longer name gets its own.
@@ -85,19 +87,17 @@ impl Heap {
 fn map(len: usize) -> usize {
     // SAFETY: an anonymous mapping aliases nothing.
     let p = unsafe {
-        libc::mmap(
+        mmap_anonymous(
             ptr::null_mut(),
             len,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-            -1,
-            0,
+            ProtFlags::READ | ProtFlags::WRITE,
+            MapFlags::PRIVATE,
         )
     };
-    if p == libc::MAP_FAILED {
+    let Ok(p) = p else {
         errln!("error: out of memory");
         process::exit(1);
-    }
+    };
     p as usize
 }
 
@@ -123,16 +123,14 @@ fn tombstone(base: usize, len: usize) {
     // SAFETY: the range is a mapping this heap owns; nothing may touch it
     // after release, and what does faults, which is the point.
     let p = unsafe {
-        libc::mmap(
+        mmap_anonymous(
             base as *mut _,
             len,
-            libc::PROT_NONE,
-            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE | libc::MAP_FIXED,
-            -1,
-            0,
+            ProtFlags::empty(),
+            MapFlags::PRIVATE | MapFlags::NORESERVE | MapFlags::FIXED,
         )
     };
-    if p == libc::MAP_FAILED {
+    if p.is_err() {
         // the pages stay, the range stays ours: a leak, never a reuse
         return;
     }

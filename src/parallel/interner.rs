@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::{process, ptr};
 
-use rustix::mm::{MapFlags, ProtFlags, mmap_anonymous};
+use rustix::mm::{MapFlags, ProtFlags, mmap_anonymous, munmap};
 use crate::runtime::heap::Heap;
 use crate::session::Session;
 use crate::syntax::symbol::{FxHasher, Sym};
@@ -132,7 +132,7 @@ impl Default for Interner {
 /// The mapping of [`per_sym`].
 pub(super) fn unmap_per_sym<T>(p: *mut T) {
     // SAFETY: the owner's last handle is gone, so nothing reads the table.
-    unsafe { libc::munmap(p as *mut _, MAX_SYMS * size_of::<T>()) };
+    let _ = unsafe { munmap(p as *mut _, MAX_SYMS * size_of::<T>()) };
 }
 
 /// `MAX_SYMS` zeroed `T`s, paged in on demand, unmapped by the owner's drop.
