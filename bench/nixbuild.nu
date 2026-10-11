@@ -6,18 +6,24 @@
 #
 # Cases, one hyperfine JSON each in the shape bench/chart.nu reads:
 #   nixbuild-dispatch        small.nix, a new marker every run: a real build
-#   nixbuild-dispatch-fetch  the same, the output copied back
+#   nixbuild-dispatch-fetch  the same, the output copied into the local store
+#   nixbuild-dispatch-fetchto  the same, iets only, the output in a directory
 #   nixbuild-cachehit        small.nix, one fixed marker built before: the
 #                            builder's store already has the output
 #   nixbuild-closure         closure.nix, a new marker every run: python3's
 #                            drv closure, a 16 MiB random output
-#   nixbuild-closure-fetch   the same, the output copied back
-# Copied back means `nix copy --from` into the local store for nix and
-# `--fetch-to DIR` for iets, which has no local store.
+#   nixbuild-closure-fetch   the same, the output copied into the local store
+#   nixbuild-closure-fetchto   the same, iets only, the output in a directory
+# -fetch pairs `nix copy --from` with `iets -o`: both register the output in
+# the local store. -fetchto is `iets --fetch-to DIR`, which unpacks the NAR
+# into a directory with no local store; nix has no such operation, so the
+# case has no nix series.
 # nixbuild-phases.json holds PHASE_RUNS (default 3) instrumented runs per
 # client and case: nix's from internal-json timestamps, iets's from --timings.
 # The boundaries differ: nix's eval ends at its first copy, so it includes
 # the ssh connect and the first queries. Compare totals across clients.
+# --timings does not time the copy -o makes, so for -fetch iets's fetch is the
+# total minus its other phases, process start-up included.
 # RUNS (default 10) sets the hyperfine runs. Each run writes the account
 # usage before and after to bench/results/nixbuild-env.txt.
 use ../scripts/lib.nu [require-real-nix]
@@ -50,12 +56,13 @@ def nix-phases [rows: table, fetch_s: float]: nothing -> record {
   { eval: ($e - $t0), upload: ($b0 - $e), build: ($b1 - $b0), fetch: (($end - $b1) + $fetch_s), total: ($end - $t0 + $fetch_s) }
 }
 
-def iets-phases [rows: table]: nothing -> record {
+def iets-phases [rows: table, linked: bool]: nothing -> record {
   let t0 = ($rows | where l == START | first | get t)
   let end = ($rows | where l == EXIT | first | get t)
   let ph = ($rows | get l | parse -r '^(?<k>eval|plan|connect|query|resolve|substitute|add|build|outputs|fetch): .*?(?<s>[0-9.]+)s$' | update s { into float } | reduce -f {} {|it, acc| $acc | upsert $it.k (($acc | get -o $it.k | default 0.0) + $it.s) })
   let g = {|k| $ph | get -o $k | default 0.0 }
-  { eval: (do $g eval), upload: ((do $g plan) + (do $g connect) + (do $g query) + (do $g resolve) + (do $g substitute) + (do $g add)), build: (do $g build), fetch: ((do $g outputs) + (do $g fetch)), total: ($end - $t0) }
+  let r = { eval: (do $g eval), upload: ((do $g plan) + (do $g connect) + (do $g query) + (do $g resolve) + (do $g substitute) + (do $g add)), build: (do $g build), fetch: ((do $g outputs) + (do $g fetch)), total: ($end - $t0) }
+  if $linked { $r | update fetch ($r.total - $r.eval - $r.upload - $r.build) } else { $r }
 }
 
 def main [] {
@@ -73,24 +80,30 @@ def main [] {
   let nixb = $"nix build --eval-store auto --store ($store) --no-link --print-out-paths --impure -I nixpkgs=($np)"
   let ietsb = $"($iets) build --builder ($store) --no-cache --workers 4 --impure -I nixpkgs=($np)"
   let m = "--argstr marker \"$(date +%s%N)-$$\""
+  # fetch: none, store (into the local store) or dir (--fetch-to, iets only)
+  let iets_out = {|fetch, d|
+    match $fetch { store => $"-o ($d)/result", dir => $"--fetch-to ($d)/out", _ => "" }
+  }
   let cmds = {|f, marker, fetch|
-    let nix = if $fetch {
+    let nix = if $fetch == store {
       $"p=$\(($nixb) -f ($wd)/($f) ($marker)) && nix copy --no-check-sigs --from ($store) $p"
     } else { $"($nixb) -f ($wd)/($f) ($marker)" }
-    let ie = if $fetch {
-      $"d=$\(mktemp -d) && ($ietsb) --fetch-to $d/out ($wd)/($f) ($marker); s=$?; rm -rf $d; exit $s"
-    } else { $"($ietsb) ($wd)/($f) ($marker)" }
-    [-n nix $nix -n "iets w4" $ie]
+    let ie = if $fetch == none { $"($ietsb) ($wd)/($f) ($marker)" } else {
+      $"d=$\(mktemp -d) && ($ietsb) (do $iets_out $fetch '$d') ($wd)/($f) ($marker); s=$?; rm -rf $d; exit $s"
+    }
+    if $fetch == dir { [-n "iets w4" $ie] } else { [-n nix $nix -n "iets w4" $ie] }
   }
   let shared = "--argstr marker shared"
   ^bash -c $"($nixb) -f ($wd)/small.nix ($shared)"
   let cases = [
     [name file marker fetch];
-    [nixbuild-dispatch small.nix $m false]
-    [nixbuild-dispatch-fetch small.nix $m true]
-    [nixbuild-cachehit small.nix $shared false]
-    [nixbuild-closure closure.nix $m false]
-    [nixbuild-closure-fetch closure.nix $m true]
+    [nixbuild-dispatch small.nix $m none]
+    [nixbuild-dispatch-fetch small.nix $m store]
+    [nixbuild-dispatch-fetchto small.nix $m dir]
+    [nixbuild-cachehit small.nix $shared none]
+    [nixbuild-closure closure.nix $m none]
+    [nixbuild-closure-fetch closure.nix $m store]
+    [nixbuild-closure-fetchto closure.nix $m dir]
   ]
   for c in $cases {
     let out = $"bench/results/($c.name)"
@@ -103,17 +116,20 @@ def main [] {
   let phases = ($cases | each {|c|
     1..$pr | each {|i|
       let marker = $c.marker
-      let n = (stamped $"($nixb) --log-format internal-json -f ($wd)/($c.file) ($marker)")
-      let fetch_s = if $c.fetch {
-        let p = ($n | where l starts-with "/nix/store/" | last | get l)
-        let t = (date now)
-        ^nix copy --no-check-sigs --from $store $p
-        ((date now) - $t | into int) / 1e9
-      } else { 0.0 }
+      let nix = if $c.fetch == dir { [] } else {
+        let n = (stamped $"($nixb) --log-format internal-json -f ($wd)/($c.file) ($marker)")
+        let fetch_s = if $c.fetch == store {
+          let p = ($n | where l starts-with "/nix/store/" | last | get l)
+          let t = (date now)
+          ^nix copy --no-check-sigs --from $store $p
+          ((date now) - $t | into int) / 1e9
+        } else { 0.0 }
+        [({ case: $c.name, client: nix, run: $i } | merge (nix-phases $n $fetch_s))]
+      }
       let d = (mktemp -d)
-      let ie = (stamped $"($ietsb) --timings (if $c.fetch { $'--fetch-to ($d)/out' } else { '' }) ($wd)/($c.file) ($marker)")
+      let ie = (stamped $"($ietsb) --timings (do $iets_out $c.fetch $d) ($wd)/($c.file) ($marker)")
       rm -rf $d
-      [({ case: $c.name, client: nix, run: $i } | merge (nix-phases $n $fetch_s)), ({ case: $c.name, client: "iets w4", run: $i } | merge (iets-phases $ie))]
+      $nix | append ({ case: $c.name, client: "iets w4", run: $i } | merge (iets-phases $ie ($c.fetch == store)))
     } | flatten
   } | flatten)
   $phases | save -f bench/results/nixbuild-phases.json
