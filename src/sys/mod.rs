@@ -8,6 +8,7 @@ mod imp;
 
 pub mod errno;
 pub mod fault;
+#[cfg_attr(windows, path = "ffi_windows.rs")]
 mod ffi;
 pub mod fs;
 pub mod net;
