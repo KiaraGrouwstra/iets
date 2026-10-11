@@ -158,7 +158,7 @@ fn collapse(p: &str) -> String {
     p
 }
 
-fn is_rev(s: &str) -> bool {
+pub(crate) fn is_rev(s: &str) -> bool {
     s.len() == 40 && s.bytes().all(|c| c.is_ascii_hexdigit())
 }
 
