@@ -367,10 +367,14 @@ impl Backend for Grpc {
         if links.is_empty() {
             return Ok(());
         }
+        let t0 = Instant::now();
+        self.t.common.links += links.len();
         let paths = link_targets(links)?;
         let mut conn = Connection::open(&local(), &mut |_| {})?;
-        build::register(&mut self.c, &paths, &mut conn, &mut |_| {})?;
-        add_roots(&mut conn, links)
+        self.t.common.link_copied += build::register(&mut self.c, &paths, &mut conn, &mut |_| {})?;
+        let r = add_roots(&mut conn, links);
+        self.t.common.link += t0.elapsed();
+        r
     }
 
     fn note_connect(&mut self, d: Duration) {

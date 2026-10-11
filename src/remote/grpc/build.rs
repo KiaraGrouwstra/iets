@@ -855,6 +855,7 @@ mod tests {
              build: 11 drvs, 10 already valid, 0.006s\n\
              outputs: 0.007s\n\
              fetch: 2 outputs, 0.008s\n\
+             link: 1 out-links, 3 paths copied, 0.010s\n\
              grpc: 12 calls"
         );
     }

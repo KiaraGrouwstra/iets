@@ -181,8 +181,10 @@ message also goes to the log (`docs/reference/errors.md`).
 
 `--timings` prints one line per step on stderr: `plan`, `connect`, `query`,
 `resolve` (finding and hashing the missing sources), `substitute` (only when
-paths were left to the daemon), `add`, `build`, `outputs`, `fetch`, and a
-`worker` line with the round trips.
+paths were left to the daemon), `add`, `build`, `outputs`, `fetch` (only with
+`--fetch-to`), `link` (only with `-o`: copying the outputs into the local
+store and adding the GC roots), and a `worker`
+line with the round trips.
 
 ## `grpc://`
 
