@@ -6,7 +6,7 @@
 
 use crate::sys;
 use crate::sys::OsStrExt;
-use crate::sys::process::CommandExt;
+use crate::sys::process;
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ffi::{OsStr, OsString};
@@ -559,13 +559,12 @@ fn exec(s: &Shell, drv: &Derivation, shell: &str, cores: u64) -> error::Result<(
     write(&rc_path, rc_script(s, shell, &tmp, &structured_rc))?;
 
     let mut cmd = Command::new(shell);
-    cmd.arg0("bash");
     if s.interactive {
         cmd.arg("--rcfile");
     }
     cmd.arg(&rc_path);
     cmd.env_clear().envs(env);
-    let e = cmd.exec();
+    let e = process::exec(&mut cmd, "bash");
     Err(CrateError::io(format!("executing shell '{shell}'"), e))
 }
 

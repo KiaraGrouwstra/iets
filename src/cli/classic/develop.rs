@@ -2,7 +2,7 @@
 //! bash. The rc script is `makeRcScript` plus the tail `CmdDevelop::run` adds.
 //! See `docs/reference/classic.md`.
 
-use crate::sys::process::CommandExt;
+use crate::sys::process;
 use std::collections::BTreeMap;
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -160,13 +160,12 @@ fn run(d: &Develop, cfg: &config::Config, dev: &DevEnv) -> error::Result<()> {
         .map_err(|e| error::Error::io(format!("cannot write '{}'", rc_path.display()), e))?;
 
     let mut cmd = Command::new(&shell);
-    cmd.arg0("bash");
     if d.command.is_empty() {
         cmd.arg("--rcfile");
     }
     cmd.arg(&rc_path);
     cmd.env_clear().envs(environment(d, &dev.out_path, &shell));
-    let e = cmd.exec();
+    let e = process::exec(&mut cmd, "bash");
     Err(error::Error::io(format!("cannot execute '{shell}'"), e))
 }
 

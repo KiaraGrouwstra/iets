@@ -665,6 +665,10 @@ pub const DEFAULT_SYSTEM: &str = "riscv64-linux";
 pub const DEFAULT_SYSTEM: &str = "x86_64-darwin";
 #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
 pub const DEFAULT_SYSTEM: &str = "aarch64-darwin";
+#[cfg(all(target_arch = "x86_64", target_os = "windows"))]
+pub const DEFAULT_SYSTEM: &str = "x86_64-windows";
+#[cfg(all(target_arch = "aarch64", target_os = "windows"))]
+pub const DEFAULT_SYSTEM: &str = "aarch64-windows";
 
 fn cpus() -> u64 {
     thread::available_parallelism().map_or(1, |n| n.get() as u64)

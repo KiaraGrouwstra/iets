@@ -5,6 +5,31 @@ use std::ptr;
 
 use rustix::mm::{MapFlags, MprotectFlags, ProtFlags, mmap_anonymous, munmap};
 
+/// Bytes of `[base, base + len)` that are resident, in whole pages.
+pub fn resident(base: *mut u8, len: usize) -> usize {
+    let page = page_size();
+    let mut v = vec![0u8; len / page];
+    // SAFETY: one byte per page of the range, which the caller maps. The
+    // vector's element type is `c_char` or `u8` depending on the platform.
+    unsafe { libc::mincore(base.cast(), len, v.as_mut_ptr().cast()) };
+    v.iter().filter(|b| **b & 1 != 0).count() * page
+}
+
+/// Hands the pages back and leaves fresh zero pages in their place.
+///
+/// # Safety
+/// The range is a mapping of the caller's and nothing in it is needed.
+pub unsafe fn reset(p: *mut u8, len: usize) {
+    let _ = unsafe {
+        mmap_anonymous(
+            p.cast(),
+            len,
+            ProtFlags::READ | ProtFlags::WRITE,
+            MapFlags::PRIVATE | MapFlags::FIXED,
+        )
+    };
+}
+
 pub fn page_size() -> usize {
     rustix::param::page_size()
 }

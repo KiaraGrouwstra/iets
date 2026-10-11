@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Condvar, Mutex};
 
-use rustix::mm::{MapFlags, ProtFlags, mmap_anonymous};
+use super::vm;
 
 /// One lock and one condition for every word. The scheduler sleeps on a
 /// single epoch, so there is nothing to tell apart.
@@ -33,18 +33,11 @@ pub fn futex_wake(_word: &AtomicU32, n: u32) {
 /// The range is an anonymous mapping of the caller's.
 pub unsafe fn prefault(_p: *mut u8, _len: usize, _huge: bool) {}
 
-/// Gives the pages back by mapping fresh zero pages over them.
+/// Gives the pages back and leaves fresh zero pages in their place.
 ///
 /// # Safety
 /// The range is an anonymous mapping of the caller's, and nothing in it is
 /// needed any more.
 pub unsafe fn discard(p: *mut u8, len: usize) {
-    let _ = unsafe {
-        mmap_anonymous(
-            p.cast(),
-            len,
-            ProtFlags::READ | ProtFlags::WRITE,
-            MapFlags::PRIVATE | MapFlags::FIXED,
-        )
-    };
+    unsafe { vm::reset(p, len) };
 }

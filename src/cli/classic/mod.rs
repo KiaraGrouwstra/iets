@@ -10,7 +10,7 @@ pub mod instantiate;
 pub mod nix;
 pub mod shell;
 
-use crate::sys::process::CommandExt;
+use crate::sys::process;
 use std::path::PathBuf;
 use std::process::{Command, exit};
 
@@ -56,10 +56,9 @@ pub fn fallback(name: &str, argv: &[String], reason: &str) -> ! {
         eprintln!("iets: cannot fall back to {name}: not found on PATH");
         exit(1)
     };
-    let e = Command::new(&real)
-        .arg0(name)
-        .args(argv.iter().map(|a| argv::os(a)))
-        .exec();
+    let mut cmd = Command::new(&real);
+    cmd.args(argv.iter().map(|a| argv::os(a)));
+    let e = process::exec(&mut cmd, name);
     eprintln!("iets: cannot exec '{}': {e}", real.display());
     exit(1)
 }
