@@ -11,6 +11,7 @@ mod ffi;
 pub mod fs;
 pub mod net;
 pub mod process;
+pub mod vm;
 
 pub use ffi::{OsStrExt, OsStringExt};
 pub use imp::{discard, futex_wait, futex_wake, prefault};

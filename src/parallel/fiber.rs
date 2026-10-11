@@ -12,10 +12,8 @@ use std::sync::Once;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::{error, io, mem, ptr};
 
-use rustix::mm::{MapFlags, MprotectFlags, ProtFlags, mmap_anonymous, mprotect};
-
 use crate::runtime::heap;
-use crate::sys;
+use crate::sys::{self, vm};
 
 pub const DEFAULT_STACK: usize = 256 << 20;
 /// Stack of the demand fiber and of the process main thread. The demand
@@ -25,7 +23,7 @@ pub const MAIN_STACK: usize = 4 << 30;
 /// The inaccessible page at the low end of a stack: one page, whatever the
 /// platform's page size is.
 fn guard() -> usize {
-    rustix::param::page_size()
+    vm::page_size()
 }
 /// Bytes a fiber keeps in hand above its guard page. The force path
 /// refuses to go below it, so an overflow is reported instead of taken.
@@ -240,22 +238,14 @@ pub struct Stack {
 
 impl Stack {
     pub fn new(size: usize) -> Result<Stack, StackError> {
-        // SAFETY: anonymous private mapping; the low page is made
-        // inaccessible as a guard. NORESERVE keeps large reservations cheap.
-        let base = unsafe {
-            let p = mmap_anonymous(
-                ptr::null_mut(),
-                size,
-                ProtFlags::READ | ProtFlags::WRITE,
-                MapFlags::PRIVATE | MapFlags::NORESERVE,
-            )
-            .map_err(|e| StackError {
-                bytes: size,
-                why: Why::Mmap(e.into()),
-            })?;
-            let _ = mprotect(p, guard(), MprotectFlags::empty());
-            p as *mut u8
-        };
+        // The low page is made inaccessible as a guard. A lazy mapping keeps
+        // large reservations cheap.
+        let base = vm::map(size, true).map_err(|e| StackError {
+            bytes: size,
+            why: Why::Mmap(e),
+        })?;
+        // SAFETY: the page is the bottom of the mapping just made.
+        unsafe { vm::fence(base, guard()) };
         register_guard(base as usize);
         Ok(Stack { base, size })
     }
@@ -293,7 +283,7 @@ impl Drop for Stack {
         unregister_guard(self.base as usize);
         // SAFETY: the whole mapping `new` made; the fiber on it never runs
         // again.
-        unsafe { libc::munmap(self.base as *mut _, self.size) };
+        unsafe { vm::unmap(self.base, self.size) };
     }
 }
 

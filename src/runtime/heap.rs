@@ -10,9 +10,8 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::{mem, process, ptr, slice};
 
-use rustix::mm::{MapFlags, ProtFlags, mmap_anonymous};
-
 use crate::parallel::fiber;
+use crate::sys::vm;
 
 /// Name bytes come from blocks of this size; a longer name gets its own.
 const NAME_BLOCK: usize = 1 << 20;
@@ -49,7 +48,7 @@ impl Heap {
         let len = len.max(1).next_multiple_of(8);
         let mut g = self.inner.lock().unwrap();
         if g.end - g.next < len {
-            let size = NAME_BLOCK.max(len.next_multiple_of(rustix::param::page_size()));
+            let size = NAME_BLOCK.max(len.next_multiple_of(vm::page_size()));
             let p = map(size);
             g.chunks.push((p, size));
             if size > NAME_BLOCK {
@@ -85,16 +84,7 @@ impl Heap {
 }
 
 fn map(len: usize) -> usize {
-    // SAFETY: an anonymous mapping aliases nothing.
-    let p = unsafe {
-        mmap_anonymous(
-            ptr::null_mut(),
-            len,
-            ProtFlags::READ | ProtFlags::WRITE,
-            MapFlags::PRIVATE,
-        )
-    };
-    let Ok(p) = p else {
+    let Ok(p) = vm::map(len, false) else {
         errln!("error: out of memory");
         process::exit(1);
     };
@@ -122,15 +112,7 @@ impl Drop for Heap {
 fn tombstone(base: usize, len: usize) {
     // SAFETY: the range is a mapping this heap owns; nothing may touch it
     // after release, and what does faults, which is the point.
-    let p = unsafe {
-        mmap_anonymous(
-            base as *mut _,
-            len,
-            ProtFlags::empty(),
-            MapFlags::PRIVATE | MapFlags::NORESERVE | MapFlags::FIXED,
-        )
-    };
-    if p.is_err() {
+    if !unsafe { vm::revoke(base as *mut u8, len) } {
         // the pages stay, the range stays ours: a leak, never a reuse
         return;
     }
