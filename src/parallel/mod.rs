@@ -9,7 +9,7 @@ pub mod sched;
 pub mod shared;
 pub mod thunk;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::{ptr, thread};
 
 use crate::eval::Evaluator;
@@ -83,6 +83,10 @@ fn stack_size() -> usize {
 /// Run `f` with `ev` as the main fiber on `workers` threads. With one
 /// worker this is a plain call. The error is the fiber stacks: the
 /// reservation is over the cap, or the kernel refused the mapping.
+///
+/// When it returns, `ev` is dropped and so is everything the run started:
+/// the helper threads have exited, and the fibers, their stacks and their
+/// evaluators are freed. The heap the evaluation built stays.
 pub fn try_run<R: Send + 'static>(
     workers: usize,
     mut ev: Evaluator,
@@ -96,7 +100,8 @@ pub fn try_run<R: Send + 'static>(
     let template = force::SyncEv(ev.clone());
     let rt = sched::Runtime::start(workers, Box::new(template), stack_size())?;
     let user = Box::into_raw(Box::new(ev)) as *mut ();
-    let out: &'static Mutex<Option<R>> = Box::leak(Box::new(Mutex::new(None)));
+    let out = Arc::new(Mutex::new(None));
+    let put = out.clone();
     rt.run_main(
         user,
         Box::new(move |slot: &mut sched::Slot| {
@@ -139,7 +144,7 @@ pub fn try_run<R: Send + 'static>(
                     slot.fiber.stack.resident() >> 10
                 );
             }
-            *out.lock().unwrap() = Some(r);
+            *put.lock().unwrap() = Some(r);
         }),
     )?;
     Ok(out
