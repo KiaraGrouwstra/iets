@@ -95,7 +95,7 @@ disk writes.
 
 ## The IR cache: compile each file once
 
-Parsing and compiling the 3,500 files of the nixos-desktop workload was
+Parsing and compiling the 3,500 files of the nixos-server workload was
 about 28 % of a one-worker run. The IR cache writes each imported file's
 compiled IR after its first compile and loads it on later runs. All the
 files load in 229 ms against 696 ms to compile, and `hackage-packages.nix`
@@ -127,7 +127,7 @@ search path follows the run.
 nix-eval-jobs keeps no on-disk evaluation cache for a file argument, so its
 two rows differ only in page cache.
 
-A second nixpkgs costs little on disk. Evaluating the nixos-desktop
+A second nixpkgs costs little on disk. Evaluating the nixos-server
 workload at a nixpkgs two releases older than the pinned one added one
 tracing entry (0.9 MiB) and 56 IR entries (0.5 MiB).
 
@@ -242,14 +242,14 @@ hit replays: the stdout bytes for `eval`, the root derivation paths for
 adds `drvs` and `sources`, so a hit can still upload the closure, and
 `warnings` holds the lint warnings a hit replays. An `eval` entry leaves out
 `drvs` and `sources`, because nothing would read them back and writing the
-16 MB `drvs` of nixos-desktop cost 40 ms on every miss.
+16 MB `drvs` of nixos-server cost 40 ms on every miss.
 
 One file makes the entry atomic. A killed writer leaves the previous entry
 untouched, and two writers of one key each publish a whole entry. The cost
 is that a hit that refreshed a stat field publishes the whole entry again,
-17 MB for a `build` of nixos-desktop.
+17 MB for a `build` of nixos-server.
 
-The cost of recording is about 3 % at one worker on nixos-desktop, and
+The cost of recording is about 3 % at one worker on nixos-server, and
 inside the noise at four, because the hashing happens on the fiber that read
 the file and so spreads over the workers. What it buys:
 

@@ -17,14 +17,14 @@ Mozilla roots built into it, and `NIX_SSL_CERT_FILE` overrides them
 
 The evaluator keeps its values in its own arena, and everything else comes
 from the global allocator. With musl's malloc the static build ran 24–30%
-slower than the glibc build, and 79% slower on desktop w4 (the nixos-desktop
+slower than the glibc build, and 79% slower on server w4 (the nixos-server
 workload at four workers; `w1` is one worker).
 
 The table times each allocator with hyperfine (1 warmup, 5 runs, median) on
 the `bench/ab.nu` workloads, on an idle Ryzen 9 7950X3D pinned to cores 0–7.
 The baseline is glibc's malloc.
 
-| variant | desktop w1 | desktop w4 | minimal w1 | outpaths 0/8 w1 | outpaths 0/8 w4 |
+| variant | server w1 | server w4 | minimal w1 | outpaths 0/8 w1 | outpaths 0/8 w4 |
 |---|---:|---:|---:|---:|---:|
 | glibc, system | 0.97 s | 0.47 s | 0.74 s | 24.4 s | 9.05 s |
 | glibc, mimalloc | −7% | −7% | −8% | −8% | −7% |
@@ -47,4 +47,4 @@ the fastest on both libcs, so iets uses it on every target.
 
 Even with mimalloc the static build is 9–13% slower than the glibc build.
 Most of the gap is in musl's `memcpy`, `memmove`, `memcmp` and `memset`,
-which take 13.8% of the cycles on desktop w1, where glibc's take 2.9%.
+which take 13.8% of the cycles on server w1, where glibc's take 2.9%.

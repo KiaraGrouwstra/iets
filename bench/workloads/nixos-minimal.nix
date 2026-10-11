@@ -13,7 +13,7 @@ in
       imports = [ (nixpkgs + "/nixos/modules/profiles/minimal.nix") ];
       boot.loader.grub.enable = false;
       fileSystems."/" = { device = "none"; fsType = "tmpfs"; };
-      networking.hostName = "fix-bench-minimal";
+      networking.hostName = "minimal";
       system.stateVersion = "25.11";
       nixpkgs.config = {
         allowUnfree = true;

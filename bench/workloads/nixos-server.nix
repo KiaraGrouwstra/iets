@@ -1,5 +1,5 @@
-# A less trivial NixOS system: several services and a handful of packages, so
-# far more of the module system and nixpkgs is forced than the minimal profile.
+# A NixOS server: several services and a handful of command-line packages,
+# and no desktop. It forces far more of the module system than the minimal one.
 # Resolve nixpkgs through NIX_PATH so this workload can be run directly.
 let
   nixpkgs = <nixpkgs>;
@@ -9,7 +9,7 @@ in
     configuration = { pkgs, ... }: {
       boot.loader.grub.enable = false;
       fileSystems."/" = { device = "none"; fsType = "tmpfs"; };
-      networking.hostName = "fix-bench-desktop";
+      networking.hostName = "server";
       networking.networkmanager.enable = true;
       system.stateVersion = "25.11";
       nixpkgs.config = {

@@ -141,8 +141,8 @@ their complexity. Together they changed:
 
 | | before | after | Nix for scale |
 |---|---|---|---|
-| desktop arena | 937 MB | 629 MB | |
-| desktop peak RSS, 1 worker | 988 MB | 659 MB | 690 MB (`nix-instantiate`) |
+| server arena | 937 MB | 629 MB | |
+| server peak RSS, 1 worker | 988 MB | 659 MB | 690 MB (`nix-instantiate`) |
 | outpaths arena | 13,253 MB | 7,106 MB | |
 | outpaths peak RSS, 1 worker | 13,495 MB | 7,219 MB | 4.8 GB per nix-eval-jobs worker, restarted at that size |
 | outpaths wall, 1 / 4 workers | 32.7 / 15.2 s | 32.5 / 13.5 s | |
@@ -217,9 +217,9 @@ contention:
 
 | workload | workers | wall | user | sys |
 |---|---|---|---|---|
-| nixos-desktop | 1 | 1.67 s | 1.44 s | 0.21 s |
-| nixos-desktop | 4 | 1.01 s | 2.37 s | 0.31 s |
-| nixos-desktop | 16 | 1.27 s | 5.88 s | 0.74 s |
+| nixos-server | 1 | 1.67 s | 1.44 s | 0.21 s |
+| nixos-server | 4 | 1.01 s | 2.37 s | 0.31 s |
+| nixos-server | 16 | 1.27 s | 5.88 s | 0.74 s |
 | nixos-minimal | 1 | 1.32 s | 1.16 s | 0.15 s |
 | nixos-minimal | 4 | 0.89 s | 1.95 s | 0.27 s |
 | nixos-minimal | 16 | 1.18 s | 4.86 s | 0.59 s |
@@ -265,7 +265,7 @@ The demand path pays for this guarantee. A helper leaves its value inside
 the thunk, so the demand path reads the cell, the thunk state and the value,
 writes the value into the cell, and writes `EMPTY` over the helper's mark.
 Against the same tree with helper unboxing put back, this costs 3.2 % of the
-instructions on nixos-desktop at four workers. At one worker there is no
+instructions on nixos-server at four workers. At one worker there is no
 helper, so it costs nothing.
 
 A lint finding is not a value and is held back instead. One a helper

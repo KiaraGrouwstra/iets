@@ -29,7 +29,7 @@ abstraction is wrong or the feature belongs elsewhere.
 1. Byte-exact parity with `nix-instantiate --eval --strict` on the
    `.drvPath` of NixOS systems from nixpkgs. The judge is
    `scripts/difftest.nu`.
-2. Faster than Nix on `bench/workloads/nixos-desktop.nix` with the pinned
+2. Faster than Nix on `bench/workloads/nixos-server.nix` with the pinned
    nixpkgs. Sequential speed first, parallel forcing second.
 3. A polished experience out of the box. The good behaviour is the default
    and needs no flag: errors name the fix, nothing is ignored or fails in
@@ -321,17 +321,17 @@ measure against, and defaults to the pinned source in the scripts;
 
 | script | what it measures |
 |---|---|
-| `bench/run.nu [workload...]` | `nix-instantiate` against iets with hyperfine, on `nixos-desktop` by default |
+| `bench/run.nu [workload...]` | `nix-instantiate` against iets with hyperfine, on `nixos-server` and `nixos-plasma` by default |
 | `bench/perf.nu` | wall, user, sys and peak RSS for one binary |
 | `bench/ab.nu` | the same, comparing two binaries; `--runs N`, `--skip-outpaths` |
 | `bench/nar.nu` | the NAR writer, reader and hashes; `--nix` adds the real-nix reference rows |
 | `bench/eval-jobs.nu [rounds]` | `iets eval-jobs` against `nix-eval-jobs` on `nixos/release-small.nix`, 4 workers, cold and warm cache runs interleaved; `--no-parity` skips the `--force-recurse` job-set comparison |
-| `bench/cache-growth.nu` | evaluates `bench/workloads/nixos-desktop.nix` at two nixpkgs revisions and reports what the second adds to each cache |
+| `bench/cache-growth.nu` | evaluates `bench/workloads/nixos-server.nix` at two nixpkgs revisions and reports what the second adds to each cache |
 
 The two standard workloads:
 
 ```
-iets eval --impure --strict --no-tracing-cache --workers 1 -I nixpkgs=$NIXPKGS bench/workloads/nixos-desktop.nix
+iets eval --impure --strict --no-tracing-cache --workers 1 -I nixpkgs=$NIXPKGS bench/workloads/nixos-server.nix
 iets eval-jobs --impure --no-instantiate --workers 1 --chunks 8 --chunk 0   # ci/eval/outpaths.nix
 ```
 
@@ -343,7 +343,7 @@ per fiber, and so are the arena figures. A fiber adds its own to the run
 total whenever it parks or finishes, so the printed numbers cover every
 worker, and a workload's derivation count is the same at one worker and
 at four. The arena sum grows with workers because each arena interns its
-own strings: on nixos-desktop, ~630 MB at one worker and ~645 MB at four.
+own strings: on nixos-server, ~630 MB at one worker and ~645 MB at four.
 `rss_kb` is always the whole process.
 
 ## Conventions

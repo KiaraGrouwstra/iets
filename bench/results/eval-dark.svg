@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="800" height="566" viewBox="0 0 800 566" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="12">
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="744" viewBox="0 0 800 744" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="12">
 <text x="0" y="16" font-size="15" font-weight="600" fill="#f0f6fc">Eval wall time, lower is better</text>
 <rect x="0" y="30" width="10" height="10" rx="2" fill="#3987e5"/><text x="14" y="39" fill="#c3c2b7">Nix</text>
 <rect x="53" y="30" width="10" height="10" rx="2" fill="#008300"/><text x="67" y="39" fill="#c3c2b7">Lix</text>
@@ -6,189 +6,277 @@
 <rect x="229" y="30" width="10" height="10" rx="2" fill="#c98500"/><text x="243" y="39" fill="#c3c2b7">fix, 4 workers</text>
 <rect x="359" y="30" width="10" height="10" rx="2" fill="#199e70"/><text x="373" y="39" fill="#c3c2b7">iets, 1 worker</text>
 <rect x="489" y="30" width="10" height="10" rx="2" fill="#9085e9"/><text x="503" y="39" fill="#c3c2b7">iets, 4 workers</text>
-<text x="0" y="72" font-weight="600" fill="#f0f6fc">nixos-desktop</text><text x="378" y="72" text-anchor="end" fill="#9198a1">warm page cache, 10 runs</text>
+<text x="0" y="72" font-weight="600" fill="#f0f6fc">nixos-plasma</text><text x="378" y="72" text-anchor="end" fill="#9198a1">warm page cache, 10 runs</text>
 <line x1="100" x2="100" y1="78" y2="214" stroke="#3d444d"/>
 <text x="94" y="93.0" text-anchor="end" fill="#c3c2b7">Nix</text>
-<g><title>nix, nixos-desktop warm: mean 2.15 s, min 2.12 s, max 2.17 s, 10 runs</title>
-<path d="M100 82h81.4a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-81.4z" fill="#3987e5"/>
-<line x1="184.2" x2="186.3" y1="89.0" y2="89.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="184.2" x2="184.2" y1="85.0" y2="93.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="186.3" x2="186.3" y1="85.0" y2="93.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
-<text x="192.3" y="93.0" fill="#f0f6fc">2.15 s<tspan dx="6" fill="#c3c2b7"></tspan></text>
+<g><title>nix, nixos-plasma warm: mean 3.52 s, min 3.50 s, max 3.54 s, 10 runs</title>
+<path d="M100 82h90.69999999999999a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-90.69999999999999z" fill="#3987e5"/>
+<line x1="194.2" x2="195.1" y1="89.0" y2="89.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="194.2" x2="194.2" y1="85.0" y2="93.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="195.1" x2="195.1" y1="85.0" y2="93.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="201.1" y="93.0" fill="#f0f6fc">3.52 s<tspan dx="6" fill="#c3c2b7"></tspan></text>
 <text x="94" y="115.0" text-anchor="end" fill="#c3c2b7">Lix</text>
-<g><title>lix, nixos-desktop warm: mean 2.13 s, min 2.12 s, max 2.14 s, 10 runs</title>
-<path d="M100 104h80.69999999999999a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-80.69999999999999z" fill="#008300"/>
-<line x1="184.4" x2="185.2" y1="111.0" y2="111.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="184.4" x2="184.4" y1="107.0" y2="115.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="185.2" x2="185.2" y1="107.0" y2="115.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
-<text x="191.2" y="115.0" fill="#f0f6fc">2.13 s<tspan dx="6" fill="#c3c2b7">· ≈ Nix</tspan></text>
+<g><title>lix, nixos-plasma warm: mean 3.54 s, min 3.53 s, max 3.55 s, 10 runs</title>
+<path d="M100 104h91.19999999999999a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-91.19999999999999z" fill="#008300"/>
+<line x1="194.9" x2="195.5" y1="111.0" y2="111.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="194.9" x2="194.9" y1="107.0" y2="115.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="195.5" x2="195.5" y1="107.0" y2="115.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="201.5" y="115.0" fill="#f0f6fc">3.54 s<tspan dx="6" fill="#c3c2b7">· ≈ Nix</tspan></text>
 <text x="94" y="137.0" text-anchor="end" fill="#c3c2b7">fix, 1 worker</text>
-<g><title>fix w1, nixos-desktop warm: mean 2.63 s, min 2.63 s, max 2.64 s, 10 runs</title>
-<path d="M100 126h100.80000000000001a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-100.80000000000001z" fill="#d55181"/>
-<line x1="204.5" x2="205.1" y1="133.0" y2="133.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="204.5" x2="204.5" y1="129.0" y2="137.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="205.1" x2="205.1" y1="129.0" y2="137.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
-<text x="211.1" y="137.0" fill="#f0f6fc">2.63 s<tspan dx="6" fill="#c3c2b7">· 1.2× slower</tspan></text>
+<g><title>fix w1, nixos-plasma warm: mean 3.94 s, min 3.92 s, max 3.96 s, 10 runs</title>
+<path d="M100 126h102.1a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-102.1z" fill="#d55181"/>
+<line x1="205.3" x2="206.5" y1="133.0" y2="133.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="205.3" x2="205.3" y1="129.0" y2="137.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="206.5" x2="206.5" y1="129.0" y2="137.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="212.5" y="137.0" fill="#f0f6fc">3.94 s<tspan dx="6" fill="#c3c2b7">· 1.1× slower</tspan></text>
 <text x="94" y="159.0" text-anchor="end" fill="#c3c2b7">fix, 4 workers</text>
-<g><title>fix w4, nixos-desktop warm: mean 1.27 s, min 1.19 s, max 1.39 s, 10 runs</title>
-<path d="M100 148h46.599999999999994a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-46.599999999999994z" fill="#c98500"/>
-<line x1="147.3" x2="155.4" y1="155.0" y2="155.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="147.3" x2="147.3" y1="151.0" y2="159.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="155.4" x2="155.4" y1="151.0" y2="159.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
-<text x="161.4" y="159.0" fill="#f0f6fc">1.27 s<tspan dx="6" fill="#c3c2b7">· 1.7× faster</tspan></text>
+<g><title>fix w4, nixos-plasma warm: mean 1.80 s, min 1.59 s, max 1.99 s, 10 runs</title>
+<path d="M100 148h44.5a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-44.5z" fill="#c98500"/>
+<line x1="142.8" x2="153.4" y1="155.0" y2="155.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="142.8" x2="142.8" y1="151.0" y2="159.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="153.4" x2="153.4" y1="151.0" y2="159.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="159.4" y="159.0" fill="#f0f6fc">1.80 s<tspan dx="6" fill="#c3c2b7">· 2.0× faster</tspan></text>
 <text x="94" y="181.0" text-anchor="end" fill="#c3c2b7">iets, 1 worker</text>
-<g><title>iets w1, nixos-desktop warm: mean 1.13 s, min 1.12 s, max 1.13 s, 10 runs</title>
-<path d="M100 170h40.80000000000001a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-40.80000000000001z" fill="#199e70"/>
-<line x1="144.6" x2="145.0" y1="177.0" y2="177.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="144.6" x2="144.6" y1="173.0" y2="181.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="145.0" x2="145.0" y1="173.0" y2="181.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
-<text x="151.0" y="181.0" fill="#f0f6fc">1.13 s<tspan dx="6" fill="#c3c2b7">· 1.9× faster</tspan></text>
+<g><title>iets w1, nixos-plasma warm: mean 1.97 s, min 1.94 s, max 2.01 s, 10 runs</title>
+<path d="M100 170h49.099999999999994a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-49.099999999999994z" fill="#199e70"/>
+<line x1="152.1" x2="154.0" y1="177.0" y2="177.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="152.1" x2="152.1" y1="173.0" y2="181.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="154.0" x2="154.0" y1="173.0" y2="181.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="160.0" y="181.0" fill="#f0f6fc">1.97 s<tspan dx="6" fill="#c3c2b7">· 1.8× faster</tspan></text>
 <text x="94" y="203.0" text-anchor="end" fill="#c3c2b7">iets, 4 workers</text>
-<g><title>iets w4, nixos-desktop warm: mean 0.61 s, min 0.60 s, max 0.62 s, 10 runs</title>
-<path d="M100 192h20.099999999999994a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-20.099999999999994z" fill="#9085e9"/>
-<line x1="123.8" x2="124.7" y1="199.0" y2="199.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="123.8" x2="123.8" y1="195.0" y2="203.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="124.7" x2="124.7" y1="195.0" y2="203.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
-<text x="130.7" y="203.0" fill="#f0f6fc">0.61 s<tspan dx="6" fill="#c3c2b7">· 3.5× faster</tspan></text>
-<text x="414" y="72" font-weight="600" fill="#f0f6fc">nixos-desktop</text><text x="792" y="72" text-anchor="end" fill="#9198a1">cold page cache, 5 runs</text>
+<g><title>iets w4, nixos-plasma warm: mean 0.70 s, min 0.69 s, max 0.71 s, 10 runs</title>
+<path d="M100 192h14.900000000000006a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-14.900000000000006z" fill="#9085e9"/>
+<line x1="118.6" x2="119.2" y1="199.0" y2="199.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="118.6" x2="118.6" y1="195.0" y2="203.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="119.2" x2="119.2" y1="195.0" y2="203.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="125.2" y="203.0" fill="#f0f6fc">0.70 s<tspan dx="6" fill="#c3c2b7">· 5.0× faster</tspan></text>
+<text x="414" y="72" font-weight="600" fill="#f0f6fc">nixos-plasma</text><text x="792" y="72" text-anchor="end" fill="#9198a1">cold page cache, 5 runs</text>
 <line x1="514" x2="514" y1="78" y2="214" stroke="#3d444d"/>
 <text x="508" y="93.0" text-anchor="end" fill="#c3c2b7">Nix</text>
-<g><title>nix, nixos-desktop cold: mean 2.77 s, min 2.77 s, max 2.79 s, 5 runs</title>
-<path d="M514 82h106.39999999999998a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-106.39999999999998z" fill="#3987e5"/>
-<line x1="624.1" x2="624.9" y1="89.0" y2="89.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="624.1" x2="624.1" y1="85.0" y2="93.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="624.9" x2="624.9" y1="85.0" y2="93.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
-<text x="630.9" y="93.0" fill="#f0f6fc">2.77 s<tspan dx="6" fill="#c3c2b7"></tspan></text>
+<g><title>nix, nixos-plasma cold: mean 4.34 s, min 4.32 s, max 4.36 s, 5 runs</title>
+<path d="M514 82h112.79999999999995a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-112.79999999999995z" fill="#3987e5"/>
+<line x1="630.3" x2="631.2" y1="89.0" y2="89.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="630.3" x2="630.3" y1="85.0" y2="93.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="631.2" x2="631.2" y1="85.0" y2="93.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="637.2" y="93.0" fill="#f0f6fc">4.34 s<tspan dx="6" fill="#c3c2b7"></tspan></text>
 <text x="508" y="115.0" text-anchor="end" fill="#c3c2b7">Lix</text>
-<g><title>lix, nixos-desktop cold: mean 2.73 s, min 2.72 s, max 2.74 s, 5 runs</title>
-<path d="M514 104h104.5a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-104.5z" fill="#008300"/>
-<line x1="622.1" x2="623.1" y1="111.0" y2="111.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="622.1" x2="622.1" y1="107.0" y2="115.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="623.1" x2="623.1" y1="107.0" y2="115.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
-<text x="629.1" y="115.0" fill="#f0f6fc">2.73 s<tspan dx="6" fill="#c3c2b7">· ≈ Nix</tspan></text>
+<g><title>lix, nixos-plasma cold: mean 4.34 s, min 4.33 s, max 4.34 s, 5 runs</title>
+<path d="M514 104h112.60000000000002a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-112.60000000000002z" fill="#008300"/>
+<line x1="630.5" x2="630.9" y1="111.0" y2="111.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="630.5" x2="630.5" y1="107.0" y2="115.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="630.9" x2="630.9" y1="107.0" y2="115.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="636.9" y="115.0" fill="#f0f6fc">4.34 s<tspan dx="6" fill="#c3c2b7">· ≈ Nix</tspan></text>
 <text x="508" y="137.0" text-anchor="end" fill="#c3c2b7">fix, 1 worker</text>
-<g><title>fix w1, nixos-desktop cold: mean 3.21 s, min 3.20 s, max 3.22 s, 5 runs</title>
+<g><title>fix w1, nixos-plasma cold: mean 4.75 s, min 4.72 s, max 4.76 s, 5 runs</title>
 <path d="M514 126h123.70000000000005a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-123.70000000000005z" fill="#d55181"/>
-<line x1="641.2" x2="642.0" y1="133.0" y2="133.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="641.2" x2="641.2" y1="129.0" y2="137.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="641.1" x2="642.0" y1="133.0" y2="133.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="641.1" x2="641.1" y1="129.0" y2="137.0" stroke="#f0f6fc" stroke-width="1.5"/>
 <line x1="642.0" x2="642.0" y1="129.0" y2="137.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
-<text x="648.0" y="137.0" fill="#f0f6fc">3.21 s<tspan dx="6" fill="#c3c2b7">· 1.2× slower</tspan></text>
+<text x="648.0" y="137.0" fill="#f0f6fc">4.75 s<tspan dx="6" fill="#c3c2b7">· 1.1× slower</tspan></text>
 <text x="508" y="159.0" text-anchor="end" fill="#c3c2b7">fix, 4 workers</text>
-<g><title>fix w4, nixos-desktop cold: mean 1.47 s, min 1.39 s, max 1.61 s, 5 runs</title>
-<path d="M514 148h54.5a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-54.5z" fill="#c98500"/>
-<line x1="569.2" x2="578.0" y1="155.0" y2="155.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="569.2" x2="569.2" y1="151.0" y2="159.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="578.0" x2="578.0" y1="151.0" y2="159.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
-<text x="584.0" y="159.0" fill="#f0f6fc">1.47 s<tspan dx="6" fill="#c3c2b7">· 1.9× faster</tspan></text>
+<g><title>fix w4, nixos-plasma cold: mean 2.08 s, min 1.89 s, max 2.22 s, 5 runs</title>
+<path d="M514 148h52.0a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-52.0z" fill="#c98500"/>
+<line x1="564.9" x2="573.8" y1="155.0" y2="155.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="564.9" x2="564.9" y1="151.0" y2="159.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="573.8" x2="573.8" y1="151.0" y2="159.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="579.8" y="159.0" fill="#f0f6fc">2.08 s<tspan dx="6" fill="#c3c2b7">· 2.1× faster</tspan></text>
 <text x="508" y="181.0" text-anchor="end" fill="#c3c2b7">iets, 1 worker</text>
-<g><title>iets w1, nixos-desktop cold: mean 1.66 s, min 1.65 s, max 1.66 s, 5 runs</title>
-<path d="M514 170h61.89999999999998a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-61.89999999999998z" fill="#199e70"/>
-<line x1="579.8" x2="580.1" y1="177.0" y2="177.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="579.8" x2="579.8" y1="173.0" y2="181.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="580.1" x2="580.1" y1="173.0" y2="181.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
-<text x="586.1" y="181.0" fill="#f0f6fc">1.66 s<tspan dx="6" fill="#c3c2b7">· 1.7× faster</tspan></text>
+<g><title>iets w1, nixos-plasma cold: mean 2.69 s, min 2.66 s, max 2.75 s, 5 runs</title>
+<path d="M514 170h68.39999999999998a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-68.39999999999998z" fill="#199e70"/>
+<line x1="585.6" x2="587.9" y1="177.0" y2="177.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="585.6" x2="585.6" y1="173.0" y2="181.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="587.9" x2="587.9" y1="173.0" y2="181.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="593.9" y="181.0" fill="#f0f6fc">2.69 s<tspan dx="6" fill="#c3c2b7">· 1.6× faster</tspan></text>
 <text x="508" y="203.0" text-anchor="end" fill="#c3c2b7">iets, 4 workers</text>
-<g><title>iets w4, nixos-desktop cold: mean 0.82 s, min 0.80 s, max 0.83 s, 5 runs</title>
-<path d="M514 192h28.5a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-28.5z" fill="#9085e9"/>
-<line x1="545.9" x2="547.2" y1="199.0" y2="199.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="545.9" x2="545.9" y1="195.0" y2="203.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="547.2" x2="547.2" y1="195.0" y2="203.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
-<text x="553.2" y="203.0" fill="#f0f6fc">0.82 s<tspan dx="6" fill="#c3c2b7">· 3.4× faster</tspan></text>
-<text x="0" y="250" font-weight="600" fill="#f0f6fc">nixos-minimal</text><text x="378" y="250" text-anchor="end" fill="#9198a1">warm page cache, 10 runs</text>
+<g><title>iets w4, nixos-plasma cold: mean 0.98 s, min 0.98 s, max 0.99 s, 5 runs</title>
+<path d="M514 192h22.5a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-22.5z" fill="#9085e9"/>
+<line x1="540.3" x2="540.6" y1="199.0" y2="199.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="540.3" x2="540.3" y1="195.0" y2="203.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="540.6" x2="540.6" y1="195.0" y2="203.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="546.6" y="203.0" fill="#f0f6fc">0.98 s<tspan dx="6" fill="#c3c2b7">· 4.4× faster</tspan></text>
+<text x="0" y="250" font-weight="600" fill="#f0f6fc">nixos-server</text><text x="378" y="250" text-anchor="end" fill="#9198a1">warm page cache, 10 runs</text>
 <line x1="100" x2="100" y1="256" y2="392" stroke="#3d444d"/>
 <text x="94" y="271.0" text-anchor="end" fill="#c3c2b7">Nix</text>
-<g><title>nix, nixos-minimal warm: mean 1.73 s, min 1.72 s, max 1.73 s, 10 runs</title>
-<path d="M100 260h84.0a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-84.0z" fill="#3987e5"/>
-<line x1="187.6" x2="188.4" y1="267.0" y2="267.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="187.6" x2="187.6" y1="263.0" y2="271.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="188.4" x2="188.4" y1="263.0" y2="271.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
-<text x="194.4" y="271.0" fill="#f0f6fc">1.73 s<tspan dx="6" fill="#c3c2b7"></tspan></text>
+<g><title>nix, nixos-server warm: mean 2.15 s, min 2.13 s, max 2.17 s, 10 runs</title>
+<path d="M100 260h82.69999999999999a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-82.69999999999999z" fill="#3987e5"/>
+<line x1="185.9" x2="187.2" y1="267.0" y2="267.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="185.9" x2="185.9" y1="263.0" y2="271.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="187.2" x2="187.2" y1="263.0" y2="271.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="193.2" y="271.0" fill="#f0f6fc">2.15 s<tspan dx="6" fill="#c3c2b7"></tspan></text>
 <text x="94" y="293.0" text-anchor="end" fill="#c3c2b7">Lix</text>
-<g><title>lix, nixos-minimal warm: mean 1.68 s, min 1.68 s, max 1.69 s, 10 runs</title>
-<path d="M100 282h81.69999999999999a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-81.69999999999999z" fill="#008300"/>
-<line x1="185.4" x2="186.0" y1="289.0" y2="289.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="185.4" x2="185.4" y1="285.0" y2="293.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="186.0" x2="186.0" y1="285.0" y2="293.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
-<text x="192.0" y="293.0" fill="#f0f6fc">1.68 s<tspan dx="6" fill="#c3c2b7">· ≈ Nix</tspan></text>
+<g><title>lix, nixos-server warm: mean 2.12 s, min 2.11 s, max 2.12 s, 10 runs</title>
+<path d="M100 282h81.1a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-81.1z" fill="#008300"/>
+<line x1="184.8" x2="185.5" y1="289.0" y2="289.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="184.8" x2="184.8" y1="285.0" y2="293.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="185.5" x2="185.5" y1="285.0" y2="293.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="191.5" y="293.0" fill="#f0f6fc">2.12 s<tspan dx="6" fill="#c3c2b7">· ≈ Nix</tspan></text>
 <text x="94" y="315.0" text-anchor="end" fill="#c3c2b7">fix, 1 worker</text>
-<g><title>fix w1, nixos-minimal warm: mean 2.04 s, min 2.03 s, max 2.05 s, 10 runs</title>
-<path d="M100 304h100.1a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-100.1z" fill="#d55181"/>
-<line x1="203.6" x2="204.4" y1="311.0" y2="311.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="203.6" x2="203.6" y1="307.0" y2="315.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="204.4" x2="204.4" y1="307.0" y2="315.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
-<text x="210.4" y="315.0" fill="#f0f6fc">2.04 s<tspan dx="6" fill="#c3c2b7">· 1.2× slower</tspan></text>
+<g><title>fix w1, nixos-server warm: mean 2.60 s, min 2.58 s, max 2.61 s, 10 runs</title>
+<path d="M100 304h100.4a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-100.4z" fill="#d55181"/>
+<line x1="204.0" x2="205.1" y1="311.0" y2="311.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="204.0" x2="204.0" y1="307.0" y2="315.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="205.1" x2="205.1" y1="307.0" y2="315.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="211.1" y="315.0" fill="#f0f6fc">2.60 s<tspan dx="6" fill="#c3c2b7">· 1.2× slower</tspan></text>
 <text x="94" y="337.0" text-anchor="end" fill="#c3c2b7">fix, 4 workers</text>
-<g><title>fix w4, nixos-minimal warm: mean 0.86 s, min 0.78 s, max 0.95 s, 10 runs</title>
-<path d="M100 326h39.80000000000001a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-39.80000000000001z" fill="#c98500"/>
-<line x1="139.8" x2="148.3" y1="333.0" y2="333.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="139.8" x2="139.8" y1="329.0" y2="337.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="148.3" x2="148.3" y1="329.0" y2="337.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
-<text x="154.3" y="337.0" fill="#f0f6fc">0.86 s<tspan dx="6" fill="#c3c2b7">· 2.0× faster</tspan></text>
+<g><title>fix w4, nixos-server warm: mean 1.31 s, min 1.16 s, max 1.39 s, 10 runs</title>
+<path d="M100 326h48.69999999999999a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-48.69999999999999z" fill="#c98500"/>
+<line x1="146.5" x2="156.1" y1="333.0" y2="333.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="146.5" x2="146.5" y1="329.0" y2="337.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="156.1" x2="156.1" y1="329.0" y2="337.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="162.1" y="337.0" fill="#f0f6fc">1.31 s<tspan dx="6" fill="#c3c2b7">· 1.6× faster</tspan></text>
 <text x="94" y="359.0" text-anchor="end" fill="#c3c2b7">iets, 1 worker</text>
-<g><title>iets w1, nixos-minimal warm: mean 0.89 s, min 0.89 s, max 0.90 s, 10 runs</title>
-<path d="M100 348h41.5a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-41.5z" fill="#199e70"/>
-<line x1="145.3" x2="145.8" y1="355.0" y2="355.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="145.3" x2="145.3" y1="351.0" y2="359.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="145.8" x2="145.8" y1="351.0" y2="359.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
-<text x="151.8" y="359.0" fill="#f0f6fc">0.89 s<tspan dx="6" fill="#c3c2b7">· 1.9× faster</tspan></text>
+<g><title>iets w1, nixos-server warm: mean 1.29 s, min 1.26 s, max 1.32 s, 10 runs</title>
+<path d="M100 348h48.0a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-48.0z" fill="#199e70"/>
+<line x1="150.9" x2="153.0" y1="355.0" y2="355.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="150.9" x2="150.9" y1="351.0" y2="359.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="153.0" x2="153.0" y1="351.0" y2="359.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="159.0" y="359.0" fill="#f0f6fc">1.29 s<tspan dx="6" fill="#c3c2b7">· 1.7× faster</tspan></text>
 <text x="94" y="381.0" text-anchor="end" fill="#c3c2b7">iets, 4 workers</text>
-<g><title>iets w4, nixos-minimal warm: mean 0.51 s, min 0.51 s, max 0.53 s, 10 runs</title>
-<path d="M100 370h22.200000000000003a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-22.200000000000003z" fill="#9085e9"/>
-<line x1="125.8" x2="126.9" y1="377.0" y2="377.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="125.8" x2="125.8" y1="373.0" y2="381.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="126.9" x2="126.9" y1="373.0" y2="381.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
-<text x="132.9" y="381.0" fill="#f0f6fc">0.51 s<tspan dx="6" fill="#c3c2b7">· 3.4× faster</tspan></text>
-<text x="414" y="250" font-weight="600" fill="#f0f6fc">nixos-minimal</text><text x="792" y="250" text-anchor="end" fill="#9198a1">cold page cache, 5 runs</text>
+<g><title>iets w4, nixos-server warm: mean 0.55 s, min 0.54 s, max 0.57 s, 10 runs</title>
+<path d="M100 370h18.099999999999994a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-18.099999999999994z" fill="#9085e9"/>
+<line x1="121.9" x2="122.9" y1="377.0" y2="377.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="121.9" x2="121.9" y1="373.0" y2="381.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="122.9" x2="122.9" y1="373.0" y2="381.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="128.9" y="381.0" fill="#f0f6fc">0.55 s<tspan dx="6" fill="#c3c2b7">· 3.9× faster</tspan></text>
+<text x="414" y="250" font-weight="600" fill="#f0f6fc">nixos-server</text><text x="792" y="250" text-anchor="end" fill="#9198a1">cold page cache, 5 runs</text>
 <line x1="514" x2="514" y1="256" y2="392" stroke="#3d444d"/>
 <text x="508" y="271.0" text-anchor="end" fill="#c3c2b7">Nix</text>
-<g><title>nix, nixos-minimal cold: mean 2.22 s, min 2.21 s, max 2.22 s, 5 runs</title>
-<path d="M514 260h109.0a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-109.0z" fill="#3987e5"/>
-<line x1="626.8" x2="627.1" y1="267.0" y2="267.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="626.8" x2="626.8" y1="263.0" y2="271.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="627.1" x2="627.1" y1="263.0" y2="271.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
-<text x="633.1" y="271.0" fill="#f0f6fc">2.22 s<tspan dx="6" fill="#c3c2b7"></tspan></text>
+<g><title>nix, nixos-server cold: mean 2.77 s, min 2.76 s, max 2.78 s, 5 runs</title>
+<path d="M514 260h107.5a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-107.5z" fill="#3987e5"/>
+<line x1="625.2" x2="625.8" y1="267.0" y2="267.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="625.2" x2="625.2" y1="263.0" y2="271.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="625.8" x2="625.8" y1="263.0" y2="271.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="631.8" y="271.0" fill="#f0f6fc">2.77 s<tspan dx="6" fill="#c3c2b7"></tspan></text>
 <text x="508" y="293.0" text-anchor="end" fill="#c3c2b7">Lix</text>
-<g><title>lix, nixos-minimal cold: mean 2.17 s, min 2.16 s, max 2.18 s, 5 runs</title>
-<path d="M514 282h106.60000000000002a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-106.60000000000002z" fill="#008300"/>
-<line x1="624.1" x2="625.0" y1="289.0" y2="289.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="624.1" x2="624.1" y1="285.0" y2="293.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="625.0" x2="625.0" y1="285.0" y2="293.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
-<text x="631.0" y="293.0" fill="#f0f6fc">2.17 s<tspan dx="6" fill="#c3c2b7">· ≈ Nix</tspan></text>
+<g><title>lix, nixos-server cold: mean 2.71 s, min 2.70 s, max 2.72 s, 5 runs</title>
+<path d="M514 282h105.20000000000005a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-105.20000000000005z" fill="#008300"/>
+<line x1="622.8" x2="623.6" y1="289.0" y2="289.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="622.8" x2="622.8" y1="285.0" y2="293.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="623.6" x2="623.6" y1="285.0" y2="293.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="629.6" y="293.0" fill="#f0f6fc">2.71 s<tspan dx="6" fill="#c3c2b7">· ≈ Nix</tspan></text>
 <text x="508" y="315.0" text-anchor="end" fill="#c3c2b7">fix, 1 worker</text>
-<g><title>fix w1, nixos-minimal cold: mean 2.50 s, min 2.50 s, max 2.51 s, 5 runs</title>
-<path d="M514 304h123.70000000000005a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-123.70000000000005z" fill="#d55181"/>
-<line x1="641.6" x2="642.0" y1="311.0" y2="311.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="641.6" x2="641.6" y1="307.0" y2="315.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<g><title>fix w1, nixos-server cold: mean 3.17 s, min 3.16 s, max 3.18 s, 5 runs</title>
+<path d="M514 304h123.60000000000002a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-123.60000000000002z" fill="#d55181"/>
+<line x1="641.3" x2="642.0" y1="311.0" y2="311.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="641.3" x2="641.3" y1="307.0" y2="315.0" stroke="#f0f6fc" stroke-width="1.5"/>
 <line x1="642.0" x2="642.0" y1="307.0" y2="315.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
-<text x="648.0" y="315.0" fill="#f0f6fc">2.50 s<tspan dx="6" fill="#c3c2b7">· 1.1× slower</tspan></text>
+<text x="648.0" y="315.0" fill="#f0f6fc">3.17 s<tspan dx="6" fill="#c3c2b7">· 1.1× slower</tspan></text>
 <text x="508" y="337.0" text-anchor="end" fill="#c3c2b7">fix, 4 workers</text>
-<g><title>fix w4, nixos-minimal cold: mean 0.99 s, min 0.95 s, max 1.08 s, 5 runs</title>
-<path d="M514 326h46.700000000000045a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-46.700000000000045z" fill="#c98500"/>
-<line x1="562.7" x2="568.9" y1="333.0" y2="333.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="562.7" x2="562.7" y1="329.0" y2="337.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="568.9" x2="568.9" y1="329.0" y2="337.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
-<text x="574.9" y="337.0" fill="#f0f6fc">0.99 s<tspan dx="6" fill="#c3c2b7">· 2.2× faster</tspan></text>
+<g><title>fix w4, nixos-server cold: mean 1.42 s, min 1.36 s, max 1.52 s, 5 runs</title>
+<path d="M514 326h53.200000000000045a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-53.200000000000045z" fill="#c98500"/>
+<line x1="568.6" x2="575.1" y1="333.0" y2="333.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="568.6" x2="568.6" y1="329.0" y2="337.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="575.1" x2="575.1" y1="329.0" y2="337.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="581.1" y="337.0" fill="#f0f6fc">1.42 s<tspan dx="6" fill="#c3c2b7">· 1.9× faster</tspan></text>
 <text x="508" y="359.0" text-anchor="end" fill="#c3c2b7">iets, 1 worker</text>
-<g><title>iets w1, nixos-minimal cold: mean 1.32 s, min 1.32 s, max 1.32 s, 5 runs</title>
-<path d="M514 348h63.200000000000045a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-63.200000000000045z" fill="#199e70"/>
-<line x1="581.1" x2="581.5" y1="355.0" y2="355.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="581.1" x2="581.1" y1="351.0" y2="359.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="581.5" x2="581.5" y1="351.0" y2="359.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
-<text x="587.5" y="359.0" fill="#f0f6fc">1.32 s<tspan dx="6" fill="#c3c2b7">· 1.7× faster</tspan></text>
+<g><title>iets w1, nixos-server cold: mean 1.78 s, min 1.73 s, max 1.81 s, 5 runs</title>
+<path d="M514 348h67.5a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-67.5z" fill="#199e70"/>
+<line x1="583.8" x2="587.0" y1="355.0" y2="355.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="583.8" x2="583.8" y1="351.0" y2="359.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="587.0" x2="587.0" y1="351.0" y2="359.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="593.0" y="359.0" fill="#f0f6fc">1.78 s<tspan dx="6" fill="#c3c2b7">· 1.6× faster</tspan></text>
 <text x="508" y="381.0" text-anchor="end" fill="#c3c2b7">iets, 4 workers</text>
-<g><title>iets w4, nixos-minimal cold: mean 0.71 s, min 0.70 s, max 0.71 s, 5 runs</title>
-<path d="M514 370h32.200000000000045a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-32.200000000000045z" fill="#9085e9"/>
-<line x1="549.9" x2="550.4" y1="377.0" y2="377.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="549.9" x2="549.9" y1="373.0" y2="381.0" stroke="#f0f6fc" stroke-width="1.5"/>
-<line x1="550.4" x2="550.4" y1="373.0" y2="381.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
-<text x="556.4" y="381.0" fill="#f0f6fc">0.71 s<tspan dx="6" fill="#c3c2b7">· 3.1× faster</tspan></text>
-<text x="0" y="418" font-size="11" fill="#9198a1">date: 2026-10-10T17:28:28Z</text>
-<text x="0" y="434" font-size="11" fill="#9198a1">host: bld1, 32 cores, AMD Ryzen 9 7950X3D 16-Core Processor, kernel 6.18.45</text>
-<text x="0" y="450" font-size="11" fill="#9198a1">nix: nix-instantiate (Nix) 2.34.8</text>
-<text x="0" y="466" font-size="11" fill="#9198a1">lix: nix-instantiate (Lix, like Nix) 2.95.2</text>
-<text x="0" y="482" font-size="11" fill="#9198a1">fix: fix 0.3.0 (Nix language compatibility 2.18.3), e0c1f6d6</text>
-<text x="0" y="498" font-size="11" fill="#9198a1">iets: d821a699, sha256 2b40627a272fb088</text>
-<text x="0" y="514" font-size="11" fill="#9198a1">nixpkgs: 26.11 a831408e6378bc02ebf8cc09b52c96ca86f6bab4</text>
-<text x="0" y="530" font-size="11" fill="#9198a1">hyperfine: hyperfine 1.20.0</text>
-<text x="0" y="546" font-size="11" fill="#9198a1">Bars: mean. Whiskers: min to max. Eval caches off; cold drops the page cache before each run.</text>
+<g><title>iets w4, nixos-server cold: mean 0.76 s, min 0.76 s, max 0.77 s, 5 runs</title>
+<path d="M514 370h26.700000000000045a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-26.700000000000045z" fill="#9085e9"/>
+<line x1="544.4" x2="544.9" y1="377.0" y2="377.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="544.4" x2="544.4" y1="373.0" y2="381.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="544.9" x2="544.9" y1="373.0" y2="381.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="550.9" y="381.0" fill="#f0f6fc">0.76 s<tspan dx="6" fill="#c3c2b7">· 3.6× faster</tspan></text>
+<text x="0" y="428" font-weight="600" fill="#f0f6fc">nixos-minimal</text><text x="378" y="428" text-anchor="end" fill="#9198a1">warm page cache, 10 runs</text>
+<line x1="100" x2="100" y1="434" y2="570" stroke="#3d444d"/>
+<text x="94" y="449.0" text-anchor="end" fill="#c3c2b7">Nix</text>
+<g><title>nix, nixos-minimal warm: mean 1.72 s, min 1.71 s, max 1.74 s, 10 runs</title>
+<path d="M100 438h84.19999999999999a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-84.19999999999999z" fill="#3987e5"/>
+<line x1="187.8" x2="188.9" y1="445.0" y2="445.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="187.8" x2="187.8" y1="441.0" y2="449.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="188.9" x2="188.9" y1="441.0" y2="449.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="194.9" y="449.0" fill="#f0f6fc">1.72 s<tspan dx="6" fill="#c3c2b7"></tspan></text>
+<text x="94" y="471.0" text-anchor="end" fill="#c3c2b7">Lix</text>
+<g><title>lix, nixos-minimal warm: mean 1.67 s, min 1.67 s, max 1.68 s, 10 runs</title>
+<path d="M100 460h81.80000000000001a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-81.80000000000001z" fill="#008300"/>
+<line x1="185.4" x2="186.2" y1="467.0" y2="467.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="185.4" x2="185.4" y1="463.0" y2="471.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="186.2" x2="186.2" y1="463.0" y2="471.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="192.2" y="471.0" fill="#f0f6fc">1.67 s<tspan dx="6" fill="#c3c2b7">· ≈ Nix</tspan></text>
+<text x="94" y="493.0" text-anchor="end" fill="#c3c2b7">fix, 1 worker</text>
+<g><title>fix w1, nixos-minimal warm: mean 2.01 s, min 1.99 s, max 2.03 s, 10 runs</title>
+<path d="M100 482h99.1a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-99.1z" fill="#d55181"/>
+<line x1="202.0" x2="203.9" y1="489.0" y2="489.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="202.0" x2="202.0" y1="485.0" y2="493.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="203.9" x2="203.9" y1="485.0" y2="493.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="209.9" y="493.0" fill="#f0f6fc">2.01 s<tspan dx="6" fill="#c3c2b7">· 1.2× slower</tspan></text>
+<text x="94" y="515.0" text-anchor="end" fill="#c3c2b7">fix, 4 workers</text>
+<g><title>fix w4, nixos-minimal warm: mean 0.81 s, min 0.76 s, max 0.92 s, 10 runs</title>
+<path d="M100 504h37.69999999999999a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-37.69999999999999z" fill="#c98500"/>
+<line x1="138.9" x2="147.0" y1="511.0" y2="511.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="138.9" x2="138.9" y1="507.0" y2="515.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="147.0" x2="147.0" y1="507.0" y2="515.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="153.0" y="515.0" fill="#f0f6fc">0.81 s<tspan dx="6" fill="#c3c2b7">· 2.1× faster</tspan></text>
+<text x="94" y="537.0" text-anchor="end" fill="#c3c2b7">iets, 1 worker</text>
+<g><title>iets w1, nixos-minimal warm: mean 0.96 s, min 0.94 s, max 0.99 s, 10 runs</title>
+<path d="M100 526h45.30000000000001a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-45.30000000000001z" fill="#199e70"/>
+<line x1="148.3" x2="150.8" y1="533.0" y2="533.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="148.3" x2="148.3" y1="529.0" y2="537.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="150.8" x2="150.8" y1="529.0" y2="537.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="156.8" y="537.0" fill="#f0f6fc">0.96 s<tspan dx="6" fill="#c3c2b7">· 1.8× faster</tspan></text>
+<text x="94" y="559.0" text-anchor="end" fill="#c3c2b7">iets, 4 workers</text>
+<g><title>iets w4, nixos-minimal warm: mean 0.47 s, min 0.46 s, max 0.48 s, 10 runs</title>
+<path d="M100 548h20.0a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-20.0z" fill="#9085e9"/>
+<line x1="123.6" x2="124.3" y1="555.0" y2="555.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="123.6" x2="123.6" y1="551.0" y2="559.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="124.3" x2="124.3" y1="551.0" y2="559.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="130.3" y="559.0" fill="#f0f6fc">0.47 s<tspan dx="6" fill="#c3c2b7">· 3.7× faster</tspan></text>
+<text x="414" y="428" font-weight="600" fill="#f0f6fc">nixos-minimal</text><text x="792" y="428" text-anchor="end" fill="#9198a1">cold page cache, 5 runs</text>
+<line x1="514" x2="514" y1="434" y2="570" stroke="#3d444d"/>
+<text x="508" y="449.0" text-anchor="end" fill="#c3c2b7">Nix</text>
+<g><title>nix, nixos-minimal cold: mean 2.21 s, min 2.20 s, max 2.21 s, 5 runs</title>
+<path d="M514 438h109.0a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-109.0z" fill="#3987e5"/>
+<line x1="626.8" x2="627.3" y1="445.0" y2="445.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="626.8" x2="626.8" y1="441.0" y2="449.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="627.3" x2="627.3" y1="441.0" y2="449.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="633.3" y="449.0" fill="#f0f6fc">2.21 s<tspan dx="6" fill="#c3c2b7"></tspan></text>
+<text x="508" y="471.0" text-anchor="end" fill="#c3c2b7">Lix</text>
+<g><title>lix, nixos-minimal cold: mean 2.15 s, min 2.15 s, max 2.16 s, 5 runs</title>
+<path d="M514 460h106.29999999999995a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-106.29999999999995z" fill="#008300"/>
+<line x1="623.9" x2="624.6" y1="467.0" y2="467.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="623.9" x2="623.9" y1="463.0" y2="471.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="624.6" x2="624.6" y1="463.0" y2="471.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="630.6" y="471.0" fill="#f0f6fc">2.15 s<tspan dx="6" fill="#c3c2b7">· ≈ Nix</tspan></text>
+<text x="508" y="493.0" text-anchor="end" fill="#c3c2b7">fix, 1 worker</text>
+<g><title>fix w1, nixos-minimal cold: mean 2.49 s, min 2.48 s, max 2.50 s, 5 runs</title>
+<path d="M514 482h123.29999999999995a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-123.29999999999995z" fill="#d55181"/>
+<line x1="640.9" x2="642.0" y1="489.0" y2="489.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="640.9" x2="640.9" y1="485.0" y2="493.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="642.0" x2="642.0" y1="485.0" y2="493.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="648.0" y="493.0" fill="#f0f6fc">2.49 s<tspan dx="6" fill="#c3c2b7">· 1.1× slower</tspan></text>
+<text x="508" y="515.0" text-anchor="end" fill="#c3c2b7">fix, 4 workers</text>
+<g><title>fix w4, nixos-minimal cold: mean 0.99 s, min 0.91 s, max 1.10 s, 5 runs</title>
+<path d="M514 504h46.799999999999955a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-46.799999999999955z" fill="#c98500"/>
+<line x1="560.8" x2="570.4" y1="511.0" y2="511.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="560.8" x2="560.8" y1="507.0" y2="515.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="570.4" x2="570.4" y1="507.0" y2="515.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="576.4" y="515.0" fill="#f0f6fc">0.99 s<tspan dx="6" fill="#c3c2b7">· 2.2× faster</tspan></text>
+<text x="508" y="537.0" text-anchor="end" fill="#c3c2b7">iets, 1 worker</text>
+<g><title>iets w1, nixos-minimal cold: mean 1.43 s, min 1.41 s, max 1.45 s, 5 runs</title>
+<path d="M514 526h69.10000000000002a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-69.10000000000002z" fill="#199e70"/>
+<line x1="586.1" x2="588.1" y1="533.0" y2="533.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="586.1" x2="586.1" y1="529.0" y2="537.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="588.1" x2="588.1" y1="529.0" y2="537.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="594.1" y="537.0" fill="#f0f6fc">1.43 s<tspan dx="6" fill="#c3c2b7">· 1.5× faster</tspan></text>
+<text x="508" y="559.0" text-anchor="end" fill="#c3c2b7">iets, 4 workers</text>
+<g><title>iets w4, nixos-minimal cold: mean 0.67 s, min 0.67 s, max 0.67 s, 5 runs</title>
+<path d="M514 548h30.200000000000045a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-30.200000000000045z" fill="#9085e9"/>
+<line x1="548.1" x2="548.5" y1="555.0" y2="555.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="548.1" x2="548.1" y1="551.0" y2="559.0" stroke="#f0f6fc" stroke-width="1.5"/>
+<line x1="548.5" x2="548.5" y1="551.0" y2="559.0" stroke="#f0f6fc" stroke-width="1.5"/></g>
+<text x="554.5" y="559.0" fill="#f0f6fc">0.67 s<tspan dx="6" fill="#c3c2b7">· 3.3× faster</tspan></text>
+<text x="0" y="596" font-size="11" fill="#9198a1">date: 2026-10-11T19:24:47Z</text>
+<text x="0" y="612" font-size="11" fill="#9198a1">host: bld1, 32 cores, AMD Ryzen 9 7950X3D 16-Core Processor, kernel 6.18.45</text>
+<text x="0" y="628" font-size="11" fill="#9198a1">nix: nix-instantiate (Nix) 2.34.8</text>
+<text x="0" y="644" font-size="11" fill="#9198a1">lix: nix-instantiate (Lix, like Nix) 2.95.2</text>
+<text x="0" y="660" font-size="11" fill="#9198a1">fix: fix 0.3.0 (Nix language compatibility 2.18.3), e0c1f6d6</text>
+<text x="0" y="676" font-size="11" fill="#9198a1">iets: aeafa28e, sha256 cef9098f11d96884</text>
+<text x="0" y="692" font-size="11" fill="#9198a1">nixpkgs: 26.11 a831408e6378bc02ebf8cc09b52c96ca86f6bab4</text>
+<text x="0" y="708" font-size="11" fill="#9198a1">hyperfine: hyperfine 1.20.0</text>
+<text x="0" y="724" font-size="11" fill="#9198a1">Bars: mean. Whiskers: min to max. Eval caches off; cold drops the page cache before each run.</text>
 </svg>
