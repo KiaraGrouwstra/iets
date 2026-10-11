@@ -1,29 +1,17 @@
 #!/usr/bin/env nu
 # Usage: bench/nixbuild.nu
-# Compares `nix build --store ssh-ng://` and `iets build --builder ssh-ng://`
-# against a remote builder, eu.nixbuild.net by default (STORE). It bills per
-# CPU-second: the builds are a few seconds of bash each.
-#
-# Cases, one hyperfine JSON each in the shape bench/chart.nu reads:
-#   nixbuild-dispatch        small.nix, a new marker every run: a real build
-#   nixbuild-dispatch-fetch  the same, the output copied into the local store
-#   nixbuild-dispatch-fetchto  the same, iets only, the output in a directory
-#   nixbuild-cachehit        small.nix, one fixed marker built before: the
-#                            builder's store already has the output
-#   nixbuild-closure         closure.nix, a new marker every run: python3's
-#                            drv closure, a 16 MiB random output
-#   nixbuild-closure-fetch   the same, the output copied into the local store
-#   nixbuild-closure-fetchto   the same, iets only, the output in a directory
-# -fetch pairs `nix copy --from` with `iets -o`: both register the output in
-# the local store. -fetchto is `iets --fetch-to DIR`, which unpacks the NAR
-# into a directory with no local store; nix has no such operation, so the
-# case has no nix series.
-# nixbuild-phases.json holds PHASE_RUNS (default 3) instrumented runs per
-# client and case: nix's from internal-json timestamps, iets's from --timings.
-# The boundaries differ: nix's eval ends at its first copy, so it includes
-# the ssh connect and the first queries. Compare totals across clients.
-# RUNS (default 10) sets the hyperfine runs. Each run writes the account
-# usage before and after to bench/results/nixbuild-env.txt.
+# nix build --store ssh-ng:// against iets build --builder ssh-ng:// on
+# STORE (default eu.nixbuild.net, billed per CPU-second). One hyperfine JSON
+# per case, in the shape bench/chart.nu reads:
+#   dispatch          small.nix, a new marker each run
+#   cachehit          small.nix, a marker built before
+#   closure           closure.nix (python3's drv closure, 16 MiB output)
+#   *-fetch           into the local store: nix copy --from / iets -o
+#   *-fetchto         iets --fetch-to DIR only; nix has no equivalent
+# nixbuild-phases.json: PHASE_RUNS (default 3) runs per case and client.
+# nix's eval ends at its first copy, so it includes the ssh connect; compare
+# totals across clients. RUNS (default 10); nixbuild-env.txt has the load
+# and account usage before and after.
 use ../scripts/lib.nu [require-real-nix]
 
 def usage [host: string]: nothing -> string {
