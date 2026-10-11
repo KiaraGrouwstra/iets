@@ -7,6 +7,7 @@
 mod imp;
 
 pub mod errno;
+pub mod fault;
 mod ffi;
 pub mod fs;
 pub mod net;

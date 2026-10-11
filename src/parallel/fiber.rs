@@ -6,13 +6,12 @@
 //! swaps stack pointers. Nothing else is saved: the compiler treats the
 //! switch as an ordinary call, so caller-saved registers are already dead.
 
-use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
-use std::sync::Once;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
-use std::{error, io, mem, ptr};
+use std::{error, io, ptr};
 
 use crate::runtime::heap;
+use crate::sys::fault::{self, Fault};
 use crate::sys::{self, vm};
 
 pub const DEFAULT_STACK: usize = 256 << 20;
@@ -132,94 +131,27 @@ const RELEASED_MSG: &[u8] = b"error: a value was used after its session was rele
 /// fiber: a released session's memory faults on any thread. It replaces
 /// the handler Rust's runtime installs, as `install_overflow_handler` does.
 pub(crate) fn install_fault_handler() {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(set_handler);
+    fault::install(classify);
 }
 
-fn set_handler() {
-    // SAFETY: the documented use of `sigaction`, with a handler that only
-    // writes to fd 2 and ends the process.
-    unsafe {
-        for sig in [libc::SIGSEGV, libc::SIGBUS] {
-            let mut sa: libc::sigaction = mem::zeroed();
-            sa.sa_sigaction = on_segv as *const () as usize;
-            sa.sa_flags = libc::SA_ONSTACK | libc::SA_SIGINFO;
-            libc::sigemptyset(&mut sa.sa_mask);
-            libc::sigaction(sig, &sa, ptr::null_mut());
-        }
-    }
-}
-
-extern "C" fn on_segv(sig: i32, info: *mut libc::siginfo_t, _ctx: *mut libc::c_void) {
-    // SAFETY: the kernel passes a valid siginfo for SIGSEGV/SIGBUS.
-    let addr = unsafe { (*info).si_addr() } as usize;
+fn classify(addr: usize) -> Option<Fault> {
     if is_guard(addr) {
-        // SAFETY: write and _exit are async-signal-safe.
-        unsafe {
-            libc::write(2, OVERFLOW_MSG.as_ptr() as *const _, OVERFLOW_MSG.len());
-            libc::_exit(1);
-        }
+        return Some(Fault {
+            message: OVERFLOW_MSG,
+            abort: false,
+        });
     }
-    if heap::is_released(addr) {
-        // SAFETY: write and abort are async-signal-safe.
-        unsafe {
-            libc::write(2, RELEASED_MSG.as_ptr() as *const _, RELEASED_MSG.len());
-            libc::abort();
-        }
-    }
-    // not ours: let the default disposition produce the usual crash
-    // SAFETY: restoring the default handler and re-raising is the standard
-    // way to report a fault we do not own.
-    unsafe {
-        libc::signal(sig, libc::SIG_DFL);
-    }
+    heap::is_released(addr).then_some(Fault {
+        message: RELEASED_MSG,
+        abort: true,
+    })
 }
 
-/// This thread's alternate signal stack. The destructor turns `sigaltstack`
-/// off before the memory goes.
-struct AltStack {
-    _mem: Box<[u8]>,
-}
-
-impl Drop for AltStack {
-    fn drop(&mut self) {
-        let ss = libc::stack_t {
-            ss_sp: ptr::null_mut(),
-            ss_flags: libc::SS_DISABLE,
-            ss_size: 0,
-        };
-        // SAFETY: disables this thread's alternate stack; no handler can
-        // run on it after this returns.
-        unsafe { libc::sigaltstack(&ss, ptr::null_mut()) };
-    }
-}
-
-thread_local! {
-    static ALT_STACK: RefCell<Option<AltStack>> = const { RefCell::new(None) };
-}
-
-/// Install the guard-page handler on this thread. `sigaltstack` is per
-/// thread, and the alternate stack is separate from every fiber stack, so
-/// it stays valid across a fiber switch.
+/// Install the guard-page handler on this thread, which also needs the
+/// alternate stack: `sigaltstack` is per thread.
 pub fn install_overflow_handler() {
-    const ALT: usize = 64 << 10;
-    ALT_STACK.with(|a| {
-        let mut a = a.borrow_mut();
-        if a.is_some() {
-            return;
-        }
-        let mut mem = vec![0u8; ALT].into_boxed_slice();
-        let ss = libc::stack_t {
-            ss_sp: mem.as_mut_ptr() as *mut _,
-            ss_flags: 0,
-            ss_size: ALT,
-        };
-        // SAFETY: the alternate stack lives in this thread's `ALT_STACK`
-        // until the thread exits.
-        unsafe { libc::sigaltstack(&ss, ptr::null_mut()) };
-        set_handler();
-        *a = Some(AltStack { _mem: mem });
-    });
+    fault::alt_stack();
+    install_fault_handler();
 }
 
 /// Fiber lifecycle. Transitions are documented in docs/explanation/evaluation.md.
