@@ -2060,7 +2060,7 @@ impl Evaluator {
 
     /// `eval_select` for `Ir::SelectCount`. It is a function of its own
     /// because one body for both, with the test of the name compiled out of
-    /// `eval_select`, cost 0.16 % of the instructions on nixos-desktop.
+    /// `eval_select`, cost 0.16 % of the instructions on nixos-server.
     #[cold]
     #[inline(never)]
     fn eval_select_count(&mut self, env: &'static EnvObj, s: &SelectIr) -> EvalResult<Word> {

@@ -1,6 +1,6 @@
 #!/usr/bin/env nu
 # Usage: bench/perf.nu [--runs N] [--label L] [--skip-outpaths] [IETS]
-# Wall, user, sys and peak RSS of one binary: nixos-desktop at 1 and 4
+# Wall, user, sys and peak RSS of one binary: nixos-server at 1 and 4
 # workers (the run with the median wall of N, default 5), and outpaths
 # chunk 0 of 8 at 1 and 4 workers (one run each, about 14 GB). Run it on an
 # idle box.
@@ -33,13 +33,13 @@ def main [
   cd ($env.FILE_PWD | path join "..")
   let np = ($env.NIXPKGS? | default "/nix/store/ah3pxz4xa52hd6vhbx17vcsci0b8bmbr-source")
   let label = if $label == "" { (^git rev-parse --short HEAD | str trim) } else { $label }
-  let desktop = $"($env.PWD)/bench/workloads/nixos-desktop.nix"
+  let server = $"($env.PWD)/bench/workloads/nixos-server.nix"
   let outpaths = (mktemp --tmpdir outpaths.XXXXXX)
   $"import ($np)/ci/eval/outpaths.nix { path = ($np); systems = [ \"x86_64-linux\" ]; includeBroken = false; }\n" | save -f $outpaths
   mut rows = []
   for w in [1 4] {
-    let r = (median-run $iets [eval --impure --strict --no-tracing-cache --workers ($w | into string) -I $"nixpkgs=($np)" $desktop] $runs)
-    $rows = ($rows | append ($r | insert workload "nixos-desktop" | insert workers $w))
+    let r = (median-run $iets [eval --impure --strict --no-tracing-cache --workers ($w | into string) -I $"nixpkgs=($np)" $server] $runs)
+    $rows = ($rows | append ($r | insert workload "nixos-server" | insert workers $w))
   }
   if not $skip_outpaths {
     for w in [1 4] {

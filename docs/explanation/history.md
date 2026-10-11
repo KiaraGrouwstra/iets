@@ -42,7 +42,7 @@ has its own style for each kind of file. statix and deadnix read the syntax, so 
 their rules into iets told you nothing new.
 
 The removal took 523 lines out of `src/`. The compiler doesn't record a
-frame's bindings and uses. On nixos-desktop with one worker, a run that
+frame's bindings and uses. On nixos-server with one worker, a run that
 compiles every file went from 12.201 G to 12.183 G instructions. A run with
 a warm compiled-file cache did not change (9.393 G).
 
@@ -126,8 +126,8 @@ reference into a string of its own.
 
 | warm, instructions | before | after | |
 |---|---:|---:|---:|
-| nixos-desktop, 1 worker | 9.74 G | 9.39 G | −3.6 % |
-| nixos-desktop, 4 workers | 10.54 G | 10.19 G | −3.4 % |
+| nixos-server, 1 worker | 9.74 G | 9.39 G | −3.6 % |
+| nixos-server, 4 workers | 10.54 G | 10.19 G | −3.4 % |
 | nixos-minimal, 1 worker | 7.51 G | 7.22 G | −3.9 % |
 | nixos-minimal, 4 workers | 8.12 G | 7.84 G | −3.5 % |
 
@@ -146,7 +146,7 @@ The first profile of a warm-cache run put `AttrIter::next` at 7.1 %, second
 only to `eval` itself and 2.3× the cost of a lookup. The multi-leaf merge
 scanned every leaf head twice per attribute: once to pick the minimum, and
 once to advance it. So eight leaves cost 16 head checks. A census of one
-nixos-desktop run found where that landed: 8.4 million merge steps, of which
+nixos-server run found where that landed: 8.4 million merge steps, of which
 5.1 million came from iterations over six, seven or eight leaves, a few
 hundred iterations of 5,000 to 12,000 attributes each.
 
@@ -160,8 +160,8 @@ gives the tail back to the bump pointer.
 
 | warm, instructions | before | after | |
 |---|---:|---:|---:|
-| nixos-desktop, 1 worker | 10.03 G | 9.74 G | −2.9 % |
-| nixos-desktop, 4 workers | 10.86 G | 10.54 G | −3.0 % |
+| nixos-server, 1 worker | 10.03 G | 9.74 G | −2.9 % |
+| nixos-server, 4 workers | 10.86 G | 10.54 G | −3.0 % |
 | nixos-minimal, 1 worker | 7.75 G | 7.51 G | −3.0 % |
 | nixos-minimal, 4 workers | 8.40 G | 8.12 G | −3.2 % |
 
@@ -181,11 +181,11 @@ while it is built, so keys start at 1, not 0. The tie-break must prefer the
 
 `parallel::try_run` clones the evaluator as the fiber template, and
 `api::evaluate` installed the IR cache after that clone, inside the main
-fiber. So every helper fiber ran without one. On nixos-desktop with a warm
+fiber. So every helper fiber ran without one. On nixos-server with a warm
 cache, a run loaded 2804 entries at one worker and 60 at four. Each helper
 parsed and compiled its own imports again.
 
-| nixos-desktop, warm, instructions | before | after |
+| nixos-server, warm, instructions | before | after |
 |---|---:|---:|
 | 1 worker | 10.03 G | 10.03 G |
 | 4 workers | 13.05 G | 10.88 G |
@@ -264,7 +264,7 @@ We proposed and did *not* cut:
 *2026-09-19*
 
 Helpers evaluated thunks at creation time, behind a flag, off by default.
-Fifteen runs of nixos-desktop: 1.401 s off, 1.544 s at level 1, 1.405 s at
+Fifteen runs of nixos-server: 1.401 s off, 1.544 s at level 1, 1.405 s at
 level 3; user time 2.58 s against 2.98 s.
 
 It burned CPU on work nobody asked for, and with no collector the results
@@ -279,7 +279,7 @@ creation budget. Removed.
 objects on M connections, per-derivation or K-at-a-time build operations,
 submitting while the upload runs, critical-path order, and skipping
 substitutable paths. They were measured on synthetic graphs of several widths
-and depths, on hello and on a nixos-desktop upload, over a latency shim at 0
+and depths, on hello and on a nixos-server upload, over a latency shim at 0
 and 20 ms, over a unix socket, and against a real host 0.11 s away.
 
 None paid. Per-derivation operations were 7.3× slower on one graph and
@@ -306,8 +306,8 @@ Rejected:
 
 - **Transient frames on a fiber-local stack.** 20 M of 59 M frames proved
   uncaptured, and it saved 320 MB of RSS on outpaths. But wall time was
-  −1.7 % there and +2.5 % on desktop.
-- **An inline cache on attribute selection.** 82 % hits on desktop, and yet
+  −1.7 % there and +2.5 % on server.
+- **An inline cache on attribute selection.** 82 % hits on server, and yet
   +2.2 % to +5.8 % wall, because a miss stores into a shared IR node.
 - **One escaped ATerm per derivation.** User time −1 to −3 %, wall −1.2 % on
   outpaths: under the bar, because the derivation path is only about 6 % of

@@ -1,6 +1,6 @@
 #!/usr/bin/env nu
 # Usage: bench/cache-growth.nu
-# What the two caches cost on disk: nixos-desktop at the pinned nixpkgs, then
+# What the two caches cost on disk: nixos-server at the pinned nixpkgs, then
 # the same workload at a second nixpkgs revision in the store. The second row
 # is what one revision of drift adds, so it names the dedup ratio.
 
@@ -30,7 +30,7 @@ def main [] {
   let np1 = ($env.NIXPKGS? | default "/nix/store/ah3pxz4xa52hd6vhbx17vcsci0b8bmbr-source")
   let np2 = ($env.NIXPKGS2? | default "/nix/store/bgp6cqzszs95fdsrjsl6gpy540rjrac9-source")
   let cache = $"($env.TMPDIR? | default '/tmp')/iets-growth-cache"
-  let workload = $"($env.PWD)/bench/workloads/nixos-desktop.nix"
+  let workload = $"($env.PWD)/bench/workloads/nixos-server.nix"
   rm -rf $cache
 
   mut rows = []

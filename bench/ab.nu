@@ -2,7 +2,7 @@
 # Usage: bench/ab.nu [--runs N] [--skip-outpaths] BEFORE AFTER
 # Interleaved A/B of two iets binaries: one hyperfine invocation per
 # workload (`--warmup 1 --runs N`, default 7) so the runs alternate, on
-# nixos-desktop at 1 and 4 workers, nixos-minimal at 1 worker, and outpaths
+# nixos-server at 1 and 4 workers, nixos-minimal at 1 worker, and outpaths
 # chunk 0 of 8 (`eval-jobs --no-instantiate`) at 1 worker. Prints the
 # median wall, mean user and sys, the peak RSS of one extra timed run, and
 # the wall change. Run it on an idle box.
@@ -21,13 +21,13 @@ def main [
 ] {
   cd ($env.FILE_PWD | path join "..")
   let np = ($env.NIXPKGS? | default "/nix/store/ah3pxz4xa52hd6vhbx17vcsci0b8bmbr-source")
-  let desktop = $"($env.PWD)/bench/workloads/nixos-desktop.nix"
+  let server = $"($env.PWD)/bench/workloads/nixos-server.nix"
   let minimal = $"($env.PWD)/bench/workloads/nixos-minimal.nix"
   let outpaths = (mktemp --tmpdir outpaths.XXXXXX)
   $"import ($np)/ci/eval/outpaths.nix { path = ($np); systems = [ \"x86_64-linux\" ]; includeBroken = false; }\n" | save -f $outpaths
   mut cases = [
-    { name: "nixos-desktop w1", args: [eval --impure --strict --no-tracing-cache --workers "1" -I $"nixpkgs=($np)" $desktop] }
-    { name: "nixos-desktop w4", args: [eval --impure --strict --no-tracing-cache --workers "4" -I $"nixpkgs=($np)" $desktop] }
+    { name: "nixos-server w1", args: [eval --impure --strict --no-tracing-cache --workers "1" -I $"nixpkgs=($np)" $server] }
+    { name: "nixos-server w4", args: [eval --impure --strict --no-tracing-cache --workers "4" -I $"nixpkgs=($np)" $server] }
     { name: "nixos-minimal w1", args: [eval --impure --strict --no-tracing-cache --workers "1" -I $"nixpkgs=($np)" $minimal] }
   ]
   if not $skip_outpaths {

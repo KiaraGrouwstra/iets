@@ -1,5 +1,5 @@
 #!/usr/bin/env nu
-# Usage: bench/run.nu [workload...]   (default: nixos-desktop)
+# Usage: bench/run.nu [workload...]   (default: nixos-server nixos-plasma)
 # Compares nix-instantiate, Lix, fix, and iets at 1 and 4 workers with hyperfine.
 # COLD=1 drops the page cache before each run (needs root); results get a
 # -cold suffix. LIX is the path to Lix's nix-instantiate; Lix is skipped when
@@ -37,7 +37,7 @@ def main [...workloads: string] {
   let iets = ($env.IETS? | default "./target/release/iets")
   let cold = ($env.COLD? | default "" | is-not-empty)
   mkdir bench/results
-  let ws = if ($workloads | is-empty) { [nixos-desktop] } else { $workloads }
+  let ws = if ($workloads | is-empty) { [nixos-server nixos-plasma] } else { $workloads }
   if not ($fix | path exists) { print -e $"fix: ($fix) not found, skipped" }
   write-pins $np $iets $fix
   for w in $ws {

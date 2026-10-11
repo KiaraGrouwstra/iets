@@ -827,7 +827,7 @@ mod tests {
     }
 
     /// `REGEX_BENCH=1 cargo test --release regex_bench -- --ignored --nocapture`
-    /// times the patterns nixos-desktop runs most, on the inputs it gives them.
+    /// times the patterns nixos-server runs most, on the inputs it gives them.
     #[test]
     #[ignore]
     fn regex_bench() {

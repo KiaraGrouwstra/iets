@@ -38,7 +38,7 @@ impl Hasher for MixHasher {
 
 /// One multiply carries the entropy up, one fold brings it back down into
 /// the bits hashbrown indexes with. Three instructions: a full
-/// finaliser measured 0.2 % more instructions on nixos-desktop.
+/// finaliser measured 0.2 % more instructions on nixos-server.
 #[inline]
 fn mix(h: u64) -> u64 {
     let h = h.wrapping_mul(0x9e3779b97f4a7c15);

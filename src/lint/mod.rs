@@ -724,7 +724,7 @@ pub fn list(c: &Config) -> String {
 }
 
 /// Warnings wait in `pending` until it holds this much, then go to stderr
-/// in one write: 13k lines on nixos-desktop cost 7 % of the wall at 4
+/// in one write: 13k lines on nixos-server cost 7 % of the wall at 4
 /// workers as one syscall each.
 const FLUSH_AT: usize = 16 << 10;
 
@@ -879,7 +879,7 @@ impl Evaluator {
 
     /// Any fiber reports: the site set keeps a warning to one line, and bailing
     /// like `trace` (docs/explanation/evaluation.md, "Speculation can't change the result")
-    /// cost 15 % of the wall on nixos-desktop at 4 workers. A site the scope
+    /// cost 15 % of the wall on nixos-server at 4 workers. A site the scope
     /// silences enters the set too; an `error` site never does, so every fiber
     /// that reaches it fails. A `level` is that of the tree a value comes from,
     /// not of the site. A finding of `tree` is one for the tree, so the site set
