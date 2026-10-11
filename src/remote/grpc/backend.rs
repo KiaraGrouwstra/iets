@@ -28,7 +28,7 @@ use crate::log::{
 };
 use crate::remote::copy::Copying;
 use crate::remote::event::{Event, Started};
-use crate::remote::plan::{Object, Plan};
+use crate::remote::plan::{self, Object, Plan};
 use crate::remote::worker::{Connection, failed_event};
 use crate::store::drv::Derivation;
 use crate::store::path::StorePath;
@@ -86,27 +86,18 @@ fn build_batch(
         .iter()
         .map(|j| (j.drv.to_string(), Status::ok()))
         .collect();
-    let mut out_names: Vec<String> = Vec::new();
-    let mut out_of: Vec<&StorePath> = Vec::new();
-    for (drv_path, drv) in drvs {
-        for (name, o) in &drv.outputs {
-            let Some(p) = o.path(&drv.name, name)? else {
-                return Err(Error::Plan(format!(
-                    "'{drv_path}': output '{name}' has no statically known path; the build \
-                     farm needs statically known input and output paths"
-                )));
-            };
-            out_names.push(p.base_name().to_string());
-            out_of.push(drv_path);
-        }
-    }
-    let valid = build::query_valid_paths(c, &out_names, t)?;
-    let mut needs: BTreeSet<&StorePath> = BTreeSet::new();
-    for (name, drv_path) in out_names.iter().zip(&out_of) {
-        if !valid.contains(name) {
-            needs.insert(drv_path);
-        }
-    }
+    let roots = batch
+        .jobs
+        .iter()
+        .map(|j| {
+            drvs.get_key_value(&j.drv)
+                .map(|(k, _)| k)
+                .ok_or_else(|| Error::Plan(format!("'{}' is not in the batch's closure", j.drv)))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let needs = missing_drvs(drvs, roots, &mut |names| {
+        build::query_valid_paths(c, names, t)
+    })?;
 
     let mut jobs: Vec<build::Job> = Vec::new();
     let mut index: HashMap<&StorePath, usize> = HashMap::new();
@@ -214,6 +205,80 @@ fn build_batch(
         }
     }
     Ok(out)
+}
+
+/// The derivations of the roots' closure whose outputs the store lacks. Asked
+/// top-down like `Plan::query_valid`: a valid output's closure is valid, so
+/// nothing below a derivation the store has built is asked about or built.
+fn missing_drvs<'a>(
+    drvs: &'a BTreeMap<StorePath, Derivation>,
+    roots: Vec<&'a StorePath>,
+    query: &mut dyn FnMut(&[String]) -> Result<HashSet<String>>,
+) -> Result<BTreeSet<&'a StorePath>> {
+    let outputs = |p: &StorePath| -> Result<Vec<String>> {
+        let drv = &drvs[p];
+        let mut names = Vec::new();
+        for (name, o) in &drv.outputs {
+            let Some(out) = o.path(&drv.name, name)? else {
+                return Err(Error::Plan(format!(
+                    "'{p}': output '{name}' has no statically known path; the build \
+                     farm needs statically known input and output paths"
+                )));
+            };
+            names.push(out.base_name().to_string());
+        }
+        Ok(names)
+    };
+    let inputs = |p: &StorePath| {
+        drvs[p]
+            .input_drvs
+            .keys()
+            .filter_map(|d| drvs.get_key_value(d).map(|(k, _)| k))
+    };
+    let mut valid: HashSet<String> = HashSet::new();
+    let mut known: HashSet<&StorePath> = HashSet::new();
+    let mut seen: HashSet<&StorePath> = HashSet::new();
+    let mut needs = BTreeSet::new();
+    let mut level = roots;
+    for depth in 0.. {
+        level.retain(|p| seen.insert(*p));
+        if level.is_empty() {
+            break;
+        }
+        let mut ask: Vec<&StorePath> = level
+            .iter()
+            .copied()
+            .filter(|p| !known.contains(p))
+            .collect();
+        if depth >= plan::TOP_DOWN_LEVELS {
+            let mut stack = ask;
+            ask = Vec::new();
+            while let Some(p) = stack.pop() {
+                if known.insert(p) {
+                    ask.push(p);
+                    stack.extend(inputs(p));
+                }
+            }
+        } else {
+            known.extend(&ask);
+        }
+        if !ask.is_empty() {
+            let mut names = Vec::new();
+            for p in ask {
+                names.extend(outputs(p)?);
+            }
+            valid.extend(query(&names)?);
+        }
+        let mut next = Vec::new();
+        for p in level {
+            if outputs(p)?.iter().any(|o| !valid.contains(o)) {
+                needs.insert(p);
+                next.extend(inputs(p));
+            }
+        }
+        level = next;
+    }
+    Ok(needs)
 }
 
 impl Backend for Grpc {
@@ -349,5 +414,110 @@ impl Backend for Grpc {
 
     fn report(&self, plan: &Plan, plan_time: Duration) -> String {
         self.t.report(plan, plan_time)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::drv::{DerivationOutput, InputNode};
+
+    fn sp(name: &str) -> StorePath {
+        const NIX32: &[u8] = b"0123456789abcdfghijklmnpqrsvwxyz";
+        let hash: String = name
+            .bytes()
+            .cycle()
+            .take(32)
+            .map(|b| NIX32[b as usize % 32] as char)
+            .collect();
+        StorePath::parse(&format!("/nix/store/{hash}-{name}")).unwrap()
+    }
+
+    /// Each `(name, inputs)` is `name.drv` with one output `name-out`.
+    fn graph(edges: &[(&str, &[&str])]) -> BTreeMap<StorePath, Derivation> {
+        edges
+            .iter()
+            .map(|(name, inputs)| {
+                let drv = Derivation {
+                    name: name.to_string(),
+                    outputs: [(
+                        "out".to_string(),
+                        DerivationOutput::InputAddressed(sp(&format!("{name}-out"))),
+                    )]
+                    .into(),
+                    input_drvs: inputs
+                        .iter()
+                        .map(|i| (sp(&format!("{i}.drv")), InputNode::default()))
+                        .collect(),
+                    ..Derivation::default()
+                };
+                (sp(&format!("{name}.drv")), drv)
+            })
+            .collect()
+    }
+
+    fn run(
+        drvs: &BTreeMap<StorePath, Derivation>,
+        roots: &[&str],
+        valid: &[&str],
+    ) -> (Vec<String>, Vec<Vec<String>>) {
+        let roots: Vec<StorePath> = roots.iter().map(|r| sp(&format!("{r}.drv"))).collect();
+        let valid: HashSet<String> = valid
+            .iter()
+            .map(|v| sp(&format!("{v}-out")).base_name().to_string())
+            .collect();
+        let mut calls = Vec::new();
+        let needs = missing_drvs(drvs, roots.iter().collect(), &mut |names| {
+            let mut asked: Vec<String> = names
+                .iter()
+                .map(|n| n[33..n.len() - 4].to_string())
+                .collect();
+            asked.sort();
+            calls.push(asked);
+            Ok(names
+                .iter()
+                .filter(|n| valid.contains(*n))
+                .cloned()
+                .collect())
+        })
+        .unwrap();
+        let needs = needs.iter().map(|p| drvs[*p].name.clone()).collect();
+        (needs, calls)
+    }
+
+    const CHAIN: &[(&str, &[&str])] = &[
+        ("root", &["a"]),
+        ("a", &["b"]),
+        ("b", &["c"]),
+        ("c", &["d"]),
+        ("d", &[]),
+    ];
+
+    #[test]
+    fn a_built_root_asks_nothing_below_it() {
+        let (needs, calls) = run(&graph(CHAIN), &["root"], &["root", "a", "b", "c", "d"]);
+        assert!(needs.is_empty());
+        assert_eq!(calls, vec![vec!["root"]]);
+    }
+
+    #[test]
+    fn a_built_input_stops_the_walk() {
+        let (needs, calls) = run(&graph(CHAIN), &["root"], &["a", "b", "c", "d"]);
+        assert_eq!(needs, vec!["root"]);
+        assert_eq!(calls, vec![vec!["root"], vec!["a"]]);
+    }
+
+    #[test]
+    fn a_cold_store_is_asked_the_rest_in_one_call() {
+        let (needs, calls) = run(&graph(CHAIN), &["root"], &[]);
+        assert_eq!(needs, vec!["a", "b", "c", "d", "root"]);
+        assert_eq!(calls, vec![vec!["root"], vec!["a"], vec!["b", "c", "d"]]);
+    }
+
+    #[test]
+    fn an_input_below_a_built_one_is_not_built() {
+        let (needs, calls) = run(&graph(CHAIN), &["root"], &["c"]);
+        assert_eq!(needs, vec!["a", "b", "root"]);
+        assert_eq!(calls, vec![vec!["root"], vec!["a"], vec!["b", "c", "d"]]);
     }
 }

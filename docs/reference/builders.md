@@ -237,16 +237,20 @@ First, one `StoreInfo` call, for the trust flag. Then:
    `substitute` answers.
 3. `AddMultipleToStore`: one client-streamed zstd stream that decompresses
    to the worker-protocol framing the `unix://` path writes.
-4. For each derivation, with at most `max-builds` in flight, and only once
+4. `QueryValidPaths` on output paths, top-down from the roots: first the
+   roots' outputs, then the outputs of the input derivations of each
+   derivation that has a missing output. After two levels, iets asks about
+   everything left in one call. Nothing below a built output is built.
+5. For each derivation, with at most `max-builds` in flight, and only once
    every input derivation of it is done: a `Want` on the batch's one
    `Scheduler.Schedule` stream. The scheduler answers `Cached` (the verdict
    is `AlreadyValid`), `Assigned` (a worker address), or `Unplaceable`, which
    is only advice: the `Want` stays queued, and fails after `restart-grace`.
    On `Assigned`, a `BuildDerivation` goes to that worker. Its log lines
    and phases become `Log` events, and its result becomes the derivation's
-   verdict. A derivation whose outputs are already valid is skipped, so it
-   costs no `Want`.
-5. `--fetch-to DIR`: the farm never copies an output into a local store, so
+   verdict. A derivation whose outputs are already valid (step 4) is
+   skipped, so it costs no `Want`.
+6. `--fetch-to DIR`: the farm never copies an output into a local store, so
    `FetchNars` streams the NARs back, and iets restores each into `DIR`.
 
 iets never opens the worker-protocol tunnel (`Connect`), which a farm

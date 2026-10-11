@@ -160,7 +160,7 @@ pub struct Resolved {
 
 /// Levels of the graph `Plan::query_valid` asks about one call at a time
 /// before it asks about everything left in one call.
-const TOP_DOWN_LEVELS: usize = 2;
+pub(crate) const TOP_DOWN_LEVELS: usize = 2;
 
 impl Plan {
     /// The base names of the plan's paths that the store holds. A store
