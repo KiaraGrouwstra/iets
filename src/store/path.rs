@@ -362,6 +362,8 @@ mod tests {
     }
 
     // nix-instantiate --eval -E '"${./tree}"' (tree from nar.rs fixture_tree)
+    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
+    #[cfg(unix)]
     #[test]
     fn path_copy_directory() {
         let tree = fixture_tree("pathcopy");
@@ -388,6 +390,8 @@ mod tests {
     }
 
     // nix-instantiate --eval -E '"${builtins.filterSource (p: t: baseNameOf p != "sub") ./tree}"'
+    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
+    #[cfg(unix)]
     #[test]
     fn filter_source() {
         let tree = fixture_tree("filtersrc");
@@ -404,6 +408,8 @@ mod tests {
     }
 
     // nix-instantiate --eval -E '"${builtins.path { path = ./tree; name = "mytree"; }}"'
+    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
+    #[cfg(unix)]
     #[test]
     fn path_with_name() {
         let tree = fixture_tree("pathname");

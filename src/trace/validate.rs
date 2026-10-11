@@ -306,6 +306,11 @@ mod tests {
         d
     }
 
+    /// Windows lets only a handle opened for writing change the times.
+    fn open_rw(p: &Path) -> fs::File {
+        fs::OpenOptions::new().write(true).open(p).unwrap()
+    }
+
     #[test]
     fn file_touch_refreshes_edit_misses() {
         let d = tmp("file");
@@ -319,7 +324,7 @@ mod tests {
 
         // same content, new mtime: rehash once, refresh
         let later = SystemTime::now() + Duration::from_secs(5);
-        fs::File::open(&f).unwrap().set_modified(later).unwrap();
+        open_rw(&f).set_modified(later).unwrap();
         let r = validate(&mut obs, 2).unwrap();
         assert_eq!((r.rehashed, r.refreshed), (1, 1));
         let r = validate(&mut obs, 2).unwrap();
@@ -341,7 +346,7 @@ mod tests {
         fs::write(&other, b"BBBB").unwrap();
         let fixed = time::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
         for p in [&f, &other] {
-            fs::File::open(p).unwrap().set_modified(fixed).unwrap();
+            open_rw(p).set_modified(fixed).unwrap();
         }
         let m = fs::metadata(&f).unwrap();
         let p = f.as_os_str().as_bytes().to_vec();
@@ -351,7 +356,7 @@ mod tests {
         // the kernel stamps ctime from a clock that ticks every few
         // milliseconds, so wait until a write can get a new one
         while {
-            fs::File::open(&other).unwrap().set_modified(fixed).unwrap();
+            open_rw(&other).set_modified(fixed).unwrap();
             ctime_ns(&other, &fs::metadata(&other).unwrap()) == ctime_ns(&f, &m)
         } {
             thread::sleep(Duration::from_millis(1));
@@ -359,7 +364,7 @@ mod tests {
         let mut bytes = fs::File::create(&f).unwrap();
         io::Write::write_all(&mut bytes, b"BBBB").unwrap();
         drop(bytes);
-        fs::File::open(&f).unwrap().set_modified(fixed).unwrap();
+        open_rw(&f).set_modified(fixed).unwrap();
         let now = fs::metadata(&f).unwrap();
         assert_eq!(
             (now.len(), mtime_ns(&now), file_id(&f, &now).1),
@@ -428,6 +433,8 @@ mod dir_hash_tests {
 
     /// The buffered hash must answer exactly what the allocating one does, or
     /// a cache entry written by one generation is unreadable by the next.
+    // TODO: the tree holds a non-UTF-8 name and a symlink, which Windows cannot make without privileges.
+    #[cfg(unix)]
     #[test]
     fn dir_hash_agrees_with_dir_listing_hash() {
         let d = env::temp_dir().join(format!("iets-dirhash-{}", std::process::id()));

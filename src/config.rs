@@ -980,7 +980,11 @@ mod tests {
         assert!(!c.keep_failed().unwrap());
         assert_eq!(c.max_jobs().unwrap(), cpus());
         assert!(c.list("substituters").is_empty());
-        assert!(c.system().ends_with("-linux") || c.system().ends_with("-darwin"));
+        assert!(
+            ["-linux", "-darwin", "-windows"]
+                .iter()
+                .any(|os| c.system().ends_with(os))
+        );
 
         let c = load("typed.conf");
         assert_eq!(c.store(), "daemon");

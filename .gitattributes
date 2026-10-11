@@ -1,0 +1,4 @@
+# Fixtures and embedded files are hashed, and a checkout that rewrites their
+# line endings changes the hash. The lang tests hold deliberate CRLF.
+* text=auto eol=lf
+tests/lang/** -text

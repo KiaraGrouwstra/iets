@@ -1112,6 +1112,8 @@ mod tests {
     }
 
     /// Every rule the git sink applies, both ways, byte for byte.
+    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
+    #[cfg(unix)]
     #[test]
     fn spool_matches_the_tree() {
         let big = vec![b'z'; 70 * 1024];
@@ -1524,6 +1526,8 @@ mod tests {
     }
 
     /// The fixture whose `narHash` a lock file records, hashed out of the spool.
+    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
+    #[cfg(unix)]
     #[test]
     fn nar_hash_of_the_fixture() {
         let bytes =

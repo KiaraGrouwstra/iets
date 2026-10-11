@@ -16,6 +16,11 @@ use rustix::fs::{
 use rustix::io::Errno;
 
 /// Fills `buf` from `offset`, without moving the file's cursor.
+/// The resolved path. Unix has nothing to strip.
+pub fn canonicalize(p: &Path) -> io::Result<std::path::PathBuf> {
+    fs::canonicalize(p)
+}
+
 pub fn read_exact_at(f: &File, buf: &mut [u8], offset: u64) -> io::Result<()> {
     f.read_exact_at(buf, offset)
 }

@@ -614,6 +614,8 @@ mod tests {
         );
     }
 
+    // TODO: the script is for a POSIX shell and the test names its paths that way.
+    #[cfg(unix)]
     #[test]
     fn rc_script_rewrites_outputs_and_writes_attrs() {
         let dir = fixture_tree("devenv-rc");

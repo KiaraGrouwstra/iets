@@ -44,6 +44,9 @@ pub fn os(s: &str) -> OsString {
 mod tests {
     use super::*;
 
+    // TODO: Windows names are UTF-8 here, so arbitrary bytes do not round-trip.
+
+    #[cfg(unix)]
     #[test]
     fn every_byte_round_trips() {
         let raw: Vec<u8> = b"/tmp/\xff\xfe.nix caf\xc3\xa9 \xc3".to_vec();

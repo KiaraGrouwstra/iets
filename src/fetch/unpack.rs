@@ -338,6 +338,9 @@ mod tests {
         fs::remove_dir_all(&w).unwrap();
     }
 
+    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
+
+    #[cfg(unix)]
     #[test]
     fn modes_symlinks_and_empty_dirs() {
         let w = work("modes");
@@ -364,6 +367,8 @@ mod tests {
     }
 
     /// The last copy of a member wins, as the git sink's `id` ordering does.
+    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
+    #[cfg(unix)]
     #[test]
     fn a_repeated_member_keeps_the_last_copy() {
         let w = work("dup");
@@ -405,6 +410,8 @@ mod tests {
     /// The NAR hash of an unpacked tree is what `nix hash path` prints for it;
     /// the expected value comes from a tarball whose `narHash` a lock file
     /// records (`tests/data/tarball`).
+    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
+    #[cfg(unix)]
     #[test]
     fn nar_hash_of_the_fixture() {
         let w = work("golden");

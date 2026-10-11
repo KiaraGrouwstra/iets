@@ -24,7 +24,7 @@ use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, FileInfo, Pos};
 use crate::log::{self, Site};
 use crate::session::Session;
 use crate::syntax::symbol::{FxHashMap, FxHasher};
-use crate::sys::OsStrExt;
+use crate::sys;
 use crate::{compile, ignored, parallel, project, provenance, settings};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
@@ -527,7 +527,7 @@ impl Config {
                         let Some(d) = d.as_str() else {
                             return Err(at("'roots' must be a list of strings".into()));
                         };
-                        self.add_root(base.join(d).as_os_str().as_bytes());
+                        self.add_root(&sys::path_to_internal(&base.join(d)));
                     }
                 }
                 ("roots", _) => return Err(at("'roots' must be a list of strings".into())),
@@ -579,7 +579,7 @@ impl Config {
     ) -> Result<Config, String> {
         let mut c = Config::default();
         if let Some(dir) = start {
-            c.add_root(dir.as_os_str().as_bytes());
+            c.add_root(&sys::path_to_internal(dir));
         }
         let read = |f: &Path| fs::read_to_string(f).map_err(|e| format!("{}: {e}", f.display()));
         let settings = settings::conf_file();
@@ -1029,7 +1029,7 @@ impl Evaluator {
             let Some(local) = known.origin.and_then(|o| o.at.local()) else {
                 break;
             };
-            let mut next = local.as_os_str().as_encoded_bytes().to_vec();
+            let mut next = sys::path_to_internal(&local);
             next.extend_from_slice(&p[root..]);
             p = next;
         }

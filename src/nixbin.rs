@@ -74,7 +74,7 @@ fn on_path(name: &str, dirs: impl Iterator<Item = PathBuf>, me: Option<&Path>) -
 /// the bin directory the farm on `PATH` was built for, else the first
 /// `<name>` on `PATH` that is not iets.
 pub fn real(name: &str) -> Option<PathBuf> {
-    let me = fs::canonicalize("/proc/self/exe").ok();
+    let me = this_exe();
     if let Some(dir) = &Session::current().settings().nix_bin_dir
         && let Some(p) = candidate(dir, name, me.as_deref())
     {
@@ -84,10 +84,16 @@ pub fn real(name: &str) -> Option<PathBuf> {
     on_path(name, dirs.into_iter(), me.as_deref()).or_else(|| sibling(name))
 }
 
+/// This executable, resolved, so that it compares with what a candidate
+/// resolves to.
+fn this_exe() -> Option<PathBuf> {
+    fs::canonicalize(env::current_exe().ok()?).ok()
+}
+
 /// The farm never shadows `nix-store`, so its real location names the nix
 /// installation even on a system path built without the marker.
 fn sibling(name: &str) -> Option<PathBuf> {
-    let me = fs::canonicalize("/proc/self/exe").ok();
+    let me = this_exe();
     for dir in env::split_paths(&env::var_os("PATH")?) {
         let probe = dir.join("nix-store");
         if !executable(&probe) {
@@ -158,7 +164,8 @@ mod tests {
             Some(nix.clone())
         );
         assert_eq!(on_path("nix", dirs[..2].iter().cloned(), None), None);
-        assert_eq!(on_path("nix", dirs.iter().cloned(), Some(&nix)), None);
+        let resolved = fs::canonicalize(&nix).unwrap();
+        assert_eq!(on_path("nix", dirs.iter().cloned(), Some(&resolved)), None);
 
         // what `nix-bin-dir` points at goes through the same test, so a
         // directory of iets's own classic names cannot exec iets again

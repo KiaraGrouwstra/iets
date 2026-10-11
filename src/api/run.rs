@@ -153,6 +153,7 @@ impl Run {
 mod tests {
     use super::*;
     use crate::api::{self, EvalArgs, Input};
+    use crate::sys;
 
     use std::path::Path;
     use std::time::{Duration, Instant};
@@ -173,7 +174,8 @@ mod tests {
             let f = dir.join(format!("m{i}.nix"));
             let src = format!("let xs = [ {elems}]; in builtins.length xs + {i}\n");
             fs::write(&f, src).expect("workload file");
-            list += &format!(" (import {}) ", f.display());
+            let internal = String::from_utf8(sys::path_to_internal(&f)).expect("utf-8 path");
+            list += &format!(" (import (/. + \"{internal}\")) ");
         }
         list + "]"
     }

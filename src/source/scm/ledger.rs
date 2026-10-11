@@ -131,6 +131,12 @@ mod tests {
     use crate::builtins::store_hooks::open;
     use crate::eval::{EvalConfig, Evaluator, Pos};
     use crate::flake::parse_flake_ref;
+    use crate::sys;
+
+    /// A path as the evaluator and a flake URL name it: `/C:/x` on Windows.
+    fn internal(p: &Path) -> String {
+        String::from_utf8(sys::path_to_internal(p)).expect("utf-8 path")
+    }
     use crate::runtime::{Ctx, Taint, Word};
     use crate::source::scm::{count_key, rev_count};
     use crate::source::{AttrVal, Attrs, SourceRef, Tree, tree};
@@ -164,7 +170,7 @@ mod tests {
     }
 
     fn source(root: &Path) -> SourceRef {
-        let arg = format!("{}/sub#x", root.display());
+        let arg = format!("{}/sub#x", internal(root));
         parse_flake_ref(&arg, b"/", None).unwrap().source
     }
 
@@ -173,7 +179,7 @@ mod tests {
     }
 
     fn attrs(pairs: &[(&str, AttrVal)], root: &Path, nar_hash: String) -> Attrs {
-        let url = format!("file://{}", root.display());
+        let url = format!("file://{}", internal(root));
         let mut a: Attrs = pairs
             .iter()
             .map(|(k, v)| (k.to_string(), v.clone()))
@@ -187,19 +193,19 @@ mod tests {
     #[test]
     fn a_directory_in_a_working_tree_is_found() {
         let (root, _) = fixture("detect");
-        let r = parse_flake_ref(&format!("{}/sub#x", root.display()), b"/", None).unwrap();
+        let r = parse_flake_ref(&format!("{}/sub#x", internal(&root)), b"/", None).unwrap();
         let tracked = SourceRef::Tracked {
             scm: &Ledger,
             root: root.clone(),
             subdir: "sub".into(),
         };
         assert_eq!(r.source, tracked);
-        let url = format!("ledger+file://{}?dir=sub", root.display());
+        let url = format!("ledger+file://{}?dir=sub", internal(&root));
         assert_eq!(crate::api::flake::url(&r), url);
-        let r = parse_flake_ref(&root.display().to_string(), b"/", None).unwrap();
-        let url = format!("ledger+file://{}", root.display());
+        let r = parse_flake_ref(&internal(&root), b"/", None).unwrap();
+        let url = format!("ledger+file://{}", internal(&root));
         assert_eq!(crate::api::flake::url(&r), url);
-        let r = parse_flake_ref(&format!("path:{}/sub", root.display()), b"/", None).unwrap();
+        let r = parse_flake_ref(&format!("path:{}/sub", internal(&root)), b"/", None).unwrap();
         assert_eq!(r.source, SourceRef::Path(root.join("sub")));
     }
 

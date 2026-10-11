@@ -6,7 +6,7 @@ use std::io;
 use std::mem;
 use std::os::windows::fs::{self as winfs, FileExt, MetadataExt, OpenOptionsExt};
 use std::os::windows::io::AsRawHandle;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use windows_sys::Win32::Storage::FileSystem::{
@@ -166,6 +166,19 @@ pub fn lock(f: &File) -> bool {
 
 pub fn unlock(f: &File) {
     let _ = f.unlock();
+}
+
+/// The resolved path, without the `\\?\` that `std` puts before a drive.
+/// That form has no `..` and no `/`, and the callers show it and compare it.
+pub fn canonicalize(p: &Path) -> io::Result<PathBuf> {
+    let full = fs::canonicalize(p)?;
+    let s = full.to_string_lossy();
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') && !rest.starts_with("UNC") => {
+            Ok(PathBuf::from(rest))
+        }
+        _ => Ok(full),
+    }
 }
 
 pub fn touch(path: &Path, follow: bool) {

@@ -282,7 +282,6 @@ pub fn workdir(
 mod tests {
     use super::*;
 
-    use std::fs::File;
     use std::time::{Duration, SystemTime};
 
     use crate::store::hash;
@@ -319,7 +318,12 @@ mod tests {
         let f = d.join("newest");
         fs::write(&f, b"x").unwrap();
         let later = SystemTime::now() + Duration::from_secs(1000);
-        File::open(&f).unwrap().set_modified(later).unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&f)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
         let want = mtime_secs(&fs::metadata(&f).unwrap());
         let (hash, size, mtime) = dump_and_max_mtime(&d, &mut None).unwrap();
         assert_eq!(mtime, want);

@@ -901,6 +901,8 @@ pub(crate) mod tests {
     }
 
     // nix-store --dump tree | sha256sum ; nix-store --dump tree | wc -c
+    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
+    #[cfg(unix)]
     #[test]
     fn directory_nar() {
         let tree = fixture_tree("dir");
@@ -912,6 +914,8 @@ pub(crate) mod tests {
     }
 
     // nix hash path tree ; nix hash path --base32 tree
+    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
+    #[cfg(unix)]
     #[test]
     fn directory_nar_hash_formats() {
         let tree = fixture_tree("fmt");
@@ -936,6 +940,8 @@ pub(crate) mod tests {
     }
 
     // nix-store --dump tree/run.sh | sha256sum
+    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
+    #[cfg(unix)]
     #[test]
     fn executable_file_nar() {
         let tree = fixture_tree("exec");
@@ -999,6 +1005,8 @@ pub(crate) mod tests {
     }
 
     // nix-store --dump tree | nix-store --restore out ; nix-store --dump out | sha256sum
+    // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
+    #[cfg(unix)]
     #[test]
     fn restore_roundtrip() {
         let tree = fixture_tree("restore");

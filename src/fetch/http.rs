@@ -948,7 +948,8 @@ mod tests {
     fn file_url(name: &str, bytes: &[u8]) -> String {
         let f = env::temp_dir().join(format!("iets-http-{}-{name}", std::process::id()));
         fs::write(&f, bytes).unwrap();
-        format!("file://{}", f.display())
+        let internal = String::from_utf8(sys::path_to_internal(&f)).expect("utf-8 path");
+        format!("file://{internal}")
     }
 
     #[test]

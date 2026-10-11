@@ -190,7 +190,14 @@ mod tests {
             "src/keep",
             "src/keep/a",
         ];
-        assert_eq!(got, want.map(|p| d.join(p).to_str().unwrap().to_string()));
+        let join = |p: &str| {
+            p.split('/')
+                .fold(d.clone(), |acc, c| acc.join(c))
+                .to_str()
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(got, want.map(join));
         let _ = fs::remove_dir_all(&d);
     }
 }
