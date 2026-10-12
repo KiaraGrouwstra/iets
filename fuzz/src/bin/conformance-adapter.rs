@@ -1,11 +1,12 @@
 //! iets behind the adapter protocol of nix-conformance (its README.md):
-//! `conformance-adapter OP FILE [FLAG...]`. `parse`, `nar` and `drv` call the
-//! library; `check`, `eval` and `flake` run `$IETS`, else `iets` on `PATH`.
+//! `conformance-adapter OP FILE [FLAG...]`. `parse`, `nar`, `drv` and `wire`
+//! call the library; `check`, `eval` and `flake` run `$IETS`, else `iets` on
+//! `PATH`.
 
 use iets::store::drv::Derivation;
 use iets::store::nar;
 use iets::syntax::{self, ast::FileId, symbol::Interner};
-use iets_fuzz::{canon, sx};
+use iets_fuzz::{canon, sx, wire};
 use sha2::{Digest, Sha256};
 use std::path::{self, Path};
 use std::process::{Command, exit};
@@ -45,8 +46,23 @@ fn main() {
             let flake = format!("path:{}#result", absolute(&dir.to_string_lossy()));
             iets(&["eval", "--strict", "--json", "--no-cache", &flake])
         }
+        "wire" => answer_wire(file, flags),
         _ => UNSUPPORTED,
     })
+}
+
+/// `wire SOCKET OP ARG...`: FILE is the socket of nix-conformance's scripted
+/// daemon.
+fn answer_wire(sock: &str, flags: &[String]) -> i32 {
+    let Some((op, args)) = flags.split_first() else {
+        return 2;
+    };
+    match wire::run_iets(Path::new(sock), op, args) {
+        Ok(a) if a == "unsupported" => return UNSUPPORTED,
+        Ok(a) => println!("{a}"),
+        Err(_) => println!("error"),
+    }
+    0
 }
 
 fn parse(file: &str) -> i32 {

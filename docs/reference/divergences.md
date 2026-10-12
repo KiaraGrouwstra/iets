@@ -593,7 +593,8 @@ an older daemon at the handshake with
 `the Nix daemon speaks protocol 1.N; this client needs 1.35 or newer`.
 Older daemons lack the trust flag and some reply shapes this client
 relies on, so the `wire` fuzz target (`docs/reference/fuzz.md`) makes
-daemons of 1.35 and newer only.
+daemons of 1.35 and newer only. The `wire/connect-1.*` cases of
+nix-conformance below 1.35 are in `fuzz/conformance-known`.
 
 ## Padding in a NAR from the daemon
 

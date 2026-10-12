@@ -22,3 +22,8 @@ drv/bytes/env-name-all.drv
 # Reading a `.drv` file: a git: output hash or an impure output
 drv/shape/fixed-git-sha1.drv
 drv/shape/impure.drv
+
+# Daemon protocol versions
+wire/connect-1.18.op
+wire/connect-1.32.op
+wire/connect-1.34.op
