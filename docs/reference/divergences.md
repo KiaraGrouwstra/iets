@@ -126,7 +126,10 @@ names them.
   the keys sorted; a value that is not JSON stops it with `cannot process
   __json attribute`. iets keeps the text as it is. A `.drv` that Nix
   wrote holds the sorted form already, so only a `.drv` written by hand
-  shows this. (`drv-json-not-checked`, `drv-json-kept-as-text`)
+  shows this. iets also needs the value to be UTF-8, and stops with
+  `non-UTF-8 structured attrs in derivation`. Nix reads bytes that are
+  not UTF-8 inside a JSON string, and drops all bytes after a NUL byte.
+  (`drv-json-not-checked`, `drv-json-kept-as-text`, `drv-json-not-utf8`)
 - **A `blake3` hash:** Nix needs the experimental feature
   `blake3-hashes`; in iets every feature is on (see "Experimental-feature
   builtins"). (`drv-blake3-without-feature`)
@@ -593,7 +596,8 @@ an older daemon at the handshake with
 `the Nix daemon speaks protocol 1.N; this client needs 1.35 or newer`.
 Older daemons lack the trust flag and some reply shapes this client
 relies on, so the `wire` fuzz target (`docs/reference/fuzz.md`) makes
-daemons of 1.35 and newer only.
+daemons of 1.35 and newer only. The `wire/connect-1.*` cases of
+nix-conformance below 1.35 are in `fuzz/conformance-known`.
 
 ## Padding in a NAR from the daemon
 

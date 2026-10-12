@@ -92,7 +92,7 @@ impl Wire {
         self.seq += 1;
         let sock = self.dir.join(format!("{}.sock", self.seq));
         let stop = serve(&sock, script, split);
-        let iets = no_panic(|| run_iets(&sock, &op));
+        let iets = no_panic(|| run_iets(&sock, op.name, &op.args));
         let mut line = format!("{} {}", sock.display(), op.name);
         for a in &op.args {
             line.push(' ');
@@ -200,8 +200,9 @@ fn serve(sock: &Path, script: Vec<u8>, split: usize) -> Arc<AtomicBool> {
     stop
 }
 
-/// The answer, or why iets refused the reply.
-fn run_iets(sock: &Path, op: &Op) -> Result<String, String> {
+/// The answer line of iets's client to `name args` against the daemon at
+/// `sock` (nix-conformance SPEC.md), or why iets refused the reply.
+pub fn run_iets(sock: &Path, name: &str, args: &[String]) -> Result<String, String> {
     let answer = || -> iets::error::Result<String> {
         let mut quiet = |_| {};
         let mut c = Connection::open_with(
@@ -209,8 +210,7 @@ fn run_iets(sock: &Path, op: &Op) -> Result<String, String> {
             &Options::default(),
             &mut quiet,
         )?;
-        let args = &op.args;
-        Ok(match op.name {
+        Ok(match name {
             "connect" => format!(
                 "ok minor={} version={} trusted={}",
                 c.minor,

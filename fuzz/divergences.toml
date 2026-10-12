@@ -112,6 +112,12 @@ kind = "iets-only"
 nix = "cannot process __json attribute"
 
 [[drv]]
+id = "drv-json-not-utf8"
+doc = "docs/reference/divergences.md#reading-a-drv-file"
+kind = "nix-only"
+iets = "non-UTF-8 structured attrs in derivation"
+
+[[drv]]
 id = "drv-blake3-without-feature"
 doc = "docs/reference/divergences.md#reading-a-drv-file"
 kind = "iets-only"
