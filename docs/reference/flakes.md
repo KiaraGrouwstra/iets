@@ -54,9 +54,14 @@ prints.
   `narHash` or is a relative `path:` input, and every declared input has a
   lock entry. The declared inputs are the names in `inputs` and the
   arguments of `outputs` other than `self`. If not, you get
-  `flake.lock missing or incomplete, run nix flake lock`. The lock wins over
-  `flake.nix`. `--reference-lock-file PATH` reads the root flake's lock from
-  `PATH` instead, under the same rule, and `PATH` must exist.
+  `flake.lock missing or incomplete, run nix flake lock`.
+  `--reference-lock-file PATH` reads the root flake's lock from `PATH`
+  instead, under the same rules, and `PATH` must exist.
+- `flake.lock` must still be what `flake.nix` asks for: each input's `url`
+  and `follows`, and those that `flake.nix` sets for its inputs' inputs
+  (`inputs.b.inputs.c.follows`). A stale lock gives the same error, where
+  Nix would lock again (`docs/reference/divergences.md`). An input with
+  both a `url` and a `follows` is an error, as in Nix.
 - A flake that declares no inputs needs no `flake.lock`, as in Nix.
 - `--strict`, `--json` and `--raw` work as they do with a file. `--raw`
   behaves like `nix eval --raw`: the value becomes a string without copying

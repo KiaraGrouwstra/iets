@@ -36,6 +36,30 @@ impl Lock {
             .filter_map(|n| Some((n.as_str(), self.json["nodes"][n]["locked"].as_object()?)))
     }
 
+    /// Why the lock does not hold what `flake.nix` declares for input `name`
+    /// of `node`, or `None`. A missing input is left to the caller.
+    pub fn disagrees(&self, node: &str, name: &str, want: &Declared) -> Option<String> {
+        let spec = self.json["nodes"][node]["inputs"].get(name)?;
+        match (want, spec) {
+            (Declared::Follows(p), Value::Array(got)) => {
+                let same = got.len() == p.len() && got.iter().zip(p).all(|(g, w)| g == w);
+                (!same).then(|| format!("follows '{}' in flake.nix", p.join("/")))
+            }
+            (Declared::Follows(p), _) => Some(format!("follows '{}' in flake.nix", p.join("/"))),
+            (Declared::Ref(url, want), Value::String(n)) => {
+                let got = self.json["nodes"][n]["original"].as_object()?;
+                (normal(got) != normal(want)).then(|| format!("is '{url}' in flake.nix"))
+            }
+            (Declared::Ref(url, _), _) => Some(format!("is '{url}' in flake.nix")),
+            (Declared::Unknown, _) => None,
+        }
+    }
+
+    /// The node input `name` of `node` names, unless it follows another.
+    pub fn child(&self, node: &str, name: &str) -> Option<&str> {
+        self.json["nodes"][node]["inputs"][name].as_str()
+    }
+
     /// `(narHash, node name)` of every locked node, for messages that name
     /// an input by what `fetchTree` receives.
     pub fn nar_hash_names(&self) -> impl Iterator<Item = (&str, &str)> {
@@ -48,6 +72,29 @@ impl Lock {
                 Some((h, name.as_str()))
             })
     }
+}
+
+/// What `flake.nix` declares for one input, as the lock records it.
+pub enum Declared {
+    /// `follows`, split at `/`; `""` is the root itself.
+    Follows(Vec<String>),
+    /// `url` and its attributes, `dir` included: the lock's `original`.
+    Ref(String, serde_json::Map<String, Value>),
+    /// A form not compared: a path value, or the attributes of a reference.
+    Unknown,
+}
+
+/// `./sub` and `sub` are one relative path input.
+fn normal(m: &serde_json::Map<String, Value>) -> serde_json::Map<String, Value> {
+    let mut m = m.clone();
+    if m.get("type").and_then(Value::as_str) == Some("path")
+        && let Some(Value::String(p)) = m.get_mut("path")
+    {
+        while let Some(rest) = p.strip_prefix("./") {
+            *p = rest.to_string();
+        }
+    }
+    m
 }
 
 /// A node is locked when it has a `narHash` (fetchers.cc:isLocked) or is a
@@ -228,5 +275,37 @@ mod tests {
         let old = LOCK.replace(r#""version": 7"#, r#""version": 4"#);
         assert!(check(old.as_bytes()).is_err());
         assert!(check(b"{").is_err());
+    }
+
+    #[test]
+    fn declared_inputs_must_match_the_lock() {
+        let l = check(LOCK.as_bytes()).unwrap();
+        let reference =
+            |url: &str, j: Value| Declared::Ref(url.into(), j.as_object().unwrap().clone());
+        let follows = |p: &[&str]| Declared::Follows(p.iter().map(|s| s.to_string()).collect());
+        let github = reference(
+            "github:x/y",
+            serde_json::json!({ "type": "github", "owner": "x", "repo": "y" }),
+        );
+        assert_eq!(l.disagrees("root", "a", &github), None);
+        let sub = serde_json::json!({ "type": "path", "path": "sub" });
+        assert_eq!(l.disagrees("root", "p", &reference("./sub", sub)), None);
+        assert_eq!(
+            l.disagrees("root", "nixpkgs", &follows(&["a", "nixpkgs"])),
+            None
+        );
+        assert_eq!(l.disagrees("root", "missing", &github), None);
+        assert_eq!(l.disagrees("root", "a", &Declared::Unknown), None);
+
+        let other = serde_json::json!({ "type": "github", "owner": "x", "repo": "z" });
+        assert!(
+            l.disagrees("root", "a", &reference("github:x/z", other))
+                .is_some()
+        );
+        assert!(l.disagrees("root", "nixpkgs", &github).is_some());
+        assert!(l.disagrees("root", "nixpkgs", &follows(&["a"])).is_some());
+        assert!(l.disagrees("root", "a", &follows(&[])).is_some());
+        assert_eq!(l.child("root", "a"), Some("a"));
+        assert_eq!(l.child("root", "nixpkgs"), None);
     }
 }

@@ -1,6 +1,6 @@
 //! iets behind the adapter protocol of nix-conformance (its README.md):
 //! `conformance-adapter OP FILE [FLAG...]`. `parse`, `nar` and `drv` call the
-//! library; `check` and `eval` run `$IETS`, else `iets` on `PATH`.
+//! library; `check`, `eval` and `flake` run `$IETS`, else `iets` on `PATH`.
 
 use iets::store::drv::Derivation;
 use iets::store::nar;
@@ -39,6 +39,11 @@ fn main() {
             a.extend(flags.iter().map(String::as_str));
             a.push(file);
             iets(&a)
+        }
+        "flake" => {
+            let dir = Path::new(file).parent().unwrap_or(Path::new("."));
+            let flake = format!("path:{}#result", absolute(&dir.to_string_lossy()));
+            iets(&["eval", "--strict", "--json", "--no-cache", &flake])
         }
         _ => UNSUPPORTED,
     })
