@@ -500,6 +500,22 @@ lock, which must be complete for the inputs `flake.nix` declares, like the
 flake's own `flake.lock`. Neither writes the file. The path belongs to the
 tracing-cache key (`docs/reference/classic.md`).
 
+## A stale `flake.lock`
+
+Nix computes the lock again and refuses one it would have to change
+(`--no-update-lock-file`). iets compares the lock with the root's
+`flake.nix` only: the `url` and `follows` of each input, and those it sets
+for its inputs' inputs (`docs/reference/flakes.md`). It accepts a stale
+lock that only a full lock computation finds:
+
+- a `follows` that an input's own `flake.nix` no longer declares;
+- a lock entry for an input `flake.nix` no longer declares;
+- an input given as a path value (`url = ./sub`), as attributes
+  (`type = "github"`), or as a url iets cannot parse.
+
+nix-conformance's `flake/fail-*` cases refuse the stale locks the root's
+`flake.nix` can show.
+
 ## Tarball inputs
 
 The tree of an archive input is the git sink's

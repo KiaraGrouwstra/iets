@@ -17,8 +17,9 @@ use crate::compile;
 use crate::compile::ir::ParamIr;
 use crate::error::{Error, Result};
 use crate::eval::{Error as EvalError, ErrorKind, EvalResult, Evaluator, Pos};
-use crate::runtime::{Value, Word};
-use crate::source::{self, SourceRef, lock};
+use crate::runtime::{AttrsObj, Value, Word};
+use crate::source::lock::Declared;
+use crate::source::{self, AttrVal, SourceRef, lock};
 use crate::store::path::StorePath;
 use crate::sys;
 
@@ -472,13 +473,15 @@ fn check_declared_inputs(
     let v = ev.eval_file(&p, pos)?;
     let attrs = ev.force_attrs(v, pos, "while evaluating flake.nix")?;
     let mut declared = Vec::new();
-    if let Some(inputs) = attrs.get(ev.sym(b"inputs")) {
-        let inputs = ev.force_attrs(
-            inputs.cell.get(),
+    let mut inputs = None;
+    if let Some(a) = attrs.get(ev.sym(b"inputs")) {
+        let a = ev.force_attrs(
+            a.cell.get(),
             pos,
             "while evaluating the 'inputs' attribute of flake.nix",
         )?;
-        declared.extend(inputs.iter().map(|a| (a.sym, "")));
+        declared.extend(a.iter().map(|a| (a.sym, "")));
+        inputs = Some(a);
     }
     if let Some(outputs) = attrs.get(ev.sym(b"outputs")) {
         let outputs = ev.force(outputs.cell.get())?;
@@ -508,7 +511,95 @@ fn check_declared_inputs(
             ));
         }
     }
+    match inputs {
+        Some(inputs) => check_inputs(ev, lock, &lock.root, "", inputs, pos),
+        None => Ok(()),
+    }
+}
+
+/// flake.cc:computeLocks keeps a lock entry only while `flake.nix`, with
+/// the overrides in it, still asks for it. Only the root's `flake.nix` is
+/// read, so a stale `follows` that an input's own flake declares passes.
+fn check_inputs(
+    ev: &mut Evaluator,
+    lock: &lock::Lock,
+    node: &str,
+    path: &str,
+    inputs: &'static AttrsObj,
+    pos: Pos,
+) -> EvalResult<()> {
+    for a in inputs.iter() {
+        let name = String::from_utf8_lossy(ev.interner.name(a.sym)).into_owned();
+        let at = if path.is_empty() {
+            name.clone()
+        } else {
+            format!("{path}/{name}")
+        };
+        let decl = ev.force_attrs(a.cell.get(), pos, "while evaluating a flake input")?;
+        let mut get = |k: &[u8]| decl.get(ev.sym(k)).map(|x| x.cell.get());
+        let (url, follows, sub) = (get(b"url"), get(b"follows"), get(b"inputs"));
+        let is_ref = url.is_some() || get(b"type").is_some();
+        let want = match (follows, url) {
+            (Some(_), _) if is_ref => {
+                let m = format!(
+                    "flake input '{at}' has both a flake reference and a follows attribute"
+                );
+                return Err(EvalError::boxed(ErrorKind::Eval, m, pos));
+            }
+            (Some(f), _) => {
+                let f = ev.force_string_no_ctx(f, pos, "while evaluating a follows attribute")?;
+                let f = String::from_utf8_lossy(f);
+                Declared::Follows(
+                    f.split('/')
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_owned)
+                        .collect(),
+                )
+            }
+            (None, Some(u)) => declared_ref(ev, u)?,
+            (None, None) => Declared::Unknown,
+        };
+        if let Some(why) = lock.disagrees(node, &name, &want) {
+            let m = format!("{LOCK_ERROR} (input '{at}' {why}, not in flake.lock)");
+            return Err(EvalError::boxed(ErrorKind::Unsupported, m, pos));
+        }
+        if let Some(sub) = sub
+            && let Some(child) = lock.child(node, &name)
+        {
+            let sub = ev.force_attrs(sub, pos, "while evaluating the 'inputs' of a flake input")?;
+            check_inputs(ev, lock, child, &at, sub, pos)?;
+        }
+    }
     Ok(())
+}
+
+/// A url string as the lock's `original` holds it; a path value or a url
+/// iets cannot parse is not compared.
+fn declared_ref(ev: &mut Evaluator, url: Word) -> EvalResult<Declared> {
+    let Value::String(s) = ev.force(url)?.view() else {
+        return Ok(Declared::Unknown);
+    };
+    let url = String::from_utf8_lossy(s.bytes).into_owned();
+    let Ok(mut p) = flakeref::parse(&url) else {
+        return Ok(Declared::Unknown);
+    };
+    if !p.dir.is_empty() {
+        p.input
+            .insert("dir".into(), AttrVal::Str(mem::take(&mut p.dir)));
+    }
+    let original = p
+        .input
+        .into_iter()
+        .map(|(k, v)| {
+            let v = match v {
+                AttrVal::Str(s) => serde_json::Value::String(s),
+                AttrVal::Bool(b) => serde_json::Value::Bool(b),
+                AttrVal::Int(n) => serde_json::Value::from(n),
+            };
+            (k, v)
+        })
+        .collect();
+    Ok(Declared::Ref(url, original))
 }
 
 #[cfg(test)]
