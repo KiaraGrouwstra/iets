@@ -4,7 +4,7 @@
 //! carry it and nothing is drawn.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::thread::{self, Builder};
 use std::time::{Duration, Instant};
@@ -58,6 +58,9 @@ struct Tasks {
 #[derive(Default)]
 pub struct Board {
     mode: AtomicU8,
+    /// The build renderer draws the running builds itself, so the status
+    /// line leaves them out.
+    live: AtomicBool,
     tasks: Mutex<Tasks>,
 }
 
@@ -72,6 +75,10 @@ impl Board {
             2 => Mode::Lines,
             _ => Mode::Off,
         }
+    }
+
+    pub fn set_live(&self, on: bool) {
+        self.live.store(on, Ordering::Relaxed);
     }
 
     fn lock(&self) -> MutexGuard<'_, Tasks> {
@@ -158,7 +165,11 @@ impl Board {
         }
         match self.mode() {
             Mode::Bar if t.suspended > 0 => Some(Tick::Bar(String::new())),
-            Mode::Bar => Some(Tick::Bar(summary(&t.all, now, true).unwrap_or_default())),
+            Mode::Bar => {
+                let builds = !self.live.load(Ordering::Relaxed);
+                let line = summary(&t.all, now, builds).unwrap_or_default();
+                Some(Tick::Bar(render::status(&line)))
+            }
             Mode::Lines if log::classic() => Some(Tick::Quiet),
             Mode::Lines => {
                 let due = t.beat.is_none_or(|b| now - b >= HEARTBEAT);
