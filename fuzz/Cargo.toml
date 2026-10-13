@@ -13,7 +13,7 @@ iets = { path = ".." }
 libfuzzer-sys = "0.4"
 serde_json = "1"
 toml = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 rustix = { version = "1", features = ["fs"] }
 
 [[bin]]

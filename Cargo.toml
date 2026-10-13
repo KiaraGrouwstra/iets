@@ -7,11 +7,11 @@ edition = "2024"
 name = "iets"
 path = "src/main.rs"
 [dependencies]
-sha2 = "0.10"
+sha2 = "0.11"
 blake3 = "1"
 crc32fast = "1"
-sha1 = "0.10"
-md-5 = "0.10"
+sha1 = "0.11"
+md-5 = "0.11"
 libc = "0.2"
 rustix = { version = "1", features = ["fs", "mm", "param", "thread", "process", "termios"] }
 memchr = "2"
@@ -23,8 +23,8 @@ tonic-prost = "0.14"
 prost = "0.14"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 tokio-stream = "0.1"
-zstd = "0.13"
-lz4_flex = { version = "0.11", default-features = false, features = ["safe-encode", "safe-decode"] }
+zstd = "0.14"
+lz4_flex = { version = "0.14", default-features = false, features = ["safe-encode", "safe-decode"] }
 # The flake-input fetcher (src/fetch/http.rs, src/fetch/unpack.rs): the HTTP and
 # TLS halves are the ones tonic already brings; only the archive formats are new.
 hyper = { version = "1", default-features = false, features = ["client", "http1"] }
@@ -37,7 +37,7 @@ rustls-native-certs = "0.8"
 webpki-roots = "1"
 tar = { version = "0.4", default-features = false }
 flate2 = "1"
-lzma-rust2 = { version = "0.16", default-features = false, features = ["std", "xz"] }
+lzma-rust2 = { version = "0.21", default-features = false, features = ["std", "xz"] }
 bzip2 = "0.6"
 mimalloc = "0.1"
 libmimalloc-sys = { version = "0.1", features = ["extended"] }
@@ -59,9 +59,9 @@ windows-sys = { version = "0.61", features = [
 stats2 = []
 
 [build-dependencies]
-sha2 = "0.10"
+sha2 = "0.11"
 tonic-prost-build = "0.14"
-protox = "0.9"
+protox = "0.10"
 
 [profile.release]
 opt-level = 3
