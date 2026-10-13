@@ -3,7 +3,8 @@
 
 mod hermetic;
 
-use std::process::Output;
+use std::process::{self, Command, Output};
+use std::{env, fs};
 
 fn iets(args: &[&str]) -> Output {
     hermetic::iets().args(args).output().expect("run iets")
@@ -11,6 +12,13 @@ fn iets(args: &[&str]) -> Output {
 
 fn text(b: &[u8]) -> String {
     String::from_utf8_lossy(b).into_owned()
+}
+
+fn run_complete(mut c: Command, words: &[&str]) -> String {
+    let o = c.arg("__complete").args(words).output().expect("run iets");
+    assert_eq!(o.status.code(), Some(0), "{words:?}: {}", text(&o.stderr));
+    assert!(o.stderr.is_empty(), "{words:?}: {}", text(&o.stderr));
+    text(&o.stdout)
 }
 
 #[test]
@@ -116,4 +124,106 @@ fn io_errors_read_like_strerror() {
     let err = text(&o.stderr);
     assert!(err.contains(NO_SUCH_FILE), "{err}");
     assert!(!err.contains("os error"), "{err}");
+}
+
+#[test]
+fn completion_asks_the_binary_and_ignores_settings() {
+    let conf = env::temp_dir().join(format!("iets-complete-{}", process::id()));
+    fs::create_dir_all(conf.join("iets")).unwrap();
+    fs::write(conf.join("iets/iets.toml"), "this is = not [valid\n").unwrap();
+    let complete = |words: &[&str]| {
+        let mut c = hermetic::iets();
+        c.env("XDG_CONFIG_HOME", &conf);
+        run_complete(c, words)
+    };
+    let out = complete(&["bu"]);
+    assert!(out.starts_with("build\t"), "{out}");
+    assert!(out.ends_with("\n:4\n"), "{out}");
+    assert_eq!(complete(&["eval", "--arg", "n", ""]), ":4\n");
+    assert_eq!(complete(&["eval", "-f", ""]), ":0\n");
+    assert!(complete(&["cache", ""]).starts_with("gc\t"));
+
+    for shell in ["bash", "zsh", "fish", "nushell", "elvish", "powershell"] {
+        let o = iets(&["completion", shell]);
+        assert_eq!(o.status.code(), Some(0), "{shell}");
+        assert!(text(&o.stdout).contains("__complete"), "{shell}");
+    }
+    let o = iets(&["completion", "ksh"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(text(&o.stderr).contains("unknown subcommand \'ksh\'"));
+    let _ = fs::remove_dir_all(&conf);
+}
+
+#[test]
+fn a_flake_fragment_completes_to_the_outputs_attribute_names() {
+    let d = env::temp_dir().join(format!("iets-complete-flake-{}", process::id()));
+    fs::create_dir_all(&d).unwrap();
+    let sys = [
+        "x86_64-linux",
+        "aarch64-linux",
+        "x86_64-darwin",
+        "aarch64-darwin",
+    ];
+    let pkgs: String = sys
+        .iter()
+        .map(|s| format!("{s} = {{ hello = 1; help = 2; other = 3; \"a.b\" = 4; }}; "))
+        .collect();
+    fs::write(
+        d.join("flake.nix"),
+        format!("{{ outputs = _: {{ packages = {{ {pkgs} }}; lib.answer = 42; }}; }}"),
+    )
+    .unwrap();
+    let complete = |word: &str| {
+        let mut c = hermetic::iets();
+        c.current_dir(&d);
+        run_complete(c, &["eval", word])
+    };
+    // the package prefix is implied, and no space follows: not the end
+    assert_eq!(complete(".#he"), ".#hello\n.#help\n:6\n");
+    // an explicit path is completed from the root, name by name
+    let mut systems = sys.to_vec();
+    systems.sort();
+    let want: String = systems
+        .iter()
+        .map(|s| format!(".#packages.{s}\n"))
+        .collect();
+    assert_eq!(complete(".#packages."), format!("{want}:6\n"));
+    assert_eq!(complete(".#.lib.an"), ".#.lib.answer\n:6\n");
+    assert_eq!(complete(".#pack"), ".#packages\n:6\n");
+    // nothing matches, or the flake is not there: no candidates, no noise
+    assert_eq!(complete(".#zzz"), ":6\n");
+    assert_eq!(complete("/nonexistent#a"), ":6\n");
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn dash_a_completes_the_attribute_names_under_its_root() {
+    let d = env::temp_dir().join(format!("iets-complete-attr-{}", process::id()));
+    fs::create_dir_all(&d).unwrap();
+    fs::write(
+        d.join("x.nix"),
+        "{ lib = { alpha = 1; beta = 2; }; pkgs = { hello = 1; }; }",
+    )
+    .unwrap();
+    let complete = |words: &[&str]| {
+        let mut c = hermetic::iets();
+        c.current_dir(&d);
+        run_complete(c, words)
+    };
+    assert_eq!(
+        complete(&["eval", "-f", "x.nix", "-A", ""]),
+        "lib\npkgs\n:6\n"
+    );
+    assert_eq!(
+        complete(&["eval", "x.nix", "-A", "lib.b"]),
+        "lib.beta\n:6\n"
+    );
+    assert_eq!(
+        complete(&["eval", "-E", "{ a = 1; ab = 2; }", "--attr", "a"]),
+        "a\nab\n:6\n"
+    );
+    // no root to select from, and a root that is not there: nothing, not files
+    assert_eq!(complete(&["eval", "-A", "a"]), ":4\n");
+    assert_eq!(complete(&["eval", "-f", "nope.nix", "-A", "a"]), ":6\n");
+    let _ = fs::remove_dir_all(&d);
 }

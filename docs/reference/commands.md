@@ -30,6 +30,7 @@ iets COMMAND [ARGS...]
 | `lint` | print the lint registry and the levels a run would use |
 | `parse` | parse Nix files and print or check the syntax tree |
 | `cache` | sweep old cache entries, or print an entry's read set and its watchable paths |
+| `completion` | print the tab-completion script of a shell |
 | `plumbing` | the machine-first operations (`docs/reference/plumbing.md`) |
 | `help`, `version` | the help of a command or a topic; the version |
 
@@ -846,6 +847,25 @@ with a note on stderr. A command names its own entry with
   `dump` and `paths` are the only subcommands.
 
 `docs/explanation/caching.md` explains the caches.
+
+## `completion`
+
+```
+iets completion bash|zsh|fish|nushell|elvish|powershell
+```
+
+Prints the script that completes `iets` in that shell.
+
+| Shell | Load it with |
+|---|---|
+| bash | `source <(iets completion bash)` |
+| zsh | `source <(iets completion zsh)` after `compinit`, or save it as `_iets` in `$fpath` |
+| fish | `iets completion fish \| source` |
+| nushell | `iets completion nushell \| save -f FILE`, then `source FILE` in `config.nu` |
+| elvish | `eval (iets completion elvish \| slurp)` |
+| powershell | `iets completion powershell \| Out-String \| Invoke-Expression` |
+
+- Exit: 0, 2 for a shell this does not know.
 
 ## `help` and the topics
 
