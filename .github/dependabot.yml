@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directories: ["/", "/fuzz"]
+    schedule:
+      interval: weekly
+    groups:
+      cargo:
+        patterns: ["*"]
+  # flake.lock of the root flake and of the private CI flake
+  - package-ecosystem: nix
+    directories: ["/", "/nix/ci"]
+    schedule:
+      interval: weekly
