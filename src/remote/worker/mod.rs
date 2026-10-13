@@ -6,7 +6,7 @@ pub mod wire;
 
 use crate::sys::fs::symlink;
 use crate::sys::net::UnixStream;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -20,7 +20,9 @@ use super::grpc::GrpcConfig;
 use super::grpc::drvwire::PathInfo;
 use crate::config::{self, Config};
 use crate::error::{self, Error, Result};
-use crate::log::{self, ACT_BUILD, LVL_INFO, RES_BUILD_LOG_LINE, RES_SET_PHASE};
+use crate::log::{
+    self, ACT_BUILD, ACT_BUILDS, LVL_INFO, RES_BUILD_LOG_LINE, RES_PROGRESS, RES_SET_PHASE,
+};
 use crate::store::path::StorePath;
 use wire::{Counting, FramedSink};
 
@@ -484,6 +486,58 @@ pub struct Connection {
     parents: HashMap<u64, u64>,
     /// The daemon's activity ids to the ones this process logs them under.
     ids: HashMap<u64, u64>,
+    builds: BuildCounts,
+}
+
+/// The daemon bumps `done` or `failed` on its builds activity just before a
+/// build's own activity stops, and its worker finishes one goal at a time.
+/// So the oldest unclaimed change belongs to the next build that stops.
+#[derive(Default)]
+struct BuildCounts {
+    act: Option<u64>,
+    done: u64,
+    failed: u64,
+    /// One entry per change: true for a success.
+    pending: VecDeque<bool>,
+}
+
+impl BuildCounts {
+    fn progress(&mut self, fields: &[Value]) {
+        let n = |i: usize| fields.get(i).and_then(Value::as_u64).unwrap_or(0);
+        let (done, failed) = (n(0), n(3));
+        self.pending.extend((self.done..done).map(|_| true));
+        self.pending.extend((self.failed..failed).map(|_| false));
+        (self.done, self.failed) = (done, failed);
+    }
+}
+
+#[cfg(test)]
+mod counts_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn p(f: [u64; 4]) -> Vec<Value> {
+        f.iter().map(|n| json!(n)).collect()
+    }
+
+    /// The order the daemon sent for two builds, one failing then one built.
+    #[test]
+    fn each_change_is_a_verdict_in_order() {
+        let mut c = BuildCounts::default();
+        c.progress(&p([0, 3, 2, 0]));
+        assert!(c.pending.is_empty());
+        c.progress(&p([0, 3, 2, 1]));
+        c.progress(&p([1, 3, 1, 1]));
+        assert_eq!(c.pending, [false, true]);
+    }
+
+    #[test]
+    fn a_repeated_update_claims_nothing() {
+        let mut c = BuildCounts::default();
+        c.progress(&p([1, 3, 1, 0]));
+        c.progress(&p([1, 3, 1, 0]));
+        assert_eq!(c.pending, [true]);
+    }
 }
 
 impl Drop for Connection {
@@ -569,6 +623,7 @@ impl Connection {
             activities: HashMap::new(),
             parents: HashMap::new(),
             ids: HashMap::new(),
+            builds: BuildCounts::default(),
         };
         conn.handshake()?;
         conn.process_stderr(on_event)?;
@@ -714,9 +769,18 @@ impl Connection {
                         let up = self.ids.get(&parent).copied().unwrap_or(0);
                         log::start(id, lvl, ty, &s, fields.clone(), up);
                     }
+                    if ty == ACT_BUILDS {
+                        self.builds = BuildCounts {
+                            act: Some(act),
+                            ..BuildCounts::default()
+                        };
+                    }
                     if ty == ACT_BUILD
                         && let Some(Value::String(drv)) = fields.first()
                     {
+                        // a goal that failed without a build activity left a
+                        // change nobody will claim
+                        self.builds.pending.clear();
                         self.activities.insert(act, drv.clone());
                         on_event(Event::Started(Started {
                             drv_path: drv.clone(),
@@ -735,7 +799,14 @@ impl Connection {
                     }
                     self.parents.remove(&act);
                     if let Some(drv) = self.activities.remove(&act) {
-                        on_event(Event::Stopped(Stopped { drv_path: drv }));
+                        // a build hook runs two activities for one build and
+                        // the verdict belongs to the last
+                        let last = !self.activities.values().any(|d| *d == drv);
+                        let built = last && self.builds.pending.pop_front() == Some(true);
+                        on_event(Event::Stopped(Stopped {
+                            drv_path: drv,
+                            built,
+                        }));
                     }
                 }
                 STDERR_RESULT => {
@@ -744,6 +815,9 @@ impl Connection {
                     let fields = self.read_fields()?;
                     if let Some(&id) = self.ids.get(&act) {
                         log::result(id, ty, fields.clone());
+                    }
+                    if ty == RES_PROGRESS && self.builds.act == Some(act) {
+                        self.builds.progress(&fields);
                     }
                     if matches!(ty, RES_BUILD_LOG_LINE | RES_POST_BUILD_LOG_LINE)
                         && let Some(Value::String(line)) = fields.first()
