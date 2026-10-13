@@ -1,12 +1,12 @@
 {
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
   inputs.crane.url = "github:ipetkov/crane";
-  # the reference stays on its own nixpkgs, where nix is 2.34.8
-  inputs.nix-conformance.url = "github:numtide/nix-conformance";
-  inputs.hercules-ci-effects.url = "github:hercules-ci/hercules-ci-effects";
-  inputs.hercules-ci-effects.inputs.nixpkgs.follows = "nixpkgs";
-  outputs = { self, nixpkgs, crane, nix-conformance, hercules-ci-effects }:
+  outputs = { self, nixpkgs, crane }:
     let
+      # CI-only inputs live in a private flake with its own lock, so they stay
+      # out of this flake.lock and out of the lock of anyone using iets.
+      ci = (import ./nix/flake-compat.nix { src = ./nix/ci; }).defaultNix;
+      inherit (ci) nix-conformance hercules-ci-effects;
       lib = nixpkgs.lib;
       # Cargo.toml must agree: checks.version fails when it does not
       version = lib.fileContents ./VERSION;
