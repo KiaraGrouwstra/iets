@@ -39,7 +39,7 @@ use crate::provenance::Provenance;
 use crate::remote::event::Event;
 use crate::remote::plan::Plan;
 use crate::remote::worker::{Missing, Options, Transport};
-use crate::session;
+use crate::session::{self, Session};
 use crate::store::path::StorePath;
 
 use crate::store::drv::{Derivation, DerivationOutput};
@@ -111,8 +111,9 @@ impl Heartbeat {
                 // took 10 ms does not wait a tick for this thread to exit
                 let mut last = Instant::now();
                 while !flag.load(Ordering::Relaxed) {
-                    thread::park_timeout(render::HEARTBEAT.saturating_sub(last.elapsed()));
-                    if !flag.load(Ordering::Relaxed) && last.elapsed() >= render::HEARTBEAT {
+                    let every = render.lock().unwrap().interval();
+                    thread::park_timeout(every.saturating_sub(last.elapsed()));
+                    if !flag.load(Ordering::Relaxed) && last.elapsed() >= every {
                         last = Instant::now();
                         render.lock().unwrap().heartbeat();
                     }
@@ -136,19 +137,36 @@ impl Drop for Heartbeat {
 /// Where the events go: the renderer.
 pub struct Reporter {
     render: Arc<Mutex<Renderer>>,
+    /// Whose log shows the live region, so the region comes down with us.
+    live: Option<Arc<Session>>,
     /// Per drv: when the build started and how long it ran.
     timing: HashMap<String, (Instant, Option<Duration>)>,
 }
 
 impl Reporter {
     pub fn new(style: Style) -> Reporter {
-        Reporter::with_output(style, Box::new(SessionOut::default()))
+        let mut render = Renderer::new(style, Box::new(SessionOut::default()));
+        let mut live = None;
+        // under internal-json the activity records carry the progress
+        if style.mode == render::Mode::Tty && !style.quiet && !log::json() {
+            let s = Session::current();
+            s.log.progress.set_live(true);
+            let sink = s.clone();
+            render = render.with_live(Box::new(move |lines| sink.log.set_region(lines)));
+            live = Some(s);
+        }
+        Reporter {
+            render: Arc::new(Mutex::new(render)),
+            live,
+            timing: HashMap::new(),
+        }
     }
 
     /// The same, writing the progress somewhere else than stderr.
     pub fn with_output(style: Style, out: Box<dyn Write + Send>) -> Reporter {
         Reporter {
             render: Arc::new(Mutex::new(Renderer::new(style, out))),
+            live: None,
             timing: HashMap::new(),
         }
     }
@@ -181,6 +199,18 @@ impl Reporter {
             r.retained_tail(drv)
         } else {
             live
+        }
+    }
+}
+
+impl Drop for Reporter {
+    fn drop(&mut self) {
+        self.render
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .finish();
+        if let Some(s) = self.live.take() {
+            s.log.progress.set_live(false);
         }
     }
 }
@@ -593,7 +623,11 @@ fn event_sink<'a>(
             {
                 *slot = Some(t.elapsed());
             }
-            reporter.render.lock().unwrap().stopped(&s.drv_path);
+            reporter
+                .render
+                .lock()
+                .unwrap()
+                .stopped(&s.drv_path, s.built);
         }
         Event::Failed(f) => {
             let d = reporter.duration(&f.drv_path);

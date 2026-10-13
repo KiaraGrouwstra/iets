@@ -27,7 +27,7 @@ use crate::log::{
     LVL_ERROR, LVL_INFO, LVL_TALKATIVE, RES_PROGRESS,
 };
 use crate::remote::copy::Copying;
-use crate::remote::event::{Event, Started};
+use crate::remote::event::{Event, Started, Stopped};
 use crate::remote::plan::{self, Object, Plan};
 use crate::remote::worker::{Connection, failed_event};
 use crate::store::drv::Derivation;
@@ -154,7 +154,9 @@ fn build_batch(
             f,
         );
         progress(&|n| n[2] += 1);
-        let _ = tx.send(Event::Started(Started { drv_path: drv }));
+        let _ = tx.send(Event::Started(Started {
+            drv_path: drv.clone(),
+        }));
         let res = match build::build(client, &sched, job, objects, tx, &act) {
             Ok((res, n)) => {
                 calls.fetch_add(n, Ordering::Relaxed);
@@ -172,6 +174,10 @@ fn build_batch(
             n[2] -= 1;
             n[if res.success() { 0 } else { 3 }] += 1;
         });
+        let _ = tx.send(Event::Stopped(Stopped {
+            drv_path: drv,
+            built: res.success(),
+        }));
         res
     };
     let work = fanout::Work {

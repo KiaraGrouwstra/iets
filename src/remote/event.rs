@@ -34,9 +34,11 @@ pub struct Phase {
     pub phase: String,
 }
 
-/// The build activity ended. Says nothing about success: the op's
-/// `BuildResult` and the daemon's error messages do.
+/// The build activity ended. `built` is true when the backend saw the build
+/// succeed. False says nothing, the op's `BuildResult` and the daemon's error
+/// messages decide.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stopped {
     pub drv_path: String,
+    pub built: bool,
 }

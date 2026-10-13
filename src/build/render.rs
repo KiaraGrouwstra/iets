@@ -8,16 +8,21 @@
 //! successes are folded with `::group::` markers. A heartbeat thread names
 //! the running builds every `HEARTBEAT`, and a build silent for `STALL`
 //! switches to live streaming.
+//!
+//! On a terminal the running builds are a region under the output, redrawn
+//! in place with a spinner (tty_renderer.py). Verdicts scroll up above it.
+//! Without a terminal the block form above is the fallback.
 
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
-use std::io::{self, IsTerminal, Write};
+use std::io::Write;
 use std::time::{Duration, Instant};
 
 use super::event::{BuildEvent, Kind, fmt_duration};
 
-use crate::log::{json, note_mismatch, strip_ansi};
+use crate::log::{interactive, json, note_mismatch, strip_ansi};
+use crate::sys::tty;
 
 /// Unfolded tail of a failure log.
 pub const FAILURE_TAIL: usize = 200;
@@ -27,9 +32,18 @@ pub const BUFFER_LINES: usize = 10_000;
 const STALL_TAIL: usize = 5;
 pub const HEARTBEAT: Duration = Duration::from_secs(30);
 pub const STALL: Duration = Duration::from_secs(300);
+/// One spinner frame.
+pub const FRAME: Duration = Duration::from_millis(100);
+/// Log lines redraw the region at most this often.
+const LOG_REDRAW: Duration = Duration::from_millis(50);
+/// Log lines a terminal shows of a failed build.
+const EXTRACT_LINES: usize = 10;
+const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const ATTR_WIDTH: usize = 40;
 
 const GREEN: &str = "\x1b[32m";
 const RED: &str = "\x1b[31m";
+const YELLOW: &str = "\x1b[33m";
 const DIM: &str = "\x1b[2m";
 const BOLD: &str = "\x1b[1m";
 const RESET: &str = "\x1b[0m";
@@ -56,16 +70,39 @@ impl Style {
     /// `GITHUB_ACTIONS`/`GITEA_ACTIONS`/`FORGEJO_ACTIONS` mean folding.
     pub fn detect() -> Style {
         Style {
-            mode: if is_tty() { Mode::Tty } else { Mode::Ci },
-            color: is_tty() && env::var_os("NO_COLOR").is_none() && !json(),
+            mode: if interactive() { Mode::Tty } else { Mode::Ci },
+            color: color(),
             fold: actions_ci(),
             quiet: false,
         }
     }
 }
 
-fn is_tty() -> bool {
-    io::stderr().is_terminal()
+/// Colour goes to a terminal that wants it.
+pub fn color() -> bool {
+    interactive() && env::var_os("NO_COLOR").is_none() && !json()
+}
+
+/// The status line under the builds, in the colours of the rows above it.
+pub fn status(line: &str) -> String {
+    paint_status(color(), line)
+}
+
+fn paint_status(color: bool, line: &str) -> String {
+    let (true, Some(rest)) = (color, line.strip_prefix("⏵")) else {
+        return line.to_string();
+    };
+    // the time a task has taken is the one part that stays in the background
+    let (text, age) = match rest.rfind(" (") {
+        Some(at) if rest.ends_with(')') => rest.split_at(at),
+        _ => (rest, ""),
+    };
+    let age = if age.is_empty() {
+        String::new()
+    } else {
+        format!("{DIM}{age}{RESET}")
+    };
+    format!("{YELLOW}⏵{RESET}{text}{age}")
 }
 
 /// The CIs whose logs understand `::group::` markers.
@@ -77,6 +114,7 @@ fn actions_ci() -> bool {
 
 /// One build's buffered output.
 struct Build {
+    drv: String,
     /// The attribute plus its source position, for the state-change lines.
     label: String,
     /// The attribute alone, for the per-line log prefix.
@@ -111,9 +149,17 @@ impl Build {
     }
 }
 
+/// Takes the lines of the region.
+pub type Live = Box<dyn FnMut(Vec<String>) + Send>;
+
 pub struct Renderer {
     style: Style,
     out: Box<dyn Write + Send>,
+    live: Option<Live>,
+    began: Instant,
+    last_draw: Instant,
+    succeeded: usize,
+    failed_count: usize,
     running: HashMap<String, Build>,
     /// Buffers of builds that already stopped, for a failure reported after
     /// the activity ended. Bounded: only the most recent are kept.
@@ -140,6 +186,11 @@ impl Renderer {
         Renderer {
             style,
             out,
+            live: None,
+            began: Instant::now(),
+            last_draw: Instant::now(),
+            succeeded: 0,
+            failed_count: 0,
             running: HashMap::new(),
             finished: VecDeque::new(),
             failed: HashSet::new(),
@@ -147,6 +198,104 @@ impl Renderer {
             owned: HashSet::new(),
             held: HashMap::new(),
         }
+    }
+
+    /// Draws the running builds through `live`.
+    pub fn with_live(mut self, live: Live) -> Renderer {
+        self.live = Some(live);
+        self
+    }
+
+    fn is_live(&self) -> bool {
+        self.live.is_some() && self.style.mode == Mode::Tty && !self.style.quiet
+    }
+
+    /// How often `heartbeat` should run.
+    pub fn interval(&self) -> Duration {
+        if self.is_live() { FRAME } else { HEARTBEAT }
+    }
+
+    /// Log lines are throttled. A state change draws at once.
+    fn redraw(&mut self, throttled: bool) {
+        if !self.is_live() || (throttled && self.last_draw.elapsed() < LOG_REDRAW) {
+            return;
+        }
+        self.last_draw = Instant::now();
+        let lines = self.region();
+        if let Some(live) = self.live.as_mut() {
+            live(lines);
+        }
+    }
+
+    /// A header, then a row and the last log line per running build.
+    fn region(&self) -> Vec<String> {
+        if self.running.is_empty() {
+            return Vec::new();
+        }
+        let frame = self.began.elapsed().as_millis() / FRAME.as_millis();
+        let spin = SPINNER[frame as usize % SPINNER.len()];
+        let mut lines = vec![format!(
+            " {} {} {} ⏵{}   {}",
+            self.sgr(BOLD, "BUILD"),
+            self.sgr(GREEN, &format!("✔{}", self.succeeded)),
+            self.sgr(RED, &format!("✘{}", self.failed_count)),
+            self.running.len(),
+            fmt_duration(self.began.elapsed()),
+        )];
+        let mut running: Vec<&Build> = self.running.values().collect();
+        running.sort_by_key(|b| (b.started, b.drv.as_str()));
+        // two rows a build under the header, and one for the overflow note
+        let rows = tty::size().map_or(24, |(_, r)| r);
+        let mut fit = rows.saturating_sub(3) / 2;
+        if running.len() > fit {
+            fit = fit.saturating_sub(1).max(1);
+        }
+        for b in running.iter().take(fit) {
+            lines.push(format!(
+                " {} {:<w$} {:<12} {:>7}",
+                self.sgr(YELLOW, &spin.to_string()),
+                trunc_middle(&b.short, ATTR_WIDTH),
+                b.phase.as_deref().unwrap_or("build"),
+                fmt_duration(b.elapsed()),
+                w = ATTR_WIDTH,
+            ));
+            if let Some(l) = last_line(b) {
+                lines.push(self.sgr(DIM, &format!("     {l}")));
+            }
+        }
+        if running.len() > fit {
+            let more = running.len() - fit;
+            lines.push(self.sgr(DIM, &format!("     … +{more} more")));
+        }
+        lines
+    }
+
+    fn tally(&mut self, ok: bool) {
+        match ok {
+            true => self.succeeded += 1,
+            false => self.failed_count += 1,
+        }
+    }
+
+    /// Takes the region down and sums up a run of several builds.
+    pub fn finish(&mut self) {
+        if let Some(live) = self.live.as_mut() {
+            live(Vec::new());
+        }
+        if self.style.quiet || self.succeeded + self.failed_count < 2 {
+            return;
+        }
+        let mut parts = vec![self.sgr(GREEN, &format!("✔ {} succeeded", self.succeeded))];
+        if self.failed_count > 0 {
+            parts.push(self.sgr(RED, &format!("✘ {} failed", self.failed_count)));
+        }
+        let l = format!(
+            "{} {} · {}",
+            self.sgr(BOLD, "summary:"),
+            parts.join(" · "),
+            fmt_duration(self.began.elapsed())
+        );
+        self.print(&[l]);
     }
 
     /// The derivations the build op now running reports verdicts for.
@@ -167,6 +316,7 @@ impl Renderer {
             let why = (!ok).then_some("the daemon named it only after the build ended");
             self.verdict_block(&b, ok, why);
         }
+        self.redraw(false);
     }
 
     fn sgr(&self, code: &str, s: &str) -> String {
@@ -205,6 +355,11 @@ impl Renderer {
     }
 
     pub fn event(&mut self, e: &BuildEvent) {
+        self.dispatch(e);
+        self.redraw(matches!(e.kind, Kind::Log(_)));
+    }
+
+    fn dispatch(&mut self, e: &BuildEvent) {
         match &e.kind {
             Kind::Started => self.started(e),
             Kind::Phase(p) => self.phase(e, p),
@@ -230,6 +385,7 @@ impl Renderer {
         self.running.insert(
             e.drv.clone(),
             Build {
+                drv: e.drv.clone(),
                 label: e.attr.clone(),
                 short: short_label(&e.attr),
                 pos: e.pos.clone(),
@@ -242,28 +398,18 @@ impl Renderer {
                 streaming: false,
             },
         );
-        if !self.style.quiet {
+        // The verdict names the build, so a start line would repeat it.
+        if !self.style.quiet && self.style.mode == Mode::Ci {
             let l = format!("▶ building {}", e.attr);
             self.line(l);
         }
     }
 
     fn phase(&mut self, e: &BuildEvent, phase: &str) {
-        let (label, elapsed) = match self.running.get_mut(&e.drv) {
-            Some(b) => {
-                b.phase = Some(phase.to_string());
-                b.last_output = Instant::now();
-                b.lines.push_back(format!("@ phase {phase}"));
-                (b.label.clone(), b.started.elapsed())
-            }
-            None => (e.attr.clone(), e.elapsed),
-        };
-        if self.style.mode == Mode::Tty && !self.style.quiet {
-            let l = self.sgr(
-                DIM,
-                &format!("  {label}: {phase} ({})", fmt_duration(elapsed)),
-            );
-            self.line(l);
+        if let Some(b) = self.running.get_mut(&e.drv) {
+            b.phase = Some(phase.to_string());
+            b.last_output = Instant::now();
+            b.lines.push_back(format!("@ phase {phase}"));
         }
     }
 
@@ -333,7 +479,26 @@ impl Renderer {
     /// end says nothing about success, the op's result does, and a build hook
     /// ends two activities for one build. The buffer stays open, so the
     /// daemon's own error text still lands in that build's block.
-    pub fn stopped(&mut self, drv: &str) {
+    pub fn stopped(&mut self, drv: &str, built: bool) {
+        match built && !self.failed.contains(drv) {
+            true => self.succeed(drv),
+            false => self.settle(drv),
+        }
+        self.redraw(false);
+    }
+
+    /// The backend saw the build succeed, so the verdict needs no op.
+    fn succeed(&mut self, drv: &str) {
+        let Some(b) = self.running.remove(drv) else {
+            return;
+        };
+        let tail = b.tail(FAILURE_TAIL);
+        self.retain(drv, tail);
+        self.verdicted.insert(drv.to_string());
+        self.verdict_block(&b, true, None);
+    }
+
+    fn settle(&mut self, drv: &str) {
         if self.owned.contains(drv) {
             if let Some(b) = self.running.get_mut(drv)
                 && b.ended.is_none()
@@ -375,14 +540,19 @@ impl Renderer {
         elapsed: Duration,
         reason: Option<&str>,
     ) -> String {
-        let mut l = format!("✘  {} failed after {}", attr, fmt_duration(elapsed));
+        let mut l = format!(
+            "{}  {} failed after {}",
+            self.sgr(RED, "✘"),
+            self.sgr(BOLD, attr),
+            fmt_duration(elapsed)
+        );
         if let Some(r) = reason.filter(|r| !r.is_empty()) {
             l.push_str(&format!(" ({r})"));
         }
         if let Some(p) = pos {
-            l.push_str(&format!(", defined at {p}"));
+            l.push_str(&self.sgr(DIM, &format!(", defined at {p}")));
         }
-        self.sgr(RED, &l)
+        l
     }
 
     fn verdict(&mut self, e: &BuildEvent, ok: bool, reason: Option<&str>) {
@@ -393,6 +563,7 @@ impl Renderer {
                 self.verdict_block(&b, ok, reason);
             }
             None if !ok => {
+                self.tally(false);
                 let l =
                     self.failed_line(&short_label(&e.attr), e.pos.as_deref(), e.elapsed, reason);
                 self.line(l);
@@ -415,6 +586,8 @@ impl Renderer {
             // The block went out when the activity stopped. Say something
             // only when that block claimed a success the op now contradicts.
             if !self.failed.contains(&e.drv) {
+                self.succeeded = self.succeeded.saturating_sub(1);
+                self.tally(false);
                 let l = self.failed_line(
                     &short_label(&e.attr),
                     e.pos.as_deref(),
@@ -425,27 +598,47 @@ impl Renderer {
             }
             return;
         }
+        self.tally(false);
         let head = self.failed_line(
             &short_label(&e.attr),
             e.pos.as_deref(),
             e.elapsed,
             Some(reason),
         );
-        let prefix = self.sgr(DIM, &format!("{}>", e.attr));
         let mut out = vec![head];
-        out.extend(tail.iter().map(|l| format!("{prefix} {l}")));
-        out.push(self.sgr(
-            RED,
-            &format!("✘ end of log for {} · nix log {}", e.attr, e.drv),
-        ));
+        if self.style.mode == Mode::Tty {
+            out.extend(self.extract(&e.attr, &e.drv, tail));
+        } else {
+            let prefix = self.sgr(DIM, &format!("{}>", e.attr));
+            out.extend(tail.iter().map(|l| format!("{prefix} {l}")));
+            out.push(self.sgr(
+                RED,
+                &format!("✘ end of log for {} · nix log {}", e.attr, e.drv),
+            ));
+        }
         self.print(&out);
     }
 
+    /// Where the full log is, then its last lines.
+    fn extract(&self, attr: &str, drv: &str, tail: &[String]) -> Vec<String> {
+        let prefix = self.sgr(DIM, &format!("{attr}>"));
+        let skip = tail.len().saturating_sub(EXTRACT_LINES);
+        let mut out = vec![self.sgr(
+            DIM,
+            &format!("── error extract (full log: nix log {drv}) ──"),
+        )];
+        out.extend(tail[skip..].iter().map(|l| format!("{prefix} {l}")));
+        out
+    }
+
     fn verdict_block(&mut self, b: &Build, ok: bool, reason: Option<&str>) {
+        self.tally(ok);
         let verdict = if ok {
-            self.sgr(
-                GREEN,
-                &format!("✔  {} ({})", b.label, fmt_duration(b.elapsed())),
+            format!(
+                "{}  {} {}",
+                self.sgr(GREEN, "✔"),
+                self.sgr(BOLD, &b.label),
+                self.sgr(DIM, &format!("({})", fmt_duration(b.elapsed())))
             )
         } else {
             self.failed_line(&b.short, b.pos.as_deref(), b.elapsed(), reason)
@@ -458,6 +651,12 @@ impl Renderer {
         }
         if self.style.quiet || (ok && self.style.mode == Mode::Tty) {
             self.line(verdict);
+            return;
+        }
+        if self.style.mode == Mode::Tty {
+            let mut out = vec![verdict];
+            out.extend(self.extract(&b.short, &b.drv, &b.tail(EXTRACT_LINES)));
+            self.print(&out);
             return;
         }
         let prefix = self.sgr(DIM, &format!("{}>", b.short));
@@ -513,6 +712,11 @@ impl Renderer {
 
     /// One heartbeat: escalate the stalled builds, then name what is running.
     pub fn heartbeat(&mut self) {
+        // the region already shows every running build, spinning
+        if self.is_live() {
+            self.redraw(false);
+            return;
+        }
         self.check_stalls();
         if self.running.is_empty() || self.style.quiet {
             return;
@@ -580,6 +784,27 @@ impl Renderer {
     }
 }
 
+/// The last log line, stripped so it cannot move the cursor.
+fn last_line(b: &Build) -> Option<String> {
+    let l = b.lines.iter().rev().find(|l| !l.starts_with("@ phase "))?;
+    let clean: String = strip_ansi(l).chars().filter(|c| !c.is_control()).collect();
+    let clean = clean.trim();
+    (!clean.is_empty()).then(|| clean.to_string())
+}
+
+fn trunc_middle(s: &str, n: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= n {
+        return s.to_string();
+    }
+    let head = (n - 1) / 2;
+    let tail = n - 1 - head;
+    let mut out: String = chars[..head].iter().collect();
+    out.push('…');
+    out.extend(&chars[chars.len() - tail..]);
+    out
+}
+
 /// The label without the source position: `checks.x.foo (f.nix:1:2)` as
 /// `checks.x.foo`, so a log prefix stays short.
 fn short_label(label: &str) -> String {
@@ -615,10 +840,26 @@ fn drv_paths(text: &str) -> Vec<String> {
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use std::io;
     use std::sync::{Arc, Mutex};
 
     use crate::session::Session;
+
+    #[test]
+    fn the_status_line_takes_the_colours_of_the_rows_above() {
+        let l = "⏵ copying path 'x' (51s)";
+        assert_eq!(
+            paint_status(true, l),
+            "\x1b[33m⏵\x1b[0m copying path 'x'\x1b[2m (51s)\x1b[0m"
+        );
+        assert_eq!(
+            paint_status(true, "⏵ 16 copying, 301.2 MiB"),
+            "\x1b[33m⏵\x1b[0m 16 copying, 301.2 MiB"
+        );
+        assert_eq!(paint_status(false, l), l);
+        assert_eq!(paint_status(true, ""), "");
+    }
 
     /// Somewhere to read the renderer's stderr back from.
     #[derive(Clone, Default)]
@@ -681,7 +922,7 @@ pub(super) mod tests {
         let (mut r, s) = ci(true);
         r.event(&ev(Kind::Started));
         r.event(&ev(Kind::Log(b"line one".to_vec())));
-        r.stopped("/nix/store/a.drv");
+        r.stopped("/nix/store/a.drv", false);
         r.release();
         let t = text(&s);
         assert!(t.contains("::group::✔  checks.x.a"), "{t}");
@@ -708,7 +949,7 @@ pub(super) mod tests {
         let (mut r, s) = ci(false);
         r.event(&ev(Kind::Started));
         r.event(&ev(Kind::Log(b"line one".to_vec())));
-        r.stopped("/nix/store/a.drv");
+        r.stopped("/nix/store/a.drv", false);
         r.release();
         let t = text(&s);
         let log = t.find("checks.x.a> line one").expect("the log line");
@@ -744,9 +985,9 @@ pub(super) mod tests {
             Kind::Log(b"a2".to_vec()),
             Duration::ZERO,
         ));
-        r.stopped("/nix/store/a.drv");
+        r.stopped("/nix/store/a.drv", false);
         r.release();
-        r.stopped("/nix/store/b.drv");
+        r.stopped("/nix/store/b.drv", false);
         r.release();
         let t = text(&s);
         let a1 = t.find("a> a1").unwrap();
@@ -768,13 +1009,135 @@ pub(super) mod tests {
         r.event(&ev(Kind::Started));
         r.event(&ev(Kind::Log(b"noise".to_vec())));
         r.event(&ev(Kind::Phase("build".into())));
-        r.stopped("/nix/store/a.drv");
+        r.stopped("/nix/store/a.drv", false);
         r.release();
         let t = text(&s);
-        assert!(t.contains("▶ building checks.x.a"));
-        assert!(t.contains("checks.x.a: build (0s)"));
+        assert!(!t.contains("▶ building"), "{t}");
         assert!(t.contains("✔  checks.x.a (0s)"));
         assert!(!t.contains("noise"), "{t}");
+    }
+
+    type Frames = Arc<Mutex<Vec<Vec<String>>>>;
+
+    fn live() -> (Renderer, Sink, Frames) {
+        let s = Sink::default();
+        let frames = Frames::default();
+        let f = frames.clone();
+        let style = Style {
+            mode: Mode::Tty,
+            color: false,
+            fold: false,
+            quiet: false,
+        };
+        let r = Renderer::new(style, Box::new(s.clone()))
+            .with_live(Box::new(move |l| f.lock().unwrap().push(l)));
+        (r, s, frames)
+    }
+
+    #[test]
+    fn the_live_region_spins_and_counts() {
+        let (mut r, s, frames) = live();
+        r.event(&ev(Kind::Started));
+        r.event(&ev(Kind::Phase("buildPhase".into())));
+        r.event(&ev(Kind::Log(b"compiling foo.c".to_vec())));
+        // log lines wait for the next frame
+        r.heartbeat();
+        let last = frames.lock().unwrap().last().unwrap().clone();
+        assert!(last[0].contains("BUILD ✔0 ✘0 ⏵1"), "{last:?}");
+        assert!(SPINNER.iter().any(|c| last[1].contains(*c)), "{last:?}");
+        assert!(last[1].contains("checks.x.a"), "{last:?}");
+        assert!(last[1].contains("buildPhase"), "{last:?}");
+        assert_eq!(last[2].trim(), "compiling foo.c", "{last:?}");
+        // the start is not announced above the region
+        assert!(!text(&s).contains("▶"), "{}", text(&s));
+
+        r.stopped("/nix/store/a.drv", false);
+        r.release();
+        let t = text(&s);
+        assert!(t.contains("✔  checks.x.a (0s)"), "{t}");
+        assert!(!t.contains("compiling"), "{t}");
+        // nothing runs, so the region is taken down
+        assert!(frames.lock().unwrap().last().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_failure_shows_a_short_extract() {
+        let (mut r, s, _) = live();
+        r.event(&ev(Kind::Started));
+        for i in 0..30 {
+            r.event(&ev(Kind::Log(format!("line {i}").into_bytes())));
+        }
+        r.event(&ev(Kind::Failed {
+            reason: "status 1".into(),
+            log_tail: vec![],
+        }));
+        let t = text(&s);
+        assert!(
+            t.contains("✘  checks.x.a failed after 0s (status 1)"),
+            "{t}"
+        );
+        assert!(t.contains("error extract (full log: nix log /nix/store/a.drv)"));
+        assert!(t.contains("checks.x.a> line 29"), "{t}");
+        assert!(t.contains("checks.x.a> line 20"), "{t}");
+        assert!(!t.contains("line 19"), "{t}");
+    }
+
+    #[test]
+    fn the_summary_follows_more_than_one_build() {
+        let (mut r, s, frames) = live();
+        for n in ["a", "b"] {
+            let drv = format!("/nix/store/{n}.drv");
+            r.event(&BuildEvent::new(n, &drv, Kind::Started, Duration::ZERO));
+            r.event(&BuildEvent::new(
+                n,
+                &drv,
+                Kind::Built {
+                    outputs: BTreeMap::new(),
+                },
+                Duration::ZERO,
+            ));
+        }
+        r.finish();
+        let t = text(&s);
+        assert!(t.contains("summary: ✔ 2 succeeded · 0s"), "{t}");
+        assert!(frames.lock().unwrap().last().unwrap().is_empty());
+    }
+
+    /// A backend that saw the build succeed does not wait for the op, even
+    /// for a build the op owns.
+    #[test]
+    fn a_build_the_backend_saw_succeed_is_verdicted_at_once() {
+        let (mut r, s, frames) = live();
+        r.owns(["/nix/store/a.drv".to_string()]);
+        r.event(&ev(Kind::Started));
+        r.stopped("/nix/store/a.drv", true);
+        let t = text(&s);
+        assert!(t.contains("✔  checks.x.a (0s)"), "{t}");
+        assert!(frames.lock().unwrap().last().unwrap().is_empty());
+        // the op's own result adds nothing
+        r.event(&ev(Kind::Built {
+            outputs: BTreeMap::new(),
+        }));
+        r.release();
+        assert_eq!(text(&s).matches("✔").count(), 1, "{}", text(&s));
+    }
+
+    #[test]
+    fn one_build_needs_no_summary() {
+        let (mut r, s, _) = live();
+        r.event(&ev(Kind::Started));
+        r.stopped("/nix/store/a.drv", false);
+        r.release();
+        r.finish();
+        assert!(!text(&s).contains("summary"), "{}", text(&s));
+    }
+
+    #[test]
+    fn a_long_attribute_keeps_its_ends() {
+        assert_eq!(trunc_middle("short", 40), "short");
+        let t = trunc_middle("abcdefghijklmnopqrstuvwxyz", 11);
+        assert_eq!(t.chars().count(), 11);
+        assert!(t.starts_with("abcde") && t.ends_with("vwxyz") && t.contains('…'));
     }
 
     #[test]
@@ -792,7 +1155,7 @@ pub(super) mod tests {
             ),
             Duration::ZERO,
         ));
-        r.stopped("/nix/store/a.drv");
+        r.stopped("/nix/store/a.drv", false);
         r.release();
         let t = text(&s);
         assert!(t.contains("✘  checks.x.a failed after 0s"), "{t}");
@@ -825,8 +1188,8 @@ pub(super) mod tests {
         r.event(&at(Kind::Started));
         r.event(&at(Kind::Log(b"about to fail".to_vec())));
         // The hook's activity ends, then the build's; neither is a verdict.
-        r.stopped("/nix/store/a.drv");
-        r.stopped("/nix/store/a.drv");
+        r.stopped("/nix/store/a.drv", false);
+        r.stopped("/nix/store/a.drv", false);
         // The daemon's own error text is unattributed, and still belongs to
         // the one build that is running.
         r.event(&BuildEvent::new(
@@ -871,7 +1234,7 @@ pub(super) mod tests {
         let (mut r, s) = ci(false);
         r.event(&ev(Kind::Started));
         r.event(&ev(Kind::Log(b"work".to_vec())));
-        r.stopped("/nix/store/a.drv");
+        r.stopped("/nix/store/a.drv", false);
         assert!(!text(&s).contains("✔"), "a verdict before the op is over");
         r.event(&BuildEvent::new(
             "",

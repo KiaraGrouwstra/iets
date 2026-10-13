@@ -19,6 +19,7 @@ use std::{env, mem, process};
 use serde_json::{Value, json};
 
 use crate::cli::help;
+use crate::display::{Display, Term, Tty};
 use crate::eval::{Error, Pos};
 use crate::progress::{Board, Mode};
 use crate::session::Session;
@@ -51,50 +52,102 @@ pub struct Log {
 #[derive(Default)]
 struct Out {
     w: Option<Box<dyn Write + Send>>,
+    /// The terminal the live view is drawn on. `None` is stderr's.
+    term: Option<Box<dyn Term>>,
     status: String,
-    shown: bool,
-    /// A status line drawn here would join a line its writer has not ended.
-    mid_line: bool,
+    /// Lines under the output, redrawn in place: the build renderer's view.
+    region: Vec<String>,
+    /// Drawn while a terminal answers and nothing has paused it.
+    display: Option<Display>,
+    /// A child may prompt on the terminal while this is above zero.
+    paused: usize,
+    /// What was written without its newline, until it has one.
+    partial: Vec<u8>,
 }
 
 impl Out {
+    fn term(&self) -> &dyn Term {
+        self.term.as_deref().unwrap_or(&Tty)
+    }
+
+    /// Output goes through the display while there is one.
     fn write(&mut self, bytes: &[u8]) {
-        self.take_down();
-        if let Some(w) = self.w.as_mut() {
-            let _ = w.write_all(bytes);
+        if self.display.is_none() {
+            self.send(bytes);
+            self.sync();
+            return;
         }
-        if let Some(&last) = bytes.last() {
-            self.mid_line = last != b'\n';
-        }
-        self.draw();
-    }
-
-    fn take_down(&mut self) {
-        if self.shown
-            && let Some(w) = self.w.as_mut()
-        {
-            let _ = w.write_all(b"\r\x1b[K");
-        }
-        self.shown = false;
-    }
-
-    fn draw(&mut self) {
-        let Some(w) = self.w.as_mut() else {
+        self.partial.extend_from_slice(bytes);
+        let Some(end) = self.partial.iter().rposition(|b| *b == b'\n') else {
             return;
         };
-        if !self.shown && !self.mid_line && !self.status.is_empty() {
-            let _ = w.write_all(fit(&self.status).as_bytes());
-            self.shown = true;
-        }
-        let _ = w.flush();
+        let rest = self.partial.split_off(end + 1);
+        let done = String::from_utf8_lossy(&mem::replace(&mut self.partial, rest)).into_owned();
+        let lines: Vec<String> = done
+            .lines()
+            .map(|l| l.trim_end_matches('\r').to_string())
+            .collect();
+        self.paint(&lines);
     }
-}
 
-/// `line` cut to the terminal's width: a status line that wraps cannot be
-/// taken down with one carriage return.
-fn fit(line: &str) -> String {
-    let cols = sys::tty::columns().unwrap_or(80);
-    line.chars().take(cols - 1).collect()
+    fn send(&mut self, bytes: &[u8]) {
+        if let Some(w) = self.w.as_mut() {
+            let _ = w.write_all(bytes);
+            let _ = w.flush();
+        }
+    }
+
+    /// The lines under the output: the region, then the status line.
+    fn live(&self) -> Vec<String> {
+        let status = Some(&self.status).filter(|s| !s.is_empty());
+        self.region.iter().chain(status).cloned().collect()
+    }
+
+    /// Brings the display in line with what is to be shown: starts it, ends it
+    /// or redraws it. A new size redraws it too.
+    fn sync(&mut self) {
+        let wanted = self.paused == 0 && !self.live().is_empty() && self.w.is_some();
+        let size = self.term().size().filter(|_| wanted);
+        match (size, self.display.is_some()) {
+            (Some(_), true) => self.paint(&[]),
+            (Some((_, rows)), false) => {
+                let (row, col) = self.term().cursor().unwrap_or((rows, 1));
+                // a line somebody has not ended must not be drawn over
+                let origin = match col {
+                    1 => row,
+                    _ => {
+                        self.send(b"\n");
+                        (row + 1).min(rows)
+                    }
+                };
+                self.display = Some(Display::new(origin));
+                self.paint(&[]);
+            }
+            (None, true) => self.close(),
+            (None, false) => {}
+        }
+    }
+
+    fn paint(&mut self, output: &[String]) {
+        let live = self.live();
+        let (Some(size), Some(display)) = (self.term().size(), self.display.as_mut()) else {
+            return self.close();
+        };
+        let frame = display.frame(size, output, &live);
+        let top = display.top();
+        self.send(frame.as_bytes());
+        self.term().guard(top);
+    }
+
+    fn close(&mut self) {
+        let Some(display) = self.display.take() else {
+            return;
+        };
+        let mut bytes = display.close().into_bytes();
+        bytes.extend(mem::take(&mut self.partial));
+        self.send(&bytes);
+        self.term().guard(0);
+    }
 }
 
 impl Log {
@@ -111,10 +164,27 @@ impl Log {
     pub fn set_status(&self, line: String) {
         let mut o = self.writer();
         if o.status != line {
-            o.take_down();
             o.status = line;
-            o.draw();
+            o.sync();
         }
+    }
+
+    /// The lines above the status line that are redrawn in place. Empty takes
+    /// them down.
+    pub fn set_region(&self, lines: Vec<String>) {
+        let mut o = self.writer();
+        o.region = lines;
+        o.sync();
+    }
+
+    /// Takes the live view down while a child may prompt on the terminal.
+    pub fn pause(&self, on: bool) {
+        let mut o = self.writer();
+        o.paused = match on {
+            true => o.paused + 1,
+            false => o.paused.saturating_sub(1),
+        };
+        o.sync();
     }
 
     /// What `iets` itself does, and what a host that wants Nix's own
@@ -353,8 +423,7 @@ pub fn show_progress() {
     if s.log.progress.mode() != Mode::Off {
         return;
     }
-    let tty = stderr_is_tty() && env::var("TERM").is_ok_and(|t| t != "dumb");
-    s.log.progress.set_mode(match tty {
+    s.log.progress.set_mode(match interactive() {
         true => Mode::Bar,
         false => Mode::Lines,
     });
@@ -431,13 +500,14 @@ pub struct Suspended(Arc<Session>);
 pub fn suspend() -> Suspended {
     let s = cur();
     s.log.progress.suspend();
-    s.log.set_status(String::new());
+    s.log.pause(true);
     Suspended(s)
 }
 
 impl Drop for Suspended {
     fn drop(&mut self) {
         self.0.log.progress.resume();
+        self.0.log.pause(false);
     }
 }
 
@@ -511,6 +581,11 @@ pub fn line(text: &str) {
 
 fn stderr_is_tty() -> bool {
     io::stderr().is_terminal()
+}
+
+/// A terminal that takes cursor movement. `TERM=dumb` is one that does not.
+pub fn interactive() -> bool {
+    stderr_is_tty() && env::var("TERM").is_ok_and(|t| t != "dumb")
 }
 
 /// logging.cc:SimpleLogger::log filters every line it writes; an
@@ -1024,6 +1099,151 @@ mod tests {
     use super::*;
 
     use std::time::Duration;
+
+    use crate::display::Size;
+    use crate::display::tests::Emu;
+
+    /// A terminal of a given size, and the screen what is written shows.
+    #[derive(Clone)]
+    struct Screen {
+        emu: Arc<Mutex<Emu>>,
+        size: Arc<Mutex<Option<Size>>>,
+        guards: Arc<Mutex<Vec<usize>>>,
+    }
+
+    impl Write for Screen {
+        fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+            self.emu.lock().unwrap().feed(&String::from_utf8_lossy(b));
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Term for Screen {
+        fn size(&self) -> Option<Size> {
+            *self.size.lock().unwrap()
+        }
+        fn cursor(&self) -> Option<(usize, usize)> {
+            let (row, col) = self.emu.lock().unwrap().cursor();
+            Some((row + 1, col + 1))
+        }
+        fn guard(&self, top: usize) {
+            self.guards.lock().unwrap().push(top);
+        }
+    }
+
+    impl Screen {
+        fn log(cols: usize, rows: usize) -> (Log, Screen) {
+            let s = Screen {
+                emu: Arc::new(Mutex::new(Emu::new(rows, cols))),
+                size: Arc::new(Mutex::new(Some((cols, rows)))),
+                guards: Arc::default(),
+            };
+            let log = Log::default();
+            log.write_to(Box::new(s.clone()));
+            log.writer().term = Some(Box::new(s.clone()));
+            (log, s)
+        }
+
+        fn rows(&self) -> Vec<String> {
+            self.emu.lock().unwrap().rows()
+        }
+
+        fn resize(&self, cols: usize, rows: usize) {
+            *self.size.lock().unwrap() = Some((cols, rows));
+            self.emu.lock().unwrap().resize(rows, cols);
+        }
+    }
+
+    #[test]
+    fn a_region_stays_under_the_output_that_scrolls_above_it() {
+        let (log, s) = Screen::log(40, 8);
+        log.set_region(vec!["one".into(), "two".into()]);
+        for i in 0..12 {
+            log.errln(&format!("out {i}"));
+        }
+        let rows = s.rows();
+        assert_eq!(
+            rows[..6],
+            (6..12).map(|i| format!("out {i}")).collect::<Vec<_>>()[..]
+        );
+        assert_eq!(rows[6..], ["one", "two"]);
+        log.set_region(Vec::new());
+        log.errln("end");
+        let rows = s.rows();
+        assert!(rows.iter().all(|r| r != "one" && r != "two"), "{rows:?}");
+        assert!(rows.contains(&"end".to_string()), "{rows:?}");
+        // nothing is left to clear on a signal
+        assert_eq!(s.guards.lock().unwrap().last(), Some(&0));
+    }
+
+    #[test]
+    fn the_status_line_goes_under_the_region() {
+        let (log, s) = Screen::log(40, 8);
+        log.set_region(vec!["region".into()]);
+        log.set_status("status".into());
+        assert_eq!(s.rows()[..2], ["region", "status"]);
+        log.set_status(String::new());
+        assert_eq!(s.rows()[..2], ["region", ""]);
+    }
+
+    /// A shrinking terminal redraws what it damaged, and only once.
+    #[test]
+    fn a_resize_redraws_the_region_once() {
+        let (log, s) = Screen::log(40, 10);
+        log.set_region(vec!["HEADER".into(), "run".into()]);
+        for i in 0..6 {
+            log.errln(&format!("out {i}"));
+        }
+        s.resize(20, 6);
+        log.set_region(vec!["HEADER".into(), "run".into()]);
+        log.set_region(vec!["HEADER".into(), "run".into()]);
+        let rows = s.rows();
+        assert_eq!(
+            rows.iter().filter(|r| *r == "HEADER").count(),
+            1,
+            "{rows:?}"
+        );
+        assert_eq!(rows[4..], ["HEADER", "run"]);
+        assert_eq!(rows[3], "out 5");
+    }
+
+    /// A child that prompts owns the terminal, and gets it back after.
+    #[test]
+    fn a_pause_takes_the_view_down_for_a_prompt() {
+        let (log, s) = Screen::log(40, 8);
+        log.set_region(vec!["region".into()]);
+        log.pause(true);
+        assert!(s.rows().iter().all(|r| r != "region"));
+        log.err(b"Password: ");
+        assert_eq!(s.rows()[0], "Password:");
+        log.pause(false);
+        assert!(s.rows().contains(&"region".to_string()));
+    }
+
+    #[test]
+    fn a_half_line_waits_for_its_newline() {
+        let (log, s) = Screen::log(40, 8);
+        log.set_region(vec!["region".into()]);
+        log.err(b"abc");
+        assert!(s.rows().iter().all(|r| !r.contains("abc")));
+        log.err(b"def\n");
+        assert_eq!(s.rows()[0], "abcdef");
+        log.set_region(Vec::new());
+        assert_eq!(s.rows().iter().filter(|r| r.contains("abcdef")).count(), 1);
+    }
+
+    #[test]
+    fn without_a_terminal_output_is_plain() {
+        let (log, s) = Screen::log(40, 8);
+        *s.size.lock().unwrap() = None;
+        log.set_region(vec!["region".into()]);
+        log.errln("plain");
+        assert_eq!(s.rows()[0], "plain");
+        assert!(s.rows().iter().all(|r| r != "region"));
+    }
 
     #[test]
     fn ansi_stripping() {

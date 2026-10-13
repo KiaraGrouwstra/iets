@@ -16,6 +16,7 @@ pub mod cli;
 pub mod compile;
 pub mod config;
 pub mod devenv;
+pub mod display;
 pub mod error;
 pub mod eval;
 pub mod events;
