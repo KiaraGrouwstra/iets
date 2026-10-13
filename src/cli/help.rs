@@ -23,6 +23,7 @@ commands:
   lint           list the lints and the levels a run would use
   parse          parse Nix files and print or check the syntax tree
   cache          sweep old cache entries, or dump a cache entry's read set
+  completion     print the tab-completion script of a shell
   help, version
 
 classic: 'iets NAME ARGS...' with NAME one of nix-instantiate, nix-build,
@@ -216,7 +217,9 @@ usage: iets cache gc [--ttl DAYS] [--dry-run] [--cache-dir DIR]
        iets cache dump ENTRY
        iets cache paths ENTRY [--json]
 
-gc removes the cache entries nobody read for DAYS days; dump prints the
+gc removes the cache entries nobody read for DAYS days, and the spark
+profile ('sparks' in the cache directory) when it went unread that long;
+dump prints the
 read set of a tracing-cache entry ('iets help caching').
 
 paths prints the paths a watcher has to watch for that entry's answer to
@@ -229,8 +232,21 @@ its own entry with --entry-to.
   --json                one object per path, with its kind
 ";
 
-pub const COMMANDS: &str =
-    "eval build search diff eval-jobs print-dev-env prefetch plumbing lint parse cache";
+const COMPLETION: &str = "\
+usage: iets completion bash|zsh|fish|nushell|elvish|powershell
+
+Print the script that completes 'iets' in that shell, for
+'source <(iets completion bash)' in a startup file, or for a file the shell
+loads by itself (bash-completion, zsh's fpath, fish's completions). Each
+script says in its first lines how its shell loads it.
+
+The script asks 'iets __complete WORD...' for the candidates, which
+prints one 'CANDIDATE<TAB>DESCRIPTION' per line and then ':N', where N
+says what the shell adds: 0 files too, 4 nothing.
+";
+
+pub const COMMANDS: &str = "eval build search diff eval-jobs print-dev-env prefetch plumbing lint parse \
+     cache completion";
 
 /// The native command being parsed, "iets" before the command word; unset
 /// under a classic name.
@@ -258,6 +274,7 @@ fn parts(cmd: Option<&str>) -> Option<[&'static str; 2]> {
         "lint" => [LINT, ""],
         "parse" => [PARSE, ""],
         "cache" | "cache-dump" => [CACHE, ""],
+        "completion" => [COMPLETION, ""],
         _ => return None,
     })
 }
@@ -296,16 +313,75 @@ pub fn help(cmd: Option<&str>) -> ! {
     exit(0)
 }
 
-/// The flags the help of `cmd` lists: the words before the description.
-fn flags(cmd: &str) -> Vec<&'static str> {
+/// A flag the help of a command lists.
+#[derive(Debug, PartialEq)]
+pub struct Flag {
+    pub name: &'static str,
+    pub about: &'static str,
+    /// The placeholders of the values it takes: `["N", "EXPR"]` for `--arg`.
+    pub values: Vec<&'static str>,
+}
+
+/// The flags the help of `cmd` lists: the words before the description. A
+/// short flag takes the values of the long one it is listed with, as in
+/// `-f, --file FILE`.
+pub fn flag_table(cmd: &str) -> Vec<Flag> {
     let Some(parts) = parts(Some(cmd)) else {
-        return vec!["--help", "-h", "--version"];
+        let about = "";
+        let bare = |name| Flag {
+            name,
+            about,
+            values: vec![],
+        };
+        return vec![bare("--help"), bare("-h"), bare("--version")];
     };
-    let lines = parts.into_iter().flat_map(str::lines);
-    let heads = lines.filter_map(|l| l.strip_prefix("  -").map(|_| l[2..].split("  ").next()));
-    heads
-        .flatten()
-        .flat_map(|h| h.split([' ', ',']).filter(|w| w.starts_with('-')))
+    let mut table = Vec::new();
+    for l in parts.into_iter().flat_map(str::lines) {
+        if !l.starts_with("  -") {
+            continue;
+        }
+        let (head, about) = match l[2..].split_once("  ") {
+            Some((h, a)) => (h, a.trim()),
+            None => (&l[2..], ""),
+        };
+        // the placeholders follow the flag word of its comma-separated
+        // alternative; a bare one takes those of the alternative after it
+        let mut alts: Vec<(&'static str, Vec<&'static str>)> = Vec::new();
+        for alt in head.split(',').map(str::trim) {
+            let mut words = alt.split(' ');
+            let Some(name) = words.next().filter(|w| w.starts_with('-')) else {
+                continue;
+            };
+            alts.push((name, words.take_while(|w| !w.starts_with('-')).collect()));
+        }
+        for i in 0..alts.len() {
+            let (name, mut values) = alts[i].clone();
+            if values.is_empty() && name.len() == 2 {
+                values = alts.get(i + 1).map(|a| a.1.clone()).unwrap_or_default();
+            }
+            table.push(Flag {
+                name,
+                about,
+                values,
+            });
+        }
+    }
+    table
+}
+
+fn flags(cmd: &str) -> Vec<&'static str> {
+    flag_table(cmd).into_iter().map(|f| f.name).collect()
+}
+
+/// The commands of the overview with their one-line descriptions.
+pub fn command_summaries() -> Vec<(&'static str, &'static str)> {
+    OVERVIEW
+        .lines()
+        .skip_while(|l| *l != "commands:")
+        .skip(1)
+        .take_while(|l| !l.is_empty())
+        .filter_map(|l| l.trim_start().split_once("  "))
+        .map(|(n, a)| (n, a.trim()))
         .collect()
 }
 
@@ -337,7 +413,7 @@ pub fn suggest<'a>(word: &str, candidates: impl IntoIterator<Item = &'a str>) ->
 
 /// Every word `iets WORD` takes: the native commands, the classic names it
 /// answers to, and the two that are not commands.
-fn command_words() -> Vec<&'static str> {
+pub fn command_words() -> Vec<&'static str> {
     (COMMANDS.split(' '))
         .chain(classic::NAMES.iter().copied())
         .chain(["help", "version"])
