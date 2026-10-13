@@ -30,7 +30,7 @@ def impure-for [args: list<string>]: nothing -> list<string> {
 # a directory per tool whose entries are compared too.
 def check [ctx: record, name: string, args: list<string>]: nothing -> bool {
   let work = $ctx.work
-  let nargs = ($args | each { str replace -a GCROOTS $"($work)/($name).nej-gc" })
+  let nargs = ($args | each { str replace -a GCROOTS $"($work)/($name).nej-gc" | str replace -r '^0$' 100000 })
   let iargs = ($args | each { str replace -a GCROOTS $"($work)/($name).iets-gc" })
   mkdir $"($work)/($name).nej-gc" $"($work)/($name).iets-gc"
   let stdin = (open --raw ($env.STDIN? | default "/dev/null"))
