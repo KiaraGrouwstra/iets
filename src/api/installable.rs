@@ -9,7 +9,7 @@ use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::runtime::{self, AttrsObj, Cell, Ctx, Word};
 use crate::store::path::StorePath;
 
-use super::flake;
+use super::{Input, flake};
 
 /// Which `getActualAttrPaths` table a fragment is tried against
 /// (installable-flake.cc, with each command's own defaults and prefixes).
@@ -129,6 +129,112 @@ pub fn from_outputs(
         ));
     }
     Ok(found)
+}
+
+/// installables.cc:completeFlakeRefWithFragment for the flake at `loc`.
+pub fn complete_in_flake(
+    ev: &mut Evaluator,
+    loc: &str,
+    p: Prefixes,
+    fragment: &str,
+) -> Option<Vec<String>> {
+    let fr = super::flake_ref(loc, &super::cwd()).ok()?;
+    let outputs = flake::outputs(ev, &fr).ok()?;
+    Some(complete_fragment(ev, outputs, p, fragment))
+}
+
+/// The `-A` completion of `prefix` under the root `input`.
+pub fn complete_in_input(ev: &mut Evaluator, input: &Input, prefix: &str) -> Option<Vec<String>> {
+    let cwd = super::cwd();
+    let root = match input {
+        Input::Expr(e) => ev.eval_string(e, &cwd).ok()?,
+        Input::File(f) => ev.eval_file(&super::abs_path(f, &cwd), Pos::NONE).ok()?,
+        Input::Flake(_) => return None,
+    };
+    let args = super::auto_args(ev, &[], &cwd).ok()?;
+    Some(complete_attr_path(ev, root, args, prefix))
+}
+
+/// Names with a dot or a quote in them are left out: nothing quotes them.
+fn complete_fragment(
+    ev: &mut Evaluator,
+    outputs: Word,
+    p: Prefixes,
+    fragment: &str,
+) -> Vec<String> {
+    if fragment.contains('"') {
+        return Vec::new();
+    }
+    let (lead, rest) = match fragment.strip_prefix('.') {
+        Some(r) => (".", r),
+        None => ("", fragment),
+    };
+    let system = ev.current_system();
+    let mut prefixes = Vec::new();
+    if lead.is_empty() {
+        if p == Prefixes::DevShell {
+            prefixes.push(format!("devShells.{system}."));
+        }
+        prefixes.push(format!("packages.{system}."));
+        prefixes.push(format!("legacyPackages.{system}."));
+    }
+    prefixes.push(String::new());
+    let split = rest.rfind('.').map_or(0, |i| i + 1);
+    let (head, last) = rest.split_at(split);
+    let mut out: Vec<String> = Vec::new();
+    for prefix in prefixes {
+        let dir = format!("{prefix}{head}");
+        let Ok(path) = flake::parse_attr_path(dir.trim_end_matches('.')) else {
+            continue;
+        };
+        let Ok(Some(v)) = flake::select(ev, outputs, &path) else {
+            continue;
+        };
+        let Some(attrs) = ev.force(v).ok().and_then(|w| w.as_attrs()) else {
+            continue;
+        };
+        out.extend(child_names(ev, attrs, last).map(|n| format!("{lead}{head}{n}")));
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn child_names<'a>(
+    ev: &'a Evaluator,
+    attrs: &'static AttrsObj,
+    last: &'a str,
+) -> impl Iterator<Item = &'a str> {
+    attrs
+        .iter()
+        .filter_map(|a| std::str::from_utf8(ev.interner.name(a.sym)).ok())
+        .filter(move |n| n.starts_with(last) && !n.contains(['.', '"']))
+}
+
+fn complete_attr_path(ev: &mut Evaluator, root: Word, args: Word, prefix: &str) -> Vec<String> {
+    if prefix.contains('"') {
+        return Vec::new();
+    }
+    let (head, last) = prefix.split_at(prefix.rfind('.').map_or(0, |i| i + 1));
+    let dir = head.trim_end_matches('.');
+    let walk = |ev: &mut Evaluator| -> EvalResult<Option<&'static AttrsObj>> {
+        let v = if dir.is_empty() {
+            root
+        } else {
+            find_along_attr_path(ev, root, dir, args)?
+        };
+        let v = ev.auto_call(v, args)?;
+        Ok(ev.force(v)?.as_attrs())
+    };
+    let Ok(Some(attrs)) = walk(ev) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = child_names(ev, attrs, last)
+        .map(|n| format!("{head}{n}"))
+        .collect();
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// attr-path.cc:findAlongAttrPath. Auto-calls at every step, selects an

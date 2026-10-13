@@ -65,6 +65,13 @@ fn main() {
                 help::set_command("iets");
                 help::help(argv.get(1).map(String::as_str))
             }
+            // hidden: the shell scripts of 'iets completion' call it on every
+            // tab, and a settings file with a mistake must not silence it
+            // (a flake fragment evaluates, so it runs on the evaluator's stack)
+            Some("__complete") => {
+                let words = argv[1..].to_vec();
+                exit(on_big_stack(move || cli::complete::cmd_complete(&words)))
+            }
             _ => {}
         }
     }
@@ -113,6 +120,7 @@ fn main() {
         help::help(Some(name))
     }
     let code = match name {
+        "completion" => cli::complete::cmd_completion(&rest),
         "cache" => match rest.first().map(String::as_str) {
             Some("gc") => cli::cache_gc::cmd_cache_gc(&rest[1..]),
             Some("dump") => match &rest[1..] {
