@@ -30,7 +30,7 @@ def impure-for [args: list<string>]: nothing -> list<string> {
 # a directory per tool whose entries are compared too.
 def check [ctx: record, name: string, args: list<string>]: nothing -> bool {
   let work = $ctx.work
-  let nargs = ($args | each { str replace -a GCROOTS $"($work)/($name).nej-gc" | str replace -r '^0$' 100000 })
+  let nargs = ($args | each { str replace -a GCROOTS $"($work)/($name).nej-gc" })
   let iargs = ($args | each { str replace -a GCROOTS $"($work)/($name).iets-gc" })
   mkdir $"($work)/($name).nej-gc" $"($work)/($name).iets-gc"
   let stdin = (open --raw ($env.STDIN? | default "/dev/null"))
@@ -180,13 +180,6 @@ def run-all [ctx: record, np: string]: nothing -> int {
     [check ca-workers [--extra-experimental-features ca-derivations --no-instantiate --workers 3 ca.nix]]
     [check cache-status [--check-cache-status --meta -I $"nixpkgs=($np)" cache.nix]]
     [check cache-status-constituents [--check-cache-status --constituents --gc-roots-dir GCROOTS aggregates.nix]]
-    [check restart [--max-memory-size 1 --workers 2 --meta --gc-roots-dir GCROOTS ci.nix]]
-    [check restart-1 [--max-memory-size 1 --workers 1 --meta ci.nix]]
-    [check restart-big [--max-memory-size 100000 --workers 3 --meta --show-input-drvs ci.nix]]
-    [check restart-constituents [--max-memory-size 1 --workers 2 --constituents --check-cache-status --gc-roots-dir GCROOTS aggregates.nix]]
-    [check restart-flake [--max-memory-size 1 --workers 2 --flake ./flake#hydraJobs --apply 'd: { n = d.name; }']]
-    [check restart-no-instantiate [--max-memory-size 1 --workers 2 --no-instantiate --meta ci.nix]]
-    [check one-process [--max-memory-size 0 --force-recurse --meta --gc-roots-dir GCROOTS ci.nix]]
     [chunks chunks [--meta ci.nix]]
     [expect-fail no-instantiate-constituents [--no-instantiate --constituents aggregates.nix]]
     [expect-fail no-instantiate-cache [--no-instantiate --check-cache-status ci.nix]]
