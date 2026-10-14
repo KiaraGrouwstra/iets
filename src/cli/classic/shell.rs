@@ -11,7 +11,7 @@ use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::io::{self, IsTerminal};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 use std::{env, fs, slice};
@@ -193,7 +193,7 @@ fn default_file(s: &mut Shell) -> Result<(), String> {
 /// nix-build.cc:resolveShellExprPath: a directory resolves to `shell.nix`, not
 /// to `default.nix`, when it has one.
 fn resolve_shell_expr_path(p: &[u8]) -> Result<Vec<u8>, String> {
-    let path = PathBuf::from(OsStr::from_bytes(p));
+    let path = sys::path_from_internal(p);
     if !path.is_dir() {
         return Ok(p.to_vec());
     }

@@ -436,7 +436,10 @@ mod tests {
             .collect();
         for _ in 0..50 {
             let e = validate(&mut obs, 4).expect_err("the missing paths fail");
-            assert_eq!(e.0, "/nonexistent/iets-validate-3 is gone");
+            assert_eq!(
+                e.0,
+                format!("{} is gone", lossy(b"/nonexistent/iets-validate-3"))
+            );
         }
     }
 }

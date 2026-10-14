@@ -10,9 +10,8 @@ use crate::provenance::SourceMap;
 use crate::session::Session;
 use crate::store::hash::{Hash, HashFormat};
 use crate::store::path;
-use crate::sys::OsStrExt;
+use crate::sys;
 use crate::sys::fs::copy_mode;
-use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::io::{self, IsTerminal, Write};
 
@@ -108,7 +107,7 @@ pub fn local_files(ev: &Evaluator) -> Vec<PathBuf> {
         .map_while(|i| ev.files.get(i))
         .map(|f| map.locate(&f.path).unwrap_or_else(|| f.path.clone()))
         .filter(|p| p.starts_with(b"/") && path::strip_store_dir(p).is_none())
-        .map(|p| PathBuf::from(OsStr::from_bytes(&p)))
+        .map(|p| sys::path_from_internal(&p))
         .collect();
     out.sort();
     out.dedup();
