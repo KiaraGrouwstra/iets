@@ -11,6 +11,7 @@ use std::env::{split_paths, var, var_os};
 use std::path::{Path, PathBuf};
 use std::{fs, thread};
 
+use crate::env::Env;
 use crate::error::{Error, Result};
 use crate::session::Session;
 use crate::{ignored, log};
@@ -262,13 +263,17 @@ fn env(name: &str) -> Option<String> {
     var(name).ok().filter(|s| !s.is_empty())
 }
 
-fn home() -> PathBuf {
-    env("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from)
-}
-
 /// `$XDG_CONFIG_HOME` or `~/.config` (unix/xdg-dirs.cc:getConfigHome).
 pub fn config_home() -> PathBuf {
-    env("XDG_CONFIG_HOME").map_or_else(|| home().join(".config"), PathBuf::from)
+    config_home_in(&Env::process())
+}
+
+pub fn config_home_in(e: &Env) -> PathBuf {
+    let home = e
+        .non_empty("HOME")
+        .map_or_else(|| PathBuf::from("/"), PathBuf::from);
+    e.non_empty("XDG_CONFIG_HOME")
+        .map_or_else(|| home.join(".config"), PathBuf::from)
 }
 
 /// `$XDG_CONFIG_DIRS` or `/etc/xdg` (unix/xdg-dirs.cc:getConfigDirs).

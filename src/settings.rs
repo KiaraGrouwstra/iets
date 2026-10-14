@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::{env, fs, result};
 
+use crate::env::Env as HostEnv;
 use crate::error::{Error, Result};
 use crate::events::Group;
 use crate::profile::Mode;
@@ -205,7 +206,11 @@ pub fn builders(flag: Option<&str>, cfg: &config::Config) -> Vec<BuilderSpec> {
 /// may not ([`check_project`]). There is no machine file: iets is a client,
 /// and what it builds with is the user's (docs/reference/settings.md).
 pub fn conf_file() -> PathBuf {
-    config::config_home().join("iets/iets.toml")
+    conf_file_in(&HostEnv::process())
+}
+
+pub fn conf_file_in(e: &HostEnv) -> PathBuf {
+    config::config_home_in(e).join("iets/iets.toml")
 }
 
 /// Refuses every key of a project's `iets.toml` but `lint`. The file comes

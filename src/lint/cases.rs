@@ -4,6 +4,7 @@
 use super::*;
 use crate::api::testkit::eval;
 use crate::api::{EvalArgs, Input};
+use crate::env::Env;
 
 const URL_WARN: &str = "warning: [url-literal] URL literals are discouraged. Consider using a string literal \"http://example.com\" instead";
 
@@ -19,7 +20,16 @@ struct Out {
 
 /// `file` under `tests/lint`, lints given as `name=level` or `family:x=level`.
 fn run(file: &str, strict: bool, flags: &[&str]) -> Out {
+    run_with(file, strict, &Env::process(), flags)
+}
+
+fn run_in(file: &str, env: &Env, flags: &[&str]) -> Out {
+    run_with(file, false, env, flags)
+}
+
+fn run_with(file: &str, strict: bool, env: &Env, flags: &[&str]) -> Out {
     let mut a = EvalArgs::new();
+    a.env = env.clone();
     a.input = Some(Input::File(dir().join(file).display().to_string()));
     a.strict = strict;
     a.no_tracing_cache = true;
@@ -238,4 +248,45 @@ fn allow_comments_silence_the_lines_they_cover() {
         r.err
     );
     assert!(r.err.contains("warning: [url-literal]"), "{}", r.err);
+}
+
+#[test]
+fn iets_lint_sets_a_level_and_a_flag_beats_it() {
+    let env = Env::from_pairs([("IETS_LINT", "url-literal=warn")]);
+    let r = run_in("url-literal.nix", &env, &[]);
+    assert!(r.err.contains(URL_WARN), "{}", r.err);
+    let r = run_in("url-literal.nix", &env, &["--lint", "url-literal=off"]);
+    assert!(!r.err.contains("warning:"), "{}", r.err);
+    let env = Env::from_pairs([("IETS_LINT", "url-literal=off,family:legacy=warn")]);
+    let r = run_in("url-literal.nix", &env, &[]);
+    assert!(
+        !r.err.contains("[url-literal]"),
+        "a name beats a later family: {}",
+        r.err
+    );
+}
+
+#[test]
+fn the_user_iets_toml_sets_a_level_and_the_project_file_wins_over_it() {
+    let user = Env::from_pairs([("XDG_CONFIG_HOME", dir().join("user"))]);
+    let r = run_in("url-literal.nix", &user, &[]);
+    assert_eq!(r.rc, 1, "{}", r.err);
+    assert!(r.err.contains("error: [url-literal]"), "{}", r.err);
+    let r = run_in("cases/toml/main.nix", &user, &[]);
+    assert_eq!(r.rc, 0, "{}", r.err);
+    assert!(r.err.contains(URL_WARN), "user below project: {}", r.err);
+}
+
+#[test]
+fn an_unknown_name_in_iets_lint_is_a_warning_and_the_rest_counts() {
+    let env = Env::from_pairs([("IETS_LINT", "nope=warn,url-literal=warn")]);
+    let r = run_in("url-literal.nix", &env, &[]);
+    assert_eq!(r.rc, 0, "{}", r.err);
+    assert!(
+        r.err
+            .contains("IETS_LINT: iets does not know the lint 'nope'"),
+        "{}",
+        r.err
+    );
+    assert!(r.err.contains("[url-literal]"), "{}", r.err);
 }

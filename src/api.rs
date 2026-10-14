@@ -20,6 +20,7 @@ pub mod watch;
 
 use crate::builtins::text;
 use crate::compile::cache::IrCache;
+use crate::env::Env;
 use crate::eval::{self, Error, ErrorKind, EvalConfig, Evaluator, Pos};
 use crate::flake::{eval_flake_value, parse_flake_ref, select_output};
 use crate::lint::{self, Level, Scope};
@@ -74,6 +75,8 @@ pub struct EvalArgs {
     /// `--reference-lock-file PATH`: the root flake's lock file, in place of
     /// its own `flake.lock`. It must be complete all the same.
     pub reference_lock_file: Option<String>,
+    /// What the lint configuration reads: `IETS_LINT` and the config home.
+    pub env: Env,
 }
 
 impl Default for EvalArgs {
@@ -101,6 +104,7 @@ impl Default for EvalArgs {
             flake_whole: false,
             pure: None,
             reference_lock_file: None,
+            env: Env::process(),
         }
     }
 }
@@ -235,7 +239,7 @@ pub fn project_root(a: &EvalArgs) -> Option<Vec<u8>> {
 pub fn lint_config(a: &EvalArgs) -> Result<lint::Config, Box<Error>> {
     let cwd = cwd();
     let roots: Vec<Vec<u8>> = a.lint_roots.iter().map(|r| abs_path(r, &cwd)).collect();
-    lint::Config::resolve(Some(&entry_dir(a)), &a.lints, &roots, a.lint_scope)
+    lint::Config::resolve(Some(&entry_dir(a)), &a.lints, &roots, a.lint_scope, &a.env)
         .map_err(|m| Error::boxed(ErrorKind::Eval, m, Pos::NONE))
 }
 
