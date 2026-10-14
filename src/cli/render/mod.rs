@@ -8,9 +8,9 @@ pub mod text;
 use serde_json::Value;
 
 use crate::api::render::Report;
+use crate::session::{self, Session};
 use crate::{error, log};
-use std::io::{self, IsTerminal, Write};
-use std::process;
+use std::io;
 
 /// Everything a command writes on stdout goes through here. Nothing is
 /// added: `b` is the output. A write that fails ends the process: exit 0 is
@@ -18,20 +18,22 @@ use std::process;
 /// throws for the same reason.
 pub fn bytes(b: &[u8]) {
     if let Err(e) = write(b) {
-        process::exit(error::Error::io(format!("write of {} bytes", b.len()), e).report())
+        session::exit(error::Error::io(format!("write of {} bytes", b.len()), e).report())
     }
 }
 
 /// [`bytes`] for the legacy command names, which write through `std::cout`
 /// and never look: `nix-instantiate` and `nix-build` exit 0 on a full disk.
+pub fn line(text: &str) {
+    bytes(format!("{text}\n").as_bytes());
+}
+
 pub fn bytes_lossy(b: &[u8]) {
     let _ = write(b);
 }
 
 fn write(b: &[u8]) -> io::Result<()> {
-    let mut out = io::stdout();
-    out.write_all(b)?;
-    out.flush()
+    Session::current().out.write_all(b)
 }
 
 /// `nlohmann::json::dump`: an object's keys are sorted, `--pretty` indents
@@ -50,7 +52,7 @@ pub fn json(v: &Value, pretty: bool) -> Vec<u8> {
 
 /// `--pretty`'s default: a terminal on stdout.
 pub fn pretty() -> bool {
-    io::stdout().is_terminal()
+    Session::current().out.is_terminal()
 }
 
 /// util.cc:renderSize: KiB at least, one decimal.

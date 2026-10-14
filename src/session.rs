@@ -9,9 +9,12 @@
 //! [`bind`]. docs/reference/library.md says what a host owns.
 
 use std::cell::RefCell;
-use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, OnceLock};
+use std::panic;
+use std::process;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
+use crate::env::Env;
 use crate::events::Events;
 use crate::ignored::Ignored;
 use crate::jobs::Run;
@@ -20,11 +23,16 @@ use crate::profile::Profile;
 use crate::provenance::SourceMap;
 use crate::runtime::heap::Heap;
 use crate::settings::Settings;
+use crate::stdout::Stdout;
 use crate::{config, error, treestore};
 
 #[derive(Default)]
 pub struct Session {
     pub log: Log,
+    pub env: Env,
+    pub command: Mutex<Option<&'static str>>,
+    pub catch_exit: AtomicBool,
+    pub out: Stdout,
     /// This run's sampled flame graph (`crate::profile`).
     pub profile: Profile,
     /// Where this run's instrumentation events go (`crate::events`).
@@ -66,6 +74,13 @@ impl Session {
         Arc::new(Session::default())
     }
 
+    pub fn with_env(env: Env) -> Arc<Session> {
+        Arc::new(Session {
+            env,
+            ..Session::default()
+        })
+    }
+
     /// The session this thread entered, else the fallback one.
     pub fn current() -> Arc<Session> {
         CURRENT
@@ -103,6 +118,16 @@ impl Session {
         let _ = self.settings.set(s);
         Ok(())
     }
+}
+
+pub struct Exit(pub i32);
+
+/// Ends the process, or unwinds to `cli::run` when the host asked to catch it.
+pub fn exit(code: i32) -> ! {
+    if Session::current().catch_exit.load(Ordering::Relaxed) {
+        panic::resume_unwind(Box::new(Exit(code)));
+    }
+    process::exit(code)
 }
 
 /// Puts back the session [`Session::enter`] replaced.

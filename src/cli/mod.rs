@@ -18,6 +18,7 @@ pub mod parse;
 pub mod plumbing;
 pub mod prefetch;
 pub mod render;
+pub mod run;
 pub mod search;
 
 use help::{arg_error, each_arg};
@@ -28,7 +29,7 @@ use crate::lint::{self, Level, Scope};
 use crate::log::{self, Activity};
 use crate::parallel::fiber::StackError;
 use crate::runtime::Word;
-use crate::session::Session;
+use crate::session::{self, Session};
 use crate::{config, error, ignored};
 
 pub use crate::api::run::{Outcome, Run};
@@ -37,8 +38,6 @@ pub use crate::api::{
     parse_include, report,
 };
 use crate::trace::run::Cache;
-
-use std::process;
 
 /// The evaluation input flags every command line shares (common-eval-args.cc).
 #[derive(Default)]
@@ -186,7 +185,7 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
     });
     // for its warnings, and for the session's copy that the fetcher reads
     if let Err(e) = config::Config::load_native(&f.overrides) {
-        process::exit(e.report())
+        session::exit(e.report())
     }
     ignored::flush();
     (a.includes, a.args, a.pure) = (f.includes, f.args, f.pure);
@@ -266,7 +265,7 @@ pub fn cmd_lint(argv: &[String]) -> i32 {
 pub fn run_for(a: &EvalArgs) -> Run {
     match Run::new(a) {
         Ok(r) => r,
-        Err(code) => process::exit(code),
+        Err(code) => session::exit(code),
     }
 }
 
@@ -289,7 +288,7 @@ pub fn run_reported<T: Send + 'static>(
 
 fn stacks<R>(e: StackError) -> R {
     log::line(&format!("iets: {e}"));
-    process::exit(1)
+    session::exit(1)
 }
 
 /// `api::evaluate`, with a missing input reported as a usage error.

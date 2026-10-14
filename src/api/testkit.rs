@@ -5,28 +5,8 @@ use crate::api::run::Run;
 use crate::api::{self, EvalArgs};
 use crate::print;
 use crate::session::Session;
+use crate::sink::Sink;
 use std::collections::HashSet;
-use std::io::{self, Write};
-use std::sync::{Arc, Mutex};
-
-#[derive(Clone, Default)]
-pub struct Sink(Arc<Mutex<Vec<u8>>>);
-
-impl Sink {
-    fn text(&self) -> String {
-        String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
-    }
-}
-
-impl Write for Sink {
-    fn write(&mut self, b: &[u8]) -> io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(b);
-        Ok(b.len())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
 
 /// One evaluation as `iets eval` does it: stdout, exit code and stderr.
 pub fn eval(a: EvalArgs) -> (String, i32, String) {
