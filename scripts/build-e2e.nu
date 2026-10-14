@@ -14,6 +14,7 @@
 # 5. a plain Nix file with -A and --argstr.
 # 6. --dry-run over a tree.
 # 7. an attribute that does not evaluate, and a tree with nothing in it.
+# 10. --no-build uploads the closure of every installable.
 #
 # usage: nu scripts/build-e2e.nu
 #        BIN=target/debug nu scripts/build-e2e.nu
@@ -134,6 +135,11 @@ in {
   let r9 = (go $iets --iets-option fix-hashes always build --builder daemon $forge -A forge)
   $ok = ($ok | append (verdict ((open --raw $forge) | str contains $good) "a forged mismatch never rewrites a hash in the file" (open --raw $forge)))
   $ok = ($ok | append (verdict (not ($r9.stderr =~ 'fixed: ')) "nothing was fixed" $r9.stderr))
+
+  print "== 10. --no-build with several installables"
+  checks-flake $"($tmp)/other"
+  let r10 = (go $iets build --builder daemon --no-build --timings $"path:($tmp)/other#checks.($system).ok" $"path:($tmp)/other#checks.($system).dep")
+  $ok = ($ok | append (verdict (($r10.exit_code == 0) and ($r10.stderr =~ 'query: 2 paths')) "--no-build uploads every installable" $r10.stderr))
 
   ^rm -rf $tmp
   let failed = ($ok | where $it == false | length)
