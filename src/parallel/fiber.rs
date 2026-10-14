@@ -121,7 +121,7 @@ fn is_guard(addr: usize) -> bool {
     let n = NGUARDS.load(Ordering::Acquire).min(MAX_GUARDS);
     (0..n).any(|i| {
         let b = GUARDS[i].load(Ordering::Acquire);
-        b != 0 && addr >= b && addr < b + guard()
+        b != 0 && addr >= b && addr < b + vm::fault_span()
     })
 }
 
@@ -171,8 +171,7 @@ pub struct Stack {
 
 impl Stack {
     pub fn new(size: usize) -> Result<Stack, StackError> {
-        // The low page is made inaccessible as a guard. A lazy mapping keeps
-        // large reservations cheap, except on Windows where stacks are committed.
+        // The low page is made inaccessible as a guard.
         let base = vm::map_stack(size).map_err(|e| StackError {
             bytes: size,
             why: Why::Mmap(e),
@@ -198,11 +197,8 @@ impl Stack {
     /// Return every page except the top `keep` bytes to the OS. Only valid
     /// while the fiber is not running (its frames are garbage).
     pub fn release(&self, keep: usize) {
-        let len = self.size - guard() - keep;
-        // SAFETY: range is inside the mapping and above the guard page.
-        unsafe {
-            sys::discard(self.base.add(guard()), len);
-        }
+        // SAFETY: the fiber is idle and the range is a stack from `map_stack`.
+        unsafe { vm::trim_stack(self.base, self.size, keep) };
     }
 
     /// Number of resident bytes, for diagnostics.
@@ -268,7 +264,7 @@ impl Fiber {
             // SAFETY: the stack mapping has room for the frame.
             self.sp = unsafe {
                 context::seed_stack(
-                    self.stack.base,
+                    self.stack.base.add(vm::STACK_ZONE),
                     self.stack.top(),
                     fiber_main,
                     self as *mut Fiber as *mut (),

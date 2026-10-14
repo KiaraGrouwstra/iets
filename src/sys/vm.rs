@@ -5,6 +5,8 @@ use std::ptr;
 
 use rustix::mm::{MapFlags, MprotectFlags, ProtFlags, mmap_anonymous, munmap};
 
+use crate::sys::discard;
+
 /// Bytes of `[base, base + len)` that are resident, in whole pages.
 pub fn resident(base: *mut u8, len: usize) -> usize {
     let page = page_size();
@@ -58,6 +60,22 @@ pub fn map(len: usize, lazy: bool) -> io::Result<*mut u8> {
 /// the stack grows.
 pub fn map_stack(len: usize) -> io::Result<*mut u8> {
     map(len, true)
+}
+
+pub const STACK_ZONE: usize = 0;
+
+/// Bytes at the low end of a stack whose faults mean an overflow.
+pub fn fault_span() -> usize {
+    page_size()
+}
+
+/// Returns the pages of an idle stack, except the top `keep` bytes.
+///
+/// # Safety
+/// `[base, base + len)` is a stack from `map_stack` that nothing runs on.
+pub unsafe fn trim_stack(base: *mut u8, len: usize, keep: usize) {
+    // SAFETY: the range is inside the mapping and above the guard page.
+    unsafe { discard(base.add(page_size()), len - page_size() - keep) };
 }
 
 /// # Safety

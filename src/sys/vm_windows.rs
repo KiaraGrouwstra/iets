@@ -7,8 +7,8 @@
 //! A lazy mapping is therefore only reserved. A handler commits one chunk
 //! whenever a touch faults, much like demand paging does on Unix.
 //!
-//! Stacks can't do this, because the fault would be delivered on the stack
-//! that just faulted. They are committed in full when they are made.
+//! A stack commits its top and a low zone. The kernel grows it through a
+//! guard page, as it does a thread's.
 
 use std::io;
 use std::mem;
@@ -20,8 +20,8 @@ use windows_sys::Win32::System::Diagnostics::Debug::{
     EXCEPTION_POINTERS,
 };
 use windows_sys::Win32::System::Memory::{
-    MEM_COMMIT, MEM_DECOMMIT, MEM_RELEASE, MEM_RESERVE, MEMORY_BASIC_INFORMATION, PAGE_NOACCESS,
-    PAGE_READWRITE, VirtualAlloc, VirtualFree, VirtualProtect, VirtualQuery,
+    MEM_COMMIT, MEM_DECOMMIT, MEM_RELEASE, MEM_RESERVE, MEMORY_BASIC_INFORMATION, PAGE_GUARD,
+    PAGE_NOACCESS, PAGE_READWRITE, VirtualAlloc, VirtualFree, VirtualProtect, VirtualQuery,
 };
 use windows_sys::Win32::System::ProcessStatus::{
     K32QueryWorkingSetEx, PSAPI_WORKING_SET_EX_INFORMATION,
@@ -123,9 +123,79 @@ pub fn map(len: usize, lazy: bool) -> io::Result<*mut u8> {
     Ok(p.cast())
 }
 
-/// `len` bytes for a stack. All of it is committed now, see the module docs.
+/// Low bytes of a stack that stay committed, for the overflow exception to run in.
+pub const STACK_ZONE: usize = 256 << 10;
+/// Bytes at the low end of a stack whose faults mean an overflow.
+pub fn fault_span() -> usize {
+    STACK_ZONE
+}
+
+const STACK_INIT: usize = 256 << 10;
+const STACK_HEAD: usize = 64 << 10;
+
+fn arm_guard(at: *mut u8) {
+    let mut old = 0;
+    // SAFETY: the page is committed memory of the caller's.
+    unsafe {
+        VirtualProtect(
+            at.cast(),
+            page_size(),
+            PAGE_READWRITE | PAGE_GUARD,
+            &mut old,
+        )
+    };
+}
+
+/// `len` bytes for a stack. One too small for the layout is committed in full.
 pub fn map_stack(len: usize) -> io::Result<*mut u8> {
-    map(len, false)
+    if len < 2 * (STACK_INIT + STACK_ZONE) {
+        return map(len, false);
+    }
+    // SAFETY: a fresh allocation aliases nothing.
+    let p = unsafe { VirtualAlloc(ptr::null(), len, MEM_RESERVE, PAGE_READWRITE) }.cast::<u8>();
+    if p.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    let top = p.wrapping_add(len - STACK_INIT);
+    // SAFETY: both ranges lie inside the reservation just made.
+    let ok = unsafe {
+        !VirtualAlloc(top.cast(), STACK_INIT, MEM_COMMIT, PAGE_READWRITE).is_null()
+            && !VirtualAlloc(p.cast(), STACK_ZONE, MEM_COMMIT, PAGE_READWRITE).is_null()
+    };
+    if !ok {
+        let e = io::Error::last_os_error();
+        // SAFETY: the allocation is ours and unused.
+        unsafe { unmap(p, len) };
+        return Err(e);
+    }
+    arm_guard(top.wrapping_add(STACK_HEAD));
+    Ok(p)
+}
+
+/// Returns the pages of an idle stack except the top `keep` bytes.
+///
+/// # Safety
+/// `[base, base + len)` is a stack from `map_stack` that nothing runs on.
+pub unsafe fn trim_stack(base: *mut u8, len: usize, keep: usize) {
+    if len < 2 * (STACK_INIT + STACK_ZONE) {
+        // SAFETY: the range is inside the mapping and nothing uses it.
+        unsafe { reset(base.add(STACK_ZONE), len - STACK_ZONE - keep) };
+        return;
+    }
+    let init = STACK_INIT.max(keep);
+    let top = base.wrapping_add(len - init);
+    // SAFETY: the ranges lie inside the stack and nothing uses them.
+    unsafe {
+        VirtualFree(
+            base.add(STACK_ZONE).cast(),
+            len - STACK_ZONE - init,
+            MEM_DECOMMIT,
+        );
+        if init > keep {
+            reset(top, init - keep);
+        }
+    }
+    arm_guard(top.wrapping_add(STACK_HEAD));
 }
 
 /// Releases the whole allocation that starts at `p`. Windows takes no length.
