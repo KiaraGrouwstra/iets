@@ -1,5 +1,6 @@
 //! `iets cache dump` (also `cache-dump`): the read set of a tracing-cache entry as text.
 
+use crate::cli::render;
 use crate::error;
 use crate::trace::store::{Entry, Part};
 use crate::trace::{Obs, wire};
@@ -20,36 +21,40 @@ pub fn cmd_cache_dump(file: &str) -> i32 {
         match o {
             Obs::File {
                 path, size, hash, ..
-            } => println!("file {} {size} {}", s(path), &hex(hash)[..16]),
-            Obs::Dir { path, hash } => println!("dir {} {}", s(path), &hex(hash)[..16]),
-            Obs::Stat { path, follow, kind } => {
-                println!("stat {} follow={follow} {kind:?}", s(path))
+            } => render::line(&format!("file {} {size} {}", s(path), &hex(hash)[..16])),
+            Obs::Dir { path, hash } => {
+                render::line(&format!("dir {} {}", s(path), &hex(hash)[..16]))
             }
-            Obs::Tree { root, filtered, .. } => println!(
+            Obs::Stat { path, follow, kind } => {
+                render::line(&format!("stat {} follow={follow} {kind:?}", s(path)))
+            }
+            Obs::Tree { root, filtered, .. } => render::line(&format!(
                 "tree {} accepted={}",
                 s(root),
                 filtered
                     .as_ref()
                     .map_or("all".to_string(), |f| f.accepted.len().to_string())
-            ),
-            Obs::Canon { path, target } => println!(
+            )),
+            Obs::Canon { path, target } => render::line(&format!(
                 "canon {} -> {}",
                 s(path),
                 target.as_deref().map_or("(none)".to_string(), s)
-            ),
+            )),
             // the value is a keyed hash; the entry never holds it
-            Obs::Env { name, value } => println!(
+            Obs::Env { name, value } => render::line(&format!(
                 "env {} {}",
                 s(name),
                 value.map_or("(unset)".to_string(), |h| hex(&h)[..16].to_string())
-            ),
-            Obs::Cmd { dir, query, hash } => println!(
+            )),
+            Obs::Cmd { dir, query, hash } => render::line(&format!(
                 "cmd {} `{}` {}",
                 s(dir),
                 query.argv().join(" "),
                 &hex(hash)[..16]
-            ),
-            Obs::Input { entry, version } => println!("input {} v{version}", s(entry)),
+            )),
+            Obs::Input { entry, version } => {
+                render::line(&format!("input {} v{version}", s(entry)))
+            }
         }
     }
     0

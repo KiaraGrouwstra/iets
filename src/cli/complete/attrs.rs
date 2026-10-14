@@ -1,8 +1,8 @@
 //! Attribute completion: `FLAKEREF#fragment` and `-A`. It evaluates, so it
 //! is limited in time and silent on stderr.
 
+use crate::session::exit;
 use std::io;
-use std::process::exit;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;

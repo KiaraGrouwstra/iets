@@ -10,9 +10,10 @@ pub mod instantiate;
 pub mod nix;
 pub mod shell;
 
+use crate::session::exit;
 use crate::sys::process;
 use std::path::PathBuf;
-use std::process::{Command, exit};
+use std::process::Command;
 
 use crate::cli::{EvalArgs, EvalFlags, abs_path, eval_flag, full_includes, jobs};
 use crate::config::{self, Config};

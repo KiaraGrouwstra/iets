@@ -5,7 +5,7 @@
 //! other quadrants stay in the repository and their topics print the path
 //! they live at.
 
-use std::process::exit;
+use crate::session::exit;
 
 use crate::cli::help;
 
