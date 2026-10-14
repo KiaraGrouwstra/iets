@@ -267,52 +267,7 @@ The kinds are in `src/eval/error.rs`. `tryEval` catches only `Throw` and
 classic command name runs the real Nix instead. To add a trace line, call
 `e.add_trace(pos, msg)`.
 
-## Testing
-
-`cargo test` for the units. `nix flake check` adds clippy, fmt, ast-grep, the
-examples, the NixOS module and the scripts. The scripts that need no
-`nix-daemon` run in the build sandbox. The scripts that need a daemon and a
-store to write to run in a NixOS test container (`nix/e2e-test.nix`,
-x86_64-linux only): systemd-nspawn, so no KVM; the real Nix 2.34.8 on `PATH`, a
-`nix-daemon` with its build sandbox on, and no network. The nixpkgs tree there
-is the flake input, through `$NIXPKGS`, and the closure of every path a case
-realises is in the container's store, so nothing is substituted. The builder
-needs the `uid-range` system feature (`auto-allocate-uids = true`).
-
-Every script that compares against the real nix calls `require-real-nix`
-first. On a host that installs the classic farm, `nix` and
-`nix-instantiate` on `PATH` are iets, so outside the dev shell the
-comparison would be iets against itself, and the run would pass while
-testing nothing. The guard resolves the symlink chain of each name and
-aborts when it ends in `iets`, the same test the fallback uses
-(`is_iets`, `src/nixbin.rs`). Nothing behavioural can tell them apart:
-the farm execs the real nix for whatever it does not implement,
-`--version` included. The same guard warns when the reference nix is not
-2.34.8. The iets-only scripts do not call it and still run anywhere.
-A comparison typed by hand has no guard: name the reference by its store
-path, and check that `readlink -f $(command -v nix-eval-jobs)` does not end
-in an `iets` output.
-
-| script | what it compares | runs |
-|---|---|---|
-| `tests/langtests.rs` | Nix 2.34.8's functional tests, `tests/lang/` | `cargo test` |
-| `corpus.nu` | `tests/corpus/` against `.exp` from `nix-instantiate` (`--update` rewrites them) | by hand |
-| `partest.nu` | 1 against N workers | check, sandbox |
-| `linttest.nu` | the lints on their fixtures | check, sandbox |
-| `cachetest.nu` | the tracing cache's hits and misses | check, container |
-| `difftest.nu`, `drvdiff.nu` | one expression against `nix-instantiate`; the first differing derivation | by hand |
-| `tests/diff.rs` | `iets diff` on two small derivations | `cargo test` |
-| `classic-e2e.nu` | the classic names against the real nix, stdout byte for byte | check, container |
-| `daemon-e2e.nu` | `iets build` over the worker protocol | check, container; not by hand on a host whose store refuses `nix-store --delete` |
-| `build-e2e.nu` | `iets build` over an attribute tree: the verdicts, the exit code, `--json` | check, container |
-| `grpc-e2e.nu` | `iets build` over `grpc://` | by hand |
-| `flaketest.nu` | flake evaluation and the input store against `nix eval` | check, container, less the 3 cases that need the network (`online` in `lib.nu`); all 39 by hand |
-| `plumbing-e2e.nu` | `iets plumbing`, one case per op | check, container |
-| `prefetch-e2e.nu` | `iets prefetch` against `nix store prefetch-file` and `nix hash` | check, container |
-| `devenv-test.nu` | `print-dev-env` against `nix print-dev-env` | by hand |
-| `provenance-e2e.nu` | the rewritten paths and positions | by hand |
-| `evaljobs-flags.nu` | `iets eval-jobs` against the pinned `nix-eval-jobs` 2.35.2, flag by flag, on `tests/evaljobs/`; a newer pin changes three things (`docs/reference/commands.md`) | check, container |
-| `evaljobs-cmp.nu` | two `eval-jobs` outputs, attribute by attribute | by hand |
+## Benchmarks
 
 `bench/` holds the workloads and the runners. Each one runs from the
 repository root, in the dev shell. `NIXPKGS` names the nixpkgs tree to

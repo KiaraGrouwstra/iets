@@ -57,7 +57,7 @@ prints cover every worker.
 | | `fix-hashes` | `ask`, `always`, `never` | `ask` | See **fix-hashes**. |
 
 `IETS_BUILD_ID` is not a setting. It is fixed when iets is built, and it
-ties the caches to the binary. `ARCHITECTURE.md`, under "Testing", lists the
+ties the caches to the binary. `ARCHITECTURE.md`, under "Benchmarks", lists the
 benchmark scripts that read the statistics knobs.
 
 ### fix-hashes
