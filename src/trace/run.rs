@@ -226,8 +226,21 @@ impl Cache {
         HashMap<StorePath, DrvInfo>,
         HashMap<StorePath, SourceOrigin>,
     )> {
+        let (groups, drvs, sources) = self.read_build_groups()?;
+        Some((groups.concat(), drvs, sources))
+    }
+
+    /// [`Cache::read_build`] with the roots of each installable apart.
+    #[allow(clippy::type_complexity)]
+    pub fn read_build_groups(
+        &self,
+    ) -> Option<(
+        Vec<Vec<(StorePath, Option<String>)>>,
+        HashMap<StorePath, DrvInfo>,
+        HashMap<StorePath, SourceOrigin>,
+    )> {
         let tables = (|| {
-            let roots = wire::decode_roots(&self.part(Part::Result)?)?;
+            let roots = wire::decode_groups(&self.part(Part::Result)?)?;
             let drvs = wire::decode_drvs(&self.part(Part::Drvs)?)?;
             let sources = wire::decode_sources(&self.part(Part::Sources)?)?;
             Some((roots, drvs, sources))
