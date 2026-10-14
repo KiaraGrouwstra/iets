@@ -2,10 +2,9 @@
 //! mismatch is a miss. Stat-only checks come first; a file whose stat
 //! changed is rehashed and accepted when its content did not.
 
-use crate::sys::OsStrExt;
 use crate::sys::fs::file_id;
+use crate::sys::{self, OsStrExt};
 use std::collections::HashSet;
-use std::ffi::OsStr;
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -44,12 +43,13 @@ enum Outcome {
     Changed(String),
 }
 
-fn os(p: &[u8]) -> &Path {
-    Path::new(OsStr::from_bytes(p))
+fn os(p: &[u8]) -> PathBuf {
+    sys::path_from_internal(p)
 }
 
+/// A recorded path as the user's system writes it.
 fn lossy(p: &[u8]) -> String {
-    String::from_utf8_lossy(p).into_owned()
+    os(p).to_string_lossy().into_owned()
 }
 
 /// Why a path no longer reads: it is not there, or it is there and the read
@@ -106,13 +106,13 @@ fn check(o: &Obs, rehashed: &AtomicUsize, dirs: &mut DirBuf) -> Outcome {
             }
             if m.len() == *size
                 && mtime_ns(&m) == *mt
-                && ctime_ns(os(path), &m) == *ct
-                && file_id(os(path), &m) == (*dev, *ino)
+                && ctime_ns(&os(path), &m) == *ct
+                && file_id(&os(path), &m) == (*dev, *ino)
             {
                 return Outcome::Same;
             }
             rehashed.fetch_add(1, Ordering::Relaxed);
-            let now = match file_sha256(os(path)) {
+            let now = match file_sha256(&os(path)) {
                 Ok(h) => h,
                 Err(e) => return unreadable(path, &e),
             };
@@ -121,7 +121,7 @@ fn check(o: &Obs, rehashed: &AtomicUsize, dirs: &mut DirBuf) -> Outcome {
             }
             Outcome::Refresh(file_obs(path, &m, *hash))
         }
-        Obs::Dir { path, hash } => match dir_hash(os(path), dirs) {
+        Obs::Dir { path, hash } => match dir_hash(&os(path), dirs) {
             Ok(now) => {
                 if now == *hash {
                     Outcome::Same
@@ -132,7 +132,7 @@ fn check(o: &Obs, rehashed: &AtomicUsize, dirs: &mut DirBuf) -> Outcome {
             Err(e) => unreadable(path, &e),
         },
         Obs::Stat { path, follow, kind } => {
-            let now = stat_kind(os(path), *follow);
+            let now = stat_kind(&os(path), *follow);
             match (now, *kind) {
                 (now, was) if now == was => Outcome::Same,
                 (Kind::Missing, _) => Outcome::Changed(format!("{} is gone", lossy(path))),
@@ -152,20 +152,17 @@ fn check(o: &Obs, rehashed: &AtomicUsize, dirs: &mut DirBuf) -> Outcome {
             filtered,
             newest,
         } => {
-            let accepted: Option<HashSet<PathBuf>> = filtered.as_ref().map(|f| {
-                f.accepted
-                    .iter()
-                    .map(|p| PathBuf::from(OsStr::from_bytes(p)))
-                    .collect()
-            });
+            let accepted: Option<HashSet<PathBuf>> = filtered
+                .as_ref()
+                .map(|f| f.accepted.iter().map(|p| os(p)).collect());
             let root_p = os(root);
-            match tree_fingerprint(root_p, accepted.as_ref()) {
+            match tree_fingerprint(&root_p, accepted.as_ref()) {
                 Ok((sh, _)) if sh == *stat_hash => return Outcome::Same,
                 Ok(_) => {}
                 Err(e) => return unreadable(root, &e),
             }
             rehashed.fetch_add(1, Ordering::Relaxed);
-            let (nar, seen, sh, now) = match tree_rehash(root_p, accepted.as_ref()) {
+            let (nar, seen, sh, now) = match tree_rehash(&root_p, accepted.as_ref()) {
                 Ok(t) => t,
                 Err(e) => return unreadable(root, &e),
             };
@@ -210,7 +207,7 @@ fn check(o: &Obs, rehashed: &AtomicUsize, dirs: &mut DirBuf) -> Outcome {
             };
             Outcome::Changed(format!("environment variable ${} {what}", lossy(name)))
         }
-        Obs::Cmd { dir, query, hash } => match run_query(os(dir), *query) {
+        Obs::Cmd { dir, query, hash } => match run_query(&os(dir), *query) {
             Ok((status, out)) if cmd_hash(status, &out) == *hash => Outcome::Same,
             _ => Outcome::Changed(format!(
                 "the output of `{}` in {} changed",
@@ -293,7 +290,7 @@ pub fn validate(obs: &mut [Obs], threads: usize) -> Result<Report, Mismatch> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::sha256;
+    use super::super::{Trace, sha256};
     use super::*;
 
     use std::env;
@@ -331,6 +328,27 @@ mod tests {
         assert_eq!((r.rehashed, r.refreshed), (0, 0));
 
         fs::write(&f, b"2").unwrap();
+        assert!(validate(&mut obs, 2).is_err());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// `flake::read_traced` hands the recorder the bytes of a native path.
+    /// The validator must read back what the recorder stored.
+    #[test]
+    fn what_a_native_path_records_validates() {
+        let d = tmp("native");
+        let f = d.join("flake.nix");
+        fs::write(&f, b"1").unwrap();
+        let meta = fs::metadata(&f).unwrap();
+        let native = f.as_os_str().as_bytes();
+        let trace = Trace::enabled();
+        trace.file(native, &meta, b"1");
+        trace.stat_now(d.join("missing").as_os_str().as_bytes(), true);
+        let mut obs = trace.take();
+        assert_eq!(obs.len(), 2);
+        let r = validate(&mut obs, 2).unwrap();
+        assert_eq!((r.rehashed, r.refreshed), (0, 0));
+        fs::write(&f, b"22").unwrap();
         assert!(validate(&mut obs, 2).is_err());
         let _ = fs::remove_dir_all(&d);
     }

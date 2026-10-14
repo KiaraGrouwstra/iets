@@ -4,9 +4,8 @@
 //! file watcher has. A consumer that can do better picks by `kind`.
 
 use super::{Filtered, Kind, Obs};
-use crate::sys::OsStrExt;
+use crate::sys;
 use std::collections::HashSet;
-use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -32,7 +31,7 @@ pub struct Watched {
 /// is watched. Environment variables and resolved links have no file.
 pub fn watched(obs: &[Obs], skip: &[&Path]) -> Vec<Watched> {
     let kept = |b: &[u8]| {
-        let p = PathBuf::from(OsStr::from_bytes(b));
+        let p = sys::path_from_internal(b);
         (!skip.iter().any(|s| p.starts_with(s))).then_some(p)
     };
     let mut out: Vec<(PathBuf, &'static str)> = Vec::new();

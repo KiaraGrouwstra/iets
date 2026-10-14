@@ -10,7 +10,10 @@ pub mod watch;
 pub mod wire;
 
 use crate::sys::OsStrExt;
-use crate::sys::fs::{ctime_ns, file_id, is_executable, mtime_ns, mtime_secs};
+use crate::sys::{
+    self,
+    fs::{ctime_ns, file_id, is_executable, mtime_ns, mtime_secs},
+};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::env::var_os;
@@ -400,14 +403,14 @@ impl Trace {
     /// A regular file whose bytes are in memory.
     pub fn file(&self, path: &[u8], meta: &fs::Metadata, bytes: &[u8]) {
         if self.is_on() {
-            self.record(file_obs(path, meta, sha256(bytes)));
+            self.record(file_obs(&sys::from_native(path), meta, sha256(bytes)));
         }
     }
 
     pub fn stat(&self, path: &[u8], follow: bool, kind: Kind) {
         if self.is_on() {
             self.record(Obs::Stat {
-                path: path.to_vec(),
+                path: sys::from_native(path).into_owned(),
                 follow,
                 kind,
             });
@@ -416,7 +419,7 @@ impl Trace {
 
     /// Stats `path` and records what it saw; returns the kind.
     pub fn stat_now(&self, path: &[u8], follow: bool) -> Kind {
-        let kind = stat_kind(Path::new(OsStr::from_bytes(path)), follow);
+        let kind = stat_kind(&sys::path_from_internal(&sys::from_native(path)), follow);
         self.stat(path, follow, kind);
         kind
     }
@@ -566,13 +569,13 @@ fn exec_bit(st: &fs::Metadata) -> u32 {
 }
 
 pub fn file_obs(path: &[u8], meta: &fs::Metadata, hash: Digest32) -> Obs {
-    let at = Path::new(OsStr::from_bytes(path));
-    let (dev, ino) = file_id(at, meta);
+    let at = sys::path_from_internal(path);
+    let (dev, ino) = file_id(&at, meta);
     Obs::File {
         path: path.to_vec(),
         size: meta.len(),
         mtime_ns: mtime_ns(meta),
-        ctime_ns: ctime_ns(at, meta),
+        ctime_ns: ctime_ns(&at, meta),
         dev,
         ino,
         hash,
