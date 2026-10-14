@@ -404,11 +404,11 @@ fn op_plan(argv: &[String]) -> i32 {
         .map(|o| o.store_path().to_string())
         .collect();
     let sources: Vec<String> = plan.sources.iter().map(ToString::to_string).collect();
-    println!(
-        "{}",
-        serde_json::json!({
+    render::line(
+        &serde_json::json!({
             "drvs": drvs, "sources": sources, "storeDrvs": plan.store_drvs,
         })
+        .to_string(),
     );
     0
 }
@@ -572,7 +572,7 @@ fn build(o: &BuildOpts, r: Roots) -> error::Result<i32> {
         .overrides(o.sources.clone());
     if o.no_build {
         d.upload_only(&paths_of(&r.targets))?;
-        println!("{}", serde_json::json!({ "outcomes": [] }));
+        render::line(&serde_json::json!({ "outcomes": [] }).to_string());
         return Ok(0);
     }
     let outcomes = d.submit(r.targets)?;
@@ -602,7 +602,7 @@ fn build(o: &BuildOpts, r: Roots) -> error::Result<i32> {
     if o.gc_root.is_some() {
         v["gcRoots"] = serde_json::json!(roots);
     }
-    println!("{v}");
+    render::line(&v.to_string());
     Ok(d.d.exit)
 }
 

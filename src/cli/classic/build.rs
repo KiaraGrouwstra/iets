@@ -11,6 +11,7 @@ use super::{
 use crate::api::build::{Dispatch, Root};
 use crate::api::{build as apibuild, installable};
 use crate::build::render::Style;
+use crate::cli::render;
 use crate::cli::{self, Outcome, Run, abs_path, auto_args, cwd, devenv};
 use crate::error;
 use crate::eval::Evaluator;
@@ -18,7 +19,6 @@ use crate::provenance::{self, Provenance};
 use crate::remote::plan::Plan;
 use crate::remote::worker::{Options, Transport};
 use crate::store::path::StorePath;
-use std::io::{self, Write};
 
 const NAME: &str = "nix-build";
 
@@ -202,8 +202,6 @@ fn realise(
         return e.report();
     }
     keep_outputs(b, &kept);
-    let mut stdout = io::stdout();
-    let _ = stdout.write_all(out.as_bytes());
-    let _ = stdout.flush();
+    render::bytes_lossy(out.as_bytes());
     0
 }

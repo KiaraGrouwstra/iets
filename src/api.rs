@@ -3,6 +3,8 @@
 //! `iets` command line is one frontend on top of this; docs/reference/library.md
 //! lists the whole surface.
 
+pub use crate::parallel::fiber::MAIN_STACK;
+
 pub mod build;
 pub mod drvshow;
 pub mod fetch;
@@ -104,7 +106,7 @@ impl Default for EvalArgs {
             flake_whole: false,
             pure: None,
             reference_lock_file: None,
-            env: Env::process(),
+            env: Session::current().env.clone(),
         }
     }
 }
