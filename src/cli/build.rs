@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::api;
+use crate::api::Loaded;
 use crate::api::build as apibuild;
 use crate::api::build::Dispatch;
 use crate::api::installable::roots_of;
@@ -16,7 +17,7 @@ use crate::build::{Outcome, Target};
 use crate::cli::help::{arg_error, each_arg};
 use crate::cli::render::{self, text};
 use crate::cli::{
-    self, EvalArgs, Input, Run, build_targets, devenv, evaluate, parse_eval_args, report, run_for,
+    self, EvalArgs, Input, Run, build_targets, devenv, parse_eval_args, report, run_for,
 };
 use crate::error::Error as CrateError;
 use crate::eval::{self, Evaluator};
@@ -134,58 +135,92 @@ fn parse(argv: &[String]) -> (BuildArgs, EvalArgs) {
         s => rest.push(s.to_string()),
     });
     let a = parse_eval_args(&rest);
-    b.root_key = root_key(&a);
+    b.root_key = root_key(&installables(&a));
     (b, a)
 }
 
+/// One `EvalArgs` per installable, in order.
+fn installables(a: &EvalArgs) -> Vec<EvalArgs> {
+    let mut all: Vec<EvalArgs> = Vec::new();
+    for input in a.more.iter().cloned().chain(a.input.clone()) {
+        let mut one = a.clone();
+        one.more = Vec::new();
+        one.input = Some(input);
+        all.push(one);
+    }
+    if all.is_empty() {
+        all.push(a.clone());
+    }
+    all
+}
+
 /// What names this run's roots: the tag, the working directory and the
-/// installable, so two projects keep two sets of roots and the same command
+/// installables, so two projects keep two sets of roots and the same command
 /// replaces its own in place. A drv path would not: every edit would leave the
 /// previous root behind for the TTL to sweep.
-fn root_key(a: &EvalArgs) -> Vec<Vec<u8>> {
-    let input = match &a.input {
-        Some(Input::Flake(f) | Input::File(f) | Input::Expr(f)) => f.as_bytes().to_vec(),
-        None => Vec::new(),
-    };
-    vec![
-        b"build".to_vec(),
-        crate::cli::cwd(),
-        input,
-        a.attr.clone().unwrap_or_default().into_bytes(),
-    ]
+fn root_key(all: &[EvalArgs]) -> Vec<Vec<u8>> {
+    let mut key = vec![b"build".to_vec(), crate::cli::cwd()];
+    for a in all {
+        key.push(match &a.input {
+            Some(Input::Flake(f) | Input::File(f) | Input::Expr(f)) => f.as_bytes().to_vec(),
+            None => Vec::new(),
+        });
+        key.push(a.attr.clone().unwrap_or_default().into_bytes());
+    }
+    key
 }
 
 /// The local files the evaluation of `argv` parses, from a fresh
 /// evaluation: a cache hit does not know them.
 fn local_files(argv: &[String]) -> Vec<PathBuf> {
     let (_, a) = parse(argv);
-    let a = EvalArgs {
-        no_tracing_cache: true,
-        ..a
-    };
-    let Ok(run) = Run::new(&a) else {
+    let all: Vec<EvalArgs> = installables(&a)
+        .into_iter()
+        .map(|a| EvalArgs {
+            no_tracing_cache: true,
+            ..a
+        })
+        .collect();
+    let Ok(run) = Run::new(&all[0]) else {
         return Vec::new();
     };
     cli::run_parallel(run, move |ev, _| {
-        let _ = resolve(ev, a);
+        let _ = resolve_all(ev, all);
         fixhash::local_files(ev)
     })
 }
 
 fn build_once(argv: &[String]) -> i32 {
     let (b, a) = parse(argv);
-    if let Some(Input::File(f)) = &a.input
+    if a.more.is_empty()
+        && let Some(Input::File(f)) = &a.input
         && f.ends_with(".drv")
     {
         return build_drv_file(&b, f);
     }
+    let mut all = installables(&a);
 
     let t0 = Instant::now();
-    let a = EvalArgs {
-        timings: a.timings || b.timings,
-        ..a
+    for one in &mut all {
+        one.timings |= b.timings;
+    }
+    let first = &all[0];
+    let run = run_for(first);
+    // only flakes can be named in the key by their directory
+    let run = if all.len() == 1 {
+        run.cached(first, "build")
+    } else if all.iter().all(|a| matches!(a.input, Some(Input::Flake(_)))) {
+        let more: Vec<String> = all[1..]
+            .iter()
+            .filter_map(|a| match &a.input {
+                Some(Input::Flake(f)) => Some(f.clone()),
+                _ => None,
+            })
+            .collect();
+        run.cached_more(first, "build", &more)
+    } else {
+        run
     };
-    let run = run_for(&a).cached(&a, "build");
     if let Some(code) = run.hit(|c| {
         let (roots, drvs, sources) = c.read_build()?;
         c.replay_warnings();
@@ -208,21 +243,40 @@ fn build_once(argv: &[String]) -> i32 {
         return code;
     }
     // parallel: eval and build run as the main fiber
-    cli::run_parallel(run, move |ev, cache| build_eval(ev, &b, a, t0, cache))
+    cli::run_parallel(run, move |ev, cache| build_eval(ev, &b, all, t0, cache))
 }
 
 type Roots = Vec<(StorePath, Option<String>)>;
 
+/// The roots of every installable, loading each flake once.
+fn resolve_all(ev: &mut Evaluator, all: Vec<EvalArgs>) -> Result<Roots, Box<eval::Error>> {
+    let mut loaded = Loaded::default();
+    let mut roots = Vec::new();
+    for a in all {
+        let evaluating = cli::evaluating(&a);
+        roots.extend(resolve(ev, a, &mut loaded)?);
+        drop(evaluating);
+    }
+    Ok(roots)
+}
+
 /// The roots of the installable, each named by the attribute it was reached
 /// by: the walk names a tree's members, the installable names the rest.
-fn resolve(ev: &mut Evaluator, a: EvalArgs) -> Result<Roots, Box<eval::Error>> {
+fn resolve(
+    ev: &mut Evaluator,
+    a: EvalArgs,
+    loaded: &mut Loaded,
+) -> Result<Roots, Box<eval::Error>> {
     let target = a.attr.clone().or_else(|| match &a.input {
         Some(Input::Flake(f)) => f.split_once('#').map(|(_, frag)| frag.to_string()),
         _ => None,
     });
     let target = target.unwrap_or_default();
     let args = a.args.clone();
-    let v = evaluate(ev, a)?;
+    if a.input.is_none() {
+        arg_error("nothing to evaluate: give -E EXPR or FILE")
+    }
+    let v = api::evaluate_with(ev, a, loaded)?;
     let args = cli::auto_args(ev, &args, &cli::cwd())?;
     let mut roots = Vec::new();
     roots_of(ev, v, args, &target, &mut roots)?;
@@ -235,16 +289,14 @@ fn resolve(ev: &mut Evaluator, a: EvalArgs) -> Result<Roots, Box<eval::Error>> {
 fn build_eval(
     ev: &mut Evaluator,
     b: &BuildArgs,
-    a: EvalArgs,
+    all: Vec<EvalArgs>,
     t0: Instant,
     cache: Option<Cache>,
 ) -> i32 {
-    let evaluating = cli::evaluating(&a);
-    let roots = match resolve(ev, a) {
+    let roots = match resolve_all(ev, all) {
         Ok(r) => r,
         Err(e) => return report(ev, &e),
     };
-    drop(evaluating);
     let eval_time = t0.elapsed();
     if b.timings {
         eprintln!(

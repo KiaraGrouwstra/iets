@@ -3,6 +3,7 @@
 
 mod hermetic;
 
+use std::path::Path;
 use std::process::{self, Command, Output};
 use std::{env, fs};
 
@@ -226,4 +227,52 @@ fn dash_a_completes_the_attribute_names_under_its_root() {
     assert_eq!(complete(&["eval", "-A", "a"]), ":4\n");
     assert_eq!(complete(&["eval", "-f", "nope.nix", "-A", "a"]), ":6\n");
     let _ = fs::remove_dir_all(&d);
+}
+
+/// A flake with checks `a` and `b` under `dir`.
+fn two_checks(dir: &Path) {
+    fs::create_dir_all(dir).expect("create the flake directory");
+    fs::write(
+        dir.join("flake.nix"),
+        r#"{ outputs = _: let
+  mk = n: derivation {
+    name = n;
+    system = "x86_64-linux";
+    builder = "/bin/sh";
+    args = [ "-c" "echo ${n} > $out" ];
+  };
+in { checks.x86_64-linux = { a = mk "a"; b = mk "b"; }; }; }"#,
+    )
+    .expect("write flake.nix");
+    fs::write(
+        dir.join("flake.lock"),
+        r#"{"nodes":{"root":{}},"root":"root","version":7}"#,
+    )
+    .expect("write flake.lock");
+}
+
+/// `iets build` with a dead builder. The evaluation comes first, so
+/// `--timings` still says what it found.
+fn build_unreachable(dir: &Path, cache: Option<&Path>, installables: &[&str]) -> String {
+    let mut c = hermetic::iets();
+    c.current_dir(dir)
+        .args(["build", "--builder", "unix:///nonexistent", "--timings"]);
+    match cache {
+        Some(cache) => c.arg("--cache-dir").arg(cache),
+        None => c.arg("--no-cache"),
+    };
+    text(&c.args(installables).output().expect("run iets").stderr)
+}
+
+const A: &str = ".#checks.x86_64-linux.a";
+const B: &str = ".#checks.x86_64-linux.b";
+
+/// The last installable used to replace the earlier ones.
+#[test]
+fn build_evaluates_every_installable() {
+    let d = env::temp_dir().join(format!("iets-build-several-{}", process::id()));
+    two_checks(&d);
+    let log = build_unreachable(&d, None, &[A, B]);
+    let _ = fs::remove_dir_all(&d);
+    assert!(log.contains("eval: 2 derivations"), "{log}");
 }

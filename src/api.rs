@@ -16,7 +16,7 @@ pub mod watch;
 use crate::builtins::text;
 use crate::compile::cache::IrCache;
 use crate::eval::{self, Error, ErrorKind, EvalConfig, Evaluator, Pos};
-use crate::flake::{eval_flake, eval_flake_value, parse_flake_ref};
+use crate::flake::{eval_flake_value, parse_flake_ref, select_output};
 use crate::lint::{self, Level, Scope};
 use crate::provenance::{describe_pos, rewrite_msg};
 use crate::runtime::Word;
@@ -33,6 +33,7 @@ use std::{env, fs};
 
 /// Everything one evaluation needs. `EvalArgs::new()` holds the defaults;
 /// `crate::cli::parse_eval_args` fills it from a command line.
+#[derive(Clone)]
 pub struct EvalArgs {
     pub strict: bool,
     pub json: bool,
@@ -40,6 +41,8 @@ pub struct EvalArgs {
     pub includes: Vec<(Vec<u8>, Vec<u8>)>,
     pub args: Vec<(String, ArgKind)>,
     pub input: Option<Input>,
+    /// Installables before `input`. Only `iets build` uses them.
+    pub more: Vec<Input>,
     pub dump_drvs: Option<String>,
     pub attr: Option<String>,
     /// `--lint SELECTOR=LEVEL` in order; applied after `iets.toml` and
@@ -78,6 +81,7 @@ impl Default for EvalArgs {
             includes: Vec::new(),
             args: Vec::new(),
             input: None,
+            more: Vec::new(),
             dump_drvs: None,
             attr: None,
             lints: Vec::new(),
@@ -233,6 +237,29 @@ pub fn lint_config(a: &EvalArgs) -> Result<lint::Config, Box<Error>> {
 /// Evaluates the input, `--arg`s and `-A` included. The settings of `a` are
 /// on `ev` already (`EvalArgs::config`).
 pub fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
+    evaluate_with(ev, a, &mut Loaded::default())
+}
+
+/// Flakes already loaded, so installables of one flake load it once. The
+/// source is part of the match: `path:.` and a git-tracked `.` are two trees.
+#[derive(Default)]
+pub struct Loaded(Vec<(flake::FlakeRef, Word)>);
+
+impl Loaded {
+    fn get(&self, fr: &flake::FlakeRef) -> Option<Word> {
+        let same = |o: &flake::FlakeRef| {
+            o.dir == fr.dir && o.source == fr.source && o.lock == fr.lock && o.probed == fr.probed
+        };
+        self.0.iter().find(|(o, _)| same(o)).map(|(_, w)| *w)
+    }
+}
+
+/// [`evaluate`] with the flake loads of earlier calls reused.
+pub fn evaluate_with(
+    ev: &mut Evaluator,
+    a: EvalArgs,
+    loaded: &mut Loaded,
+) -> Result<Word, Box<Error>> {
     let cwd = cwd();
 
     let mut v = match a.input {
@@ -250,10 +277,18 @@ pub fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
                 .reference_lock_file
                 .as_deref()
                 .map(|p| abs_pathbuf(p, &cwd));
+            let whole = match loaded.get(&fr) {
+                Some(w) => w,
+                None => {
+                    let w = eval_flake_value(ev, &fr)?;
+                    loaded.0.push((fr.clone(), w));
+                    w
+                }
+            };
             if a.flake_whole && fr.attr.is_empty() {
-                eval_flake_value(ev, &fr)?
+                whole
             } else {
-                eval_flake(ev, &fr)?
+                select_output(ev, &fr, whole)?
             }
         }
         None => {
