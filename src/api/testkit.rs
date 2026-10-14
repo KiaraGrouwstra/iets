@@ -3,6 +3,7 @@
 
 use crate::api::run::Run;
 use crate::api::{self, EvalArgs};
+use crate::env::Env;
 use crate::print;
 use crate::session::Session;
 use crate::sink::Sink;
@@ -10,7 +11,7 @@ use std::collections::HashSet;
 
 /// One evaluation as `iets eval` does it: stdout, exit code and stderr.
 pub fn eval(a: EvalArgs) -> (String, i32, String) {
-    let session = Session::new();
+    let session = Session::with_env(Env::isolated());
     let log = Sink::default();
     session.log.write_to(Box::new(log.clone()));
     let _entered = session.enter();

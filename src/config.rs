@@ -7,7 +7,7 @@
 //! (Nix warns about them and keeps them in `unknownSettings`).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::env::{split_paths, var, var_os};
+use std::env::split_paths;
 use std::path::{Path, PathBuf};
 use std::{fs, thread};
 
@@ -260,12 +260,12 @@ const CLIENT: &[&str] = &[
     "warn-dirty",
 ];
 fn env(name: &str) -> Option<String> {
-    var(name).ok().filter(|s| !s.is_empty())
+    Session::current().env.non_empty(name)
 }
 
 /// `$XDG_CONFIG_HOME` or `~/.config` (unix/xdg-dirs.cc:getConfigHome).
 pub fn config_home() -> PathBuf {
-    config_home_in(&Env::process())
+    config_home_in(&Session::current().env)
 }
 
 pub fn config_home_in(e: &Env) -> PathBuf {
@@ -297,7 +297,7 @@ pub fn conf_dir() -> PathBuf {
 /// A set but empty variable is an empty list, so no user file is read at all:
 /// globals.cc:167 tests `has_value()`, not the text.
 pub fn user_conf_files() -> Vec<PathBuf> {
-    if let Some(files) = var_os("NIX_USER_CONF_FILES") {
+    if let Some(files) = Session::current().env.var_os("NIX_USER_CONF_FILES") {
         return split_paths(&files)
             .filter(|p| !p.as_os_str().is_empty())
             .collect();
@@ -527,7 +527,7 @@ impl Config {
         for e in parse(text, origin)? {
             // NIX_PATH, even an empty one, must override the setting
             // (configuration.cc:192)
-            let set = var_os("NIX_PATH").is_some();
+            let set = Session::current().env.var_os("NIX_PATH").is_some();
             if (e.name == "nix-path" || e.name == "extra-nix-path") && set {
                 continue;
             }

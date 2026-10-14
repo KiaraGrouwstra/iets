@@ -143,9 +143,16 @@ fn command(argv: Vec<String>, classic: Option<String>) -> i32 {
     }
 }
 
-#[derive(Default)]
 pub struct Host {
     env: Env,
+}
+
+impl Default for Host {
+    fn default() -> Host {
+        Host {
+            env: Env::isolated(),
+        }
+    }
 }
 
 impl Host {
@@ -153,7 +160,7 @@ impl Host {
         mut self,
         pairs: impl IntoIterator<Item = (K, V)>,
     ) -> Host {
-        self.env = Env::from_pairs(pairs);
+        self.env = self.env.with(pairs);
         self
     }
 }
