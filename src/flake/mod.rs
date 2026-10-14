@@ -410,9 +410,13 @@ pub(crate) fn eval_error(e: Error, pos: Pos) -> Box<EvalError> {
 /// Evaluates the flake and selects `attr` from its outputs (or returns the
 /// outputs attrset for an empty path).
 pub fn eval_flake(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
-    let pos = Pos::NONE;
     let result = eval_flake_value(ev, fr)?;
+    select_output(ev, fr, result)
+}
 
+/// `fr.attr` of the outputs in `result`, the value [`eval_flake_value`] gave.
+pub fn select_output(ev: &mut Evaluator, fr: &FlakeRef, result: Word) -> EvalResult<Word> {
+    let pos = Pos::NONE;
     let attrs = ev.force_attrs(result, pos, "while evaluating the flake")?;
     let outputs_sym = ev.sym(b"outputs");
     let Some(outputs) = attrs.get(outputs_sym) else {

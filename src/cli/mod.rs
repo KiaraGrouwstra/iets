@@ -204,13 +204,15 @@ fn set_positional(a: &mut EvalArgs, s: &str) {
     }
 }
 
-/// The last input wins, but an expression and a file together is a mistake
-/// worth naming.
+/// Earlier files and flakes go to `more`. `-E` and FILE exclude each other.
 fn set_input(a: &mut EvalArgs, input: Input) {
-    if let Some(old) = &a.input
-        && matches!(old, Input::Expr(_)) != matches!(input, Input::Expr(_))
-    {
-        arg_error("-E and FILE cannot be combined")
+    if let Some(old) = a.input.take() {
+        if matches!(old, Input::Expr(_)) != matches!(input, Input::Expr(_)) {
+            arg_error("-E and FILE cannot be combined")
+        }
+        if !matches!(old, Input::Expr(_)) {
+            a.more.push(old);
+        }
     }
     a.input = Some(input);
 }
