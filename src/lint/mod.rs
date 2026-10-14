@@ -1102,7 +1102,11 @@ impl Evaluator {
 #[cfg(test)]
 mod cases;
 #[cfg(test)]
+mod cli_cases;
+#[cfg(test)]
 mod fixtures;
+#[cfg(test)]
+mod flake_cases;
 
 #[cfg(test)]
 mod tests {

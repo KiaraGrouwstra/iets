@@ -20,7 +20,7 @@ struct Out {
 
 /// `file` under `tests/lint`, lints given as `name=level` or `family:x=level`.
 fn run(file: &str, strict: bool, flags: &[&str]) -> Out {
-    run_with(file, strict, &Env::process(), flags)
+    run_with(file, strict, &Env::isolated(), flags)
 }
 
 fn run_in(file: &str, env: &Env, flags: &[&str]) -> Out {
@@ -253,12 +253,12 @@ fn allow_comments_silence_the_lines_they_cover() {
 
 #[test]
 fn iets_lint_sets_a_level_and_a_flag_beats_it() {
-    let env = Env::from_pairs([("IETS_LINT", "url-literal=warn")]);
+    let env = Env::isolated().with([("IETS_LINT", "url-literal=warn")]);
     let r = run_in("url-literal.nix", &env, &[]);
     assert!(r.err.contains(URL_WARN), "{}", r.err);
     let r = run_in("url-literal.nix", &env, &["--lint", "url-literal=off"]);
     assert!(!r.err.contains("warning:"), "{}", r.err);
-    let env = Env::from_pairs([("IETS_LINT", "url-literal=off,family:legacy=warn")]);
+    let env = Env::isolated().with([("IETS_LINT", "url-literal=off,family:legacy=warn")]);
     let r = run_in("url-literal.nix", &env, &[]);
     assert!(
         !r.err.contains("[url-literal]"),
@@ -269,7 +269,7 @@ fn iets_lint_sets_a_level_and_a_flag_beats_it() {
 
 #[test]
 fn the_user_iets_toml_sets_a_level_and_the_project_file_wins_over_it() {
-    let user = Env::from_pairs([("XDG_CONFIG_HOME", dir().join("user"))]);
+    let user = Env::isolated().with([("XDG_CONFIG_HOME", dir().join("user"))]);
     let r = run_in("url-literal.nix", &user, &[]);
     assert_eq!(r.rc, 1, "{}", r.err);
     assert!(r.err.contains("error: [url-literal]"), "{}", r.err);
@@ -280,7 +280,7 @@ fn the_user_iets_toml_sets_a_level_and_the_project_file_wins_over_it() {
 
 #[test]
 fn an_unknown_name_in_iets_lint_is_a_warning_and_the_rest_counts() {
-    let env = Env::from_pairs([("IETS_LINT", "nope=warn,url-literal=warn")]);
+    let env = Env::isolated().with([("IETS_LINT", "nope=warn,url-literal=warn")]);
     let r = run_in("url-literal.nix", &env, &[]);
     assert_eq!(r.rc, 0, "{}", r.err);
     assert!(
