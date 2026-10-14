@@ -399,7 +399,7 @@ fn build_roots(
     };
 
     if b.no_build {
-        if let Err(e) = d.upload_only(&roots[..1]) {
+        if let Err(e) = d.upload_only(roots) {
             return e.report();
         }
         timings(b, &d, plan_time);
