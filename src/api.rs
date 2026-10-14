@@ -13,6 +13,8 @@ pub mod run;
 
 #[cfg(test)]
 mod concurrent_eval;
+#[cfg(test)]
+pub mod testkit;
 pub mod value;
 pub mod watch;
 

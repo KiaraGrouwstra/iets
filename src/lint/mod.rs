@@ -1097,6 +1097,11 @@ impl Evaluator {
 }
 
 #[cfg(test)]
+mod cases;
+#[cfg(test)]
+mod fixtures;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     /// A `/tmp/iets.toml` must not set a lint level for a project below it:
