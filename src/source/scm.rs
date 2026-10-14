@@ -9,7 +9,7 @@ mod git;
 #[cfg(test)]
 mod ledger;
 
-use crate::sys::OsStrExt;
+use crate::sys::{self, OsStrExt};
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fmt::{self, Debug, Formatter};
@@ -202,8 +202,12 @@ pub fn owner(obs: &Obs) -> Option<(&'static dyn Scm, &[u8])> {
 /// what the user changed, not the answer of one query.
 pub fn changed(obs: &Obs) -> Option<String> {
     let (scm, root) = owner(obs)?;
-    let root = String::from_utf8_lossy(root);
-    Some(format!("the {} working tree in {root} changed", scm.name()))
+    let root = sys::path_from_internal(root);
+    Some(format!(
+        "the {} working tree in {} changed",
+        scm.name(),
+        root.display()
+    ))
 }
 
 pub fn named(name: &str) -> Option<&'static dyn Scm> {

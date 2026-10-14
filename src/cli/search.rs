@@ -3,7 +3,7 @@
 //! (docs/reference/commands.md).
 
 use std::collections::BTreeMap;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::path::Path;
 use std::str;
 use std::sync::Arc;
@@ -17,7 +17,7 @@ use crate::cli::{self, help, render};
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::parallel::force::{T_ATTRS_WHNF, fanout};
 use crate::runtime::{AttrsObj, Value, Word};
-use crate::sys::{OsStrExt, OsStringExt};
+use crate::sys::{self, OsStringExt};
 use crate::trace::run::Cache;
 use crate::trace::store::Part;
 use crate::{argv, error, log, print};
@@ -435,7 +435,7 @@ fn show(path: &[Vec<u8>]) -> String {
 /// The file `import` would read: a directory resolves to its `default.nix`.
 fn entry_file(p: Vec<u8>) -> String {
     let mut p = p;
-    if Path::new(OsStr::from_bytes(&p)).is_dir() {
+    if sys::path_from_internal(&p).is_dir() {
         p.extend_from_slice(b"/default.nix");
     }
     argv::encode(OsString::from_vec(p))
