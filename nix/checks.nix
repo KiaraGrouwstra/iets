@@ -34,7 +34,6 @@ in
   fmt = craneLib.cargoFmt (commonArgs // { src = sources.test; });
   # nix/ast-grep, through sgconfig.yml
   ast-grep = runCommand "iets-ast-grep" { nativeBuildInputs = [ ast-grep ]; } "cd ${sources.astGrep} && ast-grep scan && touch $out";
-  linttest = nuScript "linttest";
   # VERSION is what the release effect publishes; cargo cannot read it
   version = let cargo = (lib.importTOML ../Cargo.toml).package.version; in
     runCommand "iets-version" { } (if cargo == commonArgs.version then "touch $out" else ''
