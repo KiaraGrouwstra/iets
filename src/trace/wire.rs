@@ -555,29 +555,48 @@ pub fn decode_sources(b: &[u8]) -> Option<HashMap<StorePath, SourceOrigin>> {
 }
 
 /// The roots `iets build` resolved: drv path and the output named by context.
+type Roots = Vec<(StorePath, Option<String>)>;
+
 pub fn encode_roots(roots: &[(StorePath, Option<String>)]) -> Vec<u8> {
+    encode_groups(&[roots.to_vec()])
+}
+
+pub fn decode_roots(b: &[u8]) -> Option<Roots> {
+    Some(decode_groups(b)?.concat())
+}
+
+/// The roots of each installable, in the order the key sorts them.
+pub fn encode_groups(groups: &[Roots]) -> Vec<u8> {
     let mut e = Enc::new();
-    e.u64(roots.len() as u64);
-    for (p, out) in roots {
-        e.bytes(p.base_name().as_bytes());
-        e.opt_bytes(out.as_deref().map(str::as_bytes));
+    e.u64(groups.len() as u64);
+    for roots in groups {
+        e.u64(roots.len() as u64);
+        for (p, out) in roots {
+            e.bytes(p.base_name().as_bytes());
+            e.opt_bytes(out.as_deref().map(str::as_bytes));
+        }
     }
     e.0
 }
 
-pub fn decode_roots(b: &[u8]) -> Option<Vec<(StorePath, Option<String>)>> {
+pub fn decode_groups(b: &[u8]) -> Option<Vec<Roots>> {
     let mut d = Dec::new(b).ok()?;
-    let n = d.u64().ok()? as usize;
-    let mut v = Vec::with_capacity(n.min(1 << 16));
-    for _ in 0..n {
-        let p = store_path(d.bytes().ok()?).ok()?;
-        let out = match d.opt_vec().ok()? {
-            Some(o) => Some(String::from_utf8(o).ok()?),
-            None => None,
-        };
-        v.push((p, out));
+    let groups = d.u64().ok()? as usize;
+    let mut all = Vec::with_capacity(groups.min(1 << 16));
+    for _ in 0..groups {
+        let n = d.u64().ok()? as usize;
+        let mut v = Vec::with_capacity(n.min(1 << 16));
+        for _ in 0..n {
+            let p = store_path(d.bytes().ok()?).ok()?;
+            let out = match d.opt_vec().ok()? {
+                Some(o) => Some(String::from_utf8(o).ok()?),
+                None => None,
+            };
+            v.push((p, out));
+        }
+        all.push(v);
     }
-    d.done().then_some(v)
+    d.done().then_some(all)
 }
 
 #[cfg(test)]
@@ -722,5 +741,7 @@ mod tests {
 
         let roots = vec![(p.clone(), Some("out".to_string())), (p, None)];
         assert_eq!(decode_roots(&encode_roots(&roots)).unwrap(), roots);
+        let groups = vec![roots.clone(), Vec::new(), roots[..1].to_vec()];
+        assert_eq!(decode_groups(&encode_groups(&groups)).unwrap(), groups);
     }
 }

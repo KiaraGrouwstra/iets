@@ -135,7 +135,7 @@ fn parse(argv: &[String]) -> (BuildArgs, EvalArgs) {
         s => rest.push(s.to_string()),
     });
     let a = parse_eval_args(&rest);
-    b.root_key = root_key(&installables(&a));
+    b.root_key = root_key(&canonical(installables(&a)).0);
     (b, a)
 }
 
@@ -160,21 +160,70 @@ fn installables(a: &EvalArgs) -> Vec<EvalArgs> {
 /// previous root behind for the TTL to sweep.
 fn root_key(all: &[EvalArgs]) -> Vec<Vec<u8>> {
     let mut key = vec![b"build".to_vec(), crate::cli::cwd()];
-    for a in all {
-        key.push(match &a.input {
-            Some(Input::Flake(f) | Input::File(f) | Input::Expr(f)) => f.as_bytes().to_vec(),
-            None => Vec::new(),
-        });
-        key.push(a.attr.clone().unwrap_or_default().into_bytes());
-    }
+    key.extend(all.iter().map(label));
     key
+}
+
+fn label(a: &EvalArgs) -> Vec<u8> {
+    let mut l = match &a.input {
+        Some(Input::Flake(f) | Input::File(f) | Input::Expr(f)) => f.as_bytes().to_vec(),
+        None => Vec::new(),
+    };
+    l.push(0);
+    l.extend(a.attr.clone().unwrap_or_default().into_bytes());
+    l
+}
+
+/// The installables without repeats, sorted so that every order of the same
+/// set is one job and one cache entry, and for each installable of the
+/// command line its place in that order.
+fn canonical(all: Vec<EvalArgs>) -> (Vec<EvalArgs>, Vec<usize>) {
+    let mut uniq: Vec<(Vec<u8>, EvalArgs)> = Vec::new();
+    let mut slot = Vec::new();
+    for a in all {
+        let l = label(&a);
+        match uniq.iter().position(|(k, _)| *k == l) {
+            Some(i) => slot.push(i),
+            None => {
+                slot.push(uniq.len());
+                uniq.push((l, a));
+            }
+        }
+    }
+    let mut by_label: Vec<usize> = (0..uniq.len()).collect();
+    by_label.sort_by(|&x, &y| uniq[x].0.cmp(&uniq[y].0));
+    let mut rank = vec![0; uniq.len()];
+    for (pos, &i) in by_label.iter().enumerate() {
+        rank[i] = pos;
+    }
+    let order = slot.iter().map(|&s| rank[s]).collect();
+    let mut taken: Vec<Option<EvalArgs>> = uniq.into_iter().map(|(_, a)| Some(a)).collect();
+    let sorted = by_label
+        .into_iter()
+        .filter_map(|i| taken[i].take())
+        .collect();
+    (sorted, order)
+}
+
+/// The roots of the command line's installables in its order, each root once.
+fn in_command_order(groups: &[Roots], order: &[usize]) -> Roots {
+    let mut roots: Roots = Vec::new();
+    for &g in order {
+        for r in &groups[g] {
+            if !roots.contains(r) {
+                roots.push(r.clone());
+            }
+        }
+    }
+    roots
 }
 
 /// The local files the evaluation of `argv` parses, from a fresh
 /// evaluation: a cache hit does not know them.
 fn local_files(argv: &[String]) -> Vec<PathBuf> {
     let (_, a) = parse(argv);
-    let all: Vec<EvalArgs> = installables(&a)
+    let all: Vec<EvalArgs> = canonical(installables(&a))
+        .0
         .into_iter()
         .map(|a| EvalArgs {
             no_tracing_cache: true,
@@ -198,7 +247,8 @@ fn build_once(argv: &[String]) -> i32 {
     {
         return build_drv_file(&b, f);
     }
-    let mut all = installables(&a);
+    let (mut all, order) = canonical(installables(&a));
+    let n = all.len();
 
     let t0 = Instant::now();
     for one in &mut all {
@@ -222,7 +272,11 @@ fn build_once(argv: &[String]) -> i32 {
         run
     };
     if let Some(code) = run.hit(|c| {
-        let (roots, drvs, sources) = c.read_build()?;
+        let (groups, drvs, sources) = c.read_build_groups()?;
+        if groups.len() != n {
+            return None;
+        }
+        let roots = in_command_order(&groups, &order);
         c.replay_warnings();
         if b.timings {
             eprintln!(
@@ -243,21 +297,23 @@ fn build_once(argv: &[String]) -> i32 {
         return code;
     }
     // parallel: eval and build run as the main fiber
-    cli::run_parallel(run, move |ev, cache| build_eval(ev, &b, all, t0, cache))
+    cli::run_parallel(run, move |ev, cache| {
+        build_eval(ev, &b, all, &order, t0, cache)
+    })
 }
 
 type Roots = Vec<(StorePath, Option<String>)>;
 
-/// The roots of every installable, loading each flake once.
-fn resolve_all(ev: &mut Evaluator, all: Vec<EvalArgs>) -> Result<Roots, Box<eval::Error>> {
+/// The roots of each installable, loading each flake once.
+fn resolve_all(ev: &mut Evaluator, all: Vec<EvalArgs>) -> Result<Vec<Roots>, Box<eval::Error>> {
     let mut loaded = Loaded::default();
-    let mut roots = Vec::new();
+    let mut groups = Vec::new();
     for a in all {
         let evaluating = cli::evaluating(&a);
-        roots.extend(resolve(ev, a, &mut loaded)?);
+        groups.push(resolve(ev, a, &mut loaded)?);
         drop(evaluating);
     }
-    Ok(roots)
+    Ok(groups)
 }
 
 /// The roots of the installable, each named by the attribute it was reached
@@ -290,11 +346,12 @@ fn build_eval(
     ev: &mut Evaluator,
     b: &BuildArgs,
     all: Vec<EvalArgs>,
+    order: &[usize],
     t0: Instant,
     cache: Option<Cache>,
 ) -> i32 {
-    let roots = match resolve_all(ev, all) {
-        Ok(r) => r,
+    let groups = match resolve_all(ev, all) {
+        Ok(g) => g,
         Err(e) => return report(ev, &e),
     };
     let eval_time = t0.elapsed();
@@ -307,8 +364,9 @@ fn build_eval(
         );
     }
     if let Some(c) = &cache {
-        c.write(ev, &wire::encode_roots(&roots), true);
+        c.write(ev, &wire::encode_groups(&groups), true);
     }
+    let roots = in_command_order(&groups, order);
     let (root_paths, outputs) = build_targets(&b.outputs, &roots);
     let prov = Provenance::snapshot(ev);
     let drvs = ev.drv.drvs.lock();
@@ -550,6 +608,35 @@ mod tests {
     use crate::store::path::StorePath;
     use crate::sys;
     use std::collections::BTreeMap;
+
+    fn flake(f: &str) -> EvalArgs {
+        EvalArgs {
+            input: Some(Input::Flake(f.into())),
+            ..EvalArgs::new()
+        }
+    }
+
+    fn root(n: char) -> (StorePath, Option<String>) {
+        let name = format!("/nix/store/{}-x.drv", n.to_string().repeat(32));
+        (StorePath::parse(&name).unwrap(), None)
+    }
+
+    #[test]
+    fn installables_are_sorted_without_repeats() {
+        let all = vec![flake(".#b"), flake(".#a"), flake(".#b"), flake(".#c")];
+        let (sorted, order) = canonical(all);
+        let names: Vec<_> = sorted.iter().map(label).collect();
+        assert_eq!(names, [b".#a\0", b".#b\0", b".#c\0"]);
+        assert_eq!(order, [1, 0, 1, 2]);
+    }
+
+    #[test]
+    fn roots_come_back_in_command_order_once() {
+        let groups = vec![vec![root('a')], vec![root('b'), root('a')]];
+        // command line: second, first, second
+        let roots = in_command_order(&groups, &[1, 0, 1]);
+        assert_eq!(roots, [root('b'), root('a')]);
+    }
 
     fn outcome(success: bool, skipped: bool, outputs: &[&str]) -> Outcome {
         Outcome {
