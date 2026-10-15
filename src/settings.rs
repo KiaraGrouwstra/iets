@@ -7,7 +7,7 @@ use std::ffi::{OsStr, OsString};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::{env, fs, result};
+use std::{fs, result};
 
 use crate::env::Env as HostEnv;
 use crate::error::{Error, Result};
@@ -239,7 +239,7 @@ impl Settings {
     /// The file, then `$IETS_CONFIG`, then `overrides`, then the environment
     /// for the knobs that have a variable. Later wins.
     pub fn load(overrides: &[(String, String)]) -> Result<Settings> {
-        Settings::load_from(&conf_file(), overrides, &Env(|n| env::var_os(n)))
+        Settings::load_from(&conf_file(), overrides, &Env(session_var))
     }
 
     fn load_from(file: &Path, overrides: &[(String, String)], env: &Env) -> Result<Settings> {
@@ -377,7 +377,7 @@ impl Default for Settings {
     /// whole environment is dropped instead of failing a library's session.
     fn default() -> Settings {
         let empty = || Settings::from_conf(&Conf::default(), &Env(|_| None));
-        Settings::from_conf(&Conf::default(), &Env(|n| env::var_os(n)))
+        Settings::from_conf(&Conf::default(), &Env(session_var))
             .or_else(|_| empty())
             .expect("no file and no environment cannot fail")
     }
@@ -520,8 +520,12 @@ fn env_bool(name: &str, v: &OsStr) -> Result<bool> {
     config::parse_bool(name, v.to_str().ok_or_else(bad)?).map_err(|_| bad())
 }
 
-/// The environment a load reads: the process's, or a test's.
+/// The environment a load reads: the session's, or a test's.
 struct Env(fn(&str) -> Option<OsString>);
+
+fn session_var(name: &str) -> Option<OsString> {
+    Session::current().env.var_os(name)
+}
 
 impl Env {
     fn str(&self, name: &str) -> Option<String> {
@@ -571,11 +575,12 @@ impl Env {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{env, process};
 
     const NO_ENV: Env = Env(|_| None);
 
     fn scratch(name: &str) -> PathBuf {
-        let d = env::temp_dir().join(format!("iets-settings-{name}-{}", std::process::id()));
+        let d = env::temp_dir().join(format!("iets-settings-{name}-{}", process::id()));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(d.join("user")).unwrap();
         d.join("user/iets.toml")
