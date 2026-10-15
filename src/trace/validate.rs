@@ -188,7 +188,7 @@ fn check(o: &Obs, rehashed: &AtomicUsize, dirs: &mut DirBuf) -> Outcome {
             })
         }
         Obs::Canon { path, target } => {
-            let now = fs::canonicalize(os(path))
+            let now = sys::fs::canonicalize(&os(path))
                 .ok()
                 .map(|p| p.as_os_str().as_bytes().to_vec());
             if now == *target {
@@ -350,6 +350,23 @@ mod tests {
         assert_eq!((r.rehashed, r.refreshed), (0, 0));
         fs::write(&f, b"22").unwrap();
         assert!(validate(&mut obs, 2).is_err());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// The evaluator records the resolved path from `sys::fs::canonicalize`.
+    /// The validator must resolve to the same form, which on Windows has no
+    /// `\\?\` prefix.
+    #[test]
+    fn a_resolved_path_validates_as_the_same() {
+        let d = tmp("canon");
+        let f = d.join("a.nix");
+        fs::write(&f, b"1").unwrap();
+        let resolved = sys::fs::canonicalize(&f).unwrap();
+        let trace = Trace::enabled();
+        trace.canon(&sys::path_to_internal(&f), Some(&resolved));
+        let mut obs = trace.take();
+        assert_eq!(obs.len(), 1);
+        assert!(validate(&mut obs, 2).is_ok());
         let _ = fs::remove_dir_all(&d);
     }
 
