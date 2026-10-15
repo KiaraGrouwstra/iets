@@ -15,11 +15,12 @@ pub mod purity;
 pub mod site;
 
 use std::collections::HashSet;
+use std::fs;
 use std::hash::BuildHasherDefault;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::{env, fs};
 
+use crate::env::Env;
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, FileInfo, Pos};
 use crate::log::{self, Site};
 use crate::session::Session;
@@ -576,13 +577,14 @@ impl Config {
         flags: &[(String, Level)],
         roots: &[Vec<u8>],
         scope: Option<Scope>,
+        env: &Env,
     ) -> Result<Config, String> {
         let mut c = Config::default();
         if let Some(dir) = start {
             c.add_root(&sys::path_to_internal(dir));
         }
         let read = |f: &Path| fs::read_to_string(f).map_err(|e| format!("{}: {e}", f.display()));
-        let settings = settings::conf_file();
+        let settings = settings::conf_file_in(env);
         if settings.is_file() {
             c.apply_toml(&read(&settings)?, &settings)?;
         }
@@ -596,8 +598,9 @@ impl Config {
             settings::check_project(&text, &file)?;
             c.apply_toml(&text, &file)?;
         }
-        if let Ok(env) = env::var("IETS_LINT") {
-            c.apply_env(&env).map_err(|m| format!("IETS_LINT: {m}"))?;
+        if let Some(levels) = env.var("IETS_LINT") {
+            c.apply_env(&levels)
+                .map_err(|m| format!("IETS_LINT: {m}"))?;
         }
         let mut layer = Layer::default();
         for (selector, level) in flags {
@@ -1097,8 +1100,14 @@ impl Evaluator {
 }
 
 #[cfg(test)]
+mod cases;
+#[cfg(test)]
+mod fixtures;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
     /// A `/tmp/iets.toml` must not set a lint level for a project below it:
     /// the walk stops at the root, and the file is untrusted input.
     #[test]

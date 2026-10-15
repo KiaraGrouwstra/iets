@@ -1,9 +1,9 @@
 //! `iets cache paths`: the printing over `api::watch::watch_paths`.
 
-use std::io::{self, Write};
 use std::path::Path;
 
 use crate::api::watch;
+use crate::cli::render;
 use crate::log;
 
 /// NUL-separated paths on stdout, or `--json` with the kind of each.
@@ -23,13 +23,14 @@ pub fn cmd_cache_paths(file: &str, json: bool) -> i32 {
             .iter()
             .map(|x| serde_json::json!({ "path": x.path, "kind": x.kind }))
             .collect();
-        println!("{}", serde_json::Value::Array(a));
+        render::line(&serde_json::Value::Array(a).to_string());
     } else {
-        let mut out = io::stdout().lock();
+        let mut out = Vec::new();
         for x in &w {
-            let _ = out.write_all(x.path.as_bytes());
-            let _ = out.write_all(b"\0");
+            out.extend_from_slice(x.path.as_bytes());
+            out.push(0);
         }
+        render::bytes(&out);
     }
     0
 }
