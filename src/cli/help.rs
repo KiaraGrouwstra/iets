@@ -1,11 +1,9 @@
 //! `iets --help`, `iets COMMAND --help`, `--version`, and the one way a
 //! native command reports a bad command line.
 
-use std::process::exit;
-use std::sync::RwLock;
-
 use crate::cli::{classic, docs, plumbing, prefetch, render};
 use crate::log;
+use crate::session::{Session, exit};
 
 pub const OVERVIEW: &str = "\
 usage: iets COMMAND [ARGS...]
@@ -250,14 +248,12 @@ pub const COMMANDS: &str = "eval build search diff eval-jobs print-dev-env prefe
 
 /// The native command being parsed, "iets" before the command word; unset
 /// under a classic name.
-static COMMAND: RwLock<Option<&'static str>> = RwLock::new(None);
-
 pub fn set_command(cmd: &'static str) {
-    *COMMAND.write().unwrap() = Some(cmd);
+    *Session::current().command.lock().unwrap() = Some(cmd);
 }
 
 pub fn command() -> Option<&'static str> {
-    *COMMAND.read().unwrap()
+    *Session::current().command.lock().unwrap()
 }
 
 /// The help of `cmd` in two parts, `None` for the overview.

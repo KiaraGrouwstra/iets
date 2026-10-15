@@ -1,6 +1,6 @@
 //! `iets eval-jobs`: flags, the three process roles, and the summary.
 
-use std::process::exit;
+use crate::session::exit;
 
 use crate::cli::help::{self, arg_error, value};
 use crate::cli::{
