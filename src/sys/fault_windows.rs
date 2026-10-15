@@ -69,8 +69,7 @@ fn stack_pointer(c: &windows_sys::Win32::System::Diagnostics::Debug::CONTEXT) ->
 
 #[cfg(target_arch = "aarch64")]
 fn stack_pointer(c: &windows_sys::Win32::System::Diagnostics::Debug::CONTEXT) -> usize {
-    // SAFETY: `Sp` is the field the union exposes for the stack pointer.
-    unsafe { c.Anonymous.Anonymous.Sp as usize }
+    c.Sp as usize
 }
 
 /// Windows runs the handler on the faulting stack, so there is no separate
