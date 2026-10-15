@@ -9,7 +9,7 @@ use crate::build::upload::{PlanUpload, Uploader};
 use crate::builtins::derivation::{DrvInfo, load_drv_traced};
 use crate::cli::help::{arg_error, each_arg};
 use crate::cli::{
-    self, EvalArgs, Input, Run, abs_path, cwd, evaluate, parse_eval_args, report, run_for,
+    self, EvalArgs, Input, Run, abs_path, cwd, evaluate, parse_eval_args, render, report, run_for,
 };
 use crate::devenv::{self, BuildEnvironment, CachedResult};
 use crate::error::{self, Error as CrateError};
@@ -27,7 +27,6 @@ use crate::trace::run::Cache;
 use crate::trace::store::Part;
 use crate::{cachefs, config, log};
 use std::collections::BTreeSet;
-use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use std::{env, fs, slice, str};
@@ -297,8 +296,7 @@ pub fn cmd_print_dev_env(argv: &[String]) -> i32 {
         match dev_env_hit(&d, &hit) {
             Ok(true) => {
                 c.replay_warnings();
-                let _ = io::stdout().write_all(&hit.bytes);
-                let _ = io::stdout().flush();
+                render::bytes_lossy(&hit.bytes);
                 if a.timings {
                     eprintln!("total: {:.3}s", t0.elapsed().as_secs_f64());
                 }
@@ -504,8 +502,7 @@ fn dev_env_full(
     })();
     match r {
         Ok(out) => {
-            let _ = io::stdout().write_all(&out);
-            let _ = io::stdout().flush();
+            render::bytes_lossy(&out);
             if timings {
                 eprintln!("total: {:.3}s", t0.elapsed().as_secs_f64());
             }
