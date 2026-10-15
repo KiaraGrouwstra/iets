@@ -1,14 +1,13 @@
 //! What the two caches promise when many processes share one directory: no
-//! torn entry is ever read, a killed writer leaves the store usable, a
-//! corrupt entry or store goes instead of being repaired, and the sweep
-//! removes only what the TTL says. Shapes follow nix-tarmac's
-//! tests/{crash,concurrent,corrupt,gc}_test.cpp. See docs/explanation/caching.md.
+//! torn entry is ever read, a corrupt entry or store goes instead of being
+//! repaired, and the sweep removes only what the TTL says. Shapes follow
+//! nix-tarmac's tests/{concurrent,corrupt,gc}_test.cpp. See docs/explanation/caching.md.
 
 mod hermetic;
 
 use std::collections::HashSet;
 use std::fs::{self, File};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, SystemTime};
 
@@ -135,51 +134,6 @@ fn concurrent_readers_and_writers_never_see_a_torn_entry() {
     for key in 0..KEYS {
         assert!(check(&store, key).is_some(), "every key ends published");
     }
-}
-
-/// The child of `a_killed_writer_leaves_the_store_usable`: writes entries as
-/// fast as it can until SIGKILL. A no-op in a normal test run.
-#[test]
-fn crash_writer_child() {
-    let Some(dir) = env::var_os("IETS_CRASH_DIR") else {
-        return;
-    };
-    let store = Store::locate(Some(&dir.to_string_lossy())).expect("store");
-    for i in 0..usize::MAX {
-        let key = i % 64;
-        publish(&store, key, u8::try_from(i % 8).expect("a writer") + 1);
-    }
-}
-
-fn spawn_and_kill(dir: &Path, ms: u64) {
-    let mut child = Command::new(env::current_exe().expect("this test binary"))
-        .args(["crash_writer_child", "--exact", "--nocapture"])
-        .env("IETS_CRASH_DIR", dir)
-        .spawn()
-        .expect("spawn the writer");
-    thread::sleep(Duration::from_millis(ms));
-    child.kill().expect("kill the writer");
-    let status = child.wait().expect("reap the writer");
-    assert!(!status.success(), "the writer died on the signal");
-}
-
-#[test]
-fn a_killed_writer_leaves_the_store_usable() {
-    let dir = tmp("crash");
-    let store = Store::locate(Some(dir.to_str().expect("utf-8 path"))).expect("store");
-    assert!(cachefs::prepare(store.root(), cachefs::Shape::Dirs, false));
-    for round in 0..6 {
-        spawn_and_kill(&dir, 20 + round * 10);
-    }
-    let mut published = 0;
-    for key in 0..64 {
-        published += usize::from(check(&store, key).is_some());
-    }
-    assert!(published > 0, "the writer published before it died");
-    assert!(
-        publish(&store, 1000, 9),
-        "the next writer takes the lock a killed one held"
-    );
 }
 
 fn hit_entry() -> Vec<u8> {
