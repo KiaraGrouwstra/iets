@@ -9,10 +9,10 @@ use crate::sys::errno;
 use crate::sys::{self, OsStrExt};
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashSet};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::str::from_utf8;
 use std::sync::Arc;
-use std::{fs, io};
 
 use super::Registry;
 use super::store_hooks::{self, At, Follow};
@@ -386,7 +386,7 @@ fn store_path(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     if !is_store_path(&p) {
         p = store_hooks::resolve_links(ev, &p, Follow::Full, pos)?;
         if store_hooks::locate(ev, &p).is_none_or(|at| at.hidden()) {
-            let resolved = fs::canonicalize(os_path(&p));
+            let resolved = sys::fs::canonicalize(&os_path(&p));
             ev.trace().canon(&p, resolved.as_deref().ok());
             let resolved = resolved.map_err(|e| io_error(e, "getting status of", &p, pos))?;
             p = sys::path_to_internal(&resolved);
@@ -526,13 +526,13 @@ fn add_path_inner(
     let at = if virtual_tree {
         at
     } else {
-        let Ok(resolved) = fs::canonicalize(os_path(path)) else {
+        let Ok(resolved) = sys::fs::canonicalize(&os_path(path)) else {
             // a link with no target, or a missing component: the walk names
             // the path that does not exist, as `resolveSymlinks` names it
             let end = store_hooks::resolve_links(ev, path, Follow::Full, pos)?;
             return Err(missing(&end));
         };
-        if resolved.as_os_str().as_bytes() != path {
+        if sys::path_to_internal(&resolved) != path {
             ev.trace().canon(path, Some(&resolved));
         }
         SrcPath::fs(resolved, None)
