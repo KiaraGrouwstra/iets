@@ -5,7 +5,7 @@ use std::process;
 use std::ptr;
 use std::sync::OnceLock;
 
-use windows_sys::Win32::Foundation::EXCEPTION_ACCESS_VIOLATION;
+use windows_sys::Win32::Foundation::{EXCEPTION_ACCESS_VIOLATION, EXCEPTION_STACK_OVERFLOW};
 use windows_sys::Win32::Storage::FileSystem::WriteFile;
 use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE};
 use windows_sys::Win32::System::Diagnostics::Debug::{
@@ -29,11 +29,19 @@ pub fn install(classify: fn(usize) -> Option<Fault>) {
 unsafe extern "system" fn on_fault(info: *mut EXCEPTION_POINTERS) -> i32 {
     // SAFETY: the system passes valid pointers to the handler.
     let record = unsafe { &*(*info).ExceptionRecord };
-    if record.ExceptionCode != EXCEPTION_ACCESS_VIOLATION || record.NumberParameters < 2 {
+    let overflow = record.ExceptionCode == EXCEPTION_STACK_OVERFLOW;
+    if !overflow
+        && (record.ExceptionCode != EXCEPTION_ACCESS_VIOLATION || record.NumberParameters < 2)
+    {
         return EXCEPTION_CONTINUE_SEARCH;
     }
-    // the second parameter is the address that was touched
-    let addr = record.ExceptionInformation[1];
+    // a stack overflow names no useful address, so the stack pointer stands in
+    let addr = if overflow {
+        // SAFETY: the system passes a valid context to the handler.
+        stack_pointer(unsafe { &*(*info).ContextRecord })
+    } else {
+        record.ExceptionInformation[1]
+    };
     if let Some(f) = CLASSIFY.get().and_then(|c| c(addr)) {
         let mut written = 0;
         // SAFETY: the buffer is the message and stderr's handle is valid.
@@ -52,6 +60,17 @@ unsafe extern "system" fn on_fault(info: *mut EXCEPTION_POINTERS) -> i32 {
         process::exit(1);
     }
     EXCEPTION_CONTINUE_SEARCH
+}
+
+#[cfg(target_arch = "x86_64")]
+fn stack_pointer(c: &windows_sys::Win32::System::Diagnostics::Debug::CONTEXT) -> usize {
+    c.Rsp as usize
+}
+
+#[cfg(target_arch = "aarch64")]
+fn stack_pointer(c: &windows_sys::Win32::System::Diagnostics::Debug::CONTEXT) -> usize {
+    // SAFETY: `Sp` is the field the union exposes for the stack pointer.
+    unsafe { c.Anonymous.Anonymous.Sp as usize }
 }
 
 /// Windows runs the handler on the faulting stack, so there is no separate
