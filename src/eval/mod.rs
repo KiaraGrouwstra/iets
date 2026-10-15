@@ -926,7 +926,7 @@ impl Evaluator {
                 };
                 p = compile::canon_path(&joined);
             }
-            let full = fs::canonicalize(&local);
+            let full = sys::fs::canonicalize(&local);
             self.trace()
                 .canon(&sys::path_to_internal(&local), full.ok().as_deref());
             at = store_hooks::open(self, &p, pos)?;
