@@ -1,10 +1,8 @@
-# iets - at least it's *something*
+# iets - faster Nix
 
-> DISCLAIMER: this project is LLM-ware. This README is written by my little
-> hands. The rest of the project is LLM output with *some* level of
-> supervision. Mostly Opus 5.5 and Fable 5.1 at the time of writing.
+> *something* that evaluates *nothing*
 
-Maintainer: [zimbatm](https://github.com/zimbatm), under the Numtide org.
+Maintainer: [zimbatm](https://github.com/zimbatm)
 
 iets is a re-implementation of the Nix client (in Rust). With inputs based on
 more than a decade of using the language and seeing how the community and
