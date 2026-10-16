@@ -110,6 +110,7 @@ pub fn common_flag(c: &mut Common, a: &mut Argv, s: &str) -> Result<bool, String
     match s {
         "-E" | "--expr" => c.from_args = true,
         "--store" => set.push(("store".into(), a.value(s)?)),
+        "--flake-registry" => set.push(("flake-registry".into(), a.value(s)?)),
         "-j" | "--max-jobs" => set.push(("max-jobs".into(), a.number(s, "max-jobs")?)),
         "--cores" => set.push(("cores".into(), a.number(s, "cores")?)),
         "-k" | "--keep-going" => set.push(("keep-going".into(), "true".into())),

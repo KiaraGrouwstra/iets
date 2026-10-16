@@ -178,7 +178,10 @@ iets handles these subcommands. Every other one runs the real `nix`.
 Flags: `--json`, `--raw`, `--expr E`, `-f`/`--file FILE`, `--impure`,
 `--pure-eval`, `--no-pure-eval`, `-I`, `--arg`/`--argstr`, `--option`,
 `--store`, `--show-trace`, `--experimental-features` and
-`--extra-experimental-features`, `--accept-flake-config`.
+`--extra-experimental-features`, `--accept-flake-config`, `--flake-registry`,
+`-L`/`--print-build-logs`.
+
+- `-L` has no effect: an evaluation that would build falls back.
 
 - `nix` evaluates purely unless you say otherwise, and `-f` is impure
   (`docs/explanation/evaluation.md`).
