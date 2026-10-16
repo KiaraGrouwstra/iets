@@ -352,8 +352,9 @@ pub fn eval_flake_value(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
 }
 
 /// flake-primops.cc:prim_getFlake on a local path, parsed by
-/// `flakeref::parse_absolute`. Impure only: every reference iets resolves
-/// is unlocked, which a pure evaluation refuses. Nothing is locked here. A
+/// `flakeref::parse_absolute`. Impure, or pure on a `path:` reference with a
+/// `narHash` the tree matches; a pure evaluation refuses every other one.
+/// Nothing is locked here. A
 /// directory is always a `path:` input, even inside a git repository:
 /// flakeref.cc looks for `.git` only when it has a base directory, and
 /// getFlake passes none. A virtual copy stands for its local tree.
@@ -369,8 +370,20 @@ pub fn get_flake(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word
         let msg = format!("builtins.getFlake on '{s}' {why} is not supported");
         EvalError::boxed(ErrorKind::Unsupported, msg, pos)
     };
-    if ev.pure() {
-        // a rev or a narHash may lock it; the real nix decides those
+    let pinned = pinned_path(&p);
+    if let Some((path, expected)) = pinned {
+        let expected = source::parse_nar_hash(expected).map_err(|e| eval_error(e, pos))?;
+        let (got, _) = fetch::path_nar_hash(ev, path, pos)?;
+        if got != expected {
+            let msg = format!(
+                "NAR hash mismatch in input '{s}', expected '{}' but got '{}'",
+                expected.to_sri(),
+                got.to_sri()
+            );
+            return Err(EvalError::boxed(ErrorKind::Eval, msg, pos));
+        }
+    } else if ev.pure() {
+        // a rev may lock it; the real nix decides that
         if p.input.contains_key("rev") || p.input.contains_key("narHash") {
             return Err(unsupported("in pure evaluation mode"));
         }
@@ -383,7 +396,7 @@ pub fn get_flake(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word
             pos,
         ));
     }
-    let local = p.input.len() == 2 && p.dir.is_empty();
+    let local = (p.input.len() == 2 || pinned.is_some()) && p.dir.is_empty();
     let Some(path) = source::str_attr(&p.input, "path").filter(|_| local) else {
         return Err(unsupported("(only a local path)"));
     };
@@ -396,6 +409,14 @@ pub fn get_flake(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word
     };
     let fr = local_flake(&full, true, Vec::new()).map_err(|e| eval_error(e, pos))?;
     eval_flake_value(ev, &fr)
+}
+
+/// `path:DIR?narHash=H` and nothing else: a reference its NAR hash locks, so
+/// a pure evaluation may take it once the tree matches.
+fn pinned_path(p: &flakeref::Parsed) -> Option<(&str, &str)> {
+    let only = p.input.len() == 3 && p.dir.is_empty();
+    let path = source::str_attr(&p.input, "path").filter(|_| only)?;
+    Some((path, source::str_attr(&p.input, "narHash")?))
 }
 
 /// An error outside the evaluator as an evaluation error at `pos`.
