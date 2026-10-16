@@ -19,7 +19,7 @@ use crate::source::{
 use crate::store::hash::{Hash, HashAlgo};
 use crate::store::path::{IngestionMethod, check_name};
 use crate::syntax::symbol::Sym;
-use crate::{provenance, treestore};
+use crate::{provenance, sys, treestore};
 
 /// The attrs `fetchTree` accepts: strings and paths, booleans, non-negative
 /// integers (fetchTree.cc).
@@ -147,7 +147,7 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
                 );
             }
             let (hash, mtime) = match store_hooks::locate(ev, path.as_bytes()) {
-                None => source::path_tree(ev, Path::new(path), pos)?,
+                None => source::path_tree(ev, &sys::path_from_internal(path.as_bytes()), pos)?,
                 // a store tree's mtimes are all 1, so that is its lastModified
                 Some(_) => {
                     let sp = paths::add_path(
