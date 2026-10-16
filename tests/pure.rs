@@ -117,3 +117,42 @@ fn the_pure_setting_is_the_users_alone() {
 
     let _ = fs::remove_dir_all(&d);
 }
+
+/// A `narHash` locks a `path:` reference, so a pure evaluation takes it when
+/// the tree matches, refuses a tree that does not, and refuses no hash at all.
+#[test]
+fn get_flake_takes_a_path_its_nar_hash_locks() {
+    let d = env::temp_dir().join(format!("iets-pure-getflake-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&d);
+    fs::create_dir_all(&d).unwrap();
+    fs::write(d.join("flake.nix"), "{ outputs = _: { x = 42; }; }").unwrap();
+    fs::write(
+        d.join("flake.lock"),
+        r#"{"nodes":{"root":{}},"root":"root","version":7}"#,
+    )
+    .unwrap();
+    // the evaluator's form, `/C:/...` on Windows, keeps backslashes out of the string
+    let at = String::from_utf8(iets::sys::path_to_internal(&d)).unwrap();
+
+    let tree = format!(r#"(builtins.fetchTree {{ type = "path"; path = "{at}"; }}).narHash"#);
+    let o = iets(&d, &["eval", "--impure", "--raw", "--expr", &tree]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    let hash = text(&o.stdout);
+
+    let get = |query: &str| {
+        let e = format!(r#"(builtins.getFlake "path:{at}{query}").x"#);
+        iets(&d, &["eval", "--expr", &e])
+    };
+    let right = get(&format!("?narHash={hash}"));
+    let wrong = get("?narHash=sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+    let unpinned = get("");
+    let _ = fs::remove_dir_all(&d);
+
+    assert_eq!(right.status.code(), Some(0), "{}", text(&right.stderr));
+    assert_eq!(text(&right.stdout), "42\n");
+    assert_eq!(wrong.status.code(), Some(1), "{}", text(&wrong.stdout));
+    let e = text(&wrong.stderr);
+    assert!(e.contains("NAR hash mismatch"), "{e}");
+    let e = text(&unpinned.stderr);
+    assert!(e.contains("unlocked flake reference"), "{e}");
+}

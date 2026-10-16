@@ -49,6 +49,7 @@ const GLOBALS: &[(&str, usize)] = &[
     ("--arg", 2),
     ("--argstr", 2),
     ("--store", 1),
+    ("--flake-registry", 1),
     // The `nix-farm` wrapper passes `--eval-store auto` because the farm
     // refuses the worker-protocol tunnel; iets always evaluates locally.
     ("--eval-store", 1),
@@ -159,6 +160,8 @@ fn parse_eval(argv: &[String]) -> Result<Nix, String> {
         match s {
             "--json" => n.json = true,
             "--raw" => n.raw = true,
+            // an evaluation that would build falls back, so there is no log
+            "-L" | "--print-build-logs" => {}
             _ => return Ok(false),
         }
         Ok(true)
@@ -763,4 +766,31 @@ fn derivation_path(ev: &mut Evaluator, w: Word) -> EvalResult<Option<Vec<u8>>> {
         true,
     )?;
     Ok(Some(s.to_vec()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(a: &[&str]) -> Vec<String> {
+        a.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn eval_takes_print_build_logs() {
+        assert!(parse_eval(&args(&["-L", "--expr", "1"])).is_ok());
+        assert!(parse_eval(&args(&["--print-build-logs", "--expr", "1"])).is_ok());
+    }
+
+    #[test]
+    fn flake_registry_is_the_setting() {
+        let n = parse_build(&args(&["--flake-registry", "", ".#a"])).unwrap();
+        let set = ("flake-registry".to_string(), String::new());
+        assert!(n.c.flags.overrides.contains(&set));
+        let n = parse_eval(&args(&["--flake-registry", "/r.json", "--expr", "1"])).unwrap();
+        let set = ("flake-registry".to_string(), "/r.json".to_string());
+        assert!(n.c.flags.overrides.contains(&set));
+        let before = args(&["--flake-registry", "", "eval", "--expr", "1"]);
+        assert_eq!(find_sub(&before), Ok(2));
+    }
 }

@@ -19,7 +19,7 @@ use crate::source::{
 use crate::store::hash::{Hash, HashAlgo};
 use crate::store::path::{IngestionMethod, check_name};
 use crate::syntax::symbol::Sym;
-use crate::{provenance, treestore};
+use crate::{provenance, sys, treestore};
 
 /// The attrs `fetchTree` accepts: strings and paths, booleans, non-negative
 /// integers (fetchTree.cc).
@@ -122,6 +122,28 @@ fn check_locked(attrs: &Attrs, pos: Pos) -> EvalResult<()> {
     }
 }
 
+/// The NAR hash and the `lastModified` of a `path` input at the absolute `path`.
+pub(crate) fn path_nar_hash(ev: &mut Evaluator, path: &str, pos: Pos) -> EvalResult<(Hash, i64)> {
+    Ok(match store_hooks::locate(ev, path.as_bytes()) {
+        None => source::path_tree(ev, &sys::path_from_internal(path.as_bytes()), pos)?,
+        // a store tree's mtimes are all 1, so that is its lastModified
+        Some(_) => {
+            let sp = paths::add_path(
+                ev,
+                pos,
+                b"source",
+                path.as_bytes(),
+                None,
+                IngestionMethod::Recursive,
+                None,
+                None,
+            )?;
+            let nar = ev.known.origin(&sp).and_then(|o| o.nar);
+            (nar.expect("add_path records a recursive copy").0, 1)
+        }
+    })
+}
+
 pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     purity::unhashed_fetch(ev, "fetchTree", args[0], pos)?;
     let mut attrs = collect_attrs(ev, args[0], pos)?;
@@ -146,24 +168,7 @@ pub fn fetch_tree(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
                     to_url(&attrs)
                 );
             }
-            let (hash, mtime) = match store_hooks::locate(ev, path.as_bytes()) {
-                None => source::path_tree(ev, Path::new(path), pos)?,
-                // a store tree's mtimes are all 1, so that is its lastModified
-                Some(_) => {
-                    let sp = paths::add_path(
-                        ev,
-                        pos,
-                        b"source",
-                        path.as_bytes(),
-                        None,
-                        IngestionMethod::Recursive,
-                        None,
-                        None,
-                    )?;
-                    let nar = ev.known.origin(&sp).and_then(|o| o.nar);
-                    (nar.expect("add_path records a recursive copy").0, 1)
-                }
-            };
+            let (hash, mtime) = path_nar_hash(ev, path, pos)?;
             if let Some(expected) = str_attr(&attrs, "narHash") {
                 let exp = parse_nar_hash(expected)
                     .map_err(|e| Error::boxed(ErrorKind::Eval, e.to_string(), pos))?;
