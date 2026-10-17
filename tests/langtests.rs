@@ -6,35 +6,12 @@ mod hermetic;
 
 use iets::sys::path_to_internal;
 use iets::sys::process::signal;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Output;
-use std::{fs, thread};
 
 fn tests_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests")
-}
-
-fn expected_failures() -> Vec<String> {
-    let text =
-        fs::read_to_string(tests_dir().join("lang/expected-failures.txt")).unwrap_or_default();
-    text.lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(String::from)
-        .collect()
-}
-
-fn cases(prefix: &str) -> Vec<String> {
-    let mut names: Vec<String> = fs::read_dir(tests_dir().join("lang"))
-        .expect("read tests/lang")
-        .filter_map(|e| {
-            let name = e.ok()?.file_name().into_string().ok()?;
-            let stem = name.strip_suffix(".nix")?;
-            stem.starts_with(prefix).then(|| stem.to_string())
-        })
-        .collect();
-    names.sort();
-    names
 }
 
 fn flags_of(stem: &str) -> Vec<String> {
@@ -90,46 +67,10 @@ fn check(stem: &str) -> Option<String> {
     })
 }
 
-fn failures() -> Vec<(String, String)> {
-    let stems: Vec<String> = [cases("eval-okay-"), cases("eval-fail-")].concat();
-    let workers = thread::available_parallelism().map_or(1, |n| n.get().min(4));
-    let chunk = stems.len().div_ceil(workers).max(1);
-    let mut failed: Vec<(String, String)> = thread::scope(|s| {
-        let handles: Vec<_> = stems
-            .chunks(chunk)
-            .map(|part| {
-                s.spawn(move || {
-                    part.iter()
-                        .filter_map(|n| Some((n.clone(), check(n)?)))
-                        .collect::<Vec<_>>()
-                })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .flat_map(|h| h.join().expect("a worker panicked"))
-            .collect()
-    });
-    failed.sort();
-    failed
+fn run(stem: &str) {
+    if let Some(why) = check(stem) {
+        panic!("{stem}: {why}");
+    }
 }
 
-#[test]
-fn the_language_corpus_passes_but_for_the_expected_failures() {
-    let failed = failures();
-    let expected = expected_failures();
-    let new: Vec<String> = failed
-        .iter()
-        .filter(|(n, _)| !expected.contains(n))
-        .map(|(n, why)| format!("{n} ({why})"))
-        .collect();
-    let fixed: Vec<&String> = expected
-        .iter()
-        .filter(|n| !failed.iter().any(|(f, _)| f == *n))
-        .collect();
-    assert!(new.is_empty(), "unexpected failures: {}", new.join(", "));
-    assert!(
-        fixed.is_empty(),
-        "now passing, drop from expected-failures.txt: {fixed:?}"
-    );
-}
+include!(concat!(env!("OUT_DIR"), "/lang_cases.rs"));
