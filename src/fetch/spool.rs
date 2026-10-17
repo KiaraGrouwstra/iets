@@ -1040,6 +1040,7 @@ impl Read for Bytes<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     use crate::sys::fs::symlink;
 
@@ -1091,15 +1092,13 @@ mod tests {
             Ok(nar)
         });
 
-        let dest = env::temp_dir().join(format!("iets-spool-tree-{}-{tag}", std::process::id()));
-        let _ = fs::remove_dir_all(&dest);
-        let tree = unpack::unpack(plain, &dest).and_then(|root| {
+        let dest = tempdir().unwrap();
+        let tree = unpack::unpack(plain, dest.path()).and_then(|root| {
             let mut nar = Vec::new();
             nar::dump_path(&root, &mut nar, &mut |_, _| true)
                 .map_err(|e| Error::io("cannot dump the tree", e))?;
             Ok(nar)
         });
-        let _ = fs::remove_dir_all(&dest);
         (streamed, tree)
     }
 
@@ -1163,13 +1162,10 @@ mod tests {
     #[test]
     fn an_empty_archive_is_an_empty_directory() {
         let nar = same("empty", &[]);
-        let dest = env::temp_dir().join(format!("iets-spool-bare-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dest);
-        fs::create_dir_all(&dest).unwrap();
+        let dest = tempdir().unwrap();
         let mut want = Vec::new();
-        nar::dump_path(&dest, &mut want, &mut |_, _| true).unwrap();
+        nar::dump_path(dest.path(), &mut want, &mut |_, _| true).unwrap();
         assert_eq!(nar, want);
-        fs::remove_dir_all(&dest).unwrap();
     }
 
     /// The same errors as the tree path, for the same archives.
@@ -1282,19 +1278,12 @@ mod tests {
         Tree::index(spool, u64::MAX).unwrap()
     }
 
-    fn tmp_dir(name: &str) -> PathBuf {
-        let dir = env::temp_dir().join(format!("iets-spool-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
     /// A stored tree is the tree that was fetched: the same NAR, member for
     /// member, and the same answers to a read. Two members with one content
     /// are one object.
     #[test]
     fn a_stored_tree_dumps_the_spools_nar() {
-        let dir = tmp_dir("stored");
+        let dir = tempdir().unwrap();
         let long = vec![b'z'; 10_000];
         let tree = spooled(&[
             ("t/", DIR, 0o755, b""),
@@ -1305,7 +1294,7 @@ mod tests {
             ("t/empty", REG, 0o644, b""),
             ("t/l", SYM, 0o777, b"sub/b"),
         ]);
-        let (back, index) = stored(&dir, &tree);
+        let (back, index) = stored(dir.path(), &tree);
         let (mut want, mut got) = (Vec::new(), Vec::new());
         tree.dump(&mut want).unwrap();
         back.dump(&mut got).unwrap();
@@ -1322,27 +1311,25 @@ mod tests {
             3,
             "\"same\" twice, the long file and the empty one"
         );
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     /// No byte of a stored index is believed on its own: one flipped byte is a
     /// miss, never a crash and never a tree that is not the one stored.
     #[test]
     fn a_changed_index_byte_is_a_miss() {
-        let dir = tmp_dir("index");
+        let dir = tempdir().unwrap();
         let tree = spooled(&[
             ("t/", DIR, 0o755, b""),
             ("t/f", REG, 0o644, b"x"),
             ("t/l", SYM, 0o777, b"f"),
         ]);
-        let (_, good) = stored(&dir, &tree);
+        let (_, good) = stored(dir.path(), &tree);
         assert!(decode_index(&good).is_some());
         for i in 0..good.len() {
             let mut broken = good.clone();
             broken[i] ^= 0xff;
             assert!(decode_index(&broken).is_none(), "byte {i} was believed");
         }
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     /// A hard link fills a name no member claimed, and it may name a link whose

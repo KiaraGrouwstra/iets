@@ -3,9 +3,10 @@
 
 mod hermetic;
 
-use std::path::{Path, PathBuf};
+use std::fs;
+use std::path::Path;
 use std::process::Output;
-use std::{env, fs};
+use tempfile::{TempDir, tempdir};
 
 fn iets(dir: &Path, args: &[&str]) -> Output {
     hermetic::iets()
@@ -24,13 +25,12 @@ fn text(b: &[u8]) -> String {
 /// `outside.txt` beside the project. The marker is an `iets.toml`: a working
 /// tree would need a real SCM here, and `project::tests` covers the markers
 /// that `source::scm` supplies.
-fn checkout(name: &str) -> PathBuf {
-    let d = env::temp_dir().join(format!("iets-pure-{name}-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&d);
-    let repo = d.join("repo");
+fn checkout() -> TempDir {
+    let d = tempdir().unwrap();
+    let repo = d.path().join("repo");
     fs::create_dir_all(&repo).unwrap();
     fs::write(repo.join("iets.toml"), "").unwrap();
-    fs::write(d.join("outside.txt"), "out").unwrap();
+    fs::write(d.path().join("outside.txt"), "out").unwrap();
     fs::write(repo.join("in.txt"), "in").unwrap();
     fs::write(repo.join("read.nix"), "builtins.readFile ./in.txt").unwrap();
     fs::write(repo.join("up.nix"), "builtins.readFile ../outside.txt").unwrap();
@@ -40,8 +40,8 @@ fn checkout(name: &str) -> PathBuf {
 
 #[test]
 fn a_read_in_the_project_is_pure_and_one_above_it_is_not() {
-    let d = checkout("root");
-    let repo = d.join("repo");
+    let d = checkout();
+    let repo = d.path().join("repo");
 
     let o = iets(&repo, &["eval", "--raw", "-f", "read.nix"]);
     assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
@@ -58,27 +58,24 @@ fn a_read_in_the_project_is_pure_and_one_above_it_is_not() {
     let o = iets(&repo, &["eval", "--raw", "--impure", "-f", "up.nix"]);
     assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
     assert_eq!(text(&o.stdout), "out");
-
-    let _ = fs::remove_dir_all(&d);
 }
 
 /// No marker above the entry file: its own directory is the project, so a
 /// one-off expression in a scratch directory still evaluates.
 #[test]
 fn a_directory_with_no_marker_is_its_own_project() {
-    let d = checkout("marker");
-    let repo = d.join("repo");
+    let d = checkout();
+    let repo = d.path().join("repo");
     fs::remove_file(repo.join("iets.toml")).unwrap();
     let o = iets(&repo, &["eval", "--raw", "-f", "read.nix"]);
     assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
     assert_eq!(text(&o.stdout), "in");
-    let _ = fs::remove_dir_all(&d);
 }
 
 #[test]
 fn the_other_purity_rules_hold_without_a_flag() {
-    let d = checkout("env");
-    let repo = d.join("repo");
+    let d = checkout();
+    let repo = d.path().join("repo");
 
     let o = iets(&repo, &["eval", "--raw", "-f", "env.nix"]);
     assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
@@ -86,23 +83,21 @@ fn the_other_purity_rules_hold_without_a_flag() {
 
     let o = iets(&repo, &["eval", "-E", "builtins ? currentSystem"]);
     assert_eq!(text(&o.stdout).trim(), "false");
-
-    let _ = fs::remove_dir_all(&d);
 }
 
 /// The user's file turns it off for every run; a project's file may not.
 #[test]
 fn the_pure_setting_is_the_users_alone() {
-    let d = checkout("setting");
-    let repo = d.join("repo");
-    let conf = d.join("config/iets");
+    let d = checkout();
+    let repo = d.path().join("repo");
+    let conf = d.path().join("config/iets");
     fs::create_dir_all(&conf).unwrap();
     fs::write(conf.join("iets.toml"), "pure = false\n").unwrap();
 
     let o = hermetic::iets()
         .args(["eval", "--raw", "-f", "up.nix"])
         .current_dir(&repo)
-        .env("XDG_CONFIG_HOME", d.join("config"))
+        .env("XDG_CONFIG_HOME", d.path().join("config"))
         .env("IETS_CACHE", "0")
         .output()
         .expect("run iets");
@@ -114,39 +109,34 @@ fn the_pure_setting_is_the_users_alone() {
     assert_eq!(o.status.code(), Some(1), "{}", text(&o.stdout));
     let e = text(&o.stderr);
     assert!(e.contains("'pure' may not be set in a project file"), "{e}");
-
-    let _ = fs::remove_dir_all(&d);
 }
 
 /// A `narHash` locks a `path:` reference, so a pure evaluation takes it when
 /// the tree matches, refuses a tree that does not, and refuses no hash at all.
 #[test]
 fn get_flake_takes_a_path_its_nar_hash_locks() {
-    let d = env::temp_dir().join(format!("iets-pure-getflake-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&d);
-    fs::create_dir_all(&d).unwrap();
-    fs::write(d.join("flake.nix"), "{ outputs = _: { x = 42; }; }").unwrap();
+    let d = tempdir().unwrap();
+    fs::write(d.path().join("flake.nix"), "{ outputs = _: { x = 42; }; }").unwrap();
     fs::write(
-        d.join("flake.lock"),
+        d.path().join("flake.lock"),
         r#"{"nodes":{"root":{}},"root":"root","version":7}"#,
     )
     .unwrap();
     // the evaluator's form, `/C:/...` on Windows, keeps backslashes out of the string
-    let at = String::from_utf8(iets::sys::path_to_internal(&d)).unwrap();
+    let at = String::from_utf8(iets::sys::path_to_internal(d.path())).unwrap();
 
     let tree = format!(r#"(builtins.fetchTree {{ type = "path"; path = "{at}"; }}).narHash"#);
-    let o = iets(&d, &["eval", "--impure", "--raw", "--expr", &tree]);
+    let o = iets(d.path(), &["eval", "--impure", "--raw", "--expr", &tree]);
     assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
     let hash = text(&o.stdout);
 
     let get = |query: &str| {
         let e = format!(r#"(builtins.getFlake "path:{at}{query}").x"#);
-        iets(&d, &["eval", "--expr", &e])
+        iets(d.path(), &["eval", "--expr", &e])
     };
     let right = get(&format!("?narHash={hash}"));
     let wrong = get("?narHash=sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
     let unpinned = get("");
-    let _ = fs::remove_dir_all(&d);
 
     assert_eq!(right.status.code(), Some(0), "{}", text(&right.stderr));
     assert_eq!(text(&right.stdout), "42\n");

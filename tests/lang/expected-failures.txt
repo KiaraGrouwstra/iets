@@ -1,2 +1,0 @@
-# langtests cases iets fails today. tests/langtests.rs fails on any
-# name missing from this list, and on any listed name that starts passing.

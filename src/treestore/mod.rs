@@ -550,23 +550,21 @@ pub fn record(ev: &Evaluator, tree: &StoredTree, name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use std::env;
+    use tempfile::tempdir;
 
     use crate::store::hash::{HashAlgo, hash_bytes};
     use crate::store::nar::dump_string;
 
     #[test]
     fn a_staged_directory_goes_when_it_is_dropped() {
-        let d = env::temp_dir().join(format!("iets-inputs-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        fs::create_dir_all(&d).expect("temp dir");
-        let staged = Staged { dir: d.join("x") };
+        let d = tempdir().unwrap();
+        let staged = Staged {
+            dir: d.path().join("x"),
+        };
         fs::create_dir_all(staged.dir()).expect("staged");
         let at = staged.dir().to_path_buf();
         drop(staged);
         assert!(!at.exists());
-        let _ = fs::remove_dir_all(&d);
     }
 
     /// The name an entry gets is the store path the lock's `narHash` implies.
@@ -578,13 +576,6 @@ mod tests {
             store_path("source", &h).unwrap().to_full_string(),
             "/nix/store/z4wkdlk69gck09s64a8ghpn6h7bxhkyy-source"
         );
-    }
-
-    fn store_dir(name: &str) -> PathBuf {
-        let d = env::temp_dir().join(format!("iets-inputs-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        fs::create_dir_all(&d).unwrap();
-        d
     }
 
     /// A spooled tarball holding `files` under one top-level directory.
@@ -638,17 +629,17 @@ mod tests {
 
     #[test]
     fn a_stored_input_reads_back_and_a_wrong_hash_is_refused() {
-        let root = store_dir("put");
-        let name = put_in(&root, &[("a", b"alpha"), ("b", b"beta")]);
-        assert_eq!(read(&root, &name, "a").unwrap(), b"alpha");
-        assert_eq!(read(&root, &name, "b").unwrap(), b"beta");
+        let root = tempdir().unwrap();
+        let name = put_in(root.path(), &[("a", b"alpha"), ("b", b"beta")]);
+        assert_eq!(read(root.path(), &name, "a").unwrap(), b"alpha");
+        assert_eq!(read(root.path(), &name, "b").unwrap(), b"beta");
 
         let (tree, _) = tree_of(&[("a", b"alpha")]);
         let (_, other) = tree_of(&[("a", b"other")]);
-        let packs = Arc::new(pack::Packs::open(&root.join(pack::PACKS)));
+        let packs = Arc::new(pack::Packs::open(&root.path().join(pack::PACKS)));
         assert!(matches!(
             store(
-                &root,
+                root.path(),
                 packs,
                 "source",
                 IngestionMethod::Recursive,
@@ -657,19 +648,19 @@ mod tests {
             ),
             Err(Rejected::Mismatch(_))
         ));
-        fs::remove_dir_all(&root).unwrap();
+        fs::remove_dir_all(root.path()).unwrap();
     }
 
     #[test]
     fn two_inputs_share_their_common_files() {
-        let root = store_dir("dedup");
+        let root = tempdir().unwrap();
         let shared = vec![b's'; 5000];
-        let a = put_in(&root, &[("shared", &shared), ("only-a", b"a")]);
-        let b = put_in(&root, &[("shared", &shared), ("only-b", b"b")]);
+        let a = put_in(root.path(), &[("shared", &shared), ("only-a", b"a")]);
+        let b = put_in(root.path(), &[("shared", &shared), ("only-b", b"b")]);
         assert_ne!(a, b);
-        assert_eq!(objects(&root), 3);
-        assert_eq!(read(&root, &b, "shared").unwrap(), shared);
-        fs::remove_dir_all(&root).unwrap();
+        assert_eq!(objects(root.path()), 3);
+        assert_eq!(read(root.path(), &b, "shared").unwrap(), shared);
+        fs::remove_dir_all(root.path()).unwrap();
     }
 
     /// An input whose entry is gone loses the objects only it named; another
@@ -677,41 +668,41 @@ mod tests {
     /// before the collection still reads it.
     #[test]
     fn collect_keeps_what_an_entry_names() {
-        let root = store_dir("collect");
+        let root = tempdir().unwrap();
         let big = vec![b'x'; 50_000];
-        let a = put_in(&root, &[("shared", b"shared bytes"), ("big", &big)]);
-        let b = put_in(&root, &[("shared", b"shared bytes"), ("small", b"y")]);
-        let packs = Arc::new(pack::Packs::open(&root.join(pack::PACKS)));
-        let early = open(&root, packs, &a).unwrap();
+        let a = put_in(root.path(), &[("shared", b"shared bytes"), ("big", &big)]);
+        let b = put_in(root.path(), &[("shared", b"shared bytes"), ("small", b"y")]);
+        let packs = Arc::new(pack::Packs::open(&root.path().join(pack::PACKS)));
+        let early = open(root.path(), packs, &a).unwrap();
 
-        fs::remove_file(root.join(&a)).unwrap();
-        let c = collect(&root, false);
+        fs::remove_file(root.path().join(&a)).unwrap();
+        let c = collect(root.path(), false);
         assert!(c.rewritten + c.removed >= 1, "{c:?}");
-        assert_eq!(objects(&root), 2, "the shared file and the small one");
-        assert_eq!(read(&root, &b, "shared").unwrap(), b"shared bytes");
+        assert_eq!(objects(root.path()), 2, "the shared file and the small one");
+        assert_eq!(read(root.path(), &b, "shared").unwrap(), b"shared bytes");
         assert_eq!(
             early.read(b"big").unwrap(),
             big,
             "an open pack stays readable"
         );
-        fs::remove_dir_all(&root).unwrap();
+        fs::remove_dir_all(root.path()).unwrap();
     }
 
     /// A writer that relied on a pack a collection then removed stores those
     /// objects itself, from the spool it still holds.
     #[test]
     fn a_put_after_a_collection_brings_its_own_objects() {
-        let root = store_dir("race");
+        let root = tempdir().unwrap();
         let shared = vec![b'r'; 5000];
-        let a = put_in(&root, &[("shared", &shared)]);
-        let stale = Arc::new(pack::Packs::open(&root.join(pack::PACKS)));
-        fs::remove_file(root.join(&a)).unwrap();
-        collect(&root, false);
-        assert_eq!(objects(&root), 0);
+        let a = put_in(root.path(), &[("shared", &shared)]);
+        let stale = Arc::new(pack::Packs::open(&root.path().join(pack::PACKS)));
+        fs::remove_file(root.path().join(&a)).unwrap();
+        collect(root.path(), false);
+        assert_eq!(objects(root.path()), 0);
 
         let (tree, hash) = tree_of(&[("shared", &shared), ("new", b"n")]);
         let (b, _) = store(
-            &root,
+            root.path(),
             stale,
             "source",
             IngestionMethod::Recursive,
@@ -719,8 +710,8 @@ mod tests {
             tree,
         )
         .unwrap();
-        assert_eq!(read(&root, &b, "shared").unwrap(), shared);
-        fs::remove_dir_all(&root).unwrap();
+        assert_eq!(read(root.path(), &b, "shared").unwrap(), shared);
+        fs::remove_dir_all(root.path()).unwrap();
     }
 
     fn file_of(bytes: &[u8]) -> Tree {
@@ -734,16 +725,16 @@ mod tests {
     /// whole; any other hash is refused with the one the bytes have.
     #[test]
     fn a_flat_file_is_named_by_the_hash_of_its_bytes() {
-        let root = store_dir("flat");
+        let root = tempdir().unwrap();
         let hash = Hash::parse_any(
             "113a52l57f2jv9fh9igj2xh2mi0is40flxbkqi69wbh7nlybkcbm",
             Some(HashAlgo::Sha256),
         )
         .unwrap();
-        let packs = Arc::new(pack::Packs::open(&root.join(pack::PACKS)));
+        let packs = Arc::new(pack::Packs::open(&root.path().join(pack::PACKS)));
         let tree = file_of(b"hello fetchurl\n");
         let (name, stored) = store(
-            &root,
+            root.path(),
             packs.clone(),
             "hello.txt",
             IngestionMethod::Flat,
@@ -752,7 +743,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(name, "3ay25cl2lpykmx07i7m22qxz7zwzqmvy-hello.txt");
-        assert_eq!(read(&root, &name, "").unwrap(), b"hello fetchurl\n");
+        assert_eq!(read(root.path(), &name, "").unwrap(), b"hello fetchurl\n");
         assert_eq!(stored.stat(b"", true), Some(FileType::Regular));
         let mut nar = Hasher::new(HashAlgo::Sha256);
         dump_string(b"hello fetchurl\n", &mut nar).unwrap();
@@ -760,7 +751,7 @@ mod tests {
 
         let other = file_of(b"other\n");
         match store(
-            &root,
+            root.path(),
             packs,
             "hello.txt",
             IngestionMethod::Flat,
@@ -772,6 +763,6 @@ mod tests {
             }
             r => panic!("{:?}", r.map(|(n, _)| n)),
         }
-        fs::remove_dir_all(&root).unwrap();
+        fs::remove_dir_all(root.path()).unwrap();
     }
 }

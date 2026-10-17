@@ -197,15 +197,14 @@ pub fn locate(files: &[PathBuf], specified: &str, got: &str) -> Result<Fix, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
-    use std::{env, slice};
+    use std::slice;
 
     const FAKE: &str = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
     const GOT: &str = "sha256-GzabkpW8L2UH4rzBkFdv61RoJl8DQlICqZvY9Ql1MAU=";
 
-    fn tmp(name: &str, text: &str) -> PathBuf {
-        let d = env::temp_dir().join(format!("iets-fixhash-{}-{name}", std::process::id()));
-        fs::create_dir_all(&d).unwrap();
+    fn nix_file(d: &Path, text: &str) -> PathBuf {
         let f = d.join("default.nix");
         fs::write(&f, text).unwrap();
         f
@@ -213,7 +212,8 @@ mod tests {
 
     #[test]
     fn one_match_is_rewritten_in_its_own_spelling() {
-        let f = tmp("one", &format!("{{\n  hash = \"{FAKE}\";\n}}\n"));
+        let d = tempdir().unwrap();
+        let f = nix_file(d.path(), &format!("{{\n  hash = \"{FAKE}\";\n}}\n"));
         let fix = locate(slice::from_ref(&f), FAKE, GOT).unwrap();
         fix.write().unwrap();
         assert_eq!((fix.line, fix.new.as_str()), (2, GOT));
@@ -224,7 +224,8 @@ mod tests {
 
         let want = Hash::parse_any(FAKE, None).unwrap();
         let nix32 = want.to_string_with(HashFormat::Nix32, false);
-        let f = tmp("nix32", &format!("sha256 = \"{nix32}\";"));
+        let d = tempdir().unwrap();
+        let f = nix_file(d.path(), &format!("sha256 = \"{nix32}\";"));
         let fix = locate(slice::from_ref(&f), FAKE, GOT).unwrap();
         fix.write().unwrap();
         let got32 = Hash::parse_any(GOT, None)
@@ -235,7 +236,8 @@ mod tests {
 
     #[test]
     fn two_matches_are_left_alone() {
-        let f = tmp("two", &format!("a = \"{FAKE}\"; b = \"{FAKE}\";"));
+        let d = tempdir().unwrap();
+        let f = nix_file(d.path(), &format!("a = \"{FAKE}\"; b = \"{FAKE}\";"));
         let e = locate(slice::from_ref(&f), FAKE, GOT).unwrap_err();
         assert!(e.contains("in 2 places"), "{e}");
     }

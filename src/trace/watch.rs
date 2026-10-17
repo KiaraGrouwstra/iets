@@ -105,21 +105,22 @@ fn members(p: &Path, filtered: Option<&Filtered>, out: &mut Vec<(PathBuf, &'stat
 mod tests {
     use super::*;
     use crate::trace::Filtered;
-
-    use crate::sys;
+    use tempfile::tempdir_in;
 
     #[test]
     fn only_the_paths_an_mtime_can_speak_for() {
-        let d = sys::temp_dir().join(format!("iets-watch-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
+        let d = tempdir_in(sys::temp_dir()).unwrap();
         for sub in [".git", "src/keep", "src/drop"] {
-            fs::create_dir_all(d.join(sub)).unwrap();
+            fs::create_dir_all(d.path().join(sub)).unwrap();
         }
         for f in ["hook.sh", "src/keep/a", "src/drop/b"] {
-            fs::write(d.join(f), "").unwrap();
+            fs::write(d.path().join(f), "").unwrap();
         }
         // one component at a time, as `read_dir` names them
-        let at = |p: &str| p.split('/').fold(d.clone(), |acc, c| acc.join(c));
+        let at = |p: &str| {
+            p.split('/')
+                .fold(d.path().to_path_buf(), |acc, c| acc.join(c))
+        };
         let b = |p: &str| at(p).into_os_string().into_encoded_bytes();
         let file = |path: Vec<u8>| Obs::File {
             path,
@@ -176,7 +177,7 @@ mod tests {
         ];
         // store paths do not count against the bound
         obs.extend((0..=MAX).map(|i| file(format!("/nix/store/aaa-source/{i}").into_bytes())));
-        let cache = d.join("cache");
+        let cache = d.path().join("cache");
         let got = watched(&obs, &[Path::new("/nix/store"), &cache])
             .into_iter()
             .map(|w| w.path)
@@ -192,6 +193,5 @@ mod tests {
             "src/keep/a",
         ];
         assert_eq!(got, want.map(|p| at(p).to_str().unwrap().to_string()));
-        let _ = fs::remove_dir_all(&d);
     }
 }

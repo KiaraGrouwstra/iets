@@ -218,6 +218,7 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use std::{env, io, str};
+    use tempfile::tempdir;
 
     use crate::fetch::http;
 
@@ -259,13 +260,6 @@ mod tests {
         out
     }
 
-    fn work(name: &str) -> PathBuf {
-        let p = env::temp_dir().join(format!("iets-unpack-{}-{name}", std::process::id()));
-        let _ = fs::remove_dir_all(&p);
-        fs::create_dir_all(&p).unwrap();
-        p
-    }
-
     fn tar_gz(entries: &[(&str, tar::EntryType, u32, &[u8])]) -> Vec<u8> {
         let mut b = tar::Builder::new(Vec::new());
         for (name, kind, mode, data) in entries {
@@ -299,13 +293,13 @@ mod tests {
     /// One leading directory and nothing beside it: the hash is of its inside.
     #[test]
     fn strips_one_leading_component() {
-        let w = work("strip");
+        let w = tempdir().unwrap();
         let bytes = tar_gz(&[
             ("repo-abc/", DIR, 0o755, b""),
             ("repo-abc/flake.nix", REG, 0o644, b"{}\n"),
             ("repo-abc/sub/", DIR, 0o755, b""),
         ]);
-        let root = unpack(http::decompress(bytes).unwrap(), &w.join("x")).unwrap();
+        let root = unpack(http::decompress(bytes).unwrap(), &w.path().join("x")).unwrap();
         assert_eq!(root.file_name().unwrap(), "repo-abc");
         assert_eq!(
             tree(&root),
@@ -314,16 +308,16 @@ mod tests {
                 ("sub".to_string(), "dir".to_string()),
             ])
         );
-        fs::remove_dir_all(&w).unwrap();
+        fs::remove_dir_all(w.path()).unwrap();
     }
 
     /// Two top-level entries, or one that is a file: nothing is stripped.
     #[test]
     fn keeps_the_root_when_it_is_not_a_single_directory() {
-        let w = work("nostrip");
+        let w = tempdir().unwrap();
         let two = tar_gz(&[("a/", DIR, 0o755, b""), ("b", REG, 0o644, b"x")]);
-        let root = unpack(http::decompress(two).unwrap(), &w.join("two")).unwrap();
-        assert_eq!(root, w.join("two"));
+        let root = unpack(http::decompress(two).unwrap(), &w.path().join("two")).unwrap();
+        assert_eq!(root, w.path().join("two"));
         assert_eq!(
             tree(&root),
             BTreeMap::from([
@@ -333,9 +327,9 @@ mod tests {
         );
 
         let one = tar_gz(&[("only", REG, 0o644, b"x")]);
-        let root = unpack(http::decompress(one).unwrap(), &w.join("one")).unwrap();
-        assert_eq!(root, w.join("one"));
-        fs::remove_dir_all(&w).unwrap();
+        let root = unpack(http::decompress(one).unwrap(), &w.path().join("one")).unwrap();
+        assert_eq!(root, w.path().join("one"));
+        fs::remove_dir_all(w.path()).unwrap();
     }
 
     // TODO: Windows has no executable bit, so the fixture archives differently. Port with a fixture that has none.
@@ -343,7 +337,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn modes_symlinks_and_empty_dirs() {
-        let w = work("modes");
+        let w = tempdir().unwrap();
         let bytes = tar_gz(&[
             ("t/", DIR, 0o755, b""),
             ("t/run", REG, 0o755, b"#!/bin/sh\n"),
@@ -352,7 +346,7 @@ mod tests {
             ("t/link", tar::EntryType::Symlink, 0o777, b"plain"),
             ("t/same", tar::EntryType::Link, 0o644, b"t/plain"),
         ]);
-        let root = unpack(http::decompress(bytes).unwrap(), &w.join("x")).unwrap();
+        let root = unpack(http::decompress(bytes).unwrap(), &w.path().join("x")).unwrap();
         assert_eq!(
             tree(&root),
             BTreeMap::from([
@@ -363,7 +357,7 @@ mod tests {
                 ("same".to_string(), "p".to_string()),
             ])
         );
-        fs::remove_dir_all(&w).unwrap();
+        fs::remove_dir_all(w.path()).unwrap();
     }
 
     /// The last copy of a member wins, as the git sink's `id` ordering does.
@@ -371,28 +365,28 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_repeated_member_keeps_the_last_copy() {
-        let w = work("dup");
+        let w = tempdir().unwrap();
         let bytes = tar_gz(&[
             ("t/", DIR, 0o755, b""),
             ("t/f", REG, 0o644, b"first"),
             ("t/f", REG, 0o755, b"second"),
         ]);
-        let root = unpack(http::decompress(bytes).unwrap(), &w.join("x")).unwrap();
+        let root = unpack(http::decompress(bytes).unwrap(), &w.path().join("x")).unwrap();
         assert_eq!(
             tree(&root),
             BTreeMap::from([("f".to_string(), "xsecond".to_string())])
         );
-        fs::remove_dir_all(&w).unwrap();
+        fs::remove_dir_all(w.path()).unwrap();
     }
 
     /// A device, socket or fifo member is an error, as tarfile.cc:253 is.
     #[test]
     fn an_unsupported_member_type_is_an_error() {
-        let w = work("kinds");
+        let w = tempdir().unwrap();
         let bytes = tar_gz(&[("dev", tar::EntryType::Fifo, 0o644, b"")]);
-        let e = unpack(http::decompress(bytes).unwrap(), &w.join("y"));
+        let e = unpack(http::decompress(bytes).unwrap(), &w.path().join("y"));
         assert!(e.unwrap_err().to_string().contains("unsupported file type"));
-        fs::remove_dir_all(&w).unwrap();
+        fs::remove_dir_all(w.path()).unwrap();
     }
 
     /// An absolute member name loses its root and `..` is applied, as
@@ -414,11 +408,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn nar_hash_of_the_fixture() {
-        let w = work("golden");
+        let w = tempdir().unwrap();
         let bytes =
             fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/tarball/tree.tar.gz"))
                 .unwrap();
-        let root = unpack(http::decompress(bytes).unwrap(), &w.join("x")).unwrap();
+        let root = unpack(http::decompress(bytes).unwrap(), &w.path().join("x")).unwrap();
         let want = fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/tarball/narHash"),
         )
@@ -427,6 +421,6 @@ mod tests {
             crate::store::nar::nar_hash(&root).unwrap().to_sri(),
             want.trim()
         );
-        fs::remove_dir_all(&w).unwrap();
+        fs::remove_dir_all(w.path()).unwrap();
     }
 }

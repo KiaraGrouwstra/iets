@@ -5,8 +5,9 @@
 mod hermetic;
 
 use serde_json::Value;
-use std::path::{Path, PathBuf};
-use std::{env, fs, process};
+use std::fs;
+use std::path::Path;
+use tempfile::{TempDir, tempdir};
 
 struct Run {
     rc: i32,
@@ -14,13 +15,13 @@ struct Run {
     err: String,
 }
 
-fn demo(tag: &str) -> PathBuf {
-    let work = env::temp_dir().join(format!("iets-diff-{tag}-{}", process::id()));
-    fs::create_dir_all(work.join("data")).expect("create the work directory");
-    fs::write(work.join("data/one.txt"), "one\n").expect("write one.txt");
-    fs::write(work.join("data/two.txt"), "two\n").expect("write two.txt");
+fn demo() -> TempDir {
+    let work = tempdir().unwrap();
+    fs::create_dir_all(work.path().join("data")).expect("create the work directory");
+    fs::write(work.path().join("data/one.txt"), "one\n").expect("write one.txt");
+    fs::write(work.path().join("data/two.txt"), "two\n").expect("write two.txt");
     fs::write(
-        work.join("demo.nix"),
+        work.path().join("demo.nix"),
         r#"let
   dep = msg: derivation {
     name = "diffdep";
@@ -60,24 +61,18 @@ fn diff(work: &Path, args: &[&str]) -> Run {
     }
 }
 
-fn finish(work: &Path) {
-    let _ = fs::remove_dir_all(work);
-}
-
 #[test]
 fn equal_derivations_exit_0() {
-    let w = demo("equal");
-    let r = diff(&w, &["-A", "a", "-A", "c", "demo.nix"]);
-    finish(&w);
+    let w = demo();
+    let r = diff(w.path(), &["-A", "a", "-A", "c", "demo.nix"]);
     assert_eq!(r.rc, 0, "{}", r.out);
     assert!(r.out.contains("are the same derivation"), "{}", r.out);
 }
 
 #[test]
 fn the_text_names_the_env_the_source_and_the_input_drv() {
-    let w = demo("text");
-    let r = diff(&w, &["-A", "a", "-A", "b", "demo.nix"]);
-    finish(&w);
+    let w = demo();
+    let r = diff(w.path(), &["-A", "a", "-A", "b", "demo.nix"]);
     assert_eq!(r.rc, 1, "{}", r.out);
     for want in [
         "env GREETING:",
@@ -94,9 +89,8 @@ fn the_text_names_the_env_the_source_and_the_input_drv() {
 
 #[test]
 fn the_json_object_names_the_same_differences() {
-    let w = demo("json");
-    let r = diff(&w, &["-A", "a", "-A", "b", "--json", "demo.nix"]);
-    finish(&w);
+    let w = demo();
+    let r = diff(w.path(), &["-A", "a", "-A", "b", "--json", "demo.nix"]);
     assert_eq!(r.rc, 1, "{}", r.out);
     let j: Value = serde_json::from_str(&r.out).expect("JSON on stdout");
     assert_eq!(j["equal"], false);
@@ -137,47 +131,46 @@ fn the_json_object_names_the_same_differences() {
 
 #[test]
 fn depth_zero_stops_at_the_input_derivation() {
-    let w = demo("depth");
-    let r = diff(&w, &["-A", "a", "-A", "b", "--depth", "0", "demo.nix"]);
-    finish(&w);
+    let w = demo();
+    let r = diff(
+        w.path(),
+        &["-A", "a", "-A", "b", "--depth", "0", "demo.nix"],
+    );
     assert_eq!(r.rc, 1, "{}", r.out);
     assert!(r.out.contains("stopped: depth"), "{}", r.out);
 }
 
 #[test]
 fn one_side_is_a_usage_error() {
-    let w = demo("one-side");
-    let r = diff(&w, &["-A", "a", "demo.nix"]);
-    finish(&w);
+    let w = demo();
+    let r = diff(w.path(), &["-A", "a", "demo.nix"]);
     assert_eq!(r.rc, 2, "{}", r.err);
     assert!(r.err.contains("error:"), "{}", r.err);
 }
 
 #[test]
 fn an_unknown_flag_is_a_usage_error() {
-    let w = demo("flag");
-    let r = diff(&w, &["-A", "a", "-A", "b", "--bogus", "demo.nix"]);
-    finish(&w);
+    let w = demo();
+    let r = diff(w.path(), &["-A", "a", "-A", "b", "--bogus", "demo.nix"]);
     assert_eq!(r.rc, 2, "{}", r.err);
     assert!(r.err.contains("unknown flag"), "{}", r.err);
 }
 
 #[test]
 fn two_installables_are_one_evaluation_each() {
-    let w = demo("two");
-    fs::write(w.join("a.nix"), "(import ./demo.nix).a\n").expect("write a.nix");
-    fs::write(w.join("b.nix"), "(import ./demo.nix).b\n").expect("write b.nix");
-    let r = diff(&w, &["a.nix", "b.nix"]);
-    finish(&w);
+    let w = demo();
+    fs::write(w.path().join("a.nix"), "(import ./demo.nix).a\n").expect("write a.nix");
+    fs::write(w.path().join("b.nix"), "(import ./demo.nix).b\n").expect("write b.nix");
+    let r = diff(w.path(), &["a.nix", "b.nix"]);
     assert_eq!(r.rc, 1, "{}", r.out);
     assert!(r.out.contains("input drv changed: diffdep"), "{}", r.out);
 }
 
 #[test]
 fn an_env_name_that_repeats_the_derivation_name_is_left_out() {
-    let w = demo("name");
+    let w = demo();
     fs::write(
-        w.join("named.nix"),
+        w.path().join("named.nix"),
         r#"let mk = n: derivation {
     name = n;
     system = "x86_64-linux";
@@ -188,8 +181,7 @@ in { one = mk "ux-one"; two = mk "ux-two"; three = mk "ux-one" // { }; }
 "#,
     )
     .expect("write named.nix");
-    let r = diff(&w, &["-A", "one", "-A", "two", "named.nix"]);
-    finish(&w);
+    let r = diff(w.path(), &["-A", "one", "-A", "two", "named.nix"]);
     assert_eq!(r.rc, 1, "{}", r.out);
     assert!(r.out.contains("name: ux-one -> ux-two"), "{}", r.out);
     assert!(!r.out.contains("env name"), "{}", r.out);
@@ -197,11 +189,10 @@ in { one = mk "ux-one"; two = mk "ux-two"; three = mk "ux-one" // { }; }
 
 #[test]
 fn dash_f_is_the_positional_file() {
-    let w = demo("file");
-    let want = diff(&w, &["-A", "a", "-A", "b", "demo.nix"]);
+    let w = demo();
+    let want = diff(w.path(), &["-A", "a", "-A", "b", "demo.nix"]);
     for flag in ["-f", "--file"] {
-        let r = diff(&w, &["-A", "a", "-A", "b", flag, "demo.nix"]);
+        let r = diff(w.path(), &["-A", "a", "-A", "b", flag, "demo.nix"]);
         assert_eq!((r.rc, &r.out), (want.rc, &want.out), "{flag}");
     }
-    finish(&w);
 }

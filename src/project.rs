@@ -69,30 +69,23 @@ pub fn find(start: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
-    use std::{env, fs};
-
-    fn tmp(name: &str) -> PathBuf {
-        let d = env::temp_dir().join(format!("iets-project-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        fs::create_dir_all(&d).unwrap();
-        d
-    }
+    use std::fs;
 
     /// Each marker on its own makes a root, the SCM markers included: the
     /// test SCM's marker is in the list because detection knows it.
     #[test]
     fn each_marker_is_a_root() {
-        let d = tmp("markers");
-        let deep = d.join("a/b");
+        let d = tempdir().unwrap();
+        let deep = d.path().join("a/b");
         fs::create_dir_all(&deep).unwrap();
         assert_eq!(find(&deep), None);
-        for m in markers(&d) {
+        for m in markers(d.path()) {
             fs::write(&m, "").unwrap();
-            assert_eq!(find(&deep).as_deref(), Some(d.as_path()), "{m:?}");
+            assert_eq!(find(&deep).as_deref(), Some(d.path()), "{m:?}");
             fs::remove_file(&m).unwrap();
         }
-        fs::remove_dir_all(&d).unwrap();
     }
 
     /// A working tree beats a file marker below it: an `iets.toml` that
@@ -100,29 +93,27 @@ mod tests {
     /// evaluation there may read.
     #[test]
     fn a_working_tree_wins_over_a_file_marker_below_it() {
-        let d = tmp("tree");
-        let sub = d.join("sub");
+        let d = tempdir().unwrap();
+        let sub = d.path().join("sub");
         fs::create_dir_all(sub.join("deep")).unwrap();
         fs::write(sub.join("iets.toml"), "").unwrap();
         fs::write(sub.join("flake.nix"), "").unwrap();
         assert_eq!(find(&sub.join("deep")).as_deref(), Some(sub.as_path()));
-        let marker = scm::root_markers(&d).next().unwrap();
+        let marker = scm::root_markers(d.path()).next().unwrap();
         fs::write(&marker, "").unwrap();
-        assert_eq!(find(&sub.join("deep")).as_deref(), Some(d.as_path()));
-        fs::remove_dir_all(&d).unwrap();
+        assert_eq!(find(&sub.join("deep")).as_deref(), Some(d.path()));
     }
 
     /// Outside a working tree the nearest `flake.nix` wins, so a sub-flake
     /// of an unpacked tarball is its own project.
     #[test]
     fn the_nearest_flake_wins_without_a_working_tree() {
-        let d = tmp("nearest");
-        let inner = d.join("inner");
+        let d = tempdir().unwrap();
+        let inner = d.path().join("inner");
         fs::create_dir_all(inner.join("deep")).unwrap();
-        fs::write(d.join(FLAKE), "").unwrap();
+        fs::write(d.path().join(FLAKE), "").unwrap();
         fs::write(inner.join(FLAKE), "").unwrap();
         assert_eq!(find(&inner.join("deep")).as_deref(), Some(inner.as_path()));
-        fs::remove_dir_all(&d).unwrap();
     }
 
     /// An `iets.toml` claims no boundary: a deep one must not shrink the
@@ -131,15 +122,14 @@ mod tests {
     /// no working tree, and `[lint]` tables in subdirectories.
     #[test]
     fn a_config_file_never_shrinks_the_root() {
-        let d = tmp("config");
-        let sub = d.join("sub");
+        let d = tempdir().unwrap();
+        let sub = d.path().join("sub");
         fs::create_dir_all(sub.join("deep")).unwrap();
         fs::write(sub.join(CONFIG), "").unwrap();
         assert_eq!(find(&sub.join("deep")).as_deref(), Some(sub.as_path()));
-        fs::write(d.join(CONFIG), "").unwrap();
-        assert_eq!(find(&sub.join("deep")).as_deref(), Some(d.as_path()));
-        fs::write(d.join(FLAKE), "").unwrap();
-        assert_eq!(find(&sub.join("deep")).as_deref(), Some(d.as_path()));
-        fs::remove_dir_all(&d).unwrap();
+        fs::write(d.path().join(CONFIG), "").unwrap();
+        assert_eq!(find(&sub.join("deep")).as_deref(), Some(d.path()));
+        fs::write(d.path().join(FLAKE), "").unwrap();
+        assert_eq!(find(&sub.join("deep")).as_deref(), Some(d.path()));
     }
 }

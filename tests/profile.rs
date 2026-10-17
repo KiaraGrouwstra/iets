@@ -3,8 +3,9 @@
 
 mod hermetic;
 
+use std::fs;
 use std::process::Output;
-use std::{env, fs};
+use tempfile::tempdir;
 
 fn eval(expr: &str, env: &[(&str, &str)]) -> Output {
     let mut c = hermetic::iets();
@@ -18,12 +19,10 @@ fn eval(expr: &str, env: &[(&str, &str)]) -> Output {
     c.output().expect("run iets")
 }
 
-/// The folded lines of a `kind` profile of `expr`, and the run. `tag` keeps the
-/// files of concurrent tests apart.
-fn profile(tag: &str, kind: &str, expr: &str) -> (String, Output) {
-    let dir = env::temp_dir().join(format!("iets-profile-{tag}-{}", std::process::id()));
-    fs::create_dir_all(&dir).expect("temp dir");
-    let out = dir.join("p.folded");
+/// The folded lines of a `kind` profile of `expr`, and the run.
+fn profile(kind: &str, expr: &str) -> (String, Output) {
+    let dir = tempdir().unwrap();
+    let out = dir.path().join("p.folded");
     let o = eval(
         expr,
         &[
@@ -40,7 +39,6 @@ fn profile(tag: &str, kind: &str, expr: &str) -> (String, Output) {
         String::from_utf8_lossy(&o.stderr)
     );
     let folded = fs::read_to_string(&out).expect("the profile file");
-    let _ = fs::remove_dir_all(&dir);
     (folded, o)
 }
 
@@ -74,7 +72,7 @@ fn a_folded_line_is_a_stack_and_a_count() {
     // mutual recursion, so a sample sees a stack and not one frame
     let expr = "let f = n: if n == 0 then 0 else g (n - 1); g = n: f n; \
                 in builtins.foldl' (a: _: a + f 400) 0 (builtins.genList (x: x) 4000)";
-    let (folded, _) = profile("stack", "eval", expr);
+    let (folded, _) = profile("eval", expr);
     let mut deepest = 0;
     for line in folded.lines() {
         let (stack, count) = line.rsplit_once(' ').expect("a stack and a count");
@@ -93,7 +91,7 @@ fn a_folded_line_is_a_stack_and_a_count() {
 fn a_builtin_names_itself_in_a_frame() {
     let expr = "builtins.length (builtins.foldl' (a: _: a ++ builtins.genList (x: x) 50) [] \
                 (builtins.genList (x: x) 2000))";
-    let (folded, _) = profile("op", "eval", expr);
+    let (folded, _) = profile("eval", expr);
     assert!(folded.contains(":«"), "no builtin frame:\n{folded}");
 }
 
@@ -105,7 +103,7 @@ fn a_builtin_names_itself_in_a_frame() {
 fn an_allocation_profile_accounts_for_the_arena() {
     let expr = "builtins.length (builtins.foldl' (a: _: a ++ builtins.genList toString 200) [] \
                 (builtins.genList (x: x) 2000))";
-    let (folded, o) = profile("alloc", "alloc", expr);
+    let (folded, o) = profile("alloc", expr);
     let weighed: u64 = folded
         .lines()
         .map(|l| {

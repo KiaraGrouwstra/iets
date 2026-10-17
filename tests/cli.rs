@@ -4,8 +4,9 @@
 mod hermetic;
 
 use std::path::Path;
-use std::process::{self, Command, Output};
+use std::process::{Command, Output};
 use std::{env, fs};
+use tempfile::tempdir;
 
 fn iets(args: &[&str]) -> Output {
     hermetic::iets().args(args).output().expect("run iets")
@@ -129,12 +130,12 @@ fn io_errors_read_like_strerror() {
 
 #[test]
 fn completion_asks_the_binary_and_ignores_settings() {
-    let conf = env::temp_dir().join(format!("iets-complete-{}", process::id()));
-    fs::create_dir_all(conf.join("iets")).unwrap();
-    fs::write(conf.join("iets/iets.toml"), "this is = not [valid\n").unwrap();
+    let conf = tempdir().unwrap();
+    fs::create_dir_all(conf.path().join("iets")).unwrap();
+    fs::write(conf.path().join("iets/iets.toml"), "this is = not [valid\n").unwrap();
     let complete = |words: &[&str]| {
         let mut c = hermetic::iets();
-        c.env("XDG_CONFIG_HOME", &conf);
+        c.env("XDG_CONFIG_HOME", conf.path());
         run_complete(c, words)
     };
     let out = complete(&["bu"]);
@@ -152,13 +153,11 @@ fn completion_asks_the_binary_and_ignores_settings() {
     let o = iets(&["completion", "ksh"]);
     assert_eq!(o.status.code(), Some(2));
     assert!(text(&o.stderr).contains("unknown subcommand \'ksh\'"));
-    let _ = fs::remove_dir_all(&conf);
 }
 
 #[test]
 fn a_flake_fragment_completes_to_the_outputs_attribute_names() {
-    let d = env::temp_dir().join(format!("iets-complete-flake-{}", process::id()));
-    fs::create_dir_all(&d).unwrap();
+    let d = tempdir().unwrap();
     let sys = [
         "x86_64-linux",
         "aarch64-linux",
@@ -170,13 +169,13 @@ fn a_flake_fragment_completes_to_the_outputs_attribute_names() {
         .map(|s| format!("{s} = {{ hello = 1; help = 2; other = 3; \"a.b\" = 4; }}; "))
         .collect();
     fs::write(
-        d.join("flake.nix"),
+        d.path().join("flake.nix"),
         format!("{{ outputs = _: {{ packages = {{ {pkgs} }}; lib.answer = 42; }}; }}"),
     )
     .unwrap();
     let complete = |word: &str| {
         let mut c = hermetic::iets();
-        c.current_dir(&d);
+        c.current_dir(d.path());
         run_complete(c, &["eval", word])
     };
     // the package prefix is implied, and no space follows: not the end
@@ -194,21 +193,19 @@ fn a_flake_fragment_completes_to_the_outputs_attribute_names() {
     // nothing matches, or the flake is not there: no candidates, no noise
     assert_eq!(complete(".#zzz"), ":6\n");
     assert_eq!(complete("/nonexistent#a"), ":6\n");
-    let _ = fs::remove_dir_all(&d);
 }
 
 #[test]
 fn dash_a_completes_the_attribute_names_under_its_root() {
-    let d = env::temp_dir().join(format!("iets-complete-attr-{}", process::id()));
-    fs::create_dir_all(&d).unwrap();
+    let d = tempdir().unwrap();
     fs::write(
-        d.join("x.nix"),
+        d.path().join("x.nix"),
         "{ lib = { alpha = 1; beta = 2; }; pkgs = { hello = 1; }; }",
     )
     .unwrap();
     let complete = |words: &[&str]| {
         let mut c = hermetic::iets();
-        c.current_dir(&d);
+        c.current_dir(d.path());
         run_complete(c, words)
     };
     assert_eq!(
@@ -226,7 +223,6 @@ fn dash_a_completes_the_attribute_names_under_its_root() {
     // no root to select from, and a root that is not there: nothing, not files
     assert_eq!(complete(&["eval", "-A", "a"]), ":4\n");
     assert_eq!(complete(&["eval", "-f", "nope.nix", "-A", "a"]), ":6\n");
-    let _ = fs::remove_dir_all(&d);
 }
 
 /// A flake with checks `a` and `b` under `dir`.
@@ -270,22 +266,20 @@ const B: &str = ".#checks.x86_64-linux.b";
 /// The last installable used to replace the earlier ones.
 #[test]
 fn build_evaluates_every_installable() {
-    let d = env::temp_dir().join(format!("iets-build-several-{}", process::id()));
-    two_checks(&d);
-    let log = build_unreachable(&d, None, &[A, B]);
-    let _ = fs::remove_dir_all(&d);
+    let d = tempdir().unwrap();
+    two_checks(d.path());
+    let log = build_unreachable(d.path(), None, &[A, B]);
     assert!(log.contains("eval: 2 derivations"), "{log}");
 }
 
 /// Installables in another order are one job and one cache entry.
 #[test]
 fn build_cache_ignores_installable_order() {
-    let d = env::temp_dir().join(format!("iets-build-order-{}", process::id()));
-    two_checks(&d.join("flake"));
-    let cache = d.join("cache");
-    let first = build_unreachable(&d.join("flake"), Some(&cache), &[A, B]);
-    let second = build_unreachable(&d.join("flake"), Some(&cache), &[B, A]);
-    let _ = fs::remove_dir_all(&d);
+    let d = tempdir().unwrap();
+    two_checks(&d.path().join("flake"));
+    let cache = d.path().join("cache");
+    let first = build_unreachable(&d.path().join("flake"), Some(&cache), &[A, B]);
+    let second = build_unreachable(&d.path().join("flake"), Some(&cache), &[B, A]);
     assert!(first.contains("cache: wrote"), "{first}");
     assert!(second.contains("eval: skipped"), "{second}");
 }

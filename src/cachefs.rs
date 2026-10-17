@@ -712,17 +712,11 @@ pub fn stores(cache_dir: Option<&str>) -> Vec<(PathBuf, Shape)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     use crate::sys::fs::symlink;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
-
-    fn tmp(tag: &str) -> PathBuf {
-        let d = env::temp_dir().join(format!("iets-cachefs-{}-{tag}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        fs::create_dir_all(&d).expect("temp dir");
-        d
-    }
 
     fn back_date(path: &Path, secs: u64) {
         sysfs::set_times(path, (now_secs() - secs) as i64, true).expect("utimensat");
@@ -738,90 +732,99 @@ mod tests {
 
     #[test]
     fn version_mismatch_wipes_the_store() {
-        let d = tmp("version");
-        ready(&d);
-        fs::create_dir_all(d.join(OLD)).expect("entry");
-        fs::write(d.join(VERSION), b"99").expect("version");
-        ready(&d);
-        assert!(!d.join(OLD).exists());
-        assert_eq!(fs::read(d.join(VERSION)).expect("version"), FORMAT);
+        let d = tempdir().unwrap();
+        ready(d.path());
+        fs::create_dir_all(d.path().join(OLD)).expect("entry");
+        fs::write(d.path().join(VERSION), b"99").expect("version");
+        ready(d.path());
+        assert!(!d.path().join(OLD).exists());
+        assert_eq!(fs::read(d.path().join(VERSION)).expect("version"), FORMAT);
     }
 
     /// The input store of format 1 held a directory per entry; format 2 holds
     /// a file, so the version check is what removes the old ones.
     #[test]
     fn an_input_store_of_the_spool_layout_is_wiped() {
-        let d = tmp("inputs-v1");
-        let entry = d.join("z4wkdlk69gck09s64a8ghpn6h7bxhkyy-source");
+        let d = tempdir().unwrap();
+        let entry = d.path().join("z4wkdlk69gck09s64a8ghpn6h7bxhkyy-source");
         fs::create_dir_all(&entry).expect("entry");
         fs::write(entry.join("spool"), b"").expect("spool");
-        fs::write(d.join(VERSION), FORMAT).expect("version");
-        assert!(prepare(&d, Shape::StoreEntries, false));
+        fs::write(d.path().join(VERSION), FORMAT).expect("version");
+        assert!(prepare(d.path(), Shape::StoreEntries, false));
         assert!(!entry.exists());
-        assert_eq!(fs::read(d.join(VERSION)).expect("version"), b"2");
+        assert_eq!(fs::read(d.path().join(VERSION)).expect("version"), b"2");
     }
 
     #[test]
     fn garbled_stamp_wipes_the_store() {
-        let d = tmp("stamp");
-        ready(&d);
-        fs::create_dir_all(d.join(OLD)).expect("entry");
-        fs::write(d.join(STAMP), b"\x00not a time").expect("stamp");
-        ready(&d);
-        assert!(!d.join(OLD).exists());
+        let d = tempdir().unwrap();
+        ready(d.path());
+        fs::create_dir_all(d.path().join(OLD)).expect("entry");
+        fs::write(d.path().join(STAMP), b"\x00not a time").expect("stamp");
+        ready(d.path());
+        assert!(!d.path().join(OLD).exists());
     }
 
     #[test]
     fn a_store_without_a_version_file_is_wiped_once() {
-        let d = tmp("legacy");
-        fs::create_dir_all(d.join(OLD)).expect("entry");
-        ready(&d);
-        assert!(!d.join(OLD).exists());
-        ready(&d);
-        assert_eq!(fs::read(d.join(VERSION)).expect("version"), FORMAT);
+        let d = tempdir().unwrap();
+        fs::create_dir_all(d.path().join(OLD)).expect("entry");
+        ready(d.path());
+        assert!(!d.path().join(OLD).exists());
+        ready(d.path());
+        assert_eq!(fs::read(d.path().join(VERSION)).expect("version"), FORMAT);
     }
 
     #[test]
     fn a_directory_that_is_not_ours_is_refused_untouched() {
-        let d = tmp("foreign");
-        fs::write(d.join("unrelated.txt"), b"PRECIOUS").expect("file");
-        fs::create_dir_all(d.join("notes")).expect("dir");
-        assert!(!prepare(&d, Shape::Dirs, false), "a foreign directory");
+        let d = tempdir().unwrap();
+        fs::write(d.path().join("unrelated.txt"), b"PRECIOUS").expect("file");
+        fs::create_dir_all(d.path().join("notes")).expect("dir");
+        assert!(
+            !prepare(d.path(), Shape::Dirs, false),
+            "a foreign directory"
+        );
         assert_eq!(
-            fs::read(d.join("unrelated.txt")).expect("file"),
+            fs::read(d.path().join("unrelated.txt")).expect("file"),
             b"PRECIOUS"
         );
-        assert!(d.join("notes").exists());
-        assert!(!d.join(VERSION).exists(), "and nothing is written into it");
+        assert!(d.path().join("notes").exists());
+        assert!(
+            !d.path().join(VERSION).exists(),
+            "and nothing is written into it"
+        );
     }
 
     #[test]
     fn a_wipe_keeps_what_iets_did_not_create() {
-        let d = tmp("scoped");
-        ready(&d);
-        fs::create_dir_all(d.join(OLD)).expect("entry");
-        fs::write(d.join("unrelated.txt"), b"PRECIOUS").expect("file");
-        fs::write(d.join(VERSION), b"99").expect("version");
-        ready(&d);
-        assert!(!d.join(OLD).exists(), "the store starts empty");
+        let d = tempdir().unwrap();
+        ready(d.path());
+        fs::create_dir_all(d.path().join(OLD)).expect("entry");
+        fs::write(d.path().join("unrelated.txt"), b"PRECIOUS").expect("file");
+        fs::write(d.path().join(VERSION), b"99").expect("version");
+        ready(d.path());
+        assert!(!d.path().join(OLD).exists(), "the store starts empty");
         assert_eq!(
-            fs::read(d.join("unrelated.txt")).expect("file"),
+            fs::read(d.path().join("unrelated.txt")).expect("file"),
             b"PRECIOUS"
         );
     }
 
     #[test]
     fn a_wipe_of_the_ir_cache_walks_its_shards() {
-        let d = tmp("wipeshards");
-        assert!(prepare(&d, Shape::ShardedFiles, false));
-        fs::create_dir_all(d.join("ab")).expect("shard");
-        fs::write(d.join("ab").join(&OLD[2..]), b"ir").expect("entry");
-        fs::write(d.join("ab").join("keep.txt"), b"PRECIOUS").expect("file");
-        fs::write(d.join(VERSION), b"99").expect("version");
-        assert!(prepare(&d, Shape::ShardedFiles, false));
-        assert!(!d.join("ab").join(&OLD[2..]).exists(), "the entry goes");
+        let d = tempdir().unwrap();
+        assert!(prepare(d.path(), Shape::ShardedFiles, false));
+        fs::create_dir_all(d.path().join("ab")).expect("shard");
+        fs::write(d.path().join("ab").join(&OLD[2..]), b"ir").expect("entry");
+        fs::write(d.path().join("ab").join("keep.txt"), b"PRECIOUS").expect("file");
+        fs::write(d.path().join(VERSION), b"99").expect("version");
+        assert!(prepare(d.path(), Shape::ShardedFiles, false));
+        assert!(
+            !d.path().join("ab").join(&OLD[2..]).exists(),
+            "the entry goes"
+        );
         assert_eq!(
-            fs::read(d.join("ab").join("keep.txt")).expect("file"),
+            fs::read(d.path().join("ab").join("keep.txt")).expect("file"),
             b"PRECIOUS",
             "and a foreign file in the shard stays"
         );
@@ -829,26 +832,26 @@ mod tests {
 
     #[test]
     fn an_empty_directory_is_ours_to_take() {
-        let d = tmp("empty");
-        assert!(prepare(&d, Shape::Dirs, false));
-        assert_eq!(fs::read(d.join(VERSION)).expect("version"), FORMAT);
+        let d = tempdir().unwrap();
+        assert!(prepare(d.path(), Shape::Dirs, false));
+        assert_eq!(fs::read(d.path().join(VERSION)).expect("version"), FORMAT);
     }
 
     #[test]
     fn the_writer_lock_excludes_one_holder_at_a_time() {
-        let d = tmp("lock");
-        ready(&d);
-        let held = write_lock(&d).expect("first lock");
-        assert!(write_lock(&d).is_none());
+        let d = tempdir().unwrap();
+        ready(d.path());
+        let held = write_lock(d.path()).expect("first lock");
+        assert!(write_lock(d.path()).is_none());
         drop(held);
-        assert!(write_lock(&d).is_some());
+        assert!(write_lock(d.path()).is_some());
     }
 
     #[test]
     fn a_wait_lock_waits_for_its_holder() {
-        let d = tmp("waitlock");
-        ready(&d);
-        let f = d.join(".x.fetching.tmp");
+        let d = tempdir().unwrap();
+        ready(d.path());
+        let f = d.path().join(".x.fetching.tmp");
         let held = wait_lock(&f, || panic!("nobody holds it")).expect("first lock");
         let waited = Arc::new(AtomicBool::new(false));
         let (w, f2) = (waited.clone(), f.clone());
@@ -862,9 +865,9 @@ mod tests {
 
     #[test]
     fn a_touch_inside_the_interval_writes_nothing() {
-        let d = tmp("touch");
-        ready(&d);
-        let f = d.join("entry");
+        let d = tempdir().unwrap();
+        ready(d.path());
+        let f = d.path().join("entry");
         fs::write(&f, b"x").expect("entry");
         back_date(&f, 60);
         let before = fs::metadata(&f).expect("stat").modified().expect("mtime");
@@ -886,58 +889,71 @@ mod tests {
 
     #[test]
     fn sweep_drops_old_entries_and_keeps_young_ones() {
-        let d = tmp("sweep");
-        ready(&d);
+        let d = tempdir().unwrap();
+        ready(d.path());
         for (name, secs) in [(OLD, 40 * DAY), (YOUNG, 60)] {
-            let e = d.join(name);
+            let e = d.path().join(name);
             fs::create_dir_all(&e).expect("entry");
             fs::write(e.join("readset"), b"payload").expect("payload");
             back_date(&e, secs);
         }
-        fs::create_dir_all(d.join("ir")).expect("a sibling store");
-        let stale = d.join(".readset.1.0.tmp");
+        fs::create_dir_all(d.path().join("ir")).expect("a sibling store");
+        let stale = d.path().join(".readset.1.0.tmp");
         fs::write(&stale, b"litter").expect("litter");
         back_date(&stale, 3 * DAY);
 
         let ttl = Duration::from_secs(TTL_DAYS * DAY);
-        let dry = sweep(&d, Shape::Dirs, ttl, true);
+        let dry = sweep(d.path(), Shape::Dirs, ttl, true);
         assert_eq!((dry.scanned, dry.removed), (2, 1));
         assert!(
-            d.join(OLD).exists() && stale.exists(),
+            d.path().join(OLD).exists() && stale.exists(),
             "dry run writes nothing"
         );
 
-        let done = sweep(&d, Shape::Dirs, ttl, false);
+        let done = sweep(d.path(), Shape::Dirs, ttl, false);
         assert_eq!((done.scanned, done.removed, done.bytes), (2, 1, 7));
-        assert!(!d.join(OLD).exists());
-        assert!(d.join(YOUNG).exists());
-        assert!(d.join("ir").exists(), "only key-shaped names are swept");
+        assert!(!d.path().join(OLD).exists());
+        assert!(d.path().join(YOUNG).exists());
+        assert!(
+            d.path().join("ir").exists(),
+            "only key-shaped names are swept"
+        );
         assert!(!stale.exists(), "a killed writer's temporary file goes");
     }
 
     #[test]
     fn sweep_ages_a_root_by_its_link_not_by_what_it_names() {
-        let d = tmp("roots");
-        fs::create_dir_all(&d).expect("store");
+        let d = tempdir().unwrap();
         // the target carries the store's epoch, as a store path does
-        let target = d.join("target");
+        let target = d.path().join("target");
         fs::create_dir_all(&target).expect("target");
         back_date(&target, 400 * DAY);
         for (name, secs) in [(OLD, 40 * DAY), (YOUNG, 60)] {
-            let l = d.join(name);
+            let l = d.path().join(name);
             symlink(&target, &l).expect("link");
             back_date_link(&l, secs);
         }
-        let s = sweep(&d, Shape::Links, Duration::from_secs(TTL_DAYS * DAY), false);
+        let s = sweep(
+            d.path(),
+            Shape::Links,
+            Duration::from_secs(TTL_DAYS * DAY),
+            false,
+        );
         assert_eq!((s.scanned, s.removed, s.bytes), (2, 1, 0));
-        assert!(!d.join(OLD).exists(), "a root nobody used goes");
-        assert!(d.join(YOUNG).exists(), "a root in use stays");
+        assert!(!d.path().join(OLD).exists(), "a root nobody used goes");
+        assert!(d.path().join(YOUNG).exists(), "a root in use stays");
         assert!(target.exists(), "what a root named is not iets's to remove");
 
-        back_date_link(&d.join(YOUNG), 40 * DAY);
-        touch_link(&d.join(YOUNG));
+        back_date_link(&d.path().join(YOUNG), 40 * DAY);
+        touch_link(&d.path().join(YOUNG));
         assert_eq!(
-            sweep(&d, Shape::Links, Duration::from_secs(TTL_DAYS * DAY), false).removed,
+            sweep(
+                d.path(),
+                Shape::Links,
+                Duration::from_secs(TTL_DAYS * DAY),
+                false
+            )
+            .removed,
             0,
             "a touched link is young again"
         );
@@ -945,38 +961,38 @@ mod tests {
 
     #[test]
     fn sweep_walks_the_shards_of_the_ir_cache() {
-        let d = tmp("shards");
-        ready(&d);
-        fs::create_dir_all(d.join("ab")).expect("shard");
+        let d = tempdir().unwrap();
+        ready(d.path());
+        fs::create_dir_all(d.path().join("ab")).expect("shard");
         for (name, secs) in [(&OLD[2..], 40 * DAY), (&YOUNG[2..], 60)] {
-            let f = d.join("ab").join(name);
+            let f = d.path().join("ab").join(name);
             fs::write(&f, b"ir").expect("entry");
             back_date(&f, secs);
         }
         let s = sweep(
-            &d,
+            d.path(),
             Shape::ShardedFiles,
             Duration::from_secs(TTL_DAYS * DAY),
             false,
         );
         assert_eq!((s.scanned, s.removed), (2, 1));
-        assert!(d.join("ab").join(&YOUNG[2..]).exists());
+        assert!(d.path().join("ab").join(&YOUNG[2..]).exists());
     }
 
     #[test]
     fn a_sweep_runs_once_per_interval() {
-        let d = tmp("interval");
-        ready(&d);
-        maybe_sweep(&d, Shape::Dirs, false);
-        let stamp = fs::read(d.join(STAMP)).expect("stamp");
-        let old = d.join(OLD);
+        let d = tempdir().unwrap();
+        ready(d.path());
+        maybe_sweep(d.path(), Shape::Dirs, false);
+        let stamp = fs::read(d.path().join(STAMP)).expect("stamp");
+        let old = d.path().join(OLD);
         fs::create_dir_all(&old).expect("entry");
         back_date(&old, 40 * DAY);
-        maybe_sweep(&d, Shape::Dirs, false);
+        maybe_sweep(d.path(), Shape::Dirs, false);
         assert!(old.exists(), "the second sweep is inside the interval");
-        assert_eq!(fs::read(d.join(STAMP)).expect("stamp"), stamp);
-        fs::write(d.join(STAMP), (now_secs() - 2 * DAY).to_string()).expect("stamp");
-        maybe_sweep(&d, Shape::Dirs, false);
+        assert_eq!(fs::read(d.path().join(STAMP)).expect("stamp"), stamp);
+        fs::write(d.path().join(STAMP), (now_secs() - 2 * DAY).to_string()).expect("stamp");
+        maybe_sweep(d.path(), Shape::Dirs, false);
         assert!(!old.exists());
     }
 
@@ -984,33 +1000,39 @@ mod tests {
     /// clock catches up, and is no reason to wipe the store.
     #[test]
     fn a_stamp_in_the_future_is_due() {
-        let d = tmp("future");
-        ready(&d);
-        let old = d.join(OLD);
+        let d = tempdir().unwrap();
+        ready(d.path());
+        let old = d.path().join(OLD);
         fs::create_dir_all(&old).expect("entry");
         back_date(&old, 40 * DAY);
-        fs::write(d.join(STAMP), (now_secs() + 900 * DAY).to_string()).expect("stamp");
-        maybe_sweep(&d, Shape::Dirs, false);
+        fs::write(d.path().join(STAMP), (now_secs() + 900 * DAY).to_string()).expect("stamp");
+        maybe_sweep(d.path(), Shape::Dirs, false);
         assert!(!old.exists(), "the sweep ran");
-        assert!(d.join(VERSION).exists(), "and the store was not wiped");
+        assert!(
+            d.path().join(VERSION).exists(),
+            "and the store was not wiped"
+        );
     }
 
     /// A store whose lock cannot be opened at all is not a store whose lock a
     /// sibling holds, and the two read differently to whoever sees the line.
     #[test]
     fn a_lock_that_cannot_be_opened_is_not_a_busy_lock() {
-        let d = tmp("lockerr");
-        ready(&d);
-        let held = try_write_lock(&d).expect("open").expect("first lock");
+        let d = tempdir().unwrap();
+        ready(d.path());
+        let held = try_write_lock(d.path()).expect("open").expect("first lock");
         assert!(
-            try_write_lock(&d).expect("open").is_none(),
+            try_write_lock(d.path()).expect("open").is_none(),
             "a sibling holds it"
         );
         drop(held);
-        let lock = d.join(LOCK);
+        let lock = d.path().join(LOCK);
         let mut p = fs::metadata(&lock).unwrap().permissions();
         p.set_readonly(true);
         fs::set_permissions(&lock, p).expect("read-only");
-        assert!(try_write_lock(&d).is_err(), "a lock this run cannot write");
+        assert!(
+            try_write_lock(d.path()).is_err(),
+            "a lock this run cannot write"
+        );
     }
 }

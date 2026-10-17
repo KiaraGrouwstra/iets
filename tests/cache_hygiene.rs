@@ -7,9 +7,9 @@ mod hermetic;
 
 use std::collections::HashSet;
 use std::fs::{self, File};
-use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, SystemTime};
+use tempfile::tempdir;
 
 use std::{env, thread};
 
@@ -22,13 +22,6 @@ use iets::trace::{Obs, wire};
 
 const KEYS: usize = 4;
 const OBS: usize = 400;
-
-fn tmp(tag: &str) -> PathBuf {
-    let d = env::temp_dir().join(format!("iets-hygiene-{}-{tag}", std::process::id()));
-    let _ = fs::remove_dir_all(&d);
-    fs::create_dir_all(&d).expect("temp dir");
-    d
-}
 
 fn key_of(i: usize) -> String {
     format!("{i:064x}")
@@ -115,12 +108,12 @@ fn check(store: &Store, key: usize) -> Option<usize> {
 
 #[test]
 fn concurrent_readers_and_writers_never_see_a_torn_entry() {
-    let dir = tmp("concurrent");
-    let store = Store::locate(Some(dir.to_str().expect("utf-8 path"))).expect("store");
+    let dir = tempdir().unwrap();
+    let store = Store::locate(Some(dir.path().to_str().expect("utf-8 path"))).expect("store");
     assert!(cachefs::prepare(store.root(), cachefs::Shape::Dirs, false));
     thread::scope(|s| {
         for w in 0..8u8 {
-            let base = dir.clone();
+            let base = dir.path().to_path_buf();
             s.spawn(move || {
                 let store = Store::locate(Some(base.to_str().expect("utf-8 path"))).expect("store");
                 for round in 0..60 {
@@ -159,8 +152,8 @@ fn put_hit(c: &Cache, readset: &[u8]) {
 
 #[test]
 fn a_corrupt_entry_is_dropped_and_a_corrupt_store_is_wiped() {
-    let dir = tmp("corrupt");
-    let path = dir.to_str().expect("utf-8 path");
+    let dir = tempdir().unwrap();
+    let path = dir.path().to_str().expect("utf-8 path");
 
     let c = cached(path);
     put_hit(&c, &hit_entry());
@@ -203,8 +196,8 @@ fn a_corrupt_entry_is_dropped_and_a_corrupt_store_is_wiped() {
 /// changed byte and an entry copied to another key are both a miss.
 #[test]
 fn a_changed_byte_or_a_copied_entry_is_a_miss() {
-    let dir = tmp("integrity");
-    let path = dir.to_str().expect("utf-8 path");
+    let dir = tempdir().unwrap();
+    let path = dir.path().to_str().expect("utf-8 path");
     let c = cached(path);
     put_hit(&c, &hit_entry());
     assert!(c.lookup(), "the entry it wrote is a hit");
@@ -236,12 +229,12 @@ fn a_changed_byte_or_a_copied_entry_is_a_miss() {
 /// the allocation.
 #[test]
 fn an_entry_that_is_not_a_plain_file_is_refused() {
-    let dir = tmp("openrules");
-    let good = dir.join("good");
+    let dir = tempdir().unwrap();
+    let good = dir.path().join("good");
     fs::write(&good, b"x").expect("file");
     assert!(cachefs::open_entry(&good).is_some());
 
-    let huge = dir.join("huge");
+    let huge = dir.path().join("huge");
     let f = File::create(&huge).expect("file");
     f.set_len(cachefs::MAX_ENTRY + 1).expect("sparse length");
     drop(f);
@@ -249,7 +242,10 @@ fn an_entry_that_is_not_a_plain_file_is_refused() {
         cachefs::open_entry(&huge).is_none(),
         "a length no entry has"
     );
-    assert!(dir.join("huge").exists(), "and nothing was allocated");
+    assert!(
+        dir.path().join("huge").exists(),
+        "and nothing was allocated"
+    );
 }
 
 /// The child of `an_input_observation_marks_its_entry_as_used`: the input
@@ -287,10 +283,10 @@ fn input_touch_child() {
 /// observation is what keeps the sweep from removing an input that is in use.
 #[test]
 fn an_input_observation_marks_its_entry_as_used() {
-    let dir = tmp("inputtouch");
+    let dir = tempdir().unwrap();
     let out = Command::new(env::current_exe().expect("this test binary"))
         .args(["input_touch_child", "--exact", "--nocapture"])
-        .env("XDG_CACHE_HOME", &dir)
+        .env("XDG_CACHE_HOME", dir.path())
         .env("IETS_INPUT_NAME", "a3ck4d9zzk4l1r76rz5zv2wgycmpsy1y-source")
         .output()
         .expect("run the child");
@@ -303,8 +299,8 @@ fn an_input_observation_marks_its_entry_as_used() {
 
 #[test]
 fn cache_gc_removes_entries_past_the_ttl() {
-    let dir = tmp("gc");
-    let path = dir.to_str().expect("utf-8 path");
+    let dir = tempdir().unwrap();
+    let path = dir.path().to_str().expect("utf-8 path");
     let store = Store::locate(Some(path)).expect("store");
     assert!(cachefs::prepare(store.root(), cachefs::Shape::Dirs, false));
     for key in 0..3 {
@@ -317,13 +313,13 @@ fn cache_gc_removes_entries_past_the_ttl() {
     let ir_key = key_of(0);
     let ir_cache = iets::compile::cache::IrCache::locate(Some(path), false).expect("ir cache");
     ir_cache.write(&ir_key, b"ir entry");
-    let ir = dir.join("ir").join(&ir_key[..2]);
+    let ir = dir.path().join("ir").join(&ir_key[..2]);
     assert!(ir.join(&ir_key[2..]).exists(), "an IR entry to sweep");
 
     let gc = |args: &[&str]| {
         let out = hermetic::iets()
             .args(["cache", "gc", "--cache-dir"])
-            .arg(&dir)
+            .arg(dir.path())
             .args(args)
             .output()
             .expect("run iets cache gc");
@@ -375,20 +371,21 @@ mod unix_only {
     use iets::trace::store::{Part, Store};
     use rustix::fs::{CWD, Mode, mkfifoat};
 
-    use super::{ENTRY, hit_entry, key_of, tmp};
+    use super::{ENTRY, hit_entry, key_of};
+    use tempfile::tempdir;
 
     /// Only a plain file is an entry, whatever else sits where one should.
     #[test]
     fn a_link_or_a_fifo_is_not_an_entry() {
-        let dir = tmp("openrules-unix");
-        let good = dir.join("good");
+        let dir = tempdir().unwrap();
+        let good = dir.path().join("good");
         fs::write(&good, b"x").expect("file");
 
-        let link = dir.join("link");
+        let link = dir.path().join("link");
         symlink(&good, &link).expect("link");
         assert!(cachefs::open_entry(&link).is_none(), "a symbolic link");
 
-        let fifo = dir.join("fifo");
+        let fifo = dir.path().join("fifo");
         mkfifoat(CWD, &fifo, Mode::from_raw_mode(0o600)).expect("fifo");
         assert!(cachefs::open_entry(&fifo).is_none(), "a FIFO");
     }
@@ -397,8 +394,8 @@ mod unix_only {
     /// the user's whatever the umask, and an older cache root is tightened.
     #[test]
     fn a_cache_is_private_to_its_owner() {
-        let dir = tmp("modes");
-        let root = dir.join("trace");
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("trace");
         fs::create_dir_all(&root).expect("root");
         fs::set_permissions(&root, Permissions::from_mode(0o755)).expect("wide");
         assert!(cachefs::prepare(&root, cachefs::Shape::Dirs, false));
@@ -406,7 +403,7 @@ mod unix_only {
         assert_eq!(mode(&root), 0o700, "an older root is tightened");
         assert_eq!(mode(&root.join("version")), 0o600);
 
-        let store = Store::locate(Some(dir.to_str().expect("utf-8 path"))).expect("store");
+        let store = Store::locate(Some(dir.path().to_str().expect("utf-8 path"))).expect("store");
         assert!(
             store
                 .publish(&key_of(0), &[(Part::Readset, &hit_entry())])

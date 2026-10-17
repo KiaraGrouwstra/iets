@@ -922,9 +922,9 @@ fn relay(from: impl Read, act: &Activity, keep_errors: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     use std::time::Instant;
-    use std::{env, process};
 
     use IngestionMethod::{Flat, Recursive};
     use trace::Kind::{Directory, Regular};
@@ -1114,48 +1114,52 @@ mod tests {
 
     #[test]
     fn a_leftover_is_not_a_valid_path() {
-        let d = env::temp_dir().join(format!("iets-valid-{}", process::id()));
-        let _ = fs::remove_dir_all(&d);
-        fs::create_dir_all(d.join("tree")).unwrap();
-        fs::write(d.join("tree/f"), b"hi\n").unwrap();
-        fs::write(d.join("file"), b"hi\n").unwrap();
+        let d = tempdir().unwrap();
+        fs::create_dir_all(d.path().join("tree")).unwrap();
+        fs::write(d.path().join("tree/f"), b"hi\n").unwrap();
+        fs::write(d.path().join("file"), b"hi\n").unwrap();
         let mut h = Hasher::new(HashAlgo::Sha256);
         h.update(b"hi\n");
         let flat = h.finish();
-        let tree = nar::nar_hash(&d.join("tree")).unwrap();
+        let tree = nar::nar_hash(&d.path().join("tree")).unwrap();
         let no_store = || None;
 
         assert_eq!(
-            valid_kind(&d.join("file"), Flat, &flat, no_store),
+            valid_kind(&d.path().join("file"), Flat, &flat, no_store),
             Some(Regular)
         );
         assert_eq!(
-            valid_kind(&d.join("tree"), Recursive, &tree, no_store),
+            valid_kind(&d.path().join("tree"), Recursive, &tree, no_store),
             Some(Directory)
         );
-        assert_eq!(valid_kind(&d.join("tree"), Flat, &flat, no_store), None);
         assert_eq!(
-            valid_kind(&d.join("file"), Recursive, &tree, no_store),
+            valid_kind(&d.path().join("tree"), Flat, &flat, no_store),
             None
         );
         assert_eq!(
-            valid_kind(&d.join("file"), Flat, &flat, || Some(false)),
+            valid_kind(&d.path().join("file"), Recursive, &tree, no_store),
             None
         );
         assert_eq!(
-            valid_kind(&d.join("file"), Flat, &tree, || Some(true)),
+            valid_kind(&d.path().join("file"), Flat, &flat, || Some(false)),
+            None
+        );
+        assert_eq!(
+            valid_kind(&d.path().join("file"), Flat, &tree, || Some(true)),
             Some(Regular)
         );
         let asked = || -> Option<bool> { panic!("a missing path needs no store") };
-        assert_eq!(valid_kind(&d.join("gone"), Flat, &flat, asked), None);
+        assert_eq!(valid_kind(&d.path().join("gone"), Flat, &flat, asked), None);
 
-        fs::write(d.join("file"), b"half").unwrap();
-        fs::write(d.join("tree/f"), b"half").unwrap();
-        assert_eq!(valid_kind(&d.join("file"), Flat, &flat, no_store), None);
+        fs::write(d.path().join("file"), b"half").unwrap();
+        fs::write(d.path().join("tree/f"), b"half").unwrap();
         assert_eq!(
-            valid_kind(&d.join("tree"), Recursive, &tree, no_store),
+            valid_kind(&d.path().join("file"), Flat, &flat, no_store),
             None
         );
-        fs::remove_dir_all(&d).unwrap();
+        assert_eq!(
+            valid_kind(&d.path().join("tree"), Recursive, &tree, no_store),
+            None
+        );
     }
 }

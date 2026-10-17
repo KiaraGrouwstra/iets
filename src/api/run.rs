@@ -154,10 +154,11 @@ mod tests {
     use super::*;
     use crate::api::{self, EvalArgs, Input};
     use crate::sys;
+    use tempfile::tempdir;
 
     use std::path::Path;
     use std::time::{Duration, Instant};
-    use std::{env, fs, thread};
+    use std::{fs, thread};
 
     /// `n` files that each cost real parsing and compiling, and the
     /// expression that imports them all from one list. They are slow on
@@ -211,8 +212,8 @@ mod tests {
     /// helper fiber has every setting of the arguments.
     #[test]
     fn a_fiber_template_carries_the_configuration() {
-        let d = env::temp_dir().join(format!("iets-run-cfg-{}", std::process::id()));
-        let mut a = args("1", &d, 4);
+        let d = tempdir().unwrap();
+        let mut a = args("1", d.path(), 4);
         a.includes = vec![(b"nixpkgs".to_vec(), b"/nonexistent".to_vec())];
         a.lint_roots = vec!["/nonexistent".into()];
         let want = api::lint_config(&a).expect("the lints resolve");
@@ -221,7 +222,6 @@ mod tests {
         assert!(fiber.ir_cache().is_some(), "a fiber without the IR cache");
         assert_eq!(fiber.search_path()[0], a.includes[0]);
         assert_eq!(*fiber.lint_config(), want);
-        let _ = fs::remove_dir_all(&d);
     }
 
     /// Every fiber shares one IR cache handle, so a warm run reads one entry
@@ -230,14 +230,13 @@ mod tests {
     /// four-worker count collapses.
     #[test]
     fn helper_fibers_read_the_ir_cache() {
-        let d = env::temp_dir().join(format!("iets-run-ircache-{}", std::process::id()));
+        let d = tempdir().unwrap();
         let n = 400;
-        let expr = workload(&d.join("src"), n);
-        let cache = d.join("cache");
+        let expr = workload(&d.path().join("src"), n);
+        let cache = d.path().join("cache");
         hits(args(&expr, &cache, 1));
         let one = hits(args(&expr, &cache, 1));
         let four = hits(args(&expr, &cache, 4));
-        let _ = fs::remove_dir_all(&d);
         assert_eq!(one, n as u64, "a warm run reads one entry per file");
         assert_eq!(four, one, "helper fibers read the IR cache too");
     }
@@ -271,15 +270,14 @@ mod tests {
     /// counters alone the four-worker number is a fraction of it.
     #[test]
     fn the_counters_cover_the_helper_fibers() {
-        let d = env::temp_dir().join(format!("iets-run-counts-{}", std::process::id()));
+        let d = tempdir().unwrap();
         let n = 400;
         let expr = format!(
             "builtins.genList (i: derivation {{ name = \"c${{toString i}}\"; \
              system = \"x86_64-linux\"; builder = \"/bin/sh\"; }}) {n}"
         );
-        let one = derivations(args(&expr, &d, 1), n as u64);
-        let four = derivations(args(&expr, &d, 4), one);
-        let _ = fs::remove_dir_all(&d);
+        let one = derivations(args(&expr, d.path(), 1), n as u64);
+        let four = derivations(args(&expr, d.path(), 4), one);
         assert_eq!(one, n as u64, "one derivation per list element");
         assert_eq!(four, one, "the helper fibers' derivations are counted too");
     }
