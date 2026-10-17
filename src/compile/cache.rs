@@ -1274,10 +1274,11 @@ impl<'a> De<'a, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     use std::collections::HashSet;
+    use std::iter;
     use std::thread::Builder;
-    use std::{env, iter};
 
     use crate::print;
 
@@ -1423,14 +1424,14 @@ mod tests {
     /// one a miss before anything is decoded, and the entry is poisoned.
     #[test]
     fn a_changed_byte_of_a_stored_entry_is_a_miss() {
-        let dir = env::temp_dir().join(format!("iets-ir-fuzz-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        let cache = IrCache::locate(Some(dir.to_str().expect("utf-8 path")), false).expect("cache");
+        let dir = tempdir().unwrap();
+        let cache =
+            IrCache::locate(Some(dir.path().to_str().expect("utf-8 path")), false).expect("cache");
         let key = "ab".to_string() + &"c".repeat(60);
         let other = "ab".to_string() + &"d".repeat(60);
         let (_, bytes, _, _) = entry();
         cache.write(&key, &bytes);
-        let file = dir.join("ir").join("ab").join(&key[2..]);
+        let file = dir.path().join("ir").join("ab").join(&key[2..]);
         let stored = fs::read(&file).expect("stored entry");
         assert_eq!(cache.read(&key).as_deref(), Some(bytes.as_slice()));
 
@@ -1451,9 +1452,8 @@ mod tests {
         // the check covers the key, so an entry copied to another name is not
         // an entry there
         cache.write(&other, &stored);
-        fs::copy(&file, dir.join("ir").join("ab").join(&other[2..])).expect("copy");
+        fs::copy(&file, dir.path().join("ir").join("ab").join(&other[2..])).expect("copy");
         assert!(cache.read(&other).is_none(), "an entry under another key");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     /// The nesting cap is sized for the evaluator's stack, not a test

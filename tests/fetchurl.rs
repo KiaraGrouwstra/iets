@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::{env, fs};
+use tempfile::{TempDir, tempdir};
 
 const BYTES: &[u8] = b"hello fetchurl\n";
 const SHA256: &str = "113a52l57f2jv9fh9igj2xh2mi0is40flxbkqi69wbh7nlybkcbm";
@@ -36,12 +37,10 @@ fn text(b: &[u8]) -> String {
 }
 
 /// A scratch directory holding `hello.txt`, and a cache directory beside it.
-fn scratch(name: &str) -> (PathBuf, PathBuf) {
-    let d = env::temp_dir().join(format!("iets-fetchurl-{name}-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&d);
-    fs::create_dir_all(&d).unwrap();
-    fs::write(d.join("hello.txt"), BYTES).unwrap();
-    let cache = d.join("cache");
+fn scratch() -> (TempDir, PathBuf) {
+    let d = tempdir().unwrap();
+    fs::write(d.path().join("hello.txt"), BYTES).unwrap();
+    let cache = d.path().join("cache");
     (d, cache)
 }
 
@@ -54,8 +53,8 @@ fn eval(cache: &Path, offline: bool, flags: &[&str], expr: &str) -> Output {
 
 #[test]
 fn a_hashed_fetch_has_the_store_path_nix_gives() {
-    let (d, cache) = scratch("hashed");
-    let url = format!("{}/hello.txt", file_url(&d));
+    let (d, cache) = scratch();
+    let url = format!("{}/hello.txt", file_url(d.path()));
     let call = format!(r#"builtins.fetchurl {{ url = "{url}"; sha256 = "{SHA256}"; }}"#);
 
     let o = eval(&cache, false, &[], &call);
@@ -66,27 +65,26 @@ fn a_hashed_fetch_has_the_store_path_nix_gives() {
     );
 
     // the input store holds it now: no download, and the bytes read back
-    fs::remove_file(d.join("hello.txt")).unwrap();
+    fs::remove_file(d.path().join("hello.txt")).unwrap();
     let o = eval(&cache, true, &[], &format!("builtins.readFile ({call})"));
     assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
     assert_eq!(o.stdout, BYTES);
 
     let named =
         format!(r#"builtins.fetchurl {{ url = "{url}"; sha256 = "{SHA256}"; name = "x"; }}"#);
-    fs::write(d.join("hello.txt"), BYTES).unwrap();
+    fs::write(d.path().join("hello.txt"), BYTES).unwrap();
     let o = eval(&cache, false, &[], &named);
     assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
     assert_eq!(
         text(&o.stdout),
         "/nix/store/wi98cklj3li90ii41aggl9mf0w3nqp5y-x"
     );
-    fs::remove_dir_all(&d).unwrap();
 }
 
 #[test]
 fn a_wrong_hash_is_refused_with_the_hash_the_file_has() {
-    let (d, cache) = scratch("mismatch");
-    let url = format!("{}/hello.txt", file_url(&d));
+    let (d, cache) = scratch();
+    let url = format!("{}/hello.txt", file_url(d.path()));
     let zero = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
     let o = eval(
         &cache,
@@ -101,13 +99,12 @@ fn a_wrong_hash_is_refused_with_the_hash_the_file_has() {
          got:       sha256:{SHA256}\n"
     );
     assert!(text(&o.stderr).starts_with(&want), "{}", text(&o.stderr));
-    fs::remove_dir_all(&d).unwrap();
 }
 
 #[test]
 fn without_a_hash_no_evaluation_fetches_and_prefetch_gives_the_hash() {
-    let (d, cache) = scratch("unhashed");
-    let url = format!("{}/hello.txt", file_url(&d));
+    let (d, cache) = scratch();
+    let url = format!("{}/hello.txt", file_url(d.path()));
     let call = format!(r#"builtins.fetchurl "{url}""#);
     let want = format!(
         "error: 'fetchurl' requires a 'sha256' argument: run 'iets prefetch {url}' and pass the hash as 'sha256'"
@@ -132,5 +129,4 @@ fn without_a_hash_no_evaluation_fetches_and_prefetch_gives_the_hash() {
         text(&o.stdout),
         "/nix/store/3ay25cl2lpykmx07i7m22qxz7zwzqmvy-hello.txt"
     );
-    fs::remove_dir_all(&d).unwrap();
 }

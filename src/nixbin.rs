@@ -118,12 +118,13 @@ pub fn nix() -> PathBuf {
 mod tests {
     use super::*;
     use crate::sys::fs::{set_executable, symlink};
+    use tempfile::tempdir;
 
     #[test]
     fn farm_marker_is_found_through_two_hops() {
-        let tmp = env::temp_dir().join(format!("iets-nixbin-{}", std::process::id()));
-        let farm = tmp.join("farm");
-        let sys = tmp.join("sys");
+        let tmp = tempdir().unwrap();
+        let farm = tmp.path().join("farm");
+        let sys = tmp.path().join("sys");
         fs::create_dir_all(farm.join("bin")).unwrap();
         fs::create_dir_all(farm.join("share/iets")).unwrap();
         fs::create_dir_all(sys.join("bin")).unwrap();
@@ -135,16 +136,18 @@ mod tests {
             Some(PathBuf::from("/real/bin"))
         );
         assert_eq!(farm_real_dir(&sys.join("bin/other")), None);
-        fs::remove_dir_all(&tmp).unwrap();
     }
 
     /// Two builds of iets on `PATH`, both shadowing `nix`: neither is the
     /// real nix, whichever one is running.
     #[test]
     fn every_iets_build_is_skipped() {
-        let tmp = env::temp_dir().join(format!("iets-nixbin-two-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&tmp);
-        let (x, y, real) = (tmp.join("x"), tmp.join("y"), tmp.join("real"));
+        let tmp = tempdir().unwrap();
+        let (x, y, real) = (
+            tmp.path().join("x"),
+            tmp.path().join("y"),
+            tmp.path().join("real"),
+        );
         let exe = |p: &Path| {
             fs::write(p, "#!/bin/sh\nexit 0\n").unwrap();
             set_executable(p, true).unwrap();
@@ -173,7 +176,5 @@ mod tests {
         assert_eq!(candidate(&x, "nix", None), None);
         assert_eq!(candidate(&real, "nix", None), Some(nix));
         assert_eq!(candidate(&real, "nix-build", None), None);
-
-        fs::remove_dir_all(&tmp).unwrap();
     }
 }

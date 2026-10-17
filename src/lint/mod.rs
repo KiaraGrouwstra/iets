@@ -1111,23 +1111,22 @@ mod flake_cases;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
+    use tempfile::tempdir;
+
     /// A `/tmp/iets.toml` must not set a lint level for a project below it:
     /// the walk stops at the root, and the file is untrusted input.
     #[test]
     fn the_project_file_walk_stops_at_the_project_root() {
-        let d = env::temp_dir().join(format!("iets-walk-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        let deep = d.join("repo/sub");
+        let d = tempdir().unwrap();
+        let deep = d.path().join("repo/sub");
         fs::create_dir_all(&deep).unwrap();
-        fs::write(d.join("iets.toml"), "[lint]\n").unwrap();
-        assert_eq!(find_config_file(&deep), Some(d.join("iets.toml")));
-        fs::create_dir_all(d.join("repo/.git")).unwrap();
+        fs::write(d.path().join("iets.toml"), "[lint]\n").unwrap();
+        assert_eq!(find_config_file(&deep), Some(d.path().join("iets.toml")));
+        fs::create_dir_all(d.path().join("repo/.git")).unwrap();
         assert_eq!(find_config_file(&deep), None, "the walk left the project");
-        let own = d.join("repo/iets.toml");
+        let own = d.path().join("repo/iets.toml");
         fs::write(&own, "[lint]\n").unwrap();
         assert_eq!(find_config_file(&deep), Some(own));
-        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]

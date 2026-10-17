@@ -292,16 +292,9 @@ pub fn validate(obs: &mut [Obs], threads: usize) -> Result<Report, Mismatch> {
 mod tests {
     use super::super::{Trace, sha256};
     use super::*;
+    use tempfile::tempdir;
 
-    use std::env;
     use std::time::{self, Duration, SystemTime};
-
-    fn tmp(name: &str) -> PathBuf {
-        let d = env::temp_dir().join(format!("iets-trace-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        fs::create_dir_all(&d).unwrap();
-        d
-    }
 
     /// Windows lets only a handle opened for writing change the times.
     fn open_rw(p: &Path) -> fs::File {
@@ -310,8 +303,8 @@ mod tests {
 
     #[test]
     fn file_touch_refreshes_edit_misses() {
-        let d = tmp("file");
-        let f = d.join("a.nix");
+        let d = tempdir().unwrap();
+        let f = d.path().join("a.nix");
         fs::write(&f, b"1").unwrap();
         let m = fs::metadata(&f).unwrap();
         let p = f.as_os_str().as_bytes().to_vec();
@@ -329,28 +322,26 @@ mod tests {
 
         fs::write(&f, b"2").unwrap();
         assert!(validate(&mut obs, 2).is_err());
-        let _ = fs::remove_dir_all(&d);
     }
 
     /// `flake::read_traced` hands the recorder the bytes of a native path.
     /// The validator must read back what the recorder stored.
     #[test]
     fn what_a_native_path_records_validates() {
-        let d = tmp("native");
-        let f = d.join("flake.nix");
+        let d = tempdir().unwrap();
+        let f = d.path().join("flake.nix");
         fs::write(&f, b"1").unwrap();
         let meta = fs::metadata(&f).unwrap();
         let native = f.as_os_str().as_bytes();
         let trace = Trace::enabled();
         trace.file(native, &meta, b"1");
-        trace.stat_now(d.join("missing").as_os_str().as_bytes(), true);
+        trace.stat_now(d.path().join("missing").as_os_str().as_bytes(), true);
         let mut obs = trace.take();
         assert_eq!(obs.len(), 2);
         let r = validate(&mut obs, 2).unwrap();
         assert_eq!((r.rehashed, r.refreshed), (0, 0));
         fs::write(&f, b"22").unwrap();
         assert!(validate(&mut obs, 2).is_err());
-        let _ = fs::remove_dir_all(&d);
     }
 
     /// The evaluator records the resolved path from `sys::fs::canonicalize`.
@@ -358,8 +349,8 @@ mod tests {
     /// `\\?\` prefix.
     #[test]
     fn a_resolved_path_validates_as_the_same() {
-        let d = tmp("canon");
-        let f = d.join("a.nix");
+        let d = tempdir().unwrap();
+        let f = d.path().join("a.nix");
         fs::write(&f, b"1").unwrap();
         let resolved = sys::fs::canonicalize(&f).unwrap();
         let trace = Trace::enabled();
@@ -367,16 +358,15 @@ mod tests {
         let mut obs = trace.take();
         assert_eq!(obs.len(), 1);
         assert!(validate(&mut obs, 2).is_ok());
-        let _ = fs::remove_dir_all(&d);
     }
 
     /// `cp -p` over a file of the same length keeps the size, the mtime and
     /// the inode, and only `ctime` says the bytes are new.
     #[test]
     fn a_copy_in_place_that_keeps_the_stat_still_misses() {
-        let d = tmp("cp-p");
-        let f = d.join("a.nix");
-        let other = d.join("b.nix");
+        let d = tempdir().unwrap();
+        let f = d.path().join("a.nix");
+        let other = d.path().join("b.nix");
         fs::write(&f, b"AAAA").unwrap();
         fs::write(&other, b"BBBB").unwrap();
         let fixed = time::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
@@ -407,15 +397,14 @@ mod tests {
             "size, mtime and inode are the ones the entry holds"
         );
         assert!(validate(&mut obs, 1).is_err(), "and the content changed");
-        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]
     fn dir_stat_env_checks() {
-        let d = tmp("dir");
-        fs::write(d.join("x"), b"").unwrap();
-        let p = d.as_os_str().as_bytes().to_vec();
-        let mut entries = read_dir_kinds(&d).unwrap();
+        let d = tempdir().unwrap();
+        fs::write(d.path().join("x"), b"").unwrap();
+        let p = d.path().as_os_str().as_bytes().to_vec();
+        let mut entries = read_dir_kinds(d.path()).unwrap();
         let mut obs = vec![
             Obs::Dir {
                 path: p.clone(),
@@ -432,9 +421,8 @@ mod tests {
             },
         ];
         validate(&mut obs, 3).unwrap();
-        fs::write(d.join("y"), b"").unwrap();
+        fs::write(d.path().join("y"), b"").unwrap();
         assert!(validate(&mut obs, 3).is_err());
-        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]
@@ -469,15 +457,14 @@ mod dir_hash_tests {
     use crate::sys::OsStrExt;
     use crate::sys::fs::symlink;
     use std::ffi::OsStr;
-    use std::{env, fs};
+    use std::fs;
+    use tempfile::tempdir;
 
     /// The buffered hash must answer exactly what the allocating one does, or
     /// a cache entry written by one generation is unreadable by the next.
     #[test]
     fn dir_hash_agrees_with_dir_listing_hash() {
-        let d = env::temp_dir().join(format!("iets-dirhash-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        fs::create_dir_all(&d).unwrap();
+        let d = tempdir().unwrap();
         // names that exercise the ordering: sorts differ for case, digits,
         // length-prefix collisions and a non-UTF-8 byte
         for n in [
@@ -492,25 +479,23 @@ mod dir_hash_tests {
             "10",
             "2",
         ] {
-            fs::write(d.join(n), b"x").unwrap();
+            fs::write(d.path().join(n), b"x").unwrap();
         }
-        fs::create_dir(d.join("adir")).unwrap();
-        symlink("a", d.join("alink")).unwrap();
-        fs::write(d.join(OsStr::from_bytes(b"non\xffutf8")), b"x").unwrap();
+        fs::create_dir(d.path().join("adir")).unwrap();
+        symlink("a", d.path().join("alink")).unwrap();
+        fs::write(d.path().join(OsStr::from_bytes(b"non\xffutf8")), b"x").unwrap();
 
-        let mut entries = read_dir_kinds(&d).unwrap();
+        let mut entries = read_dir_kinds(d.path()).unwrap();
         let want = dir_listing_hash(&mut entries);
         let mut buf = DirBuf::default();
-        assert_eq!(dir_hash(&d, &mut buf).unwrap(), want);
+        assert_eq!(dir_hash(d.path(), &mut buf).unwrap(), want);
         // the buffer is reused, so a second directory must not see the first
-        let e = env::temp_dir().join(format!("iets-dirhash-e-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&e);
-        fs::create_dir_all(&e).unwrap();
-        let mut none = read_dir_kinds(&e).unwrap();
-        assert_eq!(dir_hash(&e, &mut buf).unwrap(), dir_listing_hash(&mut none));
-        assert_eq!(dir_hash(&d, &mut buf).unwrap(), want);
-
-        let _ = fs::remove_dir_all(&d);
-        let _ = fs::remove_dir_all(&e);
+        let e = tempdir().unwrap();
+        let mut none = read_dir_kinds(e.path()).unwrap();
+        assert_eq!(
+            dir_hash(e.path(), &mut buf).unwrap(),
+            dir_listing_hash(&mut none)
+        );
+        assert_eq!(dir_hash(d.path(), &mut buf).unwrap(), want);
     }
 }

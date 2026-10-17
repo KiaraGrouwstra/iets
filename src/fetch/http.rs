@@ -711,11 +711,13 @@ pub fn decompress(bytes: Vec<u8>) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
+    use std::fs;
     use std::net::{TcpListener, TcpStream};
+    use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc::{self, Receiver};
-    use std::{env, fs};
 
     #[test]
     fn urls_split() {
@@ -945,8 +947,8 @@ mod tests {
         assert!(e.to_string().contains("stalled"), "{e}");
     }
 
-    fn file_url(name: &str, bytes: &[u8]) -> String {
-        let f = env::temp_dir().join(format!("iets-http-{}-{name}", std::process::id()));
+    fn file_url(d: &Path, name: &str, bytes: &[u8]) -> String {
+        let f = d.join(name);
         fs::write(&f, bytes).unwrap();
         let internal = String::from_utf8(sys::path_to_internal(&f)).expect("utf-8 path");
         format!("file://{internal}")
@@ -956,7 +958,8 @@ mod tests {
     fn downloads_stop_at_the_size_limit() {
         let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
         gz.write_all(&vec![0; 4 << 20]).unwrap();
-        let url = file_url("size.gz", &gz.finish().unwrap());
+        let d = tempdir().unwrap();
+        let url = file_url(d.path(), "size.gz", &gz.finish().unwrap());
         let small = Limits {
             max_size: 1 << 20,
             ..limits()
@@ -1027,7 +1030,8 @@ mod tests {
     #[test]
     fn a_decompression_bomb_is_refused() {
         let bomb = zstd::encode_all(&vec![0u8; 64 << 20][..], 19).unwrap();
-        let url = file_url("bomb.zst", &bomb);
+        let d = tempdir().unwrap();
+        let url = file_url(d.path(), "bomb.zst", &bomb);
         let e = get_decompressed(&url, &[], limits(), &mut io::sink()).unwrap_err();
         assert!(e.to_string().contains("times its size"), "{e}");
     }

@@ -7,10 +7,11 @@
 // the executable bit. Check in golden archives made on Linux, then port.
 #![cfg(unix)]
 
+use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
-use std::{env, fs};
+use tempfile::tempdir;
 
 use iets::store::nar;
 
@@ -19,13 +20,6 @@ fn have_nix() -> bool {
         .arg("--version")
         .output()
         .is_ok_and(|o| o.status.success())
-}
-
-fn tmp(tag: &str) -> PathBuf {
-    let d = env::temp_dir().join(format!("iets-narparity-{}-{tag}", std::process::id()));
-    let _ = fs::remove_dir_all(&d);
-    fs::create_dir_all(&d).expect("temp dir");
-    d
 }
 
 /// A tree that exercises every case the format has: unicode and awkward names,
@@ -87,8 +81,8 @@ fn dump_is_byte_identical_to_nix_store_dump() {
         eprintln!("skipping: no nix on PATH");
         return;
     }
-    let dir = tmp("bytes");
-    let tree = dir.join("tree");
+    let dir = tempdir().unwrap();
+    let tree = dir.path().join("tree");
     fs::create_dir_all(&tree).unwrap();
     awkward_tree(&tree);
 
@@ -126,8 +120,8 @@ fn every_node_hashes_like_nix() {
         eprintln!("skipping: no nix on PATH");
         return;
     }
-    let dir = tmp("nodes");
-    let tree = dir.join("tree");
+    let dir = tempdir().unwrap();
+    let tree = dir.path().join("tree");
     fs::create_dir_all(&tree).unwrap();
     awkward_tree(&tree);
     let mut checked = 0;
@@ -157,13 +151,13 @@ fn restore_round_trips_the_awkward_tree() {
         eprintln!("skipping: no nix on PATH");
         return;
     }
-    let dir = tmp("restore");
-    let tree = dir.join("tree");
+    let dir = tempdir().unwrap();
+    let tree = dir.path().join("tree");
     fs::create_dir_all(&tree).unwrap();
     awkward_tree(&tree);
     let mut archive = Vec::new();
     nar::dump_path(&tree, &mut archive, &mut |_, _| true).unwrap();
-    let out = dir.join("restored");
+    let out = dir.path().join("restored");
     nar::restore_path(&mut archive.as_slice(), &out).unwrap();
     assert_eq!(nix_dump_sha256(&out), nix_dump_sha256(&tree));
 }
@@ -176,8 +170,8 @@ fn parse_length_matches_nix() {
         eprintln!("skipping: no nix on PATH");
         return;
     }
-    let dir = tmp("parse");
-    let tree = dir.join("tree");
+    let dir = tempdir().unwrap();
+    let tree = dir.path().join("tree");
     fs::create_dir_all(&tree).unwrap();
     awkward_tree(&tree);
     let mut archive = Vec::new();
@@ -219,7 +213,8 @@ fn reader_caps_names_and_targets() {
     nar.extend_from_slice(&(long.len() as u64).to_le_bytes());
     nar.extend_from_slice(&long);
     nar.resize(nar.len().next_multiple_of(8), 0);
-    let out = tmp("caps").join("dest");
+    let d = tempdir().unwrap();
+    let out = d.path().join("dest");
     let err = nar::restore_path(&mut nar.as_slice(), &out).unwrap_err();
     assert!(
         err.to_string().contains("too long"),

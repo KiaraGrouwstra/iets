@@ -6,6 +6,7 @@ mod hermetic;
 use std::path::Path;
 use std::process::Output;
 use std::{env, fs};
+use tempfile::tempdir;
 
 /// `groups` is `IETS_EVENTS`; the sink stays stderr, which is its default.
 fn eval(expr: &str, groups: Option<&str>) -> Output {
@@ -89,9 +90,8 @@ fn a_group_that_does_not_exist_is_a_settings_error() {
 
 #[test]
 fn the_sink_is_its_own_knob() {
-    let dir = env::temp_dir().join(format!("iets-events-{}", std::process::id()));
-    fs::create_dir_all(&dir).expect("temp dir");
-    let file = dir.join("e.jsonl");
+    let dir = tempdir().unwrap();
+    let file = dir.path().join("e.jsonl");
     let o = hermetic::iets()
         .args(["eval", "--no-cache", "--raw", "-E", TO_FILE])
         .env("IETS_EVENTS", "store")
@@ -106,5 +106,4 @@ fn the_sink_is_its_own_knob() {
     );
     let written = fs::read_to_string(&file).expect("the events file");
     assert!(written.contains(r#""event":"store-add""#), "{written}");
-    let _ = fs::remove_dir_all(&dir);
 }

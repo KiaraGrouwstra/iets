@@ -70,10 +70,10 @@ fn anchors(certs: Vec<CertificateDer<'static>>) -> Vec<TrustAnchor<'static>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     use std::fs;
     use std::path::PathBuf;
-    use std::process;
 
     const CA: &str = "-----BEGIN CERTIFICATE-----
 MIIBiTCCAS+gAwIBAgIUYqdid7LEUqasdYlUjSL8+CUCJwQwCgYIKoZIzj0EAwIw
@@ -88,9 +88,7 @@ xaH3eJUFJGliZRO5NA==
 -----END CERTIFICATE-----
 ";
 
-    fn tmp(name: &str, text: &str) -> PathBuf {
-        let d = env::temp_dir().join(format!("iets-roots-{}", process::id()));
-        fs::create_dir_all(&d).unwrap();
+    fn file(d: &Path, name: &str, text: &str) -> PathBuf {
         let f = d.join(name);
         fs::write(&f, text).unwrap();
         f
@@ -122,8 +120,9 @@ xaH3eJUFJGliZRO5NA==
 
     #[test]
     fn nix_ssl_cert_file_wins_over_ssl_cert_file_and_the_platform() {
-        let ca = tmp("ca.pem", CA);
-        let none = tmp("none.pem", "");
+        let d = tempdir().unwrap();
+        let ca = file(d.path(), "ca.pem", CA);
+        let none = file(d.path(), "none.pem", "");
         let got = choose(
             vars(&[("NIX_SSL_CERT_FILE", &ca), ("SSL_CERT_FILE", &none)]),
             Vec::new,
@@ -134,7 +133,8 @@ xaH3eJUFJGliZRO5NA==
 
     #[test]
     fn an_empty_nix_ssl_cert_file_hides_ssl_cert_file() {
-        let none = tmp("hidden.pem", "");
+        let d = tempdir().unwrap();
+        let none = file(d.path(), "hidden.pem", "");
         let got = choose(
             vars(&[
                 ("NIX_SSL_CERT_FILE", Path::new("")),
@@ -157,7 +157,8 @@ xaH3eJUFJGliZRO5NA==
                 .unwrap_err()
                 .starts_with("SSL_CERT_FILE=/nonexistent/ca.pem: ")
         );
-        let empty = tmp("empty.pem", "");
+        let d = tempdir().unwrap();
+        let empty = file(d.path(), "empty.pem", "");
         let got = choose(vars(&[("NIX_SSL_CERT_FILE", &empty)]), Vec::new);
         assert!(got.unwrap_err().ends_with("no CA certificate in the file"));
     }

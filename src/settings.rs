@@ -575,13 +575,12 @@ impl Env {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{env, process};
+    use tempfile::tempdir;
 
     const NO_ENV: Env = Env(|_| None);
 
-    fn scratch(name: &str) -> PathBuf {
-        let d = env::temp_dir().join(format!("iets-settings-{name}-{}", process::id()));
-        let _ = fs::remove_dir_all(&d);
+    /// Where the user file goes under `d`. Nothing writes it yet.
+    fn user_file(d: &Path) -> PathBuf {
         fs::create_dir_all(d.join("user")).unwrap();
         d.join("user/iets.toml")
     }
@@ -601,7 +600,8 @@ mod tests {
 
     #[test]
     fn each_source_wins_over_the_one_before() {
-        let file = scratch("order");
+        let d = tempdir().unwrap();
+        let file = user_file(d.path());
         fs::write(
             &file,
             "builder = \"user\"\nworkers = 2\nfiber-stack-mb = 2\ncache = false\nfetch-max-size = 1\n",
@@ -632,7 +632,8 @@ mod tests {
 
     #[test]
     fn source_map_adds_up_and_every_other_key_replaces() {
-        let file = scratch("lists");
+        let d = tempdir().unwrap();
+        let file = user_file(d.path());
         fs::write(&file, "source-map = [\"/nix/store/a=/a\"]\n").unwrap();
         let inline =
             Env(|n| (n == "IETS_CONFIG").then(|| "source-map = [\"/nix/store/b=/b\"]".into()));
@@ -661,7 +662,8 @@ mod tests {
     fn builder_reads_all_three_forms() {
         let one = |text: &str| {
             let env = Env(|n| (n == "IETS_CONFIG").then(|| "".into()));
-            let file = scratch("builders");
+            let d = tempdir().unwrap();
+            let file = user_file(d.path());
             fs::write(&file, text).unwrap();
             Settings::load_from(&file, &[], &env).unwrap().builder
         };
@@ -708,7 +710,8 @@ mod tests {
 
     #[test]
     fn a_missing_file_is_skipped_and_the_defaults_hold() {
-        let s = Settings::load_from(&scratch("none"), &[], &NO_ENV).unwrap();
+        let d = tempdir().unwrap();
+        let s = Settings::load_from(&user_file(d.path()), &[], &NO_ENV).unwrap();
         assert_eq!(s.builder, vec![]);
         assert_eq!(s.workers, None);
         assert_eq!(s.fetch_max_size, 16 << 30);
@@ -720,7 +723,8 @@ mod tests {
 
     #[test]
     fn the_user_file_turns_purity_off() {
-        let f = scratch("pure");
+        let d = tempdir().unwrap();
+        let f = user_file(d.path());
         fs::write(&f, "pure = false\n").unwrap();
         assert!(!Settings::load_from(&f, &[], &NO_ENV).unwrap().pure);
         let s = Settings::load_from(&f, &opts(&[("pure", "true")]), &NO_ENV).unwrap();

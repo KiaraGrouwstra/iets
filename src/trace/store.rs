@@ -240,21 +240,21 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
-    use std::env;
-
-    fn store(name: &str) -> Store {
-        let root = env::temp_dir().join(format!("iets-trace-store-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        assert!(cachefs::prepare(&root, cachefs::Shape::Dirs, false));
-        Store { root }
+    fn store(d: &Path) -> Store {
+        assert!(cachefs::prepare(d, cachefs::Shape::Dirs, false));
+        Store {
+            root: d.to_path_buf(),
+        }
     }
 
     const KEY: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     #[test]
     fn one_rename_publishes_every_part() {
-        let s = store("parts");
+        let d = tempdir().unwrap();
+        let s = store(d.path());
         assert!(matches!(s.open(KEY), Opened::None));
         assert!(
             s.publish(
@@ -273,12 +273,12 @@ mod tests {
         assert_eq!(e.part(Part::Result).as_deref(), Some(b"out".as_slice()));
         assert_eq!(e.part(Part::Drvs), None);
         assert_eq!(fs::read_dir(s.entry_dir(KEY)).expect("dir").count(), 1);
-        let _ = fs::remove_dir_all(s.root());
     }
 
     #[test]
     fn a_reader_of_one_generation_never_sees_the_next() {
-        let s = store("generation");
+        let d = tempdir().unwrap();
+        let s = store(d.path());
         assert!(
             s.publish(
                 KEY,
@@ -317,12 +317,12 @@ mod tests {
             next.part(Part::Result).as_deref(),
             Some(b"new out".as_slice())
         );
-        let _ = fs::remove_dir_all(s.root());
     }
 
     #[test]
     fn bytes_that_are_not_an_entry_are_bad_not_a_panic() {
-        let s = store("garbage");
+        let d = tempdir().unwrap();
+        let s = store(d.path());
         let dir = s.entry_dir(KEY);
         fs::create_dir_all(&dir).expect("dir");
         for bytes in [
@@ -338,6 +338,5 @@ mod tests {
             fs::write(dir.join(ENTRY), bytes).expect("entry");
             assert!(matches!(s.open(KEY), Opened::Bad), "{bytes:?}");
         }
-        let _ = fs::remove_dir_all(s.root());
     }
 }

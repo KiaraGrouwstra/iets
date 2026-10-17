@@ -514,15 +514,7 @@ pub fn collect(dir: &Path, live: &HashSet<Id>, dry_run: bool) -> io::Result<Coll
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use std::env;
-
-    fn tmp(name: &str) -> PathBuf {
-        let d = env::temp_dir().join(format!("iets-pack-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        fs::create_dir_all(&d).unwrap();
-        d
-    }
+    use tempfile::tempdir;
 
     fn objects() -> Vec<Vec<u8>> {
         vec![
@@ -535,8 +527,8 @@ mod tests {
 
     #[test]
     fn a_pack_reads_back_what_was_written() {
-        let d = tmp("roundtrip");
-        let mut w = PackWriter::new(&d).unwrap();
+        let d = tempdir().unwrap();
+        let mut w = PackWriter::new(d.path()).unwrap();
         for o in objects() {
             w.add(id_of(&o), &o).unwrap();
         }
@@ -549,21 +541,25 @@ mod tests {
         assert!(p.find(&id_of(b"absent")).is_none());
         let a = p.find(&id_of(&vec![b'a'; 4096])).unwrap();
         assert!(a.stored < a.raw, "a repetitive payload is compressed");
-        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]
     fn an_empty_writer_leaves_no_file() {
-        let d = tmp("empty");
-        assert!(PackWriter::new(&d).unwrap().finish().unwrap().is_none());
-        assert_eq!(std::fs::read_dir(&d).unwrap().count(), 0);
-        let _ = fs::remove_dir_all(&d);
+        let d = tempdir().unwrap();
+        assert!(
+            PackWriter::new(d.path())
+                .unwrap()
+                .finish()
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(std::fs::read_dir(d.path()).unwrap().count(), 0);
     }
 
     #[test]
     fn a_changed_index_byte_is_not_a_pack() {
-        let d = tmp("corrupt");
-        let mut w = PackWriter::new(&d).unwrap();
+        let d = tempdir().unwrap();
+        let mut w = PackWriter::new(d.path()).unwrap();
         for o in objects() {
             w.add(id_of(&o), &o).unwrap();
         }
@@ -581,42 +577,39 @@ mod tests {
         }
         fs::write(&path, &good[..good.len() - 1]).unwrap();
         assert!(Pack::open(&path).unwrap().is_none(), "a truncated pack");
-        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]
     fn a_set_finds_objects_across_packs_and_drops_a_broken_one() {
-        let d = tmp("set");
-        let mut a = PackWriter::new(&d).unwrap();
+        let d = tempdir().unwrap();
+        let mut a = PackWriter::new(d.path()).unwrap();
         a.add(id_of(b"one"), b"one").unwrap();
         a.finish().unwrap();
-        let mut b = PackWriter::new(&d).unwrap();
+        let mut b = PackWriter::new(d.path()).unwrap();
         b.add(id_of(b"two"), b"two").unwrap();
         b.finish().unwrap();
-        fs::write(d.join("junk.pack"), b"not a pack").unwrap();
-        let packs = Packs::open(&d);
+        fs::write(d.path().join("junk.pack"), b"not a pack").unwrap();
+        let packs = Packs::open(d.path());
         assert_eq!(packs.read(&id_of(b"one")).unwrap(), b"one");
         assert_eq!(packs.read(&id_of(b"two")).unwrap(), b"two");
-        assert!(!d.join("junk.pack").exists());
+        assert!(!d.path().join("junk.pack").exists());
         let err = packs.read(&id_of(b"three")).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
-        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]
     fn a_reader_sees_a_pack_written_after_it_listed() {
-        let d = tmp("refresh");
-        let packs = Packs::open(&d);
-        let mut w = PackWriter::new(&d).unwrap();
+        let d = tempdir().unwrap();
+        let packs = Packs::open(d.path());
+        let mut w = PackWriter::new(d.path()).unwrap();
         w.add(id_of(b"late"), b"late").unwrap();
         w.finish().unwrap();
         assert_eq!(packs.read(&id_of(b"late")).unwrap(), b"late");
-        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]
     fn collect_removes_dead_packs_and_compacts_mostly_dead_ones() {
-        let d = tmp("collect");
+        let d = tempdir().unwrap();
         let big = |c: u8| {
             vec![c; 10_000]
                 .into_iter()
@@ -624,21 +617,21 @@ mod tests {
                 .collect::<Vec<u8>>()
         };
         let (keep, drop, gone) = (b"keep, small".to_vec(), big(1), big(2));
-        let mut w = PackWriter::new(&d).unwrap();
+        let mut w = PackWriter::new(d.path()).unwrap();
         w.add(id_of(&keep), &keep).unwrap();
         w.add(id_of(&drop), &drop).unwrap();
         let mixed = w.finish().unwrap().unwrap();
-        let mut w = PackWriter::new(&d).unwrap();
+        let mut w = PackWriter::new(d.path()).unwrap();
         w.add(id_of(&gone), &gone).unwrap();
         let dead = w.finish().unwrap().unwrap();
         let live: HashSet<Id> = [id_of(&keep)].into();
 
-        let dry = collect(&d, &live, true).unwrap();
+        let dry = collect(d.path(), &live, true).unwrap();
         assert_eq!((dry.removed, dry.rewritten), (1, 1));
         assert!(mixed.exists() && dead.exists(), "a dry run changes nothing");
 
-        let reader = Packs::open(&d);
-        collect(&d, &live, false).unwrap();
+        let reader = Packs::open(d.path());
+        collect(d.path(), &live, false).unwrap();
         assert!(!dead.exists() && !mixed.exists());
         assert_eq!(
             reader.read(&id_of(&keep)).unwrap(),
@@ -652,6 +645,5 @@ mod tests {
             "from the new pack"
         );
         assert!(reader.read(&id_of(&drop)).is_err());
-        let _ = fs::remove_dir_all(&d);
     }
 }
