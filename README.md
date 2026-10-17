@@ -119,11 +119,11 @@ The full list is in
 
 ## Project status / LLM-ware
 
-As said in the disclaimer, this project is LLM-ware. Which is a very different
-way to write software than the traditional way. Traditionally we would write
-everything from the ground up. Designing the architecture. Picking the right
-libraries. When done rigorously, we would get a sense of if a project is done
-well or not.
+This project is LLM-ware. Which is a very different way to write software than the traditional way.
+Traditionally we would write everything from the ground up.
+Designing the architecture.
+Picking the right libraries.
+When done rigorously, we would get a sense of if a project is done well or not.
 
 With LLMs it's top-down.
 
