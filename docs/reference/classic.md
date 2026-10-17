@@ -6,14 +6,13 @@ implements. For everything else it runs the real Nix, so a real Nix has to be
 installed too. This page lists the flags each name handles and what makes it
 fall back. "Fallback rules" says how iets finds the real Nix.
 
-The classic package is a set of links named like the Nix tools, all pointing
-at `bin/iets`, and the name you call picks the command:
+The classic package is Nix with these five commands handled by iets:
 
 ```
-nix build .#classic     # bin/{nix-instantiate,nix-build,nix-eval-jobs,nix-shell,nix}
+nix build .#classic
 ```
 
-Without the links, use subcommands: `iets nix-instantiate ...`,
+Without the classic package, use subcommands: `iets nix-instantiate ...`,
 `iets nix-build ...`.
 
 ## Where the builds go
@@ -50,14 +49,16 @@ Set `iets.classic.enable` (default `false`) to also install the classic names:
 }
 ```
 
-The names go into `environment.systemPackages` with `lib.hiPrio`, so they
-win over Nix's own `bin/nix-instantiate` and the rest in every shell, login
-or not.
+This sets `nix.package` to the classic package, so `nixos-rebuild` uses the
+classic names too. Choose the Nix underneath with `iets.classic.nix` instead
+of `nix.package`:
 
-The real Nix is not in the system path, so the classic package writes the
-Nix it was built for into `share/iets/real-nix-bin`, and a fallback finds it
-there. The module builds the classic package for `config.nix.package`.
-`IETS_NIX_BIN_DIR` overrides it.
+```nix
+{ pkgs, ... }:
+{
+  iets.classic.nix = pkgs.nixVersions.latest;
+}
+```
 
 ## What each name handles
 
