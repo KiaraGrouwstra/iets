@@ -1,4 +1,4 @@
-# XDG_CONFIG_HOME for scripts/linttest.nu: the user file sets a level too.
+# XDG_CONFIG_HOME for src/lint/cases.rs: the user file sets a level too.
 workers = 2
 
 [lint]
