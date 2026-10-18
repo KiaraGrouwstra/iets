@@ -248,6 +248,18 @@ fn pure_eval_answers_like_nix() {
         r#"builtins.fetchTree { type = "gitlab"; owner = "o"; repo = "r"; host = "x.org"; }"#,
         "in pure evaluation mode, 'fetchTree' doesn't fetch unlocked input 'gitlab:o/r?host=x.org'",
     );
+    err(
+        r#"builtins.fetchTree { type = "file"; url = "https://example.com/x"; narHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; }"#,
+        "an unlocked 'file' input 'https://example.com/x' in pure evaluation mode is not supported",
+    );
+    err(
+        r#"builtins.fetchTree { type = "indirect"; id = "nixpkgs"; }"#,
+        "an unlocked 'indirect' input 'flake:nixpkgs' in pure evaluation mode is not supported",
+    );
+    err(
+        r#"builtins.fetchTree { type = "sourcehut"; owner = "o"; repo = "r"; }"#,
+        "an unlocked 'sourcehut' input in pure evaluation mode is not supported",
+    );
     for (src, want) in [
         (
             r#"builtins.fetchGit "/a b""#,

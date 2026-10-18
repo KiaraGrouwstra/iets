@@ -114,11 +114,18 @@ fn check_locked(attrs: &Attrs, pos: Pos) -> EvalResult<()> {
             pos,
             "in pure evaluation mode, 'fetchTree' doesn't fetch unlocked input '{s}'"
         ),
-        None => bail!(
-            ErrorKind::Unsupported,
-            pos,
-            "an unlocked '{ty}' input in pure evaluation mode is not supported"
-        ),
+        None => {
+            let detail = str_attr(attrs, "url")
+                .map(str::to_owned)
+                .or_else(|| flakeref::attrs_to_string(attrs.clone()).ok())
+                .map(|s| format!(" '{s}'"))
+                .unwrap_or_default();
+            bail!(
+                ErrorKind::Unsupported,
+                pos,
+                "an unlocked '{ty}' input{detail} in pure evaluation mode is not supported"
+            )
+        }
     }
 }
 
