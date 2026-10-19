@@ -24,6 +24,7 @@ use crate::lint::{LintId, coerce, purity};
 use crate::runtime::{self, Ctx, Value, Word, ctx_to_arena};
 use crate::source;
 use crate::store::hash::{Hash, HashAlgo, Hasher, hash_bytes};
+use crate::store::drv::Derivation;
 use crate::store::locate;
 use crate::store::nar::FileType;
 use crate::store::path::{
@@ -213,7 +214,10 @@ pub fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>
                     format!("path '{}' is not valid", lossy(sp))
                 }
             }
-            Ctx::Built { drv: d, .. } => {
+            Ctx::Built { drv: d, output } => {
+                if built_output_present(ev, d, output) {
+                    continue;
+                }
                 kind = ErrorKind::Unsupported;
                 format!(
                     "import from derivation is not supported: '{}' is not built",
@@ -229,6 +233,48 @@ pub fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>
         return Err(Box::new(e));
     }
     Ok(p)
+}
+
+/// Whether output `output` of `drv` is already in the store, so importing
+/// from it needs no build. Only outputs whose path is known without building
+/// count (input-addressed and fixed); a dynamic derivation, a floating or
+/// deferred output, or a `.drv` that cannot be read is not present. The
+/// check is the opaque path's: `stat_now` records the path's kind, so a
+/// tracing-cache hit re-checks it and a garbage-collected output is a miss.
+/// A present output joins the pure-eval allow list, as realiseContext's
+/// `allowPath` adds it in Nix.
+fn built_output_present(ev: &Evaluator, drv: &[u8], output: &[u8]) -> bool {
+    let (Ok(drv), Ok(output)) = (from_utf8(drv), from_utf8(output)) else {
+        return false;
+    };
+    if drv.contains('!') {
+        return false;
+    }
+    let Ok(path) = StorePath::parse(drv) else {
+        return false;
+    };
+    let aterm = match ev.drv.drvs.lock().get(&path).and_then(|i| i.aterm.clone()) {
+        Some(a) => a.to_vec(),
+        None => match std::fs::read(path.to_string()) {
+            Ok(a) => a,
+            Err(_) => return false,
+        },
+    };
+    let Ok(name) = Derivation::name_from_path(&path) else {
+        return false;
+    };
+    let Ok(parsed) = Derivation::parse(&aterm, name) else {
+        return false;
+    };
+    let Some(Ok(Some(out))) = parsed.outputs.get(output).map(|o| o.path(&parsed.name, output))
+    else {
+        return false;
+    };
+    if ev.trace().stat_now(out.to_string().as_bytes(), true) == Kind::Missing {
+        return false;
+    }
+    ev.known.add_on_disk(out);
+    true
 }
 
 /// What a realised path reads, the path its messages name (the file on
