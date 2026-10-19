@@ -24,10 +24,11 @@
         ietsRiscv64 = (scopeFor pkgs.pkgsCross.riscv64).iets;
         classic = final.callPackage ./nix/classic.nix { };
         devShell = final.callPackage
-          ({ lib, stdenv, mkShell, cargo, rustc, clippy, rustfmt, hyperfine, nix, perf, jq, nushell, direnv, ast-grep }:
+          ({ lib, stdenv, mkShell, cargo, rustc, rustPlatform, clippy, rustfmt, hyperfine, nix, perf, jq, nushell, direnv, ast-grep }:
             mkShell {
               packages = [ cargo rustc clippy rustfmt hyperfine nix jq nushell direnv ast-grep ]
                 ++ lib.optional stdenv.hostPlatform.isLinux perf;
+              RUST_SRC_PATH = "${rustPlatform.rustLibSrc}";
             })
           { };
         e2eCases = import ./nix/e2e-cases.nix { inherit pkgs; };
