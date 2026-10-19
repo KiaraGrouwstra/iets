@@ -17,6 +17,8 @@ use tempfile::TempDir;
 
 use crate::hermetic;
 
+pub mod classic;
+
 const CONF: &str = "\
 experimental-features = nix-command flakes
 substituters =
@@ -40,7 +42,7 @@ pub fn which(prog: &str) -> Option<PathBuf> {
 }
 
 /// `prog` on `PATH` in the real store, out of any profile.
-fn resolved(prog: &str) -> PathBuf {
+pub fn resolved(prog: &str) -> PathBuf {
     let p = which(prog).unwrap_or_else(|| panic!("{prog} on PATH"));
     fs::canonicalize(p).unwrap()
 }
@@ -65,7 +67,13 @@ impl Store {
         for sub in ["store", "var", "log", "conf"] {
             fs::create_dir(d.join(sub)).unwrap();
         }
-        let mut conf = CONF.to_string();
+        // an empty registry: nix develop's nixpkgs#bashInteractive fails fast
+        // instead of downloading the global one
+        fs::write(d.join("conf/registry.json"), r#"{"flakes":[],"version":2}"#).unwrap();
+        let mut conf = format!(
+            "{CONF}flake-registry = {}\n",
+            d.join("conf/registry.json").display()
+        );
         for (k, v) in opts {
             conf.push_str(&format!("{k} = {v}\n"));
         }
@@ -432,6 +440,20 @@ pub fn git(repo: &Path, args: &[&str]) -> Output {
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1");
     ok(&mut c)
+}
+
+/// A commit of what is staged in `repo`, made at `date`.
+pub fn git_commit(repo: &Path, msg: &str, date: &str) {
+    let mut c = Command::new("git");
+    c.args(["-c", "user.name=iets", "-c", "user.email=iets@example.com"])
+        .args(["-c", "commit.gpgsign=false", "-C"])
+        .arg(repo)
+        .args(["commit", "-q", "-m", msg])
+        .env("GIT_COMMITTER_DATE", date)
+        .env("GIT_AUTHOR_DATE", date)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1");
+    ok(&mut c);
 }
 
 /// The sorted names in `dir`, none if it is missing.
