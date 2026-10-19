@@ -1,4 +1,5 @@
-//! A store directory set by `NIX_STORE_DIR` reaches the evaluator, as in Nix.
+//! `NIX_STORE_DIR` and `NIX_STATE_DIR` move the store and the daemon socket,
+//! as in Nix.
 
 mod hermetic;
 
@@ -15,4 +16,27 @@ fn store_dir_follows_nix_store_dir() {
     let v: Vec<String> = serde_json::from_str(&out).expect("json list");
     assert_eq!(v[0], "/tmp/other/store");
     assert!(v[1].starts_with("/tmp/other/store/"), "{out}");
+}
+
+// Windows has no daemon socket
+#[cfg(unix)]
+#[test]
+fn daemon_socket_follows_nix_state_dir() {
+    let drv = r#"derivation { name = "x"; system = "x"; builder = "/b"; }"#;
+    for args in [
+        &["build", "--expr", drv][..],
+        &["nix-instantiate", "--expr", drv],
+    ] {
+        let o = hermetic::iets()
+            .env("NIX_STATE_DIR", "/nonexistent/state")
+            .args(args)
+            .output()
+            .expect("run iets");
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(!o.status.success(), "{args:?}");
+        assert!(
+            err.contains("/nonexistent/state/daemon-socket/socket"),
+            "{args:?}: {err}"
+        );
+    }
 }

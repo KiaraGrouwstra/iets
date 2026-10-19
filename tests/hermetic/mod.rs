@@ -14,6 +14,8 @@ pub fn iets() -> Command {
         // the expected paths are Nix's under /nix/store, on every platform
         .env("NIX_STORE_DIR", "/nix/store")
         .env_remove("NIX_STORE")
+        .env_remove("NIX_STATE_DIR")
+        .env_remove("NIX_DAEMON_SOCKET_PATH")
         .env_remove("NIX_CONFIG")
         .env_remove("NIX_CONFIG_HOME");
     c

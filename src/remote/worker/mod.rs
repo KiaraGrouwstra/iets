@@ -118,7 +118,20 @@ const RES_POST_BUILD_LOG_LINE: u64 = 107;
 /// error.hh:Verbosity.
 const LVL_VOMIT: u64 = 7;
 
-pub const DEFAULT_SOCKET: &str = "/nix/var/nix/daemon-socket/socket";
+const DEFAULT_SOCKET: &str = "/nix/var/nix/daemon-socket/socket";
+
+/// The local daemon's socket, as uds-remote-store.cc:getDaemonSocketPath
+/// picks it.
+pub fn default_socket() -> PathBuf {
+    let var = |n| env::var_os(n).filter(|v| !v.is_empty());
+    if let Some(p) = var("NIX_DAEMON_SOCKET_PATH") {
+        return PathBuf::from(p);
+    }
+    match var("NIX_STATE_DIR") {
+        Some(d) => Path::new(&d).join("daemon-socket/socket"),
+        None => PathBuf::from(DEFAULT_SOCKET),
+    }
+}
 
 /// Where the `--builder` or `--store` URL points.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -162,7 +175,7 @@ impl Transport {
     /// The store as Nix's getHumanReadableURI names it, for the log.
     pub fn uri(&self) -> String {
         match self {
-            Transport::Unix(p) if p == Path::new(DEFAULT_SOCKET) => "daemon".into(),
+            Transport::Unix(p) if *p == default_socket() => "daemon".into(),
             Transport::Unix(p) => format!("unix://{}", p.display()),
             Transport::Grpc(cfg) => cfg.url(),
             Transport::Ssh {
@@ -178,7 +191,7 @@ impl Transport {
         // `auto` is nix.conf's default `store`, which iets answers with the
         // daemon: it has no local store of its own (docs/reference/settings.md).
         if url == "daemon" || url == "unix://" || url == "auto" || url.is_empty() {
-            return Ok(Some(Transport::Unix(PathBuf::from(DEFAULT_SOCKET))));
+            return Ok(Some(Transport::Unix(default_socket())));
         }
         if let Some(path) = url.strip_prefix("unix://") {
             return Ok(Some(Transport::Unix(PathBuf::from(path))));
@@ -1232,7 +1245,7 @@ mod tests {
     fn transport_from_url() {
         assert_eq!(
             Transport::parse("daemon"),
-            Some(Transport::Unix(PathBuf::from(DEFAULT_SOCKET)))
+            Some(Transport::Unix(default_socket()))
         );
         assert_eq!(
             Transport::parse("unix:///tmp/s"),
