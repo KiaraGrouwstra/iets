@@ -9,12 +9,12 @@ use super::{
     Argv, Common, common_flag, eval_config, eval_input, fallback, local, settings, store_given,
 };
 use crate::api::build::{Dispatch, Root};
-use crate::api::{build as apibuild, installable};
+use crate::api::{EvalArgs, Input, build as apibuild, installable};
 use crate::build::render::Style;
 use crate::cli::render;
 use crate::cli::{self, Outcome, Run, abs_path, auto_args, cwd, devenv};
 use crate::error;
-use crate::eval::Evaluator;
+use crate::eval::{EvalConfig, Evaluator};
 use crate::provenance::{self, Provenance};
 use crate::remote::plan::Plan;
 use crate::remote::worker::{Options, Transport};
@@ -83,9 +83,30 @@ pub fn main(argv: &[String]) -> i32 {
         Err(reason) => fallback(NAME, argv, &reason),
     };
     let ec = eval_config(&b.c, &cfg);
+    let run_ = cached(&b, ec);
+    // a hit skips the evaluation and nothing else: the upload, the build, the
+    // links and the printing all happen in `realise`, as on a miss
+    if let Some((roots, plan)) = run_.hit_plan() {
+        let roots: Vec<Root> = (roots.into_iter())
+            .map(|(drv, output)| Root {
+                drv,
+                output: output.unwrap_or_else(|| "out".into()),
+            })
+            .collect();
+        return realise(&b, &transport, &options, &roots, plan, &Provenance::off());
+    }
     let b = Arc::new(b);
     let build = Arc::clone(&b);
-    match cli::run_reported(Run::on(ec), move |ev, _| run(ev, &build)) {
+    match cli::run_reported(run_, move |ev, cache| {
+        let built = run(ev, &build)?;
+        if let (Some(c), Built::Ready(roots, _, _)) = (cache, &built) {
+            let remembered: Vec<_> = (roots.iter())
+                .map(|r| (r.drv.clone(), Some(r.output.clone())))
+                .collect();
+            c.write_build(ev, &remembered);
+        }
+        Ok(built)
+    }) {
         Outcome::Failed(code) => code,
         Outcome::Unsupported(reason) => fallback(NAME, argv, &reason),
         Outcome::Ok(Built::Empty) => 0,
@@ -93,6 +114,29 @@ pub fn main(argv: &[String]) -> i32 {
             realise(&b, &transport, &options, &roots, *plan, &prov)
         }
     }
+}
+
+/// `ec` as one run of `nix-build` with its tracing cache, keyed apart from
+/// `nix build`'s: the input, every `-A` in order (the first as the attribute,
+/// the rest after it, so a repeated one is its own field), the `--arg`s, the
+/// search path and `pure-eval`. Only a run with one input is cached; more
+/// files run uncached, as before.
+fn cached(b: &Build, ec: EvalConfig) -> Run {
+    let [input] = b.c.files.as_slice() else {
+        return Run::on(ec);
+    };
+    let mut a = EvalArgs::new();
+    a.input = Some(if b.c.from_args {
+        Input::Expr(input.clone())
+    } else {
+        Input::File(input.clone())
+    });
+    let (first, more) = (b.c.flags.attrs.split_first()).expect("parse pushes an empty attr");
+    a.attr = Some(first.clone());
+    a.args = b.c.flags.args.clone();
+    a.includes = b.c.flags.includes.clone();
+    a.pure = b.c.flags.pure;
+    Run::on(ec).cached_more(&a, NAME, more)
 }
 
 fn run(ev: &mut Evaluator, b: &Build) -> error::Result<Built> {
