@@ -142,11 +142,13 @@ impl PushStr for Vec<u8> {
 /// Mirrors derivations.cc:printString: ATerm string with `\"`, `\\`, `\n`, `\r`, `\t` escapes.
 fn print_string(out: &mut Vec<u8>, s: &[u8]) {
     out.push(b'"');
+    escape_into(out, s);
+    out.push(b'"');
+}
+
+fn escape_into(out: &mut Vec<u8>, s: &[u8]) {
     let mut rest = s;
-    while let Some(i) = rest
-        .iter()
-        .position(|b| matches!(b, b'"' | b'\\' | b'\n' | b'\r' | b'\t'))
-    {
+    while let Some(i) = find_escape(rest) {
         out.extend_from_slice(&rest[..i]);
         out.push_str(match rest[i] {
             b'"' => "\\\"",
@@ -158,7 +160,32 @@ fn print_string(out: &mut Vec<u8>, s: &[u8]) {
         rest = &rest[i + 1..];
     }
     out.extend_from_slice(rest);
-    out.push(b'"');
+}
+
+fn find_escape(s: &[u8]) -> Option<usize> {
+    const LO: u64 = u64::from_ne_bytes([1; 8]);
+    const HI: u64 = LO << 7;
+    let escaped = |b: &u8| matches!(b, b'"' | b'\\' | b'\n' | b'\r' | b'\t');
+    let (chunks, rest) = s.as_chunks::<8>();
+    for (n, c) in chunks.iter().enumerate() {
+        let x = u64::from_ne_bytes(*c);
+        let q = x ^ (LO * b'"' as u64);
+        let b = x ^ (LO * b'\\' as u64);
+        // nonzero iff a byte is '"', '\\' or below 0x0e, the range of
+        // '\t', '\n' and '\r'
+        let any = ((x.wrapping_sub(LO * 0x0e) & !x)
+            | (q.wrapping_sub(LO) & !q)
+            | (b.wrapping_sub(LO) & !b))
+            & HI;
+        if any != 0
+            && let Some(i) = c.iter().position(escaped)
+        {
+            return Some(n * 8 + i);
+        }
+    }
+    rest.iter()
+        .position(escaped)
+        .map(|i| s.len() - rest.len() + i)
 }
 
 /// Mirrors derivations.cc:printUnquotedString (no escaping; for store paths and names).
@@ -274,8 +301,67 @@ impl Derivation {
         })
     }
 
+    /// `with_aterm` from the tail that `finalize_with_inputs` kept in `inputs`.
+    pub fn with_aterm_from<R>(
+        &self,
+        inputs: Option<&ModuloInputs>,
+        f: impl FnOnce(&[u8]) -> R,
+    ) -> Result<R, DrvError> {
+        with_aterm_buf(|s| {
+            self.unparse_from(s, false, None, inputs.and_then(|m| m.tail.as_ref()))?;
+            Ok(f(s))
+        })
+    }
+
     /// `unparse_with` appended to a buffer the caller keeps.
     pub fn unparse_into(
+        &self,
+        s: &mut Vec<u8>,
+        mask_outputs: bool,
+        actual_inputs: Option<&BTreeMap<String, InputNode>>,
+    ) -> Result<(), DrvError> {
+        self.unparse_head(s, mask_outputs, actual_inputs)?;
+        self.unparse_tail(s, mask_outputs, None)
+    }
+
+    fn unparse_from(
+        &self,
+        s: &mut Vec<u8>,
+        mask_outputs: bool,
+        actual_inputs: Option<&BTreeMap<String, InputNode>>,
+        tail: Option<&AtermTail>,
+    ) -> Result<(), DrvError> {
+        let Some(tail) = tail else {
+            return self.unparse_into(s, mask_outputs, actual_inputs);
+        };
+        self.unparse_head(s, mask_outputs, actual_inputs)?;
+        let mut at = 0;
+        for (off, k) in &tail.holes {
+            s.extend_from_slice(&tail.bytes[at..*off]);
+            if !mask_outputs {
+                let v = if k == STRUCTURED_ATTRS_ENV {
+                    self.structured_attrs.as_deref().map(str::as_bytes)
+                } else {
+                    self.env_get(k)
+                };
+                escape_into(s, v.unwrap_or_default());
+            }
+            at = *off;
+        }
+        s.extend_from_slice(&tail.bytes[at..]);
+        Ok(())
+    }
+
+    fn aterm_tail(&self) -> Result<AtermTail, DrvError> {
+        let mut tail = AtermTail {
+            bytes: Vec::with_capacity(4096),
+            holes: Vec::new(),
+        };
+        self.unparse_tail(&mut tail.bytes, true, Some(&mut tail.holes))?;
+        Ok(tail)
+    }
+
+    fn unparse_head(
         &self,
         s: &mut Vec<u8>,
         mask_outputs: bool,
@@ -352,7 +438,19 @@ impl Derivation {
                 }
             }
         }
-        s.push_str("],[");
+        s.push_str("],");
+        Ok(())
+    }
+
+    /// The ATerm from the input sources on. With `holes`, the env value of
+    /// each output is masked and its byte offset recorded there.
+    fn unparse_tail(
+        &self,
+        s: &mut Vec<u8>,
+        mask_outputs: bool,
+        mut holes: Option<&mut Vec<(usize, String)>>,
+    ) -> Result<(), DrvError> {
+        s.push(b'[');
         for (i, src) in self.input_srcs.iter().enumerate() {
             if i > 0 {
                 s.push(b',');
@@ -377,6 +475,9 @@ impl Derivation {
             print_string(s, k.as_bytes());
             s.push(b',');
             let masked = mask_outputs && self.outputs.contains_key(k);
+            if masked && let Some(h) = holes.as_deref_mut() {
+                h.push((s.len() + 1, k.to_string()));
+            }
             print_string(s, if masked { b"" } else { v });
             s.push(b')');
         };
@@ -789,6 +890,15 @@ pub fn hash_derivation_modulo(
 pub struct ModuloInputs {
     inputs2: BTreeMap<String, InputNode>,
     kind: DrvHashKind,
+    tail: Option<AtermTail>,
+}
+
+/// The end of the ATerm, escaped once for the three unparses of a new
+/// derivation. The env values of the outputs are left out at `holes`: the
+/// masked unparse blanks them and `finalize_with_inputs` then sets them.
+pub struct AtermTail {
+    bytes: Vec<u8>,
+    holes: Vec<(usize, String)>,
 }
 
 pub fn modulo_inputs(
@@ -836,7 +946,11 @@ pub fn modulo_inputs(
         }
     }
 
-    Ok(ModuloInputs { inputs2, kind })
+    Ok(ModuloInputs {
+        inputs2,
+        kind,
+        tail: None,
+    })
 }
 
 pub fn hash_derivation_modulo_with(
@@ -845,7 +959,7 @@ pub fn hash_derivation_modulo_with(
     inputs: &ModuloInputs,
 ) -> Result<Arc<DrvHash>, DrvError> {
     let hash = with_aterm_buf(|s| {
-        drv.unparse_into(s, mask_outputs, Some(&inputs.inputs2))?;
+        drv.unparse_from(s, mask_outputs, Some(&inputs.inputs2), inputs.tail.as_ref())?;
         Ok::<_, DrvError>(hash_bytes(HashAlgo::Sha256, s))
     })?;
     let hashes = drv.outputs.keys().map(|k| (k.clone(), hash)).collect();
@@ -899,6 +1013,7 @@ pub fn finalize_with_inputs(
 ) -> Result<Option<ModuloInputs>, DrvError> {
     let mut modulo: Option<ModuloInputs> = None;
     let mut hashes_modulo: Option<Arc<DrvHash>> = None;
+    let keys = drv.env.len();
     let names: Vec<String> = drv.outputs.keys().cloned().collect();
     for name in names {
         let out = drv.outputs[&name].clone();
@@ -908,7 +1023,8 @@ pub fn finalize_with_inputs(
                 let hm = match hashes_modulo {
                     Some(ref h) => h,
                     None => {
-                        let inputs = modulo_inputs(drv, cache, loader)?;
+                        let mut inputs = modulo_inputs(drv, cache, loader)?;
+                        inputs.tail = Some(drv.aterm_tail()?);
                         let h = hash_derivation_modulo_with(drv, true, &inputs)?;
                         modulo = Some(inputs);
                         hashes_modulo.insert(h)
@@ -954,6 +1070,12 @@ pub fn finalize_with_inputs(
             }
             Some(_) => {}
         }
+    }
+    // the tail has no hole for an env key added above
+    if drv.env.len() != keys
+        && let Some(m) = &mut modulo
+    {
+        m.tail = None;
     }
     Ok(modulo)
 }
@@ -1298,6 +1420,67 @@ mod tests {
             .string()
             .is_err()
         );
+    }
+
+    #[test]
+    fn find_escape_finds_the_first_byte_to_escape() {
+        let slow = |s: &[u8]| {
+            s.iter()
+                .position(|b| matches!(b, b'"' | b'\\' | b'\n' | b'\r' | b'\t'))
+        };
+        let mut s = [b'a'; 24];
+        for at in 0..s.len() {
+            for b in 0..=255u8 {
+                s[at] = b;
+                for end in at..=s.len() {
+                    assert_eq!(find_escape(&s[..end]), slow(&s[..end]), "{b:#x} at {at}");
+                }
+            }
+            s[at] = 0xff;
+        }
+        let mut x = 1u64;
+        for _ in 0..10_000 {
+            let s: Vec<u8> = (0..x % 40)
+                .map(|_| {
+                    x = x
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    (x >> 56) as u8
+                })
+                .collect();
+            assert_eq!(find_escape(&s), slow(&s));
+        }
+    }
+
+    #[test]
+    fn the_escaped_tail_unparses_as_a_full_unparse() {
+        let same = |drv: &Derivation, tail: &AtermTail| {
+            for mask in [false, true] {
+                let mut s = Vec::new();
+                drv.unparse_from(&mut s, mask, None, Some(tail)).unwrap();
+                assert_eq!(s, drv.unparse_with(mask, None).unwrap());
+            }
+        };
+        for (path, text) in fixtures() {
+            let drv = Derivation::parse(&text, Derivation::name_from_path(&path).unwrap()).unwrap();
+            same(&drv, &drv.aterm_tail().unwrap());
+        }
+        let mut drv = simple("tail", &["dev", "out"]);
+        drv.args = vec![b"-c".to_vec(), b"echo \"$out\"\n\t\\\r\xff".to_vec()];
+        drv.env_set("script", b"a\"b\\c\nd\re\tf\xfe$".to_vec());
+        let mut cache = DrvHashCache::new();
+        let m = finalize_with_inputs(&mut drv, &mut cache, &mut fixture_loader)
+            .unwrap()
+            .unwrap();
+        same(&drv, m.tail.as_ref().unwrap());
+        let mut drv = simple("tail", &["dev", "out"]);
+        drv.structured_attrs = Some("{\"out\":\"\\\"\\n\"}".into());
+        drv.env_remove("dev");
+        let m = finalize_with_inputs(&mut drv, &mut cache, &mut fixture_loader)
+            .unwrap()
+            .unwrap();
+        assert!(m.tail.is_none());
+        same(&drv, &drv.aterm_tail().unwrap());
     }
 
     #[test]
