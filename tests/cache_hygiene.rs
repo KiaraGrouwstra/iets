@@ -363,13 +363,14 @@ fn cache_gc_removes_entries_past_the_ttl() {
 // nothing there yet. Port these once the cache sets an ACL.
 #[cfg(unix)]
 mod unix_only {
+    use std::ffi::CString;
     use std::fs::{self, Permissions};
+    use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::{PermissionsExt, symlink};
     use std::path::Path;
 
     use iets::cachefs;
     use iets::trace::store::{Part, Store};
-    use rustix::fs::{CWD, Mode, mkfifoat};
 
     use super::{ENTRY, hit_entry, key_of};
     use tempfile::tempdir;
@@ -386,7 +387,9 @@ mod unix_only {
         assert!(cachefs::open_entry(&link).is_none(), "a symbolic link");
 
         let fifo = dir.path().join("fifo");
-        mkfifoat(CWD, &fifo, Mode::from_raw_mode(0o600)).expect("fifo");
+        // rustix has no mkfifoat on Apple
+        let c = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0, "fifo");
         assert!(cachefs::open_entry(&fifo).is_none(), "a FIFO");
     }
 

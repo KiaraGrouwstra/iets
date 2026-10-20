@@ -11,6 +11,8 @@ pub fn iets() -> Command {
         .env("NIX_USER_CONF_FILES", "")
         .env("XDG_CONFIG_HOME", "/nonexistent")
         .env("XDG_CONFIG_DIRS", "/nonexistent")
+        // the expected paths are Nix's under /nix/store, on every platform
+        .env("NIX_STORE_DIR", "/nix/store")
         .env_remove("NIX_CONFIG")
         .env_remove("NIX_CONFIG_HOME");
     c

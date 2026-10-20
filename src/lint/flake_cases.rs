@@ -32,14 +32,12 @@ fn copy_tree(from: &Path, to: &Path) {
 
 /// Some store path that exists, for the fixture that re-copies one.
 #[cfg(unix)]
-fn a_store_path() -> String {
+fn a_store_path() -> Option<String> {
     let path = env::var("PATH").unwrap_or_default();
-    path.split(':')
-        .find_map(|p| {
-            let rest = p.strip_prefix("/nix/store/")?;
-            Some(format!("/nix/store/{}", rest.split('/').next()?))
-        })
-        .expect("a /nix/store entry on PATH")
+    path.split(':').find_map(|p| {
+        let rest = p.strip_prefix("/nix/store/")?;
+        Some(format!("/nix/store/{}", rest.split('/').next()?))
+    })
 }
 
 fn internal(p: &Path) -> String {
@@ -191,10 +189,14 @@ fn a_directory_under_the_root_is_dir_copy_flake_not_path_copy() {
 #[cfg(unix)]
 #[test]
 fn a_pre_existing_store_path_is_still_a_recopy() {
+    let Some(store_path) = a_store_path() else {
+        eprintln!("skipped: no Nix store on this machine");
+        return;
+    };
     let s = scratch("store");
     let f = s.work.join("root/flake.nix");
     let text = fs::read_to_string(&f).unwrap();
-    fs::write(&f, text.replace("@STORE@", &a_store_path())).unwrap();
+    fs::write(&f, text.replace("@STORE@", &store_path)).unwrap();
     let r = eval(&s, "store", &[&["--impure"], &COPIES[..]].concat());
     assert!(
         r.stderr.contains("warning: [store-path-recopy]"),
