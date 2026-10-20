@@ -12,7 +12,7 @@ use iets::store::drv::{
     finalize_input_addressed_outputs, hash_derivation_modulo,
 };
 use iets::store::hash::{Hash, HashAlgo};
-use iets::store::path::{IngestionMethod, StorePath};
+use iets::store::path::{IngestionMethod, StorePath, pin_store_dir};
 
 fn fixture(file: &str) -> Vec<u8> {
     let p = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -67,6 +67,7 @@ const UPSTREAM: &[(&str, &str)] = &[
 
 #[test]
 fn upstream_drvs_roundtrip_byte_exact() {
+    pin_store_dir("/nix/store");
     for (file, name) in UPSTREAM {
         let text = fixture(file);
         let drv = Derivation::parse(&text, name).unwrap_or_else(|e| panic!("{file}: {e}"));
@@ -76,6 +77,7 @@ fn upstream_drvs_roundtrip_byte_exact() {
 
 #[test]
 fn upstream_bad_drvs_are_rejected() {
+    pin_store_dir("/nix/store");
     for file in ["bad-version.drv", "bad-old-version-dyn-deps.drv"] {
         assert!(Derivation::parse(&fixture(file), "x").is_err(), "{file}");
     }
@@ -86,6 +88,7 @@ fn upstream_bad_drvs_are_rejected() {
 /// byte for byte; printing what was parsed must still be a fixpoint.
 #[test]
 fn upstream_bench_drvs_parse_and_reprint_stably() {
+    pin_store_dir("/nix/store");
     for (file, name) in [("hello.drv", "hello-2.12.2"), ("firefox.drv", "firefox")] {
         let drv = Derivation::parse(&fixture(file), name).unwrap_or_else(|e| panic!("{file}: {e}"));
         let printed = drv.unparse().unwrap();
@@ -99,6 +102,7 @@ fn upstream_bench_drvs_parse_and_reprint_stably() {
 /// are recomputed from nothing and must be the ones Nix wrote.
 #[test]
 fn upstream_input_addressed_paths_recompute() {
+    pin_store_dir("/nix/store");
     for (file, name) in [
         (
             "ia-advanced-attributes-defaults.drv",
@@ -147,6 +151,7 @@ fn simple(name: &str, outputs: &[(&str, DerivationOutput)], env: &[(&str, &str)]
 /// output, with the paths Nix computed in `data/derivation/invariants/*-post.json`.
 #[test]
 fn upstream_invariants_fill_in_deferred() {
+    pin_store_dir("/nix/store");
     for (name, doc, env_out, want) in [
         (
             "filled-in-deferred-empty-env-var",
@@ -181,6 +186,7 @@ fn upstream_invariants_fill_in_deferred() {
 
 #[test]
 fn upstream_invariants_input_addressed_kept_or_rejected() {
+    pin_store_dir("/nix/store");
     let ok = "w4bk7hpyxzgy2gx8fsa8f952435pll3i-filled-in-already";
     let mut drv = simple(
         "filled-in-already",
@@ -227,6 +233,7 @@ fn ca_floating_dependency() -> Derivation {
 
 #[test]
 fn upstream_invariants_ca_floating_dependency() {
+    pin_store_dir("/nix/store");
     let dep = ca_floating_dependency();
     let dep_path = sp("lg4c4b8r9hlczwprl6kgnzfd9mc1xmkk-dependency.drv");
     assert_eq!(path_of(&dep), dep_path);
@@ -268,6 +275,7 @@ fn upstream_invariants_ca_floating_dependency() {
 /// harmonia-store-aterm/tests/roundtrip.rs.
 #[test]
 fn harmonia_cases_roundtrip() {
+    pin_store_dir("/nix/store");
     for (input, name) in [
         (
             r#"Derive([("out","","","")],[],[],"x86_64-linux","/bin/sh",[],[("name","test")])"#,
@@ -300,6 +308,7 @@ fn harmonia_cases_roundtrip() {
 /// starts with `/`; unparse prints the path the content address gives.
 #[test]
 fn fixed_output_path_is_recomputed_not_trusted() {
+    pin_store_dir("/nix/store");
     let wrong = r#"Derive([("out","/nix/store/00000000000000000000000000000000-linux-6.16.tar.xz","sha256","1a4be2fe6b5246aa4ac8987a8a4af34c42a8dd7d08b46ab48516bcc1befbcd83")],[],[],"builtin","builtin:fetchurl",[],[("name","linux-6.16.tar.xz")])"#;
     let drv = Derivation::parse(wrong.as_bytes(), "linux-6.16.tar.xz").unwrap();
     assert_eq!(
@@ -316,6 +325,7 @@ fn fixed_output_path_is_recomputed_not_trusted() {
 /// harmonia-store-aterm/src/parser.rs and raw_output.rs: errors, not panics.
 #[test]
 fn malformed_aterm_is_an_error() {
+    pin_store_dir("/nix/store");
     for input in [
         "",
         "Derive([",
@@ -369,6 +379,7 @@ fn on(deps: &[&StorePath]) -> Derivation {
 /// modulo hashes collide and hashDerivationModulo merges the output sets.
 #[test]
 fn fixed_output_inputs_hide_their_provenance() {
+    pin_store_dir("/nix/store");
     let (a, b) = (fetch("https://a.example/t"), fetch("https://b.example/t"));
     let (pa, pb) = (path_of(&a), path_of(&b));
     assert_ne!(pa, pb);
@@ -389,6 +400,7 @@ fn fixed_output_inputs_hide_their_provenance() {
 /// `deferred_input_defers`.
 #[test]
 fn floating_ca_defers_itself_and_downstream() {
+    pin_store_dir("/nix/store");
     let dep = ca_floating_dependency();
     let h = hash_derivation_modulo(&dep, false, &mut DrvHashCache::new(), &mut no_loader).unwrap();
     assert_eq!(h.kind, DrvHashKind::Deferred);
@@ -408,6 +420,7 @@ fn floating_ca_defers_itself_and_downstream() {
 /// harmonia-store-aterm/src/hash_modulo.rs `identity_and_masked_hashes_differ`.
 #[test]
 fn masked_and_unmasked_hashes_differ_once_filled() {
+    pin_store_dir("/nix/store");
     let mut drv = on(&[]);
     finalize_input_addressed_outputs(&mut drv, &mut DrvHashCache::new(), &mut no_loader).unwrap();
     let masked =
@@ -421,6 +434,7 @@ fn masked_and_unmasked_hashes_differ_once_filled() {
 /// string is bytes, and an arg or an env value that is not UTF-8 survives.
 #[test]
 fn bytes_that_are_not_utf8_roundtrip() {
+    pin_store_dir("/nix/store");
     let input: &[u8] = b"Derive([(\"out\",\"\",\"\",\"\")],[],[],\"x86_64-linux\",\"/bin/sh\",[\"a\xc8\x82b\"],[(\"name\",\"test\"),(\"v\",\"\xc8\")])";
     let drv = Derivation::parse(input, "test").unwrap();
     assert_eq!(drv.args, [b"a\xc8\x82b".to_vec()]);
