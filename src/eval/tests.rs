@@ -182,6 +182,22 @@ fn fetch_mercurial_names_a_way_out() {
     assert!(hint.contains("nix-instantiate"), "{hint}");
 }
 
+/// An evaluator with no frontend to name the system takes this build's own. It
+/// used to say `x86_64-linux` everywhere, so `print-dev-env` asked a darwin
+/// host's flake for `devShells.x86_64-linux.default` (docs/how-to/use-with-direnv.md).
+#[test]
+fn eval_config_defaults_to_the_system_this_build_is_for() {
+    let system = EvalConfig::new().build().current_system();
+    let os = if cfg!(target_os = "macos") {
+        "darwin"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else {
+        "linux"
+    };
+    assert!(system.ends_with(os), "{system} is not a {os} system");
+}
+
 fn eval_pure(src: &str) -> Result<String, String> {
     let mut ev = EvalConfig::new().pure(true).build();
     let v = ev
