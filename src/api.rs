@@ -53,6 +53,10 @@ pub struct EvalArgs {
     pub more: Vec<Input>,
     pub dump_drvs: Option<String>,
     pub attr: Option<String>,
+    /// Every `-A`/`--attr` in order. `attr` is the last of these (or
+    /// `None`), kept so single-attribute call sites stay simple. `iets eval`
+    /// walks the whole list so multiple `-A`s each print a value (#190).
+    pub attrs: Vec<String>,
     /// `--lint SELECTOR=LEVEL` in order; applied after `iets.toml` and
     /// `IETS_LINT` (docs/reference/lints.md).
     pub lints: Vec<(String, Level)>,
@@ -94,6 +98,7 @@ impl Default for EvalArgs {
             more: Vec::new(),
             dump_drvs: None,
             attr: None,
+            attrs: Vec::new(),
             lints: Vec::new(),
             lint_roots: Vec::new(),
             lint_scope: None,
@@ -489,7 +494,13 @@ pub fn setup_cache_more(
         k.field("include-prefix", &prefix);
         k.field("include-path", &path);
     }
-    k.field("attr", a.attr.as_deref().unwrap_or("").as_bytes());
+    if a.attrs.is_empty() {
+        k.field("attr", a.attr.as_deref().unwrap_or("").as_bytes());
+    } else {
+        for attr in &a.attrs {
+            k.field("attr", attr.as_bytes());
+        }
+    }
     k.flag("strict", a.strict);
     k.flag("json", a.json);
     k.flag("raw", a.raw);

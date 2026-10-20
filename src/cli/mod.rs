@@ -189,7 +189,8 @@ pub fn parse_eval_args(argv: &[String]) -> EvalArgs {
     }
     ignored::flush();
     (a.includes, a.args, a.pure) = (f.includes, f.args, f.pure);
-    a.attr = f.attrs.pop();
+    a.attrs = f.attrs;
+    a.attr = a.attrs.last().cloned();
     a
 }
 
