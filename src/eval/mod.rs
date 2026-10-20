@@ -34,8 +34,8 @@ use crate::runtime::arena::{self, STAT_NAMES, Stat};
 #[cfg(feature = "stats2")]
 use crate::runtime::census;
 use crate::runtime::{
-    Arena, AttrsObj, Cell, Ctx, EnvObj, Kind, LambdaObj, ListObj, MAX_LEAVES, StringObj, ThunkObj,
-    UNION_MIN, Value, ValueType, Word, ctx_to_arena, leaf_count,
+    Arena, AttrsObj, Cell, Ctx, EnvObj, Kind, ListObj, MAX_LEAVES, StringObj, ThunkObj, UNION_MIN,
+    Value, ValueType, Word, ctx_to_arena, leaf_count,
 };
 use crate::session::Session;
 use crate::source::LazyStore;
@@ -1540,9 +1540,22 @@ impl Evaluator {
         while !args.is_empty() {
             match cur.view() {
                 Value::Lambda(l) => {
+                    // `a: b: e` applied to two arguments binds `b` in the env
+                    // of `a` directly, without the closure in between
+                    let (mut fenv, mut lam) = (l.env, l.lam);
+                    while args.len() >= 2
+                        && let Ir::Lambda(inner) = lam.body
+                    {
+                        self.nr_function_calls += 1;
+                        let d = self.prof_enter(pos, lam.name);
+                        fenv = self.bind_lambda(fenv, lam, args[0], pos)?;
+                        self.prof.unwind(d);
+                        lam = inner;
+                        args = &args[1..];
+                    }
                     self.nr_function_calls += 1;
-                    let d = self.prof_enter(pos, l.lam.name);
-                    cur = self.call_lambda(l, args[0], pos)?;
+                    let d = self.prof_enter(pos, lam.name);
+                    cur = self.call_lambda(fenv, lam, args[0], pos)?;
                     self.prof.unwind(d);
                     args = &args[1..];
                 }
@@ -1611,9 +1624,32 @@ impl Evaluator {
         Ok(cur)
     }
 
-    fn call_lambda(&mut self, l: &'static LambdaObj, arg: Word, pos: Pos) -> EvalResult<Word> {
-        let lam: &'static LambdaIr = l.lam;
-        let env2 = self.arena.alloc_env(Some(l.env), lam.nslots());
+    fn call_lambda(
+        &mut self,
+        fenv: &'static EnvObj,
+        lam: &'static LambdaIr,
+        arg: Word,
+        pos: Pos,
+    ) -> EvalResult<Word> {
+        let env2 = self.bind_lambda(fenv, lam, arg, pos)?;
+        self.eval(env2, lam.body).map_err(|mut e| {
+            e.add_trace(lam.pos, format!("while calling {}", self.lambda_desc(lam)));
+            if !pos.is_none() {
+                e.add_trace(pos, "from call site");
+            }
+            e
+        })
+    }
+
+    /// The env of a call of `lam` closed over `fenv`, its parameters bound.
+    fn bind_lambda(
+        &mut self,
+        fenv: &'static EnvObj,
+        lam: &'static LambdaIr,
+        arg: Word,
+        pos: Pos,
+    ) -> EvalResult<&'static EnvObj> {
+        let env2 = self.arena.alloc_env(Some(fenv), lam.nslots());
         let slots = env2.slots_n(lam.nslots());
         match &lam.param {
             ParamIr::Ident => slots[0].set(arg),
@@ -1687,13 +1723,7 @@ impl Evaluator {
                 }
             }
         }
-        self.eval(env2, lam.body).map_err(|mut e| {
-            e.add_trace(lam.pos, format!("while calling {}", self.lambda_desc(lam)));
-            if !pos.is_none() {
-                e.add_trace(pos, "from call site");
-            }
-            e
-        })
+        Ok(env2)
     }
 
     fn lambda_name(&self, lam: &LambdaIr) -> String {
