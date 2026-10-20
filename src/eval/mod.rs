@@ -1555,7 +1555,14 @@ impl Evaluator {
                     }
                     self.nr_function_calls += 1;
                     let d = self.prof_enter(pos, lam.name);
-                    cur = self.call_lambda(fenv, lam, args[0], pos)?;
+                    let env2 = self.bind_lambda(fenv, lam, args[0], pos)?;
+                    cur = self.eval(env2, lam.body).map_err(|mut e| {
+                        e.add_trace(lam.pos, format!("while calling {}", self.lambda_desc(lam)));
+                        if !pos.is_none() {
+                            e.add_trace(pos, "from call site");
+                        }
+                        e
+                    })?;
                     self.prof.unwind(d);
                     args = &args[1..];
                 }
@@ -1622,23 +1629,6 @@ impl Evaluator {
             }
         }
         Ok(cur)
-    }
-
-    fn call_lambda(
-        &mut self,
-        fenv: &'static EnvObj,
-        lam: &'static LambdaIr,
-        arg: Word,
-        pos: Pos,
-    ) -> EvalResult<Word> {
-        let env2 = self.bind_lambda(fenv, lam, arg, pos)?;
-        self.eval(env2, lam.body).map_err(|mut e| {
-            e.add_trace(lam.pos, format!("while calling {}", self.lambda_desc(lam)));
-            if !pos.is_none() {
-                e.add_trace(pos, "from call site");
-            }
-            e
-        })
     }
 
     /// The env of a call of `lam` closed over `fenv`, its parameters bound.
