@@ -39,7 +39,7 @@ use crate::runtime::{
 };
 use crate::session::Session;
 use crate::source::LazyStore;
-use crate::store::path::{StorePath, strip_store_dir};
+use crate::store::path::{StorePath, store_dir, strip_store_dir};
 use crate::store::source::{SourceOrigin, SrcPath};
 use crate::syntax::ast::{Ast, FileId};
 use crate::syntax::symbol::{FxHashMap, Interner, Sym};
@@ -587,7 +587,7 @@ impl EvalConfig {
             try_level: 0,
             s,
             builtins_word: Word::NULL,
-            store_dir: b"/nix/store".to_vec(),
+            store_dir: store_dir().as_bytes().to_vec(),
             current_system: self.system,
             nr_thunks: 0,
             nr_function_calls: 0,

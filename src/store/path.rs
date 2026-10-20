@@ -84,6 +84,16 @@ pub fn strip_store_dir(p: &[u8]) -> Option<&[u8]> {
         .find_map(|dir| p.strip_prefix(dir)?.strip_prefix(b"/"))
 }
 
+/// The first store directory prefix in `text`, as its start and length.
+/// Daemon messages name the default directory too, so both are matched.
+pub fn find_store_prefix(text: &str) -> Option<(usize, usize)> {
+    let own = format!("{}/", store_dir());
+    ["/nix/store/", own.as_str()]
+        .into_iter()
+        .filter_map(|p| Some((text.find(p)?, p.len())))
+        .min()
+}
+
 /// Mirrors path.hh:StorePath::HashLen (base32 characters).
 pub const HASH_PART_LEN: usize = 32;
 

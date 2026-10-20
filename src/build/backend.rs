@@ -13,7 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -24,7 +24,7 @@ use crate::remote::event::Event;
 use crate::remote::grpc::backend::Grpc;
 use crate::remote::plan::{self, Object, Plan};
 use crate::remote::worker::wire::{self, write_object};
-use crate::remote::worker::{Connection, DEFAULT_SOCKET, Missing, Options, Stats, Transport};
+use crate::remote::worker::{Connection, Missing, Options, Stats, Transport, default_socket};
 use crate::store::nar;
 use crate::store::path::StorePath;
 
@@ -168,7 +168,7 @@ pub trait Backend {
 /// The local daemon, where out-links and GC roots go whatever the builder is
 /// (docs/reference/classic.md).
 pub fn local() -> Transport {
-    Transport::Unix(PathBuf::from(DEFAULT_SOCKET))
+    Transport::Unix(default_socket())
 }
 
 /// The store paths `out_links` was given.

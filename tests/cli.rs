@@ -283,3 +283,10 @@ fn build_cache_ignores_installable_order() {
     assert!(first.contains("cache: wrote"), "{first}");
     assert!(second.contains("eval: skipped"), "{second}");
 }
+
+#[test]
+fn eval_json_forces_without_strict() {
+    let o = iets(&["eval", "--json", "--expr", "{ a = [ (1 + 1) ]; }"]);
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    assert_eq!(text(&o.stdout).trim(), r#"{"a":[2]}"#);
+}

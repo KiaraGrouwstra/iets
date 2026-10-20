@@ -12,13 +12,12 @@ pub mod shell;
 
 use crate::session::exit;
 use crate::sys::process;
-use std::path::PathBuf;
 use std::process::Command;
 
 use crate::cli::{EvalArgs, EvalFlags, abs_path, eval_flag, full_includes, jobs};
 use crate::config::{self, Config};
 use crate::eval::{self, EvalConfig, EvalResult, Evaluator, Pos};
-use crate::remote::worker::{DEFAULT_SOCKET, Options, Transport};
+use crate::remote::worker::{Options, Transport, default_socket};
 use crate::runtime::Word;
 use crate::session::Session;
 use crate::settings::builders;
@@ -129,7 +128,7 @@ pub fn common_flag(c: &mut Common, a: &mut Argv, s: &str) -> Result<bool, String
 /// default a `grpc://` URL takes.
 pub fn transport_of(store: &str, system: &str) -> Result<Transport, String> {
     match store {
-        "auto" | "" | "daemon" => Ok(Transport::Unix(PathBuf::from(DEFAULT_SOCKET))),
+        "auto" | "" | "daemon" => Ok(Transport::Unix(default_socket())),
         s if s.starts_with("unix://") || s.starts_with("ssh-ng://") || s.starts_with("grpc://") => {
             Transport::parse_checked(s, system)
                 .map_err(|e| e.to_string())?
@@ -203,7 +202,7 @@ pub fn store_given(c: &Common) -> bool {
 /// The local daemon, where GC roots, out-links and `--add-root` registrations
 /// go whatever `builder` says (docs/reference/classic.md).
 pub fn local() -> Transport {
-    Transport::Unix(PathBuf::from(DEFAULT_SOCKET))
+    Transport::Unix(default_socket())
 }
 
 /// The evaluator configuration: the search path, the `system` setting and

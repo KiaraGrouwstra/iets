@@ -14,7 +14,7 @@ use std::io::{self, IsTerminal};
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
-use std::{env, fs, slice};
+use std::{env, fs, slice, thread};
 
 use super::{Argv, Common, common_flag, eval_config, fallback, lookup_file_arg, shell_settings};
 use crate::api::build::Root;
@@ -521,6 +521,10 @@ fn exec(s: &Shell, drv: &Derivation, shell: &str, cores: u64) -> error::Result<(
         env.insert(v.into(), tmp.clone().into());
     }
     env.insert("NIX_STORE".into(), store_dir().into());
+    let cores = match cores {
+        0 => thread::available_parallelism().map_or(1, |n| n.get() as u64),
+        n => n,
+    };
     env.insert("NIX_BUILD_CORES".into(), cores.to_string().into());
 
     let pass_as_file: BTreeSet<&str> = match drv.structured_attrs {

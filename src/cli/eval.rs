@@ -53,8 +53,9 @@ fn eval_and_print(ev: &mut Evaluator, a: EvalArgs, cache: Option<Cache>) -> i32 
         )
         .map(|s| out.extend_from_slice(&s))
     } else if json {
+        // nix eval --json forces the whole value, --strict or not (eval.cc)
         let mut ctx = Vec::new();
-        print::print_json(ev, v, &mut out, &mut ctx, strict, Pos::NONE)
+        print::print_json(ev, v, &mut out, &mut ctx, true, Pos::NONE)
     } else {
         (|| {
             let v = if strict {
