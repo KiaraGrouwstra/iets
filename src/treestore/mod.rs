@@ -578,6 +578,36 @@ mod tests {
         );
     }
 
+    /// numtide/iets#189 (NixOS/nix#16509): the `narHash` a caller pins must
+    /// name the store path a substituter serves, or the daemon is asked for a
+    /// path no cache holds and the fetch falls through to the forge. The
+    /// hashes are nixpkgs revisions whose trees cache.nixos.org serves at
+    /// exactly these paths, as its signed `CA: fixed:r:sha256:…` lines say.
+    #[test]
+    fn a_pinned_nar_hash_names_the_path_a_cache_serves() {
+        for (nar_hash, path) in [
+            (
+                "sha256-vlHUuqAcbcH2RKmHbPiuQzbv1pnzzavXnI62RD0bqCU=",
+                "/nix/store/7j1q60m17gf95k3s0gk2qvjqygnp1q36-source",
+            ),
+            (
+                "sha256-Ft/BRnIqw1MywFoXydKobjjWmDFgDdYtSpJliE8+yUw=",
+                "/nix/store/mkp6xi3vnvrllpmc17337m6sci9chm5l-source",
+            ),
+            (
+                "sha256-m0pDuRJG7EDo9ri+4Ksu83VsI+PlxNC9lNBfydejce4=",
+                "/nix/store/aiapnjc6w07cz0jxy8s3j8cg1vfh1k8b-source",
+            ),
+        ] {
+            let h = Hash::parse_any(nar_hash, None).unwrap();
+            assert_eq!(
+                store_path("source", &h).unwrap().to_full_string(),
+                path,
+                "{nar_hash}"
+            );
+        }
+    }
+
     /// A spooled tarball holding `files` under one top-level directory.
     fn tree_of(files: &[(&str, &[u8])]) -> (Tree, Hash) {
         let mut b = tar::Builder::new(Vec::new());
