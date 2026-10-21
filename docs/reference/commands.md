@@ -133,8 +133,8 @@ Evaluate and print the value. It takes the shared flags.
 
 - Without `--json` or `--raw`, iets prints the value with its own printer.
   A derivation, a lambda and a thunk each look different.
-- `--json` prints the value as JSON, the same shape as Nix. Add `--strict`
-  to force the whole value first.
+- `--json` prints the value as JSON, the same shape as Nix. The whole value
+  is forced first, `--strict` or not, as `nix eval --json` does.
 - `--raw` turns the value into a string and prints the bytes with no
   quotes and no newline at the end.
 
