@@ -53,6 +53,8 @@ pub struct EvalArgs {
     pub more: Vec<Input>,
     pub dump_drvs: Option<String>,
     pub attr: Option<String>,
+    /// Every `-A` in order; `attr` is the last. Only `iets eval` reads them all.
+    pub attrs: Vec<String>,
     /// `--lint SELECTOR=LEVEL` in order; applied after `iets.toml` and
     /// `IETS_LINT` (docs/reference/lints.md).
     pub lints: Vec<(String, Level)>,
@@ -94,6 +96,7 @@ impl Default for EvalArgs {
             more: Vec::new(),
             dump_drvs: None,
             attr: None,
+            attrs: Vec::new(),
             lints: Vec::new(),
             lint_roots: Vec::new(),
             lint_scope: None,
@@ -271,13 +274,58 @@ pub fn evaluate_with(
     a: EvalArgs,
     loaded: &mut Loaded,
 ) -> Result<Word, Box<Error>> {
+    let (root, args) = input_and_args(ev, &a, loaded)?;
+    select(ev, root, a.attr.as_deref(), args, !a.args.is_empty())
+}
+
+/// [`evaluate`] for each `-A` in order. The input and the `--arg`s are
+/// evaluated once, as in `nix-instantiate --eval`.
+pub fn evaluate_each(
+    ev: &mut Evaluator,
+    a: &EvalArgs,
+    mut each: impl FnMut(&mut Evaluator, Word) -> Result<(), Box<Error>>,
+) -> Result<(), Box<Error>> {
+    let (root, args) = input_and_args(ev, a, &mut Loaded::default())?;
+    let has_args = !a.args.is_empty();
+    if a.attrs.is_empty() {
+        let v = select(ev, root, a.attr.as_deref(), args, has_args)?;
+        return each(ev, v);
+    }
+    for attr in &a.attrs {
+        let v = select(ev, root, Some(attr), args, has_args)?;
+        each(ev, v)?;
+    }
+    Ok(())
+}
+
+fn select(
+    ev: &mut Evaluator,
+    root: Word,
+    attr: Option<&str>,
+    args: Word,
+    has_args: bool,
+) -> Result<Word, Box<Error>> {
+    match attr {
+        Some(attr) => installable::find_along_attr_path(ev, root, attr, args),
+        // nix-instantiate.cc: no attribute path, so the top level is called
+        // only when there is something to call it with
+        None if has_args => ev.auto_call(root, args),
+        None => Ok(root),
+    }
+}
+
+fn input_and_args(
+    ev: &mut Evaluator,
+    a: &EvalArgs,
+    loaded: &mut Loaded,
+) -> Result<(Word, Word), Box<Error>> {
     let cwd = cwd();
 
-    let mut v = match a.input {
-        Some(Input::Expr(e)) => ev.eval_string(&e, &cwd)?,
-        Some(Input::File(f)) => ev.eval_file(&abs_path(&f, &cwd), Pos::NONE)?,
+    let v = match &a.input {
+        Some(Input::Expr(e)) => ev.eval_string(e, &cwd)?,
+        Some(Input::File(f)) => ev.eval_file(&abs_path(f, &cwd), Pos::NONE)?,
         Some(Input::Flake(f)) => {
-            let mut fr = flake_ref(&f, &cwd).map_err(|m| {
+            let mut fr = flake_ref(f, &cwd).map_err(|m| {
                 let kind = match m {
                     error::Error::Unsupported(_) => ErrorKind::Unsupported,
                     _ => ErrorKind::Eval,
@@ -311,14 +359,7 @@ pub fn evaluate_with(
         }
     };
     let args = auto_args(ev, &a.args, &cwd)?;
-    match &a.attr {
-        Some(attr) => v = installable::find_along_attr_path(ev, v, attr, args)?,
-        // nix-instantiate.cc: no attribute path, so the top level is called
-        // only when there is something to call it with
-        None if !a.args.is_empty() => v = ev.auto_call(v, args)?,
-        None => {}
-    }
-    Ok(v)
+    Ok((v, args))
 }
 
 /// The `--arg`/`--argstr` attrset (`nix-instantiate`'s autoArgs).
@@ -489,7 +530,13 @@ pub fn setup_cache_more(
         k.field("include-prefix", &prefix);
         k.field("include-path", &path);
     }
-    k.field("attr", a.attr.as_deref().unwrap_or("").as_bytes());
+    if a.attrs.is_empty() {
+        k.field("attr", a.attr.as_deref().unwrap_or("").as_bytes());
+    } else {
+        for attr in &a.attrs {
+            k.field("attr", attr.as_bytes());
+        }
+    }
     k.flag("strict", a.strict);
     k.flag("json", a.json);
     k.flag("raw", a.raw);
