@@ -116,6 +116,7 @@ pub unsafe fn init_ctx(ev: &mut Evaluator, slot: *mut Slot) {
         cancelled: false,
         stack_lo,
         root: 0,
+        held: Held::default(),
         slot,
     };
     ev.call_depth = 0;
@@ -355,9 +356,32 @@ pub(crate) fn forget_pending(n: usize) {
     NPENDING.fetch_sub(n, Ordering::Relaxed);
 }
 
-/// Run an effect, or hold it back when a helper produced it. The demand
-/// path runs it at once.
+/// Effects a fiber produced while it worked ahead of its own order
+/// (`hold`). A clone is a fresh fiber, which holds nothing.
+#[derive(Default)]
+pub struct Held(Option<Vec<Deferred>>);
+
+impl Clone for Held {
+    fn clone(&self) -> Held {
+        Held(None)
+    }
+}
+
+/// Run an effect, or hold it back when a helper produced it or the fiber
+/// works ahead of its order. The demand path otherwise runs it at once.
 pub fn defer(ev: &mut Evaluator, f: impl FnOnce(&mut Evaluator) + Send + 'static) {
+    if ev.par.held.0.is_none() && (!ev.par.on || ev.par.is_main || ev.par.root == 0) {
+        f(ev);
+        return;
+    }
+    effect(ev, Box::new(f));
+}
+
+fn effect(ev: &mut Evaluator, f: Deferred) {
+    if let Some(held) = &mut ev.par.held.0 {
+        held.push(f);
+        return;
+    }
     if !ev.par.on || ev.par.is_main || ev.par.root == 0 {
         f(ev);
         return;
@@ -369,8 +393,16 @@ pub fn defer(ev: &mut Evaluator, f: impl FnOnce(&mut Evaluator) + Send + 'static
         .unwrap()
         .entry(ev.par.root)
         .or_default()
-        .push(Box::new(f));
+        .push(f);
     NPENDING.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Run `f` with the effects it produces held back, and return them.
+fn hold<R>(ev: &mut Evaluator, f: impl FnOnce(&mut Evaluator) -> R) -> (R, Vec<Deferred>) {
+    let outer = ev.par.held.0.replace(Vec::new());
+    let r = f(ev);
+    let held = mem::replace(&mut ev.par.held.0, outer).unwrap_or_default();
+    (r, held)
 }
 
 /// The thunk was reset, so nothing carries its effects.
@@ -392,7 +424,7 @@ fn release(ev: &mut Evaluator, key: u64) {
     let held = slot_ref(ev).runtime().pending.lock().unwrap().remove(&key);
     for f in held.into_iter().flatten() {
         NPENDING.fetch_sub(1, Ordering::Relaxed);
-        f(ev);
+        effect(ev, f);
     }
 }
 
@@ -637,7 +669,9 @@ fn deep_inner(
 
 /// Two-pass walk over `n` cells: unclaimed cells first, then (demand
 /// only) the cells another fiber was busy with, in index order so that
-/// the first error in sequential order is the one reported.
+/// the first error in sequential order is the one reported. The effects
+/// of a cell walked ahead of a busy one are held until the cells before it
+/// are done, so they come out in sequential order too.
 fn walk(
     ev: &mut Evaluator,
     n: usize,
@@ -647,29 +681,42 @@ fn walk(
     decorate: impl Fn(&mut Evaluator, usize, Box<Error>) -> Box<Error>,
 ) -> EvalResult<()> {
     let mut deferred: Vec<usize> = Vec::new();
+    let mut ahead: Vec<(usize, Vec<Deferred>)> = Vec::new();
     let mut first_err: Option<(usize, Box<Error>)> = None;
     for i in 0..n {
         let c = cell(i);
-        // a ready cell already gave up its value: forcing it again would
-        // walk the claim protocol of a thunk a helper left boxed
-        let ready = match take_cell(ev, c) {
-            CellState::Busy => {
-                if demand {
-                    deferred.push(i);
-                }
-                continue;
+        // `None` for a busy cell. Taking a ready cell runs the effects a
+        // helper parked on it, so the take is part of the step.
+        let step = |ev: &mut Evaluator, seen: &mut HashSet<u64>| {
+            // a ready cell already gave up its value: forcing it again would
+            // walk the claim protocol of a thunk a helper left boxed
+            let ready = match take_cell(ev, c) {
+                CellState::Busy => return None,
+                CellState::Ready(v) => Some(v),
+                CellState::Unclaimed => None,
+            };
+            if !demand && bail_requested(ev) {
+                return Some(Err(cancelled()));
             }
-            CellState::Ready(v) => Some(v),
-            CellState::Unclaimed => None,
+            Some(match ready {
+                Some(v) => deep_inner(ev, v, seen, demand),
+                None => ev
+                    .force_cell(c)
+                    .and_then(|v| deep_inner(ev, v, seen, demand)),
+            })
         };
-        if !demand && bail_requested(ev) {
-            return Err(cancelled());
-        }
-        let r = match ready {
-            Some(v) => deep_inner(ev, v, seen, demand),
-            None => ev
-                .force_cell(c)
-                .and_then(|v| deep_inner(ev, v, seen, demand)),
+        let r = if deferred.is_empty() {
+            step(ev, seen)
+        } else {
+            let (r, held) = hold(ev, |ev| step(ev, seen));
+            ahead.push((i, held));
+            r
+        };
+        let Some(r) = r else {
+            if demand {
+                deferred.push(i);
+            }
+            continue;
         };
         if let Err(e) = r {
             if demand {
@@ -680,9 +727,13 @@ fn walk(
         }
     }
     let limit = first_err.as_ref().map_or(n, |(i, _)| *i);
+    let mut ahead = ahead.into_iter().peekable();
     for i in deferred {
         if i >= limit {
             break;
+        }
+        while let Some((_, held)) = ahead.next_if(|(j, _)| *j < i) {
+            held.into_iter().for_each(|f| effect(ev, f));
         }
         let c = cell(i);
         let r = ev
@@ -692,6 +743,7 @@ fn walk(
             return Err(decorate(ev, i, e));
         }
     }
+    ahead.for_each(|(_, held)| held.into_iter().for_each(|f| effect(ev, f)));
     match first_err {
         Some((_, e)) => Err(e),
         None => Ok(()),

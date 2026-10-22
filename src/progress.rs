@@ -18,6 +18,7 @@ use crate::log::{
     ACT_QUERY_PATH_INFO, ACT_REALISE, ACT_SUBSTITUTE, LVL_INFO,
 };
 use crate::session::{self, Session};
+use crate::store::path::find_store_prefix;
 
 pub const FIRST: Duration = Duration::from_secs(5);
 pub const HEARTBEAT: Duration = render::HEARTBEAT;
@@ -355,19 +356,18 @@ fn short(text: &str) -> String {
 }
 
 fn unhashed(text: &str) -> String {
-    const STORE: &str = "/nix/store/";
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
-    while let Some(i) = rest.find(STORE) {
+    while let Some((i, n)) = find_store_prefix(rest) {
         out.push_str(&rest[..i]);
-        let after = &rest[i + STORE.len()..];
+        let after = &rest[i + n..];
         let hashed = after.len() > 33
             && after.as_bytes()[32] == b'-'
             && after[..32].bytes().all(|b| b.is_ascii_alphanumeric());
         match hashed {
             true => rest = &after[33..],
             false => {
-                out.push_str(STORE);
+                out.push_str(&rest[i..i + n]);
                 rest = after;
             }
         }

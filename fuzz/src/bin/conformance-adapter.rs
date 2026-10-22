@@ -10,7 +10,8 @@ use iets_fuzz::{canon, sx, wire};
 use sha2::{Digest, Sha256};
 use std::path::{self, Path};
 use std::process::{Command, exit};
-use std::{env, fs};
+use std::time::{Duration, Instant};
+use std::{env, fs, thread};
 
 /// "This implementation does not do that": the runner skips the case.
 const UNSUPPORTED: i32 = 3;
@@ -145,13 +146,44 @@ fn absolute(file: &str) -> String {
         .unwrap_or_else(|_| file.to_string())
 }
 
+/// The longest one case may take. A trivial case takes seconds even on a
+/// loaded builder; this fails a hung one long before max-silent-time.
+const CASE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Exit code of a case that ran past `CASE_TIMEOUT`.
+const TIMED_OUT: i32 = 124;
+
+/// Runs iets; past `CASE_TIMEOUT` kills it and exits `TIMED_OUT`. Any
+/// failing exit passes an `eval-fail` case, so the check (nix/fuzz.nix)
+/// fails on this code itself.
 fn iets(args: &[&str]) -> i32 {
     let bin = env::var("IETS").unwrap_or_else(|_| "iets".into());
-    match Command::new(&bin).args(args).status() {
-        Ok(s) => s.code().unwrap_or(1),
+    let mut child = match Command::new(&bin).args(args).spawn() {
+        Ok(c) => c,
         Err(e) => {
             eprintln!("conformance-adapter: cannot run {bin}: {e}");
-            2
+            return 2;
+        }
+    };
+    let start = Instant::now();
+    let mut pause = Duration::from_millis(1);
+    loop {
+        match child.try_wait() {
+            Ok(Some(s)) => return s.code().unwrap_or(1),
+            Ok(None) if start.elapsed() < CASE_TIMEOUT => {
+                thread::sleep(pause);
+                pause = (pause * 2).min(Duration::from_millis(50));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                println!("timed out after {}s", CASE_TIMEOUT.as_secs());
+                return TIMED_OUT;
+            }
+            Err(e) => {
+                eprintln!("conformance-adapter: cannot wait for {bin}: {e}");
+                return 2;
+            }
         }
     }
 }

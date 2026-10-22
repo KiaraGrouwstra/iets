@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 use super::event::{BuildEvent, Kind, fmt_duration};
 
 use crate::log::{interactive, json, note_mismatch, strip_ansi};
+use crate::store::path::find_store_prefix;
 use crate::sys::tty;
 
 /// Unfolded tail of a failure log.
@@ -814,15 +815,14 @@ fn short_label(label: &str) -> String {
     }
 }
 
-/// Every `/nix/store/<name>.drv` in `text`, in order, without duplicates.
+/// Every `<store>/<name>.drv` in `text`, in order, without duplicates.
 fn drv_paths(text: &str) -> Vec<String> {
-    const PREFIX: &str = "/nix/store/";
     let mut out: Vec<String> = Vec::new();
     let b = text.as_bytes();
     let mut i = 0;
-    while let Some(rel) = text[i..].find(PREFIX) {
+    while let Some((rel, n)) = find_store_prefix(&text[i..]) {
         let start = i + rel;
-        let mut end = start + PREFIX.len();
+        let mut end = start + n;
         while end < b.len()
             && (b[end].is_ascii_alphanumeric() || matches!(b[end], b'+' | b'-' | b'.' | b'_'))
         {
@@ -832,7 +832,7 @@ fn drv_paths(text: &str) -> Vec<String> {
         if path.ends_with(".drv") && !out.iter().any(|p| p == path) {
             out.push(path.to_string());
         }
-        i = end.max(start + PREFIX.len());
+        i = end.max(start + n);
     }
     out
 }

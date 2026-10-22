@@ -662,7 +662,7 @@ fn derivation_strict_internal(
     // hashed into is all a plain evaluation wants
     let keep_text = ev.drv.keep_aterm || ev.drv.dump_dir.is_some() || produces_drv;
     let (drv_path, text) = drv
-        .with_aterm(|t| {
+        .with_aterm_from(modulo.as_ref(), |t| {
             (
                 drv.drv_path_for(t),
                 if keep_text { t.to_vec() } else { Vec::new() },

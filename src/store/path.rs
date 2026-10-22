@@ -22,17 +22,34 @@ pub fn store_dir() -> &'static str {
     &store_dir_info().native
 }
 
-fn store_dir_info() -> &'static StoreDir {
-    static DIR: OnceLock<StoreDir> = OnceLock::new();
-    DIR.get_or_init(|| {
-        let var = |n| env::var(n).ok().filter(|v| !v.is_empty());
-        let native = resolve_store_dir(
-            var("NIX_STORE_DIR").or_else(|| var("NIX_STORE")).as_deref(),
-            var("PROGRAMDATA").as_deref(),
-            cfg!(windows),
-        );
+static DIR: OnceLock<StoreDir> = OnceLock::new();
+
+impl StoreDir {
+    fn new(native: String) -> StoreDir {
         let internal = sys::path_to_internal(Path::new(&native));
         StoreDir { native, internal }
+    }
+}
+
+/// Fixes the store directory before its first use, for code that compares
+/// with paths under another one.
+pub fn pin_store_dir(dir: &str) {
+    let got = &DIR.get_or_init(|| StoreDir::new(dir.to_string())).native;
+    assert_eq!(got, dir, "the store dir was already resolved");
+}
+
+fn store_dir_info() -> &'static StoreDir {
+    DIR.get_or_init(|| {
+        let var = |n| env::var(n).ok().filter(|v| !v.is_empty());
+        let set = var("NIX_STORE_DIR").or_else(|| var("NIX_STORE"));
+        // the unit tests compare with Nix's paths under /nix/store
+        #[cfg(test)]
+        let set = Some("/nix/store".to_string()).or(set);
+        StoreDir::new(resolve_store_dir(
+            set.as_deref(),
+            var("PROGRAMDATA").as_deref(),
+            cfg!(windows),
+        ))
     })
 }
 
@@ -65,6 +82,16 @@ pub fn strip_store_dir(p: &[u8]) -> Option<&[u8]> {
     [d.native.as_bytes(), &d.internal]
         .into_iter()
         .find_map(|dir| p.strip_prefix(dir)?.strip_prefix(b"/"))
+}
+
+/// The first store directory prefix in `text`, as its start and length.
+/// Daemon messages name the default directory too, so both are matched.
+pub fn find_store_prefix(text: &str) -> Option<(usize, usize)> {
+    let own = format!("{}/", store_dir());
+    ["/nix/store/", own.as_str()]
+        .into_iter()
+        .filter_map(|p| Some((text.find(p)?, p.len())))
+        .min()
 }
 
 /// Mirrors path.hh:StorePath::HashLen (base32 characters).

@@ -3,16 +3,6 @@
 let
   inherit (pkgs) lib;
   oracles = nix-conformance.packages.${pkgs.stdenv.hostPlatform.system}.oracles;
-  # for the libFuzzer binaries, which cargo-fuzz builds
-  common = {
-    version = "0.0.0";
-    src = sources.fuzz;
-    cargoRoot = "fuzz";
-    buildAndTestSubdir = "fuzz";
-    cargoLock.lockFile = ../fuzz/Cargo.lock;
-    doCheck = false;
-    meta.license = lib.licenses.lgpl21Plus;
-  };
   # the cases and the grown corpora of nix-conformance, as libFuzzer seeds
   link = dirs: name: ''
     find ${toString dirs} -name '${name}' | while read -r f; do
@@ -73,23 +63,44 @@ let
       cargoArtifacts = craneLib.buildDepsOnly args;
       meta.license = lib.licenses.lgpl21Plus;
     });
-  # the libFuzzer binaries, instrumented by cargo-fuzz on the stable compiler
-  fuzzers = pkgs.rustPlatform.buildRustPackage (common // {
+  # the libFuzzer binaries, built as cargo-fuzz 0.13 builds them (cargo fuzz
+  # build -v), in one cargo call for every target and on cached deps
+  fuzzerArgs = {
     pname = "iets-fuzzers";
-    nativeBuildInputs = [ pkgs.cargo-fuzz ];
-    buildPhase = ''
-      runHook preBuild
-      (cd fuzz && for t in ${toString (builtins.attrNames targets)}; do
-        cargo fuzz build --sanitizer none --release $t
-      done)
-      runHook postBuild
-    '';
-    installPhase = ''
+    version = "0.0.0";
+    strictDeps = true;
+    src = sources.fuzz;
+    cargoLock = ../fuzz/Cargo.lock;
+    cargoToml = ../fuzz/Cargo.toml;
+    postUnpack = "cd $sourceRoot/fuzz; sourceRoot=.";
+    doCheck = false;
+    RUSTFLAGS = toString [
+      "-Cpasses=sancov-module"
+      "-Cllvm-args=-sanitizer-coverage-level=4"
+      "-Cllvm-args=-sanitizer-coverage-inline-8bit-counters"
+      "-Cllvm-args=-sanitizer-coverage-pc-table"
+      "-Cllvm-args=-sanitizer-coverage-trace-compares"
+      "--cfg fuzzing"
+      "-Cllvm-args=-simplifycfg-branch-fold-threshold=0"
+      "-Cllvm-args=-sanitizer-coverage-stack-depth"
+      "-Ccodegen-units=1"
+    ];
+  };
+  fuzzerBuild = what: ''
+    cargo build --target ${pkgs.stdenv.hostPlatform.rust.rustcTarget} --release \
+      --config 'profile.release.debug="line-tables-only"' ${what}
+  '';
+  fuzzers = craneLib.mkCargoDerivation (fuzzerArgs // {
+    # the dummy bins of the deps cannot link without libFuzzer
+    cargoArtifacts = craneLib.buildDepsOnly (fuzzerArgs // { buildPhaseCargoCommand = fuzzerBuild "--lib"; });
+    buildPhaseCargoCommand = fuzzerBuild (lib.concatMapStringsSep " " (t: "--bin ${t}") (builtins.attrNames targets));
+    installPhaseCommand = ''
       for t in ${toString (builtins.attrNames targets)}; do
-        install -Dm755 fuzz/target/*/release/$t $out/bin/fuzz-$t
+        install -Dm755 target/*/release/$t $out/bin/fuzz-$t
       done
     '';
     dontFixup = true;
+    meta.license = lib.licenses.lgpl21Plus;
   });
   # one target for a fixed time; a divergence fails the build and prints the input
   run = name: seconds: ''
@@ -152,15 +163,32 @@ in
       '';
     };
     # every case of nix-conformance through iets, with the trees; the cases
-    # in conformance-known fail on purpose
-    conformance = nix-conformance.lib.${pkgs.stdenv.hostPlatform.system}.check {
+    # in conformance-known fail on purpose. The runner prints only failures
+    # and skips, and its quiet stretches outlast max-silent-time on a loaded
+    # builder, so the adapter names each case on fd 3, the build log. A case
+    # past the adapter's timeout (exit 124) is listed and fails the check.
+    conformance = (nix-conformance.lib.${pkgs.stdenv.hostPlatform.system}.check {
       name = "iets";
       adapter = "${pkgs.writeShellScript "iets-conformance-adapter" ''
-        export IETS=${iets}/bin/iets
-        exec ${fuzz-diff}/bin/conformance-adapter "$@"
+        echo "case $*" 2>/dev/null >&3
+        IETS=${iets}/bin/iets ${fuzz-diff}/bin/conformance-adapter "$@" 3>&-
+        code=$?
+        if [ $code = 124 ] && [ -n "''${NIX_BUILD_TOP:-}" ]; then
+          echo "timed out: $*" | tee -a "$NIX_BUILD_TOP/timed-out" 2>/dev/null >&3
+        fi
+        exit $code
       ''}";
       flags = [ "--tree" "--known" "${../fuzz/conformance-known}" ];
-    };
+    }).overrideAttrs (old: {
+      buildCommand = ''
+        exec 3>&2
+        ${old.buildCommand}
+        if [ -s "$NIX_BUILD_TOP/timed-out" ]; then
+          cat "$NIX_BUILD_TOP/timed-out" >&2
+          exit 1
+        fi
+      '';
+    });
     # half a minute of iets's daemon client against Nix's, on scripted daemons
     fuzz-wire = check {
       name = "wire";

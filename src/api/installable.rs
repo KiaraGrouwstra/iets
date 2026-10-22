@@ -447,7 +447,7 @@ pub fn roots_of(
     attr: &str,
     roots: &mut Vec<(StorePath, Option<String>)>,
 ) -> EvalResult<()> {
-    let v = ev.force(v)?;
+    let v = ev.auto_call(v, args)?;
     let Some(tree) = v.as_attrs().filter(|a| a.get(ev.s.drv_path).is_none()) else {
         return drv_roots(ev, v, roots);
     };

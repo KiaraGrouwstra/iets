@@ -782,7 +782,7 @@ fn job_inner(ev: &mut Evaluator, a: &'static AttrsObj, path: &[String]) -> EvalR
     let mut js = Vec::new();
     json_escape(&mut js, &name)?;
     extra.insert("name".into(), js);
-    extra.insert("storeDir".into(), b"\"/nix/store\"".to_vec());
+    extra.insert("storeDir".into(), line::json_str(store_dir()));
     let mut js = Vec::new();
     json_escape(&mut js, &system)?;
     extra.insert("system".into(), js);

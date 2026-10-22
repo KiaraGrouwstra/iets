@@ -34,17 +34,17 @@ use crate::runtime::arena::{self, STAT_NAMES, Stat};
 #[cfg(feature = "stats2")]
 use crate::runtime::census;
 use crate::runtime::{
-    Arena, AttrsObj, Cell, Ctx, EnvObj, Kind, LambdaObj, ListObj, MAX_LEAVES, StringObj, ThunkObj,
-    UNION_MIN, Value, ValueType, Word, ctx_to_arena, leaf_count,
+    Arena, AttrsObj, Cell, Ctx, EnvObj, Kind, ListObj, MAX_LEAVES, StringObj, ThunkObj, UNION_MIN,
+    Value, ValueType, Word, ctx_to_arena, leaf_count,
 };
 use crate::session::Session;
 use crate::source::LazyStore;
-use crate::store::path::{StorePath, strip_store_dir};
+use crate::store::path::{StorePath, store_dir, strip_store_dir};
 use crate::store::source::{SourceOrigin, SrcPath};
 use crate::syntax::ast::{Ast, FileId};
 use crate::syntax::symbol::{FxHashMap, Interner, Sym};
 use crate::trace::{self, Trace, store};
-use crate::{argv, parallel, syntax};
+use crate::{argv, config, parallel, syntax};
 
 pub const MAX_CALL_DEPTH: u32 = 10000;
 
@@ -391,8 +391,6 @@ macro_rules! bail {
 use crate::sys;
 pub(crate) use bail;
 
-pub const DEFAULT_SYSTEM: &str = "x86_64-linux";
-
 /// Everything fixed before evaluation starts. A field set after `try_run` clones
 /// the evaluator is one fiber's alone, so there is no setter (docs/explanation/evaluation.md).
 ///
@@ -420,7 +418,7 @@ impl Default for EvalConfig {
     /// In the session this thread entered (docs/reference/library.md).
     fn default() -> EvalConfig {
         EvalConfig {
-            system: DEFAULT_SYSTEM,
+            system: config::DEFAULT_SYSTEM,
             pure: false,
             project_root: None,
             session: Session::current(),
@@ -587,7 +585,7 @@ impl EvalConfig {
             try_level: 0,
             s,
             builtins_word: Word::NULL,
-            store_dir: b"/nix/store".to_vec(),
+            store_dir: store_dir().as_bytes().to_vec(),
             current_system: self.system,
             nr_thunks: 0,
             nr_function_calls: 0,
@@ -1540,9 +1538,29 @@ impl Evaluator {
         while !args.is_empty() {
             match cur.view() {
                 Value::Lambda(l) => {
+                    // `a: b: e` applied to two arguments binds `b` in the env
+                    // of `a` directly, without the closure in between
+                    let (mut fenv, mut lam) = (l.env, l.lam);
+                    while args.len() >= 2
+                        && let Ir::Lambda(inner) = lam.body
+                    {
+                        self.nr_function_calls += 1;
+                        let d = self.prof_enter(pos, lam.name);
+                        fenv = self.bind_lambda(fenv, lam, args[0], pos)?;
+                        self.prof.unwind(d);
+                        lam = inner;
+                        args = &args[1..];
+                    }
                     self.nr_function_calls += 1;
-                    let d = self.prof_enter(pos, l.lam.name);
-                    cur = self.call_lambda(l, args[0], pos)?;
+                    let d = self.prof_enter(pos, lam.name);
+                    let env2 = self.bind_lambda(fenv, lam, args[0], pos)?;
+                    cur = self.eval(env2, lam.body).map_err(|mut e| {
+                        e.add_trace(lam.pos, format!("while calling {}", self.lambda_desc(lam)));
+                        if !pos.is_none() {
+                            e.add_trace(pos, "from call site");
+                        }
+                        e
+                    })?;
                     self.prof.unwind(d);
                     args = &args[1..];
                 }
@@ -1611,9 +1629,15 @@ impl Evaluator {
         Ok(cur)
     }
 
-    fn call_lambda(&mut self, l: &'static LambdaObj, arg: Word, pos: Pos) -> EvalResult<Word> {
-        let lam: &'static LambdaIr = l.lam;
-        let env2 = self.arena.alloc_env(Some(l.env), lam.nslots());
+    /// The env of a call of `lam` closed over `fenv`, its parameters bound.
+    fn bind_lambda(
+        &mut self,
+        fenv: &'static EnvObj,
+        lam: &'static LambdaIr,
+        arg: Word,
+        pos: Pos,
+    ) -> EvalResult<&'static EnvObj> {
+        let env2 = self.arena.alloc_env(Some(fenv), lam.nslots());
         let slots = env2.slots_n(lam.nslots());
         match &lam.param {
             ParamIr::Ident => slots[0].set(arg),
@@ -1687,13 +1711,7 @@ impl Evaluator {
                 }
             }
         }
-        self.eval(env2, lam.body).map_err(|mut e| {
-            e.add_trace(lam.pos, format!("while calling {}", self.lambda_desc(lam)));
-            if !pos.is_none() {
-                e.add_trace(pos, "from call site");
-            }
-            e
-        })
+        Ok(env2)
     }
 
     fn lambda_name(&self, lam: &LambdaIr) -> String {
