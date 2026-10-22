@@ -11,6 +11,7 @@ use crate::builtins::derivation::DrvInfo;
 use crate::store::hash::{Hash, HashAlgo};
 use crate::store::path::StorePath;
 use crate::store::source::{Accepted, SourceKind, SourceOrigin, Src, SrcPath};
+use crate::syntax::symbol::FxHashMap;
 
 const VERSION: u8 = 7;
 
@@ -352,7 +353,7 @@ pub fn decode_readset(b: &[u8]) -> Option<Vec<Obs>> {
 
 /// Every drv this evaluation produced (the ones with an ATerm); drvs read from
 /// `/nix/store` are re-read by the planner.
-pub fn encode_drvs(drvs: &HashMap<StorePath, DrvInfo>) -> Vec<u8> {
+pub fn encode_drvs(drvs: &FxHashMap<StorePath, DrvInfo>) -> Vec<u8> {
     let mut e = Enc::new();
     let mut items: Vec<(&StorePath, &DrvInfo)> =
         drvs.iter().filter(|(_, i)| i.aterm.is_some()).collect();
@@ -383,10 +384,10 @@ fn store_path(b: &[u8]) -> R<StorePath> {
     StorePath::from_base_name(str::from_utf8(b).map_err(|_| ())?).map_err(|_| ())
 }
 
-pub fn decode_drvs(b: &[u8]) -> Option<HashMap<StorePath, DrvInfo>> {
+pub fn decode_drvs(b: &[u8]) -> Option<FxHashMap<StorePath, DrvInfo>> {
     let mut d = Dec::new(b).ok()?;
     let n = d.u64().ok()? as usize;
-    let mut m = HashMap::with_capacity(n.min(1 << 20));
+    let mut m = FxHashMap::with_capacity_and_hasher(n.min(1 << 20), Default::default());
     for _ in 0..n {
         let p = store_path(d.bytes().ok()?).ok()?;
         let outputs: BTreeSet<String> = d
@@ -636,7 +637,7 @@ mod tests {
     fn drvs_sources_roots_roundtrip() {
         let p = StorePath::from_base_name("a3ck4d9zzk4l1r76rz5zv2wgycmpsy1y-x.drv").unwrap();
         let s = StorePath::from_base_name("a3ck4d9zzk4l1r76rz5zv2wgycmpsy1y-src").unwrap();
-        let mut drvs = HashMap::new();
+        let mut drvs = FxHashMap::default();
         drvs.insert(
             p.clone(),
             DrvInfo {

@@ -7,7 +7,7 @@ pub(crate) mod regex;
 mod xml;
 
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::{self, SystemTime};
 use std::{env, str};
@@ -20,6 +20,7 @@ use crate::lint::{coerce, purity};
 use crate::log;
 use crate::runtime::{Ctx, ListObj, StringObj, Word, ctx_to_arena};
 use crate::store::hash::{Hash, HashAlgo, HashFormat, hash_bytes};
+use crate::syntax::symbol::FxHashMap;
 
 pub use fromtoml::set_parse_toml_timestamps;
 
@@ -58,7 +59,7 @@ pub(super) fn current_time(ev: &mut Evaluator, _args: &[Word], _pos: Pos) -> Eva
 type CompiledRegex = Result<regex::Prog, regex::Error>;
 
 thread_local! {
-    static REGEX_CACHE: RefCell<HashMap<Vec<u8>, Rc<CompiledRegex>>> = RefCell::new(HashMap::new());
+    static REGEX_CACHE: RefCell<FxHashMap<Vec<u8>, Rc<CompiledRegex>>> = RefCell::new(FxHashMap::default());
 }
 
 /// Entries in this thread's regex cache (`IETS_STATS`).

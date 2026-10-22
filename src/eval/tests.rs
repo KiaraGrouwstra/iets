@@ -9,7 +9,7 @@ fn eval_str(src: &str) -> String {
     let v = ev.eval_string(src, b"/").expect("eval");
     let v = ev.force_deep(v).expect("force");
     let mut out = Vec::new();
-    print::print_ambiguous(&mut ev, v, 1, &mut out, &mut HashSet::new(), 0).unwrap();
+    print::print_ambiguous(&mut ev, v, 1, &mut out, &mut HashSet::default(), 0).unwrap();
     String::from_utf8(out).unwrap()
 }
 
@@ -189,7 +189,7 @@ fn eval_pure(src: &str) -> Result<String, String> {
         .and_then(|v| ev.force_deep(v))
         .map_err(|e| e.msg)?;
     let mut out = Vec::new();
-    print::print_ambiguous(&mut ev, v, 1, &mut out, &mut HashSet::new(), 0).unwrap();
+    print::print_ambiguous(&mut ev, v, 1, &mut out, &mut HashSet::default(), 0).unwrap();
     Ok(String::from_utf8(out).unwrap())
 }
 
@@ -477,7 +477,7 @@ fn nix_eq_forces_what_the_shortcut_skips() {
             .and_then(|v| ev.force_deep(v))
             .map_err(|e| e.msg)?;
         let mut out = Vec::new();
-        print::print_ambiguous(&mut ev, v, 1, &mut out, &mut HashSet::new(), 0).unwrap();
+        print::print_ambiguous(&mut ev, v, 1, &mut out, &mut HashSet::default(), 0).unwrap();
         Ok::<_, String>(String::from_utf8(out).unwrap())
     };
     let x = "let x = { a = throw \"a\"; }; in";

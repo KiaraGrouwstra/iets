@@ -14,6 +14,7 @@ use crate::log;
 use crate::session::Session;
 use crate::store::path::StorePath;
 use crate::store::source::SourceOrigin;
+use crate::syntax::symbol::FxHashMap;
 use crate::trace::key::Key;
 use crate::trace::store::{self, Entry, Opened, Part};
 use crate::trace::{validate, wire};
@@ -223,7 +224,7 @@ impl Cache {
         &self,
     ) -> Option<(
         Vec<(StorePath, Option<String>)>,
-        HashMap<StorePath, DrvInfo>,
+        FxHashMap<StorePath, DrvInfo>,
         HashMap<StorePath, SourceOrigin>,
     )> {
         let tables = (|| {

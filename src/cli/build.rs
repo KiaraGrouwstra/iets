@@ -28,6 +28,7 @@ use crate::remote::worker::{self, Missing};
 use crate::session::Session;
 use crate::settings::FixHashes;
 use crate::store::path::StorePath;
+use crate::syntax::symbol::FxHashMap;
 use crate::trace::run::Cache;
 use crate::trace::wire;
 
@@ -352,7 +353,7 @@ fn build_drv_file(b: &BuildArgs, root_arg: &str) -> i32 {
             return log::Report::new(e.code(), msg).emit();
         }
     };
-    let drvs = HashMap::from([(root.clone(), info)]);
+    let drvs = FxHashMap::from_iter([(root.clone(), info)]);
     let sources = HashMap::new();
     let prov = Provenance::from_map(SourceMap::from_sources(&sources));
     build_roots(

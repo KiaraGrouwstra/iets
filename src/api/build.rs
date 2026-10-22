@@ -22,6 +22,7 @@ use crate::settings;
 use crate::store::locate::locate_in_store;
 use crate::store::path::StorePath;
 use crate::store::source::SourceOrigin;
+use crate::syntax::symbol::FxHashMap;
 
 // What `Dispatch::open` takes, so a caller above this line can name it all
 // without reaching past the api (tests/layering.rs).
@@ -75,7 +76,7 @@ pub fn plan(ev: &Evaluator, roots: &[StorePath]) -> Result<Plan> {
 /// is read from `/nix/store`.
 pub fn plan_with(
     roots: &[StorePath],
-    drvs: &HashMap<StorePath, DrvInfo>,
+    drvs: &FxHashMap<StorePath, DrvInfo>,
     sources: &HashMap<StorePath, SourceOrigin>,
 ) -> Result<Plan> {
     plan::plan(roots, Inputs { drvs, sources })
@@ -100,9 +101,9 @@ pub fn drv_info(path: &StorePath, text: Vec<u8>) -> Result<DrvInfo> {
 /// which is what lets one process plan or build a closure another evaluated and
 /// never wrote to the store (docs/reference/plumbing.md). Sources are not in it, so they
 /// still come from the local store.
-pub fn drvs_in_dir(dir: &Path) -> Result<HashMap<StorePath, DrvInfo>> {
+pub fn drvs_in_dir(dir: &Path) -> Result<FxHashMap<StorePath, DrvInfo>> {
     let at = |e: io::Error| Error::io(format!("reading '{}'", dir.display()), e);
-    let mut out = HashMap::new();
+    let mut out = FxHashMap::default();
     for entry in fs::read_dir(dir).map_err(at)? {
         let entry = entry.map_err(at)?;
         let base = entry.file_name().to_string_lossy().into_owned();

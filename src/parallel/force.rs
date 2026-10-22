@@ -2,7 +2,6 @@
 //! fiber an `Evaluator`, the parallel `force_thunk`, strict-demand fan-out,
 //! and the range tasks helpers run.
 
-use std::collections::HashSet;
 use std::mem;
 use std::ops::Range;
 use std::sync::OnceLock;
@@ -15,6 +14,7 @@ use super::{Ctx, fiber};
 use crate::eval::{self, Error, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::jobs;
 use crate::runtime::{AttrsObj, Cell, Kind, ListObj, Value, Word};
+use crate::syntax::symbol::FxHashSet;
 
 pub const MIN_FANOUT: usize = 4;
 pub const BATCH: u32 = 16;
@@ -617,7 +617,7 @@ fn coerce_step(ev: &mut Evaluator, c: &Cell, depth: u32) -> bool {
 
 /// Parallel `Evaluator::force_deep`.
 pub fn force_deep(ev: &mut Evaluator, w: Word) -> EvalResult<Word> {
-    let mut seen = HashSet::new();
+    let mut seen = FxHashSet::default();
     let w = ev.force(w)?;
     deep_inner(ev, w, &mut seen, true)?;
     Ok(w)
@@ -628,7 +628,7 @@ pub fn force_deep(ev: &mut Evaluator, w: Word) -> EvalResult<Word> {
 fn deep_inner(
     ev: &mut Evaluator,
     w: Word,
-    seen: &mut HashSet<u64>,
+    seen: &mut FxHashSet<u64>,
     demand: bool,
 ) -> EvalResult<()> {
     if stack_low(ev) {
@@ -686,7 +686,7 @@ fn deep_inner(
 fn walk(
     ev: &mut Evaluator,
     n: usize,
-    seen: &mut HashSet<u64>,
+    seen: &mut FxHashSet<u64>,
     demand: bool,
     cell: impl Fn(usize) -> &'static Cell,
     decorate: impl Fn(&mut Evaluator, usize, Box<Error>) -> Box<Error>,
@@ -744,7 +744,7 @@ fn ahead(ev: &mut Evaluator, range: Range<usize>, cell: impl Fn(usize) -> &'stat
     let is_main = mem::replace(&mut ev.par.is_main, false);
     let frames = mem::replace(&mut ev.par.frames, 0);
     let cancelled = ev.par.cancelled;
-    let mut seen = HashSet::new();
+    let mut seen = FxHashSet::default();
     for i in range {
         if !range_step(ev, cell(i), true, &mut seen) {
             break;
@@ -762,7 +762,7 @@ fn run_task(ev: &mut Evaluator, t: Task) {
         T_LIST_WHNF | T_LIST_DEEP => {
             let l = obj.as_list().expect("list task");
             let deep = t.kind == T_LIST_DEEP;
-            let mut seen = HashSet::new();
+            let mut seen = FxHashSet::default();
             for c in &l.cells()[start..end] {
                 if !range_step(ev, c, deep, &mut seen) {
                     return;
@@ -772,7 +772,7 @@ fn run_task(ev: &mut Evaluator, t: Task) {
         T_ATTRS_WHNF | T_ATTRS_DEEP => {
             let a = obj.as_attrs().expect("attrs task");
             let deep = t.kind == T_ATTRS_DEEP;
-            let mut seen = HashSet::new();
+            let mut seen = FxHashSet::default();
             for attr in &a.attrs()[start..end] {
                 if !range_step(ev, &attr.cell, deep, &mut seen) {
                     return;
@@ -805,7 +805,7 @@ fn run_task(ev: &mut Evaluator, t: Task) {
 
 /// Force one cell of a range task. Skips cells someone else claimed.
 /// Returns false when the task should stop.
-fn range_step(ev: &mut Evaluator, c: &Cell, deep: bool, seen: &mut HashSet<u64>) -> bool {
+fn range_step(ev: &mut Evaluator, c: &Cell, deep: bool, seen: &mut FxHashSet<u64>) -> bool {
     if bail_requested(ev) {
         return false;
     }

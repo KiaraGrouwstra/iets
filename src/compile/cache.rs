@@ -1303,7 +1303,7 @@ mod tests {
         let r = ev.eval(root, ir).and_then(|w| {
             let w = ev.force_deep(w)?;
             let mut out = Vec::new();
-            print::print_ambiguous(ev, w, 1, &mut out, &mut HashSet::new(), 0)?;
+            print::print_ambiguous(ev, w, 1, &mut out, &mut HashSet::default(), 0)?;
             Ok(String::from_utf8_lossy(&out).into_owned())
         });
         match r {

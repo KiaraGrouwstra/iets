@@ -8,7 +8,7 @@ mod tests;
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::from_utf8;
 use std::sync::{Arc, OnceLock};
@@ -42,7 +42,7 @@ use crate::source::LazyStore;
 use crate::store::path::{StorePath, store_dir, strip_store_dir};
 use crate::store::source::{SourceOrigin, SrcPath};
 use crate::syntax::ast::{Ast, FileId};
-use crate::syntax::symbol::{FxHashMap, Interner, Sym};
+use crate::syntax::symbol::{FxHashMap, FxHashSet, Interner, Sym};
 use crate::trace::{self, Trace, store};
 use crate::{argv, config, parallel, syntax};
 
@@ -1251,13 +1251,13 @@ impl Evaluator {
         if self.par.on {
             return parallel::force_deep(self, w); // parallel: fan-out walk
         }
-        let mut seen: HashSet<u64> = HashSet::new();
+        let mut seen = FxHashSet::default();
         let w = self.force(w)?;
         self.force_deep_inner(w, &mut seen)?;
         Ok(w)
     }
 
-    fn force_deep_inner(&mut self, w: Word, seen: &mut HashSet<u64>) -> EvalResult<()> {
+    fn force_deep_inner(&mut self, w: Word, seen: &mut FxHashSet<u64>) -> EvalResult<()> {
         match w.view() {
             Value::Attrs(a) => {
                 if !seen.insert(w.bits()) {
