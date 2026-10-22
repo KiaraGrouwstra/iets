@@ -203,10 +203,6 @@ comment both ignore it.
 
 ## Parallel evaluation
 
-With more than one worker, the order of `builtins.trace` and `builtins.warn`
-lines on stderr can differ from a sequential run. The demand walk forces
-every unclaimed cell first and parks on busy ones afterwards.
-
 A helper fiber starts at call depth zero. A program that fails only because
 it exceeds the maximum call depth (10000) in a sequential run can succeed
 in parallel.

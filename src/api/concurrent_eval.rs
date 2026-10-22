@@ -182,6 +182,43 @@ fn effect_cases() -> Vec<Case> {
             None,
             r#"let SLOW in [ (slow 300000) (builtins.seq (slow 600000) (builtins.warn "a" 1)) (2 == "b") 3 4 ]"#,
         ),
+        // `x` is shared: the walk forces it ahead, under the third element,
+        // and the sequential run under the second
+        effect(
+            "lint-shared-ahead",
+            lint,
+            None,
+            r#"let SLOW x = 0 == "x"; in [ (slow 300000) (builtins.seq (slow 600000) (builtins.seq x (1 == "a"))) (builtins.seq x 2) 3 4 ]"#,
+        ),
+        effect(
+            "trace-shared-ahead",
+            None,
+            None,
+            r#"let SLOW x = builtins.trace "x" 0; in [ (slow 300000) (builtins.seq (slow 600000) (builtins.seq x (builtins.trace "a" 1))) (builtins.seq x 2) 3 4 ]"#,
+        ),
+        // a helper forces `x` under the second element, and the demand path
+        // reads it under the first
+        effect(
+            "lint-shared-helper",
+            lint,
+            None,
+            r#"let SLOW x = 0 == "x"; in [ (builtins.seq (slow 600000) (builtins.seq x (1 == "a"))) (builtins.seq x 2) 3 4 5 ]"#,
+        ),
+        // a helper's `x` fails after its finding, and `tryEval` keeps the
+        // value of the thunk that forced it
+        effect(
+            "lint-try-helper",
+            lint,
+            None,
+            r#"let SLOW x = builtins.seq (0 == "x") (throw "no"); in [ (slow 300000) (builtins.tryEval x).success 3 4 5 ]"#,
+        ),
+        // the same through a `mapAttrs` entry, whose value lands in the set
+        effect(
+            "lint-shared-map",
+            lint,
+            None,
+            r#"let SLOW m = builtins.mapAttrs (n: v: builtins.seq (0 == "x") v) { a = 1; }; in [ (builtins.seq (slow 600000) (builtins.seq m.a (1 == "a"))) m.a 3 4 5 ]"#,
+        ),
         // `elem` returns at the first element, so nothing below it is demanded
         effect(
             "drv-speculated",

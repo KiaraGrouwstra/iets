@@ -89,9 +89,12 @@ const IMM_BLACKHOLE: u64 = TAG_IMM | (3 << 3);
 /// One bit above `EMPTY`, so "forced" is one mask on the force path; it is
 /// no payload, because a payload is a pointer or a tagged immediate.
 const IMM_SPECULATED: u64 = 0x40;
+/// `SPECULATED`, with effects parked on the thunk (`parallel::force::defer`):
+/// a reader that sees the plain mark need not look them up.
+const IMM_SPECULATED_FX: u64 = 0xc0;
 /// Bits a forced state word may hold. `state & !FORCED_BITS == 0` says
 /// the thunk is forced, by the demand path or by a helper.
-pub(crate) const FORCED_BITS: u64 = IMM_SPECULATED;
+pub(crate) const FORCED_BITS: u64 = IMM_SPECULATED_FX;
 
 pub(crate) const INT_MIN: i64 = -(1 << 60);
 pub(crate) const INT_MAX: i64 = (1 << 60) - 1;
@@ -103,6 +106,7 @@ impl Word {
     pub(crate) const FALSE: Word = Word(IMM_FALSE);
     pub(crate) const BLACKHOLE: Word = Word(IMM_BLACKHOLE);
     pub(crate) const SPECULATED: Word = Word(IMM_SPECULATED);
+    pub(crate) const SPECULATED_FX: Word = Word(IMM_SPECULATED_FX);
 
     /// The bit pattern, for a hash key, an atomic slot or the cache.
     #[inline]
