@@ -461,6 +461,9 @@ fn nix_eval_of_a_flake() {
 
     // the farm first on PATH: copying a fresh tree spawns the real nix
     let fresh = flake(&s, "fresh");
+    // other bytes than `flake`, which is in the store already
+    let nix = s.dir().join("fresh/flake.nix");
+    fs::write(&nix, fs::read_to_string(&nix).unwrap() + "# fresh\n").unwrap();
     let x = format!("{fresh}#x");
     let path = format!("{}:{}", f.bin.display(), std::env::var("PATH").unwrap());
     c.same(
