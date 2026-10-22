@@ -277,6 +277,12 @@ for lints, and turning the fan-out off in the builtins that stop early costs
 demand path reaches through a different thunk than the helper's first claim
 is dropped, which is a lost warning and never a wrong one.
 
+Effects come out in the order of the sequential run, as in Nix. The
+demand path takes the parked effects in the order it takes the values. A
+deep walk does the free cells before the cells a helper is busy with
+(`parallel::force::walk`). The effects of a cell walked ahead of a busy
+cell are held until that cell is done.
+
 A `--dump-drvs` file is written where the derivation is made. A parked dump goes missing while the `drvPath` that names it is
 returned.
 
