@@ -1144,7 +1144,7 @@ in
   let dr = (^nix build --dry-run --expr $dry | complete)
   let dj = (^$iets build --dry-run --json -E $dry | complete)
   let plan = ($dj.stdout | from json)
-  $ok = ($ok | append (verdict ($dj.exit_code == 0 and $dj.stderr == $dr.stderr and ($plan.willBuild | length) == 2 and ($dr.stderr | str contains ($plan.willBuild | str join "\n  ")))
+  $ok = ($ok | append (verdict ($dj.exit_code == 0 and ($dj.stderr | lines | where not ($it | str starts-with "⏵ ")) == ($dr.stderr | lines) and ($plan.willBuild | length) == 2 and ($dr.stderr | str contains ($plan.willBuild | str join "\n  ")))
     "iets build --dry-run: nix build --dry-run's text, and the plan as JSON" $"exit ($dj.exit_code)\n  real: ($dr.stderr)\n  ours: ($dj.stderr)\n  json: ($dj.stdout)"))
 
   # --- json-log-path: stderr stays text, the file gets the same records unprefixed
