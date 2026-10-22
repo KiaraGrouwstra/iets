@@ -118,6 +118,12 @@ impl Store {
             .env_remove("NIX_CONFIG")
             .env_remove("NIX_REMOTE")
             .env_remove("NIX_PATH");
+        // as hermetic::iets does, so Nix and iets see the same environment
+        for (k, _) in env::vars_os() {
+            if k.to_string_lossy().starts_with("IETS_") {
+                c.env_remove(k);
+            }
+        }
     }
 
     /// `tests/e2e/pkgs`, with an `env.nix` that names this machine's bash and
