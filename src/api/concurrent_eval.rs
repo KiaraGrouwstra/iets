@@ -1,6 +1,6 @@
 //! Differential test of the parallel runtime: every case is evaluated with
-//! 1, 2, 4 and 8 workers. Stdout, exit code and the effect lines on stderr
-//! must match.
+//! 1, 2, 4 and 8 workers. Stdout, exit code and the effect lines on stderr,
+//! in their order, must match.
 
 use crate::api::run::Run;
 use crate::api::testkit::eval;
@@ -162,6 +162,26 @@ fn effect_cases() -> Vec<Case> {
             None,
             r#"let SLOW in builtins.all (x: x == false) [ (slow 2000000 > 0 && false) (1 == "a") (2 == "b") (3 == "c") (4 == "d") ]"#,
         ),
+        // a helper is still on the second element when the demand path
+        // finishes the first, so the demand path walks the rest ahead of it
+        effect(
+            "lint-ahead",
+            lint,
+            None,
+            r#"let SLOW in [ (slow 300000) (builtins.seq (slow 600000) (1 == "a")) (2 == "b") 3 4 ]"#,
+        ),
+        effect(
+            "trace-ahead",
+            None,
+            None,
+            r#"let SLOW in [ (slow 300000) (builtins.seq (slow 600000) (builtins.trace "a" 1)) (builtins.trace "b" 2) 3 4 ]"#,
+        ),
+        effect(
+            "warn-ahead",
+            lint,
+            None,
+            r#"let SLOW in [ (slow 300000) (builtins.seq (slow 600000) (builtins.warn "a" 1)) (2 == "b") 3 4 ]"#,
+        ),
         // `elem` returns at the first element, so nothing below it is demanded
         effect(
             "drv-speculated",
@@ -309,7 +329,7 @@ fn args(c: &Case, workers: usize, dump: Option<&Path>) -> EvalArgs {
 
 fn outcome(c: &Case, workers: usize, dump: Option<&Path>) -> Outcome {
     let (out, rc, err) = eval(args(c, workers, dump));
-    let mut eff: Vec<String> = err
+    let eff: Vec<String> = err
         .lines()
         .filter(|l| {
             ["trace", "evaluation warning", "warning: ["]
@@ -318,7 +338,6 @@ fn outcome(c: &Case, workers: usize, dump: Option<&Path>) -> Outcome {
         })
         .map(String::from)
         .collect();
-    eff.sort();
     Outcome { out, rc, eff }
 }
 
