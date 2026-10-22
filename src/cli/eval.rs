@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::time::Instant;
 
-use crate::cli::{self, EvalArgs, evaluate, render, report, run_for};
+use crate::cli::{self, EvalArgs, render, report, run_for};
 use crate::eval::{Evaluator, Pos};
 use crate::trace::run::Cache;
 use crate::trace::store::Part;
@@ -27,37 +27,19 @@ pub fn run_eval(a: EvalArgs) -> i32 {
 }
 
 fn eval_and_print(ev: &mut Evaluator, a: EvalArgs, cache: Option<Cache>) -> i32 {
-    // Multiple `-A`s each print a value, like `nix-instantiate --eval`
-    // (issue #190). An empty list means the whole expression once.
-    let paths: Vec<Option<String>> = if a.attrs.is_empty() {
-        vec![a.attr.clone()]
-    } else {
-        a.attrs.iter().cloned().map(Some).collect()
-    };
-
     let strict = a.strict;
     let json = a.json;
     let raw = a.raw;
     let t0 = Instant::now();
     let timings = a.timings;
     let evaluating = cli::evaluating(&a);
-    let mut combined: Vec<u8> = Vec::new();
-
-    for path in paths {
-        let mut one = a.clone();
-        one.attr = path;
-        // Single-attr evaluate path; avoid re-walking attrs if this ever nests.
-        one.attrs.clear();
-        let v = match evaluate(ev, one) {
-            Ok(v) => v,
-            Err(e) => return report(ev, &e),
-        };
-
-        let mut out: Vec<u8> = Vec::new();
-        let r = if raw {
+    let mut out: Vec<u8> = Vec::new();
+    let r = cli::evaluate_each(ev, &a, |ev, v| {
+        let start = out.len();
+        if raw {
             // nix eval --raw: coerce without copying to the store, no newline
             let mut ctx = Vec::new();
-            ev.coerce_to_string(
+            let s = ev.coerce_to_string(
                 v,
                 &mut ctx,
                 Pos::NONE,
@@ -65,44 +47,41 @@ fn eval_and_print(ev: &mut Evaluator, a: EvalArgs, cache: Option<Cache>) -> i32 
                 false,
                 false,
                 true,
-            )
-            .map(|s| out.extend_from_slice(&s))
+            )?;
+            out.extend_from_slice(&s);
         } else if json {
             // nix eval --json forces the whole value, --strict or not (eval.cc)
             let mut ctx = Vec::new();
-            print::print_json(ev, v, &mut out, &mut ctx, true, Pos::NONE)
+            print::print_json(ev, v, &mut out, &mut ctx, true, Pos::NONE)?;
         } else {
-            (|| {
-                let v = if strict {
-                    ev.force_deep(v)?
-                } else {
-                    ev.force(v)?
-                };
-                let mut seen = HashSet::new();
-                print::print_ambiguous(ev, v, 1, &mut out, &mut seen, 0)
-            })()
-        };
-        if let Err(e) = r {
-            return report(ev, &e);
+            let v = if strict {
+                ev.force_deep(v)?
+            } else {
+                ev.force(v)?
+            };
+            let mut seen = HashSet::new();
+            print::print_ambiguous(ev, v, 1, &mut out, &mut seen, 0)?;
         }
         if !raw {
             out.push(b'\n');
         }
-        // Print as each value is ready, matching nix-instantiate --eval.
-        render::bytes(&out);
-        combined.extend_from_slice(&out);
-    }
-
+        // each value goes out as it is made, as in nix-instantiate --eval
+        render::bytes(&out[start..]);
+        Ok(())
+    });
     drop(evaluating);
     if ev.session().settings().stats >= 1 {
         ev.print_stats();
+    }
+    if let Err(e) = r {
+        return report(ev, &e);
     }
     if timings {
         eprintln!("eval: {:.3}s", t0.elapsed().as_secs_f64());
         treestore::report_timings();
     }
     if let Some(c) = &cache {
-        c.write(ev, &combined, false);
+        c.write(ev, &out, false);
     }
     0
 }

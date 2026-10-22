@@ -290,3 +290,18 @@ fn eval_json_forces_without_strict() {
     assert!(o.status.success(), "{}", text(&o.stderr));
     assert_eq!(text(&o.stdout).trim(), r#"{"a":[2]}"#);
 }
+
+/// Every `-A` prints, in order, from one evaluation of the input
+/// (nix-instantiate --eval).
+#[test]
+fn eval_prints_every_attr() {
+    let e = r#"builtins.trace "root" { a = 1; b = 2; c = throw "boom"; }"#;
+    let o = iets(&["eval", "-E", e, "-A", "b", "-A", "a"]);
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    assert_eq!(text(&o.stdout), "2\n1\n");
+    assert_eq!(text(&o.stderr).matches("trace: root").count(), 1);
+    // what came before the failing one is out already
+    let o = iets(&["eval", "-E", e, "-A", "a", "-A", "c", "-A", "b"]);
+    assert!(!o.status.success());
+    assert_eq!(text(&o.stdout), "1\n");
+}

@@ -294,10 +294,24 @@ fn stacks<R>(e: StackError) -> R {
 
 /// `api::evaluate`, with a missing input reported as a usage error.
 pub fn evaluate(ev: &mut Evaluator, a: EvalArgs) -> Result<Word, Box<Error>> {
+    need_input(&a);
+    api::evaluate(ev, a)
+}
+
+/// `api::evaluate_each`, with a missing input reported as a usage error.
+pub fn evaluate_each(
+    ev: &mut Evaluator,
+    a: &EvalArgs,
+    each: impl FnMut(&mut Evaluator, Word) -> Result<(), Box<Error>>,
+) -> Result<(), Box<Error>> {
+    need_input(a);
+    api::evaluate_each(ev, a, each)
+}
+
+fn need_input(a: &EvalArgs) {
     if a.input.is_none() {
         arg_error("nothing to evaluate: give -E EXPR or FILE")
     }
-    api::evaluate(ev, a)
 }
 
 /// Nix has no activity for evaluation, so this is `actUnknown`.
