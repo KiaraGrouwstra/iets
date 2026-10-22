@@ -33,7 +33,8 @@ let
     drv-eval = { flags = "-max_len=4096 -timeout=10"; seeds = _: ""; };
     drv-read = {
       flags = "-max_len=16384 -dict=${../fuzz/drv.dict}";
-      seeds = _: link [ "${nix-conformance}/drv" ] "*.drv";
+      # with the inputs that once diverged, so that each check runs them again
+      seeds = _: link [ "${nix-conformance}/drv" "${../fuzz/regressions/drv-read}" ] "*.drv";
     };
     drv-gen = { flags = "-max_len=4096"; seeds = _: ""; };
   };

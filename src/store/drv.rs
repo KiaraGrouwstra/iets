@@ -7,6 +7,7 @@ use crate::syntax::symbol::FxHashMap;
 use super::hash::{
     Hash, HashAlgo, HashError, HashFormat, base16_encode_into, base16_encode_into_bytes, hash_bytes,
 };
+use super::json::normalise_structured_attrs;
 use super::path::{
     DRV_EXTENSION, IngestionMethod, StorePath, StorePathError, make_fixed_output_path,
     make_output_path, make_text_path, output_path_name, store_dir,
@@ -589,10 +590,7 @@ impl Derivation {
             let v = p.bytes()?;
             p.expect(b")")?;
             if k == STRUCTURED_ATTRS_ENV {
-                drv.structured_attrs =
-                    Some(String::from_utf8(v).map_err(|_| {
-                        DrvError("non-UTF-8 structured attrs in derivation".into())
-                    })?);
+                drv.structured_attrs = Some(normalise_structured_attrs(&v)?);
             } else {
                 drv.env.push((k, v));
             }
