@@ -158,7 +158,8 @@ fn completion_asks_the_binary_and_ignores_settings() {
 #[test]
 fn a_flake_fragment_completes_to_the_outputs_attribute_names() {
     let d = tempdir().unwrap();
-    let sys = [
+    // a bare word completes under `packages.<this build's system>`
+    let mut sys: Vec<&str> = vec![
         "x86_64-linux",
         "aarch64-linux",
         "x86_64-darwin",
@@ -166,6 +167,10 @@ fn a_flake_fragment_completes_to_the_outputs_attribute_names() {
         "x86_64-windows",
         "aarch64-windows",
     ];
+    let host = iets::config::DEFAULT_SYSTEM;
+    if !sys.contains(&host) {
+        sys.push(host);
+    }
     let pkgs: String = sys
         .iter()
         .map(|s| format!("{s} = {{ hello = 1; help = 2; other = 3; \"a.b\" = 4; }}; "))
@@ -183,7 +188,7 @@ fn a_flake_fragment_completes_to_the_outputs_attribute_names() {
     // the package prefix is implied, and no space follows: not the end
     assert_eq!(complete(".#he"), ".#hello\n.#help\n:6\n");
     // an explicit path is completed from the root, name by name
-    let mut systems = sys.to_vec();
+    let mut systems = sys.clone();
     systems.sort();
     let want: String = systems
         .iter()

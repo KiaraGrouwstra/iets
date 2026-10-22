@@ -182,6 +182,21 @@ fn fetch_mercurial_names_a_way_out() {
     assert!(hint.contains("nix-instantiate"), "{hint}");
 }
 
+/// With no frontend to name it, the system is this build's own: `print-dev-env`
+/// on darwin asks for a darwin shell.
+#[test]
+fn eval_config_defaults_to_the_system_this_build_is_for() {
+    let system = EvalConfig::new().build().current_system();
+    let os = if cfg!(target_os = "macos") {
+        "darwin"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else {
+        "linux"
+    };
+    assert!(system.ends_with(os), "{system} is not a {os} system");
+}
+
 fn eval_pure(src: &str) -> Result<String, String> {
     let mut ev = EvalConfig::new().pure(true).build();
     let v = ev
