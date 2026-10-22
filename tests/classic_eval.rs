@@ -1051,7 +1051,10 @@ fn internal_json_errors() {
     );
     c.check(
         "json-log-path: stderr stays text",
-        stderr(&jo).starts_with("error: attribute 'b' missing"),
+        // a slow run prints a `⏵` progress line first
+        stderr(&jo)
+            .lines()
+            .any(|l| l.starts_with("error: attribute 'b' missing")),
         stderr(&jo),
     );
 }
