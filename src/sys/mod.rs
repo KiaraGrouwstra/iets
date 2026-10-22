@@ -4,6 +4,7 @@
 
 use std::env;
 use std::ffi::OsStr;
+use std::fs::metadata;
 use std::path::PathBuf;
 
 #[cfg_attr(target_os = "linux", path = "linux.rs")]
@@ -58,7 +59,7 @@ pub fn program(name: &OsStr) -> PathBuf {
     let find = |dirs: &OsStr| {
         env::split_paths(dirs)
             .map(|d| d.join(name))
-            .find(|p| std::fs::metadata(p).is_ok_and(|m| m.is_file() && fs::is_runnable(&m)))
+            .find(|p| metadata(p).is_ok_and(|m| m.is_file() && fs::is_runnable(&m)))
     };
     let on_path = env::var_os("PATH").is_some_and(|p| find(&p).is_some());
     let fallback = || option_env!("IETS_FALLBACK_PATH").and_then(|d| find(OsStr::new(d)));
