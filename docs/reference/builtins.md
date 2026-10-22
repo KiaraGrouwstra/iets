@@ -12,8 +12,9 @@ Each row has a status:
 These hold for every builtin:
 
 - **No import from derivation.** If a path is the output of a derivation,
-  reading it fails, because evaluation never builds anything. You can still
-  `import` a `.drv` file.
+  reading it fails, because evaluation never builds anything. An output that
+  is already in the store is read, and the `ifd-local-output` lint warns.
+  You can still `import` a `.drv` file.
 - **Classic mode falls back.** When iets does not support a call, a classic
   name such as `nix-instantiate` or `nix` runs the real Nix for you
   (`docs/reference/classic.md`).

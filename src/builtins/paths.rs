@@ -9,10 +9,10 @@ use crate::sys::errno;
 use crate::sys::{self, OsStrExt};
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::io;
 use std::path::{Path, PathBuf};
 use std::str::from_utf8;
 use std::sync::Arc;
+use std::{fs, io};
 
 use super::Registry;
 use super::store_hooks::{self, At, Follow};
@@ -23,8 +23,8 @@ use crate::flake::{self, flakeref};
 use crate::lint::{LintId, coerce, purity};
 use crate::runtime::{self, Ctx, Value, Word, ctx_to_arena};
 use crate::source;
-use crate::store::hash::{Hash, HashAlgo, Hasher, hash_bytes};
 use crate::store::drv::Derivation;
+use crate::store::hash::{Hash, HashAlgo, Hasher, hash_bytes};
 use crate::store::locate;
 use crate::store::nar::FileType;
 use crate::store::path::{
@@ -33,7 +33,7 @@ use crate::store::path::{
 };
 use crate::store::source::{SourceOrigin, Src, SrcPath};
 use crate::trace::{self, Kind};
-use crate::{log, treestore};
+use crate::{config, log, treestore};
 
 pub fn register(r: &mut Registry) {
     r.op("__readFile", 1, read_file);
@@ -215,7 +215,9 @@ pub fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>
                 }
             }
             Ctx::Built { drv: d, output } => {
-                if built_output_present(ev, d, output) {
+                if let Some(out) = built_output_present(ev, d, output) {
+                    purity::ifd_local_output(ev, &out, pos)?;
+                    ev.known.add_on_disk(out);
                     continue;
                 }
                 kind = ErrorKind::Unsupported;
@@ -235,46 +237,32 @@ pub fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>
     Ok(p)
 }
 
-/// Whether output `output` of `drv` is already in the store, so importing
-/// from it needs no build. Only outputs whose path is known without building
-/// count (input-addressed and fixed); a dynamic derivation, a floating or
-/// deferred output, or a `.drv` that cannot be read is not present. The
-/// check is the opaque path's: `stat_now` records the path's kind, so a
-/// tracing-cache hit re-checks it and a garbage-collected output is a miss.
-/// A present output joins the pure-eval allow list, as realiseContext's
-/// `allowPath` adds it in Nix.
-fn built_output_present(ev: &Evaluator, drv: &[u8], output: &[u8]) -> bool {
-    let (Ok(drv), Ok(output)) = (from_utf8(drv), from_utf8(output)) else {
-        return false;
-    };
-    if drv.contains('!') {
-        return false;
+/// The path of output `output` of `drv` when it is already in the store, so
+/// a read needs no build. Only a path known without a build counts:
+/// input-addressed or fixed, not a dynamic derivation's, a floating or a
+/// deferred one. `stat_now` records the kind, so a tracing-cache hit checks
+/// the path again.
+fn built_output_present(ev: &Evaluator, drv: &[u8], output: &[u8]) -> Option<StorePath> {
+    if !config::reads_built_outputs(ev.session()) {
+        return None;
     }
-    let Ok(path) = StorePath::parse(drv) else {
-        return false;
-    };
+    let drv = from_utf8(drv).ok()?;
+    if drv.contains('!') {
+        return None;
+    }
+    let path = StorePath::parse(drv).ok()?;
     let aterm = match ev.drv.drvs.lock().get(&path).and_then(|i| i.aterm.clone()) {
         Some(a) => a.to_vec(),
-        None => match std::fs::read(path.to_string()) {
-            Ok(a) => a,
-            Err(_) => return false,
-        },
+        None => fs::read(path.to_string()).ok()?,
     };
-    let Ok(name) = Derivation::name_from_path(&path) else {
-        return false;
-    };
-    let Ok(parsed) = Derivation::parse(&aterm, name) else {
-        return false;
-    };
-    let Some(Ok(Some(out))) = parsed.outputs.get(output).map(|o| o.path(&parsed.name, output))
-    else {
-        return false;
-    };
-    if ev.trace().stat_now(out.to_string().as_bytes(), true) == Kind::Missing {
-        return false;
-    }
-    ev.known.add_on_disk(out);
-    true
+    let parsed = Derivation::parse(&aterm, Derivation::name_from_path(&path).ok()?).ok()?;
+    let output = from_utf8(output).ok()?;
+    let out = parsed
+        .outputs
+        .get(output)?
+        .path(&parsed.name, output)
+        .ok()??;
+    (ev.trace().stat_now(out.to_string().as_bytes(), true) != Kind::Missing).then_some(out)
 }
 
 /// What a realised path reads, the path its messages name (the file on
