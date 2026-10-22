@@ -355,8 +355,13 @@ fn a_full_stdout_is_an_error() {
             .write(true)
             .open("/dev/full")
             .unwrap();
-        let st = hermetic::iets().args(a).stdout(full).status().unwrap();
-        assert_eq!(st.code(), Some(1), "{a:?}");
+        let o = hermetic::iets().args(a).stdout(full).output().unwrap();
+        assert_eq!(o.status.code(), Some(1), "{a:?}");
+        assert!(
+            text(&o.stderr).contains("No space left on device"),
+            "{a:?}: {}",
+            text(&o.stderr)
+        );
     }
 }
 
