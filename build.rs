@@ -24,7 +24,11 @@ fn hash_tree(h: &mut Sha256, dir: &Path) {
 /// One `#[test]` per tests/lang/eval-{okay,fail}-*.nix, so nextest runs and
 /// reports each case on its own. A build without the tests gets none.
 fn lang_cases(out: &Path) -> io::Result<()> {
-    println!("cargo:rerun-if-changed=tests/lang");
+    // A missing watched path makes cargo rerun the script, and so compile the
+    // crate again, at every build; the package and fuzz sources have no tests/.
+    if Path::new("tests/lang").exists() {
+        println!("cargo:rerun-if-changed=tests/lang");
+    }
     let mut stems: Vec<String> = fs::read_dir("tests/lang")
         .into_iter()
         .flatten()
