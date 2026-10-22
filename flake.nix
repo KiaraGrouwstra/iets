@@ -23,9 +23,9 @@
         ietsStatic = (scopeFor pkgs.pkgsStatic).iets;
         # only a check builds it: the dev profile, as a missing cfg fails in any
         # profile and fat LTO is the slowest compile of the suite
-        ietsRiscv64 = (scopeFor pkgs.pkgsCross.riscv64).iets.override {
-          extraArgs.CARGO_PROFILE = "dev";
-        };
+        ietsRiscv64 = (scopeFor pkgs.pkgsCross.riscv64).iets.override (o: {
+          commonArgs = o.commonArgs // { CARGO_PROFILE = "dev"; };
+        });
         classic = final.callPackage ./nix/classic.nix { };
         devShell = final.callPackage
           ({ lib, stdenv, mkShell, cargo, rustc, rustPlatform, clippy, rustfmt, hyperfine, nix, perf, jq, nushell, direnv, ast-grep }:
