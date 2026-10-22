@@ -152,6 +152,14 @@ def input-path [dir: string, input: string, --store: string]: nothing -> string 
   nixf eval ...$s --raw --impure --expr $"\(builtins.getFlake \"($dir)\"\).inputs.($input).outPath" | complete | get stdout | chomp
 }
 
+# store-delete PATH: PATH out of the daemon's store, as a verdict. A temp
+# root of a daemon worker that has not exited yet makes nix keep the path,
+# so a case must not delete a path a nix call of its own has just read.
+def store-delete [path: string]: nothing -> bool {
+  let d = (nixf store delete $path | complete)
+  verdict (not ($path | path exists)) $"setup: ($path) is not in the store" $"nix store delete kept ($path): ($d.stderr | lines | last 1 | str join '')"
+}
+
 # the `cache:` lines of a --timings run
 def cache-lines [iets: string, ref: string]: nothing -> list<string> {
   ^$iets eval --raw --timings $ref | complete | get stderr | lines | where $it =~ '^cache:'
@@ -696,17 +704,18 @@ def run-tests [iets: string, work: string]: nothing -> int {
   outputs = { self, tiny }: { v = toString (builtins.attrNames (builtins.readDir tiny)); };
 }
 '# | save $"($ghf)/flake.nix"
-    do { cd $ghf; nixf flake lock } | complete | ignore
-    let gh_exp = (nixf eval --raw --option eval-cache "false" $"($ghf)#v" | complete | get stdout | chomp)
-    let gh_path = (input-path $ghf "tiny")
-    nixf store delete $gh_path | complete | ignore
+    # nix fetches into a store of its own, as in the tarball case
+    let ghstore = $"($work)/ghstore"
+    do { cd $ghf; nixf flake lock --store $ghstore } | complete | ignore
+    let gh_exp = (nixf eval --store $ghstore --raw --option eval-cache "false" $"($ghf)#v" | complete | get stdout | chomp)
+    let gh_path = (input-path $ghf "tiny" --store $ghstore)
+    $res ++= [(verdict (not ($gh_path | path exists)) "github: the store does not have the input" $"($gh_path) is in the store already")]
     $res ++= [(fetch-only $iets "github: input fetched over https by iets" $"($ghf)#v" $gh_exp $nobin)]
 
     # the standalone case: no nix, no daemon (nix.conf's `store` points at a
     # socket that is not there), a fresh cache. The first run fetches into the
     # input store and evaluates; the second evaluates again with IETS_OFFLINE=1,
     # so any download would be an error.
-    nixf store delete $gh_path | complete | ignore
     $res ++= [(standalone $iets "standalone: no nix, no daemon, fetch then an offline hit" $"($ghf)#v" $gh_exp $nobin $"($work)/alone")]
 
     # a path cache.nixos.org has and this machine has not: the daemon substitutes
@@ -715,7 +724,8 @@ def run-tests [iets: string, work: string]: nothing -> int {
     # belongs.
     let src = (nixf eval --raw --impure --expr $"\(import ($nixpkgs) {}).sl.src.outPath" | complete | get stdout | chomp)
     let src_hash = (nixf path-info --store "https://cache.nixos.org" --json $src | complete | get stdout | from json | values | get 0.narHash)
-    nixf store delete $src | complete | ignore
+    # only the derivation is instantiated above, so no temp root holds $src
+    $res ++= [(store-delete $src)]
     let subf = $"($work)/subflake"
     mkdir $subf
     r#'{
@@ -735,29 +745,35 @@ def run-tests [iets: string, work: string]: nothing -> int {
     let sb = (with-env {IETS_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$iets eval --raw --no-tracing-cache $"($subf)#v" | complete })
     let sb_ok = (($sb.stdout | chomp) == $src and not ($sb.stderr | str contains "cannot fetch"))
     $res ++= [(verdict $sb_ok "substitute: the daemon substitutes the input, iets downloads nothing" $"substitute \(exit ($sb.exit_code)\): ($sb.stdout | chomp) ($sb.stderr | lines | last 2 | str join ' | ')")]
-    nixf store delete $src | complete | ignore
   }
 
   # `git` and `hg` are the last shell-out: iets has no git fetcher, so a
   # missing git input goes to nix, and without nix it is an error that names it.
+  # The input is a repository of its own, which nix locks in a store of its
+  # own, so the daemon's store does not have it until iets's nix fetches it:
+  # the case without nix runs first, and nothing is deleted.
+  let gitlib = $"($work)/gitlib"
   let gitf = $"($work)/gitflake"
-  mkdir $gitf
+  mkdir $gitlib $gitf
+  '{ outputs = { self }: { greeting = "git-" + self.shortRev; }; }' + $"\n# ($work)\n" | save $"($gitlib)/flake.nix"
+  git-in $gitlib init -q
+  git-in $gitlib add -A
+  git-in $gitlib commit -q -m gitlib
   r#'{
-  inputs.lib.url = "git+file://@WORK@/lib";
+  inputs.lib.url = "git+file://@WORK@/gitlib";
   outputs = { self, lib }: { v = lib.greeting; };
 }
 '# | str replace -a "@WORK@" $work | save $"($gitf)/flake.nix"
-  do { cd $gitf; nixf flake lock } | complete | ignore
-  let git_exp = (nixf eval --raw --option eval-cache "false" $"($gitf)#v" | complete | get stdout | chomp)
-  let git_path = (input-path $gitf "lib")
-  nixf store delete $git_path | complete | ignore
-  let gf = (^$iets eval --raw --no-tracing-cache $"($gitf)#v" | complete)
-  let gf_ok = (($gf.stdout | chomp) == $git_exp and $git_exp != "")
-  $res ++= [(verdict $gf_ok "git: a missing git input still goes through nix" $"git input \(exit ($gf.exit_code)\): ($gf.stdout | chomp) vs ($git_exp)")]
-  nixf store delete $git_path | complete | ignore
+  let gitstore = $"($work)/gitstore"
+  do { cd $gitf; nixf flake lock --store $gitstore } | complete | ignore
+  let git_exp = (nixf eval --store $gitstore --raw --option eval-cache "false" $"($gitf)#v" | complete | get stdout | chomp)
+  let git_path = (input-path $gitf "lib" --store $gitstore)
   let gn = (with-env {IETS_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$iets eval --raw --no-tracing-cache $"($gitf)#v" | complete })
   let gn_ok = ($gn.exit_code != 0 and ($gn.stderr | str contains "nix is not on PATH") and ($gn.stderr | str contains "input 'lib'"))
   $res ++= [(verdict $gn_ok "git: without nix the error names the input" $"git input, no nix \(exit ($gn.exit_code)\): ($gn.stderr | lines | last 2 | str join ' | ')")]
+  let gf = (^$iets eval --raw --no-tracing-cache $"($gitf)#v" | complete)
+  let gf_ok = (($gf.stdout | chomp) == $git_exp and $git_exp != "" and ($git_path | path exists))
+  $res ++= [(verdict $gf_ok "git: a missing git input still goes through nix" $"git input \(exit ($gf.exit_code)\): ($gf.stdout | chomp) vs ($git_exp)")]
   # a git input whose tree is not the one the lock names: nix reports a NAR
   # hash mismatch, and iets's record names the usual causes
   let gm = $"($work)/gitmismatch"
