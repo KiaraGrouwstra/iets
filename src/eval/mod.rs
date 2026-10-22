@@ -768,7 +768,7 @@ impl Evaluator {
             .census
             .ir_by_file
             .push((file.0, (self.arena.bytes_allocated - before) as u64));
-        self.t_compile += t0.elapsed();
+        self.t_compile += sys::elapsed(t0);
         if used_home {
             self.trace.env(b"HOME");
         }

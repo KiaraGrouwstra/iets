@@ -35,7 +35,7 @@ fn map_chunk(chunk: usize, thp: bool) -> (usize, bool) {
         };
         let t0 = Instant::now();
         sys::prefault(p.cast(), chunk, thp);
-        (p as usize, thp && t0.elapsed() > THP_STALL)
+        (p as usize, thp && sys::elapsed(t0) > THP_STALL)
     }
 }
 

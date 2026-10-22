@@ -4,6 +4,7 @@
 
 use std::env;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 #[cfg_attr(target_os = "linux", path = "linux.rs")]
 #[cfg_attr(not(target_os = "linux"), path = "portable.rs")]
@@ -52,4 +53,15 @@ pub fn temp_dir() -> PathBuf {
 /// bytes are a cache key or a name suffix, and nothing here can act on it.
 pub fn random(buf: &mut [u8]) {
     let _ = getrandom::fill(buf);
+}
+
+/// The time since `t0`, for timings and statistics. Zero in a fuzzing build:
+/// libFuzzer records the values the code compares, and a clock reading in
+/// them makes two runs with one seed keep different inputs.
+pub fn elapsed(t0: Instant) -> Duration {
+    if cfg!(fuzzing) {
+        Duration::ZERO
+    } else {
+        t0.elapsed()
+    }
 }
