@@ -158,9 +158,7 @@ fn completion_asks_the_binary_and_ignores_settings() {
 #[test]
 fn a_flake_fragment_completes_to_the_outputs_attribute_names() {
     let d = tempdir().unwrap();
-    // the bare word completes under `packages.<system>`, and `<system>` is the
-    // system this build is for (docs/reference/settings.md), so the fixture has
-    // to carry that one too: a windows runner asks for packages.x86_64-windows.
+    // a bare word completes under `packages.<this build's system>`
     let mut sys: Vec<&str> = vec![
         "x86_64-linux",
         "aarch64-linux",

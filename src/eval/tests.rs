@@ -182,9 +182,8 @@ fn fetch_mercurial_names_a_way_out() {
     assert!(hint.contains("nix-instantiate"), "{hint}");
 }
 
-/// An evaluator with no frontend to name the system takes this build's own. It
-/// used to say `x86_64-linux` everywhere, so `print-dev-env` asked a darwin
-/// host's flake for `devShells.x86_64-linux.default` (docs/how-to/use-with-direnv.md).
+/// With no frontend to name it, the system is this build's own: `print-dev-env`
+/// on darwin asks for a darwin shell.
 #[test]
 fn eval_config_defaults_to_the_system_this_build_is_for() {
     let system = EvalConfig::new().build().current_system();
