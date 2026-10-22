@@ -287,9 +287,7 @@ effects go to the thunk that forced it. A
 deep walk that meets a cell a helper is busy with does the cells after it
 as a helper would, then takes the cells from the busy one on, in order
 (`parallel::force::walk`). A thunk that fails keeps its effects with the
-thunk that forced it, because a `tryEval` can catch the error. On
-nixos-server with three lints at `warn`, a parallel run can still drop
-one or two of the 57 findings. That is a lost warning, never a wrong one.
+thunk that forced it, because a `tryEval` can catch the error.
 
 A `--dump-drvs` file is written where the derivation is made. A parked dump goes missing while the `drvPath` that names it is
 returned.

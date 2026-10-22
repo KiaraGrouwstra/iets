@@ -204,6 +204,14 @@ fn effect_cases() -> Vec<Case> {
             None,
             r#"let SLOW x = 0 == "x"; in [ (builtins.seq (slow 600000) (builtins.seq x (1 == "a"))) (builtins.seq x 2) 3 4 5 ]"#,
         ),
+        // an outer entry forces an inner entry twice: the second force must
+        // still read `x`, or the inner value lands in its set without it
+        effect(
+            "lint-map-twice",
+            lint,
+            None,
+            r#"let SLOW x = builtins.seq (0 == "x") 1; inner = builtins.mapAttrs (n: v: v) { a = x; }; outer = builtins.mapAttrs (n: v: builtins.seq v v) inner; in [ (slow 600000) outer 3 4 5 ]"#,
+        ),
         // a helper's `x` fails after its finding, and `tryEval` keeps the
         // value of the thunk that forced it
         effect(

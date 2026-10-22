@@ -235,10 +235,7 @@ fn read_speculated(ev: &mut Evaluator, cell: &Cell, st: Word) {
             release(ev, cell as *const Cell as u64);
         }
     } else if st == Word::SPECULATED_FX && ev.par.frames != 0 {
-        let key = cell as *const Cell as u64;
-        if !matches!(ev.par.fx.0.last(), Some(Effect::Read(k)) if *k == key) {
-            ev.par.fx.0.push(Effect::Read(key));
-        }
+        ev.par.fx.0.push(Effect::Read(cell as *const Cell as u64));
     }
 }
 
