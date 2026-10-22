@@ -7,7 +7,6 @@ let
   # the LLVM that rustc was built with reads its profiles
   llvm = rustc.llvmPackages.llvm;
   instrumented = iets.override {
-    wrapGit = false;
     extraArgs = {
       pname = "iets-instrumented";
       RUSTFLAGS = "-Cinstrument-coverage";

@@ -293,7 +293,7 @@ impl Query {
 /// Runs `argv` in `dir` and returns its exit status and stdout; stderr is
 /// inherited.
 fn run_cmd(dir: &Path, argv: &[Vec<u8>]) -> io::Result<(i32, Vec<u8>)> {
-    let out = Command::new(OsStr::from_bytes(&argv[0]))
+    let out = Command::new(sys::program(OsStr::from_bytes(&argv[0])))
         .args(argv[1..].iter().map(|a| OsStr::from_bytes(a)))
         .current_dir(dir)
         .stdin(Stdio::null())

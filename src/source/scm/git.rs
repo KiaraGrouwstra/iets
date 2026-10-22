@@ -5,7 +5,7 @@
 //! getRevCount keep them by revision). The tree of a revision follows from
 //! it too; the name of a branch or a tag is a `Cmd` observation of the refs.
 
-use crate::sys::OsStrExt;
+use crate::sys::{self, OsStrExt};
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::io::Write;
@@ -63,7 +63,7 @@ fn piped(root: &Path, args: &[&str], stdin: Vec<u8>) -> Result<(i32, Vec<u8>), S
             root.display()
         )
     };
-    let mut child = Command::new("git")
+    let mut child = Command::new(sys::program(OsStr::new("git")))
         .arg("--no-optional-locks")
         .arg("-C")
         .arg(root)
@@ -429,7 +429,7 @@ impl Scm for Git {
     }
 
     fn untracked(&self, root: &Path, rel: &OsStr) -> Option<String> {
-        let tracked = Command::new("git")
+        let tracked = Command::new(sys::program(OsStr::new("git")))
             .arg("--no-optional-locks")
             .arg("-C")
             .arg(root)

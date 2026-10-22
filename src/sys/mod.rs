@@ -3,6 +3,7 @@
 //! facilities. The portable one gives the same answers more slowly.
 
 use std::env;
+use std::ffi::OsStr;
 use std::path::PathBuf;
 
 #[cfg_attr(target_os = "linux", path = "linux.rs")]
@@ -46,6 +47,25 @@ pub use vm::resident;
 pub fn temp_dir() -> PathBuf {
     let t = env::temp_dir();
     fs::canonicalize(&t).unwrap_or(t)
+}
+
+/// `name` as a program to spawn: the caller's `PATH` decides, and the
+/// directories the package bakes into `IETS_FALLBACK_PATH` (nix/iets.nix)
+/// serve a caller with none, such as a systemd service. A wrapper that set
+/// `PATH` instead would hand them to every child, the shell of `nix-shell`
+/// included.
+pub fn program(name: &OsStr) -> PathBuf {
+    let find = |dirs: &OsStr| {
+        env::split_paths(dirs)
+            .map(|d| d.join(name))
+            .find(|p| std::fs::metadata(p).is_ok_and(|m| m.is_file() && fs::is_runnable(&m)))
+    };
+    let on_path = env::var_os("PATH").is_some_and(|p| find(&p).is_some());
+    let fallback = || option_env!("IETS_FALLBACK_PATH").and_then(|d| find(OsStr::new(d)));
+    match (on_path, fallback()) {
+        (false, Some(p)) => p,
+        _ => PathBuf::from(name),
+    }
 }
 
 /// Fills `buf` from the system's random source. A failure leaves zeros: the
