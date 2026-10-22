@@ -135,6 +135,9 @@ pub struct Settings {
     /// input store already holds evaluates; one that would fetch fails and says
     /// which URL it wanted.
     pub offline: bool,
+    /// `IETS_PROGRESS`: the status line on a terminal and the `⏵` lines on
+    /// a pipe. `false` draws neither (docs/reference/commands.md).
+    pub progress: bool,
     /// `fetch-max-size`: the most bytes one download may decompress to.
     pub fetch_max_size: u64,
     /// `fix-hashes`: what `iets build` does with a wrong fixed-output hash
@@ -364,6 +367,7 @@ impl Settings {
             build_gc_root: c.bool("build-gc-root")?.unwrap_or(true),
             fetching: env.set("IETS_FETCHING"),
             offline: env.set("IETS_OFFLINE"),
+            progress: env.flag("IETS_PROGRESS", None, true)?,
             fetch_max_size: c.int("fetch-max-size")?.unwrap_or(16 << 30),
             fix_hashes: fix_hashes.unwrap_or(FixHashes::Ask),
             options: Vec::new(),

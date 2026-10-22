@@ -49,6 +49,8 @@ and exit 0.
   running: eval, fetches, substitutions, uploads, builds. On a pipe you get a
   `⏵` line after 5 s and then every 30 s. A transfer with no new bytes for
   10 s says `no data for N`. `--log-format bar` and `raw` let you choose.
+  `IETS_PROGRESS=false` draws neither, for a log that must not depend on
+  how fast a run is.
   Under a Nix name, a pipe gets Nix's `copying path …...` lines instead.
 - **Exit codes** are in `docs/reference/errors.md`. In short: 0 success,
   1 any error, 2 a usage error of a native command, 100/101/102/104 a

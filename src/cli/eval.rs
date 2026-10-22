@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::time::Instant;
 
-use crate::cli::{self, EvalArgs, evaluate, render, report, run_for};
+use crate::cli::{self, EvalArgs, render, report, run_for};
 use crate::eval::{Evaluator, Pos};
 use crate::trace::run::Cache;
 use crate::trace::store::Part;
@@ -33,59 +33,55 @@ fn eval_and_print(ev: &mut Evaluator, a: EvalArgs, cache: Option<Cache>) -> i32 
     let t0 = Instant::now();
     let timings = a.timings;
     let evaluating = cli::evaluating(&a);
-    let v = match evaluate(ev, a) {
-        Ok(v) => v,
-        Err(e) => return report(ev, &e),
-    };
-
     let mut out: Vec<u8> = Vec::new();
-    let r = if raw {
-        // nix eval --raw: coerce without copying to the store, no newline
-        let mut ctx = Vec::new();
-        ev.coerce_to_string(
-            v,
-            &mut ctx,
-            Pos::NONE,
-            "while generating the eval command output",
-            false,
-            false,
-            true,
-        )
-        .map(|s| out.extend_from_slice(&s))
-    } else if json {
-        // nix eval --json forces the whole value, --strict or not (eval.cc)
-        let mut ctx = Vec::new();
-        print::print_json(ev, v, &mut out, &mut ctx, true, Pos::NONE)
-    } else {
-        (|| {
+    let r = cli::evaluate_each(ev, &a, |ev, v| {
+        let start = out.len();
+        if raw {
+            // nix eval --raw: coerce without copying to the store, no newline
+            let mut ctx = Vec::new();
+            let s = ev.coerce_to_string(
+                v,
+                &mut ctx,
+                Pos::NONE,
+                "while generating the eval command output",
+                false,
+                false,
+                true,
+            )?;
+            out.extend_from_slice(&s);
+        } else if json {
+            // nix eval --json forces the whole value, --strict or not (eval.cc)
+            let mut ctx = Vec::new();
+            print::print_json(ev, v, &mut out, &mut ctx, true, Pos::NONE)?;
+        } else {
             let v = if strict {
                 ev.force_deep(v)?
             } else {
                 ev.force(v)?
             };
             let mut seen = HashSet::new();
-            print::print_ambiguous(ev, v, 1, &mut out, &mut seen, 0)
-        })()
-    };
+            print::print_ambiguous(ev, v, 1, &mut out, &mut seen, 0)?;
+        }
+        if !raw {
+            out.push(b'\n');
+        }
+        // each value goes out as it is made, as in nix-instantiate --eval
+        render::bytes(&out[start..]);
+        Ok(())
+    });
     drop(evaluating);
     if ev.session().settings().stats >= 1 {
         ev.print_stats();
     }
-    match r {
-        Ok(()) => {
-            if !raw {
-                out.push(b'\n');
-            }
-            render::bytes(&out);
-            if timings {
-                eprintln!("eval: {:.3}s", t0.elapsed().as_secs_f64());
-                treestore::report_timings();
-            }
-            if let Some(c) = &cache {
-                c.write(ev, &out, false);
-            }
-            0
-        }
-        Err(e) => report(ev, &e),
+    if let Err(e) = r {
+        return report(ev, &e);
     }
+    if timings {
+        eprintln!("eval: {:.3}s", t0.elapsed().as_secs_f64());
+        treestore::report_timings();
+    }
+    if let Some(c) = &cache {
+        c.write(ev, &out, false);
+    }
+    0
 }
