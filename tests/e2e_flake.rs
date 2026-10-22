@@ -1117,11 +1117,14 @@ fn a_second_process_waits_for_the_download() {
         .envs(no_daemon)
         .env("IETS_CACHE_DIR", &wc)
         .env("IETS_OFFLINE", "1");
-    let o = Command::new("bash")
-        .args(["-c", &script])
-        .envs(c.get_envs().filter_map(|(k, v)| Some((k, v?))))
-        .output()
-        .unwrap();
+    let mut sh = Command::new("bash");
+    for (k, v) in c.get_envs() {
+        match v {
+            Some(v) => sh.env(k, v),
+            None => sh.env_remove(k),
+        };
+    }
+    let o = sh.args(["-c", &script]).output().unwrap();
     let ok = first.status.success()
         && o.status.success()
         && String::from_utf8_lossy(&o.stdout) == format!("hello5 {work}\n")
