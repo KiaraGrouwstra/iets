@@ -46,7 +46,12 @@ bytes, and the entry goes. Atomicity is per entry, and no reader joins two
 entries.
 
 **Poison and wipe; never repair.** An entry that does not decode is
-deleted and the run continues as a miss. A store whose version file is of
+deleted and the run continues as a miss. Only bytes a reader read, or a
+name that is not a regular file, are poison. A regular file that does not
+open is a miss and stays: Windows refuses an open while a sibling renames a
+new entry over the name. The wipe of a tracing entry takes the writer lock
+and removes the entry only if it is still the generation the reader
+rejected, so a good entry that a sibling published meanwhile stays. A store whose version file is of
 another format, or whose garbage-collection stamp cannot be parsed, or
 whose lock is not a file, is emptied and starts again.
 

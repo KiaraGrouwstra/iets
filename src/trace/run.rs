@@ -76,7 +76,7 @@ impl Cache {
     pub fn lookup(&self) -> bool {
         let t0 = Instant::now();
         let bad = || {
-            self.store.discard(&self.key);
+            self.store.discard(&self.key, self.opened());
             if self.timings {
                 errln!("cache: miss (unreadable entry, discarded)");
             }
@@ -233,7 +233,7 @@ impl Cache {
             Some((roots, drvs, sources))
         })();
         if tables.is_none() {
-            self.store.discard(&self.key);
+            self.store.discard(&self.key, self.opened());
             if self.timings {
                 errln!("cache: miss (unreadable tables, discarded)");
             }
