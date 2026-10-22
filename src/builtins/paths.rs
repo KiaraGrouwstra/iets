@@ -8,7 +8,7 @@
 use crate::sys::errno;
 use crate::sys::{self, OsStrExt};
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::str::from_utf8;
@@ -27,8 +27,8 @@ use crate::store::hash::{Hash, HashAlgo, Hasher, hash_bytes};
 use crate::store::locate;
 use crate::store::nar::FileType;
 use crate::store::path::{
-    IngestionMethod, StorePath, StorePathError, make_fixed_output_path, make_text_path,
-    strip_store_dir,
+    HASH_PART_LEN, IngestionMethod, StorePath, StorePathError, make_fixed_output_path,
+    make_text_path, strip_store_dir,
 };
 use crate::store::source::{SourceOrigin, Src, SrcPath};
 use crate::trace::{self, Kind};
@@ -231,16 +231,16 @@ pub fn realise_path(ev: &mut Evaluator, w: Word, pos: Pos) -> EvalResult<Vec<u8>
     Ok(p)
 }
 
-/// What a realised path reads, and the path its messages name: the file on
-/// disk, else the path itself. An entry a copied tree's filter left out is
-/// `path '...' does not exist`. `follow` is the resolution primops.cc asks
-/// `realisePath` for; `readFileType` asks for none.
+/// What a realised path reads, the path its messages name (the file on
+/// disk, else the path itself), and the path after `follow`. An entry a copied tree's filter left out is `path '...' does not
+/// exist`. `follow` is the resolution primops.cc asks `realisePath` for;
+/// `readFileType` asks for none.
 fn realise_existing(
     ev: &mut Evaluator,
     w: Word,
     follow: Option<Follow>,
     pos: Pos,
-) -> EvalResult<(SrcPath, Vec<u8>)> {
+) -> EvalResult<(SrcPath, Vec<u8>, Vec<u8>)> {
     let p = realise_path(ev, w, pos)?;
     let (p, at) = match follow {
         Some(m) => store_hooks::located(ev, p, m, pos)?,
@@ -254,14 +254,16 @@ fn realise_existing(
         return Err(io_error(errno::not_found(), "getting status of", &p, pos));
     }
     coerce::read_through_copy(ev, &p, pos)?;
-    let shown = at.local().map_or(p, |l| sys::path_to_internal(&l));
-    Ok((at, shown))
+    let shown = at
+        .local()
+        .map_or_else(|| p.clone(), |l| sys::path_to_internal(&l));
+    Ok((at, shown, p))
 }
 
 /// Reads `st_size` bytes like `PosixSourceAccessor::readFile`, so a procfs
 /// file reads as empty.
 fn read_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
-    let (at, p) = realise_existing(ev, args[0], Some(Follow::Full), pos)?;
+    let (at, p, named) = realise_existing(ev, args[0], Some(Follow::Full), pos)?;
     let bytes = at.read(ev, true).map_err(|e| read_error(e, &p, pos))?;
     if bytes.contains(&0) {
         bail!(
@@ -271,11 +273,87 @@ fn read_file(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
             lossy(&p)
         );
     }
-    Ok(ev.mk_string(&bytes))
+    let refs = file_references(ev, &named, &bytes);
+    if refs.is_empty() {
+        return Ok(ev.mk_string(&bytes));
+    }
+    let ctx = refs
+        .iter()
+        .map(|r| Ctx::Opaque(ev.arena.alloc_bytes(r.to_full_string().as_bytes())))
+        .collect();
+    let ctx = ctx_to_arena(&mut ev.arena, ctx);
+    Ok(ev.arena.mk_string_shared(&bytes, ctx))
+}
+
+/// primops.cc:prim_readFile's context: the references of the file's store
+/// path whose hash part occurs in `bytes`.
+fn file_references(ev: &Evaluator, named: &[u8], bytes: &[u8]) -> BTreeSet<StorePath> {
+    // nothing for the scan to keep, so skip the store query
+    if !has_hash_run(bytes) {
+        return BTreeSet::new();
+    }
+    // realisePath resolves links before the isInStore check
+    let resolved;
+    let path = if store_hooks::locate(ev, named).is_none() {
+        let r = sys::fs::canonicalize(&os_path(named));
+        ev.trace().canon(named, r.as_deref().ok());
+        let Ok(r) = r else {
+            return BTreeSet::new();
+        };
+        resolved = sys::path_to_internal(&r);
+        &resolved[..]
+    } else {
+        named
+    };
+    if !ev.is_store_path_text(path) {
+        return BTreeSet::new();
+    }
+    let Some((Ok(sp), _)) = to_store_path(path) else {
+        return BTreeSet::new();
+    };
+    scan_references(bytes, references(ev, Some(sp)))
+}
+
+fn is_nix32(b: u8) -> bool {
+    matches!(b, b'0'..=b'9' | b'a'..=b'd' | b'f'..=b'n' | b'p'..=b's' | b'v'..=b'z')
+}
+
+/// Whether `bytes` has a run of [`HASH_PART_LEN`] nix32 characters.
+fn has_hash_run(bytes: &[u8]) -> bool {
+    let mut run = 0;
+    for &b in bytes {
+        run = if is_nix32(b) { run + 1 } else { 0 };
+        if run == HASH_PART_LEN {
+            return true;
+        }
+    }
+    false
+}
+
+/// references.cc:RefScanSink: the `refs` whose hash part occurs in `bytes`.
+fn scan_references(bytes: &[u8], refs: BTreeSet<StorePath>) -> BTreeSet<StorePath> {
+    let mut by_hash: HashMap<Vec<u8>, StorePath> = refs
+        .into_iter()
+        .map(|r| (r.hash_part().as_bytes().to_vec(), r))
+        .collect();
+    let mut found = BTreeSet::new();
+    let mut i = 0;
+    while i + HASH_PART_LEN <= bytes.len() && !by_hash.is_empty() {
+        let window = &bytes[i..i + HASH_PART_LEN];
+        if let Some(j) = window.iter().rposition(|&b| !is_nix32(b)) {
+            i += j + 1;
+            continue;
+        }
+        if let Some(r) = by_hash.remove(window) {
+            found.insert(r);
+        }
+        i += 1;
+    }
+    found
 }
 
 fn read_dir(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
-    let (at, p) = realise_existing(ev, args[0], Some(Follow::Full), pos)?;
+    let (at, p, _) = realise_existing(ev, args[0], Some(Follow::Full), pos)?;
     let listing = at.read_dir(ev).map_err(|(verb, e)| {
         if errno::is_not_directory(&e) {
             Error::boxed(
@@ -301,7 +379,7 @@ fn read_dir(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
 }
 
 fn read_file_type(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
-    let (at, p) = realise_existing(ev, args[0], None, pos)?;
+    let (at, p, _) = realise_existing(ev, args[0], None, pos)?;
     let kind = at
         .stat(ev, false)
         .map_err(|e| io_error(e, "getting status of", &p, pos))?;
@@ -468,15 +546,19 @@ fn in_store(ev: &Evaluator, path: &[u8], ctx: &[Ctx]) -> Option<StorePath> {
     to_store_path(path)?.0.ok()
 }
 
-/// The references the copy inherits: the text's own for a `toFile`, none for
-/// a tree, and what the local store holds for a path this evaluation never
-/// made. A locked flake input and the flake root are trees `fetchToStore`
-/// added, so they need no store query, which costs a `nix` process.
-/// Nix swallows the store's error and copies without references.
+/// The references of `sp`: a `toFile`'s own, a `.drv`'s inputs, none for a
+/// tree, else what the local store holds. iets writes no `.drv` to the
+/// store, so the store's answer for one would depend on earlier builds. A
+/// flake input or the flake root is a tree, so it skips the store query,
+/// which costs a `nix` process. Nix swallows the store's error, and so does
+/// this.
 fn references(ev: &Evaluator, sp: Option<StorePath>) -> BTreeSet<StorePath> {
     let Some(sp) = sp else {
         return BTreeSet::new();
     };
+    if let Some(d) = ev.drv.drvs.get(&sp) {
+        return d.references;
+    }
     match ev.known.get(&sp) {
         Some(k) if k.origin.is_some() => k
             .origin

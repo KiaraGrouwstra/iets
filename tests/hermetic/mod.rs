@@ -2,10 +2,20 @@
 //! `plugin-files` line in `/etc/nix/nix.conf`, a `$NIX_CONFIG` or a user
 //! `nix.conf` would otherwise put warnings and settings into every run.
 
+// each test crate uses what it needs
+#![allow(dead_code)]
+
+use std::env;
+use std::ffi::OsStr;
 use std::process::Command;
 
 pub fn iets() -> Command {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_iets"));
+    iets_as(env!("CARGO_BIN_EXE_iets"))
+}
+
+/// `iets` started as `prog`, a link to it under another name.
+pub fn iets_as(prog: impl AsRef<OsStr>) -> Command {
+    let mut c = Command::new(prog);
     c.env("NIX_CONF_DIR", "/nonexistent")
         // set but empty: no user file is read at all (config::user_conf_files)
         .env("NIX_USER_CONF_FILES", "")
@@ -18,5 +28,10 @@ pub fn iets() -> Command {
         .env_remove("NIX_DAEMON_SOCKET_PATH")
         .env_remove("NIX_CONFIG")
         .env_remove("NIX_CONFIG_HOME");
+    for (k, _) in env::vars_os() {
+        if k.to_string_lossy().starts_with("IETS_") {
+            c.env_remove(k);
+        }
+    }
     c
 }

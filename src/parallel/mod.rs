@@ -36,6 +36,7 @@ pub struct Ctx {
     /// The outermost thunk this helper claimed in its task. Effects it
     /// produces wait on that thunk's demand.
     pub root: u64,
+    pub held: force::Held,
     pub slot: *mut sched::Slot,
 }
 
@@ -48,6 +49,7 @@ impl Default for Ctx {
             cancelled: false,
             stack_lo: 0,
             root: 0,
+            held: force::Held::default(),
             slot: ptr::null_mut(),
         }
     }

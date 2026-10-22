@@ -28,8 +28,8 @@ Some of the ideas that went into iets:
 
 * **Fast eval, and it tells you what it is doing.** Sometimes Nix hangs. Many
   beginners hit Ctrl-C thinking Nix is stuck. It was slow evaluating, with no
-  feedback, and slowly. iets makes eval 1.7-1.9x faster than Nix 2.34.8 on
-  NixOS configs on one core, and 3.1-3.5x on four (see
+  feedback, and slowly. iets makes eval 1.5-1.8x faster than Nix 2.34.8 on
+  NixOS configs on one core, and 3.3-5x on four (see
   [Benchmarks](#benchmarks)), and says what it is up to while it works.
 
 * **Hash bumping that bumps itself.** Bumping FODs (fixed-output derivations)
@@ -78,12 +78,12 @@ Some of the ideas that went into iets:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="bench/results/eval-dark.svg">
-  <img alt="Eval wall time against Nix 2.34.8 on nixos-desktop and nixos-minimal, warm and cold page cache. iets is 1.7x to 1.9x faster on 1 worker and 3.1x to 3.5x faster on 4 workers. fix 0.3.0 is 1.1x to 1.2x slower on 1 worker and 1.7x to 2.2x faster on 4 workers. Lix 2.95.2 is within 3% of Nix." src="bench/results/eval-light.svg">
+  <img alt="Eval wall time against Nix 2.34.8 on nixos-plasma, nixos-server and nixos-minimal, warm and cold page cache. iets is 1.5x to 1.8x faster on 1 worker and 3.3x to 5x faster on 4 workers. fix 0.3.0 is 1.1x to 1.2x slower on 1 worker and 1.6x to 2.2x faster on 4 workers. Lix 2.95.2 is within 3% of Nix." src="bench/results/eval-light.svg">
 </picture>
 
-To regenerate, run `bench/run.nu nixos-desktop nixos-minimal` twice (once with
-`COLD=1`), with `LIX` and `FIX` set to the binaries, then `bench/chart.nu
---pins bench/results/env.txt bench/results/*.json`.
+To regenerate, run `bench/run.nu nixos-plasma nixos-server nixos-minimal` twice
+(once with `COLD=1`), with `LIX` and `FIX` set to the binaries, then
+`bench/chart.nu --pins bench/results/env.txt bench/results/*.json`.
 
 ## Scope
 
