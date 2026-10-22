@@ -213,6 +213,7 @@ fn timeout(c: &mut Command) -> Option<Output> {
     while child.try_wait().unwrap().is_none() {
         if Instant::now() > deadline {
             let _ = child.kill();
+            let _ = child.wait();
             return None;
         }
         thread::sleep(Duration::from_millis(50));
@@ -221,6 +222,7 @@ fn timeout(c: &mut Command) -> Option<Output> {
 }
 
 /// The exit code of `c` with stdout on /dev/full.
+#[cfg(target_os = "linux")]
 fn to_full(c: &mut Command) -> Option<i32> {
     let full = fs::OpenOptions::new()
         .write(true)
@@ -233,6 +235,7 @@ fn to_full(c: &mut Command) -> Option<i32> {
         .code()
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_full_stdout() {
     let s = store!();
@@ -483,8 +486,12 @@ fn fetch_git() {
     ] {
         one(&mut c, label, &arg, mode);
     }
-    // a rev and a ref of a local repository are read without the real nix
+    // a rev and a ref of a local repository are read without the real nix;
+    // a dir without `nix` would fall through to the one on PATH
     let nonix = s.no_nix();
+    let stub = nonix.join("nix");
+    fs::write(&stub, format!("#!{}\nexit 1\n", resolved("bash").display())).unwrap();
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
     for arg in [
         format!(r#"{{ url = {path}; rev = "{more}"; }}"#),
         format!(r#"{{ url = {path}; ref = "ann"; }}"#),
