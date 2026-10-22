@@ -21,9 +21,10 @@ use std::time::{Duration, Instant};
 use e2e::{Builder, Store, checks_flake, ok, stderr, stdout};
 use serde_json::Value;
 
+/// `b` drops before `s`, whose dir it runs in.
 struct Grpc {
-    s: Store,
     b: Builder,
+    s: Store,
     url: String,
     log: PathBuf,
     daemon: Child,
@@ -79,7 +80,7 @@ fn start() -> Option<Grpc> {
         .stderr(f)
         .process_group(0);
     let daemon = c.spawn().unwrap();
-    let g = Grpc {
+    let mut g = Grpc {
         url: format!("grpc://127.0.0.1:{port}?insecure=1"),
         s,
         b,
@@ -88,8 +89,9 @@ fn start() -> Option<Grpc> {
     };
     let deadline = Instant::now() + Duration::from_secs(30);
     while TcpStream::connect(("127.0.0.1", port)).is_err() {
+        let exited = g.daemon.try_wait().unwrap().is_some();
         assert!(
-            Instant::now() < deadline,
+            !exited && Instant::now() < deadline,
             "nix-grpc-daemon did not start: {}",
             g.log()
         );
