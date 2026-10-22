@@ -5,6 +5,8 @@
 use std::env;
 use std::ffi::OsStr;
 use std::fs::metadata;
+#[cfg(test)]
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -43,6 +45,12 @@ pub use ffi::{
 };
 pub use imp::{discard, futex_wait, futex_wake, prefault};
 pub use vm::resident;
+
+/// `p` in the internal form, for a test to put into an expression.
+#[cfg(test)]
+pub(crate) fn internal_string(p: &Path) -> String {
+    String::from_utf8(path_to_internal(p)).expect("utf-8 path")
+}
 
 /// The temporary directory, resolved. Windows hands out the short `RUNNER~1`
 /// form, which a resolved path never matches.

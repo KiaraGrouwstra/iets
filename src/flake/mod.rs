@@ -630,15 +630,11 @@ fn declared_ref(ev: &mut Evaluator, url: Word) -> EvalResult<Declared> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sys::internal_string;
 
     use crate::source::scm;
     use crate::store::nar::tests::{Tree, tree};
     use rstest::rstest;
-
-    /// A path as the evaluator and a flake URL name it: `/C:/x` on Windows.
-    fn internal(p: &Path) -> String {
-        String::from_utf8(sys::path_to_internal(p)).expect("utf-8 path")
-    }
 
     #[test]
     fn attr_paths() {
@@ -712,7 +708,7 @@ mod tests {
         fs::create_dir_all(d.join(".git")).unwrap();
         let rev = "0".repeat(39) + "1";
         let git = scm::named("git").unwrap();
-        let url = format!("git+file://{}", internal(&d));
+        let url = format!("git+file://{}", internal_string(&d));
 
         let r = parse_flake_ref(&format!("{url}?ref=HEAD&rev={rev}#a"), b"/", None).unwrap();
         assert_eq!(r.dir, *d);

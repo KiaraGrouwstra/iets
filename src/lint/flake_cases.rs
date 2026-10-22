@@ -2,7 +2,7 @@
 //! directory: the scope of an input, the copy lints and `tree-meta-in-drv`.
 
 use crate::cli::run::{Host, Outcome, run};
-use crate::sys;
+use crate::sys::internal_string;
 use rstest::{fixture, rstest};
 use std::path::{Path, PathBuf};
 use std::{env, fs};
@@ -37,10 +37,6 @@ fn a_store_path() -> Option<String> {
     })
 }
 
-fn internal(p: &Path) -> String {
-    String::from_utf8_lossy(&sys::path_to_internal(p)).into_owned()
-}
-
 #[fixture]
 fn scratch() -> Scratch {
     let tmp = tempdir().unwrap();
@@ -48,7 +44,7 @@ fn scratch() -> Scratch {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/lint/scope/flake");
     copy_tree(&src.join("root"), &work.join("root"));
     copy_tree(&src.join("dep"), &work.join("dep"));
-    let dep = internal(&work.join("dep"));
+    let dep = internal_string(&work.join("dep"));
     let expr = format!("(builtins.fetchTree {{ type = \"path\"; path = \"{dep}\"; }}).narHash");
     let r = run(
         &[
@@ -68,7 +64,7 @@ fn scratch() -> Scratch {
         let text = text.replace("@DEP@", &dep).replace("@HASH@", &r.stdout);
         fs::write(dir.join(f), text).unwrap();
     }
-    let dir = internal(&dir);
+    let dir = internal_string(&dir);
     Scratch {
         work,
         dir,
@@ -104,7 +100,7 @@ fn no_lint(r: &Outcome) -> bool {
 #[rstest]
 fn an_input_is_silent_until_the_scope_or_the_inputs_table_opens_it(scratch: Scratch) {
     let root_site = format!("at {}/flake.nix:4:25", scratch.dir);
-    let dep_site = format!("at {}/dep/flake.nix:1:33", internal(&scratch.work));
+    let dep_site = format!("at {}/dep/flake.nix:1:33", internal_string(&scratch.work));
     let warn = ["--lint", "url-literal=warn"];
     let r = eval(&scratch, "value", &warn);
     assert_eq!(r.stdout, "http://dep.examplehttp://root.example");
@@ -236,7 +232,7 @@ fn the_roots_metadata_in_a_derivation_is_reported_by_default(scratch: Scratch) {
     assert!(
         r.stderr.contains(&format!(
             "at {}/dep/flake.nix:2:79",
-            internal(&scratch.work)
+            internal_string(&scratch.work)
         )),
         "{}",
         r.stderr
