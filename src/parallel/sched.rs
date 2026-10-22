@@ -200,7 +200,7 @@ pub struct Runtime {
     threads: Mutex<Vec<JoinHandle<()>>>,
     /// Effects held back by `force::defer`, by thunk address. Per runtime,
     /// so a run that ends drops the effects nothing took.
-    pub(crate) pending: Mutex<HashMap<u64, Vec<force::Deferred>>>,
+    pub(crate) pending: Mutex<HashMap<u64, Vec<force::Effect>>>,
     driver: Box<dyn Driver>,
     stack_size: usize,
     tune: Tuning,
@@ -354,14 +354,7 @@ impl Runtime {
                 self.driver.drop_user(slot.user);
             }
         }
-        let held: usize = self
-            .pending
-            .lock()
-            .unwrap()
-            .drain()
-            .map(|(_, v)| v.len())
-            .sum();
-        force::forget_pending(held);
+        self.pending.lock().unwrap().clear();
         parked
     }
 

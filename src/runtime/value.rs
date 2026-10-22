@@ -902,7 +902,7 @@ impl Word {
     /// path has not asked for this thunk yet.
     #[inline]
     pub(crate) fn thunk_speculated(self, state: Word) -> bool {
-        state == Word::SPECULATED
+        state == Word::SPECULATED || state == Word::SPECULATED_FX
     }
 
     /// The forced value once the state is EMPTY.

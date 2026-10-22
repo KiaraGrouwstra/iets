@@ -4,6 +4,7 @@
 
 use std::collections::HashSet;
 use std::mem;
+use std::ops::Range;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
@@ -115,8 +116,8 @@ pub unsafe fn init_ctx(ev: &mut Evaluator, slot: *mut Slot) {
         is_main,
         cancelled: false,
         stack_lo,
-        root: 0,
-        held: Held::default(),
+        frames: 0,
+        fx: Log::default(),
         slot,
     };
     ev.call_depth = 0;
@@ -213,22 +214,28 @@ pub fn force_thunk(ev: &mut Evaluator, w: Word) -> EvalResult<Word> {
     // SAFETY: the word a fiber stored in this state cell.
     let st = unsafe { Word::from_bits(cell.atomic().load(Ordering::Acquire)) };
     if !st.is_blackhole() && !w.thunk_unforced(st) {
-        if ev.par.is_main && w.thunk_speculated(st) {
-            take_speculated(ev, cell);
+        if w.thunk_speculated(st) {
+            read_speculated(ev, cell, st);
         }
         return Ok(w.thunk_value(st));
     }
     claim_and_run(ev, w, cell)
 }
 
-/// The demand path took a value a helper computed: the mark is upgraded so
-/// the printers show the value, and the effects parked on the thunk become
-/// the program's.
+/// A fiber reads a value a helper computed. The demand path takes it: the
+/// mark is upgraded so the printers show the value, and the effects parked
+/// on the thunk become the program's. A helper notes that the thunk it is
+/// forcing read it, so its effects come out where the demand path would
+/// have run them.
 #[inline]
-fn take_speculated(ev: &mut Evaluator, cell: &Cell) {
-    cell.set(Word::EMPTY);
-    if NPENDING.load(Ordering::Relaxed) != 0 {
-        release(ev, cell as *const Cell as u64);
+fn read_speculated(ev: &mut Evaluator, cell: &Cell, st: Word) {
+    if ev.par.is_main {
+        cell.set(Word::EMPTY);
+        if st == Word::SPECULATED_FX {
+            release(ev, cell as *const Cell as u64);
+        }
+    } else if st == Word::SPECULATED_FX && ev.par.frames != 0 {
+        ev.par.fx.0.push(Effect::Read(cell as *const Cell as u64));
     }
 }
 
@@ -253,8 +260,8 @@ fn claim_and_run(ev: &mut Evaluator, w: Word, cell: &'static Cell) -> EvalResult
         match thunk::try_claim(cell, me, |st| w.thunk_unforced(st)) {
             Claim::Won(p) => break p,
             Claim::Value(st) => {
-                if ev.par.is_main && w.thunk_speculated(st) {
-                    take_speculated(ev, cell);
+                if w.thunk_speculated(st) {
+                    read_speculated(ev, cell, st);
                 }
                 return Ok(w.thunk_value(st));
             }
@@ -287,26 +294,36 @@ fn claim_and_run(ev: &mut Evaluator, w: Word, cell: &'static Cell) -> EvalResult
         thunk::publish(unsafe { slot_mut(ev) }, cell, payload);
         return Err(e);
     }
-    // effects below this point belong to the first thunk this helper
-    // claimed: the demand path that takes its value takes them too
-    let outer = ev.par.root == 0 && !ev.par.is_main;
-    if outer {
-        ev.par.root = key;
-    }
+    // a helper's effects from here on are this thunk's, in their order
+    let spec = !ev.par.is_main;
+    let mark = ev.par.fx.0.len();
+    ev.par.frames += spec as u32;
     let r = ev.run_thunk(w, payload);
-    if outer {
-        ev.par.root = 0;
-    }
+    ev.par.frames -= spec as u32;
     match r {
         Ok(v) => {
             debug_assert!(!v.is_thunk());
             if ev.par.cancelled {
                 // Bailed (or hit an effect) somewhere below: transient.
-                discard(ev, outer, key);
+                ev.par.fx.0.truncate(mark);
                 thunk::publish(unsafe { slot_mut(ev) }, cell, payload);
                 Err(cancelled())
+            } else if ev.par.fx.0.len() > mark && w.thunk_kind() == Kind::ThunkMap {
+                // the value of a `mapAttrs` entry goes into the set's own
+                // cell, where a read takes it without its effects: the
+                // entry stays unforced, and the thunk that forced it
+                // carries them
+                if ev.par.frames == 0 {
+                    ev.par.fx.0.truncate(mark);
+                }
+                thunk::publish(unsafe { slot_mut(ev) }, cell, payload);
+                Ok(v)
             } else {
-                let done = w.thunk_finish(v, ev.par.is_main);
+                let mut done = w.thunk_finish(v, ev.par.is_main);
+                if ev.par.fx.0.len() > mark {
+                    park(ev, key, mark);
+                    done = Word::SPECULATED_FX;
+                }
                 thunk::publish(unsafe { slot_mut(ev) }, cell, done);
                 Ok(v)
             }
@@ -315,10 +332,30 @@ fn claim_and_run(ev: &mut Evaluator, w: Word, cell: &'static Cell) -> EvalResult
             if !ev.par.is_main && e.kind != ErrorKind::Cancelled {
                 slot_ref(ev).runtime().note_failed(key);
             }
-            discard(ev, outer, key);
+            // a `tryEval` above may catch the error and keep its value: the
+            // thunk that forced this one carries what it did
+            if ev.par.cancelled || e.kind == ErrorKind::Cancelled || ev.par.frames == 0 {
+                ev.par.fx.0.truncate(mark);
+            }
             thunk::publish(unsafe { slot_mut(ev) }, cell, payload);
             Err(e)
         }
+    }
+}
+
+/// Parks the effects a helper produced since `mark` on the thunk at `key`,
+/// before its value is published. The thunk that forced it reads it.
+#[cold]
+fn park(ev: &mut Evaluator, key: u64, mark: usize) {
+    let fx = ev.par.fx.0.split_off(mark);
+    slot_ref(ev)
+        .runtime()
+        .pending
+        .lock()
+        .unwrap()
+        .insert(key, fx);
+    if ev.par.frames != 0 {
+        ev.par.fx.0.push(Effect::Read(key));
     }
 }
 
@@ -342,89 +379,62 @@ pub static EFFECT_BAILS: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) type Deferred = Box<dyn FnOnce(&mut Evaluator) + Send>;
 
-/// Effects a helper produced, by the thunk whose value carries them
-/// (`Runtime::pending`). The demand path runs them when it takes that
-/// value and drops them otherwise, so a warning from work the program never
-/// asks for is never seen. Only for an effect the program may lose without
-/// losing anything it returns. This counter, over every runtime in the
-/// process, keeps the demand path off the lock while the maps are empty,
-/// which is every run without lints.
-static NPENDING: AtomicUsize = AtomicUsize::new(0);
-
-/// The effects of a runtime that ended, which nothing will take.
-pub(crate) fn forget_pending(n: usize) {
-    NPENDING.fetch_sub(n, Ordering::Relaxed);
+/// One step of a thunk's effects, in the order its evaluation made it. A
+/// `Read` is the value of another speculated thunk with effects: those run
+/// there, unless an earlier demand already ran them.
+pub(crate) enum Effect {
+    Run(Deferred),
+    Read(u64),
 }
 
-/// Effects a fiber produced while it worked ahead of its own order
-/// (`hold`). A clone is a fresh fiber, which holds nothing.
+/// The effects of the thunks a helper is forcing (`Ctx::fx`). A clone is a
+/// fresh fiber, which forces nothing.
 #[derive(Default)]
-pub struct Held(Option<Vec<Deferred>>);
+pub struct Log(Vec<Effect>);
 
-impl Clone for Held {
-    fn clone(&self) -> Held {
-        Held(None)
+impl Clone for Log {
+    fn clone(&self) -> Log {
+        Log::default()
     }
 }
 
-/// Run an effect, or hold it back when a helper produced it or the fiber
-/// works ahead of its order. The demand path otherwise runs it at once.
+/// Run an effect, or hold it back when a helper produced it. The demand
+/// path runs it at once. A helper parks it on the innermost thunk it is
+/// forcing (`Runtime::pending`), and the demand path runs it when it first
+/// takes that value, directly or through a thunk that read it. Effects
+/// come out in the order of the sequential run, and a warning from work
+/// the program never asks for is never seen. Only for an effect the
+/// program may lose without losing anything it returns.
 pub fn defer(ev: &mut Evaluator, f: impl FnOnce(&mut Evaluator) + Send + 'static) {
-    if ev.par.held.0.is_none() && (!ev.par.on || ev.par.is_main || ev.par.root == 0) {
+    if ev.par.is_main || ev.par.frames == 0 {
         f(ev);
         return;
     }
-    effect(ev, Box::new(f));
+    ev.par.fx.0.push(Effect::Run(Box::new(f)));
 }
 
-fn effect(ev: &mut Evaluator, f: Deferred) {
-    if let Some(held) = &mut ev.par.held.0 {
-        held.push(f);
-        return;
-    }
-    if !ev.par.on || ev.par.is_main || ev.par.root == 0 {
-        f(ev);
-        return;
-    }
-    slot_ref(ev)
-        .runtime()
-        .pending
-        .lock()
-        .unwrap()
-        .entry(ev.par.root)
-        .or_default()
-        .push(f);
-    NPENDING.fetch_add(1, Ordering::Relaxed);
-}
-
-/// Run `f` with the effects it produces held back, and return them.
-fn hold<R>(ev: &mut Evaluator, f: impl FnOnce(&mut Evaluator) -> R) -> (R, Vec<Deferred>) {
-    let outer = ev.par.held.0.replace(Vec::new());
-    let r = f(ev);
-    let held = mem::replace(&mut ev.par.held.0, outer).unwrap_or_default();
-    (r, held)
-}
-
-/// The thunk was reset, so nothing carries its effects.
-#[inline]
-fn discard(ev: &Evaluator, outer: bool, key: u64) {
-    if outer && NPENDING.load(Ordering::Relaxed) != 0 {
-        let held = slot_ref(ev).runtime().pending.lock().unwrap().remove(&key);
-        NPENDING.fetch_sub(held.map_or(0, |v| v.len()), Ordering::Relaxed);
-    }
-}
-
-/// The demand path took the value of the thunk at `key`: its effects are
-/// now the program's.
+/// The demand path took the value of the thunk at `key`: its effects, and
+/// those of the thunks it read that nothing took before, are now the
+/// program's.
 #[cold]
 fn release(ev: &mut Evaluator, key: u64) {
-    if !ev.par.on {
+    let pending = &slot_ref(ev).runtime().pending;
+    let Some(fx) = pending.lock().unwrap().remove(&key) else {
         return;
-    }
-    let held = slot_ref(ev).runtime().pending.lock().unwrap().remove(&key);
-    for f in held.into_iter().flatten() {
-        NPENDING.fetch_sub(1, Ordering::Relaxed);
-        effect(ev, f);
+    };
+    let mut stack = vec![fx.into_iter()];
+    while let Some(top) = stack.last_mut() {
+        match top.next() {
+            Some(Effect::Run(f)) => f(ev),
+            Some(Effect::Read(k)) => {
+                if let Some(fx) = pending.lock().unwrap().remove(&k) {
+                    stack.push(fx.into_iter());
+                }
+            }
+            None => {
+                stack.pop();
+            }
+        }
     }
 }
 
@@ -454,10 +464,10 @@ pub fn take_cell(ev: &mut Evaluator, c: &Cell) -> CellState {
         return CellState::Unclaimed;
     }
     let v = w.thunk_value(s);
+    if w.thunk_speculated(s) {
+        read_speculated(ev, st, s);
+    }
     if ev.par.is_main {
-        if w.thunk_speculated(s) {
-            take_speculated(ev, st);
-        }
         c.set(v);
     }
     CellState::Ready(v)
@@ -667,11 +677,12 @@ fn deep_inner(
     }
 }
 
-/// Two-pass walk over `n` cells: unclaimed cells first, then (demand
-/// only) the cells another fiber was busy with, in index order so that
-/// the first error in sequential order is the one reported. The effects
-/// of a cell walked ahead of a busy one are held until the cells before it
-/// are done, so they come out in sequential order too.
+/// Walk over `n` cells. Without `demand`, busy cells are skipped. With it,
+/// the walk goes in order up to the first busy cell, does the cells after
+/// it as a helper would, and then takes every cell from the busy one on,
+/// in order. The cells done ahead are speculated, so their effects run
+/// where the sequential run has them, and the first error in sequential
+/// order is the one reported.
 fn walk(
     ev: &mut Evaluator,
     n: usize,
@@ -680,74 +691,68 @@ fn walk(
     cell: impl Fn(usize) -> &'static Cell,
     decorate: impl Fn(&mut Evaluator, usize, Box<Error>) -> Box<Error>,
 ) -> EvalResult<()> {
-    let mut deferred: Vec<usize> = Vec::new();
-    let mut ahead: Vec<(usize, Vec<Deferred>)> = Vec::new();
-    let mut first_err: Option<(usize, Box<Error>)> = None;
+    let mut busy = n;
     for i in 0..n {
         let c = cell(i);
-        // `None` for a busy cell. Taking a ready cell runs the effects a
-        // helper parked on it, so the take is part of the step.
-        let step = |ev: &mut Evaluator, seen: &mut HashSet<u64>| {
-            // a ready cell already gave up its value: forcing it again would
-            // walk the claim protocol of a thunk a helper left boxed
-            let ready = match take_cell(ev, c) {
-                CellState::Busy => return None,
-                CellState::Ready(v) => Some(v),
-                CellState::Unclaimed => None,
-            };
-            if !demand && bail_requested(ev) {
-                return Some(Err(cancelled()));
-            }
-            Some(match ready {
-                Some(v) => deep_inner(ev, v, seen, demand),
-                None => ev
-                    .force_cell(c)
-                    .and_then(|v| deep_inner(ev, v, seen, demand)),
-            })
-        };
-        let r = if deferred.is_empty() {
-            step(ev, seen)
-        } else {
-            let (r, held) = hold(ev, |ev| step(ev, seen));
-            ahead.push((i, held));
-            r
-        };
-        let Some(r) = r else {
-            if demand {
-                deferred.push(i);
-            }
-            continue;
-        };
-        if let Err(e) = r {
-            if demand {
-                first_err = Some((i, decorate(ev, i, e)));
+        // a ready cell already gave up its value: forcing it again would
+        // walk the claim protocol of a thunk a helper left boxed
+        let ready = match take_cell(ev, c) {
+            CellState::Busy if demand => {
+                busy = i;
                 break;
             }
-            return Err(e);
+            CellState::Busy => continue,
+            CellState::Ready(v) => Some(v),
+            CellState::Unclaimed => None,
+        };
+        if !demand && bail_requested(ev) {
+            return Err(cancelled());
+        }
+        let r = match ready {
+            Some(v) => deep_inner(ev, v, seen, demand),
+            None => ev
+                .force_cell(c)
+                .and_then(|v| deep_inner(ev, v, seen, demand)),
+        };
+        if let Err(e) = r {
+            return Err(if demand { decorate(ev, i, e) } else { e });
         }
     }
-    let limit = first_err.as_ref().map_or(n, |(i, _)| *i);
-    let mut ahead = ahead.into_iter().peekable();
-    for i in deferred {
-        if i >= limit {
-            break;
-        }
-        while let Some((_, held)) = ahead.next_if(|(j, _)| *j < i) {
-            held.into_iter().for_each(|f| effect(ev, f));
-        }
+    if busy + 1 < n {
+        ahead(ev, busy + 1..n, &cell);
+    }
+    for i in busy..n {
         let c = cell(i);
-        let r = ev
-            .force_cell(c)
-            .and_then(|v| deep_inner(ev, v, seen, demand));
+        let r = match take_cell(ev, c) {
+            CellState::Ready(v) => deep_inner(ev, v, seen, demand),
+            _ => ev
+                .force_cell(c)
+                .and_then(|v| deep_inner(ev, v, seen, demand)),
+        };
         if let Err(e) = r {
             return Err(decorate(ev, i, e));
         }
     }
-    ahead.for_each(|(_, held)| held.into_iter().for_each(|f| effect(ev, f)));
-    match first_err {
-        Some((_, e)) => Err(e),
-        None => Ok(()),
+    Ok(())
+}
+
+/// The cells `range` as a range task does them, while the walk would
+/// otherwise wait on a busy cell before them. The effects of what this
+/// forces park on its thunks, outside the thunk this fiber is forcing, if
+/// any: the walk that takes the cells next reads them in order.
+fn ahead(ev: &mut Evaluator, range: Range<usize>, cell: impl Fn(usize) -> &'static Cell) {
+    let is_main = mem::replace(&mut ev.par.is_main, false);
+    let frames = mem::replace(&mut ev.par.frames, 0);
+    let cancelled = ev.par.cancelled;
+    let mut seen = HashSet::new();
+    for i in range {
+        if !range_step(ev, cell(i), true, &mut seen) {
+            break;
+        }
     }
+    ev.par.is_main = is_main;
+    ev.par.frames = frames;
+    ev.par.cancelled = cancelled;
 }
 
 fn run_task(ev: &mut Evaluator, t: Task) {

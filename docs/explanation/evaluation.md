@@ -269,19 +269,25 @@ instructions on nixos-server at four workers. At one worker there is no
 helper, so it costs nothing.
 
 A lint finding is not a value and is held back instead. One a helper
-produced is parked on the thunk the helper was forcing
+produced is parked on the innermost thunk the helper was forcing
 (`parallel::force::defer`). The demand path runs it when it takes that
 thunk's value and drops it otherwise. Cancelling the helper, as `trace` does, was measured at 15 % of the wall
 for lints, and turning the fan-out off in the builtins that stop early costs
-37 % at four workers, so neither is the answer. A finding whose value the
-demand path reaches through a different thunk than the helper's first claim
-is dropped, which is a lost warning and never a wrong one.
+37 % at four workers, so neither is the answer.
 
-Effects come out in the order of the sequential run, as in Nix. The
-demand path takes the parked effects in the order it takes the values. A
-deep walk does the free cells before the cells a helper is busy with
-(`parallel::force::walk`). The effects of a cell walked ahead of a busy
-cell are held until that cell is done.
+Effects come out in the order of the sequential run, as in Nix. A thunk's
+parked effects keep their order, and a read of another speculated thunk
+with effects is one of them. The demand path runs a thunk's effects the
+first time it takes its value, directly or through a thunk that read it,
+which is where the sequential run forced it. The mark `SPECULATED_FX`
+says a thunk has effects, so a read of one without them takes no lock. A
+`mapAttrs` entry keeps its value in the set's own cell, where a read does
+not take it, so a helper leaves an entry with effects unforced and its
+effects go to the thunk that forced it. A
+deep walk that meets a cell a helper is busy with does the cells after it
+as a helper would, then takes the cells from the busy one on, in order
+(`parallel::force::walk`). A thunk that fails keeps its effects with the
+thunk that forced it, because a `tryEval` can catch the error.
 
 A `--dump-drvs` file is written where the derivation is made. A parked dump goes missing while the `drvPath` that names it is
 returned.

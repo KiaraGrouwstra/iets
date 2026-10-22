@@ -33,10 +33,11 @@ pub struct Ctx {
     /// Lowest stack address this fiber may use. Zero on the sequential
     /// path, which runs on the thread stack and never checks.
     pub stack_lo: usize,
-    /// The outermost thunk this helper claimed in its task. Effects it
-    /// produces wait on that thunk's demand.
-    pub root: u64,
-    pub held: force::Held,
+    /// How many thunks this helper is forcing. Inside one, an effect waits
+    /// on the demand of the innermost (`force::defer`).
+    pub frames: u32,
+    /// The effects of the thunks this helper is forcing, innermost last.
+    pub fx: force::Log,
     pub slot: *mut sched::Slot,
 }
 
@@ -48,8 +49,8 @@ impl Default for Ctx {
             is_main: true,
             cancelled: false,
             stack_lo: 0,
-            root: 0,
-            held: force::Held::default(),
+            frames: 0,
+            fx: force::Log::default(),
             slot: ptr::null_mut(),
         }
     }
