@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -190,6 +191,17 @@ impl Drop for Store {
         // SAFETY: kill only sends a signal
         unsafe { libc::kill(-(self.daemon.id() as i32), libc::SIGKILL) };
         let _ = self.daemon.wait();
+        // store paths are read-only, and TempDir would leave them behind
+        writable(self.dir());
+    }
+}
+
+fn writable(dir: &Path) {
+    let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o755));
+    for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+        if e.file_type().is_ok_and(|t| t.is_dir()) {
+            writable(&e.path());
+        }
     }
 }
 
