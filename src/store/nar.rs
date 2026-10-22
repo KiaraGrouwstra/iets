@@ -881,7 +881,6 @@ pub(crate) mod tests {
     use crate::sys;
     use crate::sys::fs::set_executable;
     use rstest::{fixture, rstest};
-    use std::env;
     use std::ops::Deref;
     use std::path::PathBuf;
     use tempfile::{TempDir, tempdir};
@@ -1061,8 +1060,8 @@ pub(crate) mod tests {
 
     #[test]
     fn restore_rejects_garbage() {
-        let out = env::temp_dir().join(format!("iets-nar-garbage-{}", std::process::id()));
-        assert!(restore_path(&mut &b"nix-archive-2"[..], &out).is_err());
+        let d = tempdir().unwrap();
+        assert!(restore_path(&mut &b"nix-archive-2"[..], &d.path().join("out")).is_err());
     }
 
     #[rstest]
