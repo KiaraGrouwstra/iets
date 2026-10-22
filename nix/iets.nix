@@ -1,10 +1,8 @@
 # Crane builds the dependencies as a derivation of their own, from the
 # manifests alone, so a source edit rebuilds only the iets crate.
-# `extraArgs` is for variants, such as the instrumented build of nix/coverage.nix,
-# that need their own dependency build.
-{ lib, craneLib, installShellFiles, commonArgs, sources, extraArgs ? { } }:
+{ lib, craneLib, installShellFiles, commonArgs, sources }:
 let
-  args = commonArgs // { src = sources.bin; } // extraArgs;
+  args = commonArgs // { src = sources.bin; };
 in
 craneLib.buildPackage (args // {
   cargoArtifacts = craneLib.buildDepsOnly args;
