@@ -361,7 +361,7 @@ fn paths_of(targets: &[Target]) -> Vec<StorePath> {
 fn plan_of(r: &Roots) -> error::Result<Plan> {
     let drvs = match &r.drv_dir {
         Some(d) => apibuild::drvs_in_dir(d)?,
-        None => HashMap::new(),
+        None => HashMap::default(),
     };
     apibuild::plan_with(&paths_of(&r.targets), &drvs, &HashMap::new())
 }

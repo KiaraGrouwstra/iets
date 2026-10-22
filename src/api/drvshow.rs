@@ -4,7 +4,7 @@
 //! `/nix/store`; a drv the evaluation did not make is read from there
 //! (docs/reference/classic.md, docs/reference/divergences.md).
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashSet};
 use std::iter;
 use std::sync::Arc;
 
@@ -17,6 +17,7 @@ use crate::print;
 use crate::remote::plan::{load_drv, walk};
 use crate::store::drv::{Derivation, DerivationOutput};
 use crate::store::path::{IngestionMethod, StorePath};
+use crate::syntax::symbol::FxHashMap;
 
 /// derivations.hh:expectedJsonVersionDerivation.
 const VERSION: u64 = 4;
@@ -107,7 +108,7 @@ fn write_json(out: &mut Vec<u8>, v: &Value, indent: Option<usize>) {
 /// dropped, as derivation-show.cc drops it.
 fn tops(
     roots: &[StorePath],
-    table: &HashMap<StorePath, DrvInfo>,
+    table: &FxHashMap<StorePath, DrvInfo>,
 ) -> Result<Vec<(StorePath, Arc<Vec<u8>>)>> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
@@ -127,7 +128,7 @@ fn tops(
 /// what the table lacks.
 fn closure(
     roots: &[StorePath],
-    table: &HashMap<StorePath, DrvInfo>,
+    table: &FxHashMap<StorePath, DrvInfo>,
 ) -> Result<Vec<(StorePath, Arc<Vec<u8>>)>> {
     let roots: Vec<StorePath> = roots
         .iter()

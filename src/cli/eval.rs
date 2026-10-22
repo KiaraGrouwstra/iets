@@ -59,7 +59,7 @@ fn eval_and_print(ev: &mut Evaluator, a: EvalArgs, cache: Option<Cache>) -> i32 
             } else {
                 ev.force(v)?
             };
-            let mut seen = HashSet::new();
+            let mut seen = HashSet::default();
             print::print_ambiguous(ev, v, 1, &mut out, &mut seen, 0)?;
         }
         if !raw {

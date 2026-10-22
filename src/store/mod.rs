@@ -4,6 +4,7 @@
 pub mod drv;
 pub mod drvdiff;
 pub mod hash;
+pub mod json;
 pub mod locate;
 pub mod nar;
 pub mod path;

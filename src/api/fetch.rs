@@ -2,7 +2,6 @@
 //! frontends are `iets plumbing fetch` and `iets prefetch`
 //! (docs/reference/plumbing.md, docs/reference/commands.md). Nothing is added to a store.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::{io, slice};
 
@@ -19,6 +18,7 @@ use crate::remote::worker;
 use crate::store::drv::{Derivation, DerivationOutput};
 use crate::store::hash::{Hash, HashAlgo, Hasher};
 use crate::store::path::StorePath;
+use crate::syntax::symbol::FxHashMap;
 use crate::{config, log};
 
 /// The flat hash of the bytes `url` serves, or with `unpack` the NAR hash of
@@ -55,7 +55,7 @@ pub fn drv_hash(ev: &Evaluator, root: &StorePath) -> Result<(String, StorePath)>
 /// reports the hash it really produced, and nothing on disk had to change.
 fn rewrite(
     root: &StorePath,
-    drvs: &mut HashMap<StorePath, DrvInfo>,
+    drvs: &mut FxHashMap<StorePath, DrvInfo>,
 ) -> Result<(StorePath, String)> {
     let bad = |why: &str| Error::Usage(format!("cannot prefetch '{root}': {why}"));
     let info = drvs
@@ -95,7 +95,7 @@ fn build(
     ev: &Evaluator,
     root: &StorePath,
     name: &str,
-    drvs: &HashMap<StorePath, DrvInfo>,
+    drvs: &FxHashMap<StorePath, DrvInfo>,
 ) -> Result<String> {
     let cfg = apibuild::config();
     let transport = apibuild::transport(None, &cfg)?;
@@ -141,7 +141,7 @@ mod tests {
     const ZERO: &str = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
     /// A one-output derivation, and the drv table an evaluation leaves.
-    fn table(out: DerivationOutput) -> (StorePath, HashMap<StorePath, DrvInfo>) {
+    fn table(out: DerivationOutput) -> (StorePath, FxHashMap<StorePath, DrvInfo>) {
         let mut drv = Derivation {
             name: "msg".into(),
             outputs: BTreeMap::from([("out".to_string(), out)]),
@@ -162,7 +162,7 @@ mod tests {
             pos: None,
             attr: None,
         };
-        (root.clone(), HashMap::from([(root, info)]))
+        (root.clone(), FxHashMap::from_iter([(root, info)]))
     }
 
     fn fixed() -> DerivationOutput {

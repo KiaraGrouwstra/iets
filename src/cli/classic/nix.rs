@@ -25,6 +25,7 @@ use crate::remote::plan::Plan;
 use crate::remote::worker::{Options, Transport};
 use crate::runtime::{Value, Word};
 use crate::store::path::StorePath;
+use crate::syntax::symbol::FxHashSet;
 use crate::{config, error, ignored, print, session};
 
 const NAME: &str = "nix";
@@ -354,7 +355,7 @@ fn eval_run(ev: &mut Evaluator, n: &Nix) -> error::Result<Vec<u8>> {
         print::print_json(ev, v, &mut out, &mut ctx, true, Pos::NONE)?;
         out.push(b'\n');
     } else {
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         print_eval(ev, v, &mut out, &mut seen, 0)?;
         out.push(b'\n');
     }
@@ -649,7 +650,7 @@ fn print_eval(
     ev: &mut Evaluator,
     w: Word,
     out: &mut Vec<u8>,
-    seen: &mut HashSet<u64>,
+    seen: &mut FxHashSet<u64>,
     depth: usize,
 ) -> EvalResult<()> {
     if depth > eval::MAX_CALL_DEPTH as usize {
@@ -722,7 +723,7 @@ fn print_eval(
             out.extend_from_slice(print::show_value_short(ev, w).as_bytes());
         }
         _ => {
-            let mut one = HashSet::new();
+            let mut one = HashSet::default();
             print::print_ambiguous(ev, w, 1, out, &mut one, depth)?;
         }
     }

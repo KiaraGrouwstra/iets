@@ -74,3 +74,7 @@ inherits = "release"
 
 [dev-dependencies]
 tempfile = "3"
+
+[lints.rust]
+# cargo fuzz builds with `--cfg fuzzing` (src/sys/mod.rs, `elapsed`)
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)"] }

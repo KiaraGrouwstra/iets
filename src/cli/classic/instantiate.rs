@@ -198,7 +198,7 @@ fn print_value(ev: &mut Evaluator, v: Word, i: &Inst, out: &mut Vec<u8>) -> Resu
             } else {
                 ev.force(v)?
             };
-            let mut seen = HashSet::new();
+            let mut seen = HashSet::default();
             print::print_ambiguous(ev, v, 1, out, &mut seen, 0)?;
             out.push(b'\n');
         }

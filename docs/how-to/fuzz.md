@@ -22,6 +22,30 @@ nix build .#checks.x86_64-linux.conformance -L
 A check fails when it finds a difference that `fuzz/divergences.toml` does
 not list, and it prints the input in base64.
 
+Each check runs a fixed number of inputs (`runs` in `nix/fuzz.nix`) with a
+seed taken from its derivation. A slow builder runs as many inputs as a fast
+one, and two runs of one check keep the same inputs. Each target prints the
+number and the digest of the inputs it kept, so you can compare two runs.
+This holds only while libFuzzer sees the same coverage and the same compared
+values for the same input:
+
+- The check runs the fuzzer under `setarch -R`, without address
+  randomization, because the evaluator keeps sets keyed on pointers.
+- The check puts the scratch trees on tmpfs (`TMPDIR=/dev/shm`). Other file
+  systems list a directory in an order of their own.
+- Code that a target reaches must not compare a clock reading. Use
+  `sys::elapsed` for timings, which is zero in a fuzzing build.
+- Code that a target reaches must not use a hash table with a random seed
+  (`std::collections::HashMap::new`). Use `FxHashMap`, `BTreeMap` or a
+  `Vec`.
+- Code that a target reaches must not run in a thread beside the input. The
+  wire target runs its scripted daemon as a child process.
+- The `-timeout` alarm must not interrupt a system call of the input:
+  `restart_on_alarm` (fuzz/src/lib.rs) has the kernel restart it.
+
+The inputs in `fuzz/regressions/drv-read/` once diverged; `fuzz-drv` runs
+them each time as seeds.
+
 ## Manual fuzzing
 
 To run a fuzzer yourself you need only the flake's stable Rust. `cargo fuzz`

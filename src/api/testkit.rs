@@ -32,7 +32,7 @@ pub fn eval(a: EvalArgs) -> (String, i32, String) {
                     ev.force(v)?
                 };
                 let mut out = Vec::new();
-                print::print_ambiguous(ev, v, 1, &mut out, &mut HashSet::new(), 0)?;
+                print::print_ambiguous(ev, v, 1, &mut out, &mut HashSet::default(), 0)?;
                 Ok(out)
             });
             match r {

@@ -1,12 +1,12 @@
 //! Value printers: the `nix-instantiate --eval` format (`printAmbiguous`),
 //! JSON (`printValueAsJSON`), and short forms for error messages.
 
-use std::collections::HashSet;
 use std::str;
 
 use crate::eval::{self, Error, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::parallel::{self, thunk};
 use crate::runtime::{Attr, AttrsObj, Ctx, Value, Word};
+use crate::syntax::symbol::FxHashSet;
 
 /// C's `%g` with precision 6, as `std::ostream << double` prints.
 pub fn format_g(f: f64) -> String {
@@ -128,7 +128,7 @@ pub fn print_ambiguous(
     w: Word,
     cell: u64,
     out: &mut Vec<u8>,
-    seen: &mut HashSet<u64>,
+    seen: &mut FxHashSet<u64>,
     depth: usize,
 ) -> EvalResult<()> {
     if depth > eval::MAX_CALL_DEPTH as usize {

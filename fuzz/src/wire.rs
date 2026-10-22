@@ -5,10 +5,11 @@
 //! protocol version, stderr frames (log lines, activities, results, errors)
 //! after `SetOptions` and after the operation, then the operation's reply,
 //! with wrong store paths, hashes, signatures and content addresses now and
-//! then. A thread serves the script on a Unix socket to each connection and
-//! reads whatever the client sends. iets's `Connection` and Nix's
-//! `RemoteStore` (`wire-oracle`) each connect and run the same operation; the
-//! two answers must be the same line (nix-conformance's SPEC.md).
+//! then. A child process (`DAEMON`) serves the script on a Unix socket to
+//! each connection in turn and reads whatever the client sends. iets's
+//! `Connection` and Nix's `RemoteStore` (`wire-oracle`) each connect and run
+//! the same operation; the two answers must be the same line
+//! (nix-conformance's SPEC.md).
 //!
 //! Oracle frames (`wire-oracle`): request u32 length and the line
 //! `SOCKET OP ARG...`, reply u32 length and the answer.
@@ -19,14 +20,14 @@ use iets::remote::worker::{Connection, Options, Transport};
 use iets::store::hash::{HashAlgo, hash_bytes};
 use iets::store::nar;
 use libfuzzer_sys::arbitrary::Unstructured;
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
+use std::ffi::OsStr;
 use std::io::{self, Read, Write};
 use std::net::Shutdown;
-use std::os::unix::net::UnixListener;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
-use std::{env, fs, iter, thread};
+use std::{env, fs, iter, process};
 
 pub const KINDS: &[&str] = &[
     // Nix's client accepts the reply, iets's refuses it
@@ -60,6 +61,7 @@ const HASH: &str = "4ab29c33e1fd9f3e3e1ebf6e0da0e8f8c3a5e3a73c92c4e9d6e8c04b1a5f
 
 pub struct Wire {
     oracle: Oracle,
+    daemon: Oracle,
     known: Vec<known::Entry>,
     dir: PathBuf,
     seq: u64,
@@ -77,6 +79,13 @@ impl Wire {
         fs::create_dir_all(&dir).expect("a scratch directory for the wire target");
         Wire {
             oracle: Oracle::from_env("IETS_WIRE_ORACLE", "wire-oracle"),
+            daemon: Oracle::with_env(
+                env::current_exe()
+                    .expect("the path of this fuzzer")
+                    .to_string_lossy()
+                    .into_owned(),
+                (DAEMON, "1"),
+            ),
             known,
             dir,
             seq: 0,
@@ -91,7 +100,13 @@ impl Wire {
         }
         self.seq += 1;
         let sock = self.dir.join(format!("{}.sock", self.seq));
-        let stop = serve(&sock, script, split);
+        let mut start = (split as u32).to_le_bytes().to_vec();
+        start.extend_from_slice(&(sock.as_os_str().len() as u32).to_le_bytes());
+        start.extend_from_slice(sock.as_os_str().as_bytes());
+        start.extend_from_slice(&script);
+        self.daemon
+            .ask(&framed(&start), |out| oracle::bytes(out, 1))
+            .expect("the scripted daemon listens");
         let iets = no_panic(|| run_iets(&sock, op.name, &op.args));
         let mut line = format!("{} {}", sock.display(), op.name);
         for a in &op.args {
@@ -104,7 +119,13 @@ impl Wire {
             let n = oracle::u32_le(out)? as usize;
             Ok(String::from_utf8_lossy(&oracle::bytes(out, n)?).into_owned())
         });
-        stop.store(true, Ordering::SeqCst);
+        // the stop frame first, then a connection to wake the daemon's accept
+        self.daemon
+            .ask(&framed(&[]), |out| {
+                let _ = UnixStream::connect(&sock);
+                oracle::bytes(out, 1)
+            })
+            .expect("the scripted daemon stops");
         let _ = fs::remove_file(&sock);
         let d = |kind, nix: String, iets: String| {
             Some(Divergence {
@@ -157,47 +178,82 @@ const UPLOAD_END: [u8; 24] = {
     b
 };
 
-/// Serves `script` to every connection until `stop`: write it, close the
-/// write side, read until the client goes. Bytes from `split` on wait for
-/// the end of an upload, as a daemon reads it all before it answers; Nix's
-/// client asserts when the answer comes first (nix-conformance nix-bugs/).
-fn serve(sock: &Path, script: Vec<u8>, split: usize) -> Arc<AtomicBool> {
-    let listener = UnixListener::bind(sock).expect("a socket for the scripted daemon");
-    listener
-        .set_nonblocking(true)
-        .expect("a non-blocking listener");
-    let stop = Arc::new(AtomicBool::new(false));
-    let done = stop.clone();
-    let script = Arc::new(script);
-    thread::spawn(move || {
-        while !done.load(Ordering::SeqCst) {
-            match listener.accept() {
-                Ok((mut s, _)) => {
-                    let script = script.clone();
-                    thread::spawn(move || {
-                        let _ = s.set_nonblocking(false);
-                        let split = split.min(script.len());
-                        let _ = s.write_all(&script[..split]);
-                        let mut got = Vec::new();
-                        let mut sink = [0u8; 4096];
-                        if split < script.len() {
-                            while !got.ends_with(&UPLOAD_END) {
-                                match s.read(&mut sink) {
-                                    Ok(n) if n > 0 => got.extend_from_slice(&sink[..n]),
-                                    _ => break,
-                                }
-                            }
-                            let _ = s.write_all(&script[split..]);
-                        }
-                        let _ = s.shutdown(Shutdown::Write);
-                        while matches!(s.read(&mut sink), Ok(n) if n > 0) {}
-                    });
-                }
-                Err(_) => thread::sleep(Duration::from_micros(200)),
+/// Set in the environment of the scripted daemon: this fuzzer, run again.
+/// In a thread of the fuzzer, the daemon's code would add to the coverage
+/// of each input, more or less with timing, and libFuzzer would keep other
+/// inputs on each run.
+const DAEMON: &str = "IETS_WIRE_DAEMON";
+
+/// A request to the daemon: u32 length, then the body.
+fn framed(body: &[u8]) -> Vec<u8> {
+    let mut f = (body.len() as u32).to_le_bytes().to_vec();
+    f.extend_from_slice(body);
+    f
+}
+
+/// Runs the scripted daemon instead of the fuzzer when `DAEMON` is set.
+pub fn daemon_if_asked() {
+    if env::var_os(DAEMON).is_some() {
+        daemon();
+        process::exit(0);
+    }
+}
+
+/// Serves one script per request on stdin, until stdin ends. A request is
+/// u32 split, u32 length and the socket path, then the script; the empty
+/// request stops it. Each gets the reply byte 0 once done.
+fn daemon() {
+    let mut input = io::stdin().lock();
+    let mut reply = io::stdout().lock();
+    while let Some(start) = read_frame(&mut input) {
+        let split = u32::from_le_bytes(start[..4].try_into().unwrap()) as usize;
+        let n = u32::from_le_bytes(start[4..8].try_into().unwrap()) as usize;
+        let sock = Path::new(OsStr::from_bytes(&start[8..8 + n]));
+        let script = &start[8 + n..];
+        let listener = UnixListener::bind(sock).expect("a socket for the scripted daemon");
+        reply.write_all(&[0]).and_then(|()| reply.flush()).unwrap();
+        loop {
+            let (s, _) = listener.accept().expect("a connection");
+            // the stop request comes before the connection that wakes this
+            let mut fds = [PollFd::new(&input, PollFlags::IN)];
+            if poll(&mut fds, Some(&Timespec::default())).unwrap_or(0) > 0 {
+                read_frame(&mut input);
+                break;
+            }
+            serve(s, script, split);
+        }
+        reply.write_all(&[0]).and_then(|()| reply.flush()).unwrap();
+    }
+}
+
+/// Serves `script` to one connection: write it, close the write side, read
+/// until the client goes. Bytes from `split` on wait for the end of an
+/// upload, as a daemon reads it all before it answers; Nix's client asserts
+/// when the answer comes first (nix-conformance nix-bugs/).
+fn serve(mut s: UnixStream, script: &[u8], split: usize) {
+    let split = split.min(script.len());
+    let _ = s.write_all(&script[..split]);
+    let mut got = Vec::new();
+    let mut sink = [0u8; 4096];
+    if split < script.len() {
+        while !got.ends_with(&UPLOAD_END) {
+            match s.read(&mut sink) {
+                Ok(n) if n > 0 => got.extend_from_slice(&sink[..n]),
+                _ => break,
             }
         }
-    });
-    stop
+        let _ = s.write_all(&script[split..]);
+    }
+    let _ = s.shutdown(Shutdown::Write);
+    while matches!(s.read(&mut sink), Ok(n) if n > 0) {}
+}
+
+fn read_frame(input: &mut impl Read) -> Option<Vec<u8>> {
+    let mut n = [0u8; 4];
+    input.read_exact(&mut n).ok()?;
+    let mut b = vec![0u8; u32::from_le_bytes(n) as usize];
+    input.read_exact(&mut b).ok()?;
+    Some(b)
 }
 
 /// The answer line of iets's client to `name args` against the daemon at

@@ -17,7 +17,7 @@ use crate::{Divergence, Target, Verdict, classify, known, no_panic};
 use iets::eval::{EvalConfig, Evaluator};
 use iets::print;
 use libfuzzer_sys::arbitrary::Unstructured;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::{env, fs};
 
 pub const KINDS: &[&str] = &[
@@ -125,7 +125,7 @@ fn iets(ev: &mut Evaluator, src: &str) -> Answer {
         .and_then(|v| ev.force_deep(v))
         .map_err(|e| e.msg.clone())?;
     let mut out = Vec::new();
-    print::print_ambiguous(ev, v, 1, &mut out, &mut HashSet::new(), 0)
+    print::print_ambiguous(ev, v, 1, &mut out, &mut HashSet::default(), 0)
         .map_err(|e| e.msg.clone())?;
     Ok(String::from_utf8_lossy(&out).into_owned())
 }
@@ -477,7 +477,7 @@ impl Gen<'_, '_> {
     /// The variables of type `ty` that the name resolves to: the innermost
     /// lexical binding wins, then the innermost `with`.
     fn visible(&self, ty: &Ty) -> Vec<String> {
-        let mut seen = HashSet::new();
+        let mut seen = BTreeSet::new();
         let mut out = Vec::new();
         for (i, v) in self.vars.iter().enumerate().rev() {
             let resolved = if v.with {

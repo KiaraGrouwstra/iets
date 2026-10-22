@@ -3,13 +3,20 @@
 //! frames (`parse.rs`, `nar.rs`).
 
 use std::env;
-use std::io::{self, BufReader, Read, Write};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::io::{self, Write};
+use std::os::fd::OwnedFd;
+use std::os::unix::net::UnixStream;
+use std::process::{Child, ChildStdin, Command, Stdio};
 
-pub type Out = BufReader<ChildStdout>;
+use rustix::io::Errno;
+use rustix::net::{RecvFlags, recv};
+
+/// The child's stdout: a socket, not a pipe (`fill`).
+pub type Out = UnixStream;
 
 pub struct Oracle {
     program: String,
+    env: Option<(&'static str, &'static str)>,
     child: Option<(Child, ChildStdin, Out)>,
 }
 
@@ -18,6 +25,16 @@ impl Oracle {
     pub fn from_env(var: &str, default: &str) -> Oracle {
         Oracle {
             program: env::var(var).unwrap_or_else(|_| default.into()),
+            env: None,
+            child: None,
+        }
+    }
+
+    /// `program` run with the variable `env` set.
+    pub fn with_env(program: String, env: (&'static str, &'static str)) -> Oracle {
+        Oracle {
+            program,
+            env: Some(env),
             child: None,
         }
     }
@@ -59,27 +76,46 @@ impl Oracle {
         if self.child.is_some() {
             return Ok(());
         }
+        let (out, theirs) = UnixStream::pair()?;
         let mut c = Command::new(&self.program)
+            .envs(self.env)
             .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
+            .stdout(Stdio::from(OwnedFd::from(theirs)))
             // warnings: the reply carries what counts
             .stderr(Stdio::null())
             .spawn()
             .map_err(|e| io::Error::other(format!("cannot start {}: {e}", self.program)))?;
-        let (i, o) = (c.stdin.take().unwrap(), c.stdout.take().unwrap());
-        self.child = Some((c, i, BufReader::new(o)));
+        let i = c.stdin.take().unwrap();
+        self.child = Some((c, i, out));
         Ok(())
     }
 }
 
 pub fn u32_le(out: &mut Out) -> io::Result<u32> {
     let mut b = [0u8; 4];
-    Read::read_exact(out, &mut b)?;
+    fill(out, &mut b)?;
     Ok(u32::from_le_bytes(b))
 }
 
 pub fn bytes(out: &mut Out, n: usize) -> io::Result<Vec<u8>> {
     let mut b = vec![0u8; n];
-    Read::read_exact(out, &mut b)?;
+    fill(out, &mut b)?;
     Ok(b)
+}
+
+/// Reads all of `b` with one `recv` (`MSG_WAITALL`), however the child's
+/// writes arrive. Read in parts, as through a pipe, the number of parts
+/// varies with timing, and so does the coverage libFuzzer sees: two runs
+/// with one seed then fuzz different inputs.
+fn fill(out: &mut Out, b: &mut [u8]) -> io::Result<()> {
+    let mut at = 0;
+    while at < b.len() {
+        match recv(&*out, &mut b[at..], RecvFlags::WAITALL) {
+            Ok((0, _)) => return Err(io::ErrorKind::UnexpectedEof.into()),
+            Ok((n, _)) => at += n,
+            Err(Errno::INTR) => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(())
 }

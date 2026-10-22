@@ -18,11 +18,11 @@ use crate::runtime::arena::NSTATS;
 use crate::runtime::heap::Heap;
 use crate::session::Session;
 use crate::syntax::ast::FileId;
-use crate::syntax::symbol::Sym;
+use crate::syntax::symbol::{FxHashMap, Sym};
 
 use super::interner;
 
-pub struct SharedMap<K, V>(Arc<Mutex<HashMap<K, V>>>);
+pub struct SharedMap<K, V>(Arc<Mutex<FxHashMap<K, V>>>);
 
 impl<K, V> Clone for SharedMap<K, V> {
     fn clone(&self) -> Self {
@@ -32,7 +32,7 @@ impl<K, V> Clone for SharedMap<K, V> {
 
 impl<K, V> Default for SharedMap<K, V> {
     fn default() -> Self {
-        SharedMap(Arc::new(Mutex::new(HashMap::new())))
+        SharedMap(Arc::new(Mutex::new(FxHashMap::default())))
     }
 }
 
@@ -62,7 +62,7 @@ impl<K: Hash + Eq, V: Clone> SharedMap<K, V> {
     }
 
     /// The map itself, for callers that read it whole (`iets build`).
-    pub fn lock(&self) -> MutexGuard<'_, HashMap<K, V>> {
+    pub fn lock(&self) -> MutexGuard<'_, FxHashMap<K, V>> {
         self.0.lock().unwrap()
     }
 

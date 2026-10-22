@@ -15,6 +15,7 @@ use crate::store::hash::{self, Hash, HashAlgo, Hasher};
 use crate::store::nar::dump_string;
 use crate::store::path::{IngestionMethod, StorePath, make_fixed_output_path, store_dir};
 use crate::store::source::{SourceKind, SourceOrigin, SrcPath};
+use crate::syntax::symbol::FxHashMap;
 
 /// One object the daemon must hold before it can build the root.
 #[derive(Clone, Debug)]
@@ -338,7 +339,7 @@ pub type Locator<'a> = dyn Fn(&[StorePath]) -> Result<Vec<Option<SourceOrigin>>>
 /// be empty, in which case everything is read from `/nix/store`.
 #[derive(Clone, Copy)]
 pub struct Inputs<'a> {
-    pub drvs: &'a HashMap<StorePath, DrvInfo>,
+    pub drvs: &'a FxHashMap<StorePath, DrvInfo>,
     pub sources: &'a HashMap<StorePath, SourceOrigin>,
 }
 
