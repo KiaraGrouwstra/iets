@@ -20,14 +20,6 @@ fn eval(expr: &str, groups: Option<&str>) -> Output {
     c.output().expect("run iets")
 }
 
-/// Without the `⏵` lines a pipe gets for a task of 5 s or more.
-fn unticked(err: &[u8]) -> String {
-    String::from_utf8_lossy(err)
-        .split_inclusive('\n')
-        .filter(|l| !l.starts_with("⏵ "))
-        .collect()
-}
-
 fn stderr(expr: &str, groups: Option<&str>) -> String {
     let o = eval(expr, groups);
     assert_eq!(
@@ -36,7 +28,7 @@ fn stderr(expr: &str, groups: Option<&str>) -> String {
         "{}",
         String::from_utf8_lossy(&o.stderr)
     );
-    unticked(&o.stderr)
+    String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
 const TO_FILE: &str = r#""${builtins.toFile "t" "hi"}""#;
@@ -107,8 +99,11 @@ fn the_sink_is_its_own_knob() {
         .output()
         .expect("run iets");
     assert_eq!(o.status.code(), Some(0));
-    let err = unticked(&o.stderr);
-    assert!(err.is_empty(), "{err}");
+    assert!(
+        o.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
     let written = fs::read_to_string(&file).expect("the events file");
     assert!(written.contains(r#""event":"store-add""#), "{written}");
 }

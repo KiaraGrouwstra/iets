@@ -585,11 +585,7 @@ fn dry_run_and_json_log_path() {
     c.check(
         "iets build --dry-run: nix's text, and the plan as JSON",
         dj.status.success()
-            // a slow run prints a `⏵` progress line, which Nix does not
-            && stderr(&dj)
-                .lines()
-                .filter(|l| !l.starts_with("⏵ "))
-                .eq(stderr(&dr).lines())
+            && stderr(&dj) == stderr(&dr)
             && will.len() == 2
             && stderr(&dr).contains(&will.join("\n  ")),
         format!(

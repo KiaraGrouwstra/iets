@@ -37,14 +37,6 @@ fn text(b: &[u8]) -> String {
     String::from_utf8_lossy(b).into_owned()
 }
 
-/// Without the `⏵` lines a pipe gets for a task of 5 s or more.
-fn unticked(err: &[u8]) -> String {
-    String::from_utf8_lossy(err)
-        .split_inclusive('\n')
-        .filter(|l| !l.starts_with("⏵ "))
-        .collect()
-}
-
 /// A scratch directory holding `hello.txt`, and a cache directory beside it.
 fn scratch() -> (TempDir, PathBuf) {
     let d = tempdir().unwrap();
@@ -107,11 +99,7 @@ fn a_wrong_hash_is_refused_with_the_hash_the_file_has() {
          specified: sha256:0000000000000000000000000000000000000000000000000000\n  \
          got:       sha256:{SHA256}\n"
     );
-    assert!(
-        unticked(&o.stderr).starts_with(&want),
-        "{}",
-        text(&o.stderr)
-    );
+    assert!(text(&o.stderr).starts_with(&want), "{}", text(&o.stderr));
 }
 
 #[test]
@@ -125,11 +113,7 @@ fn without_a_hash_no_evaluation_fetches_and_prefetch_gives_the_hash() {
     for flags in [&[][..], &["--impure"][..]] {
         let o = eval(&cache, false, flags, &call);
         assert_eq!(o.status.code(), Some(1), "{flags:?}: {}", text(&o.stdout));
-        assert!(
-            unticked(&o.stderr).starts_with(&want),
-            "{}",
-            text(&o.stderr)
-        );
+        assert!(text(&o.stderr).starts_with(&want), "{}", text(&o.stderr));
     }
 
     let o = iets(&cache, false, &["prefetch", &url]);

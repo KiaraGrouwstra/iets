@@ -1,6 +1,7 @@
 //! The binary under test, cut off from the machine's Nix configuration: a
 //! `plugin-files` line in `/etc/nix/nix.conf`, a `$NIX_CONFIG` or a user
-//! `nix.conf` would otherwise put warnings and settings into every run.
+//! `nix.conf` would otherwise put warnings and settings into every run. It
+//! draws no progress either: a `⏵` line comes or not by how fast a run is.
 
 // each test crate uses what it needs
 #![allow(dead_code)]
@@ -8,6 +9,10 @@
 use std::env;
 use std::ffi::OsStr;
 use std::process::Command;
+
+/// The IETS_ settings every run gets. tests/e2e gives them to Nix too, so a
+/// shell either one starts has the same environment.
+pub const ENV: &[(&str, &str)] = &[("IETS_PROGRESS", "false")];
 
 pub fn iets() -> Command {
     iets_as(env!("CARGO_BIN_EXE_iets"))
@@ -33,5 +38,6 @@ pub fn iets_as(prog: impl AsRef<OsStr>) -> Command {
             c.env_remove(k);
         }
     }
+    c.envs(ENV.iter().copied());
     c
 }

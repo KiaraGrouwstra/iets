@@ -69,6 +69,10 @@ pub fn dispatch(session: &Session, argv: Vec<String>, classic: Option<String>) -
     if let Err(e) = session.load_settings(&options) {
         return e.report();
     }
+    session
+        .log
+        .progress
+        .set_hidden(!session.settings().progress);
     session.events.open(session.settings());
     profile::open(&Session::current());
     let code = command(argv, classic);

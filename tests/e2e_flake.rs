@@ -697,11 +697,7 @@ fn rev_count() {
         ],
     );
     f.verdict(
-        // a slow run prints a `⏵` progress line first
-        r.status.code() == Some(1)
-            && stderr(&r)
-                .lines()
-                .any(|l| l.starts_with(&format!("error: {finding}"))),
+        r.status.code() == Some(1) && stderr(&r).starts_with(&format!("error: {finding}")),
         || format!("rev-count=error: {}", stderr(&r)),
     );
 

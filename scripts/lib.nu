@@ -1,5 +1,10 @@
 # Helpers shared by the scripts in this directory.
 
+# Every script that uses this file runs iets with no progress drawn: a `⏵`
+# line comes or not by how fast a run is, and a check of stderr must not
+# depend on that.
+export-env { $env.IETS_PROGRESS = "false" }
+
 # Strip trailing newlines, like bash's `$(...)`.
 export def chomp []: string -> string { str trim -r -c "\n" }
 
