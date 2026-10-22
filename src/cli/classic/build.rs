@@ -15,7 +15,7 @@ use crate::cli::render;
 use crate::cli::{self, Outcome, Run, abs_path, auto_args, cwd, devenv};
 use crate::error;
 use crate::eval::{EvalConfig, Evaluator};
-use crate::provenance::{self, Provenance};
+use crate::provenance::{self, Provenance, SourceMap};
 use crate::remote::plan::Plan;
 use crate::remote::worker::{Options, Transport};
 use crate::store::path::StorePath;
@@ -93,7 +93,8 @@ pub fn main(argv: &[String]) -> i32 {
                 output: output.unwrap_or_else(|| "out".into()),
             })
             .collect();
-        return realise(&b, &transport, &options, &roots, plan, &Provenance::off());
+        let prov = Provenance::from_map(SourceMap::from_sources(&plan.origins));
+        return realise(&b, &transport, &options, &roots, plan, &prov);
     }
     let b = Arc::new(b);
     let build = Arc::clone(&b);
@@ -117,10 +118,8 @@ pub fn main(argv: &[String]) -> i32 {
 }
 
 /// `ec` as one run of `nix-build` with its tracing cache, keyed apart from
-/// `nix build`'s: the input, every `-A` in order (the first as the attribute,
-/// the rest after it, so a repeated one is its own field), the `--arg`s, the
-/// search path and `pure-eval`. Only a run with one input is cached; more
-/// files run uncached, as before.
+/// `nix build`'s: the input, every `-A` in order, the `--arg`s, the search
+/// path and `pure-eval`. A run with more than one input is not cached.
 fn cached(b: &Build, ec: EvalConfig) -> Run {
     let [input] = b.c.files.as_slice() else {
         return Run::on(ec);

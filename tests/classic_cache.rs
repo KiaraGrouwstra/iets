@@ -321,4 +321,77 @@ fn the_tracing_cache() {
         !ran(&sh) && sh.status.success() && roots() == 1,
         format!("{} roots: {}", roots(), stderr(&sh)),
     );
+
+    // nix-build: a hit prints and links what the run that wrote it did
+    let nb = cc.join("nb");
+    s.write("cc/nb/default.nix", NB);
+    s.write("cc/nb/val.nix", "\"one\"\n");
+    let nbv = |o: &Output| fs::read_to_string(stdout(o)).unwrap_or_default();
+    let nb_one = |flags: &[&str]| {
+        f.ours("nix-build")
+            .env("IETS_CACHE_DIR", &cache)
+            .arg("--no-out-link")
+            .args(flags)
+            .arg(&nb)
+            .output()
+            .unwrap()
+    };
+    let nb_cold = nb_one(&[]);
+    let nb_real = f
+        .real("nix-build")
+        .arg("--no-out-link")
+        .arg(&nb)
+        .output()
+        .unwrap();
+    c.same(
+        "nix-build: a cold run prints what nix prints",
+        &Both {
+            ours: nb_cold.clone(),
+            real: nb_real,
+        },
+    );
+    c.check(
+        "nix-build: a cold run evaluates",
+        ran(&nb_cold) && nbv(&nb_cold).contains("one"),
+        stderr(&nb_cold),
+    );
+    let nb_hit = nb_one(&[]);
+    c.check(
+        "nix-build: the second run is a hit with the same bytes",
+        !ran(&nb_hit) && nb_hit.status.success() && nb_hit.stdout == nb_cold.stdout,
+        stderr(&nb_hit),
+    );
+    s.write("cc/nb/val.nix", "\"two\"\n");
+    let nb_edit = nb_one(&[]);
+    let nb_arg = nb_one(&["--argstr", "v", "x"]);
+    c.check(
+        "nix-build: an edit and another --argstr evaluate again",
+        ran(&nb_edit)
+            && nbv(&nb_edit).contains("two")
+            && ran(&nb_arg)
+            && nbv(&nb_arg).contains("twox"),
+        format!("edit {}, arg {}", nbv(&nb_edit), nbv(&nb_arg)),
+    );
+    let nb_linked = f
+        .ours("nix-build")
+        .env("IETS_CACHE_DIR", &cache)
+        .current_dir(&nb)
+        .arg(&nb)
+        .output()
+        .unwrap();
+    let nb_target = link(&nb.join("result"));
+    c.check(
+        "nix-build: a hit makes the result link",
+        !ran(&nb_linked) && nb_target == stdout(&nb_edit),
+        format!("link -> {nb_target}: {}", stderr(&nb_linked)),
+    );
 }
+
+const NB: &str = r#"{ v ? "" }: derivation {
+  name = "cc-nb";
+  system = "@SYSTEM@";
+  val = builtins.trace "EVALUATED" (import ./val.nix + v);
+  builder = "@SHELL@";
+  args = [ "-c" "echo $val > $out" ];
+}
+"#;
