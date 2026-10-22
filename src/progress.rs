@@ -1,7 +1,8 @@
 //! The activities running now, from iets, the daemon or a child nix. A
 //! terminal gets a status line (progress-bar.cc), a pipe gets a `⏵` line
 //! after [`FIRST`] and every [`HEARTBEAT`]. Under internal-json the records
-//! carry it and nothing is drawn.
+//! carry it and nothing is drawn. With `IETS_PROGRESS=false` nothing is
+//! drawn either.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -62,6 +63,8 @@ pub struct Board {
     /// The build renderer draws the running builds itself, so the status
     /// line leaves them out.
     live: AtomicBool,
+    /// `IETS_PROGRESS=false`: the ticker draws nothing.
+    hidden: AtomicBool,
     tasks: Mutex<Tasks>,
 }
 
@@ -80,6 +83,10 @@ impl Board {
 
     pub fn set_live(&self, on: bool) {
         self.live.store(on, Ordering::Relaxed);
+    }
+
+    pub fn set_hidden(&self, on: bool) {
+        self.hidden.store(on, Ordering::Relaxed);
     }
 
     fn lock(&self) -> MutexGuard<'_, Tasks> {
@@ -163,6 +170,9 @@ impl Board {
         if t.all.is_empty() {
             t.ticking = false;
             return None;
+        }
+        if self.hidden.load(Ordering::Relaxed) {
+            return Some(Tick::Quiet);
         }
         match self.mode() {
             Mode::Bar if t.suspended > 0 => Some(Tick::Bar(String::new())),
@@ -482,5 +492,22 @@ mod tests {
         b.stop(1);
         b.stop(2);
         assert!(b.tick(later + HEARTBEAT).is_none());
+    }
+
+    #[test]
+    fn a_hidden_board_draws_nothing() {
+        let b = Board::default();
+        b.set_hidden(true);
+        b.lock()
+            .all
+            .insert(1, task(ACT_FETCH_TREE, "fetching 'x'", 0, 0));
+        b.lock().ticking = true;
+        let later = b.lock().all[&1].started + FIRST;
+        for m in [Mode::Lines, Mode::Bar] {
+            b.set_mode(m);
+            assert!(matches!(b.tick(later), Some(Tick::Quiet)));
+        }
+        b.set_hidden(false);
+        assert!(matches!(b.tick(later), Some(Tick::Bar(_))));
     }
 }

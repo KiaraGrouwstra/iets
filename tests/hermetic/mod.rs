@@ -1,6 +1,7 @@
 //! The binary under test, cut off from the machine's Nix configuration: a
 //! `plugin-files` line in `/etc/nix/nix.conf`, a `$NIX_CONFIG` or a user
-//! `nix.conf` would otherwise put warnings and settings into every run.
+//! `nix.conf` would otherwise put warnings and settings into every run. It
+//! draws no progress either: a `⏵` line comes or not by how fast a run is.
 
 use std::process::Command;
 
@@ -17,6 +18,7 @@ pub fn iets() -> Command {
         .env_remove("NIX_STATE_DIR")
         .env_remove("NIX_DAEMON_SOCKET_PATH")
         .env_remove("NIX_CONFIG")
-        .env_remove("NIX_CONFIG_HOME");
+        .env_remove("NIX_CONFIG_HOME")
+        .env("IETS_PROGRESS", "false");
     c
 }

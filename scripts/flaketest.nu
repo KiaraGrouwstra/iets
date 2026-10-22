@@ -26,11 +26,6 @@ def records [stderr: string]: nothing -> list<record> {
   $stderr | lines | where ($it | str starts-with "@nix ") | each { str substring 5.. | from json }
 }
 
-# STDERR without the `⏵` lines a pipe gets for a task of 5 s or more
-def unticked [stderr: string]: nothing -> string {
-  $stderr | lines | where not ($it | str starts-with "⏵ ") | str join "\n"
-}
-
 # check NAME REF ENV: both evaluators must agree and succeed. Prints the verdict, returns it.
 def check [iets: string, name: string, ref: string, extra?: record]: nothing -> bool {
   let n = (nixf eval --raw --option eval-cache "false" $ref | complete)
@@ -441,7 +436,7 @@ def run-tests [iets: string, work: string]: nothing -> int {
   let ok = ($r1.stdout == "4" and $r2.stdout == "4" and (do $found $r1) == 1 and (do $found $r2) == 1 and (do $sites $r1 | compact | length) == 1 and (do $sites $r1) == (do $sites $r2) and ($r2.stderr | str contains "cache: hit") and not ($lazy.stderr | str contains "rev-count"))
   $res ++= [(verdict $ok "rev-count: one finding for a tree, on a cache hit too, none for the names" $"rev-count: ($r1.stderr) | ($r2.stderr) | ($lazy.stderr)")]
   let r = (^$iets eval --raw --no-tracing-cache --lint rev-count=error $"($cnt)#again" | complete)
-  $res ++= [(verdict ($r.exit_code == 1 and (unticked $r.stderr | str starts-with $"error: ($finding)")) "rev-count: --lint sets the level" $"rev-count: error: rc=($r.exit_code) ($r.stderr)")]
+  $res ++= [(verdict ($r.exit_code == 1 and ($r.stderr | str starts-with $"error: ($finding)")) "rev-count: --lint sets the level" $"rev-count: error: rc=($r.exit_code) ($r.stderr)")]
   # a selection of the count is the site, in the code of an input too: the
   # span covers these bytes. A read without a selection has no site
   let covered = {|r|
