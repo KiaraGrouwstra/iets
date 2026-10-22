@@ -11,13 +11,24 @@ use tempfile::tempdir;
 /// `"hello"\n`, the content of the fixed output.
 const HELLO_SHA256: &str = "0n1p3c7pvgamwbaan7r2rmk10jxs8wy45h7mbc89y4x44nyr1z0i";
 
+/// The store directory in the evaluator's form, so a store path string is
+/// absolute on Windows too: `C:\x` is `/C:/x` there (src/sys/winpath.rs).
+fn store_dir(dir: &Path) -> String {
+    let s = dir.join("store").to_str().unwrap().replace('\\', "/");
+    if s.starts_with('/') {
+        s
+    } else {
+        format!("/{s}")
+    }
+}
+
 /// With the tracing cache on: only a run with a cache keeps the text of the
 /// `.drv` that gives the output path.
 fn iets(dir: &Path, args: &[&str]) -> Output {
     hermetic::iets()
         .args(args)
         .current_dir(dir)
-        .env("NIX_STORE_DIR", dir.join("store"))
+        .env("NIX_STORE_DIR", store_dir(dir))
         .env("IETS_CACHE_DIR", dir.join("cache"))
         .output()
         .expect("run iets")
@@ -54,7 +65,8 @@ fn an_output_in_the_store_is_read_with_a_warning() {
 
     fails_unbuilt(&iets(dir, &["eval", "read.nix"]));
 
-    fs::write(&out, "\"hello\"\n").unwrap();
+    let file = dir.join("store").join(out.rsplit('/').next().unwrap());
+    fs::write(&file, "\"hello\"\n").unwrap();
     let warning = format!("warning: [ifd-local-output] import from derivation: '{out}'");
     for _ in 0..2 {
         let o = iets(dir, &["eval", "read.nix"]);
@@ -82,6 +94,6 @@ fn an_output_in_the_store_is_read_with_a_warning() {
     let err = text(&o.stderr);
     assert!(err.starts_with("error: [ifd-local-output]"), "{err}");
 
-    fs::remove_file(&out).unwrap();
+    fs::remove_file(&file).unwrap();
     fails_unbuilt(&iets(dir, &["eval", "read.nix"]));
 }
