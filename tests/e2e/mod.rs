@@ -3,6 +3,8 @@
 
 #![allow(dead_code)]
 
+use std::ffi::OsStr;
+use std::fmt::Display;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
@@ -30,7 +32,7 @@ pub struct Store {
     nonce: String,
 }
 
-fn which(prog: &str) -> Option<PathBuf> {
+pub fn which(prog: &str) -> Option<PathBuf> {
     let path = env::var_os("PATH")?;
     env::split_paths(&path)
         .map(|d| d.join(prog))
@@ -143,6 +145,18 @@ impl Store {
         self.write("pkgs/env.nix", &env.replace("@PATH@", path));
     }
 
+    /// The stdout of `nix-store args`, which must succeed.
+    pub fn nix_store(&self, args: &[&str]) -> String {
+        stdout(&ok(self.nix("nix-store").args(args)))
+    }
+
+    /// An empty dir for PATH and IETS_NIX_BIN_DIR: no nix to fall back on.
+    pub fn no_nix(&self) -> PathBuf {
+        let d = self.dir().join("nobin");
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
     /// Writes `template` to `name` in the store's dir, with `@SYSTEM@`,
     /// `@SHELL@` (an absolute bash) and `@NONCE@` filled in.
     pub fn write(&self, name: &str, template: &str) -> PathBuf {
@@ -183,7 +197,12 @@ impl Store {
 
     /// iets, talking to this daemon only.
     pub fn iets(&self) -> Command {
-        let mut c = hermetic::iets();
+        self.iets_as(env!("CARGO_BIN_EXE_iets"))
+    }
+
+    /// iets started as `prog`, a link to it under another name.
+    pub fn iets_as(&self, prog: impl AsRef<OsStr>) -> Command {
+        let mut c = hermetic::iets_as(prog);
         Store::env(self.dir(), &mut c);
         c.current_dir(self.dir());
         c
@@ -196,6 +215,94 @@ impl Store {
         // with a writable state dir Nix would open the store itself
         c.env("NIX_REMOTE", "daemon").current_dir(self.dir());
         c
+    }
+}
+
+/// A second daemon on the same store dir, with its files under `root`, for
+/// the `--builder` of a test. Its store is relocated, so Nix builds in the
+/// sandbox there, with the host's `/nix/store` for bash and coreutils.
+/// Chroot stores are Linux only.
+pub struct Builder {
+    root: PathBuf,
+    store: String,
+    daemon: Child,
+}
+
+/// A chroot store takes `/nix/store` unless `store=` names the store dir.
+fn builder_store(root: &Path, store_dir: &Path) -> String {
+    format!(
+        "local?root={}&store={}",
+        root.display(),
+        store_dir.display()
+    )
+}
+
+impl Builder {
+    pub fn socket(&self) -> PathBuf {
+        self.root.join("socket")
+    }
+
+    pub fn url(&self) -> String {
+        format!("unix://{}", self.socket().display())
+    }
+
+    /// `local?root=…`, for `--store` on the Nix side.
+    pub fn store(&self) -> String {
+        self.store.clone()
+    }
+
+    /// Where store path `path` lies on disk: under `root/nix/store`, the
+    /// default of Nix's `real` setting for a chroot store.
+    pub fn real(&self, path: &str) -> PathBuf {
+        self.root
+            .join("nix/store")
+            .join(path.rsplit('/').next().unwrap())
+    }
+}
+
+impl Drop for Builder {
+    fn drop(&mut self) {
+        // SAFETY: kill only sends a signal
+        unsafe { libc::kill(-(self.daemon.id() as i32), libc::SIGKILL) };
+        let _ = self.daemon.wait();
+    }
+}
+
+impl Store {
+    /// A [`Builder`] named `name`, with `opts` as `--option`s.
+    pub fn builder(&self, name: &str, opts: &[(&str, &str)]) -> Builder {
+        let root = self.dir().join(name);
+        fs::create_dir(&root).unwrap();
+        let mut cmd = Command::new(which("nix-daemon").unwrap());
+        Store::env(self.dir(), &mut cmd);
+        let log = fs::File::create(root.join("daemon.log")).unwrap();
+        cmd.env("NIX_DAEMON_SOCKET_PATH", root.join("socket"))
+            .arg("--store")
+            .arg(builder_store(&root, &self.store_dir()))
+            .args(["--option", "sandbox-paths", "/nix/store"]);
+        for (k, v) in opts {
+            cmd.args(["--option", k, v]);
+        }
+        cmd.stdin(Stdio::null())
+            .stdout(log.try_clone().unwrap())
+            .stderr(log)
+            .process_group(0);
+        let mut b = Builder {
+            daemon: cmd.spawn().expect("spawn nix-daemon"),
+            store: builder_store(&root, &self.store_dir()),
+            root,
+        };
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !b.socket().exists() {
+            let exited = b.daemon.try_wait().unwrap().is_some();
+            assert!(
+                !exited && Instant::now() < deadline,
+                "no builder socket: {}",
+                fs::read_to_string(b.root.join("daemon.log")).unwrap_or_default()
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        b
     }
 }
 
@@ -216,6 +323,59 @@ fn writable(dir: &Path) {
             writable(&e.path());
         }
     }
+}
+
+/// The system the tree also names, which nothing builds.
+pub const OTHER: &str = "riscv64-none";
+
+const CHECKS_FLAKE: &str = r#"{
+  outputs = { self }:
+    let
+      systems = [ "@SYSTEM@" "@OTHER@" ];
+      forAll = f: builtins.listToAttrs (map (s: { name = s; value = f s; }) systems);
+      drv = system: name: args: derivation ({
+        inherit name system;
+        builder = "@SHELL@";
+      } // args);
+      nonce = "@NONCE@";
+    in {
+      checks = forAll (system: rec {
+        ok = drv system "fb-ok" {
+          args = [ "-c" "echo building fb-ok ${nonce}; echo done > $out" ];
+        };
+        dep = drv system "fb-dep" {
+          args = [ "-c" "echo building fb-dep ${nonce}; echo dep > $out" ];
+        };
+        chain = drv system "fb-chain" {
+          args = [ "-c" "echo building fb-chain ${nonce}; while read -r l; do echo \"$l\"; done < ${dep} > $out" ];
+        };
+        bad = drv system "fb-bad" {
+          args = [ "-c" "echo about to fail ${nonce}; echo line2; exit 1" ];
+        };
+      });
+      packages = forAll (system: {
+        lone = drv system "fb-lone" {
+          args = [ "-c" "echo building fb-lone ${nonce}; echo lone > $out" ];
+        };
+      });
+    };
+}
+"#;
+
+/// The checks flake in `dir`: `ok`, `dep`, `chain` (which reads `dep`) and
+/// `bad` (which exits 1) for two systems, and a `packages` set. It has its
+/// own nonce, and a lock written here: iets only evaluates locked flakes,
+/// and `nix flake lock` writes nothing for one without inputs.
+pub fn checks_flake(s: &Store, dir: &str) -> String {
+    let text = CHECKS_FLAKE
+        .replace("@OTHER@", OTHER)
+        .replace("@NONCE@", &format!("@NONCE@-{dir}"));
+    s.write(&format!("{dir}/flake.nix"), &text);
+    s.write(
+        &format!("{dir}/flake.lock"),
+        r#"{"nodes":{"root":{}},"root":"root","version":7}"#,
+    );
+    format!("path:{}", s.dir().join(dir).display())
 }
 
 /// Nix's `system` for this host.
@@ -247,6 +407,33 @@ pub fn stderr(o: &Output) -> String {
     String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
+/// The `--log-format internal-json` records in `stderr`.
+pub fn records(stderr: &str) -> Vec<serde_json::Value> {
+    stderr
+        .lines()
+        .filter_map(|l| l.strip_prefix("@nix "))
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect()
+}
+
+/// git in `repo`, with no config of the machine's.
+pub fn git(repo: &Path, args: &[&str]) -> Output {
+    let mut c = Command::new("git");
+    c.args(["-c", "user.name=iets", "-c", "user.email=iets@example.com"])
+        .args([
+            "-c",
+            "init.defaultBranch=main",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1");
+    ok(&mut c)
+}
+
 /// The sorted names in `dir`, none if it is missing.
 pub fn ls(dir: &Path) -> Vec<String> {
     let mut v: Vec<String> = fs::read_dir(dir)
@@ -257,6 +444,52 @@ pub fn ls(dir: &Path) -> Vec<String> {
         .unwrap_or_default();
     v.sort();
     v
+}
+
+/// Collects failed verdicts, so one run reports every failing case.
+#[derive(Default)]
+pub struct Checks(Vec<String>);
+
+impl Checks {
+    pub fn check(&mut self, label: &str, ok: bool, detail: impl Display) -> bool {
+        if !ok {
+            self.0.push(format!("{label}: {detail}"));
+        }
+        ok
+    }
+
+    pub fn fail(&mut self, what: String) {
+        self.0.push(what);
+    }
+}
+
+impl Drop for Checks {
+    fn drop(&mut self) {
+        if !thread::panicking() && !self.0.is_empty() {
+            panic!("{} failed:\n{}", self.0.len(), self.0.join("\n\n"));
+        }
+    }
+}
+
+/// A derivation that copies `DIR/src/a` and `DIR/src/sub/b`, at
+/// `DIR/case.nix`.
+pub fn make_case(s: &Store, dir: &str, name: &str) -> String {
+    s.write(&format!("{dir}/src/a"), &format!("hello @NONCE@ {dir}\n"));
+    s.write(&format!("{dir}/src/sub/b"), "zzz\n");
+    let src = s.dir().join(dir).join("src");
+    let text = r#"derivation {
+  name = "@NAME@";
+  system = "@SYSTEM@";
+  builder = "@SHELL@";
+  args = [ "-c" "while read -r l; do echo \"$l\"; done < ${@SRC@}/a > $out; while read -r l; do echo \"$l\"; done < ${@SRC@}/sub/b >> $out" ];
+}
+"#
+    .replace("@NAME@", name)
+    .replace("@SRC@", src.to_str().unwrap());
+    s.write(&format!("{dir}/case.nix"), &text)
+        .to_str()
+        .unwrap()
+        .to_string()
 }
 
 /// The stdout of `o` as JSON.
