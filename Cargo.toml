@@ -80,6 +80,7 @@ codegen-units = 16
 debug = "line-tables-only"
 
 [dev-dependencies]
+rstest = { version = "0.28.0", default-features = false }
 tempfile = "3"
 
 [lints.rust]
