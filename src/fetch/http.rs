@@ -11,6 +11,8 @@
 //! the decompressor, and both ends stop when the other does.
 
 use std::cell::Cell;
+use std::error::Error as StdError;
+use std::fmt::{self, Display, Formatter};
 use std::fs::File;
 use std::future::Future;
 #[cfg(test)]
@@ -103,16 +105,16 @@ struct Watched {
 #[derive(Debug)]
 struct Stalled;
 
-impl std::fmt::Display for Stalled {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for Stalled {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str("no byte arrived within stalled-download-timeout")
     }
 }
 
-impl std::error::Error for Stalled {}
+impl StdError for Stalled {}
 
 /// Whether `e` or one of its causes is [`Stalled`].
-fn is_stall(e: &(dyn std::error::Error + 'static)) -> bool {
+fn is_stall(e: &(dyn StdError + 'static)) -> bool {
     let mut at = Some(e);
     while let Some(e) = at {
         let ours = e.downcast_ref::<io::Error>().and_then(|e| e.get_ref());
@@ -125,9 +127,10 @@ fn is_stall(e: &(dyn std::error::Error + 'static)) -> bool {
 }
 
 /// tokio drops the readiness of an `epoll_wait` that SIGCONT interrupts and
-/// still fires the timers that the stop overran, so the kernel decides.
+/// still fires the timers that the stop overran, so the kernel decides. No
+/// `MSG_DONTWAIT`, which Windows lacks: tokio sockets are nonblocking.
 fn arrived(tcp: &tokio::net::TcpStream) -> bool {
-    let peek = rustix::net::RecvFlags::PEEK | rustix::net::RecvFlags::DONTWAIT;
+    let peek = rustix::net::RecvFlags::PEEK;
     rustix::net::recv(tcp, &mut [0u8; 1][..], peek) != Err(rustix::io::Errno::WOULDBLOCK)
 }
 
@@ -808,6 +811,7 @@ mod tests {
     use tempfile::tempdir;
 
     use std::fs;
+    use std::future::poll_fn;
     use std::net::{TcpListener, TcpStream};
     use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1165,7 +1169,7 @@ mod tests {
             assert!(poll(&mut w).is_pending());
             thread::sleep(limit * 2);
             assert!(poll(&mut w).is_pending());
-            let got = std::future::poll_fn(|cx| read(&mut w, cx)).await.unwrap();
+            let got = poll_fn(|cx| read(&mut w, cx)).await.unwrap();
             assert_eq!(got, b"data");
 
             let e = loop {
