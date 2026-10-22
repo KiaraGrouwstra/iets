@@ -3,7 +3,7 @@
 
 mod hermetic;
 
-use hermetic::{Iets, bin};
+use hermetic::{Iets, bin, stderr, stdout};
 use rstest::{fixture, rstest};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,10 +22,6 @@ fn file_url(p: &Path) -> String {
     } else {
         format!("file:///{p}")
     }
-}
-
-fn text(b: &[u8]) -> String {
-    String::from_utf8_lossy(b).into_owned()
 }
 
 /// `hello.txt` in a directory of its own, its URL, and iets with a cache
@@ -74,27 +70,24 @@ fn a_hashed_fetch_has_the_store_path_nix_gives(scratch: Scratch) {
     let call = format!(r#"builtins.fetchurl {{ url = "{url}"; sha256 = "{SHA256}"; }}"#);
 
     let o = scratch.eval(false, &[], &call);
-    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
     assert_eq!(
-        text(&o.stdout),
+        stdout(&o),
         "/nix/store/3ay25cl2lpykmx07i7m22qxz7zwzqmvy-hello.txt"
     );
 
     // the input store holds it now: no download, and the bytes read back
     fs::remove_file(scratch.hello()).unwrap();
     let o = scratch.eval(true, &[], &format!("builtins.readFile ({call})"));
-    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
     assert_eq!(o.stdout, BYTES);
 
     let named =
         format!(r#"builtins.fetchurl {{ url = "{url}"; sha256 = "{SHA256}"; name = "x"; }}"#);
     fs::write(scratch.hello(), BYTES).unwrap();
     let o = scratch.eval(false, &[], &named);
-    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
-    assert_eq!(
-        text(&o.stdout),
-        "/nix/store/wi98cklj3li90ii41aggl9mf0w3nqp5y-x"
-    );
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert_eq!(stdout(&o), "/nix/store/wi98cklj3li90ii41aggl9mf0w3nqp5y-x");
 }
 
 #[rstest]
@@ -106,13 +99,13 @@ fn a_wrong_hash_is_refused_with_the_hash_the_file_has(scratch: Scratch) {
         &[],
         &format!(r#"builtins.fetchurl {{ url = "{url}"; sha256 = "{zero}"; name = "y"; }}"#),
     );
-    assert_eq!(o.status.code(), Some(1), "{}", text(&o.stdout));
+    assert_eq!(o.status.code(), Some(1), "{}", stdout(&o));
     let want = format!(
         "error: hash mismatch in file downloaded from '{url}':\n  \
          specified: sha256:0000000000000000000000000000000000000000000000000000\n  \
          got:       sha256:{SHA256}\n"
     );
-    assert!(text(&o.stderr).starts_with(&want), "{}", text(&o.stderr));
+    assert!(stderr(&o).starts_with(&want), "{}", stderr(&o));
 }
 
 #[rstest]
@@ -124,21 +117,21 @@ fn without_a_hash_no_evaluation_fetches_and_prefetch_gives_the_hash(scratch: Scr
     );
     for flags in [&[][..], &["--impure"][..]] {
         let o = scratch.eval(false, flags, &call);
-        assert_eq!(o.status.code(), Some(1), "{flags:?}: {}", text(&o.stdout));
-        assert!(text(&o.stderr).starts_with(&want), "{}", text(&o.stderr));
+        assert_eq!(o.status.code(), Some(1), "{flags:?}: {}", stdout(&o));
+        assert!(stderr(&o).starts_with(&want), "{}", stderr(&o));
     }
 
     let o = scratch.run(false, &["prefetch", url]);
-    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
-    let sri = text(&o.stdout).trim().to_string();
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    let sri = stdout(&o);
     let o = scratch.eval(
         false,
         &[],
         &format!(r#"builtins.fetchurl {{ url = "{url}"; sha256 = "{sri}"; }}"#),
     );
-    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
     assert_eq!(
-        text(&o.stdout),
+        stdout(&o),
         "/nix/store/3ay25cl2lpykmx07i7m22qxz7zwzqmvy-hello.txt"
     );
 }

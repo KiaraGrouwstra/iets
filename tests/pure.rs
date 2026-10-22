@@ -3,7 +3,7 @@
 
 mod hermetic;
 
-use hermetic::{Iets, bin};
+use hermetic::{Iets, bin, stderr, stdout};
 use rstest::rstest;
 
 use std::fs;
@@ -18,10 +18,6 @@ fn run(bin: &Iets, dir: &Path, args: &[&str]) -> Output {
         .env("IETS_CACHE", "0")
         .output()
         .expect("run iets")
-}
-
-fn text(b: &[u8]) -> String {
-    String::from_utf8_lossy(b).into_owned()
 }
 
 /// A project holding `repo/read.nix`, which reads `repo/in.txt`, and
@@ -47,20 +43,20 @@ fn a_read_in_the_project_is_pure_and_one_above_it_is_not(bin: Iets) {
     let repo = d.path().join("repo");
 
     let o = run(&bin, &repo, &["eval", "--raw", "-f", "read.nix"]);
-    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
-    assert_eq!(text(&o.stdout), "in");
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert_eq!(stdout(&o), "in");
 
     let o = run(&bin, &repo, &["eval", "--raw", "-f", "up.nix"]);
-    assert_eq!(o.status.code(), Some(1), "{}", text(&o.stdout));
-    let e = text(&o.stderr);
+    assert_eq!(o.status.code(), Some(1), "{}", stdout(&o));
+    let e = stderr(&o);
     assert!(
         e.contains("outside.txt' is forbidden in pure evaluation mode"),
         "{e}"
     );
 
     let o = run(&bin, &repo, &["eval", "--raw", "--impure", "-f", "up.nix"]);
-    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
-    assert_eq!(text(&o.stdout), "out");
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert_eq!(stdout(&o), "out");
 }
 
 /// No marker above the entry file: its own directory is the project, so a
@@ -71,8 +67,8 @@ fn a_directory_with_no_marker_is_its_own_project(bin: Iets) {
     let repo = d.path().join("repo");
     fs::remove_file(repo.join("iets.toml")).unwrap();
     let o = run(&bin, &repo, &["eval", "--raw", "-f", "read.nix"]);
-    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
-    assert_eq!(text(&o.stdout), "in");
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert_eq!(stdout(&o), "in");
 }
 
 #[rstest]
@@ -81,11 +77,11 @@ fn the_other_purity_rules_hold_without_a_flag(bin: Iets) {
     let repo = d.path().join("repo");
 
     let o = run(&bin, &repo, &["eval", "--raw", "-f", "env.nix"]);
-    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
-    assert_eq!(text(&o.stdout), "");
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert_eq!(stdout(&o), "");
 
     let o = run(&bin, &repo, &["eval", "-E", "builtins ? currentSystem"]);
-    assert_eq!(text(&o.stdout).trim(), "false");
+    assert_eq!(stdout(&o), "false");
 }
 
 /// The user's file turns it off for every run; a project's file may not.
@@ -105,13 +101,13 @@ fn the_pure_setting_is_the_users_alone(bin: Iets) {
         .env("IETS_CACHE", "0")
         .output()
         .expect("run iets");
-    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
-    assert_eq!(text(&o.stdout), "out");
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert_eq!(stdout(&o), "out");
 
     fs::write(repo.join("iets.toml"), "pure = false\n").unwrap();
     let o = run(&bin, &repo, &["eval", "--raw", "-f", "read.nix"]);
-    assert_eq!(o.status.code(), Some(1), "{}", text(&o.stdout));
-    let e = text(&o.stderr);
+    assert_eq!(o.status.code(), Some(1), "{}", stdout(&o));
+    let e = stderr(&o);
     assert!(e.contains("'pure' may not be set in a project file"), "{e}");
 }
 
@@ -135,8 +131,8 @@ fn get_flake_takes_a_path_its_nar_hash_locks(bin: Iets) {
         d.path(),
         &["eval", "--impure", "--raw", "--expr", &tree],
     );
-    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
-    let hash = text(&o.stdout);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    let hash = stdout(&o);
 
     let get = |query: &str| {
         let e = format!(r#"(builtins.getFlake "path:{at}{query}").x"#);
@@ -146,11 +142,11 @@ fn get_flake_takes_a_path_its_nar_hash_locks(bin: Iets) {
     let wrong = get("?narHash=sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
     let unpinned = get("");
 
-    assert_eq!(right.status.code(), Some(0), "{}", text(&right.stderr));
-    assert_eq!(text(&right.stdout), "42\n");
-    assert_eq!(wrong.status.code(), Some(1), "{}", text(&wrong.stdout));
-    let e = text(&wrong.stderr);
+    assert_eq!(right.status.code(), Some(0), "{}", stderr(&right));
+    assert_eq!(right.stdout, "42\n".as_bytes());
+    assert_eq!(wrong.status.code(), Some(1), "{}", stdout(&wrong));
+    let e = stderr(&wrong);
     assert!(e.contains("NAR hash mismatch"), "{e}");
-    let e = text(&unpinned.stderr);
+    let e = stderr(&unpinned);
     assert!(e.contains("unlocked flake reference"), "{e}");
 }

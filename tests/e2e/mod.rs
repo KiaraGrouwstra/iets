@@ -16,6 +16,7 @@ use std::{env, fs, thread};
 use tempfile::TempDir;
 
 use crate::hermetic::{self, Iets};
+pub use crate::hermetic::{ok, stderr, stdout};
 
 pub mod classic;
 
@@ -387,26 +388,6 @@ pub fn system() -> String {
         other => other,
     };
     format!("{}-{os}", env::consts::ARCH)
-}
-
-/// Runs `c`, and panics with its stderr unless it succeeds.
-pub fn ok(c: &mut Command) -> Output {
-    let o = c.output().expect("spawn");
-    assert!(
-        o.status.success(),
-        "{c:?} failed with {}:\n{}",
-        o.status,
-        String::from_utf8_lossy(&o.stderr)
-    );
-    o
-}
-
-pub fn stdout(o: &Output) -> String {
-    String::from_utf8_lossy(&o.stdout).trim_end().to_string()
-}
-
-pub fn stderr(o: &Output) -> String {
-    String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
 /// The `--log-format internal-json` records in `stderr`.

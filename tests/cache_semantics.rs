@@ -5,7 +5,7 @@
 
 mod hermetic;
 
-use hermetic::Iets;
+use hermetic::{Iets, stderr, stdout};
 use rstest::{fixture, rstest};
 
 use std::fs;
@@ -78,11 +78,11 @@ impl Work {
 
 fn run(mut c: Command) -> Run {
     let o = c.output().unwrap();
-    let err = String::from_utf8_lossy(&o.stderr);
+    let err = stderr(&o);
     let lines = |p: &str| -> Vec<&str> { err.lines().filter(|l| l.starts_with(p)).collect() };
     Run {
         rc: o.status.code().unwrap_or(-1),
-        out: String::from_utf8_lossy(&o.stdout).trim_end().to_string(),
+        out: stdout(&o),
         status: lines("cache:").join(" "),
         why: lines("re-evaluating:").join(" "),
     }
@@ -333,8 +333,8 @@ fn uncacheable_runs_write_nothing(work: Work) {
     work.write("errs/missing.nix", "\"B\"\n");
     fs::create_dir(work.path("errs/missingdir")).unwrap();
     let e2 = nix_eval();
-    assert!(e1.status.success() && String::from_utf8_lossy(&e1.stdout).contains("«error:"));
-    assert!(e2.status.success() && !String::from_utf8_lossy(&e2.stdout).contains("«error:"));
+    assert!(e1.status.success() && stdout(&e1).contains("«error:"));
+    assert!(e2.status.success() && !stdout(&e2).contains("«error:"));
 }
 
 #[rstest]
@@ -401,7 +401,7 @@ fn a_lint_warning_is_replayed_on_a_hit(work: Work) {
         ])
         .output()
         .unwrap();
-    let err = String::from_utf8_lossy(&o.stderr);
+    let err = stderr(&o);
     assert_eq!(
         err.lines()
             .filter(|l| l.starts_with("warning: [url-literal]"))
@@ -506,7 +506,7 @@ fn the_cache_dir_keeps_what_it_did_not_make(work: Work) {
         .output()
         .unwrap();
     assert!(o.status.success());
-    assert!(String::from_utf8_lossy(&o.stderr).contains("is not an iets cache"));
+    assert!(stderr(&o).contains("is not an iets cache"));
     assert_eq!(fs::read_to_string(&notes).unwrap(), "PRECIOUS\n");
 
     // --ttl in days must fit in seconds
@@ -524,7 +524,7 @@ fn the_cache_dir_keeps_what_it_did_not_make(work: Work) {
         .output()
         .unwrap();
     assert_eq!(g.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&g.stderr).contains("--ttl wants a number of days"));
+    assert!(stderr(&g).contains("--ttl wants a number of days"));
 }
 
 /// A hit prints the same output for a lang test with paths and positions.
@@ -538,7 +538,7 @@ fn a_hit_prints_paths_and_positions_the_same(work: Work) {
         .output()
         .unwrap();
     assert_eq!(o1.stdout, r2.stdout);
-    let err = String::from_utf8_lossy(&r2.stderr);
+    let err = stderr(&r2);
     assert_eq!(err.lines().filter(|l| l.contains("cache: hit")).count(), 1);
 }
 
@@ -580,5 +580,5 @@ fn search_uses_the_cache(work: Work) {
         .output()
         .unwrap();
     assert_eq!(o.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&o.stderr).contains("--workers wants a number >= 1"));
+    assert!(stderr(&o).contains("--workers wants a number >= 1"));
 }

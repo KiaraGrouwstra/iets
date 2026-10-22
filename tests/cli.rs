@@ -3,7 +3,7 @@
 
 mod hermetic;
 
-use hermetic::{Iets, bin};
+use hermetic::{Iets, bin, stderr, stdout};
 
 use rstest::rstest;
 use std::path::Path;
@@ -15,15 +15,11 @@ fn run(bin: &Iets, args: &[&str]) -> Output {
     bin.cmd().args(args).output().expect("run iets")
 }
 
-fn text(b: &[u8]) -> String {
-    String::from_utf8_lossy(b).into_owned()
-}
-
 fn run_complete(mut c: Command, words: &[&str]) -> String {
     let o = c.arg("__complete").args(words).output().expect("run iets");
-    assert_eq!(o.status.code(), Some(0), "{words:?}: {}", text(&o.stderr));
-    assert!(o.stderr.is_empty(), "{words:?}: {}", text(&o.stderr));
-    text(&o.stdout)
+    assert_eq!(o.status.code(), Some(0), "{words:?}: {}", stderr(&o));
+    assert!(o.stderr.is_empty(), "{words:?}: {}", stderr(&o));
+    String::from_utf8_lossy(&o.stdout).into_owned()
 }
 
 #[rstest]
@@ -42,15 +38,15 @@ fn help_and_version_go_to_stdout(bin: Iets) {
     ] {
         let o = run(&bin, args);
         assert_eq!(o.status.code(), Some(0), "{args:?}");
-        assert!(o.stderr.is_empty(), "{args:?}: {}", text(&o.stderr));
+        assert!(o.stderr.is_empty(), "{args:?}: {}", stderr(&o));
         assert!(!o.stdout.is_empty(), "{args:?}");
     }
     let o = run(&bin, &["--help"]);
-    assert!(text(&o.stdout).contains("  eval-jobs "));
+    assert!(stdout(&o).contains("  eval-jobs "));
     let o = run(&bin, &["eval", "--help"]);
-    assert!(text(&o.stdout).starts_with("usage: iets eval "));
-    assert!(text(&o.stdout).contains("--strict"));
-    let v = text(&run(&bin, &["--version"]).stdout);
+    assert!(stdout(&o).starts_with("usage: iets eval "));
+    assert!(stdout(&o).contains("--strict"));
+    let v = stdout(&run(&bin, &["--version"]));
     assert_eq!(v.trim_end(), format!("iets {}", env!("CARGO_PKG_VERSION")));
 }
 
@@ -71,7 +67,7 @@ fn help_and_version_go_to_stdout(bin: Iets) {
 #[case::subcommand_typo(&["cache", "dunp"], "did you mean 'dump'?")]
 fn a_bad_command_line_names_the_problem(bin: Iets, #[case] args: &[&str], #[case] want: &str) {
     let o = run(&bin, args);
-    let err = text(&o.stderr);
+    let err = stderr(&o);
     assert_eq!(o.status.code(), Some(2), "{err}");
     assert!(o.stdout.is_empty());
     assert!(err.contains(want), "{err}");
@@ -99,11 +95,11 @@ fn dash_f_names_the_file_in_the_native_namespace(bin: Iets) {
         &["prefetch", "-f", "/nonexistent/missing.nix"],
         &["eval-jobs", "-f", "/nonexistent/missing.nix"],
     ] {
-        let err = text(&run(&bin, args).stderr);
+        let err = stderr(&run(&bin, args));
         assert!(err.contains(NO_SUCH_FILE), "{args:?}: {err}");
     }
     let o = run(&bin, &["nix-eval-jobs", "-f", "/nonexistent/missing.nix"]);
-    let err = text(&o.stderr);
+    let err = stderr(&o);
     assert!(err.contains("unknown flag '-f'"), "{err}");
     assert_eq!(o.status.code(), Some(1), "{err}");
 }
@@ -111,7 +107,7 @@ fn dash_f_names_the_file_in_the_native_namespace(bin: Iets) {
 #[rstest]
 fn io_errors_read_like_strerror(bin: Iets) {
     let o = run(&bin, &["eval", "/nonexistent/missing.nix"]);
-    let err = text(&o.stderr);
+    let err = stderr(&o);
     assert!(err.contains(NO_SUCH_FILE), "{err}");
     assert!(!err.contains("os error"), "{err}");
 }
@@ -136,11 +132,11 @@ fn completion_asks_the_binary_and_ignores_settings(bin: Iets) {
     for shell in ["bash", "zsh", "fish", "nushell", "elvish", "powershell"] {
         let o = run(&bin, &["completion", shell]);
         assert_eq!(o.status.code(), Some(0), "{shell}");
-        assert!(text(&o.stdout).contains("__complete"), "{shell}");
+        assert!(stdout(&o).contains("__complete"), "{shell}");
     }
     let o = run(&bin, &["completion", "ksh"]);
     assert_eq!(o.status.code(), Some(2));
-    assert!(text(&o.stderr).contains("unknown subcommand \'ksh\'"));
+    assert!(stderr(&o).contains("unknown subcommand \'ksh\'"));
 }
 
 #[rstest]
@@ -291,7 +287,7 @@ fn build_unreachable(
         Some(cache) => c.arg("--cache-dir").arg(cache),
         None => c.arg("--no-cache"),
     };
-    text(&c.args(installables).output().expect("run iets").stderr)
+    stderr(&c.args(installables).output().expect("run iets"))
 }
 
 const A: &str = ".#checks.x86_64-linux.a";
@@ -321,8 +317,8 @@ fn build_cache_ignores_installable_order(bin: Iets) {
 #[rstest]
 fn eval_json_forces_without_strict(bin: Iets) {
     let o = run(&bin, &["eval", "--json", "--expr", "{ a = [ (1 + 1) ]; }"]);
-    assert!(o.status.success(), "{}", text(&o.stderr));
-    assert_eq!(text(&o.stdout).trim(), r#"{"a":[2]}"#);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert_eq!(stdout(&o), r#"{"a":[2]}"#);
 }
 
 /// Nix's currentSystem is the host's unless `system` says otherwise.
@@ -337,7 +333,7 @@ fn current_system_is_the_hosts(bin: Iets) {
         &bin,
         &["eval", "--impure", "--expr", "builtins.currentSystem"],
     );
-    assert_eq!(text(&o.stdout), want, "{}", text(&o.stderr));
+    assert_eq!(o.stdout, want.as_bytes(), "{}", stderr(&o));
 }
 
 #[cfg(target_os = "linux")]
@@ -361,7 +357,7 @@ fn a_full_stdout_is_an_error(bin: Iets, #[case] args: &[&str]) {
         .output()
         .unwrap();
     assert_eq!(o.status.code(), Some(1));
-    let err = text(&o.stderr);
+    let err = stderr(&o);
     assert!(err.contains("No space left on device"), "{err}");
 }
 
@@ -383,11 +379,11 @@ fn a_bad_config_stops_only_what_reads_a_setting(bin: Iets) {
         (&["eval", "-E", "1"], 1),
     ] {
         let o = run(a);
-        assert_eq!(o.status.code(), Some(want), "{a:?}: {}", text(&o.stderr));
+        assert_eq!(o.status.code(), Some(want), "{a:?}: {}", stderr(&o));
     }
     // the log format is read first, so an early error is a record
     let o = run(&["eval", "--log-format", "internal-json", "-E", "1"]);
-    assert!(text(&o.stderr).starts_with("@nix "), "{}", text(&o.stderr));
+    assert!(stderr(&o).starts_with("@nix "), "{}", stderr(&o));
 }
 
 #[rstest]
@@ -395,9 +391,9 @@ fn eval_says_what_it_does_not_support(bin: Iets) {
     let o = run(&bin, &["eval", "--expr", "builtins.fetchMercurial ./."]);
     assert_eq!(o.status.code(), Some(1));
     assert!(
-        text(&o.stderr).contains(r#"builtins.fetchTree { type = "hg";"#),
+        stderr(&o).contains(r#"builtins.fetchTree { type = "hg";"#),
         "{}",
-        text(&o.stderr)
+        stderr(&o)
     );
 }
 
@@ -410,7 +406,7 @@ fn eval_says_what_it_does_not_support(bin: Iets) {
 fn eval_says_which_flake_refs_it_does_not_support(bin: Iets, #[case] r: &str, #[case] want: &str) {
     let o = run(&bin, &["eval", r]);
     assert_eq!(o.status.code(), Some(1));
-    assert!(text(&o.stderr).contains(want), "{}", text(&o.stderr));
+    assert!(stderr(&o).contains(want), "{}", stderr(&o));
 }
 
 /// Every `-A` prints, in order, from one evaluation of the input
@@ -419,11 +415,11 @@ fn eval_says_which_flake_refs_it_does_not_support(bin: Iets, #[case] r: &str, #[
 fn eval_prints_every_attr(bin: Iets) {
     let e = r#"builtins.trace "root" { a = 1; b = 2; c = throw "boom"; }"#;
     let o = run(&bin, &["eval", "-E", e, "-A", "b", "-A", "a"]);
-    assert!(o.status.success(), "{}", text(&o.stderr));
-    assert_eq!(text(&o.stdout), "2\n1\n");
-    assert_eq!(text(&o.stderr).matches("trace: root").count(), 1);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert_eq!(o.stdout, "2\n1\n".as_bytes());
+    assert_eq!(stderr(&o).matches("trace: root").count(), 1);
     // what came before the failing one is out already
     let o = run(&bin, &["eval", "-E", e, "-A", "a", "-A", "c", "-A", "b"]);
     assert!(!o.status.success());
-    assert_eq!(text(&o.stdout), "1\n");
+    assert_eq!(o.stdout, "1\n".as_bytes());
 }

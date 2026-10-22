@@ -4,7 +4,7 @@
 
 mod hermetic;
 
-use hermetic::{Iets, bin};
+use hermetic::{Iets, bin, stderr, stdout};
 
 use rstest::rstest;
 use serde_json::Value;
@@ -60,8 +60,8 @@ fn diff(bin: &Iets, work: &Path, args: &[&str]) -> Run {
         .expect("run iets");
     Run {
         rc: o.status.code().expect("iets exits"),
-        out: String::from_utf8_lossy(&o.stdout).trim_end().to_string(),
-        err: String::from_utf8_lossy(&o.stderr).trim_end().to_string(),
+        out: stdout(&o),
+        err: stderr(&o).trim_end().to_string(),
     }
 }
 

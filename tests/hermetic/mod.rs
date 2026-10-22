@@ -9,7 +9,7 @@
 use rstest::fixture;
 use std::env;
 use std::ffi::OsStr;
-use std::process::Command;
+use std::process::{Command, Output};
 use tempfile::TempDir;
 
 /// The IETS_ settings every run gets. tests/e2e gives them to Nix too, so a
@@ -75,4 +75,25 @@ pub fn isolate(c: &mut Command) {
         }
     }
     c.envs(ENV.iter().copied());
+}
+
+/// Runs `c`, and panics with its stderr unless it succeeds.
+pub fn ok(c: &mut Command) -> Output {
+    let o = c.output().expect("spawn");
+    assert!(
+        o.status.success(),
+        "{c:?} failed with {}:\n{}",
+        o.status,
+        String::from_utf8_lossy(&o.stderr)
+    );
+    o
+}
+
+/// Without the trailing newline.
+pub fn stdout(o: &Output) -> String {
+    String::from_utf8_lossy(&o.stdout).trim_end().to_string()
+}
+
+pub fn stderr(o: &Output) -> String {
+    String::from_utf8_lossy(&o.stderr).into_owned()
 }

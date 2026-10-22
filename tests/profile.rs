@@ -3,7 +3,7 @@
 
 mod hermetic;
 
-use hermetic::{Iets, bin};
+use hermetic::{Iets, bin, stderr};
 use rstest::rstest;
 
 use std::fs;
@@ -36,12 +36,7 @@ fn profile(bin: &Iets, kind: &str, expr: &str) -> (String, Output) {
             ("IETS_STATS", "1"),
         ],
     );
-    assert_eq!(
-        o.status.code(),
-        Some(0),
-        "{}",
-        String::from_utf8_lossy(&o.stderr)
-    );
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
     let folded = fs::read_to_string(&out).expect("the profile file");
     (folded, o)
 }
@@ -50,14 +45,14 @@ fn profile(bin: &Iets, kind: &str, expr: &str) -> (String, Output) {
 fn a_profile_that_is_not_eval_is_a_settings_error(bin: Iets) {
     let o = eval(&bin, "1", &[("IETS_PROFILE", "cpu")]);
     assert_ne!(o.status.code(), Some(0));
-    let err = String::from_utf8_lossy(&o.stderr);
+    let err = stderr(&o);
     assert!(err.contains("IETS_PROFILE: 'cpu' is not 'eval'"), "{err}");
 }
 
 #[rstest]
 fn an_unprofiled_run_says_nothing_about_a_profile(bin: Iets) {
     let o = eval(&bin, "1", &[]);
-    let err = String::from_utf8_lossy(&o.stderr);
+    let err = stderr(&o);
     assert!(!err.contains("profile"), "{err}");
 }
 
@@ -67,7 +62,7 @@ fn an_unprofiled_run_says_nothing_about_a_profile(bin: Iets) {
 fn a_run_shorter_than_a_tick_says_it_sampled_nothing(bin: Iets) {
     let o = eval(&bin, "1 + 1", &[("IETS_PROFILE", "eval")]);
     assert_eq!(o.status.code(), Some(0));
-    let err = String::from_utf8_lossy(&o.stderr);
+    let err = stderr(&o);
     assert!(err.contains("profile: no samples"), "{err}");
 }
 
@@ -118,7 +113,7 @@ fn an_allocation_profile_accounts_for_the_arena(bin: Iets) {
                 .expect("a count")
         })
         .sum();
-    let err = String::from_utf8_lossy(&o.stderr);
+    let err = stderr(&o);
     let total: u64 = err
         .split_whitespace()
         .find_map(|w| w.strip_prefix("arena_bytes=")?.parse().ok())
@@ -140,7 +135,7 @@ fn a_profile_refuses_more_than_one_worker(bin: Iets) {
         .output()
         .expect("run iets");
     assert_ne!(o.status.code(), Some(0));
-    let err = String::from_utf8_lossy(&o.stderr);
+    let err = stderr(&o);
     assert!(err.contains("--workers must be 1, not 4"), "{err}");
 
     // the same through the setting rather than the flag
@@ -152,6 +147,6 @@ fn a_profile_refuses_more_than_one_worker(bin: Iets) {
         .output()
         .expect("run iets");
     assert_ne!(o.status.code(), Some(0));
-    let err = String::from_utf8_lossy(&o.stderr);
+    let err = stderr(&o);
     assert!(err.contains("workers must be 1, not 4"), "{err}");
 }
