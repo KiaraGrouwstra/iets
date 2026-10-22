@@ -188,9 +188,36 @@ impl F {
         );
     }
 
-    fn input_path(&self, dir: &str, input: &str) -> String {
+    /// Nix locks the flake at `dir` and evaluates `dir#v` in a store of its
+    /// own, named `store`; returns that value and the store path of `input`.
+    /// The daemon's store never has the input, so nothing must be deleted
+    /// there: a daemon worker that served a Nix call can outlive the client,
+    /// and its temp root then keeps the path.
+    fn lock_apart(&self, dir: &str, input: &str, store: &str) -> (String, String) {
+        let store = self.w(store);
+        let o = self
+            .s
+            .nix("nix")
+            .args(["flake", "lock", "--store", &store])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "lock {dir}: {}", last(&stderr(&o), 3));
+        let r = format!("{dir}#v");
+        let exp = stdout(&self.nix(&[
+            "eval",
+            "--store",
+            &store,
+            "--raw",
+            "--option",
+            "eval-cache",
+            "false",
+            &r,
+        ]));
         let e = format!("(builtins.getFlake \"{dir}\").inputs.{input}.outPath");
-        stdout(&self.nix(&["eval", "--raw", "--impure", "--expr", &e]))
+        let path =
+            stdout(&self.nix(&["eval", "--store", &store, "--raw", "--impure", "--expr", &e]));
+        (exp, path)
     }
 
     fn lock(&self, dir: &str) -> Output {
@@ -795,7 +822,7 @@ fn rev_count() {
     f.check("revCount: dirty tree", &format!("{c}#meta"), &[]);
 }
 
-/// A tarball input: Nix locks it, the store copy goes away, and iets
+/// A tarball input: Nix locks it in a store of its own, and iets
 /// downloads, unpacks, hashes and keeps the tree in its input store.
 #[test]
 fn iets_fetches_a_tarball_input() {
@@ -822,10 +849,7 @@ fn iets_fetches_a_tarball_input() {
 "#
         ),
     );
-    f.lock(&tbf);
-    let exp = stdout(&f.nix_eval(&format!("{tbf}#v")));
-    let tb_path = f.input_path(&tbf, "tb");
-    f.nix(&["store", "delete", &tb_path]);
+    let (exp, tb_path) = f.lock_apart(&tbf, "tb", "tbstore");
     f.fetch_only(
         "tarball: into iets's input store",
         &format!("{tbf}#v"),
@@ -1032,7 +1056,6 @@ fn iets_fetches_a_tarball_input() {
     // nothing is registered. The input store entry goes first, or the fetch
     // never happens.
     fs::remove_file(&entry).unwrap();
-    f.nix(&["store", "delete", &tb_path]);
     write(&src.join("a"), "changed\n");
     tar(&w, &format!("{work}/tb2.tar.gz"), "tb2src");
     let env = f.no_nix();
@@ -1153,15 +1176,14 @@ fn online_inputs() {
 }
 "#,
     );
-    f.lock(&ghf);
     let r = format!("{ghf}#v");
-    let exp = stdout(&f.nix_eval(&r));
-    let gh_path = f.input_path(&ghf, "tiny");
-    f.nix(&["store", "delete", &gh_path]);
+    let (exp, gh_path) = f.lock_apart(&ghf, "tiny", "ghstore");
+    f.verdict(!Path::new(&gh_path).exists(), || {
+        format!("github: {gh_path} is in the store already")
+    });
     f.fetch_only("github: fetched over https by iets", &r, &exp);
 
     // no nix, no daemon, a fresh cache: a fetch, then an offline hit
-    f.nix(&["store", "delete", &gh_path]);
     let nobin = f.no_nix()[0].1.clone();
     let cache = f.w("alone");
     let iets_cache = format!("{cache}/iets");
@@ -1195,7 +1217,9 @@ fn online_inputs() {
 }
 
 /// iets has no git fetcher, so a missing git input goes to Nix, and without
-/// Nix it is an error that names the input.
+/// Nix it is an error that names the input. Nix locks in a store of its own,
+/// so the daemon's store has the input only once iets's Nix fetches it: the
+/// case without Nix runs first.
 #[test]
 fn a_git_input_goes_through_nix() {
     let Some(mut f) = F::new() else { return };
@@ -1207,16 +1231,8 @@ fn a_git_input_goes_through_nix() {
             "{{\n  inputs.lib.url = \"git+file://{lib}\";\n  outputs = {{ self, lib }}: {{ v = lib.greeting; }};\n}}\n"
         ),
     );
-    f.lock(&gitf);
     let r = format!("{gitf}#v");
-    let exp = stdout(&f.nix_eval(&r));
-    let path = f.input_path(&gitf, "lib");
-    f.nix(&["store", "delete", &path]);
-    let gf = f.iets_eval(&[], &["--raw", "--no-tracing-cache", &r]);
-    f.verdict(!exp.is_empty() && stdout(&gf) == exp, || {
-        format!("git input: {} vs {exp}", stdout(&gf))
-    });
-    f.nix(&["store", "delete", &path]);
+    let (exp, path) = f.lock_apart(&gitf, "lib", "gitstore");
     let env = f.no_nix();
     let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
     let gn = f.iets_eval(&env, &["--raw", "--no-tracing-cache", &r]);
@@ -1225,6 +1241,11 @@ fn a_git_input_goes_through_nix() {
             && stderr(&gn).contains("nix is not on PATH")
             && stderr(&gn).contains("input 'lib'"),
         || format!("git input, no nix: {}", last(&stderr(&gn), 2)),
+    );
+    let gf = f.iets_eval(&[], &["--raw", "--no-tracing-cache", &r]);
+    f.verdict(
+        !exp.is_empty() && stdout(&gf) == exp && Path::new(&path).exists(),
+        || format!("git input: {} vs {exp}", stdout(&gf)),
     );
 
     // a tree that is not the one the lock names: the hint names the causes
