@@ -115,6 +115,7 @@ impl Store {
     }
 
     fn env(d: &Path, c: &mut Command) {
+        hermetic::isolate(c);
         c.env("NIX_STORE_DIR", d.join("store"))
             .env("NIX_STATE_DIR", d.join("var"))
             .env("NIX_LOG_DIR", d.join("log"))
@@ -124,17 +125,7 @@ impl Store {
             .env("XDG_CONFIG_HOME", d.join("xdg"))
             .env("XDG_CONFIG_DIRS", d.join("xdg"))
             .env("XDG_CACHE_HOME", d.join("cache"))
-            .env("HOME", d)
-            .env_remove("NIX_CONFIG")
-            .env_remove("NIX_REMOTE")
-            .env_remove("NIX_PATH");
-        // as hermetic::iets does, so Nix and iets see the same environment
-        for (k, _) in env::vars_os() {
-            if k.to_string_lossy().starts_with("IETS_") {
-                c.env_remove(k);
-            }
-        }
-        c.envs(hermetic::ENV.iter().copied());
+            .env("HOME", d);
     }
 
     /// `tests/e2e/pkgs`, with an `env.nix` that names this machine's bash and
