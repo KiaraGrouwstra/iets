@@ -22,6 +22,16 @@ nix build .#checks.x86_64-linux.conformance -L
 A check fails when it finds a difference that `fuzz/divergences.toml` does
 not list, and it prints the input in base64.
 
+Each check runs a fixed number of inputs (`runs` in `nix/fuzz.nix`) with a
+seed taken from its derivation, so a slow builder runs as many inputs as a
+fast one. Each target prints the number and the digest of the inputs it
+kept. For `parse`, `drv-read`, `drv-gen`, `nar-gen` and `nar-tree`, two runs
+of one check keep the same inputs. The other targets still differ from run
+to run, because the code under test does not always take the same path, for
+example through a hash table with a random seed, a daemon thread or the order
+of a directory on disk. The inputs in `fuzz/regressions/drv-read/` once
+diverged; `fuzz-drv` runs them each time as seeds.
+
 ## Manual fuzzing
 
 To run a fuzzer yourself you need only the flake's stable Rust. `cargo fuzz`

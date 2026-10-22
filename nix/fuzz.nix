@@ -9,34 +9,39 @@ let
       ln -sf "$f" "seeds/$(echo "$f" | sha1sum | cut -c1-40)"
     done
   '';
-  # what each libFuzzer binary is run with; the seeds go to a directory `seeds`
+  # what each libFuzzer binary is run with; the seeds go to a directory `seeds`.
+  # `runs` is the number of inputs of a check, seeds included; the comments of
+  # the checks give the time this takes on an x86_64 builder.
   targets = {
     parse = {
       flags = "-max_len=4096 -dict=${../fuzz/parse.dict}";
-      # an eighth of nixpkgs in a check: the time budget includes reading them
+      # an eighth of nixpkgs in a check
       seeds = every: ''
         find ${nixpkgs} -name '*.nix' -size -32k | awk 'NR % ${toString every} == 0' | while read -r f; do
           ln -s "$f" "seeds/$(echo "$f" | sha1sum | cut -c1-40)"
         done
         ${link [ "${nix-conformance}/parse" "${nix-conformance}/corpus/parse" ] "*.nix"}
       '';
+      runs = 100000;
     };
     nar-read = {
       flags = "-max_len=65536 -dict=${../fuzz/nar.dict}";
       seeds = _: link [ "${nix-conformance}/nar" "${nix-conformance}/corpus/nar" ] "*.nar";
+      runs = 30000;
     };
-    nar-gen = { flags = "-max_len=4096"; seeds = _: ""; };
-    nar-tree = { flags = "-max_len=4096"; seeds = _: ""; };
-    wire = { flags = "-max_len=4096"; seeds = _: ""; };
+    nar-gen = { flags = "-max_len=4096"; seeds = _: ""; runs = 7500; };
+    nar-tree = { flags = "-max_len=4096"; seeds = _: ""; runs = 2500; };
+    wire = { flags = "-max_len=4096"; seeds = _: ""; runs = 4000; };
     # a hang is a bug of its own: the expressions end (fuzz/src/eval.rs)
-    eval = { flags = "-max_len=4096 -timeout=10"; seeds = _: ""; };
-    drv-eval = { flags = "-max_len=4096 -timeout=10"; seeds = _: ""; };
+    eval = { flags = "-max_len=4096 -timeout=10"; seeds = _: ""; runs = 150000; };
+    drv-eval = { flags = "-max_len=4096 -timeout=10"; seeds = _: ""; runs = 20000; };
     drv-read = {
       flags = "-max_len=16384 -dict=${../fuzz/drv.dict}";
       # with the inputs that once diverged, so that each check runs them again
       seeds = _: link [ "${nix-conformance}/drv" "${../fuzz/regressions/drv-read}" ] "*.drv";
+      runs = 150000;
     };
-    drv-gen = { flags = "-max_len=4096"; seeds = _: ""; };
+    drv-gen = { flags = "-max_len=4096"; seeds = _: ""; runs = 200000; };
   };
   env = ''
     export IETS_PARSE_ORACLE=${oracles}/bin/parse-oracle
@@ -103,19 +108,29 @@ let
     dontFixup = true;
     meta.license = lib.licenses.lgpl21Plus;
   });
-  # one target for a fixed time; a divergence fails the build and prints the input
-  run = name: seconds: ''
+  # one target for a fixed number of inputs; a divergence fails the build and
+  # prints the input. A count, not a time: a slow builder must not stop before
+  # the input that a fast one reaches. -reload=0, as libFuzzer reads the corpus
+  # again each second. The campaigns fuzz for a time.
+  run = name: ''
     mkdir -p seeds new-${name}
     rm -f seeds/*
     ${targets.${name}.seeds 8}
     # the RNG seed from $out, which the drv hash names: a new seed at each
     # change, the same inputs again on a rebuild. libFuzzer takes 0 as random.
     seed=$(( 16#$(echo -n "$out ${name}" | sha256sum | cut -c1-8) % 4294967295 + 1 ))
-    fuzz-${name} -seed=$seed -max_total_time=${toString seconds} ${targets.${name}.flags} \
-      -artifact_prefix=art-${name}- new-${name} seeds || {
+    # libFuzzer runs the seeds by size, and two of one size in the order it
+    # got them. A directory lists its files in an order of its own, a list
+    # does not.
+    printf %s "$(find seeds -mindepth 1 | sort | paste -sd, -)" > seeds.list
+    fuzz-${name} -seed=$seed -runs=${toString targets.${name}.runs} -reload=0 ${targets.${name}.flags} \
+      $([ -s seeds.list ] && echo -seed_inputs=@seeds.list) \
+      -artifact_prefix=art-${name}- new-${name} || {
         for a in art-${name}-*; do echo "the input, in base64: $(base64 -w0 "$a")" >&2; done
         exit 1
       }
+    # the grown corpus, to compare two runs of one check
+    echo "${name}: $(ls new-${name} | wc -l) inputs, sha256 $(cat new-${name}/* | sha256sum | cut -c1-16)"
   '';
   check = { name, script }: pkgs.runCommand "iets-fuzz-${name}-check" {
     nativeBuildInputs = [ fuzz-diff fuzzers oracles ];
@@ -155,12 +170,12 @@ in
 {
   inherit oracles fuzz-diff fuzzers campaign;
   checks = {
-    # every .nix file of nixpkgs through both parsers, then a minute of libFuzzer
+    # every .nix file of nixpkgs through both parsers, then about a minute of libFuzzer
     fuzz-parse = check {
       name = "parse";
       script = ''
         fuzz-diff --nix-only parse ${nixpkgs}
-        ${run "parse" 60}
+        ${run "parse"}
       '';
     };
     # every case of nix-conformance through iets, with the trees; the cases
@@ -190,30 +205,30 @@ in
         fi
       '';
     });
-    # half a minute of iets's daemon client against Nix's, on scripted daemons
+    # about half a minute of iets's daemon client against Nix's, on scripted daemons
     fuzz-wire = check {
       name = "wire";
-      script = run "wire" 30;
+      script = run "wire";
     };
-    # a minute of generated expressions through both evaluators
+    # about a minute of generated expressions through both evaluators
     fuzz-eval = check {
       name = "eval";
-      script = run "eval" 60;
+      script = run "eval";
     };
-    # twenty seconds of each derivation target
+    # about twenty seconds of each derivation target
     fuzz-drv = check {
       name = "drv";
-      script = lib.concatMapStrings (t: run t 20) [ "drv-read" "drv-gen" ];
+      script = lib.concatMapStrings run [ "drv-read" "drv-gen" ];
     };
-    # thirty seconds of derivation calls, their drvPaths and outPaths
+    # about thirty seconds of derivation calls, their drvPaths and outPaths
     fuzz-drv-eval = check {
       name = "drv-eval";
-      script = run "drv-eval" 30;
+      script = run "drv-eval";
     };
-    # twenty seconds of each NAR target
+    # about twenty seconds of each NAR target
     fuzz-nar = check {
       name = "nar";
-      script = lib.concatMapStrings (t: run t 20) [ "nar-read" "nar-gen" "nar-tree" ];
+      script = lib.concatMapStrings run [ "nar-read" "nar-gen" "nar-tree" ];
     };
   };
 }
