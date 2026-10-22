@@ -310,7 +310,7 @@ pub fn sp() -> usize {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
-    use std::{hint, thread};
+    use std::{hint, slice, thread};
 
     struct Counter {
         fiber: *mut Fiber,
@@ -393,30 +393,42 @@ mod tests {
     }
 
     #[inline(never)]
-    fn deep(n: u64) -> u64 {
+    fn deep(n: u64, low: &AtomicUsize) -> u64 {
         let buf = [n; 64];
         let p = hint::black_box(&buf);
         if n == 0 {
+            low.store(sp(), Ordering::Relaxed);
             p[3]
         } else {
-            deep(n - 1) + hint::black_box(p)[5] - n
+            deep(n - 1, low) + hint::black_box(p)[5] - n
         }
     }
 
     unsafe fn deep_entry(p: *mut ()) {
         let c = unsafe { &*(p as *const Counter) };
-        c.n.store(deep(20000) as usize, Ordering::Relaxed);
+        hint::black_box(deep(20000, &c.n));
     }
 
+    // Residency is only an upper bound: under memory pressure the kernel
+    // may swap the used pages out before they are counted.
     #[test]
     fn large_stack_use_and_release() {
-        let (_, f) = counting(64 << 20, deep_entry);
+        let keep = 64 << 10;
+        let (c, f) = counting(64 << 20, deep_entry);
         f.state.store(RUNNING, Ordering::Relaxed);
         unsafe { f.resume() };
         assert_eq!(f.state.load(Ordering::Relaxed), FINISHED);
-        assert!(f.stack.resident() > 20000 * 512);
-        f.stack.release(64 << 10);
-        assert!(f.stack.resident() <= 64 << 10);
+        let top = f.stack.top() as usize;
+        let low = c.n.load(Ordering::Relaxed) & !(vm::page_size() - 1);
+        assert!(top - low > 20000 * 512);
+        // SAFETY: the range is in the idle fiber's mapping, above the guard.
+        let used = unsafe { slice::from_raw_parts(low as *const u64, (top - keep - low) / 8) };
+        assert!(used.iter().any(|w| *w != 0));
+        f.stack.release(keep);
+        assert!(f.stack.resident() <= keep);
+        // Windows decommits the range, so a read there faults.
+        #[cfg(unix)]
+        assert!(used.iter().all(|w| *w == 0));
     }
 
     #[test]
