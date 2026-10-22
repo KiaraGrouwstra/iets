@@ -102,9 +102,8 @@ fn run(ev: &mut Evaluator, b: &Build) -> error::Result<Built> {
     for file in &b.c.files {
         let root = eval_input(ev, &b.c, file, &cwd)?;
         for attr in &b.c.flags.attrs {
-            // nix-build.cc: each `-A` gets the derivations at its path with a
-            // `done` set of its own, so the same derivation under two `-A`s
-            // is two roots and two lines, as in Nix
+            // nix-build.cc: one `getDerivations` per attribute path, so two
+            // of them that name one derivation give two roots
             let mut seen = HashSet::new();
             let v = installable::find_along_attr_path(ev, root, attr, args)?;
             installable::get_drvs_at(ev, v, args, &mut roots, &mut seen, attr)?;

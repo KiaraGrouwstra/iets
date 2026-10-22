@@ -110,6 +110,7 @@ fn out_links_and_roots() {
     // nix-build: the default `result`, -o, multi-output naming
     let two_outs = format!("let m = import {multi}; in [ m.dev m.out ]");
     let two_drvs = format!("[ (import {def}) (import {multi}) ]");
+    let a_b = format!("{{ a = import {def}; b = import {multi}; }}");
     for (label, args, links) in [
         (
             "a custom drv, default result",
@@ -126,6 +127,11 @@ fn out_links_and_roots() {
         (
             "two drvs",
             vec!["-E", &two_drvs],
+            vec!["result", "result-2"],
+        ),
+        (
+            "a repeated -A",
+            vec!["-E", &a_b, "-A", "a", "-A", "a", "-A", "b"],
             vec!["result", "result-2"],
         ),
     ] {
