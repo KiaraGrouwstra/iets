@@ -145,9 +145,11 @@ def standalone [iets: string, name: string, ref: string, expected: string, nobin
   }
 }
 
-# the store path of a locked input of the flake at DIR
-def input-path [dir: string, input: string]: nothing -> string {
-  nixf eval --raw --impure --expr $"\(builtins.getFlake \"($dir)\"\).inputs.($input).outPath" | complete | get stdout | chomp
+# the store path of a locked input of the flake at DIR, fetched into STORE
+# when given
+def input-path [dir: string, input: string, --store: string]: nothing -> string {
+  let s = if $store == null { [] } else { [--store $store] }
+  nixf eval ...$s --raw --impure --expr $"\(builtins.getFlake \"($dir)\"\).inputs.($input).outPath" | complete | get stdout | chomp
 }
 
 # the `cache:` lines of a --timings run
@@ -501,9 +503,11 @@ def run-tests [iets: string, work: string]: nothing -> int {
   let nobin = $"($work)/nobin"
   mkdir $nobin
 
-  # a `file://` tarball, offline: nix locks it, the store copy goes away, and
-  # iets downloads, unpacks (one leading component stripped), hashes and
-  # registers the tree again.
+  # a `file://` tarball, offline: nix locks it, and iets downloads, unpacks
+  # (one leading component stripped) and hashes the tree. nix fetches into a
+  # store of its own, so the daemon's store never has the tree. A delete
+  # there would race the exit of the daemon worker that served the last nix
+  # call: until it is gone, its temp root keeps the path alive.
   let tbf = $"($work)/tbflake"
   mkdir $tbf $"($work)/tb2src/sub"
   $"hello ($work)\n" | save $"($work)/tb2src/a"
@@ -518,10 +522,10 @@ def run-tests [iets: string, work: string]: nothing -> int {
   outputs = { self, tb }: { v = toString (builtins.attrNames (builtins.readDir tb)) + " " + builtins.readFile (tb + "/a"); };
 }
 '# | str replace -a "@WORK@" $work | save $"($tbf)/flake.nix"
-  do { cd $tbf; nixf flake lock } | complete | ignore
-  let tb_exp = (nixf eval --raw --option eval-cache "false" $"($tbf)#v" | complete | get stdout | chomp)
-  let tb_path = (input-path $tbf "tb")
-  nixf store delete $tb_path | complete | ignore
+  let tbstore = $"($work)/tbstore"
+  do { cd $tbf; nixf flake lock --store $tbstore } | complete | ignore
+  let tb_exp = (nixf eval --store $tbstore --raw --option eval-cache "false" $"($tbf)#v" | complete | get stdout | chomp)
+  let tb_path = (input-path $tbf "tb" --store $tbstore)
   $res ++= [(fetch-only $iets "tarball: file:// input indexed into iets's input store" $"($tbf)#v" $tb_exp $nobin)]
   # nothing was registered: the tree lives in the input store, not the store
   let tb_entry = $"($work)/cache/inputs/($tb_path | path basename)"
@@ -674,7 +678,6 @@ def run-tests [iets: string, work: string]: nothing -> int {
   # refused, and nothing is registered. The input store entry must go first,
   # or the fetch never happens: the entry is the locked tree, already verified.
   rm -rf $tb_entry
-  nixf store delete $tb_path | complete | ignore
   "changed\n" | save -f $"($work)/tb2src/a"
   ^tar -C $work -czf $"($work)/tb2.tar.gz" tb2src
   let mm = (with-env {IETS_NIX_BIN_DIR: $nobin, PATH: $nobin} { ^$iets eval --raw --no-tracing-cache $"($tbf)#v" | complete })
