@@ -134,6 +134,7 @@ impl Store {
                 c.env_remove(k);
             }
         }
+        c.envs(hermetic::ENV.iter().copied());
     }
 
     /// `tests/e2e/pkgs`, with an `env.nix` that names this machine's bash and

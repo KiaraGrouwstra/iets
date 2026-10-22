@@ -10,6 +10,10 @@ use std::env;
 use std::ffi::OsStr;
 use std::process::Command;
 
+/// The IETS_ settings every run gets. tests/e2e gives them to Nix too, so a
+/// shell either one starts has the same environment.
+pub const ENV: &[(&str, &str)] = &[("IETS_PROGRESS", "false")];
+
 pub fn iets() -> Command {
     iets_as(env!("CARGO_BIN_EXE_iets"))
 }
@@ -34,6 +38,6 @@ pub fn iets_as(prog: impl AsRef<OsStr>) -> Command {
             c.env_remove(k);
         }
     }
-    c.env("IETS_PROGRESS", "false");
+    c.envs(ENV.iter().copied());
     c
 }
