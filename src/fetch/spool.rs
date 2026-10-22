@@ -1038,7 +1038,7 @@ impl Read for Bytes<'_> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use rstest::rstest;
     use tempfile::tempdir;
@@ -1055,7 +1055,7 @@ mod tests {
     const SYM: tar::EntryType = tar::EntryType::Symlink;
     const HARD: tar::EntryType = tar::EntryType::Link;
 
-    fn tar_gz(entries: &[(&str, tar::EntryType, u32, &[u8])]) -> Vec<u8> {
+    pub(crate) fn tar_gz(entries: &[(&str, tar::EntryType, u32, &[u8])]) -> Vec<u8> {
         let mut b = tar::Builder::new(Vec::new());
         for (name, kind, mode, data) in entries {
             let carries = !matches!(*kind, DIR | SYM | HARD);

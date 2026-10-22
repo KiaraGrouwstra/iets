@@ -216,9 +216,10 @@ fn singleton(dest: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fetch::spool::tests::tar_gz;
     use rstest::rstest;
     use std::collections::BTreeMap;
-    use std::{env, io, str};
+    use std::{env, str};
     use tempfile::tempdir;
 
     use crate::fetch::http;
@@ -259,33 +260,6 @@ mod tests {
         let mut out = BTreeMap::new();
         walk(dest, dest, &mut out);
         out
-    }
-
-    fn tar_gz(entries: &[(&str, tar::EntryType, u32, &[u8])]) -> Vec<u8> {
-        let mut b = tar::Builder::new(Vec::new());
-        for (name, kind, mode, data) in entries {
-            let mut h = tar::Header::new_ustar();
-            h.set_entry_type(*kind);
-            h.set_mode(*mode);
-            h.set_size(if *kind == tar::EntryType::Regular {
-                data.len() as u64
-            } else {
-                0
-            });
-            if *kind == tar::EntryType::Symlink || *kind == tar::EntryType::Link {
-                h.set_link_name(str::from_utf8(data).unwrap()).unwrap();
-            }
-            let body: &[u8] = if *kind == tar::EntryType::Regular {
-                data
-            } else {
-                &[]
-            };
-            b.append_data(&mut h, name, body).unwrap();
-        }
-        let tar = b.into_inner().unwrap();
-        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
-        io::Write::write_all(&mut gz, &tar).unwrap();
-        gz.finish().unwrap()
     }
 
     const DIR: tar::EntryType = tar::EntryType::Directory;
