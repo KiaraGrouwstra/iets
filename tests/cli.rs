@@ -227,6 +227,40 @@ fn dash_a_completes_the_attribute_names_under_its_root() {
     assert_eq!(complete(&["eval", "-f", "nope.nix", "-A", "a"]), ":6\n");
 }
 
+// the hermetic env waits for every completion, so only this tests the budget
+#[cfg(unix)]
+mod budget {
+    use super::*;
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    /// A FIFO that nothing writes to: only the budget can end the evaluation.
+    #[test]
+    fn a_completion_that_evaluates_stops_at_its_budget() {
+        let d = tempdir().unwrap();
+        let fifo = d.path().join("x.nix");
+        let c = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: c is a valid C string
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0, "fifo");
+        let complete = |ms: &str| {
+            let mut c = hermetic::iets();
+            c.current_dir(d.path()).env("IETS_COMPLETE_MS", ms);
+            run_complete(c, &["eval", "-f", "x.nix", "-A", ""])
+        };
+
+        let start = Instant::now();
+        assert_eq!(complete("100"), ":6\n");
+        assert!(start.elapsed() >= Duration::from_millis(100));
+
+        // with a writer and no budget, the file is read
+        let feed = thread::spawn(move || fs::write(fifo, "{ lib = 1; }").expect("feed"));
+        assert_eq!(complete("0"), "lib\n:6\n");
+        feed.join().unwrap();
+    }
+}
+
 /// A flake with checks `a` and `b` under `dir`.
 fn two_checks(dir: &Path) {
     fs::create_dir_all(dir).expect("create the flake directory");

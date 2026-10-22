@@ -1,5 +1,5 @@
 //! Attribute completion: `FLAKEREF#fragment` and `-A`. It evaluates, so it
-//! is limited in time and silent on stderr.
+//! is limited in time (`IETS_COMPLETE_MS`) and silent on stderr.
 
 use crate::session::exit;
 use std::io;
@@ -13,8 +13,6 @@ use crate::api::{EvalArgs, Input};
 use crate::cli::complete::{NO_FILES, NO_SPACE};
 use crate::cli::help;
 use crate::session::{self, Session};
-
-const LIMIT: Duration = Duration::from_secs(5);
 
 static ANSWERED: AtomicBool = AtomicBool::new(false);
 
@@ -66,8 +64,12 @@ fn guarded(f: impl FnOnce() -> Option<Vec<String>>) -> Vec<String> {
 }
 
 fn watchdog() {
-    let work = session::bind(|| {
-        thread::sleep(LIMIT);
+    let ms = Session::current().settings().complete_ms;
+    if ms == 0 {
+        return;
+    }
+    let work = session::bind(move || {
+        thread::sleep(Duration::from_millis(ms));
         if !ANSWERED.swap(true, Ordering::SeqCst) {
             help::out(&format!(":{}\n", NO_SPACE | NO_FILES));
             exit(0);

@@ -12,7 +12,11 @@ use std::process::Command;
 
 /// The IETS_ settings every run gets. tests/e2e gives them to Nix too, so a
 /// shell either one starts has the same environment.
-pub const ENV: &[(&str, &str)] = &[("IETS_PROGRESS", "false")];
+pub const ENV: &[(&str, &str)] = &[
+    // a loaded machine must not turn a completion into none
+    ("IETS_COMPLETE_MS", "0"),
+    ("IETS_PROGRESS", "false"),
+];
 
 pub fn iets() -> Command {
     iets_as(env!("CARGO_BIN_EXE_iets"))

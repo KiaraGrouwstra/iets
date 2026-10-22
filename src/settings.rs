@@ -143,6 +143,8 @@ pub struct Settings {
     /// `fix-hashes`: what `iets build` does with a wrong fixed-output hash
     /// (docs/reference/settings.md).
     pub fix_hashes: FixHashes,
+    /// `IETS_COMPLETE_MS`: the time a completion may evaluate. 0 waits.
+    pub complete_ms: u64,
     /// The `--iets-option` pairs this run was given, in flag order. A
     /// command that starts a second iets passes them on: they left the argv
     /// in [`take_options`], so they are nowhere else.
@@ -370,6 +372,7 @@ impl Settings {
             progress: env.flag("IETS_PROGRESS", None, true)?,
             fetch_max_size: c.int("fetch-max-size")?.unwrap_or(16 << 30),
             fix_hashes: fix_hashes.unwrap_or(FixHashes::Ask),
+            complete_ms: env.num("IETS_COMPLETE_MS")?.unwrap_or(5000),
             options: Vec::new(),
         })
     }
