@@ -18,5 +18,10 @@ pub fn iets() -> Command {
         .env_remove("NIX_DAEMON_SOCKET_PATH")
         .env_remove("NIX_CONFIG")
         .env_remove("NIX_CONFIG_HOME");
+    for (k, _) in std::env::vars_os() {
+        if k.to_string_lossy().starts_with("IETS_") {
+            c.env_remove(k);
+        }
+    }
     c
 }
