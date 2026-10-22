@@ -44,9 +44,16 @@ fn resolved(prog: &str) -> PathBuf {
 }
 
 impl Store {
-    /// `None` without `nix-daemon` on `PATH`. `opts` go into nix.conf.
+    /// `None` without `nix-daemon` on `PATH`, unless `IETS_TEST_E2E` is set.
+    /// `opts` go into nix.conf.
     pub fn start_with(opts: &[(&str, &str)]) -> Option<Store> {
-        let daemon = which("nix-daemon")?;
+        let Some(daemon) = which("nix-daemon") else {
+            assert!(
+                env::var_os("IETS_TEST_E2E").is_none(),
+                "IETS_TEST_E2E is set, and no nix-daemon is on PATH"
+            );
+            return None;
+        };
         // a socket path has to fit in sun_path, and darwin's TMPDIR is long
         let dir = tempfile::Builder::new()
             .prefix("iets-e2e.")

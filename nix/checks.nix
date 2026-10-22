@@ -23,6 +23,8 @@ in
   test = craneLib.cargoNextest (withDev // {
     # nix runs the private daemon of tests/e2e
     nativeCheckInputs = [ git nix ];
+    # no e2e test may skip for want of nix-daemon
+    IETS_TEST_E2E = "1";
     IETS_TEST_NIXPKGS = "${path}";
     IETS_TEST_NIX_EVAL_JOBS = lib.getExe nix-eval-jobs;
     # cargo would create /homeless-shelter, and then that daemon refuses to
