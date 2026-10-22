@@ -49,6 +49,9 @@ let
     export IETS_WIRE_ORACLE=${oracles}/bin/wire-oracle
     export IETS_EVAL_ORACLE=${oracles}/bin/eval-oracle
     export IETS_DRV_ORACLE=${oracles}/bin/drv-oracle
+    # scratch trees on tmpfs: it lists a directory in the order its entries
+    # were made, where the build directory may not (nar-read, fuzz/src/nar.rs)
+    export TMPDIR=/dev/shm
   '';
   # the replay tool, built plain: it is fast and needs no libFuzzer
   fuzz-diff =
@@ -123,7 +126,10 @@ let
     # got them. A directory lists its files in an order of its own, a list
     # does not.
     printf %s "$(find seeds -mindepth 1 | sort | paste -sd, -)" > seeds.list
-    fuzz-${name} -seed=$seed -runs=${toString targets.${name}.runs} -reload=0 ${targets.${name}.flags} \
+    # without address randomization: sets keyed on pointers (seen sets of the
+    # evaluator) probe in another order at each address
+    setarch "$(uname -m)" -R \
+      fuzz-${name} -seed=$seed -runs=${toString targets.${name}.runs} -reload=0 ${targets.${name}.flags} \
       $([ -s seeds.list ] && echo -seed_inputs=@seeds.list) \
       -artifact_prefix=art-${name}- new-${name} || {
         for a in art-${name}-*; do echo "the input, in base64: $(base64 -w0 "$a")" >&2; done
@@ -133,7 +139,7 @@ let
     echo "${name}: $(ls new-${name} | wc -l) inputs, sha256 $(cat new-${name}/* | sha256sum | cut -c1-16)"
   '';
   check = { name, script }: pkgs.runCommand "iets-fuzz-${name}-check" {
-    nativeBuildInputs = [ fuzz-diff fuzzers oracles ];
+    nativeBuildInputs = [ fuzz-diff fuzzers oracles pkgs.util-linux ];
   } ''
     ${env}
     ${script}

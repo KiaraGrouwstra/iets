@@ -12,6 +12,7 @@ pub mod sx;
 pub mod wire;
 
 use std::panic::{self, AssertUnwindSafe};
+use std::{mem, ptr};
 
 /// One input that the two sides answer differently.
 pub struct Divergence {
@@ -106,16 +107,37 @@ pub fn corpus(name: &str, v: Verdict) -> libfuzzer_sys::Corpus {
     }
 }
 
+/// Makes the kernel restart a system call that libFuzzer's `-timeout` alarm
+/// interrupts. Interrupted, the call fails with `EINTR` at a moment that
+/// depends on timing, and the retry is coverage libFuzzer steers by. Call it
+/// once libFuzzer has set its handler, at the first input.
+pub fn restart_on_alarm() {
+    // SAFETY: reads the installed action and sets it again with one more flag.
+    unsafe {
+        let mut sa: libc::sigaction = mem::zeroed();
+        if libc::sigaction(libc::SIGALRM, ptr::null(), &mut sa) == 0
+            && sa.sa_sigaction != libc::SIG_DFL
+        {
+            sa.sa_flags |= libc::SA_RESTART;
+            libc::sigaction(libc::SIGALRM, &sa, ptr::null_mut());
+        }
+    }
+}
+
 /// The body of a fuzz target binary.
 #[macro_export]
 macro_rules! fuzz_main {
     ($name:literal) => {
         static TARGET: std::sync::LazyLock<std::sync::Mutex<Box<dyn $crate::Target + Send>>> =
             std::sync::LazyLock::new(|| {
+                $crate::restart_on_alarm();
                 std::sync::Mutex::new($crate::target($name).unwrap_or_else(|e| panic!("{e}")))
             });
-        libfuzzer_sys::fuzz_target!(|input: &[u8]| -> libfuzzer_sys::Corpus {
-            $crate::corpus($name, TARGET.lock().unwrap().check(input))
-        });
+        libfuzzer_sys::fuzz_target!(
+            init: $crate::wire::daemon_if_asked(),
+            |input: &[u8]| -> libfuzzer_sys::Corpus {
+                $crate::corpus($name, TARGET.lock().unwrap().check(input))
+            }
+        );
     };
 }

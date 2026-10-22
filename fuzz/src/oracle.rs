@@ -16,6 +16,7 @@ pub type Out = UnixStream;
 
 pub struct Oracle {
     program: String,
+    env: Option<(&'static str, &'static str)>,
     child: Option<(Child, ChildStdin, Out)>,
 }
 
@@ -24,6 +25,16 @@ impl Oracle {
     pub fn from_env(var: &str, default: &str) -> Oracle {
         Oracle {
             program: env::var(var).unwrap_or_else(|_| default.into()),
+            env: None,
+            child: None,
+        }
+    }
+
+    /// `program` run with the variable `env` set.
+    pub fn with_env(program: String, env: (&'static str, &'static str)) -> Oracle {
+        Oracle {
+            program,
+            env: Some(env),
             child: None,
         }
     }
@@ -67,6 +78,7 @@ impl Oracle {
         }
         let (out, theirs) = UnixStream::pair()?;
         let mut c = Command::new(&self.program)
+            .envs(self.env)
             .stdin(Stdio::piped())
             .stdout(Stdio::from(OwnedFd::from(theirs)))
             // warnings: the reply carries what counts

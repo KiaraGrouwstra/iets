@@ -520,6 +520,7 @@ name = "iets-fuzz"
 version = "0.0.0"
 dependencies = [
  "iets",
+ "libc",
  "libfuzzer-sys",
  "rustix",
  "serde_json",
