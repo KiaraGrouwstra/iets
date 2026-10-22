@@ -2,6 +2,7 @@
 //! `plugin-files` line in `/etc/nix/nix.conf`, a `$NIX_CONFIG` or a user
 //! `nix.conf` would otherwise put warnings and settings into every run.
 
+use std::env;
 use std::process::Command;
 
 pub fn iets() -> Command {
@@ -18,5 +19,10 @@ pub fn iets() -> Command {
         .env_remove("NIX_DAEMON_SOCKET_PATH")
         .env_remove("NIX_CONFIG")
         .env_remove("NIX_CONFIG_HOME");
+    for (k, _) in env::vars_os() {
+        if k.to_string_lossy().starts_with("IETS_") {
+            c.env_remove(k);
+        }
+    }
     c
 }

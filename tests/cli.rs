@@ -163,6 +163,8 @@ fn a_flake_fragment_completes_to_the_outputs_attribute_names() {
         "aarch64-linux",
         "x86_64-darwin",
         "aarch64-darwin",
+        "x86_64-windows",
+        "aarch64-windows",
     ];
     let pkgs: String = sys
         .iter()
@@ -289,4 +291,16 @@ fn eval_json_forces_without_strict() {
     let o = iets(&["eval", "--json", "--expr", "{ a = [ (1 + 1) ]; }"]);
     assert!(o.status.success(), "{}", text(&o.stderr));
     assert_eq!(text(&o.stdout).trim(), r#"{"a":[2]}"#);
+}
+
+/// Nix's currentSystem is the host's unless `system` says otherwise.
+#[test]
+fn current_system_is_the_hosts() {
+    let os = match env::consts::OS {
+        "macos" => "darwin",
+        other => other,
+    };
+    let want = format!("\"{}-{os}\"\n", env::consts::ARCH);
+    let o = iets(&["eval", "--impure", "--expr", "builtins.currentSystem"]);
+    assert_eq!(text(&o.stdout), want, "{}", text(&o.stderr));
 }
