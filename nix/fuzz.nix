@@ -152,15 +152,32 @@ in
       '';
     };
     # every case of nix-conformance through iets, with the trees; the cases
-    # in conformance-known fail on purpose
-    conformance = nix-conformance.lib.${pkgs.stdenv.hostPlatform.system}.check {
+    # in conformance-known fail on purpose. The runner prints only failures
+    # and skips, and its quiet stretches outlast max-silent-time on a loaded
+    # builder, so the adapter names each case on fd 3, the build log. A case
+    # past the adapter's timeout (exit 124) is listed and fails the check.
+    conformance = (nix-conformance.lib.${pkgs.stdenv.hostPlatform.system}.check {
       name = "iets";
       adapter = "${pkgs.writeShellScript "iets-conformance-adapter" ''
-        export IETS=${iets}/bin/iets
-        exec ${fuzz-diff}/bin/conformance-adapter "$@"
+        echo "case $*" 2>/dev/null >&3
+        IETS=${iets}/bin/iets ${fuzz-diff}/bin/conformance-adapter "$@" 3>&-
+        code=$?
+        if [ $code = 124 ] && [ -n "''${NIX_BUILD_TOP:-}" ]; then
+          echo "timed out: $*" | tee -a "$NIX_BUILD_TOP/timed-out" 2>/dev/null >&3
+        fi
+        exit $code
       ''}";
       flags = [ "--tree" "--known" "${../fuzz/conformance-known}" ];
-    };
+    }).overrideAttrs (old: {
+      buildCommand = ''
+        exec 3>&2
+        ${old.buildCommand}
+        if [ -s "$NIX_BUILD_TOP/timed-out" ]; then
+          cat "$NIX_BUILD_TOP/timed-out" >&2
+          exit 1
+        fi
+      '';
+    });
     # half a minute of iets's daemon client against Nix's, on scripted daemons
     fuzz-wire = check {
       name = "wire";
