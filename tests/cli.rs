@@ -226,15 +226,15 @@ mod budget {
     use std::time::{Duration, Instant};
 
     /// A FIFO that nothing writes to: only the budget can end the evaluation.
-    #[test]
-    fn a_completion_that_evaluates_stops_at_its_budget() {
+    #[rstest]
+    fn a_completion_that_evaluates_stops_at_its_budget(bin: Iets) {
         let d = tempdir().unwrap();
         let fifo = d.path().join("x.nix");
         let c = CString::new(fifo.as_os_str().as_bytes()).unwrap();
         // SAFETY: c is a valid C string
         assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0, "fifo");
         let complete = |ms: &str| {
-            let mut c = hermetic::iets();
+            let mut c = bin.cmd();
             c.current_dir(d.path()).env("IETS_COMPLETE_MS", ms);
             run_complete(c, &["eval", "-f", "x.nix", "-A", ""])
         };
