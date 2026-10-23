@@ -228,7 +228,7 @@ impl Nix {
     }
 
     /// installable-flake.cc: a flake installable refuses `--arg`/`--argstr`, so
-    /// the real nix reports that better than we would.
+    /// the real nix reports that better than iets would.
     pub(super) fn check_args_with_flake(&self) -> Result<(), String> {
         if !self.c.flags.args.is_empty() && self.expr.is_none() && self.file.is_none() {
             return Err("'--arg' and '--argstr' are incompatible with flakes".into());

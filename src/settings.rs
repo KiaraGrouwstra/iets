@@ -92,11 +92,10 @@ pub struct Settings {
     pub events: u32,
     /// `IETS_EVENTS_TO`: where the events go. `None` is stderr.
     pub events_to: Option<String>,
-    /// `IETS_PROFILE`: sample the call
-    /// stack, weighed by time (`eval`) or by arena bytes (`alloc`).
+    /// `IETS_PROFILE`: sample the call stack, weighed by time (`eval`) or by
+    /// arena bytes (`alloc`).
     pub profile: Option<Mode>,
-    /// `IETS_PROFILE_TO`: where the folded lines go.
-    /// `None` is stderr.
+    /// `IETS_PROFILE_TO`: where the folded lines go. `None` is stderr.
     pub profile_to: Option<String>,
     /// `IETS_PROFILE_HZ`: samples a second. Nix's `eval-profiler*` settings are
     /// not read (src/config.rs).
@@ -128,7 +127,7 @@ pub struct Settings {
     /// `--no-out-link`/`--no-link` keeps a root instead of nothing
     /// (docs/reference/divergences.md). `false` is Nix's behaviour back.
     pub build_gc_root: bool,
-    /// `IETS_FETCHING`: set on the Nix we call to fetch a flake input, so
+    /// `IETS_FETCHING`: set on the Nix that iets calls to fetch a flake input, so
     /// a recursive fetch is an error instead of a loop.
     pub fetching: bool,
     /// `IETS_OFFLINE`: any download is an error. A flake whose inputs the
@@ -390,10 +389,7 @@ impl Default for Settings {
     }
 }
 
-/// The VALUE of `--iets-option NAME VALUE`: a TOML boolean, integer, string
-/// or array when it reads as one, else the text itself, so `fix-hashes always`
-/// needs no quotes. Bare text for `source-map` is a whitespace-separated list.
-/// `builder` in each of its three forms: one URL, several URLs, or several
+/// `builder` in one of its three forms: one URL, several URLs, or several
 /// tables that also carry the constraints.
 fn read_builders(v: &Value) -> Option<Vec<BuilderSpec>> {
     if let Some(url) = v.as_str() {
@@ -435,6 +431,9 @@ fn split_urls(spec: &str) -> Vec<BuilderSpec> {
         .collect()
 }
 
+/// The VALUE of `--iets-option NAME VALUE`: a TOML boolean, integer, string
+/// or array when it reads as one, else the text itself, so `fix-hashes always`
+/// needs no quotes. Bare text for `source-map` is a whitespace-separated list.
 fn flag_value(name: &str, value: &str) -> Value {
     let table = format!("v = {value}").parse::<toml::Table>();
     match table.ok().and_then(|mut t| t.remove("v")) {

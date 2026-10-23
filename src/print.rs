@@ -121,7 +121,7 @@ pub fn lexicographic_order(
 
 /// `nix-instantiate --eval` output. Does not force; `--strict` forces first.
 /// `cell` identifies the slot the value was read from; Nix keys repeated
-/// lists on the `Value` address, which is the cell in our model. The top
+/// lists on the `Value` address, which is the cell in iets. The top
 /// level passes any unique number.
 pub fn print_ambiguous(
     ev: &mut Evaluator,
