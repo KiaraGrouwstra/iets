@@ -293,7 +293,6 @@ fn build_unreachable(
 const A: &str = ".#checks.x86_64-linux.a";
 const B: &str = ".#checks.x86_64-linux.b";
 
-/// The last installable used to replace the earlier ones.
 #[rstest]
 fn build_evaluates_every_installable(bin: Iets) {
     let d = tempdir().unwrap();

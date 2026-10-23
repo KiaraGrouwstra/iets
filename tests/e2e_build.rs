@@ -53,7 +53,7 @@ fn a_tree_builds_past_a_failure() {
     let checks = format!("{flake}#checks");
     let sys = e2e::system();
 
-    // 1. the failure does not stop the others, and the exit code is Nix's 100
+    // the failure does not stop the others, and the exit code is Nix's 100
     let r1 = build(&s, &[&checks]);
     let err = stderr(&r1);
     assert_eq!(r1.status.code(), Some(100), "{err}");
@@ -69,7 +69,7 @@ fn a_tree_builds_past_a_failure() {
     assert!(paths.lines().all(|p| fs::exists(p).unwrap()));
     assert!(!err.contains(OTHER), "the other system is not built: {err}");
 
-    // 2. --json: the `plumbing build` shape, one outcome per check
+    // --json: the `plumbing build` shape, one outcome per check
     let r2 = build(&s, &["--json", &checks]);
     assert_eq!(r2.status.code(), Some(100));
     let j = json(&r2);
@@ -106,14 +106,14 @@ fn a_tree_builds_past_a_failure() {
         assert!(paths.lines().any(|p| o["outputs"]["out"] == p), "{o}");
     }
 
-    // 3. what is built is not built again, the failure is
+    // what is built is not built again, the failure is
     let err = stderr(&r2);
     for n in ["fb-ok", "fb-dep", "fb-chain"] {
         assert!(!err.contains(&format!("building {n}")), "{err}");
     }
     assert!(err.contains("about to fail"), "{err}");
 
-    // 5. a plain file, -A and --argstr
+    // a plain file, -A and --argstr
     let rel = s.write(
         "release.nix",
         &format!(

@@ -105,7 +105,7 @@ fn a_source_tree_and_a_closure() {
     let Some(g) = start() else { return };
     let s = &g.s;
 
-    // 1. built on the daemon, drv and source deleted here first
+    // built on the daemon, drv and source deleted here first
     let case = e2e::make_case(s, "c1", "iets-grpc-e2e");
     let drv = stdout(&ok(s.nix("nix-instantiate").arg(&case)));
     let src = s.nix_store(&["-q", "--references", &drv]);
@@ -125,7 +125,7 @@ fn a_source_tree_and_a_closure() {
     let base = expected.rsplit('/').next().unwrap();
     assert_eq!(fs::read(format!("{fetch}/{base}")).unwrap(), want);
 
-    // 2. the chain cold, --no-build, then 3. warm
+    // the chain cold, --no-build, then warm
     let chain = s.pkgs().join("chain.nix");
     let chain = chain.to_str().unwrap();
     let cdrv = stdout(&ok(s.nix("nix-instantiate").arg(chain)));
