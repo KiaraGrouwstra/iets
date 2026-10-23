@@ -184,7 +184,6 @@ mod tests {
         assert!(peak.load(Ordering::SeqCst) <= 2, "{peak:?}");
     }
 
-    /// A job runs only after the jobs it depends on.
     #[test]
     fn dependencies_run_first() {
         let order = Mutex::new(Vec::new());
@@ -202,7 +201,6 @@ mod tests {
         assert_eq!(*order.lock().unwrap(), vec![0, 1, 2]);
     }
 
-    /// A failure blocks its dependants, and they are never built.
     #[test]
     fn a_failed_dependency_blocks_its_dependants() {
         let built = Mutex::new(Vec::new());

@@ -1159,7 +1159,6 @@ pub(crate) mod tests {
         same("file-at-top", &[("only", REG, 0o644, b"x")]);
     }
 
-    /// An empty archive is the NAR of an empty directory.
     #[test]
     fn an_empty_archive_is_an_empty_directory() {
         let nar = same("empty", &[]);
