@@ -9,6 +9,7 @@ use crate::lint::Level;
 use crate::parallel::fiber::MAIN_STACK;
 use crate::session::Session;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{env, fs, process, thread};
 
 const SLOW: &str = "slow = n: builtins.foldl' (a: b: a + b) 0 (builtins.genList (x: x) n);";
@@ -329,12 +330,14 @@ fn route_cases() -> Vec<Case> {
             "builtins.foldl' (acc: x: acc ++ [ x ]) [] L",
         ),
     ];
+    // 300000 steals and parks as often as 3000000 did, at a tenth of the
+    // time in the unoptimized test build; 30000 starts fewer tasks
     let wrap = |name: String, pre: &str, a: &str, b: &str| {
         case(
             &name,
             true,
             &format!(
-                "let SLOW t = (x: y: x) 1; {pre} A = {a}; B = {b}; in builtins.seq (builtins.any (x: false) A) (builtins.seq (slow 3000000) (A == B))"
+                "let SLOW t = (x: y: x) 1; {pre} A = {a}; B = {b}; in builtins.seq (builtins.any (x: false) A) (builtins.seq (slow 300000) (A == B))"
             ),
         )
     };
@@ -425,19 +428,25 @@ fn check(c: &Case) -> Option<String> {
     None
 }
 
+/// Each thread takes the next case: the route cases cost seconds each, and
+/// fixed chunks put them all on one thread.
 fn failures(cases: Vec<Case>) -> Vec<String> {
-    let chunk = cases.len().div_ceil(4).max(1);
+    let threads = thread::available_parallelism().map_or(4, |n| n.get().clamp(4, 16));
+    let next = AtomicUsize::new(0);
     thread::scope(|s| {
-        let handles: Vec<_> = cases
-            .chunks(chunk)
-            .map(|part| {
+        let handles: Vec<_> = (0..threads.min(cases.len()))
+            .map(|_| {
                 // the stack `main` gives the evaluator: deep-chain recurses deeply
                 thread::Builder::new()
                     .stack_size(MAIN_STACK)
-                    .spawn_scoped(s, move || {
-                        part.iter()
-                            .filter_map(|c| Some(format!("{}: {}", c.name, check(c)?)))
-                            .collect::<Vec<_>>()
+                    .spawn_scoped(s, || {
+                        let mut failed = Vec::new();
+                        while let Some(c) = cases.get(next.fetch_add(1, Ordering::Relaxed)) {
+                            if let Some(why) = check(c) {
+                                failed.push(format!("{}: {why}", c.name));
+                            }
+                        }
+                        failed
                     })
                     .expect("spawn a case thread")
             })

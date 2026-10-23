@@ -1,4 +1,4 @@
-{ lib, pkgs, stdenv, runCommand, git, nix, util-linux, nix-eval-jobs, path, ast-grep, craneLib, commonArgs, sources, ietsStatic, ietsRiscv64, fuzz }:
+{ lib, pkgs, stdenv, runCommand, git, jq, nix, util-linux, nix-eval-jobs, path, ast-grep, craneLib, commonArgs, sources, ietsStatic, ietsRiscv64, fuzz }:
 let
   # the dev profile, as `cargo test` in the dev shell: the release profile is
   # fat LTO, minutes for no extra coverage
@@ -22,18 +22,27 @@ in
   } // lib.optionalAttrs stdenv.hostPlatform.isLinux {
     IETS_TEST_NIX_GRPC_DAEMON = "${import ./nix-grpc-store.nix { inherit pkgs; }}/bin/nix-grpc-daemon";
   });
-  # every nixpkgs drv against nix-eval-jobs (tests/nixpkgs_eval.rs), with a
-  # release build to keep it short
+  # every nixpkgs drv against nix-eval-jobs (tests/nixpkgs_eval.rs), with
+  # optimized code to keep it short. Nix's side depends on nixpkgs alone, so
+  # it is a derivation of its own that a change to iets does not rebuild.
   nixpkgs-eval =
     let
-      args = commonArgs // { src = sources.test; };
+      args = commonArgs // { src = sources.test; CARGO_PROFILE = "ci"; };
     in
     craneLib.cargoNextest (args // {
       cargoArtifacts = craneLib.buildDepsOnly (args // { cargoCheckExtraArgs = "--all-targets"; });
       doInstallCargoArtifacts = false;
-      cargoNextestExtraArgs = "--run-ignored only -E 'binary(nixpkgs_eval)'";
+      cargoNextestExtraArgs = "--test nixpkgs_eval --run-ignored only";
       IETS_TEST_NIXPKGS = "${path}";
       IETS_TEST_NIX_EVAL_JOBS = lib.getExe nix-eval-jobs;
+      # the test reads attr, drvPath and whether there is an error: the rest
+      # is hundreds of MB
+      IETS_TEST_NIXPKGS_NIX = runCommand "nixpkgs-eval-nix" { nativeBuildInputs = [ nix-eval-jobs jq ]; } ''
+        export HOME=$(mktemp -d) NIX_CONF_DIR=/nonexistent NIX_USER_CONF_FILES= XDG_CACHE_HOME=$(mktemp -d)
+        nix-eval-jobs --store 'dummy://?read-only=false' --impure --no-instantiate --workers 4 \
+          --arg nixpkgs ${path} --arg limit null ${../tests/nixpkgs_eval.nix} \
+          | jq -c 'if has("error") then {attr, error} else {attr, drvPath} end' > $out
+      '';
     });
   # nextest runs no doctests
   doctest = craneLib.cargoDocTest withDev;

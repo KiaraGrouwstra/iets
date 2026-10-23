@@ -3,11 +3,14 @@
 //!
 //! Needs `IETS_TEST_NIXPKGS` (a nixpkgs source) and `IETS_TEST_NIX_EVAL_JOBS`
 //! (the binary). `IETS_TEST_NIXPKGS_LIMIT` takes the first N attributes.
+//! `IETS_TEST_NIXPKGS_NIX`, the output of that binary on the whole of
+//! nixpkgs, replaces its run.
 
 mod hermetic;
 
 use std::collections::BTreeMap;
 use std::env;
+use std::fs;
 use std::path::Path;
 use std::process::Command;
 
@@ -30,8 +33,12 @@ fn jobs(mut c: Command, nixpkgs: &str, limit: &str) -> Jobs {
         "{c:?}: {}",
         String::from_utf8_lossy(&o.stderr)
     );
+    parse(&String::from_utf8_lossy(&o.stdout))
+}
+
+fn parse(out: &str) -> Jobs {
     let mut jobs = Jobs::new();
-    for line in String::from_utf8_lossy(&o.stdout).lines() {
+    for line in out.lines() {
         let j: Value = serde_json::from_str(line).expect("a JSON line");
         let attr = j["attr"].as_str().expect("attr").to_string();
         let drv = match j.get("error") {
@@ -57,15 +64,21 @@ fn nixpkgs_drvs_match_nix() {
     // the check's HOME is not writable
     let cache = TempDir::new().unwrap();
 
-    let mut theirs = Command::new(nej);
-    // in memory: the check's sandbox has no daemon
-    theirs
-        .args(["--store", "dummy://?read-only=false"])
-        .env("NIX_CONF_DIR", "/nonexistent")
-        .env("NIX_USER_CONF_FILES", "")
-        .env("XDG_CACHE_HOME", cache.path())
-        .env_remove("NIX_CONFIG");
-    let theirs = jobs(theirs, &nixpkgs, &limit);
+    let theirs = match env::var("IETS_TEST_NIXPKGS_NIX") {
+        Ok(out) if limit == "null" => {
+            parse(&fs::read_to_string(out).expect("IETS_TEST_NIXPKGS_NIX"))
+        }
+        _ => {
+            let mut c = Command::new(nej);
+            // in memory: the check's sandbox has no daemon
+            c.args(["--store", "dummy://?read-only=false"])
+                .env("NIX_CONF_DIR", "/nonexistent")
+                .env("NIX_USER_CONF_FILES", "")
+                .env("XDG_CACHE_HOME", cache.path())
+                .env_remove("NIX_CONFIG");
+            jobs(c, &nixpkgs, &limit)
+        }
+    };
 
     let mut ours = hermetic::iets();
     // no daemon, as in the check's sandbox

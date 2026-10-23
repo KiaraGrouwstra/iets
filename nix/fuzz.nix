@@ -115,6 +115,8 @@ let
   # prints the input. A count, not a time: a slow builder must not stop before
   # the input that a fast one reaches. -reload=0, as libFuzzer reads the corpus
   # again each second. The campaigns fuzz for a time.
+  # -timeout=30, as the default of 1200 s an input is the silence timeout of
+  # CI; the -timeout of a target comes after it, and the last one counts.
   run = name: ''
     mkdir -p seeds new-${name}
     rm -f seeds/*
@@ -129,7 +131,7 @@ let
     # without address randomization: sets keyed on pointers (seen sets of the
     # evaluator) probe in another order at each address
     setarch "$(uname -m)" -R \
-      fuzz-${name} -seed=$seed -runs=${toString targets.${name}.runs} -reload=0 ${targets.${name}.flags} \
+      fuzz-${name} -seed=$seed -runs=${toString targets.${name}.runs} -reload=0 -timeout=30 ${targets.${name}.flags} \
       $([ -s seeds.list ] && echo -seed_inputs=@seeds.list) \
       -artifact_prefix=art-${name}- new-${name} || {
         for a in art-${name}-*; do echo "the input, in base64: $(base64 -w0 "$a")" >&2; done
@@ -189,28 +191,39 @@ in
     # and skips, and its quiet stretches outlast max-silent-time on a loaded
     # builder, so the adapter names each case on fd 3, the build log. A case
     # past the adapter's timeout (exit 124) is listed and fails the check.
-    conformance = (nix-conformance.lib.${pkgs.stdenv.hostPlatform.system}.check {
-      name = "iets";
-      adapter = "${pkgs.writeShellScript "iets-conformance-adapter" ''
-        echo "case $*" 2>/dev/null >&3
-        IETS=${iets}/bin/iets ${fuzz-diff}/bin/conformance-adapter "$@" 3>&-
-        code=$?
-        if [ $code = 124 ] && [ -n "''${NIX_BUILD_TOP:-}" ]; then
-          echo "timed out: $*" | tee -a "$NIX_BUILD_TOP/timed-out" 2>/dev/null >&3
-        fi
-        exit $code
-      ''}";
-      flags = [ "--tree" "--known" "${../fuzz/conformance-known}" ];
-    }).overrideAttrs (old: {
-      buildCommand = ''
-        exec 3>&2
-        ${old.buildCommand}
-        if [ -s "$NIX_BUILD_TOP/timed-out" ]; then
-          cat "$NIX_BUILD_TOP/timed-out" >&2
-          exit 1
-        fi
-      '';
-    });
+    # The runner takes one case at a time; the cases go round-robin to
+    # parallel runners, as one runner takes minutes.
+    conformance = pkgs.runCommand "nix-conformance-iets" { } ''
+      exec 3>&2
+      cd ${nix-conformance}
+      find lang parse nar drv flake wire -type f | sort > $NIX_BUILD_TOP/cases
+      n=$(( NIX_BUILD_CORES < 16 ? NIX_BUILD_CORES : 16 ))
+      split -n r/$n $NIX_BUILD_TOP/cases $NIX_BUILD_TOP/shard-
+      for s in $NIX_BUILD_TOP/shard-*; do
+        { xargs -a $s ${nix-conformance.packages.${pkgs.stdenv.hostPlatform.system}.run}/bin/nix-conformance \
+            --tree --known ${../fuzz/conformance-known} ${pkgs.writeShellScript "iets-conformance-adapter" ''
+              echo "case $*" 2>/dev/null >&3
+              IETS=${iets}/bin/iets ${fuzz-diff}/bin/conformance-adapter "$@" 3>&-
+              code=$?
+              if [ $code = 124 ] && [ -n "''${NIX_BUILD_TOP:-}" ]; then
+                echo "timed out: $*" | tee -a "$NIX_BUILD_TOP/timed-out" 2>/dev/null >&3
+              fi
+              exit $code
+            ''} > $s.out 2>&1; echo $? > $s.code; } &
+      done
+      wait
+      ok=1
+      for s in $NIX_BUILD_TOP/shard-??; do
+        cat $s.out
+        [ "$(cat $s.code)" = 0 ] || ok=
+      done
+      if [ -s "$NIX_BUILD_TOP/timed-out" ]; then
+        cat "$NIX_BUILD_TOP/timed-out" >&2
+        ok=
+      fi
+      [ -n "$ok" ]
+      touch $out
+    '';
     # about half a minute of iets's daemon client against Nix's, on scripted daemons
     fuzz-wire = check {
       name = "wire";
