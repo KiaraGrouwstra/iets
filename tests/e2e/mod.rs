@@ -500,7 +500,6 @@ pub fn json(c: &mut Command) -> serde_json::Value {
     parse(&ok(c))
 }
 
-/// The exit code of `c`.
 pub fn code(c: &mut Command) -> i32 {
     c.output().expect("spawn").status.code().unwrap_or(-1)
 }

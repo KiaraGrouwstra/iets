@@ -182,7 +182,6 @@ fn parse_length_matches_nix() {
     );
     assert_eq!(nar::nar_size(&tree).unwrap(), archive.len() as u64);
 
-    // Truncation, a bad keyword and non-zero padding are all rejected.
     assert!(nar::parse_length(&mut &archive[..archive.len() - 8]).is_err());
     let mut bad = archive.clone();
     bad[8] = b'X';
