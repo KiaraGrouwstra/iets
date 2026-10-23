@@ -868,10 +868,12 @@ mod tests {
         let _ = c.write_all(body);
     }
 
+    /// No wall-clock limit: the servers run in this process, so any limit
+    /// fires when the host does not schedule the process for that long.
     fn limits() -> Limits {
         Limits {
-            connect: Some(Duration::from_secs(60)),
-            stall: Some(Duration::from_secs(60)),
+            connect: None,
+            stall: None,
             max_size: 1 << 30,
         }
     }
@@ -929,22 +931,37 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_stalled_download_fails() {
-        // the server holds the connection far past any test run, so only the
-        // stall limit can end the call; a wall-clock bound here fails on a
-        // loaded machine and a short hold lets the server's close win the race
-        let (port, _) = serve(1, |_, c| {
-            let _ = c.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 100\r\n\r\nhalf");
-            thread::sleep(Duration::from_secs(3600));
+    /// A download against a server that sends `sent` and then holds the
+    /// connection open until the call has returned: only the stall limit can
+    /// end the call, however long the host takes to schedule either side.
+    fn stalled(sent: &'static [u8]) -> String {
+        let (hold, held) = mpsc::channel::<()>();
+        let (port, _) = serve(1, move |_, c| {
+            let _ = c.write_all(sent);
+            let _ = held.recv();
         });
         let l = Limits {
-            stall: Some(Duration::from_secs(1)),
+            stall: Some(Duration::from_millis(50)),
             ..limits()
         };
         let url = format!("http://127.0.0.1:{port}/");
         let e = get_decompressed(&url, &[], l, &mut Vec::new()).unwrap_err();
-        assert!(e.to_string().contains("stalled"), "{e}");
+        drop(hold);
+        e.to_string()
+    }
+
+    #[test]
+    fn a_server_that_never_answers_is_a_stall() {
+        let e = stalled(b"");
+        assert!(e.contains("no response (stalled-download-timeout)"), "{e}");
+    }
+
+    #[test]
+    fn a_stalled_download_fails() {
+        // a server the host does not schedule within the limit ends in the
+        // wait for the status line instead, which is the same limit
+        let e = stalled(b"HTTP/1.1 200 OK\r\ncontent-length: 100\r\n\r\nhalf");
+        assert!(e.contains("(stalled-download-timeout)"), "{e}");
     }
 
     fn file_url(d: &Path, name: &str, bytes: &[u8]) -> String {
