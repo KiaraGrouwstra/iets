@@ -4,13 +4,13 @@
 
 Maintainer: [zimbatm](https://github.com/zimbatm)
 
-iets is a re-implementation of the Nix client (in Rust). With inputs based on
-more than a decade of using the language and seeing how the community and
+iets is a re-implementation of the Nix client in Rust. Its design comes from
+more than a decade of use of the language, and from how the community and
 customers use it.
 
-While iets remains [mostly, but not fully](docs/reference/divergences.md)
-compatible with Nix, we are also exploring new ideas. And find interfaces that
-allow reducing the amount of tools needed to operate with Nix day-to-day.
+iets is [mostly, but not fully](docs/reference/divergences.md) compatible
+with Nix. It also explores new ideas, and tries to reduce the number of tools
+you need to use Nix every day.
 
 ```sh
 iets build -A hello ./nixpkgs                  # nix-build
@@ -26,11 +26,11 @@ iets print-dev-env --gc-root .direnv/env .     # nix-direnv's `use flake`
 
 Some of the ideas that went into iets:
 
-* **Fast eval, and it tells you what it is doing.** Sometimes Nix hangs. Many
-  beginners hit Ctrl-C thinking Nix is stuck. It was slow evaluating, with no
-  feedback, and slowly. iets makes eval 1.5-1.8x faster than Nix 2.34.8 on
-  NixOS configs on one core, and 3.3-5x on four (see
-  [Benchmarks](#benchmarks)), and says what it is up to while it works.
+* **Fast eval, and it tells you what it is doing.** Many beginners hit Ctrl-C
+  because they think Nix is stuck. Nix was only slow to evaluate, and it gave
+  no feedback. iets evaluates NixOS configs 1.5-1.8x faster than Nix 2.34.8 on
+  one core, and 3.3-5x faster on four (see [Benchmarks](#benchmarks)). It
+  also tells you what it does while it works.
 
 * **Hash bumping that bumps itself.** Bumping FODs (fixed-output derivations)
   means putting a bad hash, running a build, and then replacing the errored
@@ -38,20 +38,20 @@ Some of the ideas that went into iets:
   source, and builds again. See
   [docs/how-to/fix-hashes.md](docs/how-to/fix-hashes.md).
 
-* **Purity without flakes.** Nix eval should be pure by default, to make the
-  language follow it's own principles of purity, regardless of flakes.
-  Flakes are supported too. iets adds introspection tools to detect when
-  impurities leak into evals or builds. See
+* **Purity without flakes.** Nix eval should be pure by default, with or
+  without flakes, so that the language follows its own principle of purity.
+  iets supports flakes too. Its introspection tools detect when impurities
+  leak into evals or builds. See
   [docs/reference/lints.md](docs/reference/lints.md).
 
-* **Eval caching everywhere.** Caching uses file tracing, so it works on all
-  evals. And is more precise than upstream's flake eval cache. Running `nix
-  fmt` through iets is feels instant.
+* **Eval caching everywhere.** The cache traces the files an eval reads, so
+  it works on all evals. It is more precise than the flake eval cache of Nix.
+  `nix fmt` through iets feels instant.
   See [docs/explanation/caching.md](docs/explanation/caching.md).
 
 * **No local store needed.** A single binary for your CI environment, that
   pushes the builds to a Nix daemon or a remote builder over `ssh-ng://`
-  (eg: https://nixbuild.net) or
+  (for example https://nixbuild.net) or
   [`grpc://`](https://github.com/Mic92/nix-grpc-store). See
   [docs/how-to/build-remotely.md](docs/how-to/build-remotely.md).
 
@@ -64,14 +64,14 @@ Some of the ideas that went into iets:
   codes, and errors come with a code, a position and often the fix. See
   [docs/how-to/script-iets.md](docs/how-to/script-iets.md).
 
-* **The evaluator knows where code came from.** It tracks which source a piece
-  of Nix comes from, so language features can be enabled or disabled per
-  "package", and the language can evolve without it being all-or-nothing.
+* **The evaluator knows where code came from.** It records the source of each
+  piece of Nix code. Thus you can enable or disable language features per
+  "package", and the language can change one package at a time.
 
-* **Errors that point at your source** (experimental). We also track the
-  source to drv correspondence, so when a build fails we can tell you where
-  the error came from in your source instead of the `/nix/store`. Sometimes.
-  This one still needs more work. See
+* **Errors that point at your source** (experimental). iets also records which
+  source made each drv. When a build fails, it can show where the error came
+  from in your source, not in `/nix/store`. This works only sometimes and
+  needs more work. See
   [docs/explanation/provenance.md](docs/explanation/provenance.md).
 
 ## Benchmarks
@@ -87,10 +87,9 @@ To regenerate, run `bench/run.nu nixos-plasma nixos-server nixos-minimal` twice
 
 ## Scope
 
-For now iets is 100% a client and there is no nix-daemon implementation. We are
-trying to strike a balance and make it featureful enough that it provides a
-good out-of-the-box user experience and shortens the list of tools needed to
-use Nix day-to-day, without becoming a kitchen sink.
+iets is only a client. It has no nix-daemon implementation. It aims for a good
+user experience with no setup, and for fewer tools in daily Nix use. It does
+not try to bundle every tool.
 
 ## Not supported (yet)
 
@@ -111,7 +110,7 @@ back to the real `nix`, so you mostly won't notice.
   `nix`.
 * The library never frees memory, so don't embed it in a long-running
   program yet.
-* Lots of other small details. iets is still very fresh.
+* Many other small details. iets is still new.
 
 The full list is in
 [docs/reference/classic.md](docs/reference/classic.md#fallback-rules) and
