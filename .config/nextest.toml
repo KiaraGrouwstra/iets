@@ -1,0 +1,8 @@
+# A hung test fails in minutes, well inside the time CI gives a check, and
+# not at the builder's silence timeout.
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 4 }
+
+[[profile.default.overrides]]
+filter = "binary(nixpkgs_eval)"
+slow-timeout = { period = "60s", terminate-after = 8 }
