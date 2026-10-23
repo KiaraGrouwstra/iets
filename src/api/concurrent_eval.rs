@@ -330,12 +330,14 @@ fn route_cases() -> Vec<Case> {
             "builtins.foldl' (acc: x: acc ++ [ x ]) [] L",
         ),
     ];
+    // 300000 steals and parks as often as 3000000 did, at a tenth of the
+    // time in the unoptimized test build; 30000 starts fewer tasks
     let wrap = |name: String, pre: &str, a: &str, b: &str| {
         case(
             &name,
             true,
             &format!(
-                "let SLOW t = (x: y: x) 1; {pre} A = {a}; B = {b}; in builtins.seq (builtins.any (x: false) A) (builtins.seq (slow 3000000) (A == B))"
+                "let SLOW t = (x: y: x) 1; {pre} A = {a}; B = {b}; in builtins.seq (builtins.any (x: false) A) (builtins.seq (slow 300000) (A == B))"
             ),
         )
     };
