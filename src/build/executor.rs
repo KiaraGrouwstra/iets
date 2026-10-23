@@ -11,8 +11,8 @@
 //! placed here has its whole closure built here. That is what keeps this
 //! stage free of cross-place edges: nothing a place builds depends on
 //! something another place holds. The cost is that two roots placed
-//! differently build what they share twice
-//! (`docs/executors-proposal.md`).
+//! differently build what they share twice (`docs/reference/settings.md`,
+//! `builder`).
 
 use crate::error::{Error, Result};
 use crate::remote::worker::Transport;

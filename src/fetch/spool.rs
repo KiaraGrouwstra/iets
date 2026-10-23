@@ -566,8 +566,8 @@ impl Tree {
         Ok(out)
     }
 
-    /// The NAR of the whole tree. `shown` is where a filtered dump names the
-    /// nodes; with no filter nothing builds those paths.
+    /// The NAR of the whole tree. No filter runs, so the walk builds no
+    /// `shown` paths.
     pub fn dump(&self, sink: &mut dyn Write) -> io::Result<()> {
         self.write(&self.root, None, sink, &mut |_, _| true)
     }

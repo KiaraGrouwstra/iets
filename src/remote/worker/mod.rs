@@ -494,8 +494,8 @@ pub struct Connection {
     pub trusted: Option<bool>,
     pub stats: Stats,
     /// Running builds by activity id, to attribute log lines.
-    /// `parents` follows a nested activity back to the build it belongs to.
     activities: HashMap<u64, String>,
+    /// Follows a nested activity back to the build it belongs to.
     parents: HashMap<u64, u64>,
     /// The daemon's activity ids to the ones this process logs them under.
     ids: HashMap<u64, u64>,

@@ -1,9 +1,9 @@
-//! The `grpc://` protocol calls, mirroring `worker/build.rs`: one
-//! `QueryValidPaths`, one `AddMultipleToStore` of what the store lacks, builds
-//! — a `Want` on the `Schedule` stream, then `BuildDerivation` on the worker the
-//! scheduler assigned, per derivation —
-//! and `FetchNars` for the outputs. `backend.rs` drives them as the
-//! dispatcher's backend.
+//! The `grpc://` protocol calls, the counterpart of the worker backend
+//! (`build::backend::Worker`): one `QueryValidPaths`, one
+//! `AddMultipleToStore` of what the store lacks, the builds, and `FetchNars`
+//! for the outputs. Each build is a `Want` on the `Schedule` stream, then
+//! `BuildDerivation` on the worker that the scheduler assigned. `backend.rs`
+//! drives these calls as the dispatcher's backend.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File};

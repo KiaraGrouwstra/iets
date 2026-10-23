@@ -18,19 +18,19 @@
 //! entry's name *is* its content address, which is why a reader never re-hashes
 //! and why two processes can share one entry.
 //!
-//! `crate::source` fetches a
-//! `github`/`gitlab`/`sourcehut`/`tarball` input as one decompressed tar and
-//! indexes it (`crate::fetch::spool`); `builtins.fetchurl` downloads one file
-//! and stores it as a tree of one regular file. The store keeps the index as
+//! `crate::source` fetches a `github`/`gitlab`/`sourcehut`/`tarball` input as
+//! one decompressed tar and indexes it (`crate::fetch::spool`).
+//! `builtins.fetchurl` downloads one file and stores it as a tree of one
+//! regular file. The store keeps the index as
 //! `$XDG_CACHE_HOME/iets/inputs/<store path base name>`, with every file named
 //! by the blake3 of its bytes, and the bytes themselves in `inputs/packs/`
 //! (`pack`), where a file that two inputs share is stored once. Evaluation
 //! reads the input straight out of the packs: `import`, `readFile`,
 //! `readDir`, `pathExists`, `readFileType`, `hashFile`, `builtins.path`,
-//! `filterSource` and string coercion all answer from them. No daemon is
-//! needed to evaluate a flake with fetched inputs, and none is written during
-//! evaluation; a build uploads the tree from the same packs when its target
-//! store lacks it (`remote::plan`).
+//! `filterSource` and string coercion all answer from them. Evaluation of a
+//! flake with fetched inputs needs no daemon and writes to no store. A build
+//! uploads the tree from the same packs when its target store lacks it
+//! (`remote::plan`).
 
 pub mod pack;
 
