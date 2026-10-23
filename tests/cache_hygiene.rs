@@ -11,6 +11,7 @@ use std::process::Command;
 use std::time::{Duration, SystemTime};
 use tempfile::tempdir;
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{env, thread};
 
 use iets::cachefs;
@@ -111,9 +112,11 @@ fn concurrent_readers_and_writers_never_see_a_torn_entry() {
     let dir = tempdir().unwrap();
     let store = Store::locate(Some(dir.path().to_str().expect("utf-8 path"))).expect("store");
     assert!(cachefs::prepare(store.root(), cachefs::Shape::Dirs, false));
+    let writing = AtomicUsize::new(8);
     thread::scope(|s| {
         for w in 0..8u8 {
             let base = dir.path().to_path_buf();
+            let writing = &writing;
             s.spawn(move || {
                 let store = Store::locate(Some(base.to_str().expect("utf-8 path"))).expect("store");
                 for round in 0..60 {
@@ -121,10 +124,29 @@ fn concurrent_readers_and_writers_never_see_a_torn_entry() {
                     publish(&store, key, w + 1);
                     check(&store, (key + 1) % KEYS);
                 }
+                writing.fetch_sub(1, Ordering::Relaxed);
+            });
+        }
+        // readers that only open, so most publishes rename over a name some
+        // reader is opening; and a reader that judged an entry bad, whose
+        // discard must not take a good generation a sibling published
+        for r in 0..4 {
+            let store = &store;
+            let writing = &writing;
+            s.spawn(move || {
+                let mut n = r;
+                while writing.load(Ordering::Relaxed) > 0 {
+                    check(store, n % KEYS);
+                    if n % 8 == 0 {
+                        store.discard(&key_of(n % KEYS), &Opened::Bad);
+                    }
+                    n += 1;
+                }
             });
         }
     });
     for key in 0..KEYS {
+        store.discard(&key_of(key), &Opened::Bad);
         assert!(check(&store, key).is_some(), "every key ends published");
     }
 }
@@ -232,20 +254,34 @@ fn an_entry_that_is_not_a_plain_file_is_refused() {
     let dir = tempdir().unwrap();
     let good = dir.path().join("good");
     fs::write(&good, b"x").expect("file");
-    assert!(cachefs::open_entry(&good).is_some());
+    assert!(matches!(
+        cachefs::open_entry(&good),
+        cachefs::Found::File(..)
+    ));
 
     let huge = dir.path().join("huge");
     let f = File::create(&huge).expect("file");
     f.set_len(cachefs::MAX_ENTRY + 1).expect("sparse length");
     drop(f);
     assert!(
-        cachefs::open_entry(&huge).is_none(),
+        matches!(cachefs::open_entry(&huge), cachefs::Found::Foreign),
         "a length no entry has"
     );
     assert!(
         dir.path().join("huge").exists(),
         "and nothing was allocated"
     );
+
+    let sub = dir.path().join("dir");
+    fs::create_dir(&sub).expect("dir");
+    assert!(
+        matches!(cachefs::open_entry(&sub), cachefs::Found::Foreign),
+        "a directory"
+    );
+    assert!(matches!(
+        cachefs::open_entry(&dir.path().join("none")),
+        cachefs::Found::Missing
+    ));
 }
 
 /// The child of `an_input_observation_marks_its_entry_as_used`: the input
@@ -370,7 +406,7 @@ mod unix_only {
     use std::path::Path;
 
     use iets::cachefs;
-    use iets::trace::store::{Part, Store};
+    use iets::trace::store::{Opened, Part, Store};
 
     use super::{ENTRY, hit_entry, key_of};
     use tempfile::tempdir;
@@ -384,13 +420,47 @@ mod unix_only {
 
         let link = dir.path().join("link");
         symlink(&good, &link).expect("link");
-        assert!(cachefs::open_entry(&link).is_none(), "a symbolic link");
+        assert!(
+            matches!(cachefs::open_entry(&link), cachefs::Found::Foreign),
+            "a symbolic link"
+        );
 
         let fifo = dir.path().join("fifo");
         // rustix has no mkfifoat on Apple
         let c = CString::new(fifo.as_os_str().as_bytes()).unwrap();
         assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0, "fifo");
-        assert!(cachefs::open_entry(&fifo).is_none(), "a FIFO");
+        assert!(
+            matches!(cachefs::open_entry(&fifo), cachefs::Found::Foreign),
+            "a FIFO"
+        );
+    }
+
+    /// A regular file that does not open is how Windows shows an entry a
+    /// sibling is renaming over: a miss, and the entry stays.
+    #[test]
+    fn an_entry_that_does_not_open_is_a_miss_and_stays() {
+        let dir = tempdir().unwrap();
+        let store = Store::locate(Some(dir.path().to_str().expect("utf-8 path"))).expect("store");
+        assert!(cachefs::prepare(store.root(), cachefs::Shape::Dirs, false));
+        let key = key_of(0);
+        assert!(
+            store
+                .publish(&key, &[(Part::Readset, &hit_entry())])
+                .expect("publish")
+        );
+        let entry = store.entry_dir(&key).join(ENTRY);
+        fs::set_permissions(&entry, Permissions::from_mode(0o000)).expect("chmod");
+        if fs::File::open(&entry).is_ok() {
+            // root opens it anyway
+            return;
+        }
+        assert!(matches!(
+            cachefs::open_entry(&entry),
+            cachefs::Found::Missing
+        ));
+        assert!(matches!(store.open(&key), Opened::None));
+        assert_eq!(store.kept(&key), None);
+        assert!(entry.exists(), "and it is not wiped");
     }
 
     /// The cache holds what an evaluation read, so its directories and files are

@@ -93,7 +93,7 @@ impl Entry {
     /// of the directory the entry lives in, which is how a store names it.
     pub fn open(path: &Path) -> Option<Entry> {
         let key = path.parent()?.file_name()?.to_str()?.to_string();
-        let (f, md) = cachefs::open_entry(path)?;
+        let (f, md) = cachefs::open_entry(path).file()?;
         Entry::parse(f, md.len(), &key)
     }
 
@@ -108,7 +108,8 @@ impl Entry {
 
 /// What a key names on disk.
 pub enum Opened {
-    /// No entry: a cold run, and nothing to report.
+    /// No entry, or one that does not open now: a miss, and nothing to
+    /// report or wipe.
     None,
     /// An entry whose bytes are not one: poison and wipe.
     Bad,
@@ -144,13 +145,10 @@ impl Store {
     /// cannot be read half.
     pub fn open(&self, key: &str) -> Opened {
         let path = self.entry_dir(key).join(ENTRY);
-        let Some((f, md)) = cachefs::open_entry(&path) else {
-            // no name is a cold run; a name that is there and is not one this
-            // store can read is poison
-            return match path.symlink_metadata() {
-                Ok(_) => Opened::Bad,
-                Err(_) => Opened::None,
-            };
+        let (f, md) = match cachefs::open_entry(&path) {
+            cachefs::Found::File(f, md) => (f, md),
+            cachefs::Found::Missing => return Opened::None,
+            cachefs::Found::Foreign => return Opened::Bad,
         };
         match Entry::parse(f, md.len(), key) {
             Some(e) => Opened::Entry(e),
@@ -196,10 +194,11 @@ impl Store {
         chunks.push(&table);
         chunks.extend(parts.iter().map(|(_, b)| *b));
         let dir = self.entry_dir(key);
-        cachefs::create_dir(&dir)?;
         let Some(_lock) = cachefs::try_write_lock(&self.root)? else {
             return Ok(false);
         };
+        // under the lock, so a sibling's discard cannot remove it before the rename
+        cachefs::create_dir(&dir)?;
         cachefs::write_atomic(&dir, ENTRY, cachefs::tag(), &chunks).map(|()| true)
     }
 
@@ -215,7 +214,7 @@ impl Store {
         match self.open(key) {
             Opened::None => None,
             Opened::Bad => {
-                self.discard(key);
+                self.discard(key, &Opened::Bad);
                 None
             }
             Opened::Entry(e) => {
@@ -232,8 +231,23 @@ impl Store {
     }
 
     /// Poison and wipe, never repair: an entry that does not decode goes.
-    pub fn discard(&self, key: &str) {
-        let _ = fs::remove_dir_all(self.entry_dir(key));
+    /// `rejected` is what the caller opened. A sibling may have published a
+    /// good generation since, so the entry goes only if, under the writer
+    /// lock, it is still bad or still the bytes the caller rejected. A sibling
+    /// that holds the lock past its timeout keeps the entry for a later run
+    /// to judge.
+    pub fn discard(&self, key: &str, rejected: &Opened) {
+        let Ok(Some(_lock)) = cachefs::try_write_lock(&self.root) else {
+            return;
+        };
+        let stale = match (self.open(key), rejected) {
+            (Opened::Bad, _) => true,
+            (Opened::Entry(now), Opened::Entry(was)) => now.data == was.data,
+            _ => false,
+        };
+        if stale {
+            let _ = fs::remove_dir_all(self.entry_dir(key));
+        }
     }
 }
 
@@ -338,5 +352,45 @@ mod tests {
             fs::write(dir.join(ENTRY), bytes).expect("entry");
             assert!(matches!(s.open(KEY), Opened::Bad), "{bytes:?}");
         }
+    }
+
+    #[test]
+    fn a_discard_takes_only_the_generation_it_rejected() {
+        let d = tempdir().unwrap();
+        let s = store(d.path());
+        let gen_of = |out: &[u8]| {
+            assert!(
+                s.publish(
+                    KEY,
+                    &[(Part::Readset, b"obs".as_slice()), (Part::Result, out)]
+                )
+                .expect("publish")
+            );
+            s.open(KEY)
+        };
+        let corrupt = || {
+            fs::create_dir_all(s.entry_dir(KEY)).expect("dir");
+            fs::write(s.entry_dir(KEY).join(ENTRY), b"\x01").expect("entry");
+            s.open(KEY)
+        };
+
+        let bad = corrupt();
+        assert!(matches!(bad, Opened::Bad));
+        let old = gen_of(b"old");
+        s.discard(KEY, &bad);
+        assert!(
+            matches!(s.open(KEY), Opened::Entry(_)),
+            "a good entry stays"
+        );
+
+        let new = gen_of(b"new");
+        s.discard(KEY, &old);
+        assert!(matches!(s.open(KEY), Opened::Entry(_)), "a newer one stays");
+        s.discard(KEY, &new);
+        assert!(!s.entry_dir(KEY).exists(), "the rejected one goes");
+
+        let _ = gen_of(b"again");
+        s.discard(KEY, &corrupt());
+        assert!(!s.entry_dir(KEY).exists(), "a bad one goes");
     }
 }

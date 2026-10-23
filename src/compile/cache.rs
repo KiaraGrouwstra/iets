@@ -112,7 +112,7 @@ impl IrCache {
     /// integrity check is verified before the caller decodes anything, and an
     /// entry that fails it is poisoned like one that does not decode.
     pub fn read(&self, key: &str) -> Option<Vec<u8>> {
-        let (f, md) = cachefs::open_entry(&self.entry(key))?;
+        let (f, md) = cachefs::open_entry(&self.entry(key)).file()?;
         let mut bytes = Vec::with_capacity(md.len() as usize + 1);
         let mut r = &f;
         if r.read_to_end(&mut bytes).is_err() {

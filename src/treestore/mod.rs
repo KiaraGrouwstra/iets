@@ -209,18 +209,26 @@ pub fn report_timings() {
     }
 }
 
-fn read_entry(path: &Path) -> Option<(Node, Hash, u64)> {
-    let (f, _) = cachefs::open_entry(path)?;
+/// `None` when the entry does not open now (`cachefs::Found::Missing`), and
+/// `Some(None)` when it opens and is not one.
+fn read_entry(path: &Path) -> Option<Option<(Node, Hash, u64)>> {
+    let f = match cachefs::open_entry(path) {
+        cachefs::Found::File(f, _) => f,
+        cachefs::Found::Missing => return None,
+        cachefs::Found::Foreign => return Some(None),
+    };
     let mut bytes = Vec::new();
-    io::Read::read_to_end(&mut &f, &mut bytes).ok()?;
-    spool::decode_index(&bytes)
+    if io::Read::read_to_end(&mut &f, &mut bytes).is_err() {
+        return Some(None);
+    }
+    Some(spool::decode_index(&bytes))
 }
 
 /// The entry `name` of the store at `root`. One whose index does not decode is
 /// wiped: the next evaluation fetches it again.
 fn open(root: &Path, packs: Arc<pack::Packs>, name: &str) -> Option<StoredTree> {
     let path = root.join(name);
-    match read_entry(&path) {
+    match read_entry(&path)? {
         Some((tree, nar_hash, nar_size)) => {
             cachefs::touch(&path);
             Some(StoredTree::new(
@@ -524,10 +532,13 @@ pub fn collect(root: &Path, dry_run: bool) -> pack::Collected {
             continue;
         }
         match read_entry(&path) {
-            Some((tree, _, _)) => spool::object_ids(&tree, &mut live),
-            None if !dry_run => {
+            Some(Some((tree, _, _))) => spool::object_ids(&tree, &mut live),
+            Some(None) if !dry_run => {
                 let _ = fs::remove_file(&path);
             }
+            Some(None) => {}
+            // its objects are unknown, so no pack can be proved dead
+            None if path.exists() => return pack::Collected::default(),
             None => {}
         }
     }

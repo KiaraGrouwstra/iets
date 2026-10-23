@@ -283,16 +283,45 @@ pub fn checksum(key: &str, parts: &[&[u8]]) -> [u8; SUM] {
     out
 }
 
+/// What the name of an entry holds, as [`open_entry`] found it.
+pub enum Found {
+    /// A regular file of a length an entry can have, open for reading.
+    File(fs::File, fs::Metadata),
+    /// Nothing this run can read now: no name, or a regular file that does
+    /// not open. Windows refuses an open while a sibling renames a new entry
+    /// over the name (`ERROR_ACCESS_DENIED`, `ERROR_SHARING_VIOLATION`), so a
+    /// file that is there and does not open is a miss, never poison.
+    Missing,
+    /// A name that is no entry: a link, a directory, a FIFO, or a length no
+    /// entry has. The caller wipes it.
+    Foreign,
+}
+
+impl Found {
+    pub fn file(self) -> Option<(fs::File, fs::Metadata)> {
+        match self {
+            Found::File(f, md) => Some((f, md)),
+            _ => None,
+        }
+    }
+}
+
 /// Opens an entry for reading under the rules a cache directory needs: it is
 /// writable by whoever runs iets, so the name must not be a symbolic link,
 /// what it names must be a regular file, and its length must be one an entry
 /// can have. `O_NONBLOCK` keeps the open of a FIFO from waiting for a writer.
-pub fn open_entry(path: &Path) -> Option<(fs::File, fs::Metadata)> {
-    let f = sysfs::no_follow_no_block(fs::OpenOptions::new().read(true))
-        .open(path)
-        .ok()?;
-    let md = f.metadata().ok()?;
-    (md.is_file() && md.len() <= MAX_ENTRY).then_some((f, md))
+pub fn open_entry(path: &Path) -> Found {
+    let Ok(f) = sysfs::no_follow_no_block(fs::OpenOptions::new().read(true)).open(path) else {
+        return match path.symlink_metadata() {
+            Ok(md) if !md.is_file() => Found::Foreign,
+            _ => Found::Missing,
+        };
+    };
+    match f.metadata() {
+        Ok(md) if md.is_file() && md.len() <= MAX_ENTRY => Found::File(f, md),
+        Ok(_) => Found::Foreign,
+        Err(_) => Found::Missing,
+    }
 }
 
 /// A counter that keeps two writers of one name inside one process apart.
