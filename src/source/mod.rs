@@ -153,14 +153,6 @@ pub struct Tree {
 }
 
 impl Tree {
-    pub fn nar_hash(&self) -> Option<Hash> {
-        str_attr(&self.attrs, "narHash").and_then(|h| parse_nar_hash(h).ok())
-    }
-
-    pub fn last_modified(&self) -> Option<i64> {
-        int_attr(&self.attrs, "lastModified").map(|t| t as i64)
-    }
-
     pub fn rev(&self) -> Option<&str> {
         str_attr(&self.attrs, "rev")
     }

@@ -65,20 +65,8 @@ impl Places {
         Ok(Places(places))
     }
 
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
     pub fn get(&self, i: usize) -> &Place {
         &self.0[i]
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &Place> {
-        self.0.iter()
     }
 
     /// The first place that accepts the derivation. First, not best: this
