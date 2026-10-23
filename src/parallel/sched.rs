@@ -804,7 +804,6 @@ impl Runtime {
         }
     }
 
-    /// Note that forcing the thunk at `key` failed.
     #[inline]
     pub fn note_failed(&self, key: u64) {
         ANY_FAILED.store(true, Ordering::Relaxed);

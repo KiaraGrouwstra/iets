@@ -518,7 +518,6 @@ pub fn fanout_range(ev: &Evaluator, kind: u8, obj: Word, lo: usize, hi: usize, b
     let mut start = lo as u32;
     while (start as usize) < n {
         let len = batch.min(n as u32 - start);
-        // Only ranges with an unclaimed thunk are worth a task.
         let worth = (start..start + len)
             .any(|i| matches!(cell_state(cell(i as usize)), CellState::Unclaimed));
         if worth {

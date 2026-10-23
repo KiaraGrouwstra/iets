@@ -243,7 +243,6 @@ impl Arena {
         }
     }
 
-    /// Move the elements of `v` into one arena slice.
     pub(crate) fn alloc_vec<T>(&mut self, v: Vec<T>) -> &'static [T] {
         let n = v.len();
         if n == 0 {
@@ -264,7 +263,6 @@ impl Arena {
         self.alloc_slice(b)
     }
 
-    /// Concatenate byte slices into one arena allocation.
     pub(crate) fn alloc_concat(&mut self, parts: &[&[u8]]) -> &'static [u8] {
         let len: usize = parts.iter().map(|p| p.len()).sum();
         if len == 0 {
