@@ -1,7 +1,7 @@
-//! Resolved intermediate representation. Variables are `(depth, index)`
-//! pairs into the runtime env chain, attrpaths are merged, `inherit` is
-//! expanded, and `builtins.x` on the unshadowed global is folded to a
-//! constant. IR nodes live forever (`&'static`) so thunks can point at them.
+//! Resolved intermediate representation. A variable is a `(depth, index)`
+//! pair into the runtime env chain. The compiler merges attrpaths, expands
+//! `inherit` and folds `builtins.x` on the unshadowed global to a constant.
+//! IR nodes live forever (`&'static`) so thunks can point at them.
 
 use crate::eval::Pos;
 use crate::runtime::Word;

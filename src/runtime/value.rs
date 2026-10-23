@@ -300,12 +300,13 @@ unsafe impl Obj for AttrsObj {}
 unsafe impl Obj for PrimOpObj {}
 unsafe impl Obj for PrimOpAppObj {}
 
-/// A suspended `ir` in `env`, overwritten in place when forced. Thunk
+/// A suspended `ir` in `env`. A force overwrites it in place. Thunk
 /// objects carry no `Kind` byte: the word tag tells the layouts apart.
-/// Every layout has one `state` cell that goes from the payload it holds
-/// while unforced (never EMPTY, never a BLACKHOLE) to BLACKHOLE while being
-/// forced to EMPTY once forced, and one `code` word that holds the IR or
-/// function until then and the forced value after (docs/explanation/evaluation.md).
+/// Every layout has one `state` cell and one `code` word
+/// (docs/explanation/evaluation.md). `state` holds the payload while
+/// unforced (never EMPTY, never a BLACKHOLE), a BLACKHOLE during the
+/// force, and EMPTY after it. `code` holds the IR or the function until
+/// the force, and the forced value after it.
 #[repr(C)]
 pub struct ThunkObj {
     /// `&Ir`, then the value.
@@ -334,11 +335,11 @@ pub struct ThunkApp2Obj {
     pub state: Cell,
 }
 
-/// One per `mapAttrs` call; entry `i` of `out` starts as the map word
-/// `(desc, i)`, which is a thunk with no object of its own: its `code`
-/// word is that entry's cell (the map word, then the value) and its
-/// state is `states[i]` (NULL, BLACKHOLE, EMPTY). Forcing applies `f` to
-/// the name and `src`'s entry `i`. Attr cells never hold a BLACKHOLE, so
+/// One per `mapAttrs` call. Entry `i` of `out` starts as the map word
+/// `(desc, i)`: a thunk with no object of its own. Its `code` word is the
+/// cell of that entry (the map word, then the value). Its state is
+/// `states[i]` (NULL, BLACKHOLE, EMPTY). A force applies `f` to the name
+/// and to entry `i` of `src`. Attr cells never hold a BLACKHOLE, so
 /// readers of `attr.cell` need no special case.
 #[repr(C)]
 pub struct MapDesc {

@@ -7,12 +7,18 @@
 //! evaluator reads for a store path goes through [`locate`]: `import`,
 //! `readFile`, `readDir`, `pathExists`, `readFileType`, `hashFile`,
 //! `findFile`, `storePath`, `fetchTree`, `builtins.path`, `filterSource` and
-//! string coercion, and a read of a file through [`open`], which applies
-//! pure evaluation's allow list first. The answer is a [`SrcPath`]: the real
-//! file system, a local tree a virtual copy stands for, a member of a fetched
-//! flake input served out of its spool by offset (`crate::treestore`), or a
-//! `toFile` text or `.drv` this evaluation holds in memory. Its readers below
-//! record what they saw in the tracing cache's read set.
+//! string coercion. A read of a file goes through [`open`], which applies
+//! the allow list of pure evaluation first. The answer is a [`SrcPath`],
+//! one of:
+//!
+//! - the real file system;
+//! - a local tree that a virtual copy stands for;
+//! - a member of a fetched flake input, served out of its spool by offset
+//!   (`crate::treestore`);
+//! - a `toFile` text or a `.drv` that this evaluation holds in memory.
+//!
+//! The readers below record what they saw in the read set of the tracing
+//! cache.
 
 use std::ffi::OsStr;
 use std::fs;

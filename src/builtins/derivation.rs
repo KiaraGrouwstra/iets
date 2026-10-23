@@ -44,10 +44,10 @@ pub struct DrvInfo {
     /// The ATerm this evaluation produced; `None` when the drv was read from `/nix/store`.
     pub aterm: Option<Arc<Vec<u8>>>,
     /// Where the derivation was defined. `derivation` is a wrapper around
-    /// `derivationStrict`, so the primop's call position is inside
-    /// `«derivation-internal»` for every normal call; the position of the
-    /// `name` attribute's value stands in, which is the same position Nix
-    /// names in "whose name attribute is located at". A direct
+    /// `derivationStrict`, so for every normal call the position of the
+    /// primop call is inside `«derivation-internal»`. The position of the
+    /// value of the `name` attribute is used instead. Nix names the same
+    /// position in "whose name attribute is located at". A direct
     /// `builtins.derivationStrict` call keeps its own call position.
     pub pos: Option<Pos>,
     /// The attribute path a cli walk reached this derivation by.

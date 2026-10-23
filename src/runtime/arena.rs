@@ -1,7 +1,7 @@
-//! Bump allocator. Memory is never freed while its session lives: every
-//! allocation hands out a `'static` reference, and the chunks go only when
-//! the session's `Heap` drops. That is what makes graph sharing between
-//! cells trivially sound.
+//! Bump allocator. Memory is never freed while its session lives. Every
+//! allocation gives a `'static` reference, and the chunks go only when the
+//! `Heap` of the session drops. Thus cells can share any part of the graph
+//! with no further check.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

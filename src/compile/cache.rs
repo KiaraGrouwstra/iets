@@ -1,15 +1,19 @@
-//! Compiled-IR cache on disk. A file's IR is written after its first
-//! compile and loaded instead of parsing and compiling on later runs
+//! Compiled-IR cache on disk. The first compile of a file writes its IR.
+//! Later runs load it and do not parse or compile the file again
 //! (docs/explanation/caching.md, "The IR cache: the same file, compiled once").
 //!
-//! The IR is process-specific in three ways, and the entry undoes each:
-//! `Sym` ids (a per-entry name table is re-interned on load), `Pos` values
-//! (stored relative to the file, rebased on load), and constant `Word`s
-//! (literals are stored by content, globals and `builtins.x` by name and
-//! looked up in the live tables, so `__nixPath` follows the run). Binding
-//! frames (`let`, `rec`, formals) are slot-ordered by `Sym` id, so the
-//! loader re-sorts them and rewrites every `Local` index through a
-//! permutation stack that mirrors the compiler's scope pushes.
+//! The IR depends on the process in three ways, and the entry undoes each:
+//!
+//! - `Sym` ids: the entry has its own name table, which the load interns
+//!   again.
+//! - `Pos` values: stored relative to the file, rebased on load.
+//! - Constant `Word`s: literals are stored by content. Globals and
+//!   `builtins.x` are stored by name and looked up in the live tables, so
+//!   `__nixPath` follows the run.
+//!
+//! Binding frames (`let`, `rec`, formals) are in `Sym` id order. So the
+//! loader sorts them again and rewrites every `Local` index through a
+//! permutation stack that mirrors the scope pushes of the compiler.
 
 use std::path::{Path, PathBuf};
 
