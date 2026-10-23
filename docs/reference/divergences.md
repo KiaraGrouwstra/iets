@@ -609,8 +609,9 @@ valid store path to Nix, with the name `n-`. iets refuses it with
 ## The tracing cache under the classic names
 
 `nix eval`, `nix build`, `nix derivation show`, `nix develop`,
-`nix print-dev-env`, `nix search` and `nix fmt` answer from iets's tracing
-cache (`docs/explanation/caching.md`, `docs/reference/classic.md`). Nix's
+`nix print-dev-env`, `nix search`, `nix fmt` and `nix-build` answer from
+iets's tracing cache (`docs/explanation/caching.md`,
+`docs/reference/classic.md`). Nix's
 own evaluation cache for flakes is keyed on the locked fingerprint and is
 off for a dirty tree, `-f` and `--expr`; iets's is keyed on the command and
 validated by what the run read. stdout and the exit code of a hit are those
@@ -629,9 +630,9 @@ On stderr:
 - **A hit prints no `trace:` and no `evaluation warning:` line.**
   `builtins.trace` and `builtins.warn` write while the evaluation runs, and a
   hit does not run one. Nix behaves the same way when its cache answers
-  (`nix build`, `nix develop`). It differs for `nix eval`, which Nix never
-  answers from its cache, so there every run prints them and only iets's
-  first run does.
+  (`nix build`, `nix develop`). It differs for `nix eval` and `nix-build`,
+  which Nix never answers from its cache, so there every run prints them and
+  only iets's first run does.
 
 Observe it: run `nix eval .#x` twice on a flake whose `x` is
 `builtins.trace "evaluated" 1`. The first run prints the trace line and `1`,

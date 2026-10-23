@@ -137,9 +137,9 @@ tracing entry (0.9 MiB) and 56 IR entries (0.5 MiB).
 every observation of the outside world the run made. A later run with the
 same command validates those observations. If nothing changed, it replays
 the result and skips evaluation entirely. `print-dev-env`, `search` and the
-`nix` subcommands iets serves under the classic name do the same, each with a
-key of its own ([Classic mode](../reference/classic.md) says what each entry
-holds).
+`nix` subcommands and `nix-build` iets serves under the classic names do the
+same, each with a key of its own ([Classic mode](../reference/classic.md)
+says what each entry holds).
 
 Every primop that looks at the world records one observation.
 

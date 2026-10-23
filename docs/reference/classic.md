@@ -115,6 +115,9 @@ The exit code is 0, or 1 for an evaluation error, a daemon error or a build
 failure. The real `nix-build` gives the same codes when its daemon hands
 builds to a remote builder.
 
+A run with one `FILE` or one `-E` uses the tracing cache (**The tracing
+cache**, below). A run with more inputs evaluates each time.
+
 Falls back on: `--dry-run`, `--drv-link`, `--run-env`, `--command`,
 `--run`, `--repair`, `--check`, `--pure`, `--exclude`, `--keep`,
 `-p`/`--packages`, `-`, and any other flag.
@@ -388,7 +391,7 @@ to. `iets prefetch` prints the same hash and nothing else
 
 #### The tracing cache
 
-Every `nix` subcommand that evaluates uses the tracing cache
+Every `nix` subcommand that evaluates, and `nix-build`, uses the tracing cache
 (`docs/explanation/caching.md`). Run the same command again with nothing
 changed, and iets checks what the first run read and evaluates nothing. A
 hit skips the evaluation and nothing else:
@@ -397,6 +400,7 @@ hit skips the evaluation and nothing else:
 |---|---|---|
 | `nix eval` | the stdout bytes | nothing: `nix eval` registers no derivation here |
 | `nix build` | each installable's derivation and outputs, every derivation and every source | the upload, the build, the out-links, the `--no-link` roots, `--print-out-paths` |
+| `nix-build` | each root's derivation and output, every derivation and every source; every `-A` is in the key, in order | the upload, the build, the links, the `--no-out-link` roots, the printing |
 | `nix derivation show` | the stdout bytes; `-r` and the indentation are in the key | nothing |
 | `nix develop` | the `-env` output path and the shell's builder | reads the environment out of the output, keeps the root, runs bash; an output that is gone is a miss |
 | `nix print-dev-env` | the script, the `-env` output path and the files the script names | checks that they exist |
@@ -531,10 +535,11 @@ these:
 - A missing attribute in an installable's path is one line. Nix adds a
   `Did you mean …?` line, which iets does not have. The `error:` line is the
   same.
-- The `nix` subcommands answer from the tracing cache. stdout and the exit
-  code are the same, and `docs/reference/divergences.md`, "The tracing cache
-  under the classic names", says what differs on stderr.
-  `nix-instantiate`, `nix-build` and `nix-shell` don't use it.
+- The `nix` subcommands and `nix-build` answer from the tracing cache.
+  stdout and the exit code are the same, and
+  `docs/reference/divergences.md`, "The tracing cache under the classic
+  names", says what differs on stderr. `nix-instantiate` and `nix-shell` do
+  not use it.
 - `nix eval` and `nix derivation show` do not register the derivations they
   evaluate. The real ones write the `.drv` files as they go, so a real
   `nix derivation show` leaves its whole input closure in the store. iets
