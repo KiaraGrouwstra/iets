@@ -8,6 +8,7 @@ use super::{Level, LintId, Where};
 use crate::builtins::fetch;
 use crate::eval::{EvalResult, Evaluator, Pos};
 use crate::runtime::{self, Cell, Ctx, Kind, Taint, Value, Word};
+use crate::store::path::StorePath;
 use crate::sys::{self, OsStrExt};
 use crate::{compile, project, trace};
 use std::borrow::Cow;
@@ -69,6 +70,15 @@ pub fn ifd(ev: &mut Evaluator, ctx: &[Ctx], pos: Pos) -> EvalResult<()> {
         format!(
             "import from derivation: this import needs '{}' built first",
             String::from_utf8_lossy(drv)
+        )
+    })
+}
+
+/// A read of `out`, a derivation output found in this machine's store.
+pub fn ifd_local_output(ev: &mut Evaluator, out: &StorePath, pos: Pos) -> EvalResult<()> {
+    ev.lint(LintId::IfdLocalOutput, pos, || {
+        format!(
+            "import from derivation: '{out}' is read from this machine's store; where it is missing, the evaluation builds it or fails"
         )
     })
 }

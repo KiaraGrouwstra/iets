@@ -33,7 +33,7 @@ use crate::store::path::StorePath;
 use crate::sys::{self, OsStringExt};
 use crate::trace::key::{Key, has_relative_path};
 use crate::trace::run::Cache;
-use crate::{argv, compile, error, log, parallel, project};
+use crate::{argv, compile, config, error, log, parallel, project};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -545,6 +545,9 @@ pub fn setup_cache_more(
         k.field("xp", f.as_bytes());
     }
     k.field("system", cfg.current_system().as_bytes());
+    if !config::reads_built_outputs(&Session::current()) {
+        k.field("built-outputs", b"0");
+    }
     if needs_cwd {
         k.field("cwd", &cwd);
     }

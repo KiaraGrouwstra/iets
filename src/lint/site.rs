@@ -48,7 +48,9 @@ pub fn finding(src: &[u8], ast: &Ast, id: LintId, off: u32) -> Option<(Span, Opt
         LintId::EqTypeMismatch | LintId::EqFunction => (false, &[&eq]),
         LintId::OrNonAttrs => (false, &[&or]),
         LintId::ImpureBuiltin => (false, &[&apply, &select, &var]),
-        LintId::UnhashedFetch | LintId::Ifd | LintId::ReadThroughCopy => (false, &[&apply]),
+        LintId::UnhashedFetch | LintId::Ifd | LintId::IfdLocalOutput | LintId::ReadThroughCopy => {
+            (false, &[&apply])
+        }
         // `inherit (self) revCount`, then `getAttr "revCount" self`: the call
         // starts where its `builtins.getAttr` starts
         LintId::RevCount => (true, &[&apply, &select]),

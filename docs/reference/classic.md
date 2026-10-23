@@ -450,7 +450,7 @@ A name falls back in these cases:
    - `getContext` on the output of a dynamic derivation;
    - import from derivation: `import`, `scopedImport`, `readFile`,
      `readDir`, `pathExists`, `readFileType` or `hashFile` on a derivation
-     output;
+     output that is not in the store;
    - a second copy of a `toFile` text or `.drv`;
    - a read of a `.drv` this run made under `--no-tracing-cache`;
    - a flake that declares inputs and whose `flake.lock` is missing or

@@ -595,7 +595,7 @@ element that is not an identifier (`names."7zip"`, where 2.35.2 writes
 | `--chunks M --chunk N`, `--chunk-depth D` | iets only | Evaluate part `N` (0 to M-1) of `M` parts of the tree, split at depth `D` (default 2). |
 | `--impure` | identical | Turns off the pure evaluation that `--flake` implies. |
 | `--show-trace` | accepted | The trace is always in the error text. With `--log-format internal-json` it also goes into the error records, as in Nix. |
-| `--option k v` | as for `eval` | `allow-import-from-derivation` and `eval-cache` hold on their own: iets never builds during evaluation and has no Nix evaluation cache. `restrict-eval`, the other client settings iets has nothing for, and every store setting (substituters) give one `ignored-setting` warning. |
+| `--option k v` | as for `eval` | `allow-import-from-derivation` and `eval-cache` hold on their own: iets never builds during evaluation (`docs/reference/settings.md`) and has no Nix evaluation cache. `restrict-eval`, the other client settings iets has nothing for, and every store setting (substituters) give one `ignored-setting` warning. |
 | `--quiet`, `--verbose`, `--debug` | `--quiet` only | `--quiet` drops the stderr summary. `--verbose` and `--debug` give one `ignored-flag` warning: iets has one log level. |
 | `--log-format F` | accepted | `internal-json`: stderr is Nix's `@nix {...}` records, with a `code` and a `hint` on each error. `raw`, `raw-with-logs`, `bar`, `bar-with-logs`: plain lines. |
 | `--max-jobs N` | holds | It limits the builds of an import from derivation, and iets never builds during evaluation. |

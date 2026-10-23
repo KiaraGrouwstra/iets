@@ -261,7 +261,7 @@ site and has the kind the lint reports:
 | `eq-type-mismatch`, `eq-function` | `binary` with `==` or `!=` |
 | `or-non-attrs` | `select` with a `default` |
 | `impure-builtin` | `apply`; if there is none, `select`; if there is none, `var` |
-| `unhashed-fetch`, `ifd`, `read-through-copy` | `apply` |
+| `unhashed-fetch`, `ifd`, `ifd-local-output`, `read-through-copy` | `apply` |
 | `rev-count` | a `name` of an `inherit`; if there is none, `apply` (`builtins.getAttr`); if there is none, `select` |
 | `unknown-allow` | no node: the word in the comment |
 | all other lints | a `bind` or a `name`; if there is none, a `string` with an interpolation, a `binary` with `+`, or an `apply` |

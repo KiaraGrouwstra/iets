@@ -342,6 +342,12 @@ impl SharedMap<StorePath, Known> {
         self.lock().entry(p).or_default().origin = Some(o);
     }
 
+    /// A path that is simply on disk, such as a realised derivation output:
+    /// pure evaluation may read it (primops.cc:realiseContext's `allowPath`).
+    pub fn add_on_disk(&self, p: StorePath) {
+        self.lock().entry(p).or_default();
+    }
+
     pub fn add_copy(&self, p: StorePath, o: SourceOrigin) {
         let mut t = self.lock();
         let k = t.entry(p).or_default();

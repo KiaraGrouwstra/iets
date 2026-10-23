@@ -323,6 +323,16 @@ pub fn xp_on(feature: &str) -> bool {
         .is_some_and(|c| (c.list("experimental-features").iter()).any(|f| f == feature))
 }
 
+/// Whether an evaluation may read a derivation output that is already in the
+/// store. Nix refuses that read when `allow-import-from-derivation` is off and
+/// warns with `trace-import-from-derivation`, so both leave it to the real nix.
+pub fn reads_built_outputs(s: &Session) -> bool {
+    s.nix_conf.get().is_none_or(|c| {
+        c.bool("allow-import-from-derivation").ok().flatten() != Some(false)
+            && c.bool("trace-import-from-derivation").ok().flatten() != Some(true)
+    })
+}
+
 /// `configuration.cc:BaseSetting<bool>::parse`.
 pub fn parse_bool(name: &str, s: &str) -> Result<bool> {
     match s {

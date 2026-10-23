@@ -368,7 +368,7 @@ its URL has 'max-builds'`. `store` and `system` still apply.
 
 | Setting | Why it holds |
 |:---|:---|
-| `allow-import-from-derivation`, `trace-import-from-derivation` | iets never builds during evaluation. An import from derivation is an error in iets's own commands, and a fallback under a classic name, where the real nix applies the setting. |
+| `allow-import-from-derivation`, `trace-import-from-derivation` | iets never builds during evaluation. It reads a derivation output that is already in the store only when `allow-import-from-derivation` is on and `trace-import-from-derivation` is off. In other cases an import from derivation is an error in iets's own commands, and a fallback under a classic name, where the real nix applies the setting. |
 | `eval-cache` | iets has no Nix evaluation cache. Its own caches check every input they read, and `--no-cache` turns them off. |
 | `warn-dirty`, `allow-dirty-locks`, `commit-lock-file-summary` | iets prints no dirty-tree warning and writes no lock file. |
 | `flake-registry`, `use-registries` | iets has no registry. A reference that needs one falls back, or is an error in iets's own commands. |

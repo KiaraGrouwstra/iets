@@ -156,6 +156,7 @@ registry! {
     ImpureBuiltin: "impure-builtin", Purity, Evaluator, Off, "a `getEnv` call, or a reference to `currentTime`";
     UnhashedFetch: "unhashed-fetch", Purity, Evaluator, Off, "fetchurl, fetchTarball, fetchGit or fetchTree called without a hash, narHash or rev";
     Ifd: "ifd", Purity, Evaluator, Off, "import of a string that carries derivation context";
+    IfdLocalOutput: "ifd-local-output", Purity, Evaluator, Warn, "a read (import, readFile, readDir, ...) of a derivation output that this machine's store already holds, so a machine without it builds it or fails";
     Fod: "fod", Purity, Evaluator, Off, "a fixed-output derivation; the message names the derivation and its hash mode";
     LargeSourceCopy: "large-source-copy", Purity, Evaluator, Off, "a path copy whose NAR exceeds `max-bytes` (default 8 MiB)";
     GitInSource: "git-in-source", Purity, Evaluator, Warn, "a path copy of a directory that contains a `.git` entry";

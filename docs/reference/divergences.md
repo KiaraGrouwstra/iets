@@ -416,11 +416,16 @@ the revision without the real nix.
 
 iets never builds during evaluation. Reading a path whose string context
 names a derivation output (`import`, `readFile`, `pathExists` and the other
-builtins that read a file) fails, even when the output is already in the
-store. Nix builds the derivation first, unless
-`allow-import-from-derivation` is off. Under a classic name iets falls back
-to the real nix, which applies that setting (`docs/reference/settings.md`).
-You can still `import` a `.drv` file.
+builtins that read a file) fails when the output is not in the store. Nix
+builds the derivation first, unless `allow-import-from-derivation` is off.
+Under a classic name iets falls back to the real nix, which applies that
+setting (`docs/reference/settings.md`). An output that is already in the
+store is read, as Nix reads it, and the `ifd-local-output` lint warns:
+another machine can give another result. Only an output whose path is known
+without a build counts, not a floating content-addressed one or one of a
+dynamic derivation. With `--no-tracing-cache`, iets does not keep the text
+of a `.drv` it made, so the output of such a derivation counts as missing
+unless the `.drv` is in the store. You can still `import` a `.drv` file.
 
 ## An all-digit name in an `eval-jobs` attribute path
 
