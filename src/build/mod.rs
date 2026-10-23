@@ -438,6 +438,15 @@ impl Dispatcher {
         if kept > 0 {
             self.exit = log::combine_exit(self.exit, 102);
         }
+        // a batch that built in full built every dependency too
+        if earlier_failed || status.len() < batch.len() {
+            let held = self.reporter.render.lock().unwrap().held_successes();
+            let unbuilt = {
+                let mut on_event = event_sink(&mut self.reporter, &self.prov, &by_drv);
+                unbuilt(&mut *self.backend, &held, &mut on_event)
+            };
+            self.reporter.render.lock().unwrap().unfinished(unbuilt);
+        }
         self.reporter.release();
         Ok(out)
     }
@@ -553,6 +562,36 @@ fn already_built(
         paths.iter().all(|p| valid.contains(p.base_name())),
         roots_valid,
     ))
+}
+
+/// The derivations of `drvs` with an output the store does not hold. A
+/// derivation the store cannot answer for is left out: its verdict stays
+/// what the daemon's messages say.
+fn unbuilt(b: &mut dyn Backend, drvs: &[String], on_event: &mut dyn FnMut(Event)) -> Vec<String> {
+    let mut unbuilt = Vec::new();
+    let mut outputs = Vec::new();
+    for d in drvs {
+        let Ok(map) = b.outputs(d, on_event) else {
+            continue;
+        };
+        let paths: Option<Vec<StorePath>> = (map.into_values())
+            .map(|p| StorePath::parse(&p?).ok())
+            .collect();
+        match paths {
+            Some(p) => outputs.push((d, p)),
+            None => unbuilt.push(d.clone()),
+        }
+    }
+    let refs: Vec<&StorePath> = outputs.iter().flat_map(|(_, p)| p).collect();
+    let Ok(valid) = b.query_valid(&refs, on_event) else {
+        return unbuilt;
+    };
+    for (d, p) in outputs {
+        if !p.iter().all(|p| valid.contains(p.base_name())) {
+            unbuilt.push(d.clone());
+        }
+    }
+    unbuilt
 }
 
 /// What one derivation is called and where it was defined: the attribute the
@@ -680,7 +719,7 @@ fn strip_hash(drv_path: &str) -> &str {
 mod tests {
     use super::render::tests::Sink;
     use super::*;
-    use crate::remote::event::{Log, Started};
+    use crate::remote::event::{Failed, Log, Started, Stopped};
     use crate::remote::plan::Object;
 
     use std::sync::atomic::AtomicUsize;
@@ -884,6 +923,127 @@ mod tests {
                 "{n}'s log block is interleaved: {out}"
             );
         }
+    }
+
+    /// Builds the dependencies `done`, `cut` and `bad` of one target. `bad`
+    /// fails, so the store stops `cut` and names only `bad`.
+    struct Stops;
+
+    impl Backend for Stops {
+        fn query_valid(
+            &mut self,
+            paths: &[&StorePath],
+            _on_event: &mut dyn FnMut(Event),
+        ) -> Result<HashSet<String>> {
+            Ok((paths.iter())
+                .map(|p| p.base_name().to_string())
+                .filter(|p| p.ends_with("-done"))
+                .collect())
+        }
+
+        fn substitute(
+            &mut self,
+            _paths: &[StorePath],
+            _on_event: &mut dyn FnMut(Event),
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn add_objects(
+            &mut self,
+            _objects: &[&Object],
+            _on_event: &mut dyn FnMut(Event),
+        ) -> Result<u64> {
+            Ok(0)
+        }
+
+        fn submit(
+            &mut self,
+            batch: &backend::Batch<'_>,
+            on_event: &mut dyn FnMut(Event),
+        ) -> Result<HashMap<String, backend::Status>> {
+            for n in ["done", "cut", "bad"] {
+                on_event(Event::Started(Started {
+                    drv_path: drv(n).to_string(),
+                }));
+            }
+            on_event(Event::Failed(Failed {
+                drv_path: drv("bad").to_string(),
+                reason: "hash mismatch".into(),
+            }));
+            for n in ["done", "cut"] {
+                on_event(Event::Stopped(Stopped {
+                    drv_path: drv(n).to_string(),
+                    built: false,
+                }));
+            }
+            let why = format!("1 dependencies of derivation '{}' failed", drv("pkg"));
+            Ok((batch.jobs.iter())
+                .map(|j| (j.drv.to_string(), backend::Status::failed(why.clone(), 1)))
+                .collect())
+        }
+
+        fn outputs(
+            &mut self,
+            drv: &str,
+            on_event: &mut dyn FnMut(Event),
+        ) -> Result<BTreeMap<String, Option<String>>> {
+            Fan {
+                limit: 1,
+                peak: Arc::new(AtomicBool::new(false)),
+                verdicts: true,
+            }
+            .outputs(drv, on_event)
+        }
+
+        fn fetch(&mut self, _store_path: &str, _dir: &Path) -> Result<()> {
+            Ok(())
+        }
+
+        fn add_root(&mut self, _store_path: &str, _link: &Path) -> Result<()> {
+            Ok(())
+        }
+
+        fn out_links(&mut self, _links: &[(String, Option<String>)]) -> Result<()> {
+            Ok(())
+        }
+
+        fn note_connect(&mut self, _d: Duration) {}
+
+        fn note_upload(&mut self, _p: backend::Phase) {}
+
+        fn report(&self, _plan: &Plan, _plan_time: Duration) -> String {
+            String::new()
+        }
+    }
+
+    #[test]
+    fn a_dependency_the_store_stopped_is_not_a_success() {
+        let sink = Sink::default();
+        let style = Style {
+            mode: render::Mode::Tty,
+            color: false,
+            fold: false,
+            quiet: false,
+        };
+        let mut d = Dispatcher::with_backend(
+            Box::new(Stops),
+            Provenance::off(),
+            Reporter::with_output(style, Box::new(sink.clone())),
+        );
+        let outcomes = d
+            .submit(&mut NoUpload, vec![Target::new("pkg", drv("pkg"), vec![])])
+            .unwrap();
+        assert!(!outcomes[0].success);
+        d.reporter.render.lock().unwrap().finish();
+        let out = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
+        assert!(out.contains("✔  done"), "{out}");
+        assert!(!out.contains("✔  cut"), "{out}");
+        assert!(out.contains("·  cut stopped after"), "{out}");
+        assert!(
+            out.contains("✔ 1 succeeded · ✘ 2 failed · 1 stopped"),
+            "{out}"
+        );
     }
 
     /// A target the build op came back without leaves no output path, so the

@@ -161,6 +161,7 @@ pub struct Renderer {
     last_draw: Instant,
     succeeded: usize,
     failed_count: usize,
+    stopped_count: usize,
     running: HashMap<String, Build>,
     /// Buffers of builds that already stopped, for a failure reported after
     /// the activity ended. Bounded: only the most recent are kept.
@@ -180,6 +181,9 @@ pub struct Renderer {
     /// a failed dependency only afterwards, so a verdict waits here until the
     /// op is over or the daemon contradicts it.
     held: HashMap<String, Build>,
+    /// Held builds whose outputs the store lacks. With `keep-going` off the
+    /// daemon stops the other builds when one fails, and names only that one.
+    unfinished: HashSet<String>,
 }
 
 impl Renderer {
@@ -192,12 +196,14 @@ impl Renderer {
             last_draw: Instant::now(),
             succeeded: 0,
             failed_count: 0,
+            stopped_count: 0,
             running: HashMap::new(),
             finished: VecDeque::new(),
             failed: HashSet::new(),
             verdicted: HashSet::new(),
             owned: HashSet::new(),
             held: HashMap::new(),
+            unfinished: HashSet::new(),
         }
     }
 
@@ -283,12 +289,15 @@ impl Renderer {
         if let Some(live) = self.live.as_mut() {
             live(Vec::new());
         }
-        if self.style.quiet || self.succeeded + self.failed_count < 2 {
+        if self.style.quiet || self.succeeded + self.failed_count + self.stopped_count < 2 {
             return;
         }
         let mut parts = vec![self.sgr(GREEN, &format!("✔ {} succeeded", self.succeeded))];
         if self.failed_count > 0 {
             parts.push(self.sgr(RED, &format!("✘ {} failed", self.failed_count)));
+        }
+        if self.stopped_count > 0 {
+            parts.push(self.sgr(DIM, &format!("{} stopped", self.stopped_count)));
         }
         let l = format!(
             "{} {} · {}",
@@ -297,6 +306,19 @@ impl Renderer {
             fmt_duration(self.began.elapsed())
         );
         self.print(&[l]);
+    }
+
+    /// The held builds that `release` would call a success.
+    pub fn held_successes(&self) -> Vec<String> {
+        (self.held.keys())
+            .filter(|d| !self.failed.contains(*d))
+            .cloned()
+            .collect()
+    }
+
+    /// Of the held builds, those that did not finish.
+    pub fn unfinished(&mut self, drvs: impl IntoIterator<Item = String>) {
+        self.unfinished.extend(drvs);
     }
 
     /// The derivations the build op now running reports verdicts for.
@@ -313,6 +335,16 @@ impl Renderer {
         held.sort_by_key(|(_, b)| b.ended.unwrap_or(b.started));
         for (drv, b) in held {
             let ok = !self.failed.contains(&drv);
+            if ok && self.unfinished.remove(&drv) {
+                self.stopped_count += 1;
+                let l = format!(
+                    "·  {} stopped after {} (an output is not in the store)",
+                    b.label,
+                    fmt_duration(b.elapsed())
+                );
+                self.line(self.sgr(DIM, &l));
+                continue;
+            }
             self.verdicted.insert(drv);
             let why = (!ok).then_some("the daemon named it only after the build ended");
             self.verdict_block(&b, ok, why);
