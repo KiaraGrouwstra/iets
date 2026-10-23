@@ -11,13 +11,17 @@
 //! the decompressor, and both ends stop when the other does.
 
 use std::cell::Cell;
+use std::error::Error as StdError;
+use std::fmt::{self, Display, Formatter};
 use std::fs::File;
 use std::future::Future;
 #[cfg(test)]
 use std::io::Cursor;
 use std::io::{self, BufRead, BufReader, ErrorKind, Read, Write};
+use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use std::{mem, result, thread};
 
@@ -83,6 +87,95 @@ async fn within<T>(
     match limit {
         None => fut.await,
         Some(d) => tokio::time::timeout(d, fut).await.map_err(|_| why())?,
+    }
+}
+
+/// The socket under TLS and hyper, with `stalled-download-timeout`: a read
+/// that has waited `limit` fails with [`Stalled`] only if the kernel holds no
+/// byte for it either. Like curl, which tries the socket before
+/// `Curl_speedcheck`, a read is tried before the clock, so the time the
+/// process was stopped or not scheduled is no stall.
+struct Watched {
+    tcp: tokio::net::TcpStream,
+    limit: Option<Duration>,
+    wait: Option<Pin<Box<tokio::time::Sleep>>>,
+}
+
+/// The error under hyper's when [`Watched`] gives up.
+#[derive(Debug)]
+struct Stalled;
+
+impl Display for Stalled {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str("no byte arrived within stalled-download-timeout")
+    }
+}
+
+impl StdError for Stalled {}
+
+/// Whether `e` or one of its causes is [`Stalled`].
+fn is_stall(e: &(dyn StdError + 'static)) -> bool {
+    let mut at = Some(e);
+    while let Some(e) = at {
+        let ours = e.downcast_ref::<io::Error>().and_then(|e| e.get_ref());
+        if ours.is_some_and(|e| e.is::<Stalled>()) {
+            return true;
+        }
+        at = e.source();
+    }
+    false
+}
+
+/// tokio drops the readiness of an `epoll_wait` that SIGCONT interrupts and
+/// still fires the timers that the stop overran, so the kernel decides. No
+/// `MSG_DONTWAIT`, which Windows lacks: tokio sockets are nonblocking.
+fn arrived(tcp: &tokio::net::TcpStream) -> bool {
+    let peek = rustix::net::RecvFlags::PEEK;
+    rustix::net::recv(tcp, &mut [0u8; 1][..], peek) != Err(rustix::io::Errno::WOULDBLOCK)
+}
+
+impl tokio::io::AsyncRead for Watched {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        let read = Pin::new(&mut this.tcp).poll_read(cx, buf);
+        let Some(limit) = this.limit.filter(|_| read.is_pending()) else {
+            this.wait = None;
+            return read;
+        };
+        let wait = (this.wait).get_or_insert_with(|| Box::pin(tokio::time::sleep(limit)));
+        loop {
+            if tokio::time::Instant::now() >= wait.deadline() {
+                if !arrived(&this.tcp) {
+                    return Poll::Ready(Err(io::Error::new(ErrorKind::TimedOut, Stalled)));
+                }
+                wait.as_mut().reset(tokio::time::Instant::now() + limit);
+            }
+            if wait.as_mut().poll(cx).is_pending() {
+                return Poll::Pending;
+            }
+        }
+    }
+}
+
+impl tokio::io::AsyncWrite for Watched {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.get_mut().tcp).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().tcp).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().tcp).poll_shutdown(cx)
     }
 }
 
@@ -442,14 +535,14 @@ async fn stream(
             200 => {
                 let mut sent = Ok(());
                 loop {
-                    let stalled =
-                        || bad(&current, "the download stalled (stalled-download-timeout)");
-                    let next = within(limits.stall, stalled, async {
-                        body.frame().await.transpose().map_err(|e| {
+                    let next = body.frame().await.transpose().map_err(|e| {
+                        if is_stall(&e) {
+                            bad(&current, "the download stalled (stalled-download-timeout)")
+                        } else {
                             bad(&current, &format!("reading the response failed: {e}"))
-                        })
+                        }
                     });
-                    let frame = match next.await {
+                    let frame = match next {
                         Ok(Some(f)) => f,
                         Ok(None) => break,
                         Err(e) => {
@@ -530,6 +623,11 @@ async fn once(url: &str, headers: &[(String, String)], limits: Limits) -> Result
         let stream = tokio::net::TcpStream::connect((u.host.as_str(), u.port))
             .await
             .map_err(|e| Error::io(format!("cannot connect to '{}'", u.authority()), e))?;
+        let stream = Watched {
+            tcp: stream,
+            limit: limits.stall,
+            wait: None,
+        };
         if !u.https {
             return Ok(Box::new(stream) as Box<dyn Stream>);
         }
@@ -560,14 +658,13 @@ async fn once(url: &str, headers: &[(String, String)], limits: Limits) -> Result
     let req = req
         .body(String::new())
         .map_err(|e| bad(url, &format!("bad request: {e}")))?;
-    let stalled = || bad(url, "no response (stalled-download-timeout)");
-    let res = within(limits.stall, stalled, async {
-        sender
-            .send_request(req)
-            .await
-            .map_err(|e| bad(url, &format!("request failed: {e}")))
-    })
-    .await?;
+    let res = sender.send_request(req).await.map_err(|e| {
+        if is_stall(&e) {
+            bad(url, "no response (stalled-download-timeout)")
+        } else {
+            bad(url, &format!("request failed: {e}"))
+        }
+    })?;
     let status = res.status().as_u16();
     let location = res
         .headers()
@@ -714,10 +811,13 @@ mod tests {
     use tempfile::tempdir;
 
     use std::fs;
+    use std::future::poll_fn;
     use std::net::{TcpListener, TcpStream};
     use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc::{self, Receiver};
+    use std::task::Waker;
+    use tokio::io::AsyncRead;
 
     #[test]
     fn urls_split() {
@@ -1051,5 +1151,51 @@ mod tests {
         let url = file_url(d.path(), "bomb.zst", &bomb);
         let e = get_decompressed(&url, &[], limits(), &mut io::sink()).unwrap_err();
         assert!(e.to_string().contains("times its size"), "{e}");
+    }
+
+    /// The runtime thread blocks past the limit, as SIGSTOP or a busy host
+    /// would hold it, with no reactor turn in between: bytes waiting in the
+    /// kernel are no stall, and an empty socket is one.
+    #[test]
+    fn time_the_reader_did_not_run_is_no_stall() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            let client = TcpStream::connect(l.local_addr().unwrap()).unwrap();
+            let (mut server, _) = l.accept().unwrap();
+            client.set_nonblocking(true).unwrap();
+            let limit = Duration::from_millis(1);
+            let mut w = Watched {
+                tcp: tokio::net::TcpStream::from_std(client).unwrap(),
+                limit: Some(limit),
+                wait: None,
+            };
+            let read = |w: &mut Watched, cx: &mut Context<'_>| {
+                let mut buf = [0u8; 8];
+                let mut rb = tokio::io::ReadBuf::new(&mut buf);
+                Pin::new(w)
+                    .poll_read(cx, &mut rb)
+                    .map_ok(|()| rb.filled().to_vec())
+            };
+            let poll = |w: &mut Watched| read(w, &mut Context::from_waker(Waker::noop()));
+
+            server.write_all(b"data").unwrap();
+            assert!(poll(&mut w).is_pending());
+            thread::sleep(limit * 2);
+            assert!(poll(&mut w).is_pending());
+            let got = poll_fn(|cx| read(&mut w, cx)).await.unwrap();
+            assert_eq!(got, b"data");
+
+            let e = loop {
+                thread::sleep(limit * 2);
+                if let Poll::Ready(r) = poll(&mut w) {
+                    break r.unwrap_err();
+                }
+            };
+            assert!(is_stall(&e), "{e}");
+        });
     }
 }
