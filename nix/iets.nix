@@ -1,6 +1,11 @@
 # Crane builds the dependencies as a derivation of their own, from the
 # manifests alone, so a source edit rebuilds only the iets crate.
-{ lib, craneLib, installShellFiles, commonArgs, sources }:
+# iets runs `git` to read a work tree (docs/explanation/flakes-and-sources.md).
+# `IETS_FALLBACK_PATH` names a git for a caller with none on PATH, such as a
+# systemd service (sys::program). It is off for the static build, which is for
+# hosts without a /nix/store.
+{ lib, stdenv, craneLib, installShellFiles, gitMinimal
+, commonArgs, sources, fallbackGit ? !stdenv.hostPlatform.isStatic }:
 let
   args = commonArgs // { src = sources.bin; };
 in
@@ -19,4 +24,6 @@ craneLib.buildPackage (args // {
     install -Dm444 src/cli/complete/iets.elv $out/share/elvish/lib/iets.elv
     install -Dm444 src/cli/complete/iets.ps1 $out/share/powershell/completions/iets.ps1
   '';
+} // lib.optionalAttrs fallbackGit {
+  IETS_FALLBACK_PATH = lib.makeBinPath [ gitMinimal ];
 })
