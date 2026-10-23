@@ -98,11 +98,13 @@ pub fn main(argv: &[String]) -> i32 {
 fn run(ev: &mut Evaluator, b: &Build) -> error::Result<Built> {
     let cwd = cwd();
     let mut roots: Vec<Root> = Vec::new();
-    let mut seen = HashSet::new();
     let args = auto_args(ev, &b.c.flags.args, &cwd)?;
     for file in &b.c.files {
         let root = eval_input(ev, &b.c, file, &cwd)?;
         for attr in &b.c.flags.attrs {
+            // nix-build.cc: one `getDerivations` per attribute path, so two
+            // of them that name one derivation give two roots
+            let mut seen = HashSet::new();
             let v = installable::find_along_attr_path(ev, root, attr, args)?;
             installable::get_drvs_at(ev, v, args, &mut roots, &mut seen, attr)?;
         }
