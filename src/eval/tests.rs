@@ -5,21 +5,22 @@ use rstest::rstest;
 
 use crate::print;
 
-fn eval_str(src: &str) -> String {
-    let mut ev = Evaluator::new();
-    let v = ev.eval_string(src, b"/").expect("eval");
-    let v = ev.force_deep(v).expect("force");
+fn eval_with(mut ev: Evaluator, src: &str) -> Result<String, String> {
+    let v = ev
+        .eval_string(src, b"/")
+        .and_then(|v| ev.force_deep(v))
+        .map_err(|e| e.msg)?;
     let mut out = Vec::new();
     print::print_ambiguous(&mut ev, v, 1, &mut out, &mut HashSet::default(), 0).unwrap();
-    String::from_utf8(out).unwrap()
+    Ok(String::from_utf8(out).unwrap())
+}
+
+fn eval_str(src: &str) -> String {
+    eval_with(Evaluator::new(), src).unwrap_or_else(|e| panic!("{src:?}: {e}"))
 }
 
 fn eval_err(src: &str) -> String {
-    let mut ev = Evaluator::new();
-    match ev.eval_string(src, b"/").and_then(|v| ev.force_deep(v)) {
-        Ok(_) => panic!("expected an error"),
-        Err(e) => e.msg,
-    }
+    eval_with(Evaluator::new(), src).expect_err("expected an error")
 }
 
 #[test]
@@ -195,14 +196,7 @@ fn eval_config_defaults_to_the_system_this_build_is_for() {
 }
 
 fn eval_pure(src: &str) -> Result<String, String> {
-    let mut ev = EvalConfig::new().pure(true).build();
-    let v = ev
-        .eval_string(src, b"/")
-        .and_then(|v| ev.force_deep(v))
-        .map_err(|e| e.msg)?;
-    let mut out = Vec::new();
-    print::print_ambiguous(&mut ev, v, 1, &mut out, &mut HashSet::default(), 0).unwrap();
-    Ok(String::from_utf8(out).unwrap())
+    eval_with(EvalConfig::new().pure(true).build(), src)
 }
 
 /// The answers of `nix-instantiate --pure-eval --read-write-mode` (Nix 2.34.8).
@@ -473,13 +467,7 @@ fn nix_eq_forces_what_the_shortcut_skips() {
     let eq = |src: &str| {
         let mut ev = Evaluator::new();
         ev.nix_eq = true;
-        let v = ev
-            .eval_string(src, b"/")
-            .and_then(|v| ev.force_deep(v))
-            .map_err(|e| e.msg)?;
-        let mut out = Vec::new();
-        print::print_ambiguous(&mut ev, v, 1, &mut out, &mut HashSet::default(), 0).unwrap();
-        Ok::<_, String>(String::from_utf8(out).unwrap())
+        eval_with(ev, src)
     };
     let x = "let x = { a = throw \"a\"; }; in";
     assert_eq!(eval_str(&format!("{x} x == x")), "true");
