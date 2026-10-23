@@ -87,7 +87,7 @@ To regenerate, run `bench/run.nu nixos-plasma nixos-server nixos-minimal` twice
 
 ## Scope
 
-iets is only a client. It has no nix-daemon implementation. It aims for a good
+For now, iets is only a client. It has no nix-daemon implementation. It aims for a good
 user experience with no setup, and for fewer tools in daily Nix use. It does
 not try to bundle every tool.
 
