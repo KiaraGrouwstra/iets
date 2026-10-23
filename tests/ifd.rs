@@ -3,6 +3,8 @@
 
 mod hermetic;
 
+use hermetic::{Iets, bin};
+use rstest::rstest;
 use std::fs;
 use std::path::Path;
 use std::process::Output;
@@ -24,8 +26,8 @@ fn store_dir(dir: &Path) -> String {
 
 /// With the tracing cache on: only a run with a cache keeps the text of the
 /// `.drv` that gives the output path.
-fn iets(dir: &Path, args: &[&str]) -> Output {
-    hermetic::iets()
+fn iets(bin: &Iets, dir: &Path, args: &[&str]) -> Output {
+    bin.cmd()
         .args(args)
         .current_dir(dir)
         .env("NIX_STORE_DIR", store_dir(dir))
@@ -44,8 +46,8 @@ fn fails_unbuilt(o: &Output) {
     assert!(err.contains("is not built"), "{err}");
 }
 
-#[test]
-fn an_output_in_the_store_is_read_with_a_warning() {
+#[rstest]
+fn an_output_in_the_store_is_read_with_a_warning(bin: Iets) {
     let d = tempdir().unwrap();
     let dir = d.path();
     fs::create_dir(dir.join("store")).unwrap();
@@ -59,17 +61,17 @@ fn an_output_in_the_store_is_read_with_a_warning() {
     fs::write(dir.join("out.nix"), "(import ./drv.nix).outPath\n").unwrap();
     fs::write(dir.join("read.nix"), "import (import ./drv.nix)\n").unwrap();
 
-    let o = iets(dir, &["eval", "--raw", "out.nix"]);
+    let o = iets(&bin, dir, &["eval", "--raw", "out.nix"]);
     assert!(o.status.success(), "{}", text(&o.stderr));
     let out = text(&o.stdout);
 
-    fails_unbuilt(&iets(dir, &["eval", "read.nix"]));
+    fails_unbuilt(&iets(&bin, dir, &["eval", "read.nix"]));
 
     let file = dir.join("store").join(out.rsplit('/').next().unwrap());
     fs::write(&file, "\"hello\"\n").unwrap();
     let warning = format!("warning: [ifd-local-output] import from derivation: '{out}'");
     for _ in 0..2 {
-        let o = iets(dir, &["eval", "read.nix"]);
+        let o = iets(&bin, dir, &["eval", "read.nix"]);
         let err = text(&o.stderr);
         assert!(o.status.success(), "{err}");
         assert_eq!(text(&o.stdout).trim_end(), "\"hello\"");
@@ -77,6 +79,7 @@ fn an_output_in_the_store_is_read_with_a_warning() {
     }
 
     fails_unbuilt(&iets(
+        &bin,
         dir,
         &[
             "eval",
@@ -88,6 +91,7 @@ fn an_output_in_the_store_is_read_with_a_warning() {
     ));
 
     let o = iets(
+        &bin,
         dir,
         &["eval", "--lint", "ifd-local-output=error", "read.nix"],
     );
@@ -95,5 +99,5 @@ fn an_output_in_the_store_is_read_with_a_warning() {
     assert!(err.starts_with("error: [ifd-local-output]"), "{err}");
 
     fs::remove_file(&file).unwrap();
-    fails_unbuilt(&iets(dir, &["eval", "read.nix"]));
+    fails_unbuilt(&iets(&bin, dir, &["eval", "read.nix"]));
 }

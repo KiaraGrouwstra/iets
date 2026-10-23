@@ -15,7 +15,8 @@ use std::{env, fs, thread};
 
 use tempfile::TempDir;
 
-use crate::hermetic;
+use crate::hermetic::{self, Iets};
+pub use crate::hermetic::{ok, stderr, stdout};
 
 pub mod classic;
 
@@ -32,6 +33,7 @@ pub struct Store {
     daemon: Child,
     shell: PathBuf,
     nonce: String,
+    bin: Iets,
 }
 
 pub fn which(prog: &str) -> Option<PathBuf> {
@@ -99,6 +101,7 @@ impl Store {
             daemon,
             shell: resolved("bash"),
             nonce,
+            bin: hermetic::bin(),
         };
         store.write_pkgs();
         let deadline = Instant::now() + Duration::from_secs(30);
@@ -202,7 +205,7 @@ impl Store {
 
     /// iets started as `prog`, a link to it under another name.
     pub fn iets_as(&self, prog: impl AsRef<OsStr>) -> Command {
-        let mut c = hermetic::iets_as(prog);
+        let mut c = self.bin.cmd_as(prog);
         Store::env(self.dir(), &mut c);
         c.current_dir(self.dir());
         c
@@ -385,26 +388,6 @@ pub fn system() -> String {
         other => other,
     };
     format!("{}-{os}", env::consts::ARCH)
-}
-
-/// Runs `c`, and panics with its stderr unless it succeeds.
-pub fn ok(c: &mut Command) -> Output {
-    let o = c.output().expect("spawn");
-    assert!(
-        o.status.success(),
-        "{c:?} failed with {}:\n{}",
-        o.status,
-        String::from_utf8_lossy(&o.stderr)
-    );
-    o
-}
-
-pub fn stdout(o: &Output) -> String {
-    String::from_utf8_lossy(&o.stdout).trim_end().to_string()
-}
-
-pub fn stderr(o: &Output) -> String {
-    String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
 /// The `--log-format internal-json` records in `stderr`.

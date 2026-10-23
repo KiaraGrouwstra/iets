@@ -8,6 +8,9 @@
 
 mod hermetic;
 
+use hermetic::{Iets, bin};
+use rstest::rstest;
+
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
@@ -50,9 +53,9 @@ fn parse(out: &str) -> Jobs {
     jobs
 }
 
-#[test]
+#[rstest]
 #[ignore = "evaluates nixpkgs twice; set IETS_TEST_NIXPKGS"]
-fn nixpkgs_drvs_match_nix() {
+fn nixpkgs_drvs_match_nix(bin: Iets) {
     let (Ok(nixpkgs), Ok(nej)) = (
         env::var("IETS_TEST_NIXPKGS"),
         env::var("IETS_TEST_NIX_EVAL_JOBS"),
@@ -80,7 +83,7 @@ fn nixpkgs_drvs_match_nix() {
         }
     };
 
-    let mut ours = hermetic::iets();
+    let mut ours = bin.cmd();
     // no daemon, as in the check's sandbox
     ours.arg("nix-eval-jobs")
         .env("NIX_DAEMON_SOCKET_PATH", "/nonexistent/socket")

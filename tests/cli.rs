@@ -3,28 +3,27 @@
 
 mod hermetic;
 
+use hermetic::{Iets, bin, stderr, stdout};
+
+use rstest::rstest;
 use std::path::Path;
 use std::process::{Command, Output};
 use std::{env, fs};
 use tempfile::tempdir;
 
-fn iets(args: &[&str]) -> Output {
-    hermetic::iets().args(args).output().expect("run iets")
-}
-
-fn text(b: &[u8]) -> String {
-    String::from_utf8_lossy(b).into_owned()
+fn run(bin: &Iets, args: &[&str]) -> Output {
+    bin.cmd().args(args).output().expect("run iets")
 }
 
 fn run_complete(mut c: Command, words: &[&str]) -> String {
     let o = c.arg("__complete").args(words).output().expect("run iets");
-    assert_eq!(o.status.code(), Some(0), "{words:?}: {}", text(&o.stderr));
-    assert!(o.stderr.is_empty(), "{words:?}: {}", text(&o.stderr));
-    text(&o.stdout)
+    assert_eq!(o.status.code(), Some(0), "{words:?}: {}", stderr(&o));
+    assert!(o.stderr.is_empty(), "{words:?}: {}", stderr(&o));
+    String::from_utf8_lossy(&o.stdout).into_owned()
 }
 
-#[test]
-fn help_and_version_go_to_stdout() {
+#[rstest]
+fn help_and_version_go_to_stdout(bin: Iets) {
     for args in [
         &["--help"][..],
         &["-h"],
@@ -37,60 +36,45 @@ fn help_and_version_go_to_stdout() {
         &["version"],
         &["--version"],
     ] {
-        let o = iets(args);
+        let o = run(&bin, args);
         assert_eq!(o.status.code(), Some(0), "{args:?}");
-        assert!(o.stderr.is_empty(), "{args:?}: {}", text(&o.stderr));
+        assert!(o.stderr.is_empty(), "{args:?}: {}", stderr(&o));
         assert!(!o.stdout.is_empty(), "{args:?}");
     }
-    let o = iets(&["--help"]);
-    assert!(text(&o.stdout).contains("  eval-jobs "));
-    let o = iets(&["eval", "--help"]);
-    assert!(text(&o.stdout).starts_with("usage: iets eval "));
-    assert!(text(&o.stdout).contains("--strict"));
-    let v = text(&iets(&["--version"]).stdout);
+    let o = run(&bin, &["--help"]);
+    assert!(stdout(&o).contains("  eval-jobs "));
+    let o = run(&bin, &["eval", "--help"]);
+    assert!(stdout(&o).starts_with("usage: iets eval "));
+    assert!(stdout(&o).contains("--strict"));
+    let v = stdout(&run(&bin, &["--version"]));
     assert_eq!(v.trim_end(), format!("iets {}", env!("CARGO_PKG_VERSION")));
 }
 
-#[test]
-fn a_bad_command_line_names_the_problem() {
-    for (args, want) in [
-        (&["bogus"][..], "error: unknown command 'bogus'\n"),
-        (
-            &["buidl"],
-            "error: unknown command 'buidl'\ndid you mean 'build'?\n",
-        ),
-        (&["serach", "^"], "did you mean 'search'?"),
-        (
-            &["nix-instantate", "--eval", "-E", "1"],
-            "did you mean 'nix-instantiate'?",
-        ),
-        (
-            &["eval", "--stirct", "-E", "1"],
-            "error: unknown flag '--stirct'\ndid you mean '--strict'?\nrun 'iets eval --help' for the flags\n",
-        ),
-        (
-            &["eval", "--workers", "0", "-E", "1"],
-            "--workers wants a number >= 1, got '0'",
-        ),
-        (&["eval", "-E"], "error: -E needs an expression\n"),
-        (
-            &["eval", "-E", "1", "x.nix"],
-            "-E and FILE cannot be combined",
-        ),
-        (&["build"], "nothing to evaluate"),
-        (&["build", "--what"], "unknown flag '--what'"),
-        (&["cache", "dunp"], "did you mean 'dump'?"),
-    ] {
-        let o = iets(args);
-        let err = text(&o.stderr);
-        assert_eq!(o.status.code(), Some(2), "{args:?}: {err}");
-        assert!(o.stdout.is_empty(), "{args:?}");
-        assert!(err.contains(want), "{args:?}: {err}");
-        assert!(
-            !err.contains("usage:") && !err.contains("falling back"),
-            "{args:?}: {err}"
-        );
-    }
+#[rstest]
+#[case::unknown(&["bogus"], "error: unknown command 'bogus'\n")]
+#[case::typo(&["buidl"], "error: unknown command 'buidl'\ndid you mean 'build'?\n")]
+#[case::typo_with_args(&["serach", "^"], "did you mean 'search'?")]
+#[case::classic_typo(&["nix-instantate", "--eval", "-E", "1"], "did you mean 'nix-instantiate'?")]
+#[case::flag_typo(
+    &["eval", "--stirct", "-E", "1"],
+    "error: unknown flag '--stirct'\ndid you mean '--strict'?\nrun 'iets eval --help' for the flags\n"
+)]
+#[case::zero_workers(&["eval", "--workers", "0", "-E", "1"], "--workers wants a number >= 1, got '0'")]
+#[case::no_expr(&["eval", "-E"], "error: -E needs an expression\n")]
+#[case::expr_and_file(&["eval", "-E", "1", "x.nix"], "-E and FILE cannot be combined")]
+#[case::build_nothing(&["build"], "nothing to evaluate")]
+#[case::build_flag(&["build", "--what"], "unknown flag '--what'")]
+#[case::subcommand_typo(&["cache", "dunp"], "did you mean 'dump'?")]
+fn a_bad_command_line_names_the_problem(bin: Iets, #[case] args: &[&str], #[case] want: &str) {
+    let o = run(&bin, args);
+    let err = stderr(&o);
+    assert_eq!(o.status.code(), Some(2), "{err}");
+    assert!(o.stdout.is_empty());
+    assert!(err.contains(want), "{err}");
+    assert!(
+        !err.contains("usage:") && !err.contains("falling back"),
+        "{err}"
+    );
 }
 
 /// What the system says for a path that is not there.
@@ -102,8 +86,8 @@ const NO_SUCH_FILE: &str = if cfg!(windows) {
 
 /// `-f FILE` is the positional FILE in the native namespace; under a classic
 /// name the argv stays Nix's, where `nix-eval-jobs` has no `-f`.
-#[test]
-fn dash_f_names_the_file_in_the_native_namespace() {
+#[rstest]
+fn dash_f_names_the_file_in_the_native_namespace(bin: Iets) {
     for args in [
         &["eval", "-f", "/nonexistent/missing.nix"][..],
         &["eval", "--file", "/nonexistent/missing.nix"],
@@ -111,30 +95,30 @@ fn dash_f_names_the_file_in_the_native_namespace() {
         &["prefetch", "-f", "/nonexistent/missing.nix"],
         &["eval-jobs", "-f", "/nonexistent/missing.nix"],
     ] {
-        let err = text(&iets(args).stderr);
+        let err = stderr(&run(&bin, args));
         assert!(err.contains(NO_SUCH_FILE), "{args:?}: {err}");
     }
-    let o = iets(&["nix-eval-jobs", "-f", "/nonexistent/missing.nix"]);
-    let err = text(&o.stderr);
+    let o = run(&bin, &["nix-eval-jobs", "-f", "/nonexistent/missing.nix"]);
+    let err = stderr(&o);
     assert!(err.contains("unknown flag '-f'"), "{err}");
     assert_eq!(o.status.code(), Some(1), "{err}");
 }
 
-#[test]
-fn io_errors_read_like_strerror() {
-    let o = iets(&["eval", "/nonexistent/missing.nix"]);
-    let err = text(&o.stderr);
+#[rstest]
+fn io_errors_read_like_strerror(bin: Iets) {
+    let o = run(&bin, &["eval", "/nonexistent/missing.nix"]);
+    let err = stderr(&o);
     assert!(err.contains(NO_SUCH_FILE), "{err}");
     assert!(!err.contains("os error"), "{err}");
 }
 
-#[test]
-fn completion_asks_the_binary_and_ignores_settings() {
+#[rstest]
+fn completion_asks_the_binary_and_ignores_settings(bin: Iets) {
     let conf = tempdir().unwrap();
     fs::create_dir_all(conf.path().join("iets")).unwrap();
     fs::write(conf.path().join("iets/iets.toml"), "this is = not [valid\n").unwrap();
     let complete = |words: &[&str]| {
-        let mut c = hermetic::iets();
+        let mut c = bin.cmd();
         c.env("XDG_CONFIG_HOME", conf.path());
         run_complete(c, words)
     };
@@ -146,17 +130,17 @@ fn completion_asks_the_binary_and_ignores_settings() {
     assert!(complete(&["cache", ""]).starts_with("gc\t"));
 
     for shell in ["bash", "zsh", "fish", "nushell", "elvish", "powershell"] {
-        let o = iets(&["completion", shell]);
+        let o = run(&bin, &["completion", shell]);
         assert_eq!(o.status.code(), Some(0), "{shell}");
-        assert!(text(&o.stdout).contains("__complete"), "{shell}");
+        assert!(stdout(&o).contains("__complete"), "{shell}");
     }
-    let o = iets(&["completion", "ksh"]);
+    let o = run(&bin, &["completion", "ksh"]);
     assert_eq!(o.status.code(), Some(2));
-    assert!(text(&o.stderr).contains("unknown subcommand \'ksh\'"));
+    assert!(stderr(&o).contains("unknown subcommand \'ksh\'"));
 }
 
-#[test]
-fn a_flake_fragment_completes_to_the_outputs_attribute_names() {
+#[rstest]
+fn a_flake_fragment_completes_to_the_outputs_attribute_names(bin: Iets) {
     let d = tempdir().unwrap();
     // a bare word completes under `packages.<this build's system>`
     let mut sys: Vec<&str> = vec![
@@ -181,7 +165,7 @@ fn a_flake_fragment_completes_to_the_outputs_attribute_names() {
     )
     .unwrap();
     let complete = |word: &str| {
-        let mut c = hermetic::iets();
+        let mut c = bin.cmd();
         c.current_dir(d.path());
         run_complete(c, &["eval", word])
     };
@@ -202,8 +186,8 @@ fn a_flake_fragment_completes_to_the_outputs_attribute_names() {
     assert_eq!(complete("/nonexistent#a"), ":6\n");
 }
 
-#[test]
-fn dash_a_completes_the_attribute_names_under_its_root() {
+#[rstest]
+fn dash_a_completes_the_attribute_names_under_its_root(bin: Iets) {
     let d = tempdir().unwrap();
     fs::write(
         d.path().join("x.nix"),
@@ -211,7 +195,7 @@ fn dash_a_completes_the_attribute_names_under_its_root() {
     )
     .unwrap();
     let complete = |words: &[&str]| {
-        let mut c = hermetic::iets();
+        let mut c = bin.cmd();
         c.current_dir(d.path());
         run_complete(c, words)
     };
@@ -242,15 +226,15 @@ mod budget {
     use std::time::{Duration, Instant};
 
     /// A FIFO that nothing writes to: only the budget can end the evaluation.
-    #[test]
-    fn a_completion_that_evaluates_stops_at_its_budget() {
+    #[rstest]
+    fn a_completion_that_evaluates_stops_at_its_budget(bin: Iets) {
         let d = tempdir().unwrap();
         let fifo = d.path().join("x.nix");
         let c = CString::new(fifo.as_os_str().as_bytes()).unwrap();
         // SAFETY: c is a valid C string
         assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0, "fifo");
         let complete = |ms: &str| {
-            let mut c = hermetic::iets();
+            let mut c = bin.cmd();
             c.current_dir(d.path()).env("IETS_COMPLETE_MS", ms);
             run_complete(c, &["eval", "-f", "x.nix", "-A", ""])
         };
@@ -290,93 +274,100 @@ in { checks.x86_64-linux = { a = mk "a"; b = mk "b"; }; }; }"#,
 
 /// `iets build` with a dead builder. The evaluation comes first, so
 /// `--timings` still says what it found.
-fn build_unreachable(dir: &Path, cache: Option<&Path>, installables: &[&str]) -> String {
-    let mut c = hermetic::iets();
+fn build_unreachable(
+    bin: &Iets,
+    dir: &Path,
+    cache: Option<&Path>,
+    installables: &[&str],
+) -> String {
+    let mut c = bin.cmd();
     c.current_dir(dir)
         .args(["build", "--builder", "unix:///nonexistent", "--timings"]);
     match cache {
         Some(cache) => c.arg("--cache-dir").arg(cache),
         None => c.arg("--no-cache"),
     };
-    text(&c.args(installables).output().expect("run iets").stderr)
+    stderr(&c.args(installables).output().expect("run iets"))
 }
 
 const A: &str = ".#checks.x86_64-linux.a";
 const B: &str = ".#checks.x86_64-linux.b";
 
 /// The last installable used to replace the earlier ones.
-#[test]
-fn build_evaluates_every_installable() {
+#[rstest]
+fn build_evaluates_every_installable(bin: Iets) {
     let d = tempdir().unwrap();
     two_checks(d.path());
-    let log = build_unreachable(d.path(), None, &[A, B]);
+    let log = build_unreachable(&bin, d.path(), None, &[A, B]);
     assert!(log.contains("eval: 2 derivations"), "{log}");
 }
 
 /// Installables in another order are one job and one cache entry.
-#[test]
-fn build_cache_ignores_installable_order() {
+#[rstest]
+fn build_cache_ignores_installable_order(bin: Iets) {
     let d = tempdir().unwrap();
     two_checks(&d.path().join("flake"));
     let cache = d.path().join("cache");
-    let first = build_unreachable(&d.path().join("flake"), Some(&cache), &[A, B]);
-    let second = build_unreachable(&d.path().join("flake"), Some(&cache), &[B, A]);
+    let first = build_unreachable(&bin, &d.path().join("flake"), Some(&cache), &[A, B]);
+    let second = build_unreachable(&bin, &d.path().join("flake"), Some(&cache), &[B, A]);
     assert!(first.contains("cache: wrote"), "{first}");
     assert!(second.contains("eval: skipped"), "{second}");
 }
 
-#[test]
-fn eval_json_forces_without_strict() {
-    let o = iets(&["eval", "--json", "--expr", "{ a = [ (1 + 1) ]; }"]);
-    assert!(o.status.success(), "{}", text(&o.stderr));
-    assert_eq!(text(&o.stdout).trim(), r#"{"a":[2]}"#);
+#[rstest]
+fn eval_json_forces_without_strict(bin: Iets) {
+    let o = run(&bin, &["eval", "--json", "--expr", "{ a = [ (1 + 1) ]; }"]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert_eq!(stdout(&o), r#"{"a":[2]}"#);
 }
 
 /// Nix's currentSystem is the host's unless `system` says otherwise.
-#[test]
-fn current_system_is_the_hosts() {
+#[rstest]
+fn current_system_is_the_hosts(bin: Iets) {
     let os = match env::consts::OS {
         "macos" => "darwin",
         other => other,
     };
     let want = format!("\"{}-{os}\"\n", env::consts::ARCH);
-    let o = iets(&["eval", "--impure", "--expr", "builtins.currentSystem"]);
-    assert_eq!(text(&o.stdout), want, "{}", text(&o.stderr));
+    let o = run(
+        &bin,
+        &["eval", "--impure", "--expr", "builtins.currentSystem"],
+    );
+    assert_eq!(o.stdout, want.as_bytes(), "{}", stderr(&o));
 }
 
 #[cfg(target_os = "linux")]
-#[test]
-fn a_full_stdout_is_an_error() {
+#[rstest]
+#[case::version(&["version"])]
+#[case::parse(&["parse", "multi.nix"])]
+#[case::help(&["--help"])]
+#[case::lint_list(&["lint", "list"])]
+fn a_full_stdout_is_an_error(bin: Iets, #[case] args: &[&str]) {
     let d = tempdir().unwrap();
-    let multi = d.path().join("multi.nix");
-    fs::write(&multi, "{ }").unwrap();
-    for a in [
-        &["version"][..],
-        &["parse", multi.to_str().unwrap()],
-        &["--help"],
-        &["lint", "list"],
-    ] {
-        let full = fs::OpenOptions::new()
-            .write(true)
-            .open("/dev/full")
-            .unwrap();
-        let o = hermetic::iets().args(a).stdout(full).output().unwrap();
-        assert_eq!(o.status.code(), Some(1), "{a:?}");
-        assert!(
-            text(&o.stderr).contains("No space left on device"),
-            "{a:?}: {}",
-            text(&o.stderr)
-        );
-    }
+    fs::write(d.path().join("multi.nix"), "{ }").unwrap();
+    let full = fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let o = bin
+        .cmd()
+        .current_dir(d.path())
+        .args(args)
+        .stdout(full)
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(1));
+    let err = stderr(&o);
+    assert!(err.contains("No space left on device"), "{err}");
 }
 
-#[test]
-fn a_bad_config_stops_only_what_reads_a_setting() {
+#[rstest]
+fn a_bad_config_stops_only_what_reads_a_setting(bin: Iets) {
     let conf = tempdir().unwrap();
     fs::create_dir_all(conf.path().join("iets")).unwrap();
     fs::write(conf.path().join("iets/iets.toml"), "bogus = 1\n").unwrap();
     let run = |a: &[&str]| {
-        hermetic::iets()
+        bin.cmd()
             .env("XDG_CONFIG_HOME", conf.path())
             .args(a)
             .output()
@@ -388,49 +379,47 @@ fn a_bad_config_stops_only_what_reads_a_setting() {
         (&["eval", "-E", "1"], 1),
     ] {
         let o = run(a);
-        assert_eq!(o.status.code(), Some(want), "{a:?}: {}", text(&o.stderr));
+        assert_eq!(o.status.code(), Some(want), "{a:?}: {}", stderr(&o));
     }
     // the log format is read first, so an early error is a record
     let o = run(&["eval", "--log-format", "internal-json", "-E", "1"]);
-    assert!(text(&o.stderr).starts_with("@nix "), "{}", text(&o.stderr));
+    assert!(stderr(&o).starts_with("@nix "), "{}", stderr(&o));
 }
 
-#[test]
-fn eval_says_what_it_does_not_support() {
-    let o = iets(&["eval", "--expr", "builtins.fetchMercurial ./."]);
+#[rstest]
+fn eval_says_what_it_does_not_support(bin: Iets) {
+    let o = run(&bin, &["eval", "--expr", "builtins.fetchMercurial ./."]);
     assert_eq!(o.status.code(), Some(1));
     assert!(
-        text(&o.stderr).contains(r#"builtins.fetchTree { type = "hg";"#),
+        stderr(&o).contains(r#"builtins.fetchTree { type = "hg";"#),
         "{}",
-        text(&o.stderr)
+        stderr(&o)
     );
-    for (r, want) in [
-        (
-            "nixpkgs#lib.version",
-            "flake registry references (nixpkgs#…) are not supported",
-        ),
-        (
-            "github:NixOS/nixpkgs#lib.version",
-            "only local paths are supported",
-        ),
-    ] {
-        let o = iets(&["eval", r]);
-        assert_eq!(o.status.code(), Some(1), "{r}");
-        assert!(text(&o.stderr).contains(want), "{r}: {}", text(&o.stderr));
-    }
+}
+
+#[rstest]
+#[case::registry(
+    "nixpkgs#lib.version",
+    "flake registry references (nixpkgs#…) are not supported"
+)]
+#[case::github("github:NixOS/nixpkgs#lib.version", "only local paths are supported")]
+fn eval_says_which_flake_refs_it_does_not_support(bin: Iets, #[case] r: &str, #[case] want: &str) {
+    let o = run(&bin, &["eval", r]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(stderr(&o).contains(want), "{}", stderr(&o));
 }
 
 /// Every `-A` prints, in order, from one evaluation of the input
 /// (nix-instantiate --eval).
-#[test]
-fn eval_prints_every_attr() {
+#[rstest]
+fn eval_prints_every_attr(bin: Iets) {
     let e = r#"builtins.trace "root" { a = 1; b = 2; c = throw "boom"; }"#;
-    let o = iets(&["eval", "-E", e, "-A", "b", "-A", "a"]);
-    assert!(o.status.success(), "{}", text(&o.stderr));
-    assert_eq!(text(&o.stdout), "2\n1\n");
-    assert_eq!(text(&o.stderr).matches("trace: root").count(), 1);
+    let o = run(&bin, &["eval", "-E", e, "-A", "b", "-A", "a"]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert_eq!(o.stdout, "2\n1\n".as_bytes());
+    assert_eq!(stderr(&o).matches("trace: root").count(), 1);
     // what came before the failing one is out already
-    let o = iets(&["eval", "-E", e, "-A", "a", "-A", "c", "-A", "b"]);
+    let o = run(&bin, &["eval", "-E", e, "-A", "a", "-A", "c", "-A", "b"]);
     assert!(!o.status.success());
-    assert_eq!(text(&o.stdout), "1\n");
+    assert_eq!(o.stdout, "1\n".as_bytes());
 }

@@ -4,8 +4,10 @@
 
 mod hermetic;
 
+use hermetic::{Iets, bin};
 use iets::sys::path_to_internal;
 use iets::sys::process::signal;
+use rstest::rstest;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -23,8 +25,8 @@ fn flags_of(stem: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn eval(stem: &str) -> Output {
-    hermetic::iets()
+fn eval(bin: &Iets, stem: &str) -> Output {
+    bin.cmd()
         .current_dir(tests_dir())
         .env("HOME", "/fake-home")
         .env("TEST_VAR", "foo")
@@ -40,8 +42,8 @@ fn chomp(s: &str) -> &str {
     s.trim_end_matches('\n')
 }
 
-fn check(stem: &str) -> Option<String> {
-    let out = eval(stem);
+fn check(bin: &Iets, stem: &str) -> Option<String> {
+    let out = eval(bin, stem);
     if stem.starts_with("eval-fail-") {
         return match (out.status.code(), signal(&out.status)) {
             (Some(0), _) => Some("should fail".into()),
@@ -67,10 +69,16 @@ fn check(stem: &str) -> Option<String> {
     })
 }
 
-fn run(stem: &str) {
-    if let Some(why) = check(stem) {
+// a new case shows up after `touch tests/langtests.rs`
+#[rstest]
+fn lang(
+    bin: Iets,
+    #[files("tests/lang/eval-okay-*.nix")]
+    #[files("tests/lang/eval-fail-*.nix")]
+    path: PathBuf,
+) {
+    let stem = path.file_stem().unwrap().to_str().unwrap();
+    if let Some(why) = check(&bin, stem) {
         panic!("{stem}: {why}");
     }
 }
-
-include!(concat!(env!("OUT_DIR"), "/lang_cases.rs"));

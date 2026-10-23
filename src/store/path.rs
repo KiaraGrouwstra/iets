@@ -406,6 +406,7 @@ pub fn hash_placeholder(output_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::resolve_store_dir as resolve;
+    use rstest::rstest;
 
     #[test]
     fn the_host_picks_the_store_directory() {
@@ -440,7 +441,7 @@ mod tests {
     use super::*;
     use crate::store::nar::nar_hash;
     use crate::store::nar::nar_hash_filtered;
-    use crate::store::nar::tests::fixture_tree;
+    use crate::store::nar::tests::{Tree, tree};
 
     fn set(paths: &[&str]) -> BTreeSet<StorePath> {
         paths.iter().map(|p| StorePath::parse(p).unwrap()).collect()
@@ -481,10 +482,9 @@ mod tests {
         );
     }
 
-    // nix-instantiate --eval -E '"${./tree}"' (tree from nar.rs fixture_tree)
-    #[test]
-    fn path_copy_directory() {
-        let tree = fixture_tree("pathcopy");
+    // nix-instantiate --eval -E '"${./tree}"' (tree from the nar.rs fixture)
+    #[rstest]
+    fn path_copy_directory(tree: Tree) {
         let h = nar_hash(&tree).unwrap();
         let p = make_fixed_output_path(IngestionMethod::Recursive, &h, "tree", &BTreeSet::new())
             .unwrap();
@@ -497,9 +497,8 @@ mod tests {
     }
 
     // nix-instantiate --eval -E '"${./tree/a.txt}"'
-    #[test]
-    fn path_copy_file() {
-        let tree = fixture_tree("pathfile");
+    #[rstest]
+    fn path_copy_file(tree: Tree) {
         let h = nar_hash(&tree.join("a.txt")).unwrap();
         let p = make_fixed_output_path(IngestionMethod::Recursive, &h, "a.txt", &BTreeSet::new())
             .unwrap();
@@ -510,9 +509,8 @@ mod tests {
     }
 
     // nix-instantiate --eval -E '"${builtins.filterSource (p: t: baseNameOf p != "sub") ./tree}"'
-    #[test]
-    fn filter_source() {
-        let tree = fixture_tree("filtersrc");
+    #[rstest]
+    fn filter_source(tree: Tree) {
         let (h, _) = nar_hash_filtered(&tree, HashAlgo::Sha256, &mut |p, _| {
             p.file_name().unwrap() != "sub"
         })
@@ -527,9 +525,8 @@ mod tests {
     }
 
     // nix-instantiate --eval -E '"${builtins.path { path = ./tree; name = "mytree"; }}"'
-    #[test]
-    fn path_with_name() {
-        let tree = fixture_tree("pathname");
+    #[rstest]
+    fn path_with_name(tree: Tree) {
         let h = nar_hash(&tree).unwrap();
         let p = make_fixed_output_path(IngestionMethod::Recursive, &h, "mytree", &BTreeSet::new())
             .unwrap();
@@ -542,34 +539,26 @@ mod tests {
 
     // nix-instantiate --eval --strict -E 'let d = builtins.derivation { name = "fx"; system = "x86_64-linux";
     //   builder = "/bin/sh"; outputHash = "ba78...15ad"; outputHashAlgo = "sha256"; }; in d.outPath'
-    #[test]
-    fn fixed_flat_sha256() {
+    // and for "fr" the same with outputHashMode = "recursive"
+    #[rstest]
+    #[case::flat_sha256(
+        IngestionMethod::Flat,
+        "fx",
+        "/nix/store/rfn4vzwhmb8r4k8gp16g27dqwjji5s37-fx"
+    )]
+    #[case::recursive_sha256(
+        IngestionMethod::Recursive,
+        "fr",
+        "/nix/store/s05rl80bpix1186wb5f471k7fxwwp7lf-fr"
+    )]
+    fn fixed_output_path(#[case] method: IngestionMethod, #[case] name: &str, #[case] want: &str) {
         let h = Hash::parse_any(
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
             Some(HashAlgo::Sha256),
         )
         .unwrap();
-        let p = make_fixed_output_path(IngestionMethod::Flat, &h, "fx", &BTreeSet::new()).unwrap();
-        assert_eq!(
-            p.to_string(),
-            "/nix/store/rfn4vzwhmb8r4k8gp16g27dqwjji5s37-fx"
-        );
-    }
-
-    // same as above with outputHashMode = "recursive" and name "fr"
-    #[test]
-    fn fixed_recursive_sha256() {
-        let h = Hash::parse_any(
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-            Some(HashAlgo::Sha256),
-        )
-        .unwrap();
-        let p =
-            make_fixed_output_path(IngestionMethod::Recursive, &h, "fr", &BTreeSet::new()).unwrap();
-        assert_eq!(
-            p.to_string(),
-            "/nix/store/s05rl80bpix1186wb5f471k7fxwwp7lf-fr"
-        );
+        let p = make_fixed_output_path(method, &h, name, &BTreeSet::new()).unwrap();
+        assert_eq!(p.to_string(), want);
     }
 
     // same with outputHash = "a9993e364706816aba3e25717850c26c9cd0d89d"; outputHashAlgo = "sha1"; name "fs1"
@@ -608,21 +597,22 @@ mod tests {
         assert!(StorePath::parse("/tmp/vxjiwkjkn7x4079qvh1jkl5pn05j2aw0-foo").is_err());
     }
 
-    #[test]
-    fn check_name_rules() {
-        assert!(check_name("hello-2.12").is_ok());
-        assert!(check_name("a+b_c?d=e.f").is_ok());
-        assert!(check_name(".hidden").is_ok());
-        assert!(check_name("..x").is_ok());
-        assert!(check_name("").is_err());
-        assert!(check_name(".").is_err());
-        assert!(check_name("..").is_err());
-        assert!(check_name(".-x").is_err());
-        assert!(check_name("..-x").is_err());
-        assert!(check_name("a b").is_err());
-        assert!(check_name("a/b").is_err());
-        assert!(check_name(&"a".repeat(212)).is_err());
-        assert!(check_name(&"a".repeat(211)).is_ok());
+    #[rstest]
+    #[case("hello-2.12", true)]
+    #[case("a+b_c?d=e.f", true)]
+    #[case(".hidden", true)]
+    #[case("..x", true)]
+    #[case("", false)]
+    #[case(".", false)]
+    #[case("..", false)]
+    #[case(".-x", false)]
+    #[case("..-x", false)]
+    #[case("a b", false)]
+    #[case("a/b", false)]
+    #[case(&"a".repeat(211), true)]
+    #[case(&"a".repeat(212), false)]
+    fn check_name_rules(#[case] name: &str, #[case] ok: bool) {
+        assert_eq!(check_name(name).is_ok(), ok);
     }
 
     #[test]

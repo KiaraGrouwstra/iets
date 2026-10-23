@@ -475,27 +475,20 @@ impl Scm for Git {
 mod tests {
     use crate::flake::parse_flake_ref;
     use crate::source::SourceRef;
-    use crate::store::nar::tests::fixture_tree;
-    use crate::sys;
-
-    use std::path::Path;
-
-    /// A path as the evaluator and a flake URL name it: `/C:/x` on Windows.
-    fn internal(p: &Path) -> String {
-        String::from_utf8(sys::path_to_internal(p)).expect("utf-8 path")
-    }
+    use crate::store::nar::tests::{Tree, tree};
+    use crate::sys::internal_string;
+    use rstest::rstest;
 
     use std::fs;
 
-    #[test]
-    fn a_directory_in_a_repository_is_found() {
-        let d = fixture_tree("git-root");
+    #[rstest]
+    fn a_directory_in_a_repository_is_found(#[from(tree)] d: Tree) {
         fs::write(d.join("sub/flake.nix"), b"{ outputs = _: {}; }").unwrap();
         fs::create_dir_all(d.join(".git")).unwrap();
-        let r = parse_flake_ref(&format!("{}/sub#x", internal(&d)), b"/", None).unwrap();
-        let url = format!("git+file://{}?dir=sub", internal(&d));
+        let r = parse_flake_ref(&format!("{}/sub#x", internal_string(&d)), b"/", None).unwrap();
+        let url = format!("git+file://{}?dir=sub", internal_string(&d));
         assert_eq!(crate::api::flake::url(&r), url);
-        let r = parse_flake_ref(&format!("path:{}/sub", internal(&d)), b"/", None).unwrap();
+        let r = parse_flake_ref(&format!("path:{}/sub", internal_string(&d)), b"/", None).unwrap();
         assert_eq!(r.source, SourceRef::Path(d.join("sub")));
     }
 }

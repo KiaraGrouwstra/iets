@@ -630,14 +630,11 @@ fn declared_ref(ev: &mut Evaluator, url: Word) -> EvalResult<Declared> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sys::internal_string;
 
     use crate::source::scm;
-    use crate::store::nar::tests::fixture_tree;
-
-    /// A path as the evaluator and a flake URL name it: `/C:/x` on Windows.
-    fn internal(p: &Path) -> String {
-        String::from_utf8(sys::path_to_internal(p)).expect("utf-8 path")
-    }
+    use crate::store::nar::tests::{Tree, tree};
+    use rstest::rstest;
 
     #[test]
     fn attr_paths() {
@@ -653,15 +650,14 @@ mod tests {
         assert!(parse_attr_path("a.\"b").is_err());
     }
 
-    #[test]
-    fn refs_resolve_against_cwd_and_home() {
-        let d = fixture_tree("flakeref");
+    #[rstest]
+    fn refs_resolve_against_cwd_and_home(#[from(tree)] d: Tree) {
         fs::write(d.join("flake.nix"), b"{ outputs = _: {}; }").unwrap();
         fs::create_dir_all(d.join("sub")).unwrap();
         fs::write(d.join("sub/flake.nix"), b"{ outputs = _: {}; }").unwrap();
         let cwd = &sys::path_to_internal(&d);
         let r = parse_flake_ref(".#a.b", cwd, None).unwrap();
-        assert_eq!(r.dir, d);
+        assert_eq!(r.dir, *d);
         assert_eq!(r.source, SourceRef::Path(d.clone()));
         assert_eq!(r.attr, ["a", "b"]);
         let r = parse_flake_ref("./sub", cwd, None).unwrap();
@@ -704,19 +700,18 @@ mod tests {
         assert!(!is_flake_ref("x.nix"));
     }
 
-    #[test]
-    fn a_pinned_checkout_is_its_revision() {
-        let d = fixture_tree("flakeref-git");
+    #[rstest]
+    fn a_pinned_checkout_is_its_revision(#[from(tree)] d: Tree) {
         fs::write(d.join("flake.nix"), b"{ outputs = _: {}; }").unwrap();
         fs::create_dir_all(d.join("sub")).unwrap();
         fs::write(d.join("sub/flake.nix"), b"{ outputs = _: {}; }").unwrap();
         fs::create_dir_all(d.join(".git")).unwrap();
         let rev = "0".repeat(39) + "1";
         let git = scm::named("git").unwrap();
-        let url = format!("git+file://{}", internal(&d));
+        let url = format!("git+file://{}", internal_string(&d));
 
         let r = parse_flake_ref(&format!("{url}?ref=HEAD&rev={rev}#a"), b"/", None).unwrap();
-        assert_eq!(r.dir, d);
+        assert_eq!(r.dir, *d);
         assert_eq!(r.attr, ["a"]);
         assert_eq!(
             r.source,
