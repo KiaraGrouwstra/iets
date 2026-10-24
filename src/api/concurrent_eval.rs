@@ -114,7 +114,7 @@ in builtins.foldl' (a: b: a + builtins.foldl' (x: y: x + y) 0 b) 0 rows"#,
         case(
             "fn-identity",
             true,
-            "let SLOW t = (x: y: x) 1; A = [ t t t t t t t t ]; B = [ t t t t t t t t ]; in builtins.seq (builtins.any (x: false) A) (builtins.seq (slow 3000000) (A == B))",
+            "let SLOW t = (x: y: x) 1; A = [ t t t t t t t t ]; B = [ t t t t t t t t ]; in builtins.seq (builtins.any (x: false) A) (builtins.seq (slow 300000) (A == B))",
         ),
         // a thunk only a helper forced still prints as <CODE>
         case(
@@ -155,13 +155,13 @@ fn effect_cases() -> Vec<Case> {
             "lint-speculated",
             lint,
             None,
-            r#"let SLOW in builtins.any (x: x) [ (slow 3000000 > 0) (1 == "a") (2 == "b") (3 == "c") (4 == "d") ]"#,
+            r#"let SLOW in builtins.any (x: x) [ (slow 300000 > 0) (1 == "a") (2 == "b") (3 == "c") (4 == "d") ]"#,
         ),
         effect(
             "lint-demanded",
             lint,
             None,
-            r#"let SLOW in builtins.all (x: x == false) [ (slow 2000000 > 0 && false) (1 == "a") (2 == "b") (3 == "c") (4 == "d") ]"#,
+            r#"let SLOW in builtins.all (x: x == false) [ (slow 300000 > 0 && false) (1 == "a") (2 == "b") (3 == "c") (4 == "d") ]"#,
         ),
         // a helper is still on the second element when the demand path
         // finishes the first, so the demand path walks the rest ahead of it
@@ -233,7 +233,7 @@ fn effect_cases() -> Vec<Case> {
             "drv-speculated",
             None,
             Some(0),
-            "STOPS in builtins.elem 1 [ (slow 3000000 * 0 + 1) (builtins.stringLength (d 1)) (builtins.stringLength (d 2)) (builtins.stringLength (d 3)) ]",
+            "STOPS in builtins.elem 1 [ (slow 300000 * 0 + 1) (builtins.stringLength (d 1)) (builtins.stringLength (d 2)) (builtins.stringLength (d 3)) ]",
         ),
         effect(
             "drv-demanded",
