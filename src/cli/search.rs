@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use crate::api::run::{Outcome, Run};
 use crate::api::{self, EvalArgs, Input, cwd, flake, installable, report};
+use crate::builtins::strings::parse_drv_name_bytes;
 use crate::builtins::text::regex::{self, Prog};
 use crate::cli::classic::nix::{global_flag, nix_settings};
 use crate::cli::classic::{Argv, Common, eval_config, fallback, lookup_file_arg};
@@ -390,11 +391,11 @@ fn entry(ev: &mut Evaluator, a: &'static AttrsObj, path: &[Vec<u8>]) -> EvalResu
     desc.iter_mut()
         .filter(|b| **b == b'\n')
         .for_each(|b| *b = b' ');
-    let (pname, version) = drv_name(&name);
+    let (pname, version) = parse_drv_name_bytes(&name);
     Ok(Entry {
         path: path.join(&b'.'),
-        pname,
-        version,
+        pname: pname.to_vec(),
+        version: version.to_vec(),
         desc,
     })
 }
@@ -414,17 +415,6 @@ fn string_of(ev: &mut Evaluator, w: Word, path: &[Vec<u8>], what: &str) -> EvalR
             ),
             Pos::NONE,
         )),
-    }
-}
-
-/// names.cc:DrvName: the name runs up to the first `-` that is not followed
-/// by a letter, the version is the rest.
-fn drv_name(s: &[u8]) -> (Vec<u8>, Vec<u8>) {
-    match (0..s.len())
-        .find(|&i| s[i] == b'-' && s.get(i + 1).is_some_and(|c| !c.is_ascii_alphabetic()))
-    {
-        Some(i) => (s[..i].to_vec(), s[i + 1..].to_vec()),
-        None => (s.to_vec(), Vec::new()),
     }
 }
 
@@ -641,8 +631,11 @@ mod tests {
     #[test]
     fn drv_names() {
         let split = |s: &str| {
-            let (p, v) = drv_name(s.as_bytes());
-            (String::from_utf8(p).unwrap(), String::from_utf8(v).unwrap())
+            let (p, v) = parse_drv_name_bytes(s.as_bytes());
+            (
+                str::from_utf8(p).unwrap().to_string(),
+                str::from_utf8(v).unwrap().to_string(),
+            )
         };
         assert_eq!(split("hello-2.12"), ("hello".into(), "2.12".into()));
         assert_eq!(

@@ -354,10 +354,10 @@ pub fn eval_flake_value(ev: &mut Evaluator, fr: &FlakeRef) -> EvalResult<Word> {
 /// flake-primops.cc:prim_getFlake on a local path, parsed by
 /// `flakeref::parse_absolute`. Impure, or pure on a `path:` reference with a
 /// `narHash` the tree matches; a pure evaluation refuses every other one.
-/// Nothing is locked here. A
-/// directory is always a `path:` input, even inside a git repository:
-/// flakeref.cc looks for `.git` only when it has a base directory, and
-/// getFlake passes none. A virtual copy stands for its local tree.
+/// Nothing is locked here. A directory is always a `path:` input, even
+/// inside a git repository: flakeref.cc looks for `.git` only when it has a
+/// base directory, and getFlake passes none. A virtual copy stands for its
+/// local tree.
 pub fn get_flake(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
     let s = ev.force_string_no_ctx(
         args[0],

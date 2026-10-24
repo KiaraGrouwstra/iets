@@ -470,7 +470,6 @@ pub(crate) mod tests {
         assert_eq!(e.cursor(), (5, 0));
     }
 
-    /// A region that grows must not overwrite the output above it.
     #[test]
     fn growth_does_not_eat_output() {
         let (mut d, mut e) = (Display::new(1), Emu::new(H, W));
@@ -631,7 +630,6 @@ pub(crate) mod tests {
         );
     }
 
-    /// A line wider than the terminal takes rows, and the region stays whole.
     #[test]
     fn wrapped_output_does_not_corrupt_the_region() {
         let (mut d, mut e) = (Display::new(1), Emu::new(H, W));
@@ -652,7 +650,6 @@ pub(crate) mod tests {
         assert!(rows[H - 3].chars().all(|c| c == 'x'));
     }
 
-    /// A line that ends at the last column keeps its last character.
     #[test]
     fn a_full_width_line_keeps_its_last_column() {
         let (mut d, mut e) = (Display::new(1), Emu::new(H, W));

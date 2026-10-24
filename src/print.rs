@@ -121,7 +121,7 @@ pub fn lexicographic_order(
 
 /// `nix-instantiate --eval` output. Does not force; `--strict` forces first.
 /// `cell` identifies the slot the value was read from; Nix keys repeated
-/// lists on the `Value` address, which is the cell in our model. The top
+/// lists on the `Value` address, which is the cell in iets. The top
 /// level passes any unique number.
 pub fn print_ambiguous(
     ev: &mut Evaluator,
@@ -464,33 +464,17 @@ mod tests {
     use rstest::rstest;
 
     #[rstest]
-    fn float_formatting_is_never_empty(
-        #[values(
-            f64::NAN,
-            f64::INFINITY,
-            f64::NEG_INFINITY,
-            -0.0,
-            0.0,
-            1e300,
-            -1e300,
-            5e-324,
-            f64::MIN_POSITIVE,
-            1.0,
-            0.1
-        )]
-        f: f64,
-    ) {
-        assert!(!format_g(f).is_empty());
-        assert!(!json_float(f).is_empty());
-    }
-
-    #[rstest]
     #[case(f64::NAN, "nan", "null")]
     #[case(f64::INFINITY, "inf", "null")]
     #[case(f64::NEG_INFINITY, "-inf", "null")]
     #[case(-0.0, "-0", "-0.0")]
     #[case(1e300, "1e+300", "1e+300")]
     #[case(5e-324, "4.94066e-324", "5e-324")]
+    #[case(0.0, "0", "0.0")]
+    #[case(-1e300, "-1e+300", "-1e+300")]
+    #[case(f64::MIN_POSITIVE, "2.22507e-308", "2.2250738585072014e-308")]
+    #[case(1.0, "1", "1.0")]
+    #[case(0.1, "0.1", "0.1")]
     fn float_formatting_edge_cases(#[case] f: f64, #[case] g: &str, #[case] json: &str) {
         assert_eq!(format_g(f), g);
         assert_eq!(json_float(f), json);

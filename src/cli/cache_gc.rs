@@ -8,7 +8,7 @@ use crate::{cachefs, error};
 const DAY: u64 = 24 * 60 * 60;
 
 /// `iets cache gc [--ttl DAYS] [--dry-run] [--cache-dir DIR]`. Entries unread
-/// for longer than the TTL go; a swept tracing entry simply misses next time.
+/// for longer than the TTL go; a swept tracing entry misses next time.
 pub fn cmd_cache_gc(argv: &[String]) -> i32 {
     let mut ttl_days = cachefs::TTL_DAYS;
     let mut dry_run = false;

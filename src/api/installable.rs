@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use std::str::from_utf8;
 
 use crate::api::build::Root;
+use crate::builtins::strings::parse_drv_name_bytes;
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::runtime::{self, AttrsObj, Cell, Ctx, Word};
 use crate::store::path::StorePath;
@@ -640,16 +641,9 @@ pub fn to_app(ev: &mut Evaluator, v: Word, attr_path: &str) -> EvalResult<App> {
     })
 }
 
-/// names.cc:DrvName: the name runs up to the first `-` that is not followed
-/// by a letter.
 fn drv_pname(s: &str) -> &str {
-    let b = s.as_bytes();
-    match (0..b.len())
-        .find(|&i| b[i] == b'-' && b.get(i + 1).is_some_and(|c| !c.is_ascii_alphabetic()))
-    {
-        Some(i) => &s[..i],
-        None => s,
-    }
+    let (pname, _) = parse_drv_name_bytes(s.as_bytes());
+    &s[..pname.len()]
 }
 
 /// `meta.mainProgram`, else `pname`; `None` when neither is there.
