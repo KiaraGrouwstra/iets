@@ -618,7 +618,7 @@ impl Derivation {
 
     #[cfg(test)]
     /// The path of this derivation, for a caller with no ATerm at hand. Mirrors
-    /// derivations.cc:computeStorePath. Used by the drv and devenv tests.
+    /// derivations.cc:computeStorePath. Only tests use it.
     pub fn drv_path(&self) -> Result<StorePath, DrvError> {
         self.with_aterm(|t| self.drv_path_for(t))?
     }

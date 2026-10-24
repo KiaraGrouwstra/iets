@@ -11,8 +11,8 @@
 //! placed here has its whole closure built here. That is what keeps this
 //! stage free of cross-place edges: nothing a place builds depends on
 //! something another place holds. The cost is that two roots placed
-//! differently build what they share twice
-//! (`docs/executors-proposal.md`).
+//! differently build what they share twice (`docs/reference/settings.md`,
+//! `builder`).
 
 use crate::error::{Error, Result};
 use crate::remote::worker::Transport;
@@ -65,20 +65,8 @@ impl Places {
         Ok(Places(places))
     }
 
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
     pub fn get(&self, i: usize) -> &Place {
         &self.0[i]
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &Place> {
-        self.0.iter()
     }
 
     /// The first place that accepts the derivation. First, not best: this

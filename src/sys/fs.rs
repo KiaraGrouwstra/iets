@@ -15,7 +15,6 @@ use rustix::fs::{
 };
 use rustix::io::Errno;
 
-/// Fills `buf` from `offset`, without moving the file's cursor.
 /// Removes a symbolic link, whatever it points at.
 pub fn remove_link(p: &Path) -> io::Result<()> {
     fs::remove_file(p)
@@ -26,6 +25,7 @@ pub fn canonicalize(p: &Path) -> io::Result<PathBuf> {
     fs::canonicalize(p)
 }
 
+/// Fills `buf` from `offset`, without moving the file's cursor.
 pub fn read_exact_at(f: &File, buf: &mut [u8], offset: u64) -> io::Result<()> {
     f.read_exact_at(buf, offset)
 }
