@@ -1,7 +1,7 @@
-//! Bump allocator. Memory is never freed while its session lives: every
-//! allocation hands out a `'static` reference, and the chunks go only when
-//! the session's `Heap` drops. That is what makes graph sharing between
-//! cells trivially sound.
+//! Bump allocator. Memory is never freed while its session lives. Every
+//! allocation gives a `'static` reference, and the chunks go only when the
+//! `Heap` of the session drops. Thus it is sound for cells to share any
+//! part of the graph with no further check.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -243,7 +243,6 @@ impl Arena {
         }
     }
 
-    /// Move the elements of `v` into one arena slice.
     pub(crate) fn alloc_vec<T>(&mut self, v: Vec<T>) -> &'static [T] {
         let n = v.len();
         if n == 0 {
@@ -264,7 +263,6 @@ impl Arena {
         self.alloc_slice(b)
     }
 
-    /// Concatenate byte slices into one arena allocation.
     pub(crate) fn alloc_concat(&mut self, parts: &[&[u8]]) -> &'static [u8] {
         let len: usize = parts.iter().map(|p| p.len()).sum();
         if len == 0 {

@@ -1,9 +1,9 @@
 //! File system primops (primops.cc): readFile, readDir, readFileType,
 //! pathExists, toPath, storePath, filterSource, path, toFile. The network
-//! fetchers and flake primops are registered so `builtins ? fetchMercurial`
-//! holds, but they fail when called; only `fetchurl`, `fetchTree` on a
+//! fetchers and flake primops are registered, so `builtins ? fetchMercurial`
+//! holds, but a call fails. Only these work: `fetchurl`, `fetchTree` on a
 //! locked input, `fetchTarball` with a `sha256`, `fetchGit`, `getFlake`,
-//! `parseFlakeRef` and `flakeRefToString` work (`flake`).
+//! `parseFlakeRef` and `flakeRefToString` (`flake`).
 
 use crate::sys::errno;
 use crate::sys::{self, OsStrExt};

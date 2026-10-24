@@ -458,8 +458,8 @@ impl EvalConfig {
         self
     }
 
-    /// What [`EvalConfig::pure`] settled on: the tracing-cache key needs it,
-    /// and a frontend's flag is not the whole answer any more.
+    /// The value [`EvalConfig::pure`] settled on. The tracing-cache key needs
+    /// it, because the flag of a frontend is not the whole answer.
     pub fn is_pure(&self) -> bool {
         self.pure
     }

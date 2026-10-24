@@ -1,7 +1,7 @@
 //! Which paths of a read set a watcher can use.
 //!
-//! Selected for a watcher that compares modification times, which is all a
-//! file watcher has. A consumer that can do better picks by `kind`.
+//! The selection is for a watcher that compares modification times, which
+//! is all a file watcher has. A consumer that can do more picks by `kind`.
 
 use super::{Filtered, Kind, Obs};
 use crate::sys;

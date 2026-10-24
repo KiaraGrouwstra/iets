@@ -1,8 +1,8 @@
-//! `builtins.fetchTree` for locked inputs (fetchTree.cc, fetchers.cc): the
-//! attrs the evaluator passes become a `source::SourceRef`, which resolves
-//! to a tree, and the result attrset mirrors `emitTreeAttrs`. A `path` input
-//! is a virtual copy of the local directory, like the root tree; everything
-//! else is locked, and `crate::source` fetches it.
+//! `builtins.fetchTree` for locked inputs (fetchTree.cc, fetchers.cc). The
+//! attrs from the evaluator become a `source::SourceRef`, which resolves to
+//! a tree. The result attrset mirrors `emitTreeAttrs`. A `path` input is a
+//! virtual copy of the local directory, like the root tree. Every other
+//! input is locked, and `crate::source` fetches it.
 
 use std::path::Path;
 

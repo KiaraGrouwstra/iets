@@ -1,7 +1,7 @@
 use super::ast::{Ast, Expr, ExprId, FileId, Note, StrPart};
 use super::dump::{dump, json, tree};
 use super::symbol::Interner;
-use super::{line_col, parse};
+use super::{ParseError, line_col, parse};
 use crate::lint::LintId;
 use crate::lint::allow::bit;
 use rstest::rstest;
@@ -19,15 +19,19 @@ fn dump_src(src: &str) -> String {
     dump(&ast, &interner)
 }
 
-fn parse_err(src: &str) -> String {
+fn parse_error(src: &str) -> ParseError {
     let mut interner = Interner::new();
     match parse(src.as_bytes(), FileId(0), &mut interner) {
         Ok(ast) => panic!(
             "expected parse error for {src:?}, got {}",
             dump(&ast, &interner)
         ),
-        Err(e) => e.msg,
+        Err(e) => e,
     }
+}
+
+fn parse_err(src: &str) -> String {
+    parse_error(src).msg
 }
 
 fn str_value(src: &str) -> String {
@@ -320,9 +324,7 @@ fn a_line_ends_at_cr_lf_and_lone_cr() {
     assert_eq!(line_col(src, 5), (3, 1));
     assert_eq!(line_col(src, 7), (4, 1));
     assert_eq!(line_col(src, 8), (5, 1));
-    let e = parse(b"l\r =", FileId(0), &mut Interner::new())
-        .err()
-        .unwrap();
+    let e = parse_error("l\r =");
     assert_eq!(line_col(b"l\r =", e.span.start), (2, 2));
 }
 
@@ -526,9 +528,7 @@ fn nul_in_string_literals() {
         ("\"$\0\"", "$␀", (1, 2)),
     ];
     for (src, shown, pos) in cases {
-        let e = parse(src.as_bytes(), FileId(0), &mut Interner::new())
-            .err()
-            .unwrap_or_else(|| panic!("{src:?} parsed"));
+        let e = parse_error(src);
         assert_eq!(
             (e.msg, line_col(src.as_bytes(), e.span.start)),
             (
@@ -561,9 +561,7 @@ fn end_of_file_inside_a_path_is_at_its_last_token() {
         ("./a/ ", (1, 5)),
     ];
     for (src, pos) in cases {
-        let e = parse(src.as_bytes(), FileId(0), &mut Interner::new())
-            .err()
-            .unwrap_or_else(|| panic!("{src:?} parsed"));
+        let e = parse_error(src);
         assert_eq!(line_col(src.as_bytes(), e.span.start), pos, "{src:?}");
     }
 }
@@ -609,9 +607,7 @@ fn the_error_reported_is_the_one_nix_meets_first() {
         ),
     ];
     for (src, msg, pos) in cases {
-        let e = parse(src.as_bytes(), FileId(0), &mut Interner::new())
-            .err()
-            .unwrap_or_else(|| panic!("{src:?} parsed"));
+        let e = parse_error(src);
         assert!(e.msg.contains(msg), "{src:?}: {}", e.msg);
         assert_eq!(line_col(src.as_bytes(), e.span.start), pos, "{src:?}");
     }

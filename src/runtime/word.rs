@@ -20,8 +20,8 @@
 //! passes it back to the library, and reads it through `api::value`
 //! (docs/reference/library.md). Inside the crate a pointer-shaped word
 //! comes from a `&'static` arena object, so no safe path invents an
-//! address; the two raw-bit entries are `from_bits`, which is `unsafe`,
-//! and `imm_from_bits`, which admits immediates only.
+//! address. Only two entries take raw bits: `from_bits`, which is
+//! `unsafe`, and `imm_from_bits`, which accepts immediates only.
 //!
 //! Outside the crate the bits cannot be invented:
 //!

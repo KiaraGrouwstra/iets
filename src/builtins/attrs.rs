@@ -172,7 +172,7 @@ fn list_to_attrs(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word
         pos,
         "while evaluating the argument passed to builtins.listToAttrs",
     )?;
-    parallel::fanout_list(ev, l); // parallel
+    parallel::fanout_list(ev, l);
     let mut entries: Vec<(Sym, Pos, Word)> = Vec::with_capacity(l.len as usize);
     let mut seen: FxHashSet<Sym> = FxHashSet::default();
     for c in l.cells() {
@@ -223,7 +223,7 @@ fn zip_attrs_with(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Wor
         pos,
         "while evaluating the second argument passed to builtins.zipAttrsWith",
     )?;
-    parallel::fanout_list(ev, l); // parallel
+    parallel::fanout_list(ev, l);
     let mut groups: FxHashMap<Sym, Vec<Word>> = FxHashMap::default();
     let mut order: Vec<Sym> = Vec::new();
     for c in l.cells() {
@@ -265,7 +265,7 @@ fn cat_attrs(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the second argument passed to builtins.catAttrs",
     )?;
-    parallel::fanout_list(ev, l); // parallel
+    parallel::fanout_list(ev, l);
     let mut out = Vec::new();
     for c in l.cells() {
         let w = c.get();
@@ -292,7 +292,7 @@ fn group_by(ev: &mut Evaluator, args: &[Word], pos: Pos) -> EvalResult<Word> {
         pos,
         "while evaluating the second argument passed to builtins.groupBy",
     )?;
-    parallel::fanout_list(ev, l); // parallel
+    parallel::fanout_list(ev, l);
     let mut groups: FxHashMap<Sym, Vec<Word>> = FxHashMap::default();
     for c in l.cells() {
         let elem = c.get();
